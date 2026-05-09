@@ -394,9 +394,9 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
 
 **Steps:**
 
-- [ ] **3.1** Copy from grove-v2 (post-#82 merge): `src/bot/lib/adapters/discord.ts` + `discord-client.ts` + `response-poster.ts` + `retry.ts` + `role-resolver.ts` + `context-fetcher.ts` + `attachment-handler.ts` + `event-formatter.ts` → `cortex/src/adapters/discord/`.
-- [ ] **3.2** Copy from grove-v2: `src/bot/lib/adapters/mattermost.ts` → `cortex/src/adapters/mattermost/index.ts`.
-- [ ] **3.3** Copy from grove-v2: `src/bot/lib/adapters/types.ts` → `cortex/src/adapters/types.ts`.
+- [ ] **3.1** Copy from grove-v2 (post-#82 merge): full Discord stack per §2.1 inventory rows 109–116 — `adapters/discord.ts` + `discord-client.ts` + `response-poster.ts` + `retry.ts` + `role-resolver.ts` + `context-fetcher.ts` + `attachment-handler.ts` + `attachment-types.ts` + `event-formatter.ts` → `cortex/src/adapters/discord/`. Plus `src/bot/lib/timeout.ts` → `cortex/src/common/timeout.ts` (cross-cutting; pulled forward from §4 MIG-7.5 to avoid an adapter→common reshuffle later — same pattern as MIG-7.6 partial pull-forward in MIG-2/MIG-3a).
+- [ ] **3.2** Copy from grove-v2: full Mattermost stack — `src/bot/lib/adapters/mattermost.ts` + `mattermost-server.ts` + `mattermost-context.ts` + `mattermost-poller.ts` → `cortex/src/adapters/mattermost/{index,server,context,poller}.ts`.
+- [ ] **3.3** Copy from grove-v2: `src/bot/lib/adapters/types.ts` → `cortex/src/adapters/types.ts`. Plus `src/bot/lib/adapters/mock.ts` → `cortex/src/adapters/mock.ts` (test-only platform adapter).
 - [ ] **3.4** Refactor each adapter to **register with the surface-router** instead of being instantiated directly. The adapter's `start(onMessage, surfaceRouter)` registers `subjects + filter + render(envelope)` with the router.
 - [ ] **3.5** Adapter no longer owns its inbound NATS subscription (it only owns its platform-side connection — Discord gateway, Mattermost websocket).
 - [ ] **3.6** All tests moved + green. Add new test: surface-router registers the Discord adapter, publishes an envelope, asserts adapter renders.
