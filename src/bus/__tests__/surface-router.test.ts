@@ -465,6 +465,87 @@ describe("createSurfaceRouter — render timeout", () => {
 });
 
 // ---------------------------------------------------------------------------
+// AbortSignal contract
+// ---------------------------------------------------------------------------
+
+describe("createSurfaceRouter — render(envelope, signal)", () => {
+  test("render() receives an AbortSignal that is not aborted on the happy path", async () => {
+    const router = createSurfaceRouter(fakeRuntime(), { renderTimeoutMs: 1000 });
+    let receivedSignal: AbortSignal | undefined;
+    const adapter: SurfaceAdapter = {
+      id: "signal-observer",
+      subjects: [">"],
+      render: async (_env, signal) => {
+        receivedSignal = signal;
+      },
+    };
+    router.register(adapter);
+
+    await router.dispatch(makeEnvelope());
+
+    expect(receivedSignal).toBeDefined();
+    expect(receivedSignal?.aborted).toBe(false);
+  });
+
+  test("render() signal aborts when the render times out", async () => {
+    const router = createSurfaceRouter(fakeRuntime(), { renderTimeoutMs: 30 });
+    let observedSignal: AbortSignal | undefined;
+    let abortedAt: number | null = null;
+    const adapter: SurfaceAdapter = {
+      id: "signal-aborter",
+      subjects: [">"],
+      render: (_env, signal) => {
+        observedSignal = signal;
+        return new Promise((resolve) => {
+          // Don't resolve — let the timeout fire. Subscribe to abort so we
+          // can record the cancellation moment.
+          signal?.addEventListener("abort", () => {
+            abortedAt = Date.now();
+            resolve();
+          });
+        });
+      },
+    };
+    router.register(adapter);
+
+    const start = Date.now();
+    await router.dispatch(makeEnvelope());
+    const elapsed = Date.now() - start;
+
+    expect(observedSignal).toBeDefined();
+    expect(observedSignal?.aborted).toBe(true);
+    expect(abortedAt).not.toBeNull();
+    // Abort fires within the timeout window (with generous CI margin).
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  test("adapter that ignores the signal still gets timed out (race wins)", async () => {
+    const errors: { id: string; err: Error }[] = [];
+    const router = createSurfaceRouter(fakeRuntime(), {
+      renderTimeoutMs: 30,
+      onAdapterError: (id, err) => errors.push({ id, err }),
+    });
+    // Adapter does NOT subscribe to the signal — render hangs indefinitely.
+    // Promise.race must still resolve via the timeout branch.
+    const adapter: SurfaceAdapter = {
+      id: "signal-ignorer",
+      subjects: [">"],
+      render: () => new Promise(() => {}),
+    };
+    router.register(adapter);
+
+    const start = Date.now();
+    await router.dispatch(makeEnvelope());
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(500);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.id).toBe("signal-ignorer");
+    expect(errors[0]?.err.message).toContain("timeout");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 

@@ -317,7 +317,7 @@ export class MattermostAdapter implements PlatformAdapter {
       id: this.instanceId,
       subjects: this.adapterConfig.surfaceSubjects ?? [],
       ...(this.adapterConfig.surfaceFilter ? { filter: this.adapterConfig.surfaceFilter } : {}),
-      render: (envelope) => this.renderEnvelope(envelope),
+      render: (envelope, signal) => this.renderEnvelope(envelope, signal),
     };
   }
 
@@ -328,12 +328,19 @@ export class MattermostAdapter implements PlatformAdapter {
    * `postReply` (no rootId — top-level post in the channel). v2 routing
    * lives in the Renderer model (MIG-7.2d).
    *
+   * `signal` is the surface-router's per-render abort signal. Accepted for
+   * contract symmetry; not currently forwarded — `postReply` is a thin
+   * fetch wrapper that doesn't take an AbortSignal yet. A follow-on
+   * iteration can thread it through `postReply` so a hung HTTP request
+   * actually unwinds at the timeout (today the timed-out fetch keeps
+   * running in the background until its own connect/read deadline fires).
+   *
    * Failure mode: `postReply` may throw on HTTP error; we catch + log
    * here so the surface-router's `renderWithIsolation` doesn't have to
    * be the only safety net. Dropping is acceptable because JetStream
    * replay handles redelivery.
    */
-  private async renderEnvelope(envelope: Envelope): Promise<void> {
+  private async renderEnvelope(envelope: Envelope, _signal?: AbortSignal): Promise<void> {
     const channelId = this.adapterConfig.surfaceFallbackChannelId;
     if (!channelId) {
       console.warn(

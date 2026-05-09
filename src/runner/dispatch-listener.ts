@@ -193,7 +193,14 @@ export function createDispatchListener(
     // No payload filter on the listener side — every received envelope
     // is meant for the runner. If we add multi-runner routing (filter on
     // `payload.agent_id`), it goes here as a `PayloadFilter`.
-    render: (envelope) => handleDispatchEnvelope(envelope, runtime, source, ccSessionFactory),
+    //
+    // `signal` is accepted for contract symmetry but not currently forwarded
+    // into the CC session — the spawn lifecycle is governed by `cc-session`'s
+    // own inactivity timer (which already kills the child process on stall).
+    // A follow-on iteration can wire `signal.aborted` to `session.kill()` so
+    // surface-router timeouts end the CC process eagerly rather than waiting
+    // for cc-session's internal timeout to fire.
+    render: (envelope, _signal) => handleDispatchEnvelope(envelope, runtime, source, ccSessionFactory),
   };
 
   return {

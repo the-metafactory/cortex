@@ -743,7 +743,7 @@ export class DiscordAdapter implements PlatformAdapter {
       id: this.instanceId,
       subjects: this.adapterConfig.surfaceSubjects ?? [],
       ...(this.adapterConfig.surfaceFilter ? { filter: this.adapterConfig.surfaceFilter } : {}),
-      render: (envelope) => this.renderEnvelope(envelope),
+      render: (envelope, signal) => this.renderEnvelope(envelope, signal),
     };
   }
 
@@ -761,11 +761,18 @@ export class DiscordAdapter implements PlatformAdapter {
    * channel) and sovereignty-aware redaction. This method stays as the
    * default fallback for envelopes that don't match a registered template.
    *
+   * `signal` is the surface-router's per-render abort signal. We accept it
+   * for contract symmetry but don't currently forward it into discord.js —
+   * the underlying client doesn't accept an AbortSignal and `postResponse`
+   * already buffers on disconnect, so the timeout-cancellation benefit is
+   * marginal. Future refinement: thread the signal into a fetch-based
+   * Discord REST client (a follow-on iteration when v2 templates land).
+   *
    * Failure modes: this method never throws — `postResponse` already swallows
    * delivery errors and buffers when disconnected. The router's
    * `renderWithIsolation` wraps us in a timeout regardless.
    */
-  private async renderEnvelope(envelope: Envelope): Promise<void> {
+  private async renderEnvelope(envelope: Envelope, _signal?: AbortSignal): Promise<void> {
     // Buffering at the adapter level would duplicate `postResponse`'s
     // existing pending-result mechanism; instead we drop here and rely
     // on JetStream replay (per design-cortex.md §3.3 "lost event ≠ lost

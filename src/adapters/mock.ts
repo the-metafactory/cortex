@@ -66,7 +66,10 @@ export class MockAdapter implements PlatformAdapter {
     return {
       id: this.instanceId,
       subjects: this.surfaceSubjects,
-      render: async (envelope) => {
+      // The mock accepts `signal` for contract symmetry but ignores it — there's
+      // no I/O to cancel. Tests that need to assert on the abort path can
+      // construct a custom SurfaceAdapter literal that observes `signal.aborted`.
+      render: async (envelope, _signal) => {
         this.envelopesRendered.push(envelope);
       },
     };

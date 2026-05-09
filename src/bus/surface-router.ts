@@ -53,8 +53,19 @@ export interface SurfaceAdapter {
   subjects: string[];
   /** Optional client-side filter applied AFTER subject match. */
   filter?: PayloadFilter;
-  /** Adapter-specific rendering. Bounded by router's renderTimeoutMs. */
-  render(envelope: Envelope): Promise<void>;
+  /**
+   * Adapter-specific rendering. Bounded by router's renderTimeoutMs.
+   *
+   * `signal` is an opt-in `AbortSignal` that fires when the router's per-render
+   * timeout elapses. Adapters that issue I/O (HTTP, NATS, sub-process) SHOULD
+   * forward the signal to those calls so the loser of `Promise.race` is
+   * actually cancelled — without it, the timed-out work keeps running in the
+   * background, holding sockets and spending quota. Adapters that do nothing
+   * but synchronous CPU (mocks, formatters) MAY accept the parameter and
+   * ignore it; the contract is opt-in for backwards compatibility with
+   * existing render functions.
+   */
+  render(envelope: Envelope, signal?: AbortSignal): Promise<void>;
   /** Optional liveness probe. Currently unused by the router; reserved
    *  for the dashboard's adapter-health panel (G-1111.E follow-on). */
   health?(): Promise<{ ok: boolean; lag?: number }>;
@@ -259,10 +270,23 @@ function adapterMatches(adapter: SurfaceAdapter, envelope: Envelope, subject: st
 }
 
 /**
- * Run `adapter.render(envelope)` under a timeout. Errors and timeouts
- * route to `onAdapterError`. **Never throws.** The contract is critical
- * for the §5.3 isolation rule — a slow or buggy adapter MUST NOT block
- * sibling adapters' renders.
+ * Run `adapter.render(envelope, signal)` under a timeout. Errors and
+ * timeouts route to `onAdapterError`. **Never throws.** The contract is
+ * critical for the §5.3 isolation rule — a slow or buggy adapter MUST NOT
+ * block sibling adapters' renders.
+ *
+ * On timeout, two things happen in tandem:
+ *
+ *   1. `Promise.race` resolves the timeout branch, freeing the dispatch loop
+ *      so sibling adapters keep getting their turn (the §5.3 isolation rule).
+ *   2. The `AbortController` aborts the signal we passed into `render()`,
+ *      so the loser of the race can stop its in-flight I/O instead of
+ *      running to completion in the background. Without this, a hanging
+ *      HTTP call or NATS request would leak past the timeout, holding
+ *      sockets and spending quota long after the dispatch resolved.
+ *
+ * Adapters that don't accept the signal still get the race-cancellation
+ * behaviour; they just don't get to wind down their own work.
  */
 async function renderWithIsolation(
   adapter: SurfaceAdapter,
@@ -270,17 +294,20 @@ async function renderWithIsolation(
   timeoutMs: number,
   onAdapterError: SurfaceRouterOptions["onAdapterError"],
 ): Promise<void> {
+  const ac = new AbortController();
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
     const timeoutPromise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
-        reject(new Error(`render timeout after ${timeoutMs}ms`));
+        const err = new Error(`render timeout after ${timeoutMs}ms`);
+        ac.abort(err);
+        reject(err);
       }, timeoutMs);
     });
 
     // Defensively wrap the render call in case it throws synchronously
     // before returning a promise.
-    const renderPromise = (async () => adapter.render(envelope))();
+    const renderPromise = (async () => adapter.render(envelope, ac.signal))();
 
     await Promise.race([renderPromise, timeoutPromise]);
   } catch (err) {

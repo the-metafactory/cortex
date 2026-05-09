@@ -280,7 +280,12 @@ export class WorklogManager {
     return {
       id: opts.adapterId ?? "worklog-manager",
       subjects,
-      render: (envelope: Envelope) => this.renderDispatchEnvelope(envelope),
+      // `signal` is accepted for contract symmetry; not forwarded into
+      // discord.js calls (channel.send / thread.create) which don't take an
+      // AbortSignal today. Future refinement when those call paths gain
+      // signal support.
+      render: (envelope: Envelope, _signal?: AbortSignal) =>
+        this.renderDispatchEnvelope(envelope),
     };
   }
 
