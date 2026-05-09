@@ -1,0 +1,180 @@
+/* F-18 — metrics panel.
+ *
+ * Three sections (cycle-time, wait-time breakdown, per-agent table) all
+ * built with flexbox + CSS variables. Matches the existing dashboard
+ * design language — no Tailwind, no recharts, no SVG.
+ */
+
+.metrics-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 0;
+}
+
+.metrics-section {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.metrics-section h2 {
+  margin: 0 0 10px 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* ---- Window selector (segmented control) ---- */
+
+.metrics-window {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--panel-2);
+}
+.metrics-window button {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+.metrics-window button:hover { color: var(--fg); }
+.metrics-window button.active {
+  background: var(--accent, #4f8cff);
+  color: #fff;
+}
+
+/* ---- Big-number cells ---- */
+
+.metrics-bignums {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.metrics-bignum {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.metrics-bignum .label {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  margin-bottom: 4px;
+}
+.metrics-bignum .value {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Wait-time stacked bar ---- */
+
+.metrics-stack {
+  display: flex;
+  height: 22px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+.metrics-stack .seg {
+  height: 100%;
+  min-width: 2px;
+}
+.metrics-stack .seg.queued    { background: #6b7280; }
+.metrics-stack .seg.dispatched { background: #94a3b8; }
+.metrics-stack .seg.running   { background: #22c55e; }
+.metrics-stack .seg.permission { background: #f59e0b; }
+.metrics-stack .seg.tool_error { background: #ef4444; }
+.metrics-stack .seg.review    { background: #8b5cf6; }
+
+.metrics-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.metrics-legend .swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.metrics-legend .item { display: flex; align-items: center; }
+
+/* ---- Per-agent table ---- */
+
+.metrics-agents {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.metrics-agents th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  user-select: none;
+}
+.metrics-agents th .sort-indicator {
+  display: inline-block;
+  width: 10px;
+  margin-left: 4px;
+  color: var(--accent, #4f8cff);
+}
+.metrics-agents td {
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+.metrics-agents tr:last-child td { border-bottom: 0; }
+.metrics-agents .num { text-align: right; }
+
+.metrics-empty {
+  color: var(--fg-faint);
+  font-size: 12px;
+  font-style: italic;
+  padding: 8px 0;
+}
+
+/* ---- Boot loading + error states ---- */
+
+.metrics-loading {
+  color: var(--fg-faint);
+  font-size: 12px;
+  padding: 8px 0;
+}
+.metrics-error {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid #ef4444;
+  color: #b91c1c;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+}

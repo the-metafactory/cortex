@@ -1,0 +1,96 @@
+/*
+ * F-12 curation toolbar CSS — ported from `dashboard/index.html`
+ * lines ~353-429. Lives inside the F-7 drill-down between the event log
+ * and the F-10 input affordance.
+ */
+
+.curation-toolbar {
+  padding: 8px 18px;
+  border-top: 1px solid var(--line, var(--panel-border));
+  background: var(--panel, var(--panel-2));
+  display: flex; flex-direction: column; gap: 6px;
+}
+.curation-toolbar .row {
+  display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+}
+.curation-toolbar .hint {
+  color: var(--fg-dim, var(--text-dim)); font-size: 12px;
+}
+.curation-toolbar button.verb {
+  background: var(--panel-2, #0b0d12);
+  color: var(--fg, var(--text));
+  border: 1px solid var(--line, var(--panel-border));
+  padding: 5px 12px;
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.curation-toolbar button.verb:hover:not(:disabled) {
+  border-color: var(--a, var(--accent, #4f8cff));
+  color: var(--a, var(--accent, #4f8cff));
+}
+.curation-toolbar button.verb:disabled {
+  cursor: not-allowed;
+  color: var(--fg-dim, var(--text-dim));
+  border-color: var(--line, var(--panel-border));
+  opacity: 0.55;
+}
+.curation-toolbar button.verb.destructive:hover:not(:disabled) {
+  border-color: var(--p0, var(--bad, #ff6b6b));
+  color: var(--p0, var(--bad, #ff6b6b));
+}
+.curation-toolbar .agent-picker {
+  background: var(--panel-2, #0b0d12);
+  color: var(--fg, var(--text));
+  border: 1px solid var(--line, var(--panel-border));
+  padding: 4px 6px;
+  font-size: 12px;
+  border-radius: 6px;
+  font-family: inherit;
+}
+
+.curation-toolbar .confirm-panel {
+  background: color-mix(in oklch, var(--p0, #ff6b6b) 6%, transparent);
+  border: 1px solid var(--p0, var(--bad, #ff6b6b));
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 6px;
+  font-size: 12px;
+}
+.curation-toolbar .confirm-panel .prompt { color: var(--fg, var(--text)); }
+.curation-toolbar .confirm-panel input[type="text"],
+.curation-toolbar .confirm-panel select {
+  width: 100%;
+  background: var(--panel-2, #0b0d12);
+  color: var(--fg, var(--text));
+  border: 1px solid var(--line, var(--panel-border));
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.curation-toolbar .confirm-panel .actions {
+  display: flex; gap: 6px; justify-content: flex-end;
+}
+.curation-toolbar .confirm-panel button {
+  background: transparent;
+  color: var(--fg-dim, var(--text-dim));
+  border: 1px solid var(--line, var(--panel-border));
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.curation-toolbar .confirm-panel button.destructive {
+  background: var(--p0, var(--bad, #ff6b6b));
+  color: white;
+  border-color: var(--p0, var(--bad, #ff6b6b));
+}
+.curation-toolbar .confirm-panel button.destructive:hover { opacity: 0.9; }
+.curation-toolbar .err-msg {
+  color: var(--p0, var(--bad, #ff6b6b));
+  font-size: 11px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}

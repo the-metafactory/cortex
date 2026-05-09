@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Grove · Mission Control</title>
+  <!--
+    Pre-paint theme application — avoids FOUC on light-mode reload.
+    Reads the same `mc.theme` key as `useTheme`; React hydration is a
+    no-op when the values match. Wrapped in try/catch because storage
+    can throw in private mode / sandboxed iframes.
+  -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('mc.theme');
+        if (t !== 'dark' && t !== 'light') {
+          t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches)
+            ? 'light'
+            : 'dark';
+        }
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (_e) {
+        // localStorage / matchMedia unavailable — fall through to tokens.css default.
+      }
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" />
+  <link rel="stylesheet" href="./styles/tokens.css" />
+  <link rel="stylesheet" href="./styles/global.css" />
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="./main.tsx"></script>
+</body>
+</html>

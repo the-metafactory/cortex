@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     // Environment setup & latest features
-    "lib": ["ESNext"],
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "target": "ESNext",
     "module": "Preserve",
     "moduleDetection": "force",
@@ -26,5 +26,11 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   },
-  "exclude": ["src/worker", "src/webhook-proxy"]
+  "exclude": [
+    "src/worker",
+    "src/webhook-proxy",
+    "src/surface/mc/worker",
+    "src/taps/gh-webhook",
+    "../grove-auth"
+  ]
 }

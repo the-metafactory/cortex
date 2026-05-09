@@ -1,0 +1,305 @@
+/*
+ * F-7 drill-down overlay — V4-flavoured layout.
+ * Three vertical sections: header / log / input.
+ * Focus mode hides the underlying focus row + grid + table by extending
+ * the overlay to fill the full viewport.
+ */
+
+.drill-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  display: grid;
+  grid-template-columns: 1fr min(960px, 92vw) 1fr;
+  grid-template-rows: 1fr;
+}
+.drill-overlay.focus-mode {
+  grid-template-columns: 1fr min(1280px, 96vw) 1fr;
+}
+
+.drill-backdrop {
+  grid-column: 1 / -1; grid-row: 1;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  cursor: pointer;
+}
+
+.drill-panel {
+  grid-column: 2; grid-row: 1;
+  margin: 6vh 0; height: 88vh;
+  display: grid; grid-template-rows: auto auto 1fr auto;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+.drill-overlay.focus-mode .drill-panel {
+  margin: 2vh 0; height: 96vh;
+}
+
+/* --- Header --- */
+.drill-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  gap: 10px;
+}
+.drill-header .title {
+  display: flex; align-items: center; gap: 10px;
+  min-width: 0;
+}
+.drill-header .agent { font-weight: 600; color: var(--fg); }
+.drill-header .sep { color: var(--fg-faint); }
+.drill-header .task { color: var(--fg-dim); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 360px; }
+.drill-header .actions { display: flex; align-items: center; gap: 6px; }
+.drill-header .focus-btn,
+.drill-header .close-btn {
+  appearance: none; border: 1px solid var(--line); background: var(--panel-2);
+  color: var(--fg-dim); font: inherit; font-size: 11px;
+  padding: 3px 8px; border-radius: 5px; cursor: pointer;
+}
+.drill-header .focus-btn:hover,
+.drill-header .close-btn:hover { color: var(--fg); border-color: var(--accent); }
+
+/* --- Plan / artefact strip --- */
+.drill-strip {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--panel-2);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.drill-strip[hidden] { display: none; }
+.artefact-row {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  font-size: 11px;
+}
+.artefact-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--fg-dim); text-decoration: none;
+  font-family: var(--mono);
+}
+.artefact-chip:hover { color: var(--fg); border-color: var(--accent); }
+.artefact-chip .label {
+  font-family: var(--sans); font-size: 10px;
+  color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.05em;
+  margin-right: 2px;
+}
+
+.todo-pane {
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 12px;
+}
+.todo-pane h3 {
+  margin: 0;
+  font-size: 10px; font-weight: 600;
+  color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.06em;
+}
+.todo-item { display: flex; gap: 6px; align-items: baseline; }
+.todo-item.completed .text {
+  color: var(--fg-faint); text-decoration: line-through;
+}
+.todo-item.in_progress .text { color: var(--fg); font-weight: 500; }
+.todo-item.pending .text { color: var(--fg-dim); }
+.todo-item .marker { width: 12px; flex-shrink: 0; text-align: center; font-family: var(--mono); }
+.todo-item.completed .marker { color: var(--ok); }
+.todo-item.in_progress .marker { color: var(--accent); }
+.todo-item.pending .marker { color: var(--fg-faint); }
+
+/* --- Log --- */
+.drill-log-wrap {
+  overflow-y: auto;
+  padding: 10px 14px;
+  background: var(--bg);
+}
+.drill-log-load-older {
+  display: block; margin: 0 auto 10px;
+  appearance: none; border: 1px dashed var(--line); background: transparent;
+  color: var(--fg-dim); font: inherit; font-size: 11px;
+  padding: 4px 14px; border-radius: 4px; cursor: pointer;
+}
+.drill-log-load-older:hover { color: var(--fg); border-color: var(--accent); }
+.drill-log-empty { color: var(--fg-faint); font-size: 12px; padding: 12px; text-align: center; }
+.drill-log-error { color: var(--bad); font-size: 12px; padding: 8px; }
+
+.drill-row {
+  display: grid;
+  grid-template-columns: 60px 18px 1fr;
+  gap: 8px;
+  padding: 4px 0;
+  align-items: start;
+}
+.drill-row + .drill-row { border-top: 1px solid var(--line-soft); padding-top: 6px; }
+.drill-row .ts { color: var(--fg-faint); font-family: var(--mono); font-size: 11px; padding-top: 1px; }
+.drill-row .gut { display: flex; justify-content: center; padding-top: 6px; }
+.drill-row .body { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.drill-row .kind {
+  font-family: var(--mono); font-size: 11px; color: var(--fg-dim);
+}
+.drill-row .text { color: var(--fg); white-space: pre-wrap; word-break: break-word; font-size: 12.5px; }
+.drill-row.tertiary .text { color: var(--fg-dim); font-style: italic; }
+.drill-row.secondary .text { font-family: var(--mono); font-size: 11.5px; color: var(--fg-dim); }
+.drill-row .toggle {
+  appearance: none; border: 0; background: transparent;
+  color: var(--fg-faint); font: inherit; font-size: 11px;
+  cursor: pointer; padding: 0;
+}
+.drill-row .toggle:hover { color: var(--fg); }
+.drill-row .expandable .body-text { white-space: pre-wrap; font-family: var(--mono); font-size: 11.5px; color: var(--fg-dim); }
+
+.drill-row .perm-row {
+  display: grid; grid-template-columns: 80px 1fr; gap: 4px 10px;
+  font-size: 11.5px;
+}
+.drill-row .perm-row .k { color: var(--fg-faint); font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; }
+.drill-row .perm-row .v { color: var(--fg); }
+.drill-row .perm-actions {
+  display: flex; gap: 6px; margin-top: 6px;
+}
+.drill-row .perm-actions button {
+  appearance: none; border: 1px solid var(--line); background: var(--panel-2);
+  color: var(--fg-faint); font: inherit; font-size: 11px;
+  padding: 3px 10px; border-radius: 4px; cursor: not-allowed;
+}
+
+.drill-row .images-row {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;
+}
+.drill-row .images-row img {
+  max-width: 220px; max-height: 160px;
+  border: 1px solid var(--line); border-radius: 4px;
+  cursor: zoom-in; object-fit: contain; background: var(--panel);
+}
+
+.drill-row .tool-pair {
+  background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 6px;
+  padding: 8px 10px;
+  font-family: var(--mono); font-size: 11.5px;
+}
+.drill-row .tool-pair-name { color: var(--fg); font-weight: 500; }
+.drill-row .tool-pair-args, .drill-row .tool-pair-result {
+  white-space: pre-wrap; word-break: break-word; color: var(--fg-dim);
+  margin-top: 4px;
+}
+.drill-row .tool-pair-meta { color: var(--fg-faint); font-size: 10.5px; margin-top: 4px; }
+
+/* --- Markdown rendering inside text rows --- */
+.md-paragraph { margin: 0 0 6px; }
+.md-paragraph:last-child { margin-bottom: 0; }
+.md-paragraph .md-inline-code {
+  font-family: var(--mono); font-size: 11.5px;
+  background: var(--panel-2); border: 1px solid var(--line-soft);
+  padding: 0 4px; border-radius: 3px;
+}
+.md-paragraph .md-link { color: var(--accent); text-decoration: none; }
+.md-paragraph .md-link:hover { text-decoration: underline; }
+.md-code-block {
+  font-family: var(--mono); font-size: 11.5px;
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 6px 0;
+  overflow-x: auto;
+}
+.md-code-block code { background: none; border: 0; padding: 0; color: var(--fg); }
+
+/* --- Input --- */
+.drill-input {
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  padding: 10px 14px 12px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.drill-input.readonly textarea {
+  cursor: not-allowed; opacity: 0.6;
+  background: var(--panel-2);
+}
+.drill-input .err-banner {
+  background: color-mix(in oklch, var(--bad) 14%, transparent);
+  border: 1px solid var(--bad);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  color: var(--fg);
+  display: flex; justify-content: space-between; gap: 10px; align-items: center;
+}
+.drill-input .err-banner button {
+  appearance: none; border: 1px solid var(--line); background: var(--panel);
+  color: var(--fg-dim); font: inherit; font-size: 11px;
+  padding: 2px 8px; border-radius: 4px; cursor: pointer;
+}
+.drill-input .err-banner button:hover { color: var(--fg); }
+
+.drill-input .chip-row {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.drill-input .chip {
+  position: relative;
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 4px 2px 2px;
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 11px;
+}
+.drill-input .chip img {
+  width: 28px; height: 28px; object-fit: cover; border-radius: 3px;
+  background: var(--bg);
+}
+.drill-input .chip .name {
+  max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--fg-dim);
+}
+.drill-input .chip .x {
+  appearance: none; border: 0; background: transparent;
+  color: var(--fg-faint); cursor: pointer;
+  font-size: 11px; padding: 0 4px;
+}
+.drill-input .chip .x:hover { color: var(--bad); }
+
+.drill-input textarea {
+  width: 100%;
+  min-height: 56px;
+  background: var(--panel-2); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 8px 10px;
+  font: inherit; font-size: 13px; font-family: var(--sans);
+  resize: vertical;
+  outline: none;
+}
+.drill-input textarea:focus { border-color: var(--accent); }
+
+.drill-input .meta-row {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 11px; color: var(--fg-faint);
+  gap: 10px;
+}
+.drill-input .meta-left { display: flex; align-items: center; gap: 10px; }
+.drill-input .meta-left .counter.warn { color: var(--warn); }
+.drill-input .meta-left .counter.over { color: var(--bad); }
+.drill-input .meta-left .queue { color: var(--fg-dim); }
+
+.drill-input .canned-row {
+  display: flex; flex-wrap: wrap; gap: 4px;
+}
+.drill-input .canned-btn {
+  appearance: none; border: 1px solid var(--line); background: transparent;
+  color: var(--fg-dim); font: inherit; font-size: 11px;
+  padding: 2px 8px; border-radius: 12px; cursor: pointer;
+}
+.drill-input .canned-btn:hover { color: var(--fg); border-color: var(--accent); }
+.drill-input .canned-btn:focus-visible {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.drill-input .send-btn {
+  appearance: none; border: 1px solid var(--accent); background: var(--accent);
+  color: var(--bg); font: inherit; font-size: 12px; font-weight: 500;
+  padding: 5px 14px; border-radius: 5px; cursor: pointer;
+}
+.drill-input .send-btn:disabled {
+  background: var(--panel-2); border-color: var(--line); color: var(--fg-faint);
+  cursor: not-allowed;
+}

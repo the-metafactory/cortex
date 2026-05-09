@@ -1,0 +1,180 @@
+/*
+ * F-8 task table CSS — ported from the legacy monolith
+ * (`dashboard/index.html` lines ~457-645). Kept in lock-step so /v2
+ * looks like / through the migration window.
+ *
+ * Variable names are normalised to the v2 token set (`--fg`, `--fg-dim`,
+ * `--line`, `--panel-2`, etc.). Where the legacy used a token that
+ * doesn't exist in v2 (e.g. `--bad`, `--accent`, `--text-dim`) we map
+ * to the closest v2 token via CSS variables with a fallback.
+ */
+
+.tasks-section {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line, var(--panel-border));
+  background: var(--bg);
+}
+.tasks-section h2 {
+  font-size: 13px;
+  margin: 0 0 10px 0;
+  color: var(--fg-dim, var(--text-dim));
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.tasks-error {
+  color: var(--p0, #ff6b6b);
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+.tasks-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: center;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.tasks-filters .group { display: flex; align-items: center; gap: 6px; }
+.tasks-filters .group > span { color: var(--fg-dim, var(--text-dim)); }
+.tasks-filters label {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 12px;
+  border: 1px solid var(--line, var(--panel-border));
+  background: var(--panel, var(--panel-2));
+  cursor: pointer; user-select: none;
+  color: var(--fg);
+}
+.tasks-filters label.on {
+  border-color: var(--a, var(--accent, #4f8cff));
+  color: var(--a, var(--accent, #4f8cff));
+  background: color-mix(in oklch, var(--a, #4f8cff) 8%, transparent);
+}
+.tasks-filters input[type="checkbox"] { display: none; }
+.tasks-filters input[type="number"],
+.tasks-filters input[type="search"] {
+  background: var(--panel-2, #0b0d12);
+  color: var(--fg, var(--text));
+  border: 1px solid var(--line, var(--panel-border));
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.tasks-filters input[type="number"] { width: 72px; }
+.tasks-filters input[type="search"] { width: 220px; }
+.tasks-filters .closed-toggle {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  color: var(--fg-dim, var(--text-dim));
+}
+.tasks-filters .closed-toggle input { accent-color: var(--a, var(--accent, #4f8cff)); }
+.tasks-filters .clear-btn {
+  background: transparent;
+  border: 1px solid var(--line, var(--panel-border));
+  color: var(--fg-dim, var(--text-dim));
+  padding: 3px 8px; font-size: 12px;
+  border-radius: 6px; cursor: pointer;
+  font-family: inherit;
+}
+.tasks-filters .clear-btn:hover {
+  color: var(--fg, var(--text));
+  border-color: var(--a, var(--accent, #4f8cff));
+}
+
+/* F-12b — "+ Add task" button */
+.tasks-filters .add-task-btn {
+  margin-left: auto;
+  background: var(--a, var(--accent, #4f8cff));
+  color: white;
+  border: 0;
+  padding: 5px 12px;
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  font-family: inherit;
+}
+.tasks-filters .add-task-btn:hover { filter: brightness(1.08); }
+.tasks-filters .add-task-btn:focus {
+  outline: 2px solid color-mix(in oklch, var(--a, #4f8cff) 50%, transparent);
+  outline-offset: 2px;
+}
+
+.tasks-table-wrap { overflow-x: auto; }
+.tasks-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  table-layout: auto;
+}
+.tasks-table th {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  text-align: left;
+  padding: 6px 10px;
+  font-weight: 500;
+  color: var(--fg-dim, var(--text-dim));
+  border-bottom: 1px solid var(--line, var(--panel-border));
+}
+.tasks-table th.sort-asc::after  { content: " ↑"; color: var(--a, var(--accent, #4f8cff)); }
+.tasks-table th.sort-desc::after { content: " ↓"; color: var(--a, var(--accent, #4f8cff)); }
+.tasks-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line-soft, var(--panel-border));
+  vertical-align: middle;
+}
+.tasks-table td.prio {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px; width: 40px;
+}
+.tasks-table td.title { color: var(--fg, var(--text)); font-weight: 500; }
+.tasks-table td.agents { width: 30%; }
+.tasks-table td.state { width: 100px; }
+.tasks-table td.age {
+  color: var(--fg-dim, var(--text-dim));
+  font-size: 12px; white-space: nowrap; width: 90px;
+}
+.tasks-table tr.task-row { cursor: pointer; }
+.tasks-table tr.task-row:hover { background: var(--panel-2, var(--panel)); }
+.tasks-table tr.task-row.focused {
+  background: var(--panel-2, var(--panel));
+  outline: 1px solid var(--a, var(--accent, #4f8cff));
+  outline-offset: -1px;
+}
+.tasks-table tr.closed td { opacity: 0.55; }
+
+.tasks-table .agent-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  margin: 1px 2px 1px 0;
+  font-size: 11px;
+  border-radius: 10px;
+  border: 1px solid var(--line, var(--panel-border));
+  background: var(--panel-2, var(--panel));
+  color: var(--fg-dim, var(--text-dim));
+}
+.tasks-table .agent-chip.terminal { opacity: 0.5; text-decoration: line-through; }
+.tasks-table .agent-chip.overflow {
+  color: var(--fg, var(--text));
+  border-color: var(--a, var(--accent, #4f8cff));
+}
+.tasks-table .no-state { color: var(--fg-dim, var(--text-dim)); }
+
+.tasks-empty {
+  color: var(--fg-dim, var(--text-dim));
+  font-size: 13px; padding: 18px 0;
+  text-align: center;
+}
+.tasks-empty button {
+  margin-left: 8px;
+  background: transparent;
+  border: 1px solid var(--line, var(--panel-border));
+  color: var(--fg-dim, var(--text-dim));
+  padding: 3px 10px; font-size: 12px; border-radius: 6px;
+  font-family: inherit; cursor: pointer;
+}
+.tasks-empty button:hover {
+  color: var(--fg, var(--text));
+  border-color: var(--a, var(--accent, #4f8cff));
+}

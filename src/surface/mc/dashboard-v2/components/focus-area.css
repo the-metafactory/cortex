@@ -1,0 +1,111 @@
+/*
+ * F-6 focus area styles — extracted from the legacy monolith's
+ * .focus-area / .focus-cards / .focus-card tree. Class names
+ * preserved so the visual vocabulary stays consistent.
+ */
+
+.focus-area {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+.focus-area h2 {
+  font-size: 11px; margin: 0 0 10px;
+  font-weight: 500;
+  color: var(--fg-dim);
+  letter-spacing: 0.08em; text-transform: uppercase;
+}
+.focus-cards {
+  display: flex; gap: 10px; overflow-x: auto;
+  align-items: stretch;
+}
+
+.focus-card {
+  flex: 0 0 200px;
+  padding: 10px 12px 8px 14px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 12px;
+  position: relative;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.focus-card:hover { border-color: var(--fg-faint); }
+.focus-card:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.focus-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.focus-card .idx {
+  position: absolute; top: 6px; right: 8px;
+  font-size: 10px;
+  color: var(--fg-faint);
+}
+.focus-card .title {
+  font-weight: 500;
+  color: var(--fg);
+  margin-right: 14px;
+}
+.focus-card .reason {
+  color: var(--h);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.focus-card .meta {
+  color: var(--fg-faint);
+  font-size: 11px;
+  margin-top: 2px;
+  display: flex; justify-content: space-between; gap: 6px;
+}
+
+/* Priority border accents — same vocabulary as F-9 working-grid tiles. */
+.focus-card.p0 { border-left: 3px solid var(--p0); }
+.focus-card.p1 { border-left: 3px solid var(--p1); }
+.focus-card.p2 { border-left: 3px solid var(--p2); }
+.focus-card.p3 { border-left: 3px solid var(--p2); }
+/* Unknown priority — neutral dashed accent to signal "data issue, not P0/P2". */
+.focus-card.pu { border-left: 3px dashed var(--fg-faint); }
+
+.focus-more {
+  flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 16px;
+  font-size: 12px;
+  border-radius: 8px;
+  border: 1px dashed var(--line);
+  background: transparent;
+  cursor: default;
+}
+
+.focus-empty {
+  display: flex; align-items: center; gap: 10px;
+  color: var(--fg-dim);
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+.focus-empty .heartbeat {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ok);
+  animation: focus-heartbeat 1.6s ease-in-out infinite;
+}
+@keyframes focus-heartbeat { 0%,100% { opacity: 1 } 50% { opacity: 0.45 } }
+
+.focus-loading {
+  font-size: 12px;
+  padding: 6px 0;
+}
+.focus-error {
+  color: var(--bad);
+  font-size: 12px;
+  margin-bottom: 8px;
+}

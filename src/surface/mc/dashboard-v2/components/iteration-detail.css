@@ -1,0 +1,395 @@
+/*
+ * F-15 — iteration detail surface CSS.
+ *
+ * Full-page surface (NOT overlay — see component docstring for the
+ * "why"). Three vertical sections: header / body / tasks. The body
+ * editor reuses the drill-input.css textarea idiom (50 KB cap, error
+ * banner) but renders inline rather than at the bottom of a panel.
+ */
+
+.iteration-detail-section {
+  padding: 14px 20px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+}
+
+.iteration-detail-error,
+.iteration-detail-banner {
+  color: var(--bad, #ff6b6b);
+  font-size: 12px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in oklch, var(--bad, #ff6b6b) 30%, var(--line));
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--bad, #ff6b6b) 6%, var(--panel));
+}
+
+.iteration-detail-banner.ok {
+  color: var(--ok, #2ea043);
+  border-color: color-mix(in oklch, var(--ok, #2ea043) 30%, var(--line));
+  background: color-mix(in oklch, var(--ok, #2ea043) 6%, var(--panel));
+}
+
+.iteration-detail-empty {
+  font-size: 12px;
+  color: var(--fg-faint);
+  font-style: italic;
+  padding: 24px 8px;
+  text-align: center;
+}
+
+/* --- Header --- */
+
+.iteration-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.iteration-detail-header .titlebox {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.iteration-detail-header .title-input {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--fg);
+  padding: 4px 6px;
+  border-radius: 5px;
+  width: 100%;
+  min-width: 0;
+}
+.iteration-detail-header .title-input:hover {
+  border-color: var(--line);
+}
+.iteration-detail-header .title-input:focus {
+  border-color: var(--accent, #4f8cff);
+  outline: none;
+  background: var(--panel);
+}
+
+.iteration-detail-header .meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  padding: 0 6px;
+}
+.iteration-detail-header .state-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--panel-2, var(--panel));
+  border: 1px solid var(--line);
+  color: var(--fg);
+}
+.iteration-detail-header .state-pill.state-inbox { color: var(--fg-dim); }
+.iteration-detail-header .state-pill.state-designing { color: var(--accent, #4f8cff); border-color: color-mix(in oklch, var(--accent, #4f8cff) 30%, var(--line)); }
+.iteration-detail-header .state-pill.state-queued { color: var(--warn, #f4c95d); border-color: color-mix(in oklch, var(--warn, #f4c95d) 30%, var(--line)); }
+.iteration-detail-header .state-pill.state-in_flight { color: var(--ok, #2ea043); border-color: color-mix(in oklch, var(--ok, #2ea043) 30%, var(--line)); }
+.iteration-detail-header .state-pill.state-blocked { color: var(--bad, #ff6b6b); border-color: color-mix(in oklch, var(--bad, #ff6b6b) 30%, var(--line)); }
+.iteration-detail-header .state-pill.state-done { color: var(--fg-faint); }
+.iteration-detail-header .state-pill.state-cancelled { color: var(--fg-faint); text-decoration: line-through; }
+
+.iteration-detail-header .priority-select {
+  appearance: none;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  background: var(--panel-2, var(--panel));
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px 4px;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.iteration-detail-header .source-link {
+  color: var(--accent, #4f8cff);
+  text-decoration: none;
+  border-bottom: 1px dotted color-mix(in oklch, var(--accent, #4f8cff) 50%, transparent);
+}
+.iteration-detail-header .source-link:hover { border-bottom-style: solid; }
+
+.iteration-detail-header .source-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  height: 14px;
+  border-radius: 3px;
+  font-size: 9.5px;
+  border: 1px solid var(--line);
+  background: var(--panel-2, var(--panel));
+}
+
+.iteration-detail-header .actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.iteration-detail-header .action-btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel-2, var(--panel));
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.iteration-detail-header .action-btn:hover:not(:disabled) {
+  border-color: var(--accent, #4f8cff);
+}
+.iteration-detail-header .action-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.iteration-detail-header .action-btn.primary {
+  background: var(--accent, #4f8cff);
+  color: #fff;
+  border-color: var(--accent, #4f8cff);
+}
+.iteration-detail-header .action-btn.danger {
+  color: var(--bad, #ff6b6b);
+  border-color: color-mix(in oklch, var(--bad, #ff6b6b) 30%, var(--line));
+}
+.iteration-detail-header .action-btn.danger:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--bad, #ff6b6b) 8%, var(--panel));
+}
+
+/* --- Body editor --- */
+
+.iteration-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.iteration-detail-body .label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+.iteration-detail-body textarea {
+  appearance: none;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--fg);
+  padding: 10px 12px;
+  resize: vertical;
+  min-height: 200px;
+}
+.iteration-detail-body textarea:focus {
+  border-color: var(--accent, #4f8cff);
+  outline: none;
+}
+.iteration-detail-body .body-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: var(--fg-faint);
+  font-family: var(--mono);
+}
+.iteration-detail-body .counter.warn { color: var(--warn, #f4c95d); }
+.iteration-detail-body .counter.over { color: var(--bad, #ff6b6b); }
+
+/* --- Tasks --- */
+
+.iteration-detail-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.iteration-detail-tasks .header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.iteration-detail-tasks .header-row h3 {
+  font-size: 13px;
+  margin: 0;
+  color: var(--fg);
+}
+.iteration-detail-tasks .add-btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel-2, var(--panel));
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.iteration-detail-tasks .add-btn:hover:not(:disabled) {
+  border-color: var(--accent, #4f8cff);
+}
+.iteration-detail-tasks .add-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.iteration-task-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 12px;
+}
+.iteration-task-row .task-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+.iteration-task-row .task-status {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--panel-2, var(--panel));
+  border: 1px solid var(--line);
+}
+.iteration-task-row .task-priority {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg-dim);
+}
+.iteration-task-row .task-priority.p0 { color: var(--bad, #ff6b6b); }
+.iteration-task-row .task-priority.p1 { color: var(--warn, #f4c95d); }
+
+.iteration-task-row .detach-btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.iteration-task-row .detach-btn:hover:not(:disabled) {
+  color: var(--bad, #ff6b6b);
+  border-color: color-mix(in oklch, var(--bad, #ff6b6b) 30%, var(--line));
+}
+.iteration-task-row .detach-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* --- Add-task popover --- */
+
+.iteration-add-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--accent, #4f8cff);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.iteration-add-popover .tabs {
+  display: flex;
+  gap: 6px;
+}
+.iteration-add-popover .tabs button {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.iteration-add-popover .tabs button.active {
+  background: var(--panel-2, var(--panel));
+  color: var(--fg);
+  border-color: var(--accent, #4f8cff);
+}
+.iteration-add-popover .field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.iteration-add-popover .field-row label {
+  font-size: 10.5px;
+  color: var(--fg-dim);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.iteration-add-popover input,
+.iteration-add-popover select {
+  appearance: none;
+  font: inherit;
+  font-size: 12px;
+  background: var(--panel-2, var(--panel));
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 8px;
+  color: var(--fg);
+}
+.iteration-add-popover .button-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.iteration-add-popover .button-row button {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel-2, var(--panel));
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.iteration-add-popover .button-row button.primary {
+  background: var(--accent, #4f8cff);
+  color: #fff;
+  border-color: var(--accent, #4f8cff);
+}
+.iteration-add-popover .button-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}

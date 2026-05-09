@@ -1,0 +1,205 @@
+/*
+ * F-14 — iteration kanban surface CSS.
+ *
+ * Six-column flex layout. Each column is a vertical stack of cards.
+ * Tokens follow the v2 palette set up in styles/tokens.css; D/A/H
+ * attention coding (Decision 4 / Decision 5 implicit) lands via the
+ * priority-tinted left border on each card.
+ *
+ * Drag affordances:
+ *   - `.iteration-board-column.drop-allowed` lights up when a drag
+ *     enters a legal column (cursor stays default copy/move).
+ *   - `.iteration-board-column.drop-rejected` mutes the column and
+ *     shifts the cursor to no-drop. Reason text surfaces as the
+ *     column header's `title=` tooltip.
+ */
+
+.iteration-board-section {
+  padding: 14px 20px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+.iteration-board-section h2 {
+  font-size: 13px;
+  margin: 0;
+  color: var(--fg-dim);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.iteration-board-error {
+  color: var(--bad, #ff6b6b);
+  font-size: 12px;
+}
+
+.iteration-board {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.iteration-board-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  background: var(--panel-2, var(--panel));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  min-height: 220px;
+  transition: border-color 0.12s ease-out, background 0.12s ease-out;
+}
+.iteration-board-column.drop-allowed {
+  border-color: var(--accent, #4f8cff);
+  background: color-mix(in oklch, var(--accent, #4f8cff) 8%, var(--panel));
+}
+.iteration-board-column.drop-rejected {
+  border-color: var(--bad, #ff6b6b);
+  background: color-mix(in oklch, var(--bad, #ff6b6b) 6%, var(--panel));
+  cursor: not-allowed;
+}
+
+.iteration-board-col-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line-soft, var(--line));
+}
+.iteration-board-col-header .count {
+  font-family: var(--mono);
+  color: var(--fg-faint);
+  font-size: 10px;
+}
+
+.iteration-board-empty {
+  font-size: 11px;
+  color: var(--fg-faint);
+  padding: 12px 4px;
+  text-align: center;
+  font-style: italic;
+}
+
+.iteration-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: grab;
+  user-select: none;
+  font-family: inherit;
+  text-align: left;
+  appearance: none;
+  color: inherit;
+}
+.iteration-card:hover { border-color: var(--accent, #4f8cff); }
+.iteration-card:focus-visible {
+  border-color: var(--accent, #4f8cff);
+  box-shadow: 0 0 0 1px var(--accent, #4f8cff);
+  outline: none;
+}
+.iteration-card.dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+.iteration-card.p0 { border-left-color: var(--bad, #ff6b6b); }
+.iteration-card.p1 { border-left-color: var(--warn, #f4c95d); }
+.iteration-card.p2 { border-left-color: var(--fg-faint, #6b7280); }
+.iteration-card.p3 { border-left-color: var(--fg-faint, #6b7280); }
+
+.iteration-card-title {
+  font-size: 12.5px;
+  color: var(--fg);
+  font-weight: 500;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.iteration-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: 10.5px;
+  color: var(--fg-dim);
+  font-family: var(--mono);
+}
+.iteration-card-meta .priority { color: var(--fg-dim); }
+.iteration-card-meta .priority.p0 { color: var(--bad, #ff6b6b); }
+.iteration-card-meta .priority.p1 { color: var(--warn, #f4c95d); }
+
+.iteration-card-meta .source-link {
+  color: var(--accent, #4f8cff);
+  text-decoration: none;
+  border-bottom: 1px dotted color-mix(in oklch, var(--accent, #4f8cff) 50%, transparent);
+}
+.iteration-card-meta .source-link:hover { border-bottom-style: solid; }
+
+.iteration-card-meta .source-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  height: 14px;
+  border-radius: 3px;
+  font-size: 9.5px;
+  border: 1px solid var(--line);
+  background: var(--panel-2, var(--panel));
+}
+.iteration-card-meta .source-badge.open { color: var(--ok, #2ea043); border-color: color-mix(in oklch, var(--ok, #2ea043) 30%, var(--line)); }
+.iteration-card-meta .source-badge.closed { color: var(--fg-faint); }
+/* F-17 — inbox auto-import badge (matches the iteration-side source-badge
+ * shape so the visual rhythm is uniform across the kanban). The accent
+ * colour cues "this row arrived from the upstream pipeline" without
+ * shouting; the operator sees it as a quiet hint, not an alert. */
+.iteration-card-meta .source-badge.gh {
+  color: var(--accent, #4f8cff);
+  border-color: color-mix(in oklch, var(--accent, #4f8cff) 30%, var(--line));
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+.iteration-card-meta .task-count {
+  color: var(--fg-faint);
+}
+
+/* Top-nav tab bar — used by app.tsx to switch between the existing
+ * surfaces and the iteration board. Sized to match the legacy/new
+ * scaffold-header rhythm. */
+.scaffold-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.scaffold-tabs .tab {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+  margin: 0;
+}
+.scaffold-tabs .tab:hover { color: var(--fg); }
+.scaffold-tabs .tab.active {
+  color: var(--accent, #4f8cff);
+  border-bottom-color: var(--accent, #4f8cff);
+}

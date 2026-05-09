@@ -1,0 +1,139 @@
+/*
+ * F-12b — "Add task from GitHub" modal CSS.
+ * Ported from `dashboard/index.html` lines ~503-601.
+ */
+
+.add-task-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(15, 17, 21, 0.75);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 50;
+}
+.add-task-modal {
+  background: var(--panel, #181c25);
+  border: 1px solid var(--line, var(--panel-border));
+  border-radius: 10px;
+  width: 520px; max-width: 92vw;
+  padding: 20px 22px;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.4);
+  color: var(--fg);
+}
+.add-task-modal h3 {
+  margin: 0 0 14px 0;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-dim, var(--text-dim));
+}
+.add-task-modal label.field {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--fg-dim, var(--text-dim));
+}
+.add-task-modal label.field input[type="text"] {
+  display: block; width: 100%; margin-top: 4px;
+  background: var(--panel-2, #0b0d12);
+  color: var(--fg, var(--text));
+  border: 1px solid var(--line, var(--panel-border));
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.add-task-modal .hint {
+  font-size: 11px;
+  color: var(--fg-dim, var(--text-dim));
+  margin-top: 4px;
+}
+.add-task-modal .priority-row {
+  display: flex; gap: 12px; align-items: center;
+  margin-bottom: 14px;
+  font-size: 12px;
+  color: var(--fg-dim, var(--text-dim));
+}
+.add-task-modal .priority-row label {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--fg, var(--text));
+  cursor: pointer;
+}
+.add-task-modal .actions-row {
+  display: flex; justify-content: flex-end; gap: 8px;
+  margin-top: 16px;
+}
+.add-task-modal button {
+  background: transparent;
+  color: var(--fg, var(--text));
+  border: 1px solid var(--line, var(--panel-border));
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.add-task-modal button.primary {
+  background: var(--a, var(--accent, #4f8cff));
+  color: white;
+  border-color: var(--a, var(--accent, #4f8cff));
+  font-weight: 500;
+}
+.add-task-modal button.primary:disabled,
+.add-task-modal button:disabled {
+  opacity: 0.5; cursor: not-allowed;
+}
+.add-task-modal .err-banner {
+  background: color-mix(in oklch, var(--p0, #ff6b6b) 12%, transparent);
+  border: 1px solid var(--p0, #ff6b6b);
+  color: var(--p0, #ff6b6b);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+.add-task-modal .preview-box {
+  background: var(--panel-2, #0b0d12);
+  border: 1px solid var(--line, var(--panel-border));
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+.add-task-modal .preview-box .pb-row { margin: 4px 0; }
+.add-task-modal .preview-box .pb-label {
+  color: var(--fg-dim, var(--text-dim));
+  display: inline-block; min-width: 56px;
+}
+.add-task-modal .preview-box .pb-title {
+  color: var(--fg, var(--text));
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+.add-task-modal .preview-box .pb-body {
+  color: var(--fg-dim, var(--text-dim));
+  font-style: italic;
+  max-height: 90px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.add-task-modal .conflict-box {
+  background: color-mix(in oklch, var(--p1, #f4c95d) 10%, transparent);
+  border: 1px solid var(--p1, #f4c95d);
+  color: var(--p1, #f4c95d);
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+.add-task-modal .spinner {
+  display: inline-block;
+  width: 12px; height: 12px;
+  border: 2px solid rgba(255,255,255,0.2);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: add-task-spin 0.7s linear infinite;
+  margin-right: 6px;
+  vertical-align: -2px;
+}
+@keyframes add-task-spin {
+  to { transform: rotate(360deg); }
+}

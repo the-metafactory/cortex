@@ -1,0 +1,59 @@
+/*
+ * Design tokens for Grove Mission Control v2.
+ *
+ * oklch palette mirroring the Claude Design handoff at
+ * docs/design-artifacts/grove-mission-control/. Light + dark themes are
+ * keyed off the [data-theme] attribute on <html>; defaults to dark when
+ * the attribute is absent so an unstyled boot doesn't flash white.
+ *
+ * D / A / H = Deterministic / Agentic / Human attention coding.
+ * Used by the F-7 drill-log and shared event-row component.
+ */
+
+:root,
+:root[data-theme="dark"] {
+  --bg: oklch(0.18 0.008 260);
+  --panel: oklch(0.22 0.008 260);
+  --panel-2: oklch(0.25 0.008 260);
+  --line: oklch(0.30 0.010 260);
+  --line-soft: oklch(0.26 0.010 260);
+  --fg: oklch(0.94 0.005 260);
+  --fg-dim: oklch(0.66 0.010 260);
+  --fg-faint: oklch(0.50 0.010 260);
+  --accent: oklch(0.72 0.14 240);
+  --accent-soft: oklch(0.72 0.14 240 / 0.14);
+  --d: oklch(0.78 0.14 155);   /* Deterministic — green */
+  --a: oklch(0.82 0.14 80);    /* Agentic — amber */
+  --h: oklch(0.78 0.14 355);   /* Human — rose */
+  --p0: oklch(0.72 0.17 22);
+  --p1: oklch(0.82 0.14 80);
+  --p2: oklch(0.66 0.02 260);
+  --bad: oklch(0.65 0.20 22);
+  --warn: oklch(0.78 0.14 80);
+  --ok: oklch(0.74 0.14 155);
+
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+:root[data-theme="light"] {
+  --bg: oklch(0.985 0.003 260);
+  --panel: oklch(1 0 0);
+  --panel-2: oklch(0.975 0.004 260);
+  --line: oklch(0.90 0.008 260);
+  --line-soft: oklch(0.94 0.006 260);
+  --fg: oklch(0.22 0.010 260);
+  --fg-dim: oklch(0.44 0.012 260);
+  --fg-faint: oklch(0.62 0.010 260);
+  --accent: oklch(0.55 0.16 240);
+  --accent-soft: oklch(0.55 0.16 240 / 0.10);
+  --d: oklch(0.50 0.15 155);
+  --a: oklch(0.58 0.15 60);
+  --h: oklch(0.55 0.18 355);
+  --p0: oklch(0.55 0.20 22);
+  --p1: oklch(0.58 0.15 60);
+  --p2: oklch(0.60 0.02 260);
+  --bad: oklch(0.55 0.20 22);
+  --warn: oklch(0.58 0.15 60);
+  --ok: oklch(0.50 0.15 155);
+}
