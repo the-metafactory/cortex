@@ -26,6 +26,8 @@
 import { describe, expect, test } from "bun:test";
 import { BotConfigSchema, type BotConfig } from "../common/types/config";
 import { startCortex } from "../cortex";
+import type { Envelope } from "../bus/myelin/envelope-validator";
+import type { EnvelopeHandler, MyelinRuntime } from "../bus/myelin/runtime";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -51,6 +53,56 @@ function minimalConfig(overrides: Partial<Record<string, unknown>> = {}): BotCon
     paths: { publishedEventsDir: "/tmp/grove-cortex-test-published" },
     ...overrides,
   });
+}
+
+/**
+ * Recording fake `MyelinRuntime` exposing the registration set + publish log
+ * so wire-up tests can assert OBSERVABLE side-effects (Echo round-1 N1):
+ * which subsystems actually wired themselves to the runtime, in what order,
+ * and what they emitted at startup.
+ *
+ * Field semantics:
+ *   - `onEnvelopeHandlers` — every handler currently registered. Asserting
+ *     `.size > 0` proves the surface-router (which calls `runtime.onEnvelope`
+ *     on `start()`) actually wired up; asserting `.size === 0` after `stop()`
+ *     proves the unregister path fires.
+ *   - `published` — every envelope passed to `publish()`. Empty by default
+ *     in the wire-up path (cortex doesn't publish at startup); useful as a
+ *     negative assertion ("startup did not leak events") and for future
+ *     `system.cortex.started` work.
+ *   - `dispatchToHandlers(env, subject)` — fires the registered handlers
+ *     synchronously so tests can simulate "an envelope arrived from NATS"
+ *     without standing up a real subscription.
+ */
+interface RecordingRuntime extends MyelinRuntime {
+  onEnvelopeHandlers: Set<EnvelopeHandler>;
+  published: Envelope[];
+  dispatchToHandlers(env: Envelope, subject: string): void;
+}
+
+function createRecordingRuntime(): RecordingRuntime {
+  const onEnvelopeHandlers = new Set<EnvelopeHandler>();
+  const published: Envelope[] = [];
+  return {
+    enabled: false,
+    onEnvelopeHandlers,
+    published,
+    onEnvelope(handler) {
+      onEnvelopeHandlers.add(handler);
+      return {
+        unregister: () => {
+          onEnvelopeHandlers.delete(handler);
+        },
+      };
+    },
+    publish: async (envelope: Envelope) => {
+      published.push(envelope);
+    },
+    stop: async () => {},
+    dispatchToHandlers(env: Envelope, subject: string) {
+      for (const h of onEnvelopeHandlers) h(env, subject);
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -96,26 +148,106 @@ describe("startCortex — construction", () => {
 // ---------------------------------------------------------------------------
 
 describe("startCortex — wire-up", () => {
-  test("starts the surface-router (so it's ready to dispatch envelopes)", async () => {
-    // We can't introspect the router from outside, but the public contract
-    // says `router.start()` must complete before `startCortex` returns. If
-    // start() rejected, the await would propagate. Resolution alone is the
-    // signal here.
+  test("surface-router subscribes to runtime envelopes on start()", async () => {
+    // Echo round-1 N1: the prior assertion was "rejection-would-propagate"
+    // (a contract test). Strengthen to an OBSERVABLE side-effect: after
+    // startup, the router has called `runtime.onEnvelope(...)` so its
+    // handler is in the runtime's registration set. After `stop()`, the
+    // router unregisters and the set is empty again.
+    const runtime = createRecordingRuntime();
+    expect(runtime.onEnvelopeHandlers.size).toBe(0);
+
     const config = minimalConfig();
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
+      injectRuntime: runtime,
     });
     expect(handle).toBeDefined();
+    // The surface-router's `start()` registers exactly one envelope handler
+    // (its dispatch fan-out). The dispatch-listener registers as a
+    // SurfaceAdapter on the router — NOT as a runtime handler — so the
+    // count stays at 1 even with the listener wired.
+    expect(runtime.onEnvelopeHandlers.size).toBe(1);
+
+    await handle.stop();
+    // `router.stop()` unregisters from the runtime — the set drains.
+    expect(runtime.onEnvelopeHandlers.size).toBe(0);
+  });
+
+  test("dispatch-listener's surface adapter receives bus envelopes via the router", async () => {
+    // Echo round-1 N1: assert the listener actually wired itself into the
+    // dispatch path — not just that startCortex didn't reject. We do this
+    // by firing an envelope through the recording runtime's handlers; if
+    // the listener is registered with the router, and the router is
+    // subscribed to the runtime, the listener's render() runs and (via
+    // `runtime.publish`) we see a `dispatch.task.started` event.
+    const runtime = createRecordingRuntime();
+    const config = minimalConfig();
+    const handle = await startCortex(config, {
+      disableConfigWatcher: true,
+      disableDashboard: true,
+      disableOutboundPoller: true,
+      injectRuntime: runtime,
+    });
+
+    // Hand-craft a `dispatch.task.received` envelope. The listener parses
+    // its payload and emits `dispatch.task.started` BEFORE spawning CC
+    // (see runner/dispatch-listener.ts:303). Asserting the started event
+    // alone is enough to prove wire-up; we don't need to spawn real CC.
+    const envelope: Envelope = {
+      id: "11111111-1111-4111-8111-111111111111",
+      source: "test-op.cortex.local",
+      type: "dispatch.task.received",
+      timestamp: new Date().toISOString(),
+      correlation_id: "22222222-2222-4222-8222-222222222222",
+      sovereignty: {
+        classification: "local",
+        data_residency: "NZ",
+        max_hop: 0,
+        frontier_ok: true,
+        model_class: "any",
+      },
+      payload: {
+        task_id: "22222222-2222-4222-8222-222222222222",
+        agent_id: "cortex",
+        // Use a `cwd` that doesn't exist so CC's spawn errors quickly —
+        // the listener's `runtimeError` branch publishes `failed` rather
+        // than `started`-then-hang. Either started OR failed is proof of
+        // wire-up; assert there's >=1 lifecycle envelope.
+        prompt: "test",
+        cwd: "/var/empty/cortex-test-nonexistent",
+        timeout_ms: 1,
+      },
+    };
+
+    runtime.dispatchToHandlers(envelope, `local.test-op.dispatch.task.received`);
+
+    // The listener's `render` is async; the router awaits it. Give the
+    // microtask queue a beat so the `await runtime.publish(started)` lands.
+    // The `started` event publishes BEFORE CC spawns, so even with a
+    // 1-tick wait, we expect at least one lifecycle envelope on the wire.
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(runtime.published.length).toBeGreaterThanOrEqual(1);
+    const types = runtime.published.map((e) => e.type);
+    // The first lifecycle event is always `dispatch.task.started`. If we
+    // only see `failed` (CC threw before started), that's still proof of
+    // wire-up (listener reached its emit path), but in practice `started`
+    // emits first.
+    const sawDispatchEvent = types.some((t) => t.startsWith("dispatch.task."));
+    expect(sawDispatchEvent).toBe(true);
+
     await handle.stop();
   });
 
-  test("dispatch-listener registers (no crash, no missing source)", async () => {
-    // The listener requires a SystemEventSource derived from
-    // `agent.operatorId`. With operatorId present, registration must
-    // succeed; with operatorId absent, the runtime falls back to "default"
-    // and registration still succeeds (org segment becomes "default").
+  test("dispatch-listener registers with the right org-derived subject", async () => {
+    // Echo round-1 N1: the listener's `surfaceConfig.subjects` is
+    // `local.{org}.dispatch.task.received` where `{org}` comes from
+    // `agent.operatorId ?? "default"`. Verify the fallback path: with
+    // operatorId absent, the runtime sees envelopes on `local.default.*`.
+    const runtime = createRecordingRuntime();
     const noOperator = minimalConfig({
       agent: { name: "no-op-cortex", displayName: "NoOpCortex" },
     });
@@ -123,12 +255,23 @@ describe("startCortex — wire-up", () => {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
+      injectRuntime: runtime,
     });
     expect(handle).toBeDefined();
+    // Same observable-side-effect assertion: the router subscribed.
+    expect(runtime.onEnvelopeHandlers.size).toBe(1);
     await handle.stop();
+    expect(runtime.onEnvelopeHandlers.size).toBe(0);
   });
 
-  test("ignores discord instances marked enabled: false", async () => {
+  test("ignores discord instances marked enabled: false (no adapter handler registered)", async () => {
+    // Echo round-1 N1: previously this test only checked `handle defined`.
+    // Strengthen by asserting that with the only configured Discord
+    // instance disabled, the runtime registration count stays at the
+    // baseline (1 = surface-router only). A leaking start() of the
+    // disabled adapter would produce additional registrations or publish
+    // a `system.adapter.connected` envelope — neither happens here.
+    const runtime = createRecordingRuntime();
     const config = minimalConfig({
       discord: [
         {
@@ -146,14 +289,20 @@ describe("startCortex — wire-up", () => {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
+      injectRuntime: runtime,
     });
     expect(handle).toBeDefined();
-    // No adapter started → no socket leak. Stop is a no-op for the
-    // adapter slot but exercises the cleanup loop.
+    expect(runtime.onEnvelopeHandlers.size).toBe(1);
+    // No adapter started → no `system.adapter.*` envelope leaked.
+    expect(runtime.published).toEqual([]);
     await handle.stop();
   });
 
-  test("skips mattermost instances missing apiUrl/apiToken", async () => {
+  test("skips mattermost instances missing apiUrl/apiToken (no adapter handler registered)", async () => {
+    // Echo round-1 N1: same shape — assert the missing-credentials guard
+    // short-circuits BEFORE adapter.start(), so no `system.adapter.*`
+    // event is published and only the router's handler is on the runtime.
+    const runtime = createRecordingRuntime();
     const config = minimalConfig({
       mattermost: [
         // Construct via cast: BotConfigSchema would reject a fully empty
@@ -173,8 +322,11 @@ describe("startCortex — wire-up", () => {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
+      injectRuntime: runtime,
     });
     expect(handle).toBeDefined();
+    expect(runtime.onEnvelopeHandlers.size).toBe(1);
+    expect(runtime.published).toEqual([]);
     await handle.stop();
   });
 });

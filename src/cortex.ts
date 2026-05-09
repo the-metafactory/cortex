@@ -65,6 +65,15 @@ export interface StartCortexOptions {
   disableDashboard?: boolean;
   /** Skip the JSONL outbound poller (tests). */
   disableOutboundPoller?: boolean;
+  /**
+   * Inject a runtime instead of constructing one via `startMyelinRuntime`.
+   * Tests pass a recording fake to assert observable side-effects (e.g. that
+   * the surface-router actually called `runtime.onEnvelope`). Production
+   * callers omit this and the runtime is built from `config.nats?` as usual.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  injectRuntime?: MyelinRuntime;
 }
 
 /**
@@ -90,17 +99,23 @@ export async function startCortex(
   console.log(`  Config: ${options.configPath ?? "(in-memory)"}`);
   console.log(`  PID: ${process.pid}`);
 
-  // Bus runtime (M2-M6) — no-op when `config.nats?` is absent.
+  // Bus runtime (M2-M6) — no-op when `config.nats?` is absent. Tests inject
+  // a recording fake via `options.injectRuntime` to assert observable
+  // wire-up side-effects without standing up a real NATS server.
   let runtime: MyelinRuntime = {
     enabled: false,
     onEnvelope: () => ({ unregister: () => {} }),
     publish: async () => {},
     stop: async () => {},
   };
-  try {
-    runtime = await startMyelinRuntime(config);
-  } catch (err) {
-    console.error("cortex: myelin runtime startup error (non-fatal):", err instanceof Error ? err.message : err);
+  if (options.injectRuntime) {
+    runtime = options.injectRuntime;
+  } else {
+    try {
+      runtime = await startMyelinRuntime(config);
+    } catch (err) {
+      console.error("cortex: myelin runtime startup error (non-fatal):", err instanceof Error ? err.message : err);
+    }
   }
 
   // Surface router (in-process fan-out).
