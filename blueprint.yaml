@@ -75,11 +75,14 @@ features:
 
   C-106:
     name: MIG-5 — Taps (GH webhook + CC events)
-    status: planned
+    status: in-progress
     description: >
       Move src/relay/ + src/hooks/ + src/webhook-proxy/ + cloud-publisher
       into cortex/src/taps/. Update CC hooks to publish CloudEvents to NATS
-      via MyelinRuntime.
+      via MyelinRuntime. MIG-5a (5.1, 5.2, 5.4, 5.7) merged in cortex#17.
+      MIG-5b (5.3 cloud-publisher lift, 5.5 relay-side bus publishing)
+      lands in this PR. 5.6 (gh-webhook → NATS) deferred — folded into
+      MIG-7 wiring per architectural note in docs/plan-cortex-migration.md.
     parent: C-100
     issue: 7
     depends_on: [C-102]
