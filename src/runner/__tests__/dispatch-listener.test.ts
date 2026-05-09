@@ -508,6 +508,45 @@ describe("dispatch-listener — malformed payload", () => {
 
     expect(r.published).toHaveLength(0);
   });
+
+  test("non-UUID task_id → rejected at parse time (no envelopes published, no CC spawned)", async () => {
+    // Per Echo's review (cortex#34): payload-level UUID gate. A producer that
+    // slips a non-UUID `task_id` past the envelope validator must not result
+    // in a CC process spawn or any downstream `started`/`completed` envelope —
+    // those would be uncorrelated and break the §3.3.4 ordering contract.
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+    });
+    await listener.start();
+    await router.start();
+
+    const malformed: Envelope = {
+      id: "00000000-0000-4000-8000-000000000000",
+      source: "metafactory.dispatch-handler.local",
+      type: "dispatch.task.received",
+      timestamp: "2026-05-09T12:00:00Z",
+      sovereignty: {
+        classification: "local",
+        data_residency: "NZ",
+        max_hop: 0,
+        frontier_ok: false,
+        model_class: "local-only",
+      },
+      // shape is wrong on multiple axes: bare string, no hyphens, wrong length
+      payload: { task_id: "not-a-uuid", agent_id: "cortex", prompt: "x" },
+    };
+    r.trigger(malformed, "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(r.published).toHaveLength(0);
+    expect(optsCaptured).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

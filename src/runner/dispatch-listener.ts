@@ -224,25 +224,28 @@ export function createDispatchListener(
  * (a producer that emits `received` and never sees `started` knows
  * something went wrong).
  */
+// UUID v1-v5 shape per RFC 4122 §3 — same regex used by the envelope
+// validator on `envelope.id`, applied here at the payload layer for
+// `payload.task_id`.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function parsePayload(envelope: Envelope): DispatchTaskReceivedPayload | null {
   const p = envelope.payload as Partial<DispatchTaskReceivedPayload> | undefined;
   if (!p) return null;
   if (typeof p.task_id !== "string" || typeof p.agent_id !== "string") return null;
   if (typeof p.prompt !== "string" || p.prompt.length === 0) return null;
-  // TODO (deferred to MIG-7.x — Echo round-1 s2): payload-level UUID
-  // validation on `task_id`. Not added here because:
-  //   1. The envelope-level `validateEnvelope` already checks `envelope.id`
-  //      shape — the typical caller path (dispatch-handler emitting onto
-  //      the bus) sets `correlation_id = task_id` and runs through the
-  //      same UUID validator already.
-  //   2. Adding a second UUID regex here re-implements that check at a
-  //      different layer without a clear failure mode it would catch —
-  //      the only producer who could slip a non-UUID `task_id` past us
-  //      is a producer that bypasses validateEnvelope, which is an
-  //      architectural problem that belongs at the validator layer.
-  // When MIG-7+ adds a multi-runner federation, payload-shape contracts
-  // become first-class (per §4.x) — that's the right place to add a
-  // payload-level Zod schema for `dispatch.task.received`.
+  // Per Echo's review (cortex#34): the envelope-level validator only checks
+  // `envelope.id`'s shape, not `payload.task_id`. Without this gate, a
+  // malformed publisher could slip a non-UUID `task_id` through to
+  // CCSession + worklog-manager and break correlation across `started` /
+  // `completed` / `failed` envelopes downstream. Reject at parse time so
+  // no envelopes are published and no CC process is spawned for a bad id.
+  if (!UUID_RE.test(p.task_id)) {
+    console.warn(
+      `dispatch-listener: rejecting envelope ${envelope.id} — task_id missing or not UUID-shaped`,
+    );
+    return null;
+  }
   return p as DispatchTaskReceivedPayload;
 }
 
