@@ -101,6 +101,12 @@ export class DiscordAdapter implements PlatformAdapter {
   private adapterConfig: DiscordAdapterConfig;
   private runtime: MyelinRuntime | undefined;
   private systemEventSource: SystemEventSource | undefined;
+  /**
+   * Latches once we've warned about the runtime-without-source case so a
+   * busy adapter doesn't flood the log with the same diagnostic on every
+   * shard event. Cleared only when the adapter is reconstructed.
+   */
+  private warnedMissingSource = false;
 
   constructor(
     adapterConfig: DiscordAdapterConfig,
@@ -788,25 +794,35 @@ export class DiscordAdapter implements PlatformAdapter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Common gate for `system.adapter.*` emission. Splits the "no runtime
-   * configured" case (silent — bot was started without NATS) from the "no
-   * source configured but runtime present" case (warn once — operator wired
-   * NATS but forgot to pass `systemEventSource`, which is a config bug worth
-   * surfacing).
+   * Common gate for `system.adapter.*` emission. Returns the bound runtime +
+   * source pair when both are configured, or `null` otherwise. Splits the "no
+   * runtime configured" case (silent — bot was started without NATS) from the
+   * "no source configured but runtime present" case (warn once — operator
+   * wired NATS but forgot to pass `systemEventSource`, which is a config bug
+   * worth surfacing).
+   *
+   * Returning the pair (rather than a boolean) lets callers publish without
+   * any non-null assertions on `this.runtime` / `this.systemEventSource` —
+   * the discriminated shape carries the type evidence the compiler needs.
    */
-  private canPublishSystemEvent(): boolean {
-    if (!this.runtime) return false;
-    if (!this.systemEventSource) {
-      // Warn once per missing-source occurrence — without the source, we'd
-      // emit envelopes that fail schema validation on the receiver side. The
-      // operator needs this signal at start time, not buried in error logs
-      // after a real outage.
-      console.warn(
-        `discord-${this.instanceId}: runtime is configured but systemEventSource is missing — system.* events will not be emitted`,
-      );
-      return false;
+  private canPublishSystemEvent(): { runtime: MyelinRuntime; source: SystemEventSource } | null {
+    const runtime = this.runtime;
+    if (!runtime) return null;
+    const source = this.systemEventSource;
+    if (!source) {
+      if (!this.warnedMissingSource) {
+        // Warn once per process — without the source, we'd emit envelopes
+        // that fail schema validation on the receiver side. The operator
+        // needs this signal at start time, not flooded across every shard
+        // disconnect during a real outage.
+        console.warn(
+          `discord-${this.instanceId}: runtime is configured but systemEventSource is missing — system.* events will not be emitted`,
+        );
+        this.warnedMissingSource = true;
+      }
+      return null;
     }
-    return true;
+    return { runtime, source };
   }
 
   private publishAdapterDegraded(opts: {
@@ -814,9 +830,10 @@ export class DiscordAdapter implements PlatformAdapter {
     thresholdMs: number;
     since: Date;
   }): void {
-    if (!this.canPublishSystemEvent()) return;
+    const wiring = this.canPublishSystemEvent();
+    if (!wiring) return;
     const env = createSystemAdapterDegradedEvent({
-      source: this.systemEventSource!,
+      source: wiring.source,
       adapterId: opts.instanceId,
       platform: "discord",
       disconnectedSince: opts.since,
@@ -825,22 +842,23 @@ export class DiscordAdapter implements PlatformAdapter {
     });
     // Fire-and-forget — `MyelinRuntime.publish` swallows + logs errors so we
     // never crash the bot just because a degraded notification couldn't ship.
-    void this.runtime!.publish(env);
+    void wiring.runtime.publish(env);
   }
 
   private publishAdapterRecovered(opts: {
     instanceId: string;
     degradedForMs: number;
   }): void {
-    if (!this.canPublishSystemEvent()) return;
+    const wiring = this.canPublishSystemEvent();
+    if (!wiring) return;
     const env = createSystemAdapterRecoveredEvent({
-      source: this.systemEventSource!,
+      source: wiring.source,
       adapterId: opts.instanceId,
       platform: "discord",
       degradedForMs: opts.degradedForMs,
       reconnectAttempts: this.connectionHealth?.reconnectCount,
     });
-    void this.runtime!.publish(env);
+    void wiring.runtime.publish(env);
   }
 
   private publishAdapterDisconnected(opts: {
@@ -849,7 +867,8 @@ export class DiscordAdapter implements PlatformAdapter {
     closeReason?: string;
     wasClean: boolean;
   }): void {
-    if (!this.canPublishSystemEvent()) return;
+    const wiring = this.canPublishSystemEvent();
+    if (!wiring) return;
     // The disconnect timestamp lives on the connection-health snapshot; if
     // discord.js fired shardDisconnect before connection-health updated (or
     // the field was cleared between event and publish), fall back to "now"
@@ -857,7 +876,7 @@ export class DiscordAdapter implements PlatformAdapter {
     const disconnectedSince =
       this.connectionHealth?.lastDisconnectedAt ?? new Date();
     const env = createSystemAdapterDisconnectedEvent({
-      source: this.systemEventSource!,
+      source: wiring.source,
       adapterId: this.instanceId,
       platform: "discord",
       disconnectedSince,
@@ -868,6 +887,6 @@ export class DiscordAdapter implements PlatformAdapter {
       }),
       wasClean: opts.wasClean,
     });
-    void this.runtime!.publish(env);
+    void wiring.runtime.publish(env);
   }
 }
