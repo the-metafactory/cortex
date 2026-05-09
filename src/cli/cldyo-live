@@ -1,0 +1,89 @@
+#!/bin/bash
+# cldyo-live — Start an instrumented Claude Code session piped to Grove dashboard
+#
+# Usage: cldyo-live [repo] [claude-args...]
+#
+# If repo matches a Grove-tracked repo (grove, meta-factory, arc),
+# events are bucketed under that repo on the dashboard.
+# Defaults to operator name if no repo given.
+#
+# Agent identity is read from ~/.config/grove/bot.yaml (agent.name, agent.displayName).
+# If bot.yaml is missing, falls back to system username.
+#
+# Examples:
+#   cldyo-live grove              # Work on grove, visible on dashboard
+#   cldyo-live meta-factory       # Work on metafactory
+#   cldyo-live                    # Default session
+#   cldyo-live grove --resume abc # Pass extra args to claude
+
+# Read agent identity from bot.yaml
+CONFIG_FILE="${HOME}/.config/grove/bot.yaml"
+if [ -f "${CONFIG_FILE}" ]; then
+  AGENT_NAME=$(grep -A2 '^agent:' "${CONFIG_FILE}" | grep 'name:' | head -1 | sed 's/.*name:\s*//' | sed 's/#.*//' | tr -d '"' | tr -d "'" | xargs)
+  DISPLAY_NAME=$(grep -A3 '^agent:' "${CONFIG_FILE}" | grep 'displayName:' | head -1 | sed 's/.*displayName:\s*//' | sed 's/#.*//' | tr -d '"' | tr -d "'" | xargs)
+  OPERATOR_ID=$(grep -A6 '^agent:' "${CONFIG_FILE}" | grep 'operatorId:' | head -1 | sed 's/.*operatorId:\s*//' | sed 's/#.*//' | tr -d '"' | tr -d "'" | xargs)
+  OPERATOR_NAME=$(grep -A7 '^agent:' "${CONFIG_FILE}" | grep 'operatorName:' | head -1 | sed 's/.*operatorName:\s*//' | sed 's/#.*//' | tr -d '"' | tr -d "'" | xargs)
+fi
+
+# Agent identity: bot name for dashboard card, operator for correlation
+LIVE_ID="${OPERATOR_ID:-${AGENT_NAME:-$(whoami)}}"
+LIVE_NAME="${OPERATOR_NAME:-${DISPLAY_NAME:-$(whoami)}}"
+BOT_NAME="${DISPLAY_NAME:-${AGENT_NAME:-Ivy}}"
+
+export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+export GROVE_CHANNEL="${1:-${LIVE_ID}}"
+export GROVE_AGENT_NAME="${BOT_NAME}"
+export GROVE_AGENT_ID="${LIVE_ID}"
+export GROVE_OPERATOR="${LIVE_NAME}"
+export GROVE_BASH_GUARD='{"disabled":true}'
+TASK_LABEL="${1:-${LIVE_ID}}"
+shift 2>/dev/null
+
+# F-20 — register an observed session with MC v2 before exec'ing claude.
+# Best-effort: if MC v2 is unreachable, fall back to plain `claude` so the
+# operator's terminal session never fails because the dashboard is down.
+# When registration succeeds, exec claude with --session-id so EventLogger
+# tags every emitted event with the same UUID the ingestor matches on.
+#
+# JSON body is built via `jq -n --arg` so metacharacters in any of the
+# upstream env vars (a `displayName: My "fancy"` in bot.yaml, a
+# TASK_LABEL containing a backslash, etc.) don't break the request or
+# open a field-injection foot-gun.
+MC_URL="${GROVE_MC_URL:-http://localhost:8767}"
+SESSION_UUID=""
+if command -v uuidgen >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+  SESSION_UUID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+  BODY=$(jq -n \
+    --arg title "$TASK_LABEL (observed)" \
+    --arg ccSessionId "$SESSION_UUID" \
+    --arg agentId "$LIVE_ID" \
+    --arg agentName "$LIVE_NAME" \
+    --arg operatorId "${OPERATOR_ID:-$LIVE_ID}" \
+    '{title:$title, kind:"local.observed", ccSessionId:$ccSessionId,
+      agentId:$agentId, agentName:$agentName, operatorId:$operatorId}')
+  # Capture curl stderr so a 4xx/5xx body from MC v2 is distinguishable
+  # from "unreachable". Per Echo's PR-#56 review — the bare `2>/dev/null`
+  # was hiding any rejection MC v2 wrote, leaving the operator with a
+  # generic "unreachable" message even when the server explicitly
+  # refused the body.
+  CURL_ERR=$(mktemp -t cldyo-live-curl-err.XXXXXX)
+  if curl -fsS --max-time 2 -X POST "$MC_URL/api/sessions" \
+       -H "content-type: application/json" -d "$BODY" >/dev/null 2>"$CURL_ERR"; then
+    rm -f "$CURL_ERR"
+    exec claude --dangerously-skip-permissions --model opus \
+         --session-id "$SESSION_UUID" "$@"
+  else
+    if [ -s "$CURL_ERR" ]; then
+      echo "[cldyo-live] MC v2 registration failed; running unobserved." >&2
+      echo "[cldyo-live] curl: $(cat "$CURL_ERR")" >&2
+    else
+      echo "[cldyo-live] MC v2 unreachable at $MC_URL; running unobserved" >&2
+    fi
+    rm -f "$CURL_ERR"
+    exec claude --dangerously-skip-permissions --model opus "$@"
+  fi
+else
+  # Either uuidgen or jq missing on PATH; can't register safely.
+  echo "[cldyo-live] uuidgen or jq missing; running unobserved" >&2
+  exec claude --dangerously-skip-permissions --model opus "$@"
+fi

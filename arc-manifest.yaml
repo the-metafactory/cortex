@@ -9,21 +9,26 @@ authors:
   - "Jens-Christian Fischer"
 repository: "the-metafactory/cortex"
 
-# `provides:` is empty at MIG-0 (this bootstrap PR).
-# Binaries land at MIG-7 (top-level wiring + arc package switchover).
-# When MIG-7 fires, expect:
-#
-# bin:
-#   - name: "cortex"            # the bot binary (was ~/bin/grove-bot)
-#     path: "./dist/cortex"
-#   - name: "discord"           # operator CLI
-#     path: "./dist/discord"
-#   - name: "cldyo-live"        # CC instrumentation wrapper
-#     path: "./dist/cldyo-live"
-#
-# Plus hooks installed into ~/.claude/hooks/ via the install script,
-# plus the launchd plist templates rendered from src/services/.
-#
+# `provides:` covers MIG-6 deliverables only — operator CLIs.
+# MIG-7 (top-level wiring + arc cutover) will add: bot binary, hooks,
+# relay, statusline extension, launchd plists. Until then this is the
+# operator-CLI surface — installable via `arc upgrade Cortex` even
+# while grove-v2 still owns the bot/relay/hooks.
+provides:
+  files:
+    - source: src/cli/discord/discord.ts
+      target: ~/bin/discord
+    - source: src/cli/cldyo-live
+      target: ~/bin/cldyo-live
+    - source: src/cli/discord/skill
+      target: ~/.claude/skills/Discord
+
+# `scripts/postupgrade.sh` is invoked by arc on every `arc upgrade Cortex`
+# and idempotently re-creates the symlinks above. Kept thin for MIG-6;
+# expands at MIG-7 to cover bot/relay/hooks/launchd.
+hooks:
+  postupgrade: scripts/postupgrade.sh
+
 # See docs/plan-cortex-migration.md MIG-7 for the full provisioning surface.
 
 # Dependencies — declared at MIG-7 once cortex's runtime depends on
