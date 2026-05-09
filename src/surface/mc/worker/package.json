@@ -8,7 +8,7 @@
     "db:migrate": "wrangler d1 execute GROVE_DB --file=./schema.sql"
   },
   "dependencies": {
-    "grove-auth": "file:../../grove-auth",
+    "grove-auth": "file:../../../../../grove-auth",
     "hono": "^4.7.0",
     "@octokit/webhooks-methods": "^5.0.0"
   },

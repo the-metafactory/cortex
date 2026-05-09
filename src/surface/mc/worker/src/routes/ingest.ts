@@ -13,14 +13,14 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
 import { requireApiKey, type OperatorKey } from "../auth";
-import { processSessionEvent, type ProcessedSessionEvent } from "../../../common/event-processor";
-import { extractActivityEntry } from "../../../common/event-utils";
+import { processSessionEvent, type ProcessedSessionEvent } from "../../../../../common/event-processor";
+import { extractActivityEntry } from "../../../../../common/event-utils";
 import type {
   IngestEvent,
   SessionUpsertData,
   SessionCompleteData,
   UsageSnapshotData,
-} from "../../../common/types";
+} from "../../../../../common/types";
 import { invalidateCache } from "./state";
 
 type Variables = { operatorId: string; operatorKey: OperatorKey };

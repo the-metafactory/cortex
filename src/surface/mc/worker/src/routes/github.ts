@@ -14,12 +14,12 @@ import {
   processPushWebhook,
   processReleaseWebhook,
   DEFAULT_DETECTION_CONFIG,
-} from "../../../common/github-events";
+} from "../../../../../common/github-events";
 import type {
   GitHubEventData,
   IssueUpsertData,
   PullRequestUpsertData,
-} from "../../../common/types";
+} from "../../../../../common/types";
 import { invalidateCache } from "./state";
 
 export const githubRoutes = new Hono<{ Bindings: Env }>();

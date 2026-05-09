@@ -98,7 +98,7 @@ syncRoutes.post("/api/sync", requireApiKey, async (c) => {
 // GitHub REST API sync
 // ---------------------------------------------------------------------------
 
-import { hasBranchMatch, hasTrailerMatch } from "../../../common/agent-detection";
+import { hasBranchMatch, hasTrailerMatch } from "../../../../../common/agent-detection";
 
 async function ghFetch<T>(url: string, token: string): Promise<T> {
   const resp = await fetch(url, {
