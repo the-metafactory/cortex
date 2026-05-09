@@ -1,0 +1,187 @@
+/**
+ * T-2.1: Discord Client Wrapper
+ * Initializes discord.js client with required intents and event handlers.
+ */
+
+import { Client, GatewayIntentBits, Partials, type TextChannel, type ThreadChannel, type Message } from "discord.js";
+import type { BotConfig } from "../../common/types/config";
+
+export interface ConnectionHealth {
+  reconnectCount: number;
+  lastConnectedAt: Date | null;
+  lastDisconnectedAt: Date | null;
+  currentlyConnected: boolean;
+  /** True if shard has been disconnected longer than the degraded threshold. */
+  degraded: boolean;
+  /**
+   * When the disconnect that led (or is leading) to the current degraded
+   * period started. Set at `shardDisconnect` time, cleared on `shardReady`.
+   * `degraded` becomes true only after `degradedThresholdMs` elapses without
+   * recovery, but `degradedSince` already points at the disconnect timestamp
+   * so `degradedForMs` reported on recovery measures total disconnect time,
+   * not just time-since-threshold-crossed.
+   */
+  degradedSince: Date | null;
+}
+
+export interface DiscordClientOptions {
+  /** Adapter instance ID, prefixed onto every log line so multi-adapter
+   *  deployments can tell which client's shard is degraded. Recommended;
+   *  defaults to "discord" when omitted. The 2026-05-09 outage burned 8.4h
+   *  partly because `shard 0 reconnecting` was ambiguous across 3 adapters. */
+  instanceId?: string;
+  /** Mark connection degraded after this many ms disconnected (default 60s). */
+  degradedThresholdMs?: number;
+  /** Called when degraded state is entered (one-shot per degraded period). */
+  onDegraded?: (info: { instanceId: string; thresholdMs: number; since: Date }) => void;
+  /** Called when shardReady fires after a degraded period. */
+  onRecovered?: (info: { instanceId: string; degradedForMs: number }) => void;
+}
+
+export interface DiscordClientResult {
+  client: Client;
+  health: ConnectionHealth;
+}
+
+function formatUptime(since: Date | null): string {
+  if (!since) return "never";
+  return `${((Date.now() - since.getTime()) / 1000).toFixed(0)}s`;
+}
+
+export function createDiscordClient(
+  config: BotConfig,
+  options: DiscordClientOptions = {},
+): DiscordClientResult {
+  const instanceId = options.instanceId ?? "discord";
+  const tag = `[${instanceId}]`;
+  const degradedThresholdMs = options.degradedThresholdMs ?? 60_000;
+  const health: ConnectionHealth = {
+    reconnectCount: 0,
+    lastConnectedAt: null,
+    lastDisconnectedAt: null,
+    currentlyConnected: false,
+    degraded: false,
+    degradedSince: null,
+  };
+  // Single-slot timer is intentional: we always construct discord.js Client
+  // instances with shardCount=1 (no override anywhere in the codebase), and
+  // multi-adapter deployments use multiple Client instances rather than
+  // multi-shard ones. If we ever fan-shard a single Client, this needs to
+  // become Map<shardId, ReturnType<typeof setTimeout>>.
+  let degradedTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearDegradedTimer = () => {
+    if (degradedTimer) {
+      clearTimeout(degradedTimer);
+      degradedTimer = null;
+    }
+  };
+
+  const client = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+      GatewayIntentBits.DirectMessages,
+    ],
+    partials: [Partials.Channel],
+    failIfNotExists: false,
+  });
+
+  client.on("ready", () => {
+    health.currentlyConnected = true;
+    health.lastConnectedAt = new Date();
+    console.log(`grove-bot: ${tag} connected as ${client.user?.tag}`);
+    console.log(`  Agent: ${config.agent.displayName}`);
+    const guildIds = config.discord.map((d) => d.guildId).join(", ");
+    console.log(`  Guild(s): ${guildIds || "none"}`);
+  });
+
+  client.on("shardReady", (shardId) => {
+    health.currentlyConnected = true;
+    health.lastConnectedAt = new Date();
+    clearDegradedTimer();
+    const wasDegraded = health.degraded;
+    if (wasDegraded && health.degradedSince) {
+      // degradedSince was set at shardDisconnect time, so this measures total
+      // disconnect duration, not just "time since DEGRADED was declared".
+      const degradedForMs = Date.now() - health.degradedSince.getTime();
+      console.warn(
+        `grove-bot: ${tag} shard ${shardId} RECOVERED after ${(degradedForMs / 1000).toFixed(0)}s disconnected (reconnects so far: ${health.reconnectCount})`
+      );
+      try {
+        options.onRecovered?.({ instanceId, degradedForMs });
+      } catch (err) {
+        console.error(`grove-bot: ${tag} onRecovered callback threw:`, err instanceof Error ? err.message : err);
+      }
+    }
+    health.degraded = false;
+    health.degradedSince = null;
+    if (!wasDegraded) {
+      // Normal reconnect within threshold — emit the routine ready log. When
+      // we crossed the degraded threshold, RECOVERED above already conveys it.
+      console.log(`grove-bot: ${tag} shard ${shardId} ready (reconnects so far: ${health.reconnectCount})`);
+    }
+  });
+
+  client.on("shardDisconnect", (closeEvent, shardId) => {
+    health.currentlyConnected = false;
+    health.lastDisconnectedAt = new Date();
+    console.error(`grove-bot: ${tag} shard ${shardId} disconnected (code: ${closeEvent.code}, uptime: ${formatUptime(health.lastConnectedAt)})`);
+    clearDegradedTimer();
+    // Stamp degradedSince at disconnect time — the moment outage minutes
+    // started accruing — even though `degraded` only flips after the
+    // threshold elapses. Reconnect within threshold clears this in shardReady.
+    const disconnectAt = new Date();
+    health.degradedSince = disconnectAt;
+    degradedTimer = setTimeout(() => {
+      health.degraded = true;
+      console.error(
+        `grove-bot: ${tag} shard ${shardId} DEGRADED — disconnected > ${(degradedThresholdMs / 1000).toFixed(0)}s without recovery`
+      );
+      try {
+        options.onDegraded?.({ instanceId, thresholdMs: degradedThresholdMs, since: disconnectAt });
+      } catch (err) {
+        console.error(`grove-bot: ${tag} onDegraded callback threw:`, err instanceof Error ? err.message : err);
+      }
+    }, degradedThresholdMs);
+  });
+
+  client.on("shardReconnecting", (shardId) => {
+    health.reconnectCount++;
+    console.log(`grove-bot: ${tag} shard ${shardId} reconnecting (#${health.reconnectCount}, last connected: ${formatUptime(health.lastConnectedAt)} ago)`);
+  });
+
+  client.on("error", (error) => {
+    console.error(`grove-bot: ${tag} Discord client error:`, error.message);
+  });
+
+  client.on("shardError", (error, shardId) => {
+    console.error(`grove-bot: ${tag} shard ${shardId} WebSocket error:`, error.message);
+  });
+
+  return { client, health };
+}
+
+/**
+ * Check if a message is an @-mention for our bot.
+ * Ignores all bot messages AND explicitly ignores our own messages
+ * to prevent self-response loops when multiple bot processes are running.
+ */
+export function isMentionForBot(message: Message, client: Client): boolean {
+  if (!client.user) return false;
+  // Explicit self-check — never respond to our own messages
+  if (message.author.id === client.user.id) return false;
+  if (message.author.bot) return false;
+  return message.mentions.has(client.user);
+}
+
+/**
+ * Extract clean content from a mention message (strip the @mention).
+ */
+export function extractContent(message: Message, client: Client): string {
+  if (!client.user) return message.content;
+  return message.content
+    .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
+    .trim();
+}
