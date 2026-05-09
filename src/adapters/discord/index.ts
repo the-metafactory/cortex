@@ -21,8 +21,15 @@ import { postToDiscord } from "./response-poster";
 import { resolveRole } from "./role-resolver";
 import { isRetryableError } from "./retry";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
+import type { MyelinRuntime } from "../../bus/myelin/runtime";
 import type { SurfaceAdapter } from "../../bus/surface-router";
 import type { PayloadFilter } from "../../bus/payload-filter";
+import {
+  type SystemEventSource,
+  createSystemAdapterDegradedEvent,
+  createSystemAdapterDisconnectedEvent,
+  createSystemAdapterRecoveredEvent,
+} from "../../bus/system-events";
 import { formatEnvelopeAsMarkdown } from "../envelope-renderer";
 
 export interface DiscordAdapterConfig {
@@ -58,6 +65,32 @@ interface PendingResult {
   createdAt: number;
 }
 
+/**
+ * MIG-3b-ii: extra constructor wiring for `system.adapter.*` event emission.
+ *
+ * `runtime` is optional so existing callers (and tests that don't care about
+ * bus emission) keep working unchanged. When absent, the adapter still tracks
+ * degradation and writes to console.error — `runtime?.publish(...)` is a
+ * no-op anyway when the runtime is disabled, so the only effective difference
+ * is the absence of the bus envelope.
+ *
+ * `systemEventSource` is the `{org}.{agent}.{instance}` triple stamped onto
+ * every emitted `system.*` envelope. We require it explicitly (rather than
+ * deriving from `botConfig.agent.operatorId`) because a single grove-bot
+ * process may run multiple presences (Luna + Echo + ...), and the spec's
+ * §3.6 source convention names *the agent*, not the operator.
+ *
+ * Anti-pattern note (G-1111 §4.6.2): a degraded adapter publishing its OWN
+ * `degraded` event is the wrong long-term home — that belongs to a sibling
+ * `connection-watcher` component. MIG-3b-ii intentionally takes the shorter
+ * path so the wiring exists end-to-end; the watcher refactor is tracked as a
+ * follow-on iteration.
+ */
+export interface DiscordAdapterRuntimeWiring {
+  runtime?: MyelinRuntime;
+  systemEventSource?: SystemEventSource;
+}
+
 export class DiscordAdapter implements PlatformAdapter {
   readonly platform = "discord";
   readonly instanceId: string;
@@ -66,11 +99,19 @@ export class DiscordAdapter implements PlatformAdapter {
   private connectionHealth: ConnectionHealth | null = null;
   private botConfig: BotConfig;
   private adapterConfig: DiscordAdapterConfig;
+  private runtime: MyelinRuntime | undefined;
+  private systemEventSource: SystemEventSource | undefined;
 
-  constructor(adapterConfig: DiscordAdapterConfig, botConfig: BotConfig) {
+  constructor(
+    adapterConfig: DiscordAdapterConfig,
+    botConfig: BotConfig,
+    wiring: DiscordAdapterRuntimeWiring = {},
+  ) {
     this.instanceId = adapterConfig.instanceId;
     this.adapterConfig = adapterConfig;
     this.botConfig = botConfig;
+    this.runtime = wiring.runtime;
+    this.systemEventSource = wiring.systemEventSource;
 
     // MIG-3b: warn once at construction if surfaceSubjects is explicitly empty.
     // `undefined` is silent (adapter opted out of bus rendering entirely);
@@ -87,9 +128,35 @@ export class DiscordAdapter implements PlatformAdapter {
   async start(onMessage: (msg: InboundMessage) => Promise<void>): Promise<void> {
     const { client, health } = createDiscordClient(this.botConfig, {
       instanceId: this.instanceId,
+      // MIG-3b-ii: emit `system.adapter.{degraded,recovered}` envelopes so
+      // operators get out-of-band visibility (see G-1111 §3.5.3 + §4.6).
+      // The callbacks are also wired to console.error for log retention;
+      // the bus emission is additive, not a replacement.
+      onDegraded: ({ instanceId, thresholdMs, since }) => {
+        this.publishAdapterDegraded({ instanceId, thresholdMs, since });
+      },
+      onRecovered: ({ instanceId, degradedForMs }) => {
+        this.publishAdapterRecovered({ instanceId, degradedForMs });
+      },
     });
     this.client = client;
     this.connectionHealth = health;
+
+    // MIG-3b-ii: emit `system.adapter.disconnected` on every shard disconnect.
+    // Distinct from degraded — disconnect fires immediately, degraded only
+    // after threshold elapses without recovery. Surfaces filter on `was_clean`
+    // and on the disconnected→degraded escalation.
+    this.client.on("shardDisconnect", (closeEvent, shardId) => {
+      this.publishAdapterDisconnected({
+        shardId,
+        closeCode: closeEvent.code,
+        closeReason: closeEvent.reason,
+        // discord.js wsCloseCode convention: 1000 / 1001 are clean shutdowns,
+        // anything else is unclean. Keep this conservative — surfaces filter
+        // on this for incident vs flap classification.
+        wasClean: closeEvent.code === 1000 || closeEvent.code === 1001,
+      });
+    });
 
     // Retry pending deliveries on reconnect
     this.client.on("shardReady", async () => {
@@ -714,5 +781,93 @@ export class DiscordAdapter implements PlatformAdapter {
       { instanceId: this.instanceId, channelId },
       formatEnvelopeAsMarkdown(envelope),
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // MIG-3b-ii: system.adapter.* event emission
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Common gate for `system.adapter.*` emission. Splits the "no runtime
+   * configured" case (silent — bot was started without NATS) from the "no
+   * source configured but runtime present" case (warn once — operator wired
+   * NATS but forgot to pass `systemEventSource`, which is a config bug worth
+   * surfacing).
+   */
+  private canPublishSystemEvent(): boolean {
+    if (!this.runtime) return false;
+    if (!this.systemEventSource) {
+      // Warn once per missing-source occurrence — without the source, we'd
+      // emit envelopes that fail schema validation on the receiver side. The
+      // operator needs this signal at start time, not buried in error logs
+      // after a real outage.
+      console.warn(
+        `grove-bot: discord-${this.instanceId} runtime is configured but systemEventSource is missing — system.* events will not be emitted`,
+      );
+      return false;
+    }
+    return true;
+  }
+
+  private publishAdapterDegraded(opts: {
+    instanceId: string;
+    thresholdMs: number;
+    since: Date;
+  }): void {
+    if (!this.canPublishSystemEvent()) return;
+    const env = createSystemAdapterDegradedEvent({
+      source: this.systemEventSource!,
+      adapterId: opts.instanceId,
+      platform: "discord",
+      disconnectedSince: opts.since,
+      thresholdMs: opts.thresholdMs,
+      reconnectAttempts: this.connectionHealth?.reconnectCount,
+    });
+    // Fire-and-forget — `MyelinRuntime.publish` swallows + logs errors so we
+    // never crash the bot just because a degraded notification couldn't ship.
+    void this.runtime!.publish(env);
+  }
+
+  private publishAdapterRecovered(opts: {
+    instanceId: string;
+    degradedForMs: number;
+  }): void {
+    if (!this.canPublishSystemEvent()) return;
+    const env = createSystemAdapterRecoveredEvent({
+      source: this.systemEventSource!,
+      adapterId: opts.instanceId,
+      platform: "discord",
+      degradedForMs: opts.degradedForMs,
+      reconnectAttempts: this.connectionHealth?.reconnectCount,
+    });
+    void this.runtime!.publish(env);
+  }
+
+  private publishAdapterDisconnected(opts: {
+    shardId: number;
+    closeCode?: number;
+    closeReason?: string;
+    wasClean: boolean;
+  }): void {
+    if (!this.canPublishSystemEvent()) return;
+    // The disconnect timestamp lives on the connection-health snapshot; if
+    // discord.js fired shardDisconnect before connection-health updated (or
+    // the field was cleared between event and publish), fall back to "now"
+    // — the envelope timestamp is an upper bound on disconnect time anyway.
+    const disconnectedSince =
+      this.connectionHealth?.lastDisconnectedAt ?? new Date();
+    const env = createSystemAdapterDisconnectedEvent({
+      source: this.systemEventSource!,
+      adapterId: this.instanceId,
+      platform: "discord",
+      disconnectedSince,
+      shardId: opts.shardId,
+      ...(opts.closeCode !== undefined && { closeCode: opts.closeCode }),
+      ...(opts.closeReason !== undefined && opts.closeReason !== "" && {
+        closeReason: opts.closeReason,
+      }),
+      wasClean: opts.wasClean,
+    });
+    void this.runtime!.publish(env);
   }
 }
