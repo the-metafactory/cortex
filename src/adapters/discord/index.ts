@@ -157,9 +157,19 @@ export class DiscordAdapter implements PlatformAdapter {
         shardId,
         closeCode: closeEvent.code,
         closeReason: closeEvent.reason,
-        // discord.js wsCloseCode convention: 1000 / 1001 are clean shutdowns,
-        // anything else is unclean. Keep this conservative — surfaces filter
-        // on this for incident vs flap classification.
+        // `was_clean` follows RFC 6455 close-frame semantics: codes 1000/1001
+        // are clean; everything else is unclean.
+        //
+        // Discord layers gateway-specific 4xxx codes on top of the WebSocket
+        // standard set (see https://discord.com/developers/docs/topics/opcodes-and-status-codes#gateway):
+        //   - 4004 (auth failed)         — permanent; was_clean: false
+        //   - 4014 (disallowed intents)  — permanent; was_clean: false
+        //   - 4000 (unknown error)       — retryable; was_clean: false
+        // All currently classify as unclean; a surface that wants
+        // transient-vs-permanent must inspect `code` itself. Keep this
+        // conservative — surfaces filter on `was_clean` for incident vs
+        // flap classification, and an "unknown 4xxx" being flagged unclean
+        // is the right default during an outage.
         wasClean: closeEvent.code === 1000 || closeEvent.code === 1001,
       });
     });
