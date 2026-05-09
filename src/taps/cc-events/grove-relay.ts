@@ -13,6 +13,8 @@ import { processEvent } from "./lib/policy-engine";
 import { EventProcessor } from "./lib/event-processor";
 import { watchRawEvents } from "./lib/file-watcher";
 import { RawEventSchema } from "./hooks/lib/event-types";
+import { NatsLink } from "../../bus/nats/connection";
+import { createCcEventPublisher } from "./cc-events";
 
 // =============================================================================
 // Paths
@@ -135,6 +137,18 @@ program
   .description("Start the relay daemon")
   .option("--policy <path>", "Path to relay policy YAML", DEFAULT_POLICY)
   .option("--foreground", "Run in foreground (don't daemonize)")
+  .option(
+    "--nats-url <url>",
+    "Optional NATS URL — when set, the relay publishes filtered events as Myelin envelopes on local.{org}.{type}. Falls back to env var NATS_URL.",
+  )
+  .option(
+    "--nats-token <token>",
+    "Bearer token for NATS auth. Falls back to env var NATS_TOKEN.",
+  )
+  .option(
+    "--org <org>",
+    "Operator/org segment for published subjects (local.{org}.{type}). Falls back to env var GROVE_OPERATOR or NATS_ORG.",
+  )
   .action(async (options) => {
     if (!existsSync(options.policy)) {
       console.error(`Policy file not found: ${options.policy}`);
@@ -151,7 +165,51 @@ program
     }
 
     const policy = loadPolicy(options.policy);
-    const processor = new EventProcessor(policy);
+
+    // MIG-5b: Optional NATS publishing. The relay opens its own NatsLink
+    // (independent of the bot's MyelinRuntime — the relay is a separate
+    // daemon). When --nats-url is absent (or env var NATS_URL unset), the
+    // relay behaves identically to its pre-MIG-5b form: JSONL only, zero
+    // bus emission. This matches the project-wide rule that grove must
+    // stay installable without NATS configured.
+    const natsUrl: string | undefined = options.natsUrl ?? process.env.NATS_URL;
+    const natsToken: string | undefined =
+      options.natsToken ?? process.env.NATS_TOKEN;
+    const org: string =
+      options.org ?? process.env.GROVE_OPERATOR ?? process.env.NATS_ORG ?? "default";
+
+    let natsLink: NatsLink | undefined;
+    let onPublished: ((e: import("./hooks/lib/event-types").PublishedEvent) => void) | undefined;
+
+    if (natsUrl) {
+      try {
+        natsLink = await NatsLink.connect({
+          url: natsUrl,
+          token: natsToken,
+          name: "grove-relay",
+        });
+        onPublished = createCcEventPublisher({
+          link: natsLink,
+          org,
+        });
+        const safeUrl = natsUrl.replace(/\/\/[^@/]+@/, "//***@");
+        console.log(
+          `grove-relay: nats publishing enabled — ${safeUrl} (org="${org}")`,
+        );
+      } catch (err) {
+        // Per the design rule: failed NATS startup must NOT crash the
+        // relay's primary archival job. Log and continue JSONL-only.
+        console.error(
+          `grove-relay: nats startup failed — continuing without bus publishing: ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+        natsLink = undefined;
+        onPublished = undefined;
+      }
+    }
+
+    const processor = new EventProcessor(policy, { onPublished });
 
     // Write PID file
     writeFileSync(PID_FILE, String(process.pid));
@@ -163,6 +221,7 @@ program
     console.log(`  Policy: ${options.policy}`);
     console.log(`  Raw:    ${RAW_DIR} (${COMPRESS_AFTER_DAYS}d→gz, ${DELETE_AFTER_DAYS}d→delete)`);
     console.log(`  Pub:    ${PUBLISHED_DIR} (${COMPRESS_AFTER_DAYS}d→gz, ${DELETE_AFTER_DAYS}d→delete)`);
+    console.log(`  NATS:   ${natsLink ? "enabled" : "disabled (no --nats-url)"}`);
     console.log(`  PID:    ${process.pid}`);
 
     // Watch and process
@@ -192,17 +251,26 @@ program
     const retentionInterval = setInterval(runRetentionSweep, 6 * 60 * 60 * 1000);
 
     // Handle shutdown
-    const shutdown = () => {
+    const shutdown = async () => {
       console.log("\ngrove-relay: shutting down...");
       cleanup();
       clearInterval(interval);
       clearInterval(retentionInterval);
+      if (natsLink) {
+        try {
+          await natsLink.close();
+        } catch (err) {
+          console.error(
+            `grove-relay: nats close error: ${err instanceof Error ? err.message : err}`,
+          );
+        }
+      }
       if (existsSync(PID_FILE)) unlinkSync(PID_FILE);
       process.exit(0);
     };
 
-    process.on("SIGINT", shutdown);
-    process.on("SIGTERM", shutdown);
+    process.on("SIGINT", () => { shutdown().catch(() => process.exit(1)); });
+    process.on("SIGTERM", () => { shutdown().catch(() => process.exit(1)); });
 
     console.log("grove-relay: daemon started (Ctrl+C to stop)");
   });

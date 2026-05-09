@@ -151,4 +151,83 @@ describe("EventProcessor", () => {
     expect(pub1.session_id).toBe("session-a");
     expect(pub2.session_id).toBe("session-b");
   });
+
+  // ---------------------------------------------------------------------------
+  // MIG-5b — onPublished hook
+  // ---------------------------------------------------------------------------
+
+  describe("onPublished hook", () => {
+    test("invoked once per filtered event with the published shape", () => {
+      const rawFile = join(RAW_DIR, "hook.jsonl");
+      const pubFile = join(PUB_DIR, "hook.jsonl");
+      const captured: Array<{ event_id: string; event_type: string }> = [];
+
+      const processor = new EventProcessor(testPolicy, {
+        onPublished: (event) => {
+          captured.push({ event_id: event.event_id, event_type: event.event_type });
+        },
+      });
+
+      writeEvent(rawFile, sampleRawEvent(1));
+      writeEvent(rawFile, sampleRawEvent(2));
+      const count = processor.processFile(rawFile, pubFile);
+
+      expect(count).toBe(2);
+      expect(captured).toHaveLength(2);
+      expect(captured[0]!.event_type).toBe("agent.task.completed");
+      expect(captured[1]!.event_type).toBe("agent.task.completed");
+    });
+
+    test("not invoked for events filtered by policy", () => {
+      const rawFile = join(RAW_DIR, "filter.jsonl");
+      const pubFile = join(PUB_DIR, "filter.jsonl");
+      const captured: string[] = [];
+
+      const processor = new EventProcessor(testPolicy, {
+        onPublished: (event) => {
+          captured.push(event.event_type);
+        },
+      });
+
+      writeEvent(rawFile, sampleRawEvent(1)); // allowed (agent.task.completed)
+      writeEvent(rawFile, sampleRawEvent(2, { event_type: "tool.bash.executed" })); // dropped
+      processor.processFile(rawFile, pubFile);
+
+      expect(captured).toEqual(["agent.task.completed"]);
+    });
+
+    test("hook throws are swallowed (do not break JSONL pipeline)", () => {
+      const rawFile = join(RAW_DIR, "throw.jsonl");
+      const pubFile = join(PUB_DIR, "throw.jsonl");
+
+      const processor = new EventProcessor(testPolicy, {
+        onPublished: () => {
+          throw new Error("nats publish boom");
+        },
+      });
+
+      writeEvent(rawFile, sampleRawEvent(1));
+      // Must NOT throw — the JSONL append is the durable primary path
+      expect(() => processor.processFile(rawFile, pubFile)).not.toThrow();
+
+      // JSONL output unaffected by hook failure
+      const lines = readFileSync(pubFile, "utf-8").trim().split("\n");
+      expect(lines).toHaveLength(1);
+      const pub = JSON.parse(lines[0]!);
+      expect(pub.event_type).toBe("agent.task.completed");
+    });
+
+    test("absence of hook is identical to pre-MIG-5b behaviour", () => {
+      const rawFile = join(RAW_DIR, "noop.jsonl");
+      const pubFile = join(PUB_DIR, "noop.jsonl");
+
+      // No options — same constructor signature as before MIG-5b
+      const processor = new EventProcessor(testPolicy);
+
+      writeEvent(rawFile, sampleRawEvent(1));
+      const count = processor.processFile(rawFile, pubFile);
+      expect(count).toBe(1);
+      expect(existsSync(pubFile)).toBe(true);
+    });
+  });
 });
