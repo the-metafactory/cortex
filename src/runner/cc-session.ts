@@ -1,7 +1,8 @@
 /**
  * Streaming Claude Code session wrapper.
  * Spawns CC with --output-format stream-json and emits typed events.
- * Replaces the synchronous invokeClaudeCode() for async-capable usage.
+ * The single CC invocation primitive in cortex — the legacy synchronous
+ * `invokeClaudeCode()` was retired in MIG-4.8.
  */
 
 import { EventEmitter } from "events";
@@ -158,7 +159,10 @@ export class CCSession extends EventEmitter {
 
   /**
    * Await full completion — returns a CCSessionResult.
-   * This is the sync-compatible path: start() + wait() behaves like invokeClaudeCode().
+   * The sync-compatible path: `start() + wait()` produces the same
+   * final blob as a request/response invocation, while the underlying
+   * stream still emits incremental tool-use / text events for callers
+   * that listen.
    */
   async wait(): Promise<CCSessionResult> {
     if (!this.proc) {

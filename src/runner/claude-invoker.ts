@@ -1,6 +1,23 @@
 /**
- * T-3.3: Claude Invoker
- * Spawns claude --print with channel context. Supports --resume for threaded sessions.
+ * Claude CLI argument builder.
+ *
+ * Originally this module also exported `invokeClaudeCode()` — a synchronous
+ * spawn helper that produced a final result blob. That entry point was
+ * superseded by `cc-session.ts`'s streaming `CCSession`, which emits
+ * incremental events (tool-use, text, result) and supports the same
+ * one-shot use case via `start().wait()`. MIG-4.8 retires the legacy
+ * `invokeClaudeCode` per `docs/v1-to-v2-cutover.md` §7. The shared
+ * `buildClaudeArgs` helper stays because `cc-session.ts` uses it to
+ * construct the CLI argv — moving the function elsewhere would just
+ * shuffle imports.
+ *
+ * What this module exports today:
+ *   - `ClaudeInvocationOpts` — the option bag shape consumed by
+ *     `buildClaudeArgs`. Kept symmetric with the historical opts so a
+ *     future `JsonInvoker` (e.g. for SSE streaming) can reuse the type.
+ *   - `buildClaudeArgs(opts)` — pure function: opts → string[] of CLI args
+ *     to spawn `claude` with. No side effects. Tested directly by
+ *     `claude-invoker-resume.test.ts`.
  */
 
 export interface ClaudeInvocationOpts {
@@ -20,17 +37,12 @@ export interface ClaudeInvocationOpts {
   allowedDirs?: string[];
 }
 
-export interface ClaudeResult {
-  success: boolean;
-  response: string;
-  exitCode: number;
-  durationMs: number;
-  /** Session ID from CC (for storing in session manager) */
-  sessionId?: string;
-}
-
 /**
- * Build the claude CLI args. Exported for testing.
+ * Build the claude CLI args. Pure function — no spawn, no side effects.
+ *
+ * Used by `cc-session.ts` to construct the argv for the streaming spawn;
+ * also used by tests to lock in flag-ordering invariants without going
+ * through a process spawn.
  */
 export function buildClaudeArgs(opts: ClaudeInvocationOpts): string[] {
   const args: string[] = ["--print"];
@@ -61,70 +73,4 @@ export function buildClaudeArgs(opts: ClaudeInvocationOpts): string[] {
   args.push("-p", opts.prompt);
 
   return args;
-}
-
-export async function invokeClaudeCode(opts: ClaudeInvocationOpts): Promise<ClaudeResult> {
-  const start = performance.now();
-  const timeout = opts.timeoutMs ?? 120_000;
-
-  const args = buildClaudeArgs(opts);
-
-  const env: Record<string, string> = {
-    ...process.env as Record<string, string>,
-    GROVE_CHANNEL: opts.groveChannel ?? "",
-  };
-
-  // G-501: Pass network identifier if provided
-  if (opts.groveNetwork) {
-    env.GROVE_NETWORK = opts.groveNetwork;
-  }
-
-  // Suppress ANTHROPIC_API_KEY when OAuth token is present
-  if (env.CLAUDE_CODE_OAUTH_TOKEN) {
-    delete env.ANTHROPIC_API_KEY;
-  }
-
-  try {
-    const proc = Bun.spawn(["claude", ...args], {
-      stdout: "pipe",
-      stderr: "pipe",
-      env,
-    });
-
-    // Timeout handling
-    const timeoutId = setTimeout(() => {
-      proc.kill("SIGTERM");
-    }, timeout);
-
-    const exitCode = await proc.exited;
-    clearTimeout(timeoutId);
-
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-    const durationMs = Math.round(performance.now() - start);
-
-    if (exitCode !== 0) {
-      console.error(`grove-bot: claude exited ${exitCode}: ${stderr.trim().slice(0, 500)}`);
-    }
-
-    // Try to extract session ID from stderr (CC prints it there)
-    const sessionMatch = stderr.match(/session:\s*([a-f0-9-]+)/i)
-      ?? stderr.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/);
-
-    return {
-      success: exitCode === 0,
-      response: stdout.trim(),
-      exitCode,
-      durationMs,
-      sessionId: sessionMatch?.[1],
-    };
-  } catch (error) {
-    const durationMs = Math.round(performance.now() - start);
-    return {
-      success: false,
-      response: error instanceof Error ? error.message : String(error),
-      exitCode: 1,
-      durationMs,
-    };
-  }
 }
