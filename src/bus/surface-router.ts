@@ -156,18 +156,14 @@ const DEFAULT_RENDER_TIMEOUT_MS = 5000;
 
 /**
  * Construct a surface router that consumes envelopes from
- * `MyelinRuntime`. The runtime parameter is currently retained for the
- * future wiring hook (see file header) — the router does not call into
- * the runtime today; the runtime will call into the router via
- * `dispatch()` once an `onEnvelope` registration surface lands.
+ * `MyelinRuntime`. On `start()`, the router registers an
+ * `onEnvelope` handler with the runtime; on `stop()`, the
+ * registration unwinds. Production callers should construct the
+ * router after `startMyelinRuntime` returns and `await router.start()`
+ * before publishing.
  */
 export function createSurfaceRouter(
-  // Reserved for the future runtime → router wiring (see file header).
-  // Today the parameter is part of the contract but the router does not
-  // call into the runtime; the runtime will call `dispatch()` on this
-  // router once an `onEnvelope` registration surface is added there.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _runtime: MyelinRuntime,
+  runtime: MyelinRuntime,
   opts?: SurfaceRouterOptions,
 ): SurfaceRouter {
   const adapters: SurfaceAdapter[] = [];
@@ -176,8 +172,11 @@ export function createSurfaceRouter(
 
   let started = false;
   let stopped = false;
+  let envelopeReg: { unregister: () => void } | null = null;
 
-  return {
+  // Forward declaration — start() needs to reference dispatch by name to
+  // bind the runtime's onEnvelope handler.
+  const router: SurfaceRouter = {
     register(adapter) {
       adapters.push(adapter);
       return {
@@ -191,11 +190,25 @@ export function createSurfaceRouter(
     async start() {
       if (started) return;
       started = true;
+      // Wire runtime → router. Each envelope from any active subscription
+      // arrives at the router with its actual NATS subject (so wildcard
+      // patterns route correctly).
+      envelopeReg = runtime.onEnvelope((env, subject) => {
+        // dispatch() returns a Promise; we don't await — the runtime's
+        // subscriber loop must not block on adapter rendering. The router
+        // already isolates adapter errors via renderWithIsolation so this
+        // floating Promise resolves cleanly.
+        void router.dispatch(env, subject);
+      });
     },
 
     async stop() {
       if (stopped) return;
       stopped = true;
+      if (envelopeReg) {
+        envelopeReg.unregister();
+        envelopeReg = null;
+      }
     },
 
     async dispatch(envelope, subject) {
@@ -224,6 +237,8 @@ export function createSurfaceRouter(
       }
     },
   };
+
+  return router;
 }
 
 // =============================================================================

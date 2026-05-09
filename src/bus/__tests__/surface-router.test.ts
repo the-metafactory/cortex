@@ -34,6 +34,33 @@ function fakeRuntime(): MyelinRuntime {
   };
 }
 
+/**
+ * `fakeRuntime` plus a `trigger()` helper for end-to-end wiring tests.
+ * Use when the test needs to simulate an envelope arriving on the bus
+ * (i.e. the runtime side of the surface-router contract).
+ */
+function fakeRuntimeWithTrigger(): {
+  runtime: MyelinRuntime;
+  trigger: (env: Envelope, subject: string) => void;
+  registrationCount: () => number;
+} {
+  const handlers = new Set<Parameters<MyelinRuntime["onEnvelope"]>[0]>();
+  return {
+    runtime: {
+      enabled: true,
+      onEnvelope: (handler) => {
+        handlers.add(handler);
+        return { unregister: () => { handlers.delete(handler); } };
+      },
+      stop: async () => {},
+    },
+    trigger: (env, subject) => {
+      for (const h of handlers) h(env, subject);
+    },
+    registrationCount: () => handlers.size,
+  };
+}
+
 function makeEnvelope(overrides: Partial<Envelope> = {}): Envelope {
   return {
     id: "00000000-0000-4000-8000-000000000000",
@@ -486,10 +513,9 @@ describe("createSurfaceRouter — lifecycle", () => {
 
 describe("createSurfaceRouter — runtime integration shape", () => {
   test("router accepts a MyelinRuntime stub and dispatches when called externally", async () => {
-    // The future wiring: a runtime modification that calls
-    // `router.dispatch(envelope, subject)` from its envelope handler.
-    // Until that lands, simulate it here so the integration shape is
-    // pinned down in tests.
+    // The legacy direct-dispatch path — verifies dispatch() works even
+    // when the runtime hasn't fired the handler. Useful for unit tests
+    // and for callers that want to push synthetic envelopes through.
     const runtime = fakeRuntime();
     const router = createSurfaceRouter(runtime);
 
@@ -497,7 +523,6 @@ describe("createSurfaceRouter — runtime integration shape", () => {
     router.register(a.adapter);
     await router.start();
 
-    // Simulate three envelopes arriving from the runtime.
     const envs = [
       makeEnvelope({ id: "11111111-1111-4111-8111-111111111111" }),
       makeEnvelope({ id: "22222222-2222-4222-8222-222222222222" }),
@@ -511,5 +536,72 @@ describe("createSurfaceRouter — runtime integration shape", () => {
     expect(a.calls.map((c) => c.id)).toEqual(envs.map((e) => e.id));
 
     await router.stop();
+  });
+
+  test("start() registers an onEnvelope handler on the runtime", async () => {
+    const fake = fakeRuntimeWithTrigger();
+    const router = createSurfaceRouter(fake.runtime);
+
+    expect(fake.registrationCount()).toBe(0);
+    await router.start();
+    expect(fake.registrationCount()).toBe(1);
+    await router.start(); // idempotent — must not double-register
+    expect(fake.registrationCount()).toBe(1);
+    await router.stop();
+  });
+
+  test("stop() unregisters the runtime onEnvelope handler", async () => {
+    const fake = fakeRuntimeWithTrigger();
+    const router = createSurfaceRouter(fake.runtime);
+
+    await router.start();
+    expect(fake.registrationCount()).toBe(1);
+    await router.stop();
+    expect(fake.registrationCount()).toBe(0);
+    await router.stop(); // idempotent
+    expect(fake.registrationCount()).toBe(0);
+  });
+
+  test("end-to-end: runtime envelope reaches registered adapter via wired handler", async () => {
+    // The §4.355 integration acceptance shape: register a fake adapter,
+    // simulate an envelope arriving from the runtime, assert the
+    // adapter received it.
+    const fake = fakeRuntimeWithTrigger();
+    const router = createSurfaceRouter(fake.runtime);
+
+    const a = recordingAdapter({ id: "a", subjects: ["local.metafactory.review.>"] });
+    router.register(a.adapter);
+    await router.start();
+
+    fake.trigger(
+      makeEnvelope({ id: "12121212-1212-4121-8121-121212121212" }),
+      "local.metafactory.review.cycle.completed",
+    );
+
+    // Dispatch is fire-and-forget from the handler's perspective. Yield
+    // to the microtask queue so allSettled completes before we assert.
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(a.calls).toHaveLength(1);
+    expect(a.calls[0]!.id).toBe("12121212-1212-4121-8121-121212121212");
+
+    await router.stop();
+  });
+
+  test("after stop(), runtime envelopes do not reach adapters (handler unregistered)", async () => {
+    const fake = fakeRuntimeWithTrigger();
+    const router = createSurfaceRouter(fake.runtime);
+    const a = recordingAdapter({ id: "a", subjects: ["local.metafactory.>"] });
+    router.register(a.adapter);
+
+    await router.start();
+    fake.trigger(makeEnvelope(), "local.metafactory.review.cycle.completed");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(a.calls).toHaveLength(1);
+
+    await router.stop();
+    fake.trigger(makeEnvelope(), "local.metafactory.review.cycle.completed");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(a.calls).toHaveLength(1); // unchanged — stop unregistered the handler
   });
 });
