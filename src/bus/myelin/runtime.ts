@@ -27,7 +27,7 @@ import type { Envelope } from "./envelope-validator";
  */
 export type EnvelopeHandler = (envelope: Envelope, subject: string) => void;
 
-/** Lifecycle handle so grove-bot can clean up on shutdown. */
+/** Lifecycle handle so cortex can clean up on shutdown. */
 export interface MyelinRuntime {
   readonly enabled: boolean;
   /**
@@ -129,7 +129,7 @@ export async function startMyelinRuntime(
 
   if (subjects.length === 0) {
     console.warn(
-      "grove-bot: nats.url configured but nats.subjects is empty — no subscriptions started",
+      "myelin-runtime: nats.url configured but nats.subjects is empty — no subscriptions started",
     );
     return {
       enabled: false,
@@ -149,11 +149,11 @@ export async function startMyelinRuntime(
       ...(options?.connectImpl ? { connectImpl: options.connectImpl } : {}),
     });
     console.log(
-      `grove-bot: myelin runtime connected to ${safeUrl} as "${nats.name}"`,
+      `myelin-runtime: connected to ${safeUrl} as "${nats.name}"`,
     );
   } catch (err) {
     console.error(
-      "grove-bot: myelin runtime failed to connect — continuing without NATS:",
+      "myelin-runtime: failed to connect — continuing without NATS:",
       err instanceof Error ? err.message : err,
     );
     return {
@@ -180,7 +180,7 @@ export async function startMyelinRuntime(
               handler(env, subject);
             } catch (err) {
               console.error(
-                "grove-bot: myelin onEnvelope handler threw:",
+                "myelin-runtime: onEnvelope handler threw:",
                 err instanceof Error ? err.message : err,
               );
             }
@@ -188,10 +188,10 @@ export async function startMyelinRuntime(
         },
       });
       subscribers.push(sub);
-      console.log(`grove-bot: myelin subscribed to "${pattern}"`);
+      console.log(`myelin-runtime: subscribed to "${pattern}"`);
     } catch (err) {
       console.error(
-        `grove-bot: myelin failed to subscribe to "${pattern}":`,
+        `myelin-runtime: failed to subscribe to "${pattern}":`,
         err instanceof Error ? err.message : err,
       );
     }
@@ -230,7 +230,7 @@ export async function startMyelinRuntime(
       // most failure modes here (closed connection, oversized payload) are
       // already-bad-state signals.
       console.error(
-        `grove-bot: myelin publish failed for subject=${subject} id=${envelope.id} type=${envelope.type}:`,
+        `myelin-runtime: publish failed for subject=${subject} id=${envelope.id} type=${envelope.type}:`,
         err instanceof Error ? err.message : err,
       );
     }
@@ -248,11 +248,11 @@ export async function startMyelinRuntime(
       await Promise.allSettled(subscribers.map((s) => s.stop()));
       await link.close().catch((err) => {
         console.error(
-          "grove-bot: myelin runtime close error:",
+          "myelin-runtime: close error:",
           err instanceof Error ? err.message : err,
         );
       });
-      console.log("grove-bot: myelin runtime stopped");
+      console.log("myelin-runtime: stopped");
     },
   };
 }
@@ -267,6 +267,6 @@ export async function startMyelinRuntime(
 function logEnvelope(env: Envelope, subject: string): void {
   const corr = env.correlation_id ? ` correlation=${env.correlation_id}` : "";
   console.log(
-    `grove-bot: myelin received envelope subject=${subject} id=${env.id} type=${env.type}${corr}`,
+    `myelin-runtime: received envelope subject=${subject} id=${env.id} type=${env.type}${corr}`,
   );
 }

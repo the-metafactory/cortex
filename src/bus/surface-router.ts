@@ -230,7 +230,7 @@ export function createSurfaceRouter(
           // Should not happen — renderWithIsolation never rejects. If it
           // does, log defensively rather than crash dispatch.
           console.error(
-            "grove-bot: surface-router internal error — renderWithIsolation rejected:",
+            "surface-router: internal error — renderWithIsolation rejected:",
             r.reason instanceof Error ? r.reason.message : r.reason,
           );
         }
@@ -300,7 +300,7 @@ function safeReportError(
     // Default sink: log so a missing observer doesn't make adapter
     // failures invisible.
     console.error(
-      `grove-bot: surface-router adapter "${adapterId}" render failed:`,
+      `surface-router: adapter "${adapterId}" render failed:`,
       err.message,
     );
     return;
@@ -310,7 +310,7 @@ function safeReportError(
   } catch (hookErr) {
     // A throwing observer must not poison the dispatch loop.
     console.error(
-      `grove-bot: surface-router onAdapterError hook threw for "${adapterId}":`,
+      `surface-router: onAdapterError hook threw for "${adapterId}":`,
       hookErr instanceof Error ? hookErr.message : hookErr,
     );
   }

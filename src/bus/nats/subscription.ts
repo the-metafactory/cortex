@@ -113,7 +113,7 @@ export class NatsSubscription {
       } catch (err) {
         // Drain can fail if the connection is already closed; log and proceed.
         console.error(
-          `grove-bot: nats-subscription "${this.pattern}" drain error:`,
+          `nats-subscription: "${this.pattern}" drain error:`,
           err instanceof Error ? err.message : err,
         );
       }
@@ -144,7 +144,7 @@ export class NatsSubscription {
       // page someone — and leave `subscription` null so stop() won't
       // try to drain a phantom.
       console.error(
-        `grove-bot: nats-subscription "${this.pattern}" subscribe failed:`,
+        `nats-subscription: "${this.pattern}" subscribe failed:`,
         err instanceof Error ? err.message : err,
       );
       this.subscription = null;
@@ -157,7 +157,7 @@ export class NatsSubscription {
     const loop = this.consume(this.subscription).catch((err) => {
       if (!this.stopped) {
         console.error(
-          `grove-bot: nats-subscription "${this.pattern}" consume loop rejection:`,
+          `nats-subscription: "${this.pattern}" consume loop rejection:`,
           err instanceof Error ? err.message : err,
         );
       }
@@ -197,7 +197,7 @@ export class NatsSubscription {
     } catch (err) {
       if (!this.stopped) {
         console.error(
-          `grove-bot: nats-subscription "${this.pattern}" consume loop error:`,
+          `nats-subscription: "${this.pattern}" consume loop error:`,
           err instanceof Error ? err.message : err,
         );
       }
@@ -228,7 +228,7 @@ export class NatsSubscription {
           if (old) {
             old.drain().catch((err) => {
               console.error(
-                `grove-bot: nats-subscription "${this.pattern}" pre-reconnect drain error:`,
+                `nats-subscription: "${this.pattern}" pre-reconnect drain error:`,
                 err instanceof Error ? err.message : err,
               );
             });
@@ -245,7 +245,7 @@ export class NatsSubscription {
           // misleading "subscribe failed → re-subscribed" log pair.
           if (this.subscribeOnce()) {
             console.info(
-              `grove-bot: nats-subscription "${this.pattern}" re-subscribed after reconnect`,
+              `nats-subscription: "${this.pattern}" re-subscribed after reconnect`,
             );
           }
         }
@@ -253,7 +253,7 @@ export class NatsSubscription {
     } catch (err) {
       if (!this.stopped) {
         console.error(
-          `grove-bot: nats-subscription "${this.pattern}" status loop error:`,
+          `nats-subscription: "${this.pattern}" status loop error:`,
           err instanceof Error ? err.message : err,
         );
       }
@@ -280,7 +280,7 @@ export class NatsSubscription {
 
 function defaultErrorLog(err: Error, subject: string): void {
   console.error(
-    `grove-bot: nats-subscription handler error on "${subject}":`,
+    `nats-subscription: handler error on "${subject}":`,
     err.message,
   );
 }

@@ -216,7 +216,7 @@ describe("MyelinRuntime", () => {
     });
     expect(runtime.enabled).toBe(true);
     const connectLog = logs.find(
-      (l) => l.kind === "log" && l.msg.includes("myelin runtime connected"),
+      (l) => l.kind === "log" && l.msg.includes("myelin-runtime: connected"),
     );
     expect(connectLog).toBeDefined();
     expect(connectLog!.msg).not.toContain("secret-token");
@@ -236,7 +236,7 @@ describe("MyelinRuntime", () => {
     });
     expect(runtime.enabled).toBe(true);
     const connectLog = logs.find(
-      (l) => l.kind === "log" && l.msg.includes("myelin runtime connected"),
+      (l) => l.kind === "log" && l.msg.includes("myelin-runtime: connected"),
     );
     expect(connectLog).toBeDefined();
     // Both user and password redacted.
@@ -263,7 +263,7 @@ describe("MyelinRuntime", () => {
     // invocations, not twice — proves the `stopped` flag in the
     // closure actually short-circuits.
     const stoppedLines = logs.filter(
-      (l) => l.kind === "log" && l.msg.includes("myelin runtime stopped"),
+      (l) => l.kind === "log" && l.msg.includes("myelin-runtime: stopped"),
     );
     expect(stoppedLines.length).toBe(1);
   });

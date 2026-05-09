@@ -112,11 +112,11 @@ export class DispatchHandler extends EventEmitter {
     this.cleanupInterval = setInterval(() => {
       const removed = this.sessions.cleanupIdle();
       if (removed.length > 0) {
-        console.log(`grove-bot: cleaned up ${removed.length} idle session(s)`);
+        console.log(`dispatch-handler: cleaned up ${removed.length} idle session(s)`);
       }
       const expiredDirs = cleanupExpiredDirs();
       if (expiredDirs > 0) {
-        console.log(`grove-bot: cleaned up ${expiredDirs} expired attachment dir(s)`);
+        console.log(`dispatch-handler: cleaned up ${expiredDirs} expired attachment dir(s)`);
       }
     }, 60_000);
   }
@@ -140,7 +140,7 @@ export class DispatchHandler extends EventEmitter {
       skipBashGuard: true,
       skipFilesystemRestriction: true,
     });
-    console.log("message-router: config updated");
+    console.log("dispatch-handler: config updated");
   }
 
   /** Get current config (for watcher initialization) */
@@ -157,10 +157,10 @@ export class DispatchHandler extends EventEmitter {
         // G-300: Unknown DMs are silently ignored (no response to user)
         // But always log for audit — helps decide if permissions need changing
         if (msg.isDM) {
-          console.log(`grove-bot: [DM-REJECT] ignored DM from ${msg.authorName} (${msg.authorId}) — "${msg.content.slice(0, 100)}"`);
+          console.log(`dispatch-handler: [DM-REJECT] ignored DM from ${msg.authorName} (${msg.authorId}) — "${msg.content.slice(0, 100)}"`);
           return;
         }
-        console.log(`grove-bot: denied ${msg.authorName} (${msg.authorId}) on ${adapter.instanceId} — ${access.denyReason ?? "no role"}`);
+        console.log(`dispatch-handler: denied ${msg.authorName} (${msg.authorId}) on ${adapter.instanceId} — ${access.denyReason ?? "no role"}`);
         const target = this.targetFromMsg(adapter, msg);
         await adapter.postResponse(target, access.denyReason ?? "Sorry, I'm not set up to respond to you. Ask the operator to add you to a role.");
         return;
@@ -169,7 +169,7 @@ export class DispatchHandler extends EventEmitter {
       // 2. Log DM access for audit trail
       if (msg.isDM) {
         const dmLabel = msg.dmType === "operator" ? "operator" : `user:${msg.authorName}`;
-        console.log(`grove-bot: [DM-ACCESS] ${dmLabel} (${msg.authorId}) — bashGuard:${access.bashGuard !== false}`);
+        console.log(`dispatch-handler: [DM-ACCESS] ${dmLabel} (${msg.authorId}) — bashGuard:${access.bashGuard !== false}`);
       } else {
         // Operator notification (non-operator guild messages)
         await this.notifyOperatorIfNeeded(adapter, msg);
@@ -204,7 +204,7 @@ export class DispatchHandler extends EventEmitter {
         : { repo: null, repoShort: null, entityType: null, entityRef: null } as ChannelContext;
 
       if (channelCtx.repo) {
-        console.log(`grove-bot: channel context → ${channelCtx.repo}${channelCtx.entityType ? ` (${channelCtx.entityType} ${channelCtx.entityRef})` : ""}`);
+        console.log(`dispatch-handler: channel context → ${channelCtx.repo}${channelCtx.entityType ? ` (${channelCtx.entityType} ${channelCtx.entityRef})` : ""}`);
       }
 
       // Use channel-resolved repo name for event attribution (e.g., "meta-factory" not "luna")
@@ -348,12 +348,12 @@ export class DispatchHandler extends EventEmitter {
           break;
       }
     } catch (error) {
-      console.error(`grove-bot: router error on ${adapter.instanceId}:`, error);
+      console.error(`dispatch-handler: error on ${adapter.instanceId}:`, error);
       try {
         const target = this.targetFromMsg(adapter, msg);
         await adapter.postResponse(target, "An error occurred while processing your request.");
       } catch (postErr) {
-        console.error("grove-bot: router: failed to post error response:", postErr instanceof Error ? postErr.message : postErr);
+        console.error("dispatch-handler: failed to post error response:", postErr instanceof Error ? postErr.message : postErr);
       }
     }
   }
@@ -431,20 +431,20 @@ export class DispatchHandler extends EventEmitter {
 
       if (useSession && result.sessionId) {
         this.sessions.setSession(sessionKey, result.sessionId);
-        console.log(`grove-bot: ${resumeSessionId ? "resumed" : "new"} session ${result.sessionId} for ${sessionKey}`);
+        console.log(`dispatch-handler: ${resumeSessionId ? "resumed" : "new"} session ${result.sessionId} for ${sessionKey}`);
       }
     } else {
       await adapter.postResponse(target, `Sorry, I couldn't process that. (exit code: ${result.exitCode})`);
     }
 
     if (result.usage) {
-      console.log(`grove-bot: responded in ${result.durationMs}ms (${result.usage.inputTokens}in/${result.usage.outputTokens}out${result.usage.costUsd ? ` $${result.usage.costUsd.toFixed(4)}` : ""})`);
+      console.log(`dispatch-handler: responded in ${result.durationMs}ms (${result.usage.inputTokens}in/${result.usage.outputTokens}out${result.usage.costUsd ? ` $${result.usage.costUsd.toFixed(4)}` : ""})`);
       // G-206: Forward usage to dashboard state
       if (result.sessionId) {
         this.emit("session-usage", result.sessionId, result.usage);
       }
     } else {
-      console.log(`grove-bot: responded in ${result.durationMs}ms`);
+      console.log(`dispatch-handler: responded in ${result.durationMs}ms`);
     }
   }
 
@@ -526,7 +526,7 @@ export class DispatchHandler extends EventEmitter {
           this.sessions.setSession(sessionKey, session.sessionId);
         }
       } catch (err) {
-        console.error("grove-bot: async result post failed:", err);
+        console.error("dispatch-handler: async result post failed:", err);
       }
       this.taskTracker.complete(taskId);
     });
@@ -537,7 +537,7 @@ export class DispatchHandler extends EventEmitter {
       try {
         await adapter.postResponse(replyTarget, `Task failed: ${err.message}`);
       } catch (postErr) {
-        console.error("grove-bot: router: failed to post task error:", postErr instanceof Error ? postErr.message : postErr);
+        console.error("dispatch-handler: failed to post task error:", postErr instanceof Error ? postErr.message : postErr);
       }
       this.taskTracker.complete(taskId);
     });
@@ -545,7 +545,7 @@ export class DispatchHandler extends EventEmitter {
     session.on("exit", (code: number) => {
       clearInterval(typingInterval);
       if (session.usage) {
-        console.log(`grove-bot: async task completed (exit ${code}, ${session.usage.inputTokens}in/${session.usage.outputTokens}out)`);
+        console.log(`dispatch-handler: async task completed (exit ${code}, ${session.usage.inputTokens}in/${session.usage.outputTokens}out)`);
         // G-206: Forward usage to dashboard state
         if (session.sessionId) {
           this.emit("session-usage", session.sessionId, session.usage);
@@ -555,7 +555,7 @@ export class DispatchHandler extends EventEmitter {
 
     session.start();
     this.taskTracker.track(taskId, session, replyTarget.channelId, msg.content.slice(0, 100));
-    console.log(`grove-bot: async task ${taskId} dispatched on ${adapter.instanceId}`);
+    console.log(`dispatch-handler: async task ${taskId} dispatched on ${adapter.instanceId}`);
   }
 
   // ---------------------------------------------------------------------------
@@ -617,7 +617,7 @@ export class DispatchHandler extends EventEmitter {
         const preview = text.slice(0, 300);
         await adapter.postResponse(replyTarget, `**${member}**: ${preview}${text.length > 300 ? "..." : ""}`);
       } catch (err) {
-        console.warn("grove-bot: router: failed to post team progress:", err instanceof Error ? err.message : err);
+        console.warn("dispatch-handler: failed to post team progress:", err instanceof Error ? err.message : err);
       }
     });
 
@@ -625,7 +625,7 @@ export class DispatchHandler extends EventEmitter {
       try {
         await adapter.postResponse(replyTarget, result);
       } catch (err) {
-        console.error("grove-bot: team synthesis post failed:", err);
+        console.error("dispatch-handler: team synthesis post failed:", err);
       }
       this.taskTracker.complete(taskId);
     });
@@ -634,14 +634,14 @@ export class DispatchHandler extends EventEmitter {
       try {
         await adapter.postResponse(replyTarget, `Team failed: ${err.message}`);
       } catch (postErr) {
-        console.error("grove-bot: router: failed to post team error:", postErr instanceof Error ? postErr.message : postErr);
+        console.error("dispatch-handler: failed to post team error:", postErr instanceof Error ? postErr.message : postErr);
       }
       this.taskTracker.complete(taskId);
     });
 
     team.start();
     const { traceId, teamId } = team.getTraceContext();
-    console.log(`grove-bot: team ${teamId} dispatched on ${adapter.instanceId} (trace: ${traceId})`);
+    console.log(`dispatch-handler: team ${teamId} dispatched on ${adapter.instanceId} (trace: ${traceId})`);
   }
 
   // ---------------------------------------------------------------------------
@@ -710,7 +710,7 @@ export class DispatchHandler extends EventEmitter {
     try {
       await adapter.notifyOperator(text);
     } catch (err) {
-      console.warn("grove-bot: router: failed to notify operator:", err instanceof Error ? err.message : err);
+      console.warn("dispatch-handler: failed to notify operator:", err instanceof Error ? err.message : err);
     }
   }
 

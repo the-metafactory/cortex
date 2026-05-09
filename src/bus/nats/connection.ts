@@ -115,7 +115,7 @@ export class NatsLink {
       // Drain can fail if already closed by the server, or hit our timeout.
       // Log and proceed — caller wants close() to resolve.
       console.error(
-        `grove-bot: nats-connection "${this.name}" drain error:`,
+        `nats-connection: "${this.name}" drain error:`,
         err instanceof Error ? err.message : err,
       );
     }
@@ -135,24 +135,24 @@ export class NatsLink {
         switch (status.type) {
           case Events.Disconnect:
             console.warn(
-              `grove-bot: nats-connection "${this.name}" disconnected from ${status.data}`,
+              `nats-connection: "${this.name}" disconnected from ${status.data}`,
             );
             break;
           case Events.Reconnect:
             console.info(
-              `grove-bot: nats-connection "${this.name}" reconnected to ${status.data}`,
+              `nats-connection: "${this.name}" reconnected to ${status.data}`,
             );
             break;
           case Events.Error:
             console.error(
-              `grove-bot: nats-connection "${this.name}" error:`,
+              `nats-connection: "${this.name}" error:`,
               status.data,
             );
             break;
           // LDM, Update, etc. are quieter — log at debug level for now.
           default:
             console.debug(
-              `grove-bot: nats-connection "${this.name}" status:`,
+              `nats-connection: "${this.name}" status:`,
               status.type,
               status.data,
             );
@@ -162,7 +162,7 @@ export class NatsLink {
       // Status iterator can throw on close — only log if we weren't expecting it.
       if (!this.closed) {
         console.error(
-          `grove-bot: nats-connection "${this.name}" status loop error:`,
+          `nats-connection: "${this.name}" status loop error:`,
           err instanceof Error ? err.message : err,
         );
       }

@@ -144,7 +144,7 @@ export class MyelinSubscriber {
 
 function defaultHandlerErrorLog(err: Error, subject: string): void {
   console.error(
-    `grove-bot: myelin-subscriber onEnvelope handler error on "${sanitizeForLog(subject)}":`,
+    `myelin-subscriber: onEnvelope handler error on "${sanitizeForLog(subject)}":`,
     err.message,
   );
 }
@@ -170,7 +170,7 @@ function makeDefaultInvalidEnvelopeLog(logRawSnippet: boolean): InvalidEnvelopeH
       ? `; payload snippet: ${sanitizeForLog(rawSnippet)}`
       : "";
     console.warn(
-      `grove-bot: myelin-subscriber dropped invalid envelope on "${safeSubject}" — ${reasonStr}; ${lengthSuffix}${snippetSuffix}`,
+      `myelin-subscriber: dropped invalid envelope on "${safeSubject}" — ${reasonStr}; ${lengthSuffix}${snippetSuffix}`,
     );
   };
 }
