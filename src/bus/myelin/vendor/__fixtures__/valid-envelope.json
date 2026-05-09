@@ -1,0 +1,23 @@
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "source": "acme.monitor.prod-01",
+  "type": "ops.deploy.completed",
+  "timestamp": "2026-05-06T15:00:00Z",
+  "correlation_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "sovereignty": {
+    "classification": "local",
+    "data_residency": "DE",
+    "max_hop": 0,
+    "frontier_ok": false,
+    "model_class": "local-only"
+  },
+  "economics": {},
+  "extensions": {
+    "trace_id": "abc123"
+  },
+  "payload": {
+    "service": "api-gateway",
+    "version": "2.4.1",
+    "environment": "production"
+  }
+}

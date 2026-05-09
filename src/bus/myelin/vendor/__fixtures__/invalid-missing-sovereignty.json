@@ -1,0 +1,9 @@
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "source": "acme.monitor.prod-01",
+  "type": "ops.deploy.completed",
+  "timestamp": "2026-05-06T15:00:00Z",
+  "payload": {
+    "note": "This envelope is intentionally invalid — missing sovereignty block"
+  }
+}
