@@ -1,6 +1,12 @@
 /**
  * Shared utilities for extracting metadata from published events.
  * Used by both dashboard-state and worklog-manager to avoid duplication.
+ *
+ * TODO(MIG-7): This is the bot/lib version of event-utils, distinct from
+ * `src/common/event-utils.ts` (the mc/tap version). They cover different
+ * event shapes (`PublishedEvent` here vs `IngestEvent` there) — overlapping
+ * function names work on different surfaces. Consolidation pass scheduled
+ * at MIG-7 alongside the broader common/types reorg.
  */
 
 import type { PublishedEvent } from "../taps/cc-events/hooks/lib/event-types";
