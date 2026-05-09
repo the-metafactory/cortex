@@ -147,6 +147,23 @@ const TIMEOUT_RESULT: CCSessionResult = {
   durationMs: 120_000,
 };
 
+/**
+ * The canonical inactivity-timeout outcome from cc-session.ts:
+ * `wait()` settles via the "error" listener (timeout fires emit("error"))
+ * with exitCode: 1 BEFORE wireExit() observes the eventual SIGTERM/143.
+ * Previously the dispatch-listener missed this case (W1 in Echo round-1),
+ * so we test it explicitly to ensure abort detection now uses
+ * `result.aborted` rather than relying on exit code 143.
+ */
+const ABORTED_BY_FLAG_RESULT: CCSessionResult = {
+  success: false,
+  response: "",
+  exitCode: 1,
+  durationMs: 120_000,
+  aborted: true,
+  abortReason: "timeout",
+};
+
 // ---------------------------------------------------------------------------
 // Surface-adapter shape
 // ---------------------------------------------------------------------------
@@ -358,6 +375,31 @@ describe("dispatch-listener — failure paths", () => {
       router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(TIMEOUT_RESULT).factory,
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(r.published.map((e) => e.type)).toEqual([
+      "dispatch.task.started",
+      "dispatch.task.aborted",
+    ]);
+    expect(r.published[1]!.payload.reason).toBe("timeout");
+  });
+
+  test("aborted=true + exitCode=1 (canonical inactivity timeout) → started → aborted", async () => {
+    // Echo round-1 W1 regression: the inactivity-timeout path settles
+    // wait() via the "error" listener with exitCode: 1, NOT 143. The
+    // listener must use result.aborted as the source of truth.
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: fakeFactory(ABORTED_BY_FLAG_RESULT).factory,
     });
     await listener.start();
     await router.start();

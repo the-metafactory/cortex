@@ -45,6 +45,25 @@ export interface CCSessionResult {
   exitCode: number;
   durationMs: number;
   usage?: UsageStats;
+  /**
+   * True when the session was killed from outside (inactivity timeout,
+   * manual `kill()`, future shutdown signals) rather than exiting on its
+   * own. Distinct from `success === false`: a CC process can fail without
+   * being aborted, and the abort path settles `wait()` via the `error`
+   * listener with `exitCode: 1` BEFORE the eventual SIGTERM/143 fires —
+   * so callers cannot rely on `exitCode === 143` alone to detect aborts.
+   *
+   * Consumers (see `dispatch-listener`) use this to emit
+   * `dispatch.task.aborted` instead of `dispatch.task.failed`.
+   */
+  aborted?: boolean;
+  /**
+   * Reason for the abort, when `aborted === true`. Currently the only
+   * value emitted is `"timeout"` (inactivity timer fired); the field is
+   * left open-ended so future kill paths (operator cancel, runner
+   * shutdown) can populate it without a breaking change.
+   */
+  abortReason?: "timeout";
 }
 
 export class CCSession extends EventEmitter {
@@ -171,8 +190,14 @@ export class CCSession extends EventEmitter {
 
     return new Promise<CCSessionResult>((resolve) => {
       // Must listen for "error" to prevent unhandled EventEmitter crash
-      // (e.g. timeout fires emit("error") with no listener → process crash)
+      // (e.g. timeout fires emit("error") with no listener → process crash).
+      //
+      // The inactivity-timeout path settles HERE first (with exitCode: 1),
+      // BEFORE wireExit() observes the eventual SIGTERM and emits "exit"
+      // with exitCode: 143. Callers therefore cannot rely on exit code 143
+      // alone to detect aborts — they must check `aborted` instead.
       this.on("error", (err: Error) => {
+        void err; // referenced by name above for documentation; payload is on `this.timedOut`
         const durationMs = Math.round(performance.now() - this.startTime);
         resolve({
           success: false,
@@ -181,6 +206,7 @@ export class CCSession extends EventEmitter {
           exitCode: 1,
           durationMs,
           usage: this.usage,
+          ...(this.timedOut && { aborted: true, abortReason: "timeout" as const }),
         });
       });
 
@@ -193,6 +219,11 @@ export class CCSession extends EventEmitter {
           exitCode: code,
           durationMs,
           usage: this.usage,
+          // The exit path can also be reached on inactivity timeout —
+          // wireExit() races with the error listener and may win when CC
+          // exits in response to SIGINT before the error has been emitted.
+          // Either way, `this.timedOut` is the source of truth.
+          ...(this.timedOut && { aborted: true, abortReason: "timeout" as const }),
         });
       });
     });

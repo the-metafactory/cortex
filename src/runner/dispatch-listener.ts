@@ -41,7 +41,6 @@
  *   spawn) lives in the adapter implementation, not the registry.
  */
 
-import { randomUUID } from "crypto";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type {
@@ -230,6 +229,20 @@ function parsePayload(envelope: Envelope): DispatchTaskReceivedPayload | null {
   if (!p) return null;
   if (typeof p.task_id !== "string" || typeof p.agent_id !== "string") return null;
   if (typeof p.prompt !== "string" || p.prompt.length === 0) return null;
+  // TODO (deferred to MIG-7.x — Echo round-1 s2): payload-level UUID
+  // validation on `task_id`. Not added here because:
+  //   1. The envelope-level `validateEnvelope` already checks `envelope.id`
+  //      shape — the typical caller path (dispatch-handler emitting onto
+  //      the bus) sets `correlation_id = task_id` and runs through the
+  //      same UUID validator already.
+  //   2. Adding a second UUID regex here re-implements that check at a
+  //      different layer without a clear failure mode it would catch —
+  //      the only producer who could slip a non-UUID `task_id` past us
+  //      is a producer that bypasses validateEnvelope, which is an
+  //      architectural problem that belongs at the validator layer.
+  // When MIG-7+ adds a multi-runner federation, payload-shape contracts
+  // become first-class (per §4.x) — that's the right place to add a
+  // payload-level Zod schema for `dispatch.task.received`.
   return p as DispatchTaskReceivedPayload;
 }
 
@@ -350,14 +363,19 @@ async function handleDispatchEnvelope(
     return;
   }
 
-  // Distinguish timeout (CC's own timeout exit code 143 / SIGTERM) from
-  // a regular failure. The CC session uses SIGINT then SIGTERM on inactivity
-  // timeout; exit code 143 is the SIGTERM signal.
-  // A future iteration can plumb a richer "abort reason" through
-  // CCSessionResult (e.g. `aborted: boolean, abortReason?: string`); for
-  // now, exit code 143 is the most reliable signal we have without
-  // changing cc-session.ts (forbidden per task contract).
-  if (result.exitCode === 143) {
+  // Distinguish abort (timeout / external kill) from a regular failure.
+  //
+  // History (Echo round-1 W1): the previous implementation only looked at
+  // `result.exitCode === 143` (SIGTERM). That signal is UNREACHABLE for
+  // the canonical inactivity-timeout case, because cc-session.ts settles
+  // `wait()` via the `error` listener with `exitCode: 1` BEFORE the actual
+  // SIGTERM/143 fires. The fix lives in cc-session.ts: it now exposes
+  // `aborted: boolean` + `abortReason` on CCSessionResult, sourced from
+  // its internal `timedOut` flag, regardless of which listener wins the
+  // race. We treat that field as the source of truth and keep the
+  // exit-code-143 check as defense-in-depth (e.g. a SIGTERM delivered
+  // from outside without going through the inactivity timer).
+  if (result.aborted === true || result.exitCode === 143) {
     await runtime.publish(
       createDispatchTaskAbortedEvent({
         source,
@@ -365,7 +383,7 @@ async function handleDispatchEnvelope(
         agentId,
         startedAt,
         abortedAt: new Date(),
-        reason: "timeout",
+        reason: result.abortReason ?? "timeout",
       }),
     );
     return;
@@ -402,6 +420,3 @@ function truncateSummary(text: string): string {
   return first.length > 1000 ? first.slice(0, 997) + "..." : first;
 }
 
-// Avoid unused-warning on randomUUID — currently unused but kept available
-// for future use (e.g. correlation rewriting if a producer omits task_id).
-void randomUUID;
