@@ -19,9 +19,26 @@ import { NatsLink } from "../nats/connection";
 import { MyelinSubscriber } from "./subscriber";
 import type { Envelope } from "./envelope-validator";
 
+/**
+ * Per-envelope handler. Receives validated envelopes from any active
+ * subscription, with the actual NATS subject (so wildcard-pattern
+ * subscribers can route on the concrete subject — see
+ * `src/bus/surface-router.ts`, G-1111.A).
+ */
+export type EnvelopeHandler = (envelope: Envelope, subject: string) => void;
+
 /** Lifecycle handle so grove-bot can clean up on shutdown. */
 export interface MyelinRuntime {
   readonly enabled: boolean;
+  /**
+   * Register a fan-out handler. Multiple handlers may register; each
+   * receives every envelope from every active subscription. Returns
+   * an unregister token so the caller can detach on shutdown.
+   *
+   * The runtime's existing `logEnvelope` always runs alongside any
+   * registered handlers — registration is additive, not a replacement.
+   */
+  onEnvelope(handler: EnvelopeHandler): { unregister: () => void };
   /** Best-effort shutdown — drains subscribers, closes the link. */
   stop(): Promise<void>;
 }
@@ -51,8 +68,23 @@ export async function startMyelinRuntime(
   config: BotConfig,
   options?: MyelinRuntimeOptions,
 ): Promise<MyelinRuntime> {
+  // Fan-out registry — populated regardless of whether NATS itself
+  // starts. Callers (like the surface-router) can safely register
+  // even when the runtime is a no-op; their handlers simply never
+  // fire, which is the right semantic for a bot started without
+  // NATS configured.
+  const handlers = new Set<EnvelopeHandler>();
+  const onEnvelope = (handler: EnvelopeHandler) => {
+    handlers.add(handler);
+    return {
+      unregister: () => {
+        handlers.delete(handler);
+      },
+    };
+  };
+
   if (!config.nats?.url) {
-    return { enabled: false, stop: async () => {} };
+    return { enabled: false, onEnvelope, stop: async () => {} };
   }
 
   const nats = config.nats;
@@ -64,7 +96,7 @@ export async function startMyelinRuntime(
     console.warn(
       "grove-bot: nats.url configured but nats.subjects is empty — no subscriptions started",
     );
-    return { enabled: false, stop: async () => {} };
+    return { enabled: false, onEnvelope, stop: async () => {} };
   }
 
   let link: NatsLink;
@@ -84,7 +116,7 @@ export async function startMyelinRuntime(
       "grove-bot: myelin runtime failed to connect — continuing without NATS:",
       err instanceof Error ? err.message : err,
     );
-    return { enabled: false, stop: async () => {} };
+    return { enabled: false, onEnvelope, stop: async () => {} };
   }
 
   const subscribers: MyelinSubscriber[] = [];
@@ -92,7 +124,23 @@ export async function startMyelinRuntime(
     try {
       const sub = MyelinSubscriber.start(link, {
         pattern,
-        onEnvelope: (env, subject) => logEnvelope(env, subject),
+        onEnvelope: (env, subject) => {
+          logEnvelope(env, subject);
+          // Fan out to registered handlers. Each handler runs in its
+          // own try/catch so one slow/failing consumer can't poison
+          // the others (router-level isolation lives in the
+          // surface-router; this is a defensive last line).
+          for (const handler of handlers) {
+            try {
+              handler(env, subject);
+            } catch (err) {
+              console.error(
+                "grove-bot: myelin onEnvelope handler threw:",
+                err instanceof Error ? err.message : err,
+              );
+            }
+          }
+        },
       });
       subscribers.push(sub);
       console.log(`grove-bot: myelin subscribed to "${pattern}"`);
@@ -108,12 +156,13 @@ export async function startMyelinRuntime(
     // Nothing actually subscribed — close the link so we don't hold a
     // socket open for nothing.
     await link.close().catch(() => {});
-    return { enabled: false, stop: async () => {} };
+    return { enabled: false, onEnvelope, stop: async () => {} };
   }
 
   let stopped = false;
   return {
     enabled: true,
+    onEnvelope,
     stop: async () => {
       if (stopped) return;
       stopped = true;

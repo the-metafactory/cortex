@@ -23,7 +23,15 @@ import { createSurfaceRouter, subjectMatches, type SurfaceAdapter } from "../sur
 // ---------------------------------------------------------------------------
 
 function fakeRuntime(): MyelinRuntime {
-  return { enabled: true, stop: async () => {} };
+  const handlers = new Set<Parameters<MyelinRuntime["onEnvelope"]>[0]>();
+  return {
+    enabled: true,
+    onEnvelope: (handler) => {
+      handlers.add(handler);
+      return { unregister: () => { handlers.delete(handler); } };
+    },
+    stop: async () => {},
+  };
 }
 
 function makeEnvelope(overrides: Partial<Envelope> = {}): Envelope {

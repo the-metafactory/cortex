@@ -119,6 +119,39 @@ describe("MyelinRuntime", () => {
     await runtime.stop();
   });
 
+  test("disabled runtime exposes onEnvelope (handlers register but never fire)", async () => {
+    const runtime = await startMyelinRuntime(makeConfig(undefined));
+    expect(runtime.enabled).toBe(false);
+    let called = 0;
+    const reg = runtime.onEnvelope(() => {
+      called++;
+    });
+    expect(typeof reg.unregister).toBe("function");
+    reg.unregister();
+    expect(called).toBe(0);
+    await runtime.stop();
+  });
+
+  test("enabled runtime registers + unregisters handlers without throwing", async () => {
+    const fake = makeFakeNatsConnection();
+    const runtime = await startMyelinRuntime(
+      makeConfig({
+        url: "nats://localhost:4222",
+        name: "grove-bot",
+        subjects: ["local.test.>"],
+      }),
+      { connectImpl: async () => fake.nc },
+    );
+    expect(runtime.enabled).toBe(true);
+    const reg = runtime.onEnvelope(() => {});
+    expect(typeof reg.unregister).toBe("function");
+    reg.unregister();
+    // Re-registering after unregister also fine.
+    const reg2 = runtime.onEnvelope(() => {});
+    reg2.unregister();
+    await runtime.stop();
+  });
+
   test("warns + returns disabled when nats.url present but subjects empty", async () => {
     const config = makeConfig({
       url: "nats://localhost:4222",
