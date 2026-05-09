@@ -9,8 +9,19 @@
 
 import type { Client, TextChannel, ThreadChannel } from "discord.js";
 import type { PublishedEvent } from "../taps/cc-events/hooks/lib/event-types";
-import { formatEventForThread, formatThreadName, formatCompletionSummary, formatChannelStart, formatChannelCompletion, isSubAgentEvent, extractTaskDescription } from "./worklog-formatter";
+import {
+  formatEventForThread,
+  formatThreadName,
+  formatCompletionSummary,
+  formatChannelStart,
+  formatChannelCompletion,
+  formatDispatchEnvelopeForThread,
+  isSubAgentEvent,
+  extractTaskDescription,
+} from "./worklog-formatter";
 import { detectProject, extractGitHubIssue, formatDuration } from "./event-utils";
+import type { Envelope } from "../bus/myelin/envelope-validator";
+import type { SurfaceAdapter } from "../bus/surface-router";
 
 export class WorklogManager {
   private client: Client;
@@ -204,6 +215,166 @@ export class WorklogManager {
       console.error(`worklog: could not fetch channel ${this.worklogChannelId}:`, err instanceof Error ? err.message : err);
     }
     return null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // MIG-4.7: Bus-driven sibling-consumer entry point.
+  //
+  // Per G-1111 §3.4, the worklog-manager can ALSO subscribe to
+  // `dispatch.task.*` envelopes via the surface-router — alongside its
+  // existing direct-call API. Adding this is purely additive: the existing
+  // `handleEvent(PublishedEvent)` path stays intact for backwards
+  // compatibility with the in-process CC-hook event pipeline. The new path
+  // lets a future producer (a remote runner, a parallel agent fleet) emit
+  // lifecycle events on the bus and have them rendered to the worklog
+  // thread without going through the direct call.
+  //
+  // Thread keying: the bus path keys threads by `payload.task_id` (envelope
+  // correlation_id). The direct-call path keys by `event.session_id`. Both
+  // share the `sessionThreads` map because the keys are distinct UUIDs —
+  // a session_id from CC will never collide with a task_id from a
+  // dispatch envelope. (If they ever did, the consequence is benign: a
+  // thread shared across two unrelated tasks. The probability is
+  // 2^-64 per bot lifetime — vanishingly small and recoverable.)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Surface adapter face — register this with `SurfaceRouter.register(...)`
+   * to make worklog-manager a bus consumer of `dispatch.task.*` envelopes.
+   *
+   * Implementation note: returned as a getter (rather than a stored field)
+   * so the closure captures `this` correctly. `render` is a fresh closure
+   * per call to keep the surface contract obviously side-effect-free at
+   * construction time.
+   *
+   * @param adapterId — defaults to `worklog-manager`. Configurable so a
+   *   future multi-channel worklog (one channel per repo) can disambiguate.
+   * @param subjects — defaults to `local.{org}.dispatch.task.>`. Caller
+   *   passes the org segment because worklog-manager doesn't know it (the
+   *   manager is constructed with a Discord client + channel ID, not a
+   *   bot config). Passing it explicitly keeps the dependency direction
+   *   clean (no config import here).
+   */
+  surfaceConfig(opts: { org: string; adapterId?: string }): SurfaceAdapter {
+    const subjects = [`local.${opts.org}.dispatch.task.>`];
+    return {
+      id: opts.adapterId ?? "worklog-manager",
+      subjects,
+      render: (envelope: Envelope) => this.renderDispatchEnvelope(envelope),
+    };
+  }
+
+  /**
+   * Render a `dispatch.task.*` envelope to the worklog thread. Mirrors the
+   * direct-call path's three-stage logic: started → create thread; progress
+   * (none on the bus path today, see §3.4); terminal (completed/failed/
+   * aborted) → post summary, archive thread.
+   *
+   * Errors are caught and logged at the same granularity as the direct-call
+   * path so a failing Discord API call can't poison the surface-router.
+   */
+  private async renderDispatchEnvelope(envelope: Envelope): Promise<void> {
+    const payload = envelope.payload as Record<string, unknown>;
+    const taskId = typeof payload.task_id === "string" ? payload.task_id : null;
+    if (!taskId) {
+      console.error(
+        `worklog: dispatch envelope ${envelope.id} missing task_id — skipping`,
+      );
+      return;
+    }
+    this.sessionLastSeen.set(taskId, Date.now());
+
+    const channel = await this.getWorklogChannel();
+    if (!channel) return;
+
+    if (envelope.type === "dispatch.task.started") {
+      await this.handleDispatchStarted(channel, envelope, taskId);
+      return;
+    }
+
+    if (
+      envelope.type === "dispatch.task.completed"
+      || envelope.type === "dispatch.task.failed"
+      || envelope.type === "dispatch.task.aborted"
+    ) {
+      await this.handleDispatchTerminal(channel, envelope, taskId);
+      return;
+    }
+
+    // Unknown dispatch.task.* sub-type — log and ignore. Append-only spec
+    // means new sub-types arrive over time; we tolerate them rather than
+    // crashing.
+    console.log(`worklog: ignoring unknown dispatch envelope type ${envelope.type}`);
+  }
+
+  private async handleDispatchStarted(
+    channel: TextChannel,
+    envelope: Envelope,
+    taskId: string,
+  ): Promise<void> {
+    const payload = envelope.payload as Record<string, unknown>;
+    const agentId = typeof payload.agent_id === "string" ? payload.agent_id : "agent";
+    // Compact thread name — task_id prefix is enough to disambiguate for
+    // operators eyeballing the channel feed.
+    const threadName = `${agentId} — task ${taskId.slice(0, 8)}`;
+
+    try {
+      const startMsg = await channel.send(`\u{1F3C3} **${agentId}** started task \`${taskId.slice(0, 8)}\``);
+      const thread = await startMsg.startThread({
+        name: threadName,
+        autoArchiveDuration: 1440, // 24h, matches the direct-call path
+      });
+      this.sessionThreads.set(taskId, thread.id);
+      this.sessionDescriptions.set(taskId, threadName);
+
+      // Opening message inside the thread carries the started envelope.
+      const formatted = formatDispatchEnvelopeForThread(envelope.type, payload);
+      if (formatted) await thread.send(formatted);
+    } catch (err) {
+      console.error(
+        "worklog: failed to create dispatch thread:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  private async handleDispatchTerminal(
+    channel: TextChannel,
+    envelope: Envelope,
+    taskId: string,
+  ): Promise<void> {
+    const payload = envelope.payload as Record<string, unknown>;
+    const threadId = this.sessionThreads.get(taskId);
+    const formatted = formatDispatchEnvelopeForThread(envelope.type, payload);
+
+    // Post terminal line to the thread (if it exists)
+    if (threadId) {
+      try {
+        const thread = await this.client.channels.fetch(threadId) as ThreadChannel | null;
+        if (thread && formatted) {
+          await thread.send(formatted);
+          await thread.setArchived(true);
+        }
+      } catch (err) {
+        console.error(
+          "worklog: failed to post dispatch terminal to thread:",
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
+    // Channel-level summary — short, scannable.
+    if (formatted) {
+      // Use just the headline (first line) for the channel feed; details
+      // stay in the thread.
+      const head = formatted.split("\n", 1)[0] ?? formatted;
+      await channel.send(head).catch(() => {});
+    }
+
+    // Clean up mappings so the maps don't grow unbounded.
+    this.sessionThreads.delete(taskId);
+    this.sessionDescriptions.delete(taskId);
+    this.sessionLastSeen.delete(taskId);
   }
 }
 

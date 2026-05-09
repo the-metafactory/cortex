@@ -189,3 +189,104 @@ function truncate(str: string, max: number): string {
   if (str.length <= max) return str;
   return str.slice(0, max - 3) + "...";
 }
+
+// ---------------------------------------------------------------------------
+// MIG-4.7: Bus-driven worklog formatting for `dispatch.task.*` envelopes.
+//
+// Why a separate formatter family:
+//   The `formatEventForThread` / `formatCompletionSummary` / `formatChannelStart`
+//   helpers above operate on `PublishedEvent` — the in-process CC-hook event
+//   format. The bus path delivers G-1111 envelopes (different shape:
+//   `envelope.payload.task_id`, `envelope.payload.agent_id`, etc.). Rather
+//   than overloading the existing formatters with discriminated-union
+//   payload handling, we add a parallel, intentionally-thin formatter for
+//   envelope-shaped events. The two paths converge on the same Discord
+//   thread idiom (start line / completion line).
+// ---------------------------------------------------------------------------
+
+/**
+ * Lifecycle envelope shape — matches the four constructors in
+ * `src/bus/dispatch-events.ts`. Re-declared here as a structural type to
+ * avoid a circular import (`runner/` → `bus/dispatch-events`); the test
+ * suite asserts the constructed envelopes match this shape.
+ */
+interface DispatchTaskLifecyclePayload {
+  task_id?: unknown;
+  agent_id?: unknown;
+  started_at?: unknown;
+  completed_at?: unknown;
+  failed_at?: unknown;
+  aborted_at?: unknown;
+  result_summary?: unknown;
+  error_summary?: unknown;
+  reason?: unknown;
+}
+
+/**
+ * Format a `dispatch.task.*` envelope for posting inside a worklog thread.
+ *
+ * Returns `null` for envelope types this formatter doesn't handle — the
+ * worklog adapter's `render` will silently no-op, matching the §5.3
+ * isolation contract.
+ *
+ * Output is intentionally compact (single line where possible) so a thread
+ * full of lifecycle events stays scannable.
+ */
+export function formatDispatchEnvelopeForThread(
+  envelopeType: string,
+  payload: DispatchTaskLifecyclePayload,
+): string | null {
+  const taskId = typeof payload.task_id === "string" ? payload.task_id.slice(0, 8) : "?";
+  const agent = typeof payload.agent_id === "string" ? payload.agent_id : "?";
+
+  switch (envelopeType) {
+    case "dispatch.task.started":
+      return `\u{1F3C3} **${agent}** started task \`${taskId}\``;
+
+    case "dispatch.task.completed": {
+      const summary = typeof payload.result_summary === "string"
+        ? truncate(payload.result_summary, 300)
+        : null;
+      const duration = computeDuration(payload.started_at, payload.completed_at);
+      const parts = [`✅ **${agent}** completed \`${taskId}\``];
+      if (duration) parts.push(`(${duration})`);
+      const head = parts.join(" ");
+      return summary ? `${head}\n${summary}` : head;
+    }
+
+    case "dispatch.task.failed": {
+      const error = typeof payload.error_summary === "string"
+        ? truncate(payload.error_summary, 300)
+        : null;
+      const duration = computeDuration(payload.started_at, payload.failed_at);
+      const parts = [`❌ **${agent}** failed \`${taskId}\``];
+      if (duration) parts.push(`(${duration})`);
+      const head = parts.join(" ");
+      return error ? `${head}\n${error}` : head;
+    }
+
+    case "dispatch.task.aborted": {
+      const reason = typeof payload.reason === "string"
+        ? truncate(payload.reason, 200)
+        : null;
+      const duration = computeDuration(payload.started_at, payload.aborted_at);
+      const parts = [`⚠\u{FE0F} **${agent}** aborted \`${taskId}\``];
+      if (duration) parts.push(`(${duration})`);
+      const head = parts.join(" ");
+      return reason ? `${head} — ${reason}` : head;
+    }
+
+    default:
+      return null;
+  }
+}
+
+function computeDuration(startedAt: unknown, endedAt: unknown): string | null {
+  if (typeof startedAt !== "string" || typeof endedAt !== "string") return null;
+  const start = Date.parse(startedAt);
+  const end = Date.parse(endedAt);
+  if (Number.isNaN(start) || Number.isNaN(end)) return null;
+  const ms = end - start;
+  if (ms < 0) return null;
+  return formatDuration(ms);
+}
