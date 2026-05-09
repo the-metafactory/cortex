@@ -7,7 +7,7 @@
 import { join } from "path";
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, rmdirSync } from "fs";
 import { randomUUID } from "crypto";
-import { fetchWithTimeout } from "./timeout";
+import { fetchWithTimeout } from "../../common/timeout";
 import {
   ALLOWED_MIME_TYPES,
   MAGIC_BYTES,
