@@ -263,6 +263,11 @@ export const BotConfigSchema = z.object({
     operatorDiscordId: z.string().optional(),
     /** Operator's Mattermost user ID — receives DM notifications when others talk to the bot */
     operatorMattermostId: z.string().optional(),
+    /** Operator data residency stamped into `sovereignty.data_residency` on emitted
+     *  envelopes (system.*, dispatch.task.*, cc.*). ISO-3166 country code; defaults
+     *  to "NZ" when omitted. Operators in AU/EU/US/etc. set this to match their
+     *  jurisdiction so envelopes accurately reflect residency for compliance audits. */
+    dataResidency: z.string().optional(),
   }),
 
   /** Discord instances — accepts a single object (legacy) or array (multi-instance) */

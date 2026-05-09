@@ -222,3 +222,34 @@ describe("dispatch.task.* — correlation_id contract", () => {
     expect(aborted.correlation_id).toBe(TASK_ID);
   });
 });
+
+describe("dispatch.task.* — data_residency parameterisation", () => {
+  test("source without dataResidency defaults to NZ", () => {
+    const env = createDispatchTaskStartedEvent({
+      source: SOURCE,
+      taskId: TASK_ID,
+      agentId: "cortex",
+      startedAt: STARTED_AT,
+    });
+    expect(env.sovereignty.data_residency).toBe("NZ");
+  });
+
+  test("source.dataResidency overrides the default for every lifecycle helper", () => {
+    const sourceAU: DispatchEventSource = { ...SOURCE, dataResidency: "AU" };
+    const common = {
+      source: sourceAU,
+      taskId: TASK_ID,
+      agentId: "cortex",
+      startedAt: STARTED_AT,
+    };
+    const envs = [
+      createDispatchTaskStartedEvent(common),
+      createDispatchTaskCompletedEvent({ ...common, completedAt: COMPLETED_AT }),
+      createDispatchTaskFailedEvent({ ...common, failedAt: COMPLETED_AT, errorSummary: "x" }),
+      createDispatchTaskAbortedEvent({ ...common, abortedAt: COMPLETED_AT, reason: "timeout" }),
+    ];
+    for (const env of envs) {
+      expect(env.sovereignty.data_residency).toBe("AU");
+    }
+  });
+});

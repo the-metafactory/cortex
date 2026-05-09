@@ -133,6 +133,14 @@ describe("createCcEventEnvelope", () => {
     expect(e2.sovereignty.max_hop).toBe(0);
   });
 
+  test("source.dataResidency overrides the NZ default", () => {
+    const env = createCcEventEnvelope({
+      event: makeEvent(),
+      source: { org: "metafactory", agent: "cortex", instance: "relay", dataResidency: "EU" },
+    });
+    expect(env.sovereignty.data_residency).toBe("EU");
+  });
+
   test("payload includes top-level PublishedEvent fields plus payload spread", () => {
     const event = makeEvent({
       event_id: "evt-abc",

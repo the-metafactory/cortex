@@ -148,10 +148,17 @@ export async function startCortex(
 
   // SystemEventSource for `system.*` envelopes (spec §3.6:
   // `{operatorId}.cortex.{instance}`). `local` until federation lands.
+  // `dataResidency` flows from `config.agent.dataResidency` so a non-NZ
+  // operator gets envelopes stamped with their actual residency without
+  // touching the per-event constructors. Defaults to "NZ" when absent
+  // (the original cortex deployment's residency).
   const systemEventSource: SystemEventSource = {
     org: config.agent.operatorId ?? "default",
     agent: "cortex",
     instance: "local",
+    ...(config.agent.dataResidency !== undefined && {
+      dataResidency: config.agent.dataResidency,
+    }),
   };
 
   // Dispatch-handler — synchronous platform-message → CC pipeline.

@@ -58,13 +58,19 @@ function buildSource(src: SystemEventSource): string {
  * Default sovereignty for `dispatch.task.*` events. Same posture as
  * `system.*`: operator-only, local residency, no federation, no frontier.
  *
+ * `data_residency` is sourced from `source.dataResidency` (defaulting to
+ * `"NZ"` for the original cortex deployment) so a non-NZ operator gets
+ * envelopes stamped with their actual residency. Mirrors the parameterisation
+ * pattern in `system-events.ts` so both event domains read the same field
+ * off the same source struct.
+ *
  * Returned as a fresh literal per call so a downstream mutation on one
  * envelope's `sovereignty` cannot leak into a sibling envelope.
  */
-function defaultDispatchSovereignty(): Envelope["sovereignty"] {
+function defaultDispatchSovereignty(source: SystemEventSource): Envelope["sovereignty"] {
   return {
     classification: "local",
-    data_residency: "NZ",
+    data_residency: source.dataResidency ?? "NZ",
     max_hop: 0,
     frontier_ok: false,
     model_class: "local-only",
@@ -128,7 +134,7 @@ function buildBaseEnvelope(
     type,
     timestamp: new Date().toISOString(),
     correlation_id: common.correlationId ?? common.taskId,
-    sovereignty: defaultDispatchSovereignty(),
+    sovereignty: defaultDispatchSovereignty(common.source),
     payload: {
       task_id: common.taskId,
       agent_id: common.agentId,

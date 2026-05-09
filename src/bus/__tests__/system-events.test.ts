@@ -256,3 +256,61 @@ describe("createSystemInboundAbortedEvent", () => {
     }
   });
 });
+
+describe("data_residency parameterisation", () => {
+  test("omitting source.dataResidency defaults to NZ across all helpers", () => {
+    const sourceNoRes = { org: "metafactory", agent: "cortex", instance: "local" };
+    const degraded = createSystemAdapterDegradedEvent({
+      source: sourceNoRes,
+      adapterId: "x", platform: "discord",
+      disconnectedSince: new Date(), thresholdMs: 1,
+    });
+    const recovered = createSystemAdapterRecoveredEvent({
+      source: sourceNoRes,
+      adapterId: "x", platform: "discord", degradedForMs: 1,
+    });
+    const disconnected = createSystemAdapterDisconnectedEvent({
+      source: sourceNoRes,
+      adapterId: "x", platform: "discord",
+      disconnectedSince: new Date(), wasClean: true,
+    });
+    const aborted = createSystemInboundAbortedEvent({
+      source: sourceNoRes,
+      adapterId: "x", inboundMessageId: "1",
+      timeoutSource: "unknown", timeoutMs: 1, elapsedMs: 1,
+      phase: "pre_dispatch",
+    });
+    for (const env of [degraded, recovered, disconnected, aborted]) {
+      expect(env.sovereignty.data_residency).toBe("NZ");
+    }
+  });
+
+  test("source.dataResidency overrides the default in every helper", () => {
+    const sourceAU = { org: "metafactory", agent: "cortex", instance: "local", dataResidency: "AU" };
+    const degraded = createSystemAdapterDegradedEvent({
+      source: sourceAU,
+      adapterId: "x", platform: "discord",
+      disconnectedSince: new Date(), thresholdMs: 1,
+    });
+    const recovered = createSystemAdapterRecoveredEvent({
+      source: sourceAU,
+      adapterId: "x", platform: "discord", degradedForMs: 1,
+    });
+    const disconnected = createSystemAdapterDisconnectedEvent({
+      source: sourceAU,
+      adapterId: "x", platform: "discord",
+      disconnectedSince: new Date(), wasClean: true,
+    });
+    const aborted = createSystemInboundAbortedEvent({
+      source: sourceAU,
+      adapterId: "x", inboundMessageId: "1",
+      timeoutSource: "unknown", timeoutMs: 1, elapsedMs: 1,
+      phase: "pre_dispatch",
+    });
+    for (const env of [degraded, recovered, disconnected, aborted]) {
+      expect(env.sovereignty.data_residency).toBe("AU");
+      // Schema must still accept the override.
+      expect(validateEnvelope(env).ok).toBe(true);
+    }
+  });
+});
