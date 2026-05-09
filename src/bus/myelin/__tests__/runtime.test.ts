@@ -27,6 +27,7 @@ function makeConfig(natsBlock: BotConfig["nats"]): BotConfig {
 function makeFakeNatsConnection() {
   const statusListeners = new Set<(s: Status | null) => void>();
   const subscribePatterns: string[] = [];
+  const publishes: { subject: string; payload: string | Uint8Array }[] = [];
 
   const status = () =>
     (async function* () {
@@ -81,8 +82,12 @@ function makeFakeNatsConnection() {
     for (const l of statusListeners) l(null);
   });
 
-  const nc = { status, subscribe, drain } as unknown as NatsConnection;
-  return { nc, subscribe, subscribePatterns };
+  const publish = mock((subject: string, payload: string | Uint8Array) => {
+    publishes.push({ subject, payload });
+  });
+
+  const nc = { status, subscribe, drain, publish } as unknown as NatsConnection;
+  return { nc, subscribe, subscribePatterns, publishes, publish };
 }
 
 describe("MyelinRuntime", () => {
@@ -261,5 +266,101 @@ describe("MyelinRuntime", () => {
       (l) => l.kind === "log" && l.msg.includes("myelin runtime stopped"),
     );
     expect(stoppedLines.length).toBe(1);
+  });
+
+  describe("publish()", () => {
+    function makeEnvelope(overrides: Partial<{ id: string; type: string }> = {}) {
+      return {
+        id: overrides.id ?? "11111111-1111-4111-8111-111111111111",
+        source: "metafactory.grove.local",
+        type: overrides.type ?? "system.adapter.degraded",
+        timestamp: "2026-05-09T12:00:00.000Z",
+        sovereignty: {
+          classification: "local" as const,
+          data_residency: "NZ",
+          max_hop: 0,
+          frontier_ok: true,
+          model_class: "any" as const,
+        },
+        payload: { adapter_id: "discord-luna" },
+      };
+    }
+
+    test("disabled runtime: publish is a no-op (resolves, no NATS calls)", async () => {
+      const runtime = await startMyelinRuntime(makeConfig(undefined));
+      expect(runtime.enabled).toBe(false);
+      // Must not throw and must not log a publish line — there's no
+      // connection to log against.
+      await runtime.publish(makeEnvelope());
+      const errLines = logs.filter((l) => l.kind === "error");
+      expect(errLines).toEqual([]);
+      await runtime.stop();
+    });
+
+    test("enabled runtime: publish forwards to NATS with subject local.{org}.{type}", async () => {
+      const fake = makeFakeNatsConnection();
+      const runtime = await startMyelinRuntime(
+        makeConfig({
+          url: "nats://localhost:4222",
+          name: "grove-bot",
+          subjects: ["local.{org}.system.>"],
+        }),
+        { connectImpl: async () => fake.nc },
+      );
+      expect(runtime.enabled).toBe(true);
+      const env = makeEnvelope({ type: "system.adapter.degraded" });
+      await runtime.publish(env);
+      expect(fake.publish).toHaveBeenCalledTimes(1);
+      // operatorId in makeConfig is "andreas" — that becomes the {org} segment.
+      expect(fake.publishes[0]?.subject).toBe(
+        "local.andreas.system.adapter.degraded",
+      );
+      // Payload is the JSON-serialised envelope; round-trip restores it intact.
+      const payload = fake.publishes[0]?.payload as string;
+      expect(typeof payload).toBe("string");
+      expect(JSON.parse(payload)).toEqual(env);
+      await runtime.stop();
+    });
+
+    test("publish swallows underlying NATS errors (logs, never throws)", async () => {
+      const fake = makeFakeNatsConnection();
+      // Force the underlying nc.publish to throw — simulates connection-closed
+      // or oversized-payload errors.
+      (fake.nc as { publish: (s: string, p: unknown) => void }).publish = () => {
+        throw new Error("connection closed");
+      };
+      const runtime = await startMyelinRuntime(
+        makeConfig({
+          url: "nats://localhost:4222",
+          name: "grove-bot",
+          subjects: ["local.{org}.system.>"],
+        }),
+        { connectImpl: async () => fake.nc },
+      );
+      // Must NOT throw — publish failure is non-fatal by design.
+      await expect(runtime.publish(makeEnvelope())).resolves.toBeUndefined();
+      const errored = logs.some(
+        (l) => l.kind === "error" && l.msg.includes("publish failed"),
+      );
+      expect(errored).toBe(true);
+      await runtime.stop();
+    });
+
+    test("publish after stop() is a no-op (no late publishes after drain)", async () => {
+      const fake = makeFakeNatsConnection();
+      const runtime = await startMyelinRuntime(
+        makeConfig({
+          url: "nats://localhost:4222",
+          name: "grove-bot",
+          subjects: ["local.{org}.system.>"],
+        }),
+        { connectImpl: async () => fake.nc },
+      );
+      expect(runtime.enabled).toBe(true);
+      await runtime.stop();
+      await runtime.publish(makeEnvelope());
+      // The fake's publish was never called — runtime short-circuited.
+      expect(fake.publish).not.toHaveBeenCalled();
+    });
   });
 });

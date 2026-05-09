@@ -30,6 +30,7 @@ function fakeRuntime(): MyelinRuntime {
       handlers.add(handler);
       return { unregister: () => { handlers.delete(handler); } };
     },
+    publish: async () => {},
     stop: async () => {},
   };
 }
@@ -52,6 +53,7 @@ function fakeRuntimeWithTrigger(): {
         handlers.add(handler);
         return { unregister: () => { handlers.delete(handler); } };
       },
+      publish: async () => {},
       stop: async () => {},
     },
     trigger: (env, subject) => {

@@ -39,6 +39,29 @@ export interface MyelinRuntime {
    * registered handlers — registration is additive, not a replacement.
    */
   onEnvelope(handler: EnvelopeHandler): { unregister: () => void };
+  /**
+   * Publish an envelope to NATS.
+   *
+   * Subject is derived from `envelope.type` per G-1111 §3.1: a fully
+   * qualified subject `local.{org}.{type}` is constructed at publish time,
+   * where `{org}` is the bot's `agent.operatorId` and `{type}` is the
+   * envelope's already-dotted `domain.entity.action`. No wildcards.
+   *
+   * **No-op when the runtime is disabled** (no NATS configured) so callers
+   * can fire-and-forget without checking `enabled` first. This matters at
+   * the adapter layer, where `runtime.publish(...)` may run on every shard
+   * disconnect / recover regardless of operator NATS configuration.
+   *
+   * Errors at publish time are logged and swallowed — emitting an
+   * operational `system.*` event must not crash the bot, especially when
+   * the bot is already in a degraded state. JetStream durability
+   * (per design-cortex.md §3.3) is the safety net for lost events.
+   *
+   * Resolves immediately — Core NATS publishes are fire-and-forget at the
+   * client layer; the `Promise<void>` shape leaves room to upgrade to
+   * `JetStream.publish` (which IS async) without breaking callers.
+   */
+  publish(envelope: Envelope): Promise<void>;
   /** Best-effort shutdown — drains subscribers, closes the link. */
   stop(): Promise<void>;
 }
@@ -83,8 +106,20 @@ export async function startMyelinRuntime(
     };
   };
 
+  // Disabled `publish` — same opt-in semantics as `onEnvelope`. Adapters
+  // call `runtime.publish(...)` from inside reconnect callbacks regardless
+  // of whether NATS is configured; making this a no-op (rather than a
+  // throw) keeps adapter code simple. The `enabled === false` flag is the
+  // explicit signal for callers who DO want to gate.
+  const publishDisabled = async (_envelope: Envelope) => {};
+
   if (!config.nats?.url) {
-    return { enabled: false, onEnvelope, stop: async () => {} };
+    return {
+      enabled: false,
+      onEnvelope,
+      publish: publishDisabled,
+      stop: async () => {},
+    };
   }
 
   const nats = config.nats;
@@ -96,7 +131,12 @@ export async function startMyelinRuntime(
     console.warn(
       "grove-bot: nats.url configured but nats.subjects is empty — no subscriptions started",
     );
-    return { enabled: false, onEnvelope, stop: async () => {} };
+    return {
+      enabled: false,
+      onEnvelope,
+      publish: publishDisabled,
+      stop: async () => {},
+    };
   }
 
   let link: NatsLink;
@@ -116,7 +156,12 @@ export async function startMyelinRuntime(
       "grove-bot: myelin runtime failed to connect — continuing without NATS:",
       err instanceof Error ? err.message : err,
     );
-    return { enabled: false, onEnvelope, stop: async () => {} };
+    return {
+      enabled: false,
+      onEnvelope,
+      publish: publishDisabled,
+      stop: async () => {},
+    };
   }
 
   const subscribers: MyelinSubscriber[] = [];
@@ -156,13 +201,45 @@ export async function startMyelinRuntime(
     // Nothing actually subscribed — close the link so we don't hold a
     // socket open for nothing.
     await link.close().catch(() => {});
-    return { enabled: false, onEnvelope, stop: async () => {} };
+    return {
+      enabled: false,
+      onEnvelope,
+      publish: publishDisabled,
+      stop: async () => {},
+    };
   }
 
+  // Capture the org segment once at runtime-start time — `agent.operatorId`
+  // is the same value used to substitute `{org}` in subscribe subjects, so
+  // publish and subscribe stay symmetrical.
+  const org = config.agent.operatorId ?? "default";
+
   let stopped = false;
+
+  const publishEnabled = async (envelope: Envelope): Promise<void> => {
+    if (stopped) {
+      // Don't publish during shutdown — link.drain() may already be in flight.
+      return;
+    }
+    const subject = `local.${org}.${envelope.type}`;
+    try {
+      link.publish(subject, JSON.stringify(envelope));
+    } catch (err) {
+      // Swallow + log per the contract on `MyelinRuntime.publish`. A failing
+      // operational event must NOT escalate into a crash, particularly since
+      // most failure modes here (closed connection, oversized payload) are
+      // already-bad-state signals.
+      console.error(
+        `grove-bot: myelin publish failed for subject=${subject} id=${envelope.id} type=${envelope.type}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  };
+
   return {
     enabled: true,
     onEnvelope,
+    publish: publishEnabled,
     stop: async () => {
       if (stopped) return;
       stopped = true;
