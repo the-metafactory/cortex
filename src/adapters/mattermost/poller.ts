@@ -134,13 +134,13 @@ export async function postReply(
     });
 
     if (!res.ok) {
-      console.error(`grove-bot: mattermost post failed: ${res.status} ${await res.text()}`);
+      console.error(`mattermost-poller: post failed: ${res.status} ${await res.text()}`);
       return null;
     }
     const created = await res.json() as Record<string, unknown>;
     return (created.id as string) ?? null;
   } catch (error) {
-    console.error("grove-bot: mattermost post error:", error);
+    console.error("mattermost-poller: post error:", error);
     return null;
   }
 }
@@ -196,7 +196,7 @@ export async function fetchMattermostFileInfos(
         source: "mattermost",
       });
     } catch (err) {
-      console.warn("grove-bot: mattermost-poller: failed to fetch file info:", fileId, err instanceof Error ? err.message : err);
+      console.warn("mattermost-poller: failed to fetch file info:", fileId, err instanceof Error ? err.message : err);
     }
   }
 
@@ -268,13 +268,13 @@ export async function postReplyWithFiles(
     });
 
     if (!res.ok) {
-      console.error(`grove-bot: mattermost post with files failed: ${res.status}`);
+      console.error(`mattermost-poller: post with files failed: ${res.status}`);
       return null;
     }
     const created = await res.json() as Record<string, unknown>;
     return (created.id as string) ?? null;
   } catch (error) {
-    console.error("grove-bot: mattermost post with files error:", error);
+    console.error("mattermost-poller: post with files error:", error);
     return null;
   }
 }
@@ -319,17 +319,17 @@ export function createMattermostPoller(options: MattermostPollerOptions): { stop
       if (!botUserId) {
         botUserId = await fetchBotUserId(apiUrl, apiToken);
         if (!botUserId) {
-          console.error("grove-bot: mattermost couldn't fetch bot user ID — check apiToken");
+          console.error("mattermost-poller: couldn't fetch bot user ID — check apiToken");
           return;
         }
-        console.log(`grove-bot: mattermost bot user ID: ${botUserId}`);
+        console.log(`mattermost-poller: bot user ID: ${botUserId}`);
       }
 
       // Refresh DM channels periodically (every ~20 polls)
       if (dmRefreshCount % 20 === 0) {
         dmChannelIds = await fetchDMChannels(botUserId, apiUrl, apiToken);
         if (dmRefreshCount === 0 && dmChannelIds.length > 0) {
-          console.log(`grove-bot: mattermost found ${dmChannelIds.length} DM channel(s)`);
+          console.log(`mattermost-poller: found ${dmChannelIds.length} DM channel(s)`);
         }
       }
       dmRefreshCount++;
@@ -371,7 +371,7 @@ export function createMattermostPoller(options: MattermostPollerOptions): { stop
           const userName = await fetchUserName(post.user_id, apiUrl, apiToken, userCache);
           const content = isDM ? post.message.trim() : extractAfterTrigger(post.message, triggerWord);
 
-          console.log(`grove-bot: mattermost inbound from ${userName} ${isDM ? "[DM]" : `in #${channelName}`}: ${content.slice(0, 100)}`);
+          console.log(`mattermost-poller: inbound from ${userName} ${isDM ? "[DM]" : `in #${channelName}`}: ${content.slice(0, 100)}`);
 
           const msg: MattermostInboundMessage = {
             channelId: post.channel_id,
@@ -391,10 +391,10 @@ export function createMattermostPoller(options: MattermostPollerOptions): { stop
             if (response) {
               const replyId = await postReply(post.channel_id, response, msg.rootId, apiUrl, apiToken);
               if (replyId) ourPostIds.add(replyId);
-              console.log(`grove-bot: mattermost replied in #${channelName}`);
+              console.log(`mattermost-poller: replied in #${channelName}`);
             }
           } catch (error) {
-            console.error(`grove-bot: mattermost handler error:`, error);
+            console.error(`mattermost-poller: handler error:`, error);
             const errReplyId = await postReply(
               post.channel_id,
               "Sorry, I encountered an error processing your request.",
@@ -411,7 +411,7 @@ export function createMattermostPoller(options: MattermostPollerOptions): { stop
 
       lastCheckTime = Date.now();
     } catch (error) {
-      console.error("grove-bot: mattermost poll error:", error);
+      console.error("mattermost-poller: poll error:", error);
     }
   };
 
@@ -426,7 +426,7 @@ export function createMattermostPoller(options: MattermostPollerOptions): { stop
   const interval = setInterval(poll, pollIntervalMs);
   poll(); // First poll immediately
 
-  console.log(`grove-bot: mattermost polling ${configuredChannels.length} channel(s) + DMs every ${pollIntervalMs / 1000}s for "${triggerWord}"`);
+  console.log(`mattermost-poller: polling ${configuredChannels.length} channel(s) + DMs every ${pollIntervalMs / 1000}s for "${triggerWord}"`);
 
   return {
     stop: () => {

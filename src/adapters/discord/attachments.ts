@@ -229,12 +229,12 @@ function cleanDirRecursive(dirPath: string): void {
           unlinkSync(entryPath);
         }
       } catch (err) {
-        console.warn("grove-bot: attachment cleanup: failed to remove entry:", entryPath, err instanceof Error ? err.message : err);
+        console.warn("discord-attachments: cleanup: failed to remove entry:", entryPath, err instanceof Error ? err.message : err);
       }
     }
     rmdirSync(dirPath);
   } catch (err) {
-    console.warn("grove-bot: attachment cleanup: failed to remove dir:", dirPath, err instanceof Error ? err.message : err);
+    console.warn("discord-attachments: cleanup: failed to remove dir:", dirPath, err instanceof Error ? err.message : err);
   }
 }
 
@@ -265,11 +265,11 @@ export function cleanupExpiredDirs(): number {
           cleaned++;
         }
       } catch (err) {
-        console.warn("grove-bot: attachment cleanup: failed to stat/clean dir:", dir, err instanceof Error ? err.message : err);
+        console.warn("discord-attachments: cleanup: failed to stat/clean dir:", dir, err instanceof Error ? err.message : err);
       }
     }
   } catch (err) {
-    console.warn("grove-bot: attachment cleanup: failed to read temp base:", err instanceof Error ? err.message : err);
+    console.warn("discord-attachments: cleanup: failed to read temp base:", err instanceof Error ? err.message : err);
   }
 
   return cleaned;
@@ -291,12 +291,12 @@ export function collectOutputFiles(sessionId: string): string[] {
           const stat = statSync(p);
           return stat.isFile() && stat.size <= ATTACHMENT_LIMITS.discordMaxUploadBytes;
         } catch (err) {
-          console.warn("grove-bot: collectOutputFiles: failed to stat:", p, err instanceof Error ? err.message : err);
+          console.warn("discord-attachments: collectOutputFiles: failed to stat:", p, err instanceof Error ? err.message : err);
           return false;
         }
       });
   } catch (err) {
-    console.warn("grove-bot: collectOutputFiles: failed to read output dir:", err instanceof Error ? err.message : err);
+    console.warn("discord-attachments: collectOutputFiles: failed to read output dir:", err instanceof Error ? err.message : err);
     return [];
   }
 }
@@ -329,13 +329,13 @@ export async function processInboundAttachments(
     );
 
     if (errors.length > 0) {
-      console.log(`grove-bot: attachment errors: ${errors.join("; ")}`);
+      console.log(`discord-attachments: errors: ${errors.join("; ")}`);
     }
 
     if (processed.length > 0) {
       prompt = buildAttachmentPrompt(processed);
       dirs.push(getSessionDir(attachSessionId));
-      console.log(`grove-bot: processed ${processed.length} attachment(s)`);
+      console.log(`discord-attachments: processed ${processed.length} attachment(s)`);
     }
   }
 
@@ -356,18 +356,18 @@ function getDirSize(dirPath: string): number {
             try {
               total += statSync(join(entryPath, file)).size;
             } catch (err) {
-              console.warn("grove-bot: getDirSize: failed to stat file:", join(entryPath, file), err instanceof Error ? err.message : err);
+              console.warn("discord-attachments: getDirSize: failed to stat file:", join(entryPath, file), err instanceof Error ? err.message : err);
             }
           }
         } else {
           total += stat.size;
         }
       } catch (err) {
-        console.warn("grove-bot: getDirSize: failed to stat entry:", entryPath, err instanceof Error ? err.message : err);
+        console.warn("discord-attachments: getDirSize: failed to stat entry:", entryPath, err instanceof Error ? err.message : err);
       }
     }
   } catch (err) {
-    console.warn("grove-bot: getDirSize: failed to read dir:", dirPath, err instanceof Error ? err.message : err);
+    console.warn("discord-attachments: getDirSize: failed to read dir:", dirPath, err instanceof Error ? err.message : err);
   }
   return total;
 }

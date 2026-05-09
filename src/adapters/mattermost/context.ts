@@ -91,7 +91,7 @@ export async function fetchMattermostContext(
     });
 
     if (!postRes.ok) {
-      console.error(`grove-bot: mattermost API error fetching post: ${postRes.status}`);
+      console.error(`mattermost-context: API error fetching post: ${postRes.status}`);
       return { messages: [], formatted: "" };
     }
 
@@ -151,7 +151,7 @@ export async function fetchMattermostContext(
       formatted: formatContextForClaude(messages),
     };
   } catch (error) {
-    console.error("grove-bot: mattermost context fetch error:", error);
+    console.error("mattermost-context: fetch error:", error);
     return { messages: [], formatted: "" };
   }
 }

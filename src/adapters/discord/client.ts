@@ -53,7 +53,11 @@ export function createDiscordClient(
   options: DiscordClientOptions = {},
 ): DiscordClientResult {
   const instanceId = options.instanceId ?? "discord";
-  const tag = `[${instanceId}]`;
+  // Logs use the instanceId directly as the prefix component (e.g.
+  // `discord-luna: shard 0 ready`). Multi-adapter deployments scope a unique
+  // instanceId per discord.js client, so the prefix disambiguates without
+  // needing a separate `grove-bot:`/`cortex:` umbrella.
+  const tag = instanceId;
   const degradedThresholdMs = options.degradedThresholdMs ?? 60_000;
   const health: ConnectionHealth = {
     reconnectCount: 0,
@@ -91,7 +95,7 @@ export function createDiscordClient(
   client.on("ready", () => {
     health.currentlyConnected = true;
     health.lastConnectedAt = new Date();
-    console.log(`grove-bot: ${tag} connected as ${client.user?.tag}`);
+    console.log(`${tag}: connected as ${client.user?.tag}`);
     console.log(`  Agent: ${config.agent.displayName}`);
     const guildIds = config.discord.map((d) => d.guildId).join(", ");
     console.log(`  Guild(s): ${guildIds || "none"}`);
@@ -107,12 +111,12 @@ export function createDiscordClient(
       // disconnect duration, not just "time since DEGRADED was declared".
       const degradedForMs = Date.now() - health.degradedSince.getTime();
       console.warn(
-        `grove-bot: ${tag} shard ${shardId} RECOVERED after ${(degradedForMs / 1000).toFixed(0)}s disconnected (reconnects so far: ${health.reconnectCount})`
+        `${tag}: shard ${shardId} RECOVERED after ${(degradedForMs / 1000).toFixed(0)}s disconnected (reconnects so far: ${health.reconnectCount})`
       );
       try {
         options.onRecovered?.({ instanceId, degradedForMs });
       } catch (err) {
-        console.error(`grove-bot: ${tag} onRecovered callback threw:`, err instanceof Error ? err.message : err);
+        console.error(`${tag}: onRecovered callback threw:`, err instanceof Error ? err.message : err);
       }
     }
     health.degraded = false;
@@ -120,14 +124,14 @@ export function createDiscordClient(
     if (!wasDegraded) {
       // Normal reconnect within threshold — emit the routine ready log. When
       // we crossed the degraded threshold, RECOVERED above already conveys it.
-      console.log(`grove-bot: ${tag} shard ${shardId} ready (reconnects so far: ${health.reconnectCount})`);
+      console.log(`${tag}: shard ${shardId} ready (reconnects so far: ${health.reconnectCount})`);
     }
   });
 
   client.on("shardDisconnect", (closeEvent, shardId) => {
     health.currentlyConnected = false;
     health.lastDisconnectedAt = new Date();
-    console.error(`grove-bot: ${tag} shard ${shardId} disconnected (code: ${closeEvent.code}, uptime: ${formatUptime(health.lastConnectedAt)})`);
+    console.error(`${tag}: shard ${shardId} disconnected (code: ${closeEvent.code}, uptime: ${formatUptime(health.lastConnectedAt)})`);
     clearDegradedTimer();
     // Stamp degradedSince at disconnect time — the moment outage minutes
     // started accruing — even though `degraded` only flips after the
@@ -137,27 +141,27 @@ export function createDiscordClient(
     degradedTimer = setTimeout(() => {
       health.degraded = true;
       console.error(
-        `grove-bot: ${tag} shard ${shardId} DEGRADED — disconnected > ${(degradedThresholdMs / 1000).toFixed(0)}s without recovery`
+        `${tag}: shard ${shardId} DEGRADED — disconnected > ${(degradedThresholdMs / 1000).toFixed(0)}s without recovery`
       );
       try {
         options.onDegraded?.({ instanceId, thresholdMs: degradedThresholdMs, since: disconnectAt });
       } catch (err) {
-        console.error(`grove-bot: ${tag} onDegraded callback threw:`, err instanceof Error ? err.message : err);
+        console.error(`${tag}: onDegraded callback threw:`, err instanceof Error ? err.message : err);
       }
     }, degradedThresholdMs);
   });
 
   client.on("shardReconnecting", (shardId) => {
     health.reconnectCount++;
-    console.log(`grove-bot: ${tag} shard ${shardId} reconnecting (#${health.reconnectCount}, last connected: ${formatUptime(health.lastConnectedAt)} ago)`);
+    console.log(`${tag}: shard ${shardId} reconnecting (#${health.reconnectCount}, last connected: ${formatUptime(health.lastConnectedAt)} ago)`);
   });
 
   client.on("error", (error) => {
-    console.error(`grove-bot: ${tag} Discord client error:`, error.message);
+    console.error(`${tag}: Discord client error:`, error.message);
   });
 
   client.on("shardError", (error, shardId) => {
-    console.error(`grove-bot: ${tag} shard ${shardId} WebSocket error:`, error.message);
+    console.error(`${tag}: shard ${shardId} WebSocket error:`, error.message);
   });
 
   return { client, health };

@@ -140,7 +140,7 @@ export function createMattermostServer(
           timestamp: payload.timestamp,
         };
 
-        console.log(`grove-bot: mattermost inbound from ${msg.userName} in #${msg.channelName}: ${content.slice(0, 100)}`);
+        console.log(`mattermost-server: inbound from ${msg.userName} in #${msg.channelName}: ${content.slice(0, 100)}`);
 
         // Invoke handler and return response
         const response = await onMessage(msg);
@@ -149,7 +149,7 @@ export function createMattermostServer(
           headers: { "Content-Type": "application/json" },
         });
       } catch (error) {
-        console.error("grove-bot: mattermost webhook error:", error);
+        console.error("mattermost-server: webhook error:", error);
         return new Response(
           JSON.stringify({ text: "An error occurred processing your request." }),
           { status: 500, headers: { "Content-Type": "application/json" } }
@@ -158,7 +158,7 @@ export function createMattermostServer(
     },
   });
 
-  console.log(`grove-bot: mattermost webhook server listening on port ${port}`);
+  console.log(`mattermost-server: webhook server listening on port ${port}`);
 
   return {
     server,

@@ -98,7 +98,7 @@ export async function postToDiscord(
         onRetry: (attempt, err, delayMs) => {
           const msg = err instanceof Error ? err.message : String(err);
           console.warn(
-            `grove-bot: discord: send retry #${attempt} for channel ${channel.id} in ${delayMs.toFixed(0)}ms (${msg})`
+            `discord-response-poster: send retry #${attempt} for channel ${channel.id} in ${delayMs.toFixed(0)}ms (${msg})`
           );
         },
         ...retryOptions,

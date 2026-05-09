@@ -116,12 +116,10 @@ describe("createDiscordClient degraded timer", () => {
       (client as any).emit("shardDisconnect", { code: 1006 } as any, 0);
       await new Promise((r) => setTimeout(r, 40));
       (client as any).emit("shardReady", 0);
-      // Every log line we emitted should carry the [discord-test] prefix
-      const ours = lines.filter((l) => l.startsWith("grove-bot:"));
+      // Every log line we emitted should carry the `discord-test:` prefix
+      // (instanceId-derived component name — see `client.ts`'s `tag`).
+      const ours = lines.filter((l) => l.startsWith("discord-test:"));
       expect(ours.length).toBeGreaterThan(0);
-      for (const l of ours) {
-        expect(l).toContain("[discord-test]");
-      }
       expect(health.degraded).toBe(false);
       client.removeAllListeners();
       client.destroy();

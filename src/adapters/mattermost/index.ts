@@ -76,7 +76,7 @@ export class MattermostAdapter implements PlatformAdapter {
     // config-typo signal worth surfacing.
     if (adapterConfig.surfaceSubjects?.length === 0) {
       console.warn(
-        `grove-bot: mattermost-${this.instanceId} surfaceSubjects is empty — adapter will never render bus envelopes`,
+        `mattermost-${this.instanceId}: surfaceSubjects is empty — adapter will never render bus envelopes`,
       );
     }
   }
@@ -276,7 +276,7 @@ export class MattermostAdapter implements PlatformAdapter {
         await postReply(dmChannel.id, text, undefined, apiUrl, apiToken);
       }
     } catch (err) {
-      console.warn("grove-bot: mattermost: failed to notify operator:", err instanceof Error ? err.message : err);
+      console.warn(`mattermost-${this.instanceId}: failed to notify operator:`, err instanceof Error ? err.message : err);
     }
   }
 
@@ -337,7 +337,7 @@ export class MattermostAdapter implements PlatformAdapter {
     const channelId = this.adapterConfig.surfaceFallbackChannelId;
     if (!channelId) {
       console.warn(
-        `grove-bot: mattermost-${this.instanceId} has no surfaceFallbackChannelId configured — dropping envelope ${envelope.id}`,
+        `mattermost-${this.instanceId}: has no surfaceFallbackChannelId configured — dropping envelope ${envelope.id}`,
       );
       return;
     }
@@ -351,7 +351,7 @@ export class MattermostAdapter implements PlatformAdapter {
       );
     } catch (err) {
       console.warn(
-        `grove-bot: mattermost-${this.instanceId} renderEnvelope failed for envelope ${envelope.id}:`,
+        `mattermost-${this.instanceId}: renderEnvelope failed for envelope ${envelope.id}:`,
         err instanceof Error ? err.message : err,
       );
     }
