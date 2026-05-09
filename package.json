@@ -1,0 +1,35 @@
+{
+  "name": "grove",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build:dashboard": "bun build src/mission-control/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser",
+    "watch:dashboard": "bun build src/mission-control/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser --watch"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@metafactory/content-filter": "github:the-metafactory/content-filter",
+    "@octokit/webhooks": "^14.2.0",
+    "@xyflow/react": "^12.10.2",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "chokidar": "^5.0.0",
+    "commander": "^14.0.3",
+    "discord.js": "^14.25.1",
+    "elkjs": "^0.11.1",
+    "grove-auth": "file:../grove-auth",
+    "nats": "^2.29.3",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "yaml": "^2.8.3",
+    "zod": "^4.3.6"
+  }
+}
