@@ -1,12 +1,21 @@
 /**
- * Shared utilities for extracting metadata from published events.
- * Used by both dashboard-state and worklog-manager to avoid duplication.
+ * Runner-side event utilities for the `PublishedEvent` shape (CC hook events
+ * lifted by the relay). Used by `dashboard-state` and `worklog-manager` to
+ * detect project / extract GitHub references / surface activity entries.
  *
- * TODO(MIG-7): This is the bot/lib version of event-utils, distinct from
- * `src/common/event-utils.ts` (the mc/tap version). They cover different
- * event shapes (`PublishedEvent` here vs `IngestEvent` there) — overlapping
- * function names work on different surfaces. Consolidation pass scheduled
- * at MIG-7 alongside the broader common/types reorg.
+ * Distinct from `src/common/event-utils.ts`, which serves the `IngestEvent`
+ * shape used by the mc API + cc-events tap. The two files share function
+ * names (`detectProject`) but operate on different event types and live in
+ * different surfaces of the codebase. The naming overlap is intentional —
+ * each surface has its own canonical "given an event, infer the project"
+ * implementation, and consolidating them would force a lossy union type
+ * (PublishedEvent | IngestEvent) that obscures which surface a caller is
+ * really on. No consolidation is planned.
+ *
+ * If you find yourself wanting to call one from the other, you're probably
+ * on the wrong side of the surface boundary — the runner shouldn't be
+ * inspecting IngestEvents, and the mc/tap layer shouldn't be inspecting
+ * PublishedEvents. Reach for the projection at the boundary instead.
  */
 
 import type { PublishedEvent } from "../taps/cc-events/hooks/lib/event-types";
