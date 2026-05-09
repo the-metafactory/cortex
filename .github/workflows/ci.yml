@@ -21,6 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # `gh label list` queries GraphQL `repository.labels`, which requires
+      # the `issues: read` scope (labels live under the issues subsystem
+      # in GitHub's permission model). Without this the call fails with
+      # "Resource not accessible by integration".
+      issues: read
     steps:
       - name: Checkout cortex
         uses: actions/checkout@v4
