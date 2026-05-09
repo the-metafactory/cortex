@@ -218,7 +218,15 @@ export async function startMyelinRuntime(
 
   const publishEnabled = async (envelope: Envelope): Promise<void> => {
     if (stopped) {
-      // Don't publish during shutdown — link.drain() may already be in flight.
+      // Post-stop publish: short-circuit. The runtime's `link.drain()`
+      // (called inside `stop()` below) flushes pending publishes before the
+      // underlying connection closes; a publish call that races between
+      // `stopped = true` and `link.close()` would either flush along with
+      // drain or be dropped silently — never crash the caller. The check
+      // here is belt-and-braces: the underlying nats client is already
+      // drain-safe, but short-circuiting at this layer keeps the contract
+      // explicit ("publish-after-stop is a no-op") and saves a JSON.stringify
+      // of the envelope on the shutdown path.
       return;
     }
     const subject = `local.${org}.${envelope.type}`;

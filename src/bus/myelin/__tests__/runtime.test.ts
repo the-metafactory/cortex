@@ -347,6 +347,11 @@ describe("MyelinRuntime", () => {
     });
 
     test("publish after stop() is a no-op (no late publishes after drain)", async () => {
+      // Pins the post-stop semantic documented on `publishEnabled` in
+      // runtime.ts: once `stop()` returns, calls to `runtime.publish(...)`
+      // must short-circuit before reaching `link.publish`. The underlying
+      // nats client is drain-safe, but the runtime contract is explicit:
+      // post-stop publish is a no-op the caller can rely on.
       const fake = makeFakeNatsConnection();
       const runtime = await startMyelinRuntime(
         makeConfig({
