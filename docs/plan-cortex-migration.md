@@ -339,9 +339,9 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
 - [ ] **1.3** Copy from grove-v2: `src/bot/lib/myelin/` (vendored schema) → `cortex/src/bus/myelin/vendor/`.
 - [ ] **1.4** Copy from grove-v2: `src/bot/lib/myelin-subscriber.ts` → `cortex/src/bus/myelin/subscriber.ts`. Tests alongside.
 - [x] **1.5** Copy from grove-v2: `src/bot/lib/myelin-runtime.ts` → `cortex/src/bus/myelin/runtime.ts`. Tests alongside. *(cortex#22, merged 2026-05-09 — closes cortex#13. 4 import rewrites + 7/7 tests forward. The keystone unlock — releases MIG-3b/4b/5b/MIG-7.1 from the strict-block deferrals.)*
-- [ ] **1.6** Copy from grove-v2: `src/bot/lib/message-router.ts` → `cortex/src/bus/dispatch-handler.ts`. **Rename** internal class `MessageRouter` → `DispatchHandler`.
+- [x] **1.6** Copy from grove-v2: `src/bot/lib/message-router.ts` → `cortex/src/bus/dispatch-handler.ts`. **Rename** internal class `MessageRouter` → `DispatchHandler`.
 - [ ] **1.7** *(no copy — `inbound-queue.ts` is legacy-grove-only per §2.2.1, not in grove-v2; cortex relies on JetStream durability per design-cortex.md §3.3 "lost event ≠ lost state". Falsifiable re-evaluation trigger: if any post-MIG-7 incident's RCA cites lost events crossing a cortex restart boundary, file a follow-on issue to port `inbound-queue.ts` from legacy.)*
-- [ ] **1.8** Copy from grove-v2: `src/bot/lib/network-resolver.ts` → `cortex/src/bus/network-resolver.ts`.
+- [x] **1.8** Copy from grove-v2: `src/bot/lib/network-resolver.ts` → `cortex/src/bus/network-resolver.ts`.
 - [ ] **1.9** Implement `cortex/src/bus/surface-router.ts` — the G-1111.A target. Surface adapters register; surface-router subscribes to NATS via `MyelinRuntime` and fans envelopes to registered adapters by subject pattern + payload filter. New code, not a port; tests new.
 - [ ] **1.10** Add the G-1111 §4.6 fail-safe rule check at config-load: `~/.config/cortex/cortex.yaml` `renderers[]` must provide ≥2 distinct platform classes covering `local.{org}.system.>`. Refuse to start otherwise. *(Platform classes are defined in `docs/design-event-taxonomy.md` §4.6.1: `chat-gateway` / `webhook-out` / `paging` / `local-projection` — match against that set at load time.)*
 - [ ] **1.11** All cross-imports rewritten: no reference to `../bot/...` or `../../bot/...`. Local imports only within `bus/` plus from `common/`.
