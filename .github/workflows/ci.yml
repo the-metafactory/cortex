@@ -6,31 +6,31 @@ on:
   pull_request:
     branches: [main]
 
+# Compass governance validators are vendored at .github/scripts/ rather than
+# pulled from a sibling checkout of the-metafactory/compass. Original setup
+# (cross-repo checkout via GH_PAT_COMPASS_RO) failed on every run since the
+# MIG-0 bootstrap because (a) the PAT secret was never provisioned and (b)
+# compass's engine/ci/ only contains label-check.ts (no run-all.ts).
+# Vendoring follows the same pattern as the myelin envelope schema vendor
+# at src/bus/myelin/vendor/ (cortex#11 G-1100.B). Update the vendored copy
+# when compass evolves its validator surface.
+# Tracked at cortex#16.
 jobs:
   validators:
     name: Compass governance validators
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout cortex
         uses: actions/checkout@v4
-        with:
-          path: cortex
-
-      - name: Checkout compass
-        uses: actions/checkout@v4
-        with:
-          repository: the-metafactory/compass
-          path: compass
-          token: ${{ secrets.GH_PAT_COMPASS_RO || github.token }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - name: Run compass validators
-        working-directory: cortex
-        run: |
-          bun ../compass/engine/ci/run-all.ts \
-            --owner the-metafactory \
-            --repo cortex
+      - name: Label check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bun .github/scripts/label-check.ts the-metafactory/cortex
