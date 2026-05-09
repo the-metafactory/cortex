@@ -55,7 +55,7 @@ export class TaskTracker {
   async shutdown(timeoutMs = 10_000): Promise<void> {
     if (this.tasks.size === 0) return;
 
-    console.log(`grove-bot: shutting down ${this.tasks.size} in-flight task(s)...`);
+    console.log(`task-tracker: shutting down ${this.tasks.size} in-flight task(s)...`);
 
     const exitPromises: Promise<void>[] = [];
 

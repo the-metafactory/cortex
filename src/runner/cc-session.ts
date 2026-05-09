@@ -171,7 +171,7 @@ export class CCSession extends EventEmitter {
     const proc = this.proc;
     setTimeout(() => {
       try { proc.kill("SIGTERM"); } catch (err) {
-        console.warn("grove-bot: cc-session: SIGTERM failed (process likely already exited):", err instanceof Error ? err.message : err);
+        console.warn("cc-session: SIGTERM failed (process likely already exited):", err instanceof Error ? err.message : err);
       }
     }, 2_000);
   }
@@ -238,7 +238,7 @@ export class CCSession extends EventEmitter {
     const timeout = this.opts.timeoutMs ?? 120_000;
     this.timeoutId = setTimeout(() => {
       const mins = Math.round(timeout / 60_000);
-      console.error(`grove-bot: cc-session timed out after ${mins} minutes of inactivity`);
+      console.error(`cc-session: timed out after ${mins} minutes of inactivity`);
       this.timedOut = true;
       this.kill();
       this.emit("error", new Error(`Timed out after ${mins} minute${mins !== 1 ? "s" : ""} of inactivity`));
@@ -294,7 +294,7 @@ export class CCSession extends EventEmitter {
         chunks.push(decoder.decode(value, { stream: true }));
       }
     } catch (err) {
-      console.warn("grove-bot: cc-session: stderr stream closed:", err instanceof Error ? err.message : err);
+      console.warn("cc-session: stderr stream closed:", err instanceof Error ? err.message : err);
     }
 
     const stderrText = chunks.join("");

@@ -60,7 +60,7 @@ export function loadConfig(path: string): BotConfig {
 function loadNetworkFiles(networksDir: string, explicit: boolean): NetworkFile[] {
   if (!existsSync(networksDir)) {
     if (explicit) {
-      console.warn(`grove-bot: networksDir "${networksDir}" does not exist — no networks loaded`);
+      console.warn(`config-loader: networksDir "${networksDir}" does not exist — no networks loaded`);
     }
     return [];
   }
@@ -114,7 +114,7 @@ function buildLegacyNetwork(raw: Record<string, unknown>): NetworkFile {
   const operatorId = (api.operatorId || (agent ? agent.operatorId : undefined)) as string | undefined;
   if (!operatorId) {
     console.warn(
-      "grove-bot: no operatorId configured (api.operatorId or agent.operatorId). " +
+      "config-loader: no operatorId configured (api.operatorId or agent.operatorId). " +
       "Skipping cloud config for legacy default network to avoid phantom dashboard entries.",
     );
   }

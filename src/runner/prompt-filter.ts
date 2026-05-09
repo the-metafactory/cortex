@@ -29,11 +29,11 @@ try {
   const mod = await import("@metafactory/content-filter");
   filterContentString = mod.filterContentString;
   console.log(
-    "grove-bot: prompt-filter: @metafactory/content-filter loaded — inbound prompts will be scanned",
+    "prompt-filter: @metafactory/content-filter loaded — inbound prompts will be scanned",
   );
 } catch (err) {
   console.error(
-    "grove-bot: prompt-filter: WARN @metafactory/content-filter failed to load — " +
+    "prompt-filter: WARN @metafactory/content-filter failed to load — " +
       "inbound prompts are NOT being scanned for prompt injection:",
     err instanceof Error ? err.message : err,
   );
@@ -78,7 +78,7 @@ export function scanPrompt(prompt: string, source: string): PromptFilterResult {
       const reasons = [...patternIds, ...encodingTypes];
       const reasonStr = reasons.length > 0 ? reasons.join(", ") : "unspecified";
       console.log(
-        `grove-bot: prompt blocked by content filter (${reasonStr}): ${prompt.slice(0, 100)}`,
+        `prompt-filter: prompt blocked by content filter (${reasonStr}): ${prompt.slice(0, 100)}`,
       );
       return {
         allowed: false,
@@ -90,7 +90,7 @@ export function scanPrompt(prompt: string, source: string): PromptFilterResult {
     return { allowed: true, score: result.overall_confidence };
   } catch (error) {
     // Fail-open on filter errors — don't block legitimate messages
-    console.error("grove-bot: content filter error:", error);
+    console.error("prompt-filter: content filter error:", error);
     return { allowed: true };
   }
 }

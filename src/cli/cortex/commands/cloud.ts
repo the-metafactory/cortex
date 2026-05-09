@@ -395,7 +395,7 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
       }
     }
   } catch (err) {
-    console.warn("grove-bot: cloud setup: failed to read bot.yaml for repos:", err instanceof Error ? err.message : err);
+    console.warn("cortex: cloud setup: failed to read bot.yaml for repos:", err instanceof Error ? err.message : err);
   }
 
   const reposResult = await runWranglerSecretPut("GITHUB_REPOS", repos, cfEnv, workerDir);

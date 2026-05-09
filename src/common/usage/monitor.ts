@@ -52,7 +52,7 @@ export class UsageMonitor {
     // Tier 3: API fallback — only if no events/cache updates in a while
     this.apiTimer = setInterval(() => this.apiFallback(), API_POLL_MS);
 
-    console.log("grove-bot: usage monitor started (event → cache → api)");
+    console.log("usage-monitor: started (event → cache → api)");
   }
 
   /** Stop all timers. */
@@ -91,7 +91,7 @@ export class UsageMonitor {
       const snapshot = this.toSnapshot("cache", raw);
       this.onUpdate(usage, snapshot);
     } catch (err) {
-      console.error("grove-bot: usage cache read failed:", err instanceof Error ? err.message : err);
+      console.error("usage-monitor: cache read failed:", err instanceof Error ? err.message : err);
     }
   }
 
@@ -121,7 +121,7 @@ export class UsageMonitor {
       this.onUpdate(usage, snapshot);
       this.lastEventAt = Date.now(); // Treat API response as a "recent update"
     } catch (err) {
-      console.error("grove-bot: usage API fallback failed:", err instanceof Error ? err.message : err);
+      console.error("usage-monitor: API fallback failed:", err instanceof Error ? err.message : err);
     }
   }
 
@@ -169,7 +169,7 @@ export class UsageMonitor {
           if (token) return token;
         }
       } catch (err) {
-        console.error("grove-bot: keychain credential read failed:", err instanceof Error ? err.message : err);
+        console.error("usage-monitor: keychain credential read failed:", err instanceof Error ? err.message : err);
       }
     }
 
@@ -182,7 +182,7 @@ export class UsageMonitor {
         if (token) return token;
       }
     } catch (err) {
-      console.error("grove-bot: credentials file read failed:", err instanceof Error ? err.message : err);
+      console.error("usage-monitor: credentials file read failed:", err instanceof Error ? err.message : err);
     }
 
     return process.env.CLAUDE_CODE_OAUTH_TOKEN ?? null;

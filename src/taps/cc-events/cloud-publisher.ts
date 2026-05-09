@@ -75,7 +75,7 @@ export class CloudPublisher {
     if (this.buffer.length > CloudPublisher.MAX_BUFFER_SIZE) {
       const dropped = this.buffer.length - CloudPublisher.MAX_BUFFER_SIZE;
       this.buffer.splice(0, dropped);
-      console.warn(`grove-bot: cloud publisher dropped ${dropped} oldest event(s) (buffer full)`);
+      console.warn(`cloud-publisher: dropped ${dropped} oldest event(s) (buffer full)`);
     }
 
     if (this.buffer.length >= this.batchSizeLimit) {
@@ -123,22 +123,22 @@ export class CloudPublisher {
         if (res.status >= 300 && res.status < 400) {
           const location = res.headers.get("location") ?? "(unknown)";
           console.error(
-            `grove-bot: cloud endpoint STALE for network "${networkId}"\n` +
+            `cloud-publisher: endpoint STALE for network "${networkId}"\n` +
             `  URL: ${url}\n` +
             `  Got: HTTP ${res.status} -> ${location}\n` +
             `  This usually means the Worker route was changed but the network config still has the old URL.\n` +
             `  Fix: update cloud.endpoint in the network config file, then restart.`,
           );
         } else if (res.ok) {
-          console.log(`grove-bot: cloud endpoint OK for network "${networkId}" (${config.endpoint})`);
+          console.log(`cloud-publisher: endpoint OK for network "${networkId}" (${config.endpoint})`);
         } else {
           console.warn(
-            `grove-bot: cloud endpoint returned HTTP ${res.status} for network "${networkId}" (${url})`,
+            `cloud-publisher: endpoint returned HTTP ${res.status} for network "${networkId}" (${url})`,
           );
         }
       } catch (err) {
         console.error(
-          `grove-bot: cloud endpoint UNREACHABLE for network "${networkId}" (${url}): ${err instanceof Error ? err.message : err}`,
+          `cloud-publisher: endpoint UNREACHABLE for network "${networkId}" (${url}): ${err instanceof Error ? err.message : err}`,
         );
       }
     }
@@ -188,7 +188,7 @@ export class CloudPublisher {
 
     if (!networkConfig) {
       console.warn(
-        `grove-bot: unknown network "${networkId}" — skipping ${events.length} event(s). ` +
+        `cloud-publisher: unknown network "${networkId}" — skipping ${events.length} event(s). ` +
         `Check networks[] config or ensure GROVE_NETWORK matches a configured network.`,
       );
       return;
@@ -221,7 +221,7 @@ export class CloudPublisher {
         if (res.status >= 300 && res.status < 400) {
           const location = res.headers.get("location") ?? "(unknown)";
           console.error(
-            `grove-bot: cloud endpoint STALE for network "${networkId}" — got HTTP ${res.status} -> ${location}\n` +
+            `cloud-publisher: endpoint STALE for network "${networkId}" — got HTTP ${res.status} -> ${location}\n` +
             `  URL: ${url}\n` +
             `  This usually means the Worker route was changed but the network config still has the old URL.\n` +
             `  Fix: update cloud.endpoint in the network config file, then restart.\n` +
@@ -231,11 +231,11 @@ export class CloudPublisher {
         }
 
         console.error(
-          `grove-bot: cloud publish failed for network "${networkId}" (attempt ${attempt}/${this.maxRetries}): HTTP ${res.status}`,
+          `cloud-publisher: publish failed for network "${networkId}" (attempt ${attempt}/${this.maxRetries}): HTTP ${res.status}`,
         );
       } catch (err) {
         console.error(
-          `grove-bot: cloud publish error for network "${networkId}" (attempt ${attempt}/${this.maxRetries}):`,
+          `cloud-publisher: publish error for network "${networkId}" (attempt ${attempt}/${this.maxRetries}):`,
           err instanceof Error ? err.message : err,
         );
       }
@@ -249,7 +249,7 @@ export class CloudPublisher {
 
     // All retries exhausted -- drop the batch (events are in local JSONL)
     console.error(
-      `grove-bot: cloud publish dropped ${events.length} event(s) for network "${networkId}" after ${this.maxRetries} retries`,
+      `cloud-publisher: publish dropped ${events.length} event(s) for network "${networkId}" after ${this.maxRetries} retries`,
     );
   }
 }
