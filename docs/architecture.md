@@ -582,8 +582,8 @@ cortex/
       gh-webhook/     ── GitHub webhook → NATS
       cc-events/      ── Claude Code hooks → NATS
     cli/              ── Operator CLIs.
-      discord/        ── ~/bin/discord
-      cldyo-live/     ── CC instrumentation wrapper
+      discord/        ── ~/bin/discord (subdir: discord.ts entry + lib/ + skill/)
+      cldyo-live      ── CC instrumentation wrapper (single bash script, NOT a directory)
     common/           ── Shared types, utilities.
   docs/
     architecture.md   ── This doc, copied in at MIG-0.10.
