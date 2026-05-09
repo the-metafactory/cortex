@@ -40,8 +40,16 @@ export class WorklogManager {
   /**
    * Clean up stale session→thread mappings for sessions that never completed.
    * Call periodically (e.g. every 5 minutes). Removes entries older than maxAgeMs.
+   *
+   * Default: 6h. Long-running CC tasks (research sweeps, multi-step builds)
+   * routinely exceed the previous 30-minute floor, and the consequence of
+   * eviction-during-progress is "terminal envelope arrives, can't find its
+   * thread, channel-level summary still posts but per-thread summary is
+   * lost" — graceful degradation, but avoidable. 6h covers nearly every
+   * realistic in-process task without making the maps unbounded; longer
+   * runs should pick a custom value (per Echo round-1 s4).
    */
-  cleanupStaleSessions(maxAgeMs = 30 * 60 * 1000): number {
+  cleanupStaleSessions(maxAgeMs = 6 * 60 * 60 * 1000): number {
     const now = Date.now();
     let removed = 0;
     for (const [sessionId, lastSeen] of this.sessionLastSeen) {
@@ -255,20 +263,17 @@ export class WorklogManager {
    *   bot config). Passing it explicitly keeps the dependency direction
    *   clean (no config import here).
    *
-   * KNOWN LIMITATION (Echo round-1 s4, deferred): the bus path keys
-   * threads by `task_id` and shares the `sessionThreads` map with the
-   * direct-call path. `cleanupStaleSessions` defaults to a 30-minute
-   * staleness window — long-running CC tasks that exceed that window
-   * will have their thread ID evicted from the map even if the task is
-   * still in progress, after which a late `dispatch.task.completed`
-   * envelope can no longer find its thread. This is acceptable for
-   * MIG-4b because: (a) the default cc-session inactivity timeout is
-   * 2 minutes, well under the 30-minute floor; (b) the bus path's
-   * fallback for "thread missing" is to skip the per-thread post but
-   * still emit the channel-level summary (graceful degradation, not
-   * data loss); (c) loosening the cleanup default is a cross-cutting
-   * design conversation (it also affects the direct-call path) better
-   * scoped to a follow-up rather than this PR.
+   * KNOWN LIMITATION (Echo round-1 s4): the bus path keys threads by
+   * `task_id` and shares the `sessionThreads` map with the direct-call
+   * path. `cleanupStaleSessions` now defaults to a 6-hour staleness
+   * window (was 30 minutes — raised in C-108 sweep so long-running tasks
+   * don't lose their thread mapping before the terminal envelope arrives).
+   * Tasks that exceed even the 6h floor will still have their thread ID
+   * evicted from the map, after which a late terminal envelope can no
+   * longer find its thread. The bus path's fallback for "thread missing"
+   * is to skip the per-thread post but still emit the channel-level
+   * summary (graceful degradation, not data loss). Callers that need a
+   * different window pass `maxAgeMs` explicitly.
    */
   surfaceConfig(opts: { org: string; adapterId?: string }): SurfaceAdapter {
     const subjects = [`local.${opts.org}.dispatch.task.>`];
