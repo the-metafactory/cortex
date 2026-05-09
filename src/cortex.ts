@@ -53,6 +53,19 @@ const DEFAULT_CONFIG = join(process.env.HOME ?? "~", ".config", "grove", "bot.ya
  *  that don't drain are abandoned (logged). */
 export interface CortexHandle {
   stop(): Promise<void>;
+  /**
+   * Subsystems that did not finish their `stop()` within
+   * `SHUTDOWN_TIMEOUT_MS` on the most recent `stop()` invocation. Empty
+   * after a clean shutdown; non-empty signals operators (or launchd) that
+   * the process exited dirty — typically wiring this to a non-zero exit
+   * code.
+   *
+   * Echo round-1 N2: previously the timeout warned but didn't surface
+   * which components were left in flight. The CLI handler at the bottom
+   * of this file checks this list after stop() and exits 1 if non-empty
+   * so launchd knows to log a dirty shutdown.
+   */
+  readonly lastShutdownAbandoned: readonly string[];
 }
 
 /** Optional test-only injection points. Production callers omit. */
@@ -74,6 +87,14 @@ export interface StartCortexOptions {
    * @internal — not part of the public API; semver does not apply.
    */
   injectRuntime?: MyelinRuntime;
+  /**
+   * Override the 15s shutdown timeout. Tests use a small value (50–200ms)
+   * to exercise the abandoned-set tracking path without holding the test
+   * runner hostage for 15 real seconds.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  shutdownTimeoutMs?: number;
 }
 
 /**
@@ -281,41 +302,103 @@ export async function startCortex(
   }
 
   // Shutdown — reverse-order; capped at SHUTDOWN_TIMEOUT_MS.
+  //
+  // Echo round-1 N2 — abandoned-set tracking: each drain step is named
+  // and pre-registered in `pending` BEFORE the loop runs. Steps remove
+  // themselves on completion. If the timeout fires first, whatever
+  // remains in `pending` is the abandoned set:
+  //   - the slow/hanging step itself (if any), and
+  //   - every subsequent step that never got its turn (drain is sequential
+  //     by design — a hung step also blocks its siblings).
+  // The handle exposes `lastShutdownAbandoned` so the CLI can exit 1
+  // (visible to launchd / operators) when shutdown was unclean.
   let shuttingDown = false;
-  const SHUTDOWN_TIMEOUT_MS = 15_000;
+  let lastShutdownAbandoned: string[] = [];
+  const SHUTDOWN_TIMEOUT_MS = options.shutdownTimeoutMs ?? 15_000;
 
   const stop = async (): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log("\ncortex: shutting down...");
 
-    const drain = async (): Promise<void> => {
-      configWatcher?.stop();
-      usageMonitor?.stop();
-      logIfThrows("dashboard stop", () => dashboardApi?.stop?.());
-      for (const cleanup of adapterCleanup) {
-        logIfThrows("outbound poller stop", cleanup);
+    // Named slots in shutdown order. Pre-register everything; each step
+    // removes its name on completion so the leftover after the race is
+    // the abandoned set.
+    const pending = new Set<string>();
+    const adapterStopNames = adapters.map((a) => `adapter ${a.instanceId} stop`);
+    const allSlots: string[] = [
+      "config-watcher stop",
+      "usage-monitor stop",
+      "dashboard stop",
+      ...adapterCleanup.map((_, i) => `outbound poller stop[${i}]`),
+      "dispatch-listener stop",
+      "surface-router stop",
+      "dispatch-handler shutdown",
+      ...adapterStopNames,
+      "cloud publisher close",
+      "runtime stop",
+    ];
+    for (const slot of allSlots) pending.add(slot);
+
+    const completeSync = (slot: string, fn: () => void): void => {
+      try { fn(); } catch (err) {
+        console.error(`cortex: ${slot} error:`, err instanceof Error ? err.message : err);
+      } finally {
+        pending.delete(slot);
       }
-      await logIfRejects("dispatch-listener stop", dispatchListener.stop());
-      await logIfRejects("surface-router stop", router.stop());
-      await logIfRejects("dispatch-handler shutdown", dispatchHandler.shutdown());
-      for (const adapter of adapters) {
-        await logIfRejects(`adapter ${adapter.instanceId} stop`, adapter.stop());
+    };
+    const completeAsync = async (slot: string, p: Promise<unknown> | undefined): Promise<void> => {
+      try { if (p) await p; } catch (err) {
+        console.error(`cortex: ${slot} error:`, err instanceof Error ? err.message : err);
+      } finally {
+        pending.delete(slot);
       }
-      await logIfRejects("cloud publisher close", cloudPublisher?.close());
-      await logIfRejects("runtime stop", runtime.stop());
     };
 
-    const timeout = new Promise<void>((resolve) =>
-      setTimeout(() => {
-        console.warn(`cortex: shutdown timed out after ${SHUTDOWN_TIMEOUT_MS}ms — abandoning remaining components`);
+    const drain = async (): Promise<void> => {
+      completeSync("config-watcher stop", () => configWatcher?.stop());
+      completeSync("usage-monitor stop", () => usageMonitor?.stop());
+      completeSync("dashboard stop", () => dashboardApi?.stop?.());
+      for (let i = 0; i < adapterCleanup.length; i++) {
+        completeSync(`outbound poller stop[${i}]`, adapterCleanup[i]!);
+      }
+      await completeAsync("dispatch-listener stop", dispatchListener.stop());
+      await completeAsync("surface-router stop", router.stop());
+      await completeAsync("dispatch-handler shutdown", dispatchHandler.shutdown());
+      for (let i = 0; i < adapters.length; i++) {
+        await completeAsync(adapterStopNames[i]!, adapters[i]!.stop());
+      }
+      await completeAsync("cloud publisher close", cloudPublisher?.close());
+      await completeAsync("runtime stop", runtime.stop());
+    };
+
+    let timeoutFired = false;
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<void>((resolve) => {
+      timeoutHandle = setTimeout(() => {
+        timeoutFired = true;
         resolve();
-      }, SHUTDOWN_TIMEOUT_MS),
-    );
+      }, SHUTDOWN_TIMEOUT_MS);
+    });
     await Promise.race([drain(), timeout]);
+
+    if (timeoutFired) {
+      lastShutdownAbandoned = Array.from(pending);
+      console.warn(
+        `cortex: shutdown timed out after ${SHUTDOWN_TIMEOUT_MS}ms — abandoned: ${lastShutdownAbandoned.join(", ")}`,
+      );
+    } else {
+      lastShutdownAbandoned = [];
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
   };
 
-  return { stop };
+  return {
+    stop,
+    get lastShutdownAbandoned() {
+      return lastShutdownAbandoned;
+    },
+  };
 }
 
 /** G-201 / G-206 dashboard wiring. Dynamic import: surface/mc uses bun-only
@@ -469,22 +552,6 @@ function setupOutboundLog(
   };
 }
 
-// Shutdown helpers — log-and-swallow so one slow stop doesn't block the next.
-
-function logIfThrows(label: string, fn: (() => void) | undefined): void {
-  if (!fn) return;
-  try { fn(); } catch (err) {
-    console.error(`cortex: ${label} error:`, err instanceof Error ? err.message : err);
-  }
-}
-
-async function logIfRejects(label: string, p: Promise<unknown> | undefined): Promise<void> {
-  if (!p) return;
-  try { await p; } catch (err) {
-    console.error(`cortex: ${label} error:`, err instanceof Error ? err.message : err);
-  }
-}
-
 /** G-204a + G-500: Issue startup `/api/sync` POST against each cloud-capable
  *  network; fall back to a local sync for any network that errors. */
 async function runStartupCloudSync(
@@ -587,7 +654,12 @@ if (import.meta.main) {
       const shutdown = async () => {
         await handle.stop();
         if (existsSync(PID_FILE)) unlinkSync(PID_FILE);
-        process.exit(0);
+        // Echo round-1 N2: surface dirty shutdown to launchd / operators
+        // via a non-zero exit code. `lastShutdownAbandoned` is non-empty
+        // only when the 15s drain timeout fired with subsystems still in
+        // flight (logged by `stop()` already).
+        const abandoned = handle.lastShutdownAbandoned;
+        process.exit(abandoned.length > 0 ? 1 : 0);
       };
       process.on("SIGINT", shutdown);
       process.on("SIGTERM", shutdown);

@@ -350,7 +350,7 @@ describe("startCortex — shutdown", () => {
     await expect(handle.stop()).resolves.toBeUndefined();
   });
 
-  test("stop() resolves within the shutdown timeout", async () => {
+  test("stop() resolves within the shutdown timeout (clean shutdown leaves abandoned set empty)", async () => {
     const config = minimalConfig();
     const handle = await startCortex(config, {
       disableConfigWatcher: true,
@@ -364,6 +364,65 @@ describe("startCortex — shutdown", () => {
     // Internal cap is 15s; an empty stack should drain in well under 1s.
     // Using 5s as a generous CI-friendly upper bound.
     expect(elapsed).toBeLessThan(5_000);
+    // Echo round-1 N2: abandoned-set is empty after a clean shutdown.
+    expect(handle.lastShutdownAbandoned).toEqual([]);
+  });
+
+  test("stop() abandons subsystems whose stop() exceeds the timeout (Echo round-1 N2)", async () => {
+    // Make `runtime.stop()` hang. It's the LAST drain step, so prior
+    // subsystems complete cleanly and only "runtime stop" should land in
+    // the abandoned set. This keeps the assertion specific instead of
+    // brittle ordering.
+    const runtime: MyelinRuntime = {
+      enabled: false,
+      onEnvelope: () => ({ unregister: () => {} }),
+      publish: async () => {},
+      // A promise that never resolves — simulating a wedged runtime
+      // (closed connection, hung drain, ...).
+      stop: () => new Promise<void>(() => {}),
+    };
+
+    const warnLines: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (msg: string, ...rest: unknown[]) => {
+      warnLines.push([msg, ...rest].join(" "));
+    };
+
+    let handle: Awaited<ReturnType<typeof startCortex>>;
+    try {
+      handle = await startCortex(minimalConfig(), {
+        disableConfigWatcher: true,
+        disableDashboard: true,
+        disableOutboundPoller: true,
+        injectRuntime: runtime,
+        // Tight timeout — keeps the test fast. Production default is
+        // 15_000ms; the same code path runs at both budgets.
+        shutdownTimeoutMs: 100,
+      });
+
+      const start = Date.now();
+      await handle.stop();
+      const elapsed = Date.now() - start;
+      // Should resolve at ~100ms (timeout fires) — well under the 15s
+      // production cap. Bound generously for CI noise.
+      expect(elapsed).toBeGreaterThanOrEqual(90);
+      expect(elapsed).toBeLessThan(2_000);
+
+      // The abandoned set: only "runtime stop" because every prior step
+      // is sequential and has already cleared. If wire-up changes cause
+      // additional steps to land here, the assertion's first match still
+      // pinpoints the relevant subsystem name.
+      expect(handle.lastShutdownAbandoned).toContain("runtime stop");
+      // Belt-and-braces: the timeout warning is logged with the named
+      // subsystem so an operator grepping the log can identify the
+      // dirty subsystem without reading code.
+      const timeoutWarn = warnLines.find((l) => l.includes("shutdown timed out"));
+      expect(timeoutWarn).toBeDefined();
+      expect(timeoutWarn!).toContain("abandoned:");
+      expect(timeoutWarn!).toContain("runtime stop");
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 });
 
