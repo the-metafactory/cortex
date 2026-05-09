@@ -110,6 +110,13 @@ export interface DispatchTaskCommonOpts {
   correlationId?: string;
 }
 
+// TODO (deferred — Echo round-1 s3): when MIG-7+ adds further event
+// families (e.g. `agent.task.*`, `system.*` lifecycle helpers beyond
+// the existing `system-events.ts`), lift this `buildBaseEnvelope` shape
+// into a shared helper (e.g. `bus/envelope-builder.ts`). Premature
+// extraction now would orphan a one-call-site abstraction; the right
+// time is when a second helper file would otherwise duplicate the
+// `id/source/type/timestamp/correlation_id/sovereignty/payload` skeleton.
 function buildBaseEnvelope(
   type: string,
   common: DispatchTaskCommonOpts,

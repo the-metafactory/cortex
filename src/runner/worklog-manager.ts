@@ -254,6 +254,21 @@ export class WorklogManager {
    *   manager is constructed with a Discord client + channel ID, not a
    *   bot config). Passing it explicitly keeps the dependency direction
    *   clean (no config import here).
+   *
+   * KNOWN LIMITATION (Echo round-1 s4, deferred): the bus path keys
+   * threads by `task_id` and shares the `sessionThreads` map with the
+   * direct-call path. `cleanupStaleSessions` defaults to a 30-minute
+   * staleness window — long-running CC tasks that exceed that window
+   * will have their thread ID evicted from the map even if the task is
+   * still in progress, after which a late `dispatch.task.completed`
+   * envelope can no longer find its thread. This is acceptable for
+   * MIG-4b because: (a) the default cc-session inactivity timeout is
+   * 2 minutes, well under the 30-minute floor; (b) the bus path's
+   * fallback for "thread missing" is to skip the per-thread post but
+   * still emit the channel-level summary (graceful degradation, not
+   * data loss); (c) loosening the cleanup default is a cross-cutting
+   * design conversation (it also affects the direct-call path) better
+   * scoped to a follow-up rather than this PR.
    */
   surfaceConfig(opts: { org: string; adapterId?: string }): SurfaceAdapter {
     const subjects = [`local.${opts.org}.dispatch.task.>`];
@@ -303,8 +318,10 @@ export class WorklogManager {
 
     // Unknown dispatch.task.* sub-type — log and ignore. Append-only spec
     // means new sub-types arrive over time; we tolerate them rather than
-    // crashing.
-    console.log(`worklog: ignoring unknown dispatch envelope type ${envelope.type}`);
+    // crashing. Warn rather than log because an unknown sub-type usually
+    // means the worklog renderer is behind the producers and ought to be
+    // updated — the operator should see this in stderr filters.
+    console.warn(`worklog: ignoring unknown dispatch envelope type ${envelope.type}`);
   }
 
   private async handleDispatchStarted(
