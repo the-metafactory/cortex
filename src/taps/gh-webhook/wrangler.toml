@@ -1,0 +1,25 @@
+name = "grove-webhook-proxy"
+main = "src/index.ts"
+compatibility_date = "2025-03-30"
+compatibility_flags = ["nodejs_compat"]
+
+# This Worker IS the public entry point for GitHub webhooks.
+# Unlike grove-api (S-001), this Worker is designed to be publicly reachable.
+# Auth is HMAC-SHA256 validation at the Worker level, not CF Access.
+# DNS: hooks.meta-factory.ai → AAAA 100:: (proxied) → this Worker route.
+workers_dev = false
+
+routes = [
+  { pattern = "hooks.meta-factory.ai/*", zone_name = "meta-factory.ai" }
+]
+
+# Service Binding: direct Worker-to-Worker tunnel to grove-api.
+# Bypasses zone pipeline (no DNS, no CF Access, no CF Pages interference).
+# This is required because same-zone subrequests via fetch() hit the zone's
+# origin (CF Pages) instead of the target Worker — a known CF behavior.
+[[services]]
+binding = "GROVE_API"
+service = "grove-api"
+
+# Secrets (set via `wrangler secret put`):
+# GITHUB_WEBHOOK_SECRET  — GitHub webhook HMAC secret (same as grove-api)

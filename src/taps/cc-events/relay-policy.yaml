@@ -1,0 +1,57 @@
+# PAI Event Relay Policy — Default Configuration
+# Events passing this policy are safe for external consumers (Grove bot, etc.)
+#
+# Customize this file after installation. The installer copies (not symlinks)
+# this file, so your changes survive grove updates.
+
+allow_events:
+  - agent.task.started
+  - agent.task.completed
+  - agent.usage.update
+  - tool.file.changed
+  - tool.agent.spawned
+  - tool.todo.updated
+  - agent.session.heartbeat
+
+fields:
+  agent.task.started:
+    include: [prompt_preview, project, entity, operator]
+  agent.task.completed:
+    include: [summary, duration_ms, project, pr_url]
+  tool.file.changed:
+    include: [path, change_type]
+  tool.agent.spawned:
+    include: [agent_description]
+  agent.usage.update:
+    include: [five_hour, seven_day, seven_day_opus, seven_day_sonnet, extra_usage]
+  tool.todo.updated:
+    include: [todo_summary, active_task]
+  agent.session.heartbeat:
+    include: [project, entity, operator]
+
+redact:
+  # Home directory paths → ~
+  - pattern: '/Users/[a-zA-Z0-9_-]+'
+    replace: '~'
+  # Anthropic API keys
+  - pattern: 'sk-ant-[a-zA-Z0-9-]+'
+    replace: '[REDACTED:ANTHROPIC_KEY]'
+  # OpenAI API keys
+  - pattern: 'sk-[a-zA-Z0-9]{32,}'
+    replace: '[REDACTED:API_KEY]'
+  # GitHub tokens
+  - pattern: 'ghp_[a-zA-Z0-9]{36,}'
+    replace: '[REDACTED:GH_TOKEN]'
+  # Slack tokens
+  - pattern: 'xoxb-[a-zA-Z0-9-]+'
+    replace: '[REDACTED:SLACK_TOKEN]'
+  # Generic secrets (case insensitive — use flags field)
+  - pattern: '(password|secret|token|key)\s*[:=]\s*\S+'
+    replace: '[REDACTED:CREDENTIAL]'
+    flags: 'i'
+
+drop_if:
+  - field: payload.path
+    contains: ['.env', 'credentials', 'secrets', '.ssh', '.gnupg', '.aws']
+  - field: payload.command_preview
+    contains: ['export ', 'API_KEY', 'TOKEN', 'SECRET', 'PASSWORD']
