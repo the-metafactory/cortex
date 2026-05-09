@@ -334,19 +334,19 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
 
 **Steps:**
 
-- [ ] **1.1** Copy from grove-v2: `src/bot/lib/nats-connection.ts` → `cortex/src/bus/nats/connection.ts`. Tests alongside.
-- [ ] **1.2** Copy from grove-v2: `src/bot/lib/nats-subscription.ts` → `cortex/src/bus/nats/subscription.ts`. Tests alongside.
-- [ ] **1.3** Copy from grove-v2: `src/bot/lib/myelin/` (vendored schema) → `cortex/src/bus/myelin/vendor/`.
-- [ ] **1.4** Copy from grove-v2: `src/bot/lib/myelin-subscriber.ts` → `cortex/src/bus/myelin/subscriber.ts`. Tests alongside.
+- [x] **1.1** Copy from grove-v2: `src/bot/lib/nats-connection.ts` → `cortex/src/bus/nats/connection.ts`. Tests alongside. *(cortex#11, merged 2026-05-09 — MIG-1.1 NATS connection primitive)*
+- [x] **1.2** Copy from grove-v2: `src/bot/lib/nats-subscription.ts` → `cortex/src/bus/nats/subscription.ts`. Tests alongside. *(cortex#11, merged 2026-05-09 — MIG-1.2 NATS subscription primitive)*
+- [x] **1.3** Copy from grove-v2: `src/bot/lib/myelin/` (vendored schema) → `cortex/src/bus/myelin/vendor/`. *(cortex#12, merged 2026-05-09 — MIG-1.3 vendored myelin schema + fixtures)*
+- [x] **1.4** Copy from grove-v2: `src/bot/lib/myelin-subscriber.ts` → `cortex/src/bus/myelin/subscriber.ts`. Tests alongside. *(cortex#12, merged 2026-05-09 — MIG-1.4 myelin subscriber)*
 - [x] **1.5** Copy from grove-v2: `src/bot/lib/myelin-runtime.ts` → `cortex/src/bus/myelin/runtime.ts`. Tests alongside. *(cortex#22, merged 2026-05-09 — closes cortex#13. 4 import rewrites + 7/7 tests forward. The keystone unlock — releases MIG-3b/4b/5b/MIG-7.1 from the strict-block deferrals.)*
-- [x] **1.6** Copy from grove-v2: `src/bot/lib/message-router.ts` → `cortex/src/bus/dispatch-handler.ts`. **Rename** internal class `MessageRouter` → `DispatchHandler`.
+- [x] **1.6** Copy from grove-v2: `src/bot/lib/message-router.ts` → `cortex/src/bus/dispatch-handler.ts`. **Rename** internal class `MessageRouter` → `DispatchHandler`. *(cortex#24, merged 2026-05-09 — MIG-1.6 DispatchHandler class rename, message-router → dispatch-handler)*
 - [ ] **1.7** *(no copy — `inbound-queue.ts` is legacy-grove-only per §2.2.1, not in grove-v2; cortex relies on JetStream durability per design-cortex.md §3.3 "lost event ≠ lost state". Falsifiable re-evaluation trigger: if any post-MIG-7 incident's RCA cites lost events crossing a cortex restart boundary, file a follow-on issue to port `inbound-queue.ts` from legacy.)*
 - [x] **1.8** Copy from grove-v2: `src/bot/lib/network-resolver.ts` → `cortex/src/bus/network-resolver.ts`.
-- [x] **1.9** Implement `cortex/src/bus/surface-router.ts` — the G-1111.A target. Surface adapters register; surface-router subscribes to NATS via `MyelinRuntime` and fans envelopes to registered adapters by subject pattern + payload filter. New code, not a port; tests new.
+- [x] **1.9** Implement `cortex/src/bus/surface-router.ts` — the G-1111.A target. Surface adapters register; surface-router subscribes to NATS via `MyelinRuntime` and fans envelopes to registered adapters by subject pattern + payload filter. New code, not a port; tests new. *(cortex#25 + #27, merged 2026-05-09 — MIG-1.12 surface-router primitive + runtime wiring)*
 - [ ] **1.10** Add the G-1111 §4.6 fail-safe rule check at config-load: `~/.config/cortex/cortex.yaml` `renderers[]` must provide ≥2 distinct platform classes covering `local.{org}.system.>`. Refuse to start otherwise. *(Platform classes are defined in `docs/design-event-taxonomy.md` §4.6.1: `chat-gateway` / `webhook-out` / `paging` / `local-projection` — match against that set at load time.)*
-- [ ] **1.11** All cross-imports rewritten: no reference to `../bot/...` or `../../bot/...`. Local imports only within `bus/` plus from `common/`.
-- [ ] **1.12** `bunx tsc --noEmit` clean.
-- [ ] **1.13** Test suite: all moved tests + new surface-router tests green.
+- [x] **1.11** All cross-imports rewritten: no reference to `../bot/...` or `../../bot/...`. Local imports only within `bus/` plus from `common/`. *(cortex#24, merged 2026-05-09 — MIG-1.11 cross-imports rewritten)*
+- [x] **1.12** `bunx tsc --noEmit` clean. *(cortex#24, merged 2026-05-09 — MIG-1.11 tsc clean across bus/)*
+- [x] **1.13** Test suite: all moved tests + new surface-router tests green. *(cortex#27, merged 2026-05-09 — MIG-1.13 bus tests green per recent PRs)*
 
 **Acceptance:**
 - `bus/` is self-contained: passes type-check + tests with no other `src/` directory present.
@@ -397,12 +397,12 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
 - [x] **3.1** Copy from grove-v2 (post-#82 merge): full Discord stack per §2.1 inventory rows 109–116 — `adapters/discord.ts` + `discord-client.ts` + `response-poster.ts` + `retry.ts` + `role-resolver.ts` + `context-fetcher.ts` + `attachment-handler.ts` + `attachment-types.ts` + `event-formatter.ts` → `cortex/src/adapters/discord/`. Plus `src/bot/lib/timeout.ts` → `cortex/src/common/timeout.ts` (cross-cutting; pulled forward from §4 MIG-7.5 to avoid an adapter→common reshuffle later — same pattern as MIG-7.6 partial pull-forward in MIG-2/MIG-3a). *(cortex#18, merged 2026-05-09 — MIG-3a)*
 - [x] **3.2** Copy from grove-v2: full Mattermost stack — `src/bot/lib/adapters/mattermost.ts` + `mattermost-server.ts` + `mattermost-context.ts` + `mattermost-poller.ts` → `cortex/src/adapters/mattermost/{index,server,context,poller}.ts`. *(cortex#18 — `resolveRole` cross-stack import preserved unchanged from grove-v2; revisit at MIG-3.4)*
 - [x] **3.3** Copy from grove-v2: `src/bot/lib/adapters/types.ts` → `cortex/src/adapters/types.ts`. Plus `src/bot/lib/adapters/mock.ts` → `cortex/src/adapters/mock.ts` (test-only platform adapter). *(cortex#18)*
-- [ ] **3.4** Refactor each adapter to **register with the surface-router** instead of being instantiated directly. The adapter's `start(onMessage, surfaceRouter)` registers `subjects + filter + render(envelope)` with the router.
-- [ ] **3.5** Adapter no longer owns its inbound NATS subscription (it only owns its platform-side connection — Discord gateway, Mattermost websocket).
-- [ ] **3.6** All tests moved + green. Add new test: surface-router registers the Discord adapter, publishes an envelope, asserts adapter renders.
-- [ ] **3.7** Wire `system.adapter.{disconnected,degraded,recovered}` event emission per G-1111 §3.5. The `onDegraded` callback (added in PR #82) now publishes via the bus instead of console.error.
-- [ ] **3.8** Same for `system.dispatch.aborted` — `TimeoutSourceError` (PR #82) becomes a structured envelope.
-- [ ] **3.9** All test suites green.
+- [x] **3.4** Refactor each adapter to **register with the surface-router** instead of being instantiated directly. The adapter's `start(onMessage, surfaceRouter)` registers `subjects + filter + render(envelope)` with the router. *(cortex#28, merged 2026-05-09 — MIG-3b adapters expose surfaceConfig)*
+- [x] **3.5** Adapter no longer owns its inbound NATS subscription (it only owns its platform-side connection — Discord gateway, Mattermost websocket). *(cortex#18, merged 2026-05-09 — MIG-3a acknowledged: adapter never owned NATS sub in cortex)*
+- [x] **3.6** All tests moved + green. Add new test: surface-router registers the Discord adapter, publishes an envelope, asserts adapter renders. *(cortex#28, merged 2026-05-09 — MIG-3b surface-integration test exists)*
+- [x] **3.7** Wire `system.adapter.{disconnected,degraded,recovered}` event emission per G-1111 §3.5. The `onDegraded` callback (added in PR #82) now publishes via the bus instead of console.error. *(cortex#29, merged 2026-05-09 — MIG-3b-ii system.adapter.* envelopes emitted)*
+- [ ] **3.8** Same for `system.dispatch.aborted` — `TimeoutSourceError` (PR #82) becomes a structured envelope. *(deferred to MIG-7 cortex.ts wiring — adapter-side `TimeoutSourceError` → `system.dispatch.aborted` envelope conversion lands when DispatchHandler is wired into cortex.ts; runner-side `dispatch.task.aborted` already published via dispatch-listener.ts L380)*
+- [x] **3.9** All test suites green. *(cortex#28 + #29, merged 2026-05-09 — MIG-3b tests green)*
 
 **Acceptance:**
 - Discord adapter responds to a manual smoke test message via cortex.
@@ -424,10 +424,10 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
 - [ ] **4.2** *(deleted — `src/hooks/lib/event-taxonomy.ts` moves with the rest of `src/hooks/` in MIG-5.2; was double-counted in earlier draft)*
 - [x] **4.3** Copy from grove-v2: `src/bot/hooks/` → `cortex/src/runner/hooks/`. *(cortex#19 — bash-guard.hook.ts)*
 - [x] **4.4** Copy from grove-v2: `src/bot/commands/` → `cortex/src/cli/cortex/commands/` (these are CLI subcommands, not runner code; placement reflects that). *(cortex#19 — cloud.ts + tests)*
-- [ ] **4.5** Refactor: runner subscribes to `local.{org}.dispatch.task.received` via the surface-router (same registration mechanism as adapters). On envelope, spawns CC. *(MIG-4b — strict block on MIG-1.5 myelin-runtime port per cortex#13)*
-- [ ] **4.6** Runner emits lifecycle envelopes per G-1111 §3.4 (`dispatch.task.{started,completed,failed,aborted}`). *(MIG-4b — same MyelinRuntime dependency)*
-- [ ] **4.7** Worklog manager subscribes to `dispatch.task.*` envelopes and projects to the worklog Discord thread. (No longer called directly from message-router — it's a sibling consumer of the bus.) *(MIG-4b — same MyelinRuntime dependency)*
-- [ ] **4.8** Retire `claude-invoker.ts:invokeClaudeCode()` dead code per existing v1-to-v2-cutover doc §7. *(deferred to MIG-4b for atomicity with the surface-router refactor; verified production-orphan in both repos — only `tests/bot/lib/claude-invoker{,-resume}.test.ts` exercise it)*
+- [x] **4.5** Refactor: runner subscribes to `local.{org}.dispatch.task.received` via the surface-router (same registration mechanism as adapters). On envelope, spawns CC. *(cortex#30, merged 2026-05-09 — MIG-4b dispatch-listener subscribes via surface-router)*
+- [x] **4.6** Runner emits lifecycle envelopes per G-1111 §3.4 (`dispatch.task.{started,completed,failed,aborted}`). *(cortex#30, merged 2026-05-09 — MIG-4b dispatch.task.* lifecycle envelopes emitted)*
+- [x] **4.7** Worklog manager subscribes to `dispatch.task.*` envelopes and projects to the worklog Discord thread. (No longer called directly from message-router — it's a sibling consumer of the bus.) *(cortex#30, merged 2026-05-09 — MIG-4b worklog-manager.surfaceConfig sibling consumer)*
+- [x] **4.8** Retire `claude-invoker.ts:invokeClaudeCode()` dead code per existing v1-to-v2-cutover doc §7. *(cortex#30, merged 2026-05-09 — MIG-4b invokeClaudeCode retired)*
 - [x] **4.9** Tests moved + green. *(cortex#19 — 118/118 src/runner/ + 19/19 src/cli/cortex/commands/; round-1 review caught 9 missed tests in tests/bot/lib/, all lifted in same PR; +64 tests added)*
 
 **Acceptance:**
