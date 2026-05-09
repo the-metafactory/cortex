@@ -12,6 +12,7 @@ import { NatsLink } from "../connection";
 
 function makeFakeConnection() {
   const statusEvents: { type: string; data: unknown }[] = [];
+  const publishes: { subject: string; payload: string | Uint8Array }[] = [];
   // Promise the test awaits to know an event has been observed by the status
   // loop. Avoids real-time setTimeout sleeps in tests.
   let observed: Promise<void> = Promise.resolve();
@@ -33,13 +34,20 @@ function makeFakeConnection() {
     if (closeStatus) closeStatus();
   });
 
+  const publish = mock((subject: string, payload: string | Uint8Array) => {
+    publishes.push({ subject, payload });
+  });
+
   const fakeNc = {
     status: () => statusIterator,
     drain,
+    publish,
   } as unknown as NatsConnection;
 
   return {
     nc: fakeNc,
+    publishes,
+    publish,
     /**
      * Push a status event AND return a promise that resolves once the
      * NatsLink status loop has had a chance to observe it. Tests await this
@@ -208,5 +216,33 @@ describe("NatsLink", () => {
     // throw — verified implicitly by the test runner having loaded the module
     // already without an active NATS server. Make it explicit:
     expect(typeof NatsLink.connect).toBe("function");
+  });
+
+  test("publish() forwards subject + string payload to the underlying connection", async () => {
+    const fake = makeFakeConnection();
+    const link = await NatsLink.connect({
+      url: "nats://localhost:4222",
+      connectImpl: async () => fake.nc,
+    });
+    link.publish("local.metafactory.system.adapter.degraded", '{"id":"abc"}');
+    expect(fake.publish).toHaveBeenCalledTimes(1);
+    expect(fake.publishes[0]).toEqual({
+      subject: "local.metafactory.system.adapter.degraded",
+      payload: '{"id":"abc"}',
+    });
+    await link.close();
+  });
+
+  test("publish() forwards Uint8Array payloads unchanged", async () => {
+    const fake = makeFakeConnection();
+    const link = await NatsLink.connect({
+      url: "nats://localhost:4222",
+      connectImpl: async () => fake.nc,
+    });
+    const bytes = new TextEncoder().encode('{"id":"abc"}');
+    link.publish("local.metafactory.test", bytes);
+    expect(fake.publishes[0]?.subject).toBe("local.metafactory.test");
+    expect(fake.publishes[0]?.payload).toBe(bytes);
+    await link.close();
   });
 });

@@ -75,6 +75,24 @@ export class NatsLink {
   }
 
   /**
+   * Publish a payload to a subject. Thin wrapper around the underlying
+   * nats.js `connection.publish` so higher-level primitives don't need to
+   * reach through `.raw`. Synchronous from the broker's perspective:
+   * nats.js queues the publish on its outbound buffer and flushes
+   * opportunistically — there is no per-publish ack on Core NATS. JetStream
+   * publishes are a separate API (`jsm.publish`) and are not used here.
+   *
+   * Errors at publish time are exceedingly rare on Core NATS — typically
+   * either "connection closed" (we're shutting down) or "subject too long".
+   * The caller decides what to do with them; we don't catch here so the
+   * `MyelinRuntime.publish` wrapper can apply its swallow-and-log policy
+   * uniformly.
+   */
+  publish(subject: string, payload: string | Uint8Array): void {
+    this.raw.publish(subject, payload);
+  }
+
+  /**
    * Close the connection cleanly. Drains in-flight subscriptions before
    * disconnecting (per nats.js convention). Idempotent. Drain is bounded
    * by `drainTimeoutMs` (default 5 s) so an unreachable server can't hang
