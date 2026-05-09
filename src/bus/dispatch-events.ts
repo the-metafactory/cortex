@@ -43,6 +43,7 @@
  */
 
 import type { Envelope } from "./myelin/envelope-validator";
+import { buildBaseEnvelope as buildSharedEnvelope } from "./envelope-builder";
 import type { SystemEventSource } from "./system-events";
 
 // Re-export `SystemEventSource` under a domain-neutral alias so callers
@@ -116,31 +117,34 @@ export interface DispatchTaskCommonOpts {
   correlationId?: string;
 }
 
-// TODO (deferred — Echo round-1 s3): when MIG-7+ adds further event
-// families (e.g. `agent.task.*`, `system.*` lifecycle helpers beyond
-// the existing `system-events.ts`), lift this `buildBaseEnvelope` shape
-// into a shared helper (e.g. `bus/envelope-builder.ts`). Premature
-// extraction now would orphan a one-call-site abstraction; the right
-// time is when a second helper file would otherwise duplicate the
-// `id/source/type/timestamp/correlation_id/sovereignty/payload` skeleton.
+/**
+ * Domain-specific wrapper around `buildSharedEnvelope` (from
+ * `bus/envelope-builder.ts`). Threads dispatch-specific defaults:
+ * sovereignty posture, source-string assembly, and the
+ * `correlation_id ?? taskId` invariant that all four lifecycle events
+ * for a single task share one correlation key.
+ *
+ * The shared helper handles the `id`/`timestamp`/`payload`/`sovereignty`
+ * skeleton; this thin wrapper exists so each dispatch-task constructor
+ * doesn't have to repeat the source-build + sovereignty + correlation-
+ * fallback boilerplate.
+ */
 function buildBaseEnvelope(
   type: string,
   common: DispatchTaskCommonOpts,
   payloadExtras: Record<string, unknown>,
 ): Envelope {
-  return {
-    id: crypto.randomUUID(),
-    source: buildSource(common.source),
+  return buildSharedEnvelope({
     type,
-    timestamp: new Date().toISOString(),
-    correlation_id: common.correlationId ?? common.taskId,
+    source: buildSource(common.source),
     sovereignty: defaultDispatchSovereignty(common.source),
+    correlationId: common.correlationId ?? common.taskId,
     payload: {
       task_id: common.taskId,
       agent_id: common.agentId,
       ...payloadExtras,
     },
-  };
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -52,6 +52,7 @@
  */
 
 import type { Envelope } from "./myelin/envelope-validator";
+import { buildBaseEnvelope } from "./envelope-builder";
 
 /**
  * Source identifier used by every `system.*` event. Three dotted segments
@@ -161,11 +162,9 @@ export interface SystemAdapterDegradedOpts {
 export function createSystemAdapterDegradedEvent(
   opts: SystemAdapterDegradedOpts,
 ): Envelope {
-  return {
-    id: crypto.randomUUID(),
-    source: buildSource(opts.source),
+  return buildBaseEnvelope({
     type: "system.adapter.degraded",
-    timestamp: new Date().toISOString(),
+    source: buildSource(opts.source),
     sovereignty: defaultSystemSovereignty(opts.source),
     payload: {
       adapter_id: opts.adapterId,
@@ -180,7 +179,7 @@ export function createSystemAdapterDegradedEvent(
       }),
       ...(opts.shardId !== undefined && { shard_id: opts.shardId }),
     },
-  };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -215,11 +214,9 @@ export interface SystemAdapterRecoveredOpts {
 export function createSystemAdapterRecoveredEvent(
   opts: SystemAdapterRecoveredOpts,
 ): Envelope {
-  return {
-    id: crypto.randomUUID(),
-    source: buildSource(opts.source),
+  return buildBaseEnvelope({
     type: "system.adapter.recovered",
-    timestamp: new Date().toISOString(),
+    source: buildSource(opts.source),
     sovereignty: defaultSystemSovereignty(opts.source),
     payload: {
       adapter_id: opts.adapterId,
@@ -232,7 +229,7 @@ export function createSystemAdapterRecoveredEvent(
         reconnect_attempts: opts.reconnectAttempts,
       }),
     },
-  };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -265,11 +262,9 @@ export interface SystemAdapterDisconnectedOpts {
 export function createSystemAdapterDisconnectedEvent(
   opts: SystemAdapterDisconnectedOpts,
 ): Envelope {
-  return {
-    id: crypto.randomUUID(),
-    source: buildSource(opts.source),
+  return buildBaseEnvelope({
     type: "system.adapter.disconnected",
-    timestamp: new Date().toISOString(),
+    source: buildSource(opts.source),
     sovereignty: defaultSystemSovereignty(opts.source),
     payload: {
       adapter_id: opts.adapterId,
@@ -280,7 +275,7 @@ export function createSystemAdapterDisconnectedEvent(
       ...(opts.closeCode !== undefined && { close_code: opts.closeCode }),
       ...(opts.closeReason !== undefined && { close_reason: opts.closeReason }),
     },
-  };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -345,12 +340,11 @@ export interface SystemInboundAbortedOpts {
 export function createSystemInboundAbortedEvent(
   opts: SystemInboundAbortedOpts,
 ): Envelope {
-  const envelope: Envelope = {
-    id: crypto.randomUUID(),
-    source: buildSource(opts.source),
+  return buildBaseEnvelope({
     type: "system.inbound.aborted",
-    timestamp: new Date().toISOString(),
+    source: buildSource(opts.source),
     sovereignty: defaultSystemSovereignty(opts.source),
+    ...(opts.correlationId !== undefined && { correlationId: opts.correlationId }),
     payload: {
       adapter_id: opts.adapterId,
       inbound_message_id: opts.inboundMessageId,
@@ -359,9 +353,5 @@ export function createSystemInboundAbortedEvent(
       elapsed_ms: opts.elapsedMs,
       phase: opts.phase,
     },
-  };
-  if (opts.correlationId !== undefined) {
-    envelope.correlation_id = opts.correlationId;
-  }
-  return envelope;
+  });
 }

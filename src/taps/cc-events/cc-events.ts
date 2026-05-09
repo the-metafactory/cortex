@@ -48,6 +48,7 @@
  */
 
 import type { Envelope } from "../../bus/myelin/envelope-validator";
+import { buildBaseEnvelope } from "../../bus/envelope-builder";
 import type { NatsLink } from "../../bus/nats/connection";
 import type { PublishedEvent } from "./hooks/lib/event-types";
 
@@ -146,15 +147,19 @@ export function createCcEventEnvelope(
   opts: CreateCcEventEnvelopeOpts,
 ): Envelope {
   const { event } = opts;
-  const envelope: Envelope = {
-    id: crypto.randomUUID(),
-    source: buildSource(opts.source),
+  // Use the shared envelope builder for the skeleton, then override
+  // `timestamp` with the PublishedEvent's hook timestamp so envelope ts ==
+  // hook ts (the relay may batch-process; using `now()` from the shared
+  // helper would smear chronology across batched events). The override is
+  // a single line and preserves the rule-of-three extraction for the rest
+  // of the skeleton.
+  const envelope = buildBaseEnvelope({
     type: event.event_type,
-    // Mirror the published event's timestamp so envelope ts == hook ts.
-    // The relay may batch-process; using `now()` would smear chronology
-    // across batched events.
-    timestamp: event.timestamp,
+    source: buildSource(opts.source),
     sovereignty: defaultCcSovereignty(opts.source),
+    // Only set correlation_id when session_id has the UUID shape the schema
+    // requires. Non-UUID session ids fall through to payload.session_id only.
+    ...(isUuid(event.session_id) && { correlationId: event.session_id }),
     payload: {
       // Flatten the PublishedEvent into the envelope payload. Downstream
       // consumers who want the legacy taxonomy can read these fields
@@ -171,14 +176,8 @@ export function createCcEventEnvelope(
       // live at top-level on the PublishedEvent, not inside payload.
       ...event.payload,
     },
-  };
-
-  // Only set correlation_id when session_id has the UUID shape the schema
-  // requires. Non-UUID session ids fall through to payload.session_id only.
-  if (isUuid(event.session_id)) {
-    envelope.correlation_id = event.session_id;
-  }
-
+  });
+  envelope.timestamp = event.timestamp;
   return envelope;
 }
 
