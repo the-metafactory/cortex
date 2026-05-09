@@ -17,9 +17,10 @@
  * every call so tests assert on the sequence.
  */
 
-import { describe, expect, test, beforeEach } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type { Client, TextChannel, ThreadChannel } from "discord.js";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
+import type { PublishedEvent } from "../../taps/cc-events/hooks/lib/event-types";
 import { WorklogManager } from "../worklog-manager";
 import {
   createDispatchTaskAbortedEvent,
@@ -318,14 +319,97 @@ describe("WorklogManager.surfaceConfig — malformed envelope", () => {
 // ---------------------------------------------------------------------------
 
 describe("WorklogManager — direct-call API still works after surfaceConfig", () => {
-  test("handleEvent (PublishedEvent path) is unchanged", async () => {
-    const { client } = makeFakeClient("worklog-channel-id");
-    const wlm = new WorklogManager(client, "worklog-channel-id");
-    // Building a surfaceConfig must not break the direct-call path.
-    void wlm.surfaceConfig({ org: "metafactory" });
+  // Build a synthetic PublishedEvent for the direct-call path. The shape
+  // matches what cc-events' published pipeline emits — see
+  // src/taps/cc-events/hooks/lib/event-types.ts.
+  function makePublishedEvent(
+    eventType: string,
+    sessionId: string,
+    extras: Record<string, unknown> = {},
+  ): PublishedEvent {
+    return {
+      event_id: "00000000-0000-4000-8000-000000000001",
+      event_type: eventType,
+      timestamp: STARTED_AT.toISOString(),
+      session_id: sessionId,
+      payload: {
+        prompt_preview: "direct-call task description",
+        ...extras,
+      },
+    };
+  }
 
-    // The handleEvent method should still exist and accept PublishedEvent.
-    expect(typeof wlm.handleEvent).toBe("function");
+  test("direct-call path AND bus path coexist on one instance without thread collision", async () => {
+    const { client, calls } = makeFakeClient("worklog-channel-id");
+    const wlm = new WorklogManager(client, "worklog-channel-id");
+    const cfg = wlm.surfaceConfig({ org: "metafactory" });
+
+    // Drive the bus path: one task lifecycle (started → completed).
+    await cfg.render(makeStarted());
+    await cfg.render(makeCompleted());
+
+    // Drive the direct-call path with a DIFFERENT session_id (UUIDs from
+    // the two paths never collide in production because they come from
+    // different generators — see worklog-manager.ts §"Thread keying").
+    const SESSION_ID = "22222222-2222-4222-8222-222222222222";
+    await wlm.handleEvent(makePublishedEvent("agent.task.started", SESSION_ID));
+    await wlm.handleEvent(
+      makePublishedEvent("agent.task.completed", SESSION_ID, {
+        result_summary: "direct path done",
+      }),
+    );
+
+    // Two distinct threads must have been created — one per path.
+    expect(calls.threadsCreated.length).toBe(2);
+    const threadIds = calls.threadsCreated.map((t) => t.id);
+    expect(new Set(threadIds).size).toBe(2);
+
+    // Each thread received both its start opener and its terminal line —
+    // i.e. neither path's terminal event was double-handled or routed to
+    // the wrong thread.
+    for (const t of calls.threadsCreated) {
+      expect(t.sent.length).toBeGreaterThanOrEqual(2);
+      expect(t.archived).toBe(true);
+    }
+
+    // Channel feed got two start lines + two summary lines, in interleaved
+    // order — one per path, no missing or duplicate messages. The two paths
+    // use different start-line formatting (direct-call: "🏃 Agent — desc";
+    // bus: "🏃 **agent** started task <id>") — we just check that 4
+    // messages flowed through, of which 2 contain the runner emoji (the
+    // start signal common to both formats).
+    expect(calls.channelSent.length).toBe(4);
+    const runnerCount = calls.channelSent.filter((m) => m.includes("\u{1F3C3}")).length;
+    expect(runnerCount).toBe(2);
+  });
+
+  test("bus terminal event for an unrelated direct-call session does NOT find the wrong thread", async () => {
+    // Defensive: even though the keys (task_id vs session_id) are
+    // different namespaces in production, the maps are shared. Make sure
+    // a bus-side completed for an unknown task_id does not accidentally
+    // pick up a direct-call thread keyed by some other UUID.
+    const { client, calls } = makeFakeClient("worklog-channel-id");
+    const wlm = new WorklogManager(client, "worklog-channel-id");
+    const cfg = wlm.surfaceConfig({ org: "metafactory" });
+
+    // Direct-call path opens a thread keyed by SESSION_ID
+    const SESSION_ID = "33333333-3333-4333-8333-333333333333";
+    await wlm.handleEvent(makePublishedEvent("agent.task.started", SESSION_ID));
+    expect(calls.threadsCreated.length).toBe(1);
+    const directThreadId = calls.threadsCreated[0]!.id;
+    const initialDirectThreadSends = calls.threadsCreated[0]!.sent.length;
+
+    // Bus path emits a "completed" for a DIFFERENT task_id (the one the
+    // surfaceConfig fixture uses, TASK_ID — never seen by direct-call).
+    await cfg.render(makeCompleted());
+
+    // The direct-call thread must NOT have received the bus terminal —
+    // bus path with no prior `started` for this task_id just emits a
+    // channel summary line and skips the per-thread post.
+    const directThread = calls.threadsCreated.find((t) => t.id === directThreadId)!;
+    expect(directThread.sent.length).toBe(initialDirectThreadSends);
+    // Direct-call thread is still active (not archived by the bus path).
+    expect(directThread.archived).toBe(false);
   });
 
   test("cleanupStaleSessions still functional", () => {
