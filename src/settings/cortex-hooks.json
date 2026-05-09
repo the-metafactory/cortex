@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "bun $GROVE_DIR/src/hooks/GroveContext.hook.ts"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": "bun $GROVE_DIR/src/hooks/EventLogger.hook.ts"
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "bun $GROVE_DIR/src/hooks/EventLogger.hook.ts"
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "type": "command",
+        "command": "bun $GROVE_DIR/src/hooks/EventLogger.hook.ts"
+      }
+    ]
+  }
+}
