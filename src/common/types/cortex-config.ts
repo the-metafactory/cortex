@@ -54,8 +54,10 @@ import {
  *
  * `emptyDefault(schema)` wraps a ZodObject so the default value is computed by
  * parsing `{}` through the schema itself, which DOES trigger field-level
- * defaults. Lazy thunk form — the parse happens once per parse call, not at
- * module-load time, so circular-default scenarios cannot deadlock.
+ * defaults. Eager computation — the inner parse happens once at schema-
+ * definition (module load) time, and the resulting value is reused for every
+ * subsequent `.parse()` call on the outer schema. This keeps validation
+ * predictable and avoids per-parse-call recomputation.
  *
  * Use this everywhere a "block is optional and falls back to its own field
  * defaults" pattern is needed. Single greppable site replaces the scattered
@@ -97,10 +99,17 @@ export const OperatorSchema = z.object({
   mattermostId: z.string().optional(),
   /**
    * Data residency stamped into `sovereignty.data_residency` on emitted
-   * envelopes. ISO-3166 country code; defaults to "NZ" when omitted. Operators
-   * in AU/EU/US/etc. set this to match their jurisdiction.
+   * envelopes. ISO-3166-1 alpha-2 country code (two uppercase ASCII letters).
+   * Defaults to "NZ" when omitted. Operators in AU/EU/US/etc. set this to
+   * match their jurisdiction.
+   *
+   * Format-enforced so a typo at config time fails fast rather than emitting
+   * envelopes with malformed residency tags that survive into compliance
+   * audits (Holly W2 review).
    */
-  dataResidency: z.string().default("NZ"),
+  dataResidency: z.string()
+    .regex(/^[A-Z]{2}$/, "dataResidency must be a 2-letter ISO-3166-1 alpha-2 country code")
+    .default("NZ"),
 });
 
 export type Operator = z.infer<typeof OperatorSchema>;
@@ -231,10 +240,18 @@ export const AgentSchema = z.object({
    * adapter treats it as agent-originated (vs human-originated).
    *
    * Coupling rule (§9.3): values MUST be agent ids — never platform user ids.
-   * Validation that referenced ids exist in the registry happens at load time
-   * in the agent registry (MIG-7.2a), not in this schema.
+   * Schema-level format check applies the same `^[a-z0-9-]+$` regex as
+   * `AgentSchema.id` and `OperatorSchema.id` so a typo (e.g. accidentally
+   * pasting a Discord user id like `"1497..."`) is caught at config load,
+   * not silently when the registry fails to resolve the reference
+   * (Holly W2 review).
+   *
+   * Validation that the referenced ids resolve to known agents happens at
+   * load time in the agent registry (MIG-7.2a), not in this schema.
    */
-  trust: z.array(z.string().min(1)).default([]),
+  trust: z.array(
+    z.string().regex(/^[a-z0-9-]+$/, "trust entries must be agent ids (lowercase alphanumeric)"),
+  ).default([]),
   /** Per-platform presence blocks — at least one is required. */
   presence: PresenceSchema,
 }).refine(
@@ -402,11 +419,22 @@ export type NatsConfig = z.infer<typeof NatsConfigSchema>;
 // =============================================================================
 // Cross-cutting infra blocks — carried forward in same shape as BotConfig
 // =============================================================================
+//
+// MIRROR NOTE: during the MIG-7.2 overlap window, these schemas live in two
+// places: here as standalone exports, and inline inside `BotConfigSchema`
+// in `./config.ts`. Field additions/changes MUST be applied to BOTH until
+// MIG-7.2e retires BotConfig. Each block below carries a `MIRROR:` breadcrumb
+// pointing at the corresponding section in config.ts so a grep for `MIRROR:`
+// surfaces every overlap site.
+//
+// Removed at MIG-7.2e together with the inline copies. (Holly review.)
 
 /**
  * Claude runtime config — passed to spawned CC sessions. Identical shape to
  * grove-v2's `BotConfig.claude` block; not refactored at MIG-7.2 because the
  * shape is already correct (no agent-bound coupling to break).
+ *
+ * MIRROR: see `BotConfigSchema.claude` in `./config.ts`. Drop both on 7.2e.
  */
 export const ClaudeConfigSchema = z.object({
   timeoutMs: z.number().int().positive().default(120_000),
@@ -427,7 +455,10 @@ export const ClaudeConfigSchema = z.object({
 
 export type ClaudeConfig = z.infer<typeof ClaudeConfigSchema>;
 
-/** Attachments config — identical shape to BotConfig.attachments. */
+/**
+ * Attachments config — identical shape to BotConfig.attachments.
+ * MIRROR: see `BotConfigSchema.attachments` in `./config.ts`. Drop both on 7.2e.
+ */
 export const AttachmentsConfigSchema = z.object({
   enabled: z.boolean().default(true),
   maxFileSizeBytes: z.number().int().positive().default(10 * 1024 * 1024),
@@ -437,7 +468,10 @@ export const AttachmentsConfigSchema = z.object({
 
 export type AttachmentsConfig = z.infer<typeof AttachmentsConfigSchema>;
 
-/** Execution backends — identical shape to BotConfig.execution. */
+/**
+ * Execution backends — identical shape to BotConfig.execution.
+ * MIRROR: see `BotConfigSchema.execution` in `./config.ts`. Drop both on 7.2e.
+ */
 export const ExecutionConfigSchema = z.object({
   default: z.string().default("local"),
   backends: z.array(z.object({
@@ -452,6 +486,9 @@ export type ExecutionConfig = z.infer<typeof ExecutionConfigSchema>;
 /**
  * GitHub agent-detection heuristics — extracted from `GithubConfigSchema` so
  * it can use `emptyDefault` cleanly when nested. Identical defaults to grove-v2.
+ *
+ * MIRROR: see `BotConfigSchema.github.agentDetection` (inline) in `./config.ts`.
+ * Drop both on 7.2e.
  */
 export const AgentDetectionSchema = z.object({
   commitTrailers: z.array(z.string()).default(["Co-Authored-By: Claude"]),
@@ -461,7 +498,10 @@ export const AgentDetectionSchema = z.object({
 
 export type AgentDetection = z.infer<typeof AgentDetectionSchema>;
 
-/** GitHub webhook surface — identical shape to BotConfig.github. */
+/**
+ * GitHub webhook surface — identical shape to BotConfig.github.
+ * MIRROR: see `BotConfigSchema.github` in `./config.ts`. Drop both on 7.2e.
+ */
 export const GithubConfigSchema = z.object({
   webhookSecret: z.string().default(""),
   repos: z.array(z.string()).default([]),
@@ -470,7 +510,11 @@ export const GithubConfigSchema = z.object({
 
 export type GithubConfig = z.infer<typeof GithubConfigSchema>;
 
-/** Filesystem paths — identical shape to BotConfig.paths but cortex-named. */
+/**
+ * Filesystem paths — identical shape to BotConfig.paths but cortex-named
+ * (default logDir `~/.config/cortex/logs` vs grove-v2's `~/.config/grove/logs`).
+ * MIRROR: see `BotConfigSchema.paths` in `./config.ts`. Drop both on 7.2e.
+ */
 export const PathsConfigSchema = z.object({
   publishedEventsDir: z.string().default("~/.claude/events/published"),
   logDir: z.string().default("~/.config/cortex/logs"),
@@ -495,6 +539,35 @@ export type PathsConfig = z.infer<typeof PathsConfigSchema>;
 export const CortexConfigSchema = z.object({
   /** Who is running this cortex instance. */
   operator: OperatorSchema,
+  /**
+   * Anti-field: the legacy grove-v2 `agent:` (singular) block must not be
+   * present in a cortex.yaml. Caught here with an explicit Zod refusal so
+   * the operator sees a clear migration error rather than the field being
+   * silently stripped by Zod's default unknown-key-strip behaviour. Holly
+   * W2 flagged the strip path as a real migration safety gap — operators
+   * who hand-edit a partially-translated config get no feedback otherwise.
+   *
+   * The schema-level error here complements `migrate-config` (MIG-7.2e):
+   * the converter produces a cortex.yaml *without* `agent:`; this guard
+   * catches the case where an operator pastes a legacy block into a new
+   * file or fails to remove it during a hand migration.
+   */
+  agent: z.never({
+    error: () =>
+      "legacy `agent:` (singular) field is not supported by CortexConfig — " +
+      "use `operator:` + `agents:[]` per architecture §9.1. " +
+      "Run `cortex migrate-config <bot.yaml>` (MIG-7.2e) to convert.",
+  }).optional(),
+  /**
+   * Anti-field: the legacy `trustedAgentBots:` block is replaced by the
+   * agent-id-keyed `trust:` arrays on each agent (architecture §9.3).
+   * Same migration-safety rationale as the `agent:` anti-field above.
+   */
+  trustedAgentBots: z.never({
+    error: () =>
+      "legacy `trustedAgentBots:` is not supported — express peer trust via " +
+      "`agents[].trust: [<agent-id>, ...]` on each agent (architecture §9.3).",
+  }).optional(),
 
   /** First-class agents — the canonical list. */
   agents: z.array(AgentSchema).min(1, "at least one agent is required"),

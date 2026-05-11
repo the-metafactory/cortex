@@ -125,6 +125,14 @@ describe("OperatorSchema", () => {
     const parsed = OperatorSchema.parse({ id: "andreas", dataResidency: "CH" });
     expect(parsed.dataResidency).toBe("CH");
   });
+
+  test("rejects malformed dataResidency (Holly W2-4)", () => {
+    // ISO-3166-1 alpha-2 is exactly 2 uppercase ASCII chars.
+    expect(() => OperatorSchema.parse({ id: "andreas", dataResidency: "CHE" })).toThrow();
+    expect(() => OperatorSchema.parse({ id: "andreas", dataResidency: "ch" })).toThrow();
+    expect(() => OperatorSchema.parse({ id: "andreas", dataResidency: "Switzerland" })).toThrow();
+    expect(() => OperatorSchema.parse({ id: "andreas", dataResidency: "C" })).toThrow();
+  });
 });
 
 // =============================================================================
@@ -160,6 +168,18 @@ describe("AgentSchema", () => {
   test("accepts trust list of agent ids (no resolution)", () => {
     const parsed = AgentSchema.parse(minAgent({ trust: ["echo", "holly"] }));
     expect(parsed.trust).toEqual(["echo", "holly"]);
+  });
+
+  test("rejects trust entries that aren't agent ids (Holly W2-3)", () => {
+    // Common typo / paste-bug: putting a Discord user id into the trust list.
+    // Schema catches it with the same `^[a-z0-9-]+$` regex as agent ids.
+    expect(() => AgentSchema.parse(minAgent({
+      trust: ["echo", "1497898452351455393"], // ← Discord id, all digits
+    }))).not.toThrow(); // digits-only is technically valid; the bug we catch is uppercase / dots / wildcards
+    expect(() => AgentSchema.parse(minAgent({ trust: ["Echo"] }))).toThrow();
+    expect(() => AgentSchema.parse(minAgent({ trust: ["echo bot"] }))).toThrow();
+    expect(() => AgentSchema.parse(minAgent({ trust: ["echo.bot"] }))).toThrow();
+    expect(() => AgentSchema.parse(minAgent({ trust: ["<@1497>"] }))).toThrow();
   });
 
   test("accepts both discord and mattermost presence on same agent", () => {
@@ -461,18 +481,29 @@ describe("CortexConfigSchema", () => {
     expect(parsed.networksDir).toBe("./networks");
   });
 
-  test("rejects legacy `agent:` (singular) field — flipped model only", () => {
-    // The new schema has no `agent:` block (that's grove-v2's shape). A config
-    // file still carrying the legacy field should produce a recognisable
-    // failure at parse time so operators see a clear migration error.
-    const legacy = {
+  test("rejects legacy `agent:` (singular) field with a migration error (Holly W2-1)", () => {
+    // The new schema has no `agent:` block (that's grove-v2's shape). Round-1
+    // relied on Zod's silent unknown-key strip; round-2 flags this as a real
+    // migration safety gap — operators who hand-edit a partial cortex.yaml
+    // get no feedback that the legacy field is being ignored.
+    //
+    // Fix: the `agent` slot is now `z.never()` with an explicit error pointing
+    // at `migrate-config` (MIG-7.2e). A config carrying both `agent:{}` and
+    // `agents:[]` fails at parse time with a clear migration error.
+    expect(() => CortexConfigSchema.parse({
       ...minConfig(),
       agent: { name: "luna", displayName: "Luna" },
-    };
-    // Zod default in v4 is to strip unknown keys silently. We still want the
-    // happy path to succeed (parsing extracts the new shape), but the legacy
-    // `agent:` field should NOT pollute the parsed output.
-    const parsed = CortexConfigSchema.parse(legacy);
-    expect((parsed as unknown as { agent?: unknown }).agent).toBeUndefined();
+    })).toThrow(/legacy `agent:`/);
+  });
+
+  test("rejects legacy `trustedAgentBots:` field with a migration error (Holly W2-1)", () => {
+    // Same migration-safety rationale as the `agent:` anti-field — legacy
+    // grove-v2 had a top-level `trustedAgentBots:` block that's now expressed
+    // per-agent as `trust:[]`. The schema rejects the legacy shape so a
+    // hand-migration miss surfaces at config load.
+    expect(() => CortexConfigSchema.parse({
+      ...minConfig(),
+      trustedAgentBots: ["echo", "holly"],
+    })).toThrow(/legacy `trustedAgentBots:`/);
   });
 });
