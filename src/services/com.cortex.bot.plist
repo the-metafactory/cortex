@@ -9,25 +9,25 @@
         <string>__HOME__/bin/cortex</string>
         <string>start</string>
         <string>--config</string>
-        <string>__HOME__/.config/grove/bot.yaml</string>
+        <string>__HOME__/.config/cortex/cortex.yaml</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>__GROVE_DIR__</string>
+    <string>__CORTEX_DIR__</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>__HOME__/.config/grove/logs/grove-bot.log</string>
+    <string>__HOME__/.config/cortex/logs/cortex-bot.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.config/grove/logs/grove-bot.error.log</string>
+    <string>__HOME__/.config/cortex/logs/cortex-bot.error.log</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>HOME</key>
         <string>__HOME__</string>
         <key>PATH</key>
         <string>__HOME__/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
-        <key>GROVE_CHANNEL</key>
+        <key>CORTEX_CHANNEL</key>
         <string>__AGENT_NAME__</string>
     </dict>
 </dict>

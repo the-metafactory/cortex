@@ -3,19 +3,43 @@
 
 name: "Cortex"
 version: "0.1.0"
+type: component
+tier: community
 description: "Layer-7 collaboration surface for the metafactory ecosystem — the M7 application that consumes the Myelin stack"
 authors:
   - "Andreas Astrom"
   - "Jens-Christian Fischer"
 repository: "the-metafactory/cortex"
 
-# `provides:` covers MIG-6 deliverables only — operator CLIs.
-# MIG-7 (top-level wiring + arc cutover) will add: bot binary, hooks,
-# relay, statusline extension, launchd plists. Until then this is the
-# operator-CLI surface — installable via `arc upgrade Cortex` even
-# while grove-v2 still owns the bot/relay/hooks.
+# Provides surface at MIG-7.7 cutover: bot binary + relay + operator CLIs +
+# hooks + launchd plists. Mirrors grove-v2's deliverables under cortex names.
+#
+# Pre-flight (operator step before `arc upgrade Cortex`):
+#   - `arc list | grep -i grove` must return nothing. The legacy grove
+#     manifest owns the `~/bin/grove-bot` and `~/bin/grove-relay` symlinks
+#     and `com.grove.bot` / `com.grove.relay` plists; `arc upgrade Cortex`
+#     does NOT touch them while grove is installed. Sequence:
+#       1. `arc uninstall Grove` (legacy)
+#       2. `arc upgrade Cortex`
+#       3. Verify `~/bin/cortex` resolves and `~/bin/grove-bot` is gone.
+#
+# Deprecation shim (separate manual step, not part of this manifest):
+#   - Install `scripts/grove-bot-shim.sh` as `~/bin/grove-bot`. It prints
+#     "use cortex instead" and execs `~/bin/cortex "$@"`. Operator can keep
+#     this in place during cutover so old aliases keep working. Removed in
+#     MIG-8.4.
+#
+# Rollback (idempotent): `arc uninstall Cortex` + `arc upgrade Grove`
+# reinstalls legacy at v0.29.0.
 provides:
   files:
+    # ─── Bot + relay binaries ─────────────────────────────────
+    - source: src/cortex.ts
+      target: ~/bin/cortex
+    - source: src/taps/cc-events/relay.ts
+      target: ~/bin/cortex-relay
+
+    # ─── Operator CLIs (carried forward from MIG-6) ──────────
     - source: src/cli/discord/discord.ts
       target: ~/bin/discord
     - source: src/cli/cldyo-live
@@ -23,13 +47,49 @@ provides:
     - source: src/cli/discord/skill
       target: ~/.claude/skills/Discord
 
-# `scripts/postupgrade.sh` is invoked by arc on every `arc upgrade Cortex`
-# and idempotently re-creates the symlinks above. Kept thin for MIG-6;
-# expands at MIG-7 to cover bot/relay/hooks/launchd.
-hooks:
-  postupgrade: scripts/postupgrade.sh
+    # ─── Claude Code hooks ────────────────────────────────────
+    # Hook source filenames keep grove-era names (GroveContext.hook.ts,
+    # EventLogger.hook.ts, bash-guard.hook.ts) so the in-repo tree stays
+    # operator-facing-stable while internals migrate. The installed symlink
+    # targets ARE renamed to Cortex* so settings.json references are
+    # cortex-side and don't collide with grove leftovers.
+    - source: src/taps/cc-events/hooks/GroveContext.hook.ts
+      target: ~/.claude/hooks/CortexContext.hook.ts
+    - source: src/taps/cc-events/hooks/EventLogger.hook.ts
+      target: ~/.claude/hooks/CortexEventLogger.hook.ts
+    - source: src/runner/hooks/bash-guard.hook.ts
+      target: ~/.claude/hooks/CortexBashGuard.hook.ts
+    - source: src/taps/cc-events/hooks/lib
+      target: ~/.claude/hooks/lib/cortex-events
 
-# See docs/plan-cortex-migration.md MIG-7 for the full provisioning surface.
+    # ─── Relay policy directory ───────────────────────────────
+    - source: src/taps/cc-events
+      target: ~/.claude/relay/cortex
+
+  hooks:
+    - event: SessionStart
+      command: ${PAI_DIR}/hooks/CortexContext.hook.ts
+    - event: PostToolUse
+      command: ${PAI_DIR}/hooks/CortexEventLogger.hook.ts
+    - event: Stop
+      command: ${PAI_DIR}/hooks/CortexEventLogger.hook.ts
+    - event: UserPromptSubmit
+      command: ${PAI_DIR}/hooks/CortexEventLogger.hook.ts
+    - event: PreToolUse
+      command: ${PAI_DIR}/hooks/CortexBashGuard.hook.ts
+      matcher: Bash
+
+# Lifecycle scripts (mirror grove-v2 three-stage pattern):
+#   - preupgrade.sh  — stop daemons + clean stale symlinks before swap
+#   - postinstall.sh — first-time install: runtime dirs + plist render +
+#                      config template check (does NOT clobber existing
+#                      ~/.config/cortex/cortex.yaml — operator runs
+#                      migrate-config separately per MIG-7.9)
+#   - postupgrade.sh — re-link binaries + re-template plists + restart
+scripts:
+  postinstall: ./scripts/postinstall.sh
+  preupgrade: ./scripts/preupgrade.sh
+  postupgrade: ./scripts/postupgrade.sh
 
 # Dependencies — declared at MIG-7 once cortex's runtime depends on
 # myelin-side identity primitives. v0.1.0 has no runtime deps.

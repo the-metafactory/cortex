@@ -3,25 +3,36 @@
     "SessionStart": [
       {
         "type": "command",
-        "command": "bun $GROVE_DIR/src/hooks/GroveContext.hook.ts"
+        "command": "bun $CORTEX_DIR/src/taps/cc-events/hooks/GroveContext.hook.ts"
       }
     ],
     "PostToolUse": [
       {
         "type": "command",
-        "command": "bun $GROVE_DIR/src/hooks/EventLogger.hook.ts"
+        "command": "bun $CORTEX_DIR/src/taps/cc-events/hooks/EventLogger.hook.ts"
       }
     ],
     "Stop": [
       {
         "type": "command",
-        "command": "bun $GROVE_DIR/src/hooks/EventLogger.hook.ts"
+        "command": "bun $CORTEX_DIR/src/taps/cc-events/hooks/EventLogger.hook.ts"
       }
     ],
     "UserPromptSubmit": [
       {
         "type": "command",
-        "command": "bun $GROVE_DIR/src/hooks/EventLogger.hook.ts"
+        "command": "bun $CORTEX_DIR/src/taps/cc-events/hooks/EventLogger.hook.ts"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun $CORTEX_DIR/src/runner/hooks/bash-guard.hook.ts"
+          }
+        ]
       }
     ]
   }
