@@ -2,3 +2,4 @@ node_modules/
 dist/
 tmp-screenshots/
 .playwright-cli/
+.specflow/
