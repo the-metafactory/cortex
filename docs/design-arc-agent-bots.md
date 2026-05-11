@@ -56,10 +56,13 @@ Cortex's runner (after MIG-7.1 lands `src/cortex.ts`) spawns Claude Code subproc
 arc install foo-review-bot
   → drops persona.md   → ~/.config/cortex/personas/foo.md
   → drops fragment     → ~/.config/cortex/agents.d/foo.yaml
-  → mints NATS creds   → cortex creds issue foo
-                         (cortex daemon mints, writes ~/.config/nats/creds/foo.creds)
   → signals cortex     → SIGHUP or `cortex agents reload`
-                         (loader+watcher, extended per §6.1, pick up the fragment)
+                         (loader+watcher, extended per §6.1, pick up the fragment;
+                          daemon registers foo BEFORE creds issue so it can scope
+                          the credential to foo's runtime.capabilities)
+  → mints NATS creds   → cortex creds issue foo
+                         (cortex daemon mints with foo's capability scope,
+                          writes ~/.config/nats/creds/foo.creds)
 ```
 
 **No new process. No new launchd plist.** The watcher (`src/common/config/watcher.ts`) hot-reloads `cortex.yaml` today and is extended in §6.1 to also watch `~/.config/cortex/agents.d/`. Cortex's runner spawns CC for foo on the next dispatch matching foo's capability.
@@ -87,15 +90,19 @@ arc install foo-codex-review-bot
   → cortex target:
       drops persona.md   → ~/.config/cortex/personas/foo.md
       drops fragment     → ~/.config/cortex/agents.d/foo.yaml
+      signals cortex     → SIGHUP or `cortex agents reload`
+                            (daemon registers foo from agents.d/ before creds issue)
       mints NATS creds   → cortex creds issue foo
+                            (now scoped to foo's runtime.capabilities)
                             → ~/.config/nats/creds/foo.creds (cortex daemon-signed)
   → darwin-launchd target:
       installs binary    → ~/bin/foo-bot   (symlink to package)
       installs plist     → ~/Library/LaunchAgents/ai.meta-factory.foo.plist
-      launchctl load     → daemon starts, connects bus, registers capability
-  → cortex target (post-other-targets hook):
-      signals cortex     → cortex sees new fragment, agent appears in registry
+      launchctl load     → daemon starts LAST — connects bus with the creds,
+                            publishes capability registration to NATS KV
 ```
+
+**Daemon-down resilience:** if cortex is briefly unreachable when `arc install` runs the signal step, the install can fail fast OR proceed (arc-side flag). When cortex comes back, the watcher (§6.1) picks up `agents.d/` on next poll cycle. Standalone daemons retry their NATS connect with backoff. No bespoke retry logic needed in `installArtifact` — the eventual-consistency guarantee from the watcher + the NATS reconnect both already cover this. Implementers should NOT add their own retry loops here.
 
 The bot daemon is wholly owned by the OS supervision target's lifecycle (its own pre/post install scripts within that HostAdapter). Cortex sees the agent only via:
 1. The fragment file in `agents.d/` (identity + trust + presence)
@@ -164,11 +171,11 @@ lifecycle:
   preinstall:
     - scripts/check-cortex-version.sh    # CortexHostAdapter.detect() + version range check
   postinstall:
-    - scripts/issue-nats-creds.sh        # mints per-agent NATS user (Q2 answer)
-    - scripts/signal-cortex-reload.sh    # SIGHUP cortex or call `cortex agents reload`
+    - scripts/signal-cortex-reload.sh    # FIRST — daemon learns about agent from agents.d/
+    - scripts/issue-nats-creds.sh        # THEN — mints per-agent NATS user (Q2; daemon scopes creds to capabilities)
   preuninstall:
-    - scripts/drain-tasks.sh             # OPEN Q4 — stop accepting, wait, then remove
-    - scripts/signal-cortex-reload.sh    # cortex drops the agent from registry
+    - scripts/drain-tasks.sh             # D1 (was Q4) — stop accepting, wait, then remove
+    - scripts/signal-cortex-reload.sh    # cortex drops the agent from registry (creds revoked in removeArtifact per D7)
 ```
 
 **Schema decisions (locked):**
@@ -294,7 +301,7 @@ export class CortexHostAdapter implements HostAdapter {
 
 Either way, no contract break on arc#117. Carry-forward to §14 intersection points.
 
-**Multi-target install ordering** (per arc#117 §3): a standalone bot with `targets: [cortex, darwin-launchd]` installs to `cortex` FIRST (fragment + creds — daemon needs to know about the agent before it shows up on the bus) then `darwin-launchd` (binary + plist + load). Uninstall reverses (unload daemon first, then revoke creds + remove fragment). Arc#117's HostAdapter scheduler handles the ordering; cortex declares this dependency in its adapter via `installOrder: "before"` for the agent artifact type.
+**Multi-target install ordering** (per arc#117 §3): a standalone bot with `targets: [cortex, darwin-launchd]` MUST install to `cortex` FIRST (fragment + creds — daemon needs to know about the agent before it shows up on the bus) then `darwin-launchd` (binary + plist + load). Uninstall reverses (unload daemon first, then revoke creds + remove fragment). **How arc#117 expresses this ordering is an open coordination item** — proposed shape: cortex declares `installOrder: "before"` for the `agent` artifact type on its `CortexHostAdapter`. Whether arc#117 adopts that field name or a different mechanism is tracked in §14 open intersection points; the invariant (cortex-target-first, reverse on uninstall) is non-negotiable regardless of how it's spelled in the adapter API.
 
 **`arc list --target cortex`** (per arc#117 §3 CLI) lists all installed cortex agents — replaces the earlier draft's proposed cortex-specific `arc agents` subcommand. Reuses arc's generic per-target listing.
 
@@ -350,8 +357,8 @@ provides:
     agent.yaml: ~/.config/cortex/agents.d/rev.yaml
 lifecycle:
   postinstall:
-    - scripts/issue-nats-creds.sh
-    - scripts/signal-cortex-reload.sh
+    - scripts/signal-cortex-reload.sh    # FIRST — daemon registers rev
+    - scripts/issue-nats-creds.sh        # THEN — daemon scopes creds to rev's capabilities
 ```
 
 `arc install claude-review-bot` → 4 files dropped, cortex hot-reloads, rev appears in dashboard as `rev (in-process / claude-code)`. First `tasks.code-review.*` task on the bus is claimed by rev's CC subprocess. No restart, no manual config edits.
@@ -381,9 +388,9 @@ provides:
   plist: services/ai.meta-factory.codex-rev.plist
 lifecycle:
   postinstall:
-    - scripts/issue-nats-creds.sh
-    - scripts/signal-cortex-reload.sh
-    - scripts/launchctl-load.sh
+    - scripts/signal-cortex-reload.sh    # 1. daemon registers codex-rev
+    - scripts/issue-nats-creds.sh        # 2. daemon scopes creds (capabilities visible now)
+    - scripts/launchctl-load.sh          # 3. daemon starts last — needs creds + registry
 ```
 
 `arc install codex-review-bot` → fragment + persona drop, plist rendered + loaded, daemon connects bus, registers `code-review` capability. Cortex sees codex-rev in fragments and on the capability KV — same agent identity (just on a different substrate). On the bus, codex-rev and rev are competing consumers for `tasks.code-review.*` per pull-consumer-group semantics.
@@ -602,4 +609,4 @@ The strict contract is the right v1 default because it surfaces config errors at
 
 ---
 
-*This document is the design specification for arc-installable sub-bots. Implementation follows the phased plan in §11. Original review owners: Luna (architecture — couldn't read the doc), Andreas (ecosystem fit + arc schema impact). Holly drove the cortex#58 review (3 rounds, all valid findings addressed). This follow-up updates the design against [arc#117](https://github.com/the-metafactory/arc/issues/117) — multi-backend `HostAdapter` pattern.*
+*This document is the design specification for arc-installable sub-bots. Implementation follows the phased plan in §11. Review owners: Holly (cortex#58 + cortex#60 reviewer), Andreas (ecosystem fit + arc schema impact). This follow-up updates the design against [arc#117](https://github.com/the-metafactory/arc/issues/117) — multi-backend `HostAdapter` pattern.*
