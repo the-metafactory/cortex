@@ -117,7 +117,7 @@ async function runRetentionSweep(): Promise<void> {
   const totalDeleted = raw.deleted + pub.deleted;
   if (totalCompressed > 0 || totalDeleted > 0) {
     console.log(
-      `grove-relay: retention sweep — compressed ${totalCompressed} file(s), ` +
+      `cortex-relay: retention sweep — compressed ${totalCompressed} file(s), ` +
       `deleted ${totalDeleted} archive(s) (raw: ${COMPRESS_AFTER_DAYS}d→gz, ${DELETE_AFTER_DAYS}d→delete)`
     );
   }
@@ -128,7 +128,7 @@ async function runRetentionSweep(): Promise<void> {
 // =============================================================================
 
 const program = new Command()
-  .name("grove-relay")
+  .name("cortex-relay")
   .description("PAI event relay — filters raw events to published events")
   .version("0.1.0");
 
@@ -186,7 +186,7 @@ program
         natsLink = await NatsLink.connect({
           url: natsUrl,
           token: natsToken,
-          name: "grove-relay",
+          name: "cortex-relay",
         });
         onPublished = createCcEventPublisher({
           link: natsLink,
@@ -194,13 +194,13 @@ program
         });
         const safeUrl = natsUrl.replace(/\/\/[^@/]+@/, "//***@");
         console.log(
-          `grove-relay: nats publishing enabled — ${safeUrl} (org="${org}")`,
+          `cortex-relay: nats publishing enabled — ${safeUrl} (org="${org}")`,
         );
       } catch (err) {
         // Per the design rule: failed NATS startup must NOT crash the
         // relay's primary archival job. Log and continue JSONL-only.
         console.error(
-          `grove-relay: nats startup failed — continuing without bus publishing: ${
+          `cortex-relay: nats startup failed — continuing without bus publishing: ${
             err instanceof Error ? err.message : err
           }`,
         );
@@ -217,7 +217,7 @@ program
     // Run retention sweep on startup (removes stale JSONL files)
     runRetentionSweep();
 
-    console.log("grove-relay: starting...");
+    console.log("cortex-relay: starting...");
     console.log(`  Policy: ${options.policy}`);
     console.log(`  Raw:    ${RAW_DIR} (${COMPRESS_AFTER_DAYS}d→gz, ${DELETE_AFTER_DAYS}d→delete)`);
     console.log(`  Pub:    ${PUBLISHED_DIR} (${COMPRESS_AFTER_DAYS}d→gz, ${DELETE_AFTER_DAYS}d→delete)`);
@@ -252,7 +252,7 @@ program
 
     // Handle shutdown
     const shutdown = async () => {
-      console.log("\ngrove-relay: shutting down...");
+      console.log("\ncortex-relay: shutting down...");
       cleanup();
       clearInterval(interval);
       clearInterval(retentionInterval);
@@ -261,7 +261,7 @@ program
           await natsLink.close();
         } catch (err) {
           console.error(
-            `grove-relay: nats close error: ${err instanceof Error ? err.message : err}`,
+            `cortex-relay: nats close error: ${err instanceof Error ? err.message : err}`,
           );
         }
       }
@@ -272,7 +272,7 @@ program
     process.on("SIGINT", () => { shutdown().catch(() => process.exit(1)); });
     process.on("SIGTERM", () => { shutdown().catch(() => process.exit(1)); });
 
-    console.log("grove-relay: daemon started (Ctrl+C to stop)");
+    console.log("cortex-relay: daemon started (Ctrl+C to stop)");
   });
 
 program
@@ -280,7 +280,7 @@ program
   .description("Stop the relay daemon")
   .action(() => {
     if (!existsSync(PID_FILE)) {
-      console.log("grove-relay: not running (no PID file)");
+      console.log("cortex-relay: not running (no PID file)");
       return;
     }
 
@@ -288,9 +288,9 @@ program
     try {
       process.kill(pid, "SIGTERM");
       unlinkSync(PID_FILE);
-      console.log(`grove-relay: stopped (PID ${pid})`);
+      console.log(`cortex-relay: stopped (PID ${pid})`);
     } catch {
-      console.log(`grove-relay: process ${pid} not found, cleaning up PID file`);
+      console.log(`cortex-relay: process ${pid} not found, cleaning up PID file`);
       unlinkSync(PID_FILE);
     }
   });
@@ -300,16 +300,16 @@ program
   .description("Check relay status")
   .action(() => {
     if (!existsSync(PID_FILE)) {
-      console.log("grove-relay: not running");
+      console.log("cortex-relay: not running");
       return;
     }
 
     const pid = parseInt(readFileSync(PID_FILE, "utf-8").trim());
     try {
       process.kill(pid, 0); // Check if process exists
-      console.log(`grove-relay: running (PID ${pid})`);
+      console.log(`cortex-relay: running (PID ${pid})`);
     } catch {
-      console.log("grove-relay: stale PID file (not running)");
+      console.log("cortex-relay: stale PID file (not running)");
       unlinkSync(PID_FILE);
     }
   });

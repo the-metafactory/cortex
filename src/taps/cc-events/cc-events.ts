@@ -5,10 +5,10 @@
  * pre-myelin Claude Code hook taxonomy (`agent.task.started`,
  * `tool.bash.executed`, etc.) co-exists with the cross-process G-1111
  * vocabulary. The path forward is "Some in-process events MAY be lifted to
- * the bus by grove-relay" — same correlation_id, separate vocabulary —
+ * the bus by cortex-relay" — same correlation_id, separate vocabulary —
  * which is what this helper enables.
  *
- * The grove-relay (cc-events tap) reads CC hooks from
+ * The cortex-relay (cc-events tap) reads CC hooks from
  * `~/.claude/events/raw/`, applies the relay policy, writes published
  * events to `~/.claude/events/published/`, and ALSO — when a
  * `MyelinRuntime` is attached — wraps each published event in a Myelin
@@ -241,7 +241,7 @@ export function createCcEventPublisher(
       // operator-facing — when a publish fails repeatedly the operator
       // sees it in launchd output and can investigate the NATS server.
       process.stderr.write(
-        `grove-relay: nats publish failed for subject=${subject} id=${envelope.id} type=${envelope.type}: ${
+        `cortex-relay: nats publish failed for subject=${subject} id=${envelope.id} type=${envelope.type}: ${
           err instanceof Error ? err.message : String(err)
         }\n`,
       );

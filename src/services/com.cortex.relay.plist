@@ -7,7 +7,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>__BUN_PATH__</string>
-        <string>__GROVE_DIR__/src/taps/cc-events/grove-relay.ts</string>
+        <string>__GROVE_DIR__/src/taps/cc-events/relay.ts</string>
         <string>start</string>
     </array>
     <key>WorkingDirectory</key>
@@ -17,8 +17,8 @@
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>__HOME__/.claude/logs/grove-relay.log</string>
+    <string>__HOME__/.claude/logs/cortex-relay.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.claude/logs/grove-relay.error.log</string>
+    <string>__HOME__/.claude/logs/cortex-relay.error.log</string>
 </dict>
 </plist>

@@ -88,7 +88,7 @@ export class EventProcessor {
             this.onPublished(result);
           } catch (err) {
             process.stderr.write(
-              `grove-relay: onPublished hook threw for event_id=${result.event_id}: ${
+              `cortex-relay: onPublished hook threw for event_id=${result.event_id}: ${
                 err instanceof Error ? err.message : String(err)
               }\n`,
             );

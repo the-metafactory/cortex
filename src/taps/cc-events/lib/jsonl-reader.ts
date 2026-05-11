@@ -54,7 +54,7 @@ export class JsonlReader {
       try {
         events.push(JSON.parse(trimmed) as RawEvent);
       } catch (err) {
-        console.warn("grove-relay: jsonl-reader: skipping malformed line:", err instanceof Error ? err.message : err);
+        console.warn("cortex-relay: jsonl-reader: skipping malformed line:", err instanceof Error ? err.message : err);
       }
     }
 
