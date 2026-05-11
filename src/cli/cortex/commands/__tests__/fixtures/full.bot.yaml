@@ -1,0 +1,80 @@
+agent:
+  name: luna
+  displayName: Luna
+  operatorId: jc
+  operatorName: Jens-Christian
+  operatorDiscordId: "112233445566778899"
+  operatorMattermostId: mm-jc-id
+  dataResidency: NZ
+  personaFile: ./personas/luna.md
+
+discord:
+  - token: discord-token-aaaa
+    guildId: "100000000000000001"
+    agentChannelId: "100000000000000002"
+    logChannelId: "100000000000000003"
+    worklogChannelId: "100000000000000004"
+    contextDepth: 12
+    enableAgentLog: true
+    operatorRoleId: "100000000000000099"
+    roles:
+      - name: operator
+        users: ["112233445566778899"]
+        features: [chat, async, team]
+
+mattermost:
+  - apiUrl: https://mm.example.com
+    apiToken: mm-token-xxxx
+    triggerWord: "@luna"
+    channels: ["chan-a", "chan-b"]
+    pollIntervalMs: 5000
+
+trustedAgentBots:
+  - discordId: "600000000000000001"
+    name: echo
+
+claude:
+  timeoutMs: 120000
+  asyncTimeoutMs: 900000
+  additionalArgs: ["--allowedTools", "Bash"]
+  allowedTools: []
+  disallowedTools: ["WebFetch"]
+  allowedDirs: ["/Users/jc/work"]
+  readOnlyDirs: []
+
+attachments:
+  enabled: true
+  maxFileSizeBytes: 10485760
+
+execution:
+  default: local
+
+github:
+  webhookSecret: secret-shhh
+  repos:
+    - the-metafactory/cortex
+  agentDetection:
+    commitTrailers: ["Co-Authored-By: Claude"]
+    branchPatterns: ["^feat/(g|f|i)-\\d+"]
+    commentPatterns: ["^Starting:", "^Completed:"]
+
+api:
+  enabled: true
+  port: 8767
+
+paths:
+  publishedEventsDir: ~/.claude/events/published
+  logDir: ~/.config/cortex/logs
+
+grove:
+  notifications:
+    discord: true
+  baseUrl: https://grove.example.com
+
+networksDir: ./networks
+
+nats:
+  url: nats://localhost:4222
+  name: cortex
+  subjects:
+    - local.{org}.>

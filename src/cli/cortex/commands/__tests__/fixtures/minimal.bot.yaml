@@ -1,0 +1,21 @@
+agent:
+  name: luna
+  displayName: Luna
+  operatorId: jc
+  operatorName: Jens-Christian
+  operatorDiscordId: "112233445566778899"
+  dataResidency: NZ
+  personaFile: ./personas/luna.md
+
+discord:
+  - token: discord-token-aaaa
+    guildId: "100000000000000001"
+    agentChannelId: "100000000000000002"
+    logChannelId: "100000000000000003"
+    contextDepth: 10
+
+claude:
+  timeoutMs: 120000
+
+paths:
+  logDir: ~/.config/cortex/logs

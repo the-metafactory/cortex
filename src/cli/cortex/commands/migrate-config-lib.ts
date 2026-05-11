@@ -1,0 +1,535 @@
+/**
+ * MIG-7.2e — Pure conversion logic for `bot.yaml` (grove-v2) → `cortex.yaml`.
+ *
+ * Side-effect-free: takes a parsed legacy object, returns the converted object
+ * + a list of warnings + a mapping table for `--check` output. The CLI wrapper
+ * in `migrate-config.ts` handles file IO and stdout formatting.
+ *
+ * Coupling boundary: this module imports the cortex-config Zod schema and
+ * verifies its output round-trips through `.parse()`. It does NOT import the
+ * legacy `BotConfigSchema` — the legacy file in the wild may carry fields
+ * (`personaFile`, `trustedAgentBots`) that were dropped from the in-repo
+ * schema, so we accept input permissively and validate output strictly.
+ */
+
+import { existsSync } from "fs";
+import { isAbsolute, resolve } from "path";
+
+import {
+  type CortexConfig,
+  CortexConfigSchema,
+  type DiscordPresence,
+  type MattermostPresence,
+} from "../../../common/types/cortex-config";
+
+// =============================================================================
+// Legacy input shape — permissive
+// =============================================================================
+
+/**
+ * Legacy `bot.yaml` fields we accept. Not a Zod schema: real grove-v2
+ * deployments may carry historical fields (`personaFile`, `trustedAgentBots`)
+ * that no longer exist in `BotConfigSchema`. Accepting them as `unknown` lets
+ * the converter translate them rather than fail at the input gate.
+ */
+export interface LegacyAgent {
+  name: string;
+  displayName: string;
+  operatorId?: string;
+  operatorName?: string;
+  operatorDiscordId?: string;
+  operatorMattermostId?: string;
+  dataResidency?: string;
+  personaFile?: string;
+}
+
+export interface LegacyDiscordInstance {
+  instanceId?: string;
+  enabled?: boolean;
+  token: string;
+  guildId: string | number;
+  agentChannelId: string | number;
+  logChannelId: string | number;
+  worklogChannelId?: string | number;
+  contextDepth?: number;
+  enableAgentLog?: boolean;
+  roles?: unknown[];
+  defaultRole?: string;
+  dm?: unknown;
+  operatorRoleId?: string | number;
+}
+
+export interface LegacyMattermostInstance {
+  instanceId?: string;
+  enabled?: boolean;
+  callbackPort?: number;
+  triggerWord?: string;
+  webhookUrl?: string;
+  apiUrl?: string;
+  apiToken?: string;
+  webhookToken?: string;
+  channels?: string[];
+  pollIntervalMs?: number;
+  allowedUsers?: string[];
+  roles?: unknown[];
+  defaultRole?: string;
+}
+
+export interface LegacyTrustedAgentBot {
+  /** Discord user id of the peer bot. Used only for human reference today. */
+  discordId?: string;
+  /** Mattermost user id of the peer bot. Used only for human reference today. */
+  mattermostId?: string;
+  /** Agent id of the peer bot — this is what migrates into `trust:`. */
+  name: string;
+}
+
+export interface LegacyBotYaml {
+  agent: LegacyAgent;
+  discord?: LegacyDiscordInstance[] | LegacyDiscordInstance;
+  mattermost?: LegacyMattermostInstance[] | LegacyMattermostInstance;
+  trustedAgentBots?: LegacyTrustedAgentBot[];
+  claude?: unknown;
+  attachments?: unknown;
+  execution?: unknown;
+  github?: unknown;
+  api?: { enabled?: boolean; port?: number; corsOrigin?: string; mode?: string };
+  paths?: unknown;
+  grove?: unknown;
+  networksDir?: string;
+  networks?: unknown[];
+  nats?: unknown;
+  renderers?: unknown[];
+  [key: string]: unknown;
+}
+
+// =============================================================================
+// Conversion output
+// =============================================================================
+
+export interface ConversionWarning {
+  field: string;
+  message: string;
+}
+
+export interface InstanceMapping {
+  legacyKind: "discord" | "mattermost";
+  legacyIndex: number;
+  legacyInstanceId: string | undefined;
+  newAgentId: string;
+  newPresence: "discord" | "mattermost";
+}
+
+export interface ConversionResult {
+  /** The cortex.yaml-shaped object, ready to YAML.stringify and write. */
+  cortex: CortexConfig;
+  /** Non-fatal warnings — surfaced to stderr by the CLI. */
+  warnings: ConversionWarning[];
+  /**
+   * Per-instance mapping table — shown by `--check`. Validates that each
+   * legacy `discord[].instanceId` / `mattermost[].instanceId` maps to exactly
+   * one new agent presence (plan §4 7.2e validation criterion #1).
+   */
+  mappings: InstanceMapping[];
+}
+
+/**
+ * Options controlling validation strictness. The CLI flips `strict: true` for
+ * `--strict` mode (warnings → errors).
+ */
+export interface ConvertOptions {
+  /**
+   * Directory the input `bot.yaml` was loaded from. Used to resolve
+   * `personaFile` paths for the file-exists validation. Optional — when
+   * omitted, persona files are not checked on disk (e.g. when tests parse
+   * fixtures via in-memory strings rather than file paths).
+   */
+  configDir?: string;
+}
+
+// =============================================================================
+// Conversion
+// =============================================================================
+
+const AGENT_ID_PATTERN = /^[a-z0-9-]+$/;
+
+function toArray<T>(val: T[] | T | undefined): T[] {
+  if (val === undefined) return [];
+  return Array.isArray(val) ? val : [val];
+}
+
+function coerceString(val: string | number | undefined): string | undefined {
+  if (val === undefined) return undefined;
+  return String(val);
+}
+
+/**
+ * Lift a legacy `agent.name` to a cortex agent id. The cortex schema enforces
+ * `^[a-z0-9-]+$`; legacy `agent.name` historically allowed mixed case (Luna,
+ * Echo, …) so we lowercase and replace any disallowed char with `-`.
+ */
+function deriveAgentId(legacyName: string): string {
+  return legacyName.trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Lift the operator block out of the singular legacy `agent:` field. The
+ * cortex `operator:` carries id / displayName / discordId / mattermostId /
+ * dataResidency — all lifted from the legacy `agent.operator*` fields.
+ *
+ * Falls back to `agent.name` for the operator id when `operatorId` is unset,
+ * since pre-cortex deployments often ran one bot per operator without a
+ * distinct operatorId.
+ */
+function buildOperator(
+  legacy: LegacyBotYaml,
+  warnings: ConversionWarning[],
+): CortexConfig["operator"] {
+  const a = legacy.agent;
+
+  const rawOperatorId = a.operatorId ?? a.name;
+  const operatorId = deriveAgentId(rawOperatorId);
+  if (operatorId !== rawOperatorId) {
+    warnings.push({
+      field: "operator.id",
+      message: `operatorId "${rawOperatorId}" normalized to "${operatorId}" (cortex requires lowercase alphanumeric + hyphen)`,
+    });
+  }
+
+  let dataResidency = a.dataResidency;
+  if (dataResidency === undefined) {
+    dataResidency = "NZ";
+  } else if (!/^[A-Z]{2}$/.test(dataResidency)) {
+    const fixed = dataResidency.toUpperCase();
+    if (/^[A-Z]{2}$/.test(fixed)) {
+      warnings.push({
+        field: "operator.dataResidency",
+        message: `dataResidency "${dataResidency}" upcased to "${fixed}"`,
+      });
+      dataResidency = fixed;
+    } else {
+      warnings.push({
+        field: "operator.dataResidency",
+        message: `dataResidency "${dataResidency}" not a 2-letter ISO-3166 code; defaulting to "NZ"`,
+      });
+      dataResidency = "NZ";
+    }
+  }
+
+  const operator: CortexConfig["operator"] = { id: operatorId, dataResidency };
+  if (a.operatorName) operator.displayName = a.operatorName;
+  if (a.operatorDiscordId) operator.discordId = a.operatorDiscordId;
+  if (a.operatorMattermostId) operator.mattermostId = a.operatorMattermostId;
+  return operator;
+}
+
+/**
+ * Convert a single legacy discord instance to a cortex DiscordPresence block.
+ * Drops `instanceId` — cortex computes it at runtime from
+ * `${agent.id}-discord` (per RESUME §Decisions §1).
+ */
+function convertDiscordPresence(inst: LegacyDiscordInstance): DiscordPresence {
+  const presence = {
+    enabled: inst.enabled ?? true,
+    token: inst.token,
+    guildId: String(inst.guildId),
+    agentChannelId: String(inst.agentChannelId),
+    logChannelId: String(inst.logChannelId),
+    contextDepth: inst.contextDepth ?? 10,
+    enableAgentLog: inst.enableAgentLog ?? false,
+    roles: (inst.roles as DiscordPresence["roles"]) ?? [],
+    defaultRole: inst.defaultRole ?? "allow-all",
+    dm: (inst.dm as DiscordPresence["dm"]) ?? {
+      operatorRole: { features: ["chat", "async", "team"], disallowedTools: [], bashGuard: true },
+      defaultRole: "denied" as const,
+      userRoles: [],
+    },
+  } as DiscordPresence;
+  const worklog = coerceString(inst.worklogChannelId);
+  if (worklog) presence.worklogChannelId = worklog;
+  const role = coerceString(inst.operatorRoleId);
+  if (role) presence.operatorRoleId = role;
+  return presence;
+}
+
+/**
+ * Convert a single legacy mattermost instance. Same field-for-field lift as
+ * discord; `instanceId` dropped.
+ */
+function convertMattermostPresence(inst: LegacyMattermostInstance): MattermostPresence {
+  return {
+    enabled: inst.enabled ?? true,
+    callbackPort: inst.callbackPort ?? 8080,
+    triggerWord: inst.triggerWord,
+    webhookUrl: inst.webhookUrl,
+    apiUrl: inst.apiUrl,
+    apiToken: inst.apiToken,
+    webhookToken: inst.webhookToken,
+    channels: inst.channels ?? [],
+    pollIntervalMs: inst.pollIntervalMs ?? 3000,
+    allowedUsers: inst.allowedUsers ?? [],
+    roles: (inst.roles as MattermostPresence["roles"]) ?? [],
+    defaultRole: inst.defaultRole ?? "allow-all",
+  } as MattermostPresence;
+}
+
+/**
+ * Resolve the persona file path for a converted agent. Returns the path the
+ * cortex.yaml should carry plus an optional warning when the file doesn't
+ * exist on disk (only checked when `configDir` is supplied).
+ *
+ * Fallback when `personaFile` is unset: `./personas/${agentId}.md`. The
+ * cortex schema requires a non-empty string here; the warning surfaces the
+ * fact that the file may need to be created.
+ */
+function resolvePersona(
+  legacyPersonaFile: string | undefined,
+  agentId: string,
+  configDir: string | undefined,
+  warnings: ConversionWarning[],
+): string {
+  const personaPath = legacyPersonaFile?.trim() || `./personas/${agentId}.md`;
+
+  if (configDir) {
+    const abs = isAbsolute(personaPath) ? personaPath : resolve(configDir, personaPath);
+    if (!existsSync(abs)) {
+      warnings.push({
+        field: `agents[${agentId}].persona`,
+        message: `persona file not found at ${abs}${legacyPersonaFile ? "" : " (defaulted from agent name)"}`,
+      });
+    }
+  } else if (!legacyPersonaFile) {
+    warnings.push({
+      field: `agents[${agentId}].persona`,
+      message: `agent.personaFile not set; defaulted to ${personaPath}`,
+    });
+  }
+
+  return personaPath;
+}
+
+/**
+ * Synthesize the cortex `agents[]` list from the singular legacy `agent` plus
+ * the (possibly multi-entry) `discord[]` and `mattermost[]` arrays.
+ *
+ * Strategy (per RESUME §MIG-7.2e Agents synthesis):
+ *   - Pair discord[i] with mattermost[i] under one agent.
+ *   - Index 0 → base agent id (deriveAgentId(agent.name)).
+ *   - Index ≥1 → `${base}-${i + 1}` (so `luna-2`, `luna-3`).
+ *   - Trust list propagates to every variant.
+ *   - Persona path propagates to every variant.
+ */
+function buildAgents(
+  legacy: LegacyBotYaml,
+  warnings: ConversionWarning[],
+  mappings: InstanceMapping[],
+  configDir: string | undefined,
+): { agents: CortexConfig["agents"]; baseId: string } {
+  const discordInstances = toArray(legacy.discord);
+  const mattermostInstances = toArray(legacy.mattermost);
+  const baseId = deriveAgentId(legacy.agent.name);
+
+  if (!AGENT_ID_PATTERN.test(baseId)) {
+    throw new Error(
+      `agent.name "${legacy.agent.name}" cannot be derived to a valid agent id (^[a-z0-9-]+$)`,
+    );
+  }
+
+  const trust = (legacy.trustedAgentBots ?? []).map((t) => {
+    const id = deriveAgentId(t.name);
+    if (!AGENT_ID_PATTERN.test(id)) {
+      throw new Error(
+        `trustedAgentBots[].name "${t.name}" cannot be derived to a valid agent id (^[a-z0-9-]+$)`,
+      );
+    }
+    if (id !== t.name) {
+      warnings.push({
+        field: "trustedAgentBots",
+        message: `trusted bot name "${t.name}" normalized to "${id}"`,
+      });
+    }
+    return id;
+  });
+
+  const persona = resolvePersona(legacy.agent.personaFile, baseId, configDir, warnings);
+  const displayName = legacy.agent.displayName || legacy.agent.name;
+
+  const variantCount = Math.max(discordInstances.length, mattermostInstances.length, 1);
+
+  if (variantCount > 1) {
+    warnings.push({
+      field: "agents",
+      message: `legacy bot.yaml carries ${discordInstances.length} discord + ${mattermostInstances.length} mattermost instance(s) under a single agent.name — emitting ${variantCount} agents (${baseId}, ${baseId}-2, …)`,
+    });
+  }
+
+  const agents: CortexConfig["agents"] = [];
+  for (let i = 0; i < variantCount; i++) {
+    const variantId = i === 0 ? baseId : `${baseId}-${i + 1}`;
+    const presence: CortexConfig["agents"][number]["presence"] = {};
+    const d = discordInstances[i];
+    const m = mattermostInstances[i];
+    if (d) {
+      presence.discord = convertDiscordPresence(d);
+      mappings.push({
+        legacyKind: "discord",
+        legacyIndex: i,
+        legacyInstanceId: d.instanceId,
+        newAgentId: variantId,
+        newPresence: "discord",
+      });
+    }
+    if (m) {
+      presence.mattermost = convertMattermostPresence(m);
+      mappings.push({
+        legacyKind: "mattermost",
+        legacyIndex: i,
+        legacyInstanceId: m.instanceId,
+        newAgentId: variantId,
+        newPresence: "mattermost",
+      });
+    }
+    agents.push({
+      id: variantId,
+      displayName: variantCount === 1 ? displayName : `${displayName} (${i + 1})`,
+      persona,
+      roles: [],
+      trust,
+      presence,
+    });
+  }
+
+  return { agents, baseId };
+}
+
+/**
+ * Synthesize a dashboard renderer entry from the legacy `api:` block when
+ * `api.enabled` is true. Pre-existing top-level `renderers[]` in the legacy
+ * input passes through unchanged.
+ */
+function buildRenderers(legacy: LegacyBotYaml, warnings: ConversionWarning[]): CortexConfig["renderers"] {
+  const renderers: CortexConfig["renderers"] = [];
+
+  if (Array.isArray(legacy.renderers)) {
+    for (const r of legacy.renderers) {
+      renderers.push(r as CortexConfig["renderers"][number]);
+    }
+  }
+
+  if (legacy.api && legacy.api.enabled === true) {
+    const port = typeof legacy.api.port === "number" ? legacy.api.port : 8767;
+    renderers.push({ kind: "dashboard", port, subscribe: ["local.{org}.>"], projections: [] });
+    warnings.push({
+      field: "api",
+      message: `legacy api.enabled=true synthesized as renderers[].kind=dashboard (port ${port}); cloud-mode api fields (endpoint, apiKey, …) are NOT carried — re-add via networks/`,
+    });
+  }
+
+  return renderers;
+}
+
+/**
+ * Convert a legacy bot.yaml-shaped object to cortex.yaml-shape. Pure: no IO
+ * apart from optional `existsSync` for persona-file validation.
+ *
+ * Throws on structurally invalid input (e.g. missing `agent.name`). Returns
+ * the converted object plus warnings + mappings. The caller (CLI) decides
+ * whether warnings are fatal (`--strict`) or advisory.
+ *
+ * The output is validated against `CortexConfigSchema` so the helper never
+ * emits a YAML that cortex itself would reject at load. If schema parse
+ * fails, the error is re-thrown verbatim so the operator sees the field
+ * path Zod identified.
+ */
+export function convertBotYaml(
+  legacy: LegacyBotYaml,
+  opts: ConvertOptions = {},
+): ConversionResult {
+  if (!legacy || typeof legacy !== "object") {
+    throw new Error("input is not an object");
+  }
+  if (!legacy.agent || typeof legacy.agent !== "object") {
+    throw new Error("bot.yaml missing required `agent:` block");
+  }
+  if (!legacy.agent.name || typeof legacy.agent.name !== "string") {
+    throw new Error("bot.yaml missing required `agent.name`");
+  }
+  if (!legacy.agent.displayName || typeof legacy.agent.displayName !== "string") {
+    throw new Error("bot.yaml missing required `agent.displayName`");
+  }
+
+  const warnings: ConversionWarning[] = [];
+  const mappings: InstanceMapping[] = [];
+
+  const operator = buildOperator(legacy, warnings);
+  const { agents } = buildAgents(legacy, warnings, mappings, opts.configDir);
+  const renderers = buildRenderers(legacy, warnings);
+
+  if (legacy.grove !== undefined) {
+    warnings.push({
+      field: "grove",
+      message: "legacy `grove:` block (F-11 notification toggles) is dropped — re-implement via renderers when needed",
+    });
+  }
+
+  const cortex: Record<string, unknown> = {
+    operator,
+    agents,
+    renderers,
+  };
+
+  if (legacy.claude !== undefined) cortex.claude = legacy.claude;
+  else cortex.claude = {};
+
+  if (legacy.attachments !== undefined) cortex.attachments = legacy.attachments;
+  if (legacy.execution !== undefined) cortex.execution = legacy.execution;
+  if (legacy.github !== undefined) cortex.github = legacy.github;
+  if (legacy.paths !== undefined) cortex.paths = legacy.paths;
+  if (legacy.networksDir !== undefined) cortex.networksDir = legacy.networksDir;
+  if (legacy.networks !== undefined) cortex.networks = legacy.networks;
+  if (legacy.nats !== undefined) cortex.nats = legacy.nats;
+
+  const parsed = CortexConfigSchema.parse(cortex);
+  return { cortex: parsed, warnings, mappings };
+}
+
+/**
+ * Render a `--check` summary table. Returns a multi-line string suitable for
+ * stdout. Pure — no console.log inside.
+ */
+export function formatCheckReport(result: ConversionResult): string {
+  const lines: string[] = [];
+  lines.push("cortex migrate-config — dry-run report");
+  lines.push("");
+  lines.push(`operator: ${result.cortex.operator.id} (dataResidency=${result.cortex.operator.dataResidency})`);
+  lines.push(`agents:   ${result.cortex.agents.length}`);
+  for (const a of result.cortex.agents) {
+    const platforms = [
+      a.presence.discord ? "discord" : null,
+      a.presence.mattermost ? "mattermost" : null,
+    ].filter(Boolean).join(", ");
+    lines.push(`  - ${a.id} (${platforms}) persona=${a.persona} trust=[${a.trust.join(", ")}]`);
+  }
+  lines.push(`renderers: ${result.cortex.renderers.length}`);
+  for (const r of result.cortex.renderers) {
+    lines.push(`  - ${r.kind}`);
+  }
+  lines.push("");
+  if (result.mappings.length > 0) {
+    lines.push("instance mappings:");
+    for (const m of result.mappings) {
+      const label = m.legacyInstanceId ?? `<auto-${m.legacyIndex}>`;
+      lines.push(`  ${m.legacyKind}[${m.legacyIndex}] ${label}  →  agents[${m.newAgentId}].presence.${m.newPresence}`);
+    }
+    lines.push("");
+  }
+  if (result.warnings.length > 0) {
+    lines.push(`warnings (${result.warnings.length}):`);
+    for (const w of result.warnings) {
+      lines.push(`  [${w.field}] ${w.message}`);
+    }
+  } else {
+    lines.push("warnings: none");
+  }
+  return lines.join("\n");
+}

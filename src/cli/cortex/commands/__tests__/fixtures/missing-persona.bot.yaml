@@ -1,0 +1,12 @@
+agent:
+  name: ghost
+  displayName: Ghost
+  operatorId: jc
+  dataResidency: NZ
+  personaFile: ./personas/ghost.md
+
+discord:
+  - token: ghost-token
+    guildId: "900000000000000001"
+    agentChannelId: "900000000000000002"
+    logChannelId: "900000000000000003"

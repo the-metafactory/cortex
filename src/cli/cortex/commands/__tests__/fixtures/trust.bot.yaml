@@ -1,0 +1,20 @@
+agent:
+  name: luna
+  displayName: Luna
+  operatorId: jc
+  dataResidency: NZ
+  personaFile: ./personas/luna.md
+
+discord:
+  - token: luna-token
+    guildId: "500000000000000001"
+    agentChannelId: "500000000000000002"
+    logChannelId: "500000000000000003"
+
+trustedAgentBots:
+  - discordId: "600000000000000001"
+    name: echo
+  - discordId: "700000000000000001"
+    name: holly
+  - discordId: "800000000000000001"
+    name: ivy
