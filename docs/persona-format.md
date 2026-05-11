@@ -32,11 +32,11 @@ That's the only required frontmatter field. Everything else is optional.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `preferredModel` | string | Claude model id (e.g. `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`). Cortex's runner uses this when set; falls back to the operator default declared in `cortex.yaml`. |
-| `allowedTools` | string[] | Tool allowlist for the agent. Subset of cortex's known tools (`Read`, `Edit`, `Write`, `Grep`, `Bash`, `Agent`, `Skill`, etc.). Advisory in v1; runtime enforcement lands in a future cortex release. |
+| `preferredModel` | string | Claude model id. **Free-form string in v1** — cortex does not validate against a closed enum. Both short aliases (`claude-opus-4-7`) and fully-qualified ids (`claude-opus-4-7-20251022`) are accepted. The runner passes the value through to the Anthropic SDK verbatim; if the model id is unknown to Anthropic, the SDK returns an error at first API call (operator-debuggable, not install-time). Non-Anthropic substrates (Codex, pi.dev, custom) interpret the field per their own runtime contract. When unset, cortex falls back to the operator default declared in `cortex.yaml`. Future cortex versions MAY tighten this to an enum; that would be a major version bump per §Versioning. |
+| `allowedTools` | string[] | Tool allowlist for the agent. **Free-form string list in v1** — cortex does not validate against a closed enum. The canonical v1.0 tool names cortex knows about are: `Read`, `Edit`, `Write`, `Grep`, `Bash`, `Glob`, `Agent`, `Skill`, `WebFetch`, `WebSearch`, `NotebookEdit`, `TodoWrite`, `BashOutput`, `KillShell`. Future tool additions land via additive enum extension (minor bump). Field is advisory in v1 — runtime enforcement (filtering the substrate's tool palette to this allowlist) lands in a future cortex release; until then the runner ignores the field with an info-level log. Unknown tool names in v1: warning logged with the name; field is preserved on the agent for future enforcement. |
 | `behavior` | object | Free-form key-value flags for persona-specific behavior toggles. Cortex passes the object through to the substrate opaquely — no schema enforcement on the interior. Bot author documents its keys in the bot's own README. |
-| `temperature` | number | Sampling temperature override, `0.0` to `1.0`. Falls back to the cortex default if unset. |
-| `maxTokens` | number | Max output tokens per turn. Falls back to the cortex default if unset. |
+| `temperature` | number | Sampling temperature override, `0.0` to `1.0` **inclusive** on both bounds. Falls back to the cortex default if unset. |
+| `maxTokens` | number | Max output tokens per turn (positive integer). Falls back to the cortex default if unset. |
 | `tags` | string[] | Free-form labels for filtering / discovery in the dashboard (e.g. `[code-review, typescript]`). No semantic meaning to cortex; convention only. |
 
 ### Body
@@ -139,11 +139,13 @@ Cortex's `CortexHostAdapter.detect()` (F-5) compares the bot's range against `PE
 | Change type | Version bump |
 |-------------|--------------|
 | Add optional field | Minor (1.0 → 1.1) |
-| Change default value of optional field | Minor |
+| Change default value of optional field — **case A:** new default is operator-overridable (cortex.yaml-level fallback) | Minor — operator can intervene to preserve old behavior |
+| Change default value of optional field — **case B:** new default observably alters per-bot output (e.g. a temperature default change) | Major — bots that relied on the prior default see different runtime behavior with no version of their own to bump |
 | Add required field | Major (1.0 → 2.0) |
 | Remove field | Major |
 | Tighten type / validation on existing field | Major |
 | Loosen type / validation on existing field | Minor |
+| Add an entry to a known-tool list (`allowedTools` canonical names) or a known-model list | Minor — additive only |
 
 ### Deprecation pathway
 
@@ -164,13 +166,15 @@ When removing a field:
 | Scenario | Cortex behavior |
 |----------|-----------------|
 | Persona file missing at declared path | Reject agent registration. Error names the expected path. |
-| Frontmatter unparseable (bad YAML) | Reject registration. Error names line + column from the YAML parser. |
+| Persona file present but **no `---` frontmatter block at all** (pure markdown body, no delimiters) | Reject registration. Error distinguishes from "file missing" — names the file path and shows the minimal required frontmatter: `displayName: <name>`. |
+| Frontmatter unparseable (bad YAML inside `---` delimiters) | Reject registration. Error names line + column from the YAML parser. |
 | Frontmatter missing `displayName` | Reject registration. Error names the required field. |
-| Frontmatter has unknown field | Warning logged; agent still registers. Forwards-compatibility with future minor versions. |
+| Frontmatter has **unknown field** (not in the v1 schema) | Warning logged with the field name; field is preserved on the agent (forwards-compatibility with future minor versions); registration succeeds. |
+| Frontmatter has **known field with wrong type** (e.g. `displayName: 42`, `tags: "code-review"`, `temperature: "warm"`, `allowedTools: "Read,Edit"`) | Reject registration. Error names the field, the expected type, and the received value. This is distinct from unknown-field-warn — known fields with bad types catch the most common hand-authored-YAML mistakes and surface them at install time rather than runtime. |
 | `displayName` in persona disagrees with `agents.d/<id>.yaml` fragment | Warning logged; fragment's `displayName` wins (operator-edited config takes precedence — cortex#58 §5 inline-vs-fragment rule generalizes here). |
-| `temperature` out of `0..1` range | Reject registration. Error names the value + expected range. |
-| `maxTokens` non-positive | Reject registration. |
-| `allowedTools` references a tool cortex doesn't know about | Warning logged; unknown tool is dropped from the allowlist; agent registers with the rest. |
+| `temperature` out of `0.0` to `1.0` inclusive range | Reject registration. Error names the value + expected `[0.0, 1.0]` range. |
+| `maxTokens` non-positive or non-integer | Reject registration. Error names the value. |
+| `allowedTools` references a tool cortex doesn't know about | Warning logged; unknown tool name is preserved on the agent (advisory in v1; future enforcement may drop or reject); other tool names register normally. |
 | File size > 100KB | Reject registration. Personas this large are almost certainly a misuse. |
 | File size > 50KB | Warning logged; agent registers. Soft signal that the persona may be overgrown. |
 | `arc-manifest.yaml`'s `runtime.persona-format` range not satisfied by `PERSONA_FORMAT_VERSION` | `arc install` aborts via `CortexHostAdapter.detect()` (F-5). No persona files are dropped on disk. |
