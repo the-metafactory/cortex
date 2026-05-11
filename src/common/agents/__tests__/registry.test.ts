@@ -14,6 +14,7 @@
 import { describe, test, expect } from "bun:test";
 
 import {
+  AgentNotFoundError,
   AgentRegistry,
   DuplicateAgentIdError,
   UnknownAgentReferenceError,
@@ -106,10 +107,11 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
 // =============================================================================
 
 describe("AgentRegistry.fromConfig", () => {
-  test("builds an empty registry path is illegal — CortexConfig requires ≥1 agent (schema layer)", () => {
-    // Defensive: even bypassing the schema, the registry handles zero agents
-    // by simply having size === 0. The schema is the gatekeeper for the
-    // "≥1 agent" rule (architecture §9.1). The registry doesn't re-enforce it.
+  test("zero-agent registries are tolerated at the registry layer", () => {
+    // The schema (CortexConfigSchema.agents.min(1)) is the gatekeeper for
+    // the architecture §9.1 "≥1 agent" rule. The registry itself does not
+    // re-enforce it — passing `[]` directly to `fromAgents` is legal so
+    // tests can construct empty registries without setting up a full config.
     const registry = AgentRegistry.fromAgents([]);
     expect(registry.size).toBe(0);
     expect(registry.getAll()).toEqual([]);
@@ -200,8 +202,22 @@ describe("AgentRegistry.getById / tryGetById", () => {
     expect(registry.getById("luna").id).toBe("luna");
   });
 
-  test("getById throws for an unknown id", () => {
-    expect(() => registry.getById("ghost")).toThrow(UnknownAgentReferenceError);
+  test("getById throws AgentNotFoundError for an unknown id (Holly W1)", () => {
+    // Previous revision reused UnknownAgentReferenceError with a
+    // `"<caller>"` placeholder fromAgent — misleading because plain lookup
+    // has no trust-relationship semantics. AgentNotFoundError is a dedicated
+    // class with just the offending id.
+    let err: unknown;
+    try {
+      registry.getById("ghost");
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(AgentNotFoundError);
+    expect(err).not.toBeInstanceOf(UnknownAgentReferenceError);
+    expect((err as AgentNotFoundError).id).toBe("ghost");
+    expect((err as AgentNotFoundError).name).toBe("AgentNotFoundError");
+    expect((err as AgentNotFoundError).message).toBe('no agent registered with id "ghost"');
   });
 
   test("tryGetById returns the agent for a known id", () => {
@@ -241,9 +257,9 @@ describe("AgentRegistry.getTrustedPeers", () => {
     expect(registry.getTrustedPeers("luna").map((a) => a.id)).toEqual(["echo"]);
   });
 
-  test("throws if the agent itself is unknown", () => {
+  test("throws AgentNotFoundError if the agent itself is unknown", () => {
     const registry = AgentRegistry.fromAgents([agentFixture({ id: "luna" })]);
-    expect(() => registry.getTrustedPeers("ghost")).toThrow(UnknownAgentReferenceError);
+    expect(() => registry.getTrustedPeers("ghost")).toThrow(AgentNotFoundError);
   });
 });
 
@@ -305,6 +321,55 @@ describe("AgentRegistry — immutability", () => {
     sourceAgents.push(agentFixture({ id: "holly" }));
     expect(registry.size).toBe(2);
     expect(registry.tryGetById("holly")).toBeUndefined();
+  });
+
+  test("agent objects returned by getById are deep-frozen (Holly W2)", () => {
+    // Previous revision shallow-froze the array but not the agents
+    // themselves — a downstream `registry.getById("luna").trust.push("x")`
+    // would silently bypass the trust closure invariant. Deep-freeze
+    // closes the gap.
+    const registry = AgentRegistry.fromAgents([
+      agentFixture({ id: "luna", roles: ["operator"], trust: [] }),
+    ]);
+    const luna = registry.getById("luna");
+    expect(Object.isFrozen(luna)).toBe(true);
+    expect(Object.isFrozen(luna.trust)).toBe(true);
+    expect(Object.isFrozen(luna.roles)).toBe(true);
+    expect(Object.isFrozen(luna.presence)).toBe(true);
+    if (luna.presence.discord) {
+      expect(Object.isFrozen(luna.presence.discord)).toBe(true);
+    }
+  });
+
+  test("attempted mutation of an agent's trust array fails in strict mode", () => {
+    // Bun's test runner runs ESM modules in strict mode by default, so
+    // pushing onto a frozen array throws. This is the load-bearing
+    // assertion for the deep-freeze guarantee.
+    const registry = AgentRegistry.fromAgents([
+      agentFixture({ id: "luna", trust: [] }),
+    ]);
+    const luna = registry.getById("luna");
+    expect(() => {
+      (luna.trust as string[]).push("evil");
+    }).toThrow();
+  });
+
+  test("attempted mutation of an agent's presence block fails in strict mode", () => {
+    const registry = AgentRegistry.fromAgents([
+      agentFixture({ id: "luna" }),
+    ]);
+    const luna = registry.getById("luna");
+    expect(() => {
+      (luna.presence as { discord?: unknown }).discord = undefined;
+    }).toThrow();
+  });
+
+  test("deep-freezing an already-frozen agent is a no-op (idempotent)", () => {
+    // Tests sometimes pass already-frozen Agents back through fromAgents
+    // (e.g. when building a registry from another registry's getAll()).
+    // Re-freezing must not throw.
+    const base = AgentRegistry.fromAgents([agentFixture({ id: "luna" })]);
+    expect(() => AgentRegistry.fromAgents(base.getAll())).not.toThrow();
   });
 });
 

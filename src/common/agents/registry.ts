@@ -6,14 +6,12 @@
  * (`{ id, displayName, persona, roles, trust, presence }`) plus the helper
  * methods presence adapters and the runner need at startup:
  *
- *   - `getById(id)`           — strict lookup; throws if unknown
+ *   - `getById(id)`           — strict lookup; throws `AgentNotFoundError`
  *   - `tryGetById(id)`        — soft lookup; returns undefined
  *   - `getAll()`              — iteration order matches config order
  *   - `getTrustedPeers(id)`   — resolve an agent's `trust:` list to Agent
  *                                objects; throws if any unresolved
- *   - `withPlatformId(...)`   — extension point for the trust-resolver
- *                                (MIG-7.2b); returns a registry view that
- *                                also knows platform user ids
+ *   - `trusts(truster, trusted)` — boolean trust check (self-trust → true)
  *
  * Architecture §9.3 rules enforced at construction:
  *
@@ -50,6 +48,9 @@ import type { Agent, CortexConfig } from "../types/cortex-config";
  * Thrown when a trust reference cannot be resolved at registry construction.
  * The error carries the offending agent + the unresolved id so the operator
  * sees exactly which line of cortex.yaml is wrong.
+ *
+ * NOT used for plain `getById` misses — that's `AgentNotFoundError` with no
+ * trust-relationship implication.
  */
 export class UnknownAgentReferenceError extends Error {
   readonly fromAgent: string;
@@ -63,6 +64,21 @@ export class UnknownAgentReferenceError extends Error {
     this.name = "UnknownAgentReferenceError";
     this.fromAgent = fromAgent;
     this.unresolvedId = unresolvedId;
+  }
+}
+
+/**
+ * Thrown by `AgentRegistry.getById` when an id has no matching agent. Plain
+ * lookup miss; no trust-relationship implication. Use `tryGetById` if a miss
+ * is a normal branch in your code path.
+ */
+export class AgentNotFoundError extends Error {
+  readonly id: string;
+
+  constructor(id: string) {
+    super(`no agent registered with id "${id}"`);
+    this.name = "AgentNotFoundError";
+    this.id = id;
   }
 }
 
@@ -117,19 +133,30 @@ export class AgentRegistry {
   /**
    * Build a registry from a raw agent array. Validates uniqueness + trust
    * closure. Used by `fromConfig` and directly by tests.
+   *
+   * **Deep immutability:** each agent is recursively frozen before being
+   * indexed so a downstream `registry.getById("luna").trust.push("evil")`
+   * fails in strict mode rather than silently bypassing the trust closure
+   * invariant that the constructor validated. The defensive copy of the
+   * outer array further isolates the registry from external mutation of
+   * the source.
    */
   static fromAgents(agents: readonly Agent[]): AgentRegistry {
+    const frozen: Agent[] = [];
     const index = new Map<string, Agent>();
-    for (const agent of agents) {
-      if (index.has(agent.id)) {
-        throw new DuplicateAgentIdError(agent.id);
+
+    for (const raw of agents) {
+      if (index.has(raw.id)) {
+        throw new DuplicateAgentIdError(raw.id);
       }
+      const agent = deepFreezeAgent(raw);
+      frozen.push(agent);
       index.set(agent.id, agent);
     }
 
     // Validate trust closure AFTER all agents are indexed, so forward
     // references (luna trusts echo, echo defined later) work cleanly.
-    for (const agent of agents) {
+    for (const agent of frozen) {
       for (const trustedId of agent.trust) {
         if (!index.has(trustedId)) {
           throw new UnknownAgentReferenceError(agent.id, trustedId);
@@ -137,19 +164,19 @@ export class AgentRegistry {
       }
     }
 
-    return new AgentRegistry(Object.freeze([...agents]), index);
+    return new AgentRegistry(Object.freeze(frozen), index);
   }
 
   /**
-   * Strict lookup. Throws if no agent with that id is registered. Use this
-   * when you've already validated the id (e.g. it came from a parsed
-   * envelope's `actor.agent_id`) and an unknown id is a bug, not a normal
-   * branch.
+   * Strict lookup. Throws `AgentNotFoundError` if no agent with that id is
+   * registered. Use this when you've already validated the id (e.g. it
+   * came from a parsed envelope's `actor.agent_id`) and an unknown id is
+   * a bug, not a normal branch.
    */
   getById(id: string): Agent {
     const agent = this.index.get(id);
     if (!agent) {
-      throw new UnknownAgentReferenceError("<caller>", id);
+      throw new AgentNotFoundError(id);
     }
     return agent;
   }
@@ -181,10 +208,14 @@ export class AgentRegistry {
    * Resolve an agent's `trust:` list to Agent objects. Self-trust entries
    * (an agent trusting its own id) are filtered out — they're harmless in
    * config but would cause downstream code to double-process the bot's own
-   * messages. Throws `UnknownAgentReferenceError` if any trusted id is not
-   * registered, even though `fromConfig` already validates this — the second
-   * check guards against callers who hand-mutated an agent's trust array
-   * after registry construction.
+   * messages.
+   *
+   * Throws `AgentNotFoundError` if `id` itself is unknown.
+   * Throws `UnknownAgentReferenceError` if any trusted id is not registered.
+   * The second check is defence-in-depth — `fromAgents` already validates
+   * the trust closure, and deep-freezing each agent prevents mutation, so
+   * this branch is structurally unreachable in production. Kept for tests
+   * that bypass the factory or call from unfrozen contexts.
    */
   getTrustedPeers(id: string): Agent[] {
     const agent = this.getById(id);
@@ -214,4 +245,28 @@ export class AgentRegistry {
     if (!trusterAgent) return false;
     return trusterAgent.trust.includes(trusted);
   }
+}
+
+// =============================================================================
+// Private helpers
+// =============================================================================
+
+/**
+ * Recursively freeze an Agent and its nested mutable surfaces (`trust`,
+ * `roles`, and the per-platform `presence` blocks). Closes Holly's
+ * shallow-freeze warning — without this, a downstream
+ * `registry.getById("luna").trust.push("evil")` would succeed and silently
+ * bypass the trust-closure invariant the constructor validated.
+ *
+ * Re-freezing an already-frozen object is a no-op, so calling this twice
+ * (e.g. tests that pass an already-frozen Agent into `fromAgents`) is safe.
+ */
+function deepFreezeAgent(agent: Agent): Agent {
+  Object.freeze(agent.trust);
+  Object.freeze(agent.roles);
+  if (agent.presence.discord) Object.freeze(agent.presence.discord);
+  if (agent.presence.mattermost) Object.freeze(agent.presence.mattermost);
+  Object.freeze(agent.presence);
+  Object.freeze(agent);
+  return agent;
 }
