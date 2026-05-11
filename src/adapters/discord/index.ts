@@ -137,18 +137,19 @@ export class DiscordAdapter implements PlatformAdapter {
     const { client, health } = createDiscordClient(
       { displayName: this.agent.displayName, guildId: this.presence.guildId },
       {
-      instanceId: this.instanceId,
-      // MIG-3b-ii: emit `system.adapter.{degraded,recovered}` envelopes so
-      // operators get out-of-band visibility (see G-1111 §3.5.3 + §4.6).
-      // The callbacks are also wired to console.error for log retention;
-      // the bus emission is additive, not a replacement.
-      onDegraded: ({ instanceId, thresholdMs, since }) => {
-        this.publishAdapterDegraded({ instanceId, thresholdMs, since });
+        instanceId: this.instanceId,
+        // MIG-3b-ii: emit `system.adapter.{degraded,recovered}` envelopes so
+        // operators get out-of-band visibility (see G-1111 §3.5.3 + §4.6).
+        // The callbacks are also wired to console.error for log retention;
+        // the bus emission is additive, not a replacement.
+        onDegraded: ({ instanceId, thresholdMs, since }) => {
+          this.publishAdapterDegraded({ instanceId, thresholdMs, since });
+        },
+        onRecovered: ({ instanceId, degradedForMs }) => {
+          this.publishAdapterRecovered({ instanceId, degradedForMs });
+        },
       },
-      onRecovered: ({ instanceId, degradedForMs }) => {
-        this.publishAdapterRecovered({ instanceId, degradedForMs });
-      },
-    });
+    );
     this.client = client;
     this.connectionHealth = health;
 
