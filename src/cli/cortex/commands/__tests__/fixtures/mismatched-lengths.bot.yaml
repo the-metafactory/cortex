@@ -1,0 +1,21 @@
+agent:
+  name: luna
+  displayName: Luna
+  operatorId: jc
+  dataResidency: NZ
+  personaFile: ./personas/luna.md
+
+discord:
+  - token: token-a
+    guildId: "200000000000000001"
+    agentChannelId: "200000000000000002"
+    logChannelId: "200000000000000003"
+  - token: token-b
+    guildId: "300000000000000001"
+    agentChannelId: "300000000000000002"
+    logChannelId: "300000000000000003"
+
+mattermost:
+  - apiUrl: https://mm.example.com
+    apiToken: mm-token-x
+    triggerWord: "@luna"

@@ -19,7 +19,10 @@ import {
   type CortexConfig,
   CortexConfigSchema,
   type DiscordPresence,
+  DiscordPresenceSchema,
   type MattermostPresence,
+  MattermostPresenceSchema,
+  RendererSchema,
 } from "../../../common/types/cortex-config";
 
 // =============================================================================
@@ -227,50 +230,55 @@ function buildOperator(
  * Convert a single legacy discord instance to a cortex DiscordPresence block.
  * Drops `instanceId` — cortex computes it at runtime from
  * `${agent.id}-discord` (per RESUME §Decisions §1).
+ *
+ * Delegates default-application to `DiscordPresenceSchema.parse()` rather than
+ * hand-coding `?? value` fallbacks, so the source-of-truth for defaults stays
+ * in `cortex-config.ts`. Holly W2-1 (cortex#51 round 1) flagged that
+ * duplicating those defaults silently diverges if the schema evolves; parsing
+ * through the schema removes both the duplication and the trailing `as
+ * DiscordPresence` cast that suppressed type-checking on the manually built
+ * object.
  */
 function convertDiscordPresence(inst: LegacyDiscordInstance): DiscordPresence {
-  const presence = {
-    enabled: inst.enabled ?? true,
+  const candidate: Record<string, unknown> = {
     token: inst.token,
     guildId: String(inst.guildId),
     agentChannelId: String(inst.agentChannelId),
     logChannelId: String(inst.logChannelId),
-    contextDepth: inst.contextDepth ?? 10,
-    enableAgentLog: inst.enableAgentLog ?? false,
-    roles: (inst.roles as DiscordPresence["roles"]) ?? [],
-    defaultRole: inst.defaultRole ?? "allow-all",
-    dm: (inst.dm as DiscordPresence["dm"]) ?? {
-      operatorRole: { features: ["chat", "async", "team"], disallowedTools: [], bashGuard: true },
-      defaultRole: "denied" as const,
-      userRoles: [],
-    },
-  } as DiscordPresence;
+  };
+  if (inst.enabled !== undefined) candidate.enabled = inst.enabled;
+  if (inst.contextDepth !== undefined) candidate.contextDepth = inst.contextDepth;
+  if (inst.enableAgentLog !== undefined) candidate.enableAgentLog = inst.enableAgentLog;
+  if (inst.roles !== undefined) candidate.roles = inst.roles;
+  if (inst.defaultRole !== undefined) candidate.defaultRole = inst.defaultRole;
+  if (inst.dm !== undefined) candidate.dm = inst.dm;
   const worklog = coerceString(inst.worklogChannelId);
-  if (worklog) presence.worklogChannelId = worklog;
+  if (worklog) candidate.worklogChannelId = worklog;
   const role = coerceString(inst.operatorRoleId);
-  if (role) presence.operatorRoleId = role;
-  return presence;
+  if (role) candidate.operatorRoleId = role;
+  return DiscordPresenceSchema.parse(candidate);
 }
 
 /**
  * Convert a single legacy mattermost instance. Same field-for-field lift as
- * discord; `instanceId` dropped.
+ * discord; `instanceId` dropped. Same Zod-parse-vs-hand-cast tradeoff as
+ * `convertDiscordPresence` (see Holly round-1 finding).
  */
 function convertMattermostPresence(inst: LegacyMattermostInstance): MattermostPresence {
-  return {
-    enabled: inst.enabled ?? true,
-    callbackPort: inst.callbackPort ?? 8080,
-    triggerWord: inst.triggerWord,
-    webhookUrl: inst.webhookUrl,
-    apiUrl: inst.apiUrl,
-    apiToken: inst.apiToken,
-    webhookToken: inst.webhookToken,
-    channels: inst.channels ?? [],
-    pollIntervalMs: inst.pollIntervalMs ?? 3000,
-    allowedUsers: inst.allowedUsers ?? [],
-    roles: (inst.roles as MattermostPresence["roles"]) ?? [],
-    defaultRole: inst.defaultRole ?? "allow-all",
-  } as MattermostPresence;
+  const candidate: Record<string, unknown> = {};
+  if (inst.enabled !== undefined) candidate.enabled = inst.enabled;
+  if (inst.callbackPort !== undefined) candidate.callbackPort = inst.callbackPort;
+  if (inst.triggerWord !== undefined) candidate.triggerWord = inst.triggerWord;
+  if (inst.webhookUrl !== undefined) candidate.webhookUrl = inst.webhookUrl;
+  if (inst.apiUrl !== undefined) candidate.apiUrl = inst.apiUrl;
+  if (inst.apiToken !== undefined) candidate.apiToken = inst.apiToken;
+  if (inst.webhookToken !== undefined) candidate.webhookToken = inst.webhookToken;
+  if (inst.channels !== undefined) candidate.channels = inst.channels;
+  if (inst.pollIntervalMs !== undefined) candidate.pollIntervalMs = inst.pollIntervalMs;
+  if (inst.allowedUsers !== undefined) candidate.allowedUsers = inst.allowedUsers;
+  if (inst.roles !== undefined) candidate.roles = inst.roles;
+  if (inst.defaultRole !== undefined) candidate.defaultRole = inst.defaultRole;
+  return MattermostPresenceSchema.parse(candidate);
 }
 
 /**
@@ -309,6 +317,35 @@ function resolvePersona(
 }
 
 /**
+ * Map legacy `trustedAgentBots[].name` entries onto cortex agent ids. Each
+ * name is normalized through `deriveAgentId` (lowercase + hyphen) so legacy
+ * "Echo Bot" → "echo-bot". A name that normalizes to the empty string (e.g.
+ * "!!!") throws — silently dropping it would produce an agent with a wrong
+ * trust list. (Holly cortex#51 round 1 architecture suggestion: extract for
+ * readability + isolated testability.)
+ */
+function buildTrustList(
+  legacyTrust: LegacyTrustedAgentBot[],
+  warnings: ConversionWarning[],
+): string[] {
+  return legacyTrust.map((t) => {
+    const id = deriveAgentId(t.name);
+    if (!AGENT_ID_PATTERN.test(id)) {
+      throw new Error(
+        `trustedAgentBots[].name "${t.name}" cannot be derived to a valid agent id (^[a-z0-9-]+$)`,
+      );
+    }
+    if (id !== t.name) {
+      warnings.push({
+        field: "trustedAgentBots",
+        message: `trusted bot name "${t.name}" normalized to "${id}"`,
+      });
+    }
+    return id;
+  });
+}
+
+/**
  * Synthesize the cortex `agents[]` list from the singular legacy `agent` plus
  * the (possibly multi-entry) `discord[]` and `mattermost[]` arrays.
  *
@@ -335,21 +372,7 @@ function buildAgents(
     );
   }
 
-  const trust = (legacy.trustedAgentBots ?? []).map((t) => {
-    const id = deriveAgentId(t.name);
-    if (!AGENT_ID_PATTERN.test(id)) {
-      throw new Error(
-        `trustedAgentBots[].name "${t.name}" cannot be derived to a valid agent id (^[a-z0-9-]+$)`,
-      );
-    }
-    if (id !== t.name) {
-      warnings.push({
-        field: "trustedAgentBots",
-        message: `trusted bot name "${t.name}" normalized to "${id}"`,
-      });
-    }
-    return id;
-  });
+  const trust = buildTrustList(legacy.trustedAgentBots ?? [], warnings);
 
   const persona = resolvePersona(legacy.agent.personaFile, baseId, configDir, warnings);
   const displayName = legacy.agent.displayName || legacy.agent.name;
@@ -391,7 +414,11 @@ function buildAgents(
     }
     agents.push({
       id: variantId,
-      displayName: variantCount === 1 ? displayName : `${displayName} (${i + 1})`,
+      // Keep the first variant's displayName bare so the operator's existing
+      // single-instance deployment doesn't gain a `(1)` suffix when they
+      // later add a second guild. Only index ≥1 carries an enumeration tag.
+      // (Holly cortex#51 round 1 nit-1.)
+      displayName: i === 0 ? displayName : `${displayName} (${i + 1})`,
       persona,
       roles: [],
       trust,
@@ -412,13 +439,17 @@ function buildRenderers(legacy: LegacyBotYaml, warnings: ConversionWarning[]): C
 
   if (Array.isArray(legacy.renderers)) {
     for (const r of legacy.renderers) {
-      renderers.push(r as CortexConfig["renderers"][number]);
+      // Parse each entry through the discriminated-union schema rather than
+      // an `as` cast — a typo (`kind: "dashbord"`) surfaces here with field
+      // path "renderers[i].kind" instead of the opaque top-level Zod error
+      // emitted by CortexConfigSchema.parse() at the end of conversion.
+      renderers.push(RendererSchema.parse(r));
     }
   }
 
   if (legacy.api && legacy.api.enabled === true) {
     const port = typeof legacy.api.port === "number" ? legacy.api.port : 8767;
-    renderers.push({ kind: "dashboard", port, subscribe: ["local.{org}.>"], projections: [] });
+    renderers.push(RendererSchema.parse({ kind: "dashboard", port }));
     warnings.push({
       field: "api",
       message: `legacy api.enabled=true synthesized as renderers[].kind=dashboard (port ${port}); cloud-mode api fields (endpoint, apiKey, …) are NOT carried — re-add via networks/`,

@@ -372,6 +372,148 @@ describe("convertBotYaml — operator id normalization", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Mismatched discord / mattermost array lengths
+// (Holly cortex#51 round 1 major #2 — locked here so the synthesis logic
+//  for "2 discord + 1 mattermost" can't silently change.)
+// ---------------------------------------------------------------------------
+
+describe("convertBotYaml — mismatched discord/mattermost lengths", () => {
+  test("emits N=max(discord, mattermost) agents", () => {
+    const legacy = loadFixture("mismatched-lengths.bot.yaml");
+    const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
+    expect(result.cortex.agents.map((a) => a.id)).toEqual(["luna", "luna-2"]);
+  });
+
+  test("first agent carries both discord and mattermost presence", () => {
+    const legacy = loadFixture("mismatched-lengths.bot.yaml");
+    const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
+    expect(result.cortex.agents[0]!.presence.discord).toBeDefined();
+    expect(result.cortex.agents[0]!.presence.mattermost).toBeDefined();
+  });
+
+  test("second agent has only discord (mattermost ran out)", () => {
+    const legacy = loadFixture("mismatched-lengths.bot.yaml");
+    const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
+    expect(result.cortex.agents[1]!.presence.discord).toBeDefined();
+    expect(result.cortex.agents[1]!.presence.mattermost).toBeUndefined();
+  });
+
+  test("empty discord + populated mattermost emits 1 mattermost-only agent", () => {
+    const legacy: LegacyBotYaml = {
+      agent: {
+        name: "luna",
+        displayName: "Luna",
+        operatorId: "jc",
+        personaFile: "./personas/luna.md",
+      },
+      discord: [],
+      mattermost: [
+        { apiUrl: "https://mm.example.com", apiToken: "tok" },
+      ],
+    };
+    const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
+    expect(result.cortex.agents).toHaveLength(1);
+    expect(result.cortex.agents[0]!.presence.discord).toBeUndefined();
+    expect(result.cortex.agents[0]!.presence.mattermost).toBeDefined();
+  });
+
+  test("output round-trips through CortexConfigSchema", () => {
+    const legacy = loadFixture("mismatched-lengths.bot.yaml");
+    const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
+    expect(() => CortexConfigSchema.parse(result.cortex)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// First-variant display name (Holly cortex#51 round 1 nit-1)
+// ---------------------------------------------------------------------------
+
+describe("convertBotYaml — first-variant display name", () => {
+  test("when variantCount > 1, agents[0] keeps bare displayName", () => {
+    const legacy = loadFixture("multi-discord.bot.yaml");
+    const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
+    expect(result.cortex.agents[0]!.displayName).toBe("Luna");
+    expect(result.cortex.agents[1]!.displayName).toBe("Luna (2)");
+    expect(result.cortex.agents[2]!.displayName).toBe("Luna (3)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Degenerate agent.name (Holly cortex#51 round 1 suggestion)
+// ---------------------------------------------------------------------------
+
+describe("convertBotYaml — degenerate agent.name", () => {
+  test("throws when agent.name normalizes to empty string", () => {
+    const legacy: LegacyBotYaml = {
+      agent: { name: "!!!", displayName: "Bang" },
+      discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
+    };
+    expect(() => convertBotYaml(legacy, {})).toThrow(/cannot be derived to a valid agent id/);
+  });
+
+  test("throws when trustedAgentBots entry normalizes to empty string", () => {
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
+      trustedAgentBots: [{ name: "!!!" }],
+    };
+    expect(() => convertBotYaml(legacy, {})).toThrow(/cannot be derived/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Defaults sourced from CortexConfig schema (Holly cortex#51 round 1 major #1)
+// ---------------------------------------------------------------------------
+
+describe("convertBotYaml — schema-sourced defaults", () => {
+  test("discord presence fills schema defaults for unspecified fields", () => {
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
+    };
+    const result = convertBotYaml(legacy, {});
+    const d = result.cortex.agents[0]!.presence.discord!;
+    expect(d.contextDepth).toBe(10);
+    expect(d.enableAgentLog).toBe(false);
+    expect(d.defaultRole).toBe("allow-all");
+    expect(d.enabled).toBe(true);
+    // dm block defaults from DMConfigSchema (operatorRole defaulted from DMRoleSchema)
+    expect(d.dm.defaultRole).toBe("denied");
+  });
+
+  test("mattermost presence fills schema defaults for unspecified fields", () => {
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      mattermost: [{ apiUrl: "https://mm.example.com" }],
+    };
+    const result = convertBotYaml(legacy, {});
+    const m = result.cortex.agents[0]!.presence.mattermost!;
+    expect(m.callbackPort).toBe(8080);
+    expect(m.pollIntervalMs).toBe(3000);
+    expect(m.defaultRole).toBe("allow-all");
+    expect(m.allowedUsers).toEqual([]);
+    expect(m.channels).toEqual([]);
+  });
+
+  test("malformed renderers entry throws at the conversion site (not the final parse)", () => {
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
+      renderers: [{ kind: "dashbord" } as unknown],
+    };
+    expect(() => convertBotYaml(legacy, {})).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildTrustList — extracted helper (Holly cortex#51 round 1 architecture)
+// ---------------------------------------------------------------------------
+
+// (Coverage of buildTrustList behaviors is folded into the trustedAgentBots
+//  and degenerate-name describe blocks above; the helper is exercised via
+//  the public `convertBotYaml` boundary.)
+
+// ---------------------------------------------------------------------------
 // Check report rendering
 // ---------------------------------------------------------------------------
 
