@@ -152,7 +152,7 @@ program
   .action(async (options) => {
     if (!existsSync(options.policy)) {
       console.error(`Policy file not found: ${options.policy}`);
-      console.error("Run grove install.sh to create default policy");
+      console.error("Run the installer to create the default policy.");
       process.exit(1);
     }
 
