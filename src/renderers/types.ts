@@ -41,6 +41,20 @@ import type { RendererKind } from "../common/types/cortex-config";
  *      Operator-input emitted from a renderer (e.g., a dashboard
  *      "approve" click) goes through the bus as a logical envelope
  *      from the operator, not from any agent (architecture §9.3).
+ *
+ * **Renderers are static across hot-reload.** Unlike platform adapters
+ * (which carry an `updateConfig(BotConfig)` hook that the
+ * `ConfigWatcher` invokes on bot.yaml changes), renderers have no
+ * config-update surface. A change to `renderers[]` — adding a
+ * pagerduty integration, rotating a routing key, expanding the
+ * dashboard subscription set — requires a cortex restart to take
+ * effect. This is intentional for the v1 slice: a renderer's
+ * resources (HTTP clients, ring buffers, subscriptions) are scoped to
+ * its lifetime, and the failure modes of partial hot-reload (a
+ * routing key swap mid-flight) are easier to reason about with a
+ * full stop/start cycle. A future iteration MAY add an
+ * `updateConfig(RendererConfig)` hook if the operator-visible cost of
+ * the restart proves too high (Holly cycle 1 W3).
  */
 export interface Renderer {
   /** Discriminator matching `RendererKind`. */

@@ -76,17 +76,32 @@ export class DashboardRenderer implements Renderer {
   }
 
   async render(envelope: Envelope, _signal?: AbortSignal): Promise<void> {
-    // Renderer contract §2: never throw. The ring-buffer push is pure
-    // synchronous work; the only failure path is OOM under absurd
-    // bufferSize values, which is a config bug, not a runtime concern.
-    this.buffer.push(envelope);
-    if (this.buffer.length > this.bufferSize) {
-      // Drop the oldest envelope to maintain the bound. Single shift per
-      // overflow is O(n) on the underlying array; if the buffer hot path
-      // ever becomes a profile concern we'd switch to a true ring index
-      // here, but at 1000-entry default + single-digit envelope rate this
-      // is several orders of magnitude below any measurable cost.
-      this.buffer.shift();
+    // Renderer contract §2: never throw. The push/shift are infallible,
+    // but the try-catch + null guard are defense-in-depth so a future
+    // change (e.g. structured-clone the envelope to break sharing) that
+    // could throw on a malformed payload doesn't poison the router's
+    // dispatch loop (Holly cycle 1 W1+W2).
+    try {
+      // Defense-in-depth: the surface-router validates envelopes before
+      // dispatch, but a malformed value sneaking through MUST NOT
+      // corrupt the buffer + leak into Mission Control's projection
+      // pipeline via getRecent(). Silently drop instead.
+      if (envelope === null || typeof envelope !== "object") return;
+      this.buffer.push(envelope);
+      if (this.buffer.length > this.bufferSize) {
+        // Drop the oldest envelope to maintain the bound. Single shift
+        // per overflow is O(n) on the underlying array; if the buffer
+        // hot path ever becomes a profile concern we'd switch to a true
+        // ring index here, but at 1000-entry default + single-digit
+        // envelope rate this is several orders of magnitude below any
+        // measurable cost.
+        this.buffer.shift();
+      }
+    } catch (err) {
+      console.warn(
+        `dashboard-renderer: render() swallowed an error while buffering envelope ${envelope?.id ?? "<null>"}:`,
+        err instanceof Error ? err.message : err,
+      );
     }
   }
 

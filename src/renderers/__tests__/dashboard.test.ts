@@ -75,6 +75,31 @@ describe("DashboardRenderer", () => {
     await expect(r.render(badEnv)).resolves.toBeUndefined();
   });
 
+  test("render() silently drops null/non-object envelopes (does not leak into buffer)", async () => {
+    const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: ["local.{org}.>"], projections: [] });
+    await r.render(makeEnvelope("e1"));
+    // Malformed values must not corrupt the buffer — Holly cycle 1 W2.
+    await r.render(null as unknown as Envelope);
+    await r.render("not an envelope" as unknown as Envelope);
+    await r.render(undefined as unknown as Envelope);
+    await r.render(makeEnvelope("e2"));
+    expect(r.getRecent().map((e) => e.id)).toEqual(["e1", "e2"]);
+  });
+
+  test("render() after stop() re-fills the buffer (intentional — stop is a teardown signal, not a render disable)", async () => {
+    // Holly cycle 1 S1: pin the post-stop behavior. The Renderer contract
+    // §3 says render-after-stop SHOULD be a no-op, but the dashboard's
+    // ring buffer is the only state — re-filling after stop() is harmless
+    // and matches the lifecycle (a fresh start() returns to the same
+    // empty-buffer state). Tests can rely on this for clean iteration.
+    const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: ["local.{org}.>"], projections: [] });
+    await r.render(makeEnvelope("e1"));
+    await r.stop();
+    expect(r.getRecent()).toEqual([]);
+    await r.render(makeEnvelope("e2"));
+    expect(r.getRecent().map((e) => e.id)).toEqual(["e2"]);
+  });
+
   test("surfaceConfig exposes the configured subscribe patterns + dashboard id", () => {
     const r = new DashboardRenderer({
       kind: "dashboard",
