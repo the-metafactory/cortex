@@ -159,18 +159,10 @@ export class MattermostAdapter implements PlatformAdapter {
   async getPlatformUserId(): Promise<string> {
     if (this.cachedPlatformUserId) return this.cachedPlatformUserId;
 
-    const apiUrl = this.apiUrl;
-    const apiToken = this.apiToken;
-    if (!apiUrl || !apiToken) {
-      throw new Error(
-        `mattermost-adapter[${this.instanceId}]: getPlatformUserId() requires ` +
-          `apiUrl + apiToken on the presence block.`,
-      );
-    }
-
-    // Delegated to the shared helper (MIG-7.2c-mattermost) so this call site,
-    // poller.fetchBotUserId, and notifyOperator all share one /users/me path.
-    const id = await fetchBotUserId(apiUrl, apiToken, { instanceId: this.instanceId });
+    // `this.apiUrl` / `this.apiToken` are constructor-validated non-empty
+    // strings (the ctor throws if either is missing); no runtime null check
+    // is reachable here. Holly cycle 1 N1.
+    const id = await fetchBotUserId(this.apiUrl, this.apiToken, { instanceId: this.instanceId });
     this.cachedPlatformUserId = id;
     return id;
   }
@@ -316,30 +308,27 @@ export class MattermostAdapter implements PlatformAdapter {
     const operatorId = this.infra.operator.mattermostId;
     if (!operatorId) return;
 
-    const apiUrl = this.apiUrl;
-    const apiToken = this.apiToken;
-
     try {
-      // Get bot's own user ID
-      const meRes = await fetch(`${apiUrl}/api/v4/users/me`, {
-        headers: { Authorization: `Bearer ${apiToken}` },
-      });
-      const me: any = meRes.ok ? await meRes.json() : null;
-      if (!me) return;
+      // MIG-7.2c-mattermost (Holly cycle 1 W1+S1): use the cached bot user
+      // id from `getPlatformUserId` instead of re-fetching /users/me here.
+      // PresenceBinding populates the cache at startup; subsequent calls
+      // are zero-RPC. Falls back to the shared helper on the rare path
+      // where notifyOperator is called before PresenceBinding finished.
+      const botUserId = await this.getPlatformUserId();
 
-      // Create/get DM channel with operator
-      const dmRes = await fetch(`${apiUrl}/api/v4/channels/direct`, {
+      // Create/get DM channel with operator.
+      const dmRes = await fetch(`${this.apiUrl}/api/v4/channels/direct`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${apiToken}`,
+          Authorization: `Bearer ${this.apiToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify([me.id, operatorId]),
+        body: JSON.stringify([botUserId, operatorId]),
       });
 
       if (dmRes.ok) {
-        const dmChannel: any = await dmRes.json();
-        await postReply(dmChannel.id, text, undefined, apiUrl, apiToken);
+        const dmChannel = (await dmRes.json()) as { id: string };
+        await postReply(dmChannel.id, text, undefined, this.apiUrl, this.apiToken);
       }
     } catch (err) {
       console.warn(`mattermost-${this.instanceId}: failed to notify operator:`, err instanceof Error ? err.message : err);
