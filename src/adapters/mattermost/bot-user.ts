@@ -39,8 +39,12 @@ export async function fetchBotUserId(
     ? `mattermost-adapter[${options.instanceId}]`
     : `mattermost`;
   const timeoutMs = options.timeoutMs ?? 10_000;
+  // Normalise a trailing slash on `apiUrl` so callers can pass either
+  // form (`https://mm.example` or `https://mm.example/`) without producing
+  // `https://mm.example//api/v4/users/me` (Holly cycle 2 nit).
+  const base = apiUrl.endsWith("/") ? apiUrl.slice(0, -1) : apiUrl;
 
-  const res = await fetch(`${apiUrl}/api/v4/users/me`, {
+  const res = await fetch(`${base}/api/v4/users/me`, {
     headers: { Authorization: `Bearer ${apiToken}` },
     signal: AbortSignal.timeout(timeoutMs),
   });

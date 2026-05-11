@@ -58,7 +58,7 @@ describe("fetchBotUserId", () => {
     expect(captured).toEqual({ Authorization: "Bearer secret-token" });
   });
 
-  test("requests the /api/v4/users/me path off the supplied apiUrl", async () => {
+  test("requests the /api/v4/users/me path off the supplied apiUrl (strips trailing slash)", async () => {
     let capturedUrl = "";
     stubFetch(async (input) => {
       capturedUrl = typeof input === "string" ? input : input.toString();
@@ -67,8 +67,23 @@ describe("fetchBotUserId", () => {
         headers: { "Content-Type": "application/json" },
       });
     });
+    // Trailing slash gets normalised so the path joins cleanly without
+    // double-slash artefacts in the request URL (Holly cycle 2 nit).
     await fetchBotUserId("https://mm.example/", "t");
-    expect(capturedUrl).toBe("https://mm.example//api/v4/users/me");
+    expect(capturedUrl).toBe("https://mm.example/api/v4/users/me");
+  });
+
+  test("handles apiUrl WITHOUT a trailing slash identically", async () => {
+    let capturedUrl = "";
+    stubFetch(async (input) => {
+      capturedUrl = typeof input === "string" ? input : input.toString();
+      return new Response(JSON.stringify({ id: "u-1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    await fetchBotUserId("https://mm.example", "t");
+    expect(capturedUrl).toBe("https://mm.example/api/v4/users/me");
   });
 
   test("throws a tagged error on a non-OK HTTP response", async () => {

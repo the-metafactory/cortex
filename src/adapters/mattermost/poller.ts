@@ -36,8 +36,10 @@ interface MattermostUser {
  * MIG-7.2c-mattermost: graceful-degradation wrapper around the shared
  * `fetchBotUserId` helper. The poller's contract is that startup keeps
  * polling even if `/users/me` is briefly unreachable — null tells the
- * poll loop to retry next tick rather than die outright. Tagged
- * underscore-prefixed since `MattermostUser` is no longer needed here.
+ * poll loop to retry next tick rather than die outright. The shared
+ * helper's 10s default `AbortSignal.timeout` applies, which matches the
+ * poll cadence well enough; if the poller ever needs a different timeout
+ * profile, pass `{ timeoutMs }` through here.
  */
 async function fetchBotUserId(apiUrl: string, apiToken: string): Promise<string | null> {
   try {
