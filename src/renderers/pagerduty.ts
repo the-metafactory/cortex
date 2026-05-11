@@ -117,8 +117,13 @@ export class PagerDutyRenderer implements Renderer {
         );
       }
     } catch (err) {
+      // Defense-in-depth: a null envelope bypassing the surface-router
+      // makes `buildPayload` throw, which lands here — accessing
+      // `envelope.id` raw would then TypeError inside the catch and
+      // surface as an unhandled rejection. Match the DashboardRenderer
+      // pattern (Holly cycle 2 nit).
       console.warn(
-        `pagerduty-renderer: failed to forward envelope ${envelope.id}:`,
+        `pagerduty-renderer: failed to forward envelope ${envelope?.id ?? "<unknown>"}:`,
         err instanceof Error ? err.message : err,
       );
     }
