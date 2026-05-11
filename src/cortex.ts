@@ -199,19 +199,6 @@ export async function startCortex(
     // migrate-config (MIG-7.2e) emits a proper `agents[]` array the suffix
     // collapses to plain `${agent.id}-discord`.
     const instanceId = instance.instanceId ?? `${config.agent.name}-discord-${instance.guildId}`;
-    // Synthesize a transitional `Agent` shape from the BotConfig.agent +
-    // bot.yaml discord[i] entry. `persona` is a placeholder until MIG-7.2e
-    // plumbs the real path; `roles` and `trust` are empty for the same
-    // reason (BotConfig has no equivalent fields). The constructed object
-    // is the same shape `cortex.yaml` will load directly post-7.2e.
-    const agent: Agent = {
-      id: config.agent.name,
-      displayName: config.agent.displayName,
-      persona: "(deferred-mig-7.2e)",
-      roles: [],
-      trust: [],
-      presence: {},
-    };
     // Build the `DiscordPresence` from the bot.yaml discord[i] entry.
     // Schema defaults already applied by `BotConfigSchema` at load time —
     // this is a structural mapping, not a parse.
@@ -229,9 +216,24 @@ export async function startCortex(
       dm: instance.dm,
       ...(instance.operatorRoleId !== undefined && { operatorRoleId: instance.operatorRoleId }),
     };
-    // Wire the synthesized presence back onto the agent so any downstream
-    // consumer that reaches `agent.presence.discord` sees the live block.
-    agent.presence.discord = presence;
+    // Synthesize a transitional `Agent` shape from the BotConfig.agent +
+    // bot.yaml discord[i] entry. `persona` is a placeholder until MIG-7.2e
+    // plumbs the real path; `roles` and `trust` are empty for the same
+    // reason (BotConfig has no equivalent fields). The constructed object
+    // is the same shape `cortex.yaml` will load directly post-7.2e.
+    //
+    // Constructed in one step (Holly cycle 1 suggestion): the presence is
+    // built first so the agent literal can nest it directly, avoiding the
+    // transiently-invalid intermediate the AgentSchema refinement would
+    // reject (`presence` must satisfy "at least one block").
+    const agent: Agent = {
+      id: config.agent.name,
+      displayName: config.agent.displayName,
+      persona: "(deferred-mig-7.2e)",
+      roles: [],
+      trust: [],
+      presence: { discord: presence },
+    };
     try {
       const adapter = new DiscordAdapter(
         agent,
