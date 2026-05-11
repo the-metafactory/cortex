@@ -162,7 +162,7 @@ provides:
 
 lifecycle:
   preinstall:
-    - scripts/check-cortex-version.sh    # require parent at compatible version
+    - scripts/check-cortex-version.sh    # CortexHostAdapter.detect() + version range check
   postinstall:
     - scripts/issue-nats-creds.sh        # mints per-agent NATS user (Q2 answer)
     - scripts/signal-cortex-reload.sh    # SIGHUP cortex or call `cortex agents reload`
@@ -250,14 +250,15 @@ export class CortexHostAdapter implements HostAdapter {
     // OR cortex binary on PATH + cortex.yaml at expected location
   }
 
-  paths: HostPaths = {
+  paths: HostPaths & CortexPaths = {
     skillsDir:    "",                                  // n/a — cortex isn't a skills host
-    agentsDir:    "~/.config/cortex/agents.d/",        // identity fragments land here
-    personasDir:  "~/.config/cortex/personas/",        // personas (cortex-extension)
-    credsDir:     "~/.config/nats/creds/",             // per-agent NATS creds
-    binDir:       "~/bin/",                            // standalone bot binaries
-    settingsPath: "~/.config/cortex/cortex.yaml",      // operator-edited core config
-    hooksFormat:  "none",                              // cortex doesn't run claude-code hooks
+    agentsDir:    "~/.config/cortex/agents.d/",        // arc#117 HostPaths field — identity fragments
+    binDir:       "~/bin/",                            // arc#117 HostPaths field — standalone bot binaries
+    settingsPath: "~/.config/cortex/cortex.yaml",      // arc#117 HostPaths field — operator-edited core config
+    hooksFormat:  "none",                              // arc#117 HostPaths field — no claude-code-style hooks
+    // Cortex-internal extensions (not in arc#117 HostPaths today):
+    personasDir:  "~/.config/cortex/personas/",        // persona markdown files
+    credsDir:     "~/.config/nats/creds/",             // per-agent NATS creds (daemon-written)
   };
 
   supports(type: ArtifactType): boolean {
@@ -265,21 +266,33 @@ export class CortexHostAdapter implements HostAdapter {
   }
 
   installArtifact(pkg, type): void {
+    // ORDER MATTERS — fragment must be visible to daemon BEFORE creds issue
+    // (daemon scopes the credential to the agent's capabilities, which it
+    // reads from the fragment).
     // 1. Drop persona.md into paths.personasDir
     // 2. Render + drop agent.yaml fragment into paths.agentsDir
-    // 3. Invoke `cortex creds issue <agent-id>` (daemon-mediated; see §6.3)
-    // 4. Signal cortex via SIGHUP or `cortex agents reload`
+    // 3. Signal cortex via SIGHUP or `cortex agents reload`
+    //      → daemon re-reads agents.d/ and adds the new agent to registry
+    // 4. Invoke `cortex creds issue <agent-id>` (daemon-mediated; see §6.3)
+    //      → daemon now knows about the agent, scopes creds to its capabilities
   }
 
   removeArtifact(pkg): void {
     // Reverse order per §8.3 — revoke creds BEFORE removing files
-    // 1. cortex creds revoke <agent-id>   (server-side first)
-    // 2. Drain (per D1) if standalone
+    // 1. Drain (per D1) if standalone — emit agents.{id}.draining, wait
+    // 2. cortex creds revoke <agent-id>   (server-side first, then local file)
+    //      → abort uninstall on revoke failure (D7)
     // 3. Remove fragment + persona
     // 4. Signal cortex reload (registry rebuilt without the agent)
   }
 }
 ```
+
+**Note on `HostPaths` extension:** arc#117's current `HostPaths` interface (per the issue body) defines `skillsDir`, `agentsDir`, `promptsDir`, `binDir`, `settingsPath`, `hooksFormat`. Cortex's adapter introduces two additional fields (`personasDir`, `credsDir`) shown above as a `HostPaths & CortexPaths` intersection — these are cortex-internal extensions, not modifications to arc#117's interface. Two arc-side paths forward:
+1. **Cortex-internal (preferred for v1):** `personasDir` and `credsDir` live only on `CortexHostAdapter.paths`. Arc#117's generic `arc list --target cortex` doesn't know about them; cortex's own diagnostics do.
+2. **Promote to `HostPaths` (deferrable):** if another future host adapter wants the same paths (unlikely — personas are cortex-specific; creds are NATS-specific), propose `HostPaths` extension on arc#117.
+
+Either way, no contract break on arc#117. Carry-forward to §14 intersection points.
 
 **Multi-target install ordering** (per arc#117 §3): a standalone bot with `targets: [cortex, darwin-launchd]` installs to `cortex` FIRST (fragment + creds — daemon needs to know about the agent before it shows up on the bus) then `darwin-launchd` (binary + plist + load). Uninstall reverses (unload daemon first, then revoke creds + remove fragment). Arc#117's HostAdapter scheduler handles the ordering; cortex declares this dependency in its adapter via `installOrder: "before"` for the agent artifact type.
 
@@ -321,7 +334,7 @@ Estimated ~300 LOC + tests + NATS account scaffolding doc. Lands as a `feat(cli/
 name: claude-review-bot
 version: 0.1.0
 type: agent
-parent: cortex
+targets: [cortex]                  # arc#117 single-target install
 runtime:
   substrate: claude-code
   mode: in-process
@@ -350,7 +363,7 @@ lifecycle:
 name: codex-review-bot
 version: 0.1.0
 type: agent
-parent: cortex
+targets: [cortex, darwin-launchd]  # arc#117 multi-target install
 runtime:
   substrate: codex
   mode: standalone
@@ -402,17 +415,19 @@ Operator interacts with Scout indirectly: another agent (Luna) dispatches a rese
 
 ```
 operator: arc install foo-review-bot
-arc:      preinstall: scripts/check-cortex-version.sh        [verify parent compat]
+arc:      preinstall: scripts/check-cortex-version.sh        [verify cortex target compat via CortexHostAdapter.detect()]
 arc:      drop persona.md   → ~/.config/cortex/personas/foo.md
 arc:      drop agent.yaml   → ~/.config/cortex/agents.d/foo.yaml
-arc:      postinstall: scripts/issue-nats-creds.sh
-            → cortex creds issue foo
-            → ~/.config/nats/creds/foo.creds written
-arc:      postinstall: scripts/signal-cortex-reload.sh
+arc:      postinstall: scripts/signal-cortex-reload.sh        [signal BEFORE creds]
             → SIGHUP cortex bot pid (or `cortex agents reload`)
             → config-watcher.ts re-reads agents.d/
             → agents[] now includes foo
-            → AgentRegistry rebuilt
+            → AgentRegistry rebuilt — daemon now knows foo + its capabilities
+arc:      postinstall: scripts/issue-nats-creds.sh
+            → cortex creds issue foo
+            → daemon scopes the cred to foo's runtime.capabilities (which it
+              just loaded from the fragment)
+            → ~/.config/nats/creds/foo.creds written
 operator: foo appears in dashboard, can take tasks
 ```
 
@@ -420,18 +435,22 @@ operator: foo appears in dashboard, can take tasks
 
 ```
 operator: arc install codex-review-bot
-arc:      preinstall: scripts/check-cortex-version.sh
+arc:      preinstall: scripts/check-cortex-version.sh         [via CortexHostAdapter.detect()]
 arc:      drop persona, agent.yaml, binary (~/bin/codex-rev-bot)
 arc:      drop plist → ~/Library/LaunchAgents/ai.meta-factory.codex-rev.plist
-arc:      postinstall: scripts/issue-nats-creds.sh
-arc:      postinstall: scripts/launchctl-load.sh
+arc:      postinstall: scripts/signal-cortex-reload.sh        [signal FIRST so daemon learns about agent]
+            → cortex re-reads agents.d/, registers codex-rev
+arc:      postinstall: scripts/issue-nats-creds.sh            [now daemon can scope creds]
+            → cortex creds issue codex-rev
+            → ~/.config/nats/creds/codex-rev.creds written
+arc:      postinstall: scripts/launchctl-load.sh              [start daemon LAST — needs creds + registry]
             → daemon starts
             → connects NATS with codex-rev.creds
             → publishes capabilities to local.{org}.agents.capabilities.codex-rev
-arc:      postinstall: scripts/signal-cortex-reload.sh
-            → cortex sees agent.yaml fragment in agents.d/
 operator: codex-rev appears in dashboard alongside cortex-hosted agents
 ```
+
+**Ordering invariant across both shapes (matches §6.2 `installArtifact` and §6.3 chicken-and-egg sequencing):** drop fragment → signal reload → issue creds → (standalone only) start daemon. The daemon needs the fragment loaded before it can scope the credential; the daemon (standalone shape) needs the credential before it can connect.
 
 ### 8.3 Uninstall
 
