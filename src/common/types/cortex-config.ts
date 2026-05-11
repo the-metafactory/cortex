@@ -43,6 +43,36 @@ import {
 } from "./config";
 
 // =============================================================================
+// Helper — Zod v4 empty-default workaround
+// =============================================================================
+
+/**
+ * Zod v4 quirk: `schema.default({} as any)` does NOT re-parse `{}` through the
+ * inner schema. Consumers that omit the field get the literal `{}` rather than
+ * the populated inner defaults — so `parsed.attachments.enabled` is undefined
+ * instead of `true`.
+ *
+ * `emptyDefault(schema)` wraps a ZodObject so the default value is computed by
+ * parsing `{}` through the schema itself, which DOES trigger field-level
+ * defaults. Lazy thunk form — the parse happens once per parse call, not at
+ * module-load time, so circular-default scenarios cannot deadlock.
+ *
+ * Use this everywhere a "block is optional and falls back to its own field
+ * defaults" pattern is needed. Single greppable site replaces the scattered
+ * `as any` casts inherited from grove-v2's config.ts.
+ */
+function emptyDefault<T extends z.ZodObject<z.ZodRawShape>>(schema: T) {
+  // Eagerly parse `{}` through the schema to compute the inner-default-applied
+  // shape, then use that concrete value as the literal default. Zod's typed
+  // default expects `NoUndefined<output<T>>` which the parse result satisfies
+  // structurally — but the generic narrowing requires a single localized
+  // `as never` cast at the call to `.default()`. This is the only type-system
+  // escape hatch in the file; the rest is strongly-typed.
+  const computed = schema.parse({}) as Record<string, unknown>;
+  return schema.default(computed as never);
+}
+
+// =============================================================================
 // Operator — who is running this cortex instance
 // =============================================================================
 
@@ -52,8 +82,13 @@ import {
  * fields by lifting them out of the (now removed) singular `agent:` block.
  */
 export const OperatorSchema = z.object({
-  /** Operator identifier — used as the {org} subject segment on the bus. */
-  id: z.string().min(1),
+  /**
+   * Operator identifier — used as the `{org}` subject segment on the bus
+   * (`local.{org}.…`). Must be safe to embed verbatim in NATS subjects, so
+   * the same regex agents use applies: lowercase alphanumeric + hyphen. No
+   * dots, no wildcards, no whitespace.
+   */
+  id: z.string().min(1).regex(/^[a-z0-9-]+$/, "operator id must be lowercase alphanumeric"),
   /** Display name shown on the dashboard. Defaults to `id`. */
   displayName: z.string().optional(),
   /** Operator's Discord user id — receives DM notifications from agents. */
@@ -100,10 +135,17 @@ export const DiscordPresenceSchema = z.object({
    * users — it never widens.
    */
   roles: z.array(RoleSchema).default([]),
-  /** Role applied to users not listed in any role. Default: allow-all. */
+  /**
+   * Role applied to users not listed in any role. Default `"allow-all"` is
+   * preserved verbatim from grove-v2 to keep `migrate-config` (MIG-7.2e)
+   * a pure-translation step. Cortex deployments that want secure-by-default
+   * should set this to `"denied"` (or a named role) in their `cortex.yaml`.
+   * Flipping the default value is a deliberate-behaviour-change decision
+   * tracked as a follow-up — not part of the schema-flip PR.
+   */
   defaultRole: z.string().default("allow-all"),
   /** G-300: DM privilege configuration. */
-  dm: DMConfigSchema.default({} as any),
+  dm: emptyDefault(DMConfigSchema),
   /**
    * F-11: Optional Discord role id to mention on `severity = 'ping'`
    * notifications. Unset → plain channel post with no mention.
@@ -142,12 +184,12 @@ export type MattermostPresence = z.infer<typeof MattermostPresenceSchema>;
 /**
  * An agent's presence map — keyed by platform. Architecture §9.1 puts
  * presence under the parent agent, not the other way around. Adding a new
- * platform (Slack, etc.) adds a new optional key here.
+ * platform (Slack, etc.) adds a new optional key here at the time the
+ * adapter lands — no speculative placeholders.
  */
 export const PresenceSchema = z.object({
   discord: DiscordPresenceSchema.optional(),
   mattermost: MattermostPresenceSchema.optional(),
-  // slack: SlackPresenceSchema.optional(),  // future
 });
 
 export type Presence = z.infer<typeof PresenceSchema>;
@@ -232,7 +274,7 @@ export type RendererKind = z.infer<typeof RendererKindSchema>;
 export const DashboardRendererSchema = z.object({
   kind: z.literal("dashboard"),
   port: z.number().int().positive().default(8767),
-  publicUrl: z.string().optional(),
+  publicUrl: z.url().optional(),
   subscribe: z.array(z.string().min(1)).default(["local.{org}.>"]),
   /**
    * Optional projection rules. Each entry maps an event source pattern to
@@ -317,8 +359,18 @@ export type Renderer = z.infer<typeof RendererSchema>;
 export const NatsIdentitySchema = z.object({
   /** Path to the NKey seed file (.nk). */
   seedPath: z.string().min(1),
-  /** NKey public identifier (UA…). Used as a sanity check at load time. */
-  publicKey: z.string().min(1).regex(/^U[A-Z0-9]+$/, "publicKey must be an NKey user identifier"),
+  /**
+   * NKey user-identifier public key. NATS NKey user keys are exactly 56
+   * characters: a `U` prefix byte plus 55 base32-encoded payload bytes
+   * (RFC-4648 alphabet, no padding). Anything shorter is a typo or a
+   * placeholder — fail at config load.
+   *
+   * Reference: `nkeys` package — `Codec.encode(NKeysPrefixByte.User, …)`.
+   */
+  publicKey: z.string().regex(
+    /^U[A-Z2-7]{55}$/,
+    "publicKey must be a 56-char NKey user identifier (U + 55 base32 chars)",
+  ),
 });
 
 export type NatsIdentity = z.infer<typeof NatsIdentitySchema>;
@@ -397,15 +449,23 @@ export const ExecutionConfigSchema = z.object({
 
 export type ExecutionConfig = z.infer<typeof ExecutionConfigSchema>;
 
+/**
+ * GitHub agent-detection heuristics — extracted from `GithubConfigSchema` so
+ * it can use `emptyDefault` cleanly when nested. Identical defaults to grove-v2.
+ */
+export const AgentDetectionSchema = z.object({
+  commitTrailers: z.array(z.string()).default(["Co-Authored-By: Claude"]),
+  branchPatterns: z.array(z.string()).default(["^feat/(g|f|i)-\\d+"]),
+  commentPatterns: z.array(z.string()).default(["^Starting:", "^Completed:"]),
+});
+
+export type AgentDetection = z.infer<typeof AgentDetectionSchema>;
+
 /** GitHub webhook surface — identical shape to BotConfig.github. */
 export const GithubConfigSchema = z.object({
   webhookSecret: z.string().default(""),
   repos: z.array(z.string()).default([]),
-  agentDetection: z.object({
-    commitTrailers: z.array(z.string()).default(["Co-Authored-By: Claude"]),
-    branchPatterns: z.array(z.string()).default(["^feat/(g|f|i)-\\d+"]),
-    commentPatterns: z.array(z.string()).default(["^Starting:", "^Completed:"]),
-  }).default({} as any),
+  agentDetection: emptyDefault(AgentDetectionSchema),
 });
 
 export type GithubConfig = z.infer<typeof GithubConfigSchema>;
@@ -446,16 +506,16 @@ export const CortexConfigSchema = z.object({
   claude: ClaudeConfigSchema,
 
   /** Attachment handling — shared by all platform presences. */
-  attachments: AttachmentsConfigSchema.default({} as any),
+  attachments: emptyDefault(AttachmentsConfigSchema),
 
   /** Execution backends — local default, plus optional remotes. */
-  execution: ExecutionConfigSchema.default({} as any),
+  execution: emptyDefault(ExecutionConfigSchema),
 
   /** GitHub webhook ingestion (the taps side). */
-  github: GithubConfigSchema.default({} as any),
+  github: emptyDefault(GithubConfigSchema),
 
   /** Filesystem paths used by the runner + taps. */
-  paths: PathsConfigSchema.default({} as any),
+  paths: emptyDefault(PathsConfigSchema),
 
   /** Directory containing per-network YAML files (G-500). */
   networksDir: z.string().default("./networks"),
