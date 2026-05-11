@@ -369,6 +369,16 @@ export class DiscordAdapter implements PlatformAdapter {
     // Update bot config (for claude execution settings)
     this.botConfig = config;
 
+    // MIG-7.2c-internal (Holly cycle 1, major/architecture): rebuild
+    // `this.agent` AFTER both `this.presence` and `this.botConfig` have
+    // been updated, otherwise `this.agent.presence.discord` and
+    // `this.agent.id` / `this.agent.displayName` drift out of sync with
+    // the live config. Harmless in this slice (no method reads from
+    // `this.agent`), but the flip slice wires PresenceBinding /
+    // TrustResolver through this field, where a stale value becomes a
+    // silent runtime regression on every hot-reload.
+    this.agent = DiscordAdapter.toAgent(this.botConfig, this.presence);
+
     console.log(`discord-adapter[${this.instanceId}]: config updated`);
   }
 
