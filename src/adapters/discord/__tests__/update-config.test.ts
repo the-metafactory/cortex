@@ -99,11 +99,9 @@ function makeBotConfig(overrides: Partial<{
 function makeAdapter(overrides: { presence?: Partial<DiscordPresence> } = {}) {
   const presence = makePresence(overrides.presence);
   const agent = makeAgent(presence);
-  const botConfig = makeBotConfig();
   const infra: DiscordAdapterInfra = {
     instanceId: "luna-discord-guild-1",
     operator: {},
-    botConfig,
   };
   return new DiscordAdapter(agent, presence, infra);
 }
@@ -113,9 +111,6 @@ function getPresence(adapter: DiscordAdapter): DiscordPresence {
 }
 function getAgent(adapter: DiscordAdapter): Agent {
   return (adapter as unknown as { agent: Agent }).agent;
-}
-function getInfra(adapter: DiscordAdapter): DiscordAdapterInfra {
-  return (adapter as unknown as { infra: DiscordAdapterInfra }).infra;
 }
 
 describe("DiscordAdapter.updateConfig", () => {
@@ -180,15 +175,5 @@ describe("DiscordAdapter.updateConfig", () => {
     const agentAfter = getAgent(adapter);
     expect(agentAfter.id).toBe("luna-rebranded");
     expect(agentAfter.displayName).toBe("Luna v2");
-  });
-
-  test("infra.botConfig is refreshed for client.ts pass-through", () => {
-    const adapter = makeAdapter();
-    const next = makeBotConfig({ displayName: "Luna Reload" });
-    adapter.updateConfig(next);
-    // The transitional getter routes `this.botConfig` through `infra.botConfig`,
-    // so the most direct check is on infra. The next createDiscordClient call
-    // (on reconnect) will read from this fresh reference.
-    expect(getInfra(adapter).botConfig).toBe(next);
   });
 });

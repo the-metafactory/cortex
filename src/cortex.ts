@@ -245,7 +245,6 @@ export async function startCortex(
           },
           runtime,
           systemEventSource,
-          botConfig: config,
         },
       );
       // Register the adapter's surface-router face. Empty `surfaceSubjects`

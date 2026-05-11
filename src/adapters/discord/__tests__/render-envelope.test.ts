@@ -19,7 +19,6 @@ import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
 import { DMConfigSchema } from "../../../common/types/config";
 import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
-import type { BotConfig } from "../../../common/types/config";
 import type { ConnectionHealth } from "../client";
 import type { Envelope } from "../../../bus/myelin/envelope-validator";
 
@@ -98,14 +97,9 @@ function makeAdapter(opts: {
     trust: [],
     presence: { discord: presence },
   };
-  const botConfig = {
-    agent: { name: "test", displayName: "Test" },
-    discord: [{ guildId: "g1" }],
-  } as unknown as BotConfig;
   const infra: DiscordAdapterInfra = {
     instanceId: "discord-renderer",
     operator: {},
-    botConfig,
     ...(opts.surfaceSubjects !== undefined && { surfaceSubjects: opts.surfaceSubjects }),
     ...(opts.surfaceFallbackChannelId !== undefined && { surfaceFallbackChannelId: opts.surfaceFallbackChannelId }),
     ...(opts.surfaceFilter !== undefined && { surfaceFilter: opts.surfaceFilter }),

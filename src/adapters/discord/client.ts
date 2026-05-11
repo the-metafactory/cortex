@@ -4,7 +4,6 @@
  */
 
 import { Client, GatewayIntentBits, Partials, type TextChannel, type ThreadChannel, type Message } from "discord.js";
-import type { BotConfig } from "../../common/types/config";
 
 export interface ConnectionHealth {
   reconnectCount: number;
@@ -43,13 +42,30 @@ export interface DiscordClientResult {
   health: ConnectionHealth;
 }
 
+/**
+ * Display-only metadata stamped into the connection-ready log lines.
+ *
+ * MIG-7.2c-discord-cleanup: replaces the previous `BotConfig` parameter so
+ * `createDiscordClient` no longer reaches across the whole config tree to
+ * print a `Agent: …` / `Guild(s): …` line. The cortex-config agent /
+ * presence model is one Discord presence per agent, so `guildId` is a
+ * single value (the legacy `config.discord.map(d => d.guildId).join(", ")`
+ * was redundant — every adapter only ever ran one guild).
+ */
+export interface DiscordClientDisplayInfo {
+  /** Parent agent's `displayName` — appears on the `Agent: …` log line. */
+  displayName: string;
+  /** This presence's `guildId` — appears on the `Guild: …` log line. */
+  guildId: string;
+}
+
 function formatUptime(since: Date | null): string {
   if (!since) return "never";
   return `${((Date.now() - since.getTime()) / 1000).toFixed(0)}s`;
 }
 
 export function createDiscordClient(
-  config: BotConfig,
+  info: DiscordClientDisplayInfo,
   options: DiscordClientOptions = {},
 ): DiscordClientResult {
   const instanceId = options.instanceId ?? "discord";
@@ -96,9 +112,8 @@ export function createDiscordClient(
     health.currentlyConnected = true;
     health.lastConnectedAt = new Date();
     console.log(`${tag}: connected as ${client.user?.tag}`);
-    console.log(`  Agent: ${config.agent.displayName}`);
-    const guildIds = config.discord.map((d) => d.guildId).join(", ");
-    console.log(`  Guild(s): ${guildIds || "none"}`);
+    console.log(`  Agent: ${info.displayName}`);
+    console.log(`  Guild: ${info.guildId}`);
   });
 
   client.on("shardReady", (shardId) => {

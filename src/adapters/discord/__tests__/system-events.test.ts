@@ -17,15 +17,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { Envelope } from "../../../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../../../bus/myelin/runtime";
-import type { BotConfig } from "../../../common/types/config";
 import { DMConfigSchema } from "../../../common/types/config";
 import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
 import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
-
-const stubBotConfig = {
-  agent: { name: "test", displayName: "Test", operatorId: "andreas" },
-  discord: [{ guildId: "g1" }],
-} as unknown as BotConfig;
 
 // MIG-7.2c-discord-flip: build a fresh (agent, presence) pair for each
 // adapter so tests can mutate them safely. Overrides on `presence` mirror
@@ -95,7 +89,6 @@ async function buildStartedAdapter(opts: {
   const infra: DiscordAdapterInfra = {
     instanceId: "discord-test",
     operator: {},
-    botConfig: stubBotConfig,
     ...(opts.runtime !== undefined && { runtime: opts.runtime }),
     ...(opts.systemEventSource !== undefined && { systemEventSource: opts.systemEventSource }),
   };

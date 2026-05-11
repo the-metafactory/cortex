@@ -18,7 +18,6 @@
 
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
-import type { BotConfig } from "../../../common/types/config";
 import { DMConfigSchema } from "../../../common/types/config";
 import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
 import type { ConnectionHealth } from "../client";
@@ -77,14 +76,9 @@ function makeAdapter(opts: {
     trust: [],
     presence: { discord: presence },
   };
-  const botConfig = {
-    agent: { name: "test", displayName: "Test" },
-    discord: [{ guildId: "g1" }],
-  } as unknown as BotConfig;
   const infra: DiscordAdapterInfra = {
     instanceId: "discord-test",
     operator: { discordId: "operator-123" },
-    botConfig,
   };
   const adapter = new DiscordAdapter(agent, presence, infra);
 

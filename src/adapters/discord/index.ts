@@ -34,39 +34,17 @@ import {
 import { formatEnvelopeAsMarkdown } from "../envelope-renderer";
 
 /**
- * MIG-7.2c-discord-flip: cortex-deployment-level wiring passed alongside the
- * agent + presence pair. Bundles four concerns the agent/presence model
- * itself doesn't carry:
+ * Cortex-deployment-level wiring passed alongside the agent + presence pair.
+ * Bundles the deployment-scoped concerns the agent/presence model itself
+ * doesn't carry: the routing/log-prefix `instanceId`, the operator's
+ * platform identity, bus wiring for `system.adapter.*` envelope emission,
+ * and the MIG-3b surface-router fields.
  *
- *  1. `instanceId` — the surface-router / log-prefix key for this adapter.
- *     Derived by `cortex.ts` from `${agent.id}-discord` (or
- *     `${agent.id}-discord-${guildId}` while `botConfig.discord[]` still
- *     allows multiple instances per agent.name; collapses to plain
- *     `${agent.id}-discord` at MIG-7.2e when migrate-config emits a real
- *     `agents[]` array).
- *
- *  2. `operator` — operator-level identity (currently just `discordId`).
- *     Architecture §9.1: the operator is who runs the cortex deployment,
- *     distinct from the agents they host. This block moves the legacy
- *     `botConfig.agent.operatorDiscordId` out of the agent block onto its
- *     proper home.
- *
- *  3. `runtime` + `systemEventSource` — bus wiring for `system.adapter.*`
- *     emission. Folded in here from the prior `DiscordAdapterRuntimeWiring`
- *     constructor parameter so the constructor has three params instead of
- *     four, all of them load-bearing data.
- *
- *  4. Surface-router fields (`surfaceSubjects`, `surfaceFilter`,
- *     `surfaceFallbackChannelId`) — MIG-3b additions that tell the adapter
- *     which bus subjects to project onto a fallback Discord channel. These
- *     are activity-centric (arch §9.2 — renderers project bus state, not
- *     credentials), so they migrate to a dedicated `kind: discord-channel`
- *     renderer at MIG-7.2d. They park here transitionally for the flip
- *     slice; `DiscordAdapter` keeps reading them from `this.infra.*`.
- *
- *  5. `botConfig` — transitional pass-through for `createDiscordClient` and
- *     `updateConfig` back-compat. Removed at MIG-7.2c-discord-cleanup when
- *     `client.ts` and the sub-modules take the new shape directly.
+ * The surface-router fields (`surfaceSubjects`, `surfaceFilter`,
+ * `surfaceFallbackChannelId`) park here transitionally — architecture §9.2
+ * makes them a renderer concern (activity-centric, not agent-credential),
+ * and a dedicated `kind: discord-channel` renderer lifts them out at
+ * MIG-7.2d. Until then, `DiscordAdapter` reads them via `this.infra.*`.
  *
  * Anti-pattern note (G-1111 §4.6.2): a degraded adapter publishing its OWN
  * `degraded` event is the wrong long-term home — that belongs to a sibling
@@ -75,9 +53,18 @@ import { formatEnvelopeAsMarkdown } from "../envelope-renderer";
  * a follow-on iteration.
  */
 export interface DiscordAdapterInfra {
+  /** Surface-router + log-prefix key. Cortex derives `${agent.id}-discord-${guildId}` while
+   * BotConfig.discord[] still permits multiple entries per agent.name; collapses to
+   * `${agent.id}-discord` at MIG-7.2e when migrate-config emits a real agents[] array. */
   instanceId: string;
+  /** Operator's platform identity. Architecture §9.1: the operator runs the cortex
+   * deployment, distinct from the agents they host. */
   operator: { discordId?: string };
+  /** Myelin runtime for `system.adapter.*` envelope emission. Optional — adapters started
+   * without NATS still track degradation/reconnect locally. */
   runtime?: MyelinRuntime;
+  /** `{org}.{agent}.{instance}` source triple stamped onto emitted `system.*` envelopes
+   * (spec §3.6 names the agent, not the operator). */
   systemEventSource?: SystemEventSource;
   /** MIG-3b: NATS subject patterns this adapter renders to Discord. Empty/undefined → adapter
    * never matches in the surface-router (still subscribes for messages, just doesn't render
@@ -88,8 +75,6 @@ export interface DiscordAdapterInfra {
   /** MIG-3b: fallback Discord channel ID for envelope rendering when no per-envelope routing
    * rule applies. Channel ID, NOT name. Moves to Renderer at MIG-7.2d. */
   surfaceFallbackChannelId?: string;
-  /** Transitional pass-through for `createDiscordClient` + `updateConfig` until MIG-7.2c-discord-cleanup. */
-  botConfig: BotConfig;
 }
 
 interface PendingResult {
@@ -108,15 +93,6 @@ export class DiscordAdapter implements PlatformAdapter {
   private agent: Agent;
   private presence: DiscordPresence;
   private infra: DiscordAdapterInfra;
-  /**
-   * Transitional alias for `infra.botConfig`. The `start()` path passes
-   * `botConfig` to `createDiscordClient` and `updateConfig` mutates it.
-   * `client.ts` still takes `BotConfig`; both call-sites move to the new
-   * shape at MIG-7.2c-discord-cleanup, at which point this field plus
-   * `infra.botConfig` both drop out.
-   */
-  private get botConfig(): BotConfig { return this.infra.botConfig; }
-  private set botConfig(next: BotConfig) { this.infra.botConfig = next; }
   /**
    * Cached pointers to `infra.runtime` / `infra.systemEventSource`. Kept as
    * dedicated fields (rather than always reading via `this.infra.*`) so the
@@ -158,7 +134,9 @@ export class DiscordAdapter implements PlatformAdapter {
   }
 
   async start(onMessage: (msg: InboundMessage) => Promise<void>): Promise<void> {
-    const { client, health } = createDiscordClient(this.botConfig, {
+    const { client, health } = createDiscordClient(
+      { displayName: this.agent.displayName, guildId: this.presence.guildId },
+      {
       instanceId: this.instanceId,
       // MIG-3b-ii: emit `system.adapter.{degraded,recovered}` envelopes so
       // operators get out-of-band visibility (see G-1111 §3.5.3 + §4.6).
@@ -368,15 +346,7 @@ export class DiscordAdapter implements PlatformAdapter {
       dm: newInstance.dm,
     };
 
-    // Refresh transitional pass-through. `createDiscordClient` already ran
-    // at construction so the live discord.js client is unaffected; this
-    // assignment is for `client.ts`'s log line that reads
-    // `config.agent.displayName` on subsequent reconnects, and for any
-    // future caller that grabs `this.botConfig` for hot-reloadable runtime
-    // params (`claude.timeoutMs`, etc.).
-    this.botConfig = config;
-
-    // Rebuild agent AFTER both `presence` and `botConfig` are refreshed so
+    // Rebuild agent AFTER `this.presence` is refreshed so
     // `agent.presence.discord` and `agent.id` / `agent.displayName` reflect
     // the post-reload state. Same hot-reload-sync invariant Holly flagged
     // at MIG-7.2c-internal cycle 1: a stale agent reference becomes a

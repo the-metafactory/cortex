@@ -1,12 +1,10 @@
 import { test, expect, describe, afterEach, beforeEach, mock, spyOn } from "bun:test";
-import { createDiscordClient, type DiscordClientOptions } from "../client";
-import type { BotConfig } from "../../../common/types/config";
+import { createDiscordClient, type DiscordClientOptions, type DiscordClientDisplayInfo } from "../client";
 
-// Minimal config stub — createDiscordClient only reads agent.displayName + discord[].guildId
-const stubConfig = {
-  agent: { displayName: "Test" },
-  discord: [{ guildId: "g1" }],
-} as unknown as BotConfig;
+// MIG-7.2c-discord-cleanup: createDiscordClient takes the display info
+// directly. Single-guild per adapter; the prior `discord: [...]` array stub
+// is no longer applicable.
+const stubInfo: DiscordClientDisplayInfo = { displayName: "Test", guildId: "g1" };
 
 let originalError: typeof console.error;
 let originalLog: typeof console.log;
@@ -30,7 +28,7 @@ afterEach(() => {
 function setupClient(options: DiscordClientOptions = {}) {
   const onDegraded = mock();
   const onRecovered = mock();
-  const result = createDiscordClient(stubConfig, {
+  const result = createDiscordClient(stubInfo, {
     instanceId: "discord-test",
     degradedThresholdMs: 50,
     onDegraded,
@@ -206,7 +204,7 @@ describe("createDiscordClient degraded timer", () => {
 
   test("onDegraded callback throwing does not break event handling", async () => {
     const errSpy = spyOn(console, "error").mockImplementation(() => {});
-    const { client, health } = createDiscordClient(stubConfig, {
+    const { client, health } = createDiscordClient(stubInfo, {
       degradedThresholdMs: 20,
       onDegraded: () => { throw new Error("callback boom"); },
     });
