@@ -4,25 +4,25 @@
     "SessionStart": [
       {
         "type": "command",
-        "command": "bun ${CLAUDE_DIR}/hooks/CortexContext.hook.ts"
+        "command": "${CLAUDE_DIR}/hooks/CortexContext.hook.ts"
       }
     ],
     "PostToolUse": [
       {
         "type": "command",
-        "command": "bun ${CLAUDE_DIR}/hooks/CortexEventLogger.hook.ts"
+        "command": "${CLAUDE_DIR}/hooks/CortexEventLogger.hook.ts"
       }
     ],
     "Stop": [
       {
         "type": "command",
-        "command": "bun ${CLAUDE_DIR}/hooks/CortexEventLogger.hook.ts"
+        "command": "${CLAUDE_DIR}/hooks/CortexEventLogger.hook.ts"
       }
     ],
     "UserPromptSubmit": [
       {
         "type": "command",
-        "command": "bun ${CLAUDE_DIR}/hooks/CortexEventLogger.hook.ts"
+        "command": "${CLAUDE_DIR}/hooks/CortexEventLogger.hook.ts"
       }
     ],
     "PreToolUse": [
@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun ${CLAUDE_DIR}/hooks/CortexBashGuard.hook.ts"
+            "command": "${CLAUDE_DIR}/hooks/CortexBashGuard.hook.ts"
           }
         ]
       }

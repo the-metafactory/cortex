@@ -86,6 +86,14 @@ provides:
 #                      ~/.config/cortex/cortex.yaml — operator runs
 #                      migrate-config separately per MIG-7.9)
 #   - postupgrade.sh — re-link binaries + re-template plists + restart
+#
+# Top-level key is `scripts:` (not `hooks:`) — same shape grove-v2 has used
+# in production since at least v0.22.x (see
+# `the-metafactory/grove-v2/arc-manifest.yaml`). The pre-MIG-7 cortex
+# manifest carried a `hooks: { postupgrade: … }` shorthand from the
+# MIG-6 bootstrap that didn't match arc's schema; this PR aligns with
+# arc's actual schema as exercised by grove-v2's working installs.
+# (Holly cortex#52 round 2 warning.)
 scripts:
   postinstall: ./scripts/postinstall.sh
   preupgrade: ./scripts/preupgrade.sh
