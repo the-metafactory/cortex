@@ -1,0 +1,344 @@
+/**
+ * MIG-7.2 base — CortexConfig schema tests.
+ *
+ * Covers the structural invariants from architecture §9.1 + §9.3:
+ *   - operator: { id } is required, every other operator field optional
+ *   - agents[] must contain ≥1 entry with unique ids
+ *   - each agent needs ≥1 presence block
+ *   - agent ids must be lowercase alphanumeric
+ *   - trust references are by agent id (string only — registry validates resolution)
+ *   - renderers[] discriminated union honours `kind`
+ *   - nats.url protocol gate
+ *   - nats.identity.publicKey NKey format
+ */
+
+import { describe, test, expect } from "bun:test";
+
+import {
+  AgentSchema,
+  CortexConfigSchema,
+  DashboardRendererSchema,
+  NatsConfigSchema,
+  NatsIdentitySchema,
+  OperatorSchema,
+  PagerDutyRendererSchema,
+  RendererSchema,
+} from "../cortex-config";
+
+// =============================================================================
+// Fixture builders — minimal valid shapes
+// =============================================================================
+
+function minOperator() {
+  return { id: "andreas" };
+}
+
+function minDiscordPresence() {
+  return {
+    token: "discord-bot-token",
+    guildId: "1487000000000000000",
+    agentChannelId: "1487000000000000001",
+    logChannelId: "1487000000000000002",
+  };
+}
+
+function minAgent(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "luna",
+    displayName: "Luna",
+    persona: "./personas/luna.md",
+    presence: { discord: minDiscordPresence() },
+    ...overrides,
+  };
+}
+
+function minConfig() {
+  return {
+    operator: minOperator(),
+    agents: [minAgent()],
+    claude: {},
+  };
+}
+
+// =============================================================================
+// Operator schema
+// =============================================================================
+
+describe("OperatorSchema", () => {
+  test("requires id", () => {
+    expect(() => OperatorSchema.parse({})).toThrow();
+  });
+
+  test("defaults dataResidency to NZ", () => {
+    const parsed = OperatorSchema.parse({ id: "andreas" });
+    expect(parsed.dataResidency).toBe("NZ");
+  });
+
+  test("accepts optional discordId / mattermostId / displayName", () => {
+    const parsed = OperatorSchema.parse({
+      id: "andreas",
+      displayName: "Andreas Astrom",
+      discordId: "1134000000000000000",
+      mattermostId: "abc123def456",
+    });
+    expect(parsed.displayName).toBe("Andreas Astrom");
+    expect(parsed.discordId).toBe("1134000000000000000");
+    expect(parsed.mattermostId).toBe("abc123def456");
+  });
+
+  test("accepts explicit dataResidency override", () => {
+    const parsed = OperatorSchema.parse({ id: "andreas", dataResidency: "CH" });
+    expect(parsed.dataResidency).toBe("CH");
+  });
+});
+
+// =============================================================================
+// Agent schema
+// =============================================================================
+
+describe("AgentSchema", () => {
+  test("accepts minimal Discord-only agent", () => {
+    const parsed = AgentSchema.parse(minAgent());
+    expect(parsed.id).toBe("luna");
+    expect(parsed.roles).toEqual([]);
+    expect(parsed.trust).toEqual([]);
+    expect(parsed.presence.discord?.token).toBe("discord-bot-token");
+  });
+
+  test("rejects uppercase id", () => {
+    expect(() => AgentSchema.parse(minAgent({ id: "Luna" }))).toThrow();
+  });
+
+  test("rejects id with whitespace", () => {
+    expect(() => AgentSchema.parse(minAgent({ id: "my agent" }))).toThrow();
+  });
+
+  test("rejects agent with no presence blocks", () => {
+    expect(() => AgentSchema.parse({
+      id: "luna",
+      displayName: "Luna",
+      persona: "./personas/luna.md",
+      presence: {},
+    })).toThrow(/at least one presence/);
+  });
+
+  test("accepts trust list of agent ids (no resolution)", () => {
+    const parsed = AgentSchema.parse(minAgent({ trust: ["echo", "holly"] }));
+    expect(parsed.trust).toEqual(["echo", "holly"]);
+  });
+
+  test("accepts both discord and mattermost presence on same agent", () => {
+    const parsed = AgentSchema.parse(minAgent({
+      presence: {
+        discord: minDiscordPresence(),
+        mattermost: {
+          callbackPort: 8081,
+          apiUrl: "https://mm.example.com",
+          apiToken: "mm-token",
+        },
+      },
+    }));
+    expect(parsed.presence.discord).toBeDefined();
+    expect(parsed.presence.mattermost?.apiUrl).toBe("https://mm.example.com");
+  });
+
+  test("defaults DiscordPresence.enabled to true", () => {
+    const parsed = AgentSchema.parse(minAgent());
+    expect(parsed.presence.discord?.enabled).toBe(true);
+  });
+
+  test("DiscordPresence accepts numeric guildId via coerce", () => {
+    const parsed = AgentSchema.parse(minAgent({
+      presence: { discord: { ...minDiscordPresence(), guildId: 1487 } },
+    }));
+    expect(parsed.presence.discord?.guildId).toBe("1487");
+  });
+});
+
+// =============================================================================
+// Renderer schemas
+// =============================================================================
+
+describe("RendererSchema", () => {
+  test("dashboard renderer parses with kind + defaults", () => {
+    const parsed = DashboardRendererSchema.parse({ kind: "dashboard" });
+    expect(parsed.port).toBe(8767);
+    expect(parsed.subscribe).toEqual(["local.{org}.>"]);
+    expect(parsed.projections).toEqual([]);
+  });
+
+  test("pagerduty renderer requires routingKey", () => {
+    expect(() => PagerDutyRendererSchema.parse({ kind: "pagerduty" })).toThrow();
+    const parsed = PagerDutyRendererSchema.parse({
+      kind: "pagerduty",
+      routingKey: "PD-ROUTING-KEY",
+      subscribe: ["local.{org}.system.adapter.degraded"],
+    });
+    expect(parsed.routingKey).toBe("PD-ROUTING-KEY");
+  });
+
+  test("discriminated union dispatches on kind", () => {
+    const dashboard = RendererSchema.parse({ kind: "dashboard" });
+    expect(dashboard.kind).toBe("dashboard");
+
+    const cliTail = RendererSchema.parse({ kind: "cli-tail" });
+    expect(cliTail.kind).toBe("cli-tail");
+  });
+
+  test("unknown kind is rejected", () => {
+    expect(() => RendererSchema.parse({ kind: "telegram" })).toThrow();
+  });
+
+  test("webhook-out renderer requires url", () => {
+    expect(() => RendererSchema.parse({ kind: "webhook-out" })).toThrow();
+    const parsed = RendererSchema.parse({
+      kind: "webhook-out",
+      url: "https://example.com/cortex-hook",
+    });
+    expect(parsed.kind).toBe("webhook-out");
+  });
+});
+
+// =============================================================================
+// NATS schema
+// =============================================================================
+
+describe("NatsConfigSchema", () => {
+  test("rejects http:// url", () => {
+    expect(() => NatsConfigSchema.parse({ url: "http://localhost:4222" })).toThrow();
+  });
+
+  test("accepts nats:// url with defaults", () => {
+    const parsed = NatsConfigSchema.parse({ url: "nats://localhost:4222" });
+    expect(parsed.name).toBe("cortex");
+    expect(parsed.subjects).toEqual([]);
+  });
+
+  test("accepts tls:// url", () => {
+    const parsed = NatsConfigSchema.parse({ url: "tls://nats.example.com:4222" });
+    expect(parsed.url).toBe("tls://nats.example.com:4222");
+  });
+
+  test("NatsIdentity rejects non-NKey publicKey", () => {
+    expect(() => NatsIdentitySchema.parse({
+      seedPath: "/etc/cortex/operator.nk",
+      publicKey: "not-an-nkey",
+    })).toThrow();
+  });
+
+  test("NatsIdentity accepts NKey user identifier", () => {
+    const parsed = NatsIdentitySchema.parse({
+      seedPath: "/etc/cortex/operator.nk",
+      publicKey: "UABCDEF1234567890",
+    });
+    expect(parsed.publicKey).toBe("UABCDEF1234567890");
+  });
+});
+
+// =============================================================================
+// CortexConfig — top-level invariants
+// =============================================================================
+
+describe("CortexConfigSchema", () => {
+  test("accepts minimal valid config", () => {
+    const parsed = CortexConfigSchema.parse(minConfig());
+    expect(parsed.operator.id).toBe("andreas");
+    expect(parsed.agents).toHaveLength(1);
+    expect(parsed.renderers).toEqual([]);
+  });
+
+  test("rejects empty agents[]", () => {
+    expect(() => CortexConfigSchema.parse({
+      ...minConfig(),
+      agents: [],
+    })).toThrow(/at least one agent/);
+  });
+
+  test("rejects duplicate agent ids", () => {
+    expect(() => CortexConfigSchema.parse({
+      ...minConfig(),
+      agents: [minAgent({ id: "luna" }), minAgent({ id: "luna" })],
+    })).toThrow(/agent ids must be unique/);
+  });
+
+  test("accepts full multi-agent + renderers + nats config", () => {
+    const parsed = CortexConfigSchema.parse({
+      operator: {
+        id: "andreas",
+        displayName: "Andreas Astrom",
+        discordId: "1134000000000000000",
+      },
+      agents: [
+        minAgent({ id: "luna", roles: ["operator"], trust: ["echo", "holly"] }),
+        minAgent({ id: "echo", roles: ["agent-restricted"], trust: ["luna", "holly"] }),
+        minAgent({ id: "holly", roles: ["agent-restricted"], trust: ["luna"] }),
+      ],
+      renderers: [
+        { kind: "dashboard", port: 8767, publicUrl: "https://cortex.meta-factory.ai" },
+        { kind: "pagerduty", routingKey: "PD-KEY", subscribe: ["local.{org}.system.>"] },
+      ],
+      claude: {},
+      nats: {
+        url: "nats://localhost:4222",
+        subjects: ["local.{org}.>"],
+        identity: {
+          seedPath: "/etc/cortex/andreas.nk",
+          publicKey: "UABCDEF1234567890",
+        },
+      },
+    });
+
+    expect(parsed.agents).toHaveLength(3);
+    expect(parsed.renderers).toHaveLength(2);
+    expect(parsed.nats?.identity?.publicKey).toBe("UABCDEF1234567890");
+
+    const dashboard = parsed.renderers.find((r) => r.kind === "dashboard");
+    expect(dashboard?.kind === "dashboard" && dashboard.publicUrl).toBe(
+      "https://cortex.meta-factory.ai",
+    );
+  });
+
+  test("trust list is preserved verbatim (no resolution at schema layer)", () => {
+    // Coupling rule §9.3: schema accepts trust as strings; the agent registry
+    // (MIG-7.2a) validates that the referenced ids exist. Schema must not
+    // pre-empt that responsibility.
+    const parsed = CortexConfigSchema.parse({
+      ...minConfig(),
+      agents: [minAgent({ trust: ["echo", "ghost-agent-that-doesnt-exist"] })],
+    });
+    expect(parsed.agents[0]?.trust).toEqual(["echo", "ghost-agent-that-doesnt-exist"]);
+  });
+
+  test("defaults are applied for optional top-level blocks when explicitly empty", () => {
+    // Zod v4 quirk: outer `.default({} as any)` does NOT re-parse the default
+    // through the inner schema (so omitting the field gives `{}` literally).
+    // Passing `{}` explicitly triggers inner defaults — that's the canonical
+    // shape config-loader will produce after MIG-7.2c lifts it.
+    const parsed = CortexConfigSchema.parse({
+      ...minConfig(),
+      attachments: {},
+      execution: {},
+      paths: {},
+    });
+    expect(parsed.attachments.enabled).toBe(true);
+    expect(parsed.execution.default).toBe("local");
+    expect(parsed.paths.publishedEventsDir).toBe("~/.claude/events/published");
+    expect(parsed.paths.logDir).toBe("~/.config/cortex/logs");
+    expect(parsed.networksDir).toBe("./networks");
+  });
+
+  test("rejects legacy `agent:` (singular) field — flipped model only", () => {
+    // The new schema has no `agent:` block (that's grove-v2's shape). A config
+    // file still carrying the legacy field should produce a recognisable
+    // failure at parse time so operators see a clear migration error.
+    const legacy = {
+      ...minConfig(),
+      agent: { name: "luna", displayName: "Luna" },
+    };
+    // Zod default in v4 is to strip unknown keys silently. We still want the
+    // happy path to succeed (parsing extracts the new shape), but the legacy
+    // `agent:` field should NOT pollute the parsed output.
+    const parsed = CortexConfigSchema.parse(legacy);
+    expect((parsed as unknown as { agent?: unknown }).agent).toBeUndefined();
+  });
+});

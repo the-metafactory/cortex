@@ -1,0 +1,488 @@
+/**
+ * MIG-7.2 base — CortexConfig schema (the flipped model from architecture §9.1).
+ *
+ * Replaces grove-v2's `BotConfig` shape (`agent:` + `discord:[]` + `mattermost:[]` +
+ * `trustedAgentBots:`) with a first-class agent model:
+ *
+ *   operator:                  who is running this cortex instance
+ *   agents:                    first-class agent bundles
+ *     - id: luna
+ *       displayName: Luna
+ *       persona: ./personas/luna.md
+ *       roles: [operator]
+ *       trust: [echo, holly, ivy]
+ *       presence:              owned by the agent — one per platform
+ *         discord: { token, guildId, ... }
+ *         mattermost: { ... }
+ *   renderers:                 multi-agent / non-agent-bound surfaces
+ *     - kind: dashboard | pagerduty | cli-tail | webhook-out
+ *   nats:                      bus runtime config (M2)
+ *   github:                    GitHub webhook surface (taps)
+ *   claude / paths / etc.      cross-cutting infra (unchanged shape)
+ *
+ * This file is **additive** — `BotConfig` in `./config.ts` continues to be the
+ * load-bearing config until MIG-7.2 sub-PRs (7.2a registry, 7.2b trust-resolver,
+ * 7.2c adapter refactor, 7.2d renderers, 7.2e migrate-config) move call-sites
+ * across. See `docs/plan-cortex-migration.md` §4 MIG-7.2*.
+ *
+ * Coupling rules from architecture §9.3 enforced by this schema:
+ *   - agents never reference other agents' platform user IDs (trust is by agent id)
+ *   - presence blocks carry only credentials, not persona/roles overrides
+ *   - personas are platform-neutral (just a markdown file path)
+ *   - renderers never publish on the bus (kind enum constrains the choice set)
+ */
+
+import { z } from "zod/v4";
+
+import {
+  DMConfigSchema,
+  NetworkClaudeSchema,
+  NetworkCloudSchema,
+  NetworkFileSchema,
+  RoleSchema,
+} from "./config";
+
+// =============================================================================
+// Operator — who is running this cortex instance
+// =============================================================================
+
+/**
+ * The operator is the human (or team) running this cortex deployment. Replaces
+ * grove-v2's `agent.operatorId` + `agent.operatorDiscordId` + `agent.operatorMattermostId`
+ * fields by lifting them out of the (now removed) singular `agent:` block.
+ */
+export const OperatorSchema = z.object({
+  /** Operator identifier — used as the {org} subject segment on the bus. */
+  id: z.string().min(1),
+  /** Display name shown on the dashboard. Defaults to `id`. */
+  displayName: z.string().optional(),
+  /** Operator's Discord user id — receives DM notifications from agents. */
+  discordId: z.string().optional(),
+  /** Operator's Mattermost user id — same purpose, Mattermost-side. */
+  mattermostId: z.string().optional(),
+  /**
+   * Data residency stamped into `sovereignty.data_residency` on emitted
+   * envelopes. ISO-3166 country code; defaults to "NZ" when omitted. Operators
+   * in AU/EU/US/etc. set this to match their jurisdiction.
+   */
+  dataResidency: z.string().default("NZ"),
+});
+
+export type Operator = z.infer<typeof OperatorSchema>;
+
+// =============================================================================
+// Agent presence — one block per platform an agent shows up on
+// =============================================================================
+
+/**
+ * Discord presence — an agent's identity on a Discord guild. The full grove-v2
+ * `DiscordInstanceSchema` carries channel ids, role config, DM rules, etc.;
+ * we keep them here in the same shape so adapter code can move with minimal
+ * field renames. The architecture §9.3 coupling rules forbid `persona` or
+ * `roles` overrides in a presence block — those live on the parent agent.
+ */
+export const DiscordPresenceSchema = z.object({
+  /** Whether this presence is active. Default: true. */
+  enabled: z.boolean().default(true),
+  token: z.string().min(1),
+  guildId: z.coerce.string().min(1),
+  agentChannelId: z.coerce.string().min(1),
+  logChannelId: z.coerce.string().min(1),
+  /** Channel id for worklog threads (G-200). If set, agent tasks get threaded updates. */
+  worklogChannelId: z.coerce.string().optional(),
+  contextDepth: z.number().int().positive().default(10),
+  /** Post agent events to #agent-log. Default: false (opt-in). */
+  enableAgentLog: z.boolean().default(false),
+  /**
+   * Platform-side role allowlists. Empty = all users get full access
+   * (backward compat with grove-v2). Architecture §9.3: this restricts the
+   * parent agent's `roles` to the subset that maps onto this platform's
+   * users — it never widens.
+   */
+  roles: z.array(RoleSchema).default([]),
+  /** Role applied to users not listed in any role. Default: allow-all. */
+  defaultRole: z.string().default("allow-all"),
+  /** G-300: DM privilege configuration. */
+  dm: DMConfigSchema.default({} as any),
+  /**
+   * F-11: Optional Discord role id to mention on `severity = 'ping'`
+   * notifications. Unset → plain channel post with no mention.
+   */
+  operatorRoleId: z.coerce.string().optional(),
+});
+
+export type DiscordPresence = z.infer<typeof DiscordPresenceSchema>;
+
+/**
+ * Mattermost presence — an agent's identity on a Mattermost server. Mirrors
+ * grove-v2's `MattermostInstanceSchema` minus the operator/role-override fields
+ * that move to the parent agent.
+ */
+export const MattermostPresenceSchema = z.object({
+  /** Whether this presence is active. Default: true. */
+  enabled: z.boolean().default(true),
+  callbackPort: z.number().int().default(8080),
+  triggerWord: z.string().optional(),
+  webhookUrl: z.string().optional(),
+  apiUrl: z.string().optional(),
+  apiToken: z.string().optional(),
+  webhookToken: z.string().optional(),
+  /** Channel ids to poll. If empty, uses search API (public channels only). */
+  channels: z.array(z.string()).default([]),
+  pollIntervalMs: z.number().int().positive().default(3000),
+  /** Mattermost user ids allowed to trigger the bot. Empty = allow all. */
+  allowedUsers: z.array(z.string()).default([]),
+  /** Platform-side role config (see DiscordPresenceSchema.roles). */
+  roles: z.array(RoleSchema).default([]),
+  defaultRole: z.string().default("allow-all"),
+});
+
+export type MattermostPresence = z.infer<typeof MattermostPresenceSchema>;
+
+/**
+ * An agent's presence map — keyed by platform. Architecture §9.1 puts
+ * presence under the parent agent, not the other way around. Adding a new
+ * platform (Slack, etc.) adds a new optional key here.
+ */
+export const PresenceSchema = z.object({
+  discord: DiscordPresenceSchema.optional(),
+  mattermost: MattermostPresenceSchema.optional(),
+  // slack: SlackPresenceSchema.optional(),  // future
+});
+
+export type Presence = z.infer<typeof PresenceSchema>;
+
+// =============================================================================
+// Agent — first-class principal in the cortex deployment
+// =============================================================================
+
+/**
+ * An agent bundles identity + persona + capability set + platform credentials.
+ * Architecture §9.1: agents are principals; platforms are servers; the agent's
+ * credentials are how the agent shows up on a platform.
+ *
+ * Coupling rules from §9.3:
+ *   - `trust` references other agents by their `id` (never by platform user id)
+ *   - `persona` is a path to platform-neutral markdown
+ *   - `roles` is the maximum capability set; presences may restrict, never widen
+ */
+export const AgentSchema = z.object({
+  /** Logical agent id — stable across deployments. Lowercase, alphanumeric. */
+  id: z.string().min(1).regex(/^[a-z0-9-]+$/, "Agent id must be lowercase alphanumeric"),
+  /** Display name shown to humans. */
+  displayName: z.string().min(1),
+  /**
+   * Path to the agent's persona markdown file. Resolved relative to the
+   * cortex config file. Architecture §9.3: personas are platform-neutral
+   * — no `<@id>` mentions baked in; the adapter translates at render time.
+   */
+  persona: z.string().min(1),
+  /**
+   * Cortex-wide capability set. Each role string maps to a capability bundle
+   * (defined elsewhere). Architecture §9.3: this is the agent's **maximum**
+   * capability set; presences may further restrict.
+   */
+  roles: z.array(z.string().min(1)).default([]),
+  /**
+   * Peer agents this agent trusts (by logical agent id). When an inbound
+   * message arrives from a trusted agent's platform user, the receiving
+   * adapter treats it as agent-originated (vs human-originated).
+   *
+   * Coupling rule (§9.3): values MUST be agent ids — never platform user ids.
+   * Validation that referenced ids exist in the registry happens at load time
+   * in the agent registry (MIG-7.2a), not in this schema.
+   */
+  trust: z.array(z.string().min(1)).default([]),
+  /** Per-platform presence blocks — at least one is required. */
+  presence: PresenceSchema,
+}).refine(
+  (agent) => Object.values(agent.presence).some((p) => p !== undefined),
+  { message: "agent must have at least one presence block", path: ["presence"] },
+);
+
+export type Agent = z.infer<typeof AgentSchema>;
+
+// =============================================================================
+// Renderers — non-agent-bound surfaces that subscribe and project
+// =============================================================================
+
+/**
+ * Renderer kinds enumerated explicitly. Architecture §9.3: renderers never
+ * publish on the bus; they're pure sinks. The enum constrains the choice set
+ * to known platform classes (dashboard, pagerduty, cli-tail, webhook-out).
+ *
+ * The G-1111 §4.6 fail-safe rule requires ≥2 distinct platform classes
+ * covering `local.{org}.system.>` — that check fires at config-load (MIG-1.10),
+ * not in the Zod schema.
+ */
+export const RendererKindSchema = z.enum([
+  "dashboard",
+  "pagerduty",
+  "cli-tail",
+  "webhook-out",
+]);
+
+export type RendererKind = z.infer<typeof RendererKindSchema>;
+
+/**
+ * Dashboard renderer — the Mission Control v3 surface. Subscribes to a slice
+ * of the bus and projects into Kanban/inbox/status-banner views. Per
+ * architecture §9.2: dashboards are activity-centric, not agent-centric.
+ */
+export const DashboardRendererSchema = z.object({
+  kind: z.literal("dashboard"),
+  port: z.number().int().positive().default(8767),
+  publicUrl: z.string().optional(),
+  subscribe: z.array(z.string().min(1)).default(["local.{org}.>"]),
+  /**
+   * Optional projection rules. Each entry maps an event source pattern to
+   * a dashboard projection (kanban-card, inbox-row, status-banner, etc.).
+   * Free-form here; the dashboard renderer interprets at runtime.
+   */
+  projections: z.array(z.object({
+    source: z.string().min(1),
+    into: z.string().min(1),
+    column: z.string().optional(),
+  })).default([]),
+});
+
+export type DashboardRendererConfig = z.infer<typeof DashboardRendererSchema>;
+
+/**
+ * PagerDuty renderer — operational events out per G-1111 §4.6. Subscribes to
+ * `system.adapter.degraded`, `system.process.crashed`, etc., and routes them
+ * to PagerDuty via the events-v2 API.
+ */
+export const PagerDutyRendererSchema = z.object({
+  kind: z.literal("pagerduty"),
+  /** Integration / routing key for PagerDuty events-v2. */
+  routingKey: z.string().min(1),
+  /** Subject patterns to subscribe to. Operator chooses what counts as page-worthy. */
+  subscribe: z.array(z.string().min(1)).default([]),
+});
+
+export type PagerDutyRendererConfig = z.infer<typeof PagerDutyRendererSchema>;
+
+/**
+ * CLI-tail renderer — local stdout follower. Developer tool; subscribes to the
+ * bus and pretty-prints envelopes to stdout.
+ */
+export const CliTailRendererSchema = z.object({
+  kind: z.literal("cli-tail"),
+  subscribe: z.array(z.string().min(1)).default(["local.{org}.>"]),
+});
+
+export type CliTailRendererConfig = z.infer<typeof CliTailRendererSchema>;
+
+/**
+ * Webhook-out renderer — generic outbound HTTP POST. Subscribes to a slice of
+ * the bus and forwards envelopes as JSON to an external URL.
+ */
+export const WebhookOutRendererSchema = z.object({
+  kind: z.literal("webhook-out"),
+  url: z.url(),
+  subscribe: z.array(z.string().min(1)).default([]),
+  /** Optional auth header (e.g. `Bearer <token>`). */
+  authHeader: z.string().optional(),
+});
+
+export type WebhookOutRendererConfig = z.infer<typeof WebhookOutRendererSchema>;
+
+/**
+ * Discriminated union over renderer kinds. Each variant carries `kind` as a
+ * literal so callers can switch on it.
+ */
+export const RendererSchema = z.discriminatedUnion("kind", [
+  DashboardRendererSchema,
+  PagerDutyRendererSchema,
+  CliTailRendererSchema,
+  WebhookOutRendererSchema,
+]);
+
+export type Renderer = z.infer<typeof RendererSchema>;
+
+// =============================================================================
+// NATS — bus runtime config
+// =============================================================================
+
+/**
+ * NATS identity — the agent-level signing material used for envelope identity
+ * stamps (per JC's E2E NATS work, myelin MY-400). Optional in v0.1 cortex;
+ * required once chain-of-stamps signing (myelin#31) lands.
+ *
+ * The `seed` and `publicKey` are NKeys (ed25519) provisioned externally and
+ * referenced by file path. Cortex never reads the seed material directly into
+ * config — it's loaded by NatsLink at connect time.
+ */
+export const NatsIdentitySchema = z.object({
+  /** Path to the NKey seed file (.nk). */
+  seedPath: z.string().min(1),
+  /** NKey public identifier (UA…). Used as a sanity check at load time. */
+  publicKey: z.string().min(1).regex(/^U[A-Z0-9]+$/, "publicKey must be an NKey user identifier"),
+});
+
+export type NatsIdentity = z.infer<typeof NatsIdentitySchema>;
+
+/**
+ * NATS / myelin subscriber configuration. Mirrors `BotConfig.nats` shape from
+ * grove-v2 plus the new `identity` block.
+ */
+export const NatsConfigSchema = z.object({
+  url: z.string().min(1).refine(
+    (s) => s.startsWith("nats://") || s.startsWith("tls://"),
+    { message: "nats.url must start with nats:// or tls://" },
+  ),
+  /** Bearer token for connect-time auth. Optional; deprecated in favour of `identity`. */
+  token: z.string().optional(),
+  /** Connection name surfaced on the server's varz endpoint. */
+  name: z.string().default("cortex"),
+  /**
+   * Subject patterns to subscribe to. Default empty. `{org}` is substituted
+   * with `operator.id` at runtime.
+   */
+  subjects: z.array(z.string().min(1)).default([]),
+  /** Optional NKey identity for envelope signing (MY-400). */
+  identity: NatsIdentitySchema.optional(),
+});
+
+export type NatsConfig = z.infer<typeof NatsConfigSchema>;
+
+// =============================================================================
+// Cross-cutting infra blocks — carried forward in same shape as BotConfig
+// =============================================================================
+
+/**
+ * Claude runtime config — passed to spawned CC sessions. Identical shape to
+ * grove-v2's `BotConfig.claude` block; not refactored at MIG-7.2 because the
+ * shape is already correct (no agent-bound coupling to break).
+ */
+export const ClaudeConfigSchema = z.object({
+  timeoutMs: z.number().int().positive().default(120_000),
+  asyncTimeoutMs: z.number().int().positive().default(900_000),
+  additionalArgs: z.array(z.string()).default([]),
+  allowedTools: z.array(z.string()).default([]),
+  disallowedTools: z.array(z.string()).default([]),
+  bashAllowlist: z.object({
+    rules: z.array(z.object({
+      pattern: z.string(),
+      repos: z.array(z.string()).optional(),
+    })).default([]),
+    repos: z.array(z.string()).default([]),
+  }).optional(),
+  allowedDirs: z.array(z.string()).default([]),
+  readOnlyDirs: z.array(z.string()).default([]),
+});
+
+export type ClaudeConfig = z.infer<typeof ClaudeConfigSchema>;
+
+/** Attachments config — identical shape to BotConfig.attachments. */
+export const AttachmentsConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  maxFileSizeBytes: z.number().int().positive().default(10 * 1024 * 1024),
+  maxTotalSizeBytes: z.number().int().positive().default(25 * 1024 * 1024),
+  maxAttachmentsPerMessage: z.number().int().positive().default(10),
+});
+
+export type AttachmentsConfig = z.infer<typeof AttachmentsConfigSchema>;
+
+/** Execution backends — identical shape to BotConfig.execution. */
+export const ExecutionConfigSchema = z.object({
+  default: z.string().default("local"),
+  backends: z.array(z.object({
+    name: z.string(),
+    type: z.enum(["cloudflare", "e2b", "ssh", "custom"]),
+    endpoint: z.string(),
+  })).default([]),
+});
+
+export type ExecutionConfig = z.infer<typeof ExecutionConfigSchema>;
+
+/** GitHub webhook surface — identical shape to BotConfig.github. */
+export const GithubConfigSchema = z.object({
+  webhookSecret: z.string().default(""),
+  repos: z.array(z.string()).default([]),
+  agentDetection: z.object({
+    commitTrailers: z.array(z.string()).default(["Co-Authored-By: Claude"]),
+    branchPatterns: z.array(z.string()).default(["^feat/(g|f|i)-\\d+"]),
+    commentPatterns: z.array(z.string()).default(["^Starting:", "^Completed:"]),
+  }).default({} as any),
+});
+
+export type GithubConfig = z.infer<typeof GithubConfigSchema>;
+
+/** Filesystem paths — identical shape to BotConfig.paths but cortex-named. */
+export const PathsConfigSchema = z.object({
+  publishedEventsDir: z.string().default("~/.claude/events/published"),
+  logDir: z.string().default("~/.config/cortex/logs"),
+});
+
+export type PathsConfig = z.infer<typeof PathsConfigSchema>;
+
+// =============================================================================
+// CortexConfig — the top-level schema
+// =============================================================================
+
+/**
+ * The cortex deployment configuration. One file per operator
+ * (`~/.config/cortex/cortex.yaml`). Loaded at startup; hot-reloaded by
+ * `config-watcher.ts` for fields that don't require a restart.
+ *
+ * Architecture §9 compliance: there is exactly ONE singular block (`operator:`),
+ * and the agent list is the canonical source. Renderers are top-level peers,
+ * not properties of any agent. No `agent:` (singular) — that's the legacy
+ * grove-v2 shape and is replaced by the agents[] array.
+ */
+export const CortexConfigSchema = z.object({
+  /** Who is running this cortex instance. */
+  operator: OperatorSchema,
+
+  /** First-class agents — the canonical list. */
+  agents: z.array(AgentSchema).min(1, "at least one agent is required"),
+
+  /** Non-agent-bound surfaces. Optional in v0.1; MIG-1.10 enforces fail-safe rule at load. */
+  renderers: z.array(RendererSchema).default([]),
+
+  /** Claude runtime config — shared by all agents' dispatch sessions. */
+  claude: ClaudeConfigSchema,
+
+  /** Attachment handling — shared by all platform presences. */
+  attachments: AttachmentsConfigSchema.default({} as any),
+
+  /** Execution backends — local default, plus optional remotes. */
+  execution: ExecutionConfigSchema.default({} as any),
+
+  /** GitHub webhook ingestion (the taps side). */
+  github: GithubConfigSchema.default({} as any),
+
+  /** Filesystem paths used by the runner + taps. */
+  paths: PathsConfigSchema.default({} as any),
+
+  /** Directory containing per-network YAML files (G-500). */
+  networksDir: z.string().default("./networks"),
+
+  /** Loaded network configurations (populated by config-loader). */
+  networks: z.array(NetworkFileSchema).default([]),
+
+  /** NATS / myelin subscriber configuration. Optional — bot stays installable without NATS. */
+  nats: NatsConfigSchema.optional(),
+}).refine(
+  (config) => {
+    const ids = config.agents.map((a) => a.id);
+    return new Set(ids).size === ids.length;
+  },
+  { message: "agent ids must be unique", path: ["agents"] },
+);
+
+export type CortexConfig = z.infer<typeof CortexConfigSchema>;
+
+// =============================================================================
+// Public-API re-exports — preserve existing import paths for shared types
+// =============================================================================
+
+export {
+  DMConfigSchema,
+  NetworkClaudeSchema,
+  NetworkCloudSchema,
+  NetworkFileSchema,
+  RoleSchema,
+};
