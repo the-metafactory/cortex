@@ -14,6 +14,7 @@
 
 import { describe, test, expect } from "bun:test";
 
+import { BotConfigSchema } from "../config";
 import {
   AgentDetectionSchema,
   AgentSchema,
@@ -505,5 +506,111 @@ describe("CortexConfigSchema", () => {
       ...minConfig(),
       trustedAgentBots: ["echo", "holly"],
     })).toThrow(/legacy `trustedAgentBots:`/);
+  });
+
+  test("rejects legacy top-level `discord:` array with a migration error (Holly W3)", () => {
+    // Top-level `discord:[]` was the grove-v2 sibling of `agent:`. In cortex,
+    // per-instance credentials live under `agents[<id>].presence.discord`.
+    // Without this guard, a hand-migration miss strips the legacy block
+    // silently and the operator only sees the indirect "at least one presence
+    // block" failure on each agent.
+    expect(() => CortexConfigSchema.parse({
+      ...minConfig(),
+      discord: [{ token: "x", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
+    })).toThrow(/legacy top-level `discord:`/);
+    expect(() => CortexConfigSchema.parse({
+      ...minConfig(),
+      discord: [{ token: "x", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
+    })).toThrow(/agents\[<id>\]\.presence\.discord/);
+  });
+
+  test("rejects legacy top-level `mattermost:` array with a migration error (Holly W3)", () => {
+    // Same migration-safety rationale as the `discord:` anti-field above.
+    expect(() => CortexConfigSchema.parse({
+      ...minConfig(),
+      mattermost: [{ apiUrl: "https://mm.example.com", apiToken: "tok" }],
+    })).toThrow(/legacy top-level `mattermost:`/);
+    expect(() => CortexConfigSchema.parse({
+      ...minConfig(),
+      mattermost: [{ apiUrl: "https://mm.example.com", apiToken: "tok" }],
+    })).toThrow(/agents\[<id>\]\.presence\.mattermost/);
+  });
+});
+
+// =============================================================================
+// MIRROR sync — cortex cross-cutting schemas vs BotConfigSchema
+// =============================================================================
+//
+// Six cortex schemas (Claude / Attachments / Execution / Github + AgentDetection
+// / Paths) carry MIRROR breadcrumbs in their JSDoc pointing at the corresponding
+// BotConfigSchema block. The breadcrumb is a manual guard during the MIG-7.2
+// overlap window — a field added on one side must be added on the other side
+// too, otherwise downstream code that reads BotConfig and writes CortexConfig
+// (or vice versa) silently drops data. These tests are the structural check
+// that fires automatically if the breadcrumbs are missed.
+//
+// Method: parse `{}` on each cortex schema, parse the minimum BotConfig
+// (which applies inner defaults to optional cross-cutting blocks), and compare.
+// Default-value equality is the strictest test because it catches both field
+// additions/removals AND default drift. Known divergence — `paths.logDir`
+// (grove → cortex rename) — is asserted as a key-set match plus per-field
+// equality on the non-divergent fields.
+
+describe("MIRROR sync — cortex cross-cutting schemas vs BotConfigSchema", () => {
+  // Minimum BotConfig that exposes inner defaults on every cross-cutting block.
+  //
+  // BotConfig pre-dates the cortex-side `emptyDefault` helper, so its outer
+  // `.default({} as any)` wrappers exhibit the Zod v4 quirk documented on
+  // `emptyDefault`: omitting the field returns the literal `{}` rather than
+  // the inner-default-applied shape. To compare populated shapes against the
+  // cortex side, pass each cross-cutting block as an explicit `{}` so Zod
+  // re-parses it through the inner schema and the inner defaults apply.
+  const bot = BotConfigSchema.parse({
+    agent: { name: "x", displayName: "x" },
+    discord: [],
+    claude: {},
+    attachments: {},
+    execution: {},
+    github: {},
+    paths: {},
+  });
+
+  test("claude defaults match", () => {
+    expect(ClaudeConfigSchema.parse({})).toEqual(bot.claude);
+  });
+
+  test("attachments defaults match", () => {
+    expect(AttachmentsConfigSchema.parse({})).toEqual(bot.attachments);
+  });
+
+  test("execution defaults match", () => {
+    expect(ExecutionConfigSchema.parse({})).toEqual(bot.execution);
+  });
+
+  test("github defaults match", () => {
+    expect(GithubConfigSchema.parse({})).toEqual(bot.github);
+  });
+
+  test("agentDetection defaults match", () => {
+    // Nested under github; check the inner block too so a field added inside
+    // agentDetection on one side surfaces immediately rather than only via
+    // the parent github diff (which `.toEqual` deep-compares, but an
+    // independent assertion documents the intent).
+    expect(AgentDetectionSchema.parse({})).toEqual(bot.github.agentDetection);
+  });
+
+  test("paths shape matches (logDir grove→cortex rename is the only intended divergence)", () => {
+    const cortexPaths = PathsConfigSchema.parse({});
+    // Same key set — field additions/removals would fail here.
+    expect(Object.keys(cortexPaths).sort()).toEqual(Object.keys(bot.paths).sort());
+    // Non-divergent fields equal.
+    expect(cortexPaths.publishedEventsDir).toBe(bot.paths.publishedEventsDir);
+    // Documented divergence: cortex moved the default log directory off the
+    // grove namespace as part of the rename. If this assertion ever stops
+    // holding, the BotConfig side has been re-pointed at cortex/ too and the
+    // MIRROR window is collapsing — drop both this assertion and the
+    // BotConfig.paths block (per the MIRROR-removal note in cortex-config.ts).
+    expect(cortexPaths.logDir).toBe("~/.config/cortex/logs");
+    expect(bot.paths.logDir).toBe("~/.config/grove/logs");
   });
 });

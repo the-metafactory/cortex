@@ -70,8 +70,7 @@ function emptyDefault<T extends z.ZodObject<z.ZodRawShape>>(schema: T) {
   // structurally — but the generic narrowing requires a single localized
   // `as never` cast at the call to `.default()`. This is the only type-system
   // escape hatch in the file; the rest is strongly-typed.
-  const computed = schema.parse({}) as Record<string, unknown>;
-  return schema.default(computed as never);
+  return schema.default(schema.parse({}) as never);
 }
 
 // =============================================================================
@@ -571,6 +570,34 @@ export const CortexConfigSchema = z.object({
 
   /** First-class agents — the canonical list. */
   agents: z.array(AgentSchema).min(1, "at least one agent is required"),
+
+  /**
+   * Anti-field: top-level `discord:` arrays are the grove-v2 shape where
+   * platform credentials sit as siblings of `agent:`. In cortex they live
+   * under `agents[].presence.discord` (architecture §9.1). A typical
+   * hand-migration miss is to lift `agents:` into the new file but leave
+   * the legacy `discord:[...]` block alongside it — Zod would silently
+   * strip it, producing agents with no presence and a confusing
+   * "at least one presence block" failure rather than a pointer at the
+   * actual mistake. This guard surfaces the migration error at the
+   * source (Holly W3 review).
+   */
+  discord: z.never({
+    error: () =>
+      "legacy top-level `discord:` is not supported by CortexConfig — " +
+      "move per-instance credentials to `agents[<id>].presence.discord` " +
+      "(architecture §9.1). Run `cortex migrate-config <bot.yaml>` (MIG-7.2e) to convert.",
+  }).optional(),
+  /**
+   * Anti-field: same migration-safety rationale as `discord:` above.
+   * Legacy `mattermost:[...]` arrays move under `agents[].presence.mattermost`.
+   */
+  mattermost: z.never({
+    error: () =>
+      "legacy top-level `mattermost:` is not supported by CortexConfig — " +
+      "move per-instance credentials to `agents[<id>].presence.mattermost` " +
+      "(architecture §9.1). Run `cortex migrate-config <bot.yaml>` (MIG-7.2e) to convert.",
+  }).optional(),
 
   /** Non-agent-bound surfaces. Optional in v0.1; MIG-1.10 enforces fail-safe rule at load. */
   renderers: z.array(RendererSchema).default([]),
