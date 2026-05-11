@@ -214,19 +214,30 @@ runtime:
       }
     });
 
-    test("multi-document YAML — first doc is validated; second doc is ignored", () => {
-      // Echo N2 on cortex#62 — original comment misstated the reason. The
-      // `yaml.parse()` we use takes only the FIRST doc. The throw here is
-      // schema validation on that first doc (which lacks displayName etc.),
-      // NOT a multi-doc rejection. The test still belongs because the
-      // important invariant is "one yaml file → at most one Agent" — we
-      // never accidentally surface both docs as two agents.
+    test("rejects multi-document YAML — yaml package throws on multi-doc by default", () => {
+      // Echo N2 on cortex#62 round 1 — original comment claimed `yaml.parse()`
+      // returns the first doc and ignores the rest. Empirically with
+      // `yaml@2.8.3`, `parse()` THROWS on multi-doc input:
+      //   YAMLParseError: Source contains multiple documents; please use
+      //   YAML.parseAllDocuments()
+      // So the FragmentLoadError surfaces as a YAML-parse error (not a
+      // schema-validation error). The invariant the test guards: a single
+      // fragment file never accidentally surfaces multiple agents.
       const dir = mkdtempSync(join(tmpdir(), "agents-d-multidoc-"));
       writeFileSync(
         join(dir, "multi.yaml"),
         `id: first\n---\nid: second\n`,
       );
-      expect(() => loadAgentsDirectory(dir)).toThrow(FragmentLoadError);
+      try {
+        loadAgentsDirectory(dir);
+        throw new Error("expected throw");
+      } catch (err) {
+        expect(err).toBeInstanceOf(FragmentLoadError);
+        // Confirm the failure path is YAML parsing, not schema validation —
+        // makes the comment's claim verifiable and catches future regression
+        // if yaml package changes default behavior.
+        expect((err as FragmentLoadError).message).toMatch(/YAML parse error/);
+      }
     });
 
     test("rejects fragments larger than 1 MiB (hardening cap)", () => {
