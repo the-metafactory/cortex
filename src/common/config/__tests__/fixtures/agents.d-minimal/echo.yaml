@@ -1,0 +1,16 @@
+id: echo
+displayName: Echo
+persona: ../personas/echo.md
+roles: [agent-restricted]
+trust: []
+presence:
+  discord:
+    enabled: false
+    token: "test-token"
+    guildId: "0000000000"
+    agentChannelId: "0000000001"
+    logChannelId: "0000000002"
+runtime:
+  substrate: claude-code
+  mode: in-process
+  capabilities: [code-review]

@@ -1,0 +1,7 @@
+id: broken
+displayName: "missing closing quote
+persona: ../personas/echo.md
+roles: [agent-restricted]
+presence:
+  discord:
+    enabled: false

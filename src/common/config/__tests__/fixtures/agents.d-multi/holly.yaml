@@ -1,0 +1,16 @@
+id: holly
+displayName: Holly
+persona: ../personas/holly.md
+roles: [agent-restricted]
+trust: [echo, luna]
+presence:
+  discord:
+    enabled: false
+    token: "test-token-2"
+    guildId: "0000000000"
+    agentChannelId: "0000000003"
+    logChannelId: "0000000004"
+runtime:
+  substrate: claude-code
+  mode: in-process
+  capabilities: [code-review, security-review]

@@ -1,0 +1,11 @@
+id: echo
+displayName: Echo
+persona: ../personas/nonexistent-persona.md
+roles: [agent-restricted]
+presence:
+  discord:
+    enabled: false
+    token: "t"
+    guildId: "0"
+    agentChannelId: "1"
+    logChannelId: "2"

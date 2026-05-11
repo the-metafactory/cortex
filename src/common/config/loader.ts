@@ -7,9 +7,10 @@
  */
 
 import { readFileSync, readdirSync, existsSync } from "fs";
-import { join, dirname, resolve } from "path";
+import { join, dirname, resolve, isAbsolute } from "path";
 import { parse as parseYaml } from "yaml";
 import { BotConfigSchema, NetworkFileSchema, type BotConfig, type NetworkFile } from "../types/config";
+import { AgentSchema, type Agent } from "../types/cortex-config";
 
 /**
  * Load bot.yaml + networks/*.yaml, validate, merge.
@@ -55,6 +56,136 @@ export function loadConfig(path: string): BotConfig {
   };
 
   return BotConfigSchema.parse(merged);
+}
+
+// =============================================================================
+// F-2 — agents.d/ fragment loader
+// =============================================================================
+
+/**
+ * Error raised when a fragment in `agents.d/` fails to load. Carries the
+ * file path so the caller can name it in operator-facing error messages.
+ *
+ * Boot-time strict-failure rule (cortex#60 spec §FR-4): cortex must refuse
+ * to start if any fragment fails. Mid-run rule (FR-5): caller catches and
+ * keeps prior valid state alive.
+ */
+export class FragmentLoadError extends Error {
+  public readonly file: string;
+  public readonly reason: string;
+
+  constructor(file: string, reason: string, cause?: Error) {
+    super(`fragment ${file}: ${reason}`);
+    this.name = "FragmentLoadError";
+    this.file = file;
+    this.reason = reason;
+    if (cause) (this as { cause?: Error }).cause = cause;
+  }
+}
+
+/**
+ * Load all `*.yaml` / `*.yml` fragments from `dir` as Agent definitions.
+ * Returns the agents in alphabetical filename order.
+ *
+ * Each fragment must parse as a single YAML document conforming to
+ * `AgentSchema`. The `persona:` path is resolved relative to `dir` (or used
+ * as-is if absolute); `~` is expanded to `$HOME`. The function checks the
+ * persona file exists on disk and surfaces a `FragmentLoadError` if not.
+ *
+ * Returns `[]` if `dir` does not exist (operator hasn't created it yet).
+ * Skips non-yaml files and dotfiles silently. Duplicate `id` across fragments
+ * triggers `FragmentLoadError` naming both filenames + the conflicting id.
+ *
+ * This function does NOT resolve trust references — callers wrap the merged
+ * Agent list in `AgentRegistry` (`src/common/agents/registry.ts`) which
+ * throws `UnknownAgentReferenceError` on unresolved trust at construction.
+ */
+export function loadAgentsDirectory(dir: string): Agent[] {
+  const expandedDir = expandTilde(dir);
+
+  if (!existsSync(expandedDir)) {
+    return [];
+  }
+
+  const files = readdirSync(expandedDir)
+    .filter((f) => !f.startsWith("."))
+    .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
+    .sort();
+
+  const agents: Agent[] = [];
+  const seenIds = new Map<string, string>();
+
+  for (const filename of files) {
+    const filePath = join(expandedDir, filename);
+    const content = readFileSync(filePath, "utf-8");
+
+    let raw: unknown;
+    try {
+      raw = parseYaml(content);
+    } catch (err) {
+      throw new FragmentLoadError(
+        filePath,
+        `YAML parse error: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err : undefined,
+      );
+    }
+
+    let agent: Agent;
+    try {
+      agent = AgentSchema.parse(raw);
+    } catch (err: unknown) {
+      const issues = (err as { issues?: Array<{ path?: unknown[]; message: string }> }).issues ?? [];
+      const details =
+        issues.length > 0
+          ? issues.map((i) => `  ${(i.path ?? []).join(".")}: ${i.message}`).join("\n")
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      throw new FragmentLoadError(
+        filePath,
+        `schema validation failed:\n${details}`,
+        err instanceof Error ? err : undefined,
+      );
+    }
+
+    if (seenIds.has(agent.id)) {
+      throw new FragmentLoadError(
+        filePath,
+        `duplicate agent id "${agent.id}" — also defined in ${seenIds.get(agent.id)}`,
+      );
+    }
+    seenIds.set(agent.id, filename);
+
+    // Resolve persona path: ~ → $HOME, then relative → absolute against the
+    // fragment file's directory. The Agent type stays in
+    // shape-fully-resolved-path; downstream callers don't re-resolve.
+    const personaPathExpanded = expandTilde(agent.persona);
+    const personaPathResolved = isAbsolute(personaPathExpanded)
+      ? personaPathExpanded
+      : resolve(expandedDir, personaPathExpanded);
+
+    if (!existsSync(personaPathResolved)) {
+      throw new FragmentLoadError(
+        filePath,
+        `persona file does not exist: ${personaPathResolved}`,
+      );
+    }
+
+    agents.push({ ...agent, persona: personaPathResolved });
+  }
+
+  return agents;
+}
+
+/** Expand a leading `~` in a path to `$HOME`. No-op if the path doesn't start with `~`. */
+function expandTilde(p: string): string {
+  if (p.startsWith("~/")) {
+    return join(process.env.HOME ?? "~", p.slice(2));
+  }
+  if (p === "~") {
+    return process.env.HOME ?? "~";
+  }
+  return p;
 }
 
 function loadNetworkFiles(networksDir: string, explicit: boolean): NetworkFile[] {

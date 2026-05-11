@@ -1,0 +1,16 @@
+id: luna
+displayName: Luna
+persona: ../personas/luna.md
+roles: [agent-restricted]
+trust: [echo, holly]
+presence:
+  discord:
+    enabled: false
+    token: "test-token-3"
+    guildId: "0000000000"
+    agentChannelId: "0000000005"
+    logChannelId: "0000000006"
+runtime:
+  substrate: codex
+  mode: standalone
+  capabilities: [research]

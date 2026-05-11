@@ -216,6 +216,27 @@ export type Presence = z.infer<typeof PresenceSchema>;
  *   - `persona` is a path to platform-neutral markdown
  *   - `roles` is the maximum capability set; presences may restrict, never widen
  */
+/**
+ * Optional `runtime` block on an agent — declares the substrate harness and
+ * dispatch mode for arc-installable sub-bots (cortex#60 D4 + design-arc-agent-
+ * bots.md §5). Optional in v1: inline agents in cortex.yaml may omit it
+ * (cortex assumes claude-code/in-process as the default substrate). Fragments
+ * dropped under `agents.d/` SHOULD declare it for dashboard provenance.
+ */
+export const AgentRuntimeSchema = z.object({
+  /** Execution substrate. Claude Code is the in-cortex default; other
+   *  substrates run as standalone arc-installed daemons. */
+  substrate: z.enum(["claude-code", "codex", "pi-dev", "custom"]),
+  /** Dispatch mode. `in-process` = cortex's runner spawns the substrate;
+   *  `standalone` = arc-installed daemon connects to the bus directly. */
+  mode: z.enum(["in-process", "standalone"]),
+  /** NATS capability names the agent claims (e.g. `code-review`,
+   *  `research`). Cortex's dispatcher routes tasks via these. */
+  capabilities: z.array(z.string().min(1)).default([]),
+});
+
+export type AgentRuntime = z.infer<typeof AgentRuntimeSchema>;
+
 export const AgentSchema = z.object({
   /** Logical agent id — stable across deployments. Lowercase, alphanumeric. */
   id: z.string().min(1).regex(/^[a-z0-9-]+$/, "Agent id must be lowercase alphanumeric"),
@@ -253,6 +274,13 @@ export const AgentSchema = z.object({
   ).default([]),
   /** Per-platform presence blocks — at least one is required. */
   presence: PresenceSchema,
+  /**
+   * F-2 (cortex#60 §5) — substrate harness + dispatch mode. Optional in v1:
+   * inline cortex.yaml agents may omit it (cortex assumes
+   * claude-code/in-process). Fragments dropped under `agents.d/` SHOULD
+   * declare it so the dashboard renders accurate substrate provenance.
+   */
+  runtime: AgentRuntimeSchema.optional(),
 }).refine(
   (agent) => Object.values(agent.presence).some((p) => p !== undefined),
   { message: "agent must have at least one presence block", path: ["presence"] },
