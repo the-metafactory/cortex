@@ -4,7 +4,7 @@
 **Date:** 2026-05-11
 **Driver:** Ivy (for Jens-Christian Fischer)
 **Related docs:**
-- `docs/design-pi-dev-review-agent.md` — substrate/presence decoupling that motivates this (committed in this same PR; previously untracked)
+- `docs/design-pi-dev-review-agent.md` — substrate/presence decoupling that motivates this
 - `docs/architecture.md` §6 (bus contracts: subjects + envelopes) and §9 (agent + presence/renderer model)
 - `src/common/agents/registry.ts` — `AgentRegistry` rules §9.3 (trust must resolve at construction)
 - `arc-manifest.yaml` (cortex root) — current arc package shape for cortex itself
@@ -307,7 +307,7 @@ Either way, no contract break on arc#117. Carry-forward to §14 intersection poi
 
 Estimated ~250 LOC (`CortexHostAdapter` + tests) + ~50 LOC in cortex (the `cortex agents reload` CLI subcommand for adapter postinstall to call). Lands as two PRs: arc-side `feat(hosts): CortexHostAdapter` and cortex-side `feat(cli/cortex): agents reload command`.
 
-**Phasing note:** this depends on arc#117 Phase 1 (the `PaiPaths` → `ArcPaths` + `HostAdapter` legacy cut) being merged. arc#117 sits at "future" priority today; cortex#58's Phase A.2 unblocks once arc#117 Phase 1 lands. Phase A.1 (cortex `agents.d/`) and Phase A.3 (cortex `creds` CLI) are independent and can land first.
+**Phasing note:** this depends on arc#117 Phase 1 (the `PaiPaths` → `ArcPaths` + `HostAdapter` legacy cut) being merged. arc#117 sits at "future" priority today; cortex#58's Phase A.3 (`CortexHostAdapter` itself) unblocks once arc#117 Phase 1 lands. Phase A.1 (cortex `agents.d/`) and Phase A.2 (cortex `cortex creds` CLI) are independent of arc#117 and can land first.
 
 ### 6.3 Cortex — `cortex creds issue` CLI (Q2)
 
