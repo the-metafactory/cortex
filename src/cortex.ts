@@ -32,6 +32,7 @@ import { createNetworkResolver } from "./bus/network-resolver";
 import type { SystemEventSource } from "./bus/system-events";
 
 import { DiscordAdapter } from "./adapters/discord";
+import type { Agent, DiscordPresence } from "./common/types/cortex-config";
 import { MattermostAdapter } from "./adapters/mattermost";
 import type { PlatformAdapter } from "./adapters/types";
 
@@ -192,25 +193,58 @@ export async function startCortex(
       console.log(`cortex: discord instance ${instance.instanceId ?? instance.guildId} disabled — skipping`);
       continue;
     }
-    const instanceId = instance.instanceId ?? `discord-${instance.guildId}`;
+    // MIG-7.2c-discord-flip: derive the instance id from the agent name plus
+    // the discord guild so multi-instance bot.yaml configs (same `agent.name`,
+    // multiple `discord[]` entries) still produce a unique key. Once
+    // migrate-config (MIG-7.2e) emits a proper `agents[]` array the suffix
+    // collapses to plain `${agent.id}-discord`.
+    const instanceId = instance.instanceId ?? `${config.agent.name}-discord-${instance.guildId}`;
+    // Synthesize a transitional `Agent` shape from the BotConfig.agent +
+    // bot.yaml discord[i] entry. `persona` is a placeholder until MIG-7.2e
+    // plumbs the real path; `roles` and `trust` are empty for the same
+    // reason (BotConfig has no equivalent fields). The constructed object
+    // is the same shape `cortex.yaml` will load directly post-7.2e.
+    const agent: Agent = {
+      id: config.agent.name,
+      displayName: config.agent.displayName,
+      persona: "(deferred-mig-7.2e)",
+      roles: [],
+      trust: [],
+      presence: {},
+    };
+    // Build the `DiscordPresence` from the bot.yaml discord[i] entry.
+    // Schema defaults already applied by `BotConfigSchema` at load time —
+    // this is a structural mapping, not a parse.
+    const presence: DiscordPresence = {
+      enabled: instance.enabled,
+      token: instance.token,
+      guildId: instance.guildId,
+      agentChannelId: instance.agentChannelId,
+      logChannelId: instance.logChannelId,
+      ...(instance.worklogChannelId !== undefined && { worklogChannelId: instance.worklogChannelId }),
+      contextDepth: instance.contextDepth,
+      enableAgentLog: instance.enableAgentLog,
+      roles: instance.roles,
+      defaultRole: instance.defaultRole,
+      dm: instance.dm,
+      ...(instance.operatorRoleId !== undefined && { operatorRoleId: instance.operatorRoleId }),
+    };
+    // Wire the synthesized presence back onto the agent so any downstream
+    // consumer that reaches `agent.presence.discord` sees the live block.
+    agent.presence.discord = presence;
     try {
       const adapter = new DiscordAdapter(
+        agent,
+        presence,
         {
           instanceId,
-          token: instance.token,
-          guildId: instance.guildId,
-          agentChannelId: instance.agentChannelId,
-          logChannelId: instance.logChannelId,
-          contextDepth: instance.contextDepth,
-          enableAgentLog: instance.enableAgentLog,
-          operatorDiscordId: config.agent.operatorDiscordId,
-          roles: instance.roles,
-          defaultRole: instance.defaultRole,
-          dm: instance.dm,
+          operator: {
+            ...(config.agent.operatorDiscordId !== undefined && { discordId: config.agent.operatorDiscordId }),
+          },
+          runtime,
+          systemEventSource,
+          botConfig: config,
         },
-        config,
-        // MIG-3b-ii: bus wiring for `system.adapter.*` envelopes.
-        { runtime, systemEventSource },
       );
       // Register the adapter's surface-router face. Empty `surfaceSubjects`
       // makes this a no-op match; harmless to register either way.

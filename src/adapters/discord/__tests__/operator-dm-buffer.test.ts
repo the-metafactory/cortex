@@ -17,8 +17,10 @@
  */
 
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { DiscordAdapter, type DiscordAdapterConfig } from "../index";
+import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
 import type { BotConfig } from "../../../common/types/config";
+import { DMConfigSchema } from "../../../common/types/config";
+import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
 import type { ConnectionHealth } from "../client";
 
 let originalWarn: typeof console.warn;
@@ -54,21 +56,37 @@ function makeAdapter(opts: {
   fetchUser?: (id: string) => Promise<FakeUser>;
   connected?: boolean;
 } = {}) {
-  const adapterConfig: DiscordAdapterConfig = {
-    instanceId: "discord-test",
+  // MIG-7.2c-discord-flip: constructor now takes (agent, presence, infra).
+  const presence: DiscordPresence = {
+    enabled: true,
     token: "test-token",
     guildId: "g1",
     agentChannelId: "c1",
     logChannelId: "c2",
     contextDepth: 0,
     enableAgentLog: false,
-    operatorDiscordId: "operator-123",
+    roles: [],
+    defaultRole: "allow-all",
+    dm: DMConfigSchema.parse({}),
+  };
+  const agent: Agent = {
+    id: "test",
+    displayName: "Test",
+    persona: "(test)",
+    roles: [],
+    trust: [],
+    presence: { discord: presence },
   };
   const botConfig = {
-    agent: { displayName: "Test" },
+    agent: { name: "test", displayName: "Test" },
     discord: [{ guildId: "g1" }],
   } as unknown as BotConfig;
-  const adapter = new DiscordAdapter(adapterConfig, botConfig);
+  const infra: DiscordAdapterInfra = {
+    instanceId: "discord-test",
+    operator: { discordId: "operator-123" },
+    botConfig,
+  };
+  const adapter = new DiscordAdapter(agent, presence, infra);
 
   const sends: string[] = [];
   const defaultUser: FakeUser = {

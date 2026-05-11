@@ -18,23 +18,43 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { Envelope } from "../../../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../../../bus/myelin/runtime";
 import type { BotConfig } from "../../../common/types/config";
-import { DiscordAdapter, type DiscordAdapterConfig } from "../index";
+import { DMConfigSchema } from "../../../common/types/config";
+import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
+import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
 
 const stubBotConfig = {
-  agent: { displayName: "Test", operatorId: "andreas" },
+  agent: { name: "test", displayName: "Test", operatorId: "andreas" },
   discord: [{ guildId: "g1" }],
 } as unknown as BotConfig;
 
-function makeAdapterConfig(overrides: Partial<DiscordAdapterConfig> = {}): DiscordAdapterConfig {
+// MIG-7.2c-discord-flip: build a fresh (agent, presence) pair for each
+// adapter so tests can mutate them safely. Overrides on `presence` mirror
+// what the previous `makeAdapterConfig` helper used to do via the
+// `DiscordAdapterConfig` partial.
+function makePresence(overrides: Partial<DiscordPresence> = {}): DiscordPresence {
   return {
-    instanceId: "discord-test",
+    enabled: true,
     token: "fake-token",
     guildId: "g1",
     agentChannelId: "ch1",
     logChannelId: "ch2",
     contextDepth: 5,
     enableAgentLog: false,
+    roles: [],
+    defaultRole: "allow-all",
+    dm: DMConfigSchema.parse({}),
     ...overrides,
+  };
+}
+
+function makeAgent(presence: DiscordPresence): Agent {
+  return {
+    id: "test",
+    displayName: "Test",
+    persona: "(test)",
+    roles: [],
+    trust: [],
+    presence: { discord: presence },
   };
 }
 
@@ -70,16 +90,16 @@ async function buildStartedAdapter(opts: {
   // discord.js Client is constructed inside start(); the only way to skip
   // the network call is to make login() resolve without doing anything.
   // We do this via a subclass-style override on the result.
-  const adapter = new DiscordAdapter(
-    makeAdapterConfig(),
-    stubBotConfig,
-    {
-      ...(opts.runtime !== undefined && { runtime: opts.runtime }),
-      ...(opts.systemEventSource !== undefined && {
-        systemEventSource: opts.systemEventSource,
-      }),
-    },
-  );
+  const presence = makePresence();
+  const agent = makeAgent(presence);
+  const infra: DiscordAdapterInfra = {
+    instanceId: "discord-test",
+    operator: {},
+    botConfig: stubBotConfig,
+    ...(opts.runtime !== undefined && { runtime: opts.runtime }),
+    ...(opts.systemEventSource !== undefined && { systemEventSource: opts.systemEventSource }),
+  };
+  const adapter = new DiscordAdapter(agent, presence, infra);
   // Reach in: replace client.login with a no-op before the real login fires.
   // The cleanest way is to start, then immediately replace the running
   // client's login — but start() awaits login. Instead, we patch the

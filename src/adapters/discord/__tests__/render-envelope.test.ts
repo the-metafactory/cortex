@@ -16,7 +16,9 @@
  */
 
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { DiscordAdapter, type DiscordAdapterConfig } from "../index";
+import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
+import { DMConfigSchema } from "../../../common/types/config";
+import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
 import type { BotConfig } from "../../../common/types/config";
 import type { ConnectionHealth } from "../client";
 import type { Envelope } from "../../../bus/myelin/envelope-validator";
@@ -67,29 +69,48 @@ interface FakeClient {
 function makeAdapter(opts: {
   surfaceSubjects?: string[];
   surfaceFallbackChannelId?: string;
-  surfaceFilter?: DiscordAdapterConfig["surfaceFilter"];
+  surfaceFilter?: DiscordAdapterInfra["surfaceFilter"];
   ready?: boolean;
   /** If false, the adapter has no client at all (pre-start state). */
   withClient?: boolean;
 } = {}) {
   const sends: Array<{ channelId: string; text: string }> = [];
-  const adapterConfig: DiscordAdapterConfig = {
-    instanceId: "discord-renderer",
+  // MIG-7.2c-discord-flip: constructor now takes (agent, presence, infra).
+  // Surface fields live on `infra` for this slice and move to a dedicated
+  // Renderer at MIG-7.2d.
+  const presence: DiscordPresence = {
+    enabled: true,
     token: "test-token",
     guildId: "g1",
     agentChannelId: "c1",
     logChannelId: "c2",
     contextDepth: 0,
     enableAgentLog: false,
-    surfaceSubjects: opts.surfaceSubjects,
-    surfaceFallbackChannelId: opts.surfaceFallbackChannelId,
-    surfaceFilter: opts.surfaceFilter,
+    roles: [],
+    defaultRole: "allow-all",
+    dm: DMConfigSchema.parse({}),
+  };
+  const agent: Agent = {
+    id: "test",
+    displayName: "Test",
+    persona: "(test)",
+    roles: [],
+    trust: [],
+    presence: { discord: presence },
   };
   const botConfig = {
-    agent: { displayName: "Test" },
+    agent: { name: "test", displayName: "Test" },
     discord: [{ guildId: "g1" }],
   } as unknown as BotConfig;
-  const adapter = new DiscordAdapter(adapterConfig, botConfig);
+  const infra: DiscordAdapterInfra = {
+    instanceId: "discord-renderer",
+    operator: {},
+    botConfig,
+    ...(opts.surfaceSubjects !== undefined && { surfaceSubjects: opts.surfaceSubjects }),
+    ...(opts.surfaceFallbackChannelId !== undefined && { surfaceFallbackChannelId: opts.surfaceFallbackChannelId }),
+    ...(opts.surfaceFilter !== undefined && { surfaceFilter: opts.surfaceFilter }),
+  };
+  const adapter = new DiscordAdapter(agent, presence, infra);
 
   if (opts.withClient !== false) {
     const client: FakeClient = {
