@@ -15,6 +15,8 @@ import type {
   ContextMessage,
 } from "../types";
 import type { BotConfig, DiscordRole, DMConfig } from "../../common/types/config";
+import { DMConfigSchema } from "../../common/types/config";
+import type { Agent, DiscordPresence } from "../../common/types/cortex-config";
 import { createDiscordClient, isMentionForBot, extractContent, type ConnectionHealth } from "./client";
 import { fetchContext } from "./context-fetcher";
 import { postToDiscord } from "./response-poster";
@@ -99,6 +101,28 @@ export class DiscordAdapter implements PlatformAdapter {
   private connectionHealth: ConnectionHealth | null = null;
   private botConfig: BotConfig;
   private adapterConfig: DiscordAdapterConfig;
+  /**
+   * MIG-7.2c-internal: presence-shape mirror of the legacy `adapterConfig`
+   * credential/role/DM fields. Computed once at construction and kept in sync
+   * by `updateConfig` so the rest of the class can already read from the
+   * cortex-config shape. The constructor signature is intentionally unchanged
+   * in this slice — the flip to `(Agent, DiscordPresence, infra)` happens in
+   * MIG-7.2c-discord-flip and removes the back-conversion below.
+   *
+   * Fields that don't map onto `DiscordPresenceSchema` (operatorDiscordId,
+   * surface*) stay on `adapterConfig` for now. They move to the operator and
+   * Renderer config respectively in later slices.
+   */
+  private presence: DiscordPresence;
+  /**
+   * MIG-7.2c-internal: minimal agent stub built from `botConfig.agent` plus
+   * the freshly-computed presence. The `persona` field is a documented
+   * placeholder until MIG-7.2c-discord-flip plumbs the real persona path
+   * down from the operator's cortex.yaml. No method currently reads from
+   * `this.agent`; this field exists so the flip slice can wire the AgentRegistry
+   * / TrustResolver paths without touching the constructor again.
+   */
+  private agent: Agent;
   private runtime: MyelinRuntime | undefined;
   private systemEventSource: SystemEventSource | undefined;
   /**
@@ -116,6 +140,8 @@ export class DiscordAdapter implements PlatformAdapter {
     this.instanceId = adapterConfig.instanceId;
     this.adapterConfig = adapterConfig;
     this.botConfig = botConfig;
+    this.presence = DiscordAdapter.toPresence(adapterConfig);
+    this.agent = DiscordAdapter.toAgent(botConfig, this.presence);
     this.runtime = wiring.runtime;
     this.systemEventSource = wiring.systemEventSource;
 
@@ -286,7 +312,7 @@ export class DiscordAdapter implements PlatformAdapter {
       await onMessage(inboundMsg);
     });
 
-    await this.client.login(this.adapterConfig.token);
+    await this.client.login(this.presence.token);
   }
 
   async stop(): Promise<void> {
@@ -334,6 +360,12 @@ export class DiscordAdapter implements PlatformAdapter {
     this.adapterConfig.defaultRole = newInstance.defaultRole;
     this.adapterConfig.dm = newInstance.dm;
 
+    // MIG-7.2c-internal: mirror the same hot-reload-safe fields into the
+    // presence shape so subsequent reads via `this.presence.*` see the
+    // updated values. Rebuild via the same helper used at construction so
+    // schema-default behaviour stays identical across the two paths.
+    this.presence = DiscordAdapter.toPresence(this.adapterConfig);
+
     // Update bot config (for claude execution settings)
     this.botConfig = config;
 
@@ -356,8 +388,8 @@ export class DiscordAdapter implements PlatformAdapter {
     }
 
     const role = resolveRole(msg.authorId, {
-      roles: this.adapterConfig.roles ?? [],
-      defaultRole: this.adapterConfig.defaultRole ?? "allow-all",
+      roles: this.presence.roles,
+      defaultRole: this.presence.defaultRole,
     });
 
     if (role.denied) {
@@ -383,7 +415,7 @@ export class DiscordAdapter implements PlatformAdapter {
 
   /** G-300: Resolve access for DM messages */
   private resolveDMAccess(msg: InboundMessage): AccessDecision {
-    const dm = this.adapterConfig.dm;
+    const dm = this.presence.dm;
 
     // Operator DM — full access
     if (msg.dmType === "operator" && dm?.operatorRole) {
@@ -706,6 +738,73 @@ export class DiscordAdapter implements PlatformAdapter {
       attachment: f.content,
       name: f.filename,
     }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // MIG-7.2c-internal: back-conversion helpers
+  //
+  // These translate the legacy `(DiscordAdapterConfig, BotConfig)` constructor
+  // inputs into the cortex-config `(Agent, DiscordPresence)` shape so the rest
+  // of the class can already read from the target types. Both helpers are
+  // deleted by MIG-7.2c-discord-flip when the constructor signature flips.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Build a `DiscordPresence`-shaped object from the credential/role/DM
+   * fields on `DiscordAdapterConfig`. Built structurally rather than via
+   * `DiscordPresenceSchema.parse` because the legacy `DiscordAdapterConfig`
+   * is a plain TS interface that doesn't enforce the schema's stricter
+   * runtime invariants (e.g. `contextDepth: z.number().positive()` rejects
+   * 0, which test fixtures legitimately use). Schema-strictness re-enters
+   * the pipeline at MIG-7.2c-discord-flip when `cortex.ts` switches over
+   * to parsing `cortex.yaml` upstream.
+   *
+   * `enabled` defaults to `true`, `roles` to `[]`, `defaultRole` to
+   * `"allow-all"`, `dm` to the schema's own default shape, matching the
+   * `DiscordPresenceSchema` field defaults so call-sites see equivalent
+   * values regardless of which constructor path runs. Optional fields not
+   * carried by the legacy adapter config (`worklogChannelId`,
+   * `operatorRoleId`) stay undefined.
+   */
+  private static toPresence(adapterConfig: DiscordAdapterConfig): DiscordPresence {
+    return {
+      enabled: true,
+      token: adapterConfig.token,
+      guildId: adapterConfig.guildId,
+      agentChannelId: adapterConfig.agentChannelId,
+      logChannelId: adapterConfig.logChannelId,
+      contextDepth: adapterConfig.contextDepth,
+      enableAgentLog: adapterConfig.enableAgentLog,
+      roles: adapterConfig.roles ?? [],
+      defaultRole: adapterConfig.defaultRole ?? "allow-all",
+      dm: adapterConfig.dm ?? DMConfigSchema.parse({}),
+    };
+  }
+
+  /**
+   * Build a minimal `Agent` from `BotConfig.agent` plus the freshly-computed
+   * presence. `persona` is a documented placeholder — `BotConfig` has no
+   * persona-file field, so the real path stays out of reach until
+   * MIG-7.2c-discord-flip plumbs it from `cortex.yaml`. `roles` and `trust`
+   * default to empty arrays for the same reason: the legacy bot.yaml carries
+   * no such fields.
+   *
+   * Built structurally (no `AgentSchema.parse`) for the same reason
+   * `toPresence` is — keep this slice's constructor strictness identical to
+   * the pre-refactor adapter so existing test fixtures keep working
+   * unchanged. No adapter method currently reads from `this.agent`; the
+   * field exists so the flip slice doesn't need a second constructor
+   * refactor to wire AgentRegistry / TrustResolver paths.
+   */
+  private static toAgent(botConfig: BotConfig, presence: DiscordPresence): Agent {
+    return {
+      id: botConfig.agent.name,
+      displayName: botConfig.agent.displayName,
+      persona: "(deferred-mig-7.2c-flip)",
+      roles: [],
+      trust: [],
+      presence: { discord: presence },
+    };
   }
 
   // ---------------------------------------------------------------------------
