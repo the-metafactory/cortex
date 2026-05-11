@@ -432,6 +432,18 @@ export const BotConfigSchema = z.object({
      */
     subjects: z.array(z.string().min(1)).default([]),
   }).optional(),
+
+  /**
+   * MIG-7.2d: optional `renderers[]` block for non-agent-bound surfaces
+   * (dashboard, pagerduty, …). Additive on the legacy `BotConfig` so an
+   * existing `bot.yaml` keeps loading unchanged; cortex.yaml (post-7.2e
+   * migrate-config) emits this field directly off the cortex-config
+   * schema. The shape passes through Zod via `z.unknown()` and the
+   * stricter parse happens inside `createRenderer` (each variant is its
+   * own `RendererSchema` block); a typo at this layer surfaces at the
+   * factory rather than at config load.
+   */
+  renderers: z.array(z.unknown()).optional(),
 });
 
 export type BotConfig = z.infer<typeof BotConfigSchema>;

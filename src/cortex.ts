@@ -32,6 +32,8 @@ import { createNetworkResolver } from "./bus/network-resolver";
 import type { SystemEventSource } from "./bus/system-events";
 
 import { DiscordAdapter } from "./adapters/discord";
+import { createRenderer, type Renderer } from "./renderers";
+import { RendererSchema } from "./common/types/cortex-config";
 import type { Agent, DiscordPresence, MattermostPresence } from "./common/types/cortex-config";
 import { MattermostAdapter } from "./adapters/mattermost";
 import type { PlatformAdapter } from "./adapters/types";
@@ -329,6 +331,46 @@ export async function startCortex(
     }
   }
 
+  // MIG-7.2d: non-agent-bound renderers (dashboard, pagerduty, …).
+  // Per architecture §9.2 these are activity-centric sinks that subscribe
+  // to a slice of the bus and project envelopes into a UI / pager / log
+  // stream. The G-1111 §4.6 fail-safe rule requires ≥2 distinct platform
+  // classes covering `local.{org}.system.>` so an operational alert
+  // reliably reaches the operator even if one sink is the thing that
+  // broke. Renderers never publish on the bus (architecture §9.3).
+  const renderers: Renderer[] = [];
+  for (const raw of config.renderers ?? []) {
+    // BotConfig types renderers as z.unknown() so legacy bot.yaml loads
+    // without breakage (the canonical shape lives on cortex-config's
+    // RendererSchema). Parse each entry strictly here — a typo fails fast
+    // with a Zod error rather than surfacing as a runtime cast failure
+    // inside the factory.
+    const parseResult = RendererSchema.safeParse(raw);
+    if (!parseResult.success) {
+      console.error(
+        `cortex: renderer config rejected by schema:`,
+        parseResult.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
+      );
+      continue;
+    }
+    const rendererConfig = parseResult.data;
+    try {
+      const renderer = createRenderer(rendererConfig);
+      await renderer.start();
+      router.register(renderer.surfaceConfig);
+      renderers.push(renderer);
+      console.log(`cortex: ${rendererConfig.kind} renderer started (id: ${renderer.id})`);
+    } catch (err) {
+      // Renderer construction can throw (UnimplementedRendererKindError)
+      // or `start()` can fail. Per the G-1111 fail-safe rule, ONE broken
+      // renderer must not prevent the others from coming up — log + skip.
+      console.error(
+        `cortex: ${rendererConfig.kind} renderer failed to start:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   // Dispatch-listener — bus envelope → CC spawn.
   const dispatchListener: DispatchListener = createDispatchListener({ runtime, router, source: systemEventSource });
   await dispatchListener.start();
@@ -397,6 +439,7 @@ export async function startCortex(
     // the abandoned set.
     const pending = new Set<string>();
     const adapterStopNames = adapters.map((a) => `adapter ${a.instanceId} stop`);
+    const rendererStopNames = renderers.map((r) => `renderer ${r.id} stop`);
     const allSlots: string[] = [
       "config-watcher stop",
       "usage-monitor stop",
@@ -406,6 +449,7 @@ export async function startCortex(
       "surface-router stop",
       "dispatch-handler shutdown",
       ...adapterStopNames,
+      ...rendererStopNames,
       "cloud publisher close",
       "runtime stop",
     ];
@@ -438,6 +482,9 @@ export async function startCortex(
       await completeAsync("dispatch-handler shutdown", dispatchHandler.shutdown());
       for (let i = 0; i < adapters.length; i++) {
         await completeAsync(adapterStopNames[i]!, adapters[i]!.stop());
+      }
+      for (let i = 0; i < renderers.length; i++) {
+        await completeAsync(rendererStopNames[i]!, renderers[i]!.stop());
       }
       await completeAsync("cloud publisher close", cloudPublisher?.close());
       await completeAsync("runtime stop", runtime.stop());

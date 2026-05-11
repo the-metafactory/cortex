@@ -357,7 +357,14 @@ export const RendererSchema = z.discriminatedUnion("kind", [
   WebhookOutRendererSchema,
 ]);
 
-export type Renderer = z.infer<typeof RendererSchema>;
+/**
+ * MIG-7.2d: renamed from `Renderer` → `RendererConfig` so the unprefixed
+ * `Renderer` name can refer to the runtime class hierarchy in
+ * `src/renderers/`. The schema-inferred type represents the CONFIG block
+ * for a renderer, not the renderer instance itself, so the new name is
+ * more accurate as well.
+ */
+export type RendererConfig = z.infer<typeof RendererSchema>;
 
 // =============================================================================
 // NATS — bus runtime config
