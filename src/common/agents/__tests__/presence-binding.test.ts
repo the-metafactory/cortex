@@ -456,4 +456,22 @@ describe("Module shape", () => {
     expect(typeof PresenceBinding).toBe("function");
     expect(typeof UnsupportedPlatformError).toBe("function");
   });
+
+  test("known-platforms list matches the TrustResolver.Platform union (drift guard)", () => {
+    // Compile-time exhaustiveness comes from the `satisfies Record<Platform, true>`
+    // bound on KNOWN_PLATFORMS in presence-binding.ts. This runtime check is the
+    // belt-and-suspenders: build a sample agent with each Platform variant in
+    // turn (via the FakeAdapter) and confirm the binding accepts it. If a new
+    // Platform variant is added to the union without updating KNOWN_PLATFORMS,
+    // the compile-time check fails first; if KNOWN_PLATFORMS is updated but the
+    // adapter wiring isn't, this runtime check stays green but the missing
+    // adapter-side wiring will surface in 7.2c-{platform} implementation work.
+    const registry = AgentRegistry.fromAgents([agentFixture({ id: "luna" })]);
+    const resolver = new TrustResolver(registry);
+    const platforms: Platform[] = ["discord", "mattermost"];
+    for (const platform of platforms) {
+      const adapter = new FakeAdapter({ platform });
+      expect(() => new PresenceBinding("luna", adapter, resolver)).not.toThrow();
+    }
+  });
 });

@@ -51,18 +51,25 @@ import { type Platform, type TrustResolver } from "./trust-resolver";
 // =============================================================================
 
 /**
- * The platforms the trust resolver accepts. Mirrors the `Platform` union in
- * `trust-resolver.ts` — kept in a `Set` so the binding can narrow an
- * adapter's `platform: string` field at construction time.
+ * The platforms the trust resolver accepts, expressed as a record keyed by
+ * every variant of the `Platform` union. The `satisfies Record<Platform, …>`
+ * bound is the compile-time drift guard Holly W1 asked for: if a new
+ * variant is added to the `Platform` union in `trust-resolver.ts` without
+ * adding a key here, this literal fails to typecheck — the runtime
+ * narrowing stays in sync with the union by construction.
  *
- * Adding a new platform requires (1) extending the `Platform` union and
- * (2) adding the value here. The duplication is deliberate: the union is
- * compile-time, the set is runtime, and TypeScript can't bridge that.
+ * Use `isKnownPlatform` to narrow an adapter's `platform: string` field at
+ * the binding boundary.
  */
-const KNOWN_PLATFORMS: ReadonlySet<Platform> = new Set<Platform>(["discord", "mattermost"]);
+const KNOWN_PLATFORMS = {
+  discord: true,
+  mattermost: true,
+} as const satisfies Record<Platform, true>;
+
+const KNOWN_PLATFORM_LIST: readonly Platform[] = Object.keys(KNOWN_PLATFORMS) as Platform[];
 
 function isKnownPlatform(s: string): s is Platform {
-  return KNOWN_PLATFORMS.has(s as Platform);
+  return Object.hasOwn(KNOWN_PLATFORMS, s);
 }
 
 // =============================================================================
@@ -85,16 +92,15 @@ export class UnsupportedPlatformError extends Error {
   readonly knownPlatforms: readonly Platform[];
 
   constructor(platform: string) {
-    const known = [...KNOWN_PLATFORMS];
     super(
       `PresenceBinding: adapter.platform "${platform}" is not a known trust-resolver ` +
-        `platform (known: ${known.join(", ")}). Extend the Platform union in ` +
-        `src/common/agents/trust-resolver.ts and the KNOWN_PLATFORMS set in ` +
+        `platform (known: ${KNOWN_PLATFORM_LIST.join(", ")}). Extend the Platform union in ` +
+        `src/common/agents/trust-resolver.ts and the KNOWN_PLATFORMS record in ` +
         `src/common/agents/presence-binding.ts before binding adapters for new platforms.`,
     );
     this.name = "UnsupportedPlatformError";
     this.platform = platform;
-    this.knownPlatforms = known;
+    this.knownPlatforms = KNOWN_PLATFORM_LIST;
   }
 }
 
@@ -149,7 +155,7 @@ export class PresenceBinding {
     } catch (err) {
       try {
         await this.adapter.stop();
-      } catch {
+      } catch (_rollbackErr) {
         // Rollback best-effort; the caller's actionable signal is `err`.
       }
       throw err;
