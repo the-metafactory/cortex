@@ -137,8 +137,13 @@ export class MattermostAdapter implements PlatformAdapter {
       );
     }
 
+    // Bound the startup-time call so a hung Mattermost server doesn't block
+    // PresenceBinding.startAndBind indefinitely. 10s is generous for a single
+    // /users/me round-trip; if the server is slower than that, startup
+    // failure with a clear error beats waiting forever (Holly W2 review).
     const res = await fetch(`${apiUrl}/api/v4/users/me`, {
       headers: { Authorization: `Bearer ${apiToken}` },
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) {
       throw new Error(
