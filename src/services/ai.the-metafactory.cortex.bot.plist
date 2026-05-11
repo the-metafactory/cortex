@@ -27,7 +27,7 @@
         <string>__HOME__</string>
         <key>PATH</key>
         <string>__HOME__/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
-        <key>CORTEX_CHANNEL</key>
+        <key>GROVE_CHANNEL</key>
         <string>__AGENT_NAME__</string>
     </dict>
 </dict>

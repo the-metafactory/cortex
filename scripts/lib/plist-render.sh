@@ -36,12 +36,26 @@ resolve_bun_path() {
 # Extract the first agent id from a cortex.yaml file. Falls back to "cortex"
 # when the file is missing or the awk parse fails. Stays awk-only to avoid
 # dragging in a yaml lib at install time.
+#
+# Output is validated against `^[a-zA-Z0-9_-]+$` — the same regex shape the
+# cortex-config schema enforces on `agents[].id`. A name containing the sed
+# delimiter `|`, the XML special chars `<` / `&`, or whitespace would
+# silently emit a malformed plist when interpolated into the
+# `<string>__AGENT_NAME__</string>` slot. Bailing here surfaces the bad
+# config at install time with a pointed error message instead of letting
+# launchd crash-loop a half-rendered plist (Holly cortex#52 round 3
+# security warning).
 extract_agent_name() {
   local cortex_yaml="$1"
   local name="cortex"
   if [ -f "${cortex_yaml}" ]; then
     name=$(awk '/^agents:/{found=1; next} found && /^[ \-]*id:/{sub(/.*id:[ ]*/, ""); gsub(/["'\'']/, ""); gsub(/#.*/, ""); print; exit}' "${cortex_yaml}" | xargs || true)
     name="${name:-cortex}"
+  fi
+  if ! [[ "${name}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "  ⚠ refusing to render plist: agent id \"${name}\" contains characters outside [a-zA-Z0-9_-]" >&2
+    echo "    Fix the first \`agents[].id\` in ${cortex_yaml} (cortex-config schema requires lowercase alphanumeric + hyphen)." >&2
+    return 1
   fi
   printf '%s' "${name}"
 }
@@ -81,7 +95,7 @@ render_cortex_plists() {
   local bot_src="${cortex_dir}/src/services/ai.the-metafactory.cortex.bot.plist"
   local bot_dst="${launch_dir}/ai.the-metafactory.cortex.bot.plist"
   local agent_name
-  agent_name="$(extract_agent_name "${config_dir}/cortex.yaml")"
+  agent_name="$(extract_agent_name "${config_dir}/cortex.yaml")" || return 1
   if [ -f "${bot_src}" ]; then
     sed -e "s|__CORTEX_DIR__|${cortex_dir}|g" \
         -e "s|__BUN_PATH__|${bun_path}|g" \
