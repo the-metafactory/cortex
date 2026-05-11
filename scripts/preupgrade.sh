@@ -9,8 +9,12 @@ echo "Stopping Cortex services for upgrade (${PAI_OLD_VERSION:-?} → ${PAI_NEW_
 if [ "$(uname)" = "Darwin" ]; then
   LAUNCH_DIR="${HOME}/Library/LaunchAgents"
 
-  # Kill any running cortex bot processes before upgrading symlinks
-  CORTEX_PIDS=$(pgrep -f "cortex start" 2>/dev/null || true)
+  # Kill running cortex bot processes before upgrading symlinks.
+  # Holly cortex#52 round 1 nit-3: previous `pgrep -f "cortex start"` matched
+  # any commandline containing that substring (`grep cortex start`, vim
+  # buffers, other users' editors on shared hosts). Constrain to the
+  # `~/bin/cortex` symlink path so only the actual daemon is matched.
+  CORTEX_PIDS=$(pgrep -f "${HOME}/bin/cortex start" 2>/dev/null || true)
   if [ -n "${CORTEX_PIDS}" ]; then
     echo "  Killing existing cortex processes: ${CORTEX_PIDS}"
     kill ${CORTEX_PIDS} 2>/dev/null || true
@@ -19,8 +23,10 @@ if [ "$(uname)" = "Darwin" ]; then
     echo "  ✓ Old cortex bot processes terminated"
   fi
 
-  # Kill any running cortex-relay processes
-  RELAY_PIDS=$(pgrep -f "cortex-relay|grove-relay" 2>/dev/null || true)
+  # Kill running cortex-relay processes — anchor to ~/bin path for the same
+  # specificity reason. Also catches the legacy grove-relay binary path
+  # (`~/bin/grove-relay`) during the cutover window.
+  RELAY_PIDS=$(pgrep -f "${HOME}/bin/(cortex-relay|grove-relay)" 2>/dev/null || true)
   if [ -n "${RELAY_PIDS}" ]; then
     echo "  Killing existing relay processes: ${RELAY_PIDS}"
     kill ${RELAY_PIDS} 2>/dev/null || true
