@@ -3,7 +3,7 @@
  * Fetches thread context from Mattermost REST API for multi-turn conversations.
  */
 
-import type { BotConfig } from "../../common/types/config";
+import type { MattermostPresence } from "../../common/types/cortex-config";
 import type { ContextMessage } from "../../common/types/context";
 import { formatContextForClaude } from "../../common/types/context";
 
@@ -70,19 +70,18 @@ async function fetchUserName(
 export async function fetchMattermostContext(
   postId: string,
   channelId: string,
-  config: BotConfig,
+  opts: { agentName: string; presence: MattermostPresence },
   botUserId?: string
 ): Promise<{ messages: ContextMessage[]; formatted: string }> {
-  const mm = config.mattermost[0]; // Instance-scoped config
-  const apiUrl = mm?.apiUrl;
-  const apiToken = mm?.apiToken;
+  const apiUrl = opts.presence.apiUrl;
+  const apiToken = opts.presence.apiToken;
 
   if (!apiUrl || !apiToken) {
     return { messages: [], formatted: "" };
   }
 
   const userCache = new Map<string, string>();
-  const agentName = config.agent.name;
+  const agentName = opts.agentName;
 
   try {
     // Try to get the post first to check if it's in a thread

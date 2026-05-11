@@ -14,8 +14,8 @@
  */
 
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { MattermostAdapter, type MattermostAdapterConfig } from "../index";
-import type { BotConfig } from "../../../common/types/config";
+import { MattermostAdapter, type MattermostAdapterInfra } from "../index";
+import type { Agent, MattermostPresence } from "../../../common/types/cortex-config";
 import type { Envelope } from "../../../bus/myelin/envelope-validator";
 
 // ---------------------------------------------------------------------------
@@ -85,23 +85,37 @@ afterEach(() => {
 function makeAdapter(opts: {
   surfaceSubjects?: string[];
   surfaceFallbackChannelId?: string;
-  surfaceFilter?: MattermostAdapterConfig["surfaceFilter"];
+  surfaceFilter?: MattermostAdapterInfra["surfaceFilter"];
 } = {}) {
-  const adapterConfig: MattermostAdapterConfig = {
-    instanceId: "mm-renderer",
+  // MIG-7.2c-mattermost: constructor now takes (agent, presence, infra).
+  // Surface fields live on `infra`; credentials live on `presence`.
+  const presence: MattermostPresence = {
+    enabled: true,
+    callbackPort: 8080,
     apiUrl: "https://mm.example",
     apiToken: "test-token",
     channels: ["c-default"],
     pollIntervalMs: 1000,
-    surfaceSubjects: opts.surfaceSubjects,
-    surfaceFallbackChannelId: opts.surfaceFallbackChannelId,
-    surfaceFilter: opts.surfaceFilter,
+    allowedUsers: [],
+    roles: [],
+    defaultRole: "allow-all",
   };
-  const botConfig = {
-    agent: { displayName: "Test" },
-    mattermost: [{ ...adapterConfig, enabled: true }],
-  } as unknown as BotConfig;
-  return new MattermostAdapter(adapterConfig, botConfig);
+  const agent: Agent = {
+    id: "test",
+    displayName: "Test",
+    persona: "(test)",
+    roles: [],
+    trust: [],
+    presence: { mattermost: presence },
+  };
+  const infra: MattermostAdapterInfra = {
+    instanceId: "mm-renderer",
+    operator: {},
+    ...(opts.surfaceSubjects !== undefined && { surfaceSubjects: opts.surfaceSubjects }),
+    ...(opts.surfaceFallbackChannelId !== undefined && { surfaceFallbackChannelId: opts.surfaceFallbackChannelId }),
+    ...(opts.surfaceFilter !== undefined && { surfaceFilter: opts.surfaceFilter }),
+  };
+  return new MattermostAdapter(agent, presence, infra);
 }
 
 function makeEnvelope(overrides: Partial<Envelope> = {}): Envelope {

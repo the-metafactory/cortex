@@ -32,7 +32,7 @@ import { createNetworkResolver } from "./bus/network-resolver";
 import type { SystemEventSource } from "./bus/system-events";
 
 import { DiscordAdapter } from "./adapters/discord";
-import type { Agent, DiscordPresence } from "./common/types/cortex-config";
+import type { Agent, DiscordPresence, MattermostPresence } from "./common/types/cortex-config";
 import { MattermostAdapter } from "./adapters/mattermost";
 import type { PlatformAdapter } from "./adapters/types";
 
@@ -275,21 +275,50 @@ export async function startCortex(
       console.error(`cortex: mattermost instance ${instance.instanceId ?? "unnamed"} missing apiUrl/apiToken — skipping`);
       continue;
     }
-    const instanceId = instance.instanceId ?? `mattermost-${config.agent.name}`;
+    // MIG-7.2c-mattermost: same instanceId-derivation strategy as Discord —
+    // suffix the legacy fallback with `mattermost-${index}` when
+    // botConfig.mattermost[] has multiple entries per agent.name. Collapses
+    // to plain `${agent.id}-mattermost` at MIG-7.2e.
+    const mmIndex = config.mattermost.indexOf(instance);
+    const instanceId = instance.instanceId ?? (config.mattermost.length > 1
+      ? `${config.agent.name}-mattermost-${mmIndex}`
+      : `${config.agent.name}-mattermost`);
+    // Build the `MattermostPresence` from the bot.yaml mattermost[i] entry.
+    const presence: MattermostPresence = {
+      enabled: instance.enabled,
+      callbackPort: instance.callbackPort,
+      apiUrl: instance.apiUrl,
+      apiToken: instance.apiToken,
+      ...(instance.triggerWord !== undefined && { triggerWord: instance.triggerWord }),
+      ...(instance.webhookUrl !== undefined && { webhookUrl: instance.webhookUrl }),
+      ...(instance.webhookToken !== undefined && { webhookToken: instance.webhookToken }),
+      channels: instance.channels,
+      pollIntervalMs: instance.pollIntervalMs,
+      allowedUsers: instance.allowedUsers,
+      roles: instance.roles,
+      defaultRole: instance.defaultRole,
+    };
+    // Synthesize a transitional `Agent` shape — same pattern as the
+    // Discord block above. Persona is a `(deferred-mig-7.2e)` placeholder
+    // until migrate-config emits cortex.yaml.
+    const agent: Agent = {
+      id: config.agent.name,
+      displayName: config.agent.displayName,
+      persona: "(deferred-mig-7.2e)",
+      roles: [],
+      trust: [],
+      presence: { mattermost: presence },
+    };
     try {
       const adapter = new MattermostAdapter(
+        agent,
+        presence,
         {
           instanceId,
-          apiUrl: instance.apiUrl,
-          apiToken: instance.apiToken,
-          triggerWord: instance.triggerWord,
-          channels: instance.channels,
-          pollIntervalMs: instance.pollIntervalMs,
-          operatorMattermostId: config.agent.operatorMattermostId,
-          roles: instance.roles,
-          defaultRole: instance.defaultRole,
+          operator: {
+            ...(config.agent.operatorMattermostId !== undefined && { mattermostId: config.agent.operatorMattermostId }),
+          },
         },
-        config,
       );
       router.register(adapter.surfaceConfig);
       await adapter.start((msg) => dispatchHandler.handleMessage(adapter, msg));

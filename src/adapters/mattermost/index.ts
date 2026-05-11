@@ -13,7 +13,8 @@ import type {
   OutboundFile,
   ContextMessage,
 } from "../types";
-import type { BotConfig, DiscordRole } from "../../common/types/config";
+import type { BotConfig } from "../../common/types/config";
+import type { Agent, MattermostPresence } from "../../common/types/cortex-config";
 import type { MattermostInboundMessage } from "./server";
 import {
   createMattermostPoller,
@@ -22,30 +23,44 @@ import {
   fetchMattermostFileInfos,
 } from "./poller";
 import { fetchMattermostContext } from "./context";
+import { fetchBotUserId } from "./bot-user";
 import { resolveRole } from "../discord/role-resolver";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
 import type { SurfaceAdapter } from "../../bus/surface-router";
 import type { PayloadFilter } from "../../bus/payload-filter";
 import { formatEnvelopeAsMarkdown } from "../envelope-renderer";
 
-export interface MattermostAdapterConfig {
+/**
+ * Cortex-deployment-level wiring passed alongside the agent + presence pair.
+ * Mirrors `DiscordAdapterInfra` (see cortex#48 / MIG-7.2c-discord-cleanup)
+ * with Mattermost-specific bits: the operator's Mattermost user id lives
+ * here, not on the agent block.
+ *
+ * The surface-router fields park here transitionally — architecture §9.2
+ * makes them a renderer concern (activity-centric, not agent-credential),
+ * and a dedicated `kind: mattermost-channel` renderer lifts them out at
+ * MIG-7.2d alongside the matching Discord renderer.
+ */
+export interface MattermostAdapterInfra {
+  /** Surface-router + log-prefix key. Cortex derives `${agent.id}-mattermost`
+   * (or `${agent.id}-mattermost-${index}` when `botConfig.mattermost[]` has
+   * multiple entries per agent.name); collapses to plain
+   * `${agent.id}-mattermost` at MIG-7.2e when migrate-config emits a real
+   * agents[] array. */
   instanceId: string;
-  apiUrl: string;
-  apiToken: string;
-  triggerWord?: string;
-  channels: string[];
-  pollIntervalMs: number;
-  operatorMattermostId?: string;
-  roles?: DiscordRole[];
-  defaultRole?: string;
-  /** MIG-3b: NATS subject patterns this adapter renders to Mattermost. Empty/undefined →
-   * adapter never matches in the surface-router. */
+  /** Operator's platform identity. Architecture §9.1: the operator runs the
+   * cortex deployment, distinct from the agents they host. */
+  operator: { mattermostId?: string };
+  /** MIG-3b: NATS subject patterns this adapter renders to Mattermost.
+   * Empty/undefined → adapter never matches in the surface-router. Moves to
+   * Renderer config at MIG-7.2d. */
   surfaceSubjects?: string[];
-  /** MIG-3b: optional payload filter applied AFTER subject match. */
+  /** MIG-3b: optional payload filter applied AFTER subject match. Moves to
+   * Renderer at MIG-7.2d. */
   surfaceFilter?: PayloadFilter;
-  /** MIG-3b: fallback Mattermost channel ID for envelope rendering when no per-envelope
-   * routing rule applies. Mattermost channel ID (the 26-char string), NOT a channel name.
-   * Per-envelope routing handled by the Renderer model (MIG-7.2d). */
+  /** MIG-3b: fallback Mattermost channel ID for envelope rendering when no
+   * per-envelope routing rule applies. The 26-char channel ID, NOT a name.
+   * Moves to Renderer at MIG-7.2d. */
   surfaceFallbackChannelId?: string;
 }
 
@@ -54,29 +69,44 @@ export class MattermostAdapter implements PlatformAdapter {
   readonly instanceId: string;
 
   private stopPoller: (() => void) | null = null;
-  private botConfig: BotConfig;
-  private scopedConfig: BotConfig; // Config with mattermost scoped to this instance
-  private adapterConfig: MattermostAdapterConfig;
+  private agent: Agent;
+  private presence: MattermostPresence;
+  private infra: MattermostAdapterInfra;
+  /**
+   * Constructor-validated, refined credentials. `MattermostPresenceSchema`
+   * leaves `apiUrl` / `apiToken` optional because cortex.yaml can legitimately
+   * declare a Mattermost presence with neither yet (e.g. webhook-only).
+   * However, every call site in this adapter — poller, REST posts, /users/me
+   * helper — needs both as concrete strings, and they're reconnect-only
+   * (never updated on hot-reload). Validate once at construction and cache
+   * the refined values; consumers read `this.apiUrl` / `this.apiToken`.
+   */
+  private apiUrl: string;
+  private apiToken: string;
   /** MIG-7.2c-binding: lazily-fetched bot user id from `/api/v4/users/me`. */
   private cachedPlatformUserId: string | null = null;
 
-  constructor(adapterConfig: MattermostAdapterConfig, botConfig: BotConfig) {
-    this.instanceId = adapterConfig.instanceId;
-    this.adapterConfig = adapterConfig;
-    this.botConfig = botConfig;
-    // Scoped config: replace mattermost array with just this instance's config
-    this.scopedConfig = {
-      ...botConfig,
-      mattermost: [{
-        ...adapterConfig,
-        enabled: true,
-      }],
-    } as BotConfig;
+  constructor(
+    agent: Agent,
+    presence: MattermostPresence,
+    infra: MattermostAdapterInfra,
+  ) {
+    this.agent = agent;
+    this.presence = presence;
+    this.infra = infra;
+    this.instanceId = infra.instanceId;
+    if (!presence.apiUrl || !presence.apiToken) {
+      throw new Error(
+        `mattermost-adapter[${this.instanceId}]: construction requires presence.apiUrl + presence.apiToken (got apiUrl=${presence.apiUrl ? "set" : "missing"}, apiToken=${presence.apiToken ? "set" : "missing"}).`,
+      );
+    }
+    this.apiUrl = presence.apiUrl;
+    this.apiToken = presence.apiToken;
 
     // MIG-3b: warn once at construction if surfaceSubjects is explicitly empty.
     // Mirrors DiscordAdapter — `undefined` is silent (opted out), `[]` is a
     // config-typo signal worth surfacing.
-    if (adapterConfig.surfaceSubjects?.length === 0) {
+    if (infra.surfaceSubjects?.length === 0) {
       console.warn(
         `mattermost-${this.instanceId}: surfaceSubjects is empty — adapter will never render bus envelopes`,
       );
@@ -85,8 +115,9 @@ export class MattermostAdapter implements PlatformAdapter {
 
   async start(onMessage: (msg: InboundMessage) => Promise<void>): Promise<void> {
     const { stop } = createMattermostPoller({
-      config: this.scopedConfig,
-      pollIntervalMs: this.adapterConfig.pollIntervalMs,
+      agentName: this.agent.id,
+      presence: this.presence,
+      pollIntervalMs: this.presence.pollIntervalMs,
       onMessage: async (mmMsg: MattermostInboundMessage) => {
         const inboundMsg: InboundMessage = {
           platform: "mattermost",
@@ -128,71 +159,59 @@ export class MattermostAdapter implements PlatformAdapter {
   async getPlatformUserId(): Promise<string> {
     if (this.cachedPlatformUserId) return this.cachedPlatformUserId;
 
-    const apiUrl = this.adapterConfig.apiUrl;
-    const apiToken = this.adapterConfig.apiToken;
+    const apiUrl = this.apiUrl;
+    const apiToken = this.apiToken;
     if (!apiUrl || !apiToken) {
       throw new Error(
         `mattermost-adapter[${this.instanceId}]: getPlatformUserId() requires ` +
-          `apiUrl + apiToken on the adapter config.`,
+          `apiUrl + apiToken on the presence block.`,
       );
     }
 
-    // Bound the startup-time call so a hung Mattermost server doesn't block
-    // PresenceBinding.startAndBind indefinitely. 10s is generous for a single
-    // /users/me round-trip; if the server is slower than that, startup
-    // failure with a clear error beats waiting forever (Holly W2 review).
-    const res = await fetch(`${apiUrl}/api/v4/users/me`, {
-      headers: { Authorization: `Bearer ${apiToken}` },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) {
-      throw new Error(
-        `mattermost-adapter[${this.instanceId}]: GET /api/v4/users/me failed ` +
-          `with HTTP ${res.status} ${res.statusText}.`,
-      );
-    }
-    const me = (await res.json()) as { id?: string };
-    if (!me.id) {
-      throw new Error(
-        `mattermost-adapter[${this.instanceId}]: /api/v4/users/me returned no id field.`,
-      );
-    }
-    this.cachedPlatformUserId = me.id;
-    return me.id;
+    // Delegated to the shared helper (MIG-7.2c-mattermost) so this call site,
+    // poller.fetchBotUserId, and notifyOperator all share one /users/me path.
+    const id = await fetchBotUserId(apiUrl, apiToken, { instanceId: this.instanceId });
+    this.cachedPlatformUserId = id;
+    return id;
   }
 
   /**
-   * F-092: Hot-reload safe config fields.
-   * Only updates fields that don't require reconnection.
+   * F-092 hot-reload (MIG-7.2c-mattermost rework): matches the live presence
+   * by the immutable `apiUrl` (Mattermost has no equivalent of Discord's
+   * `guildId`; the server URL is what cleanly disambiguates entries within
+   * `config.mattermost[]`). Only hot-reload-safe fields update;
+   * `apiUrl`/`apiToken`/`webhookUrl` are reconnect-only and intentionally
+   * preserved across the immutable spread.
    */
   updateConfig(config: BotConfig): void {
-    // Extract this instance's config from the new BotConfig
-    const newInstance = config.mattermost.find(
-      (inst: any) => (inst.instanceId ?? `mattermost-${config.agent.name}`) === this.instanceId
-    );
+    const newInstance = config.mattermost.find((inst) => inst.apiUrl === this.apiUrl);
 
     if (!newInstance) {
       console.warn(`mattermost-adapter[${this.instanceId}]: instance removed from config, ignoring update`);
       return;
     }
 
-    // Update safe fields
-    this.adapterConfig.channels = newInstance.channels;
-    this.adapterConfig.pollIntervalMs = newInstance.pollIntervalMs;
-    this.adapterConfig.roles = newInstance.roles;
-    this.adapterConfig.defaultRole = newInstance.defaultRole;
+    this.presence = {
+      ...this.presence,
+      channels: newInstance.channels,
+      pollIntervalMs: newInstance.pollIntervalMs,
+      roles: newInstance.roles,
+      defaultRole: newInstance.defaultRole,
+      allowedUsers: newInstance.allowedUsers,
+      ...(newInstance.triggerWord !== undefined && { triggerWord: newInstance.triggerWord }),
+    };
 
-    // Update bot config (for claude execution settings)
-    this.botConfig = config;
-
-    // Update scoped config
-    this.scopedConfig = {
-      ...config,
-      mattermost: [{
-        ...this.adapterConfig,
-        enabled: true,
-      }],
-    } as BotConfig;
+    // Rebuild agent so `agent.presence.mattermost` + `agent.id` /
+    // `agent.displayName` reflect the post-reload state. Same invariant
+    // Holly flagged at MIG-7.2c-internal cycle 1 for Discord — a stale
+    // agent reference becomes a runtime bug the moment PresenceBinding /
+    // TrustResolver reads from it during a live config change.
+    this.agent = {
+      ...this.agent,
+      id: config.agent.name,
+      displayName: config.agent.displayName,
+      presence: { ...this.agent.presence, mattermost: this.presence },
+    };
 
     console.log(`mattermost-adapter[${this.instanceId}]: config updated`);
   }
@@ -204,15 +223,15 @@ export class MattermostAdapter implements PlatformAdapter {
     const { messages } = await fetchMattermostContext(
       mmMsg.postId,
       mmMsg.channelId,
-      this.scopedConfig,
+      { agentName: this.agent.id, presence: this.presence },
     );
     return messages;
   }
 
   resolveAccess(msg: InboundMessage): AccessDecision {
     const role = resolveRole(msg.authorId, {
-      roles: this.adapterConfig.roles ?? [],
-      defaultRole: this.adapterConfig.defaultRole ?? "allow-all",
+      roles: this.presence.roles,
+      defaultRole: this.presence.defaultRole,
     });
 
     if (role.denied) {
@@ -237,8 +256,8 @@ export class MattermostAdapter implements PlatformAdapter {
   }
 
   async postResponse(target: ResponseTarget, text: string, files?: OutboundFile[]): Promise<void> {
-    const apiUrl = this.adapterConfig.apiUrl;
-    const apiToken = this.adapterConfig.apiToken;
+    const apiUrl = this.apiUrl;
+    const apiToken = this.apiToken;
     const rootId = target.threadId;
 
     if (files && files.length > 0) {
@@ -270,8 +289,8 @@ export class MattermostAdapter implements PlatformAdapter {
       target.channelId,
       `> ${text}`,
       target.threadId,
-      this.adapterConfig.apiUrl,
-      this.adapterConfig.apiToken,
+      this.apiUrl,
+      this.apiToken,
     );
   }
 
@@ -294,11 +313,11 @@ export class MattermostAdapter implements PlatformAdapter {
   }
 
   async notifyOperator(text: string): Promise<void> {
-    const operatorId = this.adapterConfig.operatorMattermostId;
+    const operatorId = this.infra.operator.mattermostId;
     if (!operatorId) return;
 
-    const apiUrl = this.adapterConfig.apiUrl;
-    const apiToken = this.adapterConfig.apiToken;
+    const apiUrl = this.apiUrl;
+    const apiToken = this.apiToken;
 
     try {
       // Get bot's own user ID
@@ -334,8 +353,8 @@ export class MattermostAdapter implements PlatformAdapter {
   private async fetchFileAttachments(fileIds: string[]) {
     const infos = await fetchMattermostFileInfos(
       fileIds,
-      this.adapterConfig.apiUrl,
-      this.adapterConfig.apiToken,
+      this.apiUrl,
+      this.apiToken,
     );
     return infos.map((i) => ({
       url: i.url,
@@ -362,8 +381,8 @@ export class MattermostAdapter implements PlatformAdapter {
   get surfaceConfig(): SurfaceAdapter {
     return {
       id: this.instanceId,
-      subjects: this.adapterConfig.surfaceSubjects ?? [],
-      ...(this.adapterConfig.surfaceFilter ? { filter: this.adapterConfig.surfaceFilter } : {}),
+      subjects: this.infra.surfaceSubjects ?? [],
+      ...(this.infra.surfaceFilter ? { filter: this.infra.surfaceFilter } : {}),
       render: (envelope, signal) => this.renderEnvelope(envelope, signal),
     };
   }
@@ -388,7 +407,7 @@ export class MattermostAdapter implements PlatformAdapter {
    * replay handles redelivery.
    */
   private async renderEnvelope(envelope: Envelope, _signal?: AbortSignal): Promise<void> {
-    const channelId = this.adapterConfig.surfaceFallbackChannelId;
+    const channelId = this.infra.surfaceFallbackChannelId;
     if (!channelId) {
       console.warn(
         `mattermost-${this.instanceId}: has no surfaceFallbackChannelId configured — dropping envelope ${envelope.id}`,
@@ -400,8 +419,8 @@ export class MattermostAdapter implements PlatformAdapter {
         channelId,
         formatEnvelopeAsMarkdown(envelope),
         undefined,
-        this.adapterConfig.apiUrl,
-        this.adapterConfig.apiToken,
+        this.apiUrl,
+        this.apiToken,
       );
     } catch (err) {
       console.warn(

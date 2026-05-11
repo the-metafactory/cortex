@@ -5,8 +5,9 @@
  * No inbound network connection required.
  */
 
-import type { BotConfig } from "../../common/types/config";
+import type { MattermostPresence } from "../../common/types/cortex-config";
 import { extractAfterTrigger, matchesTrigger, type MattermostInboundMessage } from "./server";
+import { fetchBotUserId as fetchBotUserIdShared } from "./bot-user";
 import { basename } from "path";
 
 interface MattermostPost {
@@ -31,14 +32,16 @@ interface MattermostUser {
   username: string;
 }
 
+/**
+ * MIG-7.2c-mattermost: graceful-degradation wrapper around the shared
+ * `fetchBotUserId` helper. The poller's contract is that startup keeps
+ * polling even if `/users/me` is briefly unreachable — null tells the
+ * poll loop to retry next tick rather than die outright. Tagged
+ * underscore-prefixed since `MattermostUser` is no longer needed here.
+ */
 async function fetchBotUserId(apiUrl: string, apiToken: string): Promise<string | null> {
   try {
-    const res = await fetch(`${apiUrl}/api/v4/users/me`, {
-      headers: { Authorization: `Bearer ${apiToken}` },
-    });
-    if (!res.ok) return null;
-    const user = await res.json() as MattermostUser;
-    return user.id;
+    return await fetchBotUserIdShared(apiUrl, apiToken);
   } catch {
     return null;
   }
@@ -280,7 +283,13 @@ export async function postReplyWithFiles(
 }
 
 export interface MattermostPollerOptions {
-  config: BotConfig;
+  /** Parent agent's logical id. Used as the default trigger-word when
+   *  `presence.triggerWord` is unset — matches the legacy `agent.name`
+   *  fallback. */
+  agentName: string;
+  /** This adapter's MattermostPresence (apiUrl, apiToken, channels,
+   *  pollIntervalMs, allowedUsers, triggerWord, …). */
+  presence: MattermostPresence;
   onMessage: (msg: MattermostInboundMessage) => Promise<string>;
   pollIntervalMs?: number;
 }
@@ -290,14 +299,13 @@ export interface MattermostPollerOptions {
  * Uses per-channel GET with `since` parameter — works in private channels and DMs.
  */
 export function createMattermostPoller(options: MattermostPollerOptions): { stop: () => void } {
-  const { config, onMessage } = options;
-  const mm = config.mattermost[0]; // Instance-scoped config (adapters pass scoped config)
-  const pollIntervalMs = options.pollIntervalMs ?? mm?.pollIntervalMs ?? 3000;
-  const apiUrl = mm?.apiUrl ?? "";
-  const apiToken = mm?.apiToken ?? "";
-  const triggerWord = mm?.triggerWord ?? config.agent.name;
-  const configuredChannels = mm?.channels ?? [];
-  const allowedUsers = mm?.allowedUsers ?? [];
+  const { agentName, presence, onMessage } = options;
+  const pollIntervalMs = options.pollIntervalMs ?? presence.pollIntervalMs ?? 3000;
+  const apiUrl = presence.apiUrl ?? "";
+  const apiToken = presence.apiToken ?? "";
+  const triggerWord = presence.triggerWord ?? agentName;
+  const configuredChannels = presence.channels ?? [];
+  const allowedUsers = presence.allowedUsers ?? [];
 
   let lastCheckTime = Date.now();
   let botUserId: string | null = null;
