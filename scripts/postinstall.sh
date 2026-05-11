@@ -55,8 +55,8 @@ if [ "$(uname)" = "Darwin" ]; then
   mkdir -p "${LAUNCH_DIR}"
 
   # Relay plist
-  RELAY_PLIST_SRC="${CORTEX_DIR}/src/services/com.cortex.relay.plist"
-  RELAY_PLIST_DST="${LAUNCH_DIR}/com.cortex.relay.plist"
+  RELAY_PLIST_SRC="${CORTEX_DIR}/src/services/ai.the-metafactory.cortex.relay.plist"
+  RELAY_PLIST_DST="${LAUNCH_DIR}/ai.the-metafactory.cortex.relay.plist"
   if [ -f "${RELAY_PLIST_SRC}" ]; then
     sed -e "s|__CORTEX_DIR__|${CORTEX_DIR}|g" \
         -e "s|__BUN_PATH__|${BUN_PATH}|g" \
@@ -67,8 +67,8 @@ if [ "$(uname)" = "Darwin" ]; then
 
   # Bot plist — extract agent name from cortex.yaml if present so the
   # launchd label and CORTEX_CHANNEL env var match the deployed agent.
-  BOT_PLIST_SRC="${CORTEX_DIR}/src/services/com.cortex.bot.plist"
-  BOT_PLIST_DST="${LAUNCH_DIR}/com.cortex.bot.plist"
+  BOT_PLIST_SRC="${CORTEX_DIR}/src/services/ai.the-metafactory.cortex.bot.plist"
+  BOT_PLIST_DST="${LAUNCH_DIR}/ai.the-metafactory.cortex.bot.plist"
   AGENT_NAME="cortex"
   if [ -f "${CONFIG_DIR}/cortex.yaml" ]; then
     # cortex.yaml puts the first agent id under `agents:`; grep the first
@@ -100,7 +100,7 @@ echo "    3. Register the cortex hooks in ~/.claude/settings.json"
 echo "       (see ${CORTEX_DIR}/src/settings/cortex-hooks.json)"
 echo "    4. Set CORTEX_CHANNEL=<name> in Claude Code sessions to enable events"
 echo "    5. Load services (macOS):"
-echo "       launchctl load ~/Library/LaunchAgents/com.cortex.relay.plist"
-echo "       launchctl load ~/Library/LaunchAgents/com.cortex.bot.plist"
+echo "       launchctl load ~/Library/LaunchAgents/ai.the-metafactory.cortex.relay.plist"
+echo "       launchctl load ~/Library/LaunchAgents/ai.the-metafactory.cortex.bot.plist"
 echo "    6. (Optional) Install grove-bot deprecation shim — see"
 echo "       ${CORTEX_DIR}/scripts/grove-bot-shim.sh"

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.cortex.relay</string>
+    <string>ai.the-metafactory.cortex.relay</string>
     <key>ProgramArguments</key>
     <array>
         <string>__BUN_PATH__</string>

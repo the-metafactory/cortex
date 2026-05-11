@@ -41,13 +41,13 @@ if [ "$(uname)" = "Darwin" ]; then
     fi
   fi
 
-  if launchctl list 2>/dev/null | grep -q "com.cortex.bot"; then
-    launchctl unload "${LAUNCH_DIR}/com.cortex.bot.plist" 2>/dev/null || true
+  if launchctl list 2>/dev/null | grep -q "ai.the-metafactory.cortex.bot"; then
+    launchctl unload "${LAUNCH_DIR}/ai.the-metafactory.cortex.bot.plist" 2>/dev/null || true
     echo "  ✓ Bot daemon stopped"
   fi
 
-  if launchctl list 2>/dev/null | grep -q "com.cortex.relay"; then
-    launchctl unload "${LAUNCH_DIR}/com.cortex.relay.plist" 2>/dev/null || true
+  if launchctl list 2>/dev/null | grep -q "ai.the-metafactory.cortex.relay"; then
+    launchctl unload "${LAUNCH_DIR}/ai.the-metafactory.cortex.relay.plist" 2>/dev/null || true
     echo "  ✓ Relay daemon stopped"
   fi
 fi

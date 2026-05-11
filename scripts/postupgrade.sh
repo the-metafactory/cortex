@@ -35,17 +35,17 @@ if [ "$(uname)" = "Darwin" ]; then
   mkdir -p "${LAUNCH_DIR}"
 
   # Relay plist
-  RELAY_PLIST_SRC="${CORTEX_DIR}/src/services/com.cortex.relay.plist"
+  RELAY_PLIST_SRC="${CORTEX_DIR}/src/services/ai.the-metafactory.cortex.relay.plist"
   if [ -f "${RELAY_PLIST_SRC}" ]; then
     sed -e "s|__CORTEX_DIR__|${CORTEX_DIR}|g" \
         -e "s|__BUN_PATH__|${BUN_PATH}|g" \
         -e "s|__HOME__|${HOME}|g" \
-        "${RELAY_PLIST_SRC}" > "${LAUNCH_DIR}/com.cortex.relay.plist"
+        "${RELAY_PLIST_SRC}" > "${LAUNCH_DIR}/ai.the-metafactory.cortex.relay.plist"
     echo "  ✓ Relay plist re-templated"
   fi
 
   # Bot plist — extract agent name from cortex.yaml (first agents[].id)
-  BOT_PLIST_SRC="${CORTEX_DIR}/src/services/com.cortex.bot.plist"
+  BOT_PLIST_SRC="${CORTEX_DIR}/src/services/ai.the-metafactory.cortex.bot.plist"
   AGENT_NAME="cortex"
   if [ -f "${CONFIG_DIR}/cortex.yaml" ]; then
     AGENT_NAME=$(awk '/^agents:/{found=1; next} found && /^[ \-]*id:/{sub(/.*id:[ ]*/, ""); gsub(/["'\'']/, ""); gsub(/#.*/, ""); print; exit}' "${CONFIG_DIR}/cortex.yaml" | xargs || true)
@@ -56,17 +56,17 @@ if [ "$(uname)" = "Darwin" ]; then
         -e "s|__BUN_PATH__|${BUN_PATH}|g" \
         -e "s|__HOME__|${HOME}|g" \
         -e "s|__AGENT_NAME__|${AGENT_NAME}|g" \
-        "${BOT_PLIST_SRC}" > "${LAUNCH_DIR}/com.cortex.bot.plist"
+        "${BOT_PLIST_SRC}" > "${LAUNCH_DIR}/ai.the-metafactory.cortex.bot.plist"
     echo "  ✓ Bot plist re-templated (agent=${AGENT_NAME})"
   fi
 
   # ─── 3. Restart daemons ─────────────────────────────────────────
   # `|| true` keeps a partial upgrade non-fatal — if a daemon was already
   # unloaded by preupgrade.sh, load just re-loads cleanly.
-  launchctl load "${LAUNCH_DIR}/com.cortex.relay.plist" 2>/dev/null || true
+  launchctl load "${LAUNCH_DIR}/ai.the-metafactory.cortex.relay.plist" 2>/dev/null || true
   echo "  ✓ Relay daemon started"
 
-  launchctl load "${LAUNCH_DIR}/com.cortex.bot.plist" 2>/dev/null || true
+  launchctl load "${LAUNCH_DIR}/ai.the-metafactory.cortex.bot.plist" 2>/dev/null || true
   echo "  ✓ Bot daemon started"
 fi
 
