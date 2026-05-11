@@ -295,6 +295,24 @@ export class DiscordAdapter implements PlatformAdapter {
   }
 
   /**
+   * MIG-7.2c-binding: Return the Discord snowflake of the bot account this
+   * adapter is logged in as. discord.js populates `client.user` after the
+   * `ready` event fires (which `start()` awaits via `client.login`). Calling
+   * this before `start()` completes — or after `stop()` — throws.
+   */
+  async getPlatformUserId(): Promise<string> {
+    const userId = this.client?.user?.id;
+    if (!userId) {
+      throw new Error(
+        `discord-adapter[${this.instanceId}]: getPlatformUserId() called ` +
+          `before start() completed or after stop() — client.user is null. ` +
+          `Ensure PresenceBinding awaits start() before binding.`,
+      );
+    }
+    return userId;
+  }
+
+  /**
    * F-092: Hot-reload safe config fields.
    * Only updates fields that don't require reconnection.
    */

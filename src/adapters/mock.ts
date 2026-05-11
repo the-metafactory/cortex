@@ -42,6 +42,8 @@ export class MockAdapter implements PlatformAdapter {
   accessDecision: AccessDecision = ALLOW_ALL;
   /** Configurable return value for fetchContext */
   contextMessages: ContextMessage[] = [];
+  /** MIG-7.2c-binding: Configurable return value for getPlatformUserId. Default `"mock-bot-user"`. */
+  platformUserId: string = "mock-bot-user";
   /** MIG-3b: Configurable subject patterns the surface face listens for. Default `mock.>`
    *  matches anything under `mock.*` for surface-router integration tests. */
   surfaceSubjects: string[] = ["mock.>"];
@@ -83,6 +85,10 @@ export class MockAdapter implements PlatformAdapter {
   async stop(): Promise<void> {
     this.started = false;
     this.onMessage = undefined;
+  }
+
+  async getPlatformUserId(): Promise<string> {
+    return this.platformUserId;
   }
 
   async fetchContext(_msg: InboundMessage, _depth: number): Promise<ContextMessage[]> {

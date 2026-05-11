@@ -110,6 +110,19 @@ export interface PlatformAdapter {
   /** Disconnect and clean up resources */
   stop(): Promise<void>;
 
+  /**
+   * MIG-7.2c-binding: Return the platform user id of the bot account this
+   * adapter is connected as. Required for `PresenceBinding` to register the
+   * adapter with the process-wide `TrustResolver` so inbound messages from
+   * peer agents are resolvable by their platform id (§9.3).
+   *
+   * Contract: callable only after `start()` has completed. Adapters that
+   * learn their bot id at connect-time (e.g. Discord via `client.user`)
+   * MUST throw if called pre-start; adapters that fetch on demand (e.g.
+   * Mattermost via `/api/v4/users/me`) MAY cache the result.
+   */
+  getPlatformUserId(): Promise<string>;
+
   /** Fetch conversation history for context */
   fetchContext(msg: InboundMessage, depth: number): Promise<ContextMessage[]>;
   /** Check if the message author has access */

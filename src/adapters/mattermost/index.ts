@@ -57,6 +57,8 @@ export class MattermostAdapter implements PlatformAdapter {
   private botConfig: BotConfig;
   private scopedConfig: BotConfig; // Config with mattermost scoped to this instance
   private adapterConfig: MattermostAdapterConfig;
+  /** MIG-7.2c-binding: lazily-fetched bot user id from `/api/v4/users/me`. */
+  private cachedPlatformUserId: string | null = null;
 
   constructor(adapterConfig: MattermostAdapterConfig, botConfig: BotConfig) {
     this.instanceId = adapterConfig.instanceId;
@@ -112,6 +114,46 @@ export class MattermostAdapter implements PlatformAdapter {
   async stop(): Promise<void> {
     this.stopPoller?.();
     this.stopPoller = null;
+    // Drop the cached id so a subsequent start() picks up the current
+    // /users/me — guards against a token swap between sessions.
+    this.cachedPlatformUserId = null;
+  }
+
+  /**
+   * MIG-7.2c-binding: Return the Mattermost user id of the bot account this
+   * adapter is connected as. Fetches `/api/v4/users/me` on first call and
+   * caches the result; subsequent calls are zero-RPC. Cache cleared on
+   * `stop()` so a token rotation between sessions re-fetches cleanly.
+   */
+  async getPlatformUserId(): Promise<string> {
+    if (this.cachedPlatformUserId) return this.cachedPlatformUserId;
+
+    const apiUrl = this.adapterConfig.apiUrl;
+    const apiToken = this.adapterConfig.apiToken;
+    if (!apiUrl || !apiToken) {
+      throw new Error(
+        `mattermost-adapter[${this.instanceId}]: getPlatformUserId() requires ` +
+          `apiUrl + apiToken on the adapter config.`,
+      );
+    }
+
+    const res = await fetch(`${apiUrl}/api/v4/users/me`, {
+      headers: { Authorization: `Bearer ${apiToken}` },
+    });
+    if (!res.ok) {
+      throw new Error(
+        `mattermost-adapter[${this.instanceId}]: GET /api/v4/users/me failed ` +
+          `with HTTP ${res.status} ${res.statusText}.`,
+      );
+    }
+    const me = (await res.json()) as { id?: string };
+    if (!me.id) {
+      throw new Error(
+        `mattermost-adapter[${this.instanceId}]: /api/v4/users/me returned no id field.`,
+      );
+    }
+    this.cachedPlatformUserId = me.id;
+    return me.id;
   }
 
   /**
