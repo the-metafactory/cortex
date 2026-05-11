@@ -11,11 +11,11 @@ set -e
 
 CORTEX_DIR="${PAI_INSTALL_PATH:-$(cd "$(dirname "$0")/.." && pwd)}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PAI_DIR="${HOME}/.claude"
+CLAUDE_DIR="${HOME}/.claude"
 CONFIG_DIR="${HOME}/.config/cortex"
 
-mkdir -p "${HOME}/bin" "${PAI_DIR}/hooks/lib" "${PAI_DIR}/relay" \
-         "${PAI_DIR}/skills" "${CONFIG_DIR}/logs"
+mkdir -p "${HOME}/bin" "${CLAUDE_DIR}/hooks/lib" "${CLAUDE_DIR}/relay" \
+         "${CLAUDE_DIR}/skills" "${CONFIG_DIR}/logs"
 
 echo "Upgrading Cortex (${PAI_OLD_VERSION:-?} → ${PAI_NEW_VERSION:-?})..."
 
@@ -24,9 +24,9 @@ echo "Upgrading Cortex (${PAI_OLD_VERSION:-?} → ${PAI_NEW_VERSION:-?})..."
 # nested-target ones (hook lib + relay dir) where arc's behaviour around
 # directory targets has varied historically.
 echo "  Refreshing nested-target symlinks..."
-ln -sf "${CORTEX_DIR}/src/taps/cc-events/hooks/lib" "${PAI_DIR}/hooks/lib/cortex-events"
-ln -sf "${CORTEX_DIR}/src/taps/cc-events"          "${PAI_DIR}/relay/cortex"
-ln -sf "${CORTEX_DIR}/src/cli/discord/skill"       "${PAI_DIR}/skills/Discord"
+ln -sf "${CORTEX_DIR}/src/taps/cc-events/hooks/lib" "${CLAUDE_DIR}/hooks/lib/cortex-events"
+ln -sf "${CORTEX_DIR}/src/taps/cc-events"          "${CLAUDE_DIR}/relay/cortex"
+ln -sf "${CORTEX_DIR}/src/cli/discord/skill"       "${CLAUDE_DIR}/skills/Discord"
 echo "  ✓ Nested symlinks refreshed"
 
 # ─── 2. Re-template launchd plists (shared with postinstall.sh) ──

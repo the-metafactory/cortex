@@ -18,15 +18,15 @@ set -e
 
 CORTEX_DIR="${PAI_INSTALL_PATH:-$(cd "$(dirname "$0")/.." && pwd)}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PAI_DIR="${HOME}/.claude"
-EVENTS_DIR="${PAI_DIR}/events"
+CLAUDE_DIR="${HOME}/.claude"
+EVENTS_DIR="${CLAUDE_DIR}/events"
 CONFIG_DIR="${HOME}/.config/cortex"
 
 echo "Running Cortex postinstall..."
 
 # ─── 1. Runtime directories ──────────────────────────────────────
 mkdir -p "${EVENTS_DIR}/raw" "${EVENTS_DIR}/published" \
-         "${PAI_DIR}/logs" "${PAI_DIR}/relay" \
+         "${CLAUDE_DIR}/logs" "${CLAUDE_DIR}/relay" \
          "${CONFIG_DIR}/logs" "${CONFIG_DIR}/state" \
          "${HOME}/bin"
 chmod 700 "${EVENTS_DIR}/raw"
@@ -39,10 +39,10 @@ chmod +x "${CORTEX_DIR}/src/taps/cc-events/relay.ts"
 echo "  ✓ Executables marked"
 
 # ─── 3. Relay policy (conditional copy — never overwrites) ──────
-if [ ! -f "${PAI_DIR}/relay/relay-policy.yaml" ]; then
+if [ ! -f "${CLAUDE_DIR}/relay/relay-policy.yaml" ]; then
   if [ -f "${CORTEX_DIR}/src/taps/cc-events/relay-policy.yaml" ]; then
     cp "${CORTEX_DIR}/src/taps/cc-events/relay-policy.yaml" \
-       "${PAI_DIR}/relay/relay-policy.yaml"
+       "${CLAUDE_DIR}/relay/relay-policy.yaml"
     echo "  ✓ Default relay policy created"
   fi
 else
