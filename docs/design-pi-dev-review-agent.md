@@ -3,7 +3,7 @@
 **Status:** Draft — architecture design for a pi.dev-based review agent that plugs into the cortex/myelin infrastructure.
 **Date:** 2026-05-11
 **Driver:** Ivy (for Jens-Christian)
-**Related docs:** `docs/architecture.md`, `docs/design-event-taxonomy.md`, `docs/design-agent-task-routing.md` (myelin PR #36), `~/Developer/myelin/docs/design-agent-task-routing.md`
+**Related docs:** `docs/architecture.md` (§6 bus contracts; §9 agent + presence/renderer model), `docs/design-arc-agent-bots.md` (substrate-pluggable bot packaging via arc — the natural follow-on to this doc). Earlier drafts referenced `docs/design-event-taxonomy.md` and `myelin/docs/design-agent-task-routing.md`; the event-taxonomy content lives inline in `docs/architecture.md` §6, and the task-routing model is tracked in myelin issue #36 (not a checked-in document). Pointer corrections per cortex#58 round-2 review.
 
 ---
 

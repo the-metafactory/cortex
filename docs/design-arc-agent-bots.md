@@ -106,7 +106,7 @@ Default to in-process when substrate is `claude-code` and the bot doesn't need a
 
 ## 4. Bot Arc-Manifest Schema
 
-Extends arc's existing manifest schema with an `agent` type. Cortex itself stays `type: app` (or whatever arc currently models cortex as).
+Extends arc's existing manifest schema with an `agent` type. Cortex itself stays `type: component` (per the current `arc-manifest.yaml` at the cortex root).
 
 ```yaml
 # foo-review-bot/arc-manifest.yaml
@@ -222,7 +222,7 @@ Estimated ~150 LOC + tests. Lands as a `feat(common/config)` PR.
 
 **Scope:** arc's manifest schema + install order.
 
-- Schema extension: `type: agent` is a distinct kind from `type: app`. Arc validates `parent` is installed (or being installed in the same transaction) and at a compatible version range.
+- Schema extension: `type: agent` is a distinct kind from `type: component` (cortex's kind). Arc validates `parent` is installed (or being installed in the same transaction) and at a compatible version range.
 - Install order: agents install after their parent. Lifecycle scripts can reference parent's installation root (`PAI_PARENT_INSTALL_PATH`).
 - Uninstall order: agents uninstall before their parent.
 - `arc list --type agent` filters to agents.
@@ -328,12 +328,12 @@ runtime:
 identity:
   id: scout
   displayName: Scout
-  roles: []
+  roles: [agent-restricted]     # required even for bus-only agents — see §4
   trust: [luna]
 # no presence: block — Scout speaks bus only
 ```
 
-Operator interacts with Scout indirectly: another agent (Luna) dispatches a research task on the bus, Scout claims, executes, publishes results back. The dashboard renders Scout's lifecycle envelopes; humans don't chat with Scout directly.
+Operator interacts with Scout indirectly: another agent (Luna) dispatches a research task on the bus, Scout claims, executes, publishes results back. The dashboard renders Scout's lifecycle envelopes; humans don't chat with Scout directly. Even though Scout has no chat surface, it still declares `roles: [agent-restricted]` — per §4 the role-bundle's intersection with `runtime.capabilities` is what cortex actually dispatches against, so an empty roles list would leave Scout unable to claim any task. Roles are an authorization axis (what cortex permits), separate from presence (where the agent shows up).
 
 ---
 
