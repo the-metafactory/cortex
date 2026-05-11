@@ -165,10 +165,19 @@ export async function startCortex(
   };
 
   // Dispatch-handler — synchronous platform-message → CC pipeline.
+  //
+  // MIG-3.8 / C-104: hand the runtime + systemEventSource down so the handler
+  // can publish `system.inbound.aborted` envelopes when an adapter outbound
+  // (today: Discord attachment fetch) trips `TimeoutSourceError`. Both
+  // fields are passed unconditionally — when the runtime is the no-op stub
+  // (NATS absent), `MyelinRuntime.publish` is a no-op and emission falls
+  // through silently. See `DispatchHandler.canPublishSystemEvent`.
   const dispatchHandler = new DispatchHandler({
     config,
     securityPreamble,
     configPath: expandedConfigPath,
+    runtime,
+    systemEventSource,
   });
 
   // Cloud publisher (G-401 + G-500) — opt-in via cloud-capable network.

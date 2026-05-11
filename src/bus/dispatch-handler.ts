@@ -32,6 +32,11 @@ import {
 } from "../adapters/discord/attachments";
 import { resolveChannelContext, type ChannelContext } from "../adapters/discord/channel-context";
 import { getNetworkForGuild, getNetworkForChannel } from "./network-resolver";
+import type { MyelinRuntime } from "./myelin/runtime";
+import {
+  type SystemEventSource,
+  createSystemInboundAbortedEvent,
+} from "./system-events";
 import { join } from "path";
 
 /** Read version from arc-manifest.yaml (cached after first read). */
@@ -56,6 +61,26 @@ export interface DispatchHandlerOpts {
   operatorDMPreamble?: string;
   /** Path to config file (for building dynamic preambles) */
   configPath?: string;
+  /**
+   * MIG-3.8 / C-104 — Myelin runtime used to publish `system.inbound.aborted`
+   * envelopes when an adapter outbound fetch (e.g. attachment download) trips
+   * `TimeoutSourceError`. Optional: when omitted (or when `systemEventSource`
+   * is missing) timeout aborts still degrade gracefully — the user sees the
+   * "Download error" reason — but no structured envelope is emitted.
+   *
+   * Wired in from `cortex.ts` so the handler can publish without owning a
+   * NATS connection of its own (same pattern as the Discord adapter's
+   * `system.adapter.*` emission).
+   */
+  runtime?: MyelinRuntime;
+  /**
+   * `{org}.{agent}.{instance}` triple stamped onto emitted `system.*`
+   * envelopes (spec §3.6). Required-with-`runtime`: if a caller passes
+   * `runtime` without `systemEventSource` the handler logs a one-shot warn
+   * and skips publication (mirroring the DiscordAdapter `canPublishSystemEvent`
+   * contract).
+   */
+  systemEventSource?: SystemEventSource;
 }
 
 /** Format a tool-use event into a human-readable progress line */
@@ -94,6 +119,21 @@ export class DispatchHandler extends EventEmitter {
   private securityPreamble: string;
   private operatorDMPreamble: string;
   private cleanupInterval: Timer;
+  /**
+   * MIG-3.8 / C-104 — bus runtime + source for emitting `system.inbound.aborted`
+   * envelopes. Both must be set for emission to actually happen; see
+   * `canPublishSystemEvent` for the split between "no runtime configured"
+   * (silent) and "runtime without source" (warn-once + skip).
+   */
+  private runtime: MyelinRuntime | undefined;
+  private systemEventSource: SystemEventSource | undefined;
+  /**
+   * Latches once we've warned about the runtime-without-source case so a
+   * burst of attachment downloads under a misconfigured deployment doesn't
+   * flood the log with the same diagnostic. Mirrors `DiscordAdapter`'s
+   * `warnedMissingSource` pattern.
+   */
+  private warnedMissingSource = false;
 
   constructor(opts: DispatchHandlerOpts) {
     super();
@@ -105,6 +145,8 @@ export class DispatchHandler extends EventEmitter {
           skipBashGuard: true,
           skipFilesystemRestriction: true,
         });
+    this.runtime = opts.runtime;
+    this.systemEventSource = opts.systemEventSource;
     this.sessions = new SessionManager({ idleTimeoutMs: 10 * 60 * 1000 });
     this.taskTracker = new TaskTracker();
 
@@ -119,6 +161,73 @@ export class DispatchHandler extends EventEmitter {
         console.log(`dispatch-handler: cleaned up ${expiredDirs} expired attachment dir(s)`);
       }
     }, 60_000);
+  }
+
+  /**
+   * MIG-3.8 / C-104 — Common gate for `system.*` emission. Returns the bound
+   * runtime + source when both are configured, or `null` otherwise. Splits
+   * the "no runtime configured" case (silent — handler was started without
+   * NATS) from the "no source but runtime present" case (warn once — caller
+   * wired NATS but forgot to pass `systemEventSource`, which is a config
+   * bug worth surfacing).
+   *
+   * Same shape as `DiscordAdapter.canPublishSystemEvent` so anyone tracing
+   * the system-event story across both layers sees the identical pattern.
+   */
+  private canPublishSystemEvent(): { runtime: MyelinRuntime; source: SystemEventSource } | null {
+    const runtime = this.runtime;
+    if (!runtime) return null;
+    const source = this.systemEventSource;
+    if (!source) {
+      if (!this.warnedMissingSource) {
+        console.warn(
+          "dispatch-handler: runtime is configured but systemEventSource is missing — system.inbound.aborted events will not be emitted",
+        );
+        this.warnedMissingSource = true;
+      }
+      return null;
+    }
+    return { runtime, source };
+  }
+
+  /**
+   * MIG-3.8 / C-104 — Publish a `system.inbound.aborted` envelope for the
+   * adapter-outbound attachment-fetch timeout case (G-1111 §3.5.4). Fire-and-
+   * forget: errors from `runtime.publish` are swallowed + logged so a bus
+   * outage can't break the attachment pipeline.
+   *
+   * Called from the `processInboundAttachments` `onTimeoutAbort` hook in
+   * `handleMessage`. The `pre_dispatch` phase is hard-coded — attachment
+   * downloads run before the CC session spawn by construction (step 8 of
+   * `handleMessage`).
+   */
+  private publishInboundAborted(opts: {
+    adapterId: string;
+    inboundMessageId: string;
+    timeoutSource: "attachment_fetch" | "cloud_publisher" | "usage_monitor" | "usage_fetcher" | "startup_sync" | "cc_session_spawn" | "unknown";
+    timeoutMs: number;
+    elapsedMs: number;
+  }): void {
+    const wiring = this.canPublishSystemEvent();
+    if (!wiring) return;
+    const env = createSystemInboundAbortedEvent({
+      source: wiring.source,
+      adapterId: opts.adapterId,
+      inboundMessageId: opts.inboundMessageId,
+      timeoutSource: opts.timeoutSource,
+      timeoutMs: opts.timeoutMs,
+      elapsedMs: opts.elapsedMs,
+      phase: "pre_dispatch",
+    });
+    // Fire-and-forget — MyelinRuntime.publish swallows + logs its own errors;
+    // we wrap a catch here as defence-in-depth in case the runtime contract
+    // ever changes (the attachment pipeline must not crash on a bus glitch).
+    void wiring.runtime.publish(env).catch((err) =>
+      console.error(
+        "dispatch-handler: publish(system.inbound.aborted) failed:",
+        err instanceof Error ? err.message : err,
+      ),
+    );
   }
 
   /** Graceful shutdown: drain tasks, clear intervals */
@@ -244,11 +353,35 @@ export class DispatchHandler extends EventEmitter {
         source: msg.platform as "discord" | "mattermost",
       }));
 
+      // MIG-3.8 / C-104 — capture the platform-native message id once so the
+      // `onTimeoutAbort` closure doesn't reach into `msg._native` per-fire.
+      // discord.js carries `.id` on the Message; Mattermost posts likewise.
+      // Fallback to a `synthetic:` prefix so the envelope still validates
+      // (the schema requires the field as a non-empty string) — this branch
+      // only fires for adapters that don't stamp `_native.id`, which today
+      // is only `MockAdapter` in tests.
+      const nativeId = (msg._native as { id?: string } | undefined)?.id;
+      const inboundMessageId =
+        nativeId ?? `synthetic:${adapter.instanceId}:${msg.channelId}:${msg.timestamp.toISOString()}`;
+
       const { prompt: attachPrompt, dirs: attachmentDirs, sessionId: attachmentSessionId } =
         await processInboundAttachments(
           existingSession?.sessionId,
           attachmentInfos,
           this.config.attachments.enabled,
+          undefined,
+          // MIG-3.8 / C-104 — emit `system.inbound.aborted` when an attachment
+          // download trips TimeoutSourceError. `pre_dispatch` phase per
+          // G-1111 §3.5.4 — attachment download runs before CC session spawn.
+          ({ err }) => {
+            this.publishInboundAborted({
+              adapterId: adapter.instanceId,
+              inboundMessageId,
+              timeoutSource: err.source,
+              timeoutMs: err.timeoutMs,
+              elapsedMs: err.elapsedMs,
+            });
+          },
         );
 
       // 9. Build prompt — operator DM gets relaxed preamble (no filesystem/bash guidance — enforced at invocation level)

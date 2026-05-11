@@ -7,7 +7,7 @@
 import { join } from "path";
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, rmdirSync } from "fs";
 import { randomUUID } from "crypto";
-import { fetchWithTimeout } from "../../common/timeout";
+import { fetchWithTimeout, TimeoutSourceError } from "../../common/timeout";
 import {
   ALLOWED_MIME_TYPES,
   MAGIC_BYTES,
@@ -16,6 +16,31 @@ import {
   type AttachmentResult,
   type ProcessedAttachment,
 } from "./attachment-types";
+
+/**
+ * MIG-3.8 / C-104 — Callback invoked when an `attachment_fetch` exceeds its
+ * timeout (TimeoutSourceError) during inbound attachment download.
+ *
+ * The adapter outbound path (Discord CDN fetch) sits in the `pre_dispatch`
+ * phase per G-1111 §3.5.4: it runs before the message reaches the CC session
+ * spawn. Today the timeout is caught and the attachment is reported as a
+ * graceful failure (so the user gets a sensible "Download error" message);
+ * this hook lets the caller emit a `system.inbound.aborted` envelope
+ * alongside that graceful return, giving operators the structured event
+ * the 2026-05-09 outage post-mortem demanded.
+ *
+ * The callback is invoked synchronously before the catch block constructs
+ * the `{ ok: false }` result — caller side-effects (publish on the bus)
+ * happen first; the user-visible behaviour is unchanged. The callback must
+ * not throw — implementations should swallow + log per the
+ * `MyelinRuntime.publish` convention (publish is fire-and-forget).
+ */
+export type AttachmentTimeoutAbortHandler = (event: {
+  /** The TimeoutSourceError instance — carries `.source`, `.timeoutMs`, `.elapsedMs`. */
+  err: TimeoutSourceError;
+  /** Which attachment we were fetching when the abort fired. */
+  attachment: AttachmentInfo;
+}) => void;
 
 const TEMP_BASE = join(process.env.TMPDIR ?? "/tmp", "grove-attachments");
 
@@ -81,11 +106,20 @@ function validateSize(
 /**
  * Download and validate a single attachment.
  * Returns a ProcessedAttachment on success, or an error reason on failure.
+ *
+ * MIG-3.8 / C-104: when `onTimeoutAbort` is provided and the download trips
+ * a `TimeoutSourceError` (the adapter-outbound abort case), the handler is
+ * fired BEFORE this function returns its `{ ok: false }` error result. The
+ * download still degrades gracefully — the user keeps seeing "Download
+ * error: …" — but the operator gets a structured `system.inbound.aborted`
+ * publish on the bus. Non-timeout errors (network failures, HTTP errors)
+ * are unchanged; we only intercept the named-timeout case.
  */
 export async function processAttachment(
   info: AttachmentInfo,
   sessionDir: string,
-  headers?: Record<string, string>
+  headers?: Record<string, string>,
+  onTimeoutAbort?: AttachmentTimeoutAbortHandler
 ): Promise<AttachmentResult> {
   // 1. Check MIME allowlist
   if (!ALLOWED_MIME_TYPES.has(info.contentType)) {
@@ -108,6 +142,23 @@ export async function processAttachment(
       return { ok: false, reason: `Download failed: HTTP ${response.status}`, originalName: info.originalName };
     }
   } catch (error) {
+    // MIG-3.8: TimeoutSourceError from fetchWithTimeout — fire the structured
+    // hook (system.inbound.aborted) BEFORE we degrade the result. The fetch
+    // result still returns gracefully so the user gets "Download error: …";
+    // the operator-side observability is the additive change.
+    if (error instanceof TimeoutSourceError && onTimeoutAbort) {
+      try {
+        onTimeoutAbort({ err: error, attachment: info });
+      } catch (hookErr) {
+        // The hook must not propagate — a publish failure can't break the
+        // attachment pipeline. Log + drop, mirroring MyelinRuntime.publish's
+        // fire-and-forget semantics.
+        console.error(
+          "discord-attachments: onTimeoutAbort hook threw:",
+          hookErr instanceof Error ? hookErr.message : hookErr,
+        );
+      }
+    }
     return { ok: false, reason: `Download error: ${error instanceof Error ? error.message : "unknown"}`, originalName: info.originalName };
   }
 
@@ -158,7 +209,8 @@ export async function processAttachment(
 export async function processAttachments(
   attachments: AttachmentInfo[],
   sessionId: string,
-  headers?: Record<string, string>
+  headers?: Record<string, string>,
+  onTimeoutAbort?: AttachmentTimeoutAbortHandler
 ): Promise<{ processed: ProcessedAttachment[]; errors: string[] }> {
   const processed: ProcessedAttachment[] = [];
   const errors: string[] = [];
@@ -180,7 +232,7 @@ export async function processAttachments(
   const sessionDir = getSessionDir(sessionId);
 
   for (const info of attachments) {
-    const result = await processAttachment(info, sessionDir, headers);
+    const result = await processAttachment(info, sessionDir, headers, onTimeoutAbort);
     if (result.ok) {
       processed.push(result.attachment);
     } else {
@@ -315,7 +367,8 @@ export async function processInboundAttachments(
   sessionId: string | undefined,
   attachmentInfos: AttachmentInfo[],
   enabled: boolean,
-  headers?: Record<string, string>
+  headers?: Record<string, string>,
+  onTimeoutAbort?: AttachmentTimeoutAbortHandler
 ): Promise<AttachmentProcessingResult> {
   const attachSessionId = sessionId ?? randomUUID();
   const dirs: string[] = [];
@@ -325,7 +378,8 @@ export async function processInboundAttachments(
     const { processed, errors } = await processAttachments(
       attachmentInfos,
       attachSessionId,
-      headers
+      headers,
+      onTimeoutAbort
     );
 
     if (errors.length > 0) {
