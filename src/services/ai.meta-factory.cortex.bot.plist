@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>ai.the-metafactory.cortex.bot</string>
+    <string>ai.meta-factory.cortex.bot</string>
     <key>ProgramArguments</key>
     <array>
         <string>__HOME__/bin/cortex</string>

@@ -81,8 +81,8 @@ render_cortex_plists() {
   mkdir -p "${launch_dir}"
 
   # Relay plist
-  local relay_src="${cortex_dir}/src/services/ai.the-metafactory.cortex.relay.plist"
-  local relay_dst="${launch_dir}/ai.the-metafactory.cortex.relay.plist"
+  local relay_src="${cortex_dir}/src/services/ai.meta-factory.cortex.relay.plist"
+  local relay_dst="${launch_dir}/ai.meta-factory.cortex.relay.plist"
   if [ -f "${relay_src}" ]; then
     sed -e "s|__CORTEX_DIR__|${cortex_dir}|g" \
         -e "s|__BUN_PATH__|${bun_path}|g" \
@@ -92,8 +92,8 @@ render_cortex_plists() {
   fi
 
   # Bot plist
-  local bot_src="${cortex_dir}/src/services/ai.the-metafactory.cortex.bot.plist"
-  local bot_dst="${launch_dir}/ai.the-metafactory.cortex.bot.plist"
+  local bot_src="${cortex_dir}/src/services/ai.meta-factory.cortex.bot.plist"
+  local bot_dst="${launch_dir}/ai.meta-factory.cortex.bot.plist"
   local agent_name
   agent_name="$(extract_agent_name "${config_dir}/cortex.yaml")" || return 1
   if [ -f "${bot_src}" ]; then

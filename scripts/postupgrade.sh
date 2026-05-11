@@ -38,10 +38,10 @@ if [ "$(uname)" = "Darwin" ]; then
   # ─── 3. Restart daemons ─────────────────────────────────────────
   # `|| true` keeps a partial upgrade non-fatal — if a daemon was already
   # unloaded by preupgrade.sh, load just re-loads cleanly.
-  launchctl load "${LAUNCH_DIR}/ai.the-metafactory.cortex.relay.plist" 2>/dev/null || true
+  launchctl load "${LAUNCH_DIR}/ai.meta-factory.cortex.relay.plist" 2>/dev/null || true
   echo "  ✓ Relay daemon started"
 
-  launchctl load "${LAUNCH_DIR}/ai.the-metafactory.cortex.bot.plist" 2>/dev/null || true
+  launchctl load "${LAUNCH_DIR}/ai.meta-factory.cortex.bot.plist" 2>/dev/null || true
   echo "  ✓ Bot daemon started"
 fi
 
