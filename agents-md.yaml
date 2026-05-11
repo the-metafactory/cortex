@@ -1,0 +1,39 @@
+# agents-md.yaml — repo-specific agent rules configuration
+# Used by `arc upgrade compass` to generate CLAUDE.md.
+# See compass/metafactory/docs/design-claude-md-sync.md for the full design spec.
+
+template: compass-standards
+
+# Which rule file formats to generate
+generate:
+  - format: claude-md
+
+# Placeholder values (substituted into templates)
+repo_name: Cortex
+repo_description: "Layer-7 collaboration surface for the metafactory Myelin stack"
+deploy_command: "arc upgrade Cortex"
+version_source: arc-manifest.yaml
+release_title_format: '"Cortex vX.Y.Z — Short Description"'
+worktree_pattern: "../cortex-{slug}"
+sop_path_prefix: "compass/"
+
+# Project-specific labels (appended to the standard label table)
+extra_labels:
+  - name: migration
+
+# Repo-specific sections injected at marked positions in the template
+sections:
+  - position: "after:description"
+    file: docs/agents-md/architecture.md
+  - position: "after:description"
+    file: docs/agents-md/message-keywords.md
+  - position: "after:description"
+    file: docs/agents-md/discord-routing.md
+  - position: "after:description"
+    file: docs/agents-md/pai-integration.md
+  - position: "after:critical-rules"
+    file: docs/agents-md/critical-rules.md
+  - position: "after:sop-table"
+    file: docs/agents-md/implementation-workflow.md
+  - position: "after:versioning"
+    file: docs/agents-md/dashboard-deployment.md
