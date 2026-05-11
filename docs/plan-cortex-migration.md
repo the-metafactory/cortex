@@ -514,16 +514,17 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
   - **Pre-flight**: verify legacy grove is uninstalled (`arc list | grep -i grove` returns nothing) before MIG-7. If legacy grove is still installed, the symlink at `~/bin/grove-bot` is owned by legacy's manifest; running `arc upgrade Cortex` does NOT touch it. Sequence: `arc uninstall Grove` (legacy) → `arc upgrade Cortex` → verify `~/bin/cortex` resolves and `~/bin/grove-bot` no longer exists.
   - **Deprecation shim**: separately, install a one-line `~/bin/grove-bot` shim that prints "use `cortex` instead" and execs `~/bin/cortex "$@"`. Manual operator step, not part of the manifest. Removed in MIG-8.4.
   - **Rollback**: `arc uninstall Cortex` + `arc upgrade Grove` (re-installs legacy at v0.29.0). Both `arc upgrade` commands are idempotent.
-- [ ] **7.8** Update launchd plist `~/Library/LaunchAgents/com.grove.bot.plist` → `com.cortex.bot.plist`.
-  - **Pre-flight**: confirm bot is idle (no in-flight CC sessions) before unloading the old plist. Run `cortex queue --pending` (or equivalent post-MIG-7 command) — should be 0.
-  - **Sequence (atomic-ish)**:
-    1. `launchctl unload ~/Library/LaunchAgents/com.grove.bot.plist` (stops legacy)
-    2. Verify the old bot is stopped (`pgrep -f grove-bot` returns nothing)
-    3. `cp` the rendered new plist to `~/Library/LaunchAgents/com.cortex.bot.plist`
-    4. `launchctl load -w ~/Library/LaunchAgents/com.cortex.bot.plist`
-    5. Verify cortex started (`pgrep -f 'cortex start'` returns a PID; tail `~/.config/cortex/logs/cortex.log` for "shard ready" lines)
-    6. Only after verification: `rm ~/Library/LaunchAgents/com.grove.bot.plist`
-  - **Rollback**: if step 4 or 5 fails: `launchctl unload ~/Library/LaunchAgents/com.cortex.bot.plist`, `launchctl load ~/Library/LaunchAgents/com.grove.bot.plist`. The old plist still works because we didn't delete it until step 6.
+- [x] **7.8** Cut launchd over from legacy `com.grove.{bot,relay}.plist` to `ai.meta-factory.cortex.{bot,relay}.plist`.
+  - **Implementation**: handled automatically by `arc upgrade Cortex` via the MIG-7.7 lifecycle scripts (extended by MIG-7.8):
+    - `scripts/preupgrade.sh` — kills any lingering `~/bin/grove-bot` / `~/bin/grove-relay` PIDs, unloads (`launchctl unload`) and removes (`rm -f`) `~/Library/LaunchAgents/com.grove.bot.plist` and `com.grove.relay.plist` when present, then unloads cortex's own plists ready for symlink refresh. Idempotent on hosts where legacy was never installed.
+    - `scripts/postinstall.sh` — renders `ai.meta-factory.cortex.{bot,relay}.plist` into `~/Library/LaunchAgents/`.
+    - `scripts/postupgrade.sh` — `launchctl load`s the freshly rendered plists.
+  - **Operator command**: `arc upgrade Cortex` — single command runs the full cutover. The pre-flight `arc uninstall Grove` (plan §4 7.7) is *recommended* but no longer load-bearing; the preupgrade cleanup is belt-and-braces.
+  - **Verification**: after `arc upgrade Cortex` completes:
+    - `launchctl list | grep ai.meta-factory.cortex` — two entries (bot + relay)
+    - `pgrep -f "${HOME}/bin/cortex start"` — non-empty PID
+    - `ls ~/Library/LaunchAgents/com.grove.*.plist 2>/dev/null` — empty (legacy plists removed)
+  - **Rollback**: `arc uninstall Cortex && arc upgrade Grove` re-installs legacy at v0.29.0 — grove's own installer re-renders `com.grove.bot.plist` from its own source. Cortex's preupgrade.sh removed the legacy plist; on a re-install grove rewrites it. No manual recovery needed.
 - [ ] **7.9** Migrate `~/.config/grove/bot.yaml` → `~/.config/cortex/cortex.yaml`.
   - **Note**: this is a **schema transformation** (per §9 / `migrate-config.ts` from step 7.2e), not just a path rename. The new file has different top-level keys (`agents:` + `renderers:` instead of `discord:` + `mattermost:` + `trustedAgentBots:`).
   - **Sequence**:

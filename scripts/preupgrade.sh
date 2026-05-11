@@ -35,6 +35,19 @@ if [ "$(uname)" = "Darwin" ]; then
     echo "  ✓ Old relay processes terminated"
   fi
 
+  # Belt: kill any lingering legacy grove-bot processes anchored to the
+  # legacy ~/bin/grove-bot path. The launchctl unload further down is the
+  # braces; this catches a grove-bot that was started outside launchd or
+  # whose plist was hand-removed.
+  GROVE_BOT_PIDS=$(pgrep -f "${HOME}/bin/grove-bot" 2>/dev/null || true)
+  if [ -n "${GROVE_BOT_PIDS}" ]; then
+    echo "  Killing legacy grove-bot processes: ${GROVE_BOT_PIDS}"
+    kill ${GROVE_BOT_PIDS} 2>/dev/null || true
+    sleep 1
+    kill -9 ${GROVE_BOT_PIDS} 2>/dev/null || true
+    echo "  ✓ Legacy grove-bot processes terminated"
+  fi
+
   # Clean up legacy grove-bot symlink if it's still owned by a stale install
   # (operator pre-flight should have run `arc uninstall Grove` already; this
   # is a belt-and-braces clean-up so the deprecation shim install step has a
@@ -46,6 +59,28 @@ if [ "$(uname)" = "Darwin" ]; then
       echo "  ✓ Removed stale legacy ~/bin/grove-bot symlink (→ ${LEGACY_TARGET})"
     fi
   fi
+
+  # MIG-7.8 — legacy launchd plist cutover. The `com.grove.bot` and
+  # `com.grove.relay` plists may linger at ~/Library/LaunchAgents/ if
+  # grove's own uninstall lifecycle didn't run (operator removed the repo
+  # manually, or `arc uninstall Grove` was skipped). Unload + remove them
+  # so the new `ai.meta-factory.cortex.*` plists own launchd cleanly.
+  # Idempotent: short-circuits when the legacy plist is absent.
+  for legacy_label in com.grove.bot com.grove.relay; do
+    legacy_plist="${LAUNCH_DIR}/${legacy_label}.plist"
+    if [ ! -e "${legacy_plist}" ]; then
+      continue
+    fi
+    # Anchor to label name to avoid partial matches (e.g. `com.grove.bot`
+    # vs a hypothetical `com.grove.bot.dev`). launchctl list column 3 is
+    # the registered label.
+    if launchctl list 2>/dev/null | awk '{print $3}' | grep -qx "${legacy_label}"; then
+      launchctl unload "${legacy_plist}" 2>/dev/null || true
+      echo "  ✓ Legacy ${legacy_label} daemon stopped"
+    fi
+    rm -f "${legacy_plist}"
+    echo "  ✓ Removed legacy ${legacy_plist}"
+  done
 
   if launchctl list 2>/dev/null | grep -q "ai.meta-factory.cortex.bot"; then
     launchctl unload "${LAUNCH_DIR}/ai.meta-factory.cortex.bot.plist" 2>/dev/null || true
