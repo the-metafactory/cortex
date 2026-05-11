@@ -5,13 +5,14 @@
 // `../loader` — pure function, no side effects beyond reading disk.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, writeFileSync, mkdirSync } from "fs";
+import { mkdtempSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
 import {
   loadAgentsDirectory,
   FragmentLoadError,
+  expandTilde,
 } from "../loader";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
@@ -48,6 +49,63 @@ describe("loadAgentsDirectory", () => {
       expect(luna.runtime!.substrate).toBe("codex");
       expect(luna.runtime!.mode).toBe("standalone");
       expect(luna.runtime!.capabilities).toEqual(["research"]);
+    });
+
+    test("rejects standalone runtime with empty capabilities (Echo M2)", () => {
+      // Echo M2 on cortex#62 — a standalone daemon with zero NATS subjects
+      // registers as agent but silently fails to receive any tasks. Schema
+      // refine() catches it at load time.
+      const dir = mkdtempSync(join(tmpdir(), "agents-d-standalone-empty-"));
+      const personaPath = join(dir, "scout.md");
+      writeFileSync(personaPath, `---\ndisplayName: Scout\n---\n`);
+      writeFileSync(
+        join(dir, "scout.yaml"),
+        `id: scout
+displayName: Scout
+persona: ${personaPath}
+roles: [agent-restricted]
+presence:
+  discord:
+    enabled: false
+    token: "t"
+    guildId: "0"
+    agentChannelId: "1"
+    logChannelId: "2"
+runtime:
+  substrate: pi-dev
+  mode: standalone
+  capabilities: []
+`,
+      );
+      expect(() => loadAgentsDirectory(dir)).toThrow(FragmentLoadError);
+    });
+
+    test("accepts in-process runtime with empty capabilities (capabilities optional for in-process)", () => {
+      const dir = mkdtempSync(join(tmpdir(), "agents-d-inprocess-empty-"));
+      const personaPath = join(dir, "echo.md");
+      writeFileSync(personaPath, `---\ndisplayName: Echo\n---\n`);
+      writeFileSync(
+        join(dir, "echo.yaml"),
+        `id: echo
+displayName: Echo
+persona: ${personaPath}
+roles: [agent-restricted]
+presence:
+  discord:
+    enabled: false
+    token: "t"
+    guildId: "0"
+    agentChannelId: "1"
+    logChannelId: "2"
+runtime:
+  substrate: claude-code
+  mode: in-process
+  capabilities: []
+`,
+      );
+      const agents = loadAgentsDirectory(dir);
+      expect(agents).toHaveLength(1);
+      expect(agents[0]!.runtime!.capabilities).toEqual([]);
     });
   });
 
@@ -156,16 +214,70 @@ describe("loadAgentsDirectory", () => {
       }
     });
 
-    test("rejects multi-document YAML (parse should be single-doc only)", () => {
+    test("multi-document YAML — first doc is validated; second doc is ignored", () => {
+      // Echo N2 on cortex#62 — original comment misstated the reason. The
+      // `yaml.parse()` we use takes only the FIRST doc. The throw here is
+      // schema validation on that first doc (which lacks displayName etc.),
+      // NOT a multi-doc rejection. The test still belongs because the
+      // important invariant is "one yaml file → at most one Agent" — we
+      // never accidentally surface both docs as two agents.
       const dir = mkdtempSync(join(tmpdir(), "agents-d-multidoc-"));
       writeFileSync(
         join(dir, "multi.yaml"),
         `id: first\n---\nid: second\n`,
       );
-      // yaml.parse() takes the FIRST doc and ignores trailing — but the first
-      // doc lacks required fields, so validation should fail. The point is the
-      // loader doesn't accidentally surface both docs as two agents.
       expect(() => loadAgentsDirectory(dir)).toThrow(FragmentLoadError);
+    });
+
+    test("rejects fragments larger than 1 MiB (hardening cap)", () => {
+      // Echo M3 on cortex#62 — unbounded readFileSync was a footgun.
+      const dir = mkdtempSync(join(tmpdir(), "agents-d-oversized-"));
+      // Build a > 1 MiB string. Padding can be junk — never reaches yaml.parse.
+      const padding = "#" + " padding ".repeat(140_000); // ~1.26 MiB
+      writeFileSync(join(dir, "huge.yaml"), `id: huge\n${padding}\n`);
+      try {
+        loadAgentsDirectory(dir);
+        throw new Error("expected throw");
+      } catch (err) {
+        expect(err).toBeInstanceOf(FragmentLoadError);
+        expect((err as FragmentLoadError).message).toContain("exceeds");
+      }
+    });
+
+    test("logs warning when agent.id differs from filename stem", () => {
+      // Echo N6 on cortex#62 — operator-UX warn for id↔filename drift.
+      const dir = mkdtempSync(join(tmpdir(), "agents-d-id-mismatch-"));
+      const personaPath = join(dir, "echo.md");
+      writeFileSync(personaPath, `---\ndisplayName: Echo\n---\n`);
+      writeFileSync(
+        join(dir, "echo-v2.yaml"),
+        validFragmentYaml("echo", "Echo", personaPath),
+      );
+      const warnings: string[] = [];
+      const originalWarn = console.warn;
+      console.warn = (msg: unknown) => {
+        warnings.push(String(msg));
+      };
+      try {
+        const agents = loadAgentsDirectory(dir);
+        expect(agents).toHaveLength(1);
+        expect(agents[0]!.id).toBe("echo");
+      } finally {
+        console.warn = originalWarn;
+      }
+      const matched = warnings.find((w) => w.includes("echo-v2.yaml") && w.includes("echo"));
+      expect(matched).toBeTruthy();
+    });
+
+    test("unresolved-trust fixture loads cleanly (loader does not validate trust)", () => {
+      // Echo N1 on cortex#62 — exercise the previously-unused fixture. The
+      // loader does NOT resolve trust references; that's AgentRegistry's
+      // job at construction time. So a fragment trusting a missing agent
+      // loads fine here.
+      const agents = loadAgentsDirectory(join(FIXTURES, "agents.d-unresolved-trust"));
+      expect(agents).toHaveLength(1);
+      expect(agents[0]!.id).toBe("echo");
+      expect(agents[0]!.trust).toEqual(["missing-agent-id"]);
     });
   });
 
@@ -211,6 +323,44 @@ describe("loadAgentsDirectory", () => {
       const agents = loadAgentsDirectory(dir);
       expect(agents[0]!.persona.startsWith(home)).toBe(true);
     });
+  });
+});
+
+describe("expandTilde (shared with watcher)", () => {
+  test("expands ~/foo to $HOME/foo", () => {
+    const home = process.env.HOME;
+    if (!home) return;
+    expect(expandTilde("~/foo")).toBe(`${home}/foo`);
+  });
+
+  test("expands bare ~ to $HOME", () => {
+    const home = process.env.HOME;
+    if (!home) return;
+    expect(expandTilde("~")).toBe(home);
+  });
+
+  test("returns non-tilde paths verbatim", () => {
+    expect(expandTilde("/absolute/path")).toBe("/absolute/path");
+    expect(expandTilde("relative/path")).toBe("relative/path");
+    expect(expandTilde("")).toBe("");
+  });
+
+  test("returns ~foo (no slash) verbatim — user-name resolution not supported", () => {
+    expect(expandTilde("~root")).toBe("~root");
+  });
+
+  test("throws when $HOME unset and path needs expansion", () => {
+    // Echo N3 on cortex#62 — previously returned literal "~" silently.
+    const original = process.env.HOME;
+    delete process.env.HOME;
+    try {
+      expect(() => expandTilde("~/foo")).toThrow(/\$HOME is not set/);
+      expect(() => expandTilde("~")).toThrow(/\$HOME is not set/);
+      // Non-tilde paths still work without HOME
+      expect(expandTilde("/abs")).toBe("/abs");
+    } finally {
+      if (original !== undefined) process.env.HOME = original;
+    }
   });
 });
 

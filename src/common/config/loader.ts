@@ -6,11 +6,42 @@
  * platform instances, cloud endpoints, repos, and security overrides.
  */
 
-import { readFileSync, readdirSync, existsSync } from "fs";
-import { join, dirname, resolve, isAbsolute } from "path";
+import { readFileSync, readdirSync, existsSync, statSync } from "fs";
+import { join, dirname, resolve, isAbsolute, basename } from "path";
 import { parse as parseYaml } from "yaml";
 import { BotConfigSchema, NetworkFileSchema, type BotConfig, type NetworkFile } from "../types/config";
 import { AgentSchema, type Agent } from "../types/cortex-config";
+
+/**
+ * Hardening cap on a single fragment file's size. Echo M3 on cortex#62 —
+ * unbounded readFileSync against an attacker- or accident-controlled file
+ * in agents.d/ is a footgun. 1MB is ~4 orders of magnitude over a realistic
+ * fragment (~1KB); the guard catches mistakes (operator drops the wrong
+ * file) and worst-case-malicious drops alike before they consume memory or
+ * stall the loader.
+ */
+const FRAGMENT_MAX_BYTES = 1_048_576; // 1 MiB
+
+/**
+ * Expand a leading `~` in a path to `$HOME`. Single source of truth for the
+ * loader + watcher to avoid drift (Echo M1 on cortex#62).
+ *
+ * Throws when `$HOME` is unset and the path needs expansion (Echo N3 — was
+ * silently returning literal `~` strings). A path that doesn't start with
+ * `~` is returned verbatim regardless of `$HOME`.
+ */
+export function expandTilde(p: string): string {
+  if (p === "~" || p.startsWith("~/")) {
+    const home = process.env.HOME;
+    if (!home) {
+      throw new Error(`cannot expand "~" in path "${p}": $HOME is not set`);
+    }
+    return p === "~" ? home : join(home, p.slice(2));
+  }
+  // Bare `~foo` (no slash) is not expanded — that's user-name resolution
+  // semantics we explicitly don't support here. Return verbatim.
+  return p;
+}
 
 /**
  * Load bot.yaml + networks/*.yaml, validate, merge.
@@ -117,7 +148,57 @@ export function loadAgentsDirectory(dir: string): Agent[] {
 
   for (const filename of files) {
     const filePath = join(expandedDir, filename);
-    const content = readFileSync(filePath, "utf-8");
+
+    // Echo M3 — size guard before readFileSync.
+    let size: number;
+    try {
+      size = statSync(filePath).size;
+    } catch (err) {
+      // Race: file was in readdir's list but vanished before we statSync'd
+      // (operator just deleted it, or arc is mid-uninstall). Skip silently
+      // — the reload loop continues with the rest of the directory.
+      if (
+        err instanceof Error &&
+        (err as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        continue;
+      }
+      throw new FragmentLoadError(
+        filePath,
+        `stat failed: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err : undefined,
+      );
+    }
+    if (size > FRAGMENT_MAX_BYTES) {
+      throw new FragmentLoadError(
+        filePath,
+        `fragment exceeds ${FRAGMENT_MAX_BYTES} bytes (got ${size}); refusing to read`,
+      );
+    }
+
+    let content: string;
+    try {
+      content = readFileSync(filePath, "utf-8");
+    } catch (err) {
+      // Same race window — between stat and read.
+      if (
+        err instanceof Error &&
+        (err as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        continue;
+      }
+      throw new FragmentLoadError(
+        filePath,
+        `read failed: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err : undefined,
+      );
+    }
+
+    // Echo N6 — warn if agent.id doesn't match filename stem. Filename is
+    // operator/arc convention; mismatched id is a footgun for both. We log
+    // rather than throw — operator may have legitimate reasons (e.g.
+    // versioned fragment filenames like `echo.v2.yaml`).
+    const filenameStem = basename(filename, filename.endsWith(".yml") ? ".yml" : ".yaml");
 
     let raw: unknown;
     try {
@@ -128,6 +209,16 @@ export function loadAgentsDirectory(dir: string): Agent[] {
         `YAML parse error: ${err instanceof Error ? err.message : String(err)}`,
         err instanceof Error ? err : undefined,
       );
+    }
+
+    // Echo N6 — operator-UX warn when id and filename stem disagree.
+    if (raw && typeof raw === "object" && "id" in raw) {
+      const declaredId = (raw as { id?: unknown }).id;
+      if (typeof declaredId === "string" && declaredId !== filenameStem) {
+        console.warn(
+          `agents-loader: fragment ${filename} declares id "${declaredId}" which differs from its filename stem "${filenameStem}". Convention is to match — operator tooling (arc, cortex agents list) keys on the id, but mismatch obscures filesystem lookup.`,
+        );
+      }
     }
 
     let agent: Agent;
@@ -175,17 +266,6 @@ export function loadAgentsDirectory(dir: string): Agent[] {
   }
 
   return agents;
-}
-
-/** Expand a leading `~` in a path to `$HOME`. No-op if the path doesn't start with `~`. */
-function expandTilde(p: string): string {
-  if (p.startsWith("~/")) {
-    return join(process.env.HOME ?? "~", p.slice(2));
-  }
-  if (p === "~") {
-    return process.env.HOME ?? "~";
-  }
-  return p;
 }
 
 function loadNetworkFiles(networksDir: string, explicit: boolean): NetworkFile[] {

@@ -9,7 +9,6 @@ import {
   mkdtempSync,
   writeFileSync,
   unlinkSync,
-  mkdirSync,
   rmSync,
 } from "fs";
 import { join } from "path";
@@ -46,7 +45,9 @@ afterEach(() => {
   rmSync(tmpPersonasDir, { recursive: true, force: true });
 });
 
-function startWatcher(initial: Awaited<ReturnType<typeof loadAgentsDirectory>> = []): void {
+async function startWatcher(
+  initial: Awaited<ReturnType<typeof loadAgentsDirectory>> = [],
+): Promise<void> {
   watcher = new AgentsDirectoryWatcher(
     tmpAgentsDir,
     initial,
@@ -56,6 +57,9 @@ function startWatcher(initial: Awaited<ReturnType<typeof loadAgentsDirectory>> =
     { debounceMs: DEBOUNCE_MS },
   );
   watcher.start();
+  // Echo M4 — wait for fs.watch registration to bind before tests write
+  // fixtures, eliminating the macOS FSEvents subscription race.
+  await watcher.waitForReady();
 }
 
 function dropFragment(id: string, personaName = `${id}.md`, extra: Record<string, unknown> = {}): void {
@@ -86,45 +90,47 @@ function sleep(ms: number): Promise<void> {
 describe("AgentsDirectoryWatcher", () => {
   describe("file events", () => {
     test("drop a fragment → fires with agentsAdded", async () => {
-      startWatcher();
+      await startWatcher();
       dropFragment("echo");
       await sleep(WAIT_AFTER_EVENT);
-      expect(events.length).toBeGreaterThan(0);
-      const last = events[events.length - 1]!;
-      expect(last.failed).toBe(false);
-      expect(last.source).toBe("watcher");
-      expect(last.agentsAdded).toContain("echo");
-      expect(last.agentsRemoved).toEqual([]);
+      // macOS fs.watch sometimes fires duplicate events; assert there is AT
+      // LEAST one event that captured the change. Each test asserts the
+      // semantic-content event, not the last event.
+      const significant = events.find((e) => e.agentsAdded.includes("echo"));
+      expect(significant).toBeDefined();
+      expect(significant!.failed).toBe(false);
+      expect(significant!.source).toBe("watcher");
+      expect(significant!.agentsRemoved).toEqual([]);
     });
 
     test("modify a fragment → fires with agentsChanged", async () => {
       dropFragment("echo");
       const initial = loadAgentsDirectory(tmpAgentsDir);
-      startWatcher(initial);
+      await startWatcher(initial);
       // Modify: change the displayName by rewriting with extra field
       dropFragment("echo", "echo.md", { trust: ["holly"] });
       await sleep(WAIT_AFTER_EVENT);
-      const last = events[events.length - 1]!;
-      expect(last.failed).toBe(false);
-      expect(last.agentsChanged).toContain("echo");
-      expect(last.agentsAdded).toEqual([]);
-      expect(last.agentsRemoved).toEqual([]);
+      const significant = events.find((e) => e.agentsChanged.includes("echo"));
+      expect(significant).toBeDefined();
+      expect(significant!.failed).toBe(false);
+      expect(significant!.agentsAdded).toEqual([]);
+      expect(significant!.agentsRemoved).toEqual([]);
     });
 
     test("delete a fragment → fires with agentsRemoved", async () => {
       dropFragment("echo");
       const initial = loadAgentsDirectory(tmpAgentsDir);
-      startWatcher(initial);
+      await startWatcher(initial);
       unlinkSync(join(tmpAgentsDir, "echo.yaml"));
       await sleep(WAIT_AFTER_EVENT);
-      const last = events[events.length - 1]!;
-      expect(last.failed).toBe(false);
-      expect(last.agentsRemoved).toContain("echo");
-      expect(last.agentsAdded).toEqual([]);
+      const significant = events.find((e) => e.agentsRemoved.includes("echo"));
+      expect(significant).toBeDefined();
+      expect(significant!.failed).toBe(false);
+      expect(significant!.agentsAdded).toEqual([]);
     });
 
     test("rapid changes debounce to a single event", async () => {
-      startWatcher();
+      await startWatcher();
       // Three writes within the debounce window.
       dropFragment("echo");
       dropFragment("echo");
@@ -136,7 +142,7 @@ describe("AgentsDirectoryWatcher", () => {
     });
 
     test("ignores dotfile changes", async () => {
-      startWatcher();
+      await startWatcher();
       writeFileSync(join(tmpAgentsDir, ".hidden.yaml"), "id: hidden\n");
       await sleep(WAIT_AFTER_EVENT);
       // No reload should fire.
@@ -144,7 +150,7 @@ describe("AgentsDirectoryWatcher", () => {
     });
 
     test("ignores non-yaml changes", async () => {
-      startWatcher();
+      await startWatcher();
       writeFileSync(join(tmpAgentsDir, "README.md"), "operator notes\n");
       await sleep(WAIT_AFTER_EVENT);
       expect(events).toEqual([]);
@@ -155,7 +161,7 @@ describe("AgentsDirectoryWatcher", () => {
     test("bad fragment mid-run → failed:true, prior state retained", async () => {
       dropFragment("echo");
       const initial = loadAgentsDirectory(tmpAgentsDir);
-      startWatcher(initial);
+      await startWatcher(initial);
       // Drop a malformed fragment alongside the good one.
       writeFileSync(join(tmpAgentsDir, "broken.yaml"), `displayName: "missing closing quote\n`);
       await sleep(WAIT_AFTER_EVENT);
@@ -169,7 +175,7 @@ describe("AgentsDirectoryWatcher", () => {
     test("recovers when bad fragment is fixed", async () => {
       dropFragment("echo");
       const initial = loadAgentsDirectory(tmpAgentsDir);
-      startWatcher(initial);
+      await startWatcher(initial);
       writeFileSync(join(tmpAgentsDir, "broken.yaml"), `displayName: "missing closing quote\n`);
       await sleep(WAIT_AFTER_EVENT);
       // Now repair it
@@ -185,7 +191,7 @@ describe("AgentsDirectoryWatcher", () => {
   describe("explicit triggerReload", () => {
     test("triggerReload(cli) emits source: cli", async () => {
       dropFragment("echo");
-      startWatcher();
+      await startWatcher();
       watcher!.triggerReload("cli");
       // Sync call — no debounce wait needed for explicit triggers.
       await sleep(20);
@@ -196,7 +202,7 @@ describe("AgentsDirectoryWatcher", () => {
 
     test("triggerReload(sighup) emits source: sighup", async () => {
       dropFragment("echo");
-      startWatcher();
+      await startWatcher();
       watcher!.triggerReload("sighup");
       await sleep(20);
       const last = events[events.length - 1]!;
@@ -224,7 +230,7 @@ describe("AgentsDirectoryWatcher", () => {
     test("getAgents() returns the last-good state", async () => {
       dropFragment("echo");
       const initial = loadAgentsDirectory(tmpAgentsDir);
-      startWatcher(initial);
+      await startWatcher(initial);
       expect(watcher!.getAgents().map((a) => a.id)).toContain("echo");
       // After a failure, getAgents still returns the prior set.
       writeFileSync(join(tmpAgentsDir, "broken.yaml"), `displayName: "missing closing quote\n`);

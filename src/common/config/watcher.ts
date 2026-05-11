@@ -4,7 +4,7 @@
  */
 
 import { watch, type FSWatcher, existsSync } from "fs";
-import { loadConfig, loadAgentsDirectory, FragmentLoadError } from "./loader";
+import { loadConfig, loadAgentsDirectory, FragmentLoadError, expandTilde } from "./loader";
 import type { BotConfig } from "../types/config";
 import type { Agent } from "../types/cortex-config";
 
@@ -389,11 +389,22 @@ export class AgentsDirectoryWatcher {
     handler: AgentsChangeHandler,
     options: { debounceMs?: number } = {},
   ) {
-    this.agentsDir = agentsDir.replace(/^~/, process.env.HOME ?? "~");
+    // Echo M1 — single source-of-truth tilde expansion shared with the loader.
+    this.agentsDir = expandTilde(agentsDir);
     this.agents = initialAgents;
     this.handler = handler;
     this.debounceMs = options.debounceMs ?? 200;
   }
+
+  /**
+   * Registration grace window in ms. macOS FSEvents subscribes asynchronously;
+   * if a test (or production code) writes a file immediately after `start()`
+   * returns, the event may be lost. `waitForReady()` waits this long for the
+   * watcher to fully bind before resolving. Tests should `await` it after
+   * `start()` to eliminate the race (Echo M4 on cortex#62).
+   */
+  private readonly registrationGraceMs = 30;
+  private readyPromise: Promise<void> | null = null;
 
   start(): void {
     if (!existsSync(this.agentsDir)) {
@@ -402,6 +413,7 @@ export class AgentsDirectoryWatcher {
       // but that widens scope. For v1: log + return. Operator restarts cortex
       // after creating the dir, or invokes `cortex agents reload` (F-3).
       console.warn(`agents-watcher: agents.d directory not found at ${this.agentsDir} — watcher idle`);
+      this.readyPromise = Promise.resolve();
       return;
     }
 
@@ -422,6 +434,23 @@ export class AgentsDirectoryWatcher {
         triggerReload("watcher");
       }
     });
+
+    // Register a small grace promise — tests await this before writing
+    // fixtures to ensure the fs.watch subscription is fully bound.
+    this.readyPromise = new Promise((resolve) =>
+      setTimeout(resolve, this.registrationGraceMs),
+    );
+  }
+
+  /**
+   * Resolves once the underlying fs.watch is bound (or immediately if the
+   * watcher is idle because agents.d/ doesn't exist). Useful for tests that
+   * want to write a fragment file right after `start()` without racing the
+   * macOS FSEvents subscription. Production code typically doesn't need it —
+   * the registration grace is short (30ms).
+   */
+  waitForReady(): Promise<void> {
+    return this.readyPromise ?? Promise.resolve();
   }
 
   stop(): void {
@@ -510,7 +539,9 @@ function diffAgents(
   for (const id of nextById.keys()) {
     if (!priorById.has(id)) {
       added.push(id);
-    } else if (JSON.stringify(priorById.get(id)) !== JSON.stringify(nextById.get(id))) {
+    } else if (!deepEqual(priorById.get(id), nextById.get(id))) {
+      // Echo N4 on cortex#62 — was JSON.stringify which depends on field
+      // ordering. `deepEqual` is order-independent.
       changed.push(id);
     }
   }
@@ -521,4 +552,36 @@ function diffAgents(
   }
 
   return { added: added.sort(), removed: removed.sort(), changed: changed.sort() };
+}
+
+/**
+ * Order-independent structural equality. Handles plain objects, arrays, and
+ * scalars — the shapes Agent values actually inhabit. Doesn't try to be a
+ * general deep-equal (no Date/RegExp/Map/Set support); kept narrow on
+ * purpose so it stays auditable.
+ */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return a === b;
+  if (typeof a !== typeof b) return false;
+  if (typeof a !== "object") return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b)) return false;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!deepEqual(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  if (Array.isArray(b)) return false;
+  const aKeys = Object.keys(a as object);
+  const bKeys = Object.keys(b as object);
+  if (aKeys.length !== bKeys.length) return false;
+  for (const key of aKeys) {
+    if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+    if (!deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])) {
+      return false;
+    }
+  }
+  return true;
 }

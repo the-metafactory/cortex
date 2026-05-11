@@ -231,9 +231,26 @@ export const AgentRuntimeSchema = z.object({
    *  `standalone` = arc-installed daemon connects to the bus directly. */
   mode: z.enum(["in-process", "standalone"]),
   /** NATS capability names the agent claims (e.g. `code-review`,
-   *  `research`). Cortex's dispatcher routes tasks via these. */
+   *  `research`). Cortex's dispatcher routes tasks via these.
+   *  Empty list is allowed for `in-process` agents whose capabilities are
+   *  declared elsewhere (e.g. inferred from `roles`); for `standalone`
+   *  agents, at least one capability is required — see refine below. */
   capabilities: z.array(z.string().min(1)).default([]),
-});
+}).refine(
+  // Echo M2 on cortex#62 — a `standalone` agent with zero capabilities parses
+  // fine but routes zero work. The daemon connects to NATS, publishes nothing
+  // to the capability KV, and just sits there. Worst-of-both failure mode:
+  // operator sees the agent in the dashboard, dispatcher never gives it
+  // anything to do. Catch it at config-load time.
+  (rt) => rt.mode !== "standalone" || rt.capabilities.length >= 1,
+  {
+    message:
+      "agent.runtime.capabilities must list at least one capability when " +
+      "runtime.mode is 'standalone' (otherwise the daemon registers no NATS " +
+      "subjects and silently fails to receive tasks)",
+    path: ["capabilities"],
+  },
+);
 
 export type AgentRuntime = z.infer<typeof AgentRuntimeSchema>;
 
