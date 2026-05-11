@@ -349,6 +349,23 @@ export const BotConfigSchema = z.object({
       /** Regex patterns for agent issue comments (e.g. "^Starting:", "^Completed:") */
       commentPatterns: z.array(z.string()).default(["^Starting:", "^Completed:"]),
     }).default({} as any),
+    /**
+     * MIG-5.6 (C-106): Local HTTP receiver that publishes webhook payloads
+     * as `local.{org}.github.{event}.{action}` envelopes onto the bus.
+     *
+     * Opt-in: only started when `enabled: true` AND `webhookSecret` is set
+     * (the secret is required for HMAC re-verification at the local hop).
+     * The default hostname is `127.0.0.1` — never expose to LAN/internet
+     * without an explicit override (HMAC is the only auth).
+     */
+    receiver: z.object({
+      /** Whether to start the local receiver. Default false (opt-in). */
+      enabled: z.boolean().default(false),
+      /** TCP port to bind. Default 8770. */
+      port: z.number().int().positive().default(8770),
+      /** Hostname to bind. Default `127.0.0.1` — never `0.0.0.0` unless explicitly chosen. */
+      hostname: z.string().default("127.0.0.1"),
+    }).default({} as any),
   }).default({} as any).transform((val) => ({
     webhookSecret: val.webhookSecret ?? "",
     repos: val.repos ?? [],
@@ -356,6 +373,11 @@ export const BotConfigSchema = z.object({
       commitTrailers: val.agentDetection?.commitTrailers ?? ["Co-Authored-By: Claude"],
       branchPatterns: val.agentDetection?.branchPatterns ?? ["^feat/(g|f|i)-\\d+"],
       commentPatterns: val.agentDetection?.commentPatterns ?? ["^Starting:", "^Completed:"],
+    },
+    receiver: {
+      enabled: val.receiver?.enabled ?? false,
+      port: val.receiver?.port ?? 8770,
+      hostname: val.receiver?.hostname ?? "127.0.0.1",
     },
   })),
 

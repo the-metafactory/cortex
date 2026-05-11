@@ -505,6 +505,23 @@ export const AgentDetectionSchema = z.object({
 export type AgentDetection = z.infer<typeof AgentDetectionSchema>;
 
 /**
+ * MIG-5.6 (C-106): local GitHub-webhook receiver — extracted so it can
+ * nest cleanly under `GithubConfigSchema` and stay MIRRORed with the
+ * inline shape in `BotConfigSchema.github.receiver`. Defaults are
+ * opt-in: `enabled=false`, `127.0.0.1:8770`.
+ *
+ * MIRROR: see `BotConfigSchema.github.receiver` (inline) in `./config.ts`.
+ * Drop both on 7.2e.
+ */
+export const GithubReceiverSchema = z.object({
+  enabled: z.boolean().default(false),
+  port: z.number().int().positive().default(8770),
+  hostname: z.string().default("127.0.0.1"),
+});
+
+export type GithubReceiver = z.infer<typeof GithubReceiverSchema>;
+
+/**
  * GitHub webhook surface — identical shape to BotConfig.github.
  * MIRROR: see `BotConfigSchema.github` in `./config.ts`. Drop both on 7.2e.
  */
@@ -512,6 +529,7 @@ export const GithubConfigSchema = z.object({
   webhookSecret: z.string().default(""),
   repos: z.array(z.string()).default([]),
   agentDetection: emptyDefault(AgentDetectionSchema),
+  receiver: emptyDefault(GithubReceiverSchema),
 });
 
 export type GithubConfig = z.infer<typeof GithubConfigSchema>;

@@ -45,6 +45,10 @@ import { CloudPublisher } from "./taps/cc-events/cloud-publisher";
 import { JsonlReader } from "./taps/cc-events/lib/jsonl-reader";
 import { PublishedEventSchema } from "./taps/cc-events/hooks/lib/event-types";
 import { formatEventForDiscord } from "./adapters/discord/event-formatter";
+import {
+  startGithubWebhookReceiver,
+  type GithubWebhookReceiverHandle,
+} from "./taps/gh-webhook-receiver/server";
 
 // MIG-7.9 (deferred) flips these to `~/.config/cortex/`. Keeping grove-shaped
 // paths for now so the operator's existing `bot.yaml` continues to work.
@@ -81,6 +85,8 @@ export interface StartCortexOptions {
   disableDashboard?: boolean;
   /** Skip the JSONL outbound poller (tests). */
   disableOutboundPoller?: boolean;
+  /** Skip the GitHub webhook receiver even if config.github.receiver.enabled is true (tests). */
+  disableGithubReceiver?: boolean;
   /**
    * Inject a runtime instead of constructing one via `startMyelinRuntime`.
    * Tests pass a recording fake to assert observable side-effects (e.g. that
@@ -414,6 +420,36 @@ export async function startCortex(
     }
   }
 
+  // MIG-5.6 (C-106): GitHub webhook receiver — opt-in via `github.receiver.enabled`
+  // AND a non-empty `github.webhookSecret`. Publishes `local.{org}.github.{event}.{action}`
+  // envelopes via `runtime.publish`; that path is a no-op when NATS isn't configured
+  // (see `myelin/runtime.ts`), so this block stays safe to run even without NATS.
+  let githubReceiver: GithubWebhookReceiverHandle | null = null;
+  if (
+    !options.disableGithubReceiver
+    && config.github.receiver.enabled
+    && config.github.webhookSecret.length > 0
+  ) {
+    try {
+      githubReceiver = startGithubWebhookReceiver({
+        secret: config.github.webhookSecret,
+        port: config.github.receiver.port,
+        hostname: config.github.receiver.hostname,
+        source: systemEventSource,
+        publish: (env) => runtime.publish(env),
+      });
+    } catch (err) {
+      console.error(
+        "cortex: github webhook receiver startup error (non-fatal):",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  } else if (config.github.receiver.enabled && !config.github.webhookSecret) {
+    console.warn(
+      "cortex: github.receiver.enabled is true but github.webhookSecret is empty — receiver not started",
+    );
+  }
+
   // Shutdown — reverse-order; capped at SHUTDOWN_TIMEOUT_MS.
   //
   // Echo round-1 N2 — abandoned-set tracking: each drain step is named
@@ -444,6 +480,7 @@ export async function startCortex(
       "config-watcher stop",
       "usage-monitor stop",
       "dashboard stop",
+      "github webhook receiver stop",
       ...adapterCleanup.map((_, i) => `outbound poller stop[${i}]`),
       "dispatch-listener stop",
       "surface-router stop",
@@ -474,6 +511,7 @@ export async function startCortex(
       completeSync("config-watcher stop", () => configWatcher?.stop());
       completeSync("usage-monitor stop", () => usageMonitor?.stop());
       completeSync("dashboard stop", () => dashboardApi?.stop?.());
+      completeSync("github webhook receiver stop", () => githubReceiver?.stop());
       for (let i = 0; i < adapterCleanup.length; i++) {
         completeSync(`outbound poller stop[${i}]`, adapterCleanup[i]!);
       }

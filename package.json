@@ -18,6 +18,7 @@
   "dependencies": {
     "@metafactory/content-filter": "github:the-metafactory/content-filter",
     "@octokit/webhooks": "^14.2.0",
+    "@octokit/webhooks-methods": "^6.0.0",
     "@xyflow/react": "^12.10.2",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",

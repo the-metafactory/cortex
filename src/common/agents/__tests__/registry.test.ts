@@ -92,6 +92,11 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
         branchPatterns: ["^feat/(g|f|i)-\\d+"],
         commentPatterns: ["^Starting:", "^Completed:"],
       },
+      receiver: {
+        enabled: false,
+        port: 8770,
+        hostname: "127.0.0.1",
+      },
     },
     paths: {
       publishedEventsDir: "~/.claude/events/published",
