@@ -184,14 +184,27 @@ export function createDiscordClient(
 
 /**
  * Check if a message is an @-mention for our bot.
- * Ignores all bot messages AND explicitly ignores our own messages
- * to prevent self-response loops when multiple bot processes are running.
+ *
+ * Default policy: ignore all bot-authored messages and ALWAYS ignore our
+ * own messages (self-loop guard, even across redundant bot processes).
+ *
+ * `trustedBotIds` (cortex#84) is an optional allowlist of Discord user
+ * ids of peer bots that are permitted to ping us. When a bot-authored
+ * message comes from a listed id, the mention check proceeds. The self
+ * id is NEVER allowed even if accidentally listed — the self-check runs
+ * first and short-circuits.
  */
-export function isMentionForBot(message: Message, client: Client): boolean {
+export function isMentionForBot(
+  message: Message,
+  client: Client,
+  trustedBotIds?: ReadonlySet<string>,
+): boolean {
   if (!client.user) return false;
-  // Explicit self-check — never respond to our own messages
+  // Explicit self-check — never respond to our own messages, regardless
+  // of any allowlist. Defends against accidentally listing the bot's own
+  // user id in `trustedBotIds`.
   if (message.author.id === client.user.id) return false;
-  if (message.author.bot) return false;
+  if (message.author.bot && !trustedBotIds?.has(message.author.id)) return false;
   return message.mentions.has(client.user);
 }
 

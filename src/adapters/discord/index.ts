@@ -75,6 +75,22 @@ export interface DiscordAdapterInfra {
   /** MIG-3b: fallback Discord channel ID for envelope rendering when no per-envelope routing
    * rule applies. Channel ID, NOT name. Moves to Renderer at MIG-7.2d. */
   surfaceFallbackChannelId?: string;
+  /**
+   * cortex#84: Discord user ids of peer bots whose messages this adapter
+   * is permitted to act on. Empty/undefined → strict default (drop every
+   * bot-authored message, the pre-cortex#84 behaviour).
+   *
+   * The adapter's own bot id is NEVER allowed regardless of this set —
+   * the self-check in the messageCreate handler short-circuits before
+   * the allowlist is consulted.
+   *
+   * Bridge field; at MIG-7.2e the in-process TrustResolver populates the
+   * effective allowlist from `agents[].trust`. Cross-process trust still
+   * needs this field because the resolver only sees adapters running in
+   * its own process. See `DiscordInstance.trustedBotIds` in
+   * `common/types/config.ts`.
+   */
+  trustedBotIds?: ReadonlySet<string>;
 }
 
 interface PendingResult {
@@ -103,6 +119,14 @@ export class DiscordAdapter implements PlatformAdapter {
   private runtime: MyelinRuntime | undefined;
   private systemEventSource: SystemEventSource | undefined;
   /**
+   * cortex#84: snapshot of `infra.trustedBotIds` taken at construction
+   * time. `ReadonlySet` so a misbehaving caller can't mutate the
+   * allowlist after the adapter has cached the reference. Empty set when
+   * no allowlist was supplied — the default "drop every bot author"
+   * branch becomes an O(1) `set.has` lookup that returns false.
+   */
+  private readonly trustedBotIds: ReadonlySet<string>;
+  /**
    * Latches once we've warned about the runtime-without-source case so a
    * busy adapter doesn't flood the log with the same diagnostic on every
    * shard event. Cleared only when the adapter is reconstructed.
@@ -120,6 +144,10 @@ export class DiscordAdapter implements PlatformAdapter {
     this.instanceId = infra.instanceId;
     this.runtime = infra.runtime;
     this.systemEventSource = infra.systemEventSource;
+    // cortex#84: snapshot the allowlist at construction. Pre-build the
+    // empty-set sentinel so the messageCreate hot path can call
+    // `set.has` unconditionally without a null check.
+    this.trustedBotIds = infra.trustedBotIds ?? new Set<string>();
 
     // MIG-3b: warn once at construction if surfaceSubjects is explicitly empty.
     // `undefined` is silent (adapter opted out of bus rendering entirely);
@@ -201,12 +229,20 @@ export class DiscordAdapter implements PlatformAdapter {
       const isDM = message.channel.type === ChannelType.DM;
 
       if (isDM) {
-        // Never respond to our own messages or other bots
+        // Self-loop guard — never respond to our own DMs, regardless of
+        // any trustedBotIds entry (the bot's own id is never allowed).
         if (message.author.id === this.client.user?.id) return;
-        if (message.author.bot) return;
+        // cortex#84: drop bot-authored DMs unless the author is an
+        // operator-blessed peer in `trustedBotIds`. The role-resolver
+        // (resolveDMAccess) then makes the final allow/deny call on
+        // the message, so listing a bot here is necessary-but-not-
+        // sufficient to elicit a response.
+        if (message.author.bot && !this.trustedBotIds.has(message.author.id)) return;
       } else {
-        // Guild: require @mention
-        if (!isMentionForBot(message, this.client)) return;
+        // Guild: require @mention (which itself honours trustedBotIds
+        // via the same allowlist — peer bots that @-mention us are
+        // allowed through; un-listed bot authors are dropped).
+        if (!isMentionForBot(message, this.client, this.trustedBotIds)) return;
       }
 
       const content = isDM ? message.content.trim() : extractContent(message, this.client);

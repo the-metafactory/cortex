@@ -122,6 +122,28 @@ export const DiscordInstanceSchema = z.object({
    * See `docs/design-mc-f11-discord-notifications.md` Decision 5.
    */
   operatorRoleId: z.coerce.string().optional(),
+
+  /**
+   * cortex#84: Discord user IDs of peer bots that are permitted to
+   * trigger this bot. Bot-authored messages are dropped by default to
+   * prevent self-loops and unsolicited bot chatter; entries listed here
+   * are allowed through the author-bot filter and then handled by the
+   * normal role-based access path (so the operator still has to grant
+   * each peer bot a role in `roles[]` or `dm.userRoles[]` to actually
+   * respond).
+   *
+   * Each entry is a Discord snowflake. The bot's own user id is NEVER
+   * allowed regardless of this list (anti-self-loop guard kept).
+   *
+   * Bridge field — at MIG-7.2e cortex.ts will switch to reading
+   * `agents[].trust` from cortex.yaml and the in-process TrustResolver
+   * (see `src/common/agents/trust-resolver.ts`) will populate the
+   * effective allowlist automatically for peer bots co-hosted in the
+   * same cortex process. This field stays as the cross-process bridge
+   * (e.g. Ivy in PAI's local cortex trusting Holly in a server cortex),
+   * since the resolver only sees adapters started in its own process.
+   */
+  trustedBotIds: z.array(z.coerce.string()).default([]),
 });
 
 export type DiscordInstance = z.infer<typeof DiscordInstanceSchema>;

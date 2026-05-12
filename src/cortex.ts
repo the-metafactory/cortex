@@ -353,6 +353,12 @@ export async function startCortex(
       presence: { discord: presence },
     };
     try {
+      // cortex#84: build the trusted-peer-bot allowlist once per adapter
+      // start so the messageCreate hot path doesn't re-allocate per event.
+      // Empty list → adapter falls back to "drop every bot author"
+      // (pre-cortex#84 behaviour). MIG-7.2e will derive this from
+      // `agents[].trust` + in-process TrustResolver where possible.
+      const trustedBotIds = new Set<string>(instance.trustedBotIds);
       const adapter = new DiscordAdapter(
         agent,
         presence,
@@ -363,6 +369,7 @@ export async function startCortex(
           },
           runtime,
           systemEventSource,
+          trustedBotIds,
         },
       );
       // Register the adapter's surface-router face. Empty `surfaceSubjects`
@@ -370,7 +377,7 @@ export async function startCortex(
       router.register(adapter.surfaceConfig);
       await adapter.start((msg) => dispatchHandler.handleMessage(adapter, msg));
       adapters.push(adapter);
-      console.log(`cortex: discord adapter started (instance: ${instanceId}, guild: ${instance.guildId})`);
+      console.log(`cortex: discord adapter started (instance: ${instanceId}, guild: ${instance.guildId}, trustedBotIds: ${trustedBotIds.size})`);
 
       // Outbound JSONL → #agent-log + worklog (opt-in). Dashboard + cloud
       // delivery handled by the HTTP path (H-004).
