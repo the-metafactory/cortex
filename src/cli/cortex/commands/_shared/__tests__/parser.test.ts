@@ -310,6 +310,33 @@ describe("prototype-pollution defense", () => {
     expect(parseSubcommandArgs(spec, ["hasOwnProperty"]).subcommand).toBe("unknown");
     expect(parseSubcommandArgs(spec, ["__proto__"]).subcommand).toBe("unknown");
   });
+
+  // Echo cortex#66 round-2 security warning — `resolveFlagKind` previously
+  // used bare `in`, traversing the prototype chain. `--toString` etc. would
+  // resolve to `Object.prototype.toString` and silently set a `true` flag.
+  test('"--toString" as flag throws UnknownFlagError (not Object.prototype.toString)', () => {
+    expect(() => parseSubcommandArgs(spec, ["list", "--toString"])).toThrow(
+      UnknownFlagError,
+    );
+  });
+
+  test('"--__proto__" as flag throws UnknownFlagError', () => {
+    expect(() => parseSubcommandArgs(spec, ["list", "--__proto__"])).toThrow(
+      UnknownFlagError,
+    );
+  });
+
+  test('"--constructor" as flag throws UnknownFlagError', () => {
+    expect(() => parseSubcommandArgs(spec, ["list", "--constructor"])).toThrow(
+      UnknownFlagError,
+    );
+  });
+
+  test('"--hasOwnProperty" as flag throws UnknownFlagError', () => {
+    expect(() => parseSubcommandArgs(spec, ["list", "--hasOwnProperty"])).toThrow(
+      UnknownFlagError,
+    );
+  });
 });
 
 // Echo cortex#66 round-1 N6 — missing edge cases.

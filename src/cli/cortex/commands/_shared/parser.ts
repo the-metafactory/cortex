@@ -290,11 +290,21 @@ function resolveFlagKind<S extends string>(
   _subcommand: ParsedSubcommandArgs<S>["subcommand"],
   flag: string,
 ): FlagKind {
-  // Universal flags first.
-  if (flag in spec.universal) {
+  // Echo cortex#66 round-2 security warning — bare `in` traversed the
+  // prototype chain, so `--toString` / `--__proto__` / `--constructor`
+  // would resolve to `Object.prototype.toString` etc. instead of
+  // throwing UnknownFlagError. Use `Object.prototype.hasOwnProperty.call`
+  // for both lookups so only declared flags are accepted. The
+  // cached `lookupFlagKindAcrossSpec` is already prototype-safe via
+  // `Map.get`; this function preserves its own subcommand-scoping
+  // logic but with the same defense.
+  if (Object.prototype.hasOwnProperty.call(spec.universal, flag)) {
     return spec.universal[flag]!;
   }
-  if (activeRule?.flags && flag in activeRule.flags) {
+  if (
+    activeRule?.flags &&
+    Object.prototype.hasOwnProperty.call(activeRule.flags, flag)
+  ) {
     return activeRule.flags[flag]!;
   }
   // Echo cortex#66 round-1 M3 — restore the legacy "unknown flag: X"
