@@ -24,6 +24,7 @@ import { dirname } from "path";
 import { CliArgsError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { type ExitResult } from "./_shared/exit-result";
+import { parseSubcommandArgs, type SubcommandSpec } from "./_shared/parser";
 import {
   loadAgentsDirectory,
   loadAgentFromFile,
@@ -63,78 +64,39 @@ export { type ExitResult } from "./_shared/exit-result";
 export const AgentsArgsError = CliArgsError;
 
 /**
- * Hand-rolled arg parser matching the migrate-config.ts convention — Echo M1
- * fix: now THROWS `AgentsArgsError` on unknown flags, `--config` / `--fragment`
- * without a value, and extra positionals. migrate-config does the same
- * (`migrate-config.ts:55-77`); this aligns with the documented convention.
+ * Grammar spec for `cortex agents`. Consumed by `parseSubcommandArgs`
+ * (cortex#66 generic parser extract).
+ */
+const AGENTS_SPEC: SubcommandSpec<"reload" | "list"> = {
+  cliName: "agents",
+  subcommands: {
+    reload: { flags: { "--config": "value", "--fragment": "value" } },
+    list: { flags: { "--config": "value" } },
+  },
+  universal: { "--help": "bool", "-h": "bool", "--json": "bool" },
+};
+
+/**
+ * Parses `cortex agents` CLI arguments via the generic
+ * `parseSubcommandArgs` helper from `_shared/parser.ts`. Throws
+ * `CliArgsError` on bad flag / missing value / extra positional /
+ * flag-scoping violation.
  *
- * Returns `subcommand = "unknown"` for empty input and unrecognized first
- * positional — those aren't parser errors (caller decides to print help).
+ * Returns the typed `ParsedAgentsArgs` shape this file already exports
+ * (kept for backward compat with `runAgentsReload(args)` /
+ * `runAgentsList(args)` signatures); the shape is hydrated from the
+ * generic parser's `flags` map.
  */
 export function parseAgentsArgs(argv: string[]): ParsedAgentsArgs {
-  const out: ParsedAgentsArgs = {
-    subcommand: "unknown",
-    rawSubcommand: "",
-    config: undefined,
-    fragment: undefined,
-    json: false,
-    help: false,
+  const parsed = parseSubcommandArgs(AGENTS_SPEC, argv);
+  return {
+    subcommand: parsed.subcommand,
+    rawSubcommand: parsed.rawSubcommand,
+    config: parsed.flags["--config"] as string | undefined,
+    fragment: parsed.flags["--fragment"] as string | undefined,
+    json: parsed.flags["--json"] === true,
+    help: parsed.help,
   };
-
-  if (argv.length === 0) {
-    return out;
-  }
-
-  let i = 0;
-  while (i < argv.length) {
-    const arg = argv[i]!;
-    if (arg === "--help" || arg === "-h") {
-      if (out.subcommand === "unknown" && out.rawSubcommand === "") {
-        out.subcommand = "help";
-      } else {
-        out.help = true;
-      }
-      i++;
-      continue;
-    }
-    if (arg === "--json") {
-      out.json = true;
-      i++;
-      continue;
-    }
-    if (arg === "--config") {
-      if (i + 1 >= argv.length || argv[i + 1]!.startsWith("-")) {
-        throw new CliArgsError("agents", `--config requires a path argument`);
-      }
-      out.config = argv[i + 1];
-      i += 2;
-      continue;
-    }
-    if (arg === "--fragment") {
-      if (i + 1 >= argv.length || argv[i + 1]!.startsWith("-")) {
-        throw new CliArgsError("agents", `--fragment requires a path argument`);
-      }
-      out.fragment = argv[i + 1];
-      i += 2;
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      throw new CliArgsError("agents", `unknown flag: ${arg}`);
-    }
-    // Positional: only one allowed (the subcommand).
-    if (out.rawSubcommand === "") {
-      out.rawSubcommand = arg;
-      if (arg === "reload" || arg === "list") {
-        out.subcommand = arg;
-      }
-      // else: subcommand stays "unknown" — caller routes via rawSubcommand
-      i++;
-      continue;
-    }
-    throw new CliArgsError("agents", `unexpected extra positional argument: "${arg}"`);
-  }
-
-  return out;
 }
 
 // =============================================================================
