@@ -156,7 +156,7 @@ describe("runAgentsReload", () => {
     expect(parsed.agents[0].id).toBe("echo");
   });
 
-  test("--json on failure emits structured error", () => {
+  test("--json on failure emits envelope with agents:[] + error (M4 round-1)", () => {
     const cfg = mkdtempSync(join(tmpdir(), "f3-cfg-json-err-"));
     seedConfigDir(cfg, BROKEN_DIR);
     const r = runAgentsReload(
@@ -166,7 +166,18 @@ describe("runAgentsReload", () => {
     // JSON goes to stdout even on failure so scripts can parse it.
     const parsed = JSON.parse(r.stdout);
     expect(parsed.status).toBe("error");
+    // Echo M4 round 1: `agents` MUST be present (empty array) so consumers
+    // can iterate without status-checking.
+    expect(parsed.agents).toEqual([]);
     expect(parsed.error.file).toContain("broken.yaml");
+    expect(parsed.error.reason).toBeTruthy();
+  });
+
+  test("--fragment <dir> exits 2 with usage error, not 1 (Echo round-1 nit)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "f3-frag-dir-"));
+    const r = runAgentsReload(parseAgentsArgs(["reload", "--fragment", dir]));
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toMatch(/expects a file, got a directory/);
   });
 
   test("--fragment validates a single file", () => {

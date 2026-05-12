@@ -18,7 +18,7 @@
  *   2  — usage error (bad flags, missing files, unknown subcommand)
  */
 
-import { existsSync } from "fs";
+import { existsSync, statSync } from "fs";
 import { dirname } from "path";
 
 import {
@@ -155,18 +155,9 @@ export function runAgentsReload(args: ParsedAgentsArgs): ExitResult {
     return reloadFragment(args.fragment, args.json);
   }
 
-  const configPath = expandTilde(args.config ?? DEFAULT_CONFIG_PATH);
-  const configDir = dirname(configPath);
-
-  if (!existsSync(configDir)) {
-    return {
-      exitCode: 2,
-      stdout: "",
-      stderr: `cortex agents reload: config directory "${configDir}" does not exist\n`,
-    };
-  }
-
-  const agentsDir = `${configDir}/agents.d`;
+  const resolved = resolveAgentsDir(args, "reload");
+  if ("exit" in resolved) return resolved.exit;
+  const agentsDir = resolved.agentsDir;
 
   try {
     const agents = loadAgentsDirectory(agentsDir);
@@ -217,6 +208,23 @@ function reloadFragment(fragmentPath: string, json: boolean): ExitResult {
     };
   }
 
+  // Echo round-1 nit — pointing --fragment at a directory is a usage error,
+  // not a validation failure. Catch with statSync before the loader hits
+  // readFileSync and throws EISDIR (which we'd otherwise wrap as exit 1).
+  try {
+    if (statSync(expanded).isDirectory()) {
+      return {
+        exitCode: 2,
+        stdout: "",
+        stderr: `cortex agents reload: --fragment expects a file, got a directory: "${expanded}"\n`,
+      };
+    }
+  } catch (err) {
+    // statSync failed (e.g. permission denied) — let the loader surface a
+    // clearer error.
+    void err;
+  }
+
   try {
     const agent = loadAgentFromFile(expanded, dirname(expanded));
     if (agent === null) {
@@ -262,18 +270,9 @@ export function runAgentsList(args: ParsedAgentsArgs): ExitResult {
     return { exitCode: 0, stdout: listHelp(), stderr: "" };
   }
 
-  const configPath = expandTilde(args.config ?? DEFAULT_CONFIG_PATH);
-  const configDir = dirname(configPath);
-
-  if (!existsSync(configDir)) {
-    return {
-      exitCode: 2,
-      stdout: "",
-      stderr: `cortex agents list: config directory "${configDir}" does not exist\n`,
-    };
-  }
-
-  const agentsDir = `${configDir}/agents.d`;
+  const resolved = resolveAgentsDir(args, "list");
+  if ("exit" in resolved) return resolved.exit;
+  const agentsDir = resolved.agentsDir;
 
   try {
     const agents = loadAgentsDirectory(agentsDir);
@@ -368,23 +367,47 @@ function successFooter(n: number): string {
 }
 
 /**
- * Unified JSON success envelope — Echo M4 on cortex#63 — `{ status, agents }`
- * is the same shape on both `reload` and `list`. No bare arrays.
+ * **JSON envelope contract** (Echo M4 round 1 on cortex#63):
+ *
+ * ```ts
+ * interface AgentsJsonEnvelope {
+ *   status: "ok" | "error";
+ *   agents: AgentSummary[];      // ALWAYS present — empty array on error
+ *   error?: { file: string; reason: string };  // present iff status === "error"
+ * }
+ * ```
+ *
+ * Matches spec.md FR-1 verbatim. Scripting consumers can `.agents.map(…)`
+ * without status-guarding when they don't care about errors, or check
+ * `.status === "ok"` when they do.
  */
+export interface AgentsJsonEnvelope {
+  status: "ok" | "error";
+  agents: ReturnType<typeof summarizeAgent>[];
+  error?: { file: string; reason: string };
+}
+
 function jsonOk(agents: Agent[]): string {
-  return (
-    JSON.stringify(
-      { status: "ok", agents: agents.map(summarizeAgent) },
-      null,
-      2,
-    ) + "\n"
-  );
+  const envelope: AgentsJsonEnvelope = {
+    status: "ok",
+    agents: agents.map(summarizeAgent),
+  };
+  return JSON.stringify(envelope, null, 2) + "\n";
+}
+
+function jsonError(file: string, reason: string): string {
+  const envelope: AgentsJsonEnvelope = {
+    status: "error",
+    agents: [], // M4 round 1: present-but-empty on error so consumers can iterate without status-checking
+    error: { file, reason },
+  };
+  return JSON.stringify(envelope, null, 2) + "\n";
 }
 
 /**
- * Unified error mapping for `FragmentLoadError` — emits JSON envelope on
- * stdout when `--json` is set, plain stderr otherwise. Exit code is always 1
- * (validation failure).
+ * Unified error mapping for `FragmentLoadError`. Emits the canonical
+ * envelope on stdout when `--json` is set, plain stderr otherwise. Exit
+ * code is always 1 (validation failure).
  */
 function jsonOrTextError(
   err: FragmentLoadError,
@@ -394,12 +417,7 @@ function jsonOrTextError(
   if (json) {
     return {
       exitCode: 1,
-      stdout:
-        JSON.stringify(
-          { status: "error", error: { file: err.file, reason: err.reason } },
-          null,
-          2,
-        ) + "\n",
+      stdout: jsonError(err.file, err.reason),
       stderr: "",
     };
   }
@@ -408,6 +426,32 @@ function jsonOrTextError(
     stdout: "",
     stderr: `cortex agents ${command}: ${err.message}\n`,
   };
+}
+
+/**
+ * Shared config-dir resolution + missing-dir bailout. Echo round-1 nit-
+ * duplication on cortex#63 — both `runAgentsReload` and `runAgentsList`
+ * had this block. Now both call this helper.
+ *
+ * Returns either the resolved `agentsDir` path, or an `ExitResult` with
+ * exit code 2 if the config directory is missing.
+ */
+function resolveAgentsDir(
+  args: ParsedAgentsArgs,
+  command: "reload" | "list",
+): { agentsDir: string } | { exit: ExitResult } {
+  const configPath = expandTilde(args.config ?? DEFAULT_CONFIG_PATH);
+  const configDir = dirname(configPath);
+  if (!existsSync(configDir)) {
+    return {
+      exit: {
+        exitCode: 2,
+        stdout: "",
+        stderr: `cortex agents ${command}: config directory "${configDir}" does not exist\n`,
+      },
+    };
+  }
+  return { agentsDir: `${configDir}/agents.d` };
 }
 
 // =============================================================================
