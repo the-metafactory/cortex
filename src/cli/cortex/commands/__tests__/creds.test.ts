@@ -638,6 +638,105 @@ describe("IPC error path — daemon unreachable", () => {
 // dispatchCreds
 // =============================================================================
 
+// =============================================================================
+// End-to-end — CLI ↔ real daemon
+// =============================================================================
+//
+// Wire test: spin up a real `createCredsHandler()` against a fresh tmp
+// socket + tmp creds dir + a freshly-minted account signing key, then
+// drive `cortex creds issue` via `dispatchCreds`. Asserts the full path
+// works: CLI parses → CLI IPC client → daemon socket → real mint →
+// daemon reply → CLI exit code + formatted output.
+//
+// Importing from `../../../runner/...` is the deliberate boundary cross —
+// the e2e test is intentionally cross-layer. The unit tests in this file
+// (and in `src/runner/__tests__/creds-handler.test.ts`) exercise each side
+// in isolation; this single test proves they compose correctly.
+
+import { createCredsHandler } from "../../../../runner/creds-handler";
+import { AgentRegistry } from "../../../../common/agents/registry";
+import type { Agent } from "../../../../common/types/cortex-config";
+import { createAccount } from "nkeys.js";
+
+describe("end-to-end — CLI → real daemon", () => {
+  test("dispatchCreds 'issue' against real handler → exit 0 + .creds file landed", async () => {
+    const tmpRoot = mkdtempSync(join(tmpdir(), "f4-e2e-"));
+    const socketPath = join(tmpRoot, "cortex.sock");
+    const credsDir = join(tmpRoot, "creds");
+    const signingKey = createAccount();
+
+    const agent: Agent = {
+      id: "luna",
+      displayName: "Luna",
+      persona: "/tmp/luna.md",
+      roles: [],
+      trust: [],
+      presence: {
+        discord: {
+          enabled: false,
+          token: "fake",
+          guildId: "0",
+          agentChannelId: "1",
+          logChannelId: "2",
+          contextDepth: 10,
+          enableAgentLog: false,
+          roles: [],
+          defaultRole: "allow-all",
+          dm: {
+            operatorRole: { features: ["chat"], disallowedTools: [], bashGuard: true },
+            defaultRole: "denied",
+            userRoles: [],
+          },
+        },
+      },
+      runtime: { substrate: "claude-code", mode: "in-process", capabilities: ["pilot"] },
+    } as Agent;
+
+    const handle = createCredsHandler({
+      runtime: {
+        enabled: false,
+        onEnvelope: () => ({ unregister: () => {} }),
+        publish: async () => {},
+        stop: async () => {},
+      },
+      registry: AgentRegistry.fromAgents([agent]),
+      accountSigningKey: signingKey,
+      org: "metafactory",
+      socketPath,
+      credsDir,
+    });
+
+    try {
+      await handle.start();
+
+      const r = await dispatchCreds([
+        "issue",
+        "luna",
+        "--socket",
+        socketPath,
+      ]);
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain("luna");
+      expect(r.stdout).toContain(join(credsDir, "luna.creds"));
+      expect(r.stdout).toContain("pilot"); // capability echoed in summary
+
+      // Verify the file actually landed.
+      const fs = await import("fs");
+      expect(fs.existsSync(join(credsDir, "luna.creds"))).toBe(true);
+      if (process.platform !== "win32") {
+        expect(fs.statSync(join(credsDir, "luna.creds")).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      await handle.stop();
+      try {
+        rmSync(tmpRoot, { recursive: true, force: true });
+      } catch {
+        // best-effort
+      }
+    }
+  });
+});
+
 describe("dispatchCreds", () => {
   test("routes 'list' to runCredsList", async () => {
     const dir = mkdtempSync(join(tmpdir(), "f4-dispatch-list-"));
