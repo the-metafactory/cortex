@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@metafactory/content-filter": "github:the-metafactory/content-filter",
+    "@nats-io/jwt": "^0.0.11",
     "@octokit/webhooks": "^14.2.0",
     "@octokit/webhooks-methods": "^6.0.0",
     "@xyflow/react": "^12.10.2",

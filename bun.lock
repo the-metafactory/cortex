@@ -6,6 +6,7 @@
       "name": "grove",
       "dependencies": {
         "@metafactory/content-filter": "github:the-metafactory/content-filter",
+        "@nats-io/jwt": "^0.0.11",
         "@octokit/webhooks": "^14.2.0",
         "@octokit/webhooks-methods": "^6.0.0",
         "@xyflow/react": "^12.10.2",
@@ -49,6 +50,10 @@
     "@discordjs/ws": ["@discordjs/ws@1.2.3", "", { "dependencies": { "@discordjs/collection": "^2.1.0", "@discordjs/rest": "^2.5.1", "@discordjs/util": "^1.1.0", "@sapphire/async-queue": "^1.5.2", "@types/ws": "^8.5.10", "@vladfrangu/async_event_emitter": "^2.2.4", "discord-api-types": "^0.38.1", "tslib": "^2.6.2", "ws": "^8.17.0" } }, "sha512-wPlQDxEmlDg5IxhJPuxXr3Vy9AjYq5xCvFWGJyD7w7Np8ZGu+Mc+97LCoEc/+AYCo2IDpKioiH0/c/mj5ZR9Uw=="],
 
     "@metafactory/content-filter": ["@metafactory/content-filter@github:the-metafactory/content-filter#a9ce45e", { "dependencies": { "zod": "^3.24" }, "peerDependencies": { "typescript": "^5" } }, "the-metafactory-content-filter-a9ce45e"],
+
+    "@nats-io/jwt": ["@nats-io/jwt@0.0.11", "", { "dependencies": { "@nats-io/nkeys": "2.0.3" } }, "sha512-olBQaTjqKgsalKKWtOA2fzQrFV2aNPKz56oadujZLrT5IsFhWw07OrYS8+XDfgh8bSAXZuMmZEZJ8QxPZwF0tw=="],
+
+    "@nats-io/nkeys": ["@nats-io/nkeys@2.0.3", "", { "dependencies": { "tweetnacl": "^1.0.3" } }, "sha512-JVt56GuE6Z89KUkI4TXUbSI9fmIfAmk6PMPknijmuL72GcD+UgIomTcRWiNvvJKxA01sBbmIPStqJs5cMRBC3A=="],
 
     "@octokit/openapi-types": ["@octokit/openapi-types@27.0.0", "", {}, "sha512-whrdktVs1h6gtR+09+QsNk2+FO+49j6ga1c55YZudfEG+oKJVvJLQi3zkOm5JjiUXAagWK2tI2kTGKJ2Ys7MGA=="],
 
