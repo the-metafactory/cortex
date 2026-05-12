@@ -18,16 +18,16 @@
  *   2  — usage error (bad flags, missing files, unknown subcommand)
  */
 
-import { existsSync, readFileSync } from "fs";
-import { dirname, basename, isAbsolute } from "path";
-import { parse as parseYaml } from "yaml";
+import { existsSync } from "fs";
+import { dirname } from "path";
 
 import {
   loadAgentsDirectory,
+  loadAgentFromFile,
   FragmentLoadError,
   expandTilde,
 } from "../../../common/config/loader";
-import { AgentSchema, type Agent } from "../../../common/types/cortex-config";
+import { type Agent } from "../../../common/types/cortex-config";
 
 // =============================================================================
 // Types
@@ -53,9 +53,26 @@ export interface ExitResult {
 // =============================================================================
 
 /**
- * Hand-rolled arg parser matching the migrate-config.ts convention. Returns
- * `subcommand = "unknown"` for both empty input and unrecognized first
- * positional — the caller decides whether to print help vs error.
+ * `AgentsArgsError` carries a usage-error message for parser-level failures
+ * (bad flag, missing flag value, extra positional). Surfacing as a throw
+ * lets `dispatchAgents` map it cleanly to an exit-2 ExitResult — Echo M1
+ * on cortex#63 (parser was silently swallowing these previously).
+ */
+export class AgentsArgsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentsArgsError";
+  }
+}
+
+/**
+ * Hand-rolled arg parser matching the migrate-config.ts convention — Echo M1
+ * fix: now THROWS `AgentsArgsError` on unknown flags, `--config` / `--fragment`
+ * without a value, and extra positionals. migrate-config does the same
+ * (`migrate-config.ts:55-77`); this aligns with the documented convention.
+ *
+ * Returns `subcommand = "unknown"` for empty input and unrecognized first
+ * positional — those aren't parser errors (caller decides to print help).
  */
 export function parseAgentsArgs(argv: string[]): ParsedAgentsArgs {
   const out: ParsedAgentsArgs = {
@@ -71,12 +88,11 @@ export function parseAgentsArgs(argv: string[]): ParsedAgentsArgs {
     return out;
   }
 
-  // First positional or help-flag determines the subcommand.
   let i = 0;
   while (i < argv.length) {
     const arg = argv[i]!;
     if (arg === "--help" || arg === "-h") {
-      if (out.subcommand === "unknown") {
+      if (out.subcommand === "unknown" && out.rawSubcommand === "") {
         out.subcommand = "help";
       } else {
         out.help = true;
@@ -90,28 +106,35 @@ export function parseAgentsArgs(argv: string[]): ParsedAgentsArgs {
       continue;
     }
     if (arg === "--config") {
+      if (i + 1 >= argv.length || argv[i + 1]!.startsWith("-")) {
+        throw new AgentsArgsError(`--config requires a path argument`);
+      }
       out.config = argv[i + 1];
       i += 2;
       continue;
     }
     if (arg === "--fragment") {
+      if (i + 1 >= argv.length || argv[i + 1]!.startsWith("-")) {
+        throw new AgentsArgsError(`--fragment requires a path argument`);
+      }
       out.fragment = argv[i + 1];
       i += 2;
       continue;
     }
-    // First positional: subcommand
-    if (out.subcommand === "unknown" && !arg.startsWith("-")) {
+    if (arg.startsWith("-")) {
+      throw new AgentsArgsError(`unknown flag: ${arg}`);
+    }
+    // Positional: only one allowed (the subcommand).
+    if (out.rawSubcommand === "") {
       out.rawSubcommand = arg;
       if (arg === "reload" || arg === "list") {
         out.subcommand = arg;
-      } else {
-        out.subcommand = "unknown";
       }
+      // else: subcommand stays "unknown" — caller routes via rawSubcommand
       i++;
       continue;
     }
-    // Unknown flag or extra positional — ignore (or fail). For v1, ignore.
-    i++;
+    throw new AgentsArgsError(`unexpected extra positional argument: "${arg}"`);
   }
 
   return out;
@@ -125,19 +148,13 @@ const DEFAULT_CONFIG_PATH = "~/.config/cortex/cortex.yaml";
 
 export function runAgentsReload(args: ParsedAgentsArgs): ExitResult {
   if (args.help) {
-    return {
-      exitCode: 0,
-      stdout: reloadHelp(),
-      stderr: "",
-    };
+    return { exitCode: 0, stdout: reloadHelp(), stderr: "" };
   }
 
-  // --fragment mode: validate a single file.
   if (args.fragment) {
     return reloadFragment(args.fragment, args.json);
   }
 
-  // --config mode: validate the agents.d/ directory next to cortex.yaml.
   const configPath = expandTilde(args.config ?? DEFAULT_CONFIG_PATH);
   const configDir = dirname(configPath);
 
@@ -154,48 +171,25 @@ export function runAgentsReload(args: ParsedAgentsArgs): ExitResult {
   try {
     const agents = loadAgentsDirectory(agentsDir);
     if (args.json) {
-      return {
-        exitCode: 0,
-        stdout: JSON.stringify({ status: "ok", agents: agents.map(summarizeAgent) }, null, 2) + "\n",
-        stderr: "",
-      };
+      return { exitCode: 0, stdout: jsonOk(agents), stderr: "" };
     }
     if (agents.length === 0) {
       return {
         exitCode: 0,
-        stdout: `0 fragments in ${agentsDir} — nothing to load (OK)\n`,
+        stdout: `0 fragments in ${agentsDir} — nothing to load (OK)\n\n${VALIDATION_ONLY_NOTE}\n`,
         stderr: "",
       };
     }
-    const lines = agents.map(formatAgentLine).join("\n");
-    const summary = `${agents.length} fragment${agents.length === 1 ? "" : "s"} loaded OK`;
     return {
       exitCode: 0,
-      stdout: `${lines}\n\n${summary}\n`,
+      stdout:
+        agents.map(formatAgentLine).join("\n") + "\n\n" + successFooter(agents.length),
       stderr: "",
     };
   } catch (err) {
     if (err instanceof FragmentLoadError) {
-      if (args.json) {
-        return {
-          exitCode: 1,
-          // JSON goes to stdout even on failure so scripts can parse it.
-          stdout:
-            JSON.stringify(
-              { status: "error", error: { file: err.file, reason: err.reason } },
-              null,
-              2,
-            ) + "\n",
-          stderr: "",
-        };
-      }
-      return {
-        exitCode: 1,
-        stdout: "",
-        stderr: `cortex agents reload: ${err.message}\n`,
-      };
+      return jsonOrTextError(err, args.json);
     }
-    // Unexpected error
     return {
       exitCode: 1,
       stdout: "",
@@ -205,9 +199,12 @@ export function runAgentsReload(args: ParsedAgentsArgs): ExitResult {
 }
 
 /**
- * Validate a single fragment file (no directory traversal). Schema-validates
- * and confirms the persona file exists. Returns exit 1 on validation
- * failure, exit 2 on file-missing (usage error).
+ * Validate a single fragment file (no directory traversal). Echo M2 on
+ * cortex#63 — now delegates to shared `loadAgentFromFile` so the
+ * single-file path gets the same hardening as the directory path: 1 MiB
+ * size cap, ENOENT race, schema validation, persona-path resolution + ~
+ * expansion (Echo B1 fix). Caller-only logic: file-existence check,
+ * vanished-mid-call mapping, exit code mapping.
  */
 function reloadFragment(fragmentPath: string, json: boolean): ExitResult {
   const expanded = expandTilde(fragmentPath);
@@ -220,110 +217,40 @@ function reloadFragment(fragmentPath: string, json: boolean): ExitResult {
     };
   }
 
-  let content: string;
   try {
-    content = readFileSync(expanded, "utf-8");
-  } catch (err) {
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: `cortex agents reload: read failed for "${expanded}": ${err instanceof Error ? err.message : String(err)}\n`,
-    };
-  }
-
-  let raw: unknown;
-  try {
-    raw = parseYaml(content);
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
+    const agent = loadAgentFromFile(expanded, dirname(expanded));
+    if (agent === null) {
+      // File vanished between existsSync above and the loader's stat. Treat
+      // as a usage error (operator-actionable: re-run).
+      return {
+        exitCode: 2,
+        stdout: "",
+        stderr: `cortex agents reload: fragment "${expanded}" disappeared between check and read; retry\n`,
+      };
+    }
     if (json) {
       return {
-        exitCode: 1,
-        stdout:
-          JSON.stringify(
-            { status: "error", error: { file: expanded, reason: `YAML parse error: ${reason}` } },
-            null,
-            2,
-          ) + "\n",
+        exitCode: 0,
+        stdout: jsonOk([agent]),
         stderr: "",
       };
     }
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: `cortex agents reload: ${basename(expanded)}: YAML parse error: ${reason}\n`,
-    };
-  }
-
-  let agent: Agent;
-  try {
-    agent = AgentSchema.parse(raw);
-  } catch (err: unknown) {
-    const issues = (err as { issues?: Array<{ path?: unknown[]; message: string }> }).issues ?? [];
-    const details =
-      issues.length > 0
-        ? issues.map((i) => `  ${(i.path ?? []).join(".")}: ${i.message}`).join("\n")
-        : err instanceof Error
-          ? err.message
-          : String(err);
-    if (json) {
-      return {
-        exitCode: 1,
-        stdout:
-          JSON.stringify(
-            { status: "error", error: { file: expanded, reason: `schema validation failed: ${details}` } },
-            null,
-            2,
-          ) + "\n",
-        stderr: "",
-      };
-    }
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: `cortex agents reload: ${basename(expanded)}: schema validation failed:\n${details}\n`,
-    };
-  }
-
-  // Persona file check (loader does this; replicate here for the single-file path).
-  const personaPath = isAbsolute(agent.persona)
-    ? agent.persona
-    : `${dirname(expanded)}/${agent.persona}`;
-  if (!existsSync(expandTilde(personaPath))) {
-    if (json) {
-      return {
-        exitCode: 1,
-        stdout:
-          JSON.stringify(
-            {
-              status: "error",
-              error: { file: expanded, reason: `persona file does not exist: ${personaPath}` },
-            },
-            null,
-            2,
-          ) + "\n",
-        stderr: "",
-      };
-    }
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: `cortex agents reload: ${basename(expanded)}: persona file does not exist: ${personaPath}\n`,
-    };
-  }
-
-  if (json) {
     return {
       exitCode: 0,
-      stdout: JSON.stringify({ status: "ok", agents: [summarizeAgent(agent)] }, null, 2) + "\n",
+      stdout:
+        formatAgentLine(agent) + "\n\n" + successFooter(1),
       stderr: "",
     };
+  } catch (err) {
+    if (err instanceof FragmentLoadError) {
+      return jsonOrTextError(err, json);
+    }
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `cortex agents reload: unexpected error: ${err instanceof Error ? err.message : String(err)}\n`,
+    };
   }
-  return {
-    exitCode: 0,
-    stdout: `${formatAgentLine(agent)}\n\n1 fragment loaded OK\n`,
-    stderr: "",
-  };
 }
 
 // =============================================================================
@@ -352,14 +279,16 @@ export function runAgentsList(args: ParsedAgentsArgs): ExitResult {
     const agents = loadAgentsDirectory(agentsDir);
     const sorted = [...agents].sort((a, b) => a.id.localeCompare(b.id));
     if (args.json) {
-      return {
-        exitCode: 0,
-        stdout: JSON.stringify(sorted.map(summarizeAgent), null, 2) + "\n",
-        stderr: "",
-      };
+      // Echo M4 — JSON envelope is `{status, agents, error?}` everywhere.
+      return { exitCode: 0, stdout: jsonOk(sorted), stderr: "" };
     }
     if (sorted.length === 0) {
-      return { exitCode: 0, stdout: "", stderr: "" };
+      // Echo m2 — align with `reload` empty-dir text output for consistency.
+      return {
+        exitCode: 0,
+        stdout: `0 agents in ${agentsDir}\n`,
+        stderr: "",
+      };
     }
     return {
       exitCode: 0,
@@ -368,11 +297,7 @@ export function runAgentsList(args: ParsedAgentsArgs): ExitResult {
     };
   } catch (err) {
     if (err instanceof FragmentLoadError) {
-      return {
-        exitCode: 1,
-        stdout: "",
-        stderr: `cortex agents list: ${err.message}\n`,
-      };
+      return jsonOrTextError(err, args.json, "list");
     }
     return {
       exitCode: 1,
@@ -387,7 +312,20 @@ export function runAgentsList(args: ParsedAgentsArgs): ExitResult {
 // =============================================================================
 
 export function dispatchAgents(argv: string[]): ExitResult {
-  const args = parseAgentsArgs(argv);
+  let args: ParsedAgentsArgs;
+  try {
+    args = parseAgentsArgs(argv);
+  } catch (err) {
+    // Echo M1 — parser now throws AgentsArgsError on bad flags. Map to exit 2.
+    if (err instanceof AgentsArgsError) {
+      return {
+        exitCode: 2,
+        stdout: "",
+        stderr: `cortex agents: ${err.message}\n${topLevelHelp()}`,
+      };
+    }
+    throw err;
+  }
 
   switch (args.subcommand) {
     case "reload":
@@ -410,6 +348,66 @@ export function dispatchAgents(argv: string[]): ExitResult {
         stderr: `cortex agents: unknown subcommand "${args.rawSubcommand}".\n${topLevelHelp()}`,
       };
   }
+}
+
+// =============================================================================
+// Output helpers — Echo M3 + M4 on cortex#63
+// =============================================================================
+
+/**
+ * Validation-only caveat appended to success output so arc lifecycle scripts
+ * (and operators reading stdout) don't infer "the running daemon reloaded."
+ * Echo M3 on cortex#63.
+ */
+const VALIDATION_ONLY_NOTE =
+  "note: validation-only — this CLI does NOT signal a running cortex daemon to reload (v1).";
+
+function successFooter(n: number): string {
+  const summary = `${n} fragment${n === 1 ? "" : "s"} loaded OK`;
+  return `${summary}\n${VALIDATION_ONLY_NOTE}\n`;
+}
+
+/**
+ * Unified JSON success envelope — Echo M4 on cortex#63 — `{ status, agents }`
+ * is the same shape on both `reload` and `list`. No bare arrays.
+ */
+function jsonOk(agents: Agent[]): string {
+  return (
+    JSON.stringify(
+      { status: "ok", agents: agents.map(summarizeAgent) },
+      null,
+      2,
+    ) + "\n"
+  );
+}
+
+/**
+ * Unified error mapping for `FragmentLoadError` — emits JSON envelope on
+ * stdout when `--json` is set, plain stderr otherwise. Exit code is always 1
+ * (validation failure).
+ */
+function jsonOrTextError(
+  err: FragmentLoadError,
+  json: boolean,
+  command: "reload" | "list" = "reload",
+): ExitResult {
+  if (json) {
+    return {
+      exitCode: 1,
+      stdout:
+        JSON.stringify(
+          { status: "error", error: { file: err.file, reason: err.reason } },
+          null,
+          2,
+        ) + "\n",
+      stderr: "",
+    };
+  }
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: `cortex agents ${command}: ${err.message}\n`,
+  };
 }
 
 // =============================================================================

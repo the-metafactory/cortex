@@ -131,6 +131,114 @@ export class FragmentLoadError extends Error {
  * Agent list in `AgentRegistry` (`src/common/agents/registry.ts`) which
  * throws `UnknownAgentReferenceError` on unresolved trust at construction.
  */
+/**
+ * Load and validate a single fragment file. Extracted from `loadAgentsDirectory`
+ * (Echo M2 on cortex#63) so consumers like the CLI's `--fragment` mode get
+ * the same hardening: 1 MiB size cap, ENOENT race handling, schema validation,
+ * filename-stem warning, persona-path resolution + existence check.
+ *
+ * `personaBaseDir` is the directory relative paths in `agent.persona` resolve
+ * against — typically the fragment's own directory.
+ *
+ * Returns `null` if the file vanished between caller's directory-listing and
+ * this call (ENOENT race). The directory loader skips such files; single-file
+ * callers translate `null` into a clear "file disappeared" error.
+ */
+export function loadAgentFromFile(filePath: string, personaBaseDir: string): Agent | null {
+  // Echo M3 — size guard before readFileSync.
+  let size: number;
+  try {
+    size = statSync(filePath).size;
+  } catch (err) {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw new FragmentLoadError(
+      filePath,
+      `stat failed: ${err instanceof Error ? err.message : String(err)}`,
+      err instanceof Error ? err : undefined,
+    );
+  }
+  if (size > FRAGMENT_MAX_BYTES) {
+    throw new FragmentLoadError(
+      filePath,
+      `fragment exceeds ${FRAGMENT_MAX_BYTES} bytes (got ${size}); refusing to read`,
+    );
+  }
+
+  let content: string;
+  try {
+    content = readFileSync(filePath, "utf-8");
+  } catch (err) {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw new FragmentLoadError(
+      filePath,
+      `read failed: ${err instanceof Error ? err.message : String(err)}`,
+      err instanceof Error ? err : undefined,
+    );
+  }
+
+  let raw: unknown;
+  try {
+    raw = parseYaml(content);
+  } catch (err) {
+    throw new FragmentLoadError(
+      filePath,
+      `YAML parse error: ${err instanceof Error ? err.message : String(err)}`,
+      err instanceof Error ? err : undefined,
+    );
+  }
+
+  // Echo N6 — operator-UX warn when id and filename stem disagree.
+  const filename = basename(filePath);
+  const filenameStem = basename(filename, filename.endsWith(".yml") ? ".yml" : ".yaml");
+  if (raw && typeof raw === "object" && "id" in raw) {
+    const declaredId = (raw as { id?: unknown }).id;
+    if (typeof declaredId === "string" && declaredId !== filenameStem) {
+      console.warn(
+        `agents-loader: fragment ${filename} declares id "${declaredId}" which differs from its filename stem "${filenameStem}". Convention is to match — operator tooling (arc, cortex agents list) keys on the id, but mismatch obscures filesystem lookup.`,
+      );
+    }
+  }
+
+  let agent: Agent;
+  try {
+    agent = AgentSchema.parse(raw);
+  } catch (err: unknown) {
+    const issues = (err as { issues?: Array<{ path?: unknown[]; message: string }> }).issues ?? [];
+    const details =
+      issues.length > 0
+        ? issues.map((i) => `  ${(i.path ?? []).join(".")}: ${i.message}`).join("\n")
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    throw new FragmentLoadError(
+      filePath,
+      `schema validation failed:\n${details}`,
+      err instanceof Error ? err : undefined,
+    );
+  }
+
+  // Resolve persona path: ~ FIRST (so a `~/personas/foo.md` is fully
+  // expanded before isAbsolute check), then relative → absolute against
+  // the fragment's directory. Echo B1 fix: must expand BEFORE join.
+  const personaPathExpanded = expandTilde(agent.persona);
+  const personaPathResolved = isAbsolute(personaPathExpanded)
+    ? personaPathExpanded
+    : resolve(personaBaseDir, personaPathExpanded);
+
+  if (!existsSync(personaPathResolved)) {
+    throw new FragmentLoadError(
+      filePath,
+      `persona file does not exist: ${personaPathResolved}`,
+    );
+  }
+
+  return { ...agent, persona: personaPathResolved };
+}
+
 export function loadAgentsDirectory(dir: string): Agent[] {
   const expandedDir = expandTilde(dir);
 
@@ -148,95 +256,10 @@ export function loadAgentsDirectory(dir: string): Agent[] {
 
   for (const filename of files) {
     const filePath = join(expandedDir, filename);
-
-    // Echo M3 — size guard before readFileSync.
-    let size: number;
-    try {
-      size = statSync(filePath).size;
-    } catch (err) {
-      // Race: file was in readdir's list but vanished before we statSync'd
-      // (operator just deleted it, or arc is mid-uninstall). Skip silently
-      // — the reload loop continues with the rest of the directory.
-      if (
-        err instanceof Error &&
-        (err as NodeJS.ErrnoException).code === "ENOENT"
-      ) {
-        continue;
-      }
-      throw new FragmentLoadError(
-        filePath,
-        `stat failed: ${err instanceof Error ? err.message : String(err)}`,
-        err instanceof Error ? err : undefined,
-      );
-    }
-    if (size > FRAGMENT_MAX_BYTES) {
-      throw new FragmentLoadError(
-        filePath,
-        `fragment exceeds ${FRAGMENT_MAX_BYTES} bytes (got ${size}); refusing to read`,
-      );
-    }
-
-    let content: string;
-    try {
-      content = readFileSync(filePath, "utf-8");
-    } catch (err) {
-      // Same race window — between stat and read.
-      if (
-        err instanceof Error &&
-        (err as NodeJS.ErrnoException).code === "ENOENT"
-      ) {
-        continue;
-      }
-      throw new FragmentLoadError(
-        filePath,
-        `read failed: ${err instanceof Error ? err.message : String(err)}`,
-        err instanceof Error ? err : undefined,
-      );
-    }
-
-    // Echo N6 — warn if agent.id doesn't match filename stem. Filename is
-    // operator/arc convention; mismatched id is a footgun for both. We log
-    // rather than throw — operator may have legitimate reasons (e.g.
-    // versioned fragment filenames like `echo.v2.yaml`).
-    const filenameStem = basename(filename, filename.endsWith(".yml") ? ".yml" : ".yaml");
-
-    let raw: unknown;
-    try {
-      raw = parseYaml(content);
-    } catch (err) {
-      throw new FragmentLoadError(
-        filePath,
-        `YAML parse error: ${err instanceof Error ? err.message : String(err)}`,
-        err instanceof Error ? err : undefined,
-      );
-    }
-
-    // Echo N6 — operator-UX warn when id and filename stem disagree.
-    if (raw && typeof raw === "object" && "id" in raw) {
-      const declaredId = (raw as { id?: unknown }).id;
-      if (typeof declaredId === "string" && declaredId !== filenameStem) {
-        console.warn(
-          `agents-loader: fragment ${filename} declares id "${declaredId}" which differs from its filename stem "${filenameStem}". Convention is to match — operator tooling (arc, cortex agents list) keys on the id, but mismatch obscures filesystem lookup.`,
-        );
-      }
-    }
-
-    let agent: Agent;
-    try {
-      agent = AgentSchema.parse(raw);
-    } catch (err: unknown) {
-      const issues = (err as { issues?: Array<{ path?: unknown[]; message: string }> }).issues ?? [];
-      const details =
-        issues.length > 0
-          ? issues.map((i) => `  ${(i.path ?? []).join(".")}: ${i.message}`).join("\n")
-          : err instanceof Error
-            ? err.message
-            : String(err);
-      throw new FragmentLoadError(
-        filePath,
-        `schema validation failed:\n${details}`,
-        err instanceof Error ? err : undefined,
-      );
+    const agent = loadAgentFromFile(filePath, expandedDir);
+    if (agent === null) {
+      // File vanished between readdir and read — skip silently.
+      continue;
     }
 
     if (seenIds.has(agent.id)) {
@@ -246,23 +269,7 @@ export function loadAgentsDirectory(dir: string): Agent[] {
       );
     }
     seenIds.set(agent.id, filename);
-
-    // Resolve persona path: ~ → $HOME, then relative → absolute against the
-    // fragment file's directory. The Agent type stays in
-    // shape-fully-resolved-path; downstream callers don't re-resolve.
-    const personaPathExpanded = expandTilde(agent.persona);
-    const personaPathResolved = isAbsolute(personaPathExpanded)
-      ? personaPathExpanded
-      : resolve(expandedDir, personaPathExpanded);
-
-    if (!existsSync(personaPathResolved)) {
-      throw new FragmentLoadError(
-        filePath,
-        `persona file does not exist: ${personaPathResolved}`,
-      );
-    }
-
-    agents.push({ ...agent, persona: personaPathResolved });
+    agents.push(agent);
   }
 
   return agents;

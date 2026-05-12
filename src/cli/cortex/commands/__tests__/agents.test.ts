@@ -10,6 +10,7 @@ import {
   runAgentsReload,
   runAgentsList,
   dispatchAgents,
+  AgentsArgsError,
 } from "../agents";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
@@ -80,6 +81,30 @@ describe("parseAgentsArgs", () => {
     expect(args.json).toBe(true);
     expect(args.config).toBe("/tmp/c.yaml");
     expect(args.fragment).toBe("/tmp/f.yaml");
+  });
+
+  // Echo M1 on cortex#63 — parser now throws on bad-flag cases (matches
+  // migrate-config convention).
+  describe("AgentsArgsError on usage failures", () => {
+    test("throws when --config is missing its value", () => {
+      expect(() => parseAgentsArgs(["reload", "--config"])).toThrow(AgentsArgsError);
+    });
+
+    test("throws when --config is followed by another flag", () => {
+      expect(() => parseAgentsArgs(["reload", "--config", "--json"])).toThrow(AgentsArgsError);
+    });
+
+    test("throws when --fragment is missing its value", () => {
+      expect(() => parseAgentsArgs(["reload", "--fragment"])).toThrow(AgentsArgsError);
+    });
+
+    test("throws on unknown flag", () => {
+      expect(() => parseAgentsArgs(["reload", "--verbose"])).toThrow(AgentsArgsError);
+    });
+
+    test("throws on extra positional argument", () => {
+      expect(() => parseAgentsArgs(["reload", "extra-arg"])).toThrow(AgentsArgsError);
+    });
   });
 });
 
@@ -165,6 +190,86 @@ describe("runAgentsReload", () => {
     expect(r.exitCode).toBe(2);
     expect(r.stderr).toMatch(/fragment file.*does not exist/);
   });
+
+  test("--fragment with `~`-prefixed persona path resolves via $HOME (Echo B1)", () => {
+    // Persona file under $HOME — fragment refers to it as `~/path/file.md`.
+    const home = process.env.HOME;
+    if (!home) return; // skip if HOME unset (CI rarity)
+    const personaHomeRel = `f3-b1-persona-${Date.now()}`;
+    const personaAbs = join(home, personaHomeRel, "echo.md");
+    mkdirSync(join(home, personaHomeRel), { recursive: true });
+    writeFileSync(personaAbs, `---\ndisplayName: Echo\n---\n`);
+
+    const fragmentDir = mkdtempSync(join(tmpdir(), "f3-b1-frag-"));
+    writeFileSync(
+      join(fragmentDir, "echo.yaml"),
+      `id: echo
+displayName: Echo
+persona: "~/${personaHomeRel}/echo.md"
+roles: [agent-restricted]
+presence:
+  discord:
+    enabled: false
+    token: "t"
+    guildId: "0"
+    agentChannelId: "1"
+    logChannelId: "2"
+`,
+    );
+
+    const r = runAgentsReload(
+      parseAgentsArgs(["reload", "--fragment", join(fragmentDir, "echo.yaml")]),
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("echo");
+  });
+
+  test("--fragment routes a schema-validation failure (not just YAML-parse) — m3 nit", () => {
+    // Echo m3 — fixture that parses as YAML but fails AgentSchema.
+    const dir = mkdtempSync(join(tmpdir(), "f3-schema-fail-"));
+    writeFileSync(
+      join(dir, "broken.yaml"),
+      // Missing displayName (required) — parses fine, fails schema.
+      `id: broken
+roles: [agent-restricted]
+persona: ./missing.md
+presence:
+  discord:
+    enabled: false
+    token: t
+    guildId: "0"
+    agentChannelId: "1"
+    logChannelId: "2"
+`,
+    );
+    const r = runAgentsReload(
+      parseAgentsArgs(["reload", "--fragment", join(dir, "broken.yaml")]),
+    );
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain("schema validation failed");
+    expect(r.stderr).toMatch(/displayName/i);
+  });
+
+  test("success text includes the validation-only caveat (Echo M3)", () => {
+    const cfg = mkdtempSync(join(tmpdir(), "f3-validation-note-"));
+    seedConfigDir(cfg, VALID_DIR);
+    const r = runAgentsReload(
+      parseAgentsArgs(["reload", "--config", join(cfg, "cortex.yaml")]),
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("validation-only");
+  });
+
+  test("--fragment 1 MiB cap applies (Echo M2 hardening parity)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "f3-frag-toobig-"));
+    const padding = "#" + " padding ".repeat(140_000);
+    writeFileSync(join(dir, "huge.yaml"), `id: huge\n${padding}\n`);
+    const r = runAgentsReload(
+      parseAgentsArgs(["reload", "--fragment", join(dir, "huge.yaml")]),
+    );
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain("exceeds");
+  });
 });
 
 // =============================================================================
@@ -192,7 +297,7 @@ describe("runAgentsList", () => {
     expect(r.stderr).toBe("");
   });
 
-  test("--json emits agent objects sorted by id", () => {
+  test("--json emits unified envelope with agents sorted by id (Echo M4)", () => {
     const cfg = mkdtempSync(join(tmpdir(), "f3-list-json-"));
     seedConfigDir(cfg, VALID_DIR);
     const r = runAgentsList(
@@ -200,11 +305,21 @@ describe("runAgentsList", () => {
     );
     expect(r.exitCode).toBe(0);
     const parsed = JSON.parse(r.stdout);
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed[0].id).toBe("echo");
-    expect(parsed[0]).toHaveProperty("substrate");
-    expect(parsed[0]).toHaveProperty("mode");
-    expect(parsed[0]).toHaveProperty("capabilities");
+    expect(parsed.status).toBe("ok");
+    expect(Array.isArray(parsed.agents)).toBe(true);
+    expect(parsed.agents[0].id).toBe("echo");
+    expect(parsed.agents[0]).toHaveProperty("substrate");
+    expect(parsed.agents[0]).toHaveProperty("mode");
+    expect(parsed.agents[0]).toHaveProperty("capabilities");
+  });
+
+  test("empty agents.d/ prints message (Echo m2 consistency)", () => {
+    const cfg = mkdtempSync(join(tmpdir(), "f3-list-empty-message-"));
+    writeFileSync(join(cfg, "cortex.yaml"), "agents: []\n");
+    mkdirSync(join(cfg, "agents.d"));
+    const r = runAgentsList(parseAgentsArgs(["list", "--config", join(cfg, "cortex.yaml")]));
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("0 agents");
   });
 });
 
