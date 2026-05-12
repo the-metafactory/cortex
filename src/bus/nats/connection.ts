@@ -14,8 +14,6 @@
  */
 
 import { readFile } from "fs/promises";
-import { statSync } from "fs";
-import { homedir } from "os";
 import {
   connect as natsConnect,
   credsAuthenticator,
@@ -23,6 +21,8 @@ import {
   type ConnectionOptions,
   type NatsConnection,
 } from "nats";
+import { enforceChmod600 } from "../../common/config/file-permissions";
+import { expandTilde } from "../../common/config/loader";
 
 export interface NatsLinkOptions {
   /** NATS server URL (e.g. nats://localhost:4222). */
@@ -46,44 +46,32 @@ export interface NatsLinkOptions {
   connectImpl?: (opts: ConnectionOptions) => Promise<NatsConnection>;
 }
 
-/** Expand a leading `~/` (or bare `~`) to the operator's home directory. */
-function expandTilde(path: string): string {
-  if (path === "~") return homedir();
-  if (path.startsWith("~/")) return `${homedir()}${path.slice(1)}`;
-  return path;
-}
-
 /**
  * Read a NATS user `.creds` file from disk and return its bytes for
- * `credsAuthenticator(...)`. Mirrors the chmod gate in
- * `src/common/config/account-signing-key.ts` — `.creds` files carry the
- * user's NKey seed and a signed JWT, both of which are sensitive enough
- * to refuse loading from a group- or world-readable file.
+ * `credsAuthenticator(...)`. `.creds` files carry the user's NKey seed
+ * and a signed JWT — both sensitive enough to refuse loading from a
+ * group- or world-readable file.
+ *
+ * Uses the canonical `expandTilde` from `common/config/loader.ts` (so
+ * the no-`$HOME` failure surfaces consistently with cortex.yaml load)
+ * and the shared `enforceChmod600` permission gate from
+ * `common/config/file-permissions.ts` (same policy as the operator
+ * account signing-key loader — Echo cortex#87 round-1 extraction).
  *
  * Throws with an operator-readable message when:
- *   - The file is missing or unreadable (ENOENT / EACCES propagate).
- *   - On POSIX, the file mode is not exactly `0o600`.
- *
- * On Windows the chmod gate is skipped (NTFS uses ACLs, not mode bits)
- * and a stderr note records the skip so the operator knows.
+ *   - `expandTilde` rejects (no `$HOME` set).
+ *   - The file is missing / unreadable (ENOENT / EACCES propagate).
+ *   - The file mode is not exactly `0o600` on POSIX.
  */
 async function loadCredsBytes(rawPath: string): Promise<Uint8Array> {
   const path = expandTilde(rawPath);
-  if (process.platform !== "win32") {
-    const stat = statSync(path); // throws ENOENT here if the file is missing
-    const mode = stat.mode & 0o777;
-    if (mode !== 0o600) {
-      throw new Error(
-        `nats-connection: creds file ${path} must be chmod 600, found ${mode
-          .toString(8)
-          .padStart(3, "0")}`,
-      );
-    }
-  } else {
-    process.stderr.write(
-      `[nats-connection] chmod 600 gate skipped on win32 — NTFS ACLs are the operator's responsibility (${path})\n`,
-    );
-  }
+  // `enforceChmod600` is sync (statSync) — that's intentional in the
+  // sibling loader to keep the stat-then-read TOCTOU window minimal.
+  // The subsequent async `readFile` widens that window slightly, but
+  // the daemon owns `~/.config/nats/` entirely so the practical risk
+  // is near zero — an attacker who can swap files in the daemon's
+  // home has already won.
+  enforceChmod600(path);
   const buf = await readFile(path);
   return new Uint8Array(buf);
 }

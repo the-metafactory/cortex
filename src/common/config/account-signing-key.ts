@@ -41,20 +41,9 @@
  * canonical `NatsConfigSchema`. Drop legacy on MIG-7.2e.
  */
 
-import { promises as fsp, statSync } from "fs";
+import { promises as fsp } from "fs";
 import { fromSeed, type KeyPair } from "nkeys.js";
-
-/**
- * Octal mode mask for the POSIX permission bits we care about. The full
- * stat `mode` field also encodes the file type (regular, dir, symlink),
- * so we mask before comparing.
- */
-const POSIX_MODE_MASK = 0o777;
-
-/**
- * Expected mode for the account signing key file: owner-only read/write.
- */
-const REQUIRED_MODE = 0o600;
+import { enforceChmod600 } from "./file-permissions";
 
 /**
  * Account signing key seed prefix. NATS nkey seeds for an *account* always
@@ -77,29 +66,10 @@ const ACCOUNT_SEED_PREFIX = "SA";
  * @returns A KeyPair ready for `sign(input)` calls.
  */
 export async function loadAccountSigningKey(path: string): Promise<KeyPair> {
-  // 1. Permission gate. Sync `statSync` keeps the check tight (one syscall
-  //    inline with the read) and avoids a TOCTOU window between stat + open
-  //    being any wider than it has to be. On Windows the mode bits are not
-  //    meaningful — gate it behind the platform check rather than fail
-  //    every Windows operator.
-  if (process.platform !== "win32") {
-    const stat = statSync(path); // throws ENOENT here if the path is bogus
-    const mode = stat.mode & POSIX_MODE_MASK;
-    if (mode !== REQUIRED_MODE) {
-      throw new Error(
-        `account signing key ${path} must be chmod 600, found ${mode.toString(8).padStart(3, "0")}`,
-      );
-    }
-  } else {
-    // Best-effort note on Windows. We still want to load the key so the
-    // daemon runs there for dev, but we want the operator to know we
-    // didn't enforce the permission gate. `process.stderr.write` because
-    // there is no logger threaded in here yet (loader is intentionally
-    // dependency-free).
-    process.stderr.write(
-      `[account-signing-key] chmod 600 gate skipped on win32 — NTFS ACLs are the operator's responsibility (${path})\n`,
-    );
-  }
+  // 1. Permission gate. Delegated to the shared `enforceChmod600` helper
+  //    (extracted in cortex#87 — same policy now backs the NATS creds
+  //    loader, so policy changes ripple to both consumers in one place).
+  enforceChmod600(path);
 
   // 2. Read + trim. Operators routinely leave a trailing newline after
   //    `nsc generate nkey -a > account.nk`; `fromSeed` would reject the
