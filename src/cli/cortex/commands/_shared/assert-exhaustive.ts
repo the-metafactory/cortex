@@ -4,17 +4,10 @@
  * compile time; the runtime branch surfaces a clear error if the type
  * assertion ever lapses (e.g. unsafe cast upstream).
  *
- * Returns the standard `ExitResult` shape (exit 2, stderr message) so
- * dispatchers can plug it into their `default:` arm without ceremony.
- *
  * Reused across F-3 (`dispatchAgents`), F-4 (`dispatchCreds`), and any
  * future cortex CLI dispatcher.
  */
-export interface ExitResult {
-  exitCode: 0 | 1 | 2;
-  stdout: string;
-  stderr: string;
-}
+import type { ExitResult } from "./exit-result";
 
 export function assertExhaustive(value: never, cliName: string): ExitResult {
   return {

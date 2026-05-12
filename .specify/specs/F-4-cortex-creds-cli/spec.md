@@ -18,23 +18,23 @@ Per the locked design (cortex#58 D8 + interview F-4 answers):
 - **Daemon-mediated signing** — CLI is thin; operator signing key lives in cortex daemon memory only
 - **Fail-on-offline-revoke** — revoke aborts when NATS server unreachable
 
-**v1 scope:** ship the CLI structure complete + `list --local` fully functional (filesystem scan). `issue`/`revoke`/`rotate` ship as structured "deferred" subcommands that emit a clear error pointing at the daemon-IPC follow-up. This matches the F-2/F-3 pattern where the foundational APIs ship before the cortex.ts integration that wires them into a running daemon.
+**v1 scope:** ship the CLI structure complete + `list` fully functional (filesystem scan). `issue`/`revoke`/`rotate` ship as structured "deferred" subcommands that emit a clear error pointing at the daemon-IPC follow-up. This matches the F-2/F-3 pattern where the foundational APIs ship before the cortex.ts integration that wires them into a running daemon.
 
 ## User Scenarios
 
 ### Scenario 1: Operator inventories per-agent creds
 
 ```bash
-cortex creds list --local
+cortex creds list
 # echo                 ~/.config/nats/creds/echo.creds      issued 2026-05-12T01:00
 # holly                ~/.config/nats/creds/holly.creds     issued 2026-05-12T01:00
 # codex-rev            ~/.config/nats/creds/codex-rev.creds issued 2026-05-12T01:00
 ```
 
 **Acceptance Criteria:**
-- [ ] `cortex creds list --local` scans `~/.config/nats/creds/` (configurable via `--creds-dir`)
+- [ ] `cortex creds list` scans `~/.config/nats/creds/` (configurable via `--creds-dir`)
 - [ ] Output includes agent id (filename stem), full path, file mtime
-- [ ] `--json` mode emits structured array
+- [ ] `--json` mode emits structured envelope (see FR-6)
 - [ ] Empty dir → exit 0, "0 creds files" message
 - [ ] Sorted alphabetically by id
 
@@ -42,13 +42,13 @@ cortex creds list --local
 
 ```bash
 cortex creds issue foo
-# (v1) → exit 2 with: "creds issue requires the cortex daemon (not yet wired); see <follow-up-issue>"
+# (v1) → exit 2 with: "not yet implemented — pending cortex daemon-IPC integration (cortex#67)"
 # (future) → mints user JWT via daemon-IPC, writes ~/.config/nats/creds/foo.creds
 ```
 
 **Acceptance Criteria (v1):**
 - [ ] `cortex creds issue <id>` returns exit 2 with a clear "not yet implemented — pending daemon IPC" message
-- [ ] Error message names the cortex repo follow-up issue (`cortex#TBD — cortex creds daemon-IPC integration`)
+- [ ] Error message cites cortex#67 (the filed daemon-IPC follow-up issue)
 - [ ] Help text documents the deferral
 
 **Acceptance Criteria (future, not in F-4 v1):**

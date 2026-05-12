@@ -253,6 +253,32 @@ describe("runCredsList", () => {
       expect(r.stderr).toContain("BadName.creds");
     });
   });
+
+  // cortex#65 — Echo round-2 H1 nit on cortex#64: cap was enforced in
+  // code but not exercised by a test. Closes the regression risk if
+  // someone flips `>` to `>=`.
+  describe("hardening cap (Echo H1)", () => {
+    test("refuses to enumerate when directory has > 10_000 entries", () => {
+      const dir = mkdtempSync(join(tmpdir(), "f4-h1-cap-"));
+      for (let i = 0; i < 10_001; i++) {
+        writeFileSync(join(dir, `agent-${i}.creds`), "x");
+      }
+      const r = runCredsList(parseCredsArgs(["list", "--creds-dir", dir]));
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr).toMatch(/refusing to enumerate/);
+      expect(r.stderr).toContain("10001");
+      expect(r.stderr).toContain("10000");
+    });
+
+    test("accepts exactly 10_000 entries (boundary)", () => {
+      const dir = mkdtempSync(join(tmpdir(), "f4-h1-boundary-"));
+      for (let i = 0; i < 10_000; i++) {
+        writeFileSync(join(dir, `agent-${i}.creds`), "x");
+      }
+      const r = runCredsList(parseCredsArgs(["list", "--creds-dir", dir]));
+      expect(r.exitCode).toBe(0);
+    });
+  });
 });
 
 // =============================================================================

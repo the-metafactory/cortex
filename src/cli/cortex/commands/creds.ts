@@ -30,6 +30,7 @@ import { expandTilde } from "../../../common/config/loader";
 import { CliArgsError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { assertExhaustive } from "./_shared/assert-exhaustive";
+import { type ExitResult } from "./_shared/exit-result";
 
 // =============================================================================
 // Types
@@ -45,11 +46,10 @@ export interface ParsedCredsArgs {
   help: boolean;
 }
 
-export interface ExitResult {
-  exitCode: 0 | 1 | 2;
-  stdout: string;
-  stderr: string;
-}
+// ExitResult moved to `_shared/exit-result.ts` (cortex#65 — Echo round-2
+// duplication nit on cortex#64). Imported above. Kept re-export for any
+// external consumer that grabbed the type via `creds.ts` directly.
+export { type ExitResult } from "./_shared/exit-result";
 
 /**
  * Per-creds-file metadata returned in the JSON envelope's `items` array.

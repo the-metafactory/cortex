@@ -151,9 +151,9 @@ describe("runAgentsReload", () => {
     expect(r.exitCode).toBe(0);
     const parsed = JSON.parse(r.stdout);
     expect(parsed.status).toBe("ok");
-    expect(parsed.agents).toBeInstanceOf(Array);
-    expect(parsed.agents.length).toBeGreaterThan(0);
-    expect(parsed.agents[0].id).toBe("echo");
+    expect(parsed.items).toBeInstanceOf(Array);
+    expect(parsed.items.length).toBeGreaterThan(0);
+    expect(parsed.items[0].id).toBe("echo");
   });
 
   test("--json on failure emits envelope with agents:[] + error (M4 round-1)", () => {
@@ -168,8 +168,8 @@ describe("runAgentsReload", () => {
     expect(parsed.status).toBe("error");
     // Echo M4 round 1: `agents` MUST be present (empty array) so consumers
     // can iterate without status-checking.
-    expect(parsed.agents).toEqual([]);
-    expect(parsed.error.file).toContain("broken.yaml");
+    expect(parsed.items).toEqual([]);
+    expect(parsed.error.context.file).toContain("broken.yaml");
     expect(parsed.error.reason).toBeTruthy();
   });
 
@@ -317,11 +317,11 @@ describe("runAgentsList", () => {
     expect(r.exitCode).toBe(0);
     const parsed = JSON.parse(r.stdout);
     expect(parsed.status).toBe("ok");
-    expect(Array.isArray(parsed.agents)).toBe(true);
-    expect(parsed.agents[0].id).toBe("echo");
-    expect(parsed.agents[0]).toHaveProperty("substrate");
-    expect(parsed.agents[0]).toHaveProperty("mode");
-    expect(parsed.agents[0]).toHaveProperty("capabilities");
+    expect(Array.isArray(parsed.items)).toBe(true);
+    expect(parsed.items[0].id).toBe("echo");
+    expect(parsed.items[0]).toHaveProperty("substrate");
+    expect(parsed.items[0]).toHaveProperty("mode");
+    expect(parsed.items[0]).toHaveProperty("capabilities");
   });
 
   test("empty agents.d/ prints message (Echo m2 consistency)", () => {

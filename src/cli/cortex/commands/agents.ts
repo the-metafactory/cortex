@@ -21,6 +21,9 @@
 import { existsSync, statSync } from "fs";
 import { dirname } from "path";
 
+import { CliArgsError } from "./_shared/arg-error";
+import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
+import { type ExitResult } from "./_shared/exit-result";
 import {
   loadAgentsDirectory,
   loadAgentFromFile,
@@ -42,28 +45,22 @@ export interface ParsedAgentsArgs {
   help: boolean;
 }
 
-export interface ExitResult {
-  exitCode: 0 | 1 | 2;
-  stdout: string;
-  stderr: string;
-}
+// ExitResult moved to `_shared/exit-result.ts` (cortex#65). Importing
+// above; re-exporting for backward compat with external imports of
+// `ExitResult` via `agents.ts`.
+export { type ExitResult } from "./_shared/exit-result";
 
 // =============================================================================
 // parseAgentsArgs
 // =============================================================================
 
 /**
- * `AgentsArgsError` carries a usage-error message for parser-level failures
- * (bad flag, missing flag value, extra positional). Surfacing as a throw
- * lets `dispatchAgents` map it cleanly to an exit-2 ExitResult — Echo M1
- * on cortex#63 (parser was silently swallowing these previously).
+ * @deprecated cortex#65 — use `CliArgsError` from `./_shared/arg-error`.
+ * Aliased here so external imports of `AgentsArgsError` (e.g. cortex#63 test
+ * patterns) continue working through the rename. Future PRs should switch
+ * to the shared class directly.
  */
-export class AgentsArgsError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "AgentsArgsError";
-  }
-}
+export const AgentsArgsError = CliArgsError;
 
 /**
  * Hand-rolled arg parser matching the migrate-config.ts convention — Echo M1
@@ -107,7 +104,7 @@ export function parseAgentsArgs(argv: string[]): ParsedAgentsArgs {
     }
     if (arg === "--config") {
       if (i + 1 >= argv.length || argv[i + 1]!.startsWith("-")) {
-        throw new AgentsArgsError(`--config requires a path argument`);
+        throw new CliArgsError("agents", `--config requires a path argument`);
       }
       out.config = argv[i + 1];
       i += 2;
@@ -115,14 +112,14 @@ export function parseAgentsArgs(argv: string[]): ParsedAgentsArgs {
     }
     if (arg === "--fragment") {
       if (i + 1 >= argv.length || argv[i + 1]!.startsWith("-")) {
-        throw new AgentsArgsError(`--fragment requires a path argument`);
+        throw new CliArgsError("agents", `--fragment requires a path argument`);
       }
       out.fragment = argv[i + 1];
       i += 2;
       continue;
     }
     if (arg.startsWith("-")) {
-      throw new AgentsArgsError(`unknown flag: ${arg}`);
+      throw new CliArgsError("agents", `unknown flag: ${arg}`);
     }
     // Positional: only one allowed (the subcommand).
     if (out.rawSubcommand === "") {
@@ -134,7 +131,7 @@ export function parseAgentsArgs(argv: string[]): ParsedAgentsArgs {
       i++;
       continue;
     }
-    throw new AgentsArgsError(`unexpected extra positional argument: "${arg}"`);
+    throw new CliArgsError("agents", `unexpected extra positional argument: "${arg}"`);
   }
 
   return out;
@@ -315,8 +312,8 @@ export function dispatchAgents(argv: string[]): ExitResult {
   try {
     args = parseAgentsArgs(argv);
   } catch (err) {
-    // Echo M1 — parser now throws AgentsArgsError on bad flags. Map to exit 2.
-    if (err instanceof AgentsArgsError) {
+    // Echo M1 — parser throws CliArgsError on bad flags. Map to exit 2.
+    if (err instanceof CliArgsError) {
       return {
         exitCode: 2,
         stdout: "",
@@ -367,48 +364,27 @@ function successFooter(n: number): string {
 }
 
 /**
- * **JSON envelope contract** (Echo M4 round 1 on cortex#63):
+ * Per-agent metadata returned in the JSON envelope's `items` array.
+ * cortex#65 — F-3 retrofit to the shared `CliJsonEnvelope<T>` shape
+ * introduced in F-4 (cortex#64). Scripting consumers now see structurally
+ * identical envelopes across `cortex agents` and `cortex creds`:
  *
  * ```ts
- * interface AgentsJsonEnvelope {
- *   status: "ok" | "error";
- *   agents: AgentSummary[];      // ALWAYS present — empty array on error
- *   error?: { file: string; reason: string };  // present iff status === "error"
- * }
+ * { status: "ok" | "error", items: T[], error?: { reason, context? } }
  * ```
  *
- * Matches spec.md FR-1 verbatim. Scripting consumers can `.agents.map(…)`
- * without status-guarding when they don't care about errors, or check
- * `.status === "ok"` when they do.
+ * **Breaking change vs F-3 cycle 2:** the OLD F-3 envelope was
+ * `{status, agents: [], error?: {file, reason}}`. New shape uses `items`
+ * (not `agents`) and `error.context.file` (not `error.file`). F-3 only
+ * just merged (cortex#63), so this contract change is acceptable in the
+ * "no-external-consumers-yet" window per Echo M2 framing on cortex#64.
  */
-export interface AgentsJsonEnvelope {
-  status: "ok" | "error";
-  agents: ReturnType<typeof summarizeAgent>[];
-  error?: { file: string; reason: string };
-}
+export type AgentSummary = ReturnType<typeof summarizeAgent>;
 
 function jsonOk(agents: Agent[]): string {
-  const envelope: AgentsJsonEnvelope = {
-    status: "ok",
-    agents: agents.map(summarizeAgent),
-  };
-  return JSON.stringify(envelope, null, 2) + "\n";
+  return renderJson(envelopeOk<AgentSummary>(agents.map(summarizeAgent)));
 }
 
-function jsonError(file: string, reason: string): string {
-  const envelope: AgentsJsonEnvelope = {
-    status: "error",
-    agents: [], // M4 round 1: present-but-empty on error so consumers can iterate without status-checking
-    error: { file, reason },
-  };
-  return JSON.stringify(envelope, null, 2) + "\n";
-}
-
-/**
- * Unified error mapping for `FragmentLoadError`. Emits the canonical
- * envelope on stdout when `--json` is set, plain stderr otherwise. Exit
- * code is always 1 (validation failure).
- */
 function jsonOrTextError(
   err: FragmentLoadError,
   json: boolean,
@@ -417,7 +393,9 @@ function jsonOrTextError(
   if (json) {
     return {
       exitCode: 1,
-      stdout: jsonError(err.file, err.reason),
+      stdout: renderJson(
+        envelopeError<AgentSummary>(err.reason, { file: err.file }),
+      ),
       stderr: "",
     };
   }
