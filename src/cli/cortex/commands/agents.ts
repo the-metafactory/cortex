@@ -25,6 +25,7 @@ import { CliArgsError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { type ExitResult } from "./_shared/exit-result";
 import { parseSubcommandArgs, type SubcommandSpec } from "./_shared/parser";
+import { boolFlag, valueFlag } from "./_shared/hydrate";
 import {
   loadAgentsDirectory,
   loadAgentFromFile,
@@ -92,9 +93,9 @@ export function parseAgentsArgs(argv: string[]): ParsedAgentsArgs {
   return {
     subcommand: parsed.subcommand,
     rawSubcommand: parsed.rawSubcommand,
-    config: parsed.flags["--config"] as string | undefined,
-    fragment: parsed.flags["--fragment"] as string | undefined,
-    json: parsed.flags["--json"] === true,
+    config: valueFlag(parsed.flags, "--config"),
+    fragment: valueFlag(parsed.flags, "--fragment"),
+    json: boolFlag(parsed.flags, "--json"),
     help: parsed.help,
   };
 }

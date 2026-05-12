@@ -27,11 +27,12 @@ import { existsSync, lstatSync, readdirSync } from "fs";
 import { join } from "path";
 
 import { expandTilde } from "../../../common/config/loader";
-import { CliArgsError } from "./_shared/arg-error";
+import { CliArgsError, MissingPositionalError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { assertExhaustive } from "./_shared/assert-exhaustive";
 import { type ExitResult } from "./_shared/exit-result";
 import { parseSubcommandArgs, type SubcommandSpec } from "./_shared/parser";
+import { boolFlag, valueFlag } from "./_shared/hydrate";
 
 // =============================================================================
 // Types
@@ -134,18 +135,20 @@ export function parseCredsArgs(argv: string[]): ParsedCredsArgs {
   try {
     parsed = parseSubcommandArgs(CREDS_SPEC, argv);
   } catch (err) {
-    // Echo M3 — missing-required-positional for issue/revoke/rotate used to
-    // be handled inside `runDeferredSubcommand` (it checks `!args.agentId`
-    // and renders a friendly message + envelope). The generic parser now
-    // throws on the missing positional. Catch that specific class and
-    // return a degenerate args object so the handler can emit its own
-    // message; re-throw everything else.
+    // Echo cortex#66 round-1 M1 — was regex-matching the error message;
+    // now `instanceof MissingPositionalError` and a strict
+    // `positionalName === "agent-id"` check. Decoupled from internal phrasing.
+    //
+    // Missing-required-positional for issue/revoke/rotate used to be
+    // handled inside `runDeferredSubcommand` (it checks `!args.agentId`
+    // and renders a friendly envelope). The generic parser now throws on
+    // the missing positional. Catch that specific subclass and return a
+    // degenerate args object so the handler emits its own message;
+    // re-throw everything else.
     if (
-      err instanceof CliArgsError &&
-      /missing required positional argument: <agent-id>/.test(err.message)
+      err instanceof MissingPositionalError &&
+      err.positionalName === "agent-id"
     ) {
-      // The first positional (subcommand) IS present in argv if we reached
-      // here; find it for `rawSubcommand` so the caller routes correctly.
       const sub = argv.find((a) => !a.startsWith("-")) ?? "";
       const known =
         sub === "list" || sub === "issue" || sub === "revoke" || sub === "rotate"
@@ -168,9 +171,9 @@ export function parseCredsArgs(argv: string[]): ParsedCredsArgs {
     subcommand: parsed.subcommand,
     rawSubcommand: parsed.rawSubcommand,
     agentId: parsed.positionals["agent-id"],
-    credsDir: parsed.flags["--creds-dir"] as string | undefined,
-    config: parsed.flags["--config"] as string | undefined,
-    json: parsed.flags["--json"] === true,
+    credsDir: valueFlag(parsed.flags, "--creds-dir"),
+    config: valueFlag(parsed.flags, "--config"),
+    json: boolFlag(parsed.flags, "--json"),
     help: parsed.help,
   };
 }

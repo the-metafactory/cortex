@@ -37,7 +37,11 @@
  * Does NOT validate positional values (e.g. agent id regex). Callers do
  * domain validation after parsing.
  */
-import { CliArgsError } from "./arg-error";
+import {
+  CliArgsError,
+  MissingPositionalError,
+  UnknownFlagError,
+} from "./arg-error";
 
 // =============================================================================
 // Spec types
@@ -185,10 +189,7 @@ export function parseSubcommandArgs<S extends string>(
   if (activeRule) {
     for (const name of activeRule.positionals ?? []) {
       if (!(name in out.positionals)) {
-        throw new CliArgsError(
-          spec.cliName,
-          `missing required positional argument: <${name}>`,
-        );
+        throw new MissingPositionalError(spec.cliName, name);
       }
     }
   }
@@ -231,25 +232,38 @@ function findFirstPositional<S extends string>(
  * subcommand's allowlist). Returns undefined if the flag isn't declared
  * anywhere — the strict second pass will throw with a clear error.
  *
- * Assumes: a given flag has the same kind (value vs bool) across all
- * subcommands that accept it. cortex's CLIs follow this convention; if
- * a future CLI breaks it, refactor to require explicit kind-per-subcommand.
+ * Invariant: a given flag has the same kind (value vs bool) across all
+ * subcommands that accept it. cortex's CLIs follow this convention by
+ * design. Echo cortex#66 round-1 N5 — added a runtime check to enforce
+ * the invariant rather than rely on it being followed by convention. If
+ * a future spec declares conflicting kinds, this surfaces at the FIRST
+ * argv that hits the flag rather than after silent mis-parses.
  */
 function lookupFlagKindAcrossSpec<S extends string>(
   spec: SubcommandSpec<S>,
   flag: string,
 ): FlagKind | undefined {
-  if (flag in spec.universal) return spec.universal[flag];
+  let found: FlagKind | undefined;
+  if (flag in spec.universal) found = spec.universal[flag];
   for (const rule of Object.values(spec.subcommands) as SubcommandRule[]) {
-    if (rule.flags && flag in rule.flags) return rule.flags[flag]!;
+    if (rule.flags && flag in rule.flags) {
+      const kind = rule.flags[flag]!;
+      if (found !== undefined && found !== kind) {
+        throw new CliArgsError(
+          spec.cliName,
+          `spec invariant violated: flag "${flag}" declared with conflicting kinds (${found} vs ${kind}) across subcommands`,
+        );
+      }
+      found = kind;
+    }
   }
-  return undefined;
+  return found;
 }
 
 function resolveFlagKind<S extends string>(
   spec: SubcommandSpec<S>,
   activeRule: SubcommandRule | undefined,
-  subcommand: ParsedSubcommandArgs<S>["subcommand"],
+  _subcommand: ParsedSubcommandArgs<S>["subcommand"],
   flag: string,
 ): FlagKind {
   // Universal flags first.
@@ -259,13 +273,11 @@ function resolveFlagKind<S extends string>(
   if (activeRule?.flags && flag in activeRule.flags) {
     return activeRule.flags[flag]!;
   }
-  // Subcommand-active but flag not in its allowlist.
-  if (activeRule) {
-    throw new CliArgsError(
-      spec.cliName,
-      `flag ${flag} is not valid for subcommand "${subcommand as string}"`,
-    );
-  }
-  // No active subcommand — the flag is universally unrecognized.
-  throw new CliArgsError(spec.cliName, `unknown flag: ${flag}`);
+  // Echo cortex#66 round-1 M3 — restore the legacy "unknown flag: X"
+  // wording across both code paths (subcommand-known-but-flag-disallowed
+  // AND no-subcommand-and-unknown-flag). The legacy parsers in F-3/F-4
+  // both said "unknown flag: X" in either case; the original cortex#66
+  // implementation surfaced two different messages, which changed
+  // operator-visible output as a side effect of the refactor.
+  throw new UnknownFlagError(spec.cliName, flag);
 }

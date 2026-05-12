@@ -3,7 +3,12 @@
 import { describe, expect, test } from "bun:test";
 
 import { parseSubcommandArgs, type SubcommandSpec } from "../parser";
-import { CliArgsError } from "../arg-error";
+import { boolFlag, valueFlag } from "../hydrate";
+import {
+  CliArgsError,
+  MissingPositionalError,
+  UnknownFlagError,
+} from "../arg-error";
 
 // Mini grammar used across tests — reflects shapes both `agents` and
 // `creds` CLIs use today.
@@ -187,5 +192,119 @@ describe("parseSubcommandArgs — CliArgsError carries cliName", () => {
       expect(err).toBeInstanceOf(CliArgsError);
       expect((err as CliArgsError).cliName).toBe("test-cli");
     }
+  });
+});
+
+// Echo cortex#66 round-1 M1 — typed error subclasses replace regex-on-message.
+describe("typed error subclasses", () => {
+  test("missing-positional throws MissingPositionalError with positionalName", () => {
+    try {
+      parseSubcommandArgs(spec, ["issue"]);
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MissingPositionalError);
+      expect(err).toBeInstanceOf(CliArgsError); // still a CliArgsError
+      expect((err as MissingPositionalError).positionalName).toBe("agent-id");
+      expect((err as MissingPositionalError).cliName).toBe("test-cli");
+    }
+  });
+
+  test("unknown-flag throws UnknownFlagError with flag", () => {
+    try {
+      parseSubcommandArgs(spec, ["list", "--verbose"]);
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(UnknownFlagError);
+      expect((err as UnknownFlagError).flag).toBe("--verbose");
+    }
+  });
+
+  test("flag-scoping violation throws UnknownFlagError (legacy wording, Echo M3)", () => {
+    try {
+      parseSubcommandArgs(spec, ["issue", "echo", "--creds-dir", "/tmp"]);
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(UnknownFlagError);
+      // Echo M3 — the message uses "unknown flag: --creds-dir" (legacy
+      // wording) regardless of whether the cause is "flag not in any
+      // allowlist" or "flag not in this subcommand's allowlist."
+      expect((err as Error).message).toBe("unknown flag: --creds-dir");
+    }
+  });
+});
+
+// Echo cortex#66 round-1 N5 — same-kind invariant on flags across subcommands.
+describe("spec invariant: same-kind across subcommands", () => {
+  test("throws when same flag declared with conflicting kinds", () => {
+    const badSpec: SubcommandSpec<"a" | "b"> = {
+      cliName: "bad",
+      subcommands: {
+        a: { flags: { "--mode": "value" } },
+        b: { flags: { "--mode": "bool" } },
+      },
+      universal: {},
+    };
+    // Trigger the first-pass scan which walks the spec for flag kinds.
+    expect(() => parseSubcommandArgs(badSpec, ["--mode", "x", "a"])).toThrow(
+      /spec invariant violated.*--mode/,
+    );
+  });
+});
+
+// Echo cortex#66 round-1 M2 — kind-safe hydration helpers.
+describe("hydrate helpers (valueFlag / boolFlag)", () => {
+  test("valueFlag returns string when set", () => {
+    const r = parseSubcommandArgs(spec, ["list", "--creds-dir", "/tmp"]);
+    expect(valueFlag(r.flags, "--creds-dir")).toBe("/tmp");
+  });
+
+  test("valueFlag returns undefined when absent", () => {
+    const r = parseSubcommandArgs(spec, ["list"]);
+    expect(valueFlag(r.flags, "--creds-dir")).toBeUndefined();
+  });
+
+  test("valueFlag throws if flag was bool-typed and accessed as value", () => {
+    const r = parseSubcommandArgs(spec, ["list", "--json"]);
+    expect(() => valueFlag(r.flags, "--json")).toThrow(/declared as bool/);
+  });
+
+  test("boolFlag returns true when set, false when absent", () => {
+    const r1 = parseSubcommandArgs(spec, ["list", "--json"]);
+    expect(boolFlag(r1.flags, "--json")).toBe(true);
+    const r2 = parseSubcommandArgs(spec, ["list"]);
+    expect(boolFlag(r2.flags, "--json")).toBe(false);
+  });
+
+  test("boolFlag throws if flag was value-typed and accessed as bool", () => {
+    const r = parseSubcommandArgs(spec, ["list", "--creds-dir", "/tmp"]);
+    expect(() => boolFlag(r.flags, "--creds-dir")).toThrow(/declared as value/);
+  });
+});
+
+// Echo cortex#66 round-1 N6 — missing edge cases.
+describe("edge cases", () => {
+  test("--flag=value syntax is currently NOT supported (documented gap)", () => {
+    // The parser splits on whitespace, not `=`. `--creds-dir=/tmp` would be
+    // treated as a single unknown flag. This test documents the gap; if
+    // operators ever ask for the syntax, lift the gap in a follow-up.
+    expect(() => parseSubcommandArgs(spec, ["list", "--creds-dir=/tmp"])).toThrow(
+      UnknownFlagError,
+    );
+  });
+
+  test("repeated bool flag is idempotent (last write wins, both set true)", () => {
+    const r = parseSubcommandArgs(spec, ["list", "--json", "--json"]);
+    expect(r.flags["--json"]).toBe(true);
+  });
+
+  test("repeated value-flag overwrites earlier value", () => {
+    const r = parseSubcommandArgs(spec, [
+      "list",
+      "--creds-dir",
+      "/tmp/first",
+      "--creds-dir",
+      "/tmp/second",
+    ]);
+    expect(r.flags["--creds-dir"]).toBe("/tmp/second");
   });
 });
