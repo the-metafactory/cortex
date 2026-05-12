@@ -453,6 +453,16 @@ export const BotConfigSchema = z.object({
      * single template works across operators.
      */
     subjects: z.array(z.string().min(1)).default([]),
+    /**
+     * Absolute path to operator account signing nkey file. Loaded into
+     * daemon memory only. File MUST be chmod 600 (loader enforces).
+     * Optional — when absent, cortex creds mutation subcommands return
+     * exit 2.
+     *
+     * MIRROR: `NatsConfigSchema.accountSigningKeyPath` in
+     * `./cortex-config.ts`. Drop both on MIG-7.2e.
+     */
+    accountSigningKeyPath: z.string().optional(),
   }).optional(),
 
   /**

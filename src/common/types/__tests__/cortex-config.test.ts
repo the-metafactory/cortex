@@ -313,6 +313,75 @@ describe("NatsConfigSchema", () => {
       publicKey: "U" + "abcdefghijklmnopqrstuvwxyz".padEnd(55, "A"),
     })).toThrow();
   });
+
+  // C-108 (Prereq B for cortex#67): the account signing key path field is
+  // optional, accepts a string path, and parses through unchanged. We don't
+  // validate the path's contents at schema time — that's the loader's job
+  // (`src/common/config/account-signing-key.ts`). Schema only carries the
+  // shape; runtime owns the chmod + prefix gates.
+
+  test("accountSigningKeyPath is optional (absent → undefined)", () => {
+    const parsed = NatsConfigSchema.parse({ url: "nats://localhost:4222" });
+    expect(parsed.accountSigningKeyPath).toBeUndefined();
+  });
+
+  test("accountSigningKeyPath accepts a string path", () => {
+    const parsed = NatsConfigSchema.parse({
+      url: "nats://localhost:4222",
+      accountSigningKeyPath: "/etc/cortex/account-signing.nk",
+    });
+    expect(parsed.accountSigningKeyPath).toBe("/etc/cortex/account-signing.nk");
+  });
+
+  test("accountSigningKeyPath rejects non-string", () => {
+    expect(() => NatsConfigSchema.parse({
+      url: "nats://localhost:4222",
+      accountSigningKeyPath: 42,
+    })).toThrow();
+  });
+});
+
+// =============================================================================
+// BotConfigSchema.nats.accountSigningKeyPath — MIRROR of cortex-config field
+// =============================================================================
+//
+// We MIRROR the field across both schemas during the MIG-7.2 overlap window.
+// Asserting the legacy schema accepts it (and round-trips it) protects against
+// drift — if someone edits one schema and forgets the other, this test fails.
+
+describe("BotConfigSchema.nats.accountSigningKeyPath (MIRROR)", () => {
+  /** Minimal BotConfig shell to exercise the optional `nats` block. */
+  function minBotConfig(natsExtras: Record<string, unknown> = {}) {
+    return {
+      agent: { name: "test", displayName: "Test", operatorId: "op" },
+      discord: [],
+      mattermost: [],
+      claude: { timeoutMs: 1000 },
+      paths: { publishedEventsDir: "/tmp/x" },
+      nats: {
+        url: "nats://localhost:4222",
+        ...natsExtras,
+      },
+    };
+  }
+
+  test("absent on legacy BotConfig.nats → undefined", () => {
+    const parsed = BotConfigSchema.parse(minBotConfig());
+    expect(parsed.nats?.accountSigningKeyPath).toBeUndefined();
+  });
+
+  test("accepts a string path on legacy BotConfig.nats", () => {
+    const parsed = BotConfigSchema.parse(
+      minBotConfig({ accountSigningKeyPath: "/etc/cortex/account-signing.nk" }),
+    );
+    expect(parsed.nats?.accountSigningKeyPath).toBe("/etc/cortex/account-signing.nk");
+  });
+
+  test("rejects non-string on legacy BotConfig.nats", () => {
+    expect(() => BotConfigSchema.parse(
+      minBotConfig({ accountSigningKeyPath: 42 }),
+    )).toThrow();
+  });
 });
 
 // =============================================================================

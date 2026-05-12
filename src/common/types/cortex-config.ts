@@ -463,6 +463,21 @@ export const NatsConfigSchema = z.object({
   subjects: z.array(z.string().min(1)).default([]),
   /** Optional NKey identity for envelope signing (MY-400). */
   identity: NatsIdentitySchema.optional(),
+  /**
+   * Absolute path to operator account signing nkey file. Loaded into daemon
+   * memory only. File MUST be chmod 600 (loader enforces). Optional — when
+   * absent, cortex creds mutation subcommands return exit 2.
+   *
+   * The account signing key is what mints per-agent NATS user JWTs (C-067,
+   * cortex#58 D7 + §6.3). It is the most sensitive key material cortex
+   * holds; it must never be logged, persisted to disk by cortex, or shipped
+   * to any renderer. See `src/common/config/account-signing-key.ts` for the
+   * loader that enforces chmod 600 and SA-prefix.
+   *
+   * MIRROR: `BotConfigSchema.nats.accountSigningKeyPath` in `./config.ts`.
+   * Drop both on MIG-7.2e.
+   */
+  accountSigningKeyPath: z.string().optional(),
 });
 
 export type NatsConfig = z.infer<typeof NatsConfigSchema>;
