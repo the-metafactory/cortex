@@ -13,8 +13,12 @@
  * (G-1100.E wires that up).
  */
 
+import { readFile } from "fs/promises";
+import { statSync } from "fs";
+import { homedir } from "os";
 import {
   connect as natsConnect,
+  credsAuthenticator,
   Events,
   type ConnectionOptions,
   type NatsConnection,
@@ -25,10 +29,63 @@ export interface NatsLinkOptions {
   url: string;
   /** Bearer token for the connect-time auth. Optional. */
   token?: string;
+  /**
+   * Path to a NATS user `.creds` file for operator-mode auth (cortex#86).
+   * The loader expands a leading `~/` to `$HOME`, enforces chmod 600 on
+   * POSIX (file MUST NOT be group- or world-readable — `.creds` carries
+   * an NKey seed + signed JWT), reads the bytes, and passes them to
+   * `credsAuthenticator(...)` as `ConnectionOptions.authenticator`.
+   * When both `token` and `credsPath` are set, `credsPath` wins and a
+   * warn log explains the precedence so operators notice a duplicated
+   * config rather than silently picking one.
+   */
+  credsPath?: string;
   /** Connection name surfaced on the server's `varz` endpoint. */
   name?: string;
   /** Override the underlying nats `connect` function (test seam). */
   connectImpl?: (opts: ConnectionOptions) => Promise<NatsConnection>;
+}
+
+/** Expand a leading `~/` (or bare `~`) to the operator's home directory. */
+function expandTilde(path: string): string {
+  if (path === "~") return homedir();
+  if (path.startsWith("~/")) return `${homedir()}${path.slice(1)}`;
+  return path;
+}
+
+/**
+ * Read a NATS user `.creds` file from disk and return its bytes for
+ * `credsAuthenticator(...)`. Mirrors the chmod gate in
+ * `src/common/config/account-signing-key.ts` — `.creds` files carry the
+ * user's NKey seed and a signed JWT, both of which are sensitive enough
+ * to refuse loading from a group- or world-readable file.
+ *
+ * Throws with an operator-readable message when:
+ *   - The file is missing or unreadable (ENOENT / EACCES propagate).
+ *   - On POSIX, the file mode is not exactly `0o600`.
+ *
+ * On Windows the chmod gate is skipped (NTFS uses ACLs, not mode bits)
+ * and a stderr note records the skip so the operator knows.
+ */
+async function loadCredsBytes(rawPath: string): Promise<Uint8Array> {
+  const path = expandTilde(rawPath);
+  if (process.platform !== "win32") {
+    const stat = statSync(path); // throws ENOENT here if the file is missing
+    const mode = stat.mode & 0o777;
+    if (mode !== 0o600) {
+      throw new Error(
+        `nats-connection: creds file ${path} must be chmod 600, found ${mode
+          .toString(8)
+          .padStart(3, "0")}`,
+      );
+    }
+  } else {
+    process.stderr.write(
+      `[nats-connection] chmod 600 gate skipped on win32 — NTFS ACLs are the operator's responsibility (${path})\n`,
+    );
+  }
+  const buf = await readFile(path);
+  return new Uint8Array(buf);
 }
 
 /**
@@ -63,13 +120,31 @@ export class NatsLink {
     const connectImpl = opts.connectImpl ?? natsConnect;
     const name = opts.name ?? "grove-bot";
 
-    const raw = await connectImpl({
+    // Build base connect options. We branch on auth mode separately so that
+    // an operator-mode `.creds` connection never leaks a bearer token into
+    // the wire — `credsAuthenticator` and `token` are mutually exclusive
+    // server-side, and the warn log calls out the precedence explicitly.
+    const connectOpts: ConnectionOptions = {
       servers: [opts.url],
-      token: opts.token,
       name,
       // Defer reconnect to the underlying client; we just log status.
       reconnect: true,
-    });
+    };
+
+    if (opts.credsPath) {
+      if (opts.token) {
+        console.warn(
+          `nats-connection: "${name}" — both 'token' and 'credsPath' set; ` +
+            `'credsPath' takes precedence (operator-mode auth wins).`,
+        );
+      }
+      const credsBytes = await loadCredsBytes(opts.credsPath);
+      connectOpts.authenticator = credsAuthenticator(credsBytes);
+    } else if (opts.token) {
+      connectOpts.token = opts.token;
+    }
+
+    const raw = await connectImpl(connectOpts);
 
     return new NatsLink(raw, name);
   }

@@ -464,6 +464,17 @@ export const NatsConfigSchema = z.object({
   /** Optional NKey identity for envelope signing (MY-400). */
   identity: NatsIdentitySchema.optional(),
   /**
+   * cortex#86 — path to a NATS user `.creds` file for operator-mode connect
+   * auth. When set, the daemon authenticates via `credsAuthenticator(...)`
+   * instead of anonymous / bearer-token. Leading `~/` expands to `$HOME`;
+   * the `NatsLink` loader enforces chmod 600 on POSIX. Wins over `token`
+   * when both are set (warn log explains precedence).
+   *
+   * MIRROR: `BotConfigSchema.nats.credsPath` in `./config.ts`. Drop both
+   * on MIG-7.2e alongside `identity` and `accountSigningKeyPath`.
+   */
+  credsPath: z.string().optional(),
+  /**
    * Absolute path to operator account signing nkey file. Loaded into daemon
    * memory only. File MUST be chmod 600 (loader enforces). Optional — when
    * absent, cortex creds mutation subcommands return exit 2.

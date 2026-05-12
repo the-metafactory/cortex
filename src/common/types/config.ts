@@ -486,6 +486,14 @@ export const BotConfigSchema = z.object({
      */
     accountSigningKeyPath: z.string().optional(),
     /**
+     * cortex#86 — path to a NATS user `.creds` file for operator-mode
+     * connect auth. See `NatsConfigSchema.credsPath` in `./cortex-config.ts`
+     * for the canonical docstring; this entry MIRRORS the field so that
+     * the migrate-config loader can synthesize a BotConfig from cortex.yaml
+     * without stripping the creds path. Drop both on MIG-7.2e.
+     */
+    credsPath: z.string().optional(),
+    /**
      * MIG-7.2e: NKey identity for envelope signing (MY-400). Optional.
      * Mirror of `NatsConfigSchema.identity` in `./cortex-config.ts` so the
      * loader can synthesize a BotConfig from cortex.yaml without stripping

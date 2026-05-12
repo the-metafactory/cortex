@@ -6,9 +6,32 @@
  */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import type { NatsConnection } from "nats";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { homedir, tmpdir } from "os";
+import { join } from "path";
+import type { ConnectionOptions, NatsConnection } from "nats";
 import { Events } from "nats";
 import { NatsLink } from "../connection";
+
+// Synthetic .creds file content modelled on `nsc generate creds` output.
+// Real value isn't validated by the loader (NATS does that at connect-time);
+// the loader only enforces existence + chmod 600 before handing bytes to
+// `credsAuthenticator`. Test seam never actually authenticates, so the
+// content can be any non-empty UTF-8.
+const FAKE_CREDS_CONTENT = `-----BEGIN NATS USER JWT-----
+eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJqdGkiOiJURVNUIn0.fake
+------END NATS USER JWT------
+
+************************* IMPORTANT *************************
+NKEY Seed printed below can be used to sign and prove identity.
+NKEYs are sensitive and should be treated as secrets.
+
+-----BEGIN USER NKEY SEED-----
+SUFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAK
+------END USER NKEY SEED------
+
+*************************************************************
+`;
 
 function makeFakeConnection() {
   const statusEvents: { type: string; data: unknown }[] = [];
@@ -244,5 +267,123 @@ describe("NatsLink", () => {
     expect(fake.publishes[0]?.subject).toBe("local.metafactory.test");
     expect(fake.publishes[0]?.payload).toBe(bytes);
     await link.close();
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // cortex#86: credsPath / credsAuthenticator wiring for operator-mode NATS.
+  //
+  // These tests exercise the loader + connectImpl handoff using a synthetic
+  // .creds file on disk. They DO NOT validate the JWT/seed content (NATS
+  // does that at the server) — they verify that:
+  //   - `credsPath` set → connectImpl receives `authenticator` (not token)
+  //   - chmod gate refuses anything looser than 600
+  //   - operator-readable error on missing file
+  //   - `token` + `credsPath` together: credsPath wins, warn logged
+  //   - leading `~/` expands to $HOME (production cortex.yaml uses this)
+  // ─────────────────────────────────────────────────────────────────────
+  describe("creds-auth (cortex#86)", () => {
+    let tmpDir: string;
+    let credsFile: string;
+
+    beforeEach(() => {
+      tmpDir = mkdtempSync(join(tmpdir(), "natslink-creds-"));
+      credsFile = join(tmpDir, "test.creds");
+      writeFileSync(credsFile, FAKE_CREDS_CONTENT, "utf8");
+      chmodSync(credsFile, 0o600);
+    });
+
+    afterEach(() => {
+      rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test("credsPath set → connectImpl receives authenticator, not token", async () => {
+      const fake = makeFakeConnection();
+      const capturedOpts: ConnectionOptions[] = [];
+      const connectImpl = mock(async (opts: ConnectionOptions) => {
+        capturedOpts.push(opts);
+        return fake.nc;
+      });
+      const link = await NatsLink.connect({
+        url: "nats://localhost:4222",
+        credsPath: credsFile,
+        connectImpl: connectImpl as never,
+      });
+      const opts = capturedOpts[0]!;
+      expect(typeof opts.authenticator).toBe("function");
+      expect(opts.token).toBeUndefined();
+      await link.close();
+    });
+
+    test("credsPath rejects chmod 644 with operator-readable error", async () => {
+      // POSIX-only: NTFS chmod is meaningless and the loader skips the gate.
+      if (process.platform === "win32") return;
+      chmodSync(credsFile, 0o644);
+      await expect(
+        NatsLink.connect({
+          url: "nats://localhost:4222",
+          credsPath: credsFile,
+          connectImpl: async () => makeFakeConnection().nc,
+        }),
+      ).rejects.toThrow(/chmod 600.*644/);
+    });
+
+    test("credsPath ENOENT bubbles up a clear error including the path", async () => {
+      const missing = join(tmpDir, "does-not-exist.creds");
+      await expect(
+        NatsLink.connect({
+          url: "nats://localhost:4222",
+          credsPath: missing,
+          connectImpl: async () => makeFakeConnection().nc,
+        }),
+      ).rejects.toThrow(/does-not-exist\.creds|ENOENT/);
+    });
+
+    test("credsPath + token → credsPath wins, warn logged about precedence", async () => {
+      const fake = makeFakeConnection();
+      const capturedOpts: ConnectionOptions[] = [];
+      const connectImpl = mock(async (opts: ConnectionOptions) => {
+        capturedOpts.push(opts);
+        return fake.nc;
+      });
+      const link = await NatsLink.connect({
+        url: "nats://localhost:4222",
+        name: "creds-vs-token",
+        token: "ignored-token-value",
+        credsPath: credsFile,
+        connectImpl: connectImpl as never,
+      });
+      expect(consoleSpy.warn).toHaveBeenCalled();
+      const warnMsg = String(consoleSpy.warn.mock.calls[0]?.[0] ?? "");
+      expect(warnMsg).toMatch(/credsPath|precedence|token/i);
+      const opts = capturedOpts[0]!;
+      expect(typeof opts.authenticator).toBe("function");
+      expect(opts.token).toBeUndefined();
+      await link.close();
+    });
+
+    test("leading ~ in credsPath expands to homedir", async () => {
+      // Place a creds file directly under $HOME so the ~-relative path
+      // resolves to a real existing file. Cleanup at teardown.
+      const homeCredsFile = join(homedir(), `.natslink-creds-test-${process.pid}.creds`);
+      writeFileSync(homeCredsFile, FAKE_CREDS_CONTENT, "utf8");
+      chmodSync(homeCredsFile, 0o600);
+      try {
+        const tildePath = `~/${homeCredsFile.slice(homedir().length + 1)}`;
+        const fake = makeFakeConnection();
+        const capturedOpts: ConnectionOptions[] = [];
+        const link = await NatsLink.connect({
+          url: "nats://localhost:4222",
+          credsPath: tildePath,
+          connectImpl: async (opts) => {
+            capturedOpts.push(opts);
+            return fake.nc;
+          },
+        });
+        expect(typeof capturedOpts[0]?.authenticator).toBe("function");
+        await link.close();
+      } finally {
+        rmSync(homeCredsFile, { force: true });
+      }
+    });
   });
 });

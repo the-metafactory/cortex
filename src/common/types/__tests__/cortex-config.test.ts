@@ -339,6 +339,39 @@ describe("NatsConfigSchema", () => {
       accountSigningKeyPath: 42,
     })).toThrow();
   });
+
+  // ─── credsPath (cortex#86) ─────────────────────────────────────────────
+  // Path is just a string at the schema layer; chmod 600 + ~/ expansion +
+  // file-read live in the NatsLink loader (`../bus/nats/connection.ts`).
+  // Schema only carries shape so legacy + cortex config loaders agree.
+
+  test("credsPath is optional (absent → undefined)", () => {
+    const parsed = NatsConfigSchema.parse({ url: "nats://localhost:4222" });
+    expect(parsed.credsPath).toBeUndefined();
+  });
+
+  test("credsPath accepts an absolute path", () => {
+    const parsed = NatsConfigSchema.parse({
+      url: "nats://localhost:4222",
+      credsPath: "/etc/cortex/cortex.creds",
+    });
+    expect(parsed.credsPath).toBe("/etc/cortex/cortex.creds");
+  });
+
+  test("credsPath accepts a ~/ path (expansion happens in loader, not schema)", () => {
+    const parsed = NatsConfigSchema.parse({
+      url: "nats://localhost:4222",
+      credsPath: "~/.config/nats/cortex.creds",
+    });
+    expect(parsed.credsPath).toBe("~/.config/nats/cortex.creds");
+  });
+
+  test("credsPath rejects non-string", () => {
+    expect(() => NatsConfigSchema.parse({
+      url: "nats://localhost:4222",
+      credsPath: 42,
+    })).toThrow();
+  });
 });
 
 // =============================================================================
@@ -375,6 +408,19 @@ describe("BotConfigSchema.nats.accountSigningKeyPath (MIRROR)", () => {
       minBotConfig({ accountSigningKeyPath: "/etc/cortex/account-signing.nk" }),
     );
     expect(parsed.nats?.accountSigningKeyPath).toBe("/etc/cortex/account-signing.nk");
+  });
+
+  test("credsPath (cortex#86) mirrors onto BotConfig.nats", () => {
+    const parsed = BotConfigSchema.parse(
+      minBotConfig({ credsPath: "~/.config/nats/cortex.creds" }),
+    );
+    expect(parsed.nats?.credsPath).toBe("~/.config/nats/cortex.creds");
+  });
+
+  test("credsPath rejects non-string on legacy BotConfig.nats", () => {
+    expect(() =>
+      BotConfigSchema.parse(minBotConfig({ credsPath: 42 })),
+    ).toThrow();
   });
 
   test("rejects non-string on legacy BotConfig.nats", () => {
