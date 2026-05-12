@@ -81,10 +81,26 @@ export interface LegacyMattermostInstance {
 export interface LegacyTrustedAgentBot {
   /** Discord user id of the peer bot. Used only for human reference today. */
   discordId?: string;
+  /** Alias for `discordId` — production grove-v2 configs frequently use this
+   *  bare field name (no symbolic agent name alongside it). The migrator
+   *  treats `id` and `discordId` as interchangeable. */
+  id?: string;
   /** Mattermost user id of the peer bot. Used only for human reference today. */
   mattermostId?: string;
-  /** Agent id of the peer bot — this is what migrates into `trust:`. */
-  name: string;
+  /** Discord role binding (`agent-restricted`, etc.). Surfaced in warnings
+   *  on entries that get skipped so the operator can hand-map them. */
+  role?: string;
+  /**
+   * Agent id of the peer bot — this is what migrates into `trust:`.
+   *
+   * Historically required, but production grove-v2 deployments often ship
+   * entries with only a Discord id and no symbolic name (see
+   * clawbox:~/.config/grove/bot.yaml). The migrator now tolerates a missing
+   * `name`: entries without a derivable agent id are skipped with a warning
+   * that surfaces the raw platform id so the operator can hand-edit the
+   * generated cortex.yaml `agents[].trust` list post-migration.
+   */
+  name?: string;
 }
 
 export interface LegacyBotYaml {
@@ -328,9 +344,28 @@ function buildTrustList(
   legacyTrust: LegacyTrustedAgentBot[],
   warnings: ConversionWarning[],
 ): string[] {
-  return legacyTrust.map((t) => {
+  const out: string[] = [];
+  for (let i = 0; i < legacyTrust.length; i++) {
+    const t = legacyTrust[i]!;
+    // Production grove-v2 carries trustedAgentBots entries with only a
+    // Discord/Mattermost id and no symbolic agent name. Surface those as
+    // warnings (operator hand-maps post-migration) rather than crashing.
+    if (typeof t.name !== "string" || t.name.trim().length === 0) {
+      const rawPlatformId = t.id ?? t.discordId ?? t.mattermostId ?? "(no id)";
+      const roleHint = t.role ? ` role="${t.role}"` : "";
+      warnings.push({
+        field: "trustedAgentBots",
+        message:
+          `trustedAgentBots[${i}] missing symbolic \`name\` (platform id: ${rawPlatformId}${roleHint}) — ` +
+          `skipping. Hand-map this entry in cortex.yaml under the relevant agent's \`trust:\` list ` +
+          `once you know which agent id corresponds to ${rawPlatformId}.`,
+      });
+      continue;
+    }
     const id = deriveAgentId(t.name);
     if (!AGENT_ID_PATTERN.test(id)) {
+      // Non-empty `name` that doesn't derive to a valid agent id is still
+      // an operator error worth surfacing loudly.
       throw new Error(
         `trustedAgentBots[].name "${t.name}" cannot be derived to a valid agent id (^[a-z0-9-]+$)`,
       );
@@ -341,8 +376,9 @@ function buildTrustList(
         message: `trusted bot name "${t.name}" normalized to "${id}"`,
       });
     }
-    return id;
-  });
+    out.push(id);
+  }
+  return out;
 }
 
 /**
@@ -518,10 +554,56 @@ export function convertBotYaml(
   if (legacy.paths !== undefined) cortex.paths = legacy.paths;
   if (legacy.networksDir !== undefined) cortex.networksDir = legacy.networksDir;
   if (legacy.networks !== undefined) cortex.networks = legacy.networks;
-  if (legacy.nats !== undefined) cortex.nats = legacy.nats;
+  if (legacy.nats !== undefined) cortex.nats = convertNats(legacy.nats, warnings);
 
   const parsed = CortexConfigSchema.parse(cortex);
   return { cortex: parsed, warnings, mappings };
+}
+
+/**
+ * Translate `legacy.nats` onto the cortex `NatsConfigSchema` shape.
+ *
+ * Real production grove-v2 bot.yaml carries `nats.identity` in a legacy
+ * `{ did, keyPath }` shape — DID + raw NKey seed path. Cortex's
+ * `NatsIdentitySchema` requires `{ seedPath, publicKey }` (NKey seed path
+ * plus a 56-char `U…` user pubkey) for envelope signing.
+ *
+ * The shapes can't be auto-translated — cortex needs the U-prefixed public
+ * key derived from the seed, which we don't have at migration time.
+ * Stripping the block with a warning is the right move: identity is
+ * optional in cortex, the operator can run `nkeys -inkey ~/.nkey/foo.nk
+ * -pubout` once post-migration and hand-add `seedPath` + `publicKey` to
+ * the new cortex.yaml.
+ *
+ * Any other unknown fields under `nats` pass through; only the
+ * shape-mismatched identity block is stripped.
+ */
+function convertNats(legacyNats: unknown, warnings: ConversionWarning[]): unknown {
+  if (!legacyNats || typeof legacyNats !== "object") return legacyNats;
+  const nats = { ...(legacyNats as Record<string, unknown>) };
+  const identity = nats.identity;
+  if (identity && typeof identity === "object") {
+    const id = identity as Record<string, unknown>;
+    const hasCortexShape = typeof id.seedPath === "string" && typeof id.publicKey === "string";
+    if (!hasCortexShape) {
+      // Legacy `{did, keyPath}` or any other partial shape — strip + warn.
+      const legacyKeys = Object.keys(id).join(", ");
+      const keyPath = typeof id.keyPath === "string" ? id.keyPath : undefined;
+      const did = typeof id.did === "string" ? id.did : undefined;
+      const hint = keyPath
+        ? ` Derive the U-prefixed pubkey via \`nkeys -inkey ${keyPath} -pubout\` and add` +
+          ` \`nats.identity.seedPath: ${keyPath}\` + \`nats.identity.publicKey: U…\` to cortex.yaml.`
+        : " Add `nats.identity.seedPath` + `nats.identity.publicKey` to cortex.yaml once you have an NKey seed.";
+      warnings.push({
+        field: "nats.identity",
+        message:
+          `legacy nats.identity shape (keys: ${legacyKeys}${did ? `; did=${did}` : ""}) does not match` +
+          ` cortex schema {seedPath, publicKey} — stripping block.${hint}`,
+      });
+      delete nats.identity;
+    }
+  }
+  return nats;
 }
 
 /**

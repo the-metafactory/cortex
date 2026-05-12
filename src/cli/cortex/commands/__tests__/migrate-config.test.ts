@@ -181,6 +181,148 @@ describe("convertBotYaml — trustedAgentBots", () => {
     expect(result.cortex.agents[0]!.trust).toEqual(["echo-bot"]);
     expect(result.warnings.some((w) => w.field === "trustedAgentBots")).toBe(true);
   });
+
+  // Production grove-v2 shape carries trustedAgentBots entries with `id:`
+  // (Discord snowflake) + `role:` and no symbolic `name:`. The migrator now
+  // skips those with a warning that surfaces the platform id so the operator
+  // can hand-map post-migration. Previously this path crashed with
+  // `undefined is not an object (evaluating 'legacyName.trim')`.
+  test("skips entries missing `name` with a warning naming the Discord id", () => {
+    const legacy: LegacyBotYaml = {
+      agent: { name: "ivy", displayName: "Ivy", operatorId: "jc" },
+      discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
+      trustedAgentBots: [
+        // production shape — id + role only, no symbolic name
+        ({ id: "1487180524542890144", role: "agent-restricted" } as unknown) as LegacyBotYaml["trustedAgentBots"] extends (infer U)[] | undefined ? U : never,
+      ],
+    };
+    const result = convertBotYaml(legacy);
+    expect(result.cortex.agents[0]!.trust).toEqual([]);
+    const warn = result.warnings.find((w) => w.field === "trustedAgentBots");
+    expect(warn).toBeDefined();
+    expect(warn!.message).toMatch(/missing symbolic `name`/);
+    expect(warn!.message).toMatch(/1487180524542890144/);
+    expect(warn!.message).toMatch(/role="agent-restricted"/);
+  });
+
+  test("falls back to `discordId` field in the warning when `id` is absent", () => {
+    const legacy: LegacyBotYaml = {
+      agent: { name: "ivy", displayName: "Ivy", operatorId: "jc" },
+      discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
+      trustedAgentBots: [
+        ({ discordId: "9999", role: "agent-restricted" } as unknown) as LegacyBotYaml["trustedAgentBots"] extends (infer U)[] | undefined ? U : never,
+      ],
+    };
+    const result = convertBotYaml(legacy);
+    expect(result.cortex.agents[0]!.trust).toEqual([]);
+    expect(result.warnings.find((w) => w.field === "trustedAgentBots")!.message).toMatch(/9999/);
+  });
+
+  test("mixed list — keeps named entries, skips id-only ones, ordering preserved", () => {
+    const legacy: LegacyBotYaml = {
+      agent: { name: "ivy", displayName: "Ivy", operatorId: "jc" },
+      discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
+      trustedAgentBots: [
+        { name: "luna" },
+        ({ id: "abc", role: "agent-restricted" } as unknown) as LegacyBotYaml["trustedAgentBots"] extends (infer U)[] | undefined ? U : never,
+        { name: "holly" },
+        ({ id: "def" } as unknown) as LegacyBotYaml["trustedAgentBots"] extends (infer U)[] | undefined ? U : never,
+      ],
+    };
+    const result = convertBotYaml(legacy);
+    expect(result.cortex.agents[0]!.trust).toEqual(["luna", "holly"]);
+    const trustWarnings = result.warnings.filter((w) => w.field === "trustedAgentBots");
+    expect(trustWarnings).toHaveLength(2);
+    expect(trustWarnings[0]!.message).toMatch(/trustedAgentBots\[1\]/);
+    expect(trustWarnings[1]!.message).toMatch(/trustedAgentBots\[3\]/);
+  });
+
+  test("empty `name` string still triggers skip-with-warning, not silent acceptance", () => {
+    const legacy: LegacyBotYaml = {
+      agent: { name: "ivy", displayName: "Ivy", operatorId: "jc" },
+      discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
+      trustedAgentBots: [{ id: "xyz", name: "   " }],
+    };
+    const result = convertBotYaml(legacy);
+    expect(result.cortex.agents[0]!.trust).toEqual([]);
+    expect(result.warnings.find((w) => w.field === "trustedAgentBots")!.message)
+      .toMatch(/missing symbolic `name`/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Conversion: nats.identity shape divergence
+// ---------------------------------------------------------------------------
+
+describe("convertBotYaml — nats.identity shape divergence", () => {
+  // Real production grove-v2 bot.yaml ships nats.identity in `{did, keyPath}`
+  // shape; cortex schema requires `{seedPath, publicKey}`. The migrator
+  // strips the block + warns rather than crashing inside CortexConfigSchema.parse.
+  test("strips legacy {did, keyPath} identity with a warning carrying the derive hint", () => {
+    const legacy: LegacyBotYaml = {
+      agent: { name: "ivy", displayName: "Ivy", operatorId: "jc" },
+      discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
+      nats: {
+        url: "nats://127.0.0.1:4222",
+        identity: { did: "did:mf:jc-ivy", keyPath: "~/.config/metafactory/keys/jc-ivy.key" },
+      },
+    };
+    const result = convertBotYaml(legacy);
+    // identity stripped from cortex output
+    expect(((result.cortex.nats as Record<string, unknown> | undefined)?.identity)).toBeUndefined();
+    // rest of nats survives
+    expect((result.cortex.nats as Record<string, unknown> | undefined)?.url).toBe("nats://127.0.0.1:4222");
+    const warn = result.warnings.find((w) => w.field === "nats.identity");
+    expect(warn).toBeDefined();
+    expect(warn!.message).toMatch(/keys: did, keyPath/);
+    expect(warn!.message).toMatch(/did=did:mf:jc-ivy/);
+    expect(warn!.message).toMatch(/nkeys -inkey/);
+    expect(warn!.message).toMatch(/jc-ivy\.key/);
+  });
+
+  test("passes through cortex-shaped {seedPath, publicKey} identity unchanged (no warning)", () => {
+    const legacy: LegacyBotYaml = {
+      agent: { name: "ivy", displayName: "Ivy", operatorId: "jc" },
+      discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
+      nats: {
+        url: "nats://127.0.0.1:4222",
+        identity: {
+          seedPath: "/path/to/seed.nk",
+          publicKey: "UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        },
+      },
+    };
+    const result = convertBotYaml(legacy);
+    const identity = (result.cortex.nats as Record<string, unknown> | undefined)?.identity as Record<string, unknown> | undefined;
+    expect(identity?.seedPath).toBe("/path/to/seed.nk");
+    expect(identity?.publicKey).toBe("UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    expect(result.warnings.find((w) => w.field === "nats.identity")).toBeUndefined();
+  });
+
+  test("missing identity block — nats survives, no warning", () => {
+    const legacy: LegacyBotYaml = {
+      agent: { name: "ivy", displayName: "Ivy", operatorId: "jc" },
+      discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
+      nats: { url: "nats://127.0.0.1:4222" },
+    };
+    const result = convertBotYaml(legacy);
+    expect((result.cortex.nats as Record<string, unknown> | undefined)?.url).toBe("nats://127.0.0.1:4222");
+    expect(result.warnings.find((w) => w.field === "nats.identity")).toBeUndefined();
+  });
+
+  test("warning omits the derive hint when keyPath is also missing", () => {
+    const legacy: LegacyBotYaml = {
+      agent: { name: "ivy", displayName: "Ivy", operatorId: "jc" },
+      discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
+      // identity exists but is structurally garbage — no recoverable seed path
+      nats: { url: "nats://127.0.0.1:4222", identity: { weirdField: 42 } },
+    };
+    const result = convertBotYaml(legacy);
+    const warn = result.warnings.find((w) => w.field === "nats.identity");
+    expect(warn).toBeDefined();
+    expect(warn!.message).toMatch(/once you have an NKey seed/);
+    expect(warn!.message).not.toMatch(/nkeys -inkey/);
+  });
 });
 
 // ---------------------------------------------------------------------------
