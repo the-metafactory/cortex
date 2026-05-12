@@ -58,6 +58,9 @@
  *     v1 concern.
  */
 
+import { decode, type User } from "@nats-io/jwt";
+import { fromPublic } from "@nats-io/nkeys";
+
 import type { Agent } from "../types/cortex-config";
 import { AgentNotFoundError, AgentRegistry } from "./registry";
 
@@ -76,6 +79,411 @@ export type Platform = "discord" | "mattermost";
 export interface PlatformIdentity {
   readonly platform: Platform;
   readonly platformId: string;
+}
+
+// =============================================================================
+// Operator-signature verification (cortex#76)
+// =============================================================================
+
+/**
+ * Options for an operator-aware `TrustResolver`. Optional — when omitted, the
+ * resolver behaves as the pre-cortex#76 platform-identity map and the
+ * operator-verification methods throw `OperatorVerifierNotConfiguredError`.
+ *
+ * The operator account signing public key (`A…` prefix) is the trust anchor:
+ * every NATS user JWT minted by `mintUserCreds()` carries this pubkey in its
+ * `iss` claim. A request is "operator-trusted" iff its user JWT chains to
+ * this pubkey AND the request payload is signed by the user nkey that owns
+ * the JWT's `sub` claim.
+ */
+export interface TrustResolverOptions {
+  /**
+   * Operator account signing public key (`A…`). Pass `keyPair.getPublicKey()`
+   * from the result of `loadAccountSigningKey()` in `cortex.ts`. The pubkey
+   * is public material — safe to log, safe to embed in config diagnostics.
+   *
+   * NOT the seed. NOT the keypair. Just the public key string. The verifier
+   * never needs signing material — verification is one-way.
+   */
+  operatorAccountSigningPublicKey?: string;
+
+  /**
+   * Optional clock-skew tolerance (seconds) for `exp` / `nbf` JWT claims and
+   * for `ts` on signed-request envelopes. Defaults to 60s. Set higher for
+   * test rigs running with deliberately divergent clocks; set to 0 for the
+   * strictest production posture.
+   */
+  clockSkewToleranceSec?: number;
+
+  /**
+   * Optional max age (seconds) for signed-request `ts` — defends against
+   * replay of a captured envelope long after the fact. Defaults to 300s
+   * (5 minutes). The user nkey signature alone has no built-in freshness
+   * guarantee, so the verifier enforces this at the envelope layer.
+   */
+  signedRequestMaxAgeSec?: number;
+}
+
+/**
+ * Default tolerances. Exported so consumers can match production policy in
+ * out-of-band scripts (e.g. a `cortex trust verify --jwt …` debug command).
+ */
+export const DEFAULT_CLOCK_SKEW_SEC = 60;
+export const DEFAULT_SIGNED_REQUEST_MAX_AGE_SEC = 300;
+
+/**
+ * A signed NATS request envelope. The shape composes with `mintUserCreds()`:
+ *
+ *   - `userJwt` is the JWT minted for the requesting agent (the `userJwt`
+ *     field returned by `mintUserCreds`). It carries the user's nkey
+ *     pubkey in `sub` and the operator account signing pubkey in `iss`.
+ *   - `subject` is the NATS subject the request is published on. Bound into
+ *     the canonical form so a captured signature can't be replayed against
+ *     a different subject (e.g. lift a `creds.issue` signature and aim it
+ *     at `creds.rotate`).
+ *   - `nonce` is a fresh, per-request random token. Bound into the canonical
+ *     form to defend against in-window replays. The verifier itself does
+ *     not maintain a nonce-seen cache — that's the caller's responsibility
+ *     if they want at-most-once semantics. The nonce is here so a future
+ *     cache CAN exist; today's value-add is preventing identical-payload
+ *     in-window replays from being byte-identical envelopes.
+ *   - `ts` is an ISO-8601 timestamp. Bound into the canonical form AND
+ *     checked against `signedRequestMaxAgeSec` for replay defence.
+ *   - `payload` is the request body (verb + args, etc.). Arbitrary JSON.
+ *     Canonicalised via `JSON.stringify(payload)` — callers are responsible
+ *     for ensuring stable key order if their payloads contain objects whose
+ *     key order varies across runtimes. For the cortex#75 use case (CredsRequest)
+ *     payloads are flat `{verb, agent_id}` so this is not a concern.
+ *   - `signature` is base64url of the ed25519 signature over the canonical
+ *     bytes, produced by the user's nkey via `KeyPair.sign(bytes)`.
+ *
+ * # Why this shape vs. pure NATS-level auth?
+ *
+ * NATS authenticates the connection via the user JWT at CONNECT time. The
+ * server enforces subject permissions baked into the JWT. That's sufficient
+ * if the application trusts the NATS server to relay the connection identity
+ * faithfully. But cortex's threat model assumes the NATS server is a
+ * separate trust domain (operator may run NATS managed by Synadia, etc.) —
+ * so the verifier re-establishes identity end-to-end at the application
+ * layer. The signature over the canonical form gives the application
+ * cryptographic proof of producer identity per request, not just per
+ * connection.
+ */
+export interface SignedRequest {
+  readonly subject: string;
+  readonly userJwt: string;
+  readonly nonce: string;
+  readonly ts: string;
+  readonly payload: unknown;
+  /** Base64url-encoded ed25519 signature over `canonicalSignedRequestBytes`. */
+  readonly signature: string;
+}
+
+/**
+ * Outcome of a verification attempt. Discriminated on `ok` so callers can
+ * branch on the failure reason without parsing strings. The structured
+ * `reason` lets the consumer (e.g. cortex#75's NATS transport gate) log /
+ * meter the failure class without surfacing it back to the requesting bot
+ * (which would leak verifier internals).
+ */
+export type OperatorVerificationResult =
+  | { ok: true; userPublicKey: string; agentName: string }
+  | { ok: false; reason: OperatorVerificationFailure; detail: string };
+
+export type OperatorVerificationFailure =
+  | "malformed_jwt"
+  | "wrong_issuer"
+  | "expired"
+  | "not_yet_valid"
+  | "malformed_envelope"
+  | "subject_mismatch"
+  | "ts_out_of_range"
+  | "malformed_signature"
+  | "signature_invalid";
+
+/**
+ * Thrown when an operator-verification method is called on a `TrustResolver`
+ * built without an `operatorAccountSigningPublicKey`. Lets the consumer fail
+ * fast with a clear message rather than silently rejecting every request.
+ */
+export class OperatorVerifierNotConfiguredError extends Error {
+  constructor() {
+    super(
+      "TrustResolver.verifyOperatorSignature called but no operatorAccountSigningPublicKey " +
+        "was supplied at construction. Pass options.operatorAccountSigningPublicKey " +
+        "(e.g. accountSigningKey.getPublicKey() from loadAccountSigningKey) when " +
+        "instantiating the resolver if you intend to verify operator-signed requests.",
+    );
+    this.name = "OperatorVerifierNotConfiguredError";
+  }
+}
+
+/**
+ * Build the canonical byte-string that the user nkey signs. The format is a
+ * deliberately simple newline-separated tuple of subject, nonce, ts, and
+ * `JSON.stringify(payload)`. Newline separators are safe because subject /
+ * nonce / ts are all token-shaped (no literal newlines), and `JSON.stringify`
+ * never emits a bare newline.
+ *
+ * Exported so the matching `signSignedRequest` helper (and tests, and any
+ * future producer in cortex#75) computes IDENTICAL bytes — there must be
+ * exactly one canonical form in the codebase or signatures will silently
+ * mismatch.
+ */
+export function canonicalSignedRequestBytes(parts: {
+  subject: string;
+  nonce: string;
+  ts: string;
+  payload: unknown;
+}): Uint8Array {
+  const canonical = `${parts.subject}\n${parts.nonce}\n${parts.ts}\n${JSON.stringify(parts.payload)}`;
+  return new TextEncoder().encode(canonical);
+}
+
+/**
+ * Verify a NATS user JWT against the operator account signing public key.
+ *
+ * `@nats-io/jwt`'s `decode` already verifies the JWT signature against the
+ * pubkey in the `iss` claim — so a successful decode means the JWT is
+ * self-consistent. This wrapper adds the missing checks the consumer cares
+ * about: (a) `iss` actually matches the operator we trust, (b) the JWT is
+ * within its validity window.
+ *
+ * Pure function over inputs. No I/O. No state.
+ */
+export function verifyOperatorUserJwt(
+  jwt: string,
+  operatorAccountSigningPublicKey: string,
+  opts: { clockSkewToleranceSec?: number; nowMs?: number } = {},
+): OperatorVerificationResult {
+  if (typeof jwt !== "string" || jwt.length === 0) {
+    return { ok: false, reason: "malformed_jwt", detail: "jwt is empty or not a string" };
+  }
+
+  let claims;
+  try {
+    claims = decode<User>(jwt);
+  } catch (err) {
+    return {
+      ok: false,
+      reason: "malformed_jwt",
+      detail: `jwt decode failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  if (claims.iss !== operatorAccountSigningPublicKey) {
+    return {
+      ok: false,
+      reason: "wrong_issuer",
+      detail:
+        `jwt iss=${claims.iss} does not match trusted operator pubkey ` +
+        `${operatorAccountSigningPublicKey}`,
+    };
+  }
+
+  const skew = opts.clockSkewToleranceSec ?? DEFAULT_CLOCK_SKEW_SEC;
+  const nowSec = Math.floor((opts.nowMs ?? Date.now()) / 1000);
+  if (typeof claims.exp === "number" && claims.exp > 0 && claims.exp + skew < nowSec) {
+    return {
+      ok: false,
+      reason: "expired",
+      detail: `jwt expired at exp=${claims.exp} (now=${nowSec}, skew=${skew}s)`,
+    };
+  }
+  if (typeof claims.nbf === "number" && claims.nbf > 0 && claims.nbf - skew > nowSec) {
+    return {
+      ok: false,
+      reason: "not_yet_valid",
+      detail: `jwt not yet valid: nbf=${claims.nbf} (now=${nowSec}, skew=${skew}s)`,
+    };
+  }
+
+  if (typeof claims.sub !== "string" || claims.sub.length === 0) {
+    return {
+      ok: false,
+      reason: "malformed_jwt",
+      detail: "jwt sub (user pubkey) is missing or empty",
+    };
+  }
+
+  return { ok: true, userPublicKey: claims.sub, agentName: claims.name ?? "" };
+}
+
+/**
+ * Verify a full operator-signed request envelope: JWT chains to operator,
+ * envelope shape is well-formed, the timestamp is within the freshness
+ * window, and the ed25519 signature over the canonical bytes verifies
+ * against the user's nkey pubkey (taken from the JWT's `sub`).
+ *
+ * The check order matches the cost / specificity profile:
+ *   1. Envelope shape (cheap, structural)
+ *   2. JWT verify + freshness (cheap, structural)
+ *   3. Subject + ts envelope bindings (cheap, semantic)
+ *   4. Signature verify (expensive, cryptographic)
+ *
+ * Pure function. The caller is responsible for nonce-replay state if they
+ * need at-most-once semantics — see `SignedRequest.nonce` rationale.
+ */
+export function verifyOperatorSignedRequest(
+  envelope: unknown,
+  operatorAccountSigningPublicKey: string,
+  opts: {
+    clockSkewToleranceSec?: number;
+    signedRequestMaxAgeSec?: number;
+    nowMs?: number;
+    /** Optional explicit subject the caller expects — defends against an envelope
+     *  whose self-declared `subject` doesn't match the NATS subject it actually
+     *  arrived on. Skip in unit tests; supply in real transports. */
+    expectedSubject?: string;
+  } = {},
+): OperatorVerificationResult {
+  if (!isSignedRequestShape(envelope)) {
+    return {
+      ok: false,
+      reason: "malformed_envelope",
+      detail: "envelope does not match SignedRequest shape",
+    };
+  }
+
+  const env = envelope as SignedRequest;
+
+  if (opts.expectedSubject !== undefined && env.subject !== opts.expectedSubject) {
+    return {
+      ok: false,
+      reason: "subject_mismatch",
+      detail: `envelope.subject="${env.subject}" but transport delivered on "${opts.expectedSubject}"`,
+    };
+  }
+
+  const jwtResult = verifyOperatorUserJwt(env.userJwt, operatorAccountSigningPublicKey, {
+    clockSkewToleranceSec: opts.clockSkewToleranceSec,
+    nowMs: opts.nowMs,
+  });
+  if (!jwtResult.ok) return jwtResult;
+
+  // Envelope freshness — defend against replay even when the JWT itself is
+  // long-lived. ISO-8601 parse is permissive; reject zero-length / NaN.
+  const tsMs = Date.parse(env.ts);
+  if (!Number.isFinite(tsMs)) {
+    return {
+      ok: false,
+      reason: "ts_out_of_range",
+      detail: `envelope.ts="${env.ts}" is not a valid ISO-8601 date`,
+    };
+  }
+  const nowMs = opts.nowMs ?? Date.now();
+  const maxAgeMs = (opts.signedRequestMaxAgeSec ?? DEFAULT_SIGNED_REQUEST_MAX_AGE_SEC) * 1000;
+  const skewMs = (opts.clockSkewToleranceSec ?? DEFAULT_CLOCK_SKEW_SEC) * 1000;
+  // Two-sided check: the envelope must not be older than the max age, and
+  // must not be too far in the future (clock skew tolerated).
+  if (nowMs - tsMs > maxAgeMs) {
+    return {
+      ok: false,
+      reason: "ts_out_of_range",
+      detail: `envelope ts=${env.ts} older than ${maxAgeMs / 1000}s (delta=${(nowMs - tsMs) / 1000}s)`,
+    };
+  }
+  if (tsMs - nowMs > skewMs) {
+    return {
+      ok: false,
+      reason: "ts_out_of_range",
+      detail: `envelope ts=${env.ts} too far in future (delta=${(tsMs - nowMs) / 1000}s, skew=${skewMs / 1000}s)`,
+    };
+  }
+
+  // Crypto verify last — most expensive step. Decode base64url to bytes,
+  // reconstruct the public-key KeyPair, verify.
+  let sigBytes: Uint8Array;
+  try {
+    sigBytes = decodeBase64Url(env.signature);
+  } catch (err) {
+    return {
+      ok: false,
+      reason: "malformed_signature",
+      detail: `signature is not valid base64url: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  let userKeyPair;
+  try {
+    userKeyPair = fromPublic(jwtResult.userPublicKey);
+  } catch (err) {
+    return {
+      ok: false,
+      reason: "malformed_jwt",
+      detail: `jwt sub="${jwtResult.userPublicKey}" is not a valid NKey public key: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  const canonical = canonicalSignedRequestBytes({
+    subject: env.subject,
+    nonce: env.nonce,
+    ts: env.ts,
+    payload: env.payload,
+  });
+
+  let verified: boolean;
+  try {
+    verified = userKeyPair.verify(canonical, sigBytes);
+  } catch (err) {
+    // `KeyPair.verify` shouldn't throw for valid inputs, but defensively
+    // catch malformed sig lengths etc. so a bug in the producer surfaces
+    // as a structured failure rather than crashing the verifier.
+    return {
+      ok: false,
+      reason: "signature_invalid",
+      detail: `verify threw: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  if (!verified) {
+    return {
+      ok: false,
+      reason: "signature_invalid",
+      detail: "ed25519 signature does not verify against jwt sub pubkey",
+    };
+  }
+
+  return jwtResult;
+}
+
+/**
+ * Type guard for `SignedRequest`. Conservative — checks every field's
+ * presence and string-ness (except `payload`, which is allowed to be any
+ * JSON value including null).
+ */
+function isSignedRequestShape(value: unknown): value is SignedRequest {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.subject === "string" &&
+    typeof v.userJwt === "string" &&
+    typeof v.nonce === "string" &&
+    typeof v.ts === "string" &&
+    typeof v.signature === "string" &&
+    "payload" in v
+  );
+}
+
+/**
+ * Decode a base64url string to bytes. Accepts the `@nats-io/jwt`
+ * convention (no padding, `-_` instead of `+/`). Throws on invalid chars
+ * via the spec'd atob fallback.
+ *
+ * We inline this rather than importing `Base64UrlCodec` from
+ * `@nats-io/jwt/lib/base64` — that path isn't part of the package's public
+ * exports and would couple us to its internals. `atob` is stdlib in Bun
+ * and Node 18+, which both target environments support.
+ */
+function decodeBase64Url(input: string): Uint8Array {
+  // Re-introduce padding atob requires.
+  const pad = input.length % 4 === 0 ? "" : "=".repeat(4 - (input.length % 4));
+  const b64 = input.replace(/-/g, "+").replace(/_/g, "/") + pad;
+  // atob throws on non-base64 chars. Let it.
+  const binary = atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
 }
 
 // =============================================================================
@@ -131,8 +539,82 @@ export class TrustResolver {
   /** Reverse: agentId → Set<`${platform}:${platformId}`> */
   private readonly reverse = new Map<string, Set<string>>();
 
-  constructor(registry: AgentRegistry) {
+  /**
+   * Operator account signing public key, if configured. When undefined,
+   * `verifyOperatorSignature` throws `OperatorVerifierNotConfiguredError`.
+   * See `TrustResolverOptions.operatorAccountSigningPublicKey`.
+   */
+  private readonly operatorAccountSigningPublicKey: string | undefined;
+  private readonly clockSkewToleranceSec: number;
+  private readonly signedRequestMaxAgeSec: number;
+
+  constructor(registry: AgentRegistry, options: TrustResolverOptions = {}) {
     this.registry = registry;
+    this.operatorAccountSigningPublicKey = options.operatorAccountSigningPublicKey;
+    this.clockSkewToleranceSec = options.clockSkewToleranceSec ?? DEFAULT_CLOCK_SKEW_SEC;
+    this.signedRequestMaxAgeSec =
+      options.signedRequestMaxAgeSec ?? DEFAULT_SIGNED_REQUEST_MAX_AGE_SEC;
+  }
+
+  /**
+   * cortex#76 — verify that a NATS request envelope was signed by
+   * operator-trusted credentials. Returns a structured result rather than
+   * a plain boolean so callers (e.g. the cortex#75 NATS transport gate)
+   * can branch on the specific failure class for logging / metering.
+   *
+   * @param signedRequest The envelope. See `SignedRequest`.
+   * @param opts.expectedSubject The NATS subject the message arrived on —
+   *        defends against an attacker re-aiming a valid signature at a
+   *        different subject. Strongly recommended in production transports.
+   *
+   * @throws OperatorVerifierNotConfiguredError if the resolver was built
+   *         without `operatorAccountSigningPublicKey`.
+   *
+   * Delegates to the module-level `verifyOperatorSignedRequest`. Sibling
+   * pure functions exposed for callers that don't want the resolver
+   * instance (e.g. tooling, debug CLI).
+   */
+  verifyOperatorSignature(
+    signedRequest: unknown,
+    opts: { expectedSubject?: string; nowMs?: number } = {},
+  ): OperatorVerificationResult {
+    if (!this.operatorAccountSigningPublicKey) {
+      throw new OperatorVerifierNotConfiguredError();
+    }
+    return verifyOperatorSignedRequest(signedRequest, this.operatorAccountSigningPublicKey, {
+      clockSkewToleranceSec: this.clockSkewToleranceSec,
+      signedRequestMaxAgeSec: this.signedRequestMaxAgeSec,
+      expectedSubject: opts.expectedSubject,
+      nowMs: opts.nowMs,
+    });
+  }
+
+  /**
+   * cortex#76 — convenience: verify just the user JWT against the trusted
+   * operator pubkey, without requiring a full signed envelope. Useful at
+   * NATS-connection authorization time when the application only has the
+   * connection's user JWT and wants to gate the connection on operator
+   * trust before accepting subscriptions.
+   *
+   * @throws OperatorVerifierNotConfiguredError if the resolver was built
+   *         without `operatorAccountSigningPublicKey`.
+   */
+  verifyUserJwt(
+    jwt: string,
+    opts: { nowMs?: number } = {},
+  ): OperatorVerificationResult {
+    if (!this.operatorAccountSigningPublicKey) {
+      throw new OperatorVerifierNotConfiguredError();
+    }
+    return verifyOperatorUserJwt(jwt, this.operatorAccountSigningPublicKey, {
+      clockSkewToleranceSec: this.clockSkewToleranceSec,
+      nowMs: opts.nowMs,
+    });
+  }
+
+  /** True iff the resolver was constructed with an operator pubkey. */
+  get isOperatorVerifierConfigured(): boolean {
+    return this.operatorAccountSigningPublicKey !== undefined;
   }
 
   /**
