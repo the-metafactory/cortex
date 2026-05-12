@@ -24,6 +24,7 @@ import { fetchWithTimeout } from "./common/timeout";
 import { UsageMonitor } from "./common/usage/monitor";
 import { AgentRegistry } from "./common/agents/registry";
 import { createCredsHandler, type CredsHandler } from "./runner/creds-handler";
+import { loadAccountSigningKey } from "./common/config/account-signing-key";
 import type { UsageStats } from "./runner/stream-parser";
 
 import { buildSecurityPreamble } from "./runner/security-preamble";
@@ -239,18 +240,45 @@ export async function startCortex(
     console.log("cortex: agent registry assembled — 0 agents (no inline agents, no fragments)");
   }
 
-  // cortex#67 — conditional creds handler. Today the body is a stub
-  // (src/runner/creds-handler.ts); the conditional shape lives here so the
-  // full implementation can swap in without touching cortex.ts. Gated on
-  // runtime being enabled + at least one registered agent — there's no
-  // point minting per-agent NATS JWTs without either a NATS link or any
-  // agent to scope creds to. The account-signing-key gate arrives once
-  // prereq B has landed.
+  // cortex#67 — creds handler. Daemon-side RPC surface for `cortex creds
+  // issue / revoke / rotate` (see `src/runner/creds-handler.ts`). Gated on
+  // ALL of:
+  //   - `runtime.enabled` (no point minting NATS creds without a NATS link)
+  //   - `agentRegistry.size > 0` (no agents → nothing to issue creds for)
+  //   - `config.nats?.accountSigningKeyPath` set (operator opted in to
+  //     daemon-mediated minting; without the signing key the handler can't
+  //     produce valid JWTs)
+  //
+  // The signing-key file is loaded via prereq B's `loadAccountSigningKey`
+  // which enforces chmod 600 + SA-prefix. Load failure is non-fatal at the
+  // creds-handler scope: the rest of cortex keeps running, the operator
+  // sees an explicit error pointing at the offending file. Same shape as
+  // the runtime-startup error path above.
   let credsHandler: CredsHandler | null = null;
-  if (runtime.enabled && agentRegistry.size > 0) {
-    credsHandler = createCredsHandler({ runtime, registry: agentRegistry });
-    await credsHandler.start();
-    console.log("cortex: creds handler ready (stub)");
+  if (
+    runtime.enabled
+    && agentRegistry.size > 0
+    && config.nats?.accountSigningKeyPath
+  ) {
+    try {
+      const accountSigningKey = await loadAccountSigningKey(
+        expandTilde(config.nats.accountSigningKeyPath),
+      );
+      credsHandler = createCredsHandler({
+        runtime,
+        registry: agentRegistry,
+        accountSigningKey,
+        org: config.agent.operatorId ?? "default",
+      });
+      await credsHandler.start();
+      console.log("cortex: creds handler ready");
+    } catch (err) {
+      credsHandler = null;
+      console.error(
+        "cortex: creds handler startup error (non-fatal):",
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 
   // Surface router (in-process fan-out).
