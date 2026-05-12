@@ -309,26 +309,36 @@ Estimated ~250 LOC (`CortexHostAdapter` + tests) + ~50 LOC in cortex (the `corte
 
 **Phasing note:** this depends on arc#117 Phase 1 (the `PaiPaths` → `ArcPaths` + `HostAdapter` legacy cut) being merged. arc#117 sits at "future" priority today; cortex#58's Phase A.3 (`CortexHostAdapter` itself) unblocks once arc#117 Phase 1 lands. Phase A.1 (cortex `agents.d/`) and Phase A.2 (cortex `cortex creds` CLI) are independent of arc#117 and can land first.
 
-### 6.3 Cortex — `cortex creds issue` CLI (Q2)
+### 6.3 Cortex — `cortex creds *` CLI (arc-delegated; cortex#79)
 
-**Scope:** `src/cli/cortex/commands/creds.ts` (thin client) + creds-issuer RPC handler inside cortex daemon + NATS account hierarchy doc.
+**Scope:** `src/cli/cortex/commands/creds.ts` (thin shell-out client). No cortex-side daemon RPC, no signing-key handling in cortex. arc owns nsc and the operator's `$SYS` account.
 
-**Signing model — daemon-mediated (locked):**
+**Signing model — arc-delegated (locked, cortex#79):**
 
-The CLI is a **thin client**. It does NOT load the operator account's signing key from disk. The signing key lives in the running cortex daemon's memory (loaded at startup from a path declared in `cortex.yaml`, owned by `chmod 600` operator-only). The CLI talks to the daemon over a local channel (preferred: NATS request/reply on `local.{org}.cortex.creds.issue` using the daemon's own ops creds; fallback: UNIX domain socket at `~/.config/cortex/cortex.sock`). The daemon validates the request, mints the user creds, writes the creds file with `chmod 600`, and returns success. **No CLI-side access to the operator signing key.**
+The CLI shells out to `arc nats … --json` (schema `arc.nats.v1`, contract pinned at [`the-metafactory/arc:docs/integrations/cortex-creds.md`](https://github.com/the-metafactory/arc/blob/main/docs/integrations/cortex-creds.md)). cortex never touches the operator account signing key — it only invokes the arc CLI, parses the JSON envelope, and surfaces the result to the operator. Supersedes the cortex#67 daemon-IPC design (which loaded the signing key into cortex daemon memory).
 
-This matters because lifecycle scripts (`arc install <bot>` calls `cortex creds issue …`) run in the operator's shell. If the CLI loaded the signing key from disk every invocation, any script — or a compromised dependency — could read the key. The daemon-mediated path means the key never leaves the daemon process even on a creds-issue-spammed host.
+This matters because (a) arc already owns nsc and the `$SYS` account boundary, so two places-of-truth was an unnecessary divergence; (b) cortex stops needing to track NATS protocol changes — arc's stable `--json` contract is the only API; (c) the cortex daemon is one moving piece smaller. The operator-signature verifier in `TrustResolver` (cortex#76) keeps using `loadAccountSigningKey` independently for inbound envelope signature checks — that's a *consumer* of the public side of the key, not a signing surface.
+
+**Verb mapping (cortex → arc):**
+
+| cortex verb | arc invocation |
+|---|---|
+| `cortex creds issue <id>` | `arc nats add-bot <id> [--account <name>] --json` |
+| `cortex creds rotate <id>` | `arc nats reissue-bot <id> [--account <name>] --json` |
+| `cortex creds revoke <id>` | `arc nats remove-bot <id> [--account <name>] --delete-creds --json` |
+| `cortex creds list` | local filesystem scan of `~/.config/nats/creds/` (no arc call) |
 
 **Surface:**
 
-- `cortex creds issue <agent-id>` mints a NATS user creds file at `~/.config/nats/creds/<agent-id>.creds`. Per-agent user (Q2 answer) — each agent gets its own NATS identity, separate keypair, separate creds file. Revocation is per-agent.
-- `cortex creds revoke <agent-id>` instructs the daemon to revoke the agent's NATS user (server-side via JWT account update), then removes the local creds file. Order matters — server revocation first so a phantom local file never authenticates again.
-- `cortex creds rotate <agent-id>` is `revoke + issue` atomically (revoke server-side, mint new server-side, write new file, only then signal the bot to reload its connection).
-- `cortex creds list` enumerates all minted creds with `issued`, `last-rotated`, `expires` timestamps.
-- Permissions scoped to the agent's subjects: pub on `local.{org}.dispatch.*`, `local.{org}.review.*`, `local.{org}.agents.capabilities.{agentId}`; sub on `local.{org}.dispatch.task.received`, `local.{org}.tasks.{capability}.*`. The capability list comes from the agent's fragment (loaded at issue time).
-- Lifecycle integration: `arc install <bot>`'s `issue-nats-creds.sh` calls `cortex creds issue <bot.identity.id>`. Script fails (and arc rolls back the install) if the daemon isn't running, the operator's account key isn't loaded, or the agent fragment isn't yet visible to the daemon (chicken-and-egg avoided by sequencing: drop fragment first, signal reload, then issue creds).
+- `cortex creds issue <agent-id>` mints a NATS user via `arc nats add-bot`. arc writes the `.creds` file to `~/.config/nats/<agent-id>.creds` (mode 600) and returns the path, JWT body, and durable U-prefixed pubkey. cortex surfaces the path + pubkey to the operator. Per-agent user — each agent gets its own NATS identity, separate keypair, separate creds file. Revocation is per-agent.
+- `cortex creds revoke <agent-id>` shells out to `arc nats remove-bot … --delete-creds`. arc revokes the user JWT server-side (adds the pubkey to the account revocation map and pushes), then deletes the local file. cortex surfaces the revoked pubkey + `credsFileDeleted` outcome. `USER_NOT_FOUND` is treated as idempotent (exit 0) — the agent is already gone server-side. `PUSH_FAILED` is surfaced with a loud WARNING: the old creds remain valid on the bus until the operator retries.
+- `cortex creds rotate <agent-id>` shells out to `arc nats reissue-bot`. arc atomically revokes the old pubkey, mints a new keypair, writes a new creds file, returns both `newPubKey` (the post-rotation identifier the bot should bind to) and `revokedPubKey` (the now-dead identifier).
+- `cortex creds list` enumerates local `.creds` files under `~/.config/nats/creds/` (default; override with `--creds-dir`). No arc call; filesystem-only. Filenames whose stem fails `/^[a-z0-9-]+$/` are skipped with a warning; symlinks are skipped (lstatSync).
+- `cortex.yaml` `nats.accountSigningKeyPath` survives the cortex#79 cut for `TrustResolver`'s operator-signature verifier (cortex#76). It is no longer required for `cortex creds *` — arc owns the nsc-side signing key, not cortex.
+- Lifecycle integration: `arc install <bot>`'s `issue-nats-creds.sh` invokes `cortex creds issue <bot.identity.id>`. cortex shells out to `arc nats add-bot`; the script fails (and arc rolls back the install) if (a) arc binary missing on PATH; (b) `arc.nats.v1` envelope returns `ok:false` with any code other than the revoke-only-idempotent `USER_NOT_FOUND`; (c) the agent fragment isn't yet visible to the cortex registry. The chicken-and-egg sequencing — drop fragment → signal reload → issue creds — is unchanged.
+- Required arc version: `>= 0.25.0` (the release that ships the stable `arc.nats.v1` contract per arc#134). Pinned in cortex's `arc-manifest.yaml` under `dependencies`.
 
-Estimated ~300 LOC + tests + NATS account scaffolding doc. Lands as a `feat(cli/cortex)` PR.
+**Error-code taxonomy** (closed set, surfaced to operator via `code` + `message`): `NSC_NOT_INSTALLED`, `USER_NOT_FOUND`, `ACCOUNT_NOT_FOUND`, `ALREADY_EXISTS`, `PUSH_FAILED`, `REVOKE_FAILED`, `VALIDATION_ERROR`, `INVALID_USER_KEY`, `ROLLBACK_FAILED`, `UNKNOWN`. Definitions live in arc's `docs/integrations/cortex-creds.md` — this is arc's authoritative contract, not cortex's.
 
 ---
 
@@ -520,7 +530,7 @@ The strict contract is the right v1 default because it surfaces config errors at
 | D5 | **Persona format authority:** bot package is source of truth (Q1). Cortex documents the persona schema in `docs/persona-format.md` (separate forthcoming spec); bot authors test against that. Version-skew handled by cortex publishing schema with semver; bot package declares supported range. | Q1 sign-off |
 | D6 | **Trust contract:** strict — `AgentRegistry` `UnknownAgentReferenceError` on unresolved trust at construction. Multi-bot install with cross-trust requires arc transaction (Q2). | Holly review feedback + alignment with `registry.ts` §9.3 |
 | D7 | **Uninstall ordering:** revoke creds (server-side first, then local file) BEFORE removing fragment + persona + binary + plist. Arc aborts on revoke failure rather than continuing. | Holly review feedback (major #3) |
-| D8 | **Signing model:** daemon-mediated (CLI is thin client; operator account key lives in cortex daemon memory; CLI talks via NATS or UNIX socket). | Holly review feedback (major #5) |
+| D8 | **Signing model:** arc-delegated (cortex#79). cortex shells out to `arc nats … --json`; arc owns nsc and the operator's $SYS account. Supersedes the cortex#67 daemon-mediated design — the operator signing key is no longer loaded into cortex memory for credential minting. The operator-signature verifier in `TrustResolver` (cortex#76) still loads the *public* side of the key independently for inbound envelope checks. | Holly review feedback (major #5); cortex#79 supersedes the cortex#67 daemon-IPC implementation |
 | D9 | **Arc integration shape:** cortex registers as a `HostAdapter` per arc#117's multi-backend pattern; bots declare `targets: [cortex]` (multi-target for standalone shape: `targets: [cortex, darwin-launchd]`). Supersedes the earlier draft's `type: agent` + `parent: cortex` schema extension proposal. | arc#117 alignment |
 
 ### 10.2 Open Questions (need decision before Phase A starts)

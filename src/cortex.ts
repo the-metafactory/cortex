@@ -23,8 +23,10 @@ import { type BotConfig, getAllRepos } from "./common/types/config";
 import { fetchWithTimeout } from "./common/timeout";
 import { UsageMonitor } from "./common/usage/monitor";
 import { AgentRegistry } from "./common/agents/registry";
-import { createCredsHandler, type CredsHandler } from "./runner/creds-handler";
-import { loadAccountSigningKey } from "./common/config/account-signing-key";
+// cortex#79 — creds minting moved to `arc nats … --json` (shelled out from
+// `src/cli/cortex/commands/creds.ts`). No daemon-side RPC handler in
+// cortex; the operator-signature verifier in TrustResolver keeps using
+// `loadAccountSigningKey` independently.
 import type { UsageStats } from "./runner/stream-parser";
 
 import { buildSecurityPreamble } from "./runner/security-preamble";
@@ -79,9 +81,9 @@ export interface CortexHandle {
   /**
    * cortex#67 prereq C — agent registry assembled at startup from inline
    * cortex.yaml `agents[]` + fragments under `agents.d/` (inline wins on id
-   * conflict per design §6.1). Read-only; downstream consumers (creds
-   * handler, dashboard, future trust/capability surfaces) look up agents
-   * here rather than synthesising local `Agent` shapes.
+   * conflict per design §6.1). Read-only; downstream consumers (dashboard,
+   * trust resolver, future capability surfaces) look up agents here rather
+   * than synthesising local `Agent` shapes.
    *
    * Today this coexists with the transitional inline `Agent` synthesis at
    * cortex.ts:246 and :321 (Discord + Mattermost adapter wiring). Those
@@ -240,46 +242,12 @@ export async function startCortex(
     console.log("cortex: agent registry assembled — 0 agents (no inline agents, no fragments)");
   }
 
-  // cortex#67 — creds handler. Daemon-side RPC surface for `cortex creds
-  // issue / revoke / rotate` (see `src/runner/creds-handler.ts`). Gated on
-  // ALL of:
-  //   - `runtime.enabled` (no point minting NATS creds without a NATS link)
-  //   - `agentRegistry.size > 0` (no agents → nothing to issue creds for)
-  //   - `config.nats?.accountSigningKeyPath` set (operator opted in to
-  //     daemon-mediated minting; without the signing key the handler can't
-  //     produce valid JWTs)
-  //
-  // The signing-key file is loaded via prereq B's `loadAccountSigningKey`
-  // which enforces chmod 600 + SA-prefix. Load failure is non-fatal at the
-  // creds-handler scope: the rest of cortex keeps running, the operator
-  // sees an explicit error pointing at the offending file. Same shape as
-  // the runtime-startup error path above.
-  let credsHandler: CredsHandler | null = null;
-  if (
-    runtime.enabled
-    && agentRegistry.size > 0
-    && config.nats?.accountSigningKeyPath
-  ) {
-    try {
-      const accountSigningKey = await loadAccountSigningKey(
-        expandTilde(config.nats.accountSigningKeyPath),
-      );
-      credsHandler = createCredsHandler({
-        runtime,
-        registry: agentRegistry,
-        accountSigningKey,
-        org: config.agent.operatorId ?? "default",
-      });
-      await credsHandler.start();
-      console.log("cortex: creds handler ready");
-    } catch (err) {
-      credsHandler = null;
-      console.error(
-        "cortex: creds handler startup error (non-fatal):",
-        err instanceof Error ? err.message : err,
-      );
-    }
-  }
+  // cortex#79 — creds minting is no longer a cortex daemon responsibility.
+  // `cortex creds issue / revoke / rotate` now shell out to
+  // `arc nats … --json`; arc owns nsc and the operator account.
+  // `config.nats.accountSigningKeyPath` survives for the operator-signature
+  // verifier on TrustResolver (cortex#76); see
+  // `src/common/agents/trust-resolver.ts`.
 
   // Surface router (in-process fan-out).
   const router: SurfaceRouter = createSurfaceRouter(runtime, {
@@ -630,7 +598,6 @@ export async function startCortex(
       ...adapterStopNames,
       ...rendererStopNames,
       "cloud publisher close",
-      ...(credsHandler ? ["creds handler stop"] : []),
       "runtime stop",
     ];
     for (const slot of allSlots) pending.add(slot);
@@ -668,9 +635,6 @@ export async function startCortex(
         await completeAsync(rendererStopNames[i]!, renderers[i]!.stop());
       }
       await completeAsync("cloud publisher close", cloudPublisher?.close());
-      if (credsHandler) {
-        await completeAsync("creds handler stop", credsHandler.stop());
-      }
       await completeAsync("runtime stop", runtime.stop());
     };
 

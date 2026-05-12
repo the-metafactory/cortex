@@ -9,20 +9,24 @@
  * ```ts
  * interface CliJsonEnvelope<T> {
  *   status: "ok" | "error";
- *   items: T[];                       // always present (empty on error)
+ *   items: T[];                                 // always present (empty on error)
+ *   data?: Record<string, string>;              // success-side structured metadata
  *   error?: { reason: string; context?: Record<string, string> };
  * }
  * ```
  *
- * The optional `context` map carries subcommand-specific metadata (file path,
- * agent id, fragment name, etc.) without forcing every CLI into a
- * subcommand-specific error shape. F-3 retrofit deferred to a follow-up PR
- * — this PR introduces the shared contract and uses it from F-4.
+ * Success-side `data` (cortex#79): carries arc-supplied fields (creds_path,
+ * pub key, account) without abusing the `error.context` channel. Empty
+ * (and unset) for subcommands that have no per-success metadata, e.g.
+ * F-3 agents list. The optional `error.context` map carries
+ * subcommand-specific metadata on the failure path.
  */
 export interface CliJsonEnvelope<T> {
   status: "ok" | "error";
   /** Per-subcommand payload. Always present — empty array on error. */
   items: T[];
+  /** Success-side structured metadata. Mirrors `error.context` shape. */
+  data?: Record<string, string>;
   error?: {
     reason: string;
     /** Subcommand-specific structured context (file path, agent id, etc.). */
@@ -30,9 +34,13 @@ export interface CliJsonEnvelope<T> {
   };
 }
 
-/** Build the success envelope. */
-export function envelopeOk<T>(items: T[]): CliJsonEnvelope<T> {
-  return { status: "ok", items };
+/** Build the success envelope. `data` is optional structured metadata
+ *  (e.g. arc-supplied creds_path on `cortex creds issue`). */
+export function envelopeOk<T>(
+  items: T[],
+  data?: Record<string, string>,
+): CliJsonEnvelope<T> {
+  return data ? { status: "ok", items, data } : { status: "ok", items };
 }
 
 /** Build the error envelope. `context` is optional structured metadata. */

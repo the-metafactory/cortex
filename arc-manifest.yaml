@@ -99,8 +99,17 @@ scripts:
   preupgrade: ./scripts/preupgrade.sh
   postupgrade: ./scripts/postupgrade.sh
 
-# Dependencies — declared at MIG-7 once cortex's runtime depends on
-# myelin-side identity primitives. v0.1.0 has no runtime deps.
+# Dependencies — cortex#79 pins arc >= 0.25.0. That's the release that
+# ships the stable `arc.nats.v1` JSON contract on the four `arc nats *`
+# commands (per arc#134, closes arc#131). `cortex creds issue/revoke/rotate`
+# shell out to `arc nats …  --json`; without that contract the CLI's
+# parse layer would have to fall back to scraping human-readable stdout.
+# See docs/design-arc-agent-bots.md §6.3 for the full delegation model.
+dependencies:
+  - name: "arc"
+    version: ">=0.25.0"
+# myelin deps still pending — declared once cortex's runtime depends on
+# myelin-side identity primitives.
 # dependencies:
 #   - name: "myelin"
 #     version: ">=0.x"           # for nats.identity provisioning per JC's E2E NATS work
