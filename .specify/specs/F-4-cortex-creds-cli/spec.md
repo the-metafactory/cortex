@@ -72,15 +72,19 @@ Same shape: v1 stubs, future = revoke + issue atomic.
 
 ## Functional Requirements
 
-### FR-1: `cortex creds list [--local] [--creds-dir <path>] [--json]`
+### FR-1: `cortex creds list [--creds-dir <path>] [--json]`
 
-- `--local` flag (default) scans the local creds directory (`~/.config/nats/creds/` by default).
-- `--creds-dir <path>` overrides the default location.
-- `--json` mode emits `{ status, creds: [{id, path, issuedAt}], error? }`.
-- File matched: any non-dotfile in the directory.
-- `id` derived from filename stem (strip extension).
+- `--creds-dir <path>` overrides the default location (`~/.config/nats/creds/`).
+- `--json` mode emits the shared CLI envelope shape:
+  `{ status: "ok" | "error", items: CredsItem[], error?: { reason, context? } }`
+  where `CredsItem = { id, path, issuedAt }`.
+- File matched: any non-dotfile **regular file** (symlinks rejected per Echo S1 cortex#64).
+- `id` derived from filename stem (everything before the FIRST dot), validated against `/^[a-z0-9-]+$/`.
+- Files whose stem fails the regex → skipped with stderr warning naming the file.
+- Id collisions across files → skipped with stderr warning naming both.
 - `issuedAt` derived from filesystem `mtime` in ISO 8601.
 - Sorted alphabetically by id.
+- Directory with > 10,000 entries refused (Echo H1 cortex#64 hardening cap).
 
 ### FR-2: `cortex creds issue <id> [--config <path>]` (v1: deferred)
 
@@ -103,17 +107,28 @@ Same shape: v1 stubs, future = revoke + issue atomic.
 
 ### FR-6: JSON envelope
 
-Matches F-3's contract shape:
+F-4 introduces the shared `CliJsonEnvelope<T>` shape in
+`src/cli/cortex/commands/_shared/envelope.ts` (Echo M2 + M4 cortex#64):
 
 ```ts
-interface CredsJsonEnvelope {
+interface CliJsonEnvelope<T> {
   status: "ok" | "error";
-  creds: { id: string; path: string; issuedAt: string }[];
-  error?: { reason: string; subcommand: string };
+  items: T[];                   // always present, empty array on error
+  error?: {
+    reason: string;
+    context?: Record<string, string>;  // subcommand-specific metadata
+  };
 }
 ```
 
-`creds: []` is always present (empty on error).
+For `cortex creds`, `T = CredsItem`:
+
+```ts
+interface CredsItem { id: string; path: string; issuedAt: string }
+```
+
+Error context populated for deferred subcommands (`subcommand`, `agentId`).
+F-3 retrofit to this shape: tracked in cortex#65.
 
 ## Non-Functional Requirements
 

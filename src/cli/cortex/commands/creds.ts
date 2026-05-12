@@ -23,17 +23,13 @@
  *   2  — usage error (bad flag, deferred subcommand v1, bad agent id)
  */
 
-import { existsSync, readdirSync, statSync } from "fs";
+import { existsSync, lstatSync, readdirSync } from "fs";
 import { join } from "path";
 
 import { expandTilde } from "../../../common/config/loader";
 import { CliArgsError } from "./_shared/arg-error";
-import {
-  envelopeError,
-  envelopeOk,
-  renderJson,
-  type CliJsonEnvelope,
-} from "./_shared/envelope";
+import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
+import { assertExhaustive } from "./_shared/assert-exhaustive";
 
 // =============================================================================
 // Types
@@ -63,6 +59,11 @@ export interface ExitResult {
  * (modulo the `items` element type — there `Agent`-shaped, here
  * `CredsItem`-shaped). Scripting consumers can pin against
  * `CliJsonEnvelope<unknown>` without per-subcommand handling.
+ *
+ * No deprecated re-exports of the prior `CredsJsonEnvelope` / `CredsArgsError`
+ * names — F-4 is the first cortex CLI to ship the shared shape and has no
+ * external consumers yet (Echo A2 nit cortex#64). Importers use the shared
+ * `_shared/envelope.ts` and `_shared/arg-error.ts` directly.
  */
 export interface CredsItem {
   id: string;
@@ -70,26 +71,29 @@ export interface CredsItem {
   issuedAt: string;
 }
 
-/** @deprecated Re-export of `CliJsonEnvelope<CredsItem>` for type-import
- *  backward compat. New consumers should import `CliJsonEnvelope` from
- *  `_shared/envelope` directly. */
-export type CredsJsonEnvelope = CliJsonEnvelope<CredsItem>;
-
-/** @deprecated Use `CliArgsError` from `_shared/arg-error.ts`. Kept as alias
- *  so external imports of `CredsArgsError` continue working. */
-export const CredsArgsError = CliArgsError;
-
 /**
  * Message emitted by the v1 stubs for `issue` / `revoke` / `rotate`. Exported
  * so tests can assert against the exact string without it living in two
  * places.
  */
 export const DEFERRED_SUBCOMMAND_MESSAGE =
-  "not yet implemented — pending cortex daemon-IPC integration (cortex#60 §6.3 / D8). " +
-  "v1 ships `cortex creds list` only; issue/revoke/rotate land when cortex.ts wires the daemon-side RPC handler.";
+  "not yet implemented — pending cortex daemon-IPC integration (cortex#67). " +
+  "v1 ships `cortex creds list` only; issue/revoke/rotate light up when " +
+  "cortex.ts wires the daemon-side RPC handler. See cortex#60 §6.3 + cortex#58 D8 for the design.";
 
+/**
+ * Canonical agent-id regex (lowercase alphanumeric + dash). Mirrors
+ * `AgentSchema.id` in `src/common/types/cortex-config.ts`. Used by:
+ *   - operator-input validation on `issue` / `revoke` / `rotate`
+ *   - filesystem-input validation on `list` (Echo M1 cortex#64)
+ */
 const AGENT_ID_REGEX = /^[a-z0-9-]+$/;
 const DEFAULT_CREDS_DIR = "~/.config/nats/creds";
+
+/** Hardening cap on `readdirSync` entry count (Echo H1 nit cortex#64).
+ *  A creds directory with thousands of entries is a misconfiguration; refuse
+ *  to enumerate rather than allocate unbounded memory. */
+const MAX_CREDS_DIR_ENTRIES = 10_000;
 
 // =============================================================================
 // parseCredsArgs
@@ -223,8 +227,6 @@ function assertFlagAllowed(
 // runCredsList
 // =============================================================================
 
-const AGENT_ID_REGEX_INTERNAL = /^[a-z0-9-]+$/;
-
 export function runCredsList(args: ParsedCredsArgs): ExitResult {
   if (args.help) {
     return { exitCode: 0, stdout: listHelp(), stderr: "" };
@@ -254,6 +256,16 @@ export function runCredsList(args: ParsedCredsArgs): ExitResult {
     };
   }
 
+  // Echo H1 nit on cortex#64 — cap entry enumeration. A multi-thousand-entry
+  // dir is a misconfiguration; bail rather than allocate unbounded memory.
+  if (entries.length > MAX_CREDS_DIR_ENTRIES) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `cortex creds list: refusing to enumerate ${dir} — ${entries.length} entries exceeds ${MAX_CREDS_DIR_ENTRIES} cap. Trim the directory or split by deployment.\n`,
+    };
+  }
+
   // Echo M1 on cortex#64 — id derivation now validates against the canonical
   // agent-id regex AND detects collisions. Filesystem input deserves the
   // same scrutiny as operator input on issue/revoke/rotate.
@@ -264,18 +276,42 @@ export function runCredsList(args: ParsedCredsArgs): ExitResult {
 
   for (const filename of entries) {
     const filePath = join(dir, filename);
+    // Echo S1 nit on cortex#64 — lstatSync rejects symlinks. Creds files
+    // are sensitive (NATS user JWT); refuse to read through a symlink that
+    // could redirect to a file the operator didn't intend. Regular files
+    // only.
     let mtime: Date;
     try {
-      const stat = statSync(filePath);
+      const stat = lstatSync(filePath);
       if (!stat.isFile()) continue;
       mtime = stat.mtime;
     } catch {
       continue;
     }
 
-    // id = filename stem (before first `.`). Validate against agent-id regex.
+    // id = filename stem before the FIRST dot. Echo C2 cortex#64 — this is
+    // intentional, not the same as "strip last extension." Rationale: a
+    // canonical agent id matches `/^[a-z0-9-]+$/` (no dots). So
+    //   `echo.creds`        → stem `echo`         (valid, accepted)
+    //   `my.agent.creds`    → stem `my`           (likely a misnamed file;
+    //                                              `my.agent` would fail the
+    //                                              regex anyway, so picking
+    //                                              the first segment matches
+    //                                              the "trim ext + reject
+    //                                              dots" behavior cleanly)
+    //   `holly.nats.creds`  → stem `holly`        (the `.nats` middle is a
+    //                                              non-canonical extension;
+    //                                              first-dot stripping
+    //                                              recovers the agent id)
+    //   `Bad!Name.creds`    → stem `Bad!Name`     (fails regex; skipped with
+    //                                              warning)
+    // Using `path.basename(filename, ext)` (strip last ext) would yield
+    // `my.agent` for `my.agent.creds`, which then fails the regex and is
+    // skipped — same operator-visible outcome, just less informative warning.
+    // First-dot stripping makes the warning name a recognizable agent-id
+    // prefix.
     const id = filename.split(".")[0]!;
-    if (!AGENT_ID_REGEX_INTERNAL.test(id)) {
+    if (!AGENT_ID_REGEX.test(id)) {
       skippedMalformed.push(filename);
       continue;
     }
@@ -446,20 +482,10 @@ export function dispatchCreds(argv: string[]): ExitResult {
         stderr: `cortex creds: unknown subcommand "${args.rawSubcommand}".\n${topLevelHelp()}`,
       };
     default:
-      // Echo n1 on cortex#64 — exhaustive guard. If a new subcommand variant
-      // is added to ParsedCredsArgs without a case here, TypeScript will
-      // catch it at compile time AND runtime gets a clear error.
+      // Echo n1 on cortex#64 — exhaustive guard via shared helper (A4 nit
+      // round 2 cortex#64 moved it to _shared/ for F-5 reuse).
       return assertExhaustive(args.subcommand, "creds");
   }
-}
-
-/** Catch unreachable-by-types fall-throughs at runtime with a clear error. */
-function assertExhaustive(value: never, cliName: string): ExitResult {
-  return {
-    exitCode: 2,
-    stdout: "",
-    stderr: `cortex ${cliName}: internal error — unhandled subcommand "${String(value)}"\n`,
-  };
 }
 
 // =============================================================================
