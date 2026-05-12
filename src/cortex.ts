@@ -17,11 +17,13 @@ import { join, dirname } from "path";
 import { parse as parseYaml } from "yaml";
 import type { TextChannel } from "discord.js";
 
-import { loadConfig } from "./common/config/loader";
+import { loadConfig, loadAgentsDirectory, expandTilde, FragmentLoadError } from "./common/config/loader";
 import { ConfigWatcher } from "./common/config/watcher";
 import { type BotConfig, getAllRepos } from "./common/types/config";
 import { fetchWithTimeout } from "./common/timeout";
 import { UsageMonitor } from "./common/usage/monitor";
+import { AgentRegistry } from "./common/agents/registry";
+import { createCredsHandler, type CredsHandler } from "./runner/creds-handler";
 import type { UsageStats } from "./runner/stream-parser";
 
 import { buildSecurityPreamble } from "./runner/security-preamble";
@@ -73,6 +75,19 @@ export interface CortexHandle {
    * so launchd knows to log a dirty shutdown.
    */
   readonly lastShutdownAbandoned: readonly string[];
+  /**
+   * cortex#67 prereq C — agent registry assembled at startup from inline
+   * cortex.yaml `agents[]` + fragments under `agents.d/` (inline wins on id
+   * conflict per design §6.1). Read-only; downstream consumers (creds
+   * handler, dashboard, future trust/capability surfaces) look up agents
+   * here rather than synthesising local `Agent` shapes.
+   *
+   * Today this coexists with the transitional inline `Agent` synthesis at
+   * cortex.ts:246 and :321 (Discord + Mattermost adapter wiring). Those
+   * paths land in MIG-7.2c-presence-adapter-flip; this PR does not refactor
+   * them.
+   */
+  readonly agentRegistry: AgentRegistry;
 }
 
 /** Optional test-only injection points. Production callers omit. */
@@ -104,6 +119,32 @@ export interface StartCortexOptions {
    * @internal — not part of the public API; semver does not apply.
    */
   shutdownTimeoutMs?: number;
+  /**
+   * Override the agents.d/ fragment directory the AgentRegistry assembly
+   * step reads. Production code derives this from the config file's
+   * directory (`{configDir}/agents.d`) matching `cortex agents` CLI
+   * behaviour, falling back to `~/.config/cortex/agents.d/` when no
+   * `configPath` was supplied. Tests pass a tmp dir so the registry
+   * assembly path runs without touching the operator's real `agents.d/`.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  agentsDir?: string;
+  /**
+   * Inline `Agent[]` to merge with the fragment-loaded list when building
+   * the registry. Mirrors the cortex.yaml `agents[]` block (design §6.1):
+   * inline entries win on id conflict with fragments.
+   *
+   * BotConfig (today's legacy shape) carries no inline `agents[]` field, so
+   * production callers pass nothing and the registry is built purely from
+   * fragments. The seam exists today so tests can assemble a registry
+   * without writing fragment files, and so the cortex.yaml migration
+   * (MIG-7.2e) can plumb the real inline list through without changing
+   * this signature.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  inlineAgents?: readonly Agent[];
 }
 
 /**
@@ -146,6 +187,70 @@ export async function startCortex(
     } catch (err) {
       console.error("cortex: myelin runtime startup error (non-fatal):", err instanceof Error ? err.message : err);
     }
+  }
+
+  // cortex#67 prereq C — assemble the AgentRegistry from inline agents +
+  // fragments dropped under `agents.d/`. Per design §6.1, inline entries win
+  // on id conflict with fragments.
+  //
+  // The fragment directory defaults to `{configDir}/agents.d` (matching the
+  // `cortex agents` CLI's resolver) so an operator who already manages
+  // fragments via that command sees them honoured at daemon startup too.
+  // When `options.configPath` is absent (e.g. tests with in-memory config),
+  // we fall back to `~/.config/cortex/agents.d/`.
+  //
+  // Fragment-load errors are non-fatal at this stage of the migration: the
+  // bot must keep starting in BotConfig mode even when an operator's
+  // experimental fragment is malformed. Once the cortex.yaml migration is
+  // complete (MIG-7.2e), the rule flips to strict per spec §FR-4.
+  const agentsDir = options.agentsDir
+    ?? (options.configPath ? join(dirname(expandedConfigPath), "agents.d") : expandTilde("~/.config/cortex/agents.d/"));
+  let fragmentAgents: Agent[] = [];
+  try {
+    fragmentAgents = loadAgentsDirectory(agentsDir);
+  } catch (err) {
+    if (err instanceof FragmentLoadError) {
+      console.error(`cortex: agents.d fragment load failed (non-fatal during BotConfig migration): ${err.message}`);
+    } else {
+      throw err;
+    }
+  }
+
+  // Merge: inline wins on id conflict (design §6.1). BotConfig today carries
+  // no inline `agents[]`, so production callers pass `inlineAgents: undefined`
+  // and the merged list is just the fragments. The seam exists so tests can
+  // exercise the merge rule without writing fragment files, and so MIG-7.2e
+  // can plumb the real inline list through without changing the signature.
+  const inlineAgents = options.inlineAgents ?? [];
+  const inlineIds = new Set(inlineAgents.map((a) => a.id));
+  const shadowedFragmentCount = fragmentAgents.filter((a) => inlineIds.has(a.id)).length;
+  const mergedAgents: Agent[] = [
+    ...inlineAgents,
+    ...fragmentAgents.filter((a) => !inlineIds.has(a.id)),
+  ];
+  const agentRegistry = AgentRegistry.fromAgents(mergedAgents);
+  if (mergedAgents.length > 0) {
+    console.log(
+      `cortex: agent registry assembled — ${mergedAgents.length} agent(s) `
+        + `(${inlineAgents.length} inline + ${fragmentAgents.length} fragment, `
+        + `${shadowedFragmentCount} fragment override(s) shadowed by inline)`,
+    );
+  } else {
+    console.log("cortex: agent registry assembled — 0 agents (no inline agents, no fragments)");
+  }
+
+  // cortex#67 — conditional creds handler. Today the body is a stub
+  // (src/runner/creds-handler.ts); the conditional shape lives here so the
+  // full implementation can swap in without touching cortex.ts. Gated on
+  // runtime being enabled + at least one registered agent — there's no
+  // point minting per-agent NATS JWTs without either a NATS link or any
+  // agent to scope creds to. The account-signing-key gate arrives once
+  // prereq B has landed.
+  let credsHandler: CredsHandler | null = null;
+  if (runtime.enabled && agentRegistry.size > 0) {
+    credsHandler = createCredsHandler({ runtime, registry: agentRegistry });
+    await credsHandler.start();
+    console.log("cortex: creds handler ready (stub)");
   }
 
   // Surface router (in-process fan-out).
@@ -497,6 +602,7 @@ export async function startCortex(
       ...adapterStopNames,
       ...rendererStopNames,
       "cloud publisher close",
+      ...(credsHandler ? ["creds handler stop"] : []),
       "runtime stop",
     ];
     for (const slot of allSlots) pending.add(slot);
@@ -534,6 +640,9 @@ export async function startCortex(
         await completeAsync(rendererStopNames[i]!, renderers[i]!.stop());
       }
       await completeAsync("cloud publisher close", cloudPublisher?.close());
+      if (credsHandler) {
+        await completeAsync("creds handler stop", credsHandler.stop());
+      }
       await completeAsync("runtime stop", runtime.stop());
     };
 
@@ -562,6 +671,9 @@ export async function startCortex(
     stop,
     get lastShutdownAbandoned() {
       return lastShutdownAbandoned;
+    },
+    get agentRegistry() {
+      return agentRegistry;
     },
   };
 }

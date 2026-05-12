@@ -24,7 +24,11 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync, rmSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 import { BotConfigSchema, type BotConfig } from "../common/types/config";
+import type { Agent } from "../common/types/cortex-config";
 import { startCortex } from "../cortex";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { EnvelopeHandler, MyelinRuntime } from "../bus/myelin/runtime";
@@ -455,5 +459,162 @@ describe("startCortex — error surface", () => {
     });
     expect(handle).toBeDefined();
     await handle.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#67 prereq C — AgentRegistry wiring
+// ---------------------------------------------------------------------------
+
+describe("startCortex — agent registry (cortex#67 prereq C)", () => {
+  test("exposes an empty registry when no inline agents + agents.d/ is empty", async () => {
+    // Production callers today pass BotConfig (no inline agents) and may have
+    // no `agents.d/` directory yet. The registry must still construct cleanly
+    // and the handle must surface it — the creds handler downstream will
+    // simply gate itself off (`registry.size > 0` check).
+    const config = minimalConfig();
+    const tmpAgentsDir = mkdtempSync(join(tmpdir(), "cortex-test-agents-empty-"));
+    const handle = await startCortex(config, {
+      disableConfigWatcher: true,
+      disableDashboard: true,
+      disableOutboundPoller: true,
+      agentsDir: tmpAgentsDir,
+    });
+    expect(handle.agentRegistry).toBeDefined();
+    expect(handle.agentRegistry.size).toBe(0);
+    expect(handle.agentRegistry.getAll()).toEqual([]);
+    await handle.stop();
+    rmSync(tmpAgentsDir, { recursive: true, force: true });
+  });
+
+  test("merges inline agents + agents.d/ fragments (inline wins on id conflict)", async () => {
+    // Design §6.1 — when an inline cortex.yaml agent shares an id with a
+    // fragment under agents.d/, the inline entry wins. We exercise both
+    // sources here: two inline agents (luna + echo), two fragments (echo +
+    // holly), and assert echo resolves to the inline definition while holly
+    // (fragment-only) is still present.
+    const tmpAgentsDir = mkdtempSync(join(tmpdir(), "cortex-test-agents-merge-"));
+
+    // Drop fragments — each needs a persona file on disk per the loader's
+    // existence check. Echo's fragment declares a `(fragment-source)` persona
+    // marker so we can assert later that the inline definition shadowed it.
+    const echoFragmentPersona = join(tmpAgentsDir, "echo-fragment.md");
+    writeFileSync(echoFragmentPersona, "echo from fragment\n");
+    writeFileSync(
+      join(tmpAgentsDir, "echo.yaml"),
+      `id: echo
+displayName: EchoFromFragment
+persona: ./echo-fragment.md
+presence:
+  discord:
+    enabled: false
+    token: "frag-echo"
+    guildId: "0"
+    agentChannelId: "1"
+    logChannelId: "2"
+`,
+    );
+    const hollyPersona = join(tmpAgentsDir, "holly.md");
+    writeFileSync(hollyPersona, "holly from fragment\n");
+    writeFileSync(
+      join(tmpAgentsDir, "holly.yaml"),
+      `id: holly
+displayName: Holly
+persona: ./holly.md
+presence:
+  discord:
+    enabled: false
+    token: "frag-holly"
+    guildId: "0"
+    agentChannelId: "1"
+    logChannelId: "2"
+`,
+    );
+
+    // Inline agents — luna fresh, echo overriding the fragment.
+    const inlineAgents: Agent[] = [
+      {
+        id: "luna",
+        displayName: "Luna",
+        persona: "/tmp/luna-inline.md",
+        roles: [],
+        trust: [],
+        presence: {
+          discord: {
+            enabled: false,
+            token: "inline-luna",
+            guildId: "0",
+            agentChannelId: "1",
+            logChannelId: "2",
+            contextDepth: 10,
+            enableAgentLog: false,
+            roles: [],
+            defaultRole: "allow-all",
+            dm: {
+              operatorRole: {
+                features: ["chat", "async", "team"],
+                disallowedTools: [],
+                bashGuard: true,
+              },
+              defaultRole: "denied",
+              userRoles: [],
+            },
+          },
+        },
+      } as Agent,
+      {
+        id: "echo",
+        displayName: "EchoFromInline",
+        persona: "/tmp/echo-inline.md",
+        roles: [],
+        trust: [],
+        presence: {
+          discord: {
+            enabled: false,
+            token: "inline-echo",
+            guildId: "0",
+            agentChannelId: "1",
+            logChannelId: "2",
+            contextDepth: 10,
+            enableAgentLog: false,
+            roles: [],
+            defaultRole: "allow-all",
+            dm: {
+              operatorRole: {
+                features: ["chat", "async", "team"],
+                disallowedTools: [],
+                bashGuard: true,
+              },
+              defaultRole: "denied",
+              userRoles: [],
+            },
+          },
+        },
+      } as Agent,
+    ];
+
+    const handle = await startCortex(minimalConfig(), {
+      disableConfigWatcher: true,
+      disableDashboard: true,
+      disableOutboundPoller: true,
+      agentsDir: tmpAgentsDir,
+      inlineAgents,
+    });
+
+    // Three agents total: luna (inline-only), echo (inline wins), holly (fragment-only).
+    expect(handle.agentRegistry.size).toBe(3);
+    const ids = handle.agentRegistry.getAll().map((a) => a.id).sort();
+    expect(ids).toEqual(["echo", "holly", "luna"]);
+
+    // Inline-wins assertion — echo's displayName comes from the inline entry,
+    // not the fragment's `EchoFromFragment`.
+    expect(handle.agentRegistry.getById("echo").displayName).toBe("EchoFromInline");
+    // Fragment-only agent still resolves.
+    expect(handle.agentRegistry.getById("holly").displayName).toBe("Holly");
+    // Inline-only agent still resolves.
+    expect(handle.agentRegistry.getById("luna").displayName).toBe("Luna");
+
+    await handle.stop();
+    rmSync(tmpAgentsDir, { recursive: true, force: true });
   });
 });
