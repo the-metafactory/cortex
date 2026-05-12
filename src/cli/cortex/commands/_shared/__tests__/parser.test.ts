@@ -61,6 +61,26 @@ describe("parseSubcommandArgs — subcommand selection", () => {
     expect(r.subcommand).toBe("list");
     expect(r.help).toBe(true);
   });
+
+  // Echo cortex#66 round-1 M4 + round-3 architecture carry-over.
+  // The pre-cortex#66 legacy parsers in agents.ts / creds.ts had a quirk
+  // where `--help` BEFORE the subcommand got overwritten by the
+  // subcommand-set step, yielding `subcommand: "list", help: false`. The
+  // new generic parser correctly sets `help: true` whenever `--help`
+  // appears anywhere once a subcommand is identifiable. These two tests
+  // pin both orderings explicitly so the deliberate behavior correction
+  // is contract-enforced.
+  test("--help BEFORE subcommand → subcommand:'list', help:true (post-cortex#66 correction)", () => {
+    const r = parseSubcommandArgs(spec, ["--help", "list"]);
+    expect(r.subcommand).toBe("list");
+    expect(r.help).toBe(true);
+  });
+
+  test("--help AFTER subcommand → subcommand:'list', help:true (same outcome — order-independent)", () => {
+    const r = parseSubcommandArgs(spec, ["list", "--help"]);
+    expect(r.subcommand).toBe("list");
+    expect(r.help).toBe(true);
+  });
 });
 
 describe("parseSubcommandArgs — universal flags", () => {
