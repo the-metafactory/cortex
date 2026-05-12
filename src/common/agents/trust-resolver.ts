@@ -154,6 +154,13 @@ export const DEFAULT_SIGNED_REQUEST_MAX_AGE_SEC = 300;
  *     for ensuring stable key order if their payloads contain objects whose
  *     key order varies across runtimes. For the cortex#75 use case (CredsRequest)
  *     payloads are flat `{verb, agent_id}` so this is not a concern.
+ *     Note: `JSON.stringify(payload)` is non-deterministic for nested objects
+ *     across runtimes (key ordering, number representation, whitespace).
+ *     Safe for the current flat key-value payload shape. If payload shape ever
+ *     grows to nested objects, either restrict the shape at the transport
+ *     layer or swap in a deterministic canonicaliser (e.g. RFC 8785 JCS) at
+ *     `canonicalSignedRequestBytes` — but do it in lock-step with all
+ *     producers, since the producer and verifier MUST agree byte-for-byte.
  *   - `signature` is base64url of the ed25519 signature over the canonical
  *     bytes, produced by the user's nkey via `KeyPair.sign(bytes)`.
  *
@@ -229,6 +236,13 @@ export class OperatorVerifierNotConfiguredError extends Error {
  * future producer in cortex#75) computes IDENTICAL bytes — there must be
  * exactly one canonical form in the codebase or signatures will silently
  * mismatch.
+ *
+ * Determinism caveat: `JSON.stringify(payload)` is NOT guaranteed
+ * byte-identical across runtimes for nested objects — key order is
+ * insertion order in V8 / JSC / Bun, but spec only guarantees order for
+ * string keys. Today's cortex#75 payloads are flat `{verb, agent_id}` so
+ * this is fine. If the payload grows nested, swap to a deterministic
+ * canonicaliser (e.g. RFC 8785 JCS) in lock-step with all producers.
  */
 export function canonicalSignedRequestBytes(parts: {
   subject: string;
@@ -323,6 +337,29 @@ export function verifyOperatorUserJwt(
  *
  * Pure function. The caller is responsible for nonce-replay state if they
  * need at-most-once semantics — see `SignedRequest.nonce` rationale.
+ *
+ * # Replay-window note
+ *
+ * The verifier enforces TWO independent freshness windows:
+ *   - envelope `ts` must be within `signedRequestMaxAgeSec` (default 300s)
+ *   - the user JWT's `exp` must be within `clockSkewToleranceSec` (default 60s)
+ *
+ * These stack — the effective max-replay-age is `min(maxAge, jwtExp − now)`.
+ * If the JWT is long-lived (cortex's default credential lifetime), `ts`
+ * dominates. If the JWT is short-lived (rotated frequently), `jwt.exp`
+ * dominates. Callers tuning either knob should consider both.
+ *
+ * # `expectedSubject` is required
+ *
+ * The caller MUST supply the NATS subject the transport actually delivered
+ * the envelope on. The verifier then checks that `envelope.subject` matches.
+ * This binds the signature to the transport delivery channel at the
+ * application layer — without it, an attacker who captures a valid envelope
+ * on subject A could replay it on subject B, because the signature only
+ * covers `envelope.subject` (which they don't need to alter). Making this
+ * parameter required at the type level forces production transports to
+ * pass it; tests that don't care about the subject check pass the same
+ * subject they signed with.
  */
 export function verifyOperatorSignedRequest(
   envelope: unknown,
@@ -331,11 +368,13 @@ export function verifyOperatorSignedRequest(
     clockSkewToleranceSec?: number;
     signedRequestMaxAgeSec?: number;
     nowMs?: number;
-    /** Optional explicit subject the caller expects — defends against an envelope
-     *  whose self-declared `subject` doesn't match the NATS subject it actually
-     *  arrived on. Skip in unit tests; supply in real transports. */
-    expectedSubject?: string;
-  } = {},
+    /** The NATS subject the transport delivered this envelope on. Bound into
+     *  the verifier so a captured envelope can't be replayed against a
+     *  different subject. REQUIRED — no default-skip. Tests that don't care
+     *  about the subject check pass the same subject the envelope was signed
+     *  with. */
+    expectedSubject: string;
+  },
 ): OperatorVerificationResult {
   if (!isSignedRequestShape(envelope)) {
     return {
@@ -347,7 +386,7 @@ export function verifyOperatorSignedRequest(
 
   const env = envelope as SignedRequest;
 
-  if (opts.expectedSubject !== undefined && env.subject !== opts.expectedSubject) {
+  if (env.subject !== opts.expectedSubject) {
     return {
       ok: false,
       reason: "subject_mismatch",
@@ -444,6 +483,10 @@ export function verifyOperatorSignedRequest(
     };
   }
 
+  // Reuse the `ok: true` result from `verifyOperatorUserJwt` — it already
+  // carries the validated `userPublicKey` and `agentName`. Constructing a
+  // fresh object here would be redundant and risk drift if the success
+  // shape gains new fields.
   return jwtResult;
 }
 
@@ -563,9 +606,12 @@ export class TrustResolver {
    * can branch on the specific failure class for logging / metering.
    *
    * @param signedRequest The envelope. See `SignedRequest`.
-   * @param opts.expectedSubject The NATS subject the message arrived on —
-   *        defends against an attacker re-aiming a valid signature at a
-   *        different subject. Strongly recommended in production transports.
+   * @param opts.expectedSubject REQUIRED. The NATS subject the transport
+   *        delivered the envelope on. Bound into the verifier to defend
+   *        against signature-rebinding: an attacker who captures a valid
+   *        envelope on subject A would otherwise be able to replay it on
+   *        subject B. Required at the type level so production transports
+   *        cannot accidentally skip the check.
    *
    * @throws OperatorVerifierNotConfiguredError if the resolver was built
    *         without `operatorAccountSigningPublicKey`.
@@ -576,7 +622,7 @@ export class TrustResolver {
    */
   verifyOperatorSignature(
     signedRequest: unknown,
-    opts: { expectedSubject?: string; nowMs?: number } = {},
+    opts: { expectedSubject: string; nowMs?: number },
   ): OperatorVerificationResult {
     if (!this.operatorAccountSigningPublicKey) {
       throw new OperatorVerifierNotConfiguredError();

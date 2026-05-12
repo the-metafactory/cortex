@@ -221,7 +221,9 @@ describe("verifyOperatorSignedRequest", () => {
       ts: new Date().toISOString(),
       payload: { verb: "issue", agent_id: "luna" },
     });
-    const result = verifyOperatorSignedRequest(env, trustedAccountSigningKey.getPublicKey());
+    const result = verifyOperatorSignedRequest(env, trustedAccountSigningKey.getPublicKey(), {
+      expectedSubject: "local.acme.cortex.creds.issue",
+    });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.userPublicKey).toBe(userKey.getPublicKey());
   });
@@ -261,6 +263,7 @@ describe("verifyOperatorSignedRequest", () => {
     const result = verifyOperatorSignedRequest(
       { subject: "x", userJwt: "y" } as unknown,
       trustedAccountSigningKey.getPublicKey(),
+      { expectedSubject: "x" },
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("malformed_envelope");
@@ -270,13 +273,16 @@ describe("verifyOperatorSignedRequest", () => {
     const result = verifyOperatorSignedRequest(
       "not an envelope",
       trustedAccountSigningKey.getPublicKey(),
+      { expectedSubject: "irrelevant" },
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("malformed_envelope");
   });
 
   test("malformed_envelope — null", () => {
-    const result = verifyOperatorSignedRequest(null, trustedAccountSigningKey.getPublicKey());
+    const result = verifyOperatorSignedRequest(null, trustedAccountSigningKey.getPublicKey(), {
+      expectedSubject: "irrelevant",
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("malformed_envelope");
   });
@@ -290,7 +296,9 @@ describe("verifyOperatorSignedRequest", () => {
       ts: new Date().toISOString(),
       payload: { verb: "issue", agent_id: "luna" },
     });
-    const result = verifyOperatorSignedRequest(env, trustedAccountSigningKey.getPublicKey());
+    const result = verifyOperatorSignedRequest(env, trustedAccountSigningKey.getPublicKey(), {
+      expectedSubject: "local.acme.cortex.creds.issue",
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("wrong_issuer");
   });
@@ -305,7 +313,9 @@ describe("verifyOperatorSignedRequest", () => {
       ts: oldTs,
       payload: {},
     });
-    const result = verifyOperatorSignedRequest(env, trustedAccountSigningKey.getPublicKey());
+    const result = verifyOperatorSignedRequest(env, trustedAccountSigningKey.getPublicKey(), {
+      expectedSubject: "s",
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("ts_out_of_range");
   });
@@ -320,7 +330,9 @@ describe("verifyOperatorSignedRequest", () => {
       ts: futureTs,
       payload: {},
     });
-    const result = verifyOperatorSignedRequest(env, trustedAccountSigningKey.getPublicKey());
+    const result = verifyOperatorSignedRequest(env, trustedAccountSigningKey.getPublicKey(), {
+      expectedSubject: "s",
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("ts_out_of_range");
   });
@@ -334,7 +346,9 @@ describe("verifyOperatorSignedRequest", () => {
       ts: "not-a-date",
       payload: {},
     });
-    const result = verifyOperatorSignedRequest(env, trustedAccountSigningKey.getPublicKey());
+    const result = verifyOperatorSignedRequest(env, trustedAccountSigningKey.getPublicKey(), {
+      expectedSubject: "s",
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("ts_out_of_range");
   });
@@ -349,7 +363,9 @@ describe("verifyOperatorSignedRequest", () => {
       payload: {},
       signature: "@@@not valid base64!!!@@@",
     };
-    const result = verifyOperatorSignedRequest(env, trustedAccountSigningKey.getPublicKey());
+    const result = verifyOperatorSignedRequest(env, trustedAccountSigningKey.getPublicKey(), {
+      expectedSubject: "s",
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       // Either malformed_signature (decode failed) OR signature_invalid (decoded
@@ -373,6 +389,7 @@ describe("verifyOperatorSignedRequest", () => {
     const result = verifyOperatorSignedRequest(
       tampered,
       trustedAccountSigningKey.getPublicKey(),
+      { expectedSubject: "s" },
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("signature_invalid");
@@ -388,9 +405,14 @@ describe("verifyOperatorSignedRequest", () => {
       payload: { verb: "issue", agent_id: "luna" },
     });
     const tampered: SignedRequest = { ...env, subject: "local.acme.cortex.creds.revoke" };
+    // expectedSubject matches the tampered subject so we exercise the signature
+    // check (not the subject_mismatch short-circuit). This proves the signature
+    // covers `subject` end-to-end — even if the transport delivered the envelope
+    // on the tampered subject, the canonical bytes still won't verify.
     const result = verifyOperatorSignedRequest(
       tampered,
       trustedAccountSigningKey.getPublicKey(),
+      { expectedSubject: "local.acme.cortex.creds.revoke" },
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("signature_invalid");
@@ -409,6 +431,7 @@ describe("verifyOperatorSignedRequest", () => {
     const result = verifyOperatorSignedRequest(
       tampered,
       trustedAccountSigningKey.getPublicKey(),
+      { expectedSubject: "s" },
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("signature_invalid");
@@ -426,7 +449,9 @@ describe("verifyOperatorSignedRequest", () => {
       ts: new Date().toISOString(),
       payload: {},
     });
-    const result = verifyOperatorSignedRequest(env, trustedAccountSigningKey.getPublicKey());
+    const result = verifyOperatorSignedRequest(env, trustedAccountSigningKey.getPublicKey(), {
+      expectedSubject: "s",
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("signature_invalid");
   });
@@ -445,7 +470,7 @@ describe("verifyOperatorSignedRequest", () => {
     const tightResult = verifyOperatorSignedRequest(
       env,
       trustedAccountSigningKey.getPublicKey(),
-      { signedRequestMaxAgeSec: 10 },
+      { expectedSubject: "s", signedRequestMaxAgeSec: 10 },
     );
     expect(tightResult.ok).toBe(false);
     if (!tightResult.ok) expect(tightResult.reason).toBe("ts_out_of_range");
@@ -454,6 +479,7 @@ describe("verifyOperatorSignedRequest", () => {
     const lenientResult = verifyOperatorSignedRequest(
       env,
       trustedAccountSigningKey.getPublicKey(),
+      { expectedSubject: "s" },
     );
     expect(lenientResult.ok).toBe(true);
   });
@@ -511,7 +537,7 @@ describe("TrustResolver.verifyOperatorSignature", () => {
 
   test("throws OperatorVerifierNotConfiguredError when pubkey absent", () => {
     const resolver = new TrustResolver(registryWithLuna());
-    expect(() => resolver.verifyOperatorSignature({})).toThrow(
+    expect(() => resolver.verifyOperatorSignature({}, { expectedSubject: "x" })).toThrow(
       OperatorVerifierNotConfiguredError,
     );
     expect(() => resolver.verifyUserJwt("any.jwt.value")).toThrow(
@@ -531,7 +557,9 @@ describe("TrustResolver.verifyOperatorSignature", () => {
       ts: new Date().toISOString(),
       payload: { verb: "issue", agent_id: "luna" },
     });
-    const result = resolver.verifyOperatorSignature(env);
+    const result = resolver.verifyOperatorSignature(env, {
+      expectedSubject: "local.acme.cortex.creds.issue",
+    });
     expect(result.ok).toBe(true);
   });
 
@@ -575,7 +603,7 @@ describe("TrustResolver.verifyOperatorSignature", () => {
       ts: new Date().toISOString(),
       payload: {},
     });
-    const result = resolver.verifyOperatorSignature(env);
+    const result = resolver.verifyOperatorSignature(env, { expectedSubject: "s" });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("wrong_issuer");
   });
