@@ -27,6 +27,13 @@ import { existsSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 
 import { expandTilde } from "../../../common/config/loader";
+import { CliArgsError } from "./_shared/arg-error";
+import {
+  envelopeError,
+  envelopeOk,
+  renderJson,
+  type CliJsonEnvelope,
+} from "./_shared/envelope";
 
 // =============================================================================
 // Types
@@ -38,7 +45,6 @@ export interface ParsedCredsArgs {
   agentId: string | undefined;
   credsDir: string | undefined;
   config: string | undefined;
-  local: boolean;
   json: boolean;
   help: boolean;
 }
@@ -50,28 +56,28 @@ export interface ExitResult {
 }
 
 /**
- * **JSON envelope contract** for `cortex creds` — mirrors F-3's shape so
- * scripting consumers don't have to special-case per CLI.
+ * Per-creds-file metadata returned in the JSON envelope's `items` array.
  *
- * `creds: []` is ALWAYS present (empty on error/non-list subcommands).
- * `error?` is present iff `status === "error"`.
+ * Echo M2 + M4 on cortex#64 — F-4 uses the shared `CliJsonEnvelope<T>` from
+ * `_shared/envelope.ts` so its JSON contract is identical in shape to F-3's
+ * (modulo the `items` element type — there `Agent`-shaped, here
+ * `CredsItem`-shaped). Scripting consumers can pin against
+ * `CliJsonEnvelope<unknown>` without per-subcommand handling.
  */
-export interface CredsJsonEnvelope {
-  status: "ok" | "error";
-  creds: { id: string; path: string; issuedAt: string }[];
-  error?: { reason: string; subcommand: string };
+export interface CredsItem {
+  id: string;
+  path: string;
+  issuedAt: string;
 }
 
-/**
- * Usage error thrown by the parser on bad flag combinations. dispatchCreds
- * catches and maps to exit 2.
- */
-export class CredsArgsError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "CredsArgsError";
-  }
-}
+/** @deprecated Re-export of `CliJsonEnvelope<CredsItem>` for type-import
+ *  backward compat. New consumers should import `CliJsonEnvelope` from
+ *  `_shared/envelope` directly. */
+export type CredsJsonEnvelope = CliJsonEnvelope<CredsItem>;
+
+/** @deprecated Use `CliArgsError` from `_shared/arg-error.ts`. Kept as alias
+ *  so external imports of `CredsArgsError` continue working. */
+export const CredsArgsError = CliArgsError;
 
 /**
  * Message emitted by the v1 stubs for `issue` / `revoke` / `rotate`. Exported
@@ -89,6 +95,19 @@ const DEFAULT_CREDS_DIR = "~/.config/nats/creds";
 // parseCredsArgs
 // =============================================================================
 
+/**
+ * Per-subcommand flag allowlist (Echo M3 on cortex#64). Parser rejects
+ * flags that don't apply to the active subcommand — e.g.
+ * `cortex creds issue echo --creds-dir /tmp` is now an error, not a silent
+ * ignore.
+ */
+const SUBCOMMAND_FLAGS: Record<"list" | "issue" | "revoke" | "rotate", Set<string>> = {
+  list: new Set(["--creds-dir", "--json", "--help", "-h"]),
+  issue: new Set(["--config", "--json", "--help", "-h"]),
+  revoke: new Set(["--config", "--json", "--help", "-h"]),
+  rotate: new Set(["--config", "--json", "--help", "-h"]),
+};
+
 export function parseCredsArgs(argv: string[]): ParsedCredsArgs {
   const out: ParsedCredsArgs = {
     subcommand: "unknown",
@@ -96,12 +115,28 @@ export function parseCredsArgs(argv: string[]): ParsedCredsArgs {
     agentId: undefined,
     credsDir: undefined,
     config: undefined,
-    local: false,
     json: false,
     help: false,
   };
 
   if (argv.length === 0) return out;
+
+  // First pass: identify subcommand from the first positional (so we know
+  // the flag allowlist before reading subsequent flags).
+  const firstPositional = argv.find((a) => !a.startsWith("-"));
+  if (firstPositional) {
+    out.rawSubcommand = firstPositional;
+    if (
+      firstPositional === "list" ||
+      firstPositional === "issue" ||
+      firstPositional === "revoke" ||
+      firstPositional === "rotate"
+    ) {
+      out.subcommand = firstPositional;
+    }
+  } else if (argv.includes("--help") || argv.includes("-h")) {
+    out.subcommand = "help";
+  }
 
   let i = 0;
   let positionalsSeen = 0;
@@ -109,57 +144,48 @@ export function parseCredsArgs(argv: string[]): ParsedCredsArgs {
     const arg = argv[i]!;
 
     if (arg === "--help" || arg === "-h") {
-      if (out.subcommand === "unknown" && out.rawSubcommand === "") {
-        out.subcommand = "help";
-      } else {
+      if (out.subcommand !== "help") {
         out.help = true;
       }
       i++;
       continue;
     }
     if (arg === "--json") {
+      assertFlagAllowed(out.subcommand, "--json");
       out.json = true;
       i++;
       continue;
     }
-    if (arg === "--local") {
-      out.local = true;
-      i++;
-      continue;
-    }
     if (arg === "--creds-dir") {
+      assertFlagAllowed(out.subcommand, "--creds-dir");
       if (i + 1 >= argv.length || argv[i + 1]!.startsWith("-")) {
-        throw new CredsArgsError("--creds-dir requires a path argument");
+        throw new CliArgsError("creds", "--creds-dir requires a path argument");
       }
       out.credsDir = argv[i + 1];
       i += 2;
       continue;
     }
     if (arg === "--config") {
+      assertFlagAllowed(out.subcommand, "--config");
       if (i + 1 >= argv.length || argv[i + 1]!.startsWith("-")) {
-        throw new CredsArgsError("--config requires a path argument");
+        throw new CliArgsError("creds", "--config requires a path argument");
       }
       out.config = argv[i + 1];
       i += 2;
       continue;
     }
     if (arg.startsWith("-")) {
-      throw new CredsArgsError(`unknown flag: ${arg}`);
+      throw new CliArgsError("creds", `unknown flag: ${arg}`);
     }
 
-    // Positional handling
+    // Positionals
     positionalsSeen++;
     if (positionalsSeen === 1) {
-      // First positional: subcommand
-      out.rawSubcommand = arg;
-      if (arg === "list" || arg === "issue" || arg === "revoke" || arg === "rotate") {
-        out.subcommand = arg;
-      }
+      // Already captured above as rawSubcommand. No-op.
       i++;
       continue;
     }
     if (positionalsSeen === 2) {
-      // Second positional: agent id (only valid for issue / revoke / rotate)
       if (
         out.subcommand === "issue" ||
         out.subcommand === "revoke" ||
@@ -169,17 +195,35 @@ export function parseCredsArgs(argv: string[]): ParsedCredsArgs {
         i++;
         continue;
       }
-      throw new CredsArgsError(`unexpected extra positional argument: "${arg}"`);
+      throw new CliArgsError("creds", `unexpected extra positional argument: "${arg}"`);
     }
-    throw new CredsArgsError(`unexpected extra positional argument: "${arg}"`);
+    throw new CliArgsError("creds", `unexpected extra positional argument: "${arg}"`);
   }
 
   return out;
 }
 
+function assertFlagAllowed(
+  subcommand: ParsedCredsArgs["subcommand"],
+  flag: string,
+): void {
+  // Flags before a subcommand is determined are accepted (the subcommand
+  // resolves at the end). Help is universal; --json is universal.
+  if (subcommand === "unknown" || subcommand === "help") return;
+  const allowed = SUBCOMMAND_FLAGS[subcommand];
+  if (!allowed.has(flag)) {
+    throw new CliArgsError(
+      "creds",
+      `flag ${flag} is not valid for subcommand "${subcommand}"`,
+    );
+  }
+}
+
 // =============================================================================
 // runCredsList
 // =============================================================================
+
+const AGENT_ID_REGEX_INTERNAL = /^[a-z0-9-]+$/;
 
 export function runCredsList(args: ParsedCredsArgs): ExitResult {
   if (args.help) {
@@ -190,11 +234,7 @@ export function runCredsList(args: ParsedCredsArgs): ExitResult {
 
   if (!existsSync(dir)) {
     if (args.json) {
-      return {
-        exitCode: 0,
-        stdout: jsonOk([]),
-        stderr: "",
-      };
+      return { exitCode: 0, stdout: renderJson(envelopeOk<CredsItem>([])), stderr: "" };
     }
     return {
       exitCode: 0,
@@ -214,7 +254,14 @@ export function runCredsList(args: ParsedCredsArgs): ExitResult {
     };
   }
 
-  const creds: CredsJsonEnvelope["creds"] = [];
+  // Echo M1 on cortex#64 — id derivation now validates against the canonical
+  // agent-id regex AND detects collisions. Filesystem input deserves the
+  // same scrutiny as operator input on issue/revoke/rotate.
+  const creds: CredsItem[] = [];
+  const seenIds = new Map<string, string>();
+  const skippedMalformed: string[] = [];
+  const skippedColliding: { id: string; first: string; second: string }[] = [];
+
   for (const filename of entries) {
     const filePath = join(dir, filename);
     let mtime: Date;
@@ -223,37 +270,52 @@ export function runCredsList(args: ParsedCredsArgs): ExitResult {
       if (!stat.isFile()) continue;
       mtime = stat.mtime;
     } catch {
-      // Race: file vanished between readdir and stat. Skip.
       continue;
     }
-    // id is the filename stem (everything before the FIRST `.`).
-    // Handles `echo.creds`, `echo.nats.creds`, plain `echo` all consistently.
+
+    // id = filename stem (before first `.`). Validate against agent-id regex.
     const id = filename.split(".")[0]!;
-    creds.push({
-      id,
-      path: filePath,
-      issuedAt: mtime.toISOString(),
-    });
+    if (!AGENT_ID_REGEX_INTERNAL.test(id)) {
+      skippedMalformed.push(filename);
+      continue;
+    }
+    if (seenIds.has(id)) {
+      skippedColliding.push({ id, first: seenIds.get(id)!, second: filename });
+      continue;
+    }
+    seenIds.set(id, filename);
+    creds.push({ id, path: filePath, issuedAt: mtime.toISOString() });
   }
 
   creds.sort((a, b) => a.id.localeCompare(b.id));
 
+  // Surface malformed/colliding filenames as warnings on stderr. Echo M1
+  // explicitly asked for collision visibility — silent collisions are how
+  // operators end up debugging non-deterministic agent registration.
+  let warnings = "";
+  for (const f of skippedMalformed) {
+    warnings += `cortex creds list: skipping "${f}" — filename stem doesn't match agent-id regex /^[a-z0-9-]+$/\n`;
+  }
+  for (const c of skippedColliding) {
+    warnings += `cortex creds list: skipping "${c.second}" — id "${c.id}" already taken by "${c.first}"\n`;
+  }
+
   if (args.json) {
-    return { exitCode: 0, stdout: jsonOk(creds), stderr: "" };
+    return { exitCode: 0, stdout: renderJson(envelopeOk(creds)), stderr: warnings };
   }
 
   if (creds.length === 0) {
     return {
       exitCode: 0,
       stdout: `0 creds files in ${dir}\n`,
-      stderr: "",
+      stderr: warnings,
     };
   }
 
   return {
     exitCode: 0,
     stdout: creds.map(formatCredsLine).join("\n") + "\n",
-    stderr: "",
+    stderr: warnings,
   };
 }
 
@@ -281,26 +343,31 @@ function runDeferredSubcommand(
     return { exitCode: 0, stdout: deferredSubcommandHelp(subcommand), stderr: "" };
   }
 
-  // Validate the agent id even though we won't act on it — surface bad
-  // operator input at the CLI layer, not in some future daemon RPC.
+  // Validate the agent id at the CLI layer — surface operator input errors
+  // before the deferred-stub message, even though v1 won't act.
   if (!args.agentId) {
+    const reason = `missing agent id (usage: cortex creds ${subcommand} <agent-id>)`;
     if (args.json) {
       return {
         exitCode: 2,
-        stdout: jsonError(`missing agent id for "${subcommand}"`, subcommand),
+        stdout: errorEnvelopeForSubcommand(reason, subcommand, args.agentId),
         stderr: "",
       };
     }
     return {
       exitCode: 2,
       stdout: "",
-      stderr: `cortex creds ${subcommand}: missing agent id (usage: cortex creds ${subcommand} <agent-id>)\n`,
+      stderr: `cortex creds ${subcommand}: ${reason}\n`,
     };
   }
   if (!AGENT_ID_REGEX.test(args.agentId)) {
     const reason = `agent id "${args.agentId}" is invalid — must match /^[a-z0-9-]+$/`;
     if (args.json) {
-      return { exitCode: 2, stdout: jsonError(reason, subcommand), stderr: "" };
+      return {
+        exitCode: 2,
+        stdout: errorEnvelopeForSubcommand(reason, subcommand, args.agentId),
+        stderr: "",
+      };
     }
     return {
       exitCode: 2,
@@ -309,11 +376,10 @@ function runDeferredSubcommand(
     };
   }
 
-  // Stub: emit the deferred message.
   if (args.json) {
     return {
       exitCode: 2,
-      stdout: jsonError(DEFERRED_SUBCOMMAND_MESSAGE, subcommand),
+      stdout: errorEnvelopeForSubcommand(DEFERRED_SUBCOMMAND_MESSAGE, subcommand, args.agentId),
       stderr: "",
     };
   }
@@ -322,6 +388,18 @@ function runDeferredSubcommand(
     stdout: "",
     stderr: `cortex creds ${subcommand}: ${DEFERRED_SUBCOMMAND_MESSAGE}\n`,
   };
+}
+
+/** Build a creds-specific error envelope (uses shared `context` for
+ *  subcommand-specific metadata, per Echo M2). */
+function errorEnvelopeForSubcommand(
+  reason: string,
+  subcommand: string,
+  agentId: string | undefined,
+): string {
+  const context: Record<string, string> = { subcommand };
+  if (agentId) context.agentId = agentId;
+  return renderJson(envelopeError<CredsItem>(reason, context));
 }
 
 // =============================================================================
@@ -333,7 +411,7 @@ export function dispatchCreds(argv: string[]): ExitResult {
   try {
     args = parseCredsArgs(argv);
   } catch (err) {
-    if (err instanceof CredsArgsError) {
+    if (err instanceof CliArgsError) {
       return {
         exitCode: 2,
         stdout: "",
@@ -367,28 +445,28 @@ export function dispatchCreds(argv: string[]): ExitResult {
         stdout: "",
         stderr: `cortex creds: unknown subcommand "${args.rawSubcommand}".\n${topLevelHelp()}`,
       };
+    default:
+      // Echo n1 on cortex#64 — exhaustive guard. If a new subcommand variant
+      // is added to ParsedCredsArgs without a case here, TypeScript will
+      // catch it at compile time AND runtime gets a clear error.
+      return assertExhaustive(args.subcommand, "creds");
   }
+}
+
+/** Catch unreachable-by-types fall-throughs at runtime with a clear error. */
+function assertExhaustive(value: never, cliName: string): ExitResult {
+  return {
+    exitCode: 2,
+    stdout: "",
+    stderr: `cortex ${cliName}: internal error — unhandled subcommand "${String(value)}"\n`,
+  };
 }
 
 // =============================================================================
 // Output helpers
 // =============================================================================
 
-function jsonOk(creds: CredsJsonEnvelope["creds"]): string {
-  const envelope: CredsJsonEnvelope = { status: "ok", creds };
-  return JSON.stringify(envelope, null, 2) + "\n";
-}
-
-function jsonError(reason: string, subcommand: string): string {
-  const envelope: CredsJsonEnvelope = {
-    status: "error",
-    creds: [],
-    error: { reason, subcommand },
-  };
-  return JSON.stringify(envelope, null, 2) + "\n";
-}
-
-function formatCredsLine(c: { id: string; path: string; issuedAt: string }): string {
+function formatCredsLine(c: CredsItem): string {
   return `${c.id.padEnd(20)} ${c.path}  issued ${c.issuedAt}`;
 }
 
@@ -400,7 +478,7 @@ function topLevelHelp(): string {
   return `cortex creds — manage per-agent NATS user credentials
 
 Usage:
-  cortex creds list   [--creds-dir <path>] [--local] [--json]
+  cortex creds list   [--creds-dir <path>] [--json]
   cortex creds issue  <agent-id> [--config <path>] [--json]
   cortex creds revoke <agent-id> [--config <path>] [--json]
   cortex creds rotate <agent-id> [--config <path>] [--json]
@@ -412,12 +490,18 @@ Subcommands:
   revoke   Revoke creds (v1: deferred)
   rotate   Revoke + issue atomically (v1: deferred)
 
-Common options:
-  --creds-dir <path>   Directory containing .creds files (default: ~/.config/nats/creds)
-  --config <path>      cortex.yaml path (for issue/revoke/rotate when implemented)
-  --local              Operate on local files only (no daemon contact) — implied for list in v1
-  --json               Emit structured JSON envelope
+Per-subcommand options:
+  list:    --creds-dir <path>   Directory containing .creds files (default: ~/.config/nats/creds)
+  issue:   --config <path>      cortex.yaml path (for v2 daemon contact)
+  revoke:  --config <path>      same
+  rotate:  --config <path>      same
+
+Universal options:
+  --json               Emit structured JSON envelope (shared shape via _shared/envelope.ts)
   --help, -h           Show help
+
+Flag scoping: a flag passed to a subcommand that does not accept it is a usage
+error (exit 2). E.g. \`cortex creds issue echo --creds-dir /tmp\` is rejected.
 
 Exit codes:
   0    success
@@ -430,11 +514,17 @@ function listHelp(): string {
   return `cortex creds list — list local NATS creds files
 
 Usage:
-  cortex creds list [--creds-dir <path>] [--local] [--json]
+  cortex creds list [--creds-dir <path>] [--json]
 
 Options:
   --creds-dir <path>   Default: ~/.config/nats/creds
-  --json               Emit envelope { status, creds: [{id, path, issuedAt}], error? }
+  --json               Emit envelope { status, items: [{id, path, issuedAt}], error? }
+
+Behavior:
+  - Filenames whose stem doesn't match /^[a-z0-9-]+$/ are SKIPPED with a
+    warning on stderr (Echo M1 on cortex#64).
+  - Id collisions (two files yielding the same stem) are SKIPPED with a
+    warning naming both files.
 `;
 }
 

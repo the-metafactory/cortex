@@ -12,9 +12,9 @@ import {
   runCredsRevoke,
   runCredsRotate,
   dispatchCreds,
-  CredsArgsError,
   DEFERRED_SUBCOMMAND_MESSAGE,
 } from "../creds";
+import { CliArgsError } from "../_shared/arg-error";
 
 // =============================================================================
 // parseCredsArgs
@@ -57,11 +57,6 @@ describe("parseCredsArgs", () => {
     expect(parseCredsArgs(["status"]).rawSubcommand).toBe("status");
   });
 
-  test("parses --local flag", () => {
-    expect(parseCredsArgs(["list", "--local"]).local).toBe(true);
-    expect(parseCredsArgs(["list"]).local).toBe(false);
-  });
-
   test("parses --creds-dir flag", () => {
     const args = parseCredsArgs(["list", "--creds-dir", "/tmp/foo"]);
     expect(args.credsDir).toBe("/tmp/foo");
@@ -76,25 +71,58 @@ describe("parseCredsArgs", () => {
     expect(args.config).toBe("/tmp/cortex.yaml");
   });
 
-  describe("CredsArgsError throws", () => {
+  describe("CliArgsError throws", () => {
     test("throws when --creds-dir is missing its value", () => {
-      expect(() => parseCredsArgs(["list", "--creds-dir"])).toThrow(CredsArgsError);
+      expect(() => parseCredsArgs(["list", "--creds-dir"])).toThrow(CliArgsError);
     });
 
     test("throws when --config is missing its value", () => {
-      expect(() => parseCredsArgs(["issue", "echo", "--config"])).toThrow(CredsArgsError);
+      expect(() => parseCredsArgs(["issue", "echo", "--config"])).toThrow(CliArgsError);
     });
 
     test("throws on unknown flag", () => {
-      expect(() => parseCredsArgs(["list", "--verbose"])).toThrow(CredsArgsError);
+      expect(() => parseCredsArgs(["list", "--verbose"])).toThrow(CliArgsError);
     });
 
     test("throws on extra positional argument for list", () => {
-      expect(() => parseCredsArgs(["list", "extra"])).toThrow(CredsArgsError);
+      expect(() => parseCredsArgs(["list", "extra"])).toThrow(CliArgsError);
     });
 
     test("throws on extra positional for issue beyond <id>", () => {
-      expect(() => parseCredsArgs(["issue", "echo", "extra"])).toThrow(CredsArgsError);
+      expect(() => parseCredsArgs(["issue", "echo", "extra"])).toThrow(CliArgsError);
+    });
+  });
+
+  // Echo M3 on cortex#64 — per-subcommand flag allowlist.
+  describe("per-subcommand flag scoping (Echo M3)", () => {
+    test("--creds-dir is rejected on issue", () => {
+      expect(() => parseCredsArgs(["issue", "echo", "--creds-dir", "/tmp"])).toThrow(
+        CliArgsError,
+      );
+    });
+
+    test("--creds-dir is rejected on revoke", () => {
+      expect(() => parseCredsArgs(["revoke", "echo", "--creds-dir", "/tmp"])).toThrow(
+        CliArgsError,
+      );
+    });
+
+    test("--creds-dir is rejected on rotate", () => {
+      expect(() => parseCredsArgs(["rotate", "echo", "--creds-dir", "/tmp"])).toThrow(
+        CliArgsError,
+      );
+    });
+
+    test("--config is rejected on list", () => {
+      expect(() => parseCredsArgs(["list", "--config", "/tmp/c.yaml"])).toThrow(
+        CliArgsError,
+      );
+    });
+
+    test("--json is universal", () => {
+      // Should not throw for any subcommand
+      expect(parseCredsArgs(["list", "--json"]).json).toBe(true);
+      expect(parseCredsArgs(["issue", "echo", "--json"]).json).toBe(true);
     });
   });
 });
@@ -158,10 +186,10 @@ describe("runCredsList", () => {
     expect(r.exitCode).toBe(0);
     const parsed = JSON.parse(r.stdout);
     expect(parsed.status).toBe("ok");
-    expect(Array.isArray(parsed.creds)).toBe(true);
-    expect(parsed.creds[0].id).toBe("echo");
-    expect(parsed.creds[0].path).toContain("echo.creds");
-    expect(parsed.creds[0].issuedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(Array.isArray(parsed.items)).toBe(true);
+    expect(parsed.items[0].id).toBe("echo");
+    expect(parsed.items[0].path).toContain("echo.creds");
+    expect(parsed.items[0].issuedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   test("--json on empty dir emits envelope with creds: []", () => {
@@ -170,7 +198,7 @@ describe("runCredsList", () => {
     expect(r.exitCode).toBe(0);
     const parsed = JSON.parse(r.stdout);
     expect(parsed.status).toBe("ok");
-    expect(parsed.creds).toEqual([]);
+    expect(parsed.items).toEqual([]);
   });
 
   test("strips multiple extensions (e.g. echo.creds.json → echo)", () => {
@@ -178,8 +206,52 @@ describe("runCredsList", () => {
     writeFileSync(join(dir, "echo.creds"), "x");
     writeFileSync(join(dir, "holly.nats.creds"), "x");
     const r = runCredsList(parseCredsArgs(["list", "--creds-dir", dir]));
-    // We use the filename stem (everything before first .); accept reasonable shape
     expect(r.stdout).toContain("echo");
+  });
+
+  // Echo M1 on cortex#64 — id derivation now validates against agent-id
+  // regex and detects collisions.
+  describe("filesystem id hygiene (Echo M1)", () => {
+    test("skips files whose stem doesn't match /^[a-z0-9-]+$/", () => {
+      const dir = mkdtempSync(join(tmpdir(), "f4-bad-stem-"));
+      writeFileSync(join(dir, "Echo!.creds"), "x"); // uppercase + special char
+      writeFileSync(join(dir, "ok-agent.creds"), "x");
+      const r = runCredsList(parseCredsArgs(["list", "--creds-dir", dir]));
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain("ok-agent");
+      expect(r.stdout).not.toContain("Echo!");
+      // Warning on stderr names the skipped file
+      expect(r.stderr).toContain("Echo!.creds");
+      expect(r.stderr).toMatch(/doesn't match agent-id regex/);
+    });
+
+    test("skips id collisions and warns naming both files", () => {
+      const dir = mkdtempSync(join(tmpdir(), "f4-collide-"));
+      writeFileSync(join(dir, "echo.creds"), "first");
+      writeFileSync(join(dir, "echo.nats.creds"), "second");
+      const r = runCredsList(parseCredsArgs(["list", "--creds-dir", dir]));
+      expect(r.exitCode).toBe(0);
+      // Only one "echo" in output (the first one alphabetically) — collision warned
+      const lines = r.stdout.trim().split("\n").filter((l) => l.startsWith("echo"));
+      expect(lines).toHaveLength(1);
+      expect(r.stderr).toContain("echo.creds");
+      expect(r.stderr).toContain("echo.nats.creds");
+      expect(r.stderr).toMatch(/already taken/);
+    });
+
+    test("malformed stems are reported in JSON mode via stderr (not envelope)", () => {
+      // JSON envelope is for machine-readable success/items shape; warnings
+      // are diagnostic information for humans + log scrapers. They live on
+      // stderr regardless of --json.
+      const dir = mkdtempSync(join(tmpdir(), "f4-bad-stem-json-"));
+      writeFileSync(join(dir, "BadName.creds"), "x");
+      const r = runCredsList(parseCredsArgs(["list", "--creds-dir", dir, "--json"]));
+      expect(r.exitCode).toBe(0);
+      const parsed = JSON.parse(r.stdout);
+      expect(parsed.status).toBe("ok");
+      expect(parsed.items).toEqual([]);
+      expect(r.stderr).toContain("BadName.creds");
+    });
   });
 });
 
@@ -225,9 +297,12 @@ describe("deferred subcommands", () => {
     expect(r.exitCode).toBe(2);
     const parsed = JSON.parse(r.stdout);
     expect(parsed.status).toBe("error");
-    expect(parsed.creds).toEqual([]);
+    expect(parsed.items).toEqual([]);
     expect(parsed.error.reason).toContain(DEFERRED_SUBCOMMAND_MESSAGE);
-    expect(parsed.error.subcommand).toBe("issue");
+    // Echo M2 + M4 round 1 — error context lives under `error.context.<key>`
+    // in the shared envelope shape.
+    expect(parsed.error.context.subcommand).toBe("issue");
+    expect(parsed.error.context.agentId).toBe("echo");
   });
 });
 
@@ -273,7 +348,7 @@ describe("dispatchCreds", () => {
     expect(r.stderr).toContain("usage");
   });
 
-  test("CredsArgsError → exit 2 with named flag", () => {
+  test("CliArgsError → exit 2 with named flag", () => {
     const r = dispatchCreds(["list", "--verbose"]);
     expect(r.exitCode).toBe(2);
     expect(r.stderr).toContain("--verbose");
