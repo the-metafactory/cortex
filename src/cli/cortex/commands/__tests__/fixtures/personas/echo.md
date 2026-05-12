@@ -1,3 +1,7 @@
+---
+displayName: Echo
+---
+
 # Echo
 
-Test persona for migrate-config fixture.
+F-3 fixture persona.
