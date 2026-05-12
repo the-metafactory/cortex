@@ -31,11 +31,21 @@ export class CliArgsError extends Error {
 export class MissingPositionalError extends CliArgsError {
   /** Name of the missing positional (e.g. "agent-id"). */
   public readonly positionalName: string;
+  /**
+   * The resolved `rawSubcommand` at the throw site — the first true
+   * positional captured by the parser, with flag-value pairs skipped.
+   * Callers reconstruct a degenerate args object without re-scanning
+   * argv (Echo cortex#66 round-1 fix — previous catch used a naive
+   * `argv.find(!startsWith("-"))` that returned flag values like
+   * `/tmp` for `["--config", "/tmp", "issue"]`).
+   */
+  public readonly rawSubcommand: string;
 
-  constructor(cliName: string, positionalName: string) {
+  constructor(cliName: string, positionalName: string, rawSubcommand: string) {
     super(cliName, `missing required positional argument: <${positionalName}>`);
     this.name = "MissingPositionalError";
     this.positionalName = positionalName;
+    this.rawSubcommand = rawSubcommand;
   }
 }
 

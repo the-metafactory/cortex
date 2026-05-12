@@ -189,7 +189,10 @@ export function parseSubcommandArgs<S extends string>(
   if (activeRule) {
     for (const name of activeRule.positionals ?? []) {
       if (!(name in out.positionals)) {
-        throw new MissingPositionalError(spec.cliName, name);
+        // Pass `out.rawSubcommand` so callers don't have to re-scan argv
+        // (Echo cortex#66 round-1 warning — naive re-scan dropped flag-
+        // value pairs and returned wrong rawSubcommand).
+        throw new MissingPositionalError(spec.cliName, name, out.rawSubcommand);
       }
     }
   }
@@ -228,36 +231,57 @@ function findFirstPositional<S extends string>(
 }
 
 /**
+ * Per-spec flag-kind map, memoized via WeakMap. Echo cortex#66 round-1
+ * perf suggestion — `lookupFlagKindAcrossSpec` was recomputing the
+ * merged map (and re-validating the same-kind invariant) on every flag
+ * access. Now we build the map once on first lookup per spec object;
+ * subsequent lookups are O(1) and the invariant becomes a one-time
+ * validation at first parse.
+ */
+const FLAG_KIND_CACHE = new WeakMap<object, Map<string, FlagKind>>();
+
+function buildFlagKindMap<S extends string>(
+  spec: SubcommandSpec<S>,
+): Map<string, FlagKind> {
+  const map = new Map<string, FlagKind>();
+  for (const [flag, kind] of Object.entries(spec.universal)) {
+    map.set(flag, kind);
+  }
+  for (const rule of Object.values(spec.subcommands) as SubcommandRule[]) {
+    if (!rule.flags) continue;
+    for (const [flag, kind] of Object.entries(rule.flags)) {
+      const existing = map.get(flag);
+      if (existing !== undefined && existing !== kind) {
+        throw new CliArgsError(
+          spec.cliName,
+          `spec invariant violated: flag "${flag}" declared with conflicting kinds (${existing} vs ${kind}) across subcommands`,
+        );
+      }
+      map.set(flag, kind);
+    }
+  }
+  return map;
+}
+
+/**
  * Look up a flag's kind across the entire spec (universal + every
  * subcommand's allowlist). Returns undefined if the flag isn't declared
  * anywhere — the strict second pass will throw with a clear error.
  *
  * Invariant: a given flag has the same kind (value vs bool) across all
- * subcommands that accept it. cortex's CLIs follow this convention by
- * design. Echo cortex#66 round-1 N5 — added a runtime check to enforce
- * the invariant rather than rely on it being followed by convention. If
- * a future spec declares conflicting kinds, this surfaces at the FIRST
- * argv that hits the flag rather than after silent mis-parses.
+ * subcommands that accept it. Validated once per spec at first lookup
+ * (Echo cortex#66 round-1 N5 + perf-suggestion).
  */
 function lookupFlagKindAcrossSpec<S extends string>(
   spec: SubcommandSpec<S>,
   flag: string,
 ): FlagKind | undefined {
-  let found: FlagKind | undefined;
-  if (flag in spec.universal) found = spec.universal[flag];
-  for (const rule of Object.values(spec.subcommands) as SubcommandRule[]) {
-    if (rule.flags && flag in rule.flags) {
-      const kind = rule.flags[flag]!;
-      if (found !== undefined && found !== kind) {
-        throw new CliArgsError(
-          spec.cliName,
-          `spec invariant violated: flag "${flag}" declared with conflicting kinds (${found} vs ${kind}) across subcommands`,
-        );
-      }
-      found = kind;
-    }
+  let map = FLAG_KIND_CACHE.get(spec);
+  if (!map) {
+    map = buildFlagKindMap(spec);
+    FLAG_KIND_CACHE.set(spec, map);
   }
-  return found;
+  return map.get(flag);
 }
 
 function resolveFlagKind<S extends string>(

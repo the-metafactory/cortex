@@ -281,6 +281,37 @@ describe("hydrate helpers (valueFlag / boolFlag)", () => {
   });
 });
 
+// Echo cortex#66 round-1 — typed-error carrying parser-supplied rawSubcommand.
+describe("MissingPositionalError carries rawSubcommand", () => {
+  test("rawSubcommand reflects parser's first-pass scan (skips flag values)", () => {
+    // ["--config", "/tmp", "issue"] — `/tmp` is the value of --config, not
+    // a positional. Parser must identify "issue" as the subcommand even
+    // though the missing-positional throw fires before second-pass completion.
+    try {
+      parseSubcommandArgs(spec, ["--config", "/tmp", "issue"]);
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MissingPositionalError);
+      expect((err as MissingPositionalError).rawSubcommand).toBe("issue");
+    }
+  });
+});
+
+// Echo cortex#66 round-1 — prototype-pollution defense.
+describe("prototype-pollution defense", () => {
+  test('"constructor" as subcommand is unknown (uses hasOwnProperty.call)', () => {
+    const r = parseSubcommandArgs(spec, ["constructor"]);
+    expect(r.subcommand).toBe("unknown");
+    expect(r.rawSubcommand).toBe("constructor");
+  });
+
+  test('"toString" / "hasOwnProperty" / "__proto__" as subcommand all unknown', () => {
+    expect(parseSubcommandArgs(spec, ["toString"]).subcommand).toBe("unknown");
+    expect(parseSubcommandArgs(spec, ["hasOwnProperty"]).subcommand).toBe("unknown");
+    expect(parseSubcommandArgs(spec, ["__proto__"]).subcommand).toBe("unknown");
+  });
+});
+
 // Echo cortex#66 round-1 N6 — missing edge cases.
 describe("edge cases", () => {
   test("--flag=value syntax is currently NOT supported (documented gap)", () => {
@@ -306,5 +337,14 @@ describe("edge cases", () => {
       "/tmp/second",
     ]);
     expect(r.flags["--creds-dir"]).toBe("/tmp/second");
+  });
+
+  // Echo cortex#66 round-1 perf — pin the current dash-prefix-rejection
+  // behavior with a test so a future lift (to allow `-foo.txt`-style
+  // values) is intentional.
+  test("value-flag rejects values that start with '-' (legitimate paths excluded today)", () => {
+    expect(() =>
+      parseSubcommandArgs(spec, ["list", "--creds-dir", "-foo.txt"]),
+    ).toThrow(CliArgsError);
   });
 });

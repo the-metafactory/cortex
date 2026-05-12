@@ -149,7 +149,10 @@ export function parseCredsArgs(argv: string[]): ParsedCredsArgs {
       err instanceof MissingPositionalError &&
       err.positionalName === "agent-id"
     ) {
-      const sub = argv.find((a) => !a.startsWith("-")) ?? "";
+      // Echo cortex#66 round-1 warning — use the parser-supplied
+      // `rawSubcommand` rather than naively re-scanning argv. The parser
+      // already walked argv skipping flag-value pairs; trust its answer.
+      const sub = err.rawSubcommand;
       const known =
         sub === "list" || sub === "issue" || sub === "revoke" || sub === "rotate"
           ? sub
