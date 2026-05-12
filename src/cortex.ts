@@ -17,7 +17,7 @@ import { join, dirname } from "path";
 import { parse as parseYaml } from "yaml";
 import type { TextChannel } from "discord.js";
 
-import { loadConfig, loadAgentsDirectory, expandTilde, FragmentLoadError } from "./common/config/loader";
+import { loadConfigWithAgents, loadAgentsDirectory, expandTilde, FragmentLoadError } from "./common/config/loader";
 import { ConfigWatcher } from "./common/config/watcher";
 import { type BotConfig, getAllRepos } from "./common/types/config";
 import { fetchWithTimeout } from "./common/timeout";
@@ -306,6 +306,22 @@ export async function startCortex(
   const adapters: PlatformAdapter[] = [];
   const adapterCleanup: Array<() => void> = [];
 
+  // MIG-7.2e: per-instance agent lookup. When cortex.yaml supplies
+  // `inlineAgents` (reused from the registry-merge block above), each
+  // Discord/Mattermost adapter binds to the declared Agent (real id,
+  // displayName, persona, roles, trust) instead of the
+  // synthesized-from-singular fallback. Keyed by the unique platform
+  // credential — `presence.discord.token` for Discord,
+  // `presence.mattermost.apiToken` for Mattermost.
+  const agentByDiscordToken = new Map<string, Agent>();
+  const agentByMattermostApiToken = new Map<string, Agent>();
+  for (const a of mergedAgents) {
+    if (a.presence.discord?.token) agentByDiscordToken.set(a.presence.discord.token, a);
+    if (a.presence.mattermost?.apiToken) {
+      agentByMattermostApiToken.set(a.presence.mattermost.apiToken, a);
+    }
+  }
+
   for (const instance of config.discord) {
     if (instance.enabled === false) {
       console.log(`cortex: discord instance ${instance.instanceId ?? instance.guildId} disabled — skipping`);
@@ -334,17 +350,12 @@ export async function startCortex(
       dm: instance.dm,
       ...(instance.operatorRoleId !== undefined && { operatorRoleId: instance.operatorRoleId }),
     };
-    // Synthesize a transitional `Agent` shape from the BotConfig.agent +
-    // bot.yaml discord[i] entry. `persona` is a placeholder until MIG-7.2e
-    // plumbs the real path; `roles` and `trust` are empty for the same
-    // reason (BotConfig has no equivalent fields). The constructed object
-    // is the same shape `cortex.yaml` will load directly post-7.2e.
-    //
-    // Constructed in one step (Holly cycle 1 suggestion): the presence is
-    // built first so the agent literal can nest it directly, avoiding the
-    // transiently-invalid intermediate the AgentSchema refinement would
-    // reject (`presence` must satisfy "at least one block").
-    const agent: Agent = {
+    // MIG-7.2e: prefer the cortex-shape `inlineAgents` lookup when present —
+    // per-instance identity (real id, persona, roles, trust) flows from
+    // cortex.yaml. Falls back to the transitional synthesis-from-singular
+    // for legacy bot.yaml input (no inlineAgents).
+    const matchedAgent = agentByDiscordToken.get(instance.token);
+    const agent: Agent = matchedAgent ?? {
       id: config.agent.name,
       displayName: config.agent.displayName,
       persona: "(deferred-mig-7.2e)",
@@ -416,10 +427,13 @@ export async function startCortex(
       roles: instance.roles,
       defaultRole: instance.defaultRole,
     };
-    // Synthesize a transitional `Agent` shape — same pattern as the
-    // Discord block above. Persona is a `(deferred-mig-7.2e)` placeholder
-    // until migrate-config emits cortex.yaml.
-    const agent: Agent = {
+    // MIG-7.2e: prefer the cortex-shape `inlineAgents` lookup when present —
+    // same pattern as the Discord block above. apiToken is the cleanest
+    // unique key on Mattermost presence.
+    const matchedAgent = instance.apiToken
+      ? agentByMattermostApiToken.get(instance.apiToken)
+      : undefined;
+    const agent: Agent = matchedAgent ?? {
       id: config.agent.name,
       displayName: config.agent.displayName,
       persona: "(deferred-mig-7.2e)",
@@ -917,8 +931,15 @@ if (import.meta.main) {
         console.error("cortex: unhandled rejection (non-fatal):", reason);
       });
 
-      const config = loadConfig(options.config);
-      const handle = await startCortex(config, { configPath: options.config });
+      // MIG-7.2e: detect cortex shape vs legacy bot.yaml. `loadConfigWithAgents`
+      // returns both the BotConfig projection (for downstream legacy consumers)
+      // and the rich cortex `agents[]` so `startCortex` can route per-instance
+      // identity correctly.
+      const { config, inlineAgents } = loadConfigWithAgents(options.config);
+      const handle = await startCortex(config, {
+        configPath: options.config,
+        ...(inlineAgents.length > 0 && { inlineAgents }),
+      });
 
       const shutdown = async () => {
         await handle.stop();

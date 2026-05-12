@@ -205,3 +205,163 @@ describe("error reporting", () => {
     expect(() => loadConfig(configPath)).toThrow(/bad\.yaml/i);
   });
 });
+
+// =============================================================================
+// MIG-7.2e — cortex-shape config (operator: + agents:[]) loading
+// =============================================================================
+//
+// `loadConfigWithAgents` accepts both legacy bot.yaml and cortex.yaml. The
+// detection is structural (operator: object + agents: non-empty array). For
+// cortex shape, the loader synthesizes a legacy-compatible BotConfig and
+// returns the rich agents[] alongside via `inlineAgents` so `startCortex`
+// can route per-instance identity correctly.
+
+import { loadConfigWithAgents } from "../loader";
+
+describe("MIG-7.2e — cortex-shape detection + transform", () => {
+  function writeCortexConfig(dir: string, config: Record<string, unknown>): string {
+    const path = join(dir, "cortex.yaml");
+    writeFileSync(path, stringify(config));
+    return path;
+  }
+
+  function minimalCortex(): Record<string, unknown> {
+    return {
+      operator: {
+        id: "jc",
+        displayName: "Jens-Christian",
+        discordId: "285727653603049472",
+      },
+      agents: [
+        {
+          id: "ivy",
+          displayName: "Ivy",
+          persona: "./personas/ivy.md",
+          roles: [],
+          trust: ["luna"],
+          presence: {
+            discord: {
+              token: "fake-token-ivy",
+              guildId: "1487023327791808592",
+              agentChannelId: "1487029848164536361",
+              logChannelId: "1487029942129524786",
+            },
+          },
+        },
+      ],
+      claude: {},
+    };
+  }
+
+  test("loadConfigWithAgents detects cortex shape and returns inlineAgents", () => {
+    const path = writeCortexConfig(testDir, minimalCortex());
+    const loaded = loadConfigWithAgents(path);
+    expect(loaded.inlineAgents).toHaveLength(1);
+    expect(loaded.inlineAgents[0]!.id).toBe("ivy");
+    expect(loaded.inlineAgents[0]!.displayName).toBe("Ivy");
+    expect(loaded.inlineAgents[0]!.trust).toEqual(["luna"]);
+  });
+
+  test("synthesizes BotConfig.agent from operator + first agent", () => {
+    const path = writeCortexConfig(testDir, minimalCortex());
+    const { config } = loadConfigWithAgents(path);
+    expect(config.agent.name).toBe("ivy");
+    expect(config.agent.displayName).toBe("Ivy");
+    expect(config.agent.operatorId).toBe("jc");
+    expect(config.agent.operatorDiscordId).toBe("285727653603049472");
+    expect(config.agent.operatorName).toBe("Jens-Christian");
+  });
+
+  test("flattens agents[*].presence.discord into BotConfig.discord[]", () => {
+    const cfg = minimalCortex();
+    (cfg.agents as Record<string, unknown>[]).push({
+      id: "holly",
+      displayName: "Holly",
+      persona: "./personas/holly.md",
+      roles: [],
+      trust: ["ivy"],
+      presence: {
+        discord: {
+          token: "fake-token-holly",
+          guildId: "1487023327791808592",
+          agentChannelId: "1487029848164536361",
+          logChannelId: "1487029942129524786",
+        },
+      },
+    });
+    const path = writeCortexConfig(testDir, cfg);
+    const { config } = loadConfigWithAgents(path);
+    expect(config.discord).toHaveLength(2);
+    expect(config.discord[0]!.token).toBe("fake-token-ivy");
+    expect(config.discord[1]!.token).toBe("fake-token-holly");
+    // MIG-7.2c convention: instanceId = ${agent.id}-discord (collapsed post-MIG-7.2e)
+    expect(config.discord[0]!.instanceId).toBe("ivy-discord");
+    expect(config.discord[1]!.instanceId).toBe("holly-discord");
+  });
+
+  test("passes nats block through verbatim", () => {
+    const cfg = minimalCortex();
+    cfg.nats = {
+      url: "nats://127.0.0.1:4222",
+      identity: {
+        seedPath: "/tmp/cortex.nk",
+        publicKey: "UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      },
+    };
+    const path = writeCortexConfig(testDir, cfg);
+    const { config } = loadConfigWithAgents(path);
+    expect(config.nats?.url).toBe("nats://127.0.0.1:4222");
+    expect(config.nats?.identity?.publicKey).toBe(
+      "UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    );
+  });
+
+  test("legacy shape continues to return empty inlineAgents", () => {
+    const configPath = writeCentralConfig(testDir, minimalCentral());
+    const loaded = loadConfigWithAgents(configPath);
+    expect(loaded.inlineAgents).toEqual([]);
+    expect(loaded.config.agent.name).toBeDefined();
+  });
+
+  test("loadConfig backward-compat wrapper still returns BotConfig only", () => {
+    const path = writeCortexConfig(testDir, minimalCortex());
+    const cfg = loadConfig(path);
+    expect(cfg.agent.name).toBe("ivy");
+    // Type sanity — no inlineAgents on the BotConfig
+    expect((cfg as Record<string, unknown>).inlineAgents).toBeUndefined();
+  });
+
+  test("rejects cortex.yaml carrying legacy top-level `agent:`", () => {
+    const cfg = minimalCortex();
+    cfg.agent = { name: "ivy", displayName: "Ivy" };
+    const path = writeCortexConfig(testDir, cfg);
+    expect(() => loadConfigWithAgents(path)).toThrow(/legacy `agent:`.*not supported/);
+  });
+
+  test("rejects cortex.yaml carrying legacy top-level `discord:`", () => {
+    const cfg = minimalCortex();
+    cfg.discord = [{ token: "x", guildId: "1", agentChannelId: "2", logChannelId: "3" }];
+    const path = writeCortexConfig(testDir, cfg);
+    expect(() => loadConfigWithAgents(path)).toThrow(/legacy top-level `discord:`/);
+  });
+
+  test("rejects cortex.yaml carrying legacy top-level `trustedAgentBots:`", () => {
+    const cfg = minimalCortex();
+    cfg.trustedAgentBots = [{ id: "1487180524542890144", role: "agent-restricted" }];
+    const path = writeCortexConfig(testDir, cfg);
+    expect(() => loadConfigWithAgents(path)).toThrow(/legacy `trustedAgentBots:`/);
+  });
+
+  test("operator-only with no agents falls back to legacy parse (detection requires both)", () => {
+    const partial = { operator: { id: "jc" } };
+    const path = writeCortexConfig(testDir, partial);
+    // Falls into the legacy branch; BotConfigSchema rejects missing agent.name
+    expect(() => loadConfigWithAgents(path)).toThrow();
+  });
+
+  test("agents-only with no operator falls back to legacy parse (detection requires both)", () => {
+    const partial = { agents: [{ id: "ivy" }] };
+    const path = writeCortexConfig(testDir, partial);
+    expect(() => loadConfigWithAgents(path)).toThrow();
+  });
+});

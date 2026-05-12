@@ -463,6 +463,20 @@ export const BotConfigSchema = z.object({
      * `./cortex-config.ts`. Drop both on MIG-7.2e.
      */
     accountSigningKeyPath: z.string().optional(),
+    /**
+     * MIG-7.2e: NKey identity for envelope signing (MY-400). Optional.
+     * Mirror of `NatsConfigSchema.identity` in `./cortex-config.ts` so the
+     * loader can synthesize a BotConfig from cortex.yaml without stripping
+     * the identity block. Legacy bot.yaml deployments never set this;
+     * cortex.yaml deployments always do.
+     */
+    identity: z.object({
+      seedPath: z.string().min(1),
+      publicKey: z.string().regex(
+        /^U[A-Z2-7]{55}$/,
+        "publicKey must be a 56-char NKey user identifier (U + 55 base32 chars)",
+      ),
+    }).optional(),
   }).optional(),
 
   /**

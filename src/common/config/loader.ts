@@ -10,7 +10,14 @@ import { readFileSync, readdirSync, existsSync, statSync } from "fs";
 import { join, dirname, resolve, isAbsolute, basename } from "path";
 import { parse as parseYaml } from "yaml";
 import { BotConfigSchema, NetworkFileSchema, type BotConfig, type NetworkFile } from "../types/config";
-import { AgentSchema, type Agent } from "../types/cortex-config";
+import {
+  AgentSchema,
+  CortexConfigSchema,
+  type Agent,
+  type CortexConfig,
+  type DiscordPresence,
+  type MattermostPresence,
+} from "../types/cortex-config";
 
 /**
  * Hardening cap on a single fragment file's size. Echo M3 on cortex#62 —
@@ -44,18 +51,90 @@ export function expandTilde(p: string): string {
 }
 
 /**
+ * Result of `loadConfigWithAgents`. `inlineAgents` is non-empty when the
+ * loader detected cortex-shape config (architecture §9.1 — `operator:` +
+ * `agents:[]` instead of legacy `agent:` + flat `discord:[]`). The `config`
+ * field is always a BotConfig — for cortex-shape input it's a synthesized
+ * legacy-compatible projection so downstream consumers stay unchanged
+ * during MIG-7. Callers that need the rich cortex shape use `inlineAgents`.
+ */
+export interface LoadedConfig {
+  config: BotConfig;
+  inlineAgents: Agent[];
+}
+
+/**
+ * Detect whether `raw` is a cortex-shape config (operator + agents[]) vs
+ * the legacy grove-v2 `bot.yaml` shape (singular agent + flat discord[]).
+ *
+ * The check is structural — must have `operator:` (object) AND `agents:`
+ * (non-empty array). Either field on its own keeps the legacy path so a
+ * partially-migrated config surfaces the relevant zod errors via
+ * BotConfigSchema (legacy) rather than CortexConfigSchema's anti-field
+ * rejections.
+ */
+function isCortexShape(raw: Record<string, unknown>): boolean {
+  return (
+    raw.operator !== null &&
+    typeof raw.operator === "object" &&
+    Array.isArray(raw.agents) &&
+    raw.agents.length > 0
+  );
+}
+
+/**
  * Load bot.yaml + networks/*.yaml, validate, merge.
+ *
+ * Backwards-compatible wrapper that returns just the BotConfig — callers
+ * that need cortex-shape `inlineAgents` should use `loadConfigWithAgents`.
  */
 export function loadConfig(path: string): BotConfig {
+  return loadConfigWithAgents(path).config;
+}
+
+/**
+ * MIG-7.2e — config-schema flip.
+ *
+ * Loads either:
+ *   - legacy grove-v2 `bot.yaml` (agent: + flat discord:[] + mattermost:[]),
+ *   - or cortex-shape `cortex.yaml` (operator: + agents:[] with per-agent
+ *     presence: blocks),
+ *
+ * and returns a `LoadedConfig` with:
+ *   - `config`: a BotConfig (legacy shape, possibly synthesized from cortex
+ *      shape for downstream-consumer parity),
+ *   - `inlineAgents`: the cortex-shape `agents[]` when present; empty for
+ *      legacy input.
+ *
+ * Detection is structural: presence of `operator:` (object) + `agents:`
+ * (non-empty array) → cortex; anything else → legacy. The two anti-field
+ * rejections in `CortexConfigSchema` (legacy `agent:` / `discord:` /
+ * `mattermost:` / `trustedAgentBots:` at the top level) surface as zod
+ * errors only when the detection trips the cortex branch.
+ */
+export function loadConfigWithAgents(path: string): LoadedConfig {
   const expandedPath = path.replace(/^~/, process.env.HOME ?? "~");
   const configDir = dirname(expandedPath);
 
   const content = readFileSync(expandedPath, "utf-8");
-  const raw = parseYaml(content) ?? {};
+  const raw = (parseYaml(content) ?? {}) as Record<string, unknown>;
 
-  const explicitNetworksDir = !!raw.networksDir;
-  const networksDir = resolve(configDir, raw.networksDir ?? "./networks");
+  // Networks load against the on-disk path regardless of legacy/cortex shape —
+  // both shapes share the same networks/ contract (G-500).
+  const explicitNetworksDir = typeof raw.networksDir === "string";
+  const networksDir = resolve(
+    configDir,
+    (typeof raw.networksDir === "string" ? raw.networksDir : "./networks"),
+  );
   const networks = loadNetworkFiles(networksDir, explicitNetworksDir);
+
+  if (isCortexShape(raw)) {
+    return loadCortexShape(raw, networks);
+  }
+
+  // ---------------------------------------------------------------------
+  // Legacy bot.yaml path — unchanged from pre-MIG-7.2e behaviour.
+  // ---------------------------------------------------------------------
 
   // Legacy fallback: if no network files and legacy api.* fields exist, create default network
   let isLegacyMode = false;
@@ -86,7 +165,123 @@ export function loadConfig(path: string): BotConfig {
     networksDir: raw.networksDir ?? "./networks",
   };
 
-  return BotConfigSchema.parse(merged);
+  return {
+    config: BotConfigSchema.parse(merged),
+    inlineAgents: [],
+  };
+}
+
+/**
+ * Convert a cortex-shape `cortex.yaml` into a `LoadedConfig`.
+ *
+ * Strategy (MIG-7.2e):
+ *   1. Parse via `CortexConfigSchema` — strict, rejects legacy top-level
+ *      `agent:` / `discord:[]` / `mattermost:[]` / `trustedAgentBots:`
+ *      blocks with operator-friendly migration errors.
+ *   2. Flatten `agents[*].presence.{discord,mattermost}` into the legacy
+ *      `BotConfig.{discord,mattermost}[]` arrays — each entry inherits
+ *      the parent agent's id as a synthesized `instanceId` matching the
+ *      MIG-7.2c convention (`${agent.id}-{platform}`).
+ *   3. Synthesize a singular `agent:` block from the operator block plus
+ *      the first agent — this keeps the legacy BotConfig contract intact
+ *      while the multi-agent identity routing flows via `inlineAgents`
+ *      through `startCortex`.
+ *   4. Pass renderers/claude/attachments/execution/github/paths/nats
+ *      through verbatim — they're identical in both schemas.
+ *   5. Drop `trustedAgentBots:` (cortex expresses peer trust via per-agent
+ *      `trust:` lists; legacy aggregation would lose the per-agent shape).
+ */
+function loadCortexShape(
+  raw: Record<string, unknown>,
+  networks: NetworkFile[],
+): LoadedConfig {
+  // Schema-strict parse. Any legacy field at the top level fails here with
+  // the operator-friendly migration message baked into CortexConfigSchema.
+  const cortexConfig: CortexConfig = CortexConfigSchema.parse(raw);
+
+  const firstAgent = cortexConfig.agents[0]!;
+
+  // Synthesize the BotConfig `agent:` singular from operator + first agent.
+  // Downstream consumers that read `config.agent.name` get the first agent's
+  // id; per-instance routing flows via `inlineAgents` so the multi-agent
+  // case stays correct.
+  const synthesizedAgent = {
+    name: firstAgent.id,
+    displayName: firstAgent.displayName,
+    ...(cortexConfig.operator.id !== undefined && { operatorId: cortexConfig.operator.id }),
+    ...(cortexConfig.operator.displayName !== undefined && {
+      operatorName: cortexConfig.operator.displayName,
+    }),
+    ...(cortexConfig.operator.discordId !== undefined && {
+      operatorDiscordId: cortexConfig.operator.discordId,
+    }),
+    ...(cortexConfig.operator.mattermostId !== undefined && {
+      operatorMattermostId: cortexConfig.operator.mattermostId,
+    }),
+    ...(cortexConfig.operator.dataResidency !== undefined && {
+      dataResidency: cortexConfig.operator.dataResidency,
+    }),
+    personaFile: firstAgent.persona,
+  };
+
+  // Flatten per-agent presence blocks into legacy flat arrays. Each entry
+  // carries a synthesized `instanceId` matching MIG-7.2c's post-collapse
+  // convention so `system.adapter.*` envelope ids stay stable.
+  const discord = flattenDiscordPresences(cortexConfig.agents);
+  const mattermost = flattenMattermostPresences(cortexConfig.agents);
+
+  // Build the merged BotConfig-shaped object. Networks behave the same
+  // way they do in the legacy path; renderers + nats + the *Config blocks
+  // are passthrough.
+  const merged: Record<string, unknown> = {
+    agent: synthesizedAgent,
+    discord,
+    mattermost,
+    networks,
+    networksDir: cortexConfig.networksDir,
+    renderers: cortexConfig.renderers,
+    claude: cortexConfig.claude,
+    attachments: cortexConfig.attachments,
+    execution: cortexConfig.execution,
+    github: cortexConfig.github,
+    paths: cortexConfig.paths,
+    ...(cortexConfig.nats !== undefined && { nats: cortexConfig.nats }),
+  };
+
+  return {
+    config: BotConfigSchema.parse(merged),
+    inlineAgents: [...cortexConfig.agents],
+  };
+}
+
+/**
+ * Convert each agent's optional Discord presence into a flat BotConfig
+ * discord entry. Empty when no agent has Discord presence.
+ *
+ * The synthesized `instanceId` matches the MIG-7.2c default convention —
+ * `${agent.id}-discord` with no guild suffix (one presence per agent in
+ * cortex shape). This keeps `system.adapter.*` envelope ids stable across
+ * the schema flip; operators who grep for the old `{agentName}-discord-{guildId}`
+ * pattern will see the collapsed form once cortex.yaml is in effect.
+ */
+function flattenDiscordPresences(agents: ReadonlyArray<Agent>) {
+  const out: Array<DiscordPresence & { instanceId: string }> = [];
+  for (const a of agents) {
+    const p = a.presence.discord;
+    if (!p) continue;
+    out.push({ ...p, instanceId: `${a.id}-discord` });
+  }
+  return out;
+}
+
+function flattenMattermostPresences(agents: ReadonlyArray<Agent>) {
+  const out: Array<MattermostPresence & { instanceId: string }> = [];
+  for (const a of agents) {
+    const p = a.presence.mattermost;
+    if (!p) continue;
+    out.push({ ...p, instanceId: `${a.id}-mattermost` });
+  }
+  return out;
 }
 
 // =============================================================================
