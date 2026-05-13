@@ -34,8 +34,19 @@ chmod 755 "${EVENTS_DIR}/published"
 echo "  ✓ Runtime directories created"
 
 # ─── 2. Executable permissions ──────────────────────────────────
-chmod +x "${CORTEX_DIR}/src/cortex.ts"
-chmod +x "${CORTEX_DIR}/src/taps/cc-events/relay.ts"
+# Idempotent: skip chmod when the file is already executable. Both entry
+# points are tracked as mode 100755 in git (cortex#101), so on a normal
+# `git clone`/`git pull` host this loop is a no-op and the pkg dir stays
+# clean — which means the next `arc upgrade Cortex` can `git pull` without
+# "local changes would be overwritten" aborting the upgrade.
+# Belt-and-braces: on hosts where the executable bit somehow doesn't survive
+# (alternate filesystem, copy-not-clone, archived tarball install), the
+# chmod still fires.
+for f in "${CORTEX_DIR}/src/cortex.ts" "${CORTEX_DIR}/src/taps/cc-events/relay.ts"; do
+  if [ ! -x "$f" ]; then
+    chmod +x "$f"
+  fi
+done
 echo "  ✓ Executables marked"
 
 # ─── 3. Relay policy (conditional copy — never overwrites) ──────
