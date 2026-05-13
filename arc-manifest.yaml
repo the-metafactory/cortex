@@ -66,6 +66,15 @@ provides:
     - source: src/taps/cc-events
       target: ~/.claude/relay/cortex
 
+    # ─── Status line (cortex#96) ──────────────────────────────
+    # Cortex inherits grove's statusline role. The main script falls
+    # back gracefully when PAI_DIR or its caches are absent, so the
+    # statusline keeps rendering on hosts without PAI installed.
+    - source: src/statusline/statusline-command.sh
+      target: ~/.claude/statusline-command.sh
+    - source: src/statusline/cortex-status.sh
+      target: ~/.claude/cortex-status.sh
+
   hooks:
     - event: SessionStart
       command: ${PAI_DIR}/hooks/CortexContext.hook.ts
