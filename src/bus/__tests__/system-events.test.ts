@@ -314,3 +314,103 @@ describe("data_residency parameterisation", () => {
     }
   });
 });
+
+describe("classification parameterisation (IAW A.3)", () => {
+  // Federation unblock — every `system.*` helper now accepts an optional
+  // `classification` that flows into envelope.sovereignty.classification.
+  // Defaults remain `"local"` for back-compat; opt-in `"federated"` /
+  // `"public"` lets cortex emit envelopes that match myelin's namespace
+  // grammar (and pass `validateSubjectEnvelopeAlignment` when paired with
+  // the runtime's subject derivation).
+  const source = { org: "metafactory", agent: "cortex", instance: "local" };
+
+  test("omitting classification defaults to local across all helpers", () => {
+    const degraded = createSystemAdapterDegradedEvent({
+      source,
+      adapterId: "x", platform: "discord",
+      disconnectedSince: new Date(), thresholdMs: 1,
+    });
+    const recovered = createSystemAdapterRecoveredEvent({
+      source,
+      adapterId: "x", platform: "discord", degradedForMs: 1,
+    });
+    const disconnected = createSystemAdapterDisconnectedEvent({
+      source,
+      adapterId: "x", platform: "discord",
+      disconnectedSince: new Date(), wasClean: true,
+    });
+    const aborted = createSystemInboundAbortedEvent({
+      source,
+      adapterId: "x", inboundMessageId: "1",
+      timeoutSource: "unknown", timeoutMs: 1, elapsedMs: 1,
+      phase: "pre_dispatch",
+    });
+    for (const env of [degraded, recovered, disconnected, aborted]) {
+      expect(env.sovereignty.classification).toBe("local");
+      expect(validateEnvelope(env).ok).toBe(true);
+    }
+  });
+
+  test("classification: 'federated' opts into the federation namespace", () => {
+    const degraded = createSystemAdapterDegradedEvent({
+      source,
+      adapterId: "x", platform: "discord",
+      disconnectedSince: new Date(), thresholdMs: 1,
+      classification: "federated",
+    });
+    const recovered = createSystemAdapterRecoveredEvent({
+      source,
+      adapterId: "x", platform: "discord", degradedForMs: 1,
+      classification: "federated",
+    });
+    const disconnected = createSystemAdapterDisconnectedEvent({
+      source,
+      adapterId: "x", platform: "discord",
+      disconnectedSince: new Date(), wasClean: true,
+      classification: "federated",
+    });
+    const aborted = createSystemInboundAbortedEvent({
+      source,
+      adapterId: "x", inboundMessageId: "1",
+      timeoutSource: "unknown", timeoutMs: 1, elapsedMs: 1,
+      phase: "pre_dispatch",
+      classification: "federated",
+    });
+    for (const env of [degraded, recovered, disconnected, aborted]) {
+      expect(env.sovereignty.classification).toBe("federated");
+      // Schema must still accept the federated classification.
+      expect(validateEnvelope(env).ok).toBe(true);
+    }
+  });
+
+  test("classification: 'public' opts into the public namespace", () => {
+    const degraded = createSystemAdapterDegradedEvent({
+      source,
+      adapterId: "x", platform: "discord",
+      disconnectedSince: new Date(), thresholdMs: 1,
+      classification: "public",
+    });
+    const recovered = createSystemAdapterRecoveredEvent({
+      source,
+      adapterId: "x", platform: "discord", degradedForMs: 1,
+      classification: "public",
+    });
+    const disconnected = createSystemAdapterDisconnectedEvent({
+      source,
+      adapterId: "x", platform: "discord",
+      disconnectedSince: new Date(), wasClean: true,
+      classification: "public",
+    });
+    const aborted = createSystemInboundAbortedEvent({
+      source,
+      adapterId: "x", inboundMessageId: "1",
+      timeoutSource: "unknown", timeoutMs: 1, elapsedMs: 1,
+      phase: "pre_dispatch",
+      classification: "public",
+    });
+    for (const env of [degraded, recovered, disconnected, aborted]) {
+      expect(env.sovereignty.classification).toBe("public");
+      expect(validateEnvelope(env).ok).toBe(true);
+    }
+  });
+});

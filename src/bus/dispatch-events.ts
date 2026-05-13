@@ -42,7 +42,7 @@
  *     (since `correlation_id` constraint is UUID).
  */
 
-import type { Envelope } from "./myelin/envelope-validator";
+import type { Classification, Envelope } from "./myelin/envelope-validator";
 import { buildBaseEnvelope as buildSharedEnvelope } from "./envelope-builder";
 import type { SystemEventSource } from "./system-events";
 
@@ -57,7 +57,7 @@ function buildSource(src: SystemEventSource): string {
 
 /**
  * Default sovereignty for `dispatch.task.*` events. Same posture as
- * `system.*`: operator-only, local residency, no federation, no frontier.
+ * `system.*`: operator-only by default, local residency, no frontier.
  *
  * `data_residency` is sourced from `source.dataResidency` (defaulting to
  * `"NZ"` for the original cortex deployment) so a non-NZ operator gets
@@ -65,12 +65,21 @@ function buildSource(src: SystemEventSource): string {
  * pattern in `system-events.ts` so both event domains read the same field
  * off the same source struct.
  *
+ * **IAW Phase A.3:** `classification` is now an optional parameter
+ * (defaulting to `"local"` for back-compat). Callers may opt into
+ * `"federated"` or `"public"` when dispatch lifecycle events need to cross
+ * operator boundaries (e.g. a federated multi-org dispatch). The default
+ * keeps every existing call site behaving identically.
+ *
  * Returned as a fresh literal per call so a downstream mutation on one
  * envelope's `sovereignty` cannot leak into a sibling envelope.
  */
-function defaultDispatchSovereignty(source: SystemEventSource): Envelope["sovereignty"] {
+function defaultDispatchSovereignty(
+  source: SystemEventSource,
+  classification: Classification = "local",
+): Envelope["sovereignty"] {
   return {
-    classification: "local",
+    classification,
     data_residency: source.dataResidency ?? "NZ",
     max_hop: 0,
     frontier_ok: false,
@@ -115,6 +124,16 @@ export interface DispatchTaskCommonOpts {
    * share one correlation key" guarantee.
    */
   correlationId?: string;
+  /**
+   * IAW Phase A.3 — optional sovereignty classification. Defaults to
+   * `"local"` (operator-private). Set to `"federated"` when a dispatch
+   * lifecycle event needs to reach peer operators (e.g. a multi-org task
+   * pipeline whose progress should surface on federated dashboards);
+   * `"public"` for global visibility. Mismatch with the publish-time
+   * subject is a protocol violation (see
+   * {@link validateSubjectEnvelopeAlignment}).
+   */
+  classification?: Classification;
 }
 
 /**
@@ -137,7 +156,7 @@ function buildBaseEnvelope(
   return buildSharedEnvelope({
     type,
     source: buildSource(common.source),
-    sovereignty: defaultDispatchSovereignty(common.source),
+    sovereignty: defaultDispatchSovereignty(common.source, common.classification),
     correlationId: common.correlationId ?? common.taskId,
     payload: {
       task_id: common.taskId,

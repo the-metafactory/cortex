@@ -51,7 +51,7 @@
  * connection-watcher refactor is a follow-on iteration.
  */
 
-import type { Envelope } from "./myelin/envelope-validator";
+import type { Classification, Envelope } from "./myelin/envelope-validator";
 import { buildBaseEnvelope } from "./envelope-builder";
 
 /**
@@ -91,15 +91,24 @@ function buildSource(src: SystemEventSource): string {
  * callers receive a fresh object literal (no aliasing risk if a caller
  * mutates the returned envelope's `sovereignty`).
  *
- * `system.*` events expose internal grove state — operator-only, never
- * federated outside the org, never sent to frontier models. The `data_residency`
- * field is sourced from `source.dataResidency` (defaulting to `"NZ"`) so a
- * non-NZ operator gets envelopes stamped with their actual residency without
- * having to override the entire sovereignty object at every call site.
+ * `system.*` events expose internal grove state — operator-only by default,
+ * never sent to frontier models. The `data_residency` field is sourced from
+ * `source.dataResidency` (defaulting to `"NZ"`) so a non-NZ operator gets
+ * envelopes stamped with their actual residency without having to override
+ * the entire sovereignty object at every call site.
+ *
+ * **IAW Phase A.3:** `classification` is now an optional parameter
+ * (defaulting to `"local"` for back-compat). Callers may opt into
+ * `"federated"` or `"public"` when an operator-side decision determines the
+ * envelope's reach. The default keeps every existing call site behaving
+ * identically.
  */
-function defaultSystemSovereignty(source: SystemEventSource): Envelope["sovereignty"] {
+function defaultSystemSovereignty(
+  source: SystemEventSource,
+  classification: Classification = "local",
+): Envelope["sovereignty"] {
   return {
-    classification: "local",
+    classification,
     data_residency: source.dataResidency ?? "NZ",
     max_hop: 0,
     frontier_ok: false,
@@ -150,6 +159,15 @@ export interface SystemAdapterDegradedOpts {
   reconnectAttempts?: number;
   /** Platform-specific shard/connection identifier. Optional. */
   shardId?: number;
+  /**
+   * IAW Phase A.3 — optional sovereignty classification. Defaults to
+   * `"local"` (operator-private). Set to `"federated"` to publish on
+   * `federated.{org}.system.adapter.degraded` so peer dashboards in the
+   * operator's federation policy can render the event; `"public"` for
+   * global visibility. Mismatch with the publish-time subject is a
+   * protocol violation (see {@link validateSubjectEnvelopeAlignment}).
+   */
+  classification?: Classification;
 }
 
 /**
@@ -165,7 +183,7 @@ export function createSystemAdapterDegradedEvent(
   return buildBaseEnvelope({
     type: "system.adapter.degraded",
     source: buildSource(opts.source),
-    sovereignty: defaultSystemSovereignty(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
     payload: {
       adapter_id: opts.adapterId,
       platform: opts.platform,
@@ -202,6 +220,12 @@ export interface SystemAdapterRecoveredOpts {
   disconnectedSince?: Date;
   /** How many attempts before recovery. Optional. */
   reconnectAttempts?: number;
+  /**
+   * IAW Phase A.3 — optional sovereignty classification. Defaults to
+   * `"local"`. See `SystemAdapterDegradedOpts.classification` for the full
+   * doc.
+   */
+  classification?: Classification;
 }
 
 /**
@@ -217,7 +241,7 @@ export function createSystemAdapterRecoveredEvent(
   return buildBaseEnvelope({
     type: "system.adapter.recovered",
     source: buildSource(opts.source),
-    sovereignty: defaultSystemSovereignty(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
     payload: {
       adapter_id: opts.adapterId,
       platform: opts.platform,
@@ -250,6 +274,12 @@ export interface SystemAdapterDisconnectedOpts {
   closeReason?: string;
   /** True if this was a clean shutdown (vs unexpected drop). */
   wasClean: boolean;
+  /**
+   * IAW Phase A.3 — optional sovereignty classification. Defaults to
+   * `"local"`. See `SystemAdapterDegradedOpts.classification` for the full
+   * doc.
+   */
+  classification?: Classification;
 }
 
 /**
@@ -265,7 +295,7 @@ export function createSystemAdapterDisconnectedEvent(
   return buildBaseEnvelope({
     type: "system.adapter.disconnected",
     source: buildSource(opts.source),
-    sovereignty: defaultSystemSovereignty(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
     payload: {
       adapter_id: opts.adapterId,
       platform: opts.platform,
@@ -321,6 +351,12 @@ export interface SystemInboundAbortedOpts {
   /** Wall time from dispatch start to abort (ms). */
   elapsedMs: number;
   phase: SystemInboundAbortedPhase;
+  /**
+   * IAW Phase A.3 — optional sovereignty classification. Defaults to
+   * `"local"`. See `SystemAdapterDegradedOpts.classification` for the full
+   * doc.
+   */
+  classification?: Classification;
 }
 
 /**
@@ -343,7 +379,7 @@ export function createSystemInboundAbortedEvent(
   return buildBaseEnvelope({
     type: "system.inbound.aborted",
     source: buildSource(opts.source),
-    sovereignty: defaultSystemSovereignty(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
     ...(opts.correlationId !== undefined && { correlationId: opts.correlationId }),
     payload: {
       adapter_id: opts.adapterId,

@@ -324,3 +324,68 @@ export function getLastStampPrincipal(envelope: Envelope): string | undefined {
   if (chain.length === 0) return undefined;
   return chain[chain.length - 1]!.principal;
 }
+
+/**
+ * Sovereignty classification values per the myelin envelope schema. Exported
+ * so emit-site helpers (`system-events.ts`, `dispatch-events.ts`,
+ * `github-events.ts`, `taps/cc-events/cc-events.ts`) can accept an optional
+ * `classification` parameter without redeclaring the enum.
+ */
+export type Classification = Envelope["sovereignty"]["classification"];
+
+/**
+ * IAW Phase A.3 — port of myelin's `deriveNatsSubject` (myelin
+ * `src/envelope.ts:337-345`, pinned at `SCHEMA_SOURCE_COMMIT` above).
+ *
+ * Subject prefix mirrors `envelope.sovereignty.classification` per the
+ * 1:1 alignment myelin enforces with
+ * {@link validateSubjectEnvelopeAlignment}:
+ *
+ *   - `classification === "local"`     → `local.{org}.{type}`
+ *   - `classification === "federated"` → `federated.{org}.{type}`
+ *   - `classification === "public"`    → `public.{type}` (no org — public is global)
+ *
+ * `{org}` is the first dotted segment of `envelope.source` (the same value
+ * cortex's MyelinRuntime captures from `agent.operatorId` at startup, so
+ * subject and source stay symmetrical).
+ *
+ * Pure function; safe to call from any context.
+ */
+export function deriveNatsSubject(envelope: Envelope): string {
+  const classification = envelope.sovereignty.classification;
+  if (classification === "public") {
+    // Public is global — no `{org}` segment. Matches myelin's grammar.
+    return `public.${envelope.type}`;
+  }
+  const org = envelope.source.split(".")[0] ?? "default";
+  return `${classification}.${org}.${envelope.type}`;
+}
+
+/**
+ * IAW Phase A.3 — port of myelin's `validateSubjectEnvelopeAlignment`
+ * (myelin `src/envelope.ts:347-358`). Pure validator: confirms the leading
+ * segment of a NATS subject matches `envelope.sovereignty.classification`.
+ *
+ * Cortex uses this as a defensive invariant when publishing on a
+ * `MyelinRuntime` — a `local.*` subject must NOT carry a `federated` or
+ * `public` envelope (and vice-versa). Misalignment is a protocol violation:
+ * downstream peers may drop or reject the envelope.
+ *
+ * Result shape mirrors myelin so a future merge keeps the same surface.
+ */
+export function validateSubjectEnvelopeAlignment(
+  subject: string,
+  envelope: Envelope,
+): {
+  aligned: boolean;
+  expected: Classification;
+  actual: string;
+} {
+  const subjectPrefix = subject.split(".")[0] ?? "";
+  const envelopeClassification = envelope.sovereignty.classification;
+  return {
+    aligned: subjectPrefix === envelopeClassification,
+    expected: envelopeClassification,
+    actual: subjectPrefix,
+  };
+}

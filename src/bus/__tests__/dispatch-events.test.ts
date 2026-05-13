@@ -253,3 +253,53 @@ describe("dispatch.task.* — data_residency parameterisation", () => {
     }
   });
 });
+
+describe("dispatch.task.* — classification parameterisation (IAW A.3)", () => {
+  const common = {
+    source: SOURCE,
+    taskId: TASK_ID,
+    agentId: "cortex",
+    startedAt: STARTED_AT,
+  };
+
+  test("omitting classification defaults to local for every lifecycle helper", () => {
+    const envs = [
+      createDispatchTaskStartedEvent(common),
+      createDispatchTaskCompletedEvent({ ...common, completedAt: COMPLETED_AT }),
+      createDispatchTaskFailedEvent({ ...common, failedAt: COMPLETED_AT, errorSummary: "x" }),
+      createDispatchTaskAbortedEvent({ ...common, abortedAt: COMPLETED_AT, reason: "timeout" }),
+    ];
+    for (const env of envs) {
+      expect(env.sovereignty.classification).toBe("local");
+      expect(validateEnvelope(env).ok).toBe(true);
+    }
+  });
+
+  test("classification: 'federated' flows into envelope.sovereignty for every helper", () => {
+    const fed = { ...common, classification: "federated" as const };
+    const envs = [
+      createDispatchTaskStartedEvent(fed),
+      createDispatchTaskCompletedEvent({ ...fed, completedAt: COMPLETED_AT }),
+      createDispatchTaskFailedEvent({ ...fed, failedAt: COMPLETED_AT, errorSummary: "x" }),
+      createDispatchTaskAbortedEvent({ ...fed, abortedAt: COMPLETED_AT, reason: "timeout" }),
+    ];
+    for (const env of envs) {
+      expect(env.sovereignty.classification).toBe("federated");
+      expect(validateEnvelope(env).ok).toBe(true);
+    }
+  });
+
+  test("classification: 'public' flows into envelope.sovereignty for every helper", () => {
+    const pub = { ...common, classification: "public" as const };
+    const envs = [
+      createDispatchTaskStartedEvent(pub),
+      createDispatchTaskCompletedEvent({ ...pub, completedAt: COMPLETED_AT }),
+      createDispatchTaskFailedEvent({ ...pub, failedAt: COMPLETED_AT, errorSummary: "x" }),
+      createDispatchTaskAbortedEvent({ ...pub, abortedAt: COMPLETED_AT, reason: "timeout" }),
+    ];
+    for (const env of envs) {
+      expect(env.sovereignty.classification).toBe("public");
+      expect(validateEnvelope(env).ok).toBe(true);
+    }
+  });
+});

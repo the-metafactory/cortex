@@ -256,3 +256,37 @@ describe("createGithubEventEnvelope", () => {
     expect(validation.ok).toBe(true);
   });
 });
+
+describe("github.* — classification parameterisation (IAW A.3)", () => {
+  const baseOpts = {
+    source: SRC,
+    event: "pull_request",
+    action: "opened",
+    deliveryId: "12345678-1234-4234-8234-123456789012",
+    payload: { number: 42 },
+  };
+
+  test("omitting classification defaults to local (operator-private)", () => {
+    const env = createGithubEventEnvelope(baseOpts);
+    expect(env.sovereignty.classification).toBe("local");
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("classification: 'federated' flows into envelope.sovereignty", () => {
+    const env = createGithubEventEnvelope({
+      ...baseOpts,
+      classification: "federated",
+    });
+    expect(env.sovereignty.classification).toBe("federated");
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("classification: 'public' flows into envelope.sovereignty", () => {
+    const env = createGithubEventEnvelope({
+      ...baseOpts,
+      classification: "public",
+    });
+    expect(env.sovereignty.classification).toBe("public");
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+});

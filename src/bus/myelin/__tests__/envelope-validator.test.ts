@@ -10,11 +10,13 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  deriveNatsSubject,
   getLastStampPrincipal,
   getSignedByChain,
   SCHEMA_SOURCE_COMMIT,
   tryParseEnvelope,
   validateEnvelope,
+  validateSubjectEnvelopeAlignment,
   type Envelope,
 } from "../envelope-validator";
 import validEnvelope from "../vendor/__fixtures__/valid-envelope.json" with { type: "json" };
@@ -487,5 +489,123 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
     expect(SCHEMA_SOURCE_COMMIT).toBe(
       "4578ae1e9bc595e667fbb356ea2c12c8c2c3cc8a",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// IAW Phase A.3 — subject derivation + envelope alignment.
+// ---------------------------------------------------------------------------
+
+describe("deriveNatsSubject (IAW A.3)", () => {
+  function envWithClassification(
+    classification: Envelope["sovereignty"]["classification"],
+    source = "metafactory.cortex.local",
+    type = "system.adapter.degraded",
+  ): Envelope {
+    return {
+      ...(validEnvelope as unknown as Envelope),
+      source,
+      type,
+      sovereignty: {
+        ...(validEnvelope as unknown as Envelope).sovereignty,
+        classification,
+      },
+    };
+  }
+
+  test("local classification → local.{org}.{type}", () => {
+    const env = envWithClassification("local");
+    expect(deriveNatsSubject(env)).toBe(
+      "local.metafactory.system.adapter.degraded",
+    );
+  });
+
+  test("federated classification → federated.{org}.{type}", () => {
+    const env = envWithClassification("federated");
+    expect(deriveNatsSubject(env)).toBe(
+      "federated.metafactory.system.adapter.degraded",
+    );
+  });
+
+  test("public classification → public.{type} (no org segment)", () => {
+    const env = envWithClassification("public");
+    expect(deriveNatsSubject(env)).toBe("public.system.adapter.degraded");
+  });
+
+  test("derives {org} from envelope.source's first segment", () => {
+    // A different operator (`acme.*`) routes onto its own subject namespace
+    // without any runtime-side configuration.
+    const env = envWithClassification("local", "acme.cortex.prod-01");
+    expect(deriveNatsSubject(env)).toBe(
+      "local.acme.system.adapter.degraded",
+    );
+  });
+});
+
+describe("validateSubjectEnvelopeAlignment (IAW A.3)", () => {
+  function envWithClassification(
+    classification: Envelope["sovereignty"]["classification"],
+  ): Envelope {
+    return {
+      ...(validEnvelope as unknown as Envelope),
+      sovereignty: {
+        ...(validEnvelope as unknown as Envelope).sovereignty,
+        classification,
+      },
+    };
+  }
+
+  test("aligned local subject", () => {
+    const env = envWithClassification("local");
+    const result = validateSubjectEnvelopeAlignment(
+      "local.metafactory.system.adapter.degraded",
+      env,
+    );
+    expect(result.aligned).toBe(true);
+    expect(result.expected).toBe("local");
+    expect(result.actual).toBe("local");
+  });
+
+  test("aligned federated subject", () => {
+    const env = envWithClassification("federated");
+    const result = validateSubjectEnvelopeAlignment(
+      "federated.metafactory.system.adapter.degraded",
+      env,
+    );
+    expect(result.aligned).toBe(true);
+  });
+
+  test("aligned public subject (no org segment)", () => {
+    const env = envWithClassification("public");
+    const result = validateSubjectEnvelopeAlignment(
+      "public.system.adapter.degraded",
+      env,
+    );
+    expect(result.aligned).toBe(true);
+  });
+
+  test("misaligned subject is detected — federated envelope on local subject", () => {
+    // The protocol violation IAW A.3 guards against: a federated envelope
+    // accidentally published on a `local.*` subject would leak operator-
+    // private semantics onto the federated bus, or vice versa.
+    const env = envWithClassification("federated");
+    const result = validateSubjectEnvelopeAlignment(
+      "local.metafactory.system.adapter.degraded",
+      env,
+    );
+    expect(result.aligned).toBe(false);
+    expect(result.expected).toBe("federated");
+    expect(result.actual).toBe("local");
+  });
+
+  test("misaligned subject is detected — local envelope on public subject", () => {
+    const env = envWithClassification("local");
+    const result = validateSubjectEnvelopeAlignment(
+      "public.system.adapter.degraded",
+      env,
+    );
+    expect(result.aligned).toBe(false);
+    expect(result.expected).toBe("local");
+    expect(result.actual).toBe("public");
   });
 });
