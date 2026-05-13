@@ -730,6 +730,23 @@ configuration while debugging the operator-mode setup offline. Cortex
 itself does not need to be restarted — the bot reconnects to the
 re-loaded NATS server within a few seconds.
 
+### 9.5 Related work
+
+The operator-mode pivot only carries weight end-to-end alongside the code
+landings that make a federated, signed, trust-aware fabric usable. Cross-
+references so a reader of §9 can navigate to the related primitives:
+
+- [cortex#86 — NatsLink credsAuthenticator support](https://github.com/the-metafactory/cortex/issues/86):
+  landed the daemon's own connect path against operator-mode NATS
+  (creds-based authenticator wired into the in-process bot↔server link).
+  Without #86 the bot can connect to a mem-resolver server but not to an
+  operator-mode one — §9 assumes #86 is in place.
+- [cortex#98 — TrustResolver auto-populate `trustedBotIds`](https://github.com/the-metafactory/cortex/issues/98):
+  landed the inter-bot allowlist so peer bots inside the same cortex
+  instance can DM each other under the operator-mode signing universe.
+  Without #98 the per-agent `trust:` lists in cortex.yaml are honoured
+  for outbound trust but inbound trust silently drops peer messages.
+
 ---
 
 *This plan is the ground truth for the migration. When reality drifts from it, update the plan first, then the world. For "what cortex IS" architecture, see `docs/design-cortex.md`.*
