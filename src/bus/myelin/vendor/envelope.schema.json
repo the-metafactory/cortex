@@ -68,34 +68,69 @@
     },
     "economics": {
       "type": "object",
-      "description": "Reserved for future token economics, wallet integration, and budget constraints. Do not populate in v1 — schema will be defined when payment infrastructure matures.",
-      "properties": {},
+      "description": "F-15: token economics, cost tracking, and billing attribution. Mutable annotation field — intermediaries may aggregate. MUST NOT inform security or trust decisions (architecture.md §5.2).",
+      "properties": {
+        "budget": {
+          "type": "object",
+          "description": "Publisher-set constraints on resource usage.",
+          "properties": {
+            "max_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum total tokens (input + output) permitted."
+            },
+            "max_cost_usd": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Maximum cost in USD."
+            }
+          },
+          "additionalProperties": true
+        },
+        "actual": {
+          "type": "object",
+          "description": "Actual resource usage populated by executor; aggregated by hubs in delegate chains.",
+          "properties": {
+            "input_tokens": { "type": "integer", "minimum": 0 },
+            "output_tokens": { "type": "integer", "minimum": 0 },
+            "total_tokens": { "type": "integer", "minimum": 0 },
+            "model": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]*$",
+              "description": "Lowercase model identifier (e.g., claude-sonnet-4, gpt-4o)."
+            },
+            "duration_ms": { "type": "integer", "minimum": 0 },
+            "cost_usd": { "type": "number", "minimum": 0 }
+          },
+          "additionalProperties": true
+        },
+        "wallet": {
+          "type": "string",
+          "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$",
+          "description": "DID of principal receiving/paying for this work."
+        },
+        "billing_ref": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "External invoice or tracking reference."
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$",
+          "description": "ISO 4217 currency code when not USD."
+        }
+      },
       "additionalProperties": true
     },
     "signed_by": {
-      "type": "object",
-      "description": "Identity attestation — proves who sent this envelope. Discriminated on method.",
+      "description": "Identity chain (myelin#31). Each stamp signs the canonical bytes of the envelope including the prior chain — tampering with any earlier stamp invalidates every subsequent stamp. Accepted shapes: a single stamp object (legacy back-compat shim, normalized to a one-element chain) or an array of stamps (canonical form).",
       "oneOf": [
+        { "$ref": "#/$defs/signedByStamp" },
         {
-          "required": ["method", "principal", "signature", "at"],
-          "properties": {
-            "method": { "const": "ed25519" },
-            "principal": { "type": "string", "pattern": "^did:mf:[a-z][a-z0-9._-]+$" },
-            "signature": { "type": "string", "minLength": 88, "pattern": "^[A-Za-z0-9+/]+=*$" },
-            "at": { "type": "string", "format": "date-time" }
-          },
-          "additionalProperties": false
-        },
-        {
-          "required": ["method", "principal", "stamped_by", "signature", "at"],
-          "properties": {
-            "method": { "const": "hub-stamp" },
-            "principal": { "type": "string", "pattern": "^did:mf:[a-z][a-z0-9._-]+$" },
-            "stamped_by": { "type": "string", "pattern": "^did:mf:[a-z][a-z0-9._-]+$" },
-            "signature": { "type": "string", "minLength": 88, "pattern": "^[A-Za-z0-9+/]+=*$" },
-            "at": { "type": "string", "format": "date-time" }
-          },
-          "additionalProperties": false
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/signedByStamp" }
         }
       ]
     },
@@ -107,7 +142,82 @@
     "payload": {
       "type": "object",
       "description": "Arbitrary signal content. Structure is domain-specific — the envelope does not constrain payload shape."
+    },
+    "requirements": {
+      "type": "array",
+      "description": "F-021: capability tags the task needs. Match against AGENT_CAPABILITIES KV (myelin#9). Empty array = no filter. Pattern parallels DID_RE — no trailing or consecutive hyphens.",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z](?:[a-z0-9]|-(?!-)){0,62}[a-z0-9]$"
+      },
+      "maxItems": 10,
+      "examples": [["code-review", "typescript"], ["security-scan"]]
+    },
+    "sovereignty_required": {
+      "type": "string",
+      "enum": ["open", "selective", "strict", "bidding"],
+      "description": "F-021: minimum agent sovereignty mode. open = ack all; selective = evaluate-and-may-nak; strict = explicit capability + sovereignty match; bidding (F-10) = broadcast bid-request, collect signed responses, select winner."
+    },
+    "deadline": {
+      "type": "string",
+      "format": "date-time",
+      "description": "F-021: ISO-8601 absolute soft deadline. Informs nak `not-now` decisions."
+    },
+    "distribution_mode": {
+      "type": "string",
+      "enum": ["broadcast", "direct", "delegate"],
+      "description": "F-021: operator-facing routing semantics. broadcast = competing consumers; direct = named recipient; delegate = outcome handoff (multi-step orchestration)."
+    },
+    "target_principal": {
+      "type": "string",
+      "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$",
+      "description": "F-021: required when distribution_mode is direct or delegate. DID of the receiving agent."
     }
   },
-  "additionalProperties": false
+  "allOf": [
+    {
+      "if": {
+        "properties": { "distribution_mode": { "enum": ["direct", "delegate"] } },
+        "required": ["distribution_mode"]
+      },
+      "then": { "required": ["target_principal"] }
+    }
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "signedByStamp": {
+      "type": "object",
+      "description": "A single identity attestation in the chain (myelin#31). Discriminated on method.",
+      "oneOf": [
+        {
+          "required": ["method", "principal", "signature", "at"],
+          "properties": {
+            "method": { "const": "ed25519" },
+            "principal": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
+            "signature": { "type": "string", "minLength": 88, "pattern": "^[A-Za-z0-9+/]+=*$" },
+            "at": { "type": "string", "format": "date-time" },
+            "role": { "$ref": "#/$defs/stampRole" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "required": ["method", "principal", "stamped_by", "signature", "at"],
+          "properties": {
+            "method": { "const": "hub-stamp" },
+            "principal": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
+            "stamped_by": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
+            "signature": { "type": "string", "minLength": 88, "pattern": "^[A-Za-z0-9+/]+=*$" },
+            "at": { "type": "string", "format": "date-time" },
+            "role": { "$ref": "#/$defs/stampRole" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "stampRole": {
+      "type": "string",
+      "enum": ["origin", "transit", "accountability", "sovereignty", "notary"],
+      "description": "Semantic role of this stamp in the chain (myelin#31). Optional for back-compat."
+    }
+  }
 }

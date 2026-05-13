@@ -246,7 +246,7 @@ What cortex depends on, what cortex must not do, and what to read in each upstre
 |--------|--------|
 | Spec home | `the-metafactory/myelin` — `schemas/envelope.schema.json` + `specs/namespace.md`. |
 | Status | ✅ Shipped (MY-100 — ISA 30/30 complete). MY-102 (TS library) and MY-200 (sovereignty enforcement) on the myelin roadmap. |
-| Cortex's dependency | **Vendored** at `src/bus/myelin/vendor/` — pinned at upstream commit `96b14ea`. Vendor bumps are explicit PRs. |
+| Cortex's dependency | **Vendored** at `src/bus/myelin/vendor/` — pinned at upstream commit `4578ae1` (IAW Phase A.2 bump from `96b14ea`, post-F-021 task envelope + MY-400 chain-of-stamps + F-15 economics). Vendor bumps are explicit PRs. |
 | Cortex's contract | Cortex never extends the envelope schema. Cortex validates inbound envelopes via Ajv2020 before processing. Cortex publishes envelopes whose `type` matches the documented `domain.entity.action` grammar. Cortex sets `sovereignty` per-envelope at publish time (defaults: `local`, `frontier_ok: true`, `model_class: any` for review/dispatch domains; tightened for sensitive payloads). |
 | Subject namespace | `local.{org}.{domain}.{entity}.{action}` (org-only), `federated.{org}.{domain}.{entity}.{action}` (cross-org via sovereignty), `public.{domain}.{entity}.{action}` (unrestricted). |
 | Coupling discipline | Cortex MUST NOT runtime-import `myelin/` — vendor schema only. (Once MY-102 ships a `@metafactory/myelin` TS library it may be added as a dependency.) |

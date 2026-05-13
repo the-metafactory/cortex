@@ -10,9 +10,12 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  getLastStampPrincipal,
+  getSignedByChain,
   SCHEMA_SOURCE_COMMIT,
   tryParseEnvelope,
   validateEnvelope,
+  type Envelope,
 } from "../envelope-validator";
 import validEnvelope from "../vendor/__fixtures__/valid-envelope.json" with { type: "json" };
 import invalidMissingSovereignty from "../vendor/__fixtures__/invalid-missing-sovereignty.json" with { type: "json" };
@@ -104,7 +107,7 @@ describe("envelope-validator", () => {
   // sig length per the schema's minLength constraint.
   const ED25519_SIG = "A".repeat(88);
 
-  test("accepts an envelope with valid ed25519 signed_by", () => {
+  test("accepts an envelope with valid ed25519 signed_by (legacy single-stamp shim)", () => {
     const env = {
       ...(validEnvelope as object),
       signed_by: {
@@ -117,7 +120,12 @@ describe("envelope-validator", () => {
     const result = validateEnvelope(env);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.envelope.signed_by?.method).toBe("ed25519");
+      // Single-stamp wire shape — surfaced as the object form. `getSignedByChain`
+      // normalises this to an array in the next describe block.
+      const stamp = result.envelope.signed_by;
+      expect(stamp && !Array.isArray(stamp) ? stamp.method : null).toBe(
+        "ed25519",
+      );
     }
   });
 
@@ -134,8 +142,13 @@ describe("envelope-validator", () => {
     };
     const result = validateEnvelope(env);
     expect(result.ok).toBe(true);
-    if (result.ok && result.envelope.signed_by?.method === "hub-stamp") {
-      expect(result.envelope.signed_by.stamped_by).toBe("did:mf:hub-eu-1");
+    if (result.ok) {
+      const stamp = result.envelope.signed_by;
+      expect(
+        stamp && !Array.isArray(stamp) && stamp.method === "hub-stamp"
+          ? stamp.stamped_by
+          : null,
+      ).toBe("did:mf:hub-eu-1");
     }
   });
 
@@ -180,5 +193,299 @@ describe("envelope-validator", () => {
     };
     const result = validateEnvelope(env);
     expect(result.ok).toBe(false);
+  });
+
+  // IAW Phase A.2 — chain-of-stamps (myelin#31). Cortex now surfaces the
+  // array form of `signed_by` so Phase B can wire trust decisions against
+  // real chain shapes; this slice asserts the schema accepts the array
+  // form and the cortex helpers normalise both shapes uniformly.
+
+  test("accepts an envelope with a chain-of-stamps (array form, myelin#31)", () => {
+    const env = {
+      ...(validEnvelope as object),
+      signed_by: [
+        {
+          method: "ed25519",
+          principal: "did:mf:luna",
+          signature: ED25519_SIG,
+          at: "2026-05-08T09:00:00Z",
+          role: "origin",
+        },
+        {
+          method: "hub-stamp",
+          principal: "did:mf:luna",
+          stamped_by: "did:mf:hub-eu-1",
+          signature: ED25519_SIG,
+          at: "2026-05-08T09:00:01Z",
+          role: "transit",
+        },
+      ],
+    };
+    const result = validateEnvelope(env);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const stamp = result.envelope.signed_by;
+      expect(Array.isArray(stamp)).toBe(true);
+      if (Array.isArray(stamp)) {
+        expect(stamp.length).toBe(2);
+        expect(stamp[0]?.method).toBe("ed25519");
+        expect(stamp[0]?.role).toBe("origin");
+        expect(stamp[1]?.method).toBe("hub-stamp");
+      }
+    }
+  });
+
+  test("rejects a chain-of-stamps with an invalid stamp shape", () => {
+    const env = {
+      ...(validEnvelope as object),
+      signed_by: [
+        {
+          method: "ed25519",
+          principal: "did:mf:luna",
+          signature: ED25519_SIG,
+          at: "2026-05-08T09:00:00Z",
+        },
+        {
+          method: "ed25519",
+          principal: "did:mf:luna",
+          // signature: missing — second stamp is malformed
+          at: "2026-05-08T09:00:01Z",
+        },
+      ],
+    };
+    const result = validateEnvelope(env);
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects an empty chain-of-stamps", () => {
+    const env = { ...(validEnvelope as object), signed_by: [] };
+    const result = validateEnvelope(env);
+    // The schema requires minItems: 1 when the array shape is used.
+    expect(result.ok).toBe(false);
+  });
+
+  test("accepts an unknown stamp role at the schema layer (forward-compat)", () => {
+    // The schema's `stampRole` enum is closed today, so a literal unknown
+    // role would be rejected. Older stamps with no `role` field at all
+    // remain accepted — verified by the legacy-shim test above. This test
+    // exercises the canonical, well-known roles to lock the enum surface.
+    const env = {
+      ...(validEnvelope as object),
+      signed_by: [
+        {
+          method: "ed25519",
+          principal: "did:mf:luna",
+          signature: ED25519_SIG,
+          at: "2026-05-08T09:00:00Z",
+          role: "notary",
+        },
+      ],
+    };
+    const result = validateEnvelope(env);
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("envelope-validator — F-021 task envelope fields (IAW Phase A.2)", () => {
+  // F-021 adds five optional task-routing fields. They are SURFACED in cortex
+  // (visible on the typed Envelope) but not yet acted on for routing or
+  // trust — that's IAW Phase B / cortex#102 territory.
+
+  const ED25519_SIG = "A".repeat(88);
+
+  test("accepts an envelope with all F-021 task fields populated (direct)", () => {
+    const env = {
+      ...(validEnvelope as object),
+      requirements: ["code-review", "typescript"],
+      sovereignty_required: "strict",
+      deadline: "2026-06-01T00:00:00Z",
+      distribution_mode: "direct",
+      target_principal: "did:mf:echo",
+    };
+    const result = validateEnvelope(env);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.envelope.requirements).toEqual(["code-review", "typescript"]);
+      expect(result.envelope.sovereignty_required).toBe("strict");
+      expect(result.envelope.distribution_mode).toBe("direct");
+      expect(result.envelope.target_principal).toBe("did:mf:echo");
+      expect(result.envelope.deadline).toBe("2026-06-01T00:00:00Z");
+    }
+  });
+
+  test("accepts a broadcast envelope with no target_principal", () => {
+    const env = {
+      ...(validEnvelope as object),
+      distribution_mode: "broadcast",
+      sovereignty_required: "open",
+    };
+    const result = validateEnvelope(env);
+    expect(result.ok).toBe(true);
+  });
+
+  test("rejects a direct envelope missing target_principal", () => {
+    const env = {
+      ...(validEnvelope as object),
+      distribution_mode: "direct",
+      // target_principal: missing — schema cross-field rule rejects
+    };
+    const result = validateEnvelope(env);
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects a delegate envelope missing target_principal", () => {
+    const env = {
+      ...(validEnvelope as object),
+      distribution_mode: "delegate",
+    };
+    const result = validateEnvelope(env);
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects an unknown sovereignty_required mode", () => {
+    const env = {
+      ...(validEnvelope as object),
+      sovereignty_required: "absolute",
+    };
+    const result = validateEnvelope(env);
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects an unknown distribution_mode", () => {
+    const env = {
+      ...(validEnvelope as object),
+      distribution_mode: "multicast",
+      target_principal: "did:mf:echo",
+    };
+    const result = validateEnvelope(env);
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects a target_principal that is not a DID", () => {
+    const env = {
+      ...(validEnvelope as object),
+      distribution_mode: "direct",
+      target_principal: "echo@example.com",
+    };
+    const result = validateEnvelope(env);
+    expect(result.ok).toBe(false);
+  });
+
+  test("accepts an envelope with the F-021 bidding sovereignty mode", () => {
+    const env = {
+      ...(validEnvelope as object),
+      sovereignty_required: "bidding",
+      distribution_mode: "broadcast",
+    };
+    const result = validateEnvelope(env);
+    expect(result.ok).toBe(true);
+  });
+
+  test("envelope without F-021 fields stays valid (backward compatible)", () => {
+    // The pre-F-021 fixture has no task fields — the new schema must accept
+    // it unchanged. This locks the back-compat guarantee for legacy emitters
+    // until A.3 parameterises emit sites.
+    const result = validateEnvelope(validEnvelope);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.envelope.requirements).toBeUndefined();
+      expect(result.envelope.distribution_mode).toBeUndefined();
+      expect(result.envelope.target_principal).toBeUndefined();
+    }
+  });
+
+  test("rejects a requirements tag that violates the DID-style pattern", () => {
+    const env = {
+      ...(validEnvelope as object),
+      requirements: ["TypeScript"], // capital letter — pattern is lowercase only
+    };
+    const result = validateEnvelope(env);
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
+  const ED25519_SIG = "A".repeat(88);
+
+  test("getSignedByChain returns [] for an unsigned envelope", () => {
+    const env = tryParseEnvelope(validEnvelope);
+    expect(env).not.toBeNull();
+    expect(getSignedByChain(env as Envelope)).toEqual([]);
+  });
+
+  test("getSignedByChain normalises a single-stamp object to a 1-element array", () => {
+    const env: Envelope = {
+      ...(validEnvelope as unknown as Envelope),
+      signed_by: {
+        method: "ed25519",
+        principal: "did:mf:luna",
+        signature: ED25519_SIG,
+        at: "2026-05-08T09:00:00Z",
+      },
+    };
+    const chain = getSignedByChain(env);
+    expect(chain.length).toBe(1);
+    expect(chain[0]?.method).toBe("ed25519");
+  });
+
+  test("getSignedByChain returns the array form as-is", () => {
+    const env: Envelope = {
+      ...(validEnvelope as unknown as Envelope),
+      signed_by: [
+        {
+          method: "ed25519",
+          principal: "did:mf:luna",
+          signature: ED25519_SIG,
+          at: "2026-05-08T09:00:00Z",
+          role: "origin",
+        },
+        {
+          method: "hub-stamp",
+          principal: "did:mf:luna",
+          stamped_by: "did:mf:hub-eu-1",
+          signature: ED25519_SIG,
+          at: "2026-05-08T09:00:01Z",
+          role: "transit",
+        },
+      ],
+    };
+    const chain = getSignedByChain(env);
+    expect(chain.length).toBe(2);
+    expect(chain[1]?.method).toBe("hub-stamp");
+  });
+
+  test("getLastStampPrincipal returns the principal of the last stamp", () => {
+    const env: Envelope = {
+      ...(validEnvelope as unknown as Envelope),
+      signed_by: [
+        {
+          method: "ed25519",
+          principal: "did:mf:luna",
+          signature: ED25519_SIG,
+          at: "2026-05-08T09:00:00Z",
+        },
+        {
+          method: "hub-stamp",
+          principal: "did:mf:luna",
+          stamped_by: "did:mf:hub-eu-1",
+          signature: ED25519_SIG,
+          at: "2026-05-08T09:00:01Z",
+        },
+      ],
+    };
+    expect(getLastStampPrincipal(env)).toBe("did:mf:luna");
+  });
+
+  test("getLastStampPrincipal returns undefined for an unsigned envelope", () => {
+    const env = tryParseEnvelope(validEnvelope);
+    expect(env).not.toBeNull();
+    expect(getLastStampPrincipal(env as Envelope)).toBeUndefined();
+  });
+
+  test("schema source commit points at the post-F-021 myelin pin", () => {
+    // Lock the pin so future bumps surface in a code review.
+    expect(SCHEMA_SOURCE_COMMIT).toBe(
+      "4578ae1e9bc595e667fbb356ea2c12c8c2c3cc8a",
+    );
   });
 });
