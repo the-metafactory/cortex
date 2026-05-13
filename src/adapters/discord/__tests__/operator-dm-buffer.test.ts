@@ -67,6 +67,7 @@ function makeAdapter(opts: {
     roles: [],
     defaultRole: "allow-all",
     dm: DMConfigSchema.parse({}),
+    trustedBotIds: [],
   };
   const agent: Agent = {
     id: "test",

@@ -51,6 +51,7 @@ function makePresence(overrides: Partial<DiscordPresence> = {}): DiscordPresence
     roles: [],
     defaultRole: "allow-all",
     dm: DMConfigSchema.parse({}),
+    trustedBotIds: [],
     ...overrides,
   };
 }

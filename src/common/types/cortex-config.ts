@@ -159,6 +159,30 @@ export const DiscordPresenceSchema = z.object({
    * notifications. Unset → plain channel post with no mention.
    */
   operatorRoleId: z.coerce.string().optional(),
+  /**
+   * cortex#98 (part A) — operator-set Discord user ids of peer bots that
+   * are permitted to trigger this presence. MIRROR of
+   * `DiscordInstanceSchema.trustedBotIds` in `./config.ts`; the cortex.yaml
+   * loader (`loadCortexShape` in `src/common/config/loader.ts`) threads
+   * this through to the synthesized legacy `DiscordInstance.trustedBotIds`
+   * verbatim so the messageCreate bot-author gate in
+   * `src/adapters/discord/index.ts` honours it.
+   *
+   * The TrustResolver (cortex#76) populates the effective allowlist
+   * automatically for in-process peers (cortex#98 part B); this field
+   * stays as the **cross-process bridge** — peers running in a different
+   * cortex process that the in-process resolver can never see (e.g. Ivy
+   * in PAI's local cortex trusting Holly in a server cortex). The two
+   * sources merge in `src/cortex.ts` before the adapter starts.
+   *
+   * Empty array (default) is fine when every trusted peer is in-process.
+   * `z.coerce.string()` matches the surrounding fields' shape — operators
+   * who paste Discord snowflakes as numbers get them coerced rather than
+   * a schema error. Each entry is a Discord snowflake; the bot's own
+   * user id is never allowed regardless of this list (anti-self-loop
+   * guard in `DiscordAdapter` is unchanged).
+   */
+  trustedBotIds: z.array(z.coerce.string()).default([]),
 });
 
 export type DiscordPresence = z.infer<typeof DiscordPresenceSchema>;

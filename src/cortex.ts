@@ -336,6 +336,11 @@ export async function startCortex(
     // Build the `DiscordPresence` from the bot.yaml discord[i] entry.
     // Schema defaults already applied by `BotConfigSchema` at load time —
     // this is a structural mapping, not a parse.
+    //
+    // cortex#98 (part A): `trustedBotIds` carries the operator-explicit
+    // cross-process bridge list (architecture §9.3). It MUST be threaded
+    // through verbatim — the auto-population step below merges in-process
+    // peers from `agent.trust[]` on top via the TrustResolver (part B).
     const presence: DiscordPresence = {
       enabled: instance.enabled,
       token: instance.token,
@@ -349,6 +354,7 @@ export async function startCortex(
       defaultRole: instance.defaultRole,
       dm: instance.dm,
       ...(instance.operatorRoleId !== undefined && { operatorRoleId: instance.operatorRoleId }),
+      trustedBotIds: instance.trustedBotIds,
     };
     // MIG-7.2e: prefer the cortex-shape `inlineAgents` lookup when present —
     // per-instance identity (real id, persona, roles, trust) flows from

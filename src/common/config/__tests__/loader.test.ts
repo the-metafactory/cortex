@@ -440,4 +440,27 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     const path = writeCortexConfig(testDir, partial);
     expect(() => loadConfigWithAgents(path)).toThrow();
   });
+
+  // cortex#98 (part A) — schema parity: `presence.discord.trustedBotIds`
+  // is preserved through the cortex-shape → legacy BotConfig synthesizer.
+  // Before this fix, DiscordPresenceSchema lacked the field entirely and
+  // zod's default unknown-key-strip behaviour silently dropped the
+  // operator-set value during `CortexConfigSchema.parse`, leaving the
+  // downstream DiscordInstance.trustedBotIds at its schema default ([]).
+  test("threads agents[].presence.discord.trustedBotIds through to DiscordInstance.trustedBotIds", () => {
+    const cfg = minimalCortex();
+    const firstAgent = (cfg.agents as Record<string, unknown>[])[0]!;
+    const discordPresence = (firstAgent.presence as Record<string, unknown>).discord as Record<string, unknown>;
+    discordPresence.trustedBotIds = ["123", "456"];
+    const path = writeCortexConfig(testDir, cfg);
+    const { config } = loadConfigWithAgents(path);
+    expect(config.discord).toHaveLength(1);
+    expect(config.discord[0]!.trustedBotIds).toEqual(["123", "456"]);
+  });
+
+  test("trustedBotIds defaults to [] when omitted from presence.discord", () => {
+    const path = writeCortexConfig(testDir, minimalCortex());
+    const { config } = loadConfigWithAgents(path);
+    expect(config.discord[0]!.trustedBotIds).toEqual([]);
+  });
 });
