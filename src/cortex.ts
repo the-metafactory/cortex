@@ -766,7 +766,8 @@ function setupOutboundLog(
 
   let pollInterval: ReturnType<typeof setInterval> | null = null;
 
-  client.on("ready", () => {
+  // discord.js v15 prep — see comment in adapters/discord/client.ts.
+  client.on("clientReady", () => {
     if (!existsSync(eventsDir)) {
       console.log(`cortex: published events dir not found (${eventsDir}), skipping outbound`);
       return;

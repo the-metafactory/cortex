@@ -108,7 +108,10 @@ export function createDiscordClient(
     failIfNotExists: false,
   });
 
-  client.on("ready", () => {
+  // discord.js v15 renamed `ready` → `clientReady` to disambiguate from the
+  // gateway READY frame; `clientReady` is already emitted alongside `ready`
+  // on v14, so the listener fires identically. See discord.js#10358.
+  client.on("clientReady", () => {
     health.currentlyConnected = true;
     health.lastConnectedAt = new Date();
     console.log(`${tag}: connected as ${client.user?.tag}`);
