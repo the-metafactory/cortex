@@ -1,0 +1,821 @@
+# Internet of Agentic Work — Architectural Synthesis
+
+**Refs:** cortex#110 (META) wrapping cortex#91 + cortex#102 + cortex#107 + cortex#109
+**Status:** Design draft. No implementation in this PR — only synthesis grounded in shipped code.
+**Scope:** Single design view across four sibling issues that, taken together, describe how cortex composes into networks of stacks.
+
+---
+
+## TL;DR
+
+Four sibling design issues converge on one architecture. cortex#91 (substrate harness) decouples agent execution from any single LLM vendor; cortex#102 (bot↔bot via bus envelopes) replaces platform-ID trust with cryptographic identity at L3/L4; cortex#107 (principal-based AAA) lifts authorization out of per-surface adapters and into a single PolicyEngine at M6; cortex#109 (envelope-visibility + subject-namespace routing) consumes myelin's `sovereignty.classification` taxonomy and the `local|federated|public` namespace so multi-operator federation becomes mechanically possible. The composition anchor is **stack → network → multi-network**: one operator can run multiple stacks; stacks join networks via NATS leaf-node federation; one stack can participate in multiple networks at once. Three scopes — local / federated / public — are not access control but expressed *intent*; sovereignty metadata carries the policy on every envelope. This doc maps each sibling to a layer in the M1–M7 stack, inventories what ships today vs. what is designed vs. what is open, sequences five implementation phases (A–E), and surfaces seven design questions that need Andreas's call before Phase A can start.
+
+The unit isn't the agent, isn't the stack — it's the network, and networks compose.
+
+---
+
+## §1 — OSI layering of the cortex stack
+
+cortex's canonical layered architecture is the **M1–M7 Myelin stack** (`cortex/docs/architecture.md:69-105`). This document inherits that naming and refines the boundary between cortex (the M7 application) and myelin (the protocol stack M1–M6). Sibling issues land at specific layers; understanding which layer each one belongs to is the spine of this synthesis.
+
+### M1 — Raw connectivity (NATS + TLS + creds-auth)
+
+Out of scope for myelin per `myelin/docs/architecture.md:81-88` — internet plumbing. Cortex's contract here is "assume authenticated, encrypted, ordered byte streams". Two artefacts at M1 matter for federation:
+
+- **NATS leaf-node topology.** `local.{org}.>` subjects are not replicated across operator boundaries (`myelin/specs/namespace.md:15-22`); enforcement is at the leaf-node configuration, not in application code. This is the load-bearing structural property — a misconfigured leaf-node breaks the sovereignty model irrespective of envelope content.
+- **Creds-auth.** cortex#86 (closed) — operator-mode NATS auth via `.creds` files. Per `cortex/src/common/types/cortex-config.ts:476` (`nats.credsPath`) and `src/bus/myelin/runtime.ts:148-154`, cortex authenticates connections via `credsAuthenticator(...)` before any envelope flows.
+
+**Module → layer map.** No cortex modules at M1; everything lives in operator-side NATS server configuration and platform-side leaf-node topology.
+
+### M2 — Transport (NatsLink, MyelinRuntime publish/subscribe)
+
+myelin's L2 ships an abstract `TransportPublisher` / `TransportSubscriber` interface with NATS + InMemory implementations (`myelin/docs/architecture.md:90-110`).
+
+Cortex's transport layer:
+- `src/bus/nats/connection.ts` — `NatsLink` connect wrapper (creds expansion, chmod-600 enforcement).
+- `src/bus/myelin/runtime.ts` — `MyelinRuntime` (G-1100.E). Lifecycle handle for NATS connection + N subscribers + `publish(envelope)` + `onEnvelope(handler)` fan-out (`runtime.ts:30-67`, `runtime.ts:223-249`).
+- `src/bus/myelin/subscriber.ts` — `MyelinSubscriber` (one per configured subject pattern).
+
+The runtime is the single in-process owner of the NATS connection. Adapters never speak NATS directly; they go through `runtime.publish()` and receive via the surface-router which is itself registered on `runtime.onEnvelope()`.
+
+### M3 — Envelope (Myelin schema + sovereignty + signed_by chain-of-stamps)
+
+myelin's L3 is the cleanest layer in the stack — closed-contract, transport-independent, "sovereignty travels with the message". The envelope is the unit of sovereignty travel.
+
+Shipped today:
+- **Envelope schema.** `myelin/schemas/envelope.schema.json` (draft 2020-12). Cortex vendors this at `src/bus/myelin/vendor/envelope.schema.json` pinned at commit **`96b14ea`** (`src/bus/myelin/envelope-validator.ts:22`).
+- **Sovereignty block.** Five required fields — `classification`, `data_residency`, `max_hop`, `frontier_ok`, `model_class` (`myelin/docs/envelope.md:62-79`, `src/bus/myelin/envelope-validator.ts:42-52`).
+- **Subject↔classification alignment.** `deriveNatsSubject()` (`myelin/src/envelope.ts:337-345`) and `validateSubjectEnvelopeAlignment()` (`myelin/src/envelope.ts:347-358`) enforce 1:1 alignment between subject prefix and `classification`. Mismatch is a protocol violation.
+- **Chain-of-stamps.** myelin#31 shipped post-`96b14ea`; closed by myelin PR #92. Each L4 stamp covers `id`, `source`, `type`, `timestamp`, `sovereignty`, `payload`, the F-021 task fields, and the prior `signed_by` chain (`myelin/docs/envelope.md:82-92`).
+- **F-021 task fields.** `requirements`, `sovereignty_required`, `deadline`, `distribution_mode`, `target_principal` (`myelin/docs/envelope.md:26-31`). Shipped upstream; not yet consumed by cortex's vendored schema (still `96b14ea`).
+
+Cortex consumption today:
+- Four cortex emit sites all hardcode `sovereignty.classification: "local"` (per cortex#109):
+  - `src/bus/dispatch-events.ts:73`
+  - `src/bus/system-events.ts:102`
+  - `src/bus/github-events.ts:89`
+  - `src/taps/cc-events/cc-events.ts:99`
+- Cortex's vendored envelope validator (`src/bus/myelin/envelope-validator.ts`) is pinned at `96b14ea` — pre-chain-of-stamps, pre-F-021 task fields, pre-array `signed_by`. A mechanical upgrade is on the table.
+
+### M4 — Subject routing (local / federated / public namespace + tasks domain)
+
+myelin's namespace spec (`myelin/specs/namespace.md`) defines the three subject prefixes and their reach:
+
+| Prefix | Reach | Sovereignty Rule |
+|---|---|---|
+| `local.{org}.{domain}.{entity}.{action}` | Org only | Never leaves org boundary (M1 leaf-node enforced) |
+| `federated.{org}.{domain}.{entity}.{action}` | Cross-org | Subject to envelope sovereignty rules |
+| `public.{domain}.{entity}.{action}` | Unrestricted | No sovereignty constraints |
+
+The **tasks domain** (`myelin/specs/namespace.md:134-213`) extends the standard `{prefix}.{org}.{domain}.*` form with three distribution shapes:
+
+- **Broadcast** — `local.{org}.tasks.{capability}.{subcapability}` — competing consumers, queue-group exactly-once-per-group semantics.
+- **Direct/Delegate** — `local.{org}.tasks.@{principal}.{capability}` — single-recipient via DID-encoded `@`-segment.
+- **Dead-letter** — `local.{org}.tasks.dead-letter.{capability}` — unclaimable-task escalation.
+
+The federated counterpart mirrors all three patterns (`myelin/specs/namespace.md:202-213`); subject routing for cross-operator work is wire-format-ready today.
+
+Cortex consumption today:
+- `MyelinRuntime.publish()` (`src/bus/myelin/runtime.ts:236`) emits `local.${org}.${envelope.type}` — never `federated.*` or `public.*`. Subject prefix is hardcoded to match the hardcoded classification.
+- Subscribe-side `cortex.yaml.nats.subjects` may include any pattern via `{org}` substitution (`runtime.ts:126-128`) — but emit-side only produces `local.*`.
+
+### M5 — Stream / consumer (TASKS JetStream, retention, queue-group)
+
+myelin's L5 is named (capability registry) but spec-pending (`myelin/docs/architecture.md:154-162`). What's already specified at the namespace level:
+
+- **TASKS JetStream stream** (`myelin/specs/namespace.md:216-247`): `subjects: ["local.*.tasks.>", "federated.*.tasks.>"]`, `max_age: 7d`, `replicas: 3` (R=1 dev), `retention: Limits`, `discard: Old`.
+- **Filtered durable consumers per capability.** `cortex` (M7) is the lifecycle owner of consumer creation/teardown (`myelin/specs/namespace.md:236-249`). NOT specified by myelin itself.
+- **Queue groups** drive competing-consumer semantics. `max_deliver: 3` with explicit ack; dead-letter on exhaustion.
+
+Cortex consumption today:
+- Cortex does **not** currently provision JetStream consumers for the TASKS stream. The substrate harness work (cortex#91) introduces the `SessionHarness` interface as the runtime contract; the BusPeerHarness implementation is the natural call site for declaring the consumer.
+
+### M6 — Surface-router + dispatch + policy (the application logic core)
+
+myelin's L6 is composition patterns — spec-pending (`myelin/docs/architecture.md:166-174`). Cortex implements its own M6 surface in the meantime:
+
+- **Surface-router** (`src/bus/surface-router.ts`) — G-1111.A. In-process fan-out point. Adapters declare interest via NATS-style subject patterns plus an optional payload filter; the router applies subject matching first, then payload filtering, then invokes `adapter.render(envelope)` with timeout + isolation (`surface-router.ts:259-270`, `surface-router.ts:291-319`).
+- **Dispatch-handler** (`src/bus/dispatch-handler.ts`) — orchestrates one inbound surface event through to one runner session. The natural integration point for cortex#107's PolicyEngine.
+- **Trust resolver** (`src/common/agents/trust-resolver.ts`) — cortex#76 + cortex#105. Process-wide bidirectional `(platform, platformUserId) ↔ agentId` map, plus operator-account-signing-key signature verification.
+- **PolicyEngine** (cortex#107) — does not yet exist. The design issue specifies a `src/common/policy/` module with `PolicyEngine.check(principal, intent) → { allow, capabilities } | { allow: false, reason }`.
+
+### M7 — Surface adapters (Discord, Mattermost, dashboard, gh CLI, pilot)
+
+Per `cortex/docs/architecture.md:288-303`, cortex is the L7 capability dashboard; sibling apps live in their own repos (grove for dashboard, pilot for review coordination, signal for observability). On cortex's side:
+
+- **Discord adapter** (`src/adapters/discord/`) — owns the legacy role-resolver loop. cortex#107 thins it to translate-event-to-Principal (~30 LOC).
+- **Mattermost adapter** (`src/adapters/mattermost/`) — same shape.
+- **Dashboard renderer** (`src/renderers/dashboard.ts`) — subscribes to `local.{org}.>` and projects to D1; no sovereignty filter today (cortex#109 §3).
+- **Taps** — `src/taps/cc-events/` (CC hooks → bus, `cc-events.ts`), `src/taps/gh-webhook-receiver/` (GitHub HMAC → bus, `github-events.ts`).
+
+### Module-to-layer map (cortex repo)
+
+| Layer | Cortex code | Myelin code |
+|---|---|---|
+| M1 | (operator NATS topology) | (out of scope) |
+| M2 | `src/bus/nats/connection.ts`, `src/bus/myelin/runtime.ts`, `src/bus/myelin/subscriber.ts` | `src/transport/` (NATSTransport, InMemoryTransport) |
+| M3 | `src/bus/myelin/envelope-validator.ts` (pinned at `96b14ea`), `src/bus/envelope-builder.ts`, `src/bus/dispatch-events.ts`, `src/bus/system-events.ts`, `src/bus/github-events.ts`, `src/taps/cc-events/cc-events.ts` | `src/envelope.ts`, `src/types.ts`, `schemas/envelope.schema.json` |
+| M4 | (consumes myelin namespace spec — no cortex-side namespace code) | `src/identity/` (chain-of-stamps), `specs/namespace.md` |
+| M5 | (no JetStream consumer provisioning yet) | (TASKS stream spec only; no provisioning code) |
+| M6 | `src/bus/surface-router.ts`, `src/bus/dispatch-handler.ts`, `src/common/agents/trust-resolver.ts`, `src/common/agents/registry.ts` | `src/sovereignty/` (F-5 engine — policy store, validators, audit log, transport) |
+| M7 | `src/adapters/discord/`, `src/adapters/mattermost/`, `src/renderers/dashboard.ts`, `src/taps/cc-events/`, `src/taps/gh-webhook-receiver/`, `src/runner/`, `src/cli/cortex/` | (other repos: grove, pilot, signal) |
+
+---
+
+## §2 — Current-state inventory by layer
+
+This section is rigorous about three states: **shipped** (running in production), **designed** (issue body or PR draft), **speculative** (idea in this synthesis or in operator-vision notes). Andreas wants the truth, not optimism.
+
+### What myelin ships today (shipped)
+
+- **L3 envelope schema** — `myelin/schemas/envelope.schema.json` with chain-of-stamps `signed_by[]` (post-#31 / PR #92), F-021 task fields (`requirements`, `distribution_mode`, `target_principal`, `deadline`, `sovereignty_required`), and economics block. `validateEnvelope()` is source of truth; schema mirrors.
+- **L3 sovereignty block** — five fields enforced as required + `additionalProperties: false` (`myelin/src/envelope.ts:88-113`). `parseSovereignty()` returns derived booleans (`canFederate`, `canReachFrontier`, `isLocalOnly`) without re-implementing rules.
+- **L3 namespace** — `myelin/specs/namespace.md` MY-101 closed. `deriveNatsSubject()`, `validateSubjectEnvelopeAlignment()`, tasks-domain Broadcast/Direct/Delegate/dead-letter grammar, DID-to-segment encoding with injectivity proof (`namespace.md:160-187`).
+- **L4 identity** — `myelin/src/identity/`: `Principal`, `SignedBy` (Ed25519 + hub-stamp), `VerificationResult`. JCS (RFC 8785) canonicalization. `signEnvelope`, `verifyEnvelopeIdentity`, `requireVerifiedIdentity`. `PrincipalRegistry` (file-backed + in-memory). Chain-of-stamps is **shipped** (per `myelin/docs/envelope.md:177`).
+- **L2 transport** — `myelin/src/transport/`: `NATSTransport`, `InMemoryTransport`, factory + envelope wrapper.
+- **F-5 sovereignty engine** — `myelin/src/sovereignty/`: policy store, validators, audit log, transport. Specified for cross-layer enforcement; transport-level enforcement (sovereign refusal to route across operator boundary on classification mismatch) is **spec-pending** per myelin#11 (`myelin/docs/architecture.md:190-192`).
+
+### What myelin is designing but not shipping (designed)
+
+- **L2 sovereignty enforcement** — myelin#11. The intended L2 enforcement (transport refusing to route an envelope across an operator boundary unless the sovereignty claim is satisfied) is spec-pending.
+- **L5 discovery** — myelin#9. No runtime capability registry.
+- **L6 composition** — myelin#10. Pipeline / fan-out / request-reply patterns exist in the wild (pilot review loop, signal flows) but are reinvented per use; no canonical specification.
+
+### What cortex ships today (shipped)
+
+- **M2 — MyelinRuntime** with subscribe (subjects from `cortex.yaml.nats.subjects`) + publish (`local.${org}.${type}`) + `onEnvelope` fan-out + graceful drain on shutdown (`src/bus/myelin/runtime.ts`).
+- **M3 — Four envelope constructors** (system, dispatch, github, cc). Each hardcodes `classification: "local"`. `data_residency` is parameterised via `dataResidency` on the source struct (defaulting to `"NZ"`); the four other sovereignty fields are hardcoded.
+- **M3 — Vendored envelope validator** at `src/bus/myelin/envelope-validator.ts`, pinned at myelin commit `96b14ea` (no chain-of-stamps array form, no F-021 task fields).
+- **M6 — Surface-router** with subject + payload filter matching, render isolation, AbortController-based timeout (`src/bus/surface-router.ts:291-319`).
+- **M6 — TrustResolver** with platform-ID-to-agent-ID map + operator-signature verifier (`src/common/agents/trust-resolver.ts:268-491`). NKey JWT verification chains to operator account signing pubkey.
+- **M6 — Pass 1 / Pass 2 trust-mesh wiring** (cortex#105) — agent.trust list drives auto-populated allowlists at adapter startup.
+- **M7 — Discord + Mattermost adapters** with per-surface role-resolver. Same authorization policy duplicated per surface.
+- **M7 — Dashboard renderer** subscribes to `local.{org}.>` and projects to a ring buffer / D1; no sovereignty filter on the way in (`src/renderers/dashboard.ts:78-100`).
+- **CortexConfig schema** (`src/common/types/cortex-config.ts`) — `operator:`, `agents[]`, `renderers[]`, `nats:`. Operator has `dataResidency` (`OperatorSchema:99-111`). Agent has `runtime` block (claude-code / codex / pi-dev / custom + in-process / standalone) — the F-2 substrate seam.
+
+### What cortex is designing but not shipping (designed)
+
+- **cortex#91 SessionHarness** — `SessionHarness` interface with `dispatch(req): AsyncIterable<MyelinEnvelope>`. Two implementations: `ClaudeCodeHarness` (wraps existing cc-session.ts spawn logic), `BusPeerHarness` (publish-dispatch + subscribe-reply pattern sage already implements). Cortex#92 PR has Q5/Q6/Q7 awaiting Andreas confirmation.
+- **cortex#102 bot↔bot bus envelopes** — replaces Discord-platform-ID-based bot trust with NKey-signed envelopes verified via TrustResolver. Strategic; depends on cortex#91 substrate-harness landing.
+- **cortex#107 PolicyEngine** — `src/common/policy/`. `principals[]` + `roles[]` tables; per-event `PolicyEngine.check(principal, intent)`. Discord/Mattermost adapters thin to ~30 LOC. cortex.yaml flips ONCE at the end of this step (`policy:` block replaces per-adapter `roles[]`).
+- **cortex#109 envelope-visibility consumption** — stops hardcoding `classification: "local"` at the four emit sites; surface-router honors `sovereignty.classification`; vendored envelope upgraded post-`96b14ea`; per-renderer visibility config; federation accept-rules + peer registry.
+
+### What this synthesis adds (speculative)
+
+- **Multi-network bridge pattern.** One stack participates in two networks — what does it look like in cortex.yaml? (See §3.4.)
+- **Operator-private tiers within multi-stack** (Q7 below). Three stacks per operator, one of which is private to the other two stacks but federated to the network. Tiers within tiers.
+- **Cross-network audit trail ownership** (Q6 below). When a federated task crosses operator boundaries, the audit envelope chain has multiple operators in the `signed_by` chain — who's the source of truth?
+
+### Hardcoded today / placeholdered
+
+| Where | What | Why it matters |
+|---|---|---|
+| `src/bus/dispatch-events.ts:73` | `classification: "local"` literal | cortex cannot emit a `federated.*` envelope today; federation has no inbound surface |
+| `src/bus/system-events.ts:102` | `classification: "local"` literal | Same |
+| `src/bus/github-events.ts:89` | `classification: "local"` literal | Same |
+| `src/taps/cc-events/cc-events.ts:99` | `classification: "local"` literal | Same |
+| `src/bus/myelin/runtime.ts:236` | Subject hardcoded to `local.${org}.${envelope.type}` | publish-side cannot produce `federated.*` or `public.*` subjects |
+| `src/bus/myelin/envelope-validator.ts:22` | `SCHEMA_SOURCE_COMMIT = "96b14ea..."` | Pre-chain-of-stamps, pre-F-021 task fields |
+| `src/renderers/dashboard.ts:78-100` | No sovereignty filter in projection pipeline | Federated/public envelopes would render on the operator dashboard regardless of `classification` |
+| `src/bus/surface-router.ts:259-270` | `adapterMatches` runs subject + payload filter, no sovereignty check | Same — no application-layer filter to enforce that a dashboard subscribing to `local.>` doesn't render an inbound `federated.peer-org.*` event delivered by a leaf-node misconfiguration |
+| `src/adapters/discord/role-resolver.ts` (and Mattermost equivalent) | Per-surface `roles[]` with `users[]` (platform IDs) | cortex#107 will move to top-level `policy.principals[]` with `home_operator` field; cortex.yaml stays in its current shape until that PR |
+
+---
+
+## §3 — The composition model
+
+### §3.1 Single stack — one operator, one cortex daemon, N agents
+
+The canonical single-operator stack as `cortex/docs/architecture.md:605-686` specifies it:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  operator: andreas                                              │
+│                                                                 │
+│  agents:                                                        │
+│    - luna (Discord presence, persona, trust:[echo,holly,ivy])   │
+│    - echo (Discord presence, persona, trust:[luna,holly])       │
+│    - forge (Discord presence, persona)                          │
+│    - sage (bus-peer harness via cortex#91 BusPeerHarness)       │
+│                                                                 │
+│  renderers:                                                     │
+│    - dashboard (subscribes local.andreas.>)                     │
+│    - pagerduty (subscribes local.andreas.system.>)              │
+│    - cli-tail (developer tool)                                  │
+└─────────────────────────────────────────────────────────────────┘
+        │
+        ▼ (NATS connection, local.andreas.>)
+   ┌────────────┐
+   │  NATS      │  All subjects: local.andreas.*
+   │  server    │  No leaf-node — air-gapped or single-server
+   └────────────┘
+```
+
+What ships today:
+- Multiple agents in one cortex process — `cortex.yaml.agents[]` is canonical.
+- Each agent owns its `presence.<platform>` block (Discord, Mattermost). Trust is by logical agent id, never platform user id (`cortex-config.ts:268-291`, coupling rule §9.3).
+- TrustResolver provides the runtime platform-ID → agent-id map populated at adapter startup (`trust-resolver.ts:702-715`).
+- Renderers are non-agent-bound surfaces (dashboard, pagerduty, cli-tail, webhook-out) declared at top-level (`cortex-config.ts:321-403`).
+
+What sibling issues add at this scope:
+- cortex#91 — first-class `runtime.harness: bus-peer` for sage etc. (substrate-harness interface lets agents run out-of-process via NATS, not just in-process via Claude Code spawn).
+- cortex#102 — bot↔bot dispatch goes over the bus with NKey-signed envelopes; Discord becomes a presentation channel only.
+- cortex#107 — `roles[]` per-adapter collapses into top-level `policy:` block. Principal is what's resolved, not platform IDs.
+
+### §3.2 Multi-stack per operator — one operator, multiple cortex daemons
+
+One operator can run multiple stacks side-by-side. The operator-facing distinction is concrete:
+
+- **Research stack** — frontier-OK, frontier-only on some agents, no production data residency constraint
+- **Production stack** — local-only model class, EU residency, no frontier
+- **Code stack** — code-review + deploy capabilities, claude-code substrate
+- **Data stack** — etl + analysis capabilities, pi-dev substrate
+
+How do they relate? Three plausible models:
+
+| Model | Subject namespacing | Pros | Cons |
+|---|---|---|---|
+| **A. Distinct operator IDs per stack** | `local.andreas-research.>` vs `local.andreas-production.>` | Mechanical separation; current cortex code supports it trivially | Loses the operator-level identity primitive; one human, three operator IDs |
+| **B. Same operator ID, distinct stack IDs as subdomain** | `local.andreas.research.>` vs `local.andreas.production.>` | Preserves single operator identity | Requires extending the namespace grammar — `{org}.{stack}.{domain}.{entity}.{action}` is one segment deeper than current spec |
+| **C. Same operator ID, same subject space, distinct agent ids** | `local.andreas.>` shared, agents like `luna-research`, `luna-production` | Minimal config change | No structural separation — anything published is visible to anything subscribed; sovereignty has to do all the work |
+
+Model A is the minimum-viable today. Model B is what the operator vision calls for (one operator, named-substack composition). Model C accepts that "stack" is a deployment unit but not a routing unit.
+
+**Decision deferred to Q7** (see §5) — Andreas's call on whether `local.{org}.{stack}.>` deserves protocol status or stays a deployment convention.
+
+### §3.3 Multi-operator network — peer-to-peer bus federation via NATS leaf-node
+
+Andreas's IP-routing analogy (`cortex#109` Background) maps onto NATS leaf-node federation as:
+
+| OSI / IP concept | Cortex equivalent | Where it lives |
+|---|---|---|
+| AS / network prefix | `operator.id` + the `{org}` segment in subjects | `cortex.yaml.operator:` block |
+| Routing table | `policy.federated.peers[]` | NEW — proposed in cortex#109 |
+| BGP announce | `operator.<id>.identity` envelope signed by operator account NKey, broadcast on `public.operator.>` | NEW — proposed (out of scope for cortex#109) |
+| IP packet header | NATS subject prefix + envelope `sovereignty.classification` | Existing — myelin namespace + envelope |
+| Router (forwarding) | Surface-router + NATS leaf-node federation | Half-wired (surface-router exists; leaf-node config is operator infra) |
+| Application gateway | Cortex daemon (one per operator stack) | Existing |
+| Firewall (inbound boundary policy) | Surface-router accept-rules per peer | NEW — part of cortex#109 |
+
+```
+┌────────────────────────────┐                ┌─────────────────────────────┐
+│  operator: andreas         │                │  operator: jcfischer        │
+│                            │                │                             │
+│  agents: luna, echo, sage  │                │  agents: ivy, holly         │
+│                            │                │                             │
+│  renderers: dashboard,     │                │  renderers: dashboard,      │
+│             pagerduty      │                │             cli-tail        │
+└────────────┬───────────────┘                └─────────────────┬───────────┘
+             │                                                  │
+             ▼                                                  ▼
+   ┌──────────────────┐        leaf-node           ┌──────────────────┐
+   │  NATS (andreas)  │ ◄─── federation link ────► │ NATS (jcfischer) │
+   │                  │                            │                  │
+   │  local.andreas.> │       Only `federated.*.>` │ local.jcfischer.>│
+   │  federated.>     │       crosses; `local.>`   │ federated.>      │
+   │                  │       does not.            │                  │
+   └──────────────────┘                            └──────────────────┘
+```
+
+What this requires at each layer:
+
+- **M1 — leaf-node configuration.** Andreas's NATS server and JC's NATS server peer; their leaf-node configs whitelist each other and constrain bridged subjects to `federated.>` only. Operator-side infra; no cortex code.
+- **M3 — sovereignty enforcement.** Outbound: cortex#109 unhardcodes `classification: "local"` so envelopes destined for `federated.jcfischer.*` carry `classification: "federated"`. Inbound: `validateSubjectEnvelopeAlignment()` rejects a `federated.*` subject with `local`-classified envelope at parse time.
+- **M4 — chain-of-stamps verification.** When Andreas's agent emits a federated task, the envelope `signed_by[0]` is Andreas's agent's NKey. When JC's agent picks it up and produces a result, JC's agent's NKey is appended as `signed_by[1]`. The chain proves the path; receivers verify against their own principal registries.
+- **M6 — peer registry + accept rules.** `policy.federated.peers[]` declares `{operator_id, operator_pubkey, accept_subjects, deny_subjects, max_hop}`. Surface-router consumes these to gate inbound federated envelopes by peer policy.
+
+This is where cortex#107's PolicyEngine becomes load-bearing for multi-operator: each inbound federated envelope is a `Principal{ id: 'agent-X', home_operator: 'jcfischer' }`; the PolicyEngine resolves it via `policy.principals[]` (which now spans multiple home_operators) and applies the receiver's per-peer accept/deny rules.
+
+### §3.4 Multi-network — one stack participates in two networks
+
+A stack can join multiple networks simultaneously by maintaining multiple NATS leaf-node connections, each scoped to a different peer mesh. Per the operator-vision script:
+
+> "Some stacks bridge between networks — your stack participates in two different collaborations, publishing certain capabilities to one network and different capabilities to the other."
+
+Mechanically:
+
+```
+                                           ┌──────────────────┐
+                                           │  Network A       │
+                                           │  (research mesh) │
+                                           └────────▲─────────┘
+                                                    │
+                                                    │ leaf-node A
+                                                    │
+                       ┌──────────────────┐         │
+                       │  bridge stack    │─────────┘
+                       │  operator: andreas        │
+                       │                  │
+                       │  agents: luna, echo, sage │
+                       │                  │─────────┐
+                       └──────────────────┘         │
+                                                    │ leaf-node B
+                                                    │
+                                           ┌────────▼─────────┐
+                                           │  Network B       │
+                                           │  (JV mesh)       │
+                                           └──────────────────┘
+```
+
+Open design questions for the bridge case (Q4 below):
+
+1. **How are subjects partitioned per network?** Option: per-network NATS account scoping — `federated.{org}.research.*` only crosses to network A, `federated.{org}.jv.*` only crosses to network B. The leaf-node config defines which subject patterns flow which way.
+2. **How do capability announcements differ per network?** If Andreas wants to publish `code-review` capability to network A but not network B, where does that intent get recorded in `cortex.yaml`?
+3. **Where does the per-peer-network policy slice live?** `policy.federated.peers[]` (cortex#109 schema) has a peer-id field. The bridge case extends it with per-peer subject filters that can vary per network.
+
+A workable cortex.yaml strawman:
+
+```yaml
+operator: { id: andreas }
+
+policy:
+  federated:
+    peers:
+      - operator_id: research-collab
+        operator_pubkey: O_RESEARCH_…
+        leaf_node: nats-leaf-research
+        accept_subjects: ["federated.research-collab.tasks.code-review.*"]
+        announce_capabilities: ["code-review", "security-scan"]
+        max_hop: 1
+      - operator_id: jv-acme-bigcorp
+        operator_pubkey: O_JV_…
+        leaf_node: nats-leaf-jv
+        accept_subjects: ["federated.jv-acme-bigcorp.tasks.deploy.*"]
+        announce_capabilities: ["deploy", "release"]
+        max_hop: 0  # JV is fully gated — no further hops
+```
+
+The `leaf_node` field references a named NATS connection (operator infra config) — this is where the structural separation between networks lives. **A bridge stack has multiple `NatsLink`s simultaneously open**, one per leaf-node. Cortex's current `MyelinRuntime` has a single link (`runtime.ts:142-169`); supporting multi-network requires either multiple runtimes per cortex process or extending the runtime to manage a link pool.
+
+### §3.5 Private / isolated / public mesh varieties
+
+From the operator-vision script: "Some stacks are private. No connections. ... Others join isolated private networks — four companies working on a joint venture ... And some stacks bridge between networks..."
+
+Mapping to concrete configurations:
+
+| Mesh variety | Operator example | NATS topology | cortex.yaml shape |
+|---|---|---|---|
+| **Bank private** | Single bank, no federation at all | NATS server with no leaf-nodes; firewalled | `policy.federated.peers: []` — empty registry |
+| **JV isolated-private** | 4 companies, mesh between, no external | Each company's NATS server has leaf-nodes to the other 3; no public bridge | Each peer's `policy.federated.peers[]` lists the other 3 with bidirectional accept_subjects; the `{org}` segment becomes the JV's negotiated namespace |
+| **Bridge** | One stack participates in 2 distinct networks | 2 leaf-nodes per cortex process (see §3.4) | `policy.federated.peers[]` has 2 entries with distinct `leaf_node:` references |
+| **Public mesh** | "Come find me" capability marketplace | Each stack advertises capabilities on `public.operator.*.capability.>`; matching is by capability tag | `policy.public.announce_capabilities[]` (NEW — out of scope today) |
+| **Hybrid** | Operator has private agents + some federated agents | Some agents emit `local.>` only; others emit `federated.>` per task; the operator's policy decides per-agent | Per-agent `default_classification` could parameterise this (NEW) |
+
+The **private mesh case (bank)** is the simplest: it's just §3.1 with explicit confirmation that no `federated.*` subjects ever cross leaf-nodes. The most important property is that this is mechanically enforced at M1 (leaf-node config), not at M6 (application policy) — so cortex.yaml never accidentally federates because no leaf-node exists.
+
+The **isolated-private mesh (JV)** is the interesting middle case. The 4 JV members need:
+- A negotiated `{org}` segment to name the JV (e.g. `acme-bigcorp-jv`).
+- Each member's operator key as a co-equal trust anchor in the JV's principal registry.
+- An off-bus negotiation channel for the leaf-node peering and capability declarations.
+
+The **public mesh** future case is out of scope today — it requires myelin#9 (L5 discovery) and a marketplace economics model neither of which are in flight.
+
+---
+
+## §4 — Sibling-issue assembly
+
+For each of cortex#91, #102, #107, #109: which layer it occupies, what it contributes to the composition model, what it depends on, what depends on it.
+
+### cortex#91 — Substrate harness (multi-LLM dispatch)
+
+**Layer:** M6 — application logic core. The `SessionHarness` interface lives at the boundary between cortex's runner and any execution substrate (Claude Code, Codex, Cursor, Mistral, pi.dev, NATS bus-peer).
+
+**Contribution to composition:** Cortex stops being Claude-Code-only. With `BusPeerHarness`, an agent can be ANY out-of-process daemon that speaks the myelin envelope contract on the bus — including sage today and Codex/Cursor/Gemini tomorrow. This is the foundation for multi-stack composition (§3.2) because a "stack" can now compose stateful peer daemons running in their own processes, not just spawn child processes.
+
+**Dependencies:**
+- *Depends on:* M2 (MyelinRuntime, shipped) + M3 (envelope schema, shipped).
+- *Depended on by:* cortex#102 (BusPeerHarness is where chain-of-stamps verification of inbound dispatch envelopes happens). cortex#107 (the dispatch-handler that calls into `SessionHarness.dispatch()` is where PolicyEngine.check happens).
+
+**Open questions cortex#91 needs answered:** Q5/Q6/Q7 in cortex#92 PR (substrate harness design doc). These are scoped to the substrate interface and are independent of this synthesis.
+
+### cortex#102 — Bot↔bot via bus envelopes (NKey identity)
+
+**Layer:** L3/L4 (envelope + identity). Bot identity moves from Discord-platform-ID gating (M7, surface-layer) to NKey-signed envelopes (L4, cryptographic).
+
+**Contribution to composition:** This is the issue that makes cross-operator trust work at all. Per the operator vision: "An agent on my stack and an agent on yours can both see the same task" — both agents need verifiable identity, and the trust anchor cannot be Discord (which is operator A's surface only; operator B doesn't see Discord IDs).
+
+The chain-of-stamps `signed_by[]` (shipped in myelin post-#31) is the carrier:
+- `signed_by[0]` = originating agent's NKey signature.
+- `signed_by[N]` = each forwarding agent appends its own NKey signature.
+- Receivers verify each stamp against their principal registry (cortex#107's `policy.principals[]`).
+
+**Dependencies:**
+- *Depends on:* cortex#91 (BusPeerHarness is where `signed_by` verification happens on inbound dispatch) + myelin-shipped chain-of-stamps + cortex#76 TrustResolver (operator-signature verifier).
+- *Depended on by:* cortex#109 phase E (federation accept-rules — peer agents identified by signed envelopes); cortex#107 PolicyEngine (principal resolution from `signed_by[].principal` field).
+
+**Open questions cortex#102 needs:** Q1 (how does a stack declare its OWN identity? — operator NKey vs operator.id vs both?). This is what makes the `home_operator` field in cortex#107's principal table meaningful.
+
+### cortex#107 — Principal-based AAA at dispatch-handler
+
+**Layer:** M6 — application logic core. PolicyEngine is the single decision point for "what is this principal allowed to do?" — replacing per-surface duplication.
+
+**Contribution to composition:** This is the issue that flips cortex.yaml's auth model from per-adapter `roles[]` to top-level `policy:{ principals[], roles[] }`. The `home_operator` field on each principal is what makes multi-operator dashboards work (one cloud renderer can serve N operators because it slices events by `home_operator`).
+
+cortex.yaml schema flips ONCE at the end of this step. Per cortex#107 §"Migration scope" steps A-G, the per-adapter `roles[]` go away in step D; `policy:` block is added in step C. This is the only schema flip in the whole roadmap — every other sibling issue is additive, not flipping.
+
+**Dependencies:**
+- *Depends on:* cortex#91 (`Principal` object passed to `SessionHarness.dispatch()`); cortex#109 §A+B (sovereignty consumption — PolicyEngine reads `envelope.sovereignty` as part of decision input).
+- *Depended on by:* cortex#107 §H (multi-operator cloud dashboard — the cloud renderer reuses the same PolicyEngine the local daemon uses); cortex#109 §E (federation accept-rules consume PolicyEngine for per-peer decisions).
+
+**Open questions cortex#107 needs:** Q5 (competing-consumer semantics — when a federated task arrives, who picks first? PolicyEngine decides on the basis of capability tags and queue-group semantics).
+
+### cortex#109 — Envelope-visibility composition (G-1110 + federation foundation)
+
+**Layer:** L3/L4 routing primitives. Three-tier `sovereignty.classification` consumption (M3) + NATS leaf-node federation (M1) + surface-router accept rules (M6).
+
+**Contribution to composition:** Without cortex#109, cortex literally cannot emit a `federated.*` or `public.*` envelope — the four emit sites hardcode `local`. This issue is the unblocker for multi-operator scenarios. It also wires the dashboard's visibility filter so an operator subscribing to `local.{org}.>` doesn't accidentally render an inbound federated envelope from a peer.
+
+cortex#109's own phasing:
+- A: Stop hardcoding `classification: "local"`.
+- B: Surface-router honours `sovereignty.classification` (renderer visibility config).
+- C: Upgrade vendored envelope past `96b14ea` (post-F-021 fields).
+- D: Per-renderer visibility config in `cortex.yaml`.
+- E: Federation accept-rules + peer registry — pairs with cortex#107.
+- F: Dashboard surfaces classification + residency on cards (G-1110 UI).
+
+Phases A+B can ship independently (before cortex#91 even lands) per cortex#109 §"Implementation slice".
+
+**Dependencies:**
+- *Depends on:* myelin-shipped sovereignty.classification + namespace alignment validators.
+- *Depended on by:* cortex#107 phase D+E (PolicyEngine consumes `envelope.sovereignty`; peer registry uses PolicyEngine's per-peer accept rules).
+
+**Open questions cortex#109 needs:** Q2 (per-renderer visibility config vs top-level `policy.visibility`); Q3 (when to upgrade vendored envelope past `96b14ea`); Q4 (sequencing vs cortex#107).
+
+### Dependency graph (ASCII)
+
+```
+                       ┌──────────────────────────┐
+                       │  myelin-shipped:         │
+                       │  - sovereignty schema    │
+                       │  - chain-of-stamps       │
+                       │  - namespace spec        │
+                       │  - F-021 task fields     │
+                       └────────────┬─────────────┘
+                                    │ consumed by
+                ┌───────────────────┴───────────────────┐
+                ▼                                       ▼
+   ┌──────────────────────┐               ┌──────────────────────┐
+   │ cortex#109 §A+B+C+D  │               │ cortex#91 (substrate │
+   │ (unhardcode classif.,│               │ harness — Session-   │
+   │ surface-router       │               │ Harness + bus-peer)  │
+   │ visibility filter,   │               └──────────┬───────────┘
+   │ vendored upgrade)    │                          │
+   │ — Phase A foundation │                          │ enables
+   └──────────┬───────────┘                          ▼
+              │              ┌───────────────────────────────────┐
+              │              │ cortex#102 (bot↔bot via NKey-     │
+              │              │ signed envelopes; chain-of-stamps │
+              │              │ verification on inbound dispatch) │
+              │              │ — Phase B identity                │
+              │              └────────────┬──────────────────────┘
+              │                           │
+              │                           ▼
+              │              ┌───────────────────────────────────┐
+              └─────────────►│ cortex#107 (PolicyEngine at M6;   │
+                             │ cortex.yaml policy: block; per-   │
+                             │ principal home_operator field)    │
+                             │ — Phase C policy (SCHEMA FLIP)    │
+                             └────────────┬──────────────────────┘
+                                          │
+                                          ▼
+                             ┌───────────────────────────────────┐
+                             │ cortex#109 §E (federation accept- │
+                             │ rules + peer registry) +          │
+                             │ cortex#107 §H (multi-operator     │
+                             │ cloud dashboard)                  │
+                             │ — Phase D federation              │
+                             └────────────┬──────────────────────┘
+                                          │
+                                          ▼
+                             ┌───────────────────────────────────┐
+                             │ Phase E: multi-network bridges    │
+                             │ (per-peer leaf-node + per-network │
+                             │ capability announcement)          │
+                             └───────────────────────────────────┘
+```
+
+---
+
+## §5 — Seven design questions that need decisions
+
+These are the questions Andreas needs to answer (or explicitly defer) before Phase A can start. Each is paired with a recommendation grounded in shipped code; the recommendation is the architect's read, not the decision.
+
+### Q1: How does a stack declare its OWN identity?
+
+**Options:**
+- (a) Operator NKey only — `{operator.id, operator.pubkey}`; the NKey is the trust anchor for all envelopes the stack emits.
+- (b) `operator.id` (string label) only — symbolic identifier; trust comes from peer-side allowlists.
+- (c) Both — symbolic `operator.id` for human readability (subject segment, dashboard render) AND operator NKey as cryptographic root of trust.
+
+**Recommendation:** (c) — both. The `operator.id` is already the `{org}` subject segment (`cortex-config.ts:OperatorSchema:85-95`). The operator NKey is already loaded for credential signing (`cortex-config.ts:NatsConfigSchema:478-491`). Make the pairing explicit at the protocol level: `policy.federated.peers[]` carries both `operator_id` AND `operator_pubkey`; envelope-level identity uses the NKey, dashboard-level rendering uses the id.
+
+**Status in doc:** ANSWERED above; needs Andreas's confirmation.
+**Blocks:** cortex#102 (NKey identity carrier on the bus); cortex#107 §H (cloud dashboard needs `home_operator` referencing both fields).
+
+### Q2: How does a stack announce its CAPABILITIES to a network?
+
+**Options:**
+- (a) Per-agent runtime.capabilities (already shipped in `cortex-config.ts:AgentRuntimeSchema:225-253`) gets published via a new envelope type `local.{org}.capability.agent.announce` on a periodic heartbeat.
+- (b) Operator-level `policy.federated.announce_capabilities[]` (declarative, per-peer).
+- (c) Hybrid: per-agent capabilities are the data source; per-peer policy controls which subset announces to which peer.
+
+**Recommendation:** (c) — hybrid. Today's `AgentRuntimeSchema.capabilities` is the source of truth; the *announcement* is policy-driven. `policy.federated.peers[].announce_capabilities[]` enumerates the subset of each peer.
+
+**Status in doc:** ANSWERED (hybrid is the read). Needs Andreas's confirmation.
+**Blocks:** cortex#109 §E peer registry; future myelin#9 L5 discovery (consumer side).
+
+### Q3: How does a network REGISTRY work?
+
+**Options:**
+- (a) Centralized config — operator manually edits `policy.federated.peers[]` per peer.
+- (b) Gossiped via NATS — peers publish on `public.operator.*.identity` and each cortex subscribes and updates a derived registry.
+- (c) Signed pubkey directory — a JWT-bearer "network registry" service operators query and sign assertions into.
+
+**Recommendation:** (a) for v1 — keep it operator-edited until cortex#107 §H (cloud-dashboard work) needs a derived registry. (b) is the IP/BGP analog and is the right long-term posture but requires myelin#9 discovery to land first. (c) is overkill until a public-mesh capability marketplace materialises.
+
+**Status in doc:** PARTIALLY ANSWERED — needs Andreas's call on v1 posture.
+**Blocks:** cortex#109 §E peer registry.
+
+### Q4: Bridge-stack capability scoping — different capabilities per peer-network
+
+When a stack participates in 2 networks and announces different capabilities to each, where in `cortex.yaml` does that go?
+
+**Options:**
+- (a) Top-level `policy.federated.peers[]` — per-peer `announce_capabilities[]` field. (matches Q2 (c) recommendation)
+- (b) Per-agent `agent.runtime.peer_scopes: { research-collab: [code-review], jv: [] }`.
+- (c) Separate `networks:` top-level block enumerating each network with its own `peers[]` and `capabilities[]`.
+
+**Recommendation:** (a) — per-peer policy is the right granularity because the operator's mental model is per-relationship. (c) is structurally cleaner but requires a deeper config refactor.
+
+**Status in doc:** ANSWERED (a) — but flagged as the most-likely-to-shift answer; the operator-vision distinction between "stack" and "network" might warrant (c) at v2.
+**Blocks:** Phase E (multi-network bridges).
+
+### Q5: Competing-consumers semantics on federated tasks
+
+When `federated.acme.tasks.code-review.typescript` is published and 3 peer stacks each have a `code-review` capability, how does the work get claimed?
+
+**Options:**
+- (a) NATS queue groups — one consumer per group gets it; first to ack wins. JetStream natively supports.
+- (b) Claim-first — every qualifying consumer sees it; the first to publish `claim.@principal` wins; losers see the claim and back off.
+- (c) Auction — the publisher waits for N bids in a time window, picks the best.
+
+**Recommendation:** (a) for v1 — JetStream queue groups are already specified in `myelin/specs/namespace.md:216-247` and require no new envelope semantics. (b) is a useful diagnostic mode (audit trail of "who could have done this"). (c) is marketplace territory; defer.
+
+**Status in doc:** ANSWERED (a) — but Q5 is also asked in cortex#92 (cortex#91 design PR) and may have an answer there already; cross-reference at Phase A.
+**Blocks:** cortex#107 (PolicyEngine's resolution rule); Phase E (multi-network).
+
+### Q6: Cross-network audit — who owns the audit trail?
+
+When a federated task crosses operator boundaries, the envelope `signed_by[]` chain has multiple operators' stamps. Who is the source of truth for the audit log?
+
+**Options:**
+- (a) Each operator's cortex emits its own `system.access.{allowed,denied}` envelopes (cortex#107 step G) on `local.{org}.>`; the audit is partitioned per operator and the chain itself is the cross-operator trail.
+- (b) A federated audit subject — `federated.audit.{verb}.>` — that all operators in a network publish to and consume from.
+- (c) A centralized audit service (CF Worker, similar to grove webhook proxy) that subscribes to all federated traffic.
+
+**Recommendation:** (a) — partitioned per operator, with the chain-of-stamps providing cross-operator correlation. This preserves operator sovereignty: my audit log is mine, my peer's is theirs, and a third-party reconstructs by combining (with peer's permission). (b) leaks across operator boundaries; (c) creates a central point of failure and trust.
+
+**Status in doc:** ANSWERED (a). Needs Andreas's confirmation.
+**Blocks:** Phase D (federation) — the audit story is what gets asked first in any compliance review.
+
+### Q7: Operator-private inside multi-stack — tiers within tiers
+
+When an operator has 3 stacks and wants stack-1 to be private to stack-2 and stack-3 (intra-operator) BUT federated to network N (inter-operator), how does that compose?
+
+This is the case where:
+- "local.{org}" doesn't distinguish stack-1 from stack-2 from stack-3.
+- "federated.{org}" leaks across stacks.
+
+**Options:**
+- (a) Distinct operator IDs per stack — `andreas-stack-1`, `andreas-stack-2`. Sovereignty is at the stack boundary, full stop. The "operator owns all three" is a human-level concept, not a protocol one.
+- (b) Extend the namespace with a `{stack}` segment: `local.{org}.{stack}.{domain}.{entity}.{action}`. Backward compatible (cortex defaults `stack` to a default value).
+- (c) Sovereignty extension: a new `sovereignty.scope: 'stack' | 'operator' | 'network'` field. Stack-scoped envelopes never cross between stack-1 and stack-2 even within the same operator.
+
+**Recommendation:** **NEEDS ANDREAS'S CALL.** This is the deepest question — it asks whether "stack" deserves protocol status. (a) is operationally simplest but loses the conceptual unit. (b) is the cleanest protocol extension but requires myelin and cortex coordination. (c) is the most expressive but adds a new sovereignty axis.
+
+The operator-vision script clearly treats "stack" as a first-class noun (`"We call this a stack. ... One operator can run multiple stacks"`) — which leans toward (b) or (c). But none of the four sibling issues address this; (b) would be a new myelin issue (namespace extension) and (c) would be a new myelin issue (sovereignty schema extension).
+
+**Status in doc:** FLAGGED — Andreas's call required before Phase B or C if the stack-as-protocol-unit decision shapes the principal model.
+**Blocks:** Nothing immediately (Phase A can proceed without resolving Q7); but the Phase C schema flip is the last natural moment to introduce a stack-aware namespace without re-flipping again.
+
+### Summary of Q1–Q7 status
+
+| Q | Status | Recommendation | Blocks |
+|---|---|---|---|
+| Q1 | Answered (c — both) | needs Andreas's confirmation | cortex#102, cortex#107 |
+| Q2 | Answered (c — hybrid) | needs confirmation | cortex#109 §E |
+| Q3 | Partially answered (a — operator-edited for v1) | needs Andreas's call on v1 posture | cortex#109 §E |
+| Q4 | Answered (a — per-peer) | flagged for shift if Q7 escalates | Phase E |
+| Q5 | Answered (a — queue groups) | cross-reference with cortex#92 | cortex#107, Phase E |
+| Q6 | Answered (a — partitioned per operator) | needs confirmation | Phase D |
+| Q7 | **FLAGGED — needs Andreas's call** | architect leans toward (b) if treating stack as first-class | Possibly Phase B / C; cleanest moment is Phase C schema flip |
+
+---
+
+## §6 — Sequenced implementation roadmap
+
+Five phases A–E. The cortex.yaml schema flips exactly ONCE — at the end of Phase C. Every other phase is additive or refactor-without-schema-change.
+
+### Phase A — Foundation (independent works)
+
+**Scope:** cortex#91 substrate harness + cortex#109 §A+B (visibility consumption).
+
+These two are independent. cortex#91 lands the `SessionHarness` interface + `ClaudeCodeHarness` + `BusPeerHarness`; cortex#109 §A+B unhardcodes `classification: "local"` and adds surface-router visibility filtering.
+
+**Estimated effort:** 2–3 weeks parallel. cortex#91 is ~1–2 weeks (per its own estimate). cortex#109 §A+B is ~1 week (4 emit-site changes + visibility filter + per-renderer config).
+
+**Entry criteria:**
+- cortex#92 PR's Q5/Q6/Q7 resolved (substrate harness design doc).
+- Q3 v1 posture decision (centralized vs gossiped registry).
+
+**Exit criteria:**
+- `SessionHarness` interface compiled + tested.
+- `ClaudeCodeHarness` passes all current `cc-session.ts` tests behind new interface.
+- `BusPeerHarness` connects to local sage daemon and routes a fake review task end-to-end.
+- Cortex no longer hardcodes `classification` at the four emit sites; each can be explicitly set by the caller (with `local` as the safe default).
+- Surface-router has a `sovereignty.classification` check in `adapterMatches()`.
+- Renderer config supports `visibility:` block (hide-residency / require-model-class / max-classification).
+
+**Does not require:** Phase B or any other phase. Phase A unblocks single-operator federation; multi-operator waits for Phase D.
+
+### Phase B — Identity (cortex#102 NKey-signed bot↔bot)
+
+**Scope:** cortex#102 — replace Discord-platform-ID-based bot trust with NKey-signed envelope verification in BusPeerHarness.
+
+**Entry criteria:**
+- Phase A complete (BusPeerHarness exists as the integration point).
+- Q1 resolved (stack identity = operator NKey + operator.id pairing).
+
+**Exit criteria:**
+- BusPeerHarness verifies `signed_by[]` against TrustResolver.trustsByNKey() on every inbound dispatch.
+- ClaudeCodeHarness uses MyelinRuntime.publish for bot-bot calls (instead of "post in #cortex with @mention").
+- TrustResolver gains `trustsByNKey(agentId, signerPubKey) → boolean` method.
+- cortex#98's `trustedBotIds` stays as Discord-side fallback for human-to-bot DMs, but bot↔bot path no longer consults it.
+
+**Estimated effort:** 1–2 weeks. The plumbing is largely shipped (TrustResolver has `verifyOperatorSignedRequest` per `trust-resolver.ts:362-491`); this is wiring + the BusPeerHarness consumption.
+
+### Phase C — Policy (cortex#107 AAA refactor — THE SCHEMA FLIP)
+
+**Scope:** cortex#107 — PolicyEngine at M6, per-surface adapters thin out, cortex.yaml flips from per-adapter `roles[]` to top-level `policy:` block.
+
+**Entry criteria:**
+- Phase A complete (envelope sovereignty consumable; PolicyEngine consumes it).
+- Phase B complete (NKey-signed envelopes — `signed_by[].principal` is what PolicyEngine resolves against `policy.principals[]`).
+- Q7 resolved if stack-as-protocol-unit decision is needed before the flip (the cleanest moment to introduce a stack-aware namespace; after this flip, doing so requires re-flipping).
+- Q6 resolved (audit ownership).
+
+**Exit criteria:**
+- `src/common/policy/` module exists with `PolicyEngine.check()`.
+- Discord/Mattermost adapters reduced to ~30 LOC each (translate event → Principal; no role-resolver in adapter).
+- `cortex.yaml` schema has `policy: { principals[], roles[] }` at top level; per-adapter `roles[]` removed.
+- `migrate-config` CLI lifts existing per-surface roles into top-level `policy:` (with warnings on inconsistencies between adapters).
+- `system.access.{allowed,denied}` envelopes emitted by PolicyEngine (cortex#97 audit envelopes tie in).
+- Existing tests pass; cortex.yaml schema migration is one-way (post-flip, no rollback in v1).
+
+**Estimated effort:** 2–3 weeks. The bulk of the change is the schema flip + migrate-config + adapter thinning. PolicyEngine implementation itself is ~1 week.
+
+**Critical insight:** This is the ONLY phase where the operator-facing config schema changes. Sequencing Phases A and B before Phase C means the flip happens once: the substrate harness work (Phase A) doesn't touch cortex.yaml's auth model; the NKey identity work (Phase B) extends `policy.principals[]` after the block exists. If Phase C were sequenced first, we'd flip the schema, then re-flip when Phase B adds NKey fields.
+
+### Phase D — Federation (multi-operator peer registry + accept rules)
+
+**Scope:** cortex#109 §E (peer registry + accept-rules) + cortex#107 §H (multi-operator cloud dashboard).
+
+**Entry criteria:**
+- Phase C complete (PolicyEngine exists; principals carry `home_operator`).
+- Q3 confirmed (operator-edited registry is the v1 posture).
+
+**Exit criteria:**
+- `policy.federated.peers[]` schema landed (`{ operator_id, operator_pubkey, accept_subjects, deny_subjects, max_hop }`).
+- Surface-router gates inbound `federated.*` envelopes by per-peer accept rules.
+- PolicyEngine extends to support per-peer policy slicing.
+- A second operator (jcfischer or test rig) successfully federates a task with the first operator's cortex; envelope chain is verifiable on both sides.
+- Cloud dashboard (the grove-api Worker today) extends to per-operator slicing using `home_operator` from `policy.principals[]`.
+
+**Estimated effort:** 3–4 weeks. The peer registry schema is small; the cloud-dashboard multi-tenancy is the bulk.
+
+### Phase E — Bridges + multi-network
+
+**Scope:** §3.4 multi-network case + §3.5 mesh varieties (private / isolated / public).
+
+**Entry criteria:**
+- Phase D complete (single-network federation working).
+- Q4 resolved (per-peer capability scoping schema).
+- Q7 resolved if stack-as-protocol-unit affects bridge semantics.
+
+**Exit criteria:**
+- `MyelinRuntime` supports multiple NATS links concurrently (one per leaf-node).
+- `policy.federated.peers[].leaf_node` references a named NatsLink.
+- A test rig demonstrates a single cortex process participating in 2 distinct networks (separate leaf-nodes), publishing different capabilities to each.
+- Operator-vision script's "bridge stack" pattern is operable.
+- (Future, separate issue) Public mesh capability announcement scaffold — out of this phase's scope but possible after.
+
+**Estimated effort:** 4–6 weeks. This is the largest scope; multi-link support in MyelinRuntime + per-network policy slicing + operator infra coordination.
+
+### Phase summary
+
+| Phase | Estimated | Critical path | Schema flip? |
+|---|---|---|---|
+| A — Foundation | 2–3w (parallel) | cortex#91 + cortex#109 §A+B | No |
+| B — Identity | 1–2w | cortex#102 (BusPeerHarness verification) | No |
+| C — Policy | 2–3w | cortex#107 (PolicyEngine + migrate-config) | **YES (only one)** |
+| D — Federation | 3–4w | cortex#109 §E + cortex#107 §H | No (additive) |
+| E — Bridges + multi-network | 4–6w | Multi-network MyelinRuntime + per-peer policy | No (additive) |
+
+Total roughly 12–18 weeks if sequenced; A+B+C is the foundation (~6 weeks) and unblocks all single-network work.
+
+---
+
+## §7 — Risks + non-goals
+
+### What this doc does NOT address
+
+- **Operator UX for editing config.** cortex.yaml gets richer; operator-side dashboard support for editing `policy:` and `policy.federated.peers[]` is its own design (cortex#99 dashboard settings page).
+- **Runtime observability of cross-network traffic.** Distinct from sovereignty enforcement: how operators *see* the federation flow in real time. Signal-collector territory.
+- **Legal/compliance frameworks.** Data residency at the envelope level is necessary but not sufficient for GDPR / SOC2 / HIPAA. Each operator's compliance posture is theirs; this design enables the technical primitive.
+- **Pricing / economics for public mesh.** The myelin envelope has an `economics` block reserved for future marketplace integration; this design assumes it stays empty in v1.
+
+### Risks of getting the layering wrong
+
+- **Premature multi-network work without policy** = security surface. If Phase E lands before Phase C, every inbound federated envelope is accepted by anyone subscribing — no decision point. The PolicyEngine is the gate.
+- **Policy without substrate** = vendor lock at one harness. If Phase C lands before Phase A, the PolicyEngine bakes in Claude-Code-only assumptions (e.g. `roles[].disallowedTools` listing CC-specific tool names like `NotebookEdit`). The harness interface decouples this.
+- **Identity without substrate** = wire mismatch. If Phase B lands before Phase A, NKey verification has no inbound path (BusPeerHarness doesn't exist). cortex#102 is the strategic follow-up to cortex#91, not a replacement.
+- **Schema flip more than once.** The roadmap is designed so cortex.yaml flips ONCE (Phase C). If we re-flip later (e.g. to add a stack-aware namespace per Q7), every operator's `cortex.yaml` migration is two-step. Andreas wants one flip.
+
+### Open coupling concerns
+
+- The vendored envelope at `src/bus/myelin/envelope-validator.ts:22` (`SCHEMA_SOURCE_COMMIT = "96b14ea..."`) is pre-chain-of-stamps. Cortex#102 needs post-chain-of-stamps. Cortex#109 §C upgrades this. Sequence the upgrade to land in Phase A (it's mechanical) so Phase B can rely on it.
+- `MyelinRuntime` today has a single `NatsLink` (`runtime.ts:142-169`). Phase E requires multi-link support. Either refactor at Phase E or carry the limitation through Phase D and accept that Phase D demonstrates single-network federation only.
+- `target_principal` (F-021 task field) requires the post-`96b14ea` envelope. Direct/Delegate task routing per `myelin/specs/namespace.md:152-187` cannot happen without the upgrade. This couples cortex#91 (substrate harness, which may want Direct/Delegate as a dispatch primitive) to cortex#109 §C (envelope upgrade).
+
+---
+
+## §8 — References
+
+### Cortex source
+
+- `cortex/src/bus/myelin/envelope-validator.ts:22` — vendored schema pinned at myelin `96b14ea`
+- `cortex/src/bus/myelin/runtime.ts:30-67` — MyelinRuntime interface
+- `cortex/src/bus/myelin/runtime.ts:223-249` — publish: hardcoded `local.${org}.${type}` subject
+- `cortex/src/bus/dispatch-events.ts:73` — `classification: "local"` hardcoded
+- `cortex/src/bus/system-events.ts:102` — `classification: "local"` hardcoded
+- `cortex/src/bus/github-events.ts:89` — `classification: "local"` hardcoded
+- `cortex/src/taps/cc-events/cc-events.ts:99` — `classification: "local"` hardcoded
+- `cortex/src/bus/surface-router.ts:124-160` — `subjectMatches` NATS-style pattern matcher
+- `cortex/src/bus/surface-router.ts:259-270` — `adapterMatches` (subject + payload filter; no sovereignty filter)
+- `cortex/src/bus/surface-router.ts:291-319` — `renderWithIsolation` (timeout + AbortController)
+- `cortex/src/common/agents/trust-resolver.ts:268-491` — operator-signature verification
+- `cortex/src/common/agents/trust-resolver.ts:702-715` — `trustsByPlatformId` (today's mechanism)
+- `cortex/src/common/types/cortex-config.ts:85-111` — `OperatorSchema` (id, dataResidency)
+- `cortex/src/common/types/cortex-config.ts:225-253` — `AgentRuntimeSchema` (substrate + capabilities)
+- `cortex/src/common/types/cortex-config.ts:257-304` — `AgentSchema` (id, trust, presence)
+- `cortex/src/common/types/cortex-config.ts:321-403` — `RendererSchema` (dashboard, pagerduty, cli-tail, webhook-out)
+- `cortex/src/common/types/cortex-config.ts:447-491` — `NatsConfigSchema` (credsPath, identity, accountSigningKeyPath)
+- `cortex/docs/architecture.md:69-105` — M1–M7 stack model (cortex side)
+- `cortex/docs/architecture.md:135-145` — four subject classes
+- `cortex/docs/architecture.md:188-198` — namespace reconciliation RESOLVED
+- `cortex/docs/architecture.md:599-715` — agent + presence/renderer model (§9)
+- `cortex/docs/design-collaboration-surface.md:325` — G-1110 entry (sovereignty render)
+- `cortex/docs/design-collaboration-surface.md:374-375` — multi-operator surface + sovereignty surfacing open Qs
+- `cortex/docs/plan-cortex-migration.md` — migration plan; MIG-7 is the cortex.yaml schema flip; MIG-8 retires legacy
+
+### Myelin source
+
+- `myelin/docs/architecture.md:21-79` — seven-layer model + per-layer summary
+- `myelin/docs/architecture.md:188-204` — cross-layer invariants (sovereignty, mutable fields, transport-independence, operator sovereignty)
+- `myelin/docs/envelope.md:13-32` — canonical envelope fields
+- `myelin/docs/envelope.md:62-92` — sovereignty + inside-vs-outside-signature
+- `myelin/docs/envelope.md:174-184` — L3 status snapshot
+- `myelin/specs/namespace.md:13-22` — three prefixes (local / federated / public)
+- `myelin/specs/namespace.md:134-213` — tasks domain (Broadcast / Direct / Delegate / dead-letter)
+- `myelin/specs/namespace.md:216-247` — TASKS JetStream stream spec
+- `myelin/specs/namespace.md:275-303` — envelope ↔ subject derivation
+- `myelin/src/envelope.ts:337-345` — `deriveNatsSubject`
+- `myelin/src/envelope.ts:347-358` — `validateSubjectEnvelopeAlignment`
+- `myelin/src/envelope.ts:88-113` — `parseSovereignty`
+- `myelin/src/sovereignty/` — F-5 sovereignty engine (policy store, validators, audit log, transport)
+- `myelin/src/identity/` — chain-of-stamps + sign + verify + registry
+
+### GitHub issues
+
+- cortex#110 — META (this synthesis)
+- cortex#91 — substrate harness design + cortex#92 PR (Q5/Q6/Q7 open)
+- cortex#102 — bot↔bot via bus envelopes (NKey identity)
+- cortex#107 — Approach 1 AAA at dispatch-handler (PolicyEngine)
+- cortex#109 — envelope-visibility composition with subject-namespace routing
+- cortex#76 — TrustResolver + operator-verifier
+- cortex#86 — creds-auth (closed; M1 foundation)
+- cortex#98 — trust-mesh wiring (tactical fix; retires when cortex#102 lands)
+- cortex#105 — Pass 1 / Pass 2 trust-mesh wiring
+- myelin#7 — seven-layer model (myelin canonical)
+- myelin#11 — sovereignty enforcement protocol (spec-pending)
+- myelin#31 — chain-of-stamps (shipped, PR #92)
+- myelin#43 — federation principal mapping (referenced in `namespace.md:212`)
+- myelin#44 — namespace review feedback (`namespace.md:181`)
+
+### Operator vision
+
+- "Internet of Agentic Work" video script (2026-05-13, in cortex#110 body) — the operator-facing mental model. Used as North Star; not replicated here. Three concepts mapped to issues in cortex#110's body table.
+
+---
+
+*Originating discussion: Andreas 2026-05-13 framing of multi-stack / multi-operator / multi-network routing as an OSI-perspective design problem; cortex#110 META issue + CodexResearcher report on cortex#109 confirming myelin already ships the routing primitives cortex needs. This synthesis closes the first acceptance step on cortex#110 — the deep current-state + OSI-layered analysis — and seeds the Phase A entry-criteria discussion.*
