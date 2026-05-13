@@ -455,11 +455,11 @@ Each PR runs through the standard pilot-review-loop skill with Echo as primary r
 - **cortex#102** — bot↔bot via bus envelopes (consumed in Phase B; chain-of-stamps verification).
 - **cortex#107** — principal-based AAA (consumed in Phase C; PolicyEngine + cortex.yaml flip + Step H multi-operator dashboard in Phase D).
 - **cortex#109** — envelope-visibility composition (consumed in Phase A §A.2/§A.3/§A.4 + Phase D §D.1/§D.2).
-- **Phase A sub-issue** — TBD, filed as part of this plan.
-- **Phase B sub-issue** — TBD, filed as part of this plan.
-- **Phase C sub-issue** — TBD, filed as part of this plan.
-- **Phase D sub-issue** — TBD, filed as part of this plan.
-- **Phase E sub-issue** — TBD, filed as part of this plan.
+- **cortex#113** — IAW Phase A: Foundation (I-101).
+- **cortex#114** — IAW Phase B: Identity (I-102).
+- **cortex#115** — IAW Phase C: Policy + schema flip (I-103).
+- **cortex#116** — IAW Phase D: Federation (I-104).
+- **cortex#117** — IAW Phase E: Multi-network bridges + delegation (I-105).
 
 ### 8.2 Blueprint
 

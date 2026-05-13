@@ -152,6 +152,7 @@ features:
       and capabilities: block (Q2 lock-in). Phase A.5 coordinates with myelin on
       the {stack} segment namespace extension.
     parent: I-100
+    issue: 113
     depends_on: [C-108]
 
   I-102:
@@ -163,6 +164,7 @@ features:
       MyelinRuntime.publish for bot-bot calls. Discord-platform-ID trust retires
       for bot↔bot paths; stays for human-to-bot DMs.
     parent: I-100
+    issue: 114
     depends_on: [I-101]
 
   I-103:
@@ -174,6 +176,7 @@ features:
       principals[] carries home_operator + home_stack per Q1 lock-in. Audit
       envelopes (system.access.{allowed,denied}) per cortex#97 integration.
     parent: I-100
+    issue: 115
     depends_on: [I-101, I-102]
 
   I-104:
@@ -187,6 +190,7 @@ features:
       gossiped). Two-operator integration test demonstrates federated task
       with verifiable chain-of-stamps.
     parent: I-100
+    issue: 116
     depends_on: [I-103]
 
   I-105:
@@ -199,4 +203,5 @@ features:
       varieties (private/isolated-private/bridge) documented and operable.
       Phase E delivers the §3.6 delegation pattern from the design doc.
     parent: I-100
+    issue: 117
     depends_on: [I-104]
