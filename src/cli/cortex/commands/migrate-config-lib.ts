@@ -382,15 +382,71 @@ function buildTrustList(
 }
 
 /**
+ * cortex#88 item 3 — detect the bot identity for a single legacy
+ * `bot.yaml.discord[i]` block by scanning its `roles[]` for the legacy
+ * "this-is-the-bot-identity" hint.
+ *
+ * Grove's role-resolver historically carries one role per Discord identity
+ * (`agent-luna`, `agent-echo`, `agent-forge`, …). The role's `users[]` array
+ * lists the bot's own Discord user id — that is the operator's existing
+ * mapping from "Discord adapter block N" to "the agent whose bot token sits
+ * here". Without this signal, migrate-config falls through to numeric
+ * suffixing (`luna-2`, `luna-3`) regardless of which Discord identity each
+ * adapter actually represents — bug surfaced in production at the v1 cutover
+ * (cortex#88 item 3).
+ *
+ * Rules:
+ *   - `roles[]` is `unknown[]` on the legacy schema; iterate defensively
+ *     (objects only, ignore strings / nulls).
+ *   - Match the FIRST entry whose `name` starts with `agent-` AND whose
+ *     `users[]` carries at least one non-empty string (the bot's id).
+ *     "First wins" is deterministic and matches operator expectation: if
+ *     someone hand-edits bot.yaml with multiple `agent-*` hints they meant
+ *     the top one.
+ *   - The returned id is the `name` minus the `agent-` prefix, normalized
+ *     through `deriveAgentId` so the cortex schema's `^[a-z0-9-]+$`
+ *     constraint holds (a hypothetical `agent-Echo` becomes `echo`).
+ *   - When no hint matches: return undefined and let the caller fall back
+ *     to legacy numeric suffixing.
+ */
+function detectAgentIdFromRoleHints(inst: LegacyDiscordInstance): string | undefined {
+  const roles = inst.roles;
+  if (!Array.isArray(roles)) return undefined;
+  for (const raw of roles) {
+    if (!raw || typeof raw !== "object") continue;
+    const role = raw as Record<string, unknown>;
+    const name = role.name;
+    if (typeof name !== "string" || !name.startsWith("agent-")) continue;
+    const users = role.users;
+    if (!Array.isArray(users)) continue;
+    const hasUser = users.some((u) => typeof u === "string" && u.trim().length > 0);
+    if (!hasUser) continue;
+    const stripped = name.slice("agent-".length);
+    if (stripped.length === 0) continue;
+    const id = deriveAgentId(stripped);
+    if (!AGENT_ID_PATTERN.test(id)) continue;
+    return id;
+  }
+  return undefined;
+}
+
+/**
  * Synthesize the cortex `agents[]` list from the singular legacy `agent` plus
  * the (possibly multi-entry) `discord[]` and `mattermost[]` arrays.
  *
- * Strategy (per RESUME §MIG-7.2e Agents synthesis):
+ * Strategy (per RESUME §MIG-7.2e Agents synthesis, refined by cortex#88
+ * item 3):
  *   - Pair discord[i] with mattermost[i] under one agent.
- *   - Index 0 → base agent id (deriveAgentId(agent.name)).
- *   - Index ≥1 → `${base}-${i + 1}` (so `luna-2`, `luna-3`).
- *   - Trust list propagates to every variant.
- *   - Persona path propagates to every variant.
+ *   - PRIMARY id source: scan each discord adapter's `roles[]` for the
+ *     legacy `agent-<name>` role-resolver hint with a non-empty `users[]`
+ *     (the bot's own Discord id). When found, that's the agent id.
+ *   - SECONDARY fallback: `deriveAgentId(agent.name)` (the singular legacy
+ *     field, what migrate-config used unconditionally before cortex#88
+ *     item 3 landed).
+ *   - LAST-RESORT fallback: numeric variant (`luna-2`, `luna-3`) when
+ *     neither hint nor agent.name produces a distinct id and the operator
+ *     has multiple adapters. Matches pre-#88 behaviour for parity.
+ *   - Trust list and persona path propagate to every variant.
  */
 function buildAgents(
   legacy: LegacyBotYaml,
@@ -422,9 +478,44 @@ function buildAgents(
     });
   }
 
+  // First pass: compute each variant's id using the cortex#88-item-3
+  // detection ladder (role-hint → agent.name → numeric). We need every id
+  // resolved before constructing presence blocks so collision-avoidance
+  // for the numeric fallback can see the IDs that the hint path already
+  // claimed.
+  const claimedIds = new Set<string>();
+  const variantIds: string[] = [];
+  for (let i = 0; i < variantCount; i++) {
+    const d = discordInstances[i];
+    let id: string | undefined;
+    if (d) {
+      id = detectAgentIdFromRoleHints(d);
+      if (id) {
+        warnings.push({
+          field: `agents[${i}].id`,
+          message:
+            `discord[${i}] agent id "${id}" inferred from role-resolver hint ` +
+            `(role name starting with "agent-" carrying a non-empty users[])`,
+        });
+      }
+    }
+    if (!id) {
+      // Fallback: agent.name (only safe for the first variant — subsequent
+      // variants need a distinct id, hence the numeric suffix at index ≥1).
+      id = i === 0 ? baseId : `${baseId}-${i + 1}`;
+    }
+    // Last-resort: a role-hint produced an id that collides with one
+    // already claimed by an earlier adapter. Fall through to numeric.
+    while (claimedIds.has(id)) {
+      id = `${baseId}-${variantIds.length + 1 + 1}`;
+    }
+    claimedIds.add(id);
+    variantIds.push(id);
+  }
+
   const agents: CortexConfig["agents"] = [];
   for (let i = 0; i < variantCount; i++) {
-    const variantId = i === 0 ? baseId : `${baseId}-${i + 1}`;
+    const variantId = variantIds[i]!;
     const presence: CortexConfig["agents"][number]["presence"] = {};
     const d = discordInstances[i];
     const m = mattermostInstances[i];

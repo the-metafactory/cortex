@@ -685,6 +685,148 @@ describe("convertBotYaml — paths rewrite (cortex#88 item 1)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// cortex#88 item 3 — agent id detection from role-resolver hints
+// ---------------------------------------------------------------------------
+
+describe("convertBotYaml — agent id detection (cortex#88 item 3)", () => {
+  test("infers agent id from `agent-<X>` role hint when users[] is non-empty", () => {
+    // Grove monobot bot.yaml shape: the discord adapter carries an
+    // `agent-echo` role-resolver block with the bot's own Discord user id
+    // in `users[]`. That's the canonical hint of WHICH agent this adapter
+    // represents — migrate-config should emit `echo`, not `luna`.
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      discord: [{
+        token: "echo-token",
+        guildId: "1",
+        agentChannelId: "2",
+        logChannelId: "3",
+        roles: [
+          { name: "operator", users: ["112233445566778899"], features: ["chat"] },
+          { name: "agent-echo", users: ["999888777666555444"], features: ["chat"] },
+        ],
+      }],
+    };
+    const result = convertBotYaml(legacy, {});
+    expect(result.cortex.agents).toHaveLength(1);
+    expect(result.cortex.agents[0]!.id).toBe("echo");
+    // Warning surfaces the inference for operator audit trail.
+    const hintWarn = result.warnings.find((w) => w.field === "agents[0].id");
+    expect(hintWarn?.message).toMatch(/inferred from role-resolver hint/);
+  });
+
+  test("falls back to agent.name when no role hint matches", () => {
+    // No `agent-*` role at all — preserve pre-#88 behaviour
+    // (deriveAgentId(agent.name) at index 0, numeric suffix at index ≥1).
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      discord: [{
+        token: "t",
+        guildId: "1",
+        agentChannelId: "2",
+        logChannelId: "3",
+        roles: [
+          { name: "operator", users: ["112233445566778899"], features: ["chat"] },
+        ],
+      }],
+    };
+    const result = convertBotYaml(legacy, {});
+    expect(result.cortex.agents[0]!.id).toBe("luna");
+    expect(result.warnings.find((w) => w.field === "agents[0].id")).toBeUndefined();
+  });
+
+  test("falls back to numeric suffix for second variant when no role hint matches", () => {
+    // Two discord adapters, neither has an `agent-*` role hint. Index 0
+    // gets `luna` (from agent.name), index 1 gets `luna-2`.
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      discord: [
+        { token: "t1", guildId: "1", agentChannelId: "2", logChannelId: "3" },
+        { token: "t2", guildId: "10", agentChannelId: "20", logChannelId: "30" },
+      ],
+    };
+    const result = convertBotYaml(legacy, {});
+    expect(result.cortex.agents.map((a) => a.id)).toEqual(["luna", "luna-2"]);
+  });
+
+  test("first matching hint wins when multiple `agent-*` roles are present", () => {
+    // Pathological config: two valid `agent-*` hints in one adapter's
+    // roles[]. Deterministic policy is first-wins so an operator can rely
+    // on top-of-list precedence when hand-editing.
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      discord: [{
+        token: "t",
+        guildId: "1",
+        agentChannelId: "2",
+        logChannelId: "3",
+        roles: [
+          { name: "agent-forge", users: ["111111111111111111"], features: ["chat"] },
+          { name: "agent-echo", users: ["222222222222222222"], features: ["chat"] },
+        ],
+      }],
+    };
+    const result = convertBotYaml(legacy, {});
+    expect(result.cortex.agents[0]!.id).toBe("forge");
+  });
+
+  test("ignores `agent-*` roles whose users[] is empty", () => {
+    // Brief specifies the hint requires users[] non-empty. An empty
+    // users[] entry is structurally just a role definition — not a bot
+    // identity claim. Fall through to agent.name.
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      discord: [{
+        token: "t",
+        guildId: "1",
+        agentChannelId: "2",
+        logChannelId: "3",
+        roles: [
+          { name: "agent-echo", users: [], features: ["chat"] },
+        ],
+      }],
+    };
+    const result = convertBotYaml(legacy, {});
+    expect(result.cortex.agents[0]!.id).toBe("luna");
+  });
+
+  test("applies role-resolver hints per adapter in a multi-discord bot.yaml", () => {
+    // Three-adapter monobot (grove production shape). Each adapter carries
+    // a distinct `agent-*` role-resolver hint — migrate-config should
+    // emit three agents with the inferred ids in the SAME order as the
+    // discord[] blocks (so per-instance mappings stay stable).
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      discord: [
+        {
+          token: "luna-token",
+          guildId: "1",
+          agentChannelId: "2",
+          logChannelId: "3",
+          roles: [{ name: "agent-luna", users: ["100000000000000001"], features: ["chat"] }],
+        },
+        {
+          token: "echo-token",
+          guildId: "10",
+          agentChannelId: "20",
+          logChannelId: "30",
+          roles: [{ name: "agent-echo", users: ["200000000000000002"], features: ["chat"] }],
+        },
+        {
+          token: "forge-token",
+          guildId: "100",
+          agentChannelId: "200",
+          logChannelId: "300",
+          roles: [{ name: "agent-forge", users: ["300000000000000003"], features: ["chat"] }],
+        },
+      ],
+    };
+    const result = convertBotYaml(legacy, {});
+    expect(result.cortex.agents.map((a) => a.id)).toEqual(["luna", "echo", "forge"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildTrustList — extracted helper (Holly cortex#51 round 1 architecture)
 // ---------------------------------------------------------------------------
 
