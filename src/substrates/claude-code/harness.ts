@@ -158,7 +158,10 @@ export interface ClaudeCodeHarnessOpts {
  * --output-format stream-json`. See file header for the full contract.
  */
 export class ClaudeCodeHarness implements SessionHarness {
-  readonly id: HarnessId = "claude-code";
+  // Echo cortex#125 nit: `as const` tightens the inferred literal type so
+  // any downstream `switch (harness.id)` exhaustiveness check sees this
+  // harness's exact substrate id rather than the wider `HarnessId` union.
+  readonly id = "claude-code" as const;
   readonly capabilities: Capability[];
 
   private readonly source: DispatchEventSource;
@@ -252,7 +255,14 @@ export class ClaudeCodeHarness implements SessionHarness {
 
     // Hard shutdown — kill every active session. Don't await — kill is
     // synchronous and `wait()` settlement happens via cc-session's own
-    // exit-listener wiring on the dispatch generator side.
+    // exit-listener wiring on the dispatch generator side, which then
+    // removes the session from `activeSessions` in the dispatch's
+    // `finally` block. Echo cortex#125 nit: the previous code called
+    // `activeSessions.clear()` after this loop, but that was redundant —
+    // each dispatch's `finally` (`this.activeSessions.delete(session)`)
+    // already removes its session once `wait()` settles. Clearing here
+    // would race with in-flight dispatches that haven't yet observed
+    // the kill, and (worse) skip the per-dispatch cleanup symmetry.
     for (const session of this.activeSessions) {
       try {
         session.kill?.();
@@ -266,7 +276,6 @@ export class ClaudeCodeHarness implements SessionHarness {
         );
       }
     }
-    this.activeSessions.clear();
   }
 
   // -------------------------------------------------------------------------
@@ -277,10 +286,17 @@ export class ClaudeCodeHarness implements SessionHarness {
    * Translate a `DispatchRequest` to `CCSessionOpts`. Maps the protocol-
    * level camelCase fields onto cc-session's existing options shape.
    *
-   * The translation is intentionally narrow — A.1 only carries enough
-   * fields to make a basic CC dispatch work. Later phases (A.3 emit-site
-   * parameterisation, A.5 stack identity) will extend this map without
-   * breaking the contract.
+   * A.1b widens this from the A.1 baseline by absorbing the legacy
+   * `buildCCOpts()` from `dispatch-listener.ts` — every CC-runtime knob
+   * the listener used to thread is now read from `req.runtime`. The
+   * harness is the single place that knows about `CCSessionOpts`.
+   *
+   * **Decision: prefer `req.runtime` fields over context kinds.** A.1
+   * read operator/entity/project from `context[kind=env]`; A.1b adds
+   * the same fields under `req.runtime` plus the eight runtime fields
+   * from the legacy listener. Both paths are kept (context kind = env
+   * still works for forward compat with adapters that haven't migrated)
+   * but explicit `req.runtime` always wins on conflict.
    */
   private buildCCOpts(req: DispatchRequest): CCSessionOpts {
     const opts: CCSessionOpts = {
@@ -312,19 +328,45 @@ export class ClaudeCodeHarness implements SessionHarness {
       opts.timeoutMs = inactivityMs;
     }
 
+    // A.1b: absorb the CC-specific runtime knobs the dispatch-listener
+    // used to thread directly into CCSession. All optional; only set
+    // when the request supplied a value (so undefined stays undefined
+    // and CCSession's own defaults still apply).
+    const runtime = req.runtime;
+    if (runtime) {
+      if (runtime.cwd !== undefined) opts.cwd = runtime.cwd;
+      if (runtime.allowedDirs !== undefined) opts.allowedDirs = runtime.allowedDirs;
+      if (runtime.bashAllowlist !== undefined) opts.bashAllowlist = runtime.bashAllowlist;
+      if (runtime.bashGuardDisabled !== undefined) opts.bashGuardDisabled = runtime.bashGuardDisabled;
+      if (runtime.additionalArgs !== undefined) opts.additionalArgs = runtime.additionalArgs;
+      if (runtime.groveChannel !== undefined) opts.groveChannel = runtime.groveChannel;
+      if (runtime.groveNetwork !== undefined) opts.groveNetwork = runtime.groveNetwork;
+      if (runtime.resumeSessionId !== undefined) opts.resumeSessionId = runtime.resumeSessionId;
+    }
+
     // Surface env context kinds the substrate understands. Unknown kinds
-    // are silently dropped per the protocol contract.
+    // are silently dropped per the protocol contract. Kept alongside the
+    // `req.runtime` path above for adapters that still emit env-kind
+    // context blocks; `req.runtime` values take precedence on conflict.
     for (const ctx of req.context) {
       if (ctx.kind === "env" && typeof ctx.data === "object" && ctx.data !== null) {
         const env = ctx.data as Record<string, unknown>;
-        if (typeof env.operator === "string") opts.operator = env.operator;
-        if (typeof env.entity === "string") opts.entity = env.entity;
-        if (typeof env.project === "string") opts.project = env.project;
+        if (opts.operator === undefined && typeof env.operator === "string") opts.operator = env.operator;
+        if (opts.entity === undefined && typeof env.entity === "string") opts.entity = env.entity;
+        if (opts.project === undefined && typeof env.project === "string") opts.project = env.project;
       }
     }
 
     return opts;
   }
+
+  /**
+   * Latches once a non-UUID `requestId` has been seen so the diagnostic
+   * fires exactly once per harness instance — a misconfigured producer
+   * dispatching dozens of bad ids per minute does not flood the log.
+   * Mirrors the same warn-once pattern in `DispatchHandler.warnedMissingSource`.
+   */
+  private warnedNonUuidRequestId = false;
 
   /**
    * Per-dispatch correlation key. Uses `requestId` when valid (UUID), else
@@ -335,9 +377,22 @@ export class ClaudeCodeHarness implements SessionHarness {
    * Same defensive pattern that lives in dispatch-listener.ts — the
    * schema only allows UUID `correlation_id`, so we shield the caller
    * from accidental validation failures at publish time.
+   *
+   * **Echo cortex#125 nit.** When the fallback path fires (non-UUID
+   * input), we emit a one-time warning so the operator sees that the
+   * substrate is silently rewriting `correlation_id` — a misconfigured
+   * producer would otherwise be undetectable except by stack trace
+   * comparison across envelopes.
    */
   private correlationFor(req: DispatchRequest): string {
-    return isUuid(req.requestId) ? req.requestId : randomUUID();
+    if (isUuid(req.requestId)) return req.requestId;
+    if (!this.warnedNonUuidRequestId) {
+      console.warn(
+        `claude-code-harness: requestId "${req.requestId}" is not UUID-shaped — substituting a generated correlation_id (this warning fires once per harness instance)`,
+      );
+      this.warnedNonUuidRequestId = true;
+    }
+    return randomUUID();
   }
 
   private buildStartedEnvelope(

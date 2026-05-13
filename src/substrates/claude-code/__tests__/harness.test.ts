@@ -284,6 +284,92 @@ describe("ClaudeCodeHarness — DispatchRequest → CCSessionOpts mapping", () =
     expect(envelopes).toHaveLength(2);
     expect(envelopes[1]?.type).toBe("dispatch.task.completed");
   });
+
+  test("A.1b: req.runtime fields plumb onto CCSessionOpts", async () => {
+    // A.1b extends DispatchRequest with an optional `runtime` block
+    // carrying CC-specific knobs (cwd, allowedDirs, bashAllowlist, etc.).
+    // The harness reads them onto CCSessionOpts; future non-CC harnesses
+    // ignore them.
+    const cap = captureFactory(makeResult());
+    const h = new ClaudeCodeHarness({ source: SOURCE, ccSessionFactory: cap.factory });
+    const req = makeRequest({
+      runtime: {
+        cwd: "/work",
+        allowedDirs: ["/work", "/tmp"],
+        additionalArgs: ["--verbose"],
+        groveChannel: "grove",
+        groveNetwork: "metafactory",
+        resumeSessionId: "sess-123",
+        bashAllowlist: { rules: [{ pattern: "ls" }], repos: ["grove"] },
+        bashGuardDisabled: false,
+      },
+    });
+
+    await drain(h.dispatch(req));
+
+    expect(cap.opts[0]?.cwd).toBe("/work");
+    expect(cap.opts[0]?.allowedDirs).toEqual(["/work", "/tmp"]);
+    expect(cap.opts[0]?.additionalArgs).toEqual(["--verbose"]);
+    expect(cap.opts[0]?.groveChannel).toBe("grove");
+    expect(cap.opts[0]?.groveNetwork).toBe("metafactory");
+    expect(cap.opts[0]?.resumeSessionId).toBe("sess-123");
+    expect(cap.opts[0]?.bashAllowlist).toEqual({
+      rules: [{ pattern: "ls" }],
+      repos: ["grove"],
+    });
+    expect(cap.opts[0]?.bashGuardDisabled).toBe(false);
+  });
+
+  test("A.1b: req.runtime takes precedence over env-kind context on conflict", async () => {
+    // If a payload happens to populate BOTH `req.runtime` AND a
+    // `context[kind=env]` block (defence in depth — different upstream
+    // adapters might use either path), `req.runtime` wins. This is the
+    // explicit-over-implicit principle: the new typed surface beats the
+    // legacy `context.data` route.
+    //
+    // Note: operator/entity/project don't live on `req.runtime` today —
+    // they only live in env context. The conflict is only resolvable for
+    // fields that overlap; for now nothing overlaps directly. This test
+    // asserts the *combination* path: both blocks supplied, harness reads
+    // both without throwing, env context still surfaces operator/etc.
+    const cap = captureFactory(makeResult());
+    const h = new ClaudeCodeHarness({ source: SOURCE, ccSessionFactory: cap.factory });
+    const req = makeRequest({
+      runtime: { cwd: "/work", groveChannel: "grove" },
+      context: [
+        { kind: "env", data: { operator: "andreas", entity: "pr/45", project: "cortex" } },
+      ],
+    });
+
+    await drain(h.dispatch(req));
+
+    expect(cap.opts[0]?.cwd).toBe("/work");
+    expect(cap.opts[0]?.groveChannel).toBe("grove");
+    expect(cap.opts[0]?.operator).toBe("andreas");
+    expect(cap.opts[0]?.entity).toBe("pr/45");
+    expect(cap.opts[0]?.project).toBe("cortex");
+  });
+
+  test("A.1b: persona is optional on DispatchRequest", async () => {
+    // Echo cortex#125: `req.persona` dropped to optional. A request with
+    // no persona block must still dispatch successfully (the harness
+    // doesn't inject persona — the prompt is already persona-injected
+    // upstream by dispatch-handler's prompt-builder path).
+    const cap = captureFactory(makeResult());
+    const h = new ClaudeCodeHarness({ source: SOURCE, ccSessionFactory: cap.factory });
+    const req: DispatchRequest = {
+      // NB: no `persona` field at all
+      prompt: "do it",
+      tools: { allow: [] },
+      context: [],
+      agent: { id: "cortex", displayName: "Cortex" },
+      requestId: REQUEST_ID,
+    };
+
+    const envelopes = await drain(h.dispatch(req));
+    expect(envelopes).toHaveLength(2);
+    expect(envelopes[1]?.type).toBe("dispatch.task.completed");
+  });
 });
 
 // ---------------------------------------------------------------------------

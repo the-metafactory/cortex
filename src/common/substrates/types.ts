@@ -195,6 +195,99 @@ export interface ToolCapability {
 }
 
 // ---------------------------------------------------------------------------
+// DispatchRuntime — optional substrate-runtime knobs
+// ---------------------------------------------------------------------------
+
+/**
+ * Optional substrate-runtime hints carried alongside the core dispatch
+ * inputs.
+ *
+ * These are *harness-internal* concerns (cwd, allowedDirs, bash allowlist,
+ * grove channel/network labels, resume tokens, extra CLI args) that the
+ * runner historically built directly into `CCSessionOpts` inside
+ * `dispatch-listener.ts` (A.1b folds that mapping in here). Putting them
+ * on the request keeps every future harness reading the same shape:
+ * CC-specific harnesses consume the CC-specific fields, future harnesses
+ * silently ignore knobs they don't understand.
+ *
+ * **Why optional everywhere.** Phase A.1b is a behaviour-preserving
+ * refactor: dispatch-listener supplies whatever the legacy payload
+ * carries, and the harness applies what it understands. Required fields
+ * would force every test, every future caller, and every other harness
+ * implementation to populate CC-specific knobs they don't care about.
+ *
+ * **What does NOT live here.** Tool ACLs (`tools`) stay on `DispatchRequest`
+ * top-level — every harness needs them and they're an explicit ACL surface.
+ * Persona content stays on the request top-level — it's the system prompt
+ * regardless of substrate. The fields here are the residual *runtime
+ * knobs* that historically traveled with the `CCSession` constructor but
+ * are NOT part of the conceptual dispatch contract.
+ *
+ * **Schema growth path.** Adding a new field here is a non-breaking
+ * change — all fields are optional and unknown fields are simply ignored
+ * by any harness that doesn't read them. A.3 / A.5 / B may introduce
+ * stack-aware fields (operator id, stack id, signing key hint) into this
+ * same block.
+ */
+export interface DispatchRuntime {
+  /**
+   * Working directory for the substrate process. Substrates that don't
+   * spawn child processes (`bus-peer`, `pi-dev`) MAY ignore this.
+   *
+   * Carried from the legacy `CCSessionOpts.cwd` — historically derived
+   * from `access.dirRestrictions[0]` or the agent's `claude.allowedDirs`
+   * config block.
+   */
+  cwd?: string;
+  /**
+   * Filesystem read/write allowlist. Substrates that enforce a
+   * filesystem boundary (CC's `--add-dir`) consume this; others ignore.
+   *
+   * Per Q1-α lock-in, these are substrate-native path strings. Cortex
+   * does NOT translate across substrates.
+   */
+  allowedDirs?: string[];
+  /**
+   * Bash guard allowlist config. CC's `bash-guard.hook.ts` reads this
+   * via the `GROVE_BASH_GUARD` env var and refuses any `Bash` tool
+   * invocation whose command doesn't match the allowlist. Future
+   * non-CC harnesses ignore this field.
+   */
+  bashAllowlist?: {
+    rules: Array<{ pattern: string; repos?: string[] }>;
+    repos: string[];
+  };
+  /**
+   * When `true`, disables the bash guard entirely. Used by operator DMs
+   * (the highest-privilege role) where the operator is trusted to run
+   * arbitrary commands. Future non-CC harnesses ignore.
+   */
+  bashGuardDisabled?: boolean;
+  /**
+   * Extra CLI args appended to the substrate's invocation. CC consumes
+   * these as `claude … <additional_args>`; other substrates may use
+   * them for their own CLI flag passthrough.
+   */
+  additionalArgs?: string[];
+  /**
+   * Grove channel/network labels stamped onto downstream events (for
+   * the dashboard's per-channel grouping). Carried via `GROVE_CHANNEL`
+   * / `GROVE_NETWORK` env vars on the CC child process; future
+   * substrates may surface the same labels through their own event-tap
+   * mechanism.
+   */
+  groveChannel?: string;
+  groveNetwork?: string;
+  /**
+   * Resume token for substrates that support stateful resumption (CC's
+   * `--resume <session-id>`). Future stateless substrates (`bus-peer`
+   * for one-shot delegations) ignore this. Optional everywhere — the
+   * runner only sets this on thread continuations.
+   */
+  resumeSessionId?: string;
+}
+
+// ---------------------------------------------------------------------------
 // DispatchRequest
 // ---------------------------------------------------------------------------
 
@@ -209,6 +302,12 @@ export interface ToolCapability {
  *
  * **Per-field design-doc anchors:**
  *   - `persona` — design doc §2 (M7 persona files), `architecture.md` §9.3.
+ *     **Optional in A.1b** (Echo cortex#125 review): today the runner
+ *     injects persona via the prompt-builder path BEFORE constructing
+ *     the request, so the harness layer doesn't itself need to surface
+ *     the persona file. Kept as an optional provenance hint and a
+ *     forward door for substrates that DO inject the persona themselves
+ *     at dispatch time.
  *   - `prompt` — the operator-or-agent-generated work request.
  *   - `tools` — Q1-α lock-in (substrate-native tool strings).
  *   - `context` — pluggable context bundle: discord-history, attachments,
@@ -219,19 +318,22 @@ export interface ToolCapability {
  *     is the authoritative substrate the dispatch is running on.
  *   - `requestId` — Q5 lock-in subject suffix; correlates progress /
  *     complete / error / timeout envelopes for one dispatch.
+ *   - `runtime` — optional substrate-runtime knobs (cwd, allowedDirs,
+ *     bash allowlist, grove channel labels, resume tokens, extra CLI
+ *     args). See `DispatchRuntime` doc for the per-field rationale.
  *   - `timeoutMs` / `inactivityMs` — Q6 lock-in (two caps race).
  */
 export interface DispatchRequest {
   /**
    * Agent persona. `path` is the resolved file path (for provenance in
    * envelopes and dashboard renderers); `content` is the resolved
-   * markdown body the substrate will inject as system prompt.
+   * markdown body. Optional in A.1b — see interface doc.
    *
-   * Both fields are required because the runner ALREADY reads the
-   * persona file to validate it exists; passing both saves the
-   * substrate a redundant read and keeps it filesystem-decoupled.
+   * When present, the substrate may inject `content` as a system
+   * prompt; when omitted, the caller (typically `dispatch-handler`) has
+   * already inlined the persona into `prompt` via the prompt-builder.
    */
-  persona: {
+  persona?: {
     /** Absolute or repo-relative path. Used for provenance only. */
     path: string;
     /** Resolved markdown content — what the substrate actually injects. */
@@ -315,6 +417,22 @@ export interface DispatchRequest {
    * Required because all four terminal envelope subjects need it.
    */
   requestId: string;
+  /**
+   * Optional substrate-runtime knobs. See `DispatchRuntime` for the
+   * per-field rationale.
+   *
+   * **Why a sub-object instead of flat fields.** Grouping keeps the
+   * `DispatchRequest` surface tidy as the list grows (A.3 / A.5 / B
+   * will add stack-aware fields here). It also makes it obvious which
+   * fields are "substrate-runtime" vs "core dispatch contract" at the
+   * call site — `req.runtime.cwd` vs `req.prompt` reads correctly.
+   *
+   * **Why optional.** Cortex's IAW design treats this as a forward door:
+   * a minimal dispatch (just persona + prompt + tools) is valid; the
+   * runtime block is a layered escape-hatch for the residual harness-
+   * specific knobs.
+   */
+  runtime?: DispatchRuntime;
   /**
    * Q6 lock-in (design doc §5, 2026-05-13).
    *
