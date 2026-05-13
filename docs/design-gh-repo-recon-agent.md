@@ -338,12 +338,25 @@ Invoke the `Recon` skill via the `Skill` tool with the parsed parameters. The sk
 
 ### 6.4 RepoRecon workflow shape
 
-`skill/Workflows/RepoRecon.md` describes the workflow operator-readably and invokes the script. The script is the sealed implementation; the markdown is documentation of what the script does.
+`skill/Workflows/RepoRecon.md` declares the script path in **machine-readable YAML frontmatter**, then describes the workflow operator-readably in the body. The frontmatter is the resolver's source of truth (so `invokeSkill` does not have to parse prose); the body is documentation for humans and LLM-driven surfaces.
 
 ```markdown
+---
+script: scripts/recon.ts          # REQUIRED — resolved relative to the skill root
+default: true                      # OPTIONAL — marks this as the skill's default workflow
+inputs:                            # OPTIONAL — JSON-schema-style description of stdin shape
+  owner: string
+  repo: string
+  include: string[] (default = all five)
+  state: "open" | "closed" | "all"
+  pr_limit: integer (default 30)
+  issue_limit: integer (default 30)
+  commit_limit: integer (default 20)
+---
+
 # RepoRecon
 
-Run `bun ~/.claude/skills/Recon/scripts/recon.ts <owner>/<repo> --include <subset> --state <state> [--caller <login>]`.
+Run `bun ~/.claude/skills/Recon/scripts/recon.ts` with `{ input, caller }` as JSON on stdin.
 
 Returns a `ReconVerdict` JSON object (schema in `scripts/recon.ts`).
 
@@ -352,6 +365,8 @@ Invoked by:
 - PAI `Skill("Recon")` tool calls
 - cortex `deterministic-agent` harness for `dispatch.recon.*` envelopes
 ```
+
+The `script:` frontmatter field is the single load-bearing piece of routing metadata. SKILL.md's `Workflow Routing` table in §6.2 names which workflow file to look at; the workflow file's frontmatter names which script to run. Two levels of indirection, both machine-parseable, no LLM in the resolution path.
 
 The judgment-free property of the deterministic class is enforced by the workflow being a single non-branching invocation of a known script. There are no decision steps for the LLM to take. If a future workflow under `Recon/` needs LLM-driven branching, it becomes a judgment-class skill workflow and the bus-side agent that uses it is no longer deterministic-class — a deliberate split, not an accident.
 
@@ -369,11 +384,13 @@ agents:
       kind: behavior-contract                  # not a system prompt — links to this doc
       path: ./design-gh-repo-recon-agent.md
     runtime:
+      # substrate is the discriminator for harness selection at runtime;
+      # there is no separate `harness` YAML field (HarnessId is a TypeScript
+      # union, not a config key).
       substrate: deterministic-agent           # NEW AgentRuntimeSchema.substrate value
       mode: in-process                         # required by current schema
-      harness: deterministic-agent             # NEW HarnessId value (informational)
       skill: Recon                             # PAI skill name; resolves to ~/.claude/skills/Recon/
-      workflow: RepoRecon                      # optional — defaults to skill's default workflow
+      workflow: RepoRecon                      # optional — when omitted, resolver picks the workflow whose frontmatter has `default: true`
       timeout_ms: 10000
       retry:
         max_attempts: 2
@@ -421,6 +438,10 @@ AgentRuntimeSchema.extend({
 ```
 
 The four runtime-level additions (`task_subjects`, `publish_subjects`, `secrets`, plus the already-existing `capabilities`) are broadly useful across substrates — judgment-class agents will eventually want to declare their bus subjects too. They are not gated by `substrate === "deterministic-agent"`; they are general additions. Documented here because the deterministic-agent path is the first user.
+
+**Two `capabilities` concepts — explicit bridge.** `AgentRuntimeSchema.capabilities` is `string[]` (operator-declared in YAML, consumed by the dispatcher and the NATS-KV capability registry). `SessionHarness.capabilities` is `Capability[]` with `{id, description, tags?}` objects (declared in TypeScript by the harness implementation). The contract between them: **each operator-declared string MUST equal a harness `Capability.id`.** The harness is the authoritative source of metadata; the YAML is the authoritative source of which subset this agent claims. At dispatch time, cortex validates that every `runtime.capabilities[]` string resolves to a known `Capability.id` on the resolved `SessionHarness`. Future deterministic-agent skills follow the same bridge: declare capability objects in the harness's `CAPABILITIES` constant, declare matching string ids in the operator fragment.
+
+**`.refine()` stacking.** Zod supports chaining `.refine()` calls; the existing standalone-mode refine on `AgentRuntimeSchema` (which requires `capabilities.length >= 1` when `mode === "standalone"`, per cortex#62 Echo M2) is **not replaced** by the new deterministic-agent refine — both apply. Per-refine error paths stay separate, so the operator sees one error message per violated invariant.
 
 **2. `HarnessId` (runner-facing, `src/common/substrates/types.ts`).** Today a TypeScript union of seven values. Gains `"deterministic-agent"` as an eighth. This is the type the runner uses to select a `SessionHarness` implementation; not operator-facing.
 
@@ -509,7 +530,16 @@ Field-name and contract notes for implementers:
 - Input arrives via `req.context[]` with `kind: "recon-input"` (or whatever kind the dispatcher chooses — that decision is for cortex#92's dispatcher work, not this design). Recon must not assume an arbitrary `payload` field on the request.
 - Operator identity (for the `mine` cross-cut) arrives via `req.context[]` with `kind: "env"` per the existing convention. If absent, the cross-cut is skipped.
 - `capabilities` must be `Capability[]` — array of `{ id, description, tags? }` objects, not bare strings.
-- `invokeSkill` is the new shared resolver at `src/skills/invoke.ts`. Its contract: take `(skill, workflow, input)`, locate the skill at `~/.claude/skills/<skill>/`, read SKILL.md's routing table for `workflow → script_path`, spawn the script via `Bun.spawn`, pass `{ input, caller }` as JSON on stdin, parse the JSON it writes to stdout, return as `unknown` for caller-side schema validation. Errors are thrown as typed `SkillInvocationError`. This is the only point of coupling between cortex and the PAI skill system; the same `invokeSkill` is usable by other cortex code paths (the Skill tool's invocation, future skill-shaped substrates).
+- `invokeSkill` is the new shared resolver at `src/skills/invoke.ts`. Its contract:
+  1. Take `(skill, workflow | null, input)`.
+  2. Locate the skill at `~/.claude/skills/<skill>/`.
+  3. Read SKILL.md's `Workflow Routing` table to map `workflow → workflow_markdown_file`. **If `workflow` is null,** pick the row whose `Trigger` column begins with `default`.
+  4. Open the resolved workflow markdown file. Read its YAML frontmatter. The `script:` field is the **machine-readable** path to the executable, resolved relative to the skill root.
+  5. Spawn `bun <script_path>` via `Bun.spawn`, pass `{ input, caller }` as JSON on stdin.
+  6. Parse the JSON it writes to stdout, return as `unknown` for caller-side schema validation.
+  7. Errors are thrown as typed `SkillInvocationError`.
+
+  This is the only point of coupling between cortex and the PAI skill system; the same `invokeSkill` is usable by other cortex code paths (the Skill tool's invocation, future skill-shaped substrates). The resolver never parses workflow-markdown prose — only YAML frontmatter.
 - `ReconVerdictSchema.parse(rawResult)` enforces the verdict contract at the seam between `invokeSkill`'s `unknown` return and the typed envelope emission. The schema is imported from the skill repo's published types — same source of truth as the script itself uses for `ReconInputSchema` on the input side.
 
 ### 8.1 The skill's script (lives in `~/.claude/skills/Recon/scripts/recon.ts`)
