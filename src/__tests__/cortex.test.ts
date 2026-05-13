@@ -145,6 +145,26 @@ describe("startCortex — construction", () => {
     expect(handle).toBeDefined();
     await handle.stop();
   });
+
+  test("IAW A.5.4 — boot path accepts an explicit stack: option and starts cleanly (cortex#113)", async () => {
+    // The boot wiring resolves `deriveStackId({ operator, stack })` and logs
+    // the derived id; we don't assert on stdout because the existing tests
+    // already capture the boot log line shape on the default-derived path.
+    // The smoke check here is that passing the option shape through
+    // `StartCortexOptions.stack` doesn't trip type-checking or runtime
+    // validation — `startCortex` accepts the field, threads it to the
+    // logger, and keeps going. Emit subjects are unchanged (A.5.5 follow-up
+    // on myelin#113).
+    const config = minimalConfig();
+    const handle = await startCortex(config, {
+      stack: { id: "test-op/research" },
+      disableConfigWatcher: true,
+      disableDashboard: true,
+      disableOutboundPoller: true,
+    });
+    expect(handle).toBeDefined();
+    await handle.stop();
+  });
 });
 
 // ---------------------------------------------------------------------------

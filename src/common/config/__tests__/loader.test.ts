@@ -463,4 +463,60 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     const { config } = loadConfigWithAgents(path);
     expect(config.discord[0]!.trustedBotIds).toEqual([]);
   });
+
+  // ---------------------------------------------------------------------------
+  // IAW Phase A.5 (refs cortex#113) — cortex-shape `stack:` block plumbed
+  // through to `LoadedConfig.stack`. The boot path (`startCortex`) calls
+  // `deriveStackId` on this; today no emit-subject behaviour changes —
+  // that's A.5.5, blocked on myelin#113. These tests just verify the
+  // wiring: declared block round-trips, omitted block stays undefined,
+  // malformed block fails at parse with a clear regex error.
+  // ---------------------------------------------------------------------------
+
+  test("IAW A.5.3 — declared `stack: { id }` block round-trips on LoadedConfig.stack", () => {
+    const cfg = minimalCortex();
+    cfg.stack = { id: "andreas/research" };
+    const path = writeCortexConfig(testDir, cfg);
+    const loaded = loadConfigWithAgents(path);
+    expect(loaded.stack).toBeDefined();
+    expect(loaded.stack?.id).toBe("andreas/research");
+    expect(loaded.stack?.nkey_pub).toBeUndefined();
+  });
+
+  test("IAW A.5.3 — omitted `stack:` block keeps LoadedConfig.stack undefined", () => {
+    // Backward-compat path: cortex.yaml without a stack: block still parses,
+    // and the loader returns `stack: undefined` so the boot path's
+    // `deriveStackId` falls through to `${operator.id}/default`.
+    const path = writeCortexConfig(testDir, minimalCortex());
+    const loaded = loadConfigWithAgents(path);
+    expect(loaded.stack).toBeUndefined();
+  });
+
+  test("IAW A.5.3 — declared `stack:` with `nkey_pub` round-trips both fields", () => {
+    const validNkey =
+      "U" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVZ"; // U + 55
+    const cfg = minimalCortex();
+    cfg.stack = { id: "andreas/research", nkey_pub: validNkey };
+    const path = writeCortexConfig(testDir, cfg);
+    const loaded = loadConfigWithAgents(path);
+    expect(loaded.stack?.id).toBe("andreas/research");
+    expect(loaded.stack?.nkey_pub).toBe(validNkey);
+  });
+
+  test("IAW A.5.3 — malformed `stack.id` (uppercase) fails at parse with regex error", () => {
+    const cfg = minimalCortex();
+    cfg.stack = { id: "Andreas/research" };
+    const path = writeCortexConfig(testDir, cfg);
+    expect(() => loadConfigWithAgents(path)).toThrow(/stack\.id must match/);
+  });
+
+  test("IAW A.5.3 — legacy bot.yaml input leaves LoadedConfig.stack undefined", () => {
+    // BotConfigSchema has no `stack:` field during the MIG-7.2 overlap
+    // window. The legacy branch of `loadConfigWithAgents` must produce a
+    // `LoadedConfig` with `stack: undefined` so the boot path's destructure
+    // (`const { stack } = ...`) stays safe.
+    const configPath = writeCentralConfig(testDir, minimalCentral());
+    const loaded = loadConfigWithAgents(configPath);
+    expect(loaded.stack).toBeUndefined();
+  });
 });

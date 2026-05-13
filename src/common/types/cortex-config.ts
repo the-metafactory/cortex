@@ -41,6 +41,7 @@ import {
   NetworkFileSchema,
   RoleSchema,
 } from "./config";
+import { StackConfigSchema } from "./stack";
 
 // =============================================================================
 // Helper — Zod v4 empty-default workaround
@@ -755,6 +756,23 @@ export const CortexConfigSchema = z.object({
   /** Who is running this cortex instance. */
   operator: OperatorSchema,
   /**
+   * IAW Phase A.5 (refs cortex#113) — optional stack identity. When set,
+   * declares `{operator_id}/{stack_id}` for the deployment and the
+   * stack-level NKey public key. Unset → `deriveStackId` default-derives
+   * `${operator.id}/default` preserving today's identity. The schema
+   * lives in `./stack.ts` next to the `deriveStackId` resolver; importing
+   * the schema here keeps the cortex.yaml top-level surface contained in
+   * one file.
+   *
+   * Behaviour today: the block parses, the resolver reads it, the boot
+   * path logs the derived id. Emit subjects do NOT yet consume the stack
+   * segment — that's A.5.5, blocked on myelin#113's namespace extension.
+   * Wiring the schema in ahead of the namespace cutover lets operators
+   * declare `stack:` in cortex.yaml without breaking their deployment
+   * before A.5.5 lands.
+   */
+  stack: StackConfigSchema.optional(),
+  /**
    * Anti-field: the legacy grove-v2 `agent:` (singular) block must not be
    * present in a cortex.yaml. Caught here with an explicit Zod refusal so
    * the operator sees a clear migration error rather than the field being
@@ -862,3 +880,13 @@ export {
   NetworkFileSchema,
   RoleSchema,
 };
+
+/**
+ * IAW Phase A.5 re-exports — the stack identity primitive ships in its own
+ * module (`./stack.ts`) for tighter ownership, but downstream code that
+ * already pulls `CortexConfigSchema` from this file shouldn't need a second
+ * import path. Mirror the `DMConfigSchema` / `NetworkClaudeSchema` re-export
+ * pattern above.
+ */
+export { StackConfigSchema, deriveStackId } from "./stack";
+export type { StackConfig, DerivedStackId, DeriveStackIdInput } from "./stack";

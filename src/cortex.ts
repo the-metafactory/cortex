@@ -39,8 +39,13 @@ import type { SystemEventSource } from "./bus/system-events";
 
 import { DiscordAdapter } from "./adapters/discord";
 import { createRenderer, type Renderer } from "./renderers";
-import { RendererSchema } from "./common/types/cortex-config";
-import type { Agent, DiscordPresence, MattermostPresence } from "./common/types/cortex-config";
+import { RendererSchema, deriveStackId } from "./common/types/cortex-config";
+import type {
+  Agent,
+  DiscordPresence,
+  MattermostPresence,
+  StackConfig,
+} from "./common/types/cortex-config";
 import { MattermostAdapter } from "./adapters/mattermost";
 import type { PlatformAdapter } from "./adapters/types";
 
@@ -149,6 +154,22 @@ export interface StartCortexOptions {
    * @internal — not part of the public API; semver does not apply.
    */
   inlineAgents?: readonly Agent[];
+  /**
+   * IAW Phase A.5 (refs cortex#113) — optional `stack:` block from
+   * `CortexConfig`, threaded through from the loader so the boot path can
+   * call `deriveStackId` without re-parsing the file. Undefined for legacy
+   * `bot.yaml` input (the block lives on `CortexConfigSchema` only) AND for
+   * cortex-shape input where the operator hasn't declared `stack:` —
+   * `deriveStackId` default-derives `${operator.id}/default` for both.
+   *
+   * The seam exists today so the boot path can log the derived stack id and
+   * downstream emit code (A.5.5, blocked on myelin#113) can consume the
+   * resolved value without re-loading config. No emit-subject behaviour
+   * change ships here — that's the follow-up PR.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  stack?: StackConfig;
 }
 
 /**
@@ -173,6 +194,27 @@ export async function startCortex(
   console.log(`  Agent: ${config.agent.displayName}`);
   console.log(`  Config: ${options.configPath ?? "(in-memory)"}`);
   console.log(`  PID: ${process.pid}`);
+
+  // IAW Phase A.5 (refs cortex#113) — resolve the deployment's stack identity
+  // at boot. `deriveStackId` returns `{operator, stack, id}`; today we only
+  // log the canonical id and stash nothing on the runtime. Once myelin#113
+  // lands and A.5.5 wires the stack segment into envelope subject derivation,
+  // the resolved value flows into `MyelinRuntime.publish()` — until then this
+  // is observational only (no behaviour change on emitted subjects).
+  //
+  // The helper accepts a narrow `DeriveStackIdInput` shape (operator?.id +
+  // optional stack.id) — we synthesise it from the loader-passed
+  // `options.stack` (the top-level cortex.yaml `stack:` block, when present)
+  // plus an `operator.id` derived from the BotConfig projection. The
+  // fallback path (no `options.stack`, no `agent.operatorId`) returns
+  // `default/default` and the helper never throws.
+  const derivedStack = deriveStackId({
+    operator: { id: config.agent.operatorId ?? "default" },
+    ...(options.stack !== undefined && { stack: options.stack }),
+  });
+  console.log(
+    `  Stack: ${derivedStack.id}${options.stack === undefined ? " (default-derived)" : ""}`,
+  );
 
   // Bus runtime (M2-M6) — no-op when `config.nats?` is absent. Tests inject
   // a recording fake via `options.injectRuntime` to assert observable
@@ -1143,10 +1185,16 @@ if (import.meta.main) {
       // returns both the BotConfig projection (for downstream legacy consumers)
       // and the rich cortex `agents[]` so `startCortex` can route per-instance
       // identity correctly.
-      const { config, inlineAgents } = loadConfigWithAgents(options.config);
+      //
+      // IAW A.5.3 (cortex#113): also pass through the cortex-shape `stack:`
+      // block when the operator declared one — `startCortex` calls
+      // `deriveStackId` and logs the resolved stack id. Today this is
+      // observational only; emit subjects are unchanged.
+      const { config, inlineAgents, stack } = loadConfigWithAgents(options.config);
       const handle = await startCortex(config, {
         configPath: options.config,
         ...(inlineAgents.length > 0 && { inlineAgents }),
+        ...(stack !== undefined && { stack }),
       });
 
       const shutdown = async () => {

@@ -17,6 +17,7 @@ import {
   type CortexConfig,
   type DiscordPresence,
   type MattermostPresence,
+  type StackConfig,
 } from "../types/cortex-config";
 
 /**
@@ -57,10 +58,26 @@ export function expandTilde(p: string): string {
  * field is always a BotConfig — for cortex-shape input it's a synthesized
  * legacy-compatible projection so downstream consumers stay unchanged
  * during MIG-7. Callers that need the rich cortex shape use `inlineAgents`.
+ *
+ * `stack` (IAW Phase A.5, cortex#113): the optional top-level `stack:` block
+ * from cortex-shape input, surfaced raw so the boot path can call
+ * `deriveStackId` without re-parsing the file. Undefined for legacy bot.yaml
+ * input (the block lives on `CortexConfigSchema` only — `BotConfigSchema` has
+ * no equivalent during the MIG-7.2 overlap window). When the operator
+ * declares `stack: { id: andreas/research }`, this field carries the
+ * validated object; when the block is omitted, the field stays undefined and
+ * `deriveStackId` default-derives `${operator.id}/default`.
  */
 export interface LoadedConfig {
   config: BotConfig;
   inlineAgents: Agent[];
+  /**
+   * Optional stack identity (IAW A.5.3, cortex#113). Populated only when the
+   * input was cortex-shape AND the operator declared a `stack:` block.
+   * Legacy bot.yaml input always yields `undefined`. See `deriveStackId` in
+   * `src/common/types/stack.ts` for the boot-time resolver that consumes this.
+   */
+  stack?: StackConfig;
 }
 
 /**
@@ -259,6 +276,11 @@ function loadCortexShape(
   return {
     config: BotConfigSchema.parse(merged),
     inlineAgents: [...cortexConfig.agents],
+    // IAW A.5.3 — surface the validated `stack:` block to the boot path.
+    // Always carry-through (even when undefined) keeps callers' destructuring
+    // simple: `const { stack } = loadConfigWithAgents(path)` is safe whether
+    // or not the operator declared the block.
+    ...(cortexConfig.stack !== undefined && { stack: cortexConfig.stack }),
   };
 }
 
