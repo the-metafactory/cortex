@@ -234,15 +234,18 @@ describe("CapabilitySchema.provided_by", () => {
     ).toThrow(/at least one provider agent id/);
   });
 
-  test("rejects digit-only provider id (mismatched grammar)", () => {
-    // Real failure mode: operator pastes a Discord snowflake into provided_by.
+  test("accepts digit-only provider id today (parity with AgentSchema.id on main; tightens with cortex#145)", () => {
+    // Real failure mode this pins: an operator pastes a Discord snowflake into
+    // provided_by and the schema silently accepts it. Today this MUST parse
+    // because `provided_by` mirrors `AgentSchema.id`'s loose `/^[a-z0-9-]+$/`
+    // on main — tightening both to letter-prefix is cortex#145's job. The
+    // assertion here pins the current grammar parity so the schema doesn't
+    // drift from AgentSchema.id before cortex#145 lands; when #145 merges,
+    // this test flips to a `toThrow` (along with the snowflake-style ones in
+    // cortex-config.test.ts for AgentSchema.id itself).
     expect(() =>
       CapabilitySchema.parse(minCapability({ provided_by: ["1497204875912609844"] })),
     ).not.toThrow();
-    // ^ digit-only is structurally allowed because AgentSchema.id on `main` is
-    // `/^[a-z0-9-]+$/` — provided_by mirrors that. cortex#145 will tighten both
-    // to letter-prefix. We pin the current grammar parity here so the schema
-    // doesn't drift relative to AgentSchema.id.
   });
 
   test("rejects uppercase provider id", () => {
