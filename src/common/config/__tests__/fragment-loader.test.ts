@@ -80,6 +80,46 @@ runtime:
       expect(() => loadAgentsDirectory(dir)).toThrow(FragmentLoadError);
     });
 
+    test("accepts claude-code substrate in standalone mode (gorse — the-metafactory/gorse)", () => {
+      // Claude Code is documented in `docs/design-arc-agent-bots.md` §3.1
+      // as the in-process default. The schema permits `standalone` mode
+      // for it as well — used by `the-metafactory/gorse`, a security
+      // assessment bus peer that drives Claude Code inside an ephemeral
+      // E2B sandbox per dispatch. This test prevents a future refactor
+      // from accidentally constraining `claude-code` to `in-process` only.
+      const dir = mkdtempSync(join(tmpdir(), "agents-d-claude-standalone-"));
+      const personaPath = join(dir, "gorse.md");
+      writeFileSync(personaPath, `---\ndisplayName: Gorse\n---\n`);
+      writeFileSync(
+        join(dir, "gorse.yaml"),
+        `id: gorse
+displayName: Gorse
+persona: ${personaPath}
+roles: [agent-restricted]
+presence:
+  discord:
+    enabled: false
+    token: "t"
+    guildId: "0"
+    agentChannelId: "1"
+    logChannelId: "2"
+runtime:
+  substrate: claude-code
+  mode: standalone
+  capabilities: [security-recon, security-webassessment, security-engagement]
+`,
+      );
+      const agents = loadAgentsDirectory(dir);
+      expect(agents).toHaveLength(1);
+      expect(agents[0]!.runtime!.substrate).toBe("claude-code");
+      expect(agents[0]!.runtime!.mode).toBe("standalone");
+      expect(agents[0]!.runtime!.capabilities).toEqual([
+        "security-recon",
+        "security-webassessment",
+        "security-engagement",
+      ]);
+    });
+
     test("accepts in-process runtime with empty capabilities (capabilities optional for in-process)", () => {
       const dir = mkdtempSync(join(tmpdir(), "agents-d-inprocess-empty-"));
       const personaPath = join(dir, "echo.md");
