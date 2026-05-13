@@ -319,3 +319,60 @@ describe("deriveStackId", () => {
     expect(derived.stack).toBe("sage-host");
   });
 });
+
+// =============================================================================
+// Schema round-trip invariant (cortex#141 — Echo round-1 warning)
+// =============================================================================
+
+describe("deriveStackId × StackConfigSchema round-trip invariant", () => {
+  // `OperatorSchema.id` is `/^[a-z0-9-]+$/` (digit-prefix legal, no underscores).
+  // `StackConfigSchema.id` segments are `/^[a-z][a-z0-9_-]*$/` (letter-prefix
+  // mandatory, underscores legal). These grammars overlap on the realistic
+  // common case (letter-prefixed alphanumeric + hyphen) but diverge at the
+  // edges. The grammar unification decision is tracked in cortex#141; this
+  // suite pins the current behaviour so the A.5.5 namespace cutover does not
+  // surface the divergence as a runtime error without warning.
+
+  const stackIdSchema = StackConfigSchema.shape.id;
+
+  test("derived id round-trips for letter-prefixed alphanumeric operator", () => {
+    const derived = deriveStackId({ operator: { id: "andreas" } });
+    expect(() => stackIdSchema.parse(derived.id)).not.toThrow();
+  });
+
+  test("derived id round-trips for hyphenated operator", () => {
+    const derived = deriveStackId({ operator: { id: "andreas-dev-2026" } });
+    expect(() => stackIdSchema.parse(derived.id)).not.toThrow();
+  });
+
+  test("derived id round-trips for all-alpha operator", () => {
+    const derived = deriveStackId({ operator: { id: "metafactory" } });
+    expect(() => stackIdSchema.parse(derived.id)).not.toThrow();
+  });
+
+  test("derived id round-trips for operator with internal digits", () => {
+    const derived = deriveStackId({ operator: { id: "team-42-research" } });
+    expect(() => stackIdSchema.parse(derived.id)).not.toThrow();
+  });
+
+  test("explicit stack id round-trips (tautological, but pins the contract)", () => {
+    const derived = deriveStackId({
+      operator: { id: "andreas" },
+      stack: { id: "andreas/research_2026" },
+    });
+    expect(() => stackIdSchema.parse(derived.id)).not.toThrow();
+  });
+
+  test("KNOWN GAP (cortex#141): digit-prefix operator id default-derives to a string StackConfigSchema rejects", () => {
+    // `2andreas` is legal under `OperatorSchema.id` (`/^[a-z0-9-]+$/`) today.
+    // `StackConfigSchema.id` requires letter-prefix on each segment, so the
+    // default-derived `2andreas/default` fails the stack schema. This test
+    // documents the divergence so an unintended schema tightening (or an
+    // A.5.5 self-consistency check that round-trips through the stack
+    // schema) doesn't silently break this path; resolution is tracked in
+    // cortex#141 (unify the two grammars before A.5.5 lands).
+    const derived = deriveStackId({ operator: { id: "2andreas" } });
+    expect(derived.id).toBe("2andreas/default");
+    expect(() => stackIdSchema.parse(derived.id)).toThrow();
+  });
+});
