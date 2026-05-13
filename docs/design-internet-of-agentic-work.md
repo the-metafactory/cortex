@@ -4,6 +4,8 @@
 **Status:** Design draft. No implementation in this PR — only synthesis grounded in shipped code.
 **Scope:** Single design view across four sibling issues that, taken together, describe how cortex composes into networks of stacks.
 
+> **All 7 design questions resolved 2026-05-13 (Andreas).** Implementation plan: [`docs/plan-internet-of-agentic-work.md`](./plan-internet-of-agentic-work.md). Sub-issues track Phase A–E in cortex (filed as part of cortex#110 work). The §5 recommendations are now operator-locked; the plan doc is the working ground truth from here.
+
 ---
 
 ## TL;DR
@@ -286,13 +288,15 @@ What this requires at each layer:
 
 This is where cortex#107's PolicyEngine becomes load-bearing for multi-operator: each inbound federated envelope is a `Principal{ id: 'agent-X', home_operator: 'jcfischer' }`; the PolicyEngine resolves it via `policy.principals[]` (which now spans multiple home_operators) and applies the receiver's per-peer accept/deny rules.
 
-### §3.4 Multi-network — one stack participates in two networks
+### §3.4 Multi-network — separate networks, not per-peer capability scoping (Q4 LOCKED-IN)
 
-A stack can join multiple networks simultaneously by maintaining multiple NATS leaf-node connections, each scoped to a different peer mesh. Per the operator-vision script:
+**Q4 lock-in (2026-05-13 Andreas):** *Use separate networks rather than one stack bridging two networks with per-peer capability scoping. Each network is its own subject namespace + policy domain. A "bridge stack" simply participates in network A AND network B (two independent network memberships, two separate cortex.yaml peer-registry entries). Simpler than per-peer capability differentiation within one network.*
+
+A stack joins multiple networks simultaneously by maintaining multiple NATS leaf-node connections, each scoped to a different peer mesh. Each network is structurally independent — distinct subject namespace, distinct policy domain, distinct peer registry. Per the operator-vision script:
 
 > "Some stacks bridge between networks — your stack participates in two different collaborations, publishing certain capabilities to one network and different capabilities to the other."
 
-Mechanically:
+The locked-in answer collapses the previous "per-peer capability scoping" question: capability scoping happens at the **network boundary** (one cortex.yaml entry per network membership), not at the **per-peer** boundary inside a shared network. Mechanically:
 
 ```
                                            ┌──────────────────┐
@@ -301,7 +305,7 @@ Mechanically:
                                            └────────▲─────────┘
                                                     │
                                                     │ leaf-node A
-                                                    │
+                                                    │  (network A's peer registry)
                        ┌──────────────────┐         │
                        │  bridge stack    │─────────┘
                        │  operator: andreas        │
@@ -310,36 +314,46 @@ Mechanically:
                        │                  │─────────┐
                        └──────────────────┘         │
                                                     │ leaf-node B
-                                                    │
+                                                    │  (network B's peer registry)
                                            ┌────────▼─────────┐
                                            │  Network B       │
                                            │  (JV mesh)       │
                                            └──────────────────┘
 ```
 
-Open design questions for the bridge case (Q4 below):
+What the lock-in changes from the prior framing:
 
-1. **How are subjects partitioned per network?** Option: per-network NATS account scoping — `federated.{org}.research.*` only crosses to network A, `federated.{org}.jv.*` only crosses to network B. The leaf-node config defines which subject patterns flow which way.
-2. **How do capability announcements differ per network?** If Andreas wants to publish `code-review` capability to network A but not network B, where does that intent get recorded in `cortex.yaml`?
-3. **Where does the per-peer-network policy slice live?** `policy.federated.peers[]` (cortex#109 schema) has a peer-id field. The bridge case extends it with per-peer subject filters that can vary per network.
+1. **Subjects per network.** Each network is its own namespace; `federated.{operator}.{stack}.>` belongs to one network membership. No per-peer subject filtering within a network is required.
+2. **Capability announcements per network.** Q2's stack-level capability schema (constrained `cortex.yaml`) is declared once per network membership, not per peer within a network. Bridge stacks declare two memberships, two capability sets.
+3. **Policy slice per network.** `policy.federated.networks[]` (preferred ergonomics, see Phase E plan) replaces `policy.federated.peers[]` as the top-level structure. Each network entry carries its own peer registry, accept rules, and `leaf_node` reference.
 
-A workable cortex.yaml strawman:
+A workable cortex.yaml strawman post-Q4 lock-in:
 
 ```yaml
 operator: { id: andreas }
+stack: { id: andreas/research, nkey_pub: SAA… }
 
 policy:
   federated:
-    peers:
-      - operator_id: research-collab
-        operator_pubkey: O_RESEARCH_…
+    networks:
+      - id: research-collab
         leaf_node: nats-leaf-research
+        peers:
+          - operator_id: jcfischer
+            stack_id: jcfischer/sage-host
+            operator_pubkey: O_JC_…
         accept_subjects: ["federated.research-collab.tasks.code-review.*"]
         announce_capabilities: ["code-review", "security-scan"]
         max_hop: 1
-      - operator_id: jv-acme-bigcorp
-        operator_pubkey: O_JV_…
+      - id: jv-acme-bigcorp
         leaf_node: nats-leaf-jv
+        peers:
+          - operator_id: acme
+            stack_id: acme/deploy-host
+            operator_pubkey: O_ACME_…
+          - operator_id: bigcorp
+            stack_id: bigcorp/release-host
+            operator_pubkey: O_BIGCORP_…
         accept_subjects: ["federated.jv-acme-bigcorp.tasks.deploy.*"]
         announce_capabilities: ["deploy", "release"]
         max_hop: 0  # JV is fully gated — no further hops
@@ -369,6 +383,51 @@ The **isolated-private mesh (JV)** is the interesting middle case. The 4 JV memb
 - An off-bus negotiation channel for the leaf-node peering and capability declarations.
 
 The **public mesh** future case is out of scope today — it requires myelin#9 (L5 discovery) and a marketplace economics model neither of which are in flight.
+
+### §3.6 Delegation patterns — networks as composed capability (Phase E)
+
+Andreas surfaced an additional composition pattern in the 2026-05-13 Q1–Q7 lock-in conversation:
+
+> "One network could be a composition of capability, and it might be a delegation. Even so, I can see both networks where you're interacting with an orchestrator. It's like your router that will then delegate out to other networks and stacks to get work done. ... your main digital assistant that will then delegate around and coordinate on your behalf by leaning into these different networks and stacks depending on their capability."
+
+This is the **orchestrator-agent pattern** — a stack hosts an agent whose role is to delegate, not to do. The orchestrator is the operator's main digital assistant; it sees the network capability registry (Q2), routes inbound work to whichever network/stack has the matching capability, and threads results back via the chain-of-stamps audit trail (Q6).
+
+Mechanically:
+
+```
+                                   ┌────────────────────────────────┐
+                                   │  Orchestrator agent (luna)     │
+                                   │  on stack: andreas/research    │
+                                   │                                │
+                                   │  - Reads capability registry   │
+                                   │  - Picks target network/stack  │
+                                   │  - Emits federated.* envelope  │
+                                   │  - Waits for chain-of-stamps   │
+                                   └─────────────┬──────────────────┘
+                                                 │ federated.{network}.tasks.{cap}
+                          ┌──────────────────────┼──────────────────────┐
+                          ▼                      ▼                      ▼
+              ┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
+              │  Network: research  │ │  Network: code-rev  │ │  Network: deploy    │
+              │  (capability:       │ │  (capability:       │ │  (capability:       │
+              │   literature-srch)  │ │   typescript-rev)   │ │   k8s-deploy)       │
+              └─────────────────────┘ └─────────────────────┘ └─────────────────────┘
+```
+
+Building blocks (all of which exist or are scheduled in the IAW plan):
+
+| Building block | Source | Phase |
+|---|---|---|
+| Network capability registry | Q2 lock-in (cortex.yaml schema, aggregated cross-network) | Phase A (schema) + Phase D (network-side aggregation) |
+| Outbound federation envelope | cortex#109 §E + cortex#107 multi-operator dashboard | Phase D |
+| Chain-of-stamps audit | Q6 lock-in (signed_by[] per envelope) | Phase B (consume) + Phase D (cross-network) |
+| Competing-consumer claim | Q5 lock-in (NATS queue groups, claim-first-wins) | Phase A foundation + Phase E multi-network |
+| Multi-network MyelinRuntime | §3.4 (one stack, N leaf-nodes) | Phase E |
+| Orchestrator decision logic | Per-agent application code (cortex#91 substrate harness contract) | Phase A enables; Phase E productionises |
+
+This is a **Phase E capability**, not Phase A. Phase A only needs to make the capability registry mechanically accessible; the orchestrator agent itself is application logic on top of the substrate (cortex#91) + chain-of-stamps (cortex#102) + per-network policy (Phase D peer registry). The pattern is what justifies the multi-network design over per-peer scoping (§3.4) — orchestration agents need clean network boundaries to reason about delegation.
+
+The orchestrator pattern is what gives operators the "main digital assistant that coordinates on your behalf" mental model — the same primitive that the Phase A substrate harness exposes per-agent now becomes a meta-capability across the operator's full federated graph.
 
 ---
 
@@ -496,119 +555,134 @@ Phases A+B can ship independently (before cortex#91 even lands) per cortex#109 �
 
 ---
 
-## §5 — Seven design questions that need decisions
+## §5 — Seven design questions — all locked in 2026-05-13 (Andreas)
 
-These are the questions Andreas needs to answer (or explicitly defer) before Phase A can start. Each is paired with a recommendation grounded in shipped code; the recommendation is the architect's read, not the decision.
+All seven questions resolved by Andreas on 2026-05-13. The verbatim answers below are the operator-locked design; the prior architect recommendations have been replaced. Implementation now follows from these answers — see `docs/plan-internet-of-agentic-work.md`.
 
-### Q1: How does a stack declare its OWN identity?
+### Q1: How does a stack declare its OWN identity? [LOCKED-IN — 2026-05-13 Andreas]
 
-**Options:**
-- (a) Operator NKey only — `{operator.id, operator.pubkey}`; the NKey is the trust anchor for all envelopes the stack emits.
-- (b) `operator.id` (string label) only — symbolic identifier; trust comes from peer-side allowlists.
-- (c) Both — symbolic `operator.id` for human readability (subject segment, dashboard render) AND operator NKey as cryptographic root of trust.
+**Verbatim answer:** *Format `{operator_id}/{stack_id}` (slash-separated, like git refs). Examples: `andreas/research`, `andreas/production`, `jcfischer/sage-host`. NATS subject form: `local.{operator}.{stack}.>` and `federated.{operator}.{stack}.>`. Cryptographic chain: operator-account-NKey → stack-NKey → agent-NKeys. Uniqueness: operator-id is the authority root (one per operator, enforced by the network registry); sub-stacks unique within an operator's namespace. Default: `{operator_id}/default` if operator declares only one stack. Like email but without TLD baggage.*
 
-**Recommendation:** (c) — both. The `operator.id` is already the `{org}` subject segment (`cortex-config.ts:OperatorSchema:85-95`). The operator NKey is already loaded for credential signing (`cortex-config.ts:NatsConfigSchema:478-491`). Make the pairing explicit at the protocol level: `policy.federated.peers[]` carries both `operator_id` AND `operator_pubkey`; envelope-level identity uses the NKey, dashboard-level rendering uses the id.
+Implications captured into the synthesis:
 
-**Status in doc:** ANSWERED above; needs Andreas's confirmation.
-**Blocks:** cortex#102 (NKey identity carrier on the bus); cortex#107 §H (cloud dashboard needs `home_operator` referencing both fields).
+- **Stack identity = `{operator_id}/{stack_id}`** — a single string with git-ref semantics. Replaces the prior "operator.id" / "operator NKey" pairing as the canonical surface identifier.
+- **NATS subject form grows a stack segment** — `local.{operator}.{stack}.{domain}.{entity}.{action}` and the `federated.{operator}.{stack}.>` counterpart. This is the Q7 lock-in materialised at the wire layer.
+- **Cryptographic chain is three-tier** — operator-account NKey signs stack NKey signs agent NKeys. The stack NKey becomes the per-envelope signing key on the outbound side; the operator-account NKey roots trust in the network registry (Q3).
+- **Uniqueness:** operator-id is unique network-wide (enforced by the cloud-side network registry, Q3); stack-id is unique within an operator namespace.
+- **Default convention:** an operator with one stack declares it as `{operator_id}/default`; no manual stack declaration needed.
 
-### Q2: How does a stack announce its CAPABILITIES to a network?
+**Blocks:** cortex#102 (NKey identity carrier on the bus), cortex#107 §H (cloud dashboard `home_operator`/`home_stack` fields), the Phase A cortex.yaml `stack:` block addition.
 
-**Options:**
-- (a) Per-agent runtime.capabilities (already shipped in `cortex-config.ts:AgentRuntimeSchema:225-253`) gets published via a new envelope type `local.{org}.capability.agent.announce` on a periodic heartbeat.
-- (b) Operator-level `policy.federated.announce_capabilities[]` (declarative, per-peer).
-- (c) Hybrid: per-agent capabilities are the data source; per-peer policy controls which subset announces to which peer.
+### Q2: How does a stack announce its CAPABILITIES to a network? [LOCKED-IN — 2026-05-13 Andreas]
 
-**Recommendation:** (c) — hybrid. Today's `AgentRuntimeSchema.capabilities` is the source of truth; the *announcement* is policy-driven. `policy.federated.peers[].announce_capabilities[]` enumerates the subset of each peer.
+**Verbatim answer:** *Two-part: (a) network capabilities = aggregated across all agents in all stacks part of the network; (b) operator can ALSO declare stack-level capabilities (and per-agent capability annotations) in cortex.yaml using a constrained schema — defined interface, NOT free text. "Keep it simple." Schema covers: capability id, description, tags (e.g., language tags), provided_by agent ids, optional rate/cost.*
 
-**Status in doc:** ANSWERED (hybrid is the read). Needs Andreas's confirmation.
-**Blocks:** cortex#109 §E peer registry; future myelin#9 L5 discovery (consumer side).
+Implications captured into the synthesis:
 
-### Q3: How does a network REGISTRY work?
+- **Two-layer capability model:**
+  - **Network capabilities** (top layer) = aggregated view across every agent in every stack in the network. Computed by the network's registry (Q3) from the union of member stacks' declared capabilities.
+  - **Stack capabilities** (operator layer) = declared in each operator's `cortex.yaml` under a `capabilities:` block. Per-agent annotations are first-class; the stack-level set is the union of its agents' annotations plus any stack-level extras.
+- **Schema is constrained**, not free-text JSON. Required fields:
+  - `id` — slug, network-stable (e.g. `code-review.typescript`, `literature-search.medline`).
+  - `description` — short human-readable summary.
+  - `tags[]` — taxonomic tags including language tags (`typescript`, `python`, etc.), domain tags, modality tags.
+  - `provided_by[]` — list of agent ids inside the stack that provide this capability.
+  - `rate` *(optional)* — rate envelope (requests per unit time).
+  - `cost` *(optional)* — cost envelope (cents per request, or token-class pricing).
+- **"Keep it simple"** — no free-text capability declarations. Schema-bounded so the network registry (Q3) can index capabilities deterministically and orchestrator agents (§3.6) can reason about delegation without natural-language disambiguation.
 
-**Options:**
-- (a) Centralized config — operator manually edits `policy.federated.peers[]` per peer.
-- (b) Gossiped via NATS — peers publish on `public.operator.*.identity` and each cortex subscribes and updates a derived registry.
-- (c) Signed pubkey directory — a JWT-bearer "network registry" service operators query and sign assertions into.
+**Blocks:** cortex#109 §E peer registry; Phase A `capabilities:` block in cortex.yaml; future myelin#9 L5 discovery (consumer side).
 
-**Recommendation:** (a) for v1 — keep it operator-edited until cortex#107 §H (cloud-dashboard work) needs a derived registry. (b) is the IP/BGP analog and is the right long-term posture but requires myelin#9 discovery to land first. (c) is overkill until a public-mesh capability marketplace materialises.
+### Q3: How does a network REGISTRY work? [LOCKED-IN — 2026-05-13 Andreas]
 
-**Status in doc:** PARTIALLY ANSWERED — needs Andreas's call on v1 posture.
-**Blocks:** cortex#109 §E peer registry.
+**Verbatim answer:** *Centralised config. NOT gossiped via NATS. Operators declare their peers + the network's roster in cortex.yaml (or a sibling registry config file). Cloud-side network registry service hosts the canonical pubkey directory for cross-operator discovery (sits adjacent to the cloud dashboard, see cortex#107 Step H).*
 
-### Q4: Bridge-stack capability scoping — different capabilities per peer-network
+Implications captured into the synthesis:
 
-When a stack participates in 2 networks and announces different capabilities to each, where in `cortex.yaml` does that go?
+- **Centralised, declarative registry.** Operators edit their peer/network membership in `cortex.yaml` (or a sibling config file colocated with cortex.yaml). No NATS gossip path; the registry is config, not protocol traffic.
+- **Cloud-side network registry service** hosts the canonical pubkey directory across operators. Sits adjacent to the cloud dashboard (cortex#107 Step H) — same hosting boundary, same trust anchor. Operators read from it (to discover peers) and write to it (to publish their stack identity and capability surface). The "Internet" in *Internet of Agentic Work* is the registry plus the federated NATS mesh; the registry resolves operator-id ↔ pubkey across the network.
+- **No gossip via NATS.** The IP/BGP analogue was considered and rejected for v1 — the registry is a service, not a protocol. This keeps Phase D scoped to the federation primitive itself; gossip is a future evolution if scale demands it.
+- **Identity flow:** operator → cloud-side registry (publish operator NKey + stack identities + capability declaration) → other operators' cortex daemons read registry at startup + on schedule → local cortex.yaml peer entries reference the registry-discovered pubkeys by operator-id.
 
-**Options:**
-- (a) Top-level `policy.federated.peers[]` — per-peer `announce_capabilities[]` field. (matches Q2 (c) recommendation)
-- (b) Per-agent `agent.runtime.peer_scopes: { research-collab: [code-review], jv: [] }`.
-- (c) Separate `networks:` top-level block enumerating each network with its own `peers[]` and `capabilities[]`.
+**Blocks:** cortex#109 §E peer registry (now config-driven, not gossip-driven); cortex#107 §H (the cloud-side registry service is the natural home alongside the multi-operator dashboard). Phase D scope.
 
-**Recommendation:** (a) — per-peer policy is the right granularity because the operator's mental model is per-relationship. (c) is structurally cleaner but requires a deeper config refactor.
+### Q4: Bridge-stack capability scoping — different capabilities per peer-network [LOCKED-IN — 2026-05-13 Andreas]
 
-**Status in doc:** ANSWERED (a) — but flagged as the most-likely-to-shift answer; the operator-vision distinction between "stack" and "network" might warrant (c) at v2.
-**Blocks:** Phase E (multi-network bridges).
+**Verbatim answer:** *Use separate networks rather than one stack bridging two networks with per-peer capability scoping. Each network is its own subject namespace + policy domain. A "bridge stack" simply participates in network A AND network B (two independent network memberships, two separate cortex.yaml peer-registry entries). Simpler than per-peer capability differentiation within one network.*
 
-### Q5: Competing-consumers semantics on federated tasks
+Implications captured into the synthesis (full schema in §3.4 above):
 
-When `federated.acme.tasks.code-review.typescript` is published and 3 peer stacks each have a `code-review` capability, how does the work get claimed?
+- **Bridge stacks are stacks with multiple memberships**, not stacks with per-peer-scoped capabilities. Each network entry is independent; the stack participates in N networks by declaring N entries.
+- **`policy.federated.networks[]`** replaces the prior `policy.federated.peers[]` framing. Each network entry carries:
+  - `id` — network slug.
+  - `leaf_node` — named NATS connection (operator infra config).
+  - `peers[]` — peer operator/stack list within this network.
+  - `accept_subjects[]` / `deny_subjects[]` — per-network policy slice.
+  - `announce_capabilities[]` — capability subset this network sees.
+  - `max_hop` — per-network hop budget.
+- **Multi-link MyelinRuntime is required** (one NatsLink per `leaf_node`) — already a Phase E exit-criterion (§6).
+- **Capability scoping becomes per-network**, not per-peer. The Q2 stack-level capability schema declares the full capability surface; each network membership picks a subset to announce. No per-peer-within-network differentiation — networks ARE the granularity.
 
-**Options:**
-- (a) NATS queue groups — one consumer per group gets it; first to ack wins. JetStream natively supports.
-- (b) Claim-first — every qualifying consumer sees it; the first to publish `claim.@principal` wins; losers see the claim and back off.
-- (c) Auction — the publisher waits for N bids in a time window, picks the best.
+**Blocks:** Phase E (multi-network bridges); shape of the Phase C `policy.federated.networks[]` schema.
 
-**Recommendation:** (a) for v1 — JetStream queue groups are already specified in `myelin/specs/namespace.md:216-247` and require no new envelope semantics. (b) is a useful diagnostic mode (audit trail of "who could have done this"). (c) is marketplace territory; defer.
+### Q5: Competing-consumers semantics on federated tasks [LOCKED-IN — 2026-05-13 Andreas]
 
-**Status in doc:** ANSWERED (a) — but Q5 is also asked in cortex#92 (cortex#91 design PR) and may have an answer there already; cross-reference at Phase A.
-**Blocks:** cortex#107 (PolicyEngine's resolution rule); Phase E (multi-network).
+**Verbatim answer:** *Option A — NATS queue groups (claim-first-wins at the bus layer). When multiple stacks subscribe to `federated.*.tasks.code-review.typescript`, one wins per task. No reservation protocol; no auction.*
 
-### Q6: Cross-network audit — who owns the audit trail?
+Implications captured into the synthesis:
 
-When a federated task crosses operator boundaries, the envelope `signed_by[]` chain has multiple operators' stamps. Who is the source of truth for the audit log?
+- **Claim-first-wins via NATS queue groups.** JetStream queue groups already specified in `myelin/specs/namespace.md:216-247`; the protocol is "first consumer in the group to ack wins per task". No new envelope semantics required.
+- **No reservation protocol.** The losing consumers don't see the message at all (queue group delivers to exactly one); no need for a `claim.@principal` envelope to coordinate withdrawals.
+- **No auction.** Marketplace dynamics are explicitly out of scope. If a future capability-marketplace evolves, it's a separate protocol layered on top — not a substitute for queue groups.
+- **Cross-reference cortex#92** (cortex#91 substrate harness design PR) — Q5 there should reconcile with this lock-in; if cortex#92 lands a different competing-consumer model for in-process dispatch, that's an inconsistency to flag.
 
-**Options:**
-- (a) Each operator's cortex emits its own `system.access.{allowed,denied}` envelopes (cortex#107 step G) on `local.{org}.>`; the audit is partitioned per operator and the chain itself is the cross-operator trail.
-- (b) A federated audit subject — `federated.audit.{verb}.>` — that all operators in a network publish to and consume from.
-- (c) A centralized audit service (CF Worker, similar to grove webhook proxy) that subscribes to all federated traffic.
+**Blocks:** cortex#107 (PolicyEngine's resolution rule consults queue-group membership, not principal scoring); Phase E (multi-network — queue groups are per-subject, naturally per-network).
 
-**Recommendation:** (a) — partitioned per operator, with the chain-of-stamps providing cross-operator correlation. This preserves operator sovereignty: my audit log is mine, my peer's is theirs, and a third-party reconstructs by combining (with peer's permission). (b) leaks across operator boundaries; (c) creates a central point of failure and trust.
+### Q6: Cross-network audit — who owns the audit trail? [LOCKED-IN — 2026-05-13 Andreas]
 
-**Status in doc:** ANSWERED (a). Needs Andreas's confirmation.
-**Blocks:** Phase D (federation) — the audit story is what gets asked first in any compliance review.
+**Verbatim answer:** *Recommendation A — chain-of-stamps via Myelin's `signed_by[]` array. Each stack the envelope passes through adds its signature. Audit trail is the signed chain. Unique ID per envelope; stack identity in the chain answers "where did this go?"*
 
-### Q7: Operator-private inside multi-stack — tiers within tiers
+Implications captured into the synthesis:
 
-When an operator has 3 stacks and wants stack-1 to be private to stack-2 and stack-3 (intra-operator) BUT federated to network N (inter-operator), how does that compose?
+- **Chain-of-stamps IS the audit trail.** Each stack the envelope crosses adds its `signed_by[]` entry. Cryptographic provenance is the audit record — no separate audit subject, no centralised audit service.
+- **Stack identity** (Q1 — `{operator_id}/{stack_id}`) is what each stamp carries. Reading `signed_by[]` answers "this envelope passed through stacks A, B, C in that order."
+- **Unique envelope ID** combined with the chain provides full traceability across networks. Each operator can grep their local audit (their `signed_by[i]` entry) and reconstruct the cross-network path via stamp ordering.
+- **No central authority required** — each operator owns their slice of the audit (per Q3, the cloud-side registry holds identity, not transit traffic). Cross-operator forensics rebuild from the local audits combined.
+- **Operator sovereignty preserved.** No federated audit subject leaks across operator boundaries; no central service sees all traffic; each operator's view is bounded by what their stack actually handled.
 
-This is the case where:
-- "local.{org}" doesn't distinguish stack-1 from stack-2 from stack-3.
-- "federated.{org}" leaks across stacks.
+**Blocks:** Phase D (federation) — the audit story is what gets asked first in any compliance review. The Phase B chain-of-stamps consumption is the prerequisite that makes this audit pattern observable.
 
-**Options:**
-- (a) Distinct operator IDs per stack — `andreas-stack-1`, `andreas-stack-2`. Sovereignty is at the stack boundary, full stop. The "operator owns all three" is a human-level concept, not a protocol one.
-- (b) Extend the namespace with a `{stack}` segment: `local.{org}.{stack}.{domain}.{entity}.{action}`. Backward compatible (cortex defaults `stack` to a default value).
-- (c) Sovereignty extension: a new `sovereignty.scope: 'stack' | 'operator' | 'network'` field. Stack-scoped envelopes never cross between stack-1 and stack-2 even within the same operator.
+### Q7: Stack as protocol primitive [LOCKED-IN — 2026-05-13 Andreas]
 
-**Recommendation:** **NEEDS ANDREAS'S CALL.** This is the deepest question — it asks whether "stack" deserves protocol status. (a) is operationally simplest but loses the conceptual unit. (b) is the cleanest protocol extension but requires myelin and cortex coordination. (c) is the most expressive but adds a new sovereignty axis.
+**Verbatim answer:** *YES. Extend the subject namespace with a stack segment. The "stack" is a first-class noun in the protocol. NATS subjects become `local.{operator}.{stack}.{domain}.{entity}.{action}` (3-segment authority prefix). cortex.yaml grows a `stack:` block declaring the operator-owned stack identity. Cortex daemon = "I host the stack `andreas/research`." Multiple stacks per operator = multiple cortex daemons OR a single cortex daemon hosting multiple stacks (Phase E design decision).*
 
-The operator-vision script clearly treats "stack" as a first-class noun (`"We call this a stack. ... One operator can run multiple stacks"`) — which leans toward (b) or (c). But none of the four sibling issues address this; (b) would be a new myelin issue (namespace extension) and (c) would be a new myelin issue (sovereignty schema extension).
+Implications captured into the synthesis:
 
-**Status in doc:** FLAGGED — Andreas's call required before Phase B or C if the stack-as-protocol-unit decision shapes the principal model.
-**Blocks:** Nothing immediately (Phase A can proceed without resolving Q7); but the Phase C schema flip is the last natural moment to introduce a stack-aware namespace without re-flipping again.
+- **Stack is a first-class protocol primitive.** NATS subject grammar grows a stack segment: `local.{operator}.{stack}.{domain}.{entity}.{action}` for local, `federated.{operator}.{stack}.{domain}.{entity}.{action}` for federated. The 3-segment authority prefix replaces the 2-segment `{operator}.{domain}` form.
+- **cortex.yaml `stack:` block.** New top-level config field:
+  ```yaml
+  stack:
+    id: andreas/research          # matches Q1 format
+    nkey_pub: SAA…                # stack NKey, signed by operator account NKey
+  ```
+- **Cortex daemon = stack host.** A running cortex process declares "I host stack X". The cortex.ts entrypoint registers the stack identity at boot and uses it for every outbound envelope's `signed_by[0]` entry.
+- **Multi-stack per operator** — Phase E design decision whether multiple stacks share a cortex daemon (lower process count, more complex isolation) or each stack runs its own daemon (cleaner isolation, more processes). Both wire-compatible.
+- **Backward compatibility:** if `cortex.yaml.stack` is not declared, default to `{operator_id}/default`. Existing deployments migrate without explicit operator action.
+- **Myelin namespace coordination** — this changes the wire grammar; requires a myelin issue to update `specs/namespace.md`. File as Phase A blocker (or Phase A.5 if myelin needs lead time). Cortex's vendored envelope upgrade (cortex#109 §C, Phase A.2) is the natural ride-along moment.
 
-### Summary of Q1–Q7 status
+**Blocks:** Phase A (cortex.yaml `stack:` block); Phase A.5 (myelin namespace extension); Phase C (cortex.yaml schema flip is the last natural moment to absorb the stack-aware namespace without re-flipping).
 
-| Q | Status | Recommendation | Blocks |
-|---|---|---|---|
-| Q1 | Answered (c — both) | needs Andreas's confirmation | cortex#102, cortex#107 |
-| Q2 | Answered (c — hybrid) | needs confirmation | cortex#109 §E |
-| Q3 | Partially answered (a — operator-edited for v1) | needs Andreas's call on v1 posture | cortex#109 §E |
-| Q4 | Answered (a — per-peer) | flagged for shift if Q7 escalates | Phase E |
-| Q5 | Answered (a — queue groups) | cross-reference with cortex#92 | cortex#107, Phase E |
-| Q6 | Answered (a — partitioned per operator) | needs confirmation | Phase D |
-| Q7 | **FLAGGED — needs Andreas's call** | architect leans toward (b) if treating stack as first-class | Possibly Phase B / C; cleanest moment is Phase C schema flip |
+### Summary of Q1–Q7 status — all locked in 2026-05-13 (Andreas)
+
+| Q | Lock-in summary | Phase impact |
+|---|---|---|
+| Q1 | `{operator_id}/{stack_id}` slash-form identity; three-tier NKey chain (account → stack → agents); operator-id authority root | Phase A (`stack:` block in cortex.yaml); Phase B (chain-of-stamps verification); Phase C (`policy.principals[]` carries `home_operator` + `home_stack`) |
+| Q2 | Two-layer capabilities: aggregated network capabilities + constrained-schema stack-level declaration in cortex.yaml | Phase A (`capabilities:` schema); Phase D (network aggregation) |
+| Q3 | Centralised cortex.yaml declaration + cloud-side network registry service alongside cortex#107 Step H dashboard; NOT NATS-gossiped | Phase D (peer registry + cloud registry service) |
+| Q4 | Separate networks, not per-peer-within-network scoping; bridge stack = multiple network memberships | Phase E (multi-link MyelinRuntime + `policy.federated.networks[]`) |
+| Q5 | NATS queue groups (claim-first-wins at bus layer); no reservation, no auction | Phase A (queue-group provisioning); Phase E (per-network queue groups) |
+| Q6 | Chain-of-stamps IS the audit; each stack stamps the envelope; operator-partitioned with cryptographic correlation | Phase B (chain-of-stamps consume); Phase D (cross-network audit observable) |
+| Q7 | Stack is first-class protocol primitive; namespace extends to `local.{operator}.{stack}.>` and `federated.{operator}.{stack}.>` | Phase A (cortex.yaml `stack:` block + myelin namespace extension) |
 
 ---
 
