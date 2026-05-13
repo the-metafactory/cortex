@@ -47,7 +47,11 @@
  *     read them directly.
  */
 
-import type { Envelope } from "../../bus/myelin/envelope-validator";
+import {
+  deriveNatsSubject,
+  type Classification,
+  type Envelope,
+} from "../../bus/myelin/envelope-validator";
 import { buildBaseEnvelope } from "../../bus/envelope-builder";
 import type { NatsLink } from "../../bus/nats/connection";
 import type { PublishedEvent } from "./hooks/lib/event-types";
@@ -88,15 +92,25 @@ function buildSource(src: CcEventSource | undefined): string {
 
 /**
  * Default sovereignty for `cc.*` envelopes. Same posture as `system.*`:
- * operator-only, local residency, no federation, no frontier-model
+ * operator-only by default, local residency, no frontier-model
  * processing. `data_residency` reads from `source.dataResidency`
  * (defaulting to `"NZ"`). Returned as a fresh literal per call so a
  * downstream mutation on one envelope's sovereignty cannot leak into
  * a sibling envelope.
+ *
+ * **IAW Phase A.3:** `classification` is now an optional parameter
+ * (defaulting to `"local"` for back-compat). Cortex's hook stream carries
+ * internal session activity (file paths, tool names, command previews);
+ * operator-private is the right default. Callers may opt into
+ * `"federated"` or `"public"` for explicit cross-operator visibility
+ * scenarios. Default preserves the prior posture.
  */
-function defaultCcSovereignty(source: CcEventSource | undefined): Envelope["sovereignty"] {
+function defaultCcSovereignty(
+  source: CcEventSource | undefined,
+  classification: Classification = "local",
+): Envelope["sovereignty"] {
   return {
-    classification: "local",
+    classification,
     data_residency: source?.dataResidency ?? "NZ",
     max_hop: 0,
     frontier_ok: false,
@@ -130,6 +144,16 @@ export interface CreateCcEventEnvelopeOpts {
    * to match the bot's `agent.operatorId`.
    */
   source?: CcEventSource;
+  /**
+   * IAW Phase A.3 — optional sovereignty classification. Defaults to
+   * `"local"`. CC hook events carry internal session activity (file paths,
+   * tool names); operator-private is the sensible default. Callers may opt
+   * into `"federated"` or `"public"` for explicit cross-operator scenarios
+   * (e.g. a public demo session whose events should reach a community
+   * dashboard). Mismatch with the publish-time subject is a protocol
+   * violation (see {@link validateSubjectEnvelopeAlignment}).
+   */
+  classification?: Classification;
 }
 
 /**
@@ -156,7 +180,7 @@ export function createCcEventEnvelope(
   const envelope = buildBaseEnvelope({
     type: event.event_type,
     source: buildSource(opts.source),
-    sovereignty: defaultCcSovereignty(opts.source),
+    sovereignty: defaultCcSovereignty(opts.source, opts.classification),
     // Only set correlation_id when session_id has the UUID shape the schema
     // requires. Non-UUID session ids fall through to payload.session_id only.
     ...(isUuid(event.session_id) && { correlationId: event.session_id }),
@@ -189,9 +213,10 @@ export interface CreateCcEventPublisherOpts {
   /** Live NATS connection. Caller owns the lifecycle. */
   link: NatsLink;
   /**
-   * Operator/org segment used in the published subject. Forms the second
-   * segment of `local.{org}.{type}`. Defaults to `"default"` to mirror the
-   * MyelinRuntime convention when `agent.operatorId` is absent.
+   * Operator/org segment used in the envelope `source` and (when
+   * classification is `local` or `federated`) the published NATS subject.
+   * Defaults to `"default"` to mirror the MyelinRuntime convention when
+   * `agent.operatorId` is absent.
    */
   org?: string;
   /**
@@ -207,6 +232,13 @@ export interface CreateCcEventPublisherOpts {
    */
   dataResidency?: string;
   /**
+   * IAW Phase A.3 — optional sovereignty classification. Defaults to
+   * `"local"` for back-compat. Set `"federated"` or `"public"` to scope
+   * relay-lifted CC hooks beyond the org. Applied to every envelope this
+   * publisher produces.
+   */
+  classification?: Classification;
+  /**
    * Override the envelope-construction helper. Lets tests assert on the
    * envelope shape without needing a real NATS connection. Defaults to
    * `createCcEventEnvelope`.
@@ -216,17 +248,25 @@ export interface CreateCcEventPublisherOpts {
 
 /**
  * Build an `onPublished` callback that wraps each PublishedEvent in a
- * Myelin envelope and publishes it on `local.{org}.{type}`.
+ * Myelin envelope and publishes it.
  *
  * Returned callback is **synchronous from the relay's perspective** —
  * Core NATS publishes are fire-and-forget at the client layer. Errors
  * surface to the EventProcessor's logging path but never throw out;
  * a flaky NATS must not break the JSONL pipeline.
  *
- * Subject form mirrors the MyelinRuntime.publish contract (G-1100.E):
- * `local.{org}.{envelope.type}`. Symmetry with subscribe-side patterns
- * means a `local.{org}.>` subscriber sees these CC-lifted events out
- * of the box.
+ * **IAW Phase A.3:** subject derivation now mirrors
+ * `envelope.sovereignty.classification` via `deriveNatsSubject`:
+ *
+ *   - `classification === "local"`     → `local.{org}.{type}`
+ *   - `classification === "federated"` → `federated.{org}.{type}`
+ *   - `classification === "public"`    → `public.{type}` (no `{org}` segment)
+ *
+ * Prior code hardcoded `local.{org}.{type}` here regardless of
+ * classification. The 1:1 subject↔classification invariant
+ * ({@link validateSubjectEnvelopeAlignment}) now holds for relay-lifted
+ * CC events too. The default `classification: "local"` keeps existing
+ * subscribers behaving identically.
  */
 export function createCcEventPublisher(
   opts: CreateCcEventPublisherOpts,
@@ -238,14 +278,16 @@ export function createCcEventPublisher(
     instance: opts.instance ?? "relay",
     ...(opts.dataResidency !== undefined && { dataResidency: opts.dataResidency }),
   };
+  const classification: Classification = opts.classification ?? "local";
   const buildEnvelope =
     opts.buildEnvelope ??
     ((event: PublishedEvent, src: CcEventSource) =>
-      createCcEventEnvelope({ event, source: src }));
+      createCcEventEnvelope({ event, source: src, classification }));
 
   return (event: PublishedEvent) => {
     const envelope = buildEnvelope(event, source);
-    const subject = `local.${org}.${envelope.type}`;
+    // Subject mirrors envelope classification per IAW A.3.
+    const subject = deriveNatsSubject(envelope);
     try {
       opts.link.publish(subject, JSON.stringify(envelope));
     } catch (err) {

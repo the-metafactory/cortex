@@ -336,6 +336,73 @@ describe("dispatch-listener — success path", () => {
     expect(opts.operator).toBe("andreas");
     expect(opts.resumeSessionId).toBe("prior-session");
   });
+
+  test("agent_name falls back to agent_id when omitted (A.1b flip)", async () => {
+    // A.1b refactor: the listener builds a `DispatchRequest` whose
+    // `agent.displayName` falls back to `agent_id` when `agent_name` is
+    // missing on the payload. The harness then surfaces `displayName`
+    // as `CCSessionOpts.agentName` — so the absence of payload.agent_name
+    // should NOT produce undefined `opts.agentName`.
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+    });
+    await listener.start();
+    await router.start();
+
+    // No agent_name on the payload — only agent_id.
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(optsCaptured).toHaveLength(1);
+    const opts = optsCaptured[0]!;
+    expect(opts.agentId).toBe("cortex");
+    expect(opts.agentName).toBe("cortex"); // falls back to agent_id
+  });
+
+  test("payload with no runtime knobs produces a minimal CCSessionOpts (A.1b flip)", async () => {
+    // A.1b refactor: the listener only attaches `req.runtime` when the
+    // payload actually carries one or more runtime knobs. With a bare
+    // payload (task_id + agent_id + prompt only), CCSessionOpts MUST
+    // NOT include cwd/allowedDirs/etc. — every CC-knob stays undefined
+    // so the substrate falls back to its built-in defaults.
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(optsCaptured).toHaveLength(1);
+    const opts = optsCaptured[0]!;
+    expect(opts.cwd).toBeUndefined();
+    expect(opts.allowedDirs).toBeUndefined();
+    expect(opts.additionalArgs).toBeUndefined();
+    expect(opts.groveChannel).toBeUndefined();
+    expect(opts.groveNetwork).toBeUndefined();
+    expect(opts.resumeSessionId).toBeUndefined();
+    expect(opts.bashAllowlist).toBeUndefined();
+    expect(opts.bashGuardDisabled).toBeUndefined();
+    expect(opts.timeoutMs).toBeUndefined();
+    expect(opts.operator).toBeUndefined();
+    expect(opts.entity).toBeUndefined();
+    expect(opts.project).toBeUndefined();
+    expect(opts.allowedTools).toBeUndefined();
+    expect(opts.disallowedTools).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

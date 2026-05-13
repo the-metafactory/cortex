@@ -326,14 +326,74 @@ describe("MyelinRuntime", () => {
       const env = makeEnvelope({ type: "system.adapter.degraded" });
       await runtime.publish(env);
       expect(fake.publish).toHaveBeenCalledTimes(1);
-      // operatorId in makeConfig is "andreas" — that becomes the {org} segment.
+      // IAW Phase A.3: subject `{org}` comes from `envelope.source`'s first
+      // segment ("metafactory" here), NOT from `agent.operatorId`. Subject
+      // prefix mirrors `envelope.sovereignty.classification` ("local" here),
+      // satisfying `validateSubjectEnvelopeAlignment`. Emit-site helpers
+      // populate `envelope.source` with the operator-side `agent.operatorId`,
+      // so the two values agree at runtime — the test fixture exercises the
+      // derive-from-envelope path directly.
       expect(fake.publishes[0]?.subject).toBe(
-        "local.andreas.system.adapter.degraded",
+        "local.metafactory.system.adapter.degraded",
       );
       // Payload is the JSON-serialised envelope; round-trip restores it intact.
       const payload = fake.publishes[0]?.payload as string;
       expect(typeof payload).toBe("string");
       expect(JSON.parse(payload)).toEqual(env);
+      await runtime.stop();
+    });
+
+    test("enabled runtime: publish derives federated.{org}.{type} subject", async () => {
+      // IAW Phase A.3 — federation unblock. When an emit site opts into
+      // `classification: "federated"`, the envelope's sovereignty AND the
+      // runtime-derived subject move in lockstep onto the `federated.*`
+      // namespace. This is what makes cortex able to emit federated
+      // envelopes for the first time.
+      const fake = makeFakeNatsConnection();
+      const runtime = await startMyelinRuntime(
+        makeConfig({
+          url: "nats://localhost:4222",
+          name: "grove-bot",
+          subjects: ["local.{org}.>"],
+        }),
+        { connectImpl: async () => fake.nc },
+      );
+      const baseEnv = makeEnvelope();
+      const env = {
+        ...baseEnv,
+        sovereignty: { ...baseEnv.sovereignty, classification: "federated" as const },
+      };
+      await runtime.publish(env);
+      expect(fake.publish).toHaveBeenCalledTimes(1);
+      expect(fake.publishes[0]?.subject).toBe(
+        "federated.metafactory.system.adapter.degraded",
+      );
+      await runtime.stop();
+    });
+
+    test("enabled runtime: publish derives public.{type} subject (no org segment)", async () => {
+      // IAW Phase A.3 — public-tier envelopes drop the `{org}` segment per
+      // myelin's grammar (public is global). The runtime applies this
+      // automatically via `deriveNatsSubject`.
+      const fake = makeFakeNatsConnection();
+      const runtime = await startMyelinRuntime(
+        makeConfig({
+          url: "nats://localhost:4222",
+          name: "grove-bot",
+          subjects: ["local.{org}.>"],
+        }),
+        { connectImpl: async () => fake.nc },
+      );
+      const baseEnv = makeEnvelope();
+      const env = {
+        ...baseEnv,
+        sovereignty: { ...baseEnv.sovereignty, classification: "public" as const },
+      };
+      await runtime.publish(env);
+      expect(fake.publish).toHaveBeenCalledTimes(1);
+      expect(fake.publishes[0]?.subject).toBe(
+        "public.system.adapter.degraded",
+      );
       await runtime.stop();
     });
 

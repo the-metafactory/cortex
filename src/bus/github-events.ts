@@ -60,7 +60,7 @@
  *     but the file is only imported from the local cortex process today.
  */
 
-import type { Envelope } from "./myelin/envelope-validator";
+import type { Classification, Envelope } from "./myelin/envelope-validator";
 import { buildBaseEnvelope } from "./envelope-builder";
 import type { SystemEventSource } from "./system-events";
 
@@ -76,17 +76,28 @@ function buildSource(src: SystemEventSource): string {
 }
 
 /**
- * Default sovereignty for `github.*` events. Operator-only / local / no
- * frontier — webhook payloads may carry PII (committer email, issue bodies)
- * and federating them outside the org is an explicit decision, not a default.
+ * Default sovereignty for `github.*` events. Operator-only by default / local
+ * residency / no frontier — webhook payloads may carry PII (committer email,
+ * issue bodies) and federating them outside the org is an explicit decision,
+ * not a default.
  *
  * `data_residency` is sourced from `source.dataResidency` (defaulting to
  * `"NZ"`) so a non-NZ operator gets envelopes stamped with their actual
  * residency without per-call overrides.
+ *
+ * **IAW Phase A.3:** `classification` is now an optional parameter
+ * (defaulting to `"local"` for back-compat). Callers may opt into
+ * `"federated"` or `"public"` when a GitHub event has been explicitly
+ * deemed shareable beyond the org boundary (e.g. a public-repo PR-merged
+ * event that powers a cross-org community dashboard). Default preserves
+ * the prior operator-private posture.
  */
-function defaultGithubSovereignty(source: SystemEventSource): Envelope["sovereignty"] {
+function defaultGithubSovereignty(
+  source: SystemEventSource,
+  classification: Classification = "local",
+): Envelope["sovereignty"] {
   return {
-    classification: "local",
+    classification,
     data_residency: source.dataResidency ?? "NZ",
     max_hop: 0,
     frontier_ok: false,
@@ -181,6 +192,17 @@ export interface CreateGithubEventEnvelopeOpts {
    * `repo` — exposed at the top of the payload for filters.
    */
   sender?: string;
+  /**
+   * IAW Phase A.3 — optional sovereignty classification. Defaults to
+   * `"local"`. GitHub webhook payloads can carry user-authored content
+   * (PR titles, issue bodies, committer emails); operator-private is the
+   * sensible default. Set `"federated"` only when an explicit operator
+   * decision has scoped the event for cross-org consumption (e.g. an
+   * open-source repo's release event powering a federated changelog
+   * dashboard). Mismatch with the publish-time subject is a protocol
+   * violation (see {@link validateSubjectEnvelopeAlignment}).
+   */
+  classification?: Classification;
 }
 
 /**
@@ -210,7 +232,7 @@ export function createGithubEventEnvelope(
   return buildBaseEnvelope({
     type,
     source: buildSource(opts.source),
-    sovereignty: defaultGithubSovereignty(opts.source),
+    sovereignty: defaultGithubSovereignty(opts.source, opts.classification),
     // GitHub delivery IDs are UUIDs by contract; only promote when shape
     // matches, matching the cc-events helper's defensive pattern.
     ...(isUuid(opts.deliveryId) && { correlationId: opts.deliveryId }),

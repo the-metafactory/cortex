@@ -5,27 +5,41 @@
  *   The surface-router fans envelopes to N adapters. Adapters declare
  *   interest with subjects + filter and a `render(envelope)` method.
  *   Adapters typically render to platforms (Discord, Mattermost, ...);
- *   the runner reuses the SAME adapter shape but `render()` *spawns a CC
- *   session* instead. The router doesn't care — it just fans envelopes.
- *   This keeps the runner symmetric with platform adapters and means a
- *   future test harness can register a no-op runner adapter to drain the
- *   bus during integration tests.
+ *   the runner reuses the SAME adapter shape but `render()` *dispatches
+ *   to a substrate harness* instead. The router doesn't care — it just
+ *   fans envelopes. This keeps the runner symmetric with platform
+ *   adapters and means a future test harness can register a no-op
+ *   runner adapter to drain the bus during integration tests.
  *
- * Lifecycle (per plan-cortex-migration.md §4.5–4.6):
+ * Lifecycle (per plan-cortex-migration.md §4.5–4.6, IAW Phase A.1b):
  *   1. Envelope arrives on `local.{org}.dispatch.task.received`.
- *   2. Listener parses payload → builds `CCSessionOpts`.
- *   3. Emits `dispatch.task.started` (correlation_id = task_id).
- *   4. Spawns the CC session and awaits completion.
- *   5. On exit: emits `completed` (success), `failed` (non-zero exit /
- *      runtime error), or `aborted` (timeout / shutdown).
+ *   2. Listener parses payload → builds a `DispatchRequest`.
+ *   3. Listener instantiates a per-dispatch `ClaudeCodeHarness` and
+ *      iterates `harness.dispatch(req)`.
+ *   4. For each yielded `MyelinEnvelope` (started / completed / failed
+ *      / aborted), the listener calls `runtime.publish(envelope)` to
+ *      re-emit it on the bus.
+ *   5. The harness's contract guarantees: at least one terminal envelope
+ *      (`completed` | `failed` | `aborted`) per dispatch, in order, on
+ *      the same `correlation_id`.
+ *
+ * **A.1b refactor history (cortex#113 / IAW Phase A).** Before A.1b the
+ * listener spawned `CCSession` directly and built lifecycle envelopes
+ * inline. Now the listener owns *just* the envelope-to-request
+ * translation and the publish loop; everything CC-specific lives in
+ * `ClaudeCodeHarness`. The behavioural surface is unchanged — the same
+ * four envelope types fire in the same order on the same subjects with
+ * the same payloads — but the runner is now substrate-agnostic at the
+ * code level. A future `BusPeerHarness` slots in by switching which
+ * harness the listener constructs per dispatch.
  *
  * **Boundaries (per task contract):**
  *   - This file does NOT modify `dispatch-handler.ts`. The bus-driven path
  *     and the legacy direct-call path coexist until MIG-7.1 picks the
  *     entrypoint wiring.
  *   - This file does NOT modify `cc-session.ts` or `session-manager.ts`.
- *     CC spawning is byte-identical to the existing handler — we use the
- *     same `CCSession` primitive with the same opts.
+ *     The harness still wraps `CCSession` underneath; this file no
+ *     longer imports it.
  *   - This file does NOT post to Discord. Surfaces (worklog-manager via
  *     §4.7, dashboard via the bus) consume the lifecycle envelopes the
  *     runner emits and render their own way.
@@ -35,10 +49,11 @@
  *   The G-1111 design is explicit (§5.1): the surface-router is the single
  *   fan-out point, and adapters declare a `render(envelope)` shape. The
  *   runner is logically *also* a surface — it "renders" envelopes by
- *   producing CC sessions. Re-using the same shape keeps the router code
- *   path uniform (subject match → filter → render) and avoids inventing a
- *   parallel "consumer" registry. The semantic difference (render vs
- *   spawn) lives in the adapter implementation, not the registry.
+ *   dispatching to a substrate. Re-using the same shape keeps the router
+ *   code path uniform (subject match → filter → render) and avoids
+ *   inventing a parallel "consumer" registry. The semantic difference
+ *   (render vs dispatch) lives in the adapter implementation, not the
+ *   registry.
  */
 
 import type { Envelope } from "../bus/myelin/envelope-validator";
@@ -48,36 +63,31 @@ import type {
   SurfaceRouter,
 } from "../bus/surface-router";
 import type { SystemEventSource } from "../bus/system-events";
+import type {
+  DispatchRequest,
+  SessionHarness,
+} from "../common/substrates/types";
 import {
-  createDispatchTaskAbortedEvent,
-  createDispatchTaskCompletedEvent,
-  createDispatchTaskFailedEvent,
-  createDispatchTaskStartedEvent,
-} from "../bus/dispatch-events";
-import { CCSession, type CCSessionOpts, type CCSessionResult } from "./cc-session";
+  ClaudeCodeHarness,
+  type CCSessionFactory as ClaudeCodeFactory,
+} from "../substrates/claude-code/harness";
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
 /**
- * Factory for building a CC session from envelope-derived options. Default
- * implementation is `(opts) => new CCSession(opts)`. Tests inject a fake
- * factory so they can simulate session lifecycles deterministically without
- * spawning real `claude` processes.
+ * Factory for building a CC session from envelope-derived options.
  *
- * The factory MUST return an object that exposes `start()` (returns `this`,
- * fluent API) and `wait(): Promise<CCSessionResult>`. Real `CCSession`
- * matches; fakes implement the same surface.
+ * **A.1b note.** The listener no longer constructs `CCSession` directly —
+ * it instantiates a `ClaudeCodeHarness` which in turn uses this factory
+ * (via `ClaudeCodeHarnessOpts.ccSessionFactory`). The factory type is
+ * re-exported from the harness module so existing tests
+ * (`__tests__/dispatch-listener.test.ts`) keep compiling unchanged.
+ *
+ * Real impl: `(opts) => new CCSession(opts)`. Tests inject a fake.
  */
-export interface CCSessionLike {
-  start(): CCSessionLike;
-  wait(): Promise<CCSessionResult>;
-  kill?(): void;
-}
-export type CCSessionFactory = (opts: CCSessionOpts) => CCSessionLike;
-
-const defaultCCSessionFactory: CCSessionFactory = (opts) => new CCSession(opts);
+export type CCSessionFactory = ClaudeCodeFactory;
 
 /**
  * Payload shape for `dispatch.task.received` envelopes — the input contract
@@ -180,7 +190,7 @@ export function createDispatchListener(
     runtime,
     router,
     source,
-    ccSessionFactory = defaultCCSessionFactory,
+    ccSessionFactory,
     adapterId = "runner-dispatch-listener",
   } = opts;
   const subjects = opts.subjects ?? defaultSubjects(source.org);
@@ -195,11 +205,11 @@ export function createDispatchListener(
     // `payload.agent_id`), it goes here as a `PayloadFilter`.
     //
     // `signal` is accepted for contract symmetry but not currently forwarded
-    // into the CC session — the spawn lifecycle is governed by `cc-session`'s
-    // own inactivity timer (which already kills the child process on stall).
-    // A follow-on iteration can wire `signal.aborted` to `session.kill()` so
-    // surface-router timeouts end the CC process eagerly rather than waiting
-    // for cc-session's internal timeout to fire.
+    // into the substrate dispatch — the lifecycle is governed by the
+    // harness's own timeout/inactivity timers (per Q6 lock-in). A follow-on
+    // iteration can wire `signal.aborted` to `harness.shutdown({ graceful:
+    // false })` so surface-router timeouts end the CC process eagerly
+    // rather than waiting for cc-session's internal timer to fire.
     render: (envelope, _signal) => handleDispatchEnvelope(envelope, runtime, source, ccSessionFactory),
   };
 
@@ -218,7 +228,7 @@ export function createDispatchListener(
 }
 
 // ---------------------------------------------------------------------------
-// Internals — envelope → CC spawn → lifecycle emission
+// Internals — envelope → substrate dispatch → lifecycle emission
 // ---------------------------------------------------------------------------
 
 /**
@@ -243,10 +253,11 @@ function parsePayload(envelope: Envelope): DispatchTaskReceivedPayload | null {
   if (typeof p.prompt !== "string" || p.prompt.length === 0) return null;
   // Per Echo's review (cortex#34): the envelope-level validator only checks
   // `envelope.id`'s shape, not `payload.task_id`. Without this gate, a
-  // malformed publisher could slip a non-UUID `task_id` through to
-  // CCSession + worklog-manager and break correlation across `started` /
-  // `completed` / `failed` envelopes downstream. Reject at parse time so
-  // no envelopes are published and no CC process is spawned for a bad id.
+  // malformed publisher could slip a non-UUID `task_id` through to the
+  // substrate harness + worklog-manager and break correlation across
+  // `started` / `completed` / `failed` envelopes downstream. Reject at
+  // parse time so no envelopes are published and no CC process is
+  // spawned for a bad id.
   if (!UUID_RE.test(p.task_id)) {
     console.warn(
       `dispatch-listener: rejecting envelope ${envelope.id} — task_id missing or not UUID-shaped`,
@@ -257,41 +268,89 @@ function parsePayload(envelope: Envelope): DispatchTaskReceivedPayload | null {
 }
 
 /**
- * Map a parsed payload onto `CCSessionOpts`. Keeps the snake_case <-> camelCase
- * boundary in one place and avoids leaking envelope-payload field names into
- * cc-session.ts.
+ * Translate a parsed `DispatchTaskReceivedPayload` into the protocol-
+ * level `DispatchRequest` the substrate harness consumes.
+ *
+ * **A.1b boundary.** This is the snake_case → camelCase translation layer
+ * on the listener side. The harness consumes camelCase `DispatchRequest`
+ * fields; the envelope payload uses snake_case per §3.4. The mapping is
+ * a pure projection — no defaults, no policy decisions, no enrichment.
+ *
+ * **Why CC-runtime fields live on `req.runtime` and not the top level.**
+ * `DispatchRequest` is the substrate-agnostic contract. Fields like
+ * `cwd`, `bashAllowlist`, `groveChannel`, etc. are CC-specific. Putting
+ * them under `runtime` means future harnesses (`bus-peer`, `cursor`, ...)
+ * see a clean separation: dispatch-contract on top, substrate-specific
+ * knobs in the `runtime` block. CC reads what it needs; others ignore.
+ *
+ * **persona absence.** The legacy bus-driven path does NOT carry persona
+ * file data on the payload (persona injection happens at the dispatch-
+ * handler layer via the prompt-builder). We therefore omit `persona`
+ * from the request — the harness handles `persona === undefined` per
+ * the A.1b spec (optional field).
  */
-function buildCCOpts(payload: DispatchTaskReceivedPayload): CCSessionOpts {
-  const opts: CCSessionOpts = { prompt: payload.prompt };
-  if (payload.grove_channel !== undefined) opts.groveChannel = payload.grove_channel;
-  if (payload.grove_network !== undefined) opts.groveNetwork = payload.grove_network;
-  if (payload.agent_name !== undefined) opts.agentName = payload.agent_name;
-  // The agent_id from the envelope payload doubles as `agentId` on CCSession
-  // — this is the visible label propagated through `GROVE_AGENT_ID` env var.
-  opts.agentId = payload.agent_id;
-  if (payload.resume_session_id !== undefined) opts.resumeSessionId = payload.resume_session_id;
-  if (payload.allowed_tools !== undefined) opts.allowedTools = payload.allowed_tools;
-  if (payload.disallowed_tools !== undefined) opts.disallowedTools = payload.disallowed_tools;
-  if (payload.allowed_dirs !== undefined) opts.allowedDirs = payload.allowed_dirs;
-  if (payload.timeout_ms !== undefined) opts.timeoutMs = payload.timeout_ms;
-  if (payload.cwd !== undefined) opts.cwd = payload.cwd;
-  if (payload.additional_args !== undefined) opts.additionalArgs = payload.additional_args;
-  if (payload.project !== undefined) opts.project = payload.project;
-  if (payload.entity !== undefined) opts.entity = payload.entity;
-  if (payload.operator !== undefined) opts.operator = payload.operator;
-  return opts;
+function buildDispatchRequest(payload: DispatchTaskReceivedPayload): DispatchRequest {
+  const tools: DispatchRequest["tools"] = {
+    allow: payload.allowed_tools ?? [],
+    ...(payload.disallowed_tools !== undefined && { deny: payload.disallowed_tools }),
+  };
+
+  // Build the runtime block lazily — only attach the field for keys the
+  // payload actually carried. Keeps an explicit "empty payload" indis-
+  // tinguishable from "payload with no runtime block" at the harness end.
+  const runtime: NonNullable<DispatchRequest["runtime"]> = {};
+  if (payload.cwd !== undefined) runtime.cwd = payload.cwd;
+  if (payload.allowed_dirs !== undefined) runtime.allowedDirs = payload.allowed_dirs;
+  if (payload.additional_args !== undefined) runtime.additionalArgs = payload.additional_args;
+  if (payload.grove_channel !== undefined) runtime.groveChannel = payload.grove_channel;
+  if (payload.grove_network !== undefined) runtime.groveNetwork = payload.grove_network;
+  if (payload.resume_session_id !== undefined) runtime.resumeSessionId = payload.resume_session_id;
+  const hasRuntime = Object.keys(runtime).length > 0;
+
+  // Env-kind context block carries operator/entity/project labels.
+  // Build it iff the payload supplied any of the three; the harness
+  // surfaces them onto CCSessionOpts as before.
+  const envContext: Record<string, unknown> = {};
+  if (payload.operator !== undefined) envContext.operator = payload.operator;
+  if (payload.entity !== undefined) envContext.entity = payload.entity;
+  if (payload.project !== undefined) envContext.project = payload.project;
+  const hasEnvContext = Object.keys(envContext).length > 0;
+
+  const req: DispatchRequest = {
+    prompt: payload.prompt,
+    tools,
+    context: hasEnvContext ? [{ kind: "env", data: envContext }] : [],
+    agent: {
+      id: payload.agent_id,
+      displayName: payload.agent_name ?? payload.agent_id,
+    },
+    requestId: payload.task_id,
+    ...(hasRuntime && { runtime }),
+    ...(payload.timeout_ms !== undefined && { timeoutMs: payload.timeout_ms }),
+  };
+
+  return req;
 }
 
 /**
- * The render() implementation: parse → emit started → spawn → await →
- * emit completed/failed/aborted. Return Promise<void> so the surface-router
- * can await this with its render-timeout isolation.
+ * The render() implementation: parse → instantiate harness → iterate
+ * `harness.dispatch(req)` → publish each yielded envelope. Returns
+ * `Promise<void>` so the surface-router can await with its render-timeout
+ * isolation.
+ *
+ * **Per-dispatch harness construction (Q7 lock-in).** Every received
+ * envelope spawns a fresh `ClaudeCodeHarness` instance. The harness is
+ * stateless beyond its in-flight session tracking, so this is cheap;
+ * the alternative (a long-lived harness shared across dispatches) would
+ * couple `shutdown` semantics across unrelated dispatches and is not
+ * worth the savings for A.1b. Shared infrastructure (the CC factory)
+ * is threaded through via constructor opts.
  */
 async function handleDispatchEnvelope(
   envelope: Envelope,
   runtime: MyelinRuntime,
   source: SystemEventSource,
-  factory: CCSessionFactory,
+  ccSessionFactory: CCSessionFactory | undefined,
 ): Promise<void> {
   const payload = parsePayload(envelope);
   if (!payload) {
@@ -301,132 +360,24 @@ async function handleDispatchEnvelope(
     return;
   }
 
-  const startedAt = new Date();
-  const taskId = payload.task_id;
-  const agentId = payload.agent_id;
+  // Per-dispatch harness — see fn-doc above for rationale. `source` is
+  // structurally compatible between `SystemEventSource` and the harness's
+  // `DispatchEventSource` (both alias the same shape in `dispatch-events.ts`).
+  const harness: SessionHarness = new ClaudeCodeHarness({
+    source,
+    ...(ccSessionFactory !== undefined && { ccSessionFactory }),
+  });
 
-  // Emit `dispatch.task.started` BEFORE spawning so the bus reflects the
-  // intent even if the spawn itself errors synchronously. Awaiting publish
-  // is cheap (it's a no-op when the runtime is disabled) and gives the
-  // started event a strict happens-before relationship with the spawn.
-  await runtime.publish(
-    createDispatchTaskStartedEvent({ source, taskId, agentId, startedAt }),
-  );
+  const req = buildDispatchRequest(payload);
 
-  const ccOpts = buildCCOpts(payload);
-  let result: CCSessionResult | null = null;
-  let runtimeError: Error | null = null;
-
-  try {
-    const session = factory(ccOpts);
-    session.start();
-    result = await session.wait();
-  } catch (err) {
-    runtimeError = err instanceof Error ? err : new Error(String(err));
+  // Drain the harness's lifecycle stream onto the bus. The harness
+  // guarantees at least one terminal envelope; we publish whatever it
+  // yields, in order. Each `runtime.publish` awaits — keeping the
+  // strict happens-before ordering the original implementation relied
+  // on (`started` is observable before any terminal envelope, even when
+  // the runtime is the bus's actual NATS transport).
+  for await (const env of harness.dispatch(req)) {
+    await runtime.publish(env);
   }
-
-  // Choose terminal lifecycle event based on outcome.
-  if (runtimeError) {
-    // Runtime threw — failed. Distinct from `aborted` (which is "killed
-    // from outside" e.g. timeout, shutdown).
-    await runtime.publish(
-      createDispatchTaskFailedEvent({
-        source,
-        taskId,
-        agentId,
-        startedAt,
-        failedAt: new Date(),
-        errorSummary: truncateError(runtimeError.message),
-      }),
-    );
-    return;
-  }
-
-  if (!result) {
-    // Defensive: factory returned nothing parseable. Treat as failure
-    // rather than swallowing — silent success on a no-op session is the
-    // worst-of-both-worlds outcome.
-    await runtime.publish(
-      createDispatchTaskFailedEvent({
-        source,
-        taskId,
-        agentId,
-        startedAt,
-        failedAt: new Date(),
-        errorSummary: "session factory returned no result",
-      }),
-    );
-    return;
-  }
-
-  if (result.success) {
-    await runtime.publish(
-      createDispatchTaskCompletedEvent({
-        source,
-        taskId,
-        agentId,
-        startedAt,
-        completedAt: new Date(),
-        ...(result.response && { resultSummary: truncateSummary(result.response) }),
-      }),
-    );
-    return;
-  }
-
-  // Distinguish abort (timeout / external kill) from a regular failure.
-  //
-  // History (Echo round-1 W1): the previous implementation only looked at
-  // `result.exitCode === 143` (SIGTERM). That signal is UNREACHABLE for
-  // the canonical inactivity-timeout case, because cc-session.ts settles
-  // `wait()` via the `error` listener with `exitCode: 1` BEFORE the actual
-  // SIGTERM/143 fires. The fix lives in cc-session.ts: it now exposes
-  // `aborted: boolean` + `abortReason` on CCSessionResult, sourced from
-  // its internal `timedOut` flag, regardless of which listener wins the
-  // race. We treat that field as the source of truth and keep the
-  // exit-code-143 check as defense-in-depth (e.g. a SIGTERM delivered
-  // from outside without going through the inactivity timer).
-  if (result.aborted === true || result.exitCode === 143) {
-    await runtime.publish(
-      createDispatchTaskAbortedEvent({
-        source,
-        taskId,
-        agentId,
-        startedAt,
-        abortedAt: new Date(),
-        reason: result.abortReason ?? "timeout",
-      }),
-    );
-    return;
-  }
-
-  await runtime.publish(
-    createDispatchTaskFailedEvent({
-      source,
-      taskId,
-      agentId,
-      startedAt,
-      failedAt: new Date(),
-      errorSummary: `claude exited ${result.exitCode}`,
-    }),
-  );
-}
-
-/**
- * Trim error messages so a verbose stack doesn't blow the worklog message
- * limit downstream. 500 chars matches `system.inbound.failed`'s limit
- * (system-events §3.5.4) — keeping the dispatch family symmetric.
- */
-function truncateError(msg: string): string {
-  return msg.length > 500 ? msg.slice(0, 497) + "..." : msg;
-}
-
-/**
- * Trim CC response summaries. Discord embeds tolerate ~2000 chars but
- * surfaces typically render the first line + "(more)..." — caps at 1000
- * to leave room for a label prefix without truncation surprises.
- */
-function truncateSummary(text: string): string {
-  const first = text.split("\n", 1)[0] ?? text;
-  return first.length > 1000 ? first.slice(0, 997) + "..." : first;
 }
 

@@ -17,7 +17,7 @@ import type { ConnectionOptions, NatsConnection } from "nats";
 import type { BotConfig } from "../../common/types/config";
 import { NatsLink } from "../nats/connection";
 import { MyelinSubscriber } from "./subscriber";
-import type { Envelope } from "./envelope-validator";
+import { deriveNatsSubject, type Envelope } from "./envelope-validator";
 
 /**
  * Per-envelope handler. Receives validated envelopes from any active
@@ -42,10 +42,24 @@ export interface MyelinRuntime {
   /**
    * Publish an envelope to NATS.
    *
-   * Subject is derived from `envelope.type` per G-1111 §3.1: a fully
-   * qualified subject `local.{org}.{type}` is constructed at publish time,
-   * where `{org}` is the bot's `agent.operatorId` and `{type}` is the
-   * envelope's already-dotted `domain.entity.action`. No wildcards.
+   * Subject is derived from `envelope.sovereignty.classification` +
+   * `envelope.type` per G-1111 §3.1 and the myelin grammar:
+   *
+   *   - `classification === "local"`     → `local.{org}.{type}`
+   *   - `classification === "federated"` → `federated.{org}.{type}`
+   *   - `classification === "public"`    → `public.{type}` (no `{org}` segment)
+   *
+   * `{org}` is the first dotted segment of `envelope.source` (which
+   * cortex's `system-events.ts` etc. populate from `agent.operatorId`).
+   * The 1:1 alignment between subject prefix and `sovereignty.classification`
+   * is myelin's protocol-level invariant — see
+   * {@link validateSubjectEnvelopeAlignment}.
+   *
+   * **IAW Phase A.3:** prior to this slice the runtime hardcoded
+   * `local.{org}.{type}` here, making federated/public emission structurally
+   * impossible. Subject derivation now mirrors classification, so an emit
+   * site that opts into `classification: "federated"` flows end-to-end
+   * (envelope + subject) without further runtime changes.
    *
    * **No-op when the runtime is disabled** (no NATS configured) so callers
    * can fire-and-forget without checking `enabled` first. This matters at
@@ -223,11 +237,6 @@ export async function startMyelinRuntime(
     };
   }
 
-  // Capture the org segment once at runtime-start time — `agent.operatorId`
-  // is the same value used to substitute `{org}` in subscribe subjects, so
-  // publish and subscribe stay symmetrical.
-  const org = config.agent.operatorId ?? "default";
-
   let stopped = false;
 
   const publishEnabled = async (envelope: Envelope): Promise<void> => {
@@ -243,7 +252,18 @@ export async function startMyelinRuntime(
       // of the envelope on the shutdown path.
       return;
     }
-    const subject = `local.${org}.${envelope.type}`;
+    // IAW Phase A.3: subject derivation now mirrors
+    // `envelope.sovereignty.classification`. Prior code hardcoded
+    // `local.{org}.{type}` here, making federated/public emission
+    // structurally impossible — `{org}` came from `config.agent.operatorId`
+    // and the classification prefix was always "local". `deriveNatsSubject`
+    // reads classification + extracts `{org}` from `envelope.source` so the
+    // 1:1 subject↔classification invariant
+    // (`validateSubjectEnvelopeAlignment`) holds for every emit site
+    // without further changes. `envelope.source`'s first segment is the
+    // same value `agent.operatorId` produces when emit-site helpers
+    // assemble it, so subscribe-side `{org}` substitution stays symmetric.
+    const subject = deriveNatsSubject(envelope);
     try {
       link.publish(subject, JSON.stringify(envelope));
     } catch (err) {
