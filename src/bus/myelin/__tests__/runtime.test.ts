@@ -91,16 +91,20 @@ function makeFakeNatsConnection() {
 }
 
 describe("MyelinRuntime", () => {
-  let logs: { kind: "log" | "warn" | "error"; msg: string }[];
+  let logs: { kind: "log" | "info" | "warn" | "error"; msg: string }[];
   let restore: () => void;
 
   beforeEach(() => {
     logs = [];
     const origLog = console.log;
+    const origInfo = console.info;
     const origWarn = console.warn;
     const origError = console.error;
     console.log = (...args: unknown[]) => {
       logs.push({ kind: "log", msg: args.map(String).join(" ") });
+    };
+    console.info = (...args: unknown[]) => {
+      logs.push({ kind: "info", msg: args.map(String).join(" ") });
     };
     console.warn = (...args: unknown[]) => {
       logs.push({ kind: "warn", msg: args.map(String).join(" ") });
@@ -110,6 +114,7 @@ describe("MyelinRuntime", () => {
     };
     restore = () => {
       console.log = origLog;
+      console.info = origInfo;
       console.warn = origWarn;
       console.error = origError;
     };
@@ -157,7 +162,10 @@ describe("MyelinRuntime", () => {
     await runtime.stop();
   });
 
-  test("warns + returns disabled when nats.url present but subjects empty", async () => {
+  test("cortex#88 item 6: emits info (not warn) when nats.url set but subjects empty", async () => {
+    // The publish-only case (typical cortex deployment today). Returning
+    // `enabled: false` is preserved — only the log level changes — so
+    // callers gated on `runtime.enabled` continue to behave identically.
     const config = makeConfig({
       url: "nats://localhost:4222",
       name: "grove-bot",
@@ -166,9 +174,16 @@ describe("MyelinRuntime", () => {
     const runtime = await startMyelinRuntime(config);
     expect(runtime.enabled).toBe(false);
     const warned = logs.some(
-      (l) => l.kind === "warn" && l.msg.includes("nats.subjects is empty"),
+      (l) => l.kind === "warn" && l.msg.includes("subjects"),
     );
-    expect(warned).toBe(true);
+    expect(warned).toBe(false);
+    const informed = logs.some(
+      (l) =>
+        l.kind === "info" &&
+        l.msg.includes("nats.subjects empty") &&
+        l.msg.includes("no subscriptions started"),
+    );
+    expect(informed).toBe(true);
   });
 
   test("returns disabled when NATS connect fails (logs error, doesn't throw)", async () => {

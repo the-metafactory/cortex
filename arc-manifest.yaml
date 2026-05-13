@@ -68,15 +68,15 @@ provides:
 
   hooks:
     - event: SessionStart
-      command: ${CLAUDE_DIR}/hooks/CortexContext.hook.ts
+      command: ${PAI_DIR}/hooks/CortexContext.hook.ts
     - event: PostToolUse
-      command: ${CLAUDE_DIR}/hooks/CortexEventLogger.hook.ts
+      command: ${PAI_DIR}/hooks/CortexEventLogger.hook.ts
     - event: Stop
-      command: ${CLAUDE_DIR}/hooks/CortexEventLogger.hook.ts
+      command: ${PAI_DIR}/hooks/CortexEventLogger.hook.ts
     - event: UserPromptSubmit
-      command: ${CLAUDE_DIR}/hooks/CortexEventLogger.hook.ts
+      command: ${PAI_DIR}/hooks/CortexEventLogger.hook.ts
     - event: PreToolUse
-      command: ${CLAUDE_DIR}/hooks/CortexBashGuard.hook.ts
+      command: ${PAI_DIR}/hooks/CortexBashGuard.hook.ts
       matcher: Bash
 
 # Lifecycle scripts (mirror grove-v2 three-stage pattern):

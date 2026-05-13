@@ -182,6 +182,82 @@ describe("legacy fallback", () => {
 });
 
 // ---------------------------------------------------------------------------
+// cortex#88 item 7: networksDir-missing log level
+// ---------------------------------------------------------------------------
+
+describe("networksDir-missing log level (cortex#88 item 7)", () => {
+  function captureConsole(): {
+    logs: { kind: "info" | "warn"; msg: string }[];
+    restore: () => void;
+  } {
+    const logs: { kind: "info" | "warn"; msg: string }[] = [];
+    const origInfo = console.info;
+    const origWarn = console.warn;
+    console.info = (...args: unknown[]) => {
+      logs.push({ kind: "info", msg: args.map(String).join(" ") });
+    };
+    console.warn = (...args: unknown[]) => {
+      logs.push({ kind: "warn", msg: args.map(String).join(" ") });
+    };
+    return {
+      logs,
+      restore: () => {
+        console.info = origInfo;
+        console.warn = origWarn;
+      },
+    };
+  }
+
+  test("default networksDir absent → info-level only (no warn)", () => {
+    // migrate-config emits `networksDir: ./networks` even when the operator
+    // never created the directory. Make sure that the default-value-absent
+    // case is informational, not a warning.
+    const configPath = writeCentralConfig(testDir, {
+      agent: { name: "luna", displayName: "Luna" },
+      claude: { timeoutMs: 120000 },
+      networksDir: "./networks",
+    });
+    rmSync(join(testDir, "networks"), { recursive: true });
+
+    const cap = captureConsole();
+    try {
+      loadConfig(configPath);
+    } finally {
+      cap.restore();
+    }
+    const warns = cap.logs.filter((l) => l.kind === "warn" && l.msg.includes("networksDir"));
+    expect(warns).toHaveLength(0);
+    const infos = cap.logs.filter((l) => l.kind === "info" && l.msg.includes("networksDir"));
+    expect(infos.length).toBeGreaterThan(0);
+  });
+
+  test("non-default networksDir absent → keeps console.warn", () => {
+    // Operator explicitly pointed networksDir at a non-default path that
+    // doesn't exist — that's almost certainly a typo or missing mount,
+    // worth surfacing loudly.
+    const configPath = writeCentralConfig(testDir, {
+      agent: { name: "luna", displayName: "Luna" },
+      claude: { timeoutMs: 120000 },
+      networksDir: "./operator-typo-here",
+    });
+
+    const cap = captureConsole();
+    try {
+      loadConfig(configPath);
+    } finally {
+      cap.restore();
+    }
+    const warns = cap.logs.filter(
+      (l) =>
+        l.kind === "warn" &&
+        l.msg.includes("networksDir") &&
+        l.msg.includes("does not exist"),
+    );
+    expect(warns.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // T6.4: Malformed network file error reporting
 // ---------------------------------------------------------------------------
 

@@ -121,7 +121,15 @@ export function loadConfigWithAgents(path: string): LoadedConfig {
 
   // Networks load against the on-disk path regardless of legacy/cortex shape —
   // both shapes share the same networks/ contract (G-500).
-  const explicitNetworksDir = typeof raw.networksDir === "string";
+  //
+  // cortex#88 item 7: `explicitNetworksDir` was true whenever `networksDir`
+  // appeared anywhere in raw yaml — but migrate-config emits the schema
+  // default (`./networks`) verbatim, so every startup tripped the
+  // `does not exist` warn. Treat the literal default value as "not
+  // explicit" so the warning fires only when the operator pointed
+  // networksDir at a non-default path that's actually missing.
+  const explicitNetworksDir =
+    typeof raw.networksDir === "string" && raw.networksDir !== "./networks";
   const networksDir = resolve(
     configDir,
     (typeof raw.networksDir === "string" ? raw.networksDir : "./networks"),
@@ -473,7 +481,15 @@ export function loadAgentsDirectory(dir: string): Agent[] {
 function loadNetworkFiles(networksDir: string, explicit: boolean): NetworkFile[] {
   if (!existsSync(networksDir)) {
     if (explicit) {
+      // Operator pointed networksDir at a non-default path that doesn't
+      // exist — surface loudly so they notice the typo / missing mount.
       console.warn(`config-loader: networksDir "${networksDir}" does not exist — no networks loaded`);
+    } else {
+      // cortex#88 item 7: the default path is absent. This is fine —
+      // networks/ is optional today — but surface at info-level so
+      // an operator who actually expected fragments to load can spot
+      // the path mismatch.
+      console.info(`config-loader: default networksDir "${networksDir}" not present — no networks loaded (this is fine if you haven't created any network fragments)`);
     }
     return [];
   }

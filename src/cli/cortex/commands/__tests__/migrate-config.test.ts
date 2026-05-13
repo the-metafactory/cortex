@@ -648,6 +648,43 @@ describe("convertBotYaml — schema-sourced defaults", () => {
 });
 
 // ---------------------------------------------------------------------------
+// cortex#88 item 1 — paths.* grove → cortex rewrite
+// ---------------------------------------------------------------------------
+
+describe("convertBotYaml — paths rewrite (cortex#88 item 1)", () => {
+  test("rewrites grove path defaults under paths.* to cortex equivalents", () => {
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
+      paths: {
+        publishedEventsDir: "~/.claude/events/published",
+        logDir: "~/.config/grove/logs",
+      },
+    };
+    const result = convertBotYaml(legacy, {});
+    const paths = (result.cortex.paths ?? {}) as Record<string, string>;
+    expect(paths.logDir).toBe("~/.config/cortex/logs");
+    // Non-grove paths pass through unchanged
+    expect(paths.publishedEventsDir).toBe("~/.claude/events/published");
+    // Operator sees a warning surfacing the substitution
+    const pathsWarn = result.warnings.find((w) => w.field === "paths");
+    expect(pathsWarn?.message).toMatch(/grove path\(s\)/);
+  });
+
+  test("leaves a paths block that already targets cortex unchanged", () => {
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
+      paths: { logDir: "~/.config/cortex/logs" },
+    };
+    const result = convertBotYaml(legacy, {});
+    const paths = (result.cortex.paths ?? {}) as Record<string, string>;
+    expect(paths.logDir).toBe("~/.config/cortex/logs");
+    expect(result.warnings.find((w) => w.field === "paths")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildTrustList — extracted helper (Holly cortex#51 round 1 architecture)
 // ---------------------------------------------------------------------------
 
@@ -706,6 +743,21 @@ describe("runMigrateConfig", () => {
     const written = YAML.parse(readFileSync(out, "utf-8"));
     // Re-parse via the schema to confirm the file is a valid cortex.yaml
     expect(() => CortexConfigSchema.parse(written)).not.toThrow();
+  });
+
+  test("cortex#88 item 5: creates missing parent dir before writing --out", async () => {
+    // Reproduce the fresh-host case: target lives under a non-existent
+    // `~/.config/cortex/` equivalent. Without mkdirSync, writeFileSync
+    // ENOENTs; with it, the dir is created and the write succeeds.
+    const tmpRoot = mkdtempSync(join(tmpdir(), "cortex-mig-7-2e-mkdir-"));
+    const out = join(tmpRoot, "fresh-host", "nested", "cortex.yaml");
+    const code = await runMigrateConfig([
+      join(FIXTURE_DIR, "minimal.bot.yaml"),
+      "--out",
+      out,
+    ]);
+    expect(code).toBe(0);
+    expect(existsSync(out)).toBe(true);
   });
 
   test("--strict returns exit code 2 when warnings present", async () => {

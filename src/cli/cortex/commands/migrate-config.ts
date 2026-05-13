@@ -20,7 +20,7 @@
  *   2  — strict-mode warnings (would have succeeded without --strict)
  */
 
-import { readFileSync, writeFileSync } from "fs";
+import { mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import YAML from "yaml";
 
@@ -150,6 +150,10 @@ export async function runMigrateConfig(argv: string[]): Promise<number> {
     const yamlOut = YAML.stringify(result.cortex, { indent: 2, lineWidth: 0 });
     if (args.out) {
       const outPath = resolve(args.out);
+      // cortex#88 item 5: a fresh host has no `~/.config/cortex/`, so
+      // writeFileSync ENOENTs unless we ensure the parent exists. mkdir
+      // recursive is idempotent — pre-existing dirs are a no-op.
+      mkdirSync(dirname(outPath), { recursive: true });
       writeFileSync(outPath, yamlOut, "utf-8");
       console.error(`wrote ${outPath} (${result.cortex.agents.length} agent(s), ${result.cortex.renderers.length} renderer(s))`);
     } else {

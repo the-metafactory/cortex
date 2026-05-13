@@ -128,8 +128,18 @@ export async function startMyelinRuntime(
   );
 
   if (subjects.length === 0) {
-    console.warn(
-      "myelin-runtime: nats.url configured but nats.subjects is empty — no subscriptions started",
+    // cortex#88 item 6: empty `subjects` is the typical state today —
+    // cortex publishes envelopes but doesn't subscribe (subscription
+    // routing is G-1111+ territory). Demoted from `console.warn` to
+    // `console.info`: the prior wording ("no subscriptions started")
+    // misled every operator into chasing a phantom misconfiguration on
+    // every boot. The runtime IS still considered disabled here because
+    // `publish` from this branch requires the same connect-and-subscribe
+    // path the populated case takes — keeping the early-return preserves
+    // the existing publish-disabled contract until G-1111 wires the
+    // publish-only mode end-to-end.
+    console.info(
+      "myelin-runtime: nats.url configured, nats.subjects empty — no subscriptions started (this is normal for current cortex deployments; subscription routing lands in G-1111)",
     );
     return {
       enabled: false,
