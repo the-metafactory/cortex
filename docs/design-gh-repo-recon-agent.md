@@ -394,7 +394,7 @@ The `command` field names the slash command this agent invokes — exactly the s
 
 Cortex currently has two substrate enums living in different files. They are not unified today; this design touches both and acknowledges the unification work as out of scope for this PR.
 
-**1. `AgentRuntimeSchema.substrate` (operator-facing, `src/common/types/cortex-config.ts`).** Today a flat `z.enum(["claude-code", "codex", "pi-dev", "custom"])`. Gains `"deterministic-agent"` as a fifth value. The schema is NOT a discriminated union today; this design does not propose restructuring it. Instead, `command`, `workflow`, and `retry` land as **optional top-level fields on `AgentRuntimeSchema`**, gated by a `.refine()` that requires `command` when `substrate === "deterministic-agent"` and rejects it otherwise. No breaking change to existing claude-code / codex / pi-dev / custom configs.
+**1. `AgentRuntimeSchema.substrate` (operator-facing, `src/common/types/cortex-config.ts`).** Today a flat `z.enum(["claude-code", "codex", "pi-dev", "cursor", "custom"])` after cortex#124 merge. Gains `"deterministic-agent"` as a sixth value. The schema is NOT a discriminated union today; this design does not propose restructuring it. Instead, `command`, `workflow`, and `retry` land as **optional top-level fields on `AgentRuntimeSchema`**, gated by a `.refine()` that requires `command` when `substrate === "deterministic-agent"` and rejects it otherwise. No breaking change to existing claude-code / codex / pi-dev / cursor / custom configs. Precedent for adding a substrate enum value is cortex#124 itself — one-line enum change plus design doc.
 
 ```ts
 // Sketch — actual implementation lands in the follow-up PR
