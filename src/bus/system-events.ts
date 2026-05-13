@@ -391,3 +391,69 @@ export function createSystemInboundAbortedEvent(
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// system.access.filtered — IAW Phase A.4 (cortex#113, cortex#109 §B)
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a `system.access.filtered` envelope was emitted. Mirrors the three
+ * `RendererVisibility` axes — each enum value corresponds to a single
+ * visibility rule that produced the drop. Surfaces can subscribe and
+ * project the access-decision stream without parsing free-form text.
+ *
+ * IAW Phase A.4 ties this into the cortex#97 error-surfacing pattern — a
+ * dropped envelope is an observable event, not a silent black hole. Phase
+ * B may extend the enum with trust-decision reasons (signed_by failures,
+ * unknown principals) once cortex#102 lands.
+ */
+export type SystemAccessFilteredReason =
+  | "residency_blocked"
+  | "model_class_blocked"
+  | "classification_exceeds_max";
+
+export interface SystemAccessFilteredOpts {
+  source: SystemEventSource;
+  /** Renderer/adapter id that dropped the envelope (e.g. `dashboard`). */
+  rendererId: string;
+  /** NATS subject of the dropped envelope — operators correlate by this. */
+  envelopeSubject: string;
+  /** Specific rule that fired. See {@link SystemAccessFilteredReason}. */
+  reason: SystemAccessFilteredReason;
+  /**
+   * Optional sovereignty classification of THIS event (the `filtered`
+   * notification itself, not the envelope it describes). Defaults to
+   * `"local"` — access decisions are operator-internal. Mirror of the
+   * Phase A.3 `classification` parameter on the rest of the system.*
+   * helpers.
+   */
+  classification?: Classification;
+}
+
+/**
+ * Construct a `system.access.filtered` envelope.
+ *
+ * The surface-router emits this once per `(renderer, envelope, reason)`
+ * tuple when a renderer's `visibility:` config drops an inbound envelope.
+ * It's a side-channel for operators who want to audit/debug "why didn't I
+ * see this envelope on my dashboard?" without instrumenting every renderer.
+ *
+ * Per IAW Phase A.4 the emit is direct — `runtime.publish()` straight from
+ * the router with no central error-surfacing helper. Phase B / cortex#97
+ * may consolidate the emit pattern once the helper exists; until then this
+ * is the single emit site for visibility-drop events.
+ */
+export function createSystemAccessFilteredEvent(
+  opts: SystemAccessFilteredOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.access.filtered",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    payload: {
+      renderer_id: opts.rendererId,
+      envelope_subject: opts.envelopeSubject,
+      reason: opts.reason,
+    },
+  });
+}

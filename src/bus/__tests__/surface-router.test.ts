@@ -14,9 +14,12 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import type { RendererVisibility } from "../../common/types/cortex-config";
 import type { Envelope } from "../myelin/envelope-validator";
 import type { MyelinRuntime } from "../myelin/runtime";
-import { createSurfaceRouter, subjectMatches, type SurfaceAdapter } from "../surface-router";
+import { validateEnvelope } from "../myelin/envelope-validator";
+import { createSurfaceRouter, evaluateVisibility, subjectMatches, type SurfaceAdapter } from "../surface-router";
+import type { SystemEventSource } from "../system-events";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -34,6 +37,37 @@ function fakeRuntime(): MyelinRuntime {
     stop: async () => {},
   };
 }
+
+/**
+ * IAW Phase A.4 — fakeRuntime variant that records `publish()` calls so
+ * tests can assert on the `system.access.filtered` envelopes the router
+ * emits on visibility drops.
+ */
+function fakeRuntimeWithPublishLog(): {
+  runtime: MyelinRuntime;
+  published: Envelope[];
+} {
+  const handlers = new Set<Parameters<MyelinRuntime["onEnvelope"]>[0]>();
+  const published: Envelope[] = [];
+  return {
+    runtime: {
+      enabled: true,
+      onEnvelope: (handler) => {
+        handlers.add(handler);
+        return { unregister: () => { handlers.delete(handler); } };
+      },
+      publish: async (env) => { published.push(env); },
+      stop: async () => {},
+    },
+    published,
+  };
+}
+
+const TEST_SYSTEM_EVENT_SOURCE: SystemEventSource = {
+  org: "metafactory",
+  agent: "cortex",
+  instance: "local",
+};
 
 /**
  * `fakeRuntime` plus a `trigger()` helper for end-to-end wiring tests.
@@ -90,6 +124,7 @@ function recordingAdapter(opts: {
   id: string;
   subjects: string[];
   filter?: SurfaceAdapter["filter"];
+  visibility?: RendererVisibility;
   behaviour?: "ok" | "throw" | "hang";
   hangMs?: number;
 }): RecordingAdapter {
@@ -100,6 +135,7 @@ function recordingAdapter(opts: {
       id: opts.id,
       subjects: opts.subjects,
       ...(opts.filter ? { filter: opts.filter } : {}),
+      ...(opts.visibility ? { visibility: opts.visibility } : {}),
       render: async (env) => {
         calls.push(env);
         if (opts.behaviour === "throw") {
@@ -686,5 +722,675 @@ describe("createSurfaceRouter — runtime integration shape", () => {
     fake.trigger(makeEnvelope(), "local.metafactory.review.cycle.completed");
     await new Promise((r) => setTimeout(r, 0));
     expect(a.calls).toHaveLength(1); // unchanged — stop unregistered the handler
+  });
+});
+
+// ---------------------------------------------------------------------------
+// IAW Phase A.4 — visibility filter (cortex#113, cortex#109 §B)
+// ---------------------------------------------------------------------------
+
+describe("evaluateVisibility — pure rule predicate", () => {
+  function envWith(sov: Partial<Envelope["sovereignty"]>): Envelope {
+    return makeEnvelope({
+      sovereignty: {
+        classification: "local",
+        data_residency: "NZ",
+        max_hop: 0,
+        frontier_ok: true,
+        model_class: "any",
+        ...sov,
+      },
+    });
+  }
+
+  test("undefined visibility passes through (no constraint = no filter)", () => {
+    expect(evaluateVisibility(undefined, makeEnvelope())).toBeUndefined();
+  });
+
+  test("empty visibility object passes through (every field unset)", () => {
+    expect(evaluateVisibility({}, makeEnvelope())).toBeUndefined();
+  });
+
+  describe("hide_residency_outside", () => {
+    test("envelope residency in the allowlist passes", () => {
+      expect(
+        evaluateVisibility(
+          { hide_residency_outside: ["CH", "DE"] },
+          envWith({ data_residency: "CH" }),
+        ),
+      ).toBeUndefined();
+    });
+
+    test("envelope residency outside the allowlist returns residency_blocked", () => {
+      expect(
+        evaluateVisibility(
+          { hide_residency_outside: ["CH", "DE"] },
+          envWith({ data_residency: "US" }),
+        ),
+      ).toBe("residency_blocked");
+    });
+
+    test("single-entry allowlist still works", () => {
+      expect(
+        evaluateVisibility(
+          { hide_residency_outside: ["NZ"] },
+          envWith({ data_residency: "AU" }),
+        ),
+      ).toBe("residency_blocked");
+    });
+  });
+
+  describe("require_model_class", () => {
+    test("envelope model_class in the allowlist passes", () => {
+      expect(
+        evaluateVisibility(
+          { require_model_class: ["local-only", "any"] },
+          envWith({ model_class: "local-only" }),
+        ),
+      ).toBeUndefined();
+    });
+
+    test("envelope model_class outside the allowlist returns model_class_blocked", () => {
+      expect(
+        evaluateVisibility(
+          { require_model_class: ["local-only"] },
+          envWith({ model_class: "frontier" }),
+        ),
+      ).toBe("model_class_blocked");
+    });
+
+    test("`any` in the allowlist matches `any`-tagged envelopes", () => {
+      expect(
+        evaluateVisibility(
+          { require_model_class: ["any"] },
+          envWith({ model_class: "any" }),
+        ),
+      ).toBeUndefined();
+    });
+  });
+
+  describe("max_classification", () => {
+    test("cap `local` passes local envelopes", () => {
+      expect(
+        evaluateVisibility(
+          { max_classification: "local" },
+          envWith({ classification: "local" }),
+        ),
+      ).toBeUndefined();
+    });
+
+    test("cap `local` blocks federated envelopes", () => {
+      expect(
+        evaluateVisibility(
+          { max_classification: "local" },
+          envWith({ classification: "federated" }),
+        ),
+      ).toBe("classification_exceeds_max");
+    });
+
+    test("cap `local` blocks public envelopes", () => {
+      expect(
+        evaluateVisibility(
+          { max_classification: "local" },
+          envWith({ classification: "public" }),
+        ),
+      ).toBe("classification_exceeds_max");
+    });
+
+    test("cap `federated` allows local + federated, blocks public", () => {
+      expect(
+        evaluateVisibility(
+          { max_classification: "federated" },
+          envWith({ classification: "local" }),
+        ),
+      ).toBeUndefined();
+      expect(
+        evaluateVisibility(
+          { max_classification: "federated" },
+          envWith({ classification: "federated" }),
+        ),
+      ).toBeUndefined();
+      expect(
+        evaluateVisibility(
+          { max_classification: "federated" },
+          envWith({ classification: "public" }),
+        ),
+      ).toBe("classification_exceeds_max");
+    });
+
+    test("cap `public` allows everything (no cap)", () => {
+      for (const c of ["local", "federated", "public"] as const) {
+        expect(
+          evaluateVisibility(
+            { max_classification: "public" },
+            envWith({ classification: c }),
+          ),
+        ).toBeUndefined();
+      }
+    });
+  });
+
+  describe("composition (AND semantics)", () => {
+    const fullPolicy: RendererVisibility = {
+      hide_residency_outside: ["CH", "DE"],
+      require_model_class: ["local-only", "any"],
+      max_classification: "federated",
+    };
+
+    test("envelope satisfying every rule passes", () => {
+      expect(
+        evaluateVisibility(
+          fullPolicy,
+          envWith({
+            classification: "federated",
+            data_residency: "CH",
+            model_class: "local-only",
+          }),
+        ),
+      ).toBeUndefined();
+    });
+
+    test("any single violation drops (residency)", () => {
+      expect(
+        evaluateVisibility(
+          fullPolicy,
+          envWith({
+            classification: "federated",
+            data_residency: "US",
+            model_class: "local-only",
+          }),
+        ),
+      ).toBe("residency_blocked");
+    });
+
+    test("any single violation drops (model_class)", () => {
+      expect(
+        evaluateVisibility(
+          fullPolicy,
+          envWith({
+            classification: "federated",
+            data_residency: "CH",
+            model_class: "frontier",
+          }),
+        ),
+      ).toBe("model_class_blocked");
+    });
+
+    test("any single violation drops (classification)", () => {
+      expect(
+        evaluateVisibility(
+          fullPolicy,
+          envWith({
+            classification: "public",
+            data_residency: "CH",
+            model_class: "any",
+          }),
+        ),
+      ).toBe("classification_exceeds_max");
+    });
+
+    test("residency reported first when multiple rules violated (deterministic order)", () => {
+      // All three rules violated. The evaluator walks rules in declaration
+      // order — residency first. Pin the order so a future refactor that
+      // reshuffles can't silently change observable behaviour.
+      expect(
+        evaluateVisibility(
+          fullPolicy,
+          envWith({
+            classification: "public",
+            data_residency: "US",
+            model_class: "frontier",
+          }),
+        ),
+      ).toBe("residency_blocked");
+    });
+  });
+});
+
+describe("createSurfaceRouter — visibility filter wiring", () => {
+  test("adapter with no visibility config receives every envelope (back-compat)", async () => {
+    const router = createSurfaceRouter(fakeRuntime());
+    const a = recordingAdapter({ id: "a", subjects: [">"] });
+    router.register(a.adapter);
+
+    // Three envelopes with progressively wider classification — all must
+    // reach the adapter when no visibility config is set.
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "local", data_residency: "NZ", max_hop: 0,
+          frontier_ok: true, model_class: "any",
+        },
+      }),
+      "local.metafactory.x.y.z",
+    );
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "federated", data_residency: "DE", max_hop: 1,
+          frontier_ok: true, model_class: "frontier",
+        },
+      }),
+      "federated.metafactory.x.y.z",
+    );
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "public", data_residency: "US", max_hop: 10,
+          frontier_ok: true, model_class: "any",
+        },
+      }),
+      "public.x.y.z",
+    );
+
+    expect(a.calls).toHaveLength(3);
+  });
+
+  test("residency drop: envelope outside allowlist is filtered", async () => {
+    const fake = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(fake.runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+    });
+    const a = recordingAdapter({
+      id: "dashboard",
+      subjects: [">"],
+      visibility: { hide_residency_outside: ["CH", "DE"] },
+    });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "federated", data_residency: "US", max_hop: 1,
+          frontier_ok: true, model_class: "any",
+        },
+      }),
+      "federated.metafactory.x.y.z",
+    );
+
+    expect(a.calls).toHaveLength(0);
+    // Yield so the fire-and-forget publish lands.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fake.published).toHaveLength(1);
+    expect(fake.published[0]?.type).toBe("system.access.filtered");
+    expect(fake.published[0]?.payload).toEqual({
+      renderer_id: "dashboard",
+      envelope_subject: "federated.metafactory.x.y.z",
+      reason: "residency_blocked",
+    });
+    expect(validateEnvelope(fake.published[0]!).ok).toBe(true);
+  });
+
+  test("residency pass: envelope inside allowlist is rendered", async () => {
+    const fake = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(fake.runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+    });
+    const a = recordingAdapter({
+      id: "dashboard",
+      subjects: [">"],
+      visibility: { hide_residency_outside: ["CH", "DE"] },
+    });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "federated", data_residency: "CH", max_hop: 1,
+          frontier_ok: true, model_class: "any",
+        },
+      }),
+      "federated.metafactory.x.y.z",
+    );
+
+    expect(a.calls).toHaveLength(1);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fake.published).toHaveLength(0);
+  });
+
+  test("model_class drop: envelope outside allowlist is filtered", async () => {
+    const fake = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(fake.runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+    });
+    const a = recordingAdapter({
+      id: "local-only-surface",
+      subjects: [">"],
+      visibility: { require_model_class: ["local-only", "any"] },
+    });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "local", data_residency: "NZ", max_hop: 0,
+          frontier_ok: true, model_class: "frontier",
+        },
+      }),
+      "local.metafactory.x.y.z",
+    );
+
+    expect(a.calls).toHaveLength(0);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fake.published).toHaveLength(1);
+    expect(fake.published[0]?.payload.reason).toBe("model_class_blocked");
+    expect(fake.published[0]?.payload.renderer_id).toBe("local-only-surface");
+  });
+
+  test("model_class pass: envelope in allowlist is rendered", async () => {
+    const fake = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(fake.runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+    });
+    const a = recordingAdapter({
+      id: "local-only-surface",
+      subjects: [">"],
+      visibility: { require_model_class: ["local-only", "any"] },
+    });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "local", data_residency: "NZ", max_hop: 0,
+          frontier_ok: true, model_class: "local-only",
+        },
+      }),
+      "local.metafactory.x.y.z",
+    );
+
+    expect(a.calls).toHaveLength(1);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fake.published).toHaveLength(0);
+  });
+
+  test("max_classification drop: federated envelope on local-only surface filtered", async () => {
+    const fake = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(fake.runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+    });
+    const a = recordingAdapter({
+      id: "operator-dashboard",
+      subjects: [">"],
+      visibility: { max_classification: "local" },
+    });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "federated", data_residency: "NZ", max_hop: 1,
+          frontier_ok: true, model_class: "any",
+        },
+      }),
+      "federated.metafactory.x.y.z",
+    );
+
+    expect(a.calls).toHaveLength(0);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fake.published).toHaveLength(1);
+    expect(fake.published[0]?.payload.reason).toBe("classification_exceeds_max");
+  });
+
+  test("max_classification pass: federated cap admits local + federated, blocks public", async () => {
+    const fake = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(fake.runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+    });
+    const a = recordingAdapter({
+      id: "federation-surface",
+      subjects: [">"],
+      visibility: { max_classification: "federated" },
+    });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "local", data_residency: "NZ", max_hop: 0,
+          frontier_ok: true, model_class: "any",
+        },
+      }),
+      "local.metafactory.x.y.z",
+    );
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "federated", data_residency: "NZ", max_hop: 1,
+          frontier_ok: true, model_class: "any",
+        },
+      }),
+      "federated.metafactory.x.y.z",
+    );
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "public", data_residency: "NZ", max_hop: 10,
+          frontier_ok: true, model_class: "any",
+        },
+      }),
+      "public.x.y.z",
+    );
+
+    expect(a.calls).toHaveLength(2);
+    await new Promise((r) => setTimeout(r, 0));
+    // Public envelope dropped → one access-filtered emit.
+    expect(fake.published).toHaveLength(1);
+    expect(fake.published[0]?.payload.reason).toBe("classification_exceeds_max");
+  });
+
+  test("combined visibility rules compose with AND semantics (pass)", async () => {
+    const fake = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(fake.runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+    });
+    const a = recordingAdapter({
+      id: "strict-dashboard",
+      subjects: [">"],
+      visibility: {
+        hide_residency_outside: ["CH", "DE"],
+        require_model_class: ["local-only", "any"],
+        max_classification: "federated",
+      },
+    });
+    router.register(a.adapter);
+
+    // Satisfies every rule.
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "federated", data_residency: "CH", max_hop: 1,
+          frontier_ok: false, model_class: "local-only",
+        },
+      }),
+      "federated.metafactory.x.y.z",
+    );
+
+    expect(a.calls).toHaveLength(1);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fake.published).toHaveLength(0);
+  });
+
+  test("combined visibility rules compose with AND semantics (each rule drops in isolation)", async () => {
+    const fake = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(fake.runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+    });
+    const a = recordingAdapter({
+      id: "strict-dashboard",
+      subjects: [">"],
+      visibility: {
+        hide_residency_outside: ["CH", "DE"],
+        require_model_class: ["local-only", "any"],
+        max_classification: "federated",
+      },
+    });
+    router.register(a.adapter);
+
+    // 1. Residency violation
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "federated", data_residency: "US", max_hop: 1,
+          frontier_ok: false, model_class: "local-only",
+        },
+      }),
+      "federated.metafactory.a.b.c",
+    );
+    // 2. Model-class violation
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "federated", data_residency: "CH", max_hop: 1,
+          frontier_ok: true, model_class: "frontier",
+        },
+      }),
+      "federated.metafactory.d.e.f",
+    );
+    // 3. Classification violation
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "public", data_residency: "CH", max_hop: 10,
+          frontier_ok: false, model_class: "local-only",
+        },
+      }),
+      "public.g.h.i",
+    );
+
+    expect(a.calls).toHaveLength(0);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fake.published).toHaveLength(3);
+    expect(fake.published.map((e) => e.payload.reason)).toEqual([
+      "residency_blocked",
+      "model_class_blocked",
+      "classification_exceeds_max",
+    ]);
+  });
+
+  test("subject non-match → no access-filtered emit (silent)", async () => {
+    // Visibility-drop emits an audit signal; subject non-match should not
+    // — the adapter never subscribed to the topic in the first place.
+    const fake = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(fake.runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+    });
+    const a = recordingAdapter({
+      id: "dashboard",
+      subjects: ["local.metafactory.review.>"],
+      // Visibility set, but irrelevant since subject won't match.
+      visibility: { max_classification: "local" },
+    });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "public", data_residency: "NZ", max_hop: 10,
+          frontier_ok: true, model_class: "any",
+        },
+      }),
+      "public.something.else",
+    );
+
+    expect(a.calls).toHaveLength(0);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fake.published).toHaveLength(0);
+  });
+
+  test("payload filter blocks before visibility → no access-filtered emit (silent)", async () => {
+    // The router evaluates payload filter BEFORE visibility; a payload
+    // miss is treated as "not subscribed to this content" — silent. Pins
+    // the layering decision so reordering would surface as a failing test.
+    const fake = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(fake.runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+    });
+    const a = recordingAdapter({
+      id: "dashboard",
+      subjects: [">"],
+      filter: { payload: { repo: ["myelin"] } }, // won't match
+      visibility: { max_classification: "local" }, // would block too
+    });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeEnvelope({
+        payload: { repo: "grove" },
+        sovereignty: {
+          classification: "public", data_residency: "NZ", max_hop: 10,
+          frontier_ok: true, model_class: "any",
+        },
+      }),
+      "public.x.y.z",
+    );
+
+    expect(a.calls).toHaveLength(0);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fake.published).toHaveLength(0);
+  });
+
+  test("multiple adapters: visibility filters per adapter independently", async () => {
+    const fake = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(fake.runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+    });
+    const strict = recordingAdapter({
+      id: "strict",
+      subjects: [">"],
+      visibility: { max_classification: "local" },
+    });
+    const permissive = recordingAdapter({
+      id: "permissive",
+      subjects: [">"],
+      // no visibility — accepts everything
+    });
+    router.register(strict.adapter);
+    router.register(permissive.adapter);
+
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "federated", data_residency: "NZ", max_hop: 1,
+          frontier_ok: true, model_class: "any",
+        },
+      }),
+      "federated.metafactory.x.y.z",
+    );
+
+    expect(strict.calls).toHaveLength(0);
+    expect(permissive.calls).toHaveLength(1);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fake.published).toHaveLength(1);
+    expect(fake.published[0]?.payload.renderer_id).toBe("strict");
+  });
+
+  test("router without systemEventSource: visibility still drops, no emit", async () => {
+    // Pre-MIG-7.2 callers (and unit tests) may construct the router
+    // without a SystemEventSource. Visibility filtering MUST still work
+    // — but the emit is skipped (logged only) because we can't build a
+    // schema-valid envelope without `source`.
+    const fake = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(fake.runtime); // no systemEventSource
+    const a = recordingAdapter({
+      id: "dashboard",
+      subjects: [">"],
+      visibility: { max_classification: "local" },
+    });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeEnvelope({
+        sovereignty: {
+          classification: "public", data_residency: "NZ", max_hop: 10,
+          frontier_ok: true, model_class: "any",
+        },
+      }),
+      "public.x.y.z",
+    );
+
+    expect(a.calls).toHaveLength(0);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fake.published).toHaveLength(0); // no emit (no source)
   });
 });

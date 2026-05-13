@@ -32,6 +32,12 @@
  * optional `onAdapterError` hook and never thrown out of `dispatch()`.
  */
 
+import type { RendererVisibility } from "../common/types/cortex-config";
+import {
+  createSystemAccessFilteredEvent,
+  type SystemAccessFilteredReason,
+  type SystemEventSource,
+} from "./system-events";
 import type { Envelope } from "./myelin/envelope-validator";
 import type { MyelinRuntime } from "./myelin/runtime";
 import { matchesFilter, type PayloadFilter } from "./payload-filter";
@@ -53,6 +59,19 @@ export interface SurfaceAdapter {
   subjects: string[];
   /** Optional client-side filter applied AFTER subject match. */
   filter?: PayloadFilter;
+  /**
+   * IAW Phase A.4 — optional visibility constraints. When set, the router
+   * evaluates the envelope's `sovereignty` against each active rule
+   * (residency / model_class / max_classification) BEFORE invoking
+   * `render()`. Drops emit a `system.access.filtered` envelope so operators
+   * can observe access decisions.
+   *
+   * Unset (the v1 default) means "no visibility filter" — the adapter
+   * receives every envelope that passes subject + payload filters, matching
+   * pre-A.4 behaviour exactly. See {@link RendererVisibility} for rule
+   * semantics.
+   */
+  visibility?: RendererVisibility;
   /**
    * Adapter-specific rendering. Bounded by router's renderTimeoutMs.
    *
@@ -79,6 +98,17 @@ export interface SurfaceRouterOptions {
    *  hook are swallowed (with a console.error) so a buggy hook can't
    *  poison the dispatch loop. */
   onAdapterError?(adapterId: string, err: Error): void;
+  /**
+   * IAW Phase A.4 — source struct used when emitting
+   * `system.access.filtered` envelopes on visibility-drop. When omitted,
+   * visibility filtering still runs (drops are honoured + logged) but no
+   * envelope is emitted — useful in unit tests and pre-MIG-7.2 startup
+   * paths where `SystemEventSource` isn't constructed yet. Production
+   * callers (cortex.ts) SHOULD pass the same struct used by the rest of
+   * the `system.*` emit sites so the access-decision stream stamps the
+   * correct operator/agent/instance segments.
+   */
+  systemEventSource?: SystemEventSource;
 }
 
 export interface SurfaceRouter {
@@ -180,6 +210,7 @@ export function createSurfaceRouter(
   const adapters: SurfaceAdapter[] = [];
   const renderTimeoutMs = opts?.renderTimeoutMs ?? DEFAULT_RENDER_TIMEOUT_MS;
   const onAdapterError = opts?.onAdapterError;
+  const systemEventSource = opts?.systemEventSource;
 
   let started = false;
   let stopped = false;
@@ -226,7 +257,32 @@ export function createSurfaceRouter(
       if (stopped) return;
 
       const effectiveSubject = subject ?? envelope.type;
-      const matched = adapters.filter((a) => adapterMatches(a, envelope, effectiveSubject));
+
+      // Two-pass match so we can distinguish "didn't subscribe" from
+      // "subscribed but visibility blocked". Visibility-drops emit a
+      // `system.access.filtered` envelope; subject/payload non-matches are
+      // silent (the adapter simply isn't interested).
+      const matched: SurfaceAdapter[] = [];
+      for (const adapter of adapters) {
+        const result = adapterMatches(adapter, envelope, effectiveSubject);
+        if (result.matched) {
+          matched.push(adapter);
+          continue;
+        }
+        if (result.visibilityDropReason !== undefined) {
+          // IAW Phase A.4 — visibility-drop emits an observable signal. Best
+          // effort: runtime.publish is fire-and-forget and may be a no-op
+          // when NATS is not configured. Errors are swallowed inside the
+          // runtime, so this floating Promise resolves cleanly.
+          emitAccessFiltered(
+            runtime,
+            systemEventSource,
+            adapter.id,
+            effectiveSubject,
+            result.visibilityDropReason,
+          );
+        }
+      }
       if (matched.length === 0) return;
 
       const settled = await Promise.allSettled(
@@ -256,7 +312,30 @@ export function createSurfaceRouter(
 // Internal helpers
 // =============================================================================
 
-function adapterMatches(adapter: SurfaceAdapter, envelope: Envelope, subject: string): boolean {
+/**
+ * Result of evaluating one adapter against one envelope.
+ *
+ * `matched: true` → the adapter receives the envelope.
+ * `matched: false, visibilityDropReason: <reason>` → adapter's subject + payload
+ *   matched, but visibility blocked. Router emits `system.access.filtered`.
+ * `matched: false, visibilityDropReason: undefined` → silent non-match
+ *   (subject didn't match, or payload filter blocked). No observable signal.
+ *
+ * The distinction matters for the cortex#97 error-surfacing pattern: a
+ * non-subscriber shouldn't pollute the access-decision stream with "didn't
+ * match my subject" noise, but a subscriber whose visibility config blocked
+ * the envelope IS exactly the audit-relevant signal.
+ */
+interface AdapterMatchResult {
+  matched: boolean;
+  visibilityDropReason?: SystemAccessFilteredReason;
+}
+
+function adapterMatches(
+  adapter: SurfaceAdapter,
+  envelope: Envelope,
+  subject: string,
+): AdapterMatchResult {
   // Subject-pattern union: any matching pattern proceeds to the filter.
   let subjectHit = false;
   for (const pattern of adapter.subjects) {
@@ -265,8 +344,141 @@ function adapterMatches(adapter: SurfaceAdapter, envelope: Envelope, subject: st
       break;
     }
   }
-  if (!subjectHit) return false;
-  return matchesFilter(envelope, adapter.filter);
+  if (!subjectHit) return { matched: false };
+  if (!matchesFilter(envelope, adapter.filter)) return { matched: false };
+
+  // IAW Phase A.4 — visibility filter applies AFTER subject + payload.
+  // Skipped entirely when the adapter has no `visibility:` block (the v1
+  // default), preserving the pre-A.4 behaviour for every existing renderer.
+  const dropReason = evaluateVisibility(adapter.visibility, envelope);
+  if (dropReason !== undefined) {
+    return { matched: false, visibilityDropReason: dropReason };
+  }
+  return { matched: true };
+}
+
+// =============================================================================
+// IAW Phase A.4 — visibility evaluation
+// =============================================================================
+
+/**
+ * Ordering of `sovereignty.classification` for the `max_classification`
+ * cap rule. Mirrors myelin's reach taxonomy: `local < federated < public`.
+ * An envelope's classification is "exceeds max" when its rank is strictly
+ * greater than the cap's rank.
+ *
+ * Module-level constant (vs in-function literal) so the table is a single
+ * source of truth; future schema-side changes ripple through here.
+ */
+const CLASSIFICATION_RANK: Record<Envelope["sovereignty"]["classification"], number> = {
+  local: 0,
+  federated: 1,
+  public: 2,
+};
+
+/**
+ * Pure evaluator: returns the first violated rule, or `undefined` when the
+ * envelope passes (or when no visibility constraints are configured). Rules
+ * compose with AND semantics — every set rule must pass.
+ *
+ * Exported so tests can probe each rule in isolation without setting up a
+ * full router + adapter harness.
+ *
+ * IAW Phase A.4 design choice: an envelope whose sovereignty field is
+ * `undefined` (impossible per schema today, but defensive in case future
+ * fields become optional) is treated as unconstrained — we cannot prove a
+ * violation, so we don't drop. The schema's required-field validation runs
+ * BEFORE the envelope reaches the router (envelope-validator.ts), so this
+ * branch is mostly a future-proofing guard.
+ */
+export function evaluateVisibility(
+  visibility: RendererVisibility | undefined,
+  envelope: Envelope,
+): SystemAccessFilteredReason | undefined {
+  if (!visibility) return undefined;
+
+  // Rule 1: residency allowlist. Only evaluated when both the rule is set
+  // AND the envelope carries a residency value to compare.
+  if (visibility.hide_residency_outside !== undefined) {
+    const residency = envelope.sovereignty?.data_residency;
+    if (residency !== undefined && !visibility.hide_residency_outside.includes(residency)) {
+      return "residency_blocked";
+    }
+  }
+
+  // Rule 2: model-class allowlist. Same presence semantics as residency.
+  if (visibility.require_model_class !== undefined) {
+    const modelClass = envelope.sovereignty?.model_class;
+    if (modelClass !== undefined && !visibility.require_model_class.includes(modelClass)) {
+      return "model_class_blocked";
+    }
+  }
+
+  // Rule 3: classification cap. The classification field is required by the
+  // schema; if absent we cannot evaluate the cap and treat it as passing.
+  if (visibility.max_classification !== undefined) {
+    const classification = envelope.sovereignty?.classification;
+    if (classification !== undefined) {
+      const capRank = CLASSIFICATION_RANK[visibility.max_classification];
+      const envRank = CLASSIFICATION_RANK[classification];
+      if (envRank > capRank) {
+        return "classification_exceeds_max";
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Emit a `system.access.filtered` envelope on the runtime. Best-effort:
+ * runtime.publish swallows transport errors internally + is a no-op when
+ * NATS is not configured, so a missing emit doesn't poison the dispatch
+ * loop.
+ *
+ * When `systemEventSource` is undefined (the test-only path), the function
+ * is a no-op — we cannot construct a schema-valid envelope without the
+ * `source` segments. Operators wiring the router in production (cortex.ts)
+ * MUST pass the source struct; tests that don't care about the side-effect
+ * leave it unset.
+ */
+function emitAccessFiltered(
+  runtime: MyelinRuntime,
+  source: SystemEventSource | undefined,
+  rendererId: string,
+  envelopeSubject: string,
+  reason: SystemAccessFilteredReason,
+): void {
+  if (!source) {
+    // No source struct configured — log so an operator triaging silence
+    // gets a hint, but don't try to construct a half-formed envelope.
+    console.info(
+      `surface-router: visibility drop renderer="${rendererId}" subject="${envelopeSubject}" reason=${reason} ` +
+        `(no systemEventSource configured — system.access.filtered envelope NOT emitted)`,
+    );
+    return;
+  }
+  try {
+    const env = createSystemAccessFilteredEvent({
+      source,
+      rendererId,
+      envelopeSubject,
+      reason,
+    });
+    // Fire-and-forget: runtime.publish is async but its contract is that it
+    // never throws (errors are logged + swallowed internally). The floating
+    // Promise resolves cleanly when the next event-loop tick runs.
+    void runtime.publish(env);
+  } catch (err) {
+    // Defensive: createSystemAccessFilteredEvent shouldn't throw on
+    // schema-valid inputs, but a future change could surface a synchronous
+    // failure here. Swallow + log so a buggy emit-helper doesn't poison the
+    // dispatch loop.
+    console.error(
+      `surface-router: failed to emit system.access.filtered for renderer="${rendererId}":`,
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
 
 /**

@@ -15,6 +15,7 @@ import { describe, expect, test } from "bun:test";
 import { validateEnvelope } from "../myelin/envelope-validator";
 import {
   adapterCorrelationKey,
+  createSystemAccessFilteredEvent,
   createSystemAdapterDegradedEvent,
   createSystemAdapterDisconnectedEvent,
   createSystemAdapterRecoveredEvent,
@@ -412,5 +413,102 @@ describe("classification parameterisation (IAW A.3)", () => {
       expect(env.sovereignty.classification).toBe("public");
       expect(validateEnvelope(env).ok).toBe(true);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// IAW Phase A.4 — system.access.filtered
+// ---------------------------------------------------------------------------
+
+describe("createSystemAccessFilteredEvent", () => {
+  test("required fields populated; envelope passes schema validation", () => {
+    const env = createSystemAccessFilteredEvent({
+      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      rendererId: "dashboard",
+      envelopeSubject: "federated.metafactory.review.cycle.completed",
+      reason: "residency_blocked",
+    });
+    expect(env.type).toBe("system.access.filtered");
+    expect(env.source).toBe("metafactory.cortex.local");
+    expect(env.payload).toEqual({
+      renderer_id: "dashboard",
+      envelope_subject: "federated.metafactory.review.cycle.completed",
+      reason: "residency_blocked",
+    });
+    // No correlation_id by default — access decisions are independent events.
+    expect(env.correlation_id).toBeUndefined();
+    // Sovereignty defaults match the rest of system.* — operator-only, local.
+    expect(env.sovereignty).toEqual({
+      classification: "local",
+      data_residency: "NZ",
+      max_hop: 0,
+      frontier_ok: false,
+      model_class: "local-only",
+    });
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("all reason enum values produce schema-valid envelopes", () => {
+    const reasons = [
+      "residency_blocked",
+      "model_class_blocked",
+      "classification_exceeds_max",
+    ] as const;
+    for (const reason of reasons) {
+      const env = createSystemAccessFilteredEvent({
+        source: { org: "metafactory", agent: "cortex", instance: "local" },
+        rendererId: "dashboard",
+        envelopeSubject: "local.metafactory.x.y.z",
+        reason,
+      });
+      expect(env.payload.reason).toBe(reason);
+      expect(validateEnvelope(env).ok).toBe(true);
+    }
+  });
+
+  test("source.dataResidency overrides the default residency stamp", () => {
+    const env = createSystemAccessFilteredEvent({
+      source: {
+        org: "metafactory",
+        agent: "cortex",
+        instance: "local",
+        dataResidency: "DE",
+      },
+      rendererId: "pagerduty",
+      envelopeSubject: "public.review.cycle.completed",
+      reason: "classification_exceeds_max",
+    });
+    expect(env.sovereignty.data_residency).toBe("DE");
+  });
+
+  test("explicit classification override propagates to sovereignty", () => {
+    // Mirrors the Phase A.3 pattern on the other system.* helpers — an
+    // operator may opt the access-decision stream into federated reach so
+    // peer dashboards can observe drops too.
+    const env = createSystemAccessFilteredEvent({
+      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      rendererId: "dashboard",
+      envelopeSubject: "federated.metafactory.foo.bar.baz",
+      reason: "model_class_blocked",
+      classification: "federated",
+    });
+    expect(env.sovereignty.classification).toBe("federated");
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("each invocation returns a fresh UUID id", () => {
+    const a = createSystemAccessFilteredEvent({
+      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      rendererId: "dashboard",
+      envelopeSubject: "x.y.z",
+      reason: "residency_blocked",
+    });
+    const b = createSystemAccessFilteredEvent({
+      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      rendererId: "dashboard",
+      envelopeSubject: "x.y.z",
+      reason: "residency_blocked",
+    });
+    expect(a.id).not.toBe(b.id);
   });
 });

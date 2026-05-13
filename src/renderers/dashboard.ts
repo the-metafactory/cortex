@@ -45,6 +45,7 @@ export class DashboardRenderer implements Renderer {
 
   private readonly bufferSize: number;
   private buffer: Envelope[] = [];
+  private readonly visibility: DashboardRendererConfig["visibility"];
 
   constructor(config: DashboardRendererConfig, options: DashboardRendererOptions = {}) {
     // Single dashboard per cortex deployment; the bare kind is a stable
@@ -52,6 +53,10 @@ export class DashboardRenderer implements Renderer {
     this.id = "dashboard";
     this.subjects = config.subscribe;
     this.bufferSize = options.bufferSize ?? 1000;
+    // IAW Phase A.4 — capture the optional visibility block. Forwarded to
+    // the surface-router via `surfaceConfig` so router-side filtering
+    // honours operator-declared constraints. Unset means "no filter".
+    this.visibility = config.visibility;
   }
 
   async start(): Promise<void> {
@@ -71,6 +76,12 @@ export class DashboardRenderer implements Renderer {
     return {
       id: this.id,
       subjects: this.subjects,
+      // IAW Phase A.4 — only set the visibility field when the operator
+      // declared one. Leaving it `undefined` on the adapter means the
+      // router's evaluateVisibility short-circuits to "no constraint",
+      // matching pre-A.4 behaviour exactly. Spreading conditionally keeps
+      // the SurfaceAdapter literal clean.
+      ...(this.visibility !== undefined && { visibility: this.visibility }),
       render: (envelope, signal) => this.render(envelope, signal),
     };
   }

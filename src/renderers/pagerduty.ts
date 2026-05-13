@@ -62,6 +62,7 @@ export class PagerDutyRenderer implements Renderer {
   private readonly endpoint: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly visibility: PagerDutyRendererConfig["visibility"];
 
   constructor(config: PagerDutyRendererConfig, options: PagerDutyRendererOptions = {}) {
     // The surface-router uses `id` as the metrics key and error-reporting
@@ -75,6 +76,9 @@ export class PagerDutyRenderer implements Renderer {
     this.endpoint = options.endpoint ?? EVENTS_V2_URL;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 5_000;
+    // IAW Phase A.4 — capture the optional visibility block. See
+    // DashboardRenderer for the rationale; same plumbing applies here.
+    this.visibility = config.visibility;
   }
 
   async start(): Promise<void> {
@@ -92,6 +96,10 @@ export class PagerDutyRenderer implements Renderer {
     return {
       id: this.id,
       subjects: this.subjects,
+      // IAW Phase A.4 — conditional spread so undeclared visibility leaves
+      // the field absent on the adapter (matches pre-A.4 behaviour). See
+      // DashboardRenderer.surfaceConfig for the full rationale.
+      ...(this.visibility !== undefined && { visibility: this.visibility }),
       render: (envelope, signal) => this.render(envelope, signal),
     };
   }

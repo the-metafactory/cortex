@@ -351,6 +351,81 @@ export const RendererKindSchema = z.enum([
 
 export type RendererKind = z.infer<typeof RendererKindSchema>;
 
+// ---------------------------------------------------------------------------
+// Renderer visibility — IAW Phase A.4 (cortex#113, cortex#109 §B)
+// ---------------------------------------------------------------------------
+
+/**
+ * IAW Phase A.4 — per-renderer visibility constraints applied by the
+ * surface-router BEFORE invoking `adapter.render(envelope)`. Mirrors the
+ * three sovereignty axes myelin's envelope schema carries
+ * (`sovereignty.classification`, `sovereignty.data_residency`,
+ * `sovereignty.model_class`).
+ *
+ * **All fields are optional.** An unset field means "no constraint on this
+ * axis" — the renderer accepts any value the envelope happens to carry. This
+ * keeps the schema additive: renderers without a `visibility:` block behave
+ * exactly as they did pre-A.4 (no filtering).
+ *
+ * Rules (only applied when the corresponding field is set):
+ *   - `hide_residency_outside: [iso, ...]`
+ *       Drop the envelope when `envelope.sovereignty.data_residency` is
+ *       defined AND not in the list. Envelopes with no `data_residency`
+ *       (always present per schema today) are not dropped — the schema
+ *       requires the field, so this is mostly defensive.
+ *   - `require_model_class: [class, ...]`
+ *       Drop when `envelope.sovereignty.model_class` is defined AND not in
+ *       the list.
+ *   - `max_classification: <tier>`
+ *       Cap the maximum classification this surface renders. Ordering is
+ *       `local < federated < public` per myelin's reach taxonomy:
+ *         - `"local"`     → only `local.*` envelopes render
+ *         - `"federated"` → `local.*` + `federated.*` render; `public.*` drops
+ *         - `"public"`    → all classifications render (no cap)
+ *       If unset, no cap is applied (equivalent to `"public"`).
+ *
+ * Composition: when multiple fields are set, they compose with AND semantics
+ * — the envelope must satisfy every active constraint to render.
+ *
+ * Drop side-effect: the surface-router emits a `system.access.filtered`
+ * envelope per drop (carrying `renderer_id`, `envelope_subject`, `reason`)
+ * so operators can subscribe to access-decision events for audit/debug.
+ *
+ * Cortex#109 §B references this as the consumer of myelin's existing
+ * sovereignty taxonomy — the schema lifts the values directly, no new enum.
+ */
+export const RendererVisibilitySchema = z.object({
+  /**
+   * ISO-3166-1 alpha-2 country codes the surface accepts. When set,
+   * envelopes carrying a `sovereignty.data_residency` outside this list are
+   * dropped before render. Format-enforced so a typo at config time fails
+   * fast rather than silently dropping every envelope.
+   */
+  hide_residency_outside: z.array(
+    z.string().regex(
+      /^[A-Z]{2}$/,
+      "residency entries must be 2-letter ISO-3166-1 alpha-2 country codes",
+    ),
+  ).optional(),
+  /**
+   * Model-class allowlist. When set, envelopes whose
+   * `sovereignty.model_class` is outside this list are dropped. Values match
+   * myelin's `model_class` enum verbatim (`local-only` / `frontier` / `any`)
+   * so a typo fails at config load.
+   */
+  require_model_class: z.array(
+    z.enum(["local-only", "frontier", "any"]),
+  ).optional(),
+  /**
+   * Maximum classification tier this surface will render. Caps reach using
+   * myelin's three-tier ordering (`local < federated < public`). Unset =
+   * no cap.
+   */
+  max_classification: z.enum(["local", "federated", "public"]).optional(),
+});
+
+export type RendererVisibility = z.infer<typeof RendererVisibilitySchema>;
+
 /**
  * Dashboard renderer — the Mission Control v3 surface. Subscribes to a slice
  * of the bus and projects into Kanban/inbox/status-banner views. Per
@@ -371,6 +446,12 @@ export const DashboardRendererSchema = z.object({
     into: z.string().min(1),
     column: z.string().optional(),
   })).default([]),
+  /**
+   * IAW Phase A.4 — optional visibility guardrails (cortex#113 §A.4,
+   * cortex#109 §B). Unset = no filtering applied; preserves pre-A.4 behaviour.
+   * See {@link RendererVisibilitySchema} for the rule semantics.
+   */
+  visibility: RendererVisibilitySchema.optional(),
 });
 
 export type DashboardRendererConfig = z.infer<typeof DashboardRendererSchema>;
@@ -386,6 +467,11 @@ export const PagerDutyRendererSchema = z.object({
   routingKey: z.string().min(1),
   /** Subject patterns to subscribe to. Operator chooses what counts as page-worthy. */
   subscribe: z.array(z.string().min(1)).default([]),
+  /**
+   * IAW Phase A.4 — optional visibility guardrails. See
+   * {@link RendererVisibilitySchema}.
+   */
+  visibility: RendererVisibilitySchema.optional(),
 });
 
 export type PagerDutyRendererConfig = z.infer<typeof PagerDutyRendererSchema>;
@@ -397,6 +483,11 @@ export type PagerDutyRendererConfig = z.infer<typeof PagerDutyRendererSchema>;
 export const CliTailRendererSchema = z.object({
   kind: z.literal("cli-tail"),
   subscribe: z.array(z.string().min(1)).default(["local.{org}.>"]),
+  /**
+   * IAW Phase A.4 — optional visibility guardrails. See
+   * {@link RendererVisibilitySchema}.
+   */
+  visibility: RendererVisibilitySchema.optional(),
 });
 
 export type CliTailRendererConfig = z.infer<typeof CliTailRendererSchema>;
@@ -411,6 +502,11 @@ export const WebhookOutRendererSchema = z.object({
   subscribe: z.array(z.string().min(1)).default([]),
   /** Optional auth header (e.g. `Bearer <token>`). */
   authHeader: z.string().optional(),
+  /**
+   * IAW Phase A.4 — optional visibility guardrails. See
+   * {@link RendererVisibilitySchema}.
+   */
+  visibility: RendererVisibilitySchema.optional(),
 });
 
 export type WebhookOutRendererConfig = z.infer<typeof WebhookOutRendererSchema>;
