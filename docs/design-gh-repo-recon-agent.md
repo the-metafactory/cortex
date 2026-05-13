@@ -15,36 +15,37 @@
 
 Land the first **deterministic-class agent** on cortex's bus, packaged as a **PAI skill** with a **slash-command** wrapper. Validate the agent class itself, prove the trust boundary (sealed execution, no LLM in the loop, no judgment), and absorb the highest-frequency recurring read pattern in observed PAI usage (multi-call GitHub repo recon before any non-trivial work).
 
-Land in two repos, one canonical entry point exercised by three surfaces:
+Land in two repos. One **skill** is the load-bearing artefact; the slash command is the operator surface, and the bus path invokes the same skill directly without LLM rendering.
 
-**Repo 1 — `the-metafactory/arc-skill-recon`** (new repo, matches `arc-skill-code-review` shape exactly).
-Contains:
+**Repo 1 — `the-metafactory/arc-skill-recon`** (new repo).
 
-| Path | Purpose |
-|---|---|
-| `arc-manifest.yaml` | `schema: arc/v1`, `type: skill`, name + triggers + bash capabilities |
-| `skill/SKILL.md` | PAI skill metadata + workflow routing table |
-| `skill/Workflows/RepoRecon.md` | MVP workflow — "what's in flight" for a repo |
-| `skill/scripts/recon.ts` | Sealed deterministic implementation (TypeScript via Bun) |
-| `prompt/recon.md` | Slash command. Parses `--parameters` to route to a workflow. |
-| `CLAUDE.md`, `README.md`, `package.json`, `.gitignore` | Standard repo files matching arc-skill-code-review |
+Matches the **repo shape** of `arc-skill-code-review` (manifest + skill + prompt directories, same arc-install behavior). Extends it with a `skill/scripts/` directory — a **new convention this design introduces for deterministic-class skills**. The existing `arc-skill-code-review` precedent is LLM-driven workflow markdown (lens files + workflow files) with no executable scripts; deterministic-class skills add scripts as the sealed contract.
+
+| Path | Purpose | Precedent match? |
+|---|---|---|
+| `arc-manifest.yaml` | `schema: arc/v1`, `type: skill`, name + triggers + bash capabilities | ✓ same as code-review |
+| `skill/SKILL.md` | PAI skill metadata + workflow routing table | ✓ same as code-review |
+| `skill/Workflows/RepoRecon.md` | MVP workflow — "what's in flight" for a repo | ✓ same shape as code-review's `Workflows/FullReview.md` |
+| `skill/scripts/recon.ts` | Sealed deterministic implementation (TypeScript via Bun) | **NEW pattern for deterministic-class skills** |
+| `prompt/recon.md` | Slash command. Parses `--parameters` to route to a workflow. | ✓ same as code-review's `prompt/review-pr.md` |
+| `CLAUDE.md`, `README.md`, `package.json`, `.gitignore` | Standard repo files | ✓ |
 
 Arc-install drops the skill into `~/.claude/skills/Recon/` and the slash command into `~/.claude/commands/recon.md`. Same pattern as `arc install github:the-metafactory/arc-skill-code-review`.
 
 **Repo 2 — `the-metafactory/cortex`** (this PR is the design step there).
-Contains the deterministic-agent class itself: new `HarnessId` value, the `DeterministicAgentHarness` implementation, `AgentRuntimeSchema` delta, fragment example. Cortex never imports skill code; it invokes the slash command as a black box.
+Contains the deterministic-agent class itself: new `HarnessId` value, the `DeterministicAgentHarness` implementation, `AgentRuntimeSchema` delta, `invokeSkill` resolver, fragment example. Cortex imports nothing from the skill — it resolves the skill name to its `~/.claude/skills/<name>/scripts/<workflow>.ts` script and spawns it via `Bun.spawn`.
 
-**Three invocation surfaces, one workflow:**
+**Three invocation surfaces, one script, two resolution paths:**
 
-| Surface | Entry | Who/when |
-|---|---|---|
-| **Operator** | `/recon the-metafactory/cortex` from any CC session | Andreas (or anyone with the skill installed) |
-| **Judgment agent (inline)** | `Skill("Recon", ...)` or Bash-shells `/recon ...` mid-loop | Luna deciding what to work on next |
-| **Deterministic agent (bus)** | `dispatch.recon.<id>` envelope to `gh-repo-recon-agent` on the cortex bus | Any judgment agent, the dashboard, a future cron, etc. |
+| Surface | Entry | Resolution path | Output |
+|---|---|---|---|
+| **Operator** | `/recon the-metafactory/cortex` from any CC session | LLM-driven: model parses `--parameters` from `$ARGUMENTS`, invokes `Skill("Recon", "RepoRecon", ...)`, renders verdict as operator-readable summary | Rendered Markdown |
+| **Judgment agent (inline)** | `Skill("Recon", "RepoRecon", ...)` from within a model's tool-use loop | LLM in the calling agent, but the skill's script execution is deterministic | Raw verdict, optionally LLM-rendered downstream |
+| **Deterministic agent (bus)** | `dispatch.recon.<id>` envelope to `gh-repo-recon-agent` | **Direct**: harness calls `invokeSkill(skill, workflow, input)` → spawns the script. No LLM in the loop. | Raw verdict envelope on `recon.<id>.complete` |
 
-Same workflow files (`skill/Workflows/RepoRecon.md`) and same script (`skill/scripts/recon.ts`) back all three. The slash command's `--parameters` and the bus dispatch's `recon-input` context map onto the same parameter set; the script's behavior does not depend on which surface invoked it.
+Same script (`skill/scripts/recon.ts`) backs all three. The slash command's `--parameters` parsing happens in LLM-prose (the slash command body), so the bus path **deliberately bypasses the slash command file** and goes straight to the skill+workflow resolver. The "one canonical entry point" intent is preserved at the **script** layer, not the slash-command layer.
 
-The design pattern mirrors `arc-skill-code-review`: `/review-pr` parses `--sweep | --standard | --security | --full` to route between `Workflows/FullReview.md`, `Workflows/SweepReview.md`, `Workflows/StandardReview.md`, `Workflows/SecurityReview.md`. For Recon, MVP ships only `RepoRecon`; future `--branches`, `--prs`, `--sweep` parameters can route to additional workflows without changing any caller.
+The design pattern follows `arc-skill-code-review` for the workflow-routing precedent (`/review-pr --sweep | --standard | --security | --full` → `Workflows/FullReview.md | SweepReview.md | StandardReview.md | SecurityReview.md`). For Recon, MVP ships only `RepoRecon`; future `--branches`, `--prs`, `--sweep` parameters can route to additional workflows without changing any caller.
 
 ### Non-goals
 
@@ -371,45 +372,55 @@ agents:
       substrate: deterministic-agent           # NEW AgentRuntimeSchema.substrate value
       mode: in-process                         # required by current schema
       harness: deterministic-agent             # NEW HarnessId value (informational)
-      command: recon                           # slash-command name (resolves to ~/.claude/commands/recon.md)
+      skill: Recon                             # PAI skill name; resolves to ~/.claude/skills/Recon/
       workflow: RepoRecon                      # optional — defaults to skill's default workflow
       timeout_ms: 10000
       retry:
         max_attempts: 2
         backoff: linear-2s
-    capabilities:
-      - github-read
-      - identity-aware-read
-    task_subjects:
-      - dispatch.recon.>
-    publish_subjects:
-      - recon.>
-    secrets:
-      - GH_TOKEN                               # MVP reuses existing env var; see §12 R2 for the eventual GH_TOKEN_READONLY follow-up
+      capabilities:                            # NEW — schema addition (see §7 delta)
+        - github-read
+        - identity-aware-read
+      task_subjects:                           # NEW — schema addition (see §7 delta)
+        - dispatch.recon.>
+      publish_subjects:                        # NEW — schema addition (see §7 delta)
+        - recon.>
+      secrets:                                 # NEW — schema addition (see §7 delta)
+        - GH_TOKEN                             # MVP reuses existing env var; see §12 R2 for the eventual GH_TOKEN_READONLY follow-up
 ```
 
-The `command` field names the slash command this agent invokes — exactly the same `/recon` an operator would type in a CC session. Cortex never imports skill code; it dispatches to the installed slash command as a black box. If the operator wants to run the recon manually, `/recon owner/repo` produces the same verdict shape as the bus dispatch — same workflow, same script, different surface.
+The `skill` field names the PAI skill this agent invokes. Cortex resolves it to `~/.claude/skills/<skill>/`, reads the SKILL.md routing table to find the workflow's script, and spawns the script via `Bun.spawn`. Cortex never reads the slash-command file `prompt/recon.md` — that's operator-facing LLM-prose, not machine-routable. An operator running `/recon owner/repo` ends up invoking the same `skill/scripts/recon.ts` via the LLM-driven slash-command path; the bus path skips the LLM and goes direct.
 
-### Schema delta — TWO parallel enums + one shape change
+### Schema delta — TWO parallel enums + persona shape + four runtime fields
 
 Cortex currently has two substrate enums living in different files. They are not unified today; this design touches both and acknowledges the unification work as out of scope for this PR.
 
-**1. `AgentRuntimeSchema.substrate` (operator-facing, `src/common/types/cortex-config.ts`).** Today a flat `z.enum(["claude-code", "codex", "pi-dev", "cursor", "custom"])` after cortex#124 merge. Gains `"deterministic-agent"` as a sixth value. The schema is NOT a discriminated union today; this design does not propose restructuring it. Instead, `command`, `workflow`, and `retry` land as **optional top-level fields on `AgentRuntimeSchema`**, gated by a `.refine()` that requires `command` when `substrate === "deterministic-agent"` and rejects it otherwise. No breaking change to existing claude-code / codex / pi-dev / cursor / custom configs. Precedent for adding a substrate enum value is cortex#124 itself — one-line enum change plus design doc.
+**1. `AgentRuntimeSchema.substrate` (operator-facing, `src/common/types/cortex-config.ts`).** Today a flat `z.enum(["claude-code", "codex", "pi-dev", "cursor", "custom"])` after cortex#124 merge. Gains `"deterministic-agent"` as a sixth value. The schema is NOT a discriminated union today; this design does not propose restructuring it. Instead, the new fields land as **optional top-level fields on `AgentRuntimeSchema`**, gated by a `.refine()` that requires `skill` when `substrate === "deterministic-agent"`. No breaking change to existing claude-code / codex / pi-dev / cursor / custom configs. Precedent for adding a substrate enum value is cortex#124 itself — one-line enum change plus design doc.
 
 ```ts
 // Sketch — actual implementation lands in the follow-up PR
 AgentRuntimeSchema.extend({
-  command: z.string().min(1).optional(),         // slash-command name (e.g. "recon"); resolves to ~/.claude/commands/<name>.md
-  workflow: z.string().min(1).optional(),        // workflow within the skill behind the command; defaults to skill's default
+  skill: z.string().min(1).optional(),           // PAI skill name (e.g. "Recon"); resolves to ~/.claude/skills/<name>/
+  workflow: z.string().min(1).optional(),        // workflow within the skill; defaults to skill's default workflow
   retry: z.object({
     max_attempts: z.number().int().min(1).max(10),
     backoff: z.string(),
   }).optional(),
+
+  // The following four fields already conceptually belong at the runtime level
+  // (substrate-coupled) but are not declared on AgentRuntimeSchema today.
+  // This design proposes adding them now alongside skill/workflow/retry.
+  task_subjects: z.array(z.string().min(1)).default([]),    // NATS subjects this agent claims (e.g. ["dispatch.recon.>"])
+  publish_subjects: z.array(z.string().min(1)).default([]), // NATS subjects this agent publishes (e.g. ["recon.>"])
+  secrets: z.array(z.string().min(1)).default([]),          // env vars this agent's skill requires (e.g. ["GH_TOKEN"])
+  // capabilities already exists at runtime level — no schema change for that field.
 }).refine(
-  (rt) => rt.substrate !== "deterministic-agent" || rt.command !== undefined,
-  { message: "runtime.command required when substrate is 'deterministic-agent'", path: ["command"] },
+  (rt) => rt.substrate !== "deterministic-agent" || rt.skill !== undefined,
+  { message: "runtime.skill required when substrate is 'deterministic-agent'", path: ["skill"] },
 );
 ```
+
+The four runtime-level additions (`task_subjects`, `publish_subjects`, `secrets`, plus the already-existing `capabilities`) are broadly useful across substrates — judgment-class agents will eventually want to declare their bus subjects too. They are not gated by `substrate === "deterministic-agent"`; they are general additions. Documented here because the deterministic-agent path is the first user.
 
 **2. `HarnessId` (runner-facing, `src/common/substrates/types.ts`).** Today a TypeScript union of seven values. Gains `"deterministic-agent"` as an eighth. This is the type the runner uses to select a `SessionHarness` implementation; not operator-facing.
 
@@ -421,16 +432,17 @@ The two enums are deliberately separate today (operator vocabulary vs runner voc
 
 ## 8. Harness Implementation Sketch
 
-A new `DeterministicAgentHarness` implementing `SessionHarness` per cortex#92. Single responsibility: translate the bus envelope's structured context into the parameter set the named slash command accepts, invoke the workflow's script directly (bypassing LLM interpretation), capture its structured return as a verdict envelope, emit.
+A new `DeterministicAgentHarness` implementing `SessionHarness` per cortex#92. Single responsibility: resolve the named skill+workflow to its script, spawn the script with the structured input from `DispatchRequest.context`, parse and validate the JSON verdict, emit the envelope.
 
-The harness does **not** route through Claude. The slash command's prompt body (LLM-interpreted for operator use) and the harness's direct script invocation (no LLM for bus use) both end up running the same `skill/scripts/recon.ts` with the same arguments. The slash command file is the canonical source of which workflows exist and which parameters they accept; the harness reads it as metadata, not as a prompt.
+The harness does **not** read the slash-command file `~/.claude/commands/recon.md` — that file is operator-facing LLM-prose and contains no machine-parseable workflow routing. The skill's SKILL.md routing table is the machine-parseable mapping from workflow name to script path. The slash command exists for the operator surface only; the bus path bypasses it.
 
 ```ts
 // src/substrates/deterministic-agent/harness.ts (NEW)
 
 import type { Capability, SessionHarness, DispatchRequest } from "../../common/substrates/types";
 import type { Envelope as MyelinEnvelope } from "../../bus/myelin/envelope-validator";
-import { invokeCommand } from "../../commands/invoke";  // resolves command name → workflow script
+import { invokeSkill } from "../../skills/invoke";  // resolves skill+workflow to script
+import { ReconVerdictSchema } from "@arc-skill-recon/types";  // imported from the skill repo's published types
 
 const CAPABILITIES: Capability[] = [
   { id: "github-read", description: "Reads GitHub repo metadata, PRs, issues, branches, commits via gh CLI", tags: ["github", "read-only"] },
@@ -442,8 +454,8 @@ export class DeterministicAgentHarness implements SessionHarness {
   readonly capabilities: Capability[] = CAPABILITIES;
 
   constructor(
-    private readonly command: string,           // slash-command name (e.g. "recon")
-    private readonly workflow: string | null,   // optional workflow within the skill behind the command (e.g. "RepoRecon")
+    private readonly skill: string,             // PAI skill name (e.g. "Recon")
+    private readonly workflow: string | null,   // optional workflow name (e.g. "RepoRecon"); null → skill's default
     private readonly timeoutMs: number,
   ) {}
 
@@ -460,18 +472,15 @@ export class DeterministicAgentHarness implements SessionHarness {
     });
 
     try {
-      // invokeCommand resolves "recon" to ~/.claude/commands/recon.md, reads
-      // the metadata (which skill, which workflow for which parameters),
-      // resolves the workflow to its script, and runs the script bare.
-      // Returns the structured value the script wrote to stdout (parsed JSON).
-      const result = await withTimeout(
-        invokeCommand(this.command, {
-          workflow: this.workflow,
-          input: reconInput,
-          caller: operator,
-        }),
+      // invokeSkill resolves <skill> to ~/.claude/skills/<skill>/, reads SKILL.md's
+      // routing table to find the workflow's script path, spawns the script via
+      // Bun.spawn, passes input as JSON on stdin, returns parsed JSON stdout.
+      const rawResult = await withTimeout(
+        invokeSkill(this.skill, this.workflow, { input: reconInput, caller: operator }),
         this.timeoutMs,
       );
+      // Validate at the seam — invokeSkill returns unknown; the schema is the contract.
+      const result = ReconVerdictSchema.parse(rawResult);
 
       yield envelope("dispatch.task.completed", {
         requestId: req.requestId,
@@ -500,7 +509,8 @@ Field-name and contract notes for implementers:
 - Input arrives via `req.context[]` with `kind: "recon-input"` (or whatever kind the dispatcher chooses — that decision is for cortex#92's dispatcher work, not this design). Recon must not assume an arbitrary `payload` field on the request.
 - Operator identity (for the `mine` cross-cut) arrives via `req.context[]` with `kind: "env"` per the existing convention. If absent, the cross-cut is skipped.
 - `capabilities` must be `Capability[]` — array of `{ id, description, tags? }` objects, not bare strings.
-- `invokeCommand` is the new shared resolver at `src/commands/invoke.ts`. Its contract: take a command name + optional workflow + input, locate the command at `~/.claude/commands/<name>.md`, read its frontmatter to find the backing skill and workflow script, spawn the script via `Bun.spawn`, pass input as JSON on stdin, parse the JSON it writes to stdout. Errors are thrown as typed `CommandInvocationError`. This is the only point of coupling between cortex and the PAI command/skill system; the same `invokeCommand` is usable by other cortex code paths.
+- `invokeSkill` is the new shared resolver at `src/skills/invoke.ts`. Its contract: take `(skill, workflow, input)`, locate the skill at `~/.claude/skills/<skill>/`, read SKILL.md's routing table for `workflow → script_path`, spawn the script via `Bun.spawn`, pass `{ input, caller }` as JSON on stdin, parse the JSON it writes to stdout, return as `unknown` for caller-side schema validation. Errors are thrown as typed `SkillInvocationError`. This is the only point of coupling between cortex and the PAI skill system; the same `invokeSkill` is usable by other cortex code paths (the Skill tool's invocation, future skill-shaped substrates).
+- `ReconVerdictSchema.parse(rawResult)` enforces the verdict contract at the seam between `invokeSkill`'s `unknown` return and the typed envelope emission. The schema is imported from the skill repo's published types — same source of truth as the script itself uses for `ReconInputSchema` on the input side.
 
 ### 8.1 The skill's script (lives in `~/.claude/skills/Recon/scripts/recon.ts`)
 
@@ -599,10 +609,12 @@ Deterministic agents test like functions, not like LLM agents. No eval suite nee
 
 ### 10.1 Unit tests (skill script)
 
-Mock the gh calls with JSON fixtures captured from real cortex repos. Tests live alongside the skill at `~/.claude/skills/Recon/__tests__/recon.test.ts` (run via `bun test` from the skill directory). Assertions: verdict shape, partial-section handling, mine cross-cut correctness, identity fallback.
+Tests live in the **source repo** at `arc-skill-recon/skill/__tests__/recon.test.ts` (run via `bun test` from the repo root). Arc-install does NOT ship the `__tests__/` directory to `~/.claude/skills/Recon/`; the manifest's `provides.files` block lists production files only. Tests run on CI of the skill repo and locally during development.
+
+Mock the gh calls with JSON fixtures. Assertions: verdict shape, partial-section handling, mine cross-cut correctness, identity fallback.
 
 ```
-~/.claude/skills/Recon/__tests__/recon.test.ts
+arc-skill-recon/skill/__tests__/recon.test.ts
   ✓ returns complete verdict for happy-path cortex repo
   ✓ omits sections not in include
   ✓ returns partial verdict when commits section fails
@@ -646,11 +658,12 @@ For any well-formed input that passes `ReconInputSchema`, the output passes `Rec
 
 - [ ] `HarnessId` gains `"deterministic-agent"` in `src/common/substrates/types.ts`
 - [ ] `AgentRuntimeSchema.substrate` gains `"deterministic-agent"` in `src/common/types/cortex-config.ts`
-- [ ] `AgentRuntimeSchema` extended with optional `command`, `workflow`, `retry` fields, gated by `.refine()` requiring `command` when `substrate === "deterministic-agent"`
+- [ ] `AgentRuntimeSchema` extended with optional `skill`, `workflow`, `retry`, `task_subjects`, `publish_subjects`, `secrets` fields; `.refine()` requires `skill` when `substrate === "deterministic-agent"`
 - [ ] `persona` field changed from `z.string()` to `z.union([z.string(), z.object({ kind, path })])` with bare-string interpreted as `kind: "system-prompt"` for backward compatibility
 - [ ] `DeterministicAgentHarness` implements `SessionHarness`, passes the existing contract tests applicable to all harnesses
-- [ ] `invokeCommand` resolver lands at `src/commands/invoke.ts` and reads slash-command frontmatter for skill/workflow routing
-- [ ] Fragment example at `docs/examples/agents.d/gh-repo-recon-agent.yaml` references `command: recon`
+- [ ] Harness validates `invokeSkill`'s return via `ReconVerdictSchema.parse()` at the seam
+- [ ] `invokeSkill` resolver lands at `src/skills/invoke.ts`, reads SKILL.md routing table to map workflow → script path, spawns via Bun.spawn, returns parsed JSON
+- [ ] Fragment example at `docs/examples/agents.d/gh-repo-recon-agent.yaml` references `skill: Recon`, `workflow: RepoRecon`, and the four new runtime fields
 - [ ] Integration test in cortex dispatches a real recon envelope through the harness, verifies verdict shape end-to-end
 
 ### Operator-side
@@ -719,10 +732,10 @@ Independent of cortex#92 — can land in parallel.
 | Lands | Files |
 |---|---|
 | `HarnessId` += `"deterministic-agent"` | `src/common/substrates/types.ts` |
-| `AgentRuntimeSchema` += substrate value + optional `command`/`workflow`/`retry` + `.refine()` | `src/common/types/cortex-config.ts` |
+| `AgentRuntimeSchema` += substrate value + optional `skill`/`workflow`/`retry`/`task_subjects`/`publish_subjects`/`secrets` + `.refine()` | `src/common/types/cortex-config.ts` |
 | `persona` shape union (additive, backward-compatible) | `src/common/types/cortex-config.ts` |
 | `DeterministicAgentHarness` impl + contract tests | `src/substrates/deterministic-agent/` |
-| `invokeCommand` resolver | `src/commands/invoke.ts` |
+| `invokeSkill` resolver | `src/skills/invoke.ts` |
 | Fragment example | `docs/examples/agents.d/gh-repo-recon-agent.yaml` |
 | This doc, promoted | `docs/design-gh-repo-recon-agent.md` (currently this PR — already in place) |
 
@@ -730,8 +743,10 @@ Independent of cortex#92 — can land in parallel.
 
 - `arc install github:the-metafactory/arc-skill-recon` — drops skill + slash command
 - `cp <fragment-example> ~/.config/cortex/agents.d/gh-repo-recon-agent.yaml`
-- `launchctl kickstart -k ai.meta-factory.cortex.bot` — cortex restart picks up the new agent
-- Smoke test: `/recon the-metafactory/cortex` (slash) and `@gh-repo-recon-agent` mention or direct dispatch envelope (bus)
+- Restart cortex so the new agent loads. Restart command is operator-deployment-specific:
+  - On macOS (Andreas' deployment): `launchctl kickstart -k gui/$(id -u)/ai.meta-factory.cortex.bot`
+  - On Linux / containers: per the operator's process manager (systemd unit, docker restart, etc.)
+- Smoke test: `/recon the-metafactory/cortex` (slash command) AND publish a `dispatch.recon.<id>` envelope to verify the bus path (different resolution path, same verdict shape).
 
 ---
 
