@@ -69,9 +69,9 @@ arc install foo-review-bot
 
 Use this shape for: simple persona-based agents on the cortex's Claude-Code substrate.
 
-### 3.2 Standalone bot (substrate: codex | pi-dev | custom, mode: standalone)
+### 3.2 Standalone bot (substrate: codex | pi-dev | cursor | custom, mode: standalone)
 
-Substrate-flexibility lives here. Codex / pi.dev / custom-binary bots run as their own daemons, connect directly to the same NATS bus cortex is on, and self-register capabilities.
+Substrate-flexibility lives here. Codex / pi.dev / Cursor / custom-binary bots run as their own daemons, connect directly to the same NATS bus cortex is on, and self-register capabilities.
 
 **Standalone bots install into multiple arc targets** (per arc#117's HostAdapter pattern): the `cortex` host receives the identity fragment + persona + NATS creds; the OS supervision host (`darwin-launchd` or `linux-systemd`) receives the daemon binary + service unit. Both targets land in a single `arc install` transaction.
 
@@ -111,13 +111,15 @@ The bot daemon is wholly owned by the OS supervision target's lifecycle (its own
 
 Use this shape for: any non-Claude-Code substrate, anything that needs a separate process boundary (different model API, different security sandbox, different language runtime).
 
+**Cursor-substrate note (cortex#70):** the Cursor CLI (`cursor-agent`) is a one-shot binary with no `--system-prompt` flag and no daemon mode. Cursor-substrate bots therefore stage the persona per dispatch by writing the persona content into `<workdir>/.cursor/rules/persona.mdc` before each `cursor-agent -p --force --output-format stream-json` invocation. The standalone daemon is the long-lived bus subscriber; each claimed envelope spawns a fresh `cursor-agent` process in a workdir whose lifecycle the daemon owns. Detailed treatment in `docs/design-cursor-substrate-bot.md`.
+
 **Platform note (process supervision):** the sequence above shows the macOS path (`launchctl` + `~/Library/LaunchAgents/`). On Linux the equivalent is systemd user units (`systemctl --user` + `~/.config/systemd/user/`). The bot's `arc-manifest.yaml` declares OS-specific `provides` entries (`provides.plist` for darwin, `provides.systemd-unit` for linux), and arc renders + loads the appropriate one. The launchd shape is documented here as the operator's day-1 target since cortex's MIG-7 cutover ships only macOS plists; systemd ships in a follow-on milestone once a Linux host enters the deployment topology. The bus contracts and fragment files are platform-agnostic; only the daemon supervision layer differs.
 
 ### 3.3 Shape selection
 
 | Question | In-process | Standalone |
 |---|---|---|
-| Substrate is Claude Code? | yes | no — Codex/pi.dev/custom |
+| Substrate is Claude Code? | yes | no — Codex/pi.dev/Cursor/custom |
 | Need separate process boundary? | no | yes |
 | Need different security sandbox? | no | yes |
 | Memory-cheap (per-bot)? | yes (~CC subprocess) | no (per-bot daemon + bus client) |
@@ -140,7 +142,7 @@ targets: [cortex]                 # arc#117 — bot installs into cortex's HostA
 description: Code review bot for TypeScript repos
 
 runtime:
-  substrate: claude-code          # claude-code | codex | pi-dev | custom-binary
+  substrate: claude-code          # claude-code | codex | pi-dev | cursor | custom-binary
   mode: in-process                # in-process | standalone
   capabilities:
     - code-review                 # registered to NATS KV on start

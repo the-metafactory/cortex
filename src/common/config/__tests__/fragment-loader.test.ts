@@ -80,6 +80,35 @@ runtime:
       expect(() => loadAgentsDirectory(dir)).toThrow(FragmentLoadError);
     });
 
+    test("accepts cursor substrate (cortex#70 — Cursor CLI as runtime substrate)", () => {
+      const dir = mkdtempSync(join(tmpdir(), "agents-d-cursor-"));
+      const personaPath = join(dir, "alpha.md");
+      writeFileSync(personaPath, `---\ndisplayName: Alpha\n---\n`);
+      writeFileSync(
+        join(dir, "alpha.yaml"),
+        `id: alpha
+displayName: Alpha
+persona: ${personaPath}
+roles: [agent-restricted]
+presence:
+  discord:
+    enabled: false
+    token: "t"
+    guildId: "0"
+    agentChannelId: "1"
+    logChannelId: "2"
+runtime:
+  substrate: cursor
+  mode: standalone
+  capabilities: [code-review]
+`,
+      );
+      const agents = loadAgentsDirectory(dir);
+      expect(agents).toHaveLength(1);
+      expect(agents[0]!.runtime!.substrate).toBe("cursor");
+      expect(agents[0]!.runtime!.mode).toBe("standalone");
+    });
+
     test("accepts in-process runtime with empty capabilities (capabilities optional for in-process)", () => {
       const dir = mkdtempSync(join(tmpdir(), "agents-d-inprocess-empty-"));
       const personaPath = join(dir, "echo.md");

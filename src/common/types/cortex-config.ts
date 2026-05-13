@@ -250,7 +250,7 @@ export type Presence = z.infer<typeof PresenceSchema>;
 export const AgentRuntimeSchema = z.object({
   /** Execution substrate. Claude Code is the in-cortex default; other
    *  substrates run as standalone arc-installed daemons. */
-  substrate: z.enum(["claude-code", "codex", "pi-dev", "custom"]),
+  substrate: z.enum(["claude-code", "codex", "pi-dev", "cursor", "custom"]),
   /** Dispatch mode. `in-process` = cortex's runner spawns the substrate;
    *  `standalone` = arc-installed daemon connects to the bus directly. */
   mode: z.enum(["in-process", "standalone"]),
