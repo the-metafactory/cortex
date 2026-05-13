@@ -649,4 +649,87 @@ The migration is complete when all of:
 
 ---
 
+## 9. Operator cutover — operator-mode NATS
+
+This section captures the operational recipe for the v1 cutover host moving
+NATS from `--mem-resolver` test mode to operator mode while preserving the
+existing leafnode federation. Surfaced from the 2026-05-13 v1 cutover as
+cortex#88 item 8 — `nsc generate config --mem-resolver` produces a
+resolver.conf that does NOT carry the per-remote `account:` binding leaf
+federation needs, and `nats-server` refuses to start with
+`operator mode requires account nkeys in remotes` if you merge the two
+configs naively.
+
+### 9.1 Where the operator-mode requirement comes from
+
+Operator-mode NATS demands every leafnode `remotes[]` entry declare which
+LOCAL account (in this operator's signing-key universe) the remote
+connection is bound to. Without it, the server can't determine subject
+isolation for inbound leafnode traffic and refuses to start.
+
+`nsc generate config --mem-resolver` only emits the operator + accounts
++ a `resolver: MEMORY` block. It assumes a single-tenant, no-federation
+deployment and does not know about your `leafnodes:` block.
+
+### 9.2 The required injection
+
+For each `remotes[]` entry under `leafnodes:`, add an `account:` field
+carrying the 56-char A-prefixed pubkey of the LOCAL account the remote
+should bind to. Example for an operator using a single `ANDREAS_AGENTS`
+account:
+
+```conf
+leafnodes {
+  remotes = [
+    {
+      url:  "nats-leaf://leaf.example.com:7422"
+      credentials: "/Users/andreas/.nats/leaf.creds"
+
+      # cortex#88 item 8 — operator-mode binding. Without this line
+      # nats-server fails to start with:
+      #   "operator mode requires account nkeys in remotes"
+      account: "ABXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+    }
+  ]
+}
+```
+
+The pubkey above is a placeholder — substitute your local account's
+A-prefixed pubkey. Find it with:
+
+```bash
+nsc list accounts -o "$NSC_OPERATOR" | awk '/^│ ANDREAS_AGENTS/ {print $4}'
+# or:
+nsc describe account ANDREAS_AGENTS | awk '/Account ID/ {print $3}'
+```
+
+### 9.3 End-to-end cutover sequence
+
+1. **Snapshot current config.** `cp ~/.nats/local.conf ~/.nats/local.conf.pre-cutover`.
+2. **Generate operator-mode resolver.** `nsc generate config --mem-resolver > /tmp/resolver.conf`.
+3. **Merge into local.conf.** Append the operator + accounts + resolver
+   blocks from `/tmp/resolver.conf` into `local.conf`, preserving the
+   existing `leafnodes:` block.
+4. **Inject account binding.** For each entry under
+   `leafnodes.remotes[]`, add the `account: "A..."` line per §9.2.
+5. **Restart nats-server.** `launchctl unload ~/Library/LaunchAgents/io.nats.server.plist && launchctl load ~/Library/LaunchAgents/io.nats.server.plist`.
+6. **Verify startup.**
+   - `tail -f /usr/local/var/log/nats/nats-server.log` should show
+     `Operator: <name>` + `Account [ANDREAS_AGENTS] cache loaded` +
+     no `operator mode requires account nkeys in remotes` error.
+   - `nats stream ls --server nats://localhost:4222 --creds ~/.nats/user.creds`
+     should return without auth errors.
+7. **Verify cortex.** `cortex start --config ~/.config/cortex/cortex.yaml --dry-run` confirms the config still parses (cortex#88 item 2); `cortex status` after `launchctl load …cortex.bot.plist` shows the bot connected to the operator-mode server.
+
+### 9.4 Rollback
+
+If step 6 surfaces an unrecoverable error: restore `local.conf` from the
+pre-cutover snapshot (`cp ~/.nats/local.conf.pre-cutover ~/.nats/local.conf`),
+unload/load the launchd plist again, and resume on the mem-resolver
+configuration while debugging the operator-mode setup offline. Cortex
+itself does not need to be restarted — the bot reconnects to the
+re-loaded NATS server within a few seconds.
+
+---
+
 *This plan is the ground truth for the migration. When reality drifts from it, update the plan first, then the world. For "what cortex IS" architecture, see `docs/design-cortex.md`.*
