@@ -533,7 +533,7 @@ Field-name and contract notes for implementers:
 - `invokeSkill` is the new shared resolver at `src/skills/invoke.ts`. Its contract:
   1. Take `(skill, workflow | null, input)`.
   2. Locate the skill at `~/.claude/skills/<skill>/`.
-  3. Read SKILL.md's `Workflow Routing` table to map `workflow → workflow_markdown_file`. **If `workflow` is null,** pick the row whose `Trigger` column begins with `default`.
+  3. Read SKILL.md's `Workflow Routing` table to map `workflow → workflow_markdown_file`. **If `workflow` is null,** enumerate the workflow files referenced from the table, open each one, and pick the file whose YAML frontmatter has `default: true`. At most one workflow per skill may carry this flag; the resolver throws `SkillInvocationError("ambiguous default workflow")` if more than one is found. The SKILL.md `Trigger` column is human-readable enumeration only, not consulted by the resolver — the frontmatter is the single source of truth for default-flagging.
   4. Open the resolved workflow markdown file. Read its YAML frontmatter. The `script:` field is the **machine-readable** path to the executable, resolved relative to the skill root.
   5. Spawn `bun <script_path>` via `Bun.spawn`, pass `{ input, caller }` as JSON on stdin.
   6. Parse the JSON it writes to stdout, return as `unknown` for caller-side schema validation.
