@@ -34,6 +34,7 @@
 
 import { z } from "zod/v4";
 
+import { CapabilitySchema } from "./capability";
 import {
   DMConfigSchema,
   NetworkClaudeSchema,
@@ -786,6 +787,33 @@ export const CortexConfigSchema = z.object({
    */
   stack: StackConfigSchema.optional(),
   /**
+   * IAW Phase A.6 (refs cortex#113) — stack-level capability declarations,
+   * per Q2 lock-in (`docs/design-internet-of-agentic-work.md` §5 Q2,
+   * 2026-05-13 Andreas). Each entry is a constrained-schema declaration:
+   * `id` (dot-separated lowercase), `description` (non-empty), `tags`
+   * (taxonomic labels), `provided_by` (≥1 declared agent id), optional
+   * `rate` / `cost` envelopes.
+   *
+   * The block is OPTIONAL and defaults to `[]` — an operator running
+   * cortex without any declared capabilities parses cleanly, same as
+   * before this block landed. The cross-field invariants below run only
+   * when at least one of `agents[].runtime.capabilities[]` or
+   * `capabilities[]` is non-empty.
+   *
+   * Per A.6.3, `agents[].runtime.capabilities[]` stays a string array of
+   * capability IDs (no shape change there). The top-level `capabilities[]`
+   * is the catalog those IDs reference; the existence check at the
+   * document level (refine below) rejects dangling references at config
+   * load.
+   *
+   * Behaviour today: schema-only. No runtime dispatcher consumes the
+   * catalog yet — that's a future phase (orchestrator pattern, design §3.6).
+   * Wiring the schema in now means operators can declare capabilities
+   * before the dispatch path consumes them, and the network registry
+   * (Q3) has the deterministic shape it needs when Phase D ships.
+   */
+  capabilities: z.array(CapabilitySchema).default([]),
+  /**
    * Anti-field: the legacy grove-v2 `agent:` (singular) block must not be
    * present in a cortex.yaml. Caught here with an explicit Zod refusal so
    * the operator sees a clear migration error rather than the field being
@@ -878,7 +906,99 @@ export const CortexConfigSchema = z.object({
     return new Set(ids).size === ids.length;
   },
   { message: "agent ids must be unique", path: ["agents"] },
-);
+)
+  // IAW Phase A.6.3 — capability catalog invariants.
+  //
+  // Three document-level cross-field checks, each with a pointed error
+  // message so an operator hitting one knows exactly which key to fix:
+  //
+  //   1. Top-level capability ids are unique. Two entries with the same id
+  //      represent two declarations of the same capability — likely a
+  //      copy-paste error; rejected at load time so the operator sees the
+  //      duplication immediately rather than the registry surfacing the
+  //      "last write wins" silently.
+  //
+  //   2. Every `provided_by[]` reference resolves to a declared `agents[].id`.
+  //      Symmetric dangling-reference guard with the agent-side reference
+  //      check below. A capability claiming to be provided by an agent
+  //      that doesn't exist would silently never run; we fail fast at
+  //      config load.
+  //
+  //   3. Every `agents[].runtime.capabilities[]` entry exists in the
+  //      top-level `capabilities[]` catalog. This is the core A.6.3
+  //      requirement: per-agent capability annotations REFERENCE the
+  //      catalog by id; references that don't resolve are configuration
+  //      errors, not silent runtime degradations.
+  //
+  // Implementation note: Zod's `.refine()` short-circuits on the first
+  // failing predicate, so we run the cheap structural checks first
+  // (unique catalog ids) before the cross-set walks (provider / consumer
+  // reference resolution). The Set construction and lookups are O(n+m)
+  // per check, which is well below any realistic config size.
+  .refine(
+    (config) => {
+      const ids = config.capabilities.map((c) => c.id);
+      return new Set(ids).size === ids.length;
+    },
+    {
+      message: "capability ids must be unique within the top-level capabilities[] block",
+      path: ["capabilities"],
+    },
+  )
+  // Document-level checks 2 + 3 (provider / consumer dangling references)
+  // use `superRefine` so the error message can name the specific dangling
+  // id and the specific config key that's at fault. Each issue is reported
+  // at a path that points to the offending array entry (`capabilities[i]`
+  // / `agents[j].runtime.capabilities`) so a YAML-aware loader can render
+  // the error in line with the source.
+  //
+  // We emit ALL dangling references (not just the first) so a config with
+  // many broken references surfaces them as a batch rather than the
+  // operator having to fix-and-rerun per failure.
+  .superRefine((config, ctx) => {
+    const agentIds = new Set(config.agents.map((a) => a.id));
+    const declaredAgentList = [...agentIds].sort().join(", ") || "(none)";
+    for (let capIdx = 0; capIdx < config.capabilities.length; capIdx++) {
+      const cap = config.capabilities[capIdx];
+      if (!cap) continue;
+      for (let providerIdx = 0; providerIdx < cap.provided_by.length; providerIdx++) {
+        const providerId = cap.provided_by[providerIdx];
+        if (providerId !== undefined && !agentIds.has(providerId)) {
+          ctx.addIssue({
+            code: "custom",
+            message:
+              `capability "${cap.id}" lists provider agent "${providerId}" in provided_by[], ` +
+              `but no agent with that id is declared in agents[] ` +
+              `(declared agent ids: ${declaredAgentList})`,
+            path: ["capabilities", capIdx, "provided_by", providerIdx],
+          });
+        }
+      }
+    }
+  })
+  .superRefine((config, ctx) => {
+    const catalogIds = new Set(config.capabilities.map((c) => c.id));
+    const declaredCatalog = [...catalogIds].sort().join(", ") || "(none)";
+    for (let agentIdx = 0; agentIdx < config.agents.length; agentIdx++) {
+      const agent = config.agents[agentIdx];
+      if (!agent) continue;
+      const claimed = agent.runtime?.capabilities ?? [];
+      for (let claimIdx = 0; claimIdx < claimed.length; claimIdx++) {
+        const capId = claimed[claimIdx];
+        if (capId !== undefined && !catalogIds.has(capId)) {
+          ctx.addIssue({
+            code: "custom",
+            message:
+              `agent "${agent.id}" claims capability "${capId}" in runtime.capabilities[], ` +
+              `but no matching entry exists in the top-level capabilities[] catalog ` +
+              `(declared capability ids: ${declaredCatalog}). ` +
+              `Either add a "${capId}" entry to capabilities[] or remove the reference from agent "${agent.id}".`,
+            path: ["agents", agentIdx, "runtime", "capabilities", claimIdx],
+          });
+        }
+      }
+    }
+  });
 
 export type CortexConfig = z.infer<typeof CortexConfigSchema>;
 
@@ -903,3 +1023,12 @@ export {
  */
 export { StackConfigSchema, deriveStackId } from "./stack";
 export type { StackConfig, DerivedStackId, DeriveStackIdInput } from "./stack";
+
+/**
+ * IAW Phase A.6 re-exports — the capability declaration primitive ships in
+ * its own module (`./capability.ts`) for tighter ownership, but downstream
+ * code that already pulls `CortexConfigSchema` from this file shouldn't need
+ * a second import path. Mirrors the `StackConfigSchema` re-export above.
+ */
+export { CapabilitySchema } from "./capability";
+export type { Capability, CapabilityRate, CapabilityCost } from "./capability";

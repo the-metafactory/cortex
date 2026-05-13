@@ -104,6 +104,13 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
     },
     networksDir: "./networks",
     networks: [],
+    // IAW Phase A.6 (cortex#113) — the `capabilities:` block has a `.default([])`
+    // on the schema, but the inferred CortexConfig OUTPUT type lists it as a
+    // required field (defaults always present after parse). Fixture literals
+    // that `as CortexConfig` cast through this builder therefore need to
+    // include it explicitly. Registry tests don't exercise capabilities; an
+    // empty array is the right zero-value.
+    capabilities: [],
   } as CortexConfig;
 }
 
