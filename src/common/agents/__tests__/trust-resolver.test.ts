@@ -235,6 +235,32 @@ describe("TrustResolver — lookup", () => {
   test("identitiesOf returns [] for an unknown agent", () => {
     expect(resolver.identitiesOf("ghost")).toEqual([]);
   });
+
+  // cortex#98 (part B) — inverse lookup used by cortex.ts to translate an
+  // agent's `trust: [<peer-id>, ...]` list into peer bot user ids for the
+  // Discord trustedBotIds allowlist.
+  test("lookupPlatformIdByAgent returns the registered Discord id for a known agent", () => {
+    expect(resolver.lookupPlatformIdByAgent("discord", "luna")).toBe(LUNA_DISCORD_ID);
+  });
+
+  test("lookupPlatformIdByAgent returns undefined when the agent has no registration on that platform", () => {
+    // Luna only has a Discord registration; mattermost lookup is undefined.
+    expect(resolver.lookupPlatformIdByAgent("mattermost", "luna")).toBeUndefined();
+  });
+
+  test("lookupPlatformIdByAgent returns undefined for an agent with no registrations at all (cross-process peer)", () => {
+    expect(resolver.lookupPlatformIdByAgent("discord", "echo")).toBeUndefined();
+  });
+
+  test("lookupPlatformIdByAgent returns undefined for an unknown agent id", () => {
+    expect(resolver.lookupPlatformIdByAgent("discord", "ghost")).toBeUndefined();
+  });
+
+  test("lookupPlatformIdByAgent picks the right platform when an agent has multiple", () => {
+    resolver.register("mattermost", LUNA_MATTERMOST_ID, "luna");
+    expect(resolver.lookupPlatformIdByAgent("discord", "luna")).toBe(LUNA_DISCORD_ID);
+    expect(resolver.lookupPlatformIdByAgent("mattermost", "luna")).toBe(LUNA_MATTERMOST_ID);
+  });
 });
 
 // =============================================================================
@@ -324,5 +350,124 @@ describe("TrustResolver — platform key encoding", () => {
     expect(resolver.lookupAgentId("discord", weirdId)).toBe("luna");
     const owned = resolver.identitiesOf("luna");
     expect(owned).toEqual([{ platform: "discord", platformId: weirdId }]);
+  });
+});
+
+// =============================================================================
+// cortex#98 (part B) — cortex.ts merge algorithm shape
+// =============================================================================
+//
+// These tests assert the algorithm cortex.ts runs in Pass 2 of its Discord
+// adapter loop: for each agent's `trust:[]`, look up each peer's Discord
+// bot user id via `lookupPlatformIdByAgent` and merge into the operator-
+// explicit `trustedBotIds`. They live next to the resolver tests because
+// the algorithm is pure-data over resolver state — wiring into a live
+// DiscordAdapter would require a Discord.js mock that adds noise without
+// validating the lookup logic itself.
+
+describe("cortex#98 (part B) — auto-populate trustedBotIds from agents[].trust", () => {
+  function mergeFor(
+    resolver: TrustResolver,
+    agentTrust: readonly string[],
+    selfAgentId: string,
+    explicit: ReadonlyArray<string>,
+  ): Set<string> {
+    // Mirror of the merge cortex.ts performs at the bottom of the Discord
+    // adapter-start loop. Kept in lock-step with the cortex.ts
+    // implementation; both contain the same self-skip + undefined-skip
+    // semantics.
+    const merged = new Set<string>(explicit);
+    for (const peerAgentId of agentTrust) {
+      if (peerAgentId === selfAgentId) continue;
+      const peerBotId = resolver.lookupPlatformIdByAgent("discord", peerAgentId);
+      if (peerBotId !== undefined) merged.add(peerBotId);
+    }
+    return merged;
+  }
+
+  test("in-process peers resolve via the resolver and merge into the allowlist", () => {
+    // Three-bot in-process deployment: luna trusts [echo, forge]; both
+    // have registered their bot ids in the resolver during Pass 1 of
+    // adapter-start.
+    const resolver = new TrustResolver(registryOf(
+      agentFixture({ id: "luna", trust: ["echo", "forge"] }),
+      agentFixture({ id: "echo" }),
+      agentFixture({ id: "forge" }),
+    ));
+    resolver.register("discord", ECHO_DISCORD_ID, "echo");
+    resolver.register("discord", "1497954389736947876", "forge");
+
+    const merged = mergeFor(resolver, ["echo", "forge"], "luna", []);
+    expect(merged.size).toBe(2);
+    expect(merged.has(ECHO_DISCORD_ID)).toBe(true);
+    expect(merged.has("1497954389736947876")).toBe(true);
+  });
+
+  test("operator-explicit trustedBotIds (cross-process bridge) merge with resolver-derived ids", () => {
+    // luna trusts [echo, holly]; echo is in-process (registered), holly is
+    // cross-process (the operator put holly's bot id in
+    // presence.discord.trustedBotIds because she lives in a server cortex).
+    const resolver = new TrustResolver(registryOf(
+      agentFixture({ id: "luna", trust: ["echo", "holly"] }),
+      agentFixture({ id: "echo" }),
+      agentFixture({ id: "holly" }),
+    ));
+    resolver.register("discord", ECHO_DISCORD_ID, "echo");
+    // holly NOT registered — she's cross-process.
+
+    const explicit = [HOLLY_DISCORD_ID];
+    const merged = mergeFor(resolver, ["echo", "holly"], "luna", explicit);
+    expect(merged.size).toBe(2);
+    expect(merged.has(ECHO_DISCORD_ID)).toBe(true); // resolver-derived
+    expect(merged.has(HOLLY_DISCORD_ID)).toBe(true); // operator-explicit
+  });
+
+  test("cross-process peers (unregistered) are silently skipped — set stays at explicit baseline", () => {
+    const resolver = new TrustResolver(registryOf(
+      agentFixture({ id: "luna", trust: ["holly"] }),
+      agentFixture({ id: "holly" }),
+    ));
+    // holly NOT registered — cross-process peer.
+
+    const merged = mergeFor(resolver, ["holly"], "luna", []);
+    expect(merged.size).toBe(0); // no auto-pop, no explicit — empty set
+  });
+
+  test("self-trust entry is skipped (adapter's self-loop guard handles it independently)", () => {
+    const resolver = new TrustResolver(registryOf(
+      agentFixture({ id: "luna", trust: ["luna", "echo"] }), // luna trusts herself + echo
+      agentFixture({ id: "echo" }),
+    ));
+    resolver.register("discord", LUNA_DISCORD_ID, "luna");
+    resolver.register("discord", ECHO_DISCORD_ID, "echo");
+
+    const merged = mergeFor(resolver, ["luna", "echo"], "luna", []);
+    expect(merged.size).toBe(1);
+    expect(merged.has(LUNA_DISCORD_ID)).toBe(false); // self-skip
+    expect(merged.has(ECHO_DISCORD_ID)).toBe(true);
+  });
+
+  test("empty trust list → merged equals explicit verbatim (legacy bot.yaml path)", () => {
+    const resolver = new TrustResolver(registryOf(agentFixture({ id: "luna", trust: [] })));
+    resolver.register("discord", LUNA_DISCORD_ID, "luna");
+
+    const explicit = ["1487999999999999999"]; // op-set cross-process id
+    const merged = mergeFor(resolver, [], "luna", explicit);
+    expect(merged.size).toBe(1);
+    expect(merged.has("1487999999999999999")).toBe(true);
+  });
+
+  test("explicit and resolver-derived ids dedupe when they overlap", () => {
+    // Edge case: operator hand-set echo's bot id in cortex.yaml AND echo
+    // is in-process (registered). The merge naturally dedupes via Set.
+    const resolver = new TrustResolver(registryOf(
+      agentFixture({ id: "luna", trust: ["echo"] }),
+      agentFixture({ id: "echo" }),
+    ));
+    resolver.register("discord", ECHO_DISCORD_ID, "echo");
+
+    const merged = mergeFor(resolver, ["echo"], "luna", [ECHO_DISCORD_ID]);
+    expect(merged.size).toBe(1); // not 2 — dedupe
+    expect(merged.has(ECHO_DISCORD_ID)).toBe(true);
   });
 });

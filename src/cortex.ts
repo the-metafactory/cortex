@@ -23,6 +23,7 @@ import { type BotConfig, getAllRepos } from "./common/types/config";
 import { fetchWithTimeout } from "./common/timeout";
 import { UsageMonitor } from "./common/usage/monitor";
 import { AgentRegistry } from "./common/agents/registry";
+import { TrustResolver } from "./common/agents/trust-resolver";
 // cortex#79 — creds minting moved to `arc nats … --json` (shelled out from
 // `src/cli/cortex/commands/creds.ts`). No daemon-side RPC handler in
 // cortex; the operator-signature verifier in TrustResolver keeps using
@@ -242,6 +243,19 @@ export async function startCortex(
     console.log("cortex: agent registry assembled — 0 agents (no inline agents, no fragments)");
   }
 
+  // cortex#98 (part B) — in-process trust map. Each Discord adapter
+  // registers its own `client.user.id` after login (Pass 1 of the adapter
+  // loop below), and the merge step (Pass 2) walks each agent's `trust:[]`
+  // list and asks the resolver for each peer's bot user id. Co-hosted
+  // peers land in the merged set; cross-process peers (never registered
+  // here) silently fall through and stay covered by the operator-explicit
+  // `presence.discord.trustedBotIds` field (cortex#98 part A).
+  //
+  // The resolver is constructed unconditionally — even legacy bot.yaml
+  // configs with `trust: []` (no peers) get a no-op resolver rather than
+  // a branching code path, keeping the adapter loop uniform.
+  const trustResolver = new TrustResolver(agentRegistry);
+
   // cortex#79 — creds minting is no longer a cortex daemon responsibility.
   // `cortex creds issue / revoke / rotate` now shell out to
   // `arc nats … --json`; arc owns nsc and the operator account.
@@ -322,6 +336,29 @@ export async function startCortex(
     }
   }
 
+  // cortex#98 (part B) — two-pass adapter start so peer-bot ids can be
+  // resolved across adapters. Pass 1 starts each adapter with its operator-
+  // explicit `trustedBotIds` set (the cross-process bridge list from
+  // cortex.yaml) and registers each agent's freshly-learned bot user id in
+  // the TrustResolver. Pass 2 walks each adapter's `agent.trust[]` list,
+  // asks the resolver for each peer's bot id, and merges the result into
+  // the adapter's allowlist via `setTrustedBotIds`. The split is required
+  // because adapter A's `trust` list may reference adapter B, and B's
+  // platform id is only known after B's `client.login()` resolves.
+  //
+  // Started Discord state carried between passes. We capture the adapter,
+  // its declaring agent, and the operator-explicit set as a baseline so
+  // Pass 2 can produce the merged set in one place (explicit ∪ resolved
+  // peers) without re-parsing the instance.
+  interface StartedDiscord {
+    adapter: DiscordAdapter;
+    agent: Agent;
+    instance: BotConfig["discord"][number];
+    instanceId: string;
+    explicitTrustedBotIds: ReadonlySet<string>;
+  }
+  const startedDiscord: StartedDiscord[] = [];
+
   for (const instance of config.discord) {
     if (instance.enabled === false) {
       console.log(`cortex: discord instance ${instance.instanceId ?? instance.guildId} disabled — skipping`);
@@ -373,9 +410,9 @@ export async function startCortex(
       // cortex#84: build the trusted-peer-bot allowlist once per adapter
       // start so the messageCreate hot path doesn't re-allocate per event.
       // Empty list → adapter falls back to "drop every bot author"
-      // (pre-cortex#84 behaviour). MIG-7.2e will derive this from
-      // `agents[].trust` + in-process TrustResolver where possible.
-      const trustedBotIds = new Set<string>(instance.trustedBotIds);
+      // (pre-cortex#84 behaviour). Pass 2 below merges resolver-derived
+      // in-process peer ids on top via `adapter.setTrustedBotIds`.
+      const explicitTrustedBotIds = new Set<string>(instance.trustedBotIds);
       const adapter = new DiscordAdapter(
         agent,
         presence,
@@ -386,7 +423,7 @@ export async function startCortex(
           },
           runtime,
           systemEventSource,
-          trustedBotIds,
+          trustedBotIds: explicitTrustedBotIds,
         },
       );
       // Register the adapter's surface-router face. Empty `surfaceSubjects`
@@ -394,16 +431,83 @@ export async function startCortex(
       router.register(adapter.surfaceConfig);
       await adapter.start((msg) => dispatchHandler.handleMessage(adapter, msg));
       adapters.push(adapter);
-      console.log(`cortex: discord adapter started (instance: ${instanceId}, guild: ${instance.guildId}, trustedBotIds: ${trustedBotIds.size})`);
 
-      // Outbound JSONL → #agent-log + worklog (opt-in). Dashboard + cloud
-      // delivery handled by the HTTP path (H-004).
-      if (!options.disableOutboundPoller && (instance.enableAgentLog || instance.worklogChannelId)) {
-        const cleanup = setupOutboundLog(adapter, instance, config, router, systemEventSource);
-        if (cleanup) adapterCleanup.push(cleanup);
+      // cortex#98 (part B) — Pass 1 step c: register this adapter's bot
+      // user id in the trust resolver so OTHER adapters' Pass 2 lookups
+      // can resolve `agent.trust = [<this-agent>]` to this bot id. The
+      // matched-agent lookup above already gave us this agent's
+      // declarative id; pair it with `client.user.id` (available
+      // post-login via `getPlatformUserId`).
+      //
+      // The register call is best-effort: if the agent id isn't in the
+      // registry (legacy bot.yaml with synthesized-from-singular agent
+      // — `mergedAgents` is empty, so the registry has no entries),
+      // skip silently. Pass 2 will still produce a correctly-sized
+      // empty resolved-peer set for those configs.
+      if (agentRegistry.tryGetById(agent.id)) {
+        try {
+          const botUserId = await adapter.getPlatformUserId();
+          trustResolver.register("discord", botUserId, agent.id);
+        } catch (err) {
+          // Register failures (PlatformIdAlreadyRegisteredError on a
+          // misconfigured token, or getPlatformUserId throwing if the
+          // adapter's client.user is unexpectedly null) should not abort
+          // startup — log and continue so other adapters can come up.
+          console.error(
+            `cortex: trust-resolver register for "${agent.id}" failed (non-fatal):`,
+            err instanceof Error ? err.message : err,
+          );
+        }
       }
+
+      startedDiscord.push({
+        adapter,
+        agent,
+        instance,
+        instanceId,
+        explicitTrustedBotIds,
+      });
     } catch (err) {
       console.error(`cortex: discord adapter ${instanceId} failed to start:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  // cortex#98 (part B) — Pass 2: merge resolver-derived in-process peer
+  // bot ids on top of each adapter's operator-explicit set, and log the
+  // final allowlist size per adapter. Peers absent from the resolver
+  // (cross-process — they live in a different cortex deployment) are
+  // silently skipped; the operator-explicit field in
+  // `presence.discord.trustedBotIds` covers those.
+  for (const { adapter, agent, instance, instanceId, explicitTrustedBotIds } of startedDiscord) {
+    const merged = new Set<string>(explicitTrustedBotIds);
+    const resolvedPeers: string[] = [];
+    const skippedPeers: string[] = [];
+    for (const peerAgentId of agent.trust) {
+      if (peerAgentId === agent.id) continue; // self-trust handled by adapter's self-loop guard
+      const peerBotId = trustResolver.lookupPlatformIdByAgent("discord", peerAgentId);
+      if (peerBotId !== undefined) {
+        merged.add(peerBotId);
+        resolvedPeers.push(peerAgentId);
+      } else {
+        skippedPeers.push(peerAgentId);
+      }
+    }
+    adapter.setTrustedBotIds(merged);
+    console.log(
+      `cortex: discord adapter started (instance: ${instanceId}, guild: ${instance.guildId}, ` +
+        `trustedBotIds: ${adapter.trustedBotIdCount}` +
+        (resolvedPeers.length > 0 ? ` [resolver: ${resolvedPeers.join(", ")}]` : "") +
+        (skippedPeers.length > 0 ? ` [cross-process: ${skippedPeers.join(", ")}]` : "") +
+        `)`,
+    );
+
+    // Outbound JSONL → #agent-log + worklog (opt-in). Dashboard + cloud
+    // delivery handled by the HTTP path (H-004). Moved into Pass 2 so the
+    // log-line ordering stays "adapter started → outbound poller wired";
+    // poller setup is decoupled from the trust-resolver merge.
+    if (!options.disableOutboundPoller && (instance.enableAgentLog || instance.worklogChannelId)) {
+      const cleanup = setupOutboundLog(adapter, instance, config, router, systemEventSource);
+      if (cleanup) adapterCleanup.push(cleanup);
     }
   }
 

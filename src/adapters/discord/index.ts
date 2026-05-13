@@ -120,12 +120,20 @@ export class DiscordAdapter implements PlatformAdapter {
   private systemEventSource: SystemEventSource | undefined;
   /**
    * cortex#84: snapshot of `infra.trustedBotIds` taken at construction
-   * time. `ReadonlySet` so a misbehaving caller can't mutate the
-   * allowlist after the adapter has cached the reference. Empty set when
-   * no allowlist was supplied — the default "drop every bot author"
-   * branch becomes an O(1) `set.has` lookup that returns false.
+   * time. `ReadonlySet` so the messageCreate hot path can't accidentally
+   * mutate the allowlist; the reference itself is swappable via
+   * `setTrustedBotIds` so cortex.ts (cortex#98 part B) can merge in
+   * resolver-derived peer ids after adapter-start without rebuilding the
+   * adapter. Empty set when no allowlist was supplied — the default
+   * "drop every bot author" branch becomes an O(1) `set.has` lookup
+   * that returns false.
+   *
+   * The `readonly` was dropped at cortex#98: the only mutation path is
+   * `setTrustedBotIds`, which replaces the reference atomically (no
+   * partial-write races). Hot-path readers see either the old set or
+   * the new set, never a half-built one.
    */
-  private readonly trustedBotIds: ReadonlySet<string>;
+  private trustedBotIds: ReadonlySet<string>;
   /**
    * Latches once we've warned about the runtime-without-source case so a
    * busy adapter doesn't flood the log with the same diagnostic on every
@@ -351,6 +359,42 @@ export class DiscordAdapter implements PlatformAdapter {
       );
     }
     return userId;
+  }
+
+  /**
+   * cortex#98 (part B): replace the trusted-peer-bot allowlist after
+   * construction. Cortex.ts uses this to merge in-process peer bot ids
+   * (resolved via `TrustResolver.lookupPlatformIdByAgent`) on top of the
+   * operator-explicit `presence.discord.trustedBotIds` once all adapters
+   * have logged in and registered their `client.user.id` in the resolver.
+   *
+   * Atomic reference swap — hot-path `messageCreate` readers see either
+   * the previous set or the new set, never a partially-built one. Safe
+   * to call any time after construction; cortex.ts calls it once during
+   * its second adapter-start pass.
+   *
+   * The caller is responsible for including any prior operator-explicit
+   * ids in `next`; this method does NOT merge with the existing set —
+   * it replaces it. The intent is to surface "the allowlist as
+   * cortex.ts computes it" as a single, well-defined value rather than
+   * an accreting mutation log.
+   *
+   * For the adapter's own self-loop guard (`message.author.id ===
+   * client.user?.id`) is unchanged and runs BEFORE this set is consulted
+   * (see messageCreate handler at the top of `start`), so the bot's own
+   * id is never allowed regardless of what `next` contains.
+   */
+  setTrustedBotIds(next: ReadonlySet<string>): void {
+    this.trustedBotIds = next;
+  }
+
+  /**
+   * cortex#98 (part B) — current size of the trusted-bot allowlist. Used
+   * by cortex.ts for the per-adapter "trustedBotIds: N" startup log so
+   * operators can confirm the resolver actually populated the set.
+   */
+  get trustedBotIdCount(): number {
+    return this.trustedBotIds.size;
   }
 
   /**

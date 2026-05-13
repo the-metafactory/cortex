@@ -751,6 +751,40 @@ export class TrustResolver {
   }
 
   /**
+   * cortex#98 (part B) — inverse of `lookupAgentId`: given an agent id and a
+   * platform, return the platform user id this agent registered on that
+   * platform (or `undefined` if unregistered).
+   *
+   * Used by cortex.ts at adapter-start to translate an agent's
+   * `trust: [<peer-agent-id>, ...]` list into a set of bot user ids for the
+   * Discord `trustedBotIds` allowlist. Peers that are cross-process
+   * (never registered into THIS resolver) return `undefined` and are
+   * silently skipped — the operator-explicit `presence.discord.trustedBotIds`
+   * field carries those cases as the documented cross-process bridge.
+   *
+   * An agent can have at most ONE identity per platform (a single Discord
+   * adapter per agent — Architecture §9.1's "one presence per platform" rule).
+   * Implementation walks `identitiesOf` and returns the first match; if a
+   * future schema flip allows multiple per platform, callers may need to
+   * adapt — but today this is unambiguous.
+   *
+   * Returns `undefined` for unknown agent ids (no throw — callers usually
+   * iterate over a `trust:` list where missing peers are silently expected,
+   * not a precondition violation).
+   */
+  lookupPlatformIdByAgent(platform: Platform, agentId: string): string | undefined {
+    const owned = this.reverse.get(agentId);
+    if (!owned) return undefined;
+    const prefix = `${platform}|`;
+    for (const key of owned) {
+      if (key.startsWith(prefix)) {
+        return key.slice(prefix.length);
+      }
+    }
+    return undefined;
+  }
+
+  /**
    * Full trust check by platform identity. Returns true iff:
    *   1. The `(platform, platformId)` is registered to a known agent.
    *   2. `receivingAgentId` is a known agent.
