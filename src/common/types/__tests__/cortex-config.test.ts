@@ -216,21 +216,94 @@ describe("AgentSchema", () => {
     })).toThrow(/at least one presence/);
   });
 
+  // ---------------------------------------------------------------------
+  // cortex#145 — letter-prefix rule (closes the operator/stack/agent
+  // letter-prefix trilogy: cortex#141 → cortex#144 → cortex#145)
+  // ---------------------------------------------------------------------
+
+  test("accepts canonical letter-prefixed agent ids", () => {
+    // The realistic agent population — all letter-prefixed today.
+    expect(AgentSchema.parse(minAgent({ id: "luna" })).id).toBe("luna");
+    expect(AgentSchema.parse(minAgent({ id: "echo" })).id).toBe("echo");
+    expect(AgentSchema.parse(minAgent({ id: "team-research" })).id).toBe("team-research");
+  });
+
+  test("accepts agent id with internal digits (only the prefix is gated)", () => {
+    // The rule is letter-PREFIX, not letter-only. Internal digits are fine
+    // — `agent-2026`, `team-42-research` etc.
+    expect(AgentSchema.parse(minAgent({ id: "agent-2026" })).id).toBe("agent-2026");
+    expect(AgentSchema.parse(minAgent({ id: "team-42-research" })).id).toBe("team-42-research");
+    expect(AgentSchema.parse(minAgent({ id: "a1" })).id).toBe("a1");
+  });
+
+  test("rejects digit-prefix agent id (cortex#145 — letter-prefix rule)", () => {
+    // The unified grammar requires letter-prefix on all three of
+    // `OperatorSchema.id`, `StackConfigSchema.id` segments, and
+    // `AgentSchema.id`. Agent ids end up embedded in NATS subjects
+    // post-A.5.5 (`local.{op}.{stack}.dispatch.{agent}.>`); digit-prefix
+    // segments interact poorly with downstream pattern-matchers.
+    expect(() => AgentSchema.parse(minAgent({ id: "2agent" }))).toThrow(
+      /starting with a letter/,
+    );
+    // The error message MUST surface the migration hint so operators see
+    // what to do, not just what's wrong.
+    expect(() => AgentSchema.parse(minAgent({ id: "2agent" }))).toThrow(
+      /team-2agent|agent-2026/,
+    );
+  });
+
+  test("rejects digit-prefix-with-hyphen agent id", () => {
+    expect(() => AgentSchema.parse(minAgent({ id: "7-luna" }))).toThrow(
+      /starting with a letter/,
+    );
+  });
+
+  test("rejects all-digit agent id (Discord-snowflake paste-bug)", () => {
+    expect(() => AgentSchema.parse(minAgent({ id: "1497204875912609844" }))).toThrow(
+      /starting with a letter/,
+    );
+  });
+
+  test("rejects hyphen-prefix agent id (must start with a letter, not punctuation)", () => {
+    expect(() => AgentSchema.parse(minAgent({ id: "-luna" }))).toThrow(
+      /starting with a letter/,
+    );
+  });
+
   test("accepts trust list of agent ids (no resolution)", () => {
     const parsed = AgentSchema.parse(minAgent({ trust: ["echo", "holly"] }));
     expect(parsed.trust).toEqual(["echo", "holly"]);
   });
 
-  test("rejects trust entries that aren't agent ids (Holly W2-3)", () => {
+  test("rejects trust entries that aren't agent ids (Holly W2-3; tightened by cortex#145)", () => {
     // Common typo / paste-bug: putting a Discord user id into the trust list.
-    // Schema catches it with the same `^[a-z0-9-]+$` regex as agent ids.
+    // Schema catches it with the same `^[a-z][a-z0-9-]*$` regex as agent ids
+    // (operator/stack/agent letter-prefix trilogy closed by cortex#145). The
+    // letter-prefix rule catches the digit-only Discord-snowflake paste-bug
+    // deterministically — pre-#145 the regex was `^[a-z0-9-]+$` and digit-only
+    // entries silently slipped past the structural check.
     expect(() => AgentSchema.parse(minAgent({
       trust: ["echo", "1497898452351455393"], // ← Discord id, all digits
-    }))).not.toThrow(); // digits-only is technically valid; the bug we catch is uppercase / dots / wildcards
+    }))).toThrow(/starting with a letter/);
     expect(() => AgentSchema.parse(minAgent({ trust: ["Echo"] }))).toThrow();
     expect(() => AgentSchema.parse(minAgent({ trust: ["echo bot"] }))).toThrow();
     expect(() => AgentSchema.parse(minAgent({ trust: ["echo.bot"] }))).toThrow();
     expect(() => AgentSchema.parse(minAgent({ trust: ["<@1497>"] }))).toThrow();
+  });
+
+  test("rejects digit-prefix trust entry with migration hint (cortex#145)", () => {
+    expect(() => AgentSchema.parse(minAgent({ trust: ["2agent"] }))).toThrow(
+      /starting with a letter/,
+    );
+    expect(() => AgentSchema.parse(minAgent({ trust: ["2agent"] }))).toThrow(
+      /team-2agent|agent-2026/,
+    );
+  });
+
+  test("rejects hyphen-prefix trust entry", () => {
+    expect(() => AgentSchema.parse(minAgent({ trust: ["-echo"] }))).toThrow(
+      /starting with a letter/,
+    );
   });
 
   test("accepts both discord and mattermost presence on same agent", () => {

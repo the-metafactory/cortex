@@ -29,10 +29,11 @@
  *     dispatch path consumes it yet.
  *   - **No network registry registration.** Phase D, D.4 cloud-side
  *     registry service.
- *   - **No tightening of `AgentSchema.id`.** That's cortex#145. `provided_by`
- *     mirrors the SAME pattern `AgentSchema.id` uses on `main` today
- *     (`/^[a-z0-9-]+$/`); once cortex#145 lands and tightens `AgentSchema.id`,
- *     this regex tightens with it (single edit, one-segment grammar parity).
+ *   - **Mirrors `AgentSchema.id` grammar.** `provided_by` uses the same
+ *     letter-prefix regex `/^[a-z][a-z0-9-]*$/` as `AgentSchema.id` so the
+ *     two cannot drift — closing the operator/stack/agent letter-prefix
+ *     trilogy (cortex#141 → cortex#144 → cortex#145). A future change to
+ *     the agent-id grammar is a single coordinated edit to both regexes.
  *
  * The per-agent reference validation (A.6.3) — every id in an agent's
  * `runtime.capabilities[]` must exist in the top-level `capabilities[]` block
@@ -191,13 +192,10 @@ const CapabilityTagSchema = z
 
 /**
  * Provider-id grammar — references an agent's `id` declared in the same
- * `cortex.yaml`'s `agents[]` array. The format mirrors `AgentSchema.id` on
- * `main` today: `/^[a-z0-9-]+$/`. Once cortex#145 lands and tightens
- * `AgentSchema.id` to require a letter prefix (parity with `OperatorSchema.id`
- * and `StackConfigSchema.id` segments), this regex SHOULD tighten in step.
- * Until then, deliberate parity with the looser `AgentSchema.id` shape avoids
- * blocking valid declarations against agents named `2andreas-bot` (a config
- * that parses on `main` today). cortex#145 is out of scope for this PR.
+ * `cortex.yaml`'s `agents[]` array. The format mirrors `AgentSchema.id`:
+ * `/^[a-z][a-z0-9-]*$/` (letter-prefix). cortex#145 closed the operator/
+ * stack/agent letter-prefix trilogy (cortex#141 → cortex#144 → cortex#145);
+ * `provided_by` tightened in the same PR for one-segment grammar parity.
  *
  * The existence-check that each `provided_by` value resolves to a declared
  * agent id is enforced cross-field on `CortexConfigSchema` (a `.refine()`
@@ -209,8 +207,8 @@ const CapabilityTagSchema = z
 const CapabilityProviderIdSchema = z
   .string()
   .regex(
-    /^[a-z0-9-]+$/,
-    "capability.provided_by entries must be agent ids — lowercase alphanumeric + hyphen (matches AgentSchema.id grammar on main)",
+    /^[a-z][a-z0-9-]*$/,
+    "capability.provided_by entries must be agent ids — lowercase alphanumeric + hyphen, starting with a letter (matches AgentSchema.id grammar — operator/stack/agent letter-prefix trilogy closed by cortex#145); rename digit-prefixed ids like '2agent' to 'team-2agent' or 'agent-2026'",
   );
 
 // =============================================================================

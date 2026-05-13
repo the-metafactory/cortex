@@ -253,18 +253,18 @@ describe("CapabilitySchema.provided_by", () => {
     ).toThrow(/at least one provider agent id/);
   });
 
-  test("accepts digit-only provider id today (parity with AgentSchema.id on main; tightens with cortex#145)", () => {
+  test("rejects digit-only provider id (Discord-snowflake paste-bug; tightened by cortex#145)", () => {
     // Real failure mode this pins: an operator pastes a Discord snowflake into
-    // provided_by and the schema silently accepts it. Today this MUST parse
-    // because `provided_by` mirrors `AgentSchema.id`'s loose `/^[a-z0-9-]+$/`
-    // on main — tightening both to letter-prefix is cortex#145's job. The
-    // assertion here pins the current grammar parity so the schema doesn't
-    // drift from AgentSchema.id before cortex#145 lands; when #145 merges,
-    // this test flips to a `toThrow` (along with the snowflake-style ones in
-    // cortex-config.test.ts for AgentSchema.id itself).
+    // provided_by and the schema silently accepts it. cortex#145 closed the
+    // operator/stack/agent letter-prefix trilogy (cortex#141 → cortex#144 →
+    // cortex#145) so the gate now catches the paste-bug deterministically at
+    // parse time rather than relying on the cross-field provider-resolution
+    // refine to surface it later. `provided_by` mirrors `AgentSchema.id`'s
+    // letter-prefix regex; once one tightens, the other must too — that's
+    // why they're enforced as a single coordinated edit in cortex#145.
     expect(() =>
       CapabilitySchema.parse(minCapability({ provided_by: ["1497204875912609844"] })),
-    ).not.toThrow();
+    ).toThrow(/starting with a letter/);
   });
 
   test("rejects uppercase provider id", () => {

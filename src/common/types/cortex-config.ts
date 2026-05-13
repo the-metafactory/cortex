@@ -294,8 +294,26 @@ export const AgentRuntimeSchema = z.object({
 export type AgentRuntime = z.infer<typeof AgentRuntimeSchema>;
 
 export const AgentSchema = z.object({
-  /** Logical agent id — stable across deployments. Lowercase, alphanumeric. */
-  id: z.string().min(1).regex(/^[a-z0-9-]+$/, "Agent id must be lowercase alphanumeric"),
+  /**
+   * Logical agent id — stable across deployments.
+   *
+   * Grammar: lowercase alphanumeric + hyphen, **first character must be a
+   * letter**. Mirrors `OperatorSchema.id` and `StackConfigSchema.id` segments
+   * (cortex#141, cortex#144): the same trilogy of identifiers that end up
+   * embedded verbatim in NATS subjects (`local.{op}.{stack}.dispatch.{agent}.>`
+   * after A.5.5). NATS subject segments starting with a digit interact poorly
+   * with downstream pattern-matchers that treat segments as numeric literals;
+   * letter-prefix is the safe boundary.
+   *
+   * Closing cortex#145 — the last permissive regex in the operator/stack/agent
+   * trilogy now tightens to the same letter-prefix rule. Migration hint for an
+   * agent id hitting this rule: rename `2agent` → `team-2agent` or
+   * `agent-2026` (prepend / wrap the digits with a letter-prefixed token).
+   */
+  id: z.string().min(1).regex(
+    /^[a-z][a-z0-9-]*$/,
+    "agent id must be lowercase alphanumeric + hyphen, starting with a letter (e.g. 'luna', 'echo', 'team-research'); rename digit-prefixed ids like '2agent' to 'team-2agent' or 'agent-2026'",
+  ),
   /** Display name shown to humans. */
   displayName: z.string().min(1),
   /**
@@ -316,17 +334,22 @@ export const AgentSchema = z.object({
    * adapter treats it as agent-originated (vs human-originated).
    *
    * Coupling rule (§9.3): values MUST be agent ids — never platform user ids.
-   * Schema-level format check applies the same `^[a-z0-9-]+$` regex as
-   * `AgentSchema.id` and `OperatorSchema.id` so a typo (e.g. accidentally
-   * pasting a Discord user id like `"1497..."`) is caught at config load,
-   * not silently when the registry fails to resolve the reference
-   * (Holly W2 review).
+   * Schema-level format check applies the same `^[a-z][a-z0-9-]*$` regex as
+   * `AgentSchema.id` and `OperatorSchema.id` (cortex#141/#144/#145 trilogy) so
+   * a typo (e.g. accidentally pasting a Discord user id like `"1497..."`) is
+   * caught at config load, not silently when the registry fails to resolve
+   * the reference (Holly W2 review). The letter-prefix rule also catches the
+   * digit-only-snowflake paste-bug deterministically rather than relying on
+   * downstream registry resolution to fail.
    *
    * Validation that the referenced ids resolve to known agents happens at
    * load time in the agent registry (MIG-7.2a), not in this schema.
    */
   trust: z.array(
-    z.string().regex(/^[a-z0-9-]+$/, "trust entries must be agent ids (lowercase alphanumeric)"),
+    z.string().regex(
+      /^[a-z][a-z0-9-]*$/,
+      "trust entries must be agent ids — lowercase alphanumeric + hyphen, starting with a letter (e.g. 'echo', 'team-research'); rename digit-prefixed entries like '2agent' to 'team-2agent' or 'agent-2026'",
+    ),
   ).default([]),
   /** Per-platform presence blocks — at least one is required. */
   presence: PresenceSchema,
