@@ -174,6 +174,25 @@ describe("CapabilitySchema.description", () => {
     const parsed = CapabilitySchema.parse(minCapability({ description: "." }));
     expect(parsed.description).toBe(".");
   });
+
+  test("rejects whitespace-only description (`.trim().min(1)` guard)", () => {
+    // `.min(1)` alone accepts `" "` (length 1) — `.trim().min(1)` rejects
+    // it because the trimmed length is 0. Pins the operator-facing contract:
+    // blank-looking descriptions never propagate to the registry / dashboard.
+    expect(() =>
+      CapabilitySchema.parse(minCapability({ description: "   " })),
+    ).toThrow(/capability\.description is required/);
+    expect(() =>
+      CapabilitySchema.parse(minCapability({ description: "\t\n " })),
+    ).toThrow(/capability\.description is required/);
+  });
+
+  test("trims surrounding whitespace on otherwise-valid descriptions", () => {
+    const parsed = CapabilitySchema.parse(
+      minCapability({ description: "  TypeScript review  " }),
+    );
+    expect(parsed.description).toBe("TypeScript review");
+  });
 });
 
 describe("CapabilitySchema.tags", () => {

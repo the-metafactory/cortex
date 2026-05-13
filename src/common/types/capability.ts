@@ -254,11 +254,17 @@ export const CapabilitySchema = z.object({
   id: CapabilityIdSchema,
   /**
    * Short human-readable summary. Non-empty so blank descriptions can't
-   * silently propagate into the registry / dashboard. Operators wanting a
-   * very brief label can write `description: "."` to satisfy the rule;
-   * the design doesn't require a minimum prose length beyond "non-empty".
+   * silently propagate into the registry / dashboard. `.trim().min(1)` rejects
+   * whitespace-only strings (`" "`, `"\t"`, etc.) which would otherwise pass
+   * `.min(1)` despite being functionally blank in the UI surfaces consuming
+   * the field. Operators wanting a very brief label can write
+   * `description: "."` to satisfy the rule; the design doesn't require a
+   * minimum prose length beyond "non-empty after trim".
    */
-  description: z.string().min(1, "capability.description is required and must be non-empty"),
+  description: z
+    .string()
+    .trim()
+    .min(1, "capability.description is required and must be non-empty"),
   /**
    * Taxonomic tags. May be empty array; every entry must conform to the
    * tag grammar. Dedup is not enforced (registry can dedupe at query time).
