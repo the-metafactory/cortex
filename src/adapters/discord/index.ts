@@ -32,6 +32,7 @@ import {
   createSystemAdapterRecoveredEvent,
 } from "../../bus/system-events";
 import { formatEnvelopeAsMarkdown } from "../envelope-renderer";
+import { parseReviewWireFormat, reviewThreadName } from "./wire-format";
 
 /**
  * Cortex-deployment-level wiring passed alongside the agent + presence pair.
@@ -410,6 +411,65 @@ export class DiscordAdapter implements PlatformAdapter {
         _native: message,
       };
 
+      // cortex#120 — Auto-thread on inbound review wire format.
+      //
+      // When a message in a CHANNEL (not already in a thread, not a DM)
+      // matches `<@bot> review <repo>#<N>`, find-or-create the
+      // `{repo}/pr/<N>` thread and redirect the inbound dispatch to it.
+      // The agent's reply then posts to the thread (per dispatch-handler's
+      // `targetFromMsg` which routes on `msg.threadId`), per the SOP at
+      // `CLAUDE.md ## Discord Channel Routing` step 3.
+      //
+      // Gates:
+      //   - Skip if DM (DMs don't have threads in our routing model)
+      //   - Skip if already in a thread/private channel (existing thread
+      //     handles it — don't re-create or duplicate)
+      //   - Only match the `review` verb in v1; other verbs (`work-on`,
+      //     `ship`, `babysit`) are explicitly deferred to a follow-up PR
+      //   - Parsed `botId` MUST equal this bot's `client.user.id`. The
+      //     adapter's mention-check already filtered for mentions to us,
+      //     but with `trustedBotIds` peer-mentions can also reach this
+      //     point — we don't want adapter A auto-threading on a message
+      //     that mentions adapter B.
+      if (!isDM && !isThread && !isPrivateChannel) {
+        // Match against the RAW Discord content (`message.content`),
+        // not `finalContent` — the latter has the @-mention stripped by
+        // `extractContent`, and the wire format anchors on `<@bot>`.
+        const parsed = parseReviewWireFormat(message.content);
+        if (parsed && parsed.botId === this.client.user?.id) {
+          const targetName = reviewThreadName(parsed);
+          const result = await this.findOrCreateThreadByName(
+            channel.id,
+            targetName,
+          );
+          if (result) {
+            // Mutate the InboundMessage so all downstream code
+            // (dispatch-handler.targetFromMsg, channel-context
+            // resolution, session-key derivation) sees the thread
+            // context. We intentionally do NOT swap `_native` — it
+            // stays as the original Discord Message so
+            // dispatch-handler's `inboundMessageId` derivation
+            // (`(msg._native as { id }).id`) keeps using the inbound
+            // message id, not the thread id (which would lose the
+            // dedup correlation for `system.inbound.aborted` envelopes).
+            inboundMsg.threadId = result.threadId;
+            inboundMsg.threadName = targetName;
+            console.log(
+              `discord-${this.instanceId}: auto-threaded inbound review to "${targetName}" (thread=${result.threadId})`,
+            );
+          } else {
+            // Thread create failed — leave inboundMsg as channel-level
+            // and let the agent reply at channel scope. The user sees
+            // a normal reply; the operator sees the warn log from
+            // `findOrCreateThreadByName`. Graceful degradation rather
+            // than silently dropping the message.
+            console.warn(
+              `discord-${this.instanceId}: auto-thread for "${targetName}" failed — falling back to channel reply`,
+            );
+          }
+        }
+      }
+
       await onMessage(inboundMsg);
     });
 
@@ -726,6 +786,105 @@ export class DiscordAdapter implements PlatformAdapter {
     } catch (err) {
       console.warn(`discord-${this.instanceId}: thread creation failed, falling back to channel:`, err instanceof Error ? err.message : err);
       return { instanceId: this.instanceId, channelId: msg.channelId, _native: nativeMsg.channel };
+    }
+  }
+
+  /**
+   * cortex#120 — Find or create a public thread by name on a parent text
+   * channel. Used by the inbound auto-thread path: when a message in a
+   * CHANNEL matches the review wire format, route the agent's reply into
+   * the per-PR thread `{repo}/pr/<N>` instead of the channel.
+   *
+   * Distinct from `createThread` (which always creates a NEW thread
+   * attached to a specific message via `msg.startThread`):
+   *
+   *   - `createThread(msg, name)` — message-anchored, used by async/team
+   *      dispatch paths that always create a fresh per-task thread
+   *   - `findOrCreateThreadByName(parentChannelId, name)` — channel-
+   *      anchored, idempotent. First call creates; subsequent calls reuse
+   *      the existing thread. The right primitive for `{repo}/pr/<N>`
+   *      threads which must collapse to one regardless of how many review
+   *      requests land in the channel.
+   *
+   * Lookup strategy: `channel.threads.fetchActive()` lists currently
+   * non-archived threads. Discord's API distinguishes active vs archived
+   * — once a thread auto-archives after 24h of inactivity it's no longer
+   * in this list. We accept that: any inbound review ping inside the
+   * 24h window reuses the active thread; one that lands after archive
+   * creates a fresh thread. The alternative (also list archived via
+   * `fetchArchived`) is slower and rarely worth it for per-PR work
+   * windows that close in hours.
+   *
+   * Failure modes: if `client.channels.fetch` returns a non-text
+   * channel, or the parent doesn't support threads, returns `null`.
+   * Callers fall back to channel-level reply.
+   */
+  async findOrCreateThreadByName(
+    parentChannelId: string,
+    name: string,
+  ): Promise<{ threadId: string; channel: ThreadChannel } | null> {
+    if (!this.client) return null;
+
+    let parent: TextChannel;
+    try {
+      const fetched = await this.client.channels.fetch(parentChannelId);
+      if (!fetched || fetched.type !== ChannelType.GuildText) {
+        // We only auto-thread on regular guild text channels. Forum
+        // channels, voice channels, announcement channels etc. have
+        // different thread semantics (or no thread support) — caller
+        // falls back to channel-level reply.
+        return null;
+      }
+      parent = fetched as TextChannel;
+    } catch (err) {
+      console.warn(
+        `discord-${this.instanceId}: findOrCreateThreadByName: cannot fetch parent ${parentChannelId}:`,
+        err instanceof Error ? err.message : err,
+      );
+      return null;
+    }
+
+    // Active-threads lookup. discord.js caches the result; subsequent
+    // hits in the same process don't re-fetch — important because the
+    // hot path is "every channel inbound that mentions a bot".
+    try {
+      const active = await parent.threads.fetchActive();
+      for (const thread of active.threads.values()) {
+        if (thread.name === name) {
+          return { threadId: thread.id, channel: thread };
+        }
+      }
+    } catch (err) {
+      // Lookup failure shouldn't prevent thread creation — the create
+      // call may still succeed even if listing didn't. Log and continue.
+      console.warn(
+        `discord-${this.instanceId}: findOrCreateThreadByName: fetchActive failed for ${parentChannelId}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+
+    // Not found in the active set → create. Use `auto_archive_duration:
+    // 1440` (24h) per the existing `worklog-manager` convention so the
+    // archive window matches what operators already expect for per-task
+    // threads. `type: PublicThread` because review threads are
+    // discoverable to everyone in the channel — the alternative
+    // (PrivateThread) restricts visibility to the @-mentioned users
+    // and the bot, which is wrong for review work that the wider team
+    // observes.
+    try {
+      const thread = await parent.threads.create({
+        name,
+        autoArchiveDuration: 1440,
+        type: ChannelType.PublicThread,
+        reason: `cortex#120 auto-thread for review wire format`,
+      });
+      return { threadId: thread.id, channel: thread };
+    } catch (err) {
+      console.warn(
+        `discord-${this.instanceId}: findOrCreateThreadByName: create failed for "${name}" on ${parentChannelId}:`,
+        err instanceof Error ? err.message : err,
+      );
+      return null;
     }
   }
 
