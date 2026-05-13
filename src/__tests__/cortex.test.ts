@@ -726,4 +726,33 @@ describe("runDryRun — config validator (cortex#88 item 2)", () => {
     expect(result.stdout).toBe("");
     rmSync(dir, { recursive: true, force: true });
   });
+
+  test("cortex#106 item 4: legacy bot.yaml shape (no inlineAgents) exits 2", () => {
+    // Pre-cortex#106: a legacy bot.yaml with a valid singular `agent:` block
+    // loaded fine, the loader returned `inlineAgents: []`, and dry-run
+    // reported "1 agents" via a hardcoded fallback that masked the
+    // degenerate case. Post-cortex#106: report the actual zero-agent count
+    // and exit non-zero so the operator sees the config is invalid for
+    // the cortex-shape pipeline.
+    const dir = mkdtempSync(join(tmpdir(), "cortex-dryrun-zero-"));
+    const cfgPath = join(dir, "bot.yaml");
+    writeFileSync(
+      cfgPath,
+      [
+        "agent:",
+        "  name: luna",
+        "  displayName: Luna",
+        "discord: []",
+        "mattermost: []",
+        "claude: {}",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const result = runDryRun(cfgPath);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toMatch(/has no agents — config invalid/);
+    expect(result.stdout).toBe("");
+    rmSync(dir, { recursive: true, force: true });
+  });
 });

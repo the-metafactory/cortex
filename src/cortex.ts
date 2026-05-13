@@ -1048,11 +1048,19 @@ export function runDryRun(configPath: string): DryRunResult {
   const stderr: string[] = [];
   try {
     const { config, inlineAgents } = loadConfigWithAgents(configPath);
-    // For cortex-shape input `inlineAgents.length` is the canonical agent
-    // count (operator perspective). Legacy bot.yaml carries one singular
-    // `agent:` field — fall back to 1 in that case so the operator sees a
-    // truthful number rather than `0 agents` on a working legacy config.
-    const agentCount = inlineAgents.length > 0 ? inlineAgents.length : 1;
+    // cortex#106 item 4: clamp to the actual length — don't mask a degenerate
+    // "no agents" config behind a fallback of 1. For cortex-shape input
+    // `CortexConfigSchema.agents.min(1)` enforces ≥1 at parse time, so a
+    // zero here means a legacy bot.yaml shape that the loader returned with
+    // empty `inlineAgents` AND no synthesized singular agent — surface that
+    // as a hard failure rather than reporting "1 agent" misleadingly.
+    const agentCount = inlineAgents.length;
+    if (agentCount === 0) {
+      stderr.push(
+        `cortex config validation FAILED: ${configPath} has no agents — config invalid`,
+      );
+      return { exitCode: 2, stdout: stdout.join("\n"), stderr: stderr.join("\n") + "\n" };
+    }
     const rendererCount = config.renderers?.length ?? 0;
     const natsUrl = config.nats?.url ?? "(disabled)";
     stdout.push(
