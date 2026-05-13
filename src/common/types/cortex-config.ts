@@ -310,7 +310,7 @@ export const AgentSchema = z.object({
    * agent id hitting this rule: rename `2agent` → `team-2agent` or
    * `agent-2026` (prepend / wrap the digits with a letter-prefixed token).
    */
-  id: z.string().min(1).regex(
+  id: z.string().regex(
     /^[a-z][a-z0-9-]*$/,
     "agent id must be lowercase alphanumeric + hyphen, starting with a letter (e.g. 'luna', 'echo', 'team-research'); rename digit-prefixed ids like '2agent' to 'team-2agent' or 'agent-2026'",
   ),
