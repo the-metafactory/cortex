@@ -120,3 +120,83 @@ features:
     parent: C-100
     issue: 10
     depends_on: [C-108]
+
+  I-100:
+    name: Internet of Agentic Work (umbrella META)
+    status: in-progress
+    description: >
+      Operator-facing umbrella for the Internet of Agentic Work — the composition
+      model where stacks ({operator_id}/{stack_id}) join networks via NATS leaf-node
+      federation; networks compose into the operator's federated graph; agents
+      delegate across stacks and networks via the orchestrator pattern. Five
+      implementation phases (A–E) deliver this incrementally. See
+      docs/design-internet-of-agentic-work.md (synthesis) and
+      docs/plan-internet-of-agentic-work.md (implementation plan).
+    issue: 110
+    children:
+      - I-101
+      - I-102
+      - I-103
+      - I-104
+      - I-105
+    depends_on: [C-108]
+
+  I-101:
+    name: IAW Phase A — Foundation (substrate harness + visibility + stack identity)
+    status: planned
+    description: >
+      Land cortex#91 SessionHarness interface + ClaudeCodeHarness + BusPeerHarness;
+      bump vendored myelin envelope past 96b14ea (chain-of-stamps + F-021 task
+      fields); parameterise classification at the four hardcoded emit sites; add
+      surface-router visibility filter; add cortex.yaml stack: block (Q7 lock-in)
+      and capabilities: block (Q2 lock-in). Phase A.5 coordinates with myelin on
+      the {stack} segment namespace extension.
+    parent: I-100
+    depends_on: [C-108]
+
+  I-102:
+    name: IAW Phase B — Identity (NKey-signed bot↔bot)
+    status: planned
+    description: >
+      Consume cortex#102 — BusPeerHarness verifies signed_by[] on every inbound
+      dispatch via TrustResolver.trustsByNKey(); ClaudeCodeHarness uses
+      MyelinRuntime.publish for bot-bot calls. Discord-platform-ID trust retires
+      for bot↔bot paths; stays for human-to-bot DMs.
+    parent: I-100
+    depends_on: [I-101]
+
+  I-103:
+    name: IAW Phase C — Policy + schema flip (PolicyEngine at M6)
+    status: planned
+    description: >
+      Land cortex#107 PolicyEngine at M6; the one and only cortex.yaml schema
+      flip from per-adapter roles[] to top-level policy:{ principals[], roles[] }.
+      principals[] carries home_operator + home_stack per Q1 lock-in. Audit
+      envelopes (system.access.{allowed,denied}) per cortex#97 integration.
+    parent: I-100
+    depends_on: [I-101, I-102]
+
+  I-104:
+    name: IAW Phase D — Federation (multi-operator + cloud-side network registry)
+    status: planned
+    description: >
+      Consume cortex#107 Step H multi-operator dashboard + cortex#109 §E peer
+      registry. policy.federated.networks[] schema lands; surface-router gates
+      inbound federated.* by per-peer accept rules; cloud-side network registry
+      service deployed alongside the dashboard (Q3 lock-in: centralised, NOT
+      gossiped). Two-operator integration test demonstrates federated task
+      with verifiable chain-of-stamps.
+    parent: I-100
+    depends_on: [I-103]
+
+  I-105:
+    name: IAW Phase E — Multi-network bridges + delegation
+    status: planned
+    description: >
+      Multi-link MyelinRuntime supports N concurrent NATS leaf-nodes (one per
+      network membership per Q4 lock-in). Orchestrator agent reference
+      implementation delegates across networks via chain-of-stamps. Mesh
+      varieties (private/isolated-private/bridge) documented and operable.
+      Phase E delivers the §3.6 delegation pattern from the design doc.
+    parent: I-100
+    depends_on: [I-104]
