@@ -110,6 +110,18 @@ export class DiscordAdapter implements PlatformAdapter {
   private presence: DiscordPresence;
   private infra: DiscordAdapterInfra;
   /**
+   * cortex#108 item 1: stored `onMessage` callback from `start()` so the
+   * separately-invoked `attachInboundDispatch()` can register the
+   * `messageCreate` listener AFTER Pass 2 of cortex.ts has populated the
+   * trusted-bot allowlist. The TOCTOU window between adapter login and
+   * `setTrustedBotIds` was silently dropping bot-to-bot messages.
+   *
+   * Null between construction and `start()`; set by `start()`; consumed by
+   * `attachInboundDispatch()`. Latched once attached so re-calls are no-ops.
+   */
+  private onMessage: ((msg: InboundMessage) => Promise<void>) | null = null;
+  private inboundDispatchAttached = false;
+  /**
    * Cached pointers to `infra.runtime` / `infra.systemEventSource`. Kept as
    * dedicated fields (rather than always reading via `this.infra.*`) so the
    * `warnedMissingSource` latch — which fires once per process per
@@ -169,6 +181,24 @@ export class DiscordAdapter implements PlatformAdapter {
     }
   }
 
+  /**
+   * Connect to Discord and prepare the adapter for inbound dispatch.
+   *
+   * cortex#108 item 1 (TOCTOU fix): `start()` performs `client.login()` and
+   * wires up the shard-lifecycle listeners (disconnect/recovered/degraded
+   * envelopes, pending-delivery drains) but does NOT register the
+   * `messageCreate` handler. The caller MUST call `attachInboundDispatch()`
+   * after Pass 2 has populated `trustedBotIds` so the hot-path readers see
+   * the post-merge allowlist on the first delivered event.
+   *
+   * The split is deliberate: registering `messageCreate` inside `start()`
+   * (the pre-cortex#108 shape) opens a TOCTOU window where adapter A's
+   * login resolves before adapter B exists in the resolver, so any
+   * bot-to-bot @-mention from B that lands in that window is silently
+   * dropped by A's allowlist check. Deferring listener attach to AFTER
+   * Pass 2 closes the window; the discord.js gateway buffers events at
+   * the WebSocket layer until the listener registers, so no message loss.
+   */
   async start(onMessage: (msg: InboundMessage) => Promise<void>): Promise<void> {
     const { client, health } = createDiscordClient(
       { displayName: this.agent.displayName, guildId: this.presence.guildId },
@@ -188,6 +218,11 @@ export class DiscordAdapter implements PlatformAdapter {
     );
     this.client = client;
     this.connectionHealth = health;
+    // cortex#108 item 1: stash the callback for the deferred
+    // `attachInboundDispatch()` call. The listener registration itself is
+    // intentionally NOT done here — see the method's doc comment for the
+    // TOCTOU rationale.
+    this.onMessage = onMessage;
 
     // MIG-3b-ii: emit `system.adapter.disconnected` on every shard disconnect.
     // Distinct from degraded — disconnect fires immediately, degraded only
@@ -220,6 +255,49 @@ export class DiscordAdapter implements PlatformAdapter {
       await this.drainPendingResults();
       await this.drainPendingOperatorDMs();
     });
+
+    await this.client.login(this.presence.token);
+  }
+
+  /**
+   * cortex#108 item 1 — register the `messageCreate` listener using the
+   * callback stored by `start()`. Idempotent: re-calls after the first are
+   * no-ops, so cortex.ts can safely call this from a Pass-2 loop even if
+   * the adapter was started via a path that hot-reloads / re-binds.
+   *
+   * Why this exists as a separate phase (the TOCTOU fix):
+   *   Pass 1 in cortex.ts logs every adapter into Discord (and registers
+   *   each `client.user.id` with TrustResolver). Pass 2 walks each
+   *   adapter's `agent.trust[]`, resolves peer bot ids, and calls
+   *   `setTrustedBotIds(merged)`. If `messageCreate` registered inside
+   *   `start()`, then adapter A would be processing inbound messages
+   *   BEFORE Pass 2 merged in peer B's bot id, silently dropping any
+   *   bot-to-bot @-mention from B (the messageCreate handler's
+   *   `trustedBotIds.has()` check returns false because B wasn't merged
+   *   in yet).
+   *
+   *   By splitting attach off, cortex.ts can guarantee the strict order:
+   *
+   *     1. Pass 1: start() all adapters, register bot user ids in resolver
+   *     2. Pass 2: setTrustedBotIds(merged) on each adapter
+   *     3. Pass 2 (continued): attachInboundDispatch() on each adapter
+   *
+   *   The discord.js gateway buffers events at the WebSocket layer until
+   *   a JS listener is attached, so no events are dropped during the
+   *   start()→attach window — they're held in the underlying socket and
+   *   delivered in arrival order once the listener registers.
+   *
+   * Throws if called before `start()` (no client / no onMessage stored).
+   */
+  attachInboundDispatch(): void {
+    if (this.inboundDispatchAttached) return;
+    if (!this.client || !this.onMessage) {
+      throw new Error(
+        `discord-adapter[${this.instanceId}]: attachInboundDispatch() called before start() completed — client / onMessage not initialised. ` +
+          `Cortex.ts must await start() (Pass 1) before attachInboundDispatch() (Pass 2).`,
+      );
+    }
+    const onMessage = this.onMessage;
 
     // Dedup: Discord gateway can redeliver events on reconnect
     const recentMessageIds = new Set<string>();
@@ -335,7 +413,7 @@ export class DiscordAdapter implements PlatformAdapter {
       await onMessage(inboundMsg);
     });
 
-    await this.client.login(this.presence.token);
+    this.inboundDispatchAttached = true;
   }
 
   async stop(): Promise<void> {

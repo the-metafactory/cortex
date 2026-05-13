@@ -478,6 +478,16 @@ export async function startCortex(
   // (cross-process — they live in a different cortex deployment) are
   // silently skipped; the operator-explicit field in
   // `presence.discord.trustedBotIds` covers those.
+  //
+  // cortex#108 item 1 — closing the Pass-1→Pass-2 TOCTOU window: after
+  // `setTrustedBotIds(merged)` populates the allowlist, we IMMEDIATELY
+  // call `attachInboundDispatch()` so the `messageCreate` listener is
+  // registered against the post-merge allowlist. Order is load-bearing:
+  // setTrustedBotIds MUST complete before attachInboundDispatch, so the
+  // first delivered message sees the correct allowlist. Echo's round-1
+  // review of cortex#105 flagged the start()-attaches-listener-pre-merge
+  // shape as a [major/security] silent-drop bug for bot-to-bot traffic
+  // landing in the startup window.
   for (const { adapter, agent, instance, instanceId, explicitTrustedBotIds } of startedDiscord) {
     const merged = new Set<string>(explicitTrustedBotIds);
     const resolvedPeers: string[] = [];
@@ -493,6 +503,11 @@ export async function startCortex(
       }
     }
     adapter.setTrustedBotIds(merged);
+    // cortex#108 item 1: attach the messageCreate listener now — AFTER the
+    // merged allowlist is in place. discord.js holds inbound events at the
+    // WebSocket layer until a JS listener is attached, so no startup-window
+    // bot-to-bot traffic is dropped.
+    adapter.attachInboundDispatch();
     console.log(
       `cortex: discord adapter started (instance: ${instanceId}, guild: ${instance.guildId}, ` +
         `trustedBotIds: ${adapter.trustedBotIdCount}` +
