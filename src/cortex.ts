@@ -913,6 +913,53 @@ function checkSingleton(): void {
   }
 }
 
+// cortex#88 item 2 — `cortex start --dry-run` config validator.
+//
+// `scripts/postinstall.sh` already advertises `cortex start --config <path>
+// --dry-run` to operators as a post-migration sanity check. This helper
+// implements that contract: parse the file through the normal load path
+// (`loadConfigWithAgents`, which validates against both `BotConfigSchema`
+// and `CortexConfigSchema` depending on shape), print a one-line OK
+// summary, exit 0. Schema parse failures surface verbatim with exit 2 so
+// the postinstall path stays distinguishable from "file unreadable" (1).
+//
+// Exported so the unit tests can invoke it in-process with captured stdout
+// /stderr — the production CLI block below delegates to it as well. No
+// adapter startup, no NATS connect, no plist render, no daemon — purely
+// schema validation.
+export interface DryRunResult {
+  exitCode: 0 | 2;
+  stdout: string;
+  stderr: string;
+}
+
+export function runDryRun(configPath: string): DryRunResult {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  try {
+    const { config, inlineAgents } = loadConfigWithAgents(configPath);
+    // For cortex-shape input `inlineAgents.length` is the canonical agent
+    // count (operator perspective). Legacy bot.yaml carries one singular
+    // `agent:` field — fall back to 1 in that case so the operator sees a
+    // truthful number rather than `0 agents` on a working legacy config.
+    const agentCount = inlineAgents.length > 0 ? inlineAgents.length : 1;
+    const rendererCount = config.renderers?.length ?? 0;
+    const natsUrl = config.nats?.url ?? "(disabled)";
+    stdout.push(
+      `cortex config validation OK — ${agentCount} agents, ${rendererCount} renderers, NATS=${natsUrl}`,
+    );
+    return { exitCode: 0, stdout: stdout.join("\n") + "\n", stderr: stderr.join("\n") };
+  } catch (err) {
+    // Operator-readable: surface the Zod-shaped message verbatim. The
+    // schema's own error formatter is already field-pathed (`agent.name:
+    // Required`, etc.) so we don't try to re-pretty-print here.
+    stderr.push(
+      `cortex config validation FAILED: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return { exitCode: 2, stdout: stdout.join("\n"), stderr: stderr.join("\n") + "\n" };
+  }
+}
+
 // `import.meta.main` is true only when this file is the CLI entrypoint.
 // Skipping the CLI wiring at module load is what lets tests
 // `import { startCortex }` here without parsing argv or registering signal
@@ -927,7 +974,17 @@ if (import.meta.main) {
     .command("start")
     .description("Start the bot")
     .option("--config <path>", "Path to bot config YAML", DEFAULT_CONFIG)
+    .option("--dry-run", "Validate config file and exit (no adapter / NATS / daemon startup)")
     .action(async (options) => {
+      // cortex#88 item 2 — short-circuit: skip PID file, signal handlers,
+      // and the full startCortex pipeline. Just parse + validate the config.
+      if (options.dryRun) {
+        const result = runDryRun(options.config);
+        if (result.stdout) process.stdout.write(result.stdout);
+        if (result.stderr) process.stderr.write(result.stderr);
+        process.exit(result.exitCode);
+      }
+
       mkdirSync(STATE_DIR, { recursive: true });
       checkSingleton();
       writeFileSync(PID_FILE, String(process.pid));

@@ -29,7 +29,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { BotConfigSchema, type BotConfig } from "../common/types/config";
 import type { Agent } from "../common/types/cortex-config";
-import { startCortex } from "../cortex";
+import { runDryRun, startCortex } from "../cortex";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { EnvelopeHandler, MyelinRuntime } from "../bus/myelin/runtime";
 
@@ -616,5 +616,112 @@ presence:
 
     await handle.stop();
     rmSync(tmpAgentsDir, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#88 item 2 — `cortex start --dry-run`
+// ---------------------------------------------------------------------------
+
+describe("runDryRun — config validator (cortex#88 item 2)", () => {
+  test("success path: returns exit 0 with one-line OK summary", () => {
+    // Minimal cortex.yaml-shape config: operator + one agent w/ discord
+    // presence. `loadConfigWithAgents` detects cortex shape from the
+    // presence of `operator:` + `agents:` and validates against
+    // `CortexConfigSchema`.
+    const dir = mkdtempSync(join(tmpdir(), "cortex-dryrun-ok-"));
+    const cfgPath = join(dir, "cortex.yaml");
+    writeFileSync(
+      cfgPath,
+      [
+        "operator:",
+        "  id: jc",
+        "  dataResidency: NZ",
+        "agents:",
+        "  - id: luna",
+        "    displayName: Luna",
+        "    persona: ./personas/luna.md",
+        "    roles: []",
+        "    trust: []",
+        "    presence:",
+        "      discord:",
+        "        token: tok",
+        "        guildId: \"100000000000000001\"",
+        "        agentChannelId: \"100000000000000002\"",
+        "        logChannelId: \"100000000000000003\"",
+        "renderers: []",
+        "claude: {}",
+        "nats:",
+        "  url: nats://localhost:4222",
+        "  subjects: [\"local.jc.>\"]",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const result = runDryRun(cfgPath);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/cortex config validation OK/);
+    expect(result.stdout).toMatch(/1 agents/);
+    expect(result.stdout).toMatch(/0 renderers/);
+    expect(result.stdout).toMatch(/NATS=nats:\/\/localhost:4222/);
+    expect(result.stderr).toBe("");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("success path: NATS disabled when nats block absent", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cortex-dryrun-no-nats-"));
+    const cfgPath = join(dir, "cortex.yaml");
+    writeFileSync(
+      cfgPath,
+      [
+        "operator:",
+        "  id: jc",
+        "agents:",
+        "  - id: luna",
+        "    displayName: Luna",
+        "    persona: ./personas/luna.md",
+        "    roles: []",
+        "    trust: []",
+        "    presence:",
+        "      discord:",
+        "        token: tok",
+        "        guildId: \"100000000000000001\"",
+        "        agentChannelId: \"100000000000000002\"",
+        "        logChannelId: \"100000000000000003\"",
+        "renderers: []",
+        "claude: {}",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const result = runDryRun(cfgPath);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/NATS=\(disabled\)/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("failure path: returns exit 2 with operator-readable schema error", () => {
+    // Cortex-shape input with a missing required field (no displayName on
+    // the agent) — should be rejected by CortexConfigSchema.
+    const dir = mkdtempSync(join(tmpdir(), "cortex-dryrun-fail-"));
+    const cfgPath = join(dir, "cortex.yaml");
+    writeFileSync(
+      cfgPath,
+      [
+        "operator:",
+        "  id: jc",
+        "agents:",
+        "  - id: luna",
+        // missing: displayName, persona, roles, trust, presence
+        "renderers: []",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const result = runDryRun(cfgPath);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toMatch(/cortex config validation FAILED/);
+    expect(result.stdout).toBe("");
+    rmSync(dir, { recursive: true, force: true });
   });
 });
