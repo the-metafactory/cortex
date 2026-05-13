@@ -2,13 +2,40 @@ import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { startServer } from "../server";
 import { initDatabase } from "../db/init";
 import { DEFAULT_CONFIG } from "../config";
-import { join } from "path";
+import { dirname, join } from "path";
 import { tmpdir } from "os";
-import { rmSync } from "fs";
+import { existsSync, rmSync } from "fs";
+import { fileURLToPath } from "url";
 import type { Database } from "bun:sqlite";
 import type { Server } from "bun";
 import type { WsClientRegistry } from "../ws/client-registry";
 import type { WsData } from "../ws/types";
+
+// Mirror `DASHBOARD_DIST` from ../server.ts. Server resolves it as
+// `<server.ts dir>/../../dist/dashboard-v2`; from this test file that's
+// three levels up (out of `__tests__/`, `mc/`, `surface/`) plus the same
+// `dist/dashboard-v2` tail. Kept in lockstep with server.ts by hand —
+// if the server path ever moves, this needs to move with it.
+const DASHBOARD_DIST = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "..",
+  "dist",
+  "dashboard-v2"
+);
+const DASHBOARD_INDEX = join(DASHBOARD_DIST, "index.html");
+const dashboardBuilt = existsSync(DASHBOARD_INDEX);
+if (!dashboardBuilt) {
+  // One-line discoverable log so a developer who DOES build the dashboard
+  // (or who wonders why the count says "1 skip") knows exactly how to
+  // enable the skipped case. Matches cortex#89's "self-skip with a clear
+  // log" requirement.
+  console.log(
+    `[mc-server-test] dashboard SPA test skipped — missing ${DASHBOARD_INDEX}. ` +
+      `Run \`bun build src/dashboard/index.html --outdir=dist/dashboard-v2\` to enable.`
+  );
+}
 
 describe("mission-control server", () => {
   let db: Database;
@@ -48,7 +75,15 @@ describe("mission-control server", () => {
     expect(res.status).toBe(404);
   });
 
-  it("serves the React dashboard shell on GET /", async () => {
+  // cortex#89 — this case depends on the bundled dashboard artifact at
+  // `dist/dashboard-v2/index.html`. The build is not part of `bun test`
+  // (option 2 from cortex#89: self-skip rather than bloat every run with
+  // a 10-30s build step). On a fresh checkout `dashboardBuilt` is false
+  // and the case skips with a discoverable log line; once a developer
+  // runs `bun build src/dashboard/index.html --outdir=dist/dashboard-v2`
+  // the case becomes active.
+  const dashboardIt = dashboardBuilt ? it : it.skip;
+  dashboardIt("serves the React dashboard shell on GET /", async () => {
     const res = await fetch(`http://localhost:${testPort}/`);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
