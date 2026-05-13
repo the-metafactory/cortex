@@ -431,7 +431,17 @@ export class DiscordAdapter implements PlatformAdapter {
       //     but with `trustedBotIds` peer-mentions can also reach this
       //     point — we don't want adapter A auto-threading on a message
       //     that mentions adapter B.
-      if (!isDM && !isThread && !isPrivateChannel) {
+      // cortex#122: drop the `!isPrivateChannel` gate. That heuristic is
+      // `channel.members?.size === 2` — without the `GuildMembers` intent
+      // (cortex's client only enables `Guilds` + `GuildMessages`), the
+      // bot's `members` collection is a CACHE of users it has seen, not
+      // the real guild member list. In #cortex with only the bot + the
+      // pinging peer cached, `members.size === 2` evaluates true → the
+      // auto-thread block skips when it shouldn't. We don't need the
+      // private-channel gate here anyway: a real group DM would have
+      // `channel.type === ChannelType.GroupDM` and we'd want auto-thread
+      // there too in principle. The DM + thread gates remain.
+      if (!isDM && !isThread) {
         // Match against the RAW Discord content (`message.content`),
         // not `finalContent` — the latter has the @-mention stripped by
         // `extractContent`, and the wire format anchors on `<@bot>`.
