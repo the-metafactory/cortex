@@ -431,6 +431,49 @@ function detectAgentIdFromRoleHints(inst: LegacyDiscordInstance): string | undef
 }
 
 /**
+ * cortex#88 item 4 — flag when 2+ agents share the same
+ * `presence.discord.agentChannelId` after conversion.
+ *
+ * Grove's `bot.yaml` predates multi-agent — each Discord adapter block
+ * carries one `agentChannelId` per adapter, but in production the same
+ * id is repeated across all 3 adapters (the monobot legacy: agent events
+ * for Luna / Echo / Forge all land in the same channel). After
+ * migrate-config, all 3 cortex agents end up with an identical
+ * `agentChannelId` and per-agent log routing silently no-ops — every
+ * bot still posts into the shared channel.
+ *
+ * We don't blank the field: an operator may genuinely WANT a shared
+ * log channel for cross-agent context. The warning surfaces the
+ * situation so the operator decides — set distinct ids in cortex.yaml
+ * or accept the shared default.
+ *
+ * Fires at most ONCE per distinct shared id (so a 4-agent legacy config
+ * sharing one id produces one warning, not three).
+ */
+function detectSharedAgentChannelId(
+  agents: CortexConfig["agents"],
+  warnings: ConversionWarning[],
+): void {
+  const byChannel = new Map<string, string[]>();
+  for (const a of agents) {
+    const cid = a.presence.discord?.agentChannelId;
+    if (!cid) continue;
+    const existing = byChannel.get(cid) ?? [];
+    existing.push(a.id);
+    byChannel.set(cid, existing);
+  }
+  for (const [cid, ids] of byChannel) {
+    if (ids.length < 2) continue;
+    warnings.push({
+      field: "agents.agentChannelId",
+      message:
+        `WARN: migrate-config: agents [${ids.join(",")}] share agentChannelId ${cid} ` +
+        `— set distinct channels in cortex.yaml for per-agent log routing`,
+    });
+  }
+}
+
+/**
  * Synthesize the cortex `agents[]` list from the singular legacy `agent` plus
  * the (possibly multi-entry) `discord[]` and `mattermost[]` arrays.
  *
@@ -621,6 +664,7 @@ export function convertBotYaml(
 
   const operator = buildOperator(legacy, warnings);
   const { agents } = buildAgents(legacy, warnings, mappings, opts.configDir);
+  detectSharedAgentChannelId(agents, warnings);
   const renderers = buildRenderers(legacy, warnings);
 
   if (legacy.grove !== undefined) {

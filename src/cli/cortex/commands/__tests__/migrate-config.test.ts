@@ -827,6 +827,106 @@ describe("convertBotYaml — agent id detection (cortex#88 item 3)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// cortex#88 item 4 — shared agentChannelId across agents
+// ---------------------------------------------------------------------------
+
+describe("convertBotYaml — shared agentChannelId warning (cortex#88 item 4)", () => {
+  test("warn fires when 2+ agents share the same agentChannelId", () => {
+    // Grove monobot production shape: three Discord adapters, each with
+    // an `agent-*` role hint (so cortex#88 item 3's detection picks the
+    // distinct ids), but all three repeat the same `agentChannelId`
+    // because grove's bot.yaml carried one shared #agent-log channel.
+    // After migrate-config, all three cortex agents emit with the same
+    // id — per-agent log routing silently no-ops.
+    const sharedChannel = "1487029848164536361";
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      discord: [
+        {
+          token: "luna-token",
+          guildId: "1",
+          agentChannelId: sharedChannel,
+          logChannelId: "3",
+          roles: [{ name: "agent-luna", users: ["100000000000000001"], features: ["chat"] }],
+        },
+        {
+          token: "echo-token",
+          guildId: "10",
+          agentChannelId: sharedChannel,
+          logChannelId: "30",
+          roles: [{ name: "agent-echo", users: ["200000000000000002"], features: ["chat"] }],
+        },
+        {
+          token: "forge-token",
+          guildId: "100",
+          agentChannelId: sharedChannel,
+          logChannelId: "300",
+          roles: [{ name: "agent-forge", users: ["300000000000000003"], features: ["chat"] }],
+        },
+      ],
+    };
+    const result = convertBotYaml(legacy, {});
+    const sharedWarns = result.warnings.filter((w) => w.field === "agents.agentChannelId");
+    expect(sharedWarns).toHaveLength(1);
+    expect(sharedWarns[0]!.message).toMatch(/agents \[luna,echo,forge\] share agentChannelId 1487029848164536361/);
+    expect(sharedWarns[0]!.message).toMatch(/set distinct channels in cortex.yaml for per-agent log routing/);
+    // The channel id is NOT blanked — operator may want shared logging.
+    for (const a of result.cortex.agents) {
+      expect(a.presence.discord?.agentChannelId).toBe(sharedChannel);
+    }
+  });
+
+  test("warn skipped when each agent has a distinct agentChannelId", () => {
+    // Same multi-adapter monobot shape, but each adapter declares its own
+    // channel id. No warning should fire.
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      discord: [
+        {
+          token: "luna-token",
+          guildId: "1",
+          agentChannelId: "111111111111111111",
+          logChannelId: "3",
+          roles: [{ name: "agent-luna", users: ["100000000000000001"], features: ["chat"] }],
+        },
+        {
+          token: "echo-token",
+          guildId: "10",
+          agentChannelId: "222222222222222222",
+          logChannelId: "30",
+          roles: [{ name: "agent-echo", users: ["200000000000000002"], features: ["chat"] }],
+        },
+        {
+          token: "forge-token",
+          guildId: "100",
+          agentChannelId: "333333333333333333",
+          logChannelId: "300",
+          roles: [{ name: "agent-forge", users: ["300000000000000003"], features: ["chat"] }],
+        },
+      ],
+    };
+    const result = convertBotYaml(legacy, {});
+    expect(result.warnings.filter((w) => w.field === "agents.agentChannelId")).toHaveLength(0);
+  });
+
+  test("warn skipped for single-agent legacy bot.yaml", () => {
+    // Single-adapter case can't share by definition — the detection must
+    // not produce a spurious warning.
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      discord: [{
+        token: "t",
+        guildId: "1",
+        agentChannelId: "111111111111111111",
+        logChannelId: "3",
+      }],
+    };
+    const result = convertBotYaml(legacy, {});
+    expect(result.warnings.filter((w) => w.field === "agents.agentChannelId")).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildTrustList — extracted helper (Holly cortex#51 round 1 architecture)
 // ---------------------------------------------------------------------------
 
