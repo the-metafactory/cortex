@@ -527,13 +527,19 @@ function buildAgents(
   // for the numeric fallback can see the IDs that the hint path already
   // claimed.
   const claimedIds = new Set<string>();
+  // cortex#106 item 2: track which agent id first claimed each `agent-<X>`
+  // hint so a second adapter declaring the same hint surfaces a WARN
+  // instead of silently falling through to numeric numbering.
+  const hintFirstClaimer = new Map<string, string>();
   const variantIds: string[] = [];
   for (let i = 0; i < variantCount; i++) {
     const d = discordInstances[i];
+    let hintId: string | undefined;
     let id: string | undefined;
     if (d) {
-      id = detectAgentIdFromRoleHints(d);
-      if (id) {
+      hintId = detectAgentIdFromRoleHints(d);
+      if (hintId) {
+        id = hintId;
         warnings.push({
           field: `agents[${i}].id`,
           message:
@@ -549,8 +555,28 @@ function buildAgents(
     }
     // Last-resort: a role-hint produced an id that collides with one
     // already claimed by an earlier adapter. Fall through to numeric.
+    // cortex#106 item 1: drop the off-by-one — `variantIds.length` is the
+    // index of the variant being assigned, so `+1` yields the right suffix
+    // (`luna-2` at i=1, `luna-3` at i=2), not `luna-3`/`luna-4`.
     while (claimedIds.has(id)) {
-      id = `${baseId}-${variantIds.length + 1 + 1}`;
+      id = `${baseId}-${variantIds.length + 1}`;
+    }
+    // cortex#106 item 2: duplicate `agent-<X>` hint across adapters —
+    // operator misconfigured two adapters to both claim the same identity.
+    // Emit once per duplicated hint (the second adapter's appearance) so
+    // the operator sees both adapter ids and the resolved numeric fallback.
+    if (hintId !== undefined) {
+      const firstClaimer = hintFirstClaimer.get(hintId);
+      if (firstClaimer !== undefined) {
+        warnings.push({
+          field: `agents[${i}].id`,
+          message:
+            `WARN: migrate-config: agents [${firstClaimer},${id}] both claim ` +
+            `agent-${hintId} hint — first wins; second falls back to numeric`,
+        });
+      } else {
+        hintFirstClaimer.set(hintId, id);
+      }
     }
     claimedIds.add(id);
     variantIds.push(id);

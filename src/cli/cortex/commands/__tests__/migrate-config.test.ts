@@ -827,6 +827,95 @@ describe("convertBotYaml — agent id detection (cortex#88 item 3)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// cortex#106 items 1 + 2 — collision-fallback off-by-one + duplicate-hint warn
+// ---------------------------------------------------------------------------
+
+describe("convertBotYaml — collision fallback numbering (cortex#106 item 1)", () => {
+  test("three adapters all hinting the same id walk luna, luna-2, luna-3", () => {
+    // Pathological config: three adapters all carry `agent-luna` hints. The
+    // first wins via the hint path; subsequent collisions must walk the
+    // numeric ladder cleanly (`luna-2`, `luna-3`). Pre-cortex#106 the
+    // fallback formula carried `+1+1`, jumping to `luna-3`, `luna-4`.
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      discord: [
+        {
+          token: "t1", guildId: "1", agentChannelId: "2", logChannelId: "3",
+          roles: [{ name: "agent-luna", users: ["100000000000000001"], features: ["chat"] }],
+        },
+        {
+          token: "t2", guildId: "10", agentChannelId: "20", logChannelId: "30",
+          roles: [{ name: "agent-luna", users: ["200000000000000002"], features: ["chat"] }],
+        },
+        {
+          token: "t3", guildId: "100", agentChannelId: "200", logChannelId: "300",
+          roles: [{ name: "agent-luna", users: ["300000000000000003"], features: ["chat"] }],
+        },
+      ],
+    };
+    const result = convertBotYaml(legacy, {});
+    expect(result.cortex.agents.map((a) => a.id)).toEqual(["luna", "luna-2", "luna-3"]);
+  });
+});
+
+describe("convertBotYaml — duplicate hint across adapters (cortex#106 item 2)", () => {
+  test("warn fires when two adapters both claim the same `agent-<X>` hint", () => {
+    // Operator misconfigured: two adapters both declare an `agent-echo`
+    // role-resolver hint. The first wins (id="echo"); the second falls
+    // back to numeric (`luna-2`). A WARN surfaces the collision so the
+    // operator sees it instead of silently inheriting the wrong identity.
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      discord: [
+        {
+          token: "t1", guildId: "1", agentChannelId: "2", logChannelId: "3",
+          roles: [{ name: "agent-echo", users: ["100000000000000001"], features: ["chat"] }],
+        },
+        {
+          token: "t2", guildId: "10", agentChannelId: "20", logChannelId: "30",
+          roles: [{ name: "agent-echo", users: ["200000000000000002"], features: ["chat"] }],
+        },
+      ],
+    };
+    const result = convertBotYaml(legacy, {});
+    expect(result.cortex.agents.map((a) => a.id)).toEqual(["echo", "luna-2"]);
+    const dupWarn = result.warnings.find((w) =>
+      w.message.includes("both claim agent-echo hint"),
+    );
+    expect(dupWarn).toBeDefined();
+    expect(dupWarn!.message).toMatch(/agents \[echo,luna-2\] both claim agent-echo hint/);
+    expect(dupWarn!.message).toMatch(/first wins; second falls back to numeric/);
+    expect(dupWarn!.field).toBe("agents[1].id");
+  });
+
+  test("warn does NOT fire when each adapter declares a distinct `agent-<X>` hint", () => {
+    // Healthy config: three adapters, three distinct hints. No duplicate-
+    // hint warning should appear.
+    const legacy: LegacyBotYaml = {
+      agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
+      discord: [
+        {
+          token: "t1", guildId: "1", agentChannelId: "2", logChannelId: "3",
+          roles: [{ name: "agent-luna", users: ["100000000000000001"], features: ["chat"] }],
+        },
+        {
+          token: "t2", guildId: "10", agentChannelId: "20", logChannelId: "30",
+          roles: [{ name: "agent-echo", users: ["200000000000000002"], features: ["chat"] }],
+        },
+        {
+          token: "t3", guildId: "100", agentChannelId: "200", logChannelId: "300",
+          roles: [{ name: "agent-forge", users: ["300000000000000003"], features: ["chat"] }],
+        },
+      ],
+    };
+    const result = convertBotYaml(legacy, {});
+    expect(result.cortex.agents.map((a) => a.id)).toEqual(["luna", "echo", "forge"]);
+    const dupWarns = result.warnings.filter((w) => w.message.includes("both claim agent-"));
+    expect(dupWarns).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // cortex#88 item 4 — shared agentChannelId across agents
 // ---------------------------------------------------------------------------
 
