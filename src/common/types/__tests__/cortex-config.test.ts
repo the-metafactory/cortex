@@ -105,6 +105,56 @@ describe("OperatorSchema", () => {
     expect(parsed.id).toBe("andreas-dev-2026");
   });
 
+  // ---------------------------------------------------------------------
+  // cortex#141 — letter-prefix rule (unified with StackConfigSchema)
+  // ---------------------------------------------------------------------
+
+  test("accepts canonical letter-prefixed operator ids", () => {
+    // The realistic operator population — all letter-prefixed today.
+    expect(OperatorSchema.parse({ id: "andreas" }).id).toBe("andreas");
+    expect(OperatorSchema.parse({ id: "jcfischer" }).id).toBe("jcfischer");
+    expect(OperatorSchema.parse({ id: "metafactory" }).id).toBe("metafactory");
+    expect(OperatorSchema.parse({ id: "team-research" }).id).toBe("team-research");
+  });
+
+  test("accepts operator id with internal digits (only the prefix is gated)", () => {
+    // The rule is letter-PREFIX, not letter-only. Internal digits are fine
+    // — `team-42-research`, `andreas-2026` etc. round-trip through both
+    // schemas after cortex#141 closes the gap.
+    expect(OperatorSchema.parse({ id: "team-42-research" }).id).toBe("team-42-research");
+    expect(OperatorSchema.parse({ id: "andreas-2026" }).id).toBe("andreas-2026");
+    expect(OperatorSchema.parse({ id: "a1" }).id).toBe("a1");
+  });
+
+  test("rejects digit-prefix operator id (cortex#141 — letter-prefix rule)", () => {
+    // The unified grammar requires letter-prefix on both `OperatorSchema.id`
+    // and `StackConfigSchema.id` segments. A digit-prefix id like `"2andreas"`
+    // would default-derive to `"2andreas/default"` — a string the stack
+    // schema rejects. Fail fast at the upstream Zod gate with an actionable
+    // error message rather than letting the divergence surface later at
+    // subject-derivation or self-consistency-check time.
+    expect(() => OperatorSchema.parse({ id: "2andreas" })).toThrow(
+      /starting with a letter/,
+    );
+    // The error message MUST surface the migration hint so operators see
+    // what to do, not just what's wrong.
+    expect(() => OperatorSchema.parse({ id: "2andreas" })).toThrow(
+      /team2andreas|andreas-2026/,
+    );
+  });
+
+  test("rejects all-digit operator id", () => {
+    expect(() => OperatorSchema.parse({ id: "123" })).toThrow(
+      /starting with a letter/,
+    );
+  });
+
+  test("rejects hyphen-prefix operator id (must start with a letter, not punctuation)", () => {
+    expect(() => OperatorSchema.parse({ id: "-andreas" })).toThrow(
+      /starting with a letter/,
+    );
+  });
+
   test("defaults dataResidency to NZ", () => {
     const parsed = OperatorSchema.parse({ id: "andreas" });
     expect(parsed.dataResidency).toBe("NZ");

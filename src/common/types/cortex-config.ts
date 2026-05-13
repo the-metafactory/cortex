@@ -86,11 +86,24 @@ function emptyDefault<T extends z.ZodObject<z.ZodRawShape>>(schema: T) {
 export const OperatorSchema = z.object({
   /**
    * Operator identifier — used as the `{org}` subject segment on the bus
-   * (`local.{org}.…`). Must be safe to embed verbatim in NATS subjects, so
-   * the same regex agents use applies: lowercase alphanumeric + hyphen. No
-   * dots, no wildcards, no whitespace.
+   * (`local.{org}.…`). Must be safe to embed verbatim in NATS subjects.
+   *
+   * Grammar: lowercase alphanumeric + hyphen, **first character must be a
+   * letter**. The letter-prefix rule mirrors `StackConfigSchema.id` segments
+   * (cortex#141): NATS subject segments starting with a digit interact poorly
+   * with downstream pattern-matchers that treat segments as numeric literals.
+   * Letter-prefix is the safe boundary.
+   *
+   * Closing cortex#141 — the round-trip invariant `OperatorSchema.id →
+   * deriveStackId → StackConfigSchema.id` now holds for every value the
+   * upstream gate accepts. Migration hint for an operator hitting this rule:
+   * rename `2andreas` → `team2andreas` or `andreas-2026` (prepend / wrap the
+   * digits with a letter-prefixed token).
    */
-  id: z.string().min(1).regex(/^[a-z0-9-]+$/, "operator id must be lowercase alphanumeric"),
+  id: z.string().min(1).regex(
+    /^[a-z][a-z0-9-]*$/,
+    "operator id must be lowercase alphanumeric + hyphen, starting with a letter (e.g. 'andreas', 'team-research'); rename digit-prefixed ids like '2andreas' to 'team2andreas' or 'andreas-2026'",
+  ),
   /** Display name shown on the dashboard. Defaults to `id`. */
   displayName: z.string().optional(),
   /** Operator's Discord user id — receives DM notifications from agents. */

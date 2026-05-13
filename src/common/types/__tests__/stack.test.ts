@@ -19,7 +19,7 @@
 
 import { describe, test, expect } from "bun:test";
 
-import { CortexConfigSchema } from "../cortex-config";
+import { CortexConfigSchema, OperatorSchema } from "../cortex-config";
 import {
   StackConfigSchema,
   deriveStackId,
@@ -325,13 +325,20 @@ describe("deriveStackId", () => {
 // =============================================================================
 
 describe("deriveStackId × StackConfigSchema round-trip invariant", () => {
-  // `OperatorSchema.id` is `/^[a-z0-9-]+$/` (digit-prefix legal, no underscores).
-  // `StackConfigSchema.id` segments are `/^[a-z][a-z0-9_-]*$/` (letter-prefix
-  // mandatory, underscores legal). These grammars overlap on the realistic
-  // common case (letter-prefixed alphanumeric + hyphen) but diverge at the
-  // edges. The grammar unification decision is tracked in cortex#141; this
-  // suite pins the current behaviour so the A.5.5 namespace cutover does not
-  // surface the divergence as a runtime error without warning.
+  // cortex#141 closed the divergence: `OperatorSchema.id` was tightened to
+  // `/^[a-z][a-z0-9-]*$/` (letter-prefix mandatory, hyphen allowed, no
+  // underscores), and `StackConfigSchema.id` segments remain
+  // `/^[a-z][a-z0-9_-]*$/` (letter-prefix mandatory, underscores additionally
+  // allowed in the stack-id half). The two grammars now agree on letter-prefix
+  // — every value `OperatorSchema.id` accepts default-derives to a stack id
+  // `StackConfigSchema.id` accepts.
+  //
+  // This suite is the round-trip invariant test: anything that survives the
+  // upstream `OperatorSchema.id` gate must round-trip cleanly through
+  // `deriveStackId → StackConfigSchema.id`. The digit-prefix path that used
+  // to surface the divergence is now blocked at the upstream gate
+  // (`OperatorSchema.id.parse("2andreas")` throws), so the latent runtime
+  // failure A.5.5 was at risk of surfacing is structurally impossible.
 
   const stackIdSchema = StackConfigSchema.shape.id;
 
@@ -363,16 +370,24 @@ describe("deriveStackId × StackConfigSchema round-trip invariant", () => {
     expect(() => stackIdSchema.parse(derived.id)).not.toThrow();
   });
 
-  test("KNOWN GAP (cortex#141): digit-prefix operator id default-derives to a string StackConfigSchema rejects", () => {
-    // `2andreas` is legal under `OperatorSchema.id` (`/^[a-z0-9-]+$/`) today.
-    // `StackConfigSchema.id` requires letter-prefix on each segment, so the
-    // default-derived `2andreas/default` fails the stack schema. This test
-    // documents the divergence so an unintended schema tightening (or an
-    // A.5.5 self-consistency check that round-trips through the stack
-    // schema) doesn't silently break this path; resolution is tracked in
-    // cortex#141 (unify the two grammars before A.5.5 lands).
-    const derived = deriveStackId({ operator: { id: "2andreas" } });
-    expect(derived.id).toBe("2andreas/default");
-    expect(() => stackIdSchema.parse(derived.id)).toThrow();
+  test("cortex#141 closed: digit-prefix operator id is rejected at OperatorSchema gate", () => {
+    // Pre-cortex#141: `OperatorSchema.id` accepted `"2andreas"` (regex
+    // `/^[a-z0-9-]+$/`), so `deriveStackId` produced `"2andreas/default"` —
+    // a string `StackConfigSchema.id` rejected. The divergence was a latent
+    // self-inconsistency that A.5.5's namespace cutover would surface as a
+    // runtime error.
+    //
+    // Post-cortex#141: `OperatorSchema.id` regex is `/^[a-z][a-z0-9-]*$/`
+    // (letter-prefix mandatory). Digit-prefix operator ids are rejected at
+    // the upstream Zod gate, so `deriveStackId` never receives an invalid
+    // input from a parsed `CortexConfig`. The latent divergence is
+    // structurally closed — this test pins the invariant.
+    expect(() => OperatorSchema.parse({ id: "2andreas" })).toThrow(
+      /starting with a letter/,
+    );
+    // `deriveStackId` itself is a total function and still works on the
+    // narrowed `DeriveStackIdInput` shape — but no production code path can
+    // pass a digit-prefix `operator.id` through to it, because every config
+    // is parsed through `OperatorSchema` first.
   });
 });

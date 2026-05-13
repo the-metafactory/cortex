@@ -55,12 +55,13 @@ import { z } from "zod/v4";
  *     nkey_pub: UA…
  *
  * The `id` regex enforces `{operator_id}/{stack_id}` where each segment is
- * lowercase alphanumeric + hyphens/underscores, starting with a letter. This
- * matches the broader `{operator}` regex on `OperatorSchema.id` (lowercase
- * alphanumeric + hyphen) but additionally permits underscores in the
- * stack-id half — operators tend to spell stack names with `_` (e.g.
- * `andreas/research_2026`) more naturally than they spell their own
- * identifier.
+ * lowercase alphanumeric + hyphens/underscores, starting with a letter. Both
+ * `OperatorSchema.id` and `StackConfigSchema.id` segments share the letter-
+ * prefix rule (unified by cortex#141 before the IAW A.5.5 namespace cutover);
+ * the stack-id half additionally permits underscores — operators tend to
+ * spell stack names with `_` (e.g. `andreas/research_2026`) more naturally
+ * than they spell their own identifier, so the asymmetry is retained on
+ * purpose for underscores while being closed for the letter-prefix rule.
  *
  * Why each segment must start with a letter: NATS subject segments
  * starting with a digit interact poorly with some downstream subscribers'
