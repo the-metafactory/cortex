@@ -263,19 +263,18 @@ export async function startCortex(
   // verifier on TrustResolver (cortex#76); see
   // `src/common/agents/trust-resolver.ts`.
 
-  // Surface router (in-process fan-out).
-  const router: SurfaceRouter = createSurfaceRouter(runtime, {
-    onAdapterError: (adapterId, err) => {
-      console.error(`cortex: surface adapter "${adapterId}" render error:`, err.message);
-    },
-  });
-
   // SystemEventSource for `system.*` envelopes (spec §3.6:
   // `{operatorId}.cortex.{instance}`). `local` until federation lands.
   // `dataResidency` flows from `config.agent.dataResidency` so a non-NZ
   // operator gets envelopes stamped with their actual residency without
   // touching the per-event constructors. Defaults to "NZ" when absent
   // (the original cortex deployment's residency).
+  //
+  // Declared BEFORE the surface-router (cortex#134 Echo round-1 fix):
+  // the router needs the source to publish `system.access.filtered`
+  // envelopes when a visibility-config renderer drops an envelope.
+  // Without this, the audit-trail emit silently degrades to console.info
+  // in production — only unit tests passed the explicit source.
   const systemEventSource: SystemEventSource = {
     org: config.agent.operatorId ?? "default",
     agent: "cortex",
@@ -284,6 +283,17 @@ export async function startCortex(
       dataResidency: config.agent.dataResidency,
     }),
   };
+
+  // Surface router (in-process fan-out).
+  // Receives `systemEventSource` so visibility-config drops produce
+  // `system.access.filtered` envelopes operators can subscribe to — see
+  // `evaluateVisibility()` in surface-router.ts.
+  const router: SurfaceRouter = createSurfaceRouter(runtime, {
+    systemEventSource,
+    onAdapterError: (adapterId, err) => {
+      console.error(`cortex: surface adapter "${adapterId}" render error:`, err.message);
+    },
+  });
 
   // Dispatch-handler — synchronous platform-message → CC pipeline.
   //
