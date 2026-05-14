@@ -74,7 +74,6 @@ import {
 import {
   parseGitHubRef,
   canonicalRef,
-  canonicalUrl,
   isParseError,
   type GitHubRef,
   type ParseDefaults,
@@ -129,7 +128,6 @@ import {
 import type {
   AbandonRequest,
   AbandonResponse,
-  AbandonTaskRequest,
   AbandonTaskResponse,
   AttachTaskRequest,
   AttachTaskResponse,
@@ -149,7 +147,6 @@ import type {
   PreviewTaskConflict,
   PreviewTaskRequest,
   PreviewTaskResponse,
-  RequeueRequest,
   RequeueResponse,
   UpdateIterationRequest,
   UpdateIterationResponse,
@@ -235,7 +232,7 @@ const DEFAULT_OPERATOR_ID = "mc-default-operator";
  */
 const DEFAULT_INTERNAL_TASK_PRIORITY = 2;
 
-function json<T>(body: T, status = 200): Response {
+function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json" },
@@ -243,7 +240,7 @@ function json<T>(body: T, status = 200): Response {
 }
 
 function error(message: string, status: number): Response {
-  return json<ApiError>({ error: message }, status);
+  return json({ error: message } satisfies ApiError, status);
 }
 
 // ---------- GET /api/assignments ----------
@@ -585,13 +582,17 @@ export function _resetDispatchDebounceForTests(): void {
 // parsing has no operational benefit here.
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
+// eslint-disable-next-line @typescript-eslint/require-await
 export async function handleCreateSession(
   db: Database,
   deps: ApiDeps,
   rawBody: unknown
 ): Promise<Response> {
+  // Body validation is synchronous; signature stays async to match the
+  // router's `await fn(...)` invocation contract and to leave room for
+  // the I/O-bound path below.
   const body = (rawBody ?? {}) as CreateSessionRequest;
-  if (typeof body !== "object" || body === null) {
+  if (typeof body !== "object") {
     return error("Body must be a JSON object", 400);
   }
   if (body.prompt !== undefined && typeof body.prompt !== "string") {
@@ -604,12 +605,6 @@ export async function handleCreateSession(
   // F-20 — kind validation. Default to controlled when omitted; observed
   // requires a UUID-shaped ccSessionId.
   const kind = body.kind ?? "local.process.controlled";
-  if (kind !== "local.process.controlled" && kind !== "local.observed") {
-    return error(
-      `'kind' must be 'local.process.controlled' or 'local.observed'`,
-      400
-    );
-  }
   if (kind === "local.observed") {
     if (
       typeof body.ccSessionId !== "string" ||
@@ -622,7 +617,11 @@ export async function handleCreateSession(
     }
   }
 
+  // Empty-string trim falls through to defaults; `||` preserves that
+  // semantic where `??` would propagate the empty string.
+  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
   const title = body.title?.trim() || "Untitled session";
+  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
   const operatorId = body.operatorId?.trim() || DEFAULT_OPERATOR_ID;
   // F-20 — when an observed session supplies an agentId we don't have on
   // file, register it on the spot using `agentName` as the display name.
@@ -636,6 +635,7 @@ export async function handleCreateSession(
 
   // Resolve or create the task + assignment up front, in one transaction.
   // If anything after this fails (e.g. spawn), we roll back explicitly.
+  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
   const taskId = body.taskId?.trim() || generateId();
   const assignmentId = generateId();
 
@@ -711,7 +711,7 @@ export async function handleCreateSession(
   let endpoint: { sessionId: string; write?: (text: string) => void };
   if (kind === "local.observed") {
     // ccSessionId is validated above (UUID_RE) when kind is observed.
-    const ccSessionId = body.ccSessionId!;
+    const ccSessionId = body.ccSessionId ?? "";
     // Defensive: refuse a duplicate ccSessionId. Two observed sessions
     // sharing a uuid would crosstalk in the ingestor's lookup —
     // generateId() collisions are vanishingly unlikely but the wrapper
@@ -1004,11 +1004,11 @@ export function handleSendInput(
   }
 
   // --- text validation ---
-  const hasText = body.text !== undefined && body.text !== null;
+  const hasText = body.text !== undefined;
   if (hasText && typeof body.text !== "string") {
     return error("'text' must be a string.", 400);
   }
-  const text = hasText ? (body.text as string) : "";
+  const text = hasText ? body.text ?? "" : "";
   const textByteLength = Buffer.byteLength(text, "utf8");
   if (textByteLength > DRILL_INPUT_MAX_BYTES) {
     return error("Operator input exceeds the 50 KB limit.", 413);
@@ -1019,7 +1019,7 @@ export function handleSendInput(
   if (body.images !== undefined && !Array.isArray(body.images)) {
     return error("'images' must be an array.", 400);
   }
-  const images = hasImages ? (body.images as SendInputRequest["images"])! : [];
+  const images: SendInputRequest["images"] = hasImages ? (body.images ?? []) : [];
   if (images.length > IMAGE_MAX_COUNT_PER_MESSAGE) {
     return error(
       `At most ${IMAGE_MAX_COUNT_PER_MESSAGE} images per message.`,
@@ -1028,8 +1028,8 @@ export function handleSendInput(
   }
   let imagesByteSum = 0;
   for (let i = 0; i < images.length; i++) {
-    const img = images[i]!;
-    if (typeof img !== "object" || img === null) {
+    const img = images[i];
+    if (typeof img !== "object") {
       return error(`images[${i}] must be an object.`, 400);
     }
     if (typeof img.media_type !== "string" || typeof img.data !== "string") {
@@ -1216,7 +1216,7 @@ function validateBodyKeys(
 ): Response | null {
   if (rawBody === null || rawBody === undefined) return null;
   if (typeof rawBody !== "object") return null; // caller surfaces its own 400
-  const keys = Object.keys(rawBody as Record<string, unknown>);
+  const keys = Object.keys(rawBody);
   const allowedSet = new Set(allowed);
   const unexpected = keys.filter((k) => !allowedSet.has(k));
   if (unexpected.length > 0) {
@@ -1368,12 +1368,12 @@ export function handleAbandonAssignment(
     if (typeof rawBody !== "object") {
       return error("Body must be a JSON object", 400);
     }
-    body = rawBody as AbandonRequest;
+    body = rawBody;
   }
   if (
     body.scope !== undefined &&
-    body.scope !== "assignment" &&
-    body.scope !== "task"
+    (body.scope as string) !== "assignment" &&
+    (body.scope as string) !== "task"
   ) {
     return error("'scope' must be 'assignment' or 'task'", 400);
   }
@@ -1584,7 +1584,7 @@ export async function handleHandoffAssignment(
   // session created by the spawn").
   let cancelFrom: AssignmentState | undefined;
   let cancelTo: AssignmentState | undefined;
-  let oldSessionId: string | null = null;
+  let oldSessionId: string | null;
 
   if (inFlight) {
     oldSessionId = resolveCurationSessionId(db, assignmentId);
@@ -1751,7 +1751,6 @@ export async function handleHandoffAssignment(
 //   Decision 8 — task-shadow-{taskId} helper in ../db/sessions.ts
 //   Decision 10 — `operator.curation` with kind: "task.imported"
 
-const DEFAULT_TASK_IMPORT_PRIORITY = 2;
 const TITLE_OVERRIDE_MAX_LEN = 500;
 
 /** Parse a "owner/repo" default-repo string into {owner, repo}, or {} if malformed. */
@@ -1960,7 +1959,7 @@ export async function handleCreateTask(
 
   // Optional title override — when present must be a string, 500 char cap.
   let titleOverride: string | undefined;
-  if (body.titleOverride !== undefined && body.titleOverride !== null) {
+  if (body.titleOverride !== undefined) {
     if (typeof body.titleOverride !== "string") {
       return error("'titleOverride' must be a string", 400);
     }
@@ -2336,13 +2335,13 @@ export function handleCreateIteration(
   // current state to transition from).
   let state: IterationState = "inbox";
   if (body.state !== undefined) {
-    if (typeof body.state !== "string" || !ITERATION_STATES.includes(body.state as IterationState)) {
+    if (typeof body.state !== "string" || !ITERATION_STATES.includes(body.state)) {
       return error(
-        `Invalid 'state' '${String(body.state)}'. Allowed: ${ITERATION_STATES.join(", ")}`,
+        `Invalid 'state' '${body.state}'. Allowed: ${ITERATION_STATES.join(", ")}`,
         400
       );
     }
-    state = body.state as IterationState;
+    state = body.state;
   }
 
   // Source columns — purely display references after creation (Decision
@@ -2364,9 +2363,9 @@ export function handleCreateIteration(
       imported_body: importedBody,
       priority,
       state,
-      source_system: (body.source_system as string | null) ?? null,
-      source_url: (body.source_url as string | null) ?? null,
-      source_parent_ref: (body.source_parent_ref as string | null) ?? null,
+      source_system: (body.source_system) ?? null,
+      source_url: (body.source_url) ?? null,
+      source_parent_ref: (body.source_parent_ref) ?? null,
       // `imported_at` is set by F-17 during real imports; for operator-
       // typed iterations it's null. Leaving it out of the create body
       // keeps the wire surface honest about what callers should provide.
@@ -2473,13 +2472,13 @@ export function handlePatchIteration(
   let state: IterationState | undefined;
   let stateMoved = false;
   if (body.state !== undefined) {
-    if (typeof body.state !== "string" || !ITERATION_STATES.includes(body.state as IterationState)) {
+    if (typeof body.state !== "string" || !ITERATION_STATES.includes(body.state)) {
       return error(
-        `Invalid 'state' '${String(body.state)}'. Allowed: ${ITERATION_STATES.join(", ")}`,
+        `Invalid 'state' '${body.state}'. Allowed: ${ITERATION_STATES.join(", ")}`,
         400
       );
     }
-    const proposed = body.state as IterationState;
+    const proposed = body.state;
     if (proposed !== current.state) {
       // canTransitionServer rejects the (current, proposed) move.
       // Friendly message names the legal next states so the operator
@@ -2578,8 +2577,8 @@ export function handleAttachTaskToIteration(
 
   // Mutually exclusive — either attach an existing task by id, or
   // create-and-attach a new internal-only task. Both is a usage error.
-  const hasTaskId = body.task_id !== undefined && body.task_id !== null;
-  const hasCreate = body.create !== undefined && body.create !== null;
+  const hasTaskId = body.task_id !== undefined;
+  const hasCreate = body.create !== undefined;
   if (hasTaskId && hasCreate) {
     return error(
       "Send either 'task_id' (attach existing) or 'create' (create new) — not both",
@@ -2608,7 +2607,7 @@ export function handleAttachTaskToIteration(
   // attach-existing path; set to `newTaskId` in the create-and-attach
   // path. Stays null on early-return error paths so the broadcast
   // doesn't fire on a half-applied attach.
-  let mutatedTaskId: string | null = null;
+  let mutatedTaskId: string | null;
 
   // ---- Path 1: attach existing task ----
   if (hasTaskId) {
@@ -2696,8 +2695,8 @@ export function handleAttachTaskToIteration(
     // broadcast below.
   } else {
     // ---- Path 2: create + attach in one call ----
-    const create = body.create!;
-    if (typeof create !== "object" || create === null) {
+    const create = body.create;
+    if (typeof create !== "object") {
       return error("'create' must be an object with 'title'", 400);
     }
     if (typeof create.title !== "string" || create.title.trim().length === 0) {
@@ -2925,7 +2924,7 @@ export async function handleImportIterationFromGithub(
   // editing the network yaml; the default falls through from the
   // server's per-network config.
   let labelOverride: string | undefined;
-  if (body.label !== undefined && body.label !== null) {
+  if (body.label !== undefined) {
     if (typeof body.label !== "string" || body.label.trim().length === 0) {
       return error("'label' must be a non-empty string when provided", 400);
     }
