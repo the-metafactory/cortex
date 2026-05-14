@@ -51,7 +51,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     help: false,
   };
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]!;
+    const a = argv[i] ?? "";
     if (a === "--help" || a === "-h") {
       args.help = true;
     } else if (a === "--check") {
@@ -94,6 +94,7 @@ function printHelp(): void {
  * test harness; the bottom of this file calls it from `process.argv` when
  * the script is executed directly.
  */
+// eslint-disable-next-line @typescript-eslint/require-await
 export async function runMigrateConfig(argv: string[]): Promise<number> {
   let args: ParsedArgs;
   try {
@@ -169,8 +170,8 @@ export async function runMigrateConfig(argv: string[]): Promise<number> {
 
 if (import.meta.main) {
   runMigrateConfig(process.argv.slice(2)).then(
-    (code) => process.exit(code),
-    (err) => {
+    (code) => { process.exit(code); },
+    (err: unknown) => {
       console.error("Fatal:", err);
       process.exit(1);
     },

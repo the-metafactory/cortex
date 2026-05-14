@@ -67,7 +67,7 @@ function deepMapStrings(
     if (typeof value === "string") {
       result[key] = fn(value);
     } else if (Array.isArray(value)) {
-      result[key] = value.map((item) =>
+      result[key] = (value as unknown[]).map((item): unknown =>
         typeof item === "string"
           ? fn(item)
           : item && typeof item === "object"

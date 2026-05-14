@@ -32,7 +32,7 @@ export class LearningStore {
   }
 
   private migrate(): void {
-    this.db.exec(`
+    this.db.run(`
       CREATE TABLE IF NOT EXISTS learnings (
         id TEXT PRIMARY KEY,
         content TEXT NOT NULL,
@@ -90,7 +90,7 @@ export class LearningStore {
       usage_count: number;
     }[];
 
-    return rows.map(this.rowToLearning);
+    return rows.map((r) => this.rowToLearning(r));
   }
 
   /**
@@ -113,7 +113,7 @@ export class LearningStore {
       usage_count: number;
     }[];
 
-    return rows.map(this.rowToLearning);
+    return rows.map((r) => this.rowToLearning(r));
   }
 
   /**

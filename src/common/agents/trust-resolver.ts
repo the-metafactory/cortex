@@ -291,7 +291,7 @@ export function verifyOperatorUserJwt(
       reason: "wrong_issuer",
       detail:
         `jwt iss=${claims.iss} does not match trusted operator pubkey ` +
-        `${operatorAccountSigningPublicKey}`,
+        operatorAccountSigningPublicKey,
     };
   }
 
@@ -320,7 +320,7 @@ export function verifyOperatorUserJwt(
     };
   }
 
-  return { ok: true, userPublicKey: claims.sub, agentName: claims.name ?? "" };
+  return { ok: true, userPublicKey: claims.sub, agentName: claims.name };
 }
 
 /**
@@ -384,7 +384,7 @@ export function verifyOperatorSignedRequest(
     };
   }
 
-  const env = envelope as SignedRequest;
+  const env = envelope;
 
   if (env.subject !== opts.expectedSubject) {
     return {

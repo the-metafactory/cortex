@@ -310,6 +310,7 @@ export async function maybeNotifyDiscord(
 // Internal dispatch
 // ---------------------------------------------------------------------
 
+// eslint-disable-next-line @typescript-eslint/require-await
 async function dispatchIntent(
   deps: MaybeNotifyDeps,
   intent: NotificationIntent,
@@ -468,7 +469,8 @@ async function flushDMBuffer(key: string): Promise<void> {
     // N=1: render the original single-event DM body at flush time (N1 in
     // PR #23 review — defer rendering to flush so a coalesced burst never
     // pays for the per-entry render cost).
-    const only = buffer.entries[0]!;
+    const only = buffer.entries[0];
+    if (!only) return;
     const payload = renderDM(only.renderCtx);
     await sendDMSafely(buffer, payload, only.assignmentId);
     return;
@@ -596,7 +598,9 @@ async function flushChannelBuffer(channelId: string): Promise<void> {
   if (buffer.timer !== null) buffer.scheduler.cancel(buffer.timer);
 
   if (buffer.entries.length === 1) {
-    const only = buffer.entries[0]! as PendingCoalesceEntry & {
+    const onlyEntry = buffer.entries[0];
+    if (!onlyEntry) return;
+    const only = onlyEntry as PendingCoalesceEntry & {
       fallbackPayload?: string;
       alreadyDecorated?: boolean;
     };

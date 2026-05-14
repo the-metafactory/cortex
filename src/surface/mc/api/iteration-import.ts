@@ -537,7 +537,7 @@ export function parentMetadataFromWebhook(
     return null;
   }
   const repo = env.repository as { full_name?: string; name?: string; owner?: { login?: string } };
-  const issue = env.issue as IssuesWebhookEnvelope["issue"];
+  const issue = env.issue;
   const owner = repo.owner?.login;
   const name = repo.name;
   if (typeof owner !== "string" || typeof name !== "string") return null;
@@ -553,7 +553,7 @@ export function parentMetadataFromWebhook(
         .map((l) =>
           typeof l === "string"
             ? l
-            : typeof l?.name === "string"
+            : typeof l.name === "string"
               ? l.name
               : null
         )
@@ -602,7 +602,7 @@ export function subIssueRefsFromWebhook(envelope: unknown): {
   ) {
     return null;
   }
-  const issue = env.issue as IssuesWebhookEnvelope["issue"];
+  const issue = env.issue;
   const parent = issue.parent;
   if (!parent || typeof parent !== "object") return null;
   if (typeof parent.number !== "number" || !Number.isInteger(parent.number)) {

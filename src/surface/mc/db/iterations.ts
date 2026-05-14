@@ -661,16 +661,23 @@ export function canTransitionServer(
   current: IterationState,
   proposed: IterationState
 ): boolean {
+  // TS narrows TRANSITIONS[current] to a Set when `current` is a known
+  // IterationState; the `!allowed` guards remain load-bearing for
+  // forward-compat if the union expands.
+  /* eslint-disable @typescript-eslint/no-unnecessary-condition */
   const allowed = TRANSITIONS[current];
   if (!allowed) return false;
   return allowed.has(proposed);
+  /* eslint-enable @typescript-eslint/no-unnecessary-condition */
 }
 
 /** Enumerate the legal next states from `current`. Order is matrix-insertion. */
 export function nextStatesServer(current: IterationState): IterationState[] {
+  /* eslint-disable @typescript-eslint/no-unnecessary-condition */
   const allowed = TRANSITIONS[current];
   if (!allowed) return [];
   return [...allowed];
+  /* eslint-enable @typescript-eslint/no-unnecessary-condition */
 }
 
 // ---------------------------------------------------------------------------
@@ -690,7 +697,7 @@ function hydrateListItem(
     source_parent_ref: row.source_parent_ref,
     task_count: row.task_count,
     imported_at:
-      row.imported_at === null || row.imported_at === undefined
+      row.imported_at === null
         ? null
         : epochSecondsToIso(row.imported_at),
     created_at: epochSecondsToIso(row.created_at),

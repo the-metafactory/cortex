@@ -42,8 +42,13 @@ export function buildSecurityPreamble(config: BotConfig, configPath?: string, op
   );
 
   if (!opts?.skipFilesystemRestriction) {
+    // Tests pass partial config objects without claude defaults; the `?? []`
+    // fallbacks are load-bearing for those code paths even though Zod
+    // schemas guarantee non-null in production.
+    /* eslint-disable @typescript-eslint/no-unnecessary-condition */
     const dirs = opts?.overrideDirs ?? config.claude.allowedDirs ?? [];
     const readOnlyDirs = config.claude.readOnlyDirs ?? [];
+    /* eslint-enable @typescript-eslint/no-unnecessary-condition */
     const allDirs = [...dirs, ...readOnlyDirs];
 
     if (allDirs.length > 0) {
@@ -80,7 +85,7 @@ export function buildSecurityPreamble(config: BotConfig, configPath?: string, op
         .map((r) => r.pattern.replace(/^\^/, "").replace(/\\s\+.*/, "").replace(/\\b$/, ""))
         .slice(0, 6)
         .join(", ");
-      const repoList = bashAllowlist.repos?.length
+      const repoList = bashAllowlist.repos.length
         ? bashAllowlist.repos.join(", ")
         : "any";
       rules.push(
