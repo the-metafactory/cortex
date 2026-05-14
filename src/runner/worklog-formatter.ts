@@ -13,11 +13,21 @@ import type { PublishedEvent } from "../taps/cc-events/hooks/lib/event-types";
 import { formatDuration } from "./event-utils";
 
 /**
+ * Coerce an `unknown` payload field to string. `event.payload` fields are
+ * typed `unknown` (Zod `z.record(z.string(), z.unknown())`) — string-only
+ * narrowing prevents the `[object Object]` interpolation trap that
+ * `String(value)` falls into for plain objects.
+ */
+function asString(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
+/**
  * Detect whether an event is from a sub-agent (moderator, participant, internal).
  * These should be grouped under the parent task, not shown as top-level entries.
  */
 export function isSubAgentEvent(event: PublishedEvent): boolean {
-  const preview = String(event.payload.prompt_preview ?? "");
+  const preview = asString(event.payload.prompt_preview);
   // Moderator and participant system prompts from agent-team.ts
   if (/^You are a moderator coordinating/i.test(preview)) return true;
   if (/^You are "[^"]+", a specialist participant/i.test(preview)) return true;
@@ -32,13 +42,12 @@ export function isSubAgentEvent(event: PublishedEvent): boolean {
  * Strips grove-bot wrapper text, system prompts, and truncates sensibly.
  */
 export function extractTaskDescription(event: PublishedEvent): string {
-  const raw = String(
-    event.payload.prompt_preview
-    ?? event.payload.description
-    ?? event.payload.summary
-    ?? event.payload.active_task
-    ?? ""
-  );
+  const raw =
+    asString(event.payload.prompt_preview) ||
+    asString(event.payload.description) ||
+    asString(event.payload.summary) ||
+    asString(event.payload.active_task) ||
+    "";
 
   // Strip common grove-bot prompt wrappers
   let clean = raw
@@ -48,13 +57,13 @@ export function extractTaskDescription(event: PublishedEvent): string {
     .trim();
 
   // If it's a feature ID pattern, keep it as-is
-  const taskMatch = clean.match(/^[A-Z]-\d+[:\s].*/);
+  const taskMatch = /^[A-Z]-\d+[:\s].*/.exec(clean);
   if (taskMatch) return truncate(taskMatch[0].trim(), 80);
 
   // Strip leading system-prompt boilerplate
   if (clean.length > 120 && /^(You are|As a|Given the|Based on|Please|I need you to)/i.test(clean)) {
     // Try to find the actual instruction after boilerplate
-    const instructionMatch = clean.match(/(?::\s*|\.\.?\s+)([A-Z][^.]{10,80})/);
+    const instructionMatch = /(?::\s*|\.\.?\s+)([A-Z][^.]{10,80})/.exec(clean);
     if (instructionMatch?.[1]) clean = instructionMatch[1];
   }
 
@@ -78,7 +87,7 @@ export function formatThreadName(event: PublishedEvent): string {
 export function formatEventForThread(event: PublishedEvent): string | null {
   switch (event.event_type) {
     case "tool.file.changed": {
-      const path = event.payload.path ? String(event.payload.path) : null;
+      const path = asString(event.payload.path);
       if (!path) return null;
       // Show just the filename, not the full path
       const filename = path.split("/").pop() ?? path;
@@ -86,7 +95,7 @@ export function formatEventForThread(event: PublishedEvent): string | null {
     }
 
     case "tool.todo.updated": {
-      const activeTask = event.payload.active_task ? String(event.payload.active_task) : null;
+      const activeTask = asString(event.payload.active_task);
       const summary = event.payload.todo_summary as { total?: number; completed?: number } | undefined;
       const progress = summary ? `${summary.completed ?? 0}/${summary.total ?? 0}` : null;
       const parts = ["\u{1F4CB}"]; // 📋
@@ -96,21 +105,13 @@ export function formatEventForThread(event: PublishedEvent): string | null {
     }
 
     case "tool.agent.spawned": {
-      const desc = event.payload.agent_description
-        ? String(event.payload.agent_description)
-        : event.payload.summary
-          ? String(event.payload.summary)
-          : null;
+      const desc = asString(event.payload.agent_description) || asString(event.payload.summary);
       if (!desc) return null;
       return `\u{1F916} \u2192 ${truncate(desc, 120)}`; // 🤖 →
     }
 
     case "tool.bash.executed": {
-      const command = event.payload.command_preview
-        ? String(event.payload.command_preview)
-        : event.payload.command
-          ? String(event.payload.command)
-          : null;
+      const command = asString(event.payload.command_preview) || asString(event.payload.command);
       if (!command) return null;
       // Skip noisy internal commands
       if (/^(cat|echo|ls|pwd|cd)\s/.test(command)) return null;
@@ -138,13 +139,15 @@ export function formatCompletionSummary(event: PublishedEvent): string {
   }
 
   // Summary (truncated for thread, full detail is in the response itself)
-  if (event.payload.summary) {
-    parts.push(truncate(String(event.payload.summary), 300));
+  const summary = asString(event.payload.summary);
+  if (summary) {
+    parts.push(truncate(summary, 300));
   }
 
   // PR link
-  if (event.payload.pr_url) {
-    parts.push(`**PR:** ${event.payload.pr_url}`);
+  const prUrl = asString(event.payload.pr_url);
+  if (prUrl) {
+    parts.push(`**PR:** ${prUrl}`);
   }
 
   return parts.join("\n");
@@ -178,8 +181,9 @@ export function formatChannelCompletion(event: PublishedEvent): string {
   if (durationMs) msg += ` \u2014 ${formatDuration(durationMs)}`;
 
   // PR link inline
-  if (event.payload.pr_url) {
-    msg += ` \u2022 [PR](${String(event.payload.pr_url)})`;
+  const prUrl = asString(event.payload.pr_url);
+  if (prUrl) {
+    msg += ` \u2022 [PR](${prUrl})`;
   }
 
   return msg;
