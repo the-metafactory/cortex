@@ -1,3 +1,5 @@
+import type { EmitterWebhookEvent } from "@octokit/webhooks";
+
 import type {
   GitHubEventData,
   IssueUpsertData,
@@ -11,6 +13,15 @@ import {
   DEFAULT_COMMIT_TRAILER,
   DEFAULT_COMMENT_PATTERNS,
 } from "./agent-detection";
+
+// Per-event payload aliases. The Octokit `EmitterWebhookEvent<"name">`
+// type unions all action variants; we destructure `.payload` to get the
+// payload shape directly. Lint sweep #1 — cortex#152 follow-up.
+type PullRequestPayload = EmitterWebhookEvent<"pull_request">["payload"];
+type IssuesPayload = EmitterWebhookEvent<"issues">["payload"];
+type IssueCommentPayload = EmitterWebhookEvent<"issue_comment">["payload"];
+type PushPayload = EmitterWebhookEvent<"push">["payload"];
+type ReleasePayload = EmitterWebhookEvent<"release">["payload"];
 
 export interface AgentDetectionConfig {
   branchPatterns: RegExp[];
@@ -41,39 +52,36 @@ export function isAllowedRepo(
 
 /** Process a pull_request webhook payload -> event + PR upsert data */
 export function processPRWebhook(
-  payload: Record<string, unknown>,
+  payload: PullRequestPayload,
   config: AgentDetectionConfig = DEFAULT_DETECTION_CONFIG,
 ): ProcessedWebhookResult {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const p = payload as any;
-  const action = p.action;
+  const action = payload.action;
   let eventType: string;
 
+  const pr = payload.pull_request;
   if (action === "opened") eventType = "pr_opened";
-  else if (action === "closed" && p.pull_request.merged)
-    eventType = "pr_merged";
+  else if (action === "closed" && pr.merged) eventType = "pr_merged";
   else if (action === "closed") eventType = "pr_closed";
   else if (action === "reopened") eventType = "pr_reopened";
   else return { event: null };
 
-  const pr = p.pull_request;
   const agentAuthored =
-    hasBranchMatch(pr.head?.ref, config.branchPatterns) ||
+    hasBranchMatch(pr.head.ref, config.branchPatterns) ||
     hasTrailerMatch(pr.body ?? "", config.commitTrailers);
 
   let state: "open" | "closed" | "merged" = "open";
-  if (action === "closed" && p.pull_request.merged) state = "merged";
+  if (action === "closed" && pr.merged) state = "merged";
   else if (action === "closed") state = "closed";
 
   const issueRefs = (pr.body ?? "").match(/#(\d+)/g);
   const linkedIssues = issueRefs
-    ? JSON.stringify(issueRefs.map((r: string) => parseInt(r.slice(1))))
+    ? JSON.stringify(issueRefs.map((r) => parseInt(r.slice(1))))
     : null;
 
   return {
     event: {
       eventId: `pr-${pr.id}-${action}`,
-      repo: p.repository.full_name,
+      repo: payload.repository.full_name,
       eventType,
       title: pr.title,
       number: pr.number,
@@ -82,23 +90,23 @@ export function processPRWebhook(
       agentAuthored,
       linkedSession: null,
       payload: JSON.stringify({
-        branch: pr.head?.ref,
-        base: pr.base?.ref,
+        branch: pr.head.ref,
+        base: pr.base.ref,
         additions: pr.additions,
         deletions: pr.deletions,
         changedFiles: pr.changed_files,
       }),
-      createdAt: pr.updated_at ?? pr.created_at,
+      createdAt: pr.updated_at,
     },
     pullRequest: {
       id: pr.id,
-      repo: p.repository.full_name,
+      repo: payload.repository.full_name,
       number: pr.number,
       title: pr.title,
       state,
       author: pr.user?.login ?? null,
-      branch: pr.head?.ref ?? null,
-      base: pr.base?.ref ?? null,
+      branch: pr.head.ref,
+      base: pr.base.ref,
       agentAuthored,
       linkedIssues,
       createdAt: pr.created_at,
@@ -110,11 +118,9 @@ export function processPRWebhook(
 
 /** Process an issues webhook payload */
 export function processIssueWebhook(
-  payload: Record<string, unknown>,
+  payload: IssuesPayload,
 ): ProcessedWebhookResult {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const p = payload as any;
-  const action = p.action;
+  const action = payload.action;
   let eventType: string;
 
   if (action === "opened") eventType = "issue_opened";
@@ -122,13 +128,17 @@ export function processIssueWebhook(
   else if (action === "reopened") eventType = "issue_reopened";
   else return { event: null };
 
-  const issue = p.issue;
-  const labels = issue.labels?.map((l: { name: string }) => l.name);
+  const issue = payload.issue;
+  // Octokit types `Label | string | null` in label arrays; coerce to string,
+  // drop null entries.
+  const labels = issue.labels
+    ?.map((l) => (typeof l === "string" ? l : l?.name))
+    .filter((n): n is string => typeof n === "string");
 
   return {
     event: {
       eventId: `issue-${issue.id}-${action}`,
-      repo: p.repository.full_name,
+      repo: payload.repository.full_name,
       eventType,
       title: issue.title,
       number: issue.number,
@@ -137,17 +147,17 @@ export function processIssueWebhook(
       agentAuthored: false,
       linkedSession: null,
       payload: JSON.stringify({ labels }),
-      createdAt: issue.updated_at ?? issue.created_at,
+      createdAt: issue.updated_at,
     },
     issue: {
       id: issue.id,
-      repo: p.repository.full_name,
+      repo: payload.repository.full_name,
       number: issue.number,
       title: issue.title,
       body: issue.body ?? null,
-      state: (action === "closed" ? "closed" : "open") as "open" | "closed",
+      state: action === "closed" ? "closed" : "open",
       author: issue.user?.login ?? null,
-      labels: labels?.length > 0 ? JSON.stringify(labels) : null,
+      labels: labels && labels.length > 0 ? JSON.stringify(labels) : null,
       createdAt: issue.created_at,
       updatedAt: issue.updated_at,
       closedAt: issue.closed_at ?? null,
@@ -157,16 +167,14 @@ export function processIssueWebhook(
 
 /** Process an issue_comment webhook payload */
 export function processCommentWebhook(
-  payload: Record<string, unknown>,
+  payload: IssueCommentPayload,
   config: AgentDetectionConfig = DEFAULT_DETECTION_CONFIG,
 ): ProcessedWebhookResult {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const p = payload as any;
-  if (p.action !== "created") return { event: null };
+  if (payload.action !== "created") return { event: null };
 
-  const comment = p.comment;
-  const body: string = comment.body ?? "";
-  const issueNum: number | null = p.issue?.number ?? null;
+  const comment = payload.comment;
+  const body = comment.body;
+  const issueNum: number = payload.issue.number;
 
   const agentAuthored =
     hasCommentMatch(body, config.commentPatterns) ||
@@ -175,7 +183,7 @@ export function processCommentWebhook(
   return {
     event: {
       eventId: `comment-${comment.id}`,
-      repo: p.repository.full_name,
+      repo: payload.repository.full_name,
       eventType: "comment",
       title: body.slice(0, 120) + (body.length > 120 ? "..." : ""),
       number: issueNum,
@@ -191,24 +199,17 @@ export function processCommentWebhook(
 
 /** Process a push webhook payload */
 export function processPushWebhook(
-  payload: Record<string, unknown>,
+  payload: PushPayload,
   config: AgentDetectionConfig = DEFAULT_DETECTION_CONFIG,
 ): ProcessedWebhookResult {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const p = payload as any;
-  const defaultBranch = p.repository.default_branch;
-  const ref = p.ref;
+  const defaultBranch = payload.repository.default_branch;
+  const ref = payload.ref;
   if (ref !== `refs/heads/${defaultBranch}`) return { event: null };
 
-  const commits: Array<{
-    message?: string;
-    added?: string[];
-    modified?: string[];
-    removed?: string[];
-  }> = p.commits ?? [];
+  const commits = payload.commits;
 
   const agentAuthored = commits.some((c) =>
-    hasTrailerMatch(c.message ?? "", config.commitTrailers),
+    hasTrailerMatch(c.message, config.commitTrailers),
   );
 
   const filesChanged = new Set<string>();
@@ -220,16 +221,16 @@ export function processPushWebhook(
 
   return {
     event: {
-      eventId: `push-${p.after?.slice(0, 12) ?? p.head_commit?.id?.slice(0, 12) ?? Date.now()}`,
-      repo: p.repository.full_name,
+      eventId: `push-${payload.after.slice(0, 12)}`,
+      repo: payload.repository.full_name,
       eventType: "push",
       title:
         commits.length === 1
-          ? (commits[0]?.message?.split("\n")[0] ?? "push")
+          ? (commits[0]?.message.split("\n")[0] ?? "push")
           : `${commits.length} commits`,
       number: null,
-      url: p.compare ?? null,
-      author: p.pusher?.name ?? p.sender?.login ?? null,
+      url: payload.compare,
+      author: payload.pusher.name,
       agentAuthored,
       linkedSession: null,
       payload: JSON.stringify({
@@ -237,26 +238,23 @@ export function processPushWebhook(
         filesChanged: filesChanged.size,
         branch: defaultBranch,
       }),
-      createdAt:
-        p.head_commit?.timestamp ?? new Date().toISOString(),
+      createdAt: payload.head_commit?.timestamp ?? new Date().toISOString(),
     },
   };
 }
 
 /** Process a release webhook payload */
 export function processReleaseWebhook(
-  payload: Record<string, unknown>,
+  payload: ReleasePayload,
 ): ProcessedWebhookResult {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const p = payload as any;
-  if (p.action !== "published") return { event: null };
+  if (payload.action !== "published") return { event: null };
 
-  const release = p.release;
+  const release = payload.release;
 
   return {
     event: {
       eventId: `release-${release.id}`,
-      repo: p.repository.full_name,
+      repo: payload.repository.full_name,
       eventType: "release",
       title: release.name ?? release.tag_name,
       number: null,
@@ -268,7 +266,8 @@ export function processReleaseWebhook(
         tag: release.tag_name,
         prerelease: release.prerelease,
       }),
-      createdAt: release.published_at ?? release.created_at,
+      createdAt:
+        release.published_at ?? release.created_at ?? new Date().toISOString(),
     },
   };
 }
