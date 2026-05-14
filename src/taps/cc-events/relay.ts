@@ -16,6 +16,19 @@ import { RawEventSchema } from "./hooks/lib/event-types";
 import { NatsLink } from "../../bus/nats/connection";
 import { createCcEventPublisher } from "./cc-events";
 
+// Per-command Commander option shapes. Pin the permissive `opts: any`
+// default to the actual flag set so `opts.policy` etc. narrow.
+interface StartOptions {
+  policy: string;
+  foreground?: boolean;
+  natsUrl?: string;
+  natsToken?: string;
+  org?: string;
+}
+interface TestOptions {
+  policy: string;
+}
+
 // =============================================================================
 // Paths
 // =============================================================================
@@ -149,7 +162,7 @@ program
     "--org <org>",
     "Operator/org segment for published subjects (local.{org}.{type}). Falls back to env var GROVE_OPERATOR or NATS_ORG.",
   )
-  .action(async (options) => {
+  .action(async (options: StartOptions) => {
     if (!existsSync(options.policy)) {
       console.error(`Policy file not found: ${options.policy}`);
       console.error("Run the installer to create the default policy.");
@@ -201,7 +214,7 @@ program
         // relay's primary archival job. Log and continue JSONL-only.
         console.error(
           `cortex-relay: nats startup failed — continuing without bus publishing: ${
-            err instanceof Error ? err.message : err
+            err instanceof Error ? err.message : String(err)
           }`,
         );
         natsLink = undefined;
@@ -215,7 +228,7 @@ program
     writeFileSync(PID_FILE, String(process.pid));
 
     // Run retention sweep on startup (removes stale JSONL files)
-    runRetentionSweep();
+    void runRetentionSweep();
 
     console.log("cortex-relay: starting...");
     console.log(`  Policy: ${options.policy}`);
@@ -226,7 +239,7 @@ program
 
     // Watch and process
     const cleanup = watchRawEvents(RAW_DIR, (rawPath) => {
-      const filename = rawPath.split("/").pop()!;
+      const filename = rawPath.split("/").pop() ?? rawPath;
       const publishedPath = join(PUBLISHED_DIR, filename);
       const count = processor.processFile(rawPath, publishedPath);
       if (count > 0) {
@@ -248,7 +261,9 @@ program
     }, 5000);
 
     // Periodic retention sweep (every 6 hours)
-    const retentionInterval = setInterval(runRetentionSweep, 6 * 60 * 60 * 1000);
+    const retentionInterval = setInterval(() => {
+      void runRetentionSweep();
+    }, 6 * 60 * 60 * 1000);
 
     // Handle shutdown
     const shutdown = async () => {
@@ -261,7 +276,7 @@ program
           await natsLink.close();
         } catch (err) {
           console.error(
-            `cortex-relay: nats close error: ${err instanceof Error ? err.message : err}`,
+            `cortex-relay: nats close error: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       }
@@ -318,7 +333,7 @@ program
   .command("test <event-json>")
   .description("Test policy against an event JSON file or string")
   .option("--policy <path>", "Path to relay policy YAML", DEFAULT_POLICY)
-  .action((eventJson, options) => {
+  .action((eventJson: string, options: TestOptions) => {
     const policy = loadPolicy(options.policy);
 
     let raw: unknown;
