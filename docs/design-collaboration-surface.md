@@ -330,13 +330,15 @@ These are draft entries for `blueprint.yaml`. IDs avoid collision with existing 
 
 ## 9. Coupling rules (mirroring signal)
 
-The same coupling discipline that keeps signal host-agnostic applies here, in reverse. To prevent Grove from re-becoming the wire:
+The same coupling discipline that keeps signal host-agnostic applies here, in reverse. To prevent Grove (now Cortex) from re-becoming the wire:
 
-- Grove MAY subscribe to any subject under `local.{org}.>` and `mf.net-*.>`.
-- Grove MAY publish operator-decision envelopes on `local.{org}.*.decision` and `local.{org}.*.update`.
-- Grove MUST NOT publish on subjects owned by other layers (no trace spans, no pilot errand updates, no blueprint state writes from the bot).
-- Grove MUST NOT import from `myelin/`, `signal/`, `pilot/`, or `blueprint/` at runtime. Grove validates envelopes against `myelin/schemas/envelope.schema.json` by **shape**, not by importing a TS library. (Once `MY-102` ships a TS library, an `@metafactory/myelin` dev-dependency may be added.)
-- Grove MUST stay installable without any of the above repos being present — if a card source is missing, the card source goes silent; the surface still works.
+- Cortex MAY subscribe to any subject under `local.{org}.>` and `mf.net-*.>`.
+- Cortex MAY publish operator-decision envelopes on `local.{org}.*.decision` and `local.{org}.*.update`.
+- Cortex MUST NOT publish on subjects owned by other layers (no trace spans, no pilot errand updates, no blueprint state writes from the bot).
+- Cortex MUST NOT import the myelin **envelope schema** at runtime — the schema travels by value (vendored at `src/bus/myelin/vendor/envelope.schema.json` per the `SCHEMA_SOURCE_COMMIT` pin in `src/bus/myelin/envelope-validator.ts`). A myelin outage MUST NOT wedge cortex's envelope validator. Schema bumps are explicit PRs that re-vendor the file and update the pin.
+- Cortex MAY import **pure-string utility modules** from `@the-metafactory/myelin` when myelin explicitly publishes them for cross-consumer use with **zero transitive dependencies** on the envelope schema, Ajv, NATS, or any other heavy artefact (myelin#115 designed `@the-metafactory/myelin/subjects` to this contract). This relaxes the prior "MUST NOT import from `myelin/` at runtime" rule, which originated when myelin had not yet shipped a consumable TS library. Importing schema-bound or transport-bound surfaces from myelin remains forbidden under the schema-by-value rule above.
+- Cortex MUST NOT import from `signal/`, `pilot/`, or `blueprint/` at runtime.
+- Cortex MUST stay installable without any of the above repos being present at runtime — if a card source is missing, the card source goes silent; the surface still works. (The myelin npm dep is acceptable here because it ships with cortex's `bun install`, not as an external service.)
 
 These rules turn the layered model into something we can audit, not just describe.
 

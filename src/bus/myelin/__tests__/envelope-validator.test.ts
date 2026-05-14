@@ -636,4 +636,60 @@ describe("validateSubjectEnvelopeAlignment (IAW A.3)", () => {
     expect(result.expected).toBe("local");
     expect(result.actual).toBe("public");
   });
+
+  // -------------------------------------------------------------------------
+  // Behavior-pinning tests (Sage R1 — PR #151 important finding).
+  //
+  // The shim delegates entirely to `subjectPrefixAligns` from
+  // `@the-metafactory/myelin/subjects`. These tests assert concrete
+  // alignment semantics that a future myelin behavior change (e.g.,
+  // case-folding, partial-prefix matching, whitespace tolerance) would
+  // silently inherit. Pin them here so cortex's bus invariants fail
+  // fast at vendor-bump time rather than at production publish time.
+  // -------------------------------------------------------------------------
+
+  test("alignment is case-sensitive — uppercase classification does NOT match", () => {
+    // If myelin ever case-folds, `LOCAL.metafactory.*` would start to
+    // count as aligned with a `local`-classified envelope and this
+    // assertion would fail, surfacing the semantic drift.
+    const env = envWithClassification("local");
+    const result = validateSubjectEnvelopeAlignment(
+      "LOCAL.metafactory.system.adapter.degraded",
+      env,
+    );
+    expect(result.aligned).toBe(false);
+    expect(result.actual).toBe("LOCAL");
+  });
+
+  test("alignment requires a dot boundary after the prefix — no partial matches", () => {
+    // Pin: `local-host.something.*` MUST NOT count as aligned with a
+    // `local`-classified envelope. Catches a future regression where a
+    // pure `startsWith` check without dot-boundary enforcement creeps
+    // back in.
+    const env = envWithClassification("local");
+    const result = validateSubjectEnvelopeAlignment(
+      "local-host.metafactory.system.adapter.degraded",
+      env,
+    );
+    expect(result.aligned).toBe(false);
+    expect(result.expected).toBe("local");
+    expect(result.actual).toBe("local-host");
+  });
+
+  test("bare classification subject (no payload segments) is aligned", () => {
+    // Pin: subject === classification exactly should count as aligned.
+    // Edge case where the dot-boundary check would naively fail.
+    const env = envWithClassification("local");
+    const result = validateSubjectEnvelopeAlignment("local", env);
+    expect(result.aligned).toBe(true);
+    expect(result.actual).toBe("local");
+  });
+
+  test("empty subject is misaligned (no prefix at all)", () => {
+    const env = envWithClassification("local");
+    const result = validateSubjectEnvelopeAlignment("", env);
+    expect(result.aligned).toBe(false);
+    expect(result.expected).toBe("local");
+    expect(result.actual).toBe("");
+  });
 });

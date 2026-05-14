@@ -9,16 +9,20 @@
  * economics + F-5 sovereignty + F-10 bidding + F-11 capability discovery +
  * F-019/F-020 task subjects).
  *
- * Per docs/design-collaboration-surface.md §9 coupling rules, the *schema*
- * travels with cortex by value — never imported at runtime — so a myelin
- * outage cannot wedge cortex's validator. The pure-string subject-grammar
- * primitives at `@the-metafactory/myelin/subjects` (myelin#115) carry zero
- * transitive dependencies (no envelope schema, no Ajv, no NATS) and were
- * explicitly designed for ecosystem consumers like cortex to import — so
- * `deriveNatsSubject` and `validateSubjectEnvelopeAlignment` are now thin
- * shims over those primitives instead of cortex-side ports. This keeps the
+ * Per docs/design-collaboration-surface.md §9 coupling rules (as refreshed
+ * in this PR), the *schema* travels with cortex by value — never imported
+ * at runtime — so a myelin outage cannot wedge cortex's validator. The
+ * pure-string subject-grammar primitives at `@the-metafactory/myelin/subjects`
+ * (myelin#115) carry zero transitive dependencies (no envelope schema, no
+ * Ajv, no NATS) and were explicitly designed for ecosystem consumers like
+ * cortex to import — §9 now permits this category of import. As a result
+ * `deriveNatsSubject` and `validateSubjectEnvelopeAlignment` are thin
+ * shims over those primitives instead of cortex-side ports, closing the
  * grammar-extension fan-out problem (every consumer re-porting on each
- * spec bump) closed at the source.
+ * spec bump) at the source. Behavior-pinning tests in
+ * `__tests__/envelope-validator.test.ts` lock cortex's expected alignment
+ * semantics so any future myelin behavior drift (case-folding, partial
+ * matching, etc.) fails fast at vendor-bump time.
  *
  * To upgrade the schema: copy the file, update the `SCHEMA_SOURCE_COMMIT`
  * constant, bump the `@the-metafactory/myelin` pin in package.json to match,
@@ -381,7 +385,11 @@ export type Classification = Envelope["sovereignty"]["classification"];
  * Pure function; safe to call from any context.
  */
 export function deriveNatsSubject(envelope: Envelope, stack?: string): string {
-  const org = envelope.source.split(".")[0] ?? "default";
+  // `String.prototype.split` is guaranteed to return ≥1 element; the schema's
+  // `source` pattern (`^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){2,4}$`) further
+  // guarantees a non-empty first segment. The non-null assertion bridges
+  // `noUncheckedIndexedAccess` to that runtime + schema invariant.
+  const org = envelope.source.split(".")[0]!;
   return deriveSubject(
     envelope.sovereignty.classification,
     org,
