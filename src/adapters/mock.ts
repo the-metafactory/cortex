@@ -43,7 +43,7 @@ export class MockAdapter implements PlatformAdapter {
   /** Configurable return value for fetchContext */
   contextMessages: ContextMessage[] = [];
   /** MIG-7.2c-binding: Configurable return value for getPlatformUserId. Default `"mock-bot-user"`. */
-  platformUserId: string = "mock-bot-user";
+  platformUserId = "mock-bot-user";
   /** MIG-3b: Configurable subject patterns the surface face listens for. Default `mock.>`
    *  matches anything under `mock.*` for surface-router integration tests. */
   surfaceSubjects: string[] = ["mock.>"];
@@ -52,7 +52,7 @@ export class MockAdapter implements PlatformAdapter {
   private started = false;
   private threadCounter = 0;
 
-  constructor(instanceId: string = "mock-instance") {
+  constructor(instanceId = "mock-instance") {
     this.instanceId = instanceId;
   }
 
@@ -71,12 +71,19 @@ export class MockAdapter implements PlatformAdapter {
       // The mock accepts `signal` for contract symmetry but ignores it — there's
       // no I/O to cancel. Tests that need to assert on the abort path can
       // construct a custom SurfaceAdapter literal that observes `signal.aborted`.
+      // eslint-disable-next-line @typescript-eslint/require-await
       render: async (envelope, _signal) => {
         this.envelopesRendered.push(envelope);
       },
     };
   }
 
+  // All PlatformAdapter methods below MUST stay async to satisfy the
+  // interface contract — real implementations (Discord, Mattermost) do
+  // network I/O here. The mock returns recorded state synchronously, so
+  // `require-await` fires on every method. Suppress at the class level
+  // since the entire surface is intentionally I/O-free.
+  /* eslint-disable @typescript-eslint/require-await */
   async start(onMessage: (msg: InboundMessage) => Promise<void>): Promise<void> {
     this.onMessage = onMessage;
     this.started = true;
@@ -128,6 +135,7 @@ export class MockAdapter implements PlatformAdapter {
   async notifyOperator(text: string): Promise<void> {
     this.operatorNotifications.push(text);
   }
+  /* eslint-enable @typescript-eslint/require-await */
 
   /** Simulate an inbound message (for testing) */
   async simulateMessage(msg: InboundMessage): Promise<void> {
