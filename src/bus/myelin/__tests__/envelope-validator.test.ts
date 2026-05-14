@@ -488,6 +488,24 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
       "b69c877e23a2696040561c2d832fdc75aa83f73e",
     );
   });
+
+  test("SCHEMA_SOURCE_COMMIT matches the @the-metafactory/myelin pin in package.json (Sage R2 drift guard)", async () => {
+    // The schema is vendored at `SCHEMA_SOURCE_COMMIT` AND the runtime
+    // `deriveSubject` implementation is pulled from the same myelin commit
+    // via the npm dep. If a future bump updates one but forgets the other,
+    // cortex would run new grammar against an old schema (or vice versa).
+    // This test reads package.json's myelin dep ref and asserts equality.
+    const pkgPath = new URL("../../../../package.json", import.meta.url);
+    const pkg = (await import(pkgPath.pathname, { with: { type: "json" } })) as {
+      default: { dependencies?: Record<string, string> };
+    };
+    const myelinDep = pkg.default.dependencies?.["@the-metafactory/myelin"];
+    expect(myelinDep).toBeDefined();
+    // Format: "github:the-metafactory/myelin#<40-char-sha>"
+    const match = myelinDep!.match(/#([0-9a-f]{40})$/);
+    expect(match).not.toBeNull();
+    expect(match![1]).toBe(SCHEMA_SOURCE_COMMIT);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -384,15 +384,23 @@ export type Classification = Envelope["sovereignty"]["classification"];
  *
  * Pure function; safe to call from any context.
  */
+/**
+ * Extract the leading dotted segment from a string. `String.prototype.split`
+ * is guaranteed to return ≥1 element, and cortex's incoming `envelope.source`
+ * is already schema-validated to match
+ * `^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){2,4}$`, so the first segment is always
+ * a non-empty string. The non-null assertion bridges `noUncheckedIndexedAccess`
+ * to that runtime + schema invariant — proved once here so call sites don't
+ * each need to defend it (Sage R2 nit, PR #151).
+ */
+function firstSegment(s: string): string {
+  return s.split(".")[0]!;
+}
+
 export function deriveNatsSubject(envelope: Envelope, stack?: string): string {
-  // `String.prototype.split` is guaranteed to return ≥1 element; the schema's
-  // `source` pattern (`^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){2,4}$`) further
-  // guarantees a non-empty first segment. The non-null assertion bridges
-  // `noUncheckedIndexedAccess` to that runtime + schema invariant.
-  const org = envelope.source.split(".")[0]!;
   return deriveSubject(
     envelope.sovereignty.classification,
-    org,
+    firstSegment(envelope.source),
     envelope.type,
     stack,
   );
