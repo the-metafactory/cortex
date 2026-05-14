@@ -329,7 +329,6 @@ export function computeFleetMetrics(
   opts: FleetMetricsOptions
 ): FleetMetrics {
   const sinceIso = opts.since.toISOString();
-  const sinceMs = opts.since.getTime();
 
   // Pull every assignment that intersects the window. An assignment counts
   // when:

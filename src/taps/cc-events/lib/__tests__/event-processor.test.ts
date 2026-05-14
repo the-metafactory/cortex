@@ -1,7 +1,7 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { EventProcessor } from "../event-processor";
 import { JsonlReader } from "../jsonl-reader";
-import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "fs";
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, appendFileSync } from "fs";
 import { join } from "path";
 import type { RelayPolicy } from "../policy-schema";
 
@@ -10,7 +10,6 @@ const RAW_DIR = join(TEST_DIR, "raw");
 const PUB_DIR = join(TEST_DIR, "published");
 
 function writeEvent(file: string, event: Record<string, unknown>) {
-  const { appendFileSync } = require("fs");
   appendFileSync(file, JSON.stringify(event) + "\n");
 }
 

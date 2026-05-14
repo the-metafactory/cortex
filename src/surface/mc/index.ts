@@ -45,8 +45,8 @@ try {
     process.exit(0);
   };
 
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", () => { void shutdown(); });
+  process.on("SIGTERM", () => { void shutdown(); });
 } catch (err) {
   process.stderr.write(
     `[mission-control] FATAL: ${(err as Error).message}\n`

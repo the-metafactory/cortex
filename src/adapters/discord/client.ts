@@ -3,7 +3,7 @@
  * Initializes discord.js client with required intents and event handlers.
  */
 
-import { Client, GatewayIntentBits, Partials, type TextChannel, type ThreadChannel, type Message } from "discord.js";
+import { Client, GatewayIntentBits, Partials, type Message } from "discord.js";
 
 export interface ConnectionHealth {
   reconnectCount: number;

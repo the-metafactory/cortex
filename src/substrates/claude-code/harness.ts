@@ -77,7 +77,6 @@ import type { Envelope } from "../../bus/myelin/envelope-validator";
 import type {
   Capability,
   DispatchRequest,
-  HarnessId,
   MyelinEnvelope,
   SessionHarness,
 } from "../../common/substrates/types";

@@ -1,7 +1,7 @@
 // F-3 — cortex agents reload/list CLI tests.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync, copyFileSync, mkdirSync } from "fs";
+import { mkdtempSync, writeFileSync, copyFileSync, mkdirSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -402,10 +402,9 @@ function seedConfigDir(cfg: string, srcAgentsDir: string): void {
   copyFileSync(PERSONA_PATH, join(personasD, "echo.md"));
   // Copy the fixture's fragments — but rewrite the persona path so it
   // resolves correctly against the new agents.d/ directory.
-  const fs = require("fs") as typeof import("fs");
-  for (const filename of fs.readdirSync(srcAgentsDir)) {
+  for (const filename of readdirSync(srcAgentsDir)) {
     if (!filename.endsWith(".yaml")) continue;
-    const content = fs.readFileSync(join(srcAgentsDir, filename), "utf-8");
-    fs.writeFileSync(join(agentsD, filename), content);
+    const content = readFileSync(join(srcAgentsDir, filename), "utf-8");
+    writeFileSync(join(agentsD, filename), content);
   }
 }

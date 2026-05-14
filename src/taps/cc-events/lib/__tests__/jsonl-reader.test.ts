@@ -1,12 +1,11 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { JsonlReader } from "../jsonl-reader";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, appendFileSync } from "fs";
 import { join } from "path";
 
 const TEST_DIR = join(import.meta.dir, ".test-jsonl");
 
 function writeEvent(file: string, event: Record<string, unknown>) {
-  const { appendFileSync } = require("fs");
   appendFileSync(file, JSON.stringify(event) + "\n");
 }
 
@@ -62,7 +61,6 @@ describe("JsonlReader", () => {
     const reader = new JsonlReader();
 
     writeEvent(file, sampleEvent(1));
-    const { appendFileSync } = require("fs");
     appendFileSync(file, "this is not json\n");
     writeEvent(file, sampleEvent(2));
 

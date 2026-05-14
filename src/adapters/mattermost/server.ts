@@ -162,6 +162,6 @@ export function createMattermostServer(
 
   return {
     server,
-    stop: () => server.stop(),
+    stop: () => { void server.stop(); },
   };
 }
