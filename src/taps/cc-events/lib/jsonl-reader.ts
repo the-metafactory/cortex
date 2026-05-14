@@ -3,7 +3,8 @@
  * Reads new lines from a JSONL file, tracking position for incremental reads.
  */
 
-import { readFileSync, statSync, existsSync } from "fs";
+import { readFileSync, readdirSync, statSync, existsSync } from "fs";
+import { join } from "path";
 import type { RawEvent } from "../hooks/lib/event-types";
 
 export class JsonlReader {
@@ -23,9 +24,7 @@ export class JsonlReader {
    */
   skipAllToEnd(dir: string): void {
     if (!existsSync(dir)) return;
-    const { readdirSync } = require("fs");
-    const { join } = require("path");
-    const files = readdirSync(dir).filter((f: string) => f.endsWith(".jsonl"));
+    const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
     for (const file of files) {
       this.skipToEnd(join(dir, file));
     }
