@@ -19,7 +19,11 @@ import {
   isSubAgentEvent,
   extractTaskDescription,
 } from "./worklog-formatter";
-import { detectProject, extractGitHubIssue, formatDuration } from "./event-utils";
+import { detectProject, extractGitHubIssue } from "./event-utils";
+
+function asString(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { SurfaceAdapter } from "../bus/surface-router";
 
@@ -115,14 +119,13 @@ export class WorklogManager {
       this.sessionDescriptions.set(event.session_id, extractTaskDescription(event));
 
       // Post opening message inside the thread with rich context
-      const description = event.payload.prompt_preview
-        ? String(event.payload.prompt_preview)
-        : event.payload.description
-          ? String(event.payload.description)
-          : "Task started";
+      const description =
+        asString(event.payload.prompt_preview) ||
+        asString(event.payload.description) ||
+        "Task started";
 
       const ghIssue = extractGitHubIssue(description);
-      const project = event.payload.project ? String(event.payload.project) : detectProject(description);
+      const project = asString(event.payload.project) || detectProject(description);
       const context = buildContextLinks(description, project);
 
       const parts = [
@@ -166,7 +169,9 @@ export class WorklogManager {
 
     // Post clean completion line to channel
     const completionMsg = formatChannelCompletion(event);
-    await channel.send(completionMsg).catch(() => {});
+    await channel.send(completionMsg).catch(() => {
+      // best-effort completion post; ignore Discord API errors
+    });
 
     // Clean up mappings
     this.sessionThreads.delete(event.session_id);
@@ -299,7 +304,7 @@ export class WorklogManager {
    * path so a failing Discord API call can't poison the surface-router.
    */
   private async renderDispatchEnvelope(envelope: Envelope): Promise<void> {
-    const payload = envelope.payload as Record<string, unknown>;
+    const payload = envelope.payload;
     const taskId = typeof payload.task_id === "string" ? payload.task_id : null;
     if (!taskId) {
       console.error(
@@ -339,7 +344,7 @@ export class WorklogManager {
     envelope: Envelope,
     taskId: string,
   ): Promise<void> {
-    const payload = envelope.payload as Record<string, unknown>;
+    const payload = envelope.payload;
     const agentId = typeof payload.agent_id === "string" ? payload.agent_id : "agent";
     // Compact thread name — task_id prefix is enough to disambiguate for
     // operators eyeballing the channel feed.
@@ -370,7 +375,7 @@ export class WorklogManager {
     envelope: Envelope,
     taskId: string,
   ): Promise<void> {
-    const payload = envelope.payload as Record<string, unknown>;
+    const payload = envelope.payload;
     const threadId = this.sessionThreads.get(taskId);
     const formatted = formatDispatchEnvelopeForThread(envelope.type, payload);
 
@@ -395,7 +400,9 @@ export class WorklogManager {
       // Use just the headline (first line) for the channel feed; details
       // stay in the thread.
       const head = formatted.split("\n", 1)[0] ?? formatted;
-      await channel.send(head).catch(() => {});
+      await channel.send(head).catch(() => {
+        // best-effort channel summary post; ignore Discord API errors
+      });
     }
 
     // Clean up mappings so the maps don't grow unbounded.
@@ -412,7 +419,7 @@ export class WorklogManager {
  * TODO: Move link URLs to bot.yaml config so they aren't hardcoded.
  * These point to specific branches/issues that will change over time.
  */
-function buildContextLinks(description: string, project: string | null): string | null {
+function buildContextLinks(description: string, _project: string | null): string | null {
   const links: string[] = [];
 
   // Match I-series (metafactory testing/CI)
