@@ -61,7 +61,7 @@ describe("fetchBotUserId", () => {
   test("requests the /api/v4/users/me path off the supplied apiUrl (strips trailing slash)", async () => {
     let capturedUrl = "";
     stubFetch(async (input) => {
-      capturedUrl = typeof input === "string" ? input : input.toString();
+      capturedUrl = typeof input === "string" ? input : String(input);
       return new Response(JSON.stringify({ id: "u-1" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -76,7 +76,7 @@ describe("fetchBotUserId", () => {
   test("handles apiUrl WITHOUT a trailing slash identically", async () => {
     let capturedUrl = "";
     stubFetch(async (input) => {
-      capturedUrl = typeof input === "string" ? input : input.toString();
+      capturedUrl = typeof input === "string" ? input : String(input);
       return new Response(JSON.stringify({ id: "u-1" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -122,11 +122,11 @@ describe("fetchBotUserId", () => {
       return new Promise((_resolve, reject) => {
         const signal = init?.signal;
         if (signal?.aborted) {
-          reject(signal.reason ?? new DOMException("aborted", "AbortError"));
+          reject(signal.reason instanceof Error ? signal.reason : new DOMException("aborted", "AbortError"));
           return;
         }
         signal?.addEventListener("abort", () => {
-          reject(signal.reason ?? new DOMException("aborted", "AbortError"));
+          reject(signal.reason instanceof Error ? signal.reason : new DOMException("aborted", "AbortError"));
         });
       });
     });

@@ -58,7 +58,7 @@ export function resolveRole(userId: string, config: BotConfig | RoleConfig): Res
 
   if ("roles" in config && "defaultRole" in config && !("agent" in config)) {
     // RoleConfig passed directly (new adapter path)
-    const rc = config as RoleConfig;
+    const rc = config;
     roles = rc.roles;
     defaultRoleName = rc.defaultRole;
     globalDisallowed = [];
@@ -69,8 +69,8 @@ export function resolveRole(userId: string, config: BotConfig | RoleConfig): Res
     const instance = bc.discord[0];
     roles = instance?.roles ?? [];
     defaultRoleName = instance?.defaultRole ?? "allow-all";
-    globalDisallowed = bc.claude.disallowedTools ?? [];
-    globalAllowedDirs = bc.claude.allowedDirs ?? [];
+    globalDisallowed = bc.claude.disallowedTools;
+    globalAllowedDirs = bc.claude.allowedDirs;
   }
 
   // No roles configured = everyone gets full access (backward compat)
@@ -117,7 +117,7 @@ function roleToResolved(
     name: role.name,
     features: new Set(role.features),
     disallowedTools: mergedDisallowed,
-    allowedDirs: role.allowedDirs !== undefined ? role.allowedDirs : (globalAllowedDirs.length > 0 ? globalAllowedDirs : undefined),
+    allowedDirs: role.allowedDirs ?? (globalAllowedDirs.length > 0 ? globalAllowedDirs : undefined),
     allowedSkills: role.allowedSkills,
     denied: false,
   };

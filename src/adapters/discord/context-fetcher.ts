@@ -30,18 +30,16 @@ function messagesToContext(
   return Array.from(fetched.values())
     .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
     .map((msg) => {
-      const attachments: ContextAttachment[] = msg.attachments
-        ? Array.from(msg.attachments.values()).map((a) => ({
-            name: a.name ?? "unknown",
-            url: a.url,
-            contentType: a.contentType ?? "application/octet-stream",
-            size: a.size ?? 0,
-          }))
-        : [];
+      const attachments: ContextAttachment[] = Array.from(msg.attachments.values()).map((a) => ({
+        name: a.name,
+        url: a.url,
+        contentType: a.contentType ?? "application/octet-stream",
+        size: a.size,
+      }));
 
       return {
         role: msg.author.id === botUserId ? "assistant" as const : "human" as const,
-        author: msg.author.displayName ?? msg.author.username,
+        author: msg.author.displayName,
         content: msg.content,
         timestamp: msg.createdAt.toISOString(),
         ...(attachments.length > 0 ? { attachments } : {}),

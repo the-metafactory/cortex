@@ -9,6 +9,6 @@ import { RelayPolicySchema, type RelayPolicy } from "./policy-schema";
 
 export function loadPolicy(path: string): RelayPolicy {
   const content = readFileSync(path, "utf-8");
-  const raw = parseYaml(content);
+  const raw: unknown = parseYaml(content);
   return RelayPolicySchema.parse(raw);
 }

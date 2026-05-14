@@ -99,10 +99,10 @@ describe("getNetworkForChannel", () => {
   test("resolves Mattermost channel to correct network", () => {
     const config = makeConfig([
       makeNetwork("workplace", {
-        mattermost: [{ apiUrl: "https://mm.example.com", apiToken: "t", channels: ["ch-1", "ch-2"], enabled: true, pollIntervalMs: 3000, allowedUsers: [], roles: [], defaultRole: "allow-all", callbackPort: 8080 }] as any,
+        mattermost: [{ apiUrl: "https://mm.example.com", apiToken: "t", channels: ["ch-1", "ch-2"], enabled: true, pollIntervalMs: 3000, allowedUsers: [], roles: [], defaultRole: "allow-all", callbackPort: 8080 }],
       }),
       makeNetwork("personal", {
-        mattermost: [{ apiUrl: "https://mm2.example.com", apiToken: "t", channels: ["ch-3"], enabled: true, pollIntervalMs: 3000, allowedUsers: [], roles: [], defaultRole: "allow-all", callbackPort: 8081 }] as any,
+        mattermost: [{ apiUrl: "https://mm2.example.com", apiToken: "t", channels: ["ch-3"], enabled: true, pollIntervalMs: 3000, allowedUsers: [], roles: [], defaultRole: "allow-all", callbackPort: 8081 }],
       }),
     ]);
 
@@ -114,7 +114,7 @@ describe("getNetworkForChannel", () => {
   test("returns undefined for unknown channel", () => {
     const config = makeConfig([
       makeNetwork("workplace", {
-        mattermost: [{ apiUrl: "https://mm.example.com", apiToken: "t", channels: ["ch-1"], enabled: true, pollIntervalMs: 3000, allowedUsers: [], roles: [], defaultRole: "allow-all", callbackPort: 8080 }] as any,
+        mattermost: [{ apiUrl: "https://mm.example.com", apiToken: "t", channels: ["ch-1"], enabled: true, pollIntervalMs: 3000, allowedUsers: [], roles: [], defaultRole: "allow-all", callbackPort: 8080 }],
       }),
     ]);
 
@@ -186,7 +186,7 @@ describe("buildNetworkLookups", () => {
         discord: [{ token: "t", guildId: "g1", agentChannelId: "c", logChannelId: "l", contextDepth: 10, enableAgentLog: false, roles: [], defaultRole: "allow-all", enabled: true, dm: {} as any }] as any,
       }),
       makeNetwork("beta", {
-        mattermost: [{ apiUrl: "https://mm", apiToken: "t", channels: ["ch-1", "ch-2"], enabled: true, pollIntervalMs: 3000, allowedUsers: [], roles: [], defaultRole: "allow-all", callbackPort: 8080 }] as any,
+        mattermost: [{ apiUrl: "https://mm", apiToken: "t", channels: ["ch-1", "ch-2"], enabled: true, pollIntervalMs: 3000, allowedUsers: [], roles: [], defaultRole: "allow-all", callbackPort: 8080 }],
       }),
     ]);
 
