@@ -35,6 +35,47 @@ export interface DiscordThread {
   archived: boolean;
 }
 
+// =============================================================================
+// Discord API response shapes — narrowest projections this module reads.
+// Discord's full schema is huge; only field cortex actually accesses lives
+// here. Any future field need extends the interface, not loosens the type.
+// =============================================================================
+
+interface DiscordApiUser {
+  global_name?: string | null;
+  username: string;
+}
+
+interface DiscordApiMessage {
+  id: string;
+  author: DiscordApiUser;
+  content: string;
+  timestamp: string;
+  thread?: { id: string };
+}
+
+interface DiscordApiMessageCreated {
+  id: string;
+}
+
+interface DiscordApiChannel {
+  id: string;
+  name: string;
+  type: number;
+  parent_id?: string | null;
+}
+
+interface DiscordApiThread {
+  id: string;
+  name: string;
+  message_count?: number;
+  thread_metadata?: { archived?: boolean };
+}
+
+interface DiscordApiActiveThreadsResponse {
+  threads?: DiscordApiThread[];
+}
+
 /**
  * Post a message via bot API.
  */
@@ -57,7 +98,7 @@ export async function postMessage(
     return { success: false, error: `${res.status}: ${text}` };
   }
 
-  const data = await res.json() as any;
+  const data = (await res.json()) as DiscordApiMessageCreated;
   return { success: true, messageId: data.id };
 }
 
@@ -90,7 +131,7 @@ export async function readMessages(
     throw new Error(`Failed to read channel: ${res.status} ${await res.text()}`);
   }
 
-  const messages = await res.json() as any[];
+  const messages = (await res.json()) as DiscordApiMessage[];
   return messages.reverse().map((m) => ({
     id: m.id,
     author: m.author.global_name ?? m.author.username,
@@ -115,11 +156,16 @@ export async function listChannels(
     throw new Error(`Failed to list channels: ${res.status} ${await res.text()}`);
   }
 
-  const channels = await res.json() as any[];
+  const channels = (await res.json()) as DiscordApiChannel[];
   // Text channels (type 0) and announcement channels (type 5)
   return channels
     .filter((c) => c.type === 0 || c.type === 5)
-    .map((c) => ({ id: c.id, name: c.name, type: c.type, parentId: c.parent_id }))
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      type: c.type,
+      parentId: c.parent_id ?? undefined,
+    }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -156,8 +202,8 @@ export async function listThreads(
     throw new Error(`Failed to list threads: ${res.status} ${await res.text()}`);
   }
 
-  const data = await res.json() as any;
-  return (data.threads ?? []).map((t: any) => ({
+  const data = (await res.json()) as DiscordApiActiveThreadsResponse;
+  return (data.threads ?? []).map((t) => ({
     id: t.id,
     name: t.name,
     messageCount: t.message_count ?? 0,

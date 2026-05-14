@@ -7,8 +7,32 @@
  */
 
 import { Command } from "commander";
+import YAML from "yaml";
 import { loadConfig, saveConfig, getConfigPath } from "./lib/config";
 import { postMessage, resolveChannelByName, resolveThreadByName, readMessages, listChannels, listThreads } from "./lib/discord";
+
+// Per-command option shapes. Commander's typing is permissive; pinning each
+// `.action((opts) => …)` to the concrete shape lets the typed-checked preset
+// narrow .channel/.thread/.limit instead of falling through as `any`.
+interface PostOptions {
+  channel?: string;
+  thread?: string;
+}
+interface ReadOptions {
+  channel?: string;
+  thread?: string;
+  limit: string;
+}
+
+// `setNestedValue`/`getNestedValue` walk an arbitrarily-nested config tree.
+// `JsonObject` is the recursive shape: every leaf is a string (the only
+// value type the CLI's `discord config set <key> <value>` ever writes) or
+// another nested object. The cortex.yaml shape (DiscordCliConfig) satisfies
+// this constraint structurally, so the helpers don't need to reach for any.
+type ConfigValue = string | ConfigObject | undefined;
+interface ConfigObject {
+  [key: string]: ConfigValue;
+}
 
 const program = new Command()
   .name("discord")
@@ -23,7 +47,7 @@ program
   .argument("<message...>", "Message text (multiple words joined)")
   .option("-c, --channel <name>", "Channel name (default: defaultChannel from config)")
   .option("-t, --thread <name-or-id>", "Thread name or ID to post into")
-  .action(async (messageParts: string[], opts) => {
+  .action(async (messageParts: string[], opts: PostOptions) => {
     const config = loadConfig();
     const message = messageParts.join(" ");
 
@@ -66,15 +90,18 @@ program
         }
         if (channelId) {
           // Cache the resolved ID
-          if (!config.channels) config.channels = {};
-          if (!config.channels[channelName]) config.channels[channelName] = { id: channelId };
-          else config.channels[channelName].id = channelId;
+          config.channels ??= {};
+          config.channels[channelName] = { id: channelId };
           saveConfig(config);
         }
       }
     }
 
-    const targetId = threadId ?? channelId!;
+    const targetId = threadId ?? channelId;
+    if (!targetId) {
+      console.error("internal: no target id resolved");
+      process.exit(1);
+    }
 
     const result = await postMessage(config.botToken, targetId, message);
     if (result.success) {
@@ -93,7 +120,7 @@ program
   .option("-c, --channel <name>", "Channel name (default: defaultChannel from config)")
   .option("-t, --thread <name-or-id>", "Thread name or ID to read from")
   .option("-n, --limit <n>", "Number of messages", "10")
-  .action(async (opts) => {
+  .action(async (opts: ReadOptions) => {
     const config = loadConfig();
 
     if (!config.botToken) {
@@ -134,9 +161,8 @@ program
           console.error(`Channel "#${channelName}" not found.`);
           process.exit(1);
         }
-        if (!config.channels) config.channels = {};
-        if (!config.channels[channelName]) config.channels[channelName] = { id: channelId };
-        else config.channels[channelName].id = channelId;
+        config.channels ??= {};
+        config.channels[channelName] = { id: channelId };
         saveConfig(config);
       }
       readTargetId = channelId;
@@ -202,7 +228,7 @@ configCmd
   .argument("<value>", "Config value")
   .action((key: string, value: string) => {
     const config = loadConfig();
-    setNestedValue(config, key, value);
+    setNestedValue(config as unknown as ConfigObject, key, value);
     saveConfig(config);
     console.log(`Set ${key} = ${value.length > 50 ? value.slice(0, 50) + "..." : value}`);
   });
@@ -213,7 +239,7 @@ configCmd
   .argument("<key>", "Config key (dot notation)")
   .action((key: string) => {
     const config = loadConfig();
-    const value = getNestedValue(config, key);
+    const value = getNestedValue(config as unknown as ConfigObject, key);
     if (value === undefined) {
       console.error(`Key "${key}" not found.`);
       process.exit(1);
@@ -226,7 +252,6 @@ configCmd
   .description("Show full configuration")
   .action(() => {
     const config = loadConfig();
-    const YAML = require("yaml");
     console.log(`# ${getConfigPath()}\n`);
     console.log(YAML.stringify(config));
   });
@@ -240,24 +265,27 @@ configCmd
 
 // ─── helpers ───────────────────────────────────────────────────────────────
 
-function setNestedValue(obj: any, key: string, value: string): void {
+function setNestedValue(obj: ConfigObject, key: string, value: string): void {
   const parts = key.split(".");
-  let current = obj;
+  if (parts.length === 0) return;
+  let current: ConfigObject = obj;
   for (let i = 0; i < parts.length - 1; i++) {
-    const key = parts[i]!;
-    if (current[key] === undefined || typeof current[key] !== "object") {
-      current[key] = {};
+    const part = parts[i] ?? "";
+    const next = current[part];
+    if (next === undefined || typeof next !== "object") {
+      current[part] = {};
     }
-    current = current[key];
+    current = current[part] as ConfigObject;
   }
-  current[parts[parts.length - 1]!] = value;
+  const leaf = parts[parts.length - 1] ?? "";
+  current[leaf] = value;
 }
 
-function getNestedValue(obj: any, key: string): any {
+function getNestedValue(obj: ConfigObject, key: string): ConfigValue {
   const parts = key.split(".");
-  let current = obj;
+  let current: ConfigValue = obj;
   for (const part of parts) {
-    if (current === undefined || current === null) return undefined;
+    if (current === undefined || typeof current !== "object") return undefined;
     current = current[part];
   }
   return current;
