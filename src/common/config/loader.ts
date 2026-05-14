@@ -90,6 +90,25 @@ export interface LoadedConfig {
  * BotConfigSchema (legacy) rather than CortexConfigSchema's anti-field
  * rejections.
  */
+interface ZodLikeIssue {
+  path?: (string | number)[];
+  message: string;
+}
+interface ZodLikeError {
+  issues?: ZodLikeIssue[];
+  errors?: ZodLikeIssue[];
+}
+
+/**
+ * Runtime check for a Zod-shaped error. Zod v3 exposes `.errors`, Zod v4
+ * exposes `.issues`. Cortex's schemas straddle both — accept either.
+ */
+function isZodLikeError(err: unknown): err is ZodLikeError {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { issues?: unknown; errors?: unknown };
+  return Array.isArray(e.issues) || Array.isArray(e.errors);
+}
+
 function isCortexShape(raw: Record<string, unknown>): boolean {
   return (
     raw.operator !== null &&
@@ -168,19 +187,27 @@ export function loadConfigWithAgents(path: string): LoadedConfig {
     isLegacyMode = true;
   }
 
-  // Aggregate discord/mattermost from networks into top-level arrays
+  // Aggregate discord/mattermost from networks into top-level arrays.
+  // Top-level `raw.discord` / `raw.mattermost` may be either a single
+  // object or an array — normalize to array, ignore everything else.
+  const rawDiscord = raw.discord;
+  const rawMattermost = raw.mattermost;
+  const topDiscord: unknown[] = Array.isArray(rawDiscord)
+    ? rawDiscord
+    : rawDiscord !== undefined && rawDiscord !== null
+      ? [rawDiscord]
+      : [];
+  const topMattermost: unknown[] = Array.isArray(rawMattermost)
+    ? rawMattermost
+    : rawMattermost !== undefined && rawMattermost !== null
+      ? [rawMattermost]
+      : [];
   const aggregatedDiscord = isLegacyMode
-    ? networks.flatMap(n => n.discord)
-    : [
-        ...(raw.discord ? (Array.isArray(raw.discord) ? raw.discord : [raw.discord]) : []),
-        ...networks.flatMap(n => n.discord),
-      ];
+    ? networks.flatMap((n) => n.discord)
+    : [...topDiscord, ...networks.flatMap((n) => n.discord)];
   const aggregatedMattermost = isLegacyMode
-    ? networks.flatMap(n => n.mattermost)
-    : [
-        ...(raw.mattermost ? (Array.isArray(raw.mattermost) ? raw.mattermost : [raw.mattermost]) : []),
-        ...networks.flatMap(n => n.mattermost),
-      ];
+    ? networks.flatMap((n) => n.mattermost)
+    : [...topMattermost, ...networks.flatMap((n) => n.mattermost)];
 
   const merged = {
     ...raw,
@@ -224,16 +251,25 @@ function loadCortexShape(
   // the operator-friendly migration message baked into CortexConfigSchema.
   const cortexConfig: CortexConfig = CortexConfigSchema.parse(raw);
 
-  const firstAgent = cortexConfig.agents[0]!;
+  // CortexConfigSchema guarantees `agents.min(1)`, so [0] is always defined
+  // at runtime; noUncheckedIndexedAccess still types it as possibly undefined.
+  const firstAgent = cortexConfig.agents[0];
+  if (firstAgent === undefined) {
+    throw new Error("invariant: agents schema enforced .min(1) but [0] missing");
+  }
 
   // Synthesize the BotConfig `agent:` singular from operator + first agent.
   // Downstream consumers that read `config.agent.name` get the first agent's
   // id; per-instance routing flows via `inlineAgents` so the multi-agent
   // case stays correct.
+  // `operator.id` and `operator.dataResidency` are non-optional after parse
+  // (required + default respectively), so the prior `!== undefined` guards
+  // were dead conditions. `discordId` and `mattermostId` are genuinely
+  // optional — keep the spread-on-truthy pattern there.
   const synthesizedAgent = {
     name: firstAgent.id,
     displayName: firstAgent.displayName,
-    ...(cortexConfig.operator.id !== undefined && { operatorId: cortexConfig.operator.id }),
+    operatorId: cortexConfig.operator.id,
     ...(cortexConfig.operator.displayName !== undefined && {
       operatorName: cortexConfig.operator.displayName,
     }),
@@ -243,9 +279,7 @@ function loadCortexShape(
     ...(cortexConfig.operator.mattermostId !== undefined && {
       operatorMattermostId: cortexConfig.operator.mattermostId,
     }),
-    ...(cortexConfig.operator.dataResidency !== undefined && {
-      dataResidency: cortexConfig.operator.dataResidency,
-    }),
+    dataResidency: cortexConfig.operator.dataResidency,
     personaFile: firstAgent.persona,
   };
 
@@ -531,16 +565,27 @@ function loadNetworkFiles(networksDir: string, explicit: boolean): NetworkFile[]
     try {
       raw = parseYaml(content);
     } catch (err) {
-      throw new Error(`Failed to parse network file ${filename}: ${err instanceof Error ? err.message : err}`);
+      throw new Error(
+        `Failed to parse network file ${filename}: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
     }
 
     let network: NetworkFile;
     try {
       network = NetworkFileSchema.parse(raw);
-    } catch (err: any) {
-      const issues = err.issues ?? err.errors ?? [];
-      const details = issues.map((i: any) => `  ${i.path?.join(".")}: ${i.message}`).join("\n");
-      throw new Error(`Validation error in ${filename}:\n${details || err.message}`);
+    } catch (err) {
+      // Zod errors expose either `.issues` (v4) or `.errors` (v3) — narrow
+      // via runtime feature-detection without `any`.
+      const zodIssues = isZodLikeError(err) ? (err.issues ?? err.errors ?? []) : [];
+      const details = zodIssues
+        .map((i) => `  ${i.path?.join(".") ?? "?"}: ${i.message}`)
+        .join("\n");
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Validation error in ${filename}:\n${details !== "" ? details : message}`,
+        { cause: err },
+      );
     }
 
     if (seenIds.has(network.id)) {
@@ -555,14 +600,14 @@ function loadNetworkFiles(networksDir: string, explicit: boolean): NetworkFile[]
 
 function hasLegacyCloudConfig(raw: Record<string, unknown>): boolean {
   const api = raw.api as Record<string, unknown> | undefined;
-  return !!(api?.endpoint && api?.apiKey);
+  return !!(api?.endpoint && api.apiKey);
 }
 
 function buildLegacyNetwork(raw: Record<string, unknown>): NetworkFile {
   const api = raw.api as Record<string, unknown>;
   const agent = raw.agent as Record<string, unknown> | undefined;
 
-  const operatorId = (api.operatorId || (agent ? agent.operatorId : undefined)) as string | undefined;
+  const operatorId = (api.operatorId ?? (agent ? agent.operatorId : undefined)) as string | undefined;
   if (!operatorId) {
     console.warn(
       "config-loader: no operatorId configured (api.operatorId or agent.operatorId). " +
