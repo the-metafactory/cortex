@@ -289,7 +289,7 @@ export function startServer(
         // else (primitives, arrays, null) falls through to the error branch.
         const typeField =
           typeof parsed === "object" && parsed !== null && "type" in parsed
-            ? (parsed as { type: unknown }).type
+            ? parsed.type
             : undefined;
 
         if (typeField === "ping") {
@@ -343,7 +343,7 @@ export function startServer(
 
   const stop = (closeActive = false) => {
     clearInterval(pingInterval);
-    server.stop(closeActive);
+    void server.stop(closeActive);
   };
 
   return { server, wsRegistry, stop };
@@ -428,7 +428,7 @@ async function handleApi(
   }
 
   // F-12b — POST /api/tasks/:taskId/abandon (inherited from F-12 Decision 5)
-  const abandonTaskMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/abandon$/);
+  const abandonTaskMatch = /^\/api\/tasks\/([^/]+)\/abandon$/.exec(pathname);
   if (abandonTaskMatch) {
     if (req.method !== "POST") {
       return methodNotAllowed(["POST"]);
@@ -537,9 +537,8 @@ async function handleApi(
   // F-15 — iteration tasks (attach / detach). Match before the
   // single-id GET/PATCH route so `/iterations/:id/tasks(/:tid)` doesn't
   // get swallowed by the broader regex below.
-  const detachTaskMatch = pathname.match(
-    /^\/api\/iterations\/([^/]+)\/tasks\/([^/]+)$/
-  );
+  const detachTaskMatch =
+    /^\/api\/iterations\/([^/]+)\/tasks\/([^/]+)$/.exec(pathname);
   if (detachTaskMatch) {
     if (req.method !== "DELETE") {
       return methodNotAllowed(["DELETE"]);
@@ -550,14 +549,16 @@ async function handleApi(
         503
       );
     }
-    const iterationId = decodeURIComponent(detachTaskMatch[1]!);
-    const taskId = decodeURIComponent(detachTaskMatch[2]!);
+    // Captures [1] and [2] are guaranteed by the regex's anchored groups,
+    // but noUncheckedIndexedAccess types them as possibly undefined. Use
+    // explicit ?? "" fallbacks rather than `!` assertions.
+    const iterationId = decodeURIComponent(detachTaskMatch[1] ?? "");
+    const taskId = decodeURIComponent(detachTaskMatch[2] ?? "");
     return handleDetachTaskFromIteration(db, deps, iterationId, taskId);
   }
 
-  const attachTaskMatch = pathname.match(
-    /^\/api\/iterations\/([^/]+)\/tasks$/
-  );
+  const attachTaskMatch =
+    /^\/api\/iterations\/([^/]+)\/tasks$/.exec(pathname);
   if (attachTaskMatch) {
     if (req.method !== "POST") {
       return methodNotAllowed(["POST"]);
@@ -568,16 +569,16 @@ async function handleApi(
         503
       );
     }
-    const iterationId = decodeURIComponent(attachTaskMatch[1]!);
+    const iterationId = decodeURIComponent(attachTaskMatch[1] ?? "");
     const body = await parseJsonBody(req);
     if (body.error) return body.error;
     return handleAttachTaskToIteration(db, deps, iterationId, body.value);
   }
 
   // GET / PATCH /api/iterations/:id
-  const iterationByIdMatch = pathname.match(/^\/api\/iterations\/([^/]+)$/);
+  const iterationByIdMatch = /^\/api\/iterations\/([^/]+)$/.exec(pathname);
   if (iterationByIdMatch) {
-    const iterationId = decodeURIComponent(iterationByIdMatch[1]!);
+    const iterationId = decodeURIComponent(iterationByIdMatch[1] ?? "");
     if (req.method === "GET") {
       return handleGetIteration(db, iterationId);
     }
@@ -613,9 +614,8 @@ async function handleApi(
   // F-18 — assignment-scoped metrics. Matched BEFORE the broader assignment
   // routes so the `/metrics/` prefix doesn't get captured as an id segment
   // by a later regex.
-  const metricsAssignmentMatch = pathname.match(
-    /^\/api\/metrics\/assignment\/([^/]+)$/
-  );
+  const metricsAssignmentMatch =
+    /^\/api\/metrics\/assignment\/([^/]+)$/.exec(pathname);
   if (metricsAssignmentMatch) {
     if (req.method !== "GET") {
       return methodNotAllowed(["GET"]);
@@ -642,7 +642,7 @@ async function handleApi(
   }
 
   // GET /api/assignments/:id/events
-  const eventsMatch = pathname.match(/^\/api\/assignments\/([^/]+)\/events$/);
+  const eventsMatch = /^\/api\/assignments\/([^/]+)\/events$/.exec(pathname);
   if (eventsMatch) {
     if (req.method !== "GET") {
       return methodNotAllowed(["GET"]);
@@ -655,9 +655,8 @@ async function handleApi(
 
   // F-12 — POST /api/assignments/:id/requeue
   // F-12 Decision 7 — operator_requeue (blocked → queued | failed → queued).
-  const requeueMatch = pathname.match(
-    /^\/api\/assignments\/([^/]+)\/requeue$/
-  );
+  const requeueMatch =
+    /^\/api\/assignments\/([^/]+)\/requeue$/.exec(pathname);
   if (requeueMatch) {
     if (req.method !== "POST") {
       return methodNotAllowed(["POST"]);
@@ -678,9 +677,8 @@ async function handleApi(
 
   // F-12 — POST /api/assignments/:id/abandon
   // F-12 Decision 5 — branches on context (assignment vs task scope).
-  const abandonMatch = pathname.match(
-    /^\/api\/assignments\/([^/]+)\/abandon$/
-  );
+  const abandonMatch =
+    /^\/api\/assignments\/([^/]+)\/abandon$/.exec(pathname);
   if (abandonMatch) {
     if (req.method !== "POST") {
       return methodNotAllowed(["POST"]);
@@ -701,9 +699,8 @@ async function handleApi(
 
   // F-12 — POST /api/assignments/:id/handoff
   // F-12 Decision 6 — cancel-and-respawn (in-flight) / new-only (failed).
-  const handoffMatch = pathname.match(
-    /^\/api\/assignments\/([^/]+)\/handoff$/
-  );
+  const handoffMatch =
+    /^\/api\/assignments\/([^/]+)\/handoff$/.exec(pathname);
   if (handoffMatch) {
     if (req.method !== "POST") {
       return methodNotAllowed(["POST"]);
@@ -723,7 +720,7 @@ async function handleApi(
   }
 
   // POST /api/assignments/:id/input
-  const inputMatch = pathname.match(/^\/api\/assignments\/([^/]+)\/input$/);
+  const inputMatch = /^\/api\/assignments\/([^/]+)\/input$/.exec(pathname);
   if (inputMatch) {
     if (req.method !== "POST") {
       return methodNotAllowed(["POST"]);
@@ -881,9 +878,19 @@ async function readBodyWithCap(
   const chunks: Uint8Array[] = [];
   let total = 0;
   try {
+    // Intentional infinite loop: `done` from the stream reader is the
+    // exit condition. The "always-truthy" lint rule flags `while (true)`
+    // as redundant; keep it explicit for clarity since the body has
+    // multiple `break`/`continue` branches.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      // value is `Uint8Array | undefined` at runtime for empty pulls;
+      // TS narrows it to `Uint8Array` after `done === false` but the
+      // skip-empty guard is load-bearing if the underlying reader
+      // signals a no-op chunk before the next real chunk.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
       if (value === undefined) continue;
       total += value.byteLength;
       if (total > cap) {
