@@ -219,12 +219,17 @@ export async function startCortex(
   // Bus runtime (M2-M6) — no-op when `config.nats?` is absent. Tests inject
   // a recording fake via `options.injectRuntime` to assert observable
   // wire-up side-effects without standing up a real NATS server.
+  /* eslint-disable @typescript-eslint/no-empty-function */
+  // Null-runtime stub: intentionally empty methods. NATS-less cortex flows
+  // through this path, so onEnvelope's unregister, publish, and stop are
+  // all no-ops by design — the @-disables document intent at the source.
   let runtime: MyelinRuntime = {
     enabled: false,
     onEnvelope: () => ({ unregister: () => {} }),
     publish: async () => {},
     stop: async () => {},
   };
+  /* eslint-enable @typescript-eslint/no-empty-function */
   if (options.injectRuntime) {
     runtime = options.injectRuntime;
   } else {
@@ -361,9 +366,9 @@ export async function startCortex(
     cloudPublisher = new CloudPublisher({ networkResolver });
     const networkIds = config.networks.filter((n) => n.cloud).map((n) => n.id);
     console.log(`cortex: cloud publisher active (networks: ${networkIds.join(", ")})`);
-    CloudPublisher.checkEndpoints(networkResolver, networkIds).catch((err) =>
-      console.error("cortex: endpoint health check error:", err instanceof Error ? err.message : err),
-    );
+    CloudPublisher.checkEndpoints(networkResolver, networkIds).catch((err: unknown) => {
+      console.error("cortex: endpoint health check error:", err instanceof Error ? err.message : String(err));
+    });
   } else if (config.api.mode === "cloud") {
     console.warn("cortex: api.mode is 'cloud' but no network has cloud config. Events will not be published.");
   }
@@ -412,7 +417,7 @@ export async function startCortex(
   const startedDiscord: StartedDiscord[] = [];
 
   for (const instance of config.discord) {
-    if (instance.enabled === false) {
+    if (!instance.enabled) {
       console.log(`cortex: discord instance ${instance.instanceId ?? instance.guildId} disabled — skipping`);
       continue;
     }
@@ -583,7 +588,7 @@ export async function startCortex(
   }
 
   for (const instance of config.mattermost) {
-    if (instance.enabled === false) continue;
+    if (!instance.enabled) continue;
     if (!instance.apiUrl || !instance.apiToken) {
       console.error(`cortex: mattermost instance ${instance.instanceId ?? "unnamed"} missing apiUrl/apiToken — skipping`);
       continue;
@@ -821,16 +826,21 @@ export async function startCortex(
       completeSync("dashboard stop", () => dashboardApi?.stop?.());
       completeSync("github webhook receiver stop", () => githubReceiver?.stop());
       for (let i = 0; i < adapterCleanup.length; i++) {
-        completeSync(`outbound poller stop[${i}]`, adapterCleanup[i]!);
+        const cleanup = adapterCleanup[i];
+        if (cleanup) completeSync(`outbound poller stop[${i}]`, cleanup);
       }
       await completeAsync("dispatch-listener stop", dispatchListener.stop());
       await completeAsync("surface-router stop", router.stop());
       await completeAsync("dispatch-handler shutdown", dispatchHandler.shutdown());
       for (let i = 0; i < adapters.length; i++) {
-        await completeAsync(adapterStopNames[i]!, adapters[i]!.stop());
+        const adapter = adapters[i];
+        const name = adapterStopNames[i];
+        if (adapter && name) await completeAsync(name, adapter.stop());
       }
       for (let i = 0; i < renderers.length; i++) {
-        await completeAsync(rendererStopNames[i]!, renderers[i]!.stop());
+        const renderer = renderers[i];
+        const name = rendererStopNames[i];
+        if (renderer && name) await completeAsync(name, renderer.stop());
       }
       await completeAsync("cloud publisher close", cloudPublisher?.close());
       await completeAsync("runtime stop", runtime.stop());
@@ -846,6 +856,10 @@ export async function startCortex(
     });
     await Promise.race([drain(), timeout]);
 
+    // TS narrows `timeoutFired` and `timeoutHandle` to their initial values
+    // because the only assignments happen inside Promise constructor
+    // callbacks. The runtime updates are real; suppress the rule.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     if (timeoutFired) {
       lastShutdownAbandoned = Array.from(pending);
       console.warn(
@@ -853,6 +867,7 @@ export async function startCortex(
       );
     } else {
       lastShutdownAbandoned = [];
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
       if (timeoutHandle) clearTimeout(timeoutHandle);
     }
   };
@@ -868,9 +883,19 @@ export async function startCortex(
   };
 }
 
-/** G-201 / G-206 dashboard wiring. Dynamic import: surface/mc uses bun-only
- *  globals tsc can't see, so we keep this off the type-check path. Tests
- *  pass `disableDashboard` and never enter here. */
+/**
+ * G-201 / G-206 dashboard wiring. Dynamic import: surface/mc uses bun-only
+ * globals tsc can't see, so we keep this off the type-check path. Tests
+ * pass `disableDashboard` and never enter here.
+ *
+ * The `await import("./surface/mc/api/index" as string)` deliberately
+ * sidesteps TS module resolution to keep the bun-only surface out of
+ * `tsc --noEmit`. Every downstream interaction with `DashboardApi` is
+ * therefore `any`-typed at lint time, even though the runtime contract is
+ * well-defined. Suppressing the unsafe-* family inside this function is
+ * the boundary; production callers see the typed return signature.
+ */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unnecessary-type-assertion */
 async function setupDashboard(
   config: BotConfig,
   dispatchHandler: DispatchHandler,
@@ -899,13 +924,17 @@ async function setupDashboard(
 
   const cloudNetworks = config.networks.filter((n) => n.cloud);
   if (cloudNetworks.length > 0) {
-    runStartupCloudSync(cloudNetworks, api).catch((err) =>
-      console.error("cortex: cloud sync error:", err instanceof Error ? err.message : err),
-    );
+    runStartupCloudSync(cloudNetworks, api).catch((err: unknown) => {
+      console.error("cortex: cloud sync error:", err instanceof Error ? err.message : String(err));
+    });
   } else {
     api.runStartupSync();
   }
-  if (cloudPublisher) api.setCloudPublisher((event: unknown) => cloudPublisher.publish(event as never));
+  if (cloudPublisher) {
+    api.setCloudPublisher((event: unknown) => {
+      cloudPublisher.publish(event as never);
+    });
+  }
 
   const usageMonitor = new UsageMonitor((usage, snapshot) => {
     api.getState().setAccountUsage(usage);
@@ -921,6 +950,7 @@ async function setupDashboard(
   });
   return { api, usageMonitor };
 }
+/* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unnecessary-type-assertion */
 
 /** Subscribe a Discord adapter to the published-events JSONL stream so legacy
  *  `#agent-log` and per-task worklog threads keep working. Mirrors grove-bot's
@@ -1003,9 +1033,9 @@ function setupOutboundLog(
     pollInterval = setInterval(() => {
       try {
         const files = readdirSync(eventsDir).filter((f: string) => f.endsWith(".jsonl"));
-        for (const file of files) processFile(join(eventsDir, file));
+        for (const file of files) void processFile(join(eventsDir, file));
       } catch (err) {
-        console.error("cortex: poll error:", err instanceof Error ? err.message : err);
+        console.error("cortex: poll error:", err instanceof Error ? err.message : String(err));
       }
     }, 2000);
 
@@ -1160,7 +1190,7 @@ if (import.meta.main) {
     .description("Start the bot")
     .option("--config <path>", "Path to bot config YAML", DEFAULT_CONFIG)
     .option("--dry-run", "Validate config file and exit (no adapter / NATS / daemon startup)")
-    .action(async (options) => {
+    .action(async (options: { config: string; dryRun?: boolean }) => {
       // cortex#88 item 2 — short-circuit: skip PID file, signal handlers,
       // and the full startCortex pipeline. Just parse + validate the config.
       if (options.dryRun) {
@@ -1207,8 +1237,8 @@ if (import.meta.main) {
         const abandoned = handle.lastShutdownAbandoned;
         process.exit(abandoned.length > 0 ? 1 : 0);
       };
-      process.on("SIGINT", shutdown);
-      process.on("SIGTERM", shutdown);
+      process.on("SIGINT", () => { void shutdown(); });
+      process.on("SIGTERM", () => { void shutdown(); });
     });
 
   program
