@@ -9,7 +9,7 @@
  * Every update is persisted as a time-series snapshot in SQLite.
  */
 
-import { existsSync, readFileSync, watchFile, unwatchFile, statSync } from "fs";
+import { existsSync, readFileSync, statSync } from "fs";
 import { join } from "path";
 import type { AccountUsage } from "../types/usage";
 import { fetchWithTimeout } from "../timeout";
@@ -32,6 +32,35 @@ export interface UsageSnapshot {
 
 type OnUpdate = (usage: AccountUsage, snapshot: UsageSnapshot) => void;
 
+// =============================================================================
+// Anthropic OAuth `/api/oauth/usage` response — narrow projection.
+// Only the fields cortex reads. Anthropic's response is otherwise unspecified
+// here; widen this type if more fields become load-bearing.
+// =============================================================================
+
+interface UsageBucket {
+  utilization?: number;
+  resets_at?: string;
+}
+
+interface ExtraUsageRaw {
+  is_enabled?: boolean;
+  monthly_limit?: number | null;
+  used_credits?: number | null;
+}
+
+interface RawUsage {
+  five_hour?: UsageBucket;
+  seven_day?: UsageBucket;
+  seven_day_opus?: UsageBucket;
+  seven_day_sonnet?: UsageBucket;
+  extra_usage?: ExtraUsageRaw;
+}
+
+interface KeychainCredentials {
+  claudeAiOauth?: { accessToken?: string };
+}
+
 export class UsageMonitor {
   private onUpdate: OnUpdate;
   private cacheTimer: Timer | null = null;
@@ -47,10 +76,14 @@ export class UsageMonitor {
   start(): void {
     // Tier 2: Poll cache file for changes
     this.checkCache(); // immediate
-    this.cacheTimer = setInterval(() => this.checkCache(), CACHE_POLL_MS);
+    this.cacheTimer = setInterval(() => {
+      this.checkCache();
+    }, CACHE_POLL_MS);
 
     // Tier 3: API fallback — only if no events/cache updates in a while
-    this.apiTimer = setInterval(() => this.apiFallback(), API_POLL_MS);
+    this.apiTimer = setInterval(() => {
+      void this.apiFallback();
+    }, API_POLL_MS);
 
     console.log("usage-monitor: started (event → cache → api)");
   }
@@ -67,8 +100,9 @@ export class UsageMonitor {
    */
   receiveEvent(payload: Record<string, unknown>): AccountUsage {
     this.lastEventAt = Date.now();
-    const usage = this.parseRawUsage(payload);
-    const snapshot = this.toSnapshot("event", payload);
+    const raw = payload as RawUsage;
+    const usage = this.parseRawUsage(raw);
+    const snapshot = this.toSnapshot("event", raw);
     this.onUpdate(usage, snapshot);
     return usage;
   }
@@ -84,8 +118,8 @@ export class UsageMonitor {
       // Skip if we got an event recently (event is fresher)
       if (Date.now() - this.lastEventAt < CACHE_POLL_MS) return;
 
-      const raw = JSON.parse(readFileSync(CACHE_PATH, "utf-8"));
-      if (!raw || (!raw.five_hour && !raw.seven_day)) return;
+      const raw = JSON.parse(readFileSync(CACHE_PATH, "utf-8")) as RawUsage | null;
+      if (!raw || (raw.five_hour === undefined && raw.seven_day === undefined)) return;
 
       const usage = this.parseRawUsage(raw);
       const snapshot = this.toSnapshot("cache", raw);
@@ -115,7 +149,7 @@ export class UsageMonitor {
 
       if (!response.ok) return;
 
-      const raw = await response.json() as Record<string, any>;
+      const raw = (await response.json()) as RawUsage;
       const usage = this.parseRawUsage(raw);
       const snapshot = this.toSnapshot("api", raw);
       this.onUpdate(usage, snapshot);
@@ -126,8 +160,8 @@ export class UsageMonitor {
   }
 
   /** Parse raw Anthropic usage response into AccountUsage. */
-  private parseRawUsage(raw: Record<string, any>): AccountUsage {
-    const mapBucket = (b: any) =>
+  private parseRawUsage(raw: RawUsage): AccountUsage {
+    const mapBucket = (b: UsageBucket | undefined) =>
       b ? { utilization: b.utilization ?? 0, resetsAt: b.resets_at ?? "" } : null;
 
     return {
@@ -145,7 +179,7 @@ export class UsageMonitor {
   }
 
   /** Convert raw usage data to a DB-ready snapshot. */
-  private toSnapshot(source: string, raw: Record<string, any>): UsageSnapshot {
+  private toSnapshot(source: string, raw: RawUsage): UsageSnapshot {
     return {
       source,
       fiveHourPct: raw.five_hour?.utilization ?? null,
@@ -164,7 +198,7 @@ export class UsageMonitor {
       try {
         const result = Bun.spawnSync(["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"]);
         if (result.exitCode === 0) {
-          const creds = JSON.parse(result.stdout.toString());
+          const creds = JSON.parse(result.stdout.toString()) as KeychainCredentials | null;
           const token = creds?.claudeAiOauth?.accessToken;
           if (token) return token;
         }
@@ -177,7 +211,7 @@ export class UsageMonitor {
       const credPath = `${process.env.HOME}/.claude/.credentials.json`;
       const file = Bun.file(credPath);
       if (await file.exists()) {
-        const creds = await file.json();
+        const creds = (await file.json()) as KeychainCredentials | null;
         const token = creds?.claudeAiOauth?.accessToken;
         if (token) return token;
       }
