@@ -10,6 +10,10 @@ import {
   extractGitHubIssue,
 } from "./event-utils";
 
+function asString(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
 /** Light cleanup — only strip CC internal noise that would never be meaningful to a human reader */
 function sanitizeDescription(raw: string): string {
   return raw
@@ -61,9 +65,11 @@ function processTaskStarted(
   operatorId: string,
   event: IngestEvent,
 ): ProcessedSessionEvent {
-  const description = sanitizeDescription(String(
-    event.payload.prompt_preview ?? event.payload.description ?? "Task",
-  ));
+  const description = sanitizeDescription(
+    asString(event.payload.prompt_preview) ||
+    asString(event.payload.description) ||
+    "Task",
+  );
   const project = detectProjectFromIngestEvent(event);
   const githubIssue = extractGitHubIssue(description);
   const eventOperator = typeof event.payload.operator_id === "string" ? event.payload.operator_id : null;
@@ -99,12 +105,10 @@ function processTaskCompleted(
   const durationMs = event.payload.duration_ms
     ? Number(event.payload.duration_ms)
     : null;
-  const prUrl = event.payload.pr_url
-    ? String(event.payload.pr_url)
-    : null;
+  const prUrl = asString(event.payload.pr_url) || null;
 
   // Build a fallback session in case no session exists yet (late join)
-  const description = String(event.payload.summary ?? "Task");
+  const description = asString(event.payload.summary) || "Task";
   const project = detectProjectFromIngestEvent(event);
   const githubIssue = extractGitHubIssue(description);
   const eventOperator = typeof event.payload.operator_id === "string" ? event.payload.operator_id : null;
@@ -181,9 +185,10 @@ function processProgressEvent(
   event: IngestEvent,
 ): ProcessedSessionEvent {
   const progress = extractProgress(event);
-  const rawDesc = String(
-    event.payload.active_task ?? event.payload.path ?? event.event_type,
-  );
+  const rawDesc =
+    asString(event.payload.active_task) ||
+    asString(event.payload.path) ||
+    event.event_type;
   // Strip internal IDs, file paths, and XML tags that leak from CC internals
   const description = sanitizeDescription(rawDesc);
   const project = detectProjectFromIngestEvent(event);

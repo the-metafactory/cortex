@@ -71,7 +71,7 @@ describe("envelope-validator", () => {
   });
 
   test("rejects an envelope missing required type field", () => {
-    const bad = { ...(validEnvelope as { type?: string } & object) };
+    const bad = { ...(validEnvelope as { type?: string }) };
     delete (bad as { type?: string }).type;
     const result = validateEnvelope(bad);
     expect(result.ok).toBe(false);
@@ -410,7 +410,7 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
   test("getSignedByChain returns [] for an unsigned envelope", () => {
     const env = tryParseEnvelope(validEnvelope);
     expect(env).not.toBeNull();
-    expect(getSignedByChain(env as Envelope)).toEqual([]);
+    expect(getSignedByChain(env!)).toEqual([]);
   });
 
   test("getSignedByChain normalises a single-stamp object to a 1-element array", () => {
@@ -479,7 +479,7 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
   test("getLastStampPrincipal returns undefined for an unsigned envelope", () => {
     const env = tryParseEnvelope(validEnvelope);
     expect(env).not.toBeNull();
-    expect(getLastStampPrincipal(env as Envelope)).toBeUndefined();
+    expect(getLastStampPrincipal(env!)).toBeUndefined();
   });
 
   test("schema source commit points at the post-myelin#115 stack-aware pin", () => {
@@ -502,7 +502,7 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
     const myelinDep = pkg.default.dependencies?.["@the-metafactory/myelin"];
     expect(myelinDep).toBeDefined();
     // Format: "github:the-metafactory/myelin#<40-char-sha>"
-    const match = myelinDep!.match(/#([0-9a-f]{40})$/);
+    const match = /#([0-9a-f]{40})$/.exec(myelinDep!);
     expect(match).not.toBeNull();
     expect(match![1]).toBe(SCHEMA_SOURCE_COMMIT);
   });

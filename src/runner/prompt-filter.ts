@@ -73,8 +73,8 @@ export function scanPrompt(prompt: string, source: string): PromptFilterResult {
 
     if (result.decision === "BLOCKED") {
       // Surface pattern matches (e.g. "PI-001") and/or encoding hits (e.g. "base64")
-      const patternIds = result.matches?.map((m) => m.pattern_id).filter(Boolean) ?? [];
-      const encodingTypes = result.encodings?.map((e) => e.type).filter(Boolean) ?? [];
+      const patternIds = result.matches.map((m) => m.pattern_id).filter(Boolean);
+      const encodingTypes = result.encodings.map((e) => e.type).filter(Boolean);
       const reasons = [...patternIds, ...encodingTypes];
       const reasonStr = reasons.length > 0 ? reasons.join(", ") : "unspecified";
       console.log(

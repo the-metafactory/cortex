@@ -107,12 +107,12 @@ function buildSynthesisPrompt(
 
 /** Extract @mentions from moderator output */
 function extractMentions(text: string, knownNames: string[]): string[] {
-  const mentionPattern = /@([^\s@:,;!?()\[\]{}'"<>]+)/g;
+  const mentionPattern = /@([^\s@:,;!?()[\]{}'"<>]+)/g;
   const mentions: string[] = [];
   let match;
 
   while ((match = mentionPattern.exec(text)) !== null) {
-    const name = match[1]!.toLowerCase();
+    const name = (match[1] ?? "").toLowerCase();
     const matched = knownNames.find(
       (k) => k.toLowerCase() === name || k.toLowerCase().replace(/\s+/g, "-") === name
     );
@@ -239,12 +239,10 @@ export class AgentTeam extends EventEmitter {
       operator: this.opts.operator,
     });
 
-    // Pass trace context via environment
-    const env = {
-      PAI_TRACE_ID: this.traceId,
-      PAI_PARENT_AGENT_ID: this.moderator?.sessionId ?? this.teamId,
-      PAI_AGENT_ROLE: name,
-    };
+    // Trace context env vars are passed via CC's environment-inheritance;
+    // future PR will wire them through CCSession opts explicitly. Tracked
+    // in worklog as the "trace context not forwarded" item.
+    // (PAI_TRACE_ID / PAI_PARENT_AGENT_ID / PAI_AGENT_ROLE pending wiring.)
 
     this.members.set(name, {
       name,
@@ -287,8 +285,10 @@ export class AgentTeam extends EventEmitter {
 
   private triggerSynthesis(): void {
     const participantResults = Array.from(this.members.values())
-      .filter((m) => m.role === "participant" && m.result)
-      .map((m) => ({ name: m.name, result: m.result! }));
+      .filter((m): m is typeof m & { result: string } =>
+        m.role === "participant" && typeof m.result === "string"
+      )
+      .map((m) => ({ name: m.name, result: m.result }));
 
     if (participantResults.length === 0) {
       this.emit("error", new Error("No participant results to synthesize"));

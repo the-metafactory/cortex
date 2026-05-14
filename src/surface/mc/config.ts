@@ -64,19 +64,24 @@ export function loadConfig(configPath?: string): Readonly<Config> {
     raw = readFileSync(resolvedPath, "utf-8");
   } catch (err) {
     throw new Error(
-      `Failed to read config at ${resolvedPath}: ${(err as Error).message}`
+      `Failed to read config at ${resolvedPath}: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   }
 
   let parsed: Record<string, unknown>;
   try {
-    parsed = parseYaml(raw) ?? {};
+    parsed = (parseYaml(raw) as Record<string, unknown> | null) ?? {};
   } catch (err) {
     throw new Error(
-      `Malformed YAML in ${resolvedPath}: ${(err as Error).message}`
+      `Malformed YAML in ${resolvedPath}: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   }
 
+  // Defense-in-depth: parseYaml may return primitives if the file isn't a
+  // mapping; the cast above narrows it, but a runtime guard catches that.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   if (typeof parsed !== "object" || parsed === null) {
     throw new Error(
       `Config at ${resolvedPath} must be a YAML mapping, got ${typeof parsed}`

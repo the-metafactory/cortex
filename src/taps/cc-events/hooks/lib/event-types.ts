@@ -10,9 +10,9 @@ import { z } from "zod/v4";
 // =============================================================================
 
 export const RawEventSchema = z.object({
-  event_id: z.string().uuid(),
+  event_id: z.uuid(),
   event_type: z.string().min(1),
-  timestamp: z.string().datetime(),
+  timestamp: z.iso.datetime(),
   session_id: z.string().min(1),
   grove_channel: z.string().optional(),
   agent_id: z.string().optional(),
@@ -32,9 +32,9 @@ export type RawEvent = z.infer<typeof RawEventSchema>;
 // =============================================================================
 
 export const PublishedEventSchema = z.object({
-  event_id: z.string().uuid(),
+  event_id: z.uuid(),
   event_type: z.string().min(1),
-  timestamp: z.string().datetime(),
+  timestamp: z.iso.datetime(),
   session_id: z.string().min(1),
   grove_channel: z.string().optional(),
   agent_id: z.string().optional(),

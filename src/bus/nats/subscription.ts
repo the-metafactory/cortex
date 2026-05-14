@@ -79,7 +79,7 @@ export class NatsSubscription {
 
   /** Open a new subscription. Returns once the underlying NATS subscription is registered. */
   static start(link: NatsLink, opts: NatsSubscriptionOptions): NatsSubscription {
-    const pattern = (opts.pattern ?? "").trim();
+    const pattern = opts.pattern.trim();
     if (!pattern) {
       throw new Error("nats-subscription: pattern is required (non-empty, non-whitespace)");
     }
@@ -154,11 +154,11 @@ export class NatsSubscription {
     // rejections owned by `consumeLoops`. Without `.catch`, a rejection
     // from the OLD generation's loop after we've moved on becomes an
     // unhandled-promise warning with nothing watching.
-    const loop = this.consume(this.subscription).catch((err) => {
+    const loop = this.consume(this.subscription).catch((err: unknown) => {
       if (!this.stopped) {
         console.error(
           `nats-subscription: "${this.pattern}" consume loop rejection:`,
-          err instanceof Error ? err.message : err,
+          err instanceof Error ? err.message : String(err),
         );
       }
     });
@@ -226,10 +226,10 @@ export class NatsSubscription {
           const old = this.subscription;
           this.subscription = null;
           if (old) {
-            old.drain().catch((err) => {
+            old.drain().catch((err: unknown) => {
               console.error(
                 `nats-subscription: "${this.pattern}" pre-reconnect drain error:`,
-                err instanceof Error ? err.message : err,
+                err instanceof Error ? err.message : String(err),
               );
             });
           }
@@ -273,7 +273,10 @@ export class NatsSubscription {
   private pruneSettledLoops(): void {
     const KEEP = 2;
     if (this.consumeLoops.length > KEEP) {
-      this.consumeLoops.splice(0, this.consumeLoops.length - KEEP);
+      // `splice` returns the dropped slice; we intentionally discard the
+      // settled Promises (they each already attached a `.catch` handler
+      // that logs and continues).
+      void this.consumeLoops.splice(0, this.consumeLoops.length - KEEP);
     }
   }
 }
