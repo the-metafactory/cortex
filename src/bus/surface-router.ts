@@ -209,6 +209,11 @@ export function createSurfaceRouter(
 ): SurfaceRouter {
   const adapters: SurfaceAdapter[] = [];
   const renderTimeoutMs = opts?.renderTimeoutMs ?? DEFAULT_RENDER_TIMEOUT_MS;
+  // Captured as a plain function reference. unbound-method fires here
+  // because the type tree sees this as a method that *might* read `this`;
+  // for cortex's use case (callbacks supplied by the operator config),
+  // unbound is the intended shape.
+  // eslint-disable-next-line @typescript-eslint/unbound-method
   const onAdapterError = opts?.onAdapterError;
   const systemEventSource = opts?.systemEventSource;
 
@@ -229,6 +234,9 @@ export function createSurfaceRouter(
       };
     },
 
+    // start/stop are sync underneath but typed Promise<void> to match the
+    // SurfaceRouter interface (other implementations may do I/O here).
+    // eslint-disable-next-line @typescript-eslint/require-await
     async start() {
       if (started) return;
       started = true;
@@ -244,6 +252,7 @@ export function createSurfaceRouter(
       });
     },
 
+    // eslint-disable-next-line @typescript-eslint/require-await
     async stop() {
       if (stopped) return;
       stopped = true;
@@ -397,33 +406,31 @@ export function evaluateVisibility(
 ): SystemAccessFilteredReason | undefined {
   if (!visibility) return undefined;
 
-  // Rule 1: residency allowlist. Only evaluated when both the rule is set
-  // AND the envelope carries a residency value to compare.
+  // `envelope.sovereignty.*` fields are non-nullable per schema; the prior
+  // `?.` + `!== undefined` guards were defensive against an older shape.
+  // Rule 1: residency allowlist.
   if (visibility.hide_residency_outside !== undefined) {
-    const residency = envelope.sovereignty?.data_residency;
-    if (residency !== undefined && !visibility.hide_residency_outside.includes(residency)) {
+    const residency = envelope.sovereignty.data_residency;
+    if (!visibility.hide_residency_outside.includes(residency)) {
       return "residency_blocked";
     }
   }
 
-  // Rule 2: model-class allowlist. Same presence semantics as residency.
+  // Rule 2: model-class allowlist.
   if (visibility.require_model_class !== undefined) {
-    const modelClass = envelope.sovereignty?.model_class;
-    if (modelClass !== undefined && !visibility.require_model_class.includes(modelClass)) {
+    const modelClass = envelope.sovereignty.model_class;
+    if (!visibility.require_model_class.includes(modelClass)) {
       return "model_class_blocked";
     }
   }
 
-  // Rule 3: classification cap. The classification field is required by the
-  // schema; if absent we cannot evaluate the cap and treat it as passing.
+  // Rule 3: classification cap.
   if (visibility.max_classification !== undefined) {
-    const classification = envelope.sovereignty?.classification;
-    if (classification !== undefined) {
-      const capRank = CLASSIFICATION_RANK[visibility.max_classification];
-      const envRank = CLASSIFICATION_RANK[classification];
-      if (envRank > capRank) {
-        return "classification_exceeds_max";
-      }
+    const classification = envelope.sovereignty.classification;
+    const capRank = CLASSIFICATION_RANK[visibility.max_classification];
+    const envRank = CLASSIFICATION_RANK[classification];
+    if (envRank > capRank) {
+      return "classification_exceeds_max";
     }
   }
 
@@ -526,6 +533,12 @@ async function renderWithIsolation(
     const error = err instanceof Error ? err : new Error(String(err));
     safeReportError(adapter.id, error, onAdapterError);
   } finally {
+    // TS narrows `timer` to `null` here because the only assignment is
+    // inside the Promise constructor callback (TS doesn't track that the
+    // executor runs synchronously). The clearTimeout is load-bearing —
+    // without it the timeout fires post-success and the AbortController
+    // aborts an already-resolved signal.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     if (timer !== null) clearTimeout(timer);
   }
 }
