@@ -17,11 +17,11 @@ export function initDatabase(dbPath: string): Database {
   mkdirSync(dirname(dbPath), { recursive: true });
 
   const db = new Database(dbPath, { create: true });
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA foreign_keys = ON");
+  db.run("PRAGMA journal_mode = WAL");
+  db.run("PRAGMA foreign_keys = ON");
 
   for (const sql of SCHEMA_SQL) {
-    db.exec(sql);
+    db.run(sql);
   }
 
   // F-13 — additive ALTERs guarded against re-application. SQLite has no
@@ -34,10 +34,10 @@ export function initDatabase(dbPath: string): Database {
       .query(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`)
       .get(m.table, m.column);
     if (!present) {
-      db.exec(m.ddl);
+      db.run(m.ddl);
     }
     if (m.post) {
-      for (const sql of m.post) db.exec(sql);
+      for (const sql of m.post) db.run(sql);
     }
   }
 

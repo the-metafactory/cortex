@@ -23,7 +23,7 @@
  */
 
 import type { PublishedEvent } from "./hooks/lib/event-types";
-import type { NetworkResolver, NetworkConfig } from "../../common/types/config";
+import type { NetworkResolver } from "../../common/types/config";
 import { fetchWithTimeout } from "../../common/timeout";
 
 export interface CloudPublisherConfig {
@@ -55,7 +55,7 @@ export class CloudPublisher {
     this.retryBaseMs = config.retryBaseMs ?? 1000;
 
     this.interval = setInterval(() => {
-      this.flushInternal();
+      void this.flushInternal();
     }, this.batchIntervalMs);
   }
 
@@ -79,7 +79,7 @@ export class CloudPublisher {
     }
 
     if (this.buffer.length >= this.batchSizeLimit) {
-      this.flushInternal();
+      void this.flushInternal();
     }
   }
 
@@ -138,7 +138,7 @@ export class CloudPublisher {
         }
       } catch (err) {
         console.error(
-          `cloud-publisher: endpoint UNREACHABLE for network "${networkId}" (${url}): ${err instanceof Error ? err.message : err}`,
+          `cloud-publisher: endpoint UNREACHABLE for network "${networkId}" (${url}): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }
@@ -173,7 +173,8 @@ export class CloudPublisher {
       if (!eventsByNetwork.has(networkId)) {
         eventsByNetwork.set(networkId, []);
       }
-      eventsByNetwork.get(networkId)!.push(event);
+      const bucket = eventsByNetwork.get(networkId);
+      if (bucket) bucket.push(event);
     }
 
     // Send each network's batch separately

@@ -98,6 +98,9 @@ export type ArcErrorCode =
 interface ArcEnvelopeError {
   schema: typeof ARC_NATS_SCHEMA_V1;
   ok: false;
+  // ArcErrorCode literal union widens to `string` to allow forward-compat
+  // codes from arc; the literal members document the known set.
+  // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
   error: { code: ArcErrorCode | string; message: string };
 }
 
@@ -249,13 +252,13 @@ export function runCredsList(args: ParsedCredsArgs): ExitResult {
     // id = filename stem before the FIRST dot. `echo.creds` → `echo`,
     // `my.agent.creds` → `my` (`my.agent` would fail the regex anyway).
     // Symlinks are skipped (lstatSync above).
-    const id = filename.split(".")[0]!;
+    const id = filename.split(".")[0] ?? "";
     if (!AGENT_ID_REGEX.test(id)) {
       skippedMalformed.push(filename);
       continue;
     }
     if (seenIds.has(id)) {
-      skippedColliding.push({ id, first: seenIds.get(id)!, second: filename });
+      skippedColliding.push({ id, first: seenIds.get(id) ?? "", second: filename });
       continue;
     }
     seenIds.set(id, filename);
@@ -519,7 +522,7 @@ function formatArcResult(
     };
   }
 
-  if (call.envelope.ok === false) {
+  if (!call.envelope.ok) {
     return formatArcError(call.envelope, args, subcommand);
   }
   return formatArcSuccess(call.envelope, args, subcommand);
@@ -609,7 +612,7 @@ function formatArcSuccess(
   }
   if (subcommand === "revoke" && "revokedPubKey" in env && !("newPubKey" in env)) {
     lines.push(`  revoked_pub_key: ${env.revokedPubKey}`);
-    lines.push(`  creds_file_deleted: ${(env as ArcEnvelopeRemoveBot).credsFileDeleted}`);
+    lines.push(`  creds_file_deleted: ${env.credsFileDeleted}`);
   }
   return { exitCode: 0, stdout: lines.join("\n") + "\n", stderr: "" };
 }

@@ -146,10 +146,10 @@ export class CCSession extends EventEmitter {
       this.stdoutDone = this.pipeStdout();
 
       // Wire stderr (for error detection)
-      this.pipeStderr();
+      void this.pipeStderr();
 
       // Wire exit (waits for stdout drain before emitting "exit")
-      this.wireExit();
+      void this.wireExit();
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       this.emit("error", err);
@@ -258,6 +258,7 @@ export class CCSession extends EventEmitter {
     const decoder = new TextDecoder();
 
     try {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -273,7 +274,7 @@ export class CCSession extends EventEmitter {
       // Flush any remaining buffer
       const remaining = this.lineBuffer.flush();
       if (remaining) this.processLine(remaining);
-    } catch (err) {
+    } catch (_err) {
       // Stream closed — expected on process exit
     }
   }
@@ -288,13 +289,14 @@ export class CCSession extends EventEmitter {
     const chunks: string[] = [];
 
     try {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         chunks.push(decoder.decode(value, { stream: true }));
       }
     } catch (err) {
-      console.warn("cc-session: stderr stream closed:", err instanceof Error ? err.message : err);
+      console.warn("cc-session: stderr stream closed:", err instanceof Error ? err.message : String(err));
     }
 
     const stderrText = chunks.join("");

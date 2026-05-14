@@ -59,6 +59,9 @@ export class DashboardRenderer implements Renderer {
     this.visibility = config.visibility;
   }
 
+  // Renderer interface contract — both methods MUST be Promise<void>.
+  // No I/O today, but signature stays for future Mission Control wiring.
+  /* eslint-disable @typescript-eslint/require-await */
   async start(): Promise<void> {
     // Buffer is already empty + bounded; no I/O to perform. The lifecycle
     // hook is here for symmetry — Mission Control integration at MIG-7.13
@@ -71,6 +74,7 @@ export class DashboardRenderer implements Renderer {
     // Tests rely on this for clean per-test isolation.
     this.buffer = [];
   }
+  /* eslint-enable @typescript-eslint/require-await */
 
   get surfaceConfig(): SurfaceAdapter {
     return {
@@ -86,6 +90,7 @@ export class DashboardRenderer implements Renderer {
     };
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await
   async render(envelope: Envelope, _signal?: AbortSignal): Promise<void> {
     // Renderer contract §2: never throw. The push/shift are infallible,
     // but the try-catch + null guard are defense-in-depth so a future
@@ -97,6 +102,9 @@ export class DashboardRenderer implements Renderer {
       // dispatch, but a malformed value sneaking through MUST NOT
       // corrupt the buffer + leak into Mission Control's projection
       // pipeline via getRecent(). Silently drop instead.
+      // Defensive null/object check guards against future malformed input
+      // even though TS narrows it. Suppress dead-condition on this surface.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
       if (envelope === null || typeof envelope !== "object") return;
       this.buffer.push(envelope);
       if (this.buffer.length > this.bufferSize) {
@@ -110,8 +118,8 @@ export class DashboardRenderer implements Renderer {
       }
     } catch (err) {
       console.warn(
-        `dashboard-renderer: render() swallowed an error while buffering envelope ${envelope?.id ?? "<null>"}:`,
-        err instanceof Error ? err.message : err,
+        `dashboard-renderer: render() swallowed an error while buffering envelope ${envelope.id}:`,
+        err instanceof Error ? err.message : String(err),
       );
     }
   }

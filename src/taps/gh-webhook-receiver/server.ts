@@ -255,7 +255,7 @@ export function startGithubWebhookReceiver(
       //    only fail here after auth has passed.
       let payload: Record<string, unknown>;
       try {
-        const parsed = JSON.parse(body);
+        const parsed: unknown = JSON.parse(body);
         if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
           return new Response("invalid json", { status: 400 });
         }
@@ -318,11 +318,11 @@ export function startGithubWebhookReceiver(
     port,
     stop: () => {
       try {
-        server.stop();
+        void server.stop();
       } catch (err) {
         console.error(
           "github-webhook-receiver: server stop error:",
-          err instanceof Error ? err.message : err,
+          err instanceof Error ? err.message : String(err),
         );
       }
     },
