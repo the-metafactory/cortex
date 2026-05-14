@@ -233,6 +233,11 @@ export class DiscordAdapter implements PlatformAdapter {
       this.publishAdapterDisconnected({
         shardId,
         closeCode: closeEvent.code,
+        // `closeEvent.reason` is flagged `@deprecated` by discord.js — the
+        // upstream WebSocketShard no longer fills it. Cortex still surfaces
+        // whatever the gateway emits (may be empty string) for incident
+        // attribution; the codeOnly path remains the load-bearing signal.
+        // eslint-disable-next-line @typescript-eslint/no-deprecated
         closeReason: closeEvent.reason,
         // `was_clean` follows RFC 6455 close-frame semantics: codes 1000/1001
         // are clean; everything else is unclean.
@@ -252,9 +257,11 @@ export class DiscordAdapter implements PlatformAdapter {
     });
 
     // Retry pending deliveries on reconnect
-    this.client.on("shardReady", async () => {
-      await this.drainPendingResults();
-      await this.drainPendingOperatorDMs();
+    this.client.on("shardReady", () => {
+      void (async () => {
+        await this.drainPendingResults();
+        await this.drainPendingOperatorDMs();
+      })();
     });
 
     await this.client.login(this.presence.token);
@@ -304,7 +311,8 @@ export class DiscordAdapter implements PlatformAdapter {
     const recentMessageIds = new Set<string>();
     const DEDUP_WINDOW = 30_000; // 30s
 
-    this.client.on("messageCreate", async (message: Message) => {
+    this.client.on("messageCreate", (message: Message) => {
+      void (async () => {
       if (!this.client) return;
 
       // Deduplicate — skip if we've already seen this message ID
@@ -335,7 +343,13 @@ export class DiscordAdapter implements PlatformAdapter {
       const content = isDM ? message.content.trim() : extractContent(message, this.client);
       const channel = message.channel as TextChannel | ThreadChannel | DMChannel;
       const isThread = !isDM && (channel.type === ChannelType.PublicThread || channel.type === ChannelType.PrivateThread || channel.type === ChannelType.AnnouncementThread);
-      const isPrivateChannel = !isDM && !isThread && (channel as any).members?.size === 2;
+      // Private text channels expose `.members` as a Collection; DM/thread
+      // channels do not. Narrow via duck-typing without `as any` — TextChannel
+      // doesn't carry `members` in the discord.js type tree, so a structural
+      // cast lets us peek without lying about the channel type.
+      const isPrivateChannel =
+        !isDM && !isThread &&
+        (channel as unknown as { members?: { size: number } }).members?.size === 2;
 
       // Handle message.txt (Discord auto-generates for messages > 2000 chars)
       let finalContent = content;
@@ -366,7 +380,7 @@ export class DiscordAdapter implements PlatformAdapter {
       let threadName: string | undefined;
       if (!isDM) {
         if (isThread && "parentId" in channel) {
-          const thread = channel as ThreadChannel;
+          const thread = channel;
           // parent may be null if not in cache — fetch it
           let parent = thread.parent;
           if (!parent && thread.parentId) {
@@ -376,10 +390,10 @@ export class DiscordAdapter implements PlatformAdapter {
               console.warn(`discord-${this.instanceId}: failed to fetch parent channel:`, err instanceof Error ? err.message : err);
             }
           }
-          channelName = parent?.name ?? undefined;
-          threadName = thread.name ?? undefined;
+          channelName = parent?.name;
+          threadName = thread.name;
         } else {
-          channelName = (channel as TextChannel).name ?? undefined;
+          channelName = (channel as TextChannel).name;
         }
         if (channelName) {
           console.log(`discord-${this.instanceId}: channel="${channelName}"${threadName ? ` thread="${threadName}"` : ""}`);
@@ -390,7 +404,7 @@ export class DiscordAdapter implements PlatformAdapter {
         platform: "discord",
         instanceId: this.instanceId,
         authorId: message.author.id,
-        authorName: message.author.displayName ?? message.author.username,
+        authorName: message.author.displayName,
         content: finalContent,
         channelId: channel.id,
         threadId: isDM ? channel.id : (isThread || isPrivateChannel ? channel.id : undefined),
@@ -403,9 +417,9 @@ export class DiscordAdapter implements PlatformAdapter {
           .filter((a) => !(a.name === "message.txt" && messageTxt))
           .map((a) => ({
             url: a.url,
-            filename: a.name ?? "unknown",
+            filename: a.name,
             contentType: a.contentType ?? "application/octet-stream",
-            size: a.size ?? 0,
+            size: a.size,
           })),
         timestamp: message.createdAt,
         _native: message,
@@ -481,13 +495,18 @@ export class DiscordAdapter implements PlatformAdapter {
       }
 
       await onMessage(inboundMsg);
+      })();
     });
 
     this.inboundDispatchAttached = true;
   }
 
   async stop(): Promise<void> {
-    this.client?.destroy();
+    // discord.js v14 client.destroy() returns a Promise<void>; await it so
+    // the gateway socket fully closes before the adapter is considered
+    // stopped (no-floating-promises). The await also makes the `async` on
+    // this method legitimate (no require-await).
+    await this.client?.destroy();
     this.client = null;
   }
 
@@ -497,7 +516,12 @@ export class DiscordAdapter implements PlatformAdapter {
    * `ready` event fires (which `start()` awaits via `client.login`). Calling
    * this before `start()` completes — or after `stop()` — throws.
    */
+  // eslint-disable-next-line @typescript-eslint/require-await
   async getPlatformUserId(): Promise<string> {
+    // PlatformAdapter.getPlatformUserId returns Promise<string> per the
+    // interface contract (Mattermost adapter does network I/O here). The
+    // Discord client populates `user` synchronously after `ready`, so this
+    // implementation is a non-awaiting Promise.resolve() in disguise.
     const userId = this.client?.user?.id;
     if (!userId) {
       throw new Error(
@@ -636,8 +660,9 @@ export class DiscordAdapter implements PlatformAdapter {
   private resolveDMAccess(msg: InboundMessage): AccessDecision {
     const dm = this.presence.dm;
 
-    // Operator DM — full access
-    if (msg.dmType === "operator" && dm?.operatorRole) {
+    // Operator DM — full access. `dm.operatorRole` is non-nullable after
+    // Zod default; the prior `&& dm.operatorRole` check was dead.
+    if (msg.dmType === "operator") {
       const opRole = dm.operatorRole;
       return {
         allowed: true,
@@ -655,8 +680,9 @@ export class DiscordAdapter implements PlatformAdapter {
       };
     }
 
-    // Check per-user DM roles
-    if (dm?.userRoles) {
+    // Check per-user DM roles. `dm.userRoles` defaults to `[]`; the prior
+    // truthy check was dead.
+    {
       const userRole = dm.userRoles.find((r) => r.users.includes(msg.authorId));
       if (userRole) {
         return {
@@ -676,7 +702,7 @@ export class DiscordAdapter implements PlatformAdapter {
     }
 
     // Default DM role
-    const defaultDM = dm?.defaultRole ?? "denied";
+    const defaultDM = dm.defaultRole;
     if (defaultDM === "denied") {
       return {
         allowed: false,
@@ -838,14 +864,14 @@ export class DiscordAdapter implements PlatformAdapter {
     let parent: TextChannel;
     try {
       const fetched = await this.client.channels.fetch(parentChannelId);
-      if (!fetched || fetched.type !== ChannelType.GuildText) {
+      if (fetched?.type !== ChannelType.GuildText) {
         // We only auto-thread on regular guild text channels. Forum
         // channels, voice channels, announcement channels etc. have
         // different thread semantics (or no thread support) — caller
         // falls back to channel-level reply.
         return null;
       }
-      parent = fetched as TextChannel;
+      parent = fetched;
     } catch (err) {
       console.warn(
         `discord-${this.instanceId}: findOrCreateThreadByName: cannot fetch parent ${parentChannelId}:`,
@@ -925,7 +951,13 @@ export class DiscordAdapter implements PlatformAdapter {
         );
         return;
       }
-      if (!this.connectionHealth?.currentlyConnected && isRetryableError(err)) {
+      // TOCTOU re-check: TS narrowed `currentlyConnected` to true via the
+      // earlier-return guard at the top of `notifyOperator`, but the
+      // connection can flip between that check and this catch. The
+      // re-read is load-bearing per the comment block above; suppress
+      // the rule that flags it as dead.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+      if (!this.connectionHealth.currentlyConnected && isRetryableError(err)) {
         this.bufferOperatorDM(text);
       } else {
         console.warn(`discord-${this.instanceId}: failed to notify operator:`, err instanceof Error ? err.message : err);
@@ -1065,7 +1097,11 @@ export class DiscordAdapter implements PlatformAdapter {
   /** Resolve a ResponseTarget to a discord.js channel object */
   private async resolveChannel(target: ResponseTarget, skipNativeCache = false): Promise<TextChannel | ThreadChannel | null> {
     // Use cached native channel if available
-    if (!skipNativeCache && target._native && typeof (target._native as any).send === "function") {
+    // `target._native` is the cached discord.js channel (TextChannel /
+    // ThreadChannel / DMChannel) from the inbound message. Duck-type via
+    // `.send`-shape narrowing rather than casting through `any`.
+    const native = target._native as { send?: unknown } | undefined;
+    if (!skipNativeCache && native && typeof native.send === "function") {
       return target._native as TextChannel | ThreadChannel;
     }
 
