@@ -197,12 +197,12 @@ export class NatsLink {
         switch (status.type) {
           case Events.Disconnect:
             console.warn(
-              `nats-connection: "${this.name}" disconnected from ${String(status.data)}`,
+              `nats-connection: "${this.name}" disconnected from ${stringifyStatusData(status.data)}`,
             );
             break;
           case Events.Reconnect:
             console.info(
-              `nats-connection: "${this.name}" reconnected to ${String(status.data)}`,
+              `nats-connection: "${this.name}" reconnected to ${stringifyStatusData(status.data)}`,
             );
             break;
           case Events.Error:
@@ -230,4 +230,14 @@ export class NatsLink {
       }
     }
   }
+}
+
+/** NATS status events carry a `data` payload that the client lib types
+ *  loosely as `unknown` even though Disconnect/Reconnect are strings.
+ *  Branch on shape so the lint rule doesn't fire on Object's default
+ *  stringification. */
+function stringifyStatusData(data: unknown): string {
+  if (typeof data === "string") return data;
+  if (typeof data === "number" || typeof data === "boolean") return String(data);
+  return JSON.stringify(data) ?? "(unknown)";
 }

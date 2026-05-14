@@ -63,8 +63,9 @@ export function mapHookToEventType(
       return EVENT_TYPES.SESSION_STARTED;
 
     case "PostToolUse":
-      if (toolName && toolName in TOOL_EVENT_MAP) {
-        return TOOL_EVENT_MAP[toolName]!;
+      if (toolName) {
+        const mapped = TOOL_EVENT_MAP[toolName];
+        if (mapped) return mapped;
       }
       return `tool.${(toolName ?? "unknown").toLowerCase()}.used`;
 

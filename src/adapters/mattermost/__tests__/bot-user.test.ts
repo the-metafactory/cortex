@@ -61,7 +61,7 @@ describe("fetchBotUserId", () => {
   test("requests the /api/v4/users/me path off the supplied apiUrl (strips trailing slash)", async () => {
     let capturedUrl = "";
     stubFetch(async (input) => {
-      capturedUrl = typeof input === "string" ? input : String(input);
+      capturedUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       return new Response(JSON.stringify({ id: "u-1" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -76,7 +76,7 @@ describe("fetchBotUserId", () => {
   test("handles apiUrl WITHOUT a trailing slash identically", async () => {
     let capturedUrl = "";
     stubFetch(async (input) => {
-      capturedUrl = typeof input === "string" ? input : String(input);
+      capturedUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       return new Response(JSON.stringify({ id: "u-1" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },

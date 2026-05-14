@@ -306,7 +306,10 @@ function percentile(sortedAsc: number[], p: number): number | null {
     sortedAsc.length - 1,
     Math.max(0, Math.ceil(p * sortedAsc.length) - 1)
   );
-  return sortedAsc[idx]!;
+  // idx is mathematically bounded to [0, len-1] above, so the lookup
+  // cannot return undefined. `?? null` keeps the function total without
+  // a non-null assertion.
+  return sortedAsc[idx] ?? null;
 }
 
 // ---------------------------------------------------------------------------

@@ -59,7 +59,8 @@ beforeEach(() => {
   fetchDelay = 0;
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    fetchCalls.push({ url: String(input), init: init! });
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    fetchCalls.push({ url, init: init! });
     if (fetchDelay > 0) {
       await new Promise((r) => setTimeout(r, fetchDelay));
     }

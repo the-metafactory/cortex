@@ -215,10 +215,15 @@ export function createDispatchListener(
 
   return {
     surfaceConfig,
+    // start/stop are part of the surface-listener contract — return
+    // Promise<void> even when the body is sync, so callers can await
+    // alongside other lifecycle hooks (cc-session, bus, taps).
+    // eslint-disable-next-line @typescript-eslint/require-await
     async start() {
       if (registration) return;
       registration = router.register(surfaceConfig);
     },
+    // eslint-disable-next-line @typescript-eslint/require-await
     async stop() {
       if (!registration) return;
       registration.unregister();

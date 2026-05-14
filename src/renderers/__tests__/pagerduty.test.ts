@@ -38,7 +38,7 @@ interface FetchCall {
 function makeFetch(handler: (call: FetchCall) => Response | Promise<Response>): { fetchImpl: typeof fetch; calls: FetchCall[] } {
   const calls: FetchCall[] = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === "string" ? input : input.toString();
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : init?.body;
     const call: FetchCall = { url, body, headers: init?.headers };
     calls.push(call);

@@ -249,6 +249,11 @@ export class ClaudeCodeHarness implements SessionHarness {
    * session, so their `wait()` settles fast (cc-session's kill path
    * resolves `wait()` within 2s via SIGTERM escalation).
    */
+  // Substrate contract — shutdown is Promise<void> for caller symmetry
+  // with other substrates whose bodies may await teardown work. Body
+  // here is sync (kills are issued, dispatch finallys observe via the
+  // exit listener), so the rule fires; the contract wins.
+  // eslint-disable-next-line @typescript-eslint/require-await
   async shutdown(opts: { graceful: boolean }): Promise<void> {
     this.shuttingDown = true;
     if (opts.graceful) return;

@@ -263,7 +263,11 @@ function yamlStringify(obj: Record<string, unknown>, indent = 0): string {
     } else if (typeof val === "string") {
       out += `${pad}${key}: "${val}"\n`;
     } else {
-      out += `${pad}${key}: ${val}\n`;
+      // Fallthrough — numbers/booleans/null. The `?? "null"` shields the
+      // template literal from the no-base-to-string rule on object-typed
+      // narrowings that Bun's `Record<string, unknown>` value union picks
+      // up after the `typeof === "object"` branch lands.
+      out += `${pad}${key}: ${val as number | boolean | null ?? "null"}\n`;
     }
   }
   return out;

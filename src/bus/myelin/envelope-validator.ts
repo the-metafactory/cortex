@@ -351,7 +351,8 @@ export function getSignedByChain(envelope: Envelope): SignedBy[] {
 export function getLastStampPrincipal(envelope: Envelope): string | undefined {
   const chain = getSignedByChain(envelope);
   if (chain.length === 0) return undefined;
-  return chain[chain.length - 1]!.principal;
+  const last = chain[chain.length - 1];
+  return last?.principal;
 }
 
 /**

@@ -58,7 +58,7 @@ beforeEach(() => {
       headers: { "Content-Type": "application/json" },
     });
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === "string" ? input : input.toString();
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     let body: unknown;
     if (init?.body && typeof init.body === "string") {
       try {
