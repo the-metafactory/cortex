@@ -5,12 +5,18 @@
   "private": true,
   "scripts": {
     "build:dashboard": "bun build src/mission-control/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser",
-    "watch:dashboard": "bun build src/mission-control/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser --watch"
+    "watch:dashboard": "bun build src/mission-control/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser --watch",
+    "lint": "eslint .",
+    "lint:errors": "eslint --quiet .",
+    "lint:fix": "eslint --fix ."
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/bun": "latest",
     "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3"
+    "@types/react-dom": "^19.2.3",
+    "eslint": "^10.3.0",
+    "typescript-eslint": "^8.59.3"
   },
   "peerDependencies": {
     "typescript": "^5"

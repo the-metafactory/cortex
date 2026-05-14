@@ -39,3 +39,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bun .github/scripts/label-check.ts the-metafactory/cortex
+
+  # ──────────────────────────────────────────────────────────────────
+  # Lint — strict ESLint gate. Ported from arc + myelin patterns
+  # (arc PR #150 sweep + myelin#120..#127 chain). Cortex starts with a
+  # non-gating sweep window: `continue-on-error: true` while the
+  # baseline (~1261 errors at port time) burns down. Flip the flag
+  # once the count hits 0; tracked in a follow-up issue.
+  # ──────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: ESLint (errors only — advisory until sweep complete)
+        run: bun run lint:errors
