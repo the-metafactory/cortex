@@ -19,6 +19,7 @@
     "@metafactory/content-filter": "github:the-metafactory/content-filter",
     "@nats-io/jwt": "^0.0.11",
     "@octokit/webhooks": "^14.2.0",
+    "@the-metafactory/myelin": "github:the-metafactory/myelin#b69c877e23a2696040561c2d832fdc75aa83f73e",
     "@octokit/webhooks-methods": "^6.0.0",
     "@xyflow/react": "^12.10.2",
     "ajv": "^8.20.0",

@@ -1,23 +1,44 @@
 /**
- * G-1100.B / IAW Phase A.2: Myelin envelope validator.
+ * G-1100.B / IAW Phase A.2/A.5: Myelin envelope validator.
  *
  * Validates inbound envelopes against the vendored myelin schema. The
  * schema is copied verbatim from `~/Developer/myelin/schemas/envelope.schema.json`
- * pinned at commit 4578ae1 (myelin main, post-F-021 + MY-400 chain-of-stamps
- * + F-15 economics + F-5 sovereignty policy + F-10 bidding + F-11 capability
- * discovery + F-019/F-020 task subjects).
+ * pinned at commit b69c877 (myelin main, post-myelin#113 namespace `{stack}`
+ * grammar + myelin#115 shared subjects-derivation surface, on top of the
+ * 4578ae1 baseline — F-021 task envelope + MY-400 chain-of-stamps + F-15
+ * economics + F-5 sovereignty + F-10 bidding + F-11 capability discovery +
+ * F-019/F-020 task subjects).
  *
- * Per docs/design-collaboration-surface.md §9 coupling rules, cortex MUST
- * NOT import from `myelin/` at runtime — the schema travels with us by
- * value. To upgrade the schema: copy the file, update the
- * `SCHEMA_SOURCE_COMMIT` constant, extend the vendored types below, run the
- * tests, ship a PR. There is no auto-sync.
+ * Per docs/design-collaboration-surface.md §9 coupling rules, the *schema*
+ * travels with cortex by value — never imported at runtime — so a myelin
+ * outage cannot wedge cortex's validator. The pure-string subject-grammar
+ * primitives at `@the-metafactory/myelin/subjects` (myelin#115) carry zero
+ * transitive dependencies (no envelope schema, no Ajv, no NATS) and were
+ * explicitly designed for ecosystem consumers like cortex to import — so
+ * `deriveNatsSubject` and `validateSubjectEnvelopeAlignment` are now thin
+ * shims over those primitives instead of cortex-side ports. This keeps the
+ * grammar-extension fan-out problem (every consumer re-porting on each
+ * spec bump) closed at the source.
  *
- * **IAW Phase A.2 bump (from commit 96b14ea → 4578ae1):**
+ * To upgrade the schema: copy the file, update the `SCHEMA_SOURCE_COMMIT`
+ * constant, bump the `@the-metafactory/myelin` pin in package.json to match,
+ * extend the vendored types below, run the tests, ship a PR. There is no
+ * auto-sync.
  *
- * The vendored Envelope interface now mirrors the post-F-021 wire shape.
- * New optional fields surfaced (NOT consumed for trust decisions in this
- * slice — that's IAW Phase B / cortex#102):
+ * **IAW Phase A.5 bump (from commit 4578ae1 → b69c877):**
+ *
+ * - Schema unchanged on the wire — myelin#113/#115 added subject-grammar
+ *   surface area without altering envelope JSON Schema.
+ * - `deriveNatsSubject(envelope, stack?)` now accepts an optional `stack`
+ *   segment, emitting the 6-segment `{prefix}.{org}.{stack}.{type}` form
+ *   when supplied (myelin#113 — IAW Phase A.5). Omitting `stack` preserves
+ *   the legacy 5-segment shape; subscribers default-derive missing stack
+ *   to `default` per `specs/namespace.md` § Backward compatibility.
+ * - Cortex's previous IAW A.3 ports of `deriveNatsSubject` and
+ *   `validateSubjectEnvelopeAlignment` (5-segment only) are deleted in
+ *   favour of shims around `@the-metafactory/myelin/subjects`.
+ *
+ * **IAW Phase A.2 baseline (96b14ea → 4578ae1):**
  *
  *   - `signed_by` accepts a single stamp OR a chain (`SignedBy[]`) per
  *     myelin#31. `getSignedByChain()` normalises both shapes into an array.
@@ -34,10 +55,14 @@
 // 2020-12 build rather than the default draft-07 entry point.
 import Ajv2020, { type ValidateFunction, type ErrorObject } from "ajv/dist/2020";
 import addFormats from "ajv-formats";
+import {
+  deriveSubject,
+  subjectPrefixAligns,
+} from "@the-metafactory/myelin/subjects";
 import schema from "./vendor/envelope.schema.json" with { type: "json" };
 
 /** Pin so future maintainers know which myelin commit the schema was lifted from. */
-export const SCHEMA_SOURCE_COMMIT = "4578ae1e9bc595e667fbb356ea2c12c8c2c3cc8a";
+export const SCHEMA_SOURCE_COMMIT = "b69c877e23a2696040561c2d832fdc75aa83f73e";
 
 /**
  * Hand-typed Envelope shape matching the JSON Schema. We hand-write rather
@@ -334,44 +359,46 @@ export function getLastStampPrincipal(envelope: Envelope): string | undefined {
 export type Classification = Envelope["sovereignty"]["classification"];
 
 /**
- * IAW Phase A.3 — port of myelin's `deriveNatsSubject` (myelin
- * `src/envelope.ts:337-345`, pinned at `SCHEMA_SOURCE_COMMIT` above).
+ * IAW Phase A.5 — envelope-bound shim around myelin's pure-string
+ * `deriveSubject` primitive (`@the-metafactory/myelin/subjects`,
+ * pinned at `SCHEMA_SOURCE_COMMIT` above).
  *
  * Subject prefix mirrors `envelope.sovereignty.classification` per the
  * 1:1 alignment myelin enforces with
  * {@link validateSubjectEnvelopeAlignment}:
  *
- *   - `classification === "local"`     → `local.{org}.{type}`
- *   - `classification === "federated"` → `federated.{org}.{type}`
- *   - `classification === "public"`    → `public.{type}` (no org — public is global)
+ *   - `classification === "local"`     → `local.{org}.{type}` (legacy)
+ *                                      → `local.{org}.{stack}.{type}` when `stack` supplied (myelin#113)
+ *   - `classification === "federated"` → `federated.{org}.{type}` / `federated.{org}.{stack}.{type}`
+ *   - `classification === "public"`    → `public.{type}` (no org, no stack — public is global)
  *
  * `{org}` is the first dotted segment of `envelope.source` (the same value
  * cortex's MyelinRuntime captures from `agent.operatorId` at startup, so
- * subject and source stay symmetrical).
+ * subject and source stay symmetrical). `{stack}` is the operator's stack
+ * identity — supplied by the caller when in stack-aware mode (IAW A.5),
+ * omitted in the legacy migration window.
  *
  * Pure function; safe to call from any context.
  */
-export function deriveNatsSubject(envelope: Envelope): string {
-  const classification = envelope.sovereignty.classification;
-  if (classification === "public") {
-    // Public is global — no `{org}` segment. Matches myelin's grammar.
-    return `public.${envelope.type}`;
-  }
+export function deriveNatsSubject(envelope: Envelope, stack?: string): string {
   const org = envelope.source.split(".")[0] ?? "default";
-  return `${classification}.${org}.${envelope.type}`;
+  return deriveSubject(
+    envelope.sovereignty.classification,
+    org,
+    envelope.type,
+    stack,
+  );
 }
 
 /**
- * IAW Phase A.3 — port of myelin's `validateSubjectEnvelopeAlignment`
- * (myelin `src/envelope.ts:347-358`). Pure validator: confirms the leading
+ * IAW Phase A.5 — envelope-bound shim around myelin's pure-string
+ * `subjectPrefixAligns` primitive. Pure validator: confirms the leading
  * segment of a NATS subject matches `envelope.sovereignty.classification`.
  *
  * Cortex uses this as a defensive invariant when publishing on a
  * `MyelinRuntime` — a `local.*` subject must NOT carry a `federated` or
  * `public` envelope (and vice-versa). Misalignment is a protocol violation:
  * downstream peers may drop or reject the envelope.
- *
- * Result shape mirrors myelin so a future merge keeps the same surface.
  */
 export function validateSubjectEnvelopeAlignment(
   subject: string,
@@ -381,11 +408,5 @@ export function validateSubjectEnvelopeAlignment(
   expected: Classification;
   actual: string;
 } {
-  const subjectPrefix = subject.split(".")[0] ?? "";
-  const envelopeClassification = envelope.sovereignty.classification;
-  return {
-    aligned: subjectPrefix === envelopeClassification,
-    expected: envelopeClassification,
-    actual: subjectPrefix,
-  };
+  return subjectPrefixAligns(subject, envelope.sovereignty.classification);
 }

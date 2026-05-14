@@ -293,8 +293,6 @@ describe("envelope-validator — F-021 task envelope fields (IAW Phase A.2)", ()
   // (visible on the typed Envelope) but not yet acted on for routing or
   // trust — that's IAW Phase B / cortex#102 territory.
 
-  const ED25519_SIG = "A".repeat(88);
-
   test("accepts an envelope with all F-021 task fields populated (direct)", () => {
     const env = {
       ...(validEnvelope as object),
@@ -484,10 +482,10 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
     expect(getLastStampPrincipal(env as Envelope)).toBeUndefined();
   });
 
-  test("schema source commit points at the post-F-021 myelin pin", () => {
+  test("schema source commit points at the post-myelin#115 stack-aware pin", () => {
     // Lock the pin so future bumps surface in a code review.
     expect(SCHEMA_SOURCE_COMMIT).toBe(
-      "4578ae1e9bc595e667fbb356ea2c12c8c2c3cc8a",
+      "b69c877e23a2696040561c2d832fdc75aa83f73e",
     );
   });
 });
@@ -539,6 +537,36 @@ describe("deriveNatsSubject (IAW A.3)", () => {
     expect(deriveNatsSubject(env)).toBe(
       "local.acme.system.adapter.degraded",
     );
+  });
+
+  // IAW Phase A.5 — stack-aware subject emission (myelin#113 grammar).
+  test("local + stack → local.{org}.{stack}.{type}", () => {
+    const env = envWithClassification("local");
+    expect(deriveNatsSubject(env, "research")).toBe(
+      "local.metafactory.research.system.adapter.degraded",
+    );
+  });
+
+  test("federated + stack → federated.{org}.{stack}.{type}", () => {
+    const env = envWithClassification("federated");
+    expect(deriveNatsSubject(env, "security")).toBe(
+      "federated.metafactory.security.system.adapter.degraded",
+    );
+  });
+
+  test("public + stack → stack is dropped (public is global)", () => {
+    // `public.` subjects never carry an org or stack segment, regardless of
+    // what the caller supplies — matches myelin#113 grammar.
+    const env = envWithClassification("public");
+    expect(deriveNatsSubject(env, "devops")).toBe(
+      "public.system.adapter.degraded",
+    );
+  });
+
+  test("invalid stack segment is rejected by myelin grammar", () => {
+    // STACK_SEGMENT_REGEX = /^[a-z][a-z0-9-]{0,62}$/ — uppercase rejected.
+    const env = envWithClassification("local");
+    expect(() => deriveNatsSubject(env, "BadStack")).toThrow(/stack segment/i);
   });
 });
 
