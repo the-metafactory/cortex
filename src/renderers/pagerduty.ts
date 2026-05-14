@@ -130,10 +130,16 @@ export class PagerDutyRenderer implements Renderer {
       // `envelope.id` raw would then TypeError inside the catch and
       // surface as an unhandled rejection. Match the DashboardRenderer
       // pattern (Holly cycle 2 nit).
+      // The TS type says `envelope: Envelope` (non-null), but the catch
+      // exists for the defense-in-depth case where a bug routes a null/
+      // undefined envelope through. Keep the optional chain + fallback
+      // so a thrown TypeError doesn't escape as an unhandled rejection.
+      /* eslint-disable @typescript-eslint/no-unnecessary-condition */
       console.warn(
         `pagerduty-renderer: failed to forward envelope ${envelope?.id ?? "<unknown>"}:`,
         err instanceof Error ? err.message : err,
       );
+      /* eslint-enable @typescript-eslint/no-unnecessary-condition */
     }
   }
 

@@ -239,5 +239,10 @@ export class NatsLink {
 function stringifyStatusData(data: unknown): string {
   if (typeof data === "string") return data;
   if (typeof data === "number" || typeof data === "boolean") return String(data);
+  // JSON.stringify per the JS spec returns `string | undefined`
+  // (undefined for `undefined` / function inputs), but TS's lib.es5
+  // signature claims `string`. Keep the fallback for the spec-correct
+  // case; suppress the lint rule that trusts the lib.es5 lie.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   return JSON.stringify(data) ?? "(unknown)";
 }

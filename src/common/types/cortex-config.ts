@@ -338,7 +338,12 @@ export const AgentSchema = z.object({
    */
   runtime: AgentRuntimeSchema.optional(),
 }).refine(
-  (agent) => Object.values(agent.presence).some((p) => p !== undefined),
+  // Zod's `.refine` callback receives the parsed type; presence values
+  // are `DiscordPresence | MattermostPresence | undefined`. Use `Boolean`
+  // to coerce — lint sees the refine inference differently than tsc and
+  // flags the explicit `!== undefined` as "no overlap" even though the
+  // optional fields above legitimately produce undefined values.
+  (agent) => Object.values(agent.presence).some(Boolean),
   { message: "agent must have at least one presence block", path: ["presence"] },
 );
 

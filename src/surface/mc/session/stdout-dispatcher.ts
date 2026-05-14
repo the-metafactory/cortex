@@ -83,6 +83,7 @@ async function consumeStream(
   let buffer = "";
 
   try {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;

@@ -130,7 +130,7 @@ export function createMattermostServer(
 
         const msg: MattermostInboundMessage = {
           channelId: payload.channel_id,
-          channelName: payload.channel_name ?? "unknown",
+          channelName: payload.channel_name,
           postId: payload.post_id,
           rootId: payload.post_id, // Webhook doesn't provide root_id; use post_id
           userId: payload.user_id,

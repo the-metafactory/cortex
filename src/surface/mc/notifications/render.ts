@@ -223,10 +223,9 @@ function renderBlockReasonLine(reason: BlockReason | null): string | null {
     const msg = reason.payload.error_message;
     return `tool.error: ${tool} — "${msg}"`;
   }
-  if (reason.kind === "review.checkpoint") {
-    return `review.checkpoint: "${reason.payload.description}"`;
-  }
-  return null;
+  // BlockReason has exactly three kinds; after the two `if` returns
+  // above, narrowing leaves only "review.checkpoint".
+  return `review.checkpoint: "${reason.payload.description}"`;
 }
 
 function renderChannelContextLine(ctx: RenderContext): string | null {

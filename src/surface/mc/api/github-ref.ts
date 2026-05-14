@@ -262,5 +262,5 @@ export function canonicalUrl(ref: GitHubRef): string {
  * Type guard: distinguish `ParseError` from `GitHubRef`.
  */
 export function isParseError(x: GitHubRef | ParseError): x is ParseError {
-  return (x as ParseError).error !== undefined;
+  return "error" in x;
 }

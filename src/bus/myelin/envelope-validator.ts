@@ -334,10 +334,9 @@ export function tryParseEnvelope(value: unknown): Envelope | null {
  */
 export function getSignedByChain(envelope: Envelope): SignedBy[] {
   const value = envelope.signed_by;
-  if (value === undefined || value === null) return [];
+  if (value === undefined) return [];
   if (Array.isArray(value)) return value;
-  if (typeof value === "object") return [value];
-  return [];
+  return [value];
 }
 
 /**

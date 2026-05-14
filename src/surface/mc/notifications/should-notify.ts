@@ -131,11 +131,13 @@ export function shouldNotify(input: ShouldNotifyInput): NotificationIntent | nul
     };
   }
 
-  if (to === "blocked") {
-    // The blocked-row matrix branches on (priority, kind, risk). The
-    // schema's `risk_hint` is optional and free-form on the agent side; we
-    // narrow it to the three documented buckets ("high"/"medium"/"low")
-    // and treat anything else (including `undefined`) as "medium".
+  // `to` narrows to "blocked" — every other AssignmentState returned
+  // above. The blocked-row matrix branches on (priority, kind, risk).
+  // The schema's `risk_hint` is optional and free-form on the agent
+  // side; we narrow it to the three documented buckets
+  // ("high"/"medium"/"low") and treat anything else (including
+  // `undefined`) as "medium".
+  {
     if (!blockReason) {
       // Schema invariant: state=blocked ↔ block_reason non-null. If we get
       // here, the caller violated that invariant — fail safe by emitting a
@@ -211,21 +213,17 @@ export function shouldNotify(input: ShouldNotifyInput): NotificationIntent | nul
       };
     }
 
-    if (blockReason.kind === "review.checkpoint") {
-      // review.checkpoint is "agent asked for human sign-off". DM, no ping
-      // even at P0 — the operator already opted in by configuring agents
-      // that emit checkpoints.
-      return {
-        audiences: ["dm"],
-        severity: "silent",
-        urgencyTag: priorityPrefix(priority),
-      };
-    }
+    // BlockReason has exactly three kinds; permission.request and
+    // tool.error returned above, so review.checkpoint is the only kind
+    // left. "agent asked for human sign-off" — DM, no ping even at P0
+    // (the operator opted in by configuring agents that emit
+    // checkpoints).
+    return {
+      audiences: ["dm"],
+      severity: "silent",
+      urgencyTag: priorityPrefix(priority),
+    };
   }
-
-  // Defensive fall-through: unknown future states or block-reason kinds.
-  // Returning null is the safe default — push surfaces are best-effort.
-  return null;
 }
 
 // `operator.input.requested` is contemplated by Decision 1 (last row of
