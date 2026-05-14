@@ -389,12 +389,20 @@ export type Classification = Envelope["sovereignty"]["classification"];
  * is guaranteed to return ≥1 element, and cortex's incoming `envelope.source`
  * is already schema-validated to match
  * `^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){2,4}$`, so the first segment is always
- * a non-empty string. The non-null assertion bridges `noUncheckedIndexedAccess`
- * to that runtime + schema invariant — proved once here so call sites don't
- * each need to defend it (Sage R2 nit, PR #151).
+ * a non-empty string. The explicit invariant check below bridges
+ * `noUncheckedIndexedAccess` to that runtime + schema invariant and survives
+ * refactoring — if a future change weakens the schema or feeds unvalidated
+ * input here, the throw fails fast at the call site instead of silently
+ * propagating an empty `org` segment onto the wire (Sage R3 suggestion, PR #151).
  */
 function firstSegment(s: string): string {
-  return s.split(".")[0]!;
+  const seg = s.split(".")[0];
+  if (!seg) {
+    throw new Error(
+      "invariant: source has no leading segment — schema validation skipped?",
+    );
+  }
+  return seg;
 }
 
 export function deriveNatsSubject(envelope: Envelope, stack?: string): string {
