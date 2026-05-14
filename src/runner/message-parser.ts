@@ -36,15 +36,15 @@ const MAX_CONTEXT_DEPTH = 100;
  */
 export function parseMessageKeywords(
   content: string,
-  defaultDepth: number,
+  _defaultDepth: number,
 ): ParsedMessage {
   let cleaned = content;
   let contextDepth: number | undefined;
 
   // Extract context:N (can appear anywhere in the message)
-  const contextMatch = cleaned.match(CONTEXT_PATTERN);
-  if (contextMatch) {
-    contextDepth = Math.min(parseInt(contextMatch[1]!, 10), MAX_CONTEXT_DEPTH);
+  const contextMatch = CONTEXT_PATTERN.exec(cleaned);
+  if (contextMatch?.[1] !== undefined) {
+    contextDepth = Math.min(parseInt(contextMatch[1], 10), MAX_CONTEXT_DEPTH);
     cleaned = cleaned.replace(contextMatch[0], " ").replace(/\s+/g, " ").trim();
   }
 
@@ -54,9 +54,9 @@ export function parseMessageKeywords(
   }
 
   // Check for /learning command
-  const learningMatch = cleaned.trim().match(/^\/learning\s+(.*)/i);
-  if (learningMatch) {
-    const args = learningMatch[1]!.trim();
+  const learningMatch = /^\/learning\s+(.*)/i.exec(cleaned.trim());
+  if (learningMatch?.[1] !== undefined) {
+    const args = learningMatch[1].trim();
 
     // /learning list
     if (/^list$/i.test(args)) {
@@ -69,7 +69,7 @@ export function parseMessageKeywords(
     }
 
     // /learning remove <id>
-    const removeMatch = args.match(/^remove\s+(\S+)/i);
+    const removeMatch = /^remove\s+(\S+)/i.exec(args);
     if (removeMatch) {
       return {
         mode: "learning",
@@ -80,7 +80,7 @@ export function parseMessageKeywords(
     }
 
     // /learning search <query>
-    const searchMatch = args.match(/^search\s+(.+)/i);
+    const searchMatch = /^search\s+(.+)/i.exec(args);
     if (searchMatch) {
       return {
         mode: "learning",

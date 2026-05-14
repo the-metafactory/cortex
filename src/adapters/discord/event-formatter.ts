@@ -8,6 +8,10 @@ import { POSTABLE_EVENTS } from "../../common/types/context";
 
 const MAX_SUMMARY_LENGTH = 400;
 
+function asString(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
 export function isPostableEvent(eventType: string): boolean {
   return (POSTABLE_EVENTS as readonly string[]).includes(eventType);
 }
@@ -34,19 +38,24 @@ export function formatEventForDiscord(event: PublishedEvent): string | null {
   const label = EVENT_LABELS[event.event_type] ?? event.event_type.split(".").pop();
 
   let detail = "";
-  if (event.payload.prompt_preview) {
+  const promptPreview = asString(event.payload.prompt_preview);
+  const summaryText = asString(event.payload.summary);
+  const pathText = asString(event.payload.path);
+  const activeTask = asString(event.payload.active_task);
+  const agentDescription = asString(event.payload.agent_description);
+  if (promptPreview) {
     // User input — show as quote
-    detail = `> ${String(event.payload.prompt_preview)}`;
-  } else if (event.payload.summary) {
-    detail = String(event.payload.summary);
-  } else if (event.payload.path) {
-    detail = `\`${event.payload.path}\``;
-  } else if (event.payload.active_task) {
+    detail = `> ${promptPreview}`;
+  } else if (summaryText) {
+    detail = summaryText;
+  } else if (pathText) {
+    detail = `\`${pathText}\``;
+  } else if (activeTask) {
     const summary = event.payload.todo_summary as { total?: number; completed?: number } | undefined;
     const progress = summary ? ` (${summary.completed ?? 0}/${summary.total ?? 0})` : "";
-    detail = `${event.payload.active_task}${progress}`;
-  } else if (event.payload.agent_description) {
-    detail = String(event.payload.agent_description);
+    detail = `${activeTask}${progress}`;
+  } else if (agentDescription) {
+    detail = agentDescription;
   }
 
   if (detail.length > MAX_SUMMARY_LENGTH) {

@@ -7,7 +7,6 @@
 
 import type { Database } from "bun:sqlite";
 import type { Subprocess } from "bun";
-import type { EndpointKind } from "../types";
 import type { SessionEndpoint, ManagedProcess } from "./types";
 import type { StreamJsonContentBlock } from "./stream-json";
 import { NotControllable, SessionConflict, SessionClosed } from "./types";
@@ -97,8 +96,7 @@ export function spawnControlledSession(
   if (existing) {
     const existingManaged = processManager.get(existing.id);
     if (
-      existingManaged &&
-      existingManaged.proc.exitCode === null &&
+      existingManaged?.proc.exitCode === null &&
       !existingManaged.closing
     ) {
       // Healthy active session — return its endpoint. Idempotent spawn.
@@ -178,11 +176,11 @@ export function spawnControlledSession(
       processManager.remove(session.id);
       endSession(db, session.id);
     })
-    .catch((err) => {
+    .catch((err: unknown) => {
       // endSession / processManager.remove should never throw, but if they do
       // (e.g. DB closed mid-shutdown) we must not leave an unhandled rejection.
       process.stderr.write(
-        `[endpoint] auto-exit cleanup failed for ${session.id}: ${(err as Error).message}\n`
+        `[endpoint] auto-exit cleanup failed for ${session.id}: ${err instanceof Error ? err.message : String(err)}\n`
       );
     });
 
@@ -201,7 +199,7 @@ export function createControlledEndpoint(
   sessionId: string
 ): SessionEndpoint {
   return {
-    kind: "local.process.controlled" as EndpointKind,
+    kind: "local.process.controlled",
     sessionId,
 
     // Explicit annotation matches SessionEndpoint.write; TS method-parameter
@@ -229,7 +227,7 @@ export function createControlledEndpoint(
       if (stdin === undefined || typeof stdin === "number") {
         throw new SessionClosed(sessionId, managed.proc.exitCode);
       }
-      stdin.write(framed);
+      void stdin.write(framed);
       // NOTE: FileSink backpressure (Promise return from write) is a Phase B
       // concern — Phase A dispatches small operator messages only. When the
       // dispatcher lands, switch to an async write path that awaits
@@ -248,24 +246,29 @@ export function createControlledEndpoint(
           managed.proc.kill("SIGTERM");
         } catch (err) {
           process.stderr.write(
-            `[endpoint] SIGTERM failed for ${sessionId}: ${(err as Error).message}\n`
+            `[endpoint] SIGTERM failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}\n`
           );
         }
 
         // Wait graceful, escalate to SIGKILL if needed.
         const result = await Promise.race([
           managed.proc.exited.then(() => "exited" as const),
-          new Promise<"timeout">((r) =>
-            setTimeout(() => r("timeout"), CLOSE_GRACEFUL_TIMEOUT_MS)
-          ),
+          new Promise<"timeout">((r) => {
+            setTimeout(() => { r("timeout"); }, CLOSE_GRACEFUL_TIMEOUT_MS);
+          }),
         ]);
 
+        // managed.proc.exitCode is `number | null`; TS narrowed it to null
+        // earlier (line 246's `if (managed.proc.exitCode === null)`), but
+        // the child can exit during the SIGTERM grace race — the re-check
+        // is load-bearing despite the literal-comparison appearing dead.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
         if (result === "timeout" && managed.proc.exitCode === null) {
           try {
             managed.proc.kill("SIGKILL");
           } catch (err) {
             process.stderr.write(
-              `[endpoint] SIGKILL failed for ${sessionId}: ${(err as Error).message}\n`
+              `[endpoint] SIGKILL failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}\n`
             );
           }
           await managed.proc.exited;
@@ -281,7 +284,7 @@ export function createControlledEndpoint(
           await managed.dispatcherDone;
         } catch (err) {
           process.stderr.write(
-            `[endpoint] dispatcher drain failed for ${sessionId}: ${(err as Error).message}\n`
+            `[endpoint] dispatcher drain failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}\n`
           );
         }
       }
@@ -294,7 +297,7 @@ export function createControlledEndpoint(
 
 function createObservedEndpoint(sessionId: string): SessionEndpoint {
   return {
-    kind: "local.observed" as EndpointKind,
+    kind: "local.observed",
     sessionId,
 
     // Signature mirrors SessionEndpoint.write (string | StreamJsonContentBlock[]).
