@@ -9,13 +9,18 @@
 import { EventEmitter } from "events";
 import { basename } from "path";
 import { randomUUID } from "crypto";
+import { readFileSync } from "fs";
 import { type BotConfig, getAllRepos } from "../common/types/config";
 import type {
   PlatformAdapter,
   InboundMessage,
-  AccessDecision,
   ResponseTarget,
 } from "../adapters/types";
+
+/** Coerce an `unknown` payload field to string. */
+function asString(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
 import { buildSecurityPreamble } from "../runner/security-preamble";
 import type { AttachmentInfo } from "../adapters/discord/attachment-types";
 import { parseMessageKeywords } from "../runner/message-parser";
@@ -45,13 +50,18 @@ function getGroveVersion(): string {
   if (_cachedVersion) return _cachedVersion;
   try {
     const manifest = Bun.file(join(import.meta.dir, "../../../arc-manifest.yaml"));
-    const content = require("fs").readFileSync(manifest.name!, "utf-8");
-    const match = content.match(/^version:\s*(.+)$/m);
+    const path = manifest.name;
+    if (!path) {
+      _cachedVersion = "unknown";
+      return _cachedVersion;
+    }
+    const content = readFileSync(path, "utf-8");
+    const match = /^version:\s*(.+)$/m.exec(content);
     _cachedVersion = match?.[1]?.trim() ?? "unknown";
   } catch {
     _cachedVersion = "unknown";
   }
-  return _cachedVersion ?? "unknown";
+  return _cachedVersion;
 }
 
 export interface DispatchHandlerOpts {
@@ -87,25 +97,25 @@ export interface DispatchHandlerOpts {
 function formatToolProgress(toolName: string, input: Record<string, unknown>): string {
   switch (toolName) {
     case "Read":
-      return `Reading \`${basename(String(input.file_path ?? ""))}\`...`;
+      return `Reading \`${basename(asString(input.file_path))}\`...`;
     case "Glob":
-      return `Searching for files matching \`${input.pattern ?? ""}\`...`;
+      return `Searching for files matching \`${asString(input.pattern)}\`...`;
     case "Grep":
-      return `Searching for \`${String(input.pattern ?? "").slice(0, 50)}\`...`;
+      return `Searching for \`${asString(input.pattern).slice(0, 50)}\`...`;
     case "Bash":
       return `Running command...`;
     case "Write":
-      return `Writing \`${basename(String(input.file_path ?? ""))}\`...`;
+      return `Writing \`${basename(asString(input.file_path))}\`...`;
     case "Edit":
-      return `Editing \`${basename(String(input.file_path ?? ""))}\`...`;
+      return `Editing \`${basename(asString(input.file_path))}\`...`;
     case "WebSearch":
-      return `Searching the web: \`${String(input.query ?? "").slice(0, 60)}\`...`;
+      return `Searching the web: \`${asString(input.query).slice(0, 60)}\`...`;
     case "WebFetch":
-      return `Fetching \`${String(input.url ?? "").slice(0, 60)}\`...`;
+      return `Fetching \`${asString(input.url).slice(0, 60)}\`...`;
     case "Agent":
-      return `Spawning sub-agent: ${String(input.description ?? input.subagent_type ?? "working")}...`;
+      return `Spawning sub-agent: ${asString(input.description) || asString(input.subagent_type) || "working"}...`;
     case "Skill":
-      return `Using skill: \`${input.skill ?? ""}\`...`;
+      return `Using skill: \`${asString(input.skill)}\`...`;
     default:
       return `Using \`${toolName}\`...`;
   }
@@ -222,12 +232,12 @@ export class DispatchHandler extends EventEmitter {
     // Fire-and-forget — MyelinRuntime.publish swallows + logs its own errors;
     // we wrap a catch here as defence-in-depth in case the runtime contract
     // ever changes (the attachment pipeline must not crash on a bus glitch).
-    void wiring.runtime.publish(env).catch((err) =>
+    void wiring.runtime.publish(env).catch((err: unknown) => {
       console.error(
         "dispatch-handler: publish(system.inbound.aborted) failed:",
-        err instanceof Error ? err.message : err,
-      ),
-    );
+        err instanceof Error ? err.message : String(err),
+      );
+    });
   }
 
   /** Graceful shutdown: drain tasks, clear intervals */
@@ -439,22 +449,20 @@ export class DispatchHandler extends EventEmitter {
         ? access.toolRestrictions
         : [...new Set([...globalDisallowed, ...networkDisallowed])];
       // G-121: If allowedSkills is explicitly empty, hard-block the Skill tool
-      if (access.allowedSkills !== undefined && access.allowedSkills.length === 0) {
-        if (!effectiveDisallowed.includes("Skill")) {
-          effectiveDisallowed.push("Skill");
-        }
+      if (access.allowedSkills?.length === 0 && !effectiveDisallowed.includes("Skill")) {
+        effectiveDisallowed.push("Skill");
       }
       // G-500: Per-network claude overrides take precedence over global
       const effectiveDirs = access.dirRestrictions?.length
         ? access.dirRestrictions
-        : (networkClaude?.allowedDirs?.length ? networkClaude.allowedDirs : (this.config.claude.allowedDirs ?? []));
-      const readOnlyDirs = networkClaude?.readOnlyDirs?.length ? networkClaude.readOnlyDirs : (this.config.claude.readOnlyDirs ?? []);
+        : (networkClaude?.allowedDirs.length ? networkClaude.allowedDirs : this.config.claude.allowedDirs);
+      const readOnlyDirs = networkClaude?.readOnlyDirs.length ? networkClaude.readOnlyDirs : this.config.claude.readOnlyDirs;
       const invokeDirs = [...effectiveDirs, ...readOnlyDirs, ...attachmentDirs];
       const bashGuardDisabled = access.bashGuard === false;
       // G-300: DM role may override bash allowlist; otherwise fall back to network, then global
       const effectiveBashAllowlist = bashGuardDisabled
         ? undefined
-        : (access.bashAllowlist ?? networkClaude?.bashAllowlist ?? this.config.claude.bashAllowlist ?? undefined);
+        : (access.bashAllowlist ?? networkClaude?.bashAllowlist ?? this.config.claude.bashAllowlist);
       // G-500: Set cwd to first allowedDir so the agent starts in the right directory
       const firstDir = effectiveDirs[0];
       const effectiveCwd = firstDir
@@ -466,7 +474,8 @@ export class DispatchHandler extends EventEmitter {
       const groveEntity = channelCtx.entityType && channelCtx.entityRef
         ? `${channelCtx.entityType}/${channelCtx.entityRef}`
         : undefined;
-      const groveOperator = msg.authorName ?? undefined;
+      const groveOperator = msg.authorName;
+
 
       // 12. Route by mode
       switch (parsed.mode) {
@@ -520,7 +529,7 @@ export class DispatchHandler extends EventEmitter {
       prompt,
       groveChannel: groveChannel,
       groveNetwork: groveNetwork,
-      agentName: this.config.agent.displayName ?? this.config.agent.name,
+      agentName: this.config.agent.displayName,
       agentId: this.config.agent.name,
       timeoutMs: this.config.claude.timeoutMs,
       additionalArgs: this.config.claude.additionalArgs,
@@ -539,13 +548,17 @@ export class DispatchHandler extends EventEmitter {
     // Typing indicator
     await adapter.sendTyping(target);
     const typingInterval = setInterval(() => {
-      adapter.sendTyping(target).catch(() => {});
+      adapter.sendTyping(target).catch(() => {
+        // best-effort typing indicator; swallow Discord API errors
+      });
     }, 8_000);
 
     // Tool-use progress (single edit-in-place message, cleared on result)
-    session.on("tool-use", async (toolName: string, toolInput: Record<string, unknown>) => {
-      const detail = formatToolProgress(toolName, toolInput);
-      await adapter.sendProgress(target, detail);
+    session.on("tool-use", (toolName: string, toolInput: Record<string, unknown>) => {
+      void (async () => {
+        const detail = formatToolProgress(toolName, toolInput);
+        await adapter.sendProgress(target, detail);
+      })();
     });
 
     const result = await session.start().wait();
@@ -616,9 +629,9 @@ export class DispatchHandler extends EventEmitter {
       prompt,
       groveChannel: groveChannel,
       groveNetwork: groveNetwork,
-      agentName: this.config.agent.displayName ?? this.config.agent.name,
+      agentName: this.config.agent.displayName,
       agentId: this.config.agent.name,
-      timeoutMs: this.config.claude.asyncTimeoutMs ?? 900_000,
+      timeoutMs: this.config.claude.asyncTimeoutMs,
       additionalArgs: this.config.claude.additionalArgs,
       resumeSessionId,
       allowedTools: this.config.claude.allowedTools,
@@ -634,45 +647,53 @@ export class DispatchHandler extends EventEmitter {
 
     // Typing indicator
     const typingInterval = setInterval(() => {
-      adapter.sendTyping(replyTarget).catch(() => {});
+      adapter.sendTyping(replyTarget).catch(() => {
+        // best-effort typing indicator
+      });
     }, 8_000);
 
     // Tool-use progress (single edit-in-place message, cleared on result)
-    session.on("tool-use", async (toolName: string, toolInput: Record<string, unknown>) => {
-      const detail = formatToolProgress(toolName, toolInput);
-      await adapter.sendProgress(replyTarget, detail);
+    session.on("tool-use", (toolName: string, toolInput: Record<string, unknown>) => {
+      void (async () => {
+        const detail = formatToolProgress(toolName, toolInput);
+        await adapter.sendProgress(replyTarget, detail);
+      })();
     });
 
-    session.on("result", async (text: string) => {
-      clearInterval(typingInterval);
-      await adapter.clearProgress(replyTarget);
-      try {
-        const outputFiles = collectOutputFiles(attachmentSessionId);
-        const files = outputFiles.length > 0
-          ? await Promise.all(outputFiles.map(async (p) => ({
-              content: Buffer.from(await Bun.file(p).arrayBuffer()),
-              filename: basename(p),
-            })))
-          : undefined;
-        await adapter.postResponse(replyTarget, text, files);
-        if (session.sessionId) {
-          this.sessions.setSession(sessionKey, session.sessionId);
+    session.on("result", (text: string) => {
+      void (async () => {
+        clearInterval(typingInterval);
+        await adapter.clearProgress(replyTarget);
+        try {
+          const outputFiles = collectOutputFiles(attachmentSessionId);
+          const files = outputFiles.length > 0
+            ? await Promise.all(outputFiles.map(async (p) => ({
+                content: Buffer.from(await Bun.file(p).arrayBuffer()),
+                filename: basename(p),
+              })))
+            : undefined;
+          await adapter.postResponse(replyTarget, text, files);
+          if (session.sessionId) {
+            this.sessions.setSession(sessionKey, session.sessionId);
+          }
+        } catch (err) {
+          console.error("dispatch-handler: async result post failed:", err);
         }
-      } catch (err) {
-        console.error("dispatch-handler: async result post failed:", err);
-      }
-      this.taskTracker.complete(taskId);
+        this.taskTracker.complete(taskId);
+      })();
     });
 
-    session.on("error", async (err: Error) => {
-      clearInterval(typingInterval);
-      await adapter.clearProgress(replyTarget);
-      try {
-        await adapter.postResponse(replyTarget, `Task failed: ${err.message}`);
-      } catch (postErr) {
-        console.error("dispatch-handler: failed to post task error:", postErr instanceof Error ? postErr.message : postErr);
-      }
-      this.taskTracker.complete(taskId);
+    session.on("error", (err: Error) => {
+      void (async () => {
+        clearInterval(typingInterval);
+        await adapter.clearProgress(replyTarget);
+        try {
+          await adapter.postResponse(replyTarget, `Task failed: ${err.message}`);
+        } catch (postErr) {
+          console.error("dispatch-handler: failed to post task error:", postErr instanceof Error ? postErr.message : String(postErr));
+        }
+        this.taskTracker.complete(taskId);
+      })();
     });
 
     session.on("exit", (code: number) => {
@@ -708,7 +729,7 @@ export class DispatchHandler extends EventEmitter {
     groveProject?: string,
     groveEntity?: string,
     groveOperator?: string,
-    cwd?: string,
+    _cwd?: string,
   ): Promise<void> {
     const taskId = `team-${randomUUID()}`;
 
@@ -732,7 +753,7 @@ export class DispatchHandler extends EventEmitter {
       allowedTools: this.config.claude.allowedTools,
       disallowedTools,
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
-      timeoutMs: this.config.claude.asyncTimeoutMs ?? 900_000,
+      timeoutMs: this.config.claude.asyncTimeoutMs,
       bashGuardDisabled,
       bashAllowlist,
       project: groveProject,
@@ -742,34 +763,42 @@ export class DispatchHandler extends EventEmitter {
 
     // Dummy session for TaskTracker (AgentTeam manages its own sessions)
     const dummySession = new CCSession({ prompt: "", groveChannel: this.config.agent.name, groveNetwork: groveNetwork });
-    dummySession.on("error", () => {}); // prevent unhandled error
+    dummySession.on("error", () => {
+      // prevent unhandled error — AgentTeam manages real session errors below
+    });
     this.taskTracker.track(taskId, dummySession, replyTarget.channelId, `team: ${teamContent.slice(0, 80)}`);
 
-    team.on("progress", async (member: string, text: string) => {
-      try {
-        const preview = text.slice(0, 300);
-        await adapter.postResponse(replyTarget, `**${member}**: ${preview}${text.length > 300 ? "..." : ""}`);
-      } catch (err) {
-        console.warn("dispatch-handler: failed to post team progress:", err instanceof Error ? err.message : err);
-      }
+    team.on("progress", (member: string, text: string) => {
+      void (async () => {
+        try {
+          const preview = text.slice(0, 300);
+          await adapter.postResponse(replyTarget, `**${member}**: ${preview}${text.length > 300 ? "..." : ""}`);
+        } catch (err) {
+          console.warn("dispatch-handler: failed to post team progress:", err instanceof Error ? err.message : String(err));
+        }
+      })();
     });
 
-    team.on("synthesis", async (result: string) => {
-      try {
-        await adapter.postResponse(replyTarget, result);
-      } catch (err) {
-        console.error("dispatch-handler: team synthesis post failed:", err);
-      }
-      this.taskTracker.complete(taskId);
+    team.on("synthesis", (result: string) => {
+      void (async () => {
+        try {
+          await adapter.postResponse(replyTarget, result);
+        } catch (err) {
+          console.error("dispatch-handler: team synthesis post failed:", err);
+        }
+        this.taskTracker.complete(taskId);
+      })();
     });
 
-    team.on("error", async (err: Error) => {
-      try {
-        await adapter.postResponse(replyTarget, `Team failed: ${err.message}`);
-      } catch (postErr) {
-        console.error("dispatch-handler: failed to post team error:", postErr instanceof Error ? postErr.message : postErr);
-      }
-      this.taskTracker.complete(taskId);
+    team.on("error", (err: Error) => {
+      void (async () => {
+        try {
+          await adapter.postResponse(replyTarget, `Team failed: ${err.message}`);
+        } catch (postErr) {
+          console.error("dispatch-handler: failed to post team error:", postErr instanceof Error ? postErr.message : String(postErr));
+        }
+        this.taskTracker.complete(taskId);
+      })();
     });
 
     team.start();
