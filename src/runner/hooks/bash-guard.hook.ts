@@ -45,11 +45,19 @@ const DEFAULT_CONFIG: GuardConfig = {
   repos: [],
 };
 
+// Narrow projection of the GROVE_BASH_GUARD env var payload. The hook
+// reads only `disabled` / `rules` / `repos`; anything else is ignored.
+interface GuardConfigRaw {
+  disabled?: boolean;
+  rules?: AllowRule[];
+  repos?: string[];
+}
+
 function loadConfig(): GuardConfig | null {
   const raw = process.env.GROVE_BASH_GUARD;
   if (raw) {
     try {
-      const parsed = JSON.parse(raw);
+      const parsed = JSON.parse(raw) as GuardConfigRaw;
       // G-300: Operator DM disables bash guard entirely
       if (parsed.disabled) return null;
       return {
@@ -66,10 +74,10 @@ function loadConfig(): GuardConfig | null {
  * Also handles: gh api repos/owner/name/...
  */
 function extractGhRepo(command: string): string | null {
-  const repoFlag = command.match(/(?:--repo|-R)\s+([^\s]+)/);
+  const repoFlag = /(?:--repo|-R)\s+([^\s]+)/.exec(command);
   if (repoFlag) return repoFlag[1] ?? null;
 
-  const apiPath = command.match(/gh\s+api\s+repos\/([^/]+\/[^/\s]+)/);
+  const apiPath = /gh\s+api\s+repos\/([^/]+\/[^/\s]+)/.exec(command);
   if (apiPath) return apiPath[1] ?? null;
 
   return null;
@@ -108,6 +116,7 @@ async function main(): Promise<void> {
     const reader = Bun.stdin.stream().getReader();
     let raw = "";
     const readLoop = (async () => {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -120,7 +129,7 @@ async function main(): Promise<void> {
       console.log(JSON.stringify({ continue: true }));
       return;
     }
-    input = JSON.parse(raw);
+    input = JSON.parse(raw) as HookInput;
   } catch {
     console.log(JSON.stringify({ continue: true }));
     return;
@@ -135,7 +144,7 @@ async function main(): Promise<void> {
   const rawCommand =
     typeof input.tool_input === "string"
       ? input.tool_input
-      : input.tool_input?.command ?? "";
+      : input.tool_input.command ?? "";
 
   const command = stripEnvPrefix(rawCommand).trim();
 
