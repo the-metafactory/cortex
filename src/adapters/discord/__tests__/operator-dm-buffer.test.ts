@@ -177,6 +177,10 @@ describe("notifyOperator + buffer write semantics", () => {
     // Simulate the race: connectionHealth is true at the start of the call,
     // but the underlying `users.fetch` throws a transient error, and by the
     // time the catch runs, connectionHealth has flipped to false.
+    // Declared with `let` so the closure can capture-then-bind it after
+    // `makeAdapter` returns the health object. ESLint's prefer-const sees
+    // a single assignment; the definite-assignment guard is intentional.
+    // eslint-disable-next-line prefer-const
     let healthRef!: ConnectionHealth;
     const fetchUser = async (): Promise<FakeUser> => {
       // Flip health right before the throw

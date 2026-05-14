@@ -70,6 +70,6 @@ describe("initDatabase", () => {
     expect(err).toBeDefined();
     // The underlying syscall error includes the offending path — verify it
     // surfaces so the operator can act.
-    expect(String((err as Error).message)).toContain(blocker);
+    expect((err as Error).message).toContain(blocker);
   });
 });

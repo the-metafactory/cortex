@@ -274,11 +274,12 @@ export function observeTransitionForCancel(
   if (managed.closing) return null;
   if (managed.proc.exitCode !== null) return null;
 
-  return deps.closeSession(sessionId).catch((err) => {
+  return deps.closeSession(sessionId).catch((err: unknown) => {
     // Best-effort enforcement: the DB state is the source of truth, the
     // kill is enforcement on top. Log and swallow.
+    const message = err instanceof Error ? err.message : String(err);
     process.stderr.write(
-      `[notifications] observeTransitionForCancel: closeSession(${sessionId}) failed: ${(err as Error).message}\n`
+      `[notifications] observeTransitionForCancel: closeSession(${sessionId}) failed: ${message}\n`
     );
   });
 }

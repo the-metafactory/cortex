@@ -98,9 +98,9 @@ export class ProcessManager {
       entries.map(async (m) => {
         const result = await Promise.race([
           m.proc.exited,
-          new Promise<typeof TIMEOUT>((r) =>
-            setTimeout(() => r(TIMEOUT), gracefulTimeoutMs)
-          ),
+          new Promise<typeof TIMEOUT>((r) => {
+            setTimeout(() => { r(TIMEOUT); }, gracefulTimeoutMs);
+          }),
         ]);
 
         if (result === TIMEOUT && m.proc.exitCode === null) {

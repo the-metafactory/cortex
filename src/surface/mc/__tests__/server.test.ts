@@ -108,6 +108,6 @@ describe("mission-control server", () => {
       err = e;
     }
     expect(err).toBeDefined();
-    expect(String((err as Error).message)).toContain(String(testPort));
+    expect((err as Error).message).toContain(String(testPort));
   });
 });

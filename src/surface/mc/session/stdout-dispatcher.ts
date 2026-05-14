@@ -63,12 +63,13 @@ export function startStdoutDispatcher(
   stdout: ReadableStream<Uint8Array>,
   deps: StdoutDispatcherDeps
 ): StdoutDispatcherHandle {
-  const done = consumeStream(stdout, deps).catch((err) => {
+  const done = consumeStream(stdout, deps).catch((err: unknown) => {
     // Reading CC's stdout should never throw in normal operation, but if the
     // stream errors (e.g. process killed mid-read) we surface it rather than
     // drop it — a silent swallow here would hide dispatcher crashes.
+    const message = err instanceof Error ? err.message : String(err);
     process.stderr.write(
-      `[stdout-dispatcher] stream read failed for ${deps.sessionId}: ${(err as Error).message}\n`
+      `[stdout-dispatcher] stream read failed for ${deps.sessionId}: ${message}\n`
     );
   });
   return { done };

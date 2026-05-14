@@ -66,6 +66,10 @@ function makeFakeNatsConnection() {
     const iteratorDone = new Promise<void>((r) => {
       iteratorResolve = r;
     });
+    // No `yield` — closes immediately when iteratorDone resolves. The
+    // myelin runtime's subscriber loop only checks the `done` flag, so a
+    // generator that returns without yielding satisfies the contract.
+    // eslint-disable-next-line require-yield
     const iterator = (async function* () {
       await iteratorDone;
     })();

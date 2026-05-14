@@ -42,15 +42,13 @@ jobs:
 
   # ──────────────────────────────────────────────────────────────────
   # Lint — strict ESLint gate. Ported from arc + myelin patterns
-  # (arc PR #150 sweep + myelin#120..#127 chain). Cortex starts with a
-  # non-gating sweep window: `continue-on-error: true` while the
-  # baseline (~1261 errors at port time) burns down. Flip the flag
-  # once the count hits 0; tracked in a follow-up issue.
+  # (arc PR #150 sweep + myelin#120..#127 chain). Baseline at port
+  # time was ~1261 errors; sweeps #1..#38 drove it to 0 (cortex PRs
+  # #152..#191). Gate is now blocking — new code must pass lint.
   # ──────────────────────────────────────────────────────────────────
   lint:
     name: Lint
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -60,5 +58,5 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - name: ESLint (errors only — advisory until sweep complete)
+      - name: ESLint (errors only — blocking gate)
         run: bun run lint:errors

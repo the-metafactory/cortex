@@ -26,7 +26,7 @@ describe("SessionManager", () => {
 
     // Small delay
     const start = Date.now();
-    while (Date.now() - start < 10) {} // busy wait 10ms
+    while (Date.now() - start < 10) { /* busy wait 10ms */ }
 
     const second = manager.getSession("thread-1");
     expect(second!.lastActivity).toBeGreaterThanOrEqual(firstTime);

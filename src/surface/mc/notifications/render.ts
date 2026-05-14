@@ -246,7 +246,7 @@ function renderChannelContextLine(ctx: RenderContext): string | null {
 }
 
 function pickSummary(ctx: RenderContext): string | null {
-  if (ctx.blockReason && ctx.blockReason.kind === "permission.request") {
+  if (ctx.blockReason?.kind === "permission.request") {
     const c = ctx.blockReason.payload.context;
     if (c && c.length > 0) return truncateWordBoundary(c, SUMMARY_MAX);
   }

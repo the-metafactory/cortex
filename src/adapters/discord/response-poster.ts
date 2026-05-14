@@ -15,7 +15,7 @@ export const DISCORD_MAX_LENGTH = 2000;
 export function decodeHtmlEntities(text: string): string {
   return text
     // Decode numeric entities (&#233; → é, &#x00E9; → é)
-    .replace(/&#(\d+);/g, (match, dec) => {
+    .replace(/&#(\d+);/g, (match: string, dec: string) => {
       const codePoint = parseInt(dec, 10);
       // Valid Unicode: 0 to 0x10FFFF (1114111)
       if (codePoint < 0 || codePoint > 0x10FFFF) {
@@ -23,7 +23,7 @@ export function decodeHtmlEntities(text: string): string {
       }
       return String.fromCodePoint(codePoint);
     })
-    .replace(/&#x([0-9A-Fa-f]+);/g, (match, hex) => {
+    .replace(/&#x([0-9A-Fa-f]+);/g, (match: string, hex: string) => {
       const codePoint = parseInt(hex, 16);
       if (codePoint < 0 || codePoint > 0x10FFFF) {
         return match; // Leave invalid entities unchanged

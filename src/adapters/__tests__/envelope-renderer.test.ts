@@ -110,11 +110,11 @@ describe("formatEnvelopeAsMarkdown — payload code block", () => {
     // Extract the JSON between the ```json … ``` fence and ensure it
     // round-trips back to the original object — proves we didn't drop
     // or reformat any field.
-    const match = out.match(/```json\n([\s\S]*?)\n```/);
+    const match = /```json\n([\s\S]*?)\n```/.exec(out);
     expect(match).not.toBeNull();
     const captured = match?.[1];
     expect(captured).toBeDefined();
-    const parsed = JSON.parse(captured as string);
+    const parsed = JSON.parse(captured!);
     expect(parsed).toEqual(payload);
   });
 });

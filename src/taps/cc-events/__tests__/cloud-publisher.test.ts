@@ -134,7 +134,7 @@ describe("CloudPublisher", () => {
     await pub.flush();
 
     const headers = fetchCalls[0]!.init.headers as Record<string, string>;
-    expect(headers["Authorization"]).toBe("Bearer grove_sk_secret");
+    expect(headers.Authorization).toBe("Bearer grove_sk_secret");
     expect(headers["Content-Type"]).toBe("application/json");
 
     pub.close();

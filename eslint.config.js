@@ -133,6 +133,7 @@ export default tseslint.config(
       "**/*.bak.ts",
       "eslint.config.js",
       "scripts/",
+      ".github/scripts/",
       ".claude/",
       ".specify/",
       ".triage/",

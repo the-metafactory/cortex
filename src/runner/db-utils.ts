@@ -20,7 +20,7 @@ export function initDatabase(dbPath: string): Database {
   }
 
   const db = new Database(dbPath);
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA busy_timeout = 5000");
+  db.run("PRAGMA journal_mode = WAL");
+  db.run("PRAGMA busy_timeout = 5000");
   return db;
 }

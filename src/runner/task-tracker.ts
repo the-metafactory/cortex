@@ -62,7 +62,7 @@ export class TaskTracker {
     for (const task of this.tasks.values()) {
       exitPromises.push(
         new Promise<void>((resolve) => {
-          task.session.on("exit", () => resolve());
+          task.session.on("exit", () => { resolve(); });
           // Give it a moment to finish naturally, then kill
           setTimeout(() => {
             task.session.kill();

@@ -98,6 +98,6 @@ export async function loadAccountSigningKey(path: string): Promise<KeyPair> {
     // Re-throw with the path attached so operators can pinpoint the
     // bad file when they have multiple nkey files staged.
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`failed to parse account signing key at ${path}: ${message}`);
+    throw new Error(`failed to parse account signing key at ${path}: ${message}`, { cause: err });
   }
 }

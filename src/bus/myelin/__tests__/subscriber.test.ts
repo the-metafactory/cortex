@@ -17,7 +17,7 @@ import validEnvelope from "../vendor/__fixtures__/valid-envelope.json" with { ty
 //      are read-side primitives and copying keeps each suite independent) ----
 
 function makeFakeSubscription() {
-  type Msg = { subject: string; data: Uint8Array };
+  interface Msg { subject: string; data: Uint8Array }
   const queue: Msg[] = [];
   let waiter: ((m: Msg | null) => void) | null = null;
   let drained = false;

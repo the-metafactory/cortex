@@ -33,7 +33,7 @@ const CONFIG_PATH = join(process.env.HOME ?? "~", ".config", "grove", "cli.yaml"
 export function loadConfig(): DiscordCliConfig {
   if (!existsSync(CONFIG_PATH)) return {};
   const text = readFileSync(CONFIG_PATH, "utf-8");
-  return YAML.parse(text) ?? {};
+  return (YAML.parse(text) as DiscordCliConfig | undefined) ?? {};
 }
 
 export function saveConfig(config: DiscordCliConfig): void {

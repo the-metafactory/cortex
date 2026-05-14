@@ -1868,7 +1868,7 @@ describe("PATCH /api/iterations/:id", () => {
     await teardown(t);
   });
 
-  function seedIter(id: string, state: string = "inbox"): void {
+  function seedIter(id: string, state = "inbox"): void {
     t.db.query(
       `INSERT INTO iterations (id, title, state, priority) VALUES (?, ?, ?, 2)`
     ).run(id, `Iter ${id}`, state);
