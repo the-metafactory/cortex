@@ -232,9 +232,9 @@ describe("parseArgs", () => {
       "--admin-key", "admin-secret",
     ]);
     expect(args.command).toBe("add-operator");
-    expect(args.flags["name"]).toBe("JC");
+    expect(args.flags.name).toBe("JC");
     expect(args.flags["agent-name"]).toBe("Ivy");
-    expect(args.flags["endpoint"]).toBe("https://grove-api.meta-factory.ai");
+    expect(args.flags.endpoint).toBe("https://grove-api.meta-factory.ai");
     expect(args.flags["admin-key"]).toBe("admin-secret");
   });
 
@@ -245,7 +245,7 @@ describe("parseArgs", () => {
       "--admin-key", "secret",
     ]);
     expect(args.command).toBe("status");
-    expect(args.flags["endpoint"]).toBe("https://grove-api.meta-factory.ai");
+    expect(args.flags.endpoint).toBe("https://grove-api.meta-factory.ai");
     expect(args.flags["admin-key"]).toBe("secret");
   });
 

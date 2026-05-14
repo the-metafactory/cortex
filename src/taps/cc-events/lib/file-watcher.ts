@@ -27,5 +27,7 @@ export function watchRawEvents(
     }
   });
 
-  return () => watcher.close();
+  return () => {
+    watcher.close();
+  };
 }

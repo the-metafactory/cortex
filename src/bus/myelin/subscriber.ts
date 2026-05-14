@@ -63,6 +63,7 @@ const utf8 = new TextDecoder("utf-8", { fatal: false });
 
 /** Strip C0 control characters (newlines, tabs, etc.) to prevent log injection. */
 function sanitizeForLog(s: string): string {
+  // eslint-disable-next-line no-control-regex
   return s.replace(/[\x00-\x1f\x7f]/g, "");
 }
 
@@ -88,7 +89,7 @@ export class MyelinSubscriber {
     this.subscription = NatsSubscription.start(link, {
       pattern: opts.pattern,
       onMessage: (subject, data) => this.handleRaw(subject, data),
-      onError: (err, subject) => this.onError(err, subject),
+      onError: (err, subject) => { this.onError(err, subject); },
     });
   }
 
@@ -122,7 +123,7 @@ export class MyelinSubscriber {
         {
           kind: "schema",
           errors: result.errors,
-          firstPath: first?.instancePath || "/",
+          firstPath: first?.instancePath ?? "/",
           firstMessage: first?.message ?? "(no message)",
         },
         subject,

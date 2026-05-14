@@ -44,9 +44,9 @@ export type FilterValue =
  * is a leaf; a key whose value is another PayloadFilterPattern descends
  * into that subtree.
  */
-export type PayloadFilterPattern = {
+export interface PayloadFilterPattern {
   [key: string]: FilterValue[] | PayloadFilterPattern;
-};
+}
 
 /**
  * A surface-adapter's full filter. The `envelope` pattern matches the
@@ -80,7 +80,7 @@ export interface PayloadFilter {
  */
 export function matchesFilter(envelope: Envelope, filter: PayloadFilter | undefined): boolean {
   if (!filter) return true;
-  if (filter.envelope && !matchPattern(envelope as unknown as Record<string, unknown>, filter.envelope)) {
+  if (filter.envelope && !matchPattern(envelope, filter.envelope)) {
     return false;
   }
   if (filter.payload && !matchPattern(envelope.payload, filter.payload)) {
@@ -124,7 +124,7 @@ function matchPattern(value: unknown, pattern: PayloadFilterPattern): boolean {
   for (const key of Object.keys(pattern)) {
     const sub = pattern[key];
     if (!sub) continue;
-    const fieldValue = (value as Record<string, unknown>)[key];
+    const fieldValue = value[key];
     if (Array.isArray(sub)) {
       if (!matchLeaf(fieldValue, sub)) return false;
     } else {

@@ -45,7 +45,8 @@ async function fetchUserName(
   apiToken: string,
   userCache: Map<string, string>
 ): Promise<string> {
-  if (userCache.has(userId)) return userCache.get(userId)!;
+  const cached = userCache.get(userId);
+  if (cached !== undefined) return cached;
 
   try {
     const res = await fetch(`${apiUrl}/api/v4/users/${userId}`, {
@@ -55,6 +56,9 @@ async function fetchUserName(
     if (!res.ok) return "unknown";
 
     const user = await res.json() as MattermostUser;
+    // `||` preserves empty-string fallthrough to next field; `??` would
+    // not. Mattermost returns "" for omitted optional fields.
+    // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
     const name = user.nickname || user.username || `${user.first_name} ${user.last_name}`.trim() || "unknown";
     userCache.set(userId, name);
     return name;
@@ -130,7 +134,7 @@ export async function fetchMattermostContext(
 
     for (const id of postsResponse.order.slice().reverse()) {
       const p = postsResponse.posts[id];
-      if (!p || !p.message) continue;
+      if (!p?.message) continue;
       // Skip the triggering post itself — it'll be the prompt
       if (p.id === postId) continue;
 
