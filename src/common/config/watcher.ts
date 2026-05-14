@@ -118,6 +118,14 @@ function compareConfigs(oldConfig: BotConfig, newConfig: BotConfig): {
   const applied: string[] = [];
   const requiresRestart: string[] = [];
 
+  // Helper: dynamic-key access on a typed object via a structural cast.
+  // `Record<string, unknown>` is structurally satisfied by every object, so
+  // this avoids the `any` cast that would otherwise break type-safety on
+  // surrounding code. Used for dynamic-key walks where the key set is only
+  // known at runtime (e.g., diffing config blocks).
+  const pickField = (obj: object, key: string): unknown =>
+    (obj as Record<string, unknown>)[key];
+
   // Helper: deep compare two values
   const isDifferent = (a: unknown, b: unknown): boolean => {
     if (a === b) return false;
@@ -125,13 +133,13 @@ function compareConfigs(oldConfig: BotConfig, newConfig: BotConfig): {
     if (a === null || b === null) return a !== b;
     if (Array.isArray(a) && Array.isArray(b)) {
       if (a.length !== b.length) return true;
-      return a.some((item, i) => isDifferent(item, b[i]));
+      return a.some((item, i) => isDifferent(item, b[i] as unknown));
     }
     if (typeof a === "object" && typeof b === "object") {
-      const aKeys = Object.keys(a as object);
-      const bKeys = Object.keys(b as object);
+      const aKeys = Object.keys(a);
+      const bKeys = Object.keys(b);
       if (aKeys.length !== bKeys.length) return true;
-      return aKeys.some((key) => isDifferent((a as any)[key], (b as any)[key]));
+      return aKeys.some((key) => isDifferent(pickField(a, key), pickField(b, key)));
     }
     return true;
   };
@@ -153,35 +161,35 @@ function compareConfigs(oldConfig: BotConfig, newConfig: BotConfig): {
   // Agent fields
   if (isDifferent(oldConfig.agent, newConfig.agent)) {
     for (const key of Object.keys(newConfig.agent)) {
-      checkField(`agent.${key}`, (oldConfig.agent as any)[key], (newConfig.agent as any)[key]);
+      checkField(`agent.${key}`, pickField(oldConfig.agent, key), pickField(newConfig.agent, key));
     }
   }
 
   // Claude fields
   if (isDifferent(oldConfig.claude, newConfig.claude)) {
     for (const key of Object.keys(newConfig.claude)) {
-      checkField(`claude.${key}`, (oldConfig.claude as any)[key], (newConfig.claude as any)[key]);
+      checkField(`claude.${key}`, pickField(oldConfig.claude, key), pickField(newConfig.claude, key));
     }
   }
 
   // Attachments fields
   if (isDifferent(oldConfig.attachments, newConfig.attachments)) {
     for (const key of Object.keys(newConfig.attachments)) {
-      checkField(`attachments.${key}`, (oldConfig.attachments as any)[key], (newConfig.attachments as any)[key]);
+      checkField(`attachments.${key}`, pickField(oldConfig.attachments, key), pickField(newConfig.attachments, key));
     }
   }
 
   // GitHub fields
   if (isDifferent(oldConfig.github, newConfig.github)) {
     for (const key of Object.keys(newConfig.github)) {
-      checkField(`github.${key}`, (oldConfig.github as any)[key], (newConfig.github as any)[key]);
+      checkField(`github.${key}`, pickField(oldConfig.github, key), pickField(newConfig.github, key));
     }
   }
 
   // API fields
   if (isDifferent(oldConfig.api, newConfig.api)) {
     for (const key of Object.keys(newConfig.api)) {
-      checkField(`api.${key}`, (oldConfig.api as any)[key], (newConfig.api as any)[key]);
+      checkField(`api.${key}`, pickField(oldConfig.api, key), pickField(newConfig.api, key));
     }
   }
 
@@ -205,7 +213,7 @@ function compareConfigs(oldConfig: BotConfig, newConfig: BotConfig): {
       }
       for (const key of Object.keys(newInst)) {
         if (key === "instanceId") continue;
-        checkField(`${platformName}.${key}`, (oldInst as any)[key], (newInst as any)[key]);
+        checkField(`${platformName}.${key}`, pickField(oldInst, key), pickField(newInst, key));
       }
     }
 
@@ -221,7 +229,12 @@ function compareConfigs(oldConfig: BotConfig, newConfig: BotConfig): {
     oldConfig.discord,
     newConfig.discord,
     "discord",
-    (inst) => (inst as any).instanceId ?? (inst as any).guildId
+    (inst) => {
+      const id = pickField(inst, "instanceId");
+      const guild = pickField(inst, "guildId");
+      return (typeof id === "string" ? id : undefined) ??
+        (typeof guild === "string" ? guild : "default");
+    }
   );
 
   // Mattermost instances
@@ -229,7 +242,10 @@ function compareConfigs(oldConfig: BotConfig, newConfig: BotConfig): {
     oldConfig.mattermost,
     newConfig.mattermost,
     "mattermost",
-    (inst) => (inst as any).instanceId ?? "default"
+    (inst) => {
+      const id = pickField(inst, "instanceId");
+      return typeof id === "string" ? id : "default";
+    }
   );
 
   return { applied, requiresRestart };
@@ -262,7 +278,9 @@ export class ConfigWatcher {
     // Debounced reload: wait 200ms after last change before reloading
     const triggerReload = () => {
       if (this.reloadTimeout) clearTimeout(this.reloadTimeout);
-      this.reloadTimeout = setTimeout(() => this.reload(), 200);
+      this.reloadTimeout = setTimeout(() => {
+        this.reload();
+      }, 200);
     };
 
     this.watcher = watch(this.configPath, { persistent: false }, (eventType: string) => {
@@ -421,7 +439,9 @@ export class AgentsDirectoryWatcher {
 
     const triggerReload = (source: "watcher" | "sighup" | "cli" = "watcher") => {
       if (this.reloadTimeout) clearTimeout(this.reloadTimeout);
-      this.reloadTimeout = setTimeout(() => this.reload(source), this.debounceMs);
+      this.reloadTimeout = setTimeout(() => {
+        this.reload(source);
+      }, this.debounceMs);
     };
 
     this.watcher = watch(this.agentsDir, { persistent: false }, (eventType: string, filename: string | null) => {
@@ -574,8 +594,9 @@ function deepEqual(a: unknown, b: unknown): boolean {
     return true;
   }
   if (Array.isArray(b)) return false;
-  const aKeys = Object.keys(a as object);
-  const bKeys = Object.keys(b as object);
+  if (b === undefined) return false;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
   if (aKeys.length !== bKeys.length) return false;
   for (const key of aKeys) {
     if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
