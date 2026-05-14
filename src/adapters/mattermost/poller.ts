@@ -77,7 +77,8 @@ async function fetchChannelName(
   apiToken: string,
   cache: Map<string, string>
 ): Promise<string> {
-  if (cache.has(channelId)) return cache.get(channelId)!;
+  const cached = cache.get(channelId);
+  if (cached !== undefined) return cached;
   try {
     const res = await fetch(`${apiUrl}/api/v4/channels/${channelId}`, {
       headers: { Authorization: `Bearer ${apiToken}` },
@@ -98,7 +99,8 @@ async function fetchUserName(
   apiToken: string,
   cache: Map<string, string>
 ): Promise<string> {
-  if (cache.has(userId)) return cache.get(userId)!;
+  const cached = cache.get(userId);
+  if (cached !== undefined) return cached;
   try {
     const res = await fetch(`${apiUrl}/api/v4/users/${userId}`, {
       headers: { Authorization: `Bearer ${apiToken}` },
@@ -143,7 +145,7 @@ export async function postReply(
       return null;
     }
     const created = await res.json() as Record<string, unknown>;
-    return (created.id as string) ?? null;
+    return typeof created.id === "string" ? created.id : null;
   } catch (error) {
     console.error("mattermost-poller: post error:", error);
     return null;
@@ -167,7 +169,7 @@ async function fetchChannelPostsSince(
     if (!res.ok) return [];
 
     const data = await res.json() as { posts?: Record<string, MattermostPost> };
-    const posts: MattermostPost[] = Object.values(data.posts || {});
+    const posts: MattermostPost[] = Object.values(data.posts ?? {});
     return posts.sort((a, b) => a.create_at - b.create_at);
   } catch {
     return [];
@@ -277,7 +279,7 @@ export async function postReplyWithFiles(
       return null;
     }
     const created = await res.json() as Record<string, unknown>;
-    return (created.id as string) ?? null;
+    return typeof created.id === "string" ? created.id : null;
   } catch (error) {
     console.error("mattermost-poller: post with files error:", error);
     return null;
@@ -302,12 +304,14 @@ export interface MattermostPollerOptions {
  */
 export function createMattermostPoller(options: MattermostPollerOptions): { stop: () => void } {
   const { agentName, presence, onMessage } = options;
-  const pollIntervalMs = options.pollIntervalMs ?? presence.pollIntervalMs ?? 3000;
+  // pollIntervalMs/channels/allowedUsers have schema defaults; apiUrl /
+  // apiToken / triggerWord are genuinely optional.
+  const pollIntervalMs = options.pollIntervalMs ?? presence.pollIntervalMs;
   const apiUrl = presence.apiUrl ?? "";
   const apiToken = presence.apiToken ?? "";
   const triggerWord = presence.triggerWord ?? agentName;
-  const configuredChannels = presence.channels ?? [];
-  const allowedUsers = presence.allowedUsers ?? [];
+  const configuredChannels = presence.channels;
+  const allowedUsers = presence.allowedUsers;
 
   let lastCheckTime = Date.now();
   let botUserId: string | null = null;
@@ -433,8 +437,8 @@ export function createMattermostPoller(options: MattermostPollerOptions): { stop
     }
   }, 60_000);
 
-  const interval = setInterval(poll, pollIntervalMs);
-  poll(); // First poll immediately
+  const interval = setInterval(() => { void poll(); }, pollIntervalMs);
+  void poll(); // First poll immediately
 
   console.log(`mattermost-poller: polling ${configuredChannels.length} channel(s) + DMs every ${pollIntervalMs / 1000}s for "${triggerWord}"`);
 
