@@ -22,6 +22,18 @@ import type { PublishedEvent } from "../taps/cc-events/hooks/lib/event-types";
 import { formatDuration } from "../shared/format-utils";
 
 /**
+ * Coerce an `unknown` payload field to string. Avoids the
+ * `[object Object]` stringification trap that `String(value)` falls into
+ * when `value` is a plain object — `event.payload` fields are typed as
+ * `unknown` (Zod `z.record(z.string(), z.unknown())`), so the
+ * payload-bound code paths in this module need explicit string-only
+ * narrowing before interpolating.
+ */
+function asString(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
+/**
  * Detect which project a task relates to from event text.
  * Looks for feature ID patterns: I-4xx = meta-factory, G-2xx = grove, F-1xx/F-2xx/F-3xx = meta-factory.
  * Returns lowercase project IDs for consistency (e.g. "meta-factory", "grove").
@@ -47,14 +59,14 @@ export function detectProject(text: string): string | null {
  */
 export function detectProjectFromEvent(event: PublishedEvent): string | null {
   // H-001: Explicit project metadata takes priority
-  if (event.payload.project) return String(event.payload.project);
+  const project = asString(event.payload.project);
+  if (project) return project;
 
-  const text = String(
-    event.payload.prompt_preview
-    ?? event.payload.description
-    ?? event.payload.active_task
-    ?? ""
-  );
+  const text =
+    asString(event.payload.prompt_preview) ||
+    asString(event.payload.description) ||
+    asString(event.payload.active_task) ||
+    "";
   return detectProject(text) ?? event.grove_channel ?? null;
 }
 
@@ -63,11 +75,11 @@ export function detectProjectFromEvent(event: PublishedEvent): string | null {
  * Matches full URLs (https://github.com/.../issues/123) or hash refs (#123).
  */
 export function extractGitHubIssue(text: string): string | null {
-  const match = text.match(/https:\/\/github\.com\/[^\s)]+\/issues\/\d+/);
+  const match = /https:\/\/github\.com\/[^\s)]+\/issues\/\d+/.exec(text);
   if (match) return match[0];
 
-  const hashMatch = text.match(/#(\d+)/);
-  if (hashMatch) return `#${hashMatch[1]}`;
+  const hashMatch = /#(\d+)/.exec(text);
+  if (hashMatch?.[1] !== undefined) return `#${hashMatch[1]}`;
 
   return null;
 }
@@ -84,35 +96,35 @@ export interface SessionActivity {
 export function extractActivityEntry(event: PublishedEvent): SessionActivity | null {
   switch (event.event_type) {
     case "tool.file.changed": {
-      const path = event.payload.path ? String(event.payload.path) : null;
+      const path = asString(event.payload.path);
       if (!path) return null;
       const filename = path.split("/").pop() ?? path;
       const toolInput = event.payload.tool_input as Record<string, unknown> | undefined;
-      const toolName = event.payload.tool_name ?? (toolInput?.content ? "Write" : "Edit");
+      const toolName = asString(event.payload.tool_name) || (toolInput?.content ? "Write" : "Edit");
       return { timestamp: event.timestamp, icon: "\u{1F4DD}", label: "file changed", detail: `${toolName === "Write" ? "Writing" : "Editing"} ${filename}` };
     }
     case "tool.file.read": {
       const toolInputRead = event.payload.tool_input as Record<string, unknown> | undefined;
-      const path = event.payload.path ?? (toolInputRead?.file_path ? String(toolInputRead.file_path) : null);
+      const path = asString(event.payload.path) || asString(toolInputRead?.file_path);
       if (!path) return null;
-      const filename = String(path).split("/").pop() ?? String(path);
+      const filename = path.split("/").pop() ?? path;
       return { timestamp: event.timestamp, icon: "\u{1F4D6}", label: "reading", detail: `Reading ${filename}` };
     }
     case "tool.bash.executed": {
-      const cmd = String(event.payload.command_preview ?? event.payload.command ?? "");
+      const cmd = asString(event.payload.command_preview) || asString(event.payload.command);
       if (!cmd || /^(cat|echo|ls|pwd|cd)\s/.test(cmd)) return null;
       const detail = cmd.length > 100 ? cmd.slice(0, 97) + "..." : cmd;
       return { timestamp: event.timestamp, icon: "\u{1F4BB}", label: "command", detail };
     }
     case "tool.agent.spawned": {
-      const desc = String(event.payload.agent_description ?? event.payload.summary ?? "");
+      const desc = asString(event.payload.agent_description) || asString(event.payload.summary);
       if (!desc) return null;
       const detail = desc.length > 100 ? desc.slice(0, 97) + "..." : desc;
       return { timestamp: event.timestamp, icon: "\u{1F916}", label: "subagent", detail };
     }
     case "tool.todo.updated": {
       const summary = event.payload.todo_summary as { total?: number; completed?: number } | undefined;
-      const task = event.payload.active_task ? String(event.payload.active_task) : "";
+      const task = asString(event.payload.active_task);
       const progress = summary ? `${summary.completed ?? 0}/${summary.total ?? 0}` : "";
       const detail = [progress, task].filter(Boolean).join(" ");
       if (!detail) return null;
@@ -121,19 +133,20 @@ export function extractActivityEntry(event: PublishedEvent): SessionActivity | n
     default: {
       // Handle generic tool.*.used events (Grep, Glob, WebSearch, etc.)
       if (event.event_type.startsWith("tool.") && event.event_type.endsWith(".used")) {
-        const toolName = String(event.payload.tool_name ?? event.event_type.split(".")[1] ?? "tool");
+        const fallback = event.event_type.split(".")[1] ?? "tool";
+        const toolName = asString(event.payload.tool_name) || fallback;
         const input = event.payload.tool_input as Record<string, unknown> | undefined;
         let detail = `Using ${toolName}`;
         if (toolName === "Grep" || toolName === "grep") {
-          detail = `Searching for \`${String(input?.pattern ?? "").slice(0, 60)}\``;
+          detail = `Searching for \`${asString(input?.pattern).slice(0, 60)}\``;
         } else if (toolName === "Glob" || toolName === "glob") {
-          detail = `Finding files matching \`${String(input?.pattern ?? "")}\``;
+          detail = `Finding files matching \`${asString(input?.pattern)}\``;
         } else if (toolName === "WebSearch" || toolName === "websearch") {
-          detail = `Searching web: ${String(input?.query ?? "").slice(0, 60)}`;
+          detail = `Searching web: ${asString(input?.query).slice(0, 60)}`;
         } else if (toolName === "WebFetch" || toolName === "webfetch") {
-          detail = `Fetching ${String(input?.url ?? "").slice(0, 60)}`;
+          detail = `Fetching ${asString(input?.url).slice(0, 60)}`;
         } else if (toolName === "Skill" || toolName === "skill") {
-          detail = `Using skill: ${String(input?.skill ?? "")}`;
+          detail = `Using skill: ${asString(input?.skill)}`;
         }
         return { timestamp: event.timestamp, icon: "\u{1F527}", label: toolName, detail };
       }
