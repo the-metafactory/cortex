@@ -9,6 +9,23 @@
 import { z } from "zod/v4";
 
 // =============================================================================
+// Helper: typed empty default for nested Zod object schemas.
+//
+// When every inner field has its own `.default(...)`, Zod parses an empty
+// `{}` correctly at runtime — but the parent's `.default()` requires a
+// value matching the schema's *output* type, which lists the inner fields
+// as required. The cast here narrows once at the helper boundary instead
+// of repeating `{} as any` at every call site. The lint suppressions are
+// targeted: a single helper carries the unsafety, the call sites stay
+// clean.
+// =============================================================================
+/* eslint-disable @typescript-eslint/no-unnecessary-type-parameters, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-explicit-any */
+function emptyDefault<T>(): T {
+  return {} as any;
+}
+/* eslint-enable @typescript-eslint/no-unnecessary-type-parameters, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-explicit-any */
+
+// =============================================================================
 // Role schema (shared across platforms)
 // =============================================================================
 
@@ -113,7 +130,7 @@ export const DiscordInstanceSchema = z.object({
   /** Role applied to users not listed in any role. "denied" = reject, or a role name. Default: allow all. */
   defaultRole: z.string().default("allow-all"),
   /** G-300: DM privilege configuration */
-  dm: DMConfigSchema.default({} as any),
+  dm: DMConfigSchema.default(emptyDefault()),
   /**
    * F-11: Optional Discord role id to mention on high-priority block
    * notifications. When set, channel posts marked `severity = 'ping'`
@@ -339,7 +356,7 @@ export const BotConfigSchema = z.object({
     maxTotalSizeBytes: z.number().int().positive().default(25 * 1024 * 1024),
     /** Max number of attachments per message. Default: 10. */
     maxAttachmentsPerMessage: z.number().int().positive().default(10),
-  }).default({} as any),
+  }).default(emptyDefault()),
 
   execution: z.object({
     /** Default backend name. Default: "local". */
@@ -350,7 +367,7 @@ export const BotConfigSchema = z.object({
       type: z.enum(["cloudflare", "e2b", "ssh", "custom"]),
       endpoint: z.string(),
     })).default([]),
-  }).default({ default: "local" } as any),
+  }).default(emptyDefault()),
 
   /** G-203b: GitHub webhook ingestion */
   github: z.object({
@@ -370,7 +387,7 @@ export const BotConfigSchema = z.object({
       branchPatterns: z.array(z.string()).default(["^feat/(g|f|i)-\\d+"]),
       /** Regex patterns for agent issue comments (e.g. "^Starting:", "^Completed:") */
       commentPatterns: z.array(z.string()).default(["^Starting:", "^Completed:"]),
-    }).default({} as any),
+    }).default(emptyDefault()),
     /**
      * MIG-5.6 (C-106): Local HTTP receiver that publishes webhook payloads
      * as `local.{org}.github.{event}.{action}` envelopes onto the bus.
@@ -387,8 +404,21 @@ export const BotConfigSchema = z.object({
       port: z.number().int().positive().default(8770),
       /** Hostname to bind. Default `127.0.0.1` — never `0.0.0.0` unless explicitly chosen. */
       hostname: z.string().default("127.0.0.1"),
-    }).default({} as any),
-  }).default({} as any).transform((val) => ({
+    }).default(emptyDefault()),
+  }).default(emptyDefault()).transform((val) => ({
+    // Zod v4's `.default(value)` returns `value` literally when input is
+    // undefined — it does NOT re-parse the default through the inner
+    // schema. So even though every inner field has its own `.default(...)`,
+    // the parent's `.default(emptyDefault())` produces `{}` at runtime,
+    // not the populated shape. This transform manually re-applies the
+    // inner defaults so callers get the populated shape regardless of
+    // input. The `??` chains LOOK defensive (and the typed-checked lint
+    // rules flag them as such), but they're load-bearing — without them,
+    // `bot.github.agentDetection` parses as `{}`, breaking
+    // cortex-config.test.ts MIRROR sync. Suppressed locally; the
+    // `emptyDefault()` runtime quirk is the root cause to fix here, not
+    // the defensive `??` checks.
+    /* eslint-disable @typescript-eslint/no-unnecessary-condition */
     webhookSecret: val.webhookSecret ?? "",
     repos: val.repos ?? [],
     agentDetection: {
@@ -401,6 +431,7 @@ export const BotConfigSchema = z.object({
       port: val.receiver?.port ?? 8770,
       hostname: val.receiver?.hostname ?? "127.0.0.1",
     },
+    /* eslint-enable @typescript-eslint/no-unnecessary-condition */
   })),
 
   /** G-201: Dashboard API configuration (local dashboard — cloud fields moved to network files) */
@@ -415,12 +446,12 @@ export const BotConfigSchema = z.object({
     operatorId: z.string().default(""),
     cfAccessClientId: z.string().default(""),
     cfAccessClientSecret: z.string().default(""),
-  }).default({} as any),
+  }).default(emptyDefault()),
 
   paths: z.object({
     publishedEventsDir: z.string().default("~/.claude/events/published"),
     logDir: z.string().default("~/.config/grove/logs"),
-  }).default({} as any),
+  }).default(emptyDefault()),
 
   /**
    * F-11: Grove platform-level config (cross-cutting, not bound to a
@@ -439,9 +470,9 @@ export const BotConfigSchema = z.object({
   grove: z.object({
     notifications: z.object({
       discord: z.boolean().default(false),
-    }).default({ discord: false } as any),
+    }).default(emptyDefault()),
     baseUrl: z.string().default(""),
-  }).default({} as any),
+  }).default(emptyDefault()),
 
   /** G-500: Directory containing per-network YAML files */
   networksDir: z.string().default("./networks"),
@@ -593,10 +624,8 @@ export function getFirstMattermostInstance(config: BotConfig): MattermostInstanc
 export function getAllRepos(config: BotConfig): string[] {
   const repos = new Set<string>(config.github.repos);
   for (const network of config.networks) {
-    if (network.github?.repos) {
-      for (const repo of network.github.repos) {
-        repos.add(repo);
-      }
+    for (const repo of network.github.repos) {
+      repos.add(repo);
     }
   }
   return [...repos];
