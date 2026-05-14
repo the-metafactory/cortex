@@ -73,7 +73,7 @@ function makeAdapter(opts: {
   /** If false, the adapter has no client at all (pre-start state). */
   withClient?: boolean;
 } = {}) {
-  const sends: Array<{ channelId: string; text: string }> = [];
+  const sends: { channelId: string; text: string }[] = [];
   // MIG-7.2c-discord-flip: constructor now takes (agent, presence, infra).
   // Surface fields live on `infra` for this slice and move to a dedicated
   // Renderer at MIG-7.2d.

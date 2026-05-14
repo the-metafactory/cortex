@@ -631,8 +631,8 @@ async function cloudStatus(flags: Record<string, string>): Promise<void> {
     const stateRes = await fetch(`${base}/api/state`);
     if (stateRes.ok) {
       const state = (await stateRes.json()) as {
-        agents?: Array<{ id: string; name: string; status: string }>;
-        sessions?: Array<{ session_id: string; status: string; agent_name: string }>;
+        agents?: { id: string; name: string; status: string }[];
+        sessions?: { session_id: string; status: string; agent_name: string }[];
       };
 
       const agents = state.agents ?? [];
@@ -965,12 +965,12 @@ async function cloudWebhooksCheck(flags: Record<string, string>): Promise<void> 
         continue;
       }
 
-      const hooks = await hooksRes.json() as Array<{
+      const hooks = await hooksRes.json() as {
         id: number;
         active: boolean;
         config: { url: string };
         last_response: { code: number; message: string };
-      }>;
+      }[];
 
       const groveHook = hooks.find((h) => h.config.url?.includes("/api/github/webhook"));
       if (!groveHook) {

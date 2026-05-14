@@ -80,7 +80,7 @@ export function splitMessage(content: string): string[] {
 export async function postToDiscord(
   channel: TextChannel | ThreadChannel,
   content: string,
-  files?: Array<{ attachment: Buffer | string; name: string }>,
+  files?: { attachment: Buffer | string; name: string }[],
   retryOptions?: RetryOptions
 ): Promise<void> {
   const decoded = decodeHtmlEntities(content);

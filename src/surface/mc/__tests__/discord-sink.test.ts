@@ -55,8 +55,8 @@ class FakeScheduler implements FlushScheduler {
 }
 
 class FakeNotifier implements DiscordNotifier {
-  dms: Array<{ userId: string; text: string }> = [];
-  channelMessages: Array<{ channelId: string; text: string }> = [];
+  dms: { userId: string; text: string }[] = [];
+  channelMessages: { channelId: string; text: string }[] = [];
   failNextDM = false;
   failNextChannel = false;
 

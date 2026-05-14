@@ -167,7 +167,7 @@ describe("POST /api/assignments/:id/requeue", () => {
       .query(
         "SELECT type, payload FROM events WHERE session_id = ? AND type = 'operator.curation'"
       )
-      .all(sessionId) as Array<{ type: string; payload: string }>;
+      .all(sessionId) as { type: string; payload: string }[];
     expect(events).toHaveLength(1);
     const payload = JSON.parse(events[0]!.payload);
     expect(payload.kind).toBe("requeue");
@@ -200,7 +200,7 @@ describe("POST /api/assignments/:id/requeue", () => {
       .query(
         "SELECT payload FROM events WHERE session_id = ? AND type = 'operator.curation'"
       )
-      .all(sessionId) as Array<{ payload: string }>;
+      .all(sessionId) as { payload: string }[];
     expect(events).toHaveLength(1);
     expect(JSON.parse(events[0]!.payload).reason).toBe("external dep recovered");
   });
@@ -308,7 +308,7 @@ describe("POST /api/assignments/:id/abandon", () => {
       .query(
         "SELECT payload FROM events WHERE session_id = ? AND type = 'operator.curation'"
       )
-      .all(sessionId) as Array<{ payload: string }>;
+      .all(sessionId) as { payload: string }[];
     expect(events).toHaveLength(1);
     const payload = JSON.parse(events[0]!.payload);
     expect(payload.kind).toBe("abandon");
@@ -341,7 +341,7 @@ describe("POST /api/assignments/:id/abandon", () => {
       .query(
         "SELECT payload FROM events WHERE session_id = ? AND type = 'operator.curation'"
       )
-      .all(sessionId) as Array<{ payload: string }>;
+      .all(sessionId) as { payload: string }[];
     expect(events).toHaveLength(1);
     const payload = JSON.parse(events[0]!.payload);
     expect(payload.targetKind).toBe("task");
@@ -506,7 +506,7 @@ describe("POST /api/assignments/:id/handoff", () => {
       .query(
         "SELECT payload FROM events WHERE session_id = ? AND type = 'operator.curation'"
       )
-      .all(body.newSessionId) as Array<{ payload: string }>;
+      .all(body.newSessionId) as { payload: string }[];
     expect(events).toHaveLength(1);
     const payload = JSON.parse(events[0]!.payload);
     expect(payload.kind).toBe("handoff");
@@ -519,7 +519,7 @@ describe("POST /api/assignments/:id/handoff", () => {
       .query(
         "SELECT payload FROM events WHERE session_id = ? AND type = 'state.transition'"
       )
-      .all(oldSessionId) as Array<{ payload: string }>;
+      .all(oldSessionId) as { payload: string }[];
     const cancelHit = cancelEvents.find(
       (e) => JSON.parse(e.payload).action === "cancel"
     );

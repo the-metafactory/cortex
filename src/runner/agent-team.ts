@@ -87,7 +87,7 @@ function buildModeratorPrompt(userPrompt: string, participants: TeamParticipantC
  */
 function buildSynthesisPrompt(
   userPrompt: string,
-  participantResults: Array<{ name: string; result: string }>
+  participantResults: { name: string; result: string }[]
 ): string {
   const results = participantResults
     .map((p) => `### @${p.name}\n${p.result}`)

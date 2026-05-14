@@ -254,7 +254,7 @@ export interface DispatchRuntime {
    * non-CC harnesses ignore this field.
    */
   bashAllowlist?: {
-    rules: Array<{ pattern: string; repos?: string[] }>;
+    rules: { pattern: string; repos?: string[] }[];
     repos: string[];
   };
   /**
@@ -369,7 +369,7 @@ export interface DispatchRequest {
    * extensibility — adding a new context kind should not require a
    * protocol-layer schema change. Validation, if any, is harness-side.
    */
-  context: Array<{ kind: string; data: unknown }>;
+  context: { kind: string; data: unknown }[];
   /**
    * Agent identity for the dispatch. `id` and `displayName` are the
    * minimum the runner needs for envelope provenance; `runtime.harness`

@@ -87,7 +87,7 @@ describe("buildStreamJsonMessage (content-block overload)", () => {
       { type: "text", text: "after" },
     ];
     const parsed = parseFirstLine(buildStreamJsonMessage(blocks)) as {
-      content: Array<{ type: string }>;
+      content: { type: string }[];
     };
     expect(parsed.content.map((b) => b.type)).toEqual([
       "text",

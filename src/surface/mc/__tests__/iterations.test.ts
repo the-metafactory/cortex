@@ -101,7 +101,7 @@ describe("iterations schema migration", () => {
     try {
       const cols = h.db
         .query(`SELECT name FROM pragma_table_info('iterations')`)
-        .all() as Array<{ name: string }>;
+        .all() as { name: string }[];
       const colNames = cols.map((c) => c.name).sort();
       expect(colNames).toEqual(
         [
@@ -122,7 +122,7 @@ describe("iterations schema migration", () => {
 
       const tCols = h.db
         .query(`SELECT name FROM pragma_table_info('tasks')`)
-        .all() as Array<{ name: string }>;
+        .all() as { name: string }[];
       expect(tCols.some((c) => c.name === "iteration_id")).toBe(true);
     } finally {
       teardown(h);
@@ -150,7 +150,7 @@ describe("iterations schema migration", () => {
           `SELECT name FROM sqlite_master WHERE type = 'index'
            AND name IN ('idx_iterations_state_priority', 'idx_tasks_iteration')`
         )
-        .all() as Array<{ name: string }>;
+        .all() as { name: string }[];
       const names = indexes.map((r) => r.name).sort();
       expect(names).toEqual([
         "idx_iterations_state_priority",

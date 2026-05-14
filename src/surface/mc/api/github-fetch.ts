@@ -76,7 +76,7 @@ interface RawGithubIssue {
   state?: string;
   body?: string | null;
   html_url?: string;
-  labels?: Array<{ name?: string } | string> | null;
+  labels?: ({ name?: string } | string)[] | null;
   pull_request?: unknown;
 }
 

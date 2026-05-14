@@ -85,14 +85,14 @@ export interface FleetMetrics {
   /** Mean ms per assignment blocked under each kind. */
   meanByBlockReason: Record<BlockReasonKind, number>;
   /** Top three block-reason kinds by total ms across the window, descending. */
-  topBlockers: Array<{
+  topBlockers: {
     kind: BlockReasonKind;
     totalMs: number;
     /** Distinct assignments that hit this block reason at least once. */
     assignments: number;
-  }>;
+  }[];
   /** Per-agent breakdown. Sorted by completed DESC, then p50 ASC (faster first). */
-  perAgent: Array<{
+  perAgent: {
     agentId: string;
     agentName: string;
     completed: number;
@@ -100,7 +100,7 @@ export interface FleetMetrics {
     /** Block reason consuming the most blocked time for this agent. Null
      *  if the agent had no blocked time inside the window. */
     topBlocker: BlockReasonKind | null;
-  }>;
+  }[];
 }
 
 export interface FleetMetricsOptions {
@@ -169,7 +169,7 @@ function parseIsoMs(iso: string): number {
  */
 function accumulateIntervals(
   createdAtMs: number,
-  transitions: Array<{ ts: number; from: AssignmentState; to: AssignmentState; blockReason?: BlockReason }>,
+  transitions: { ts: number; from: AssignmentState; to: AssignmentState; blockReason?: BlockReason }[],
   byState: Record<AssignmentState, number>,
   byBlockReason: Record<BlockReasonKind, number>,
   nowMs: number
@@ -236,7 +236,7 @@ function accumulateIntervals(
 function loadTransitionsForAssignment(
   db: Database,
   assignmentId: string
-): Array<{ ts: number; from: AssignmentState; to: AssignmentState; blockReason?: BlockReason }> {
+): { ts: number; from: AssignmentState; to: AssignmentState; blockReason?: BlockReason }[] {
   const rows = db
     .query(
       `SELECT s.assignment_id AS assignment_id, e.timestamp AS timestamp, e.payload AS payload

@@ -136,7 +136,7 @@ async function main() {
 
     // TodoWrite payload: extract task names and statuses
     if (toolName === "TodoWrite" && hookInput.tool_input?.todos) {
-      const todos = hookInput.tool_input.todos as Array<{ content: string; status: string; activeForm?: string }>;
+      const todos = hookInput.tool_input.todos as { content: string; status: string; activeForm?: string }[];
       const inProgress = todos.filter((t: { status: string }) => t.status === "in_progress");
       const completed = todos.filter((t: { status: string }) => t.status === "completed");
       const pending = todos.filter((t: { status: string }) => t.status === "pending");

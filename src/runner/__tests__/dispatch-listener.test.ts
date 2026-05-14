@@ -111,9 +111,9 @@ function makeReceivedEnvelope(
  */
 function fakeFactory(result: CCSessionResult): {
   factory: CCSessionFactory;
-  optsCaptured: Array<Parameters<CCSessionFactory>[0]>;
+  optsCaptured: Parameters<CCSessionFactory>[0][];
 } {
-  const optsCaptured: Array<Parameters<CCSessionFactory>[0]> = [];
+  const optsCaptured: Parameters<CCSessionFactory>[0][] = [];
   const factory: CCSessionFactory = (opts) => {
     optsCaptured.push(opts);
     const session = {

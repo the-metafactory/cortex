@@ -29,7 +29,7 @@ describe("AgentTeam", () => {
       timeoutMs: 120_000,
     });
 
-    const progressMessages: Array<{ member: string; text: string }> = [];
+    const progressMessages: { member: string; text: string }[] = [];
 
     team.on("progress", (member: string, text: string) => {
       progressMessages.push({ member, text });

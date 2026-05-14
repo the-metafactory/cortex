@@ -69,7 +69,7 @@ export interface AccessDecision {
   /** Whether bash guard should be active. Default: true. Operator DM may set false. */
   bashGuard?: boolean;
   /** Override bash allowlist (DM role may specify its own) */
-  bashAllowlist?: { rules: Array<{ pattern: string; repos?: string[] }>; repos: string[] };
+  bashAllowlist?: { rules: { pattern: string; repos?: string[] }[]; repos: string[] };
   /** Whether this is a DM conversation */
   isDM?: boolean;
   /** Human-readable denial reason */

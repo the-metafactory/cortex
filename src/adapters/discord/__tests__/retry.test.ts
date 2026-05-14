@@ -121,7 +121,7 @@ describe("retryWithBackoff", () => {
   });
 
   test("calls onRetry hook with attempt and delay", async () => {
-    const retries: Array<{ attempt: number; delayMs: number }> = [];
+    const retries: { attempt: number; delayMs: number }[] = [];
     let calls = 0;
     await retryWithBackoff(
       async () => {

@@ -294,8 +294,8 @@ function loadCortexShape(
  * the schema flip; operators who grep for the old `{agentName}-discord-{guildId}`
  * pattern will see the collapsed form once cortex.yaml is in effect.
  */
-function flattenDiscordPresences(agents: ReadonlyArray<Agent>) {
-  const out: Array<DiscordPresence & { instanceId: string }> = [];
+function flattenDiscordPresences(agents: readonly Agent[]) {
+  const out: (DiscordPresence & { instanceId: string })[] = [];
   for (const a of agents) {
     const p = a.presence.discord;
     if (!p) continue;
@@ -304,8 +304,8 @@ function flattenDiscordPresences(agents: ReadonlyArray<Agent>) {
   return out;
 }
 
-function flattenMattermostPresences(agents: ReadonlyArray<Agent>) {
-  const out: Array<MattermostPresence & { instanceId: string }> = [];
+function flattenMattermostPresences(agents: readonly Agent[]) {
+  const out: (MattermostPresence & { instanceId: string })[] = [];
   for (const a of agents) {
     const p = a.presence.mattermost;
     if (!p) continue;
@@ -432,7 +432,7 @@ export function loadAgentFromFile(filePath: string, personaBaseDir: string): Age
   try {
     agent = AgentSchema.parse(raw);
   } catch (err: unknown) {
-    const issues = (err as { issues?: Array<{ path?: unknown[]; message: string }> }).issues ?? [];
+    const issues = (err as { issues?: { path?: unknown[]; message: string }[] }).issues ?? [];
     const details =
       issues.length > 0
         ? issues.map((i) => `  ${(i.path ?? []).join(".")}: ${i.message}`).join("\n")

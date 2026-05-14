@@ -27,7 +27,7 @@ const policyPath = join(import.meta.dir, "..", "relay-policy.yaml");
 const policyYaml = readFileSync(policyPath, "utf-8");
 const policy = RelayPolicySchema.parse(parse(policyYaml));
 
-function writeRawAndProcess(rawFile: string, pubFile: string, events: Array<ReturnType<typeof createRawEvent>>) {
+function writeRawAndProcess(rawFile: string, pubFile: string, events: ReturnType<typeof createRawEvent>[]) {
   for (const event of events) {
     appendFileSync(rawFile, JSON.stringify(event) + "\n");
   }

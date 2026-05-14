@@ -130,13 +130,13 @@ export function listEventsForSession(
            ORDER BY id DESC
            LIMIT ?`
         )
-        .all(sessionId, opts.before, limit + 1) as Array<{
+        .all(sessionId, opts.before, limit + 1) as {
         id: string;
         session_id: string;
         type: string;
         payload: string;
         timestamp: string;
-      }>)
+      }[])
     : (db
         .query(
           `SELECT id, session_id, type, payload, timestamp
@@ -145,13 +145,13 @@ export function listEventsForSession(
            ORDER BY id DESC
            LIMIT ?`
         )
-        .all(sessionId, limit + 1) as Array<{
+        .all(sessionId, limit + 1) as {
         id: string;
         session_id: string;
         type: string;
         payload: string;
         timestamp: string;
-      }>);
+      }[]);
 
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
@@ -184,11 +184,11 @@ export function listEventsForSession(
 export interface OperatorInputEventPayload {
   text?: string;
   attachments?: string[];
-  images?: Array<{
+  images?: {
     media_type: string;
     /** Raw base64 (no data-URL prefix). */
     data: string;
-  }>;
+  }[];
 }
 
 export function createOperatorInputEvent(

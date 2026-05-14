@@ -370,7 +370,7 @@ export async function startCortex(
 
   // Adapters (Discord + Mattermost).
   const adapters: PlatformAdapter[] = [];
-  const adapterCleanup: Array<() => void> = [];
+  const adapterCleanup: (() => void)[] = [];
 
   // MIG-7.2e: per-instance agent lookup. When cortex.yaml supplies
   // `inlineAgents` (reused from the registry-merge block above), each

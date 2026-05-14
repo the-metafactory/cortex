@@ -66,12 +66,12 @@ function seedAssignment(
     agentName: string;
     taskId: string;
     createdAt: string;
-    transitions: Array<{
+    transitions: {
       timestamp: string;
       from: string;
       to: string;
       blockReason?: { kind: string; payload: Record<string, unknown> };
-    }>;
+    }[];
   }
 ): void {
   db.exec(
@@ -224,7 +224,7 @@ describe("GET /api/metrics/fleet", () => {
         count: number;
         completedCount: number;
         p50CycleMs: number;
-        perAgent: Array<{ agentId: string; completed: number }>;
+        perAgent: { agentId: string; completed: number }[];
       };
     };
     expect(body.metrics.count).toBe(1);
@@ -263,7 +263,7 @@ describe("GET /api/metrics/fleet", () => {
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      metrics: { count: number; perAgent: Array<{ agentId: string }> };
+      metrics: { count: number; perAgent: { agentId: string }[] };
     };
     expect(body.metrics.count).toBe(1);
     expect(body.metrics.perAgent.length).toBe(1);

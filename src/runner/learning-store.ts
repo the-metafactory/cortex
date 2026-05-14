@@ -80,7 +80,7 @@ export class LearningStore {
        WHERE is_active = 1
        ORDER BY created_at DESC
        LIMIT ?`,
-    ).all(limit) as Array<{
+    ).all(limit) as {
       id: string;
       content: string;
       author_id: string;
@@ -88,7 +88,7 @@ export class LearningStore {
       created_at: string;
       is_active: number;
       usage_count: number;
-    }>;
+    }[];
 
     return rows.map(this.rowToLearning);
   }
@@ -103,7 +103,7 @@ export class LearningStore {
        FROM learnings
        WHERE is_active = 1 AND content LIKE ?
        ORDER BY usage_count DESC, created_at DESC`,
-    ).all(pattern) as Array<{
+    ).all(pattern) as {
       id: string;
       content: string;
       author_id: string;
@@ -111,7 +111,7 @@ export class LearningStore {
       created_at: string;
       is_active: number;
       usage_count: number;
-    }>;
+    }[];
 
     return rows.map(this.rowToLearning);
   }
@@ -161,7 +161,7 @@ export class LearningStore {
       `SELECT id, content, author_id, author_name, created_at, is_active, usage_count
        FROM learnings
        WHERE is_active = 1`,
-    ).all() as Array<{
+    ).all() as {
       id: string;
       content: string;
       author_id: string;
@@ -169,7 +169,7 @@ export class LearningStore {
       created_at: string;
       is_active: number;
       usage_count: number;
-    }>;
+    }[];
 
     if (allActive.length === 0) return [];
 

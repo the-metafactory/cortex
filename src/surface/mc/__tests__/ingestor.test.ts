@@ -172,7 +172,7 @@ describe("ingestEvents", () => {
       .query(
         "SELECT payload FROM events WHERE session_id = 's-obs' AND type = 'state.transition'"
       )
-      .all() as Array<{ payload: string }>;
+      .all() as { payload: string }[];
     expect(transitions).toHaveLength(1);
     const p = JSON.parse(transitions[0]!.payload);
     expect(p.from).toBe("dispatched");

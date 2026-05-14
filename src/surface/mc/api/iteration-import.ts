@@ -488,7 +488,7 @@ export interface IssuesWebhookEnvelope {
     body: string | null;
     html_url: string;
     state: string;
-    labels?: Array<{ name?: string } | string> | null;
+    labels?: ({ name?: string } | string)[] | null;
     /**
      * GitHub's sub-issue surface. When present, the issue is a child
      * of `parent`; the parent's owner/repo/number identifies the
@@ -549,7 +549,7 @@ export function parentMetadataFromWebhook(
   }
 
   const labels: string[] = Array.isArray(issue.labels)
-    ? (issue.labels as Array<{ name?: string } | string>)
+    ? (issue.labels as ({ name?: string } | string)[])
         .map((l) =>
           typeof l === "string"
             ? l

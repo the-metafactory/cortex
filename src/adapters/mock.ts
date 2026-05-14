@@ -26,13 +26,13 @@ export class MockAdapter implements PlatformAdapter {
   readonly instanceId: string;
 
   /** Recorded postResponse calls */
-  sentMessages: Array<{ target: ResponseTarget; text: string; files?: OutboundFile[] }> = [];
+  sentMessages: { target: ResponseTarget; text: string; files?: OutboundFile[] }[] = [];
   /** Recorded sendTyping calls */
   typingSent: ResponseTarget[] = [];
   /** Recorded sendProgress calls */
-  progressSent: Array<{ target: ResponseTarget; text: string }> = [];
+  progressSent: { target: ResponseTarget; text: string }[] = [];
   /** Recorded createThread calls */
-  threadsCreated: Array<{ msg: InboundMessage; name: string }> = [];
+  threadsCreated: { msg: InboundMessage; name: string }[] = [];
   /** Recorded notifyOperator calls */
   operatorNotifications: string[] = [];
   /** MIG-3b: Recorded envelopes received via surfaceConfig.render() */

@@ -27,7 +27,7 @@ export interface CCSessionOpts {
   cwd?: string;
   additionalArgs?: string[];
   /** Bash allowlist config — passed to bash-guard.hook.ts via GROVE_BASH_GUARD env var. */
-  bashAllowlist?: { rules: Array<{ pattern: string; repos?: string[] }>; repos: string[] };
+  bashAllowlist?: { rules: { pattern: string; repos?: string[] }[]; repos: string[] };
   /** G-300: When true, disables bash guard entirely (operator DM). */
   bashGuardDisabled?: boolean;
   /** H-001: Explicit project context (e.g., "grove", "meta-factory") */

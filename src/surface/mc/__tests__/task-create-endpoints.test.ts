@@ -396,7 +396,7 @@ describe("POST /api/tasks", () => {
       .query(
         "SELECT type, payload FROM events WHERE session_id = ? AND type = 'operator.curation'"
       )
-      .all(body.shadowSessionId) as Array<{ type: string; payload: string }>;
+      .all(body.shadowSessionId) as { type: string; payload: string }[];
     expect(events).toHaveLength(1);
     const payload = JSON.parse(events[0]!.payload);
     expect(payload.kind).toBe("task.imported");
@@ -535,7 +535,7 @@ describe("POST /api/tasks/:taskId/abandon", () => {
       .query(
         "SELECT payload FROM events WHERE session_id = ? AND type = 'operator.curation' ORDER BY id DESC"
       )
-      .all(shadowSessionId) as Array<{ payload: string }>;
+      .all(shadowSessionId) as { payload: string }[];
     // First event was task.imported (from create); this is the abandon.
     const lastPayload = JSON.parse(events[0]!.payload);
     expect(lastPayload.kind).toBe("abandon");
@@ -576,7 +576,7 @@ describe("POST /api/tasks/:taskId/abandon", () => {
       .query(
         "SELECT payload FROM events WHERE session_id = ? AND type = 'operator.curation' ORDER BY id DESC"
       )
-      .all(shadowSessionId) as Array<{ payload: string }>;
+      .all(shadowSessionId) as { payload: string }[];
     const last = JSON.parse(events[0]!.payload);
     expect(last.reason).toBe("no longer relevant");
   });
@@ -648,7 +648,7 @@ describe("F-9 working-agent filter", () => {
     const res = await fetch(`${t.baseUrl}/api/working-agents`);
     expect(res.status).toBe(200);
     const body = await res.json();
-    const ids = (body.agents as Array<{ agent_id: string }>).map(
+    const ids = (body.agents as { agent_id: string }[]).map(
       (a) => a.agent_id
     );
     expect(ids).not.toContain(SHADOW_AGENT_ID);
@@ -683,12 +683,12 @@ describe("GET /api/tasks projection", () => {
     const res = await fetch(`${t.baseUrl}/api/tasks`);
     expect(res.status).toBe(200);
     const body = await res.json();
-    const row = (body.tasks as Array<{
+    const row = (body.tasks as {
       id: string;
       shadow_assignment_id: string | null;
       assignments: unknown[];
       aggregate_state: string | null;
-    }>).find((tt) => tt.id === created.taskId);
+    }[]).find((tt) => tt.id === created.taskId);
     expect(row).toBeTruthy();
     expect(row!.shadow_assignment_id).toBe(created.shadowAssignmentId);
     // The assignments roll-up does NOT include the shadow row.
@@ -705,10 +705,10 @@ describe("GET /api/tasks projection", () => {
     `);
     const res = await fetch(`${t.baseUrl}/api/tasks`);
     const body = await res.json();
-    const row = (body.tasks as Array<{
+    const row = (body.tasks as {
       id: string;
       shadow_assignment_id: string | null;
-    }>).find((tt) => tt.id === "T-internal");
+    }[]).find((tt) => tt.id === "T-internal");
     expect(row).toBeTruthy();
     expect(row!.shadow_assignment_id).toBeNull();
   });

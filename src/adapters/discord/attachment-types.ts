@@ -67,7 +67,7 @@ export const ALLOWED_MIME_TYPES = new Set([
  * Magic byte signatures for common file types.
  * Used to validate that declared MIME matches actual content (anti-polyglot).
  */
-export const MAGIC_BYTES: Array<{ mime: string; bytes: number[]; offset?: number }> = [
+export const MAGIC_BYTES: { mime: string; bytes: number[]; offset?: number }[] = [
   { mime: "image/png", bytes: [0x89, 0x50, 0x4e, 0x47] },
   { mime: "image/jpeg", bytes: [0xff, 0xd8, 0xff] },
   { mime: "image/gif", bytes: [0x47, 0x49, 0x46, 0x38] },

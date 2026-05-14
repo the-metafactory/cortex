@@ -83,7 +83,7 @@ function makeExecutionCtx(): {
   ctx: ExecutionContext;
   drain: () => Promise<void>;
 } {
-  const pending: Array<Promise<unknown>> = [];
+  const pending: Promise<unknown>[] = [];
   const ctx: ExecutionContext = {
     waitUntil(p: Promise<unknown>): void {
       pending.push(p);

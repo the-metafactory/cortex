@@ -370,7 +370,7 @@ describe("cortex#98 (part B) — auto-populate trustedBotIds from agents[].trust
     resolver: TrustResolver,
     agentTrust: readonly string[],
     selfAgentId: string,
-    explicit: ReadonlyArray<string>,
+    explicit: readonly string[],
   ): Set<string> {
     // Mirror of the merge cortex.ts performs at the bottom of the Discord
     // adapter-start loop. Kept in lock-step with the cortex.ts

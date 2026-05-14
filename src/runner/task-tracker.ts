@@ -33,7 +33,7 @@ export class TaskTracker {
   }
 
   /** List all active (in-flight) tasks. */
-  active(): Array<{ id: string; channelId: string; durationMs: number; description?: string }> {
+  active(): { id: string; channelId: string; durationMs: number; description?: string }[] {
     const now = Date.now();
     return Array.from(this.tasks.values()).map((t) => ({
       id: t.id,

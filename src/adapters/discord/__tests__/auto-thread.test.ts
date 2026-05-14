@@ -73,7 +73,7 @@ class FakeTextChannel {
   id: string;
   name: string;
   existingThreads: FakeThread[] = [];
-  createCalls: Array<{ name: string; autoArchiveDuration: number; type: number }> = [];
+  createCalls: { name: string; autoArchiveDuration: number; type: number }[] = [];
   /** When set, `threads.create` throws this error — exercises the
    *  create-failure fallback path. */
   createError: Error | null = null;

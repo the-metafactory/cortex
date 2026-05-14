@@ -736,7 +736,7 @@ export class DiscordAdapter implements PlatformAdapter {
   //     completed", "task Y failed", "warning Z"). Coalescing by key would
   //     drop messages that the operator needs to see. Order and completeness
   //     matter more than dedup, so we use a FIFO array.
-  private pendingOperatorDMs: Array<{ text: string; createdAt: number }> = [];
+  private pendingOperatorDMs: { text: string; createdAt: number }[] = [];
   private static readonly PENDING_TTL_MS = 10 * 60 * 1000; // 10 minutes
   private static readonly PENDING_MAX_SIZE = 100;
   private static readonly PENDING_OPERATOR_MAX = 50;
@@ -1051,7 +1051,7 @@ export class DiscordAdapter implements PlatformAdapter {
     }
   }
 
-  private static toDiscordFiles(files?: OutboundFile[]): Array<{ attachment: Buffer | string; name: string }> | undefined {
+  private static toDiscordFiles(files?: OutboundFile[]): { attachment: Buffer | string; name: string }[] | undefined {
     return files?.map((f) => ({
       attachment: f.content,
       name: f.filename,

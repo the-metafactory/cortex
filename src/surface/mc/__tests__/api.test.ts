@@ -269,7 +269,7 @@ describe("POST /api/sessions", () => {
     // but the parsed JSON body has already resolved so the DB write is complete.
     const events = t.db
       .query("SELECT type, payload FROM events WHERE session_id = ? ORDER BY timestamp")
-      .all(body.sessionId) as Array<{ type: string; payload: string }>;
+      .all(body.sessionId) as { type: string; payload: string }[];
     const operatorInputs = events.filter((e) => e.type === "operator.input");
     expect(operatorInputs).toHaveLength(1);
     const first = operatorInputs[0]!;
@@ -307,7 +307,7 @@ describe("POST /api/sessions", () => {
       .query(
         "SELECT payload FROM events WHERE session_id = ? AND type = 'operator.curation'"
       )
-      .all(body.sessionId) as Array<{ payload: string }>;
+      .all(body.sessionId) as { payload: string }[];
     expect(events).toHaveLength(1);
     const payload = JSON.parse(events[0]!.payload);
     expect(payload.kind).toBe("dispatch");
@@ -350,7 +350,7 @@ describe("POST /api/sessions", () => {
       .query(
         "SELECT id FROM agent_task_assignment WHERE task_id = 't-debounce'"
       )
-      .all() as Array<{ id: string }>;
+      .all() as { id: string }[];
     expect(rows).toHaveLength(1);
   });
 
@@ -396,7 +396,7 @@ describe("POST /api/sessions", () => {
     // Exactly one assignment row, one ManagedProcess.
     const rows = t.db
       .query(`SELECT id FROM agent_task_assignment WHERE task_id = 't-race'`)
-      .all() as Array<{ id: string }>;
+      .all() as { id: string }[];
     expect(rows).toHaveLength(1);
     expect(t.pm.size).toBe(1);
   });
@@ -563,7 +563,7 @@ describe("POST /api/sessions", () => {
 // loop-double-fire invariant in test form.
 describe("POST /api/sessions — F-11 Discord notification hook", () => {
   let t: TestContext;
-  let calls: Array<{ from: string; to: string }>;
+  let calls: { from: string; to: string }[];
 
   beforeEach(async () => {
     const tmpDir = join(tmpdir(), `mc-api-f11-${Date.now()}-${Math.random()}`);
@@ -671,7 +671,7 @@ describe("POST /api/assignments/:id/input", () => {
 
     const events = t.db
       .query("SELECT type, payload FROM events WHERE session_id = ? AND type = 'operator.input'")
-      .all(sessionId) as Array<{ payload: string }>;
+      .all(sessionId) as { payload: string }[];
     const texts = events.map((e) => JSON.parse(e.payload).text as string);
     expect(texts).toContain("second turn");
   });
@@ -870,7 +870,7 @@ describe("POST /api/assignments/:id/input", () => {
       .get() as { payload: string };
     const parsed = JSON.parse(stored.payload) as {
       text?: string;
-      images?: Array<{ media_type: string; data: string }>;
+      images?: { media_type: string; data: string }[];
     };
     expect(parsed.text).toBeUndefined();
     expect(parsed.images).toHaveLength(1);
@@ -1109,7 +1109,7 @@ describe("GET /api/assignments/:id/events", () => {
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      events: Array<{ id: string }>;
+      events: { id: string }[];
       hasMore: boolean;
       sessionId: string;
     };
@@ -1123,20 +1123,20 @@ describe("GET /api/assignments/:id/events", () => {
     const { assignmentId, eventIds } = seedEvents(5);
     const page1 = (await (await fetch(
       `${t.baseUrl}/api/assignments/${assignmentId}/events?limit=2`
-    )).json()) as { events: Array<{ id: string }>; hasMore: boolean };
+    )).json()) as { events: { id: string }[]; hasMore: boolean };
     expect(page1.events.map((e) => e.id)).toEqual(eventIds.slice(3, 5));
     expect(page1.hasMore).toBe(true);
 
     const firstId = page1.events[0]!.id;
     const page2 = (await (await fetch(
       `${t.baseUrl}/api/assignments/${assignmentId}/events?limit=2&before=${firstId}`
-    )).json()) as { events: Array<{ id: string }>; hasMore: boolean };
+    )).json()) as { events: { id: string }[]; hasMore: boolean };
     expect(page2.events.map((e) => e.id)).toEqual(eventIds.slice(1, 3));
     expect(page2.hasMore).toBe(true);
 
     const page3 = (await (await fetch(
       `${t.baseUrl}/api/assignments/${assignmentId}/events?limit=2&before=${page2.events[0]!.id}`
-    )).json()) as { events: Array<{ id: string }>; hasMore: boolean };
+    )).json()) as { events: { id: string }[]; hasMore: boolean };
     expect(page3.events.map((e) => e.id)).toEqual([eventIds[0]!]);
     expect(page3.hasMore).toBe(false);
   });
@@ -1235,7 +1235,7 @@ describe("GET /api/tasks", () => {
       sourceSystem?: "github" | "internal";
       sourceExternalId?: string | null;
       sourceUrl?: string | null;
-      assignments?: Array<{ id: string; agentId: string; state: string }>;
+      assignments?: { id: string; agentId: string; state: string }[];
     } = {}
   ): void {
     const title = opts.title ?? `Task ${id}`;

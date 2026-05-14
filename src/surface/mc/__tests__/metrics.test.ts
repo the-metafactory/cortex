@@ -45,14 +45,14 @@ interface SeedAssignment {
   /** ISO-8601 — when the assignment row was inserted (start of the queued segment). */
   createdAt: string;
   /** Ordered list of state transitions; the assignment ends in the final state. */
-  transitions: Array<{
+  transitions: {
     /** ISO-8601 timestamp of the transition. */
     timestamp: string;
     from: AssignmentState;
     to: AssignmentState;
     /** Required when `to === 'blocked'`. */
     blockReason?: BlockReason;
-  }>;
+  }[];
 }
 
 let monotonicSuffix = 0;

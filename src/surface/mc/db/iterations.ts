@@ -304,7 +304,7 @@ export function listInboxItems(
        ORDER BY updated_at DESC, id ASC
        LIMIT ?`
     )
-    .all(...(params as never[]), limit) as Array<{
+    .all(...(params as never[]), limit) as {
       id: string;
       title: string;
       priority: number;
@@ -314,7 +314,7 @@ export function listInboxItems(
       source_external_id: string | null;
       created_at: number;
       updated_at: number;
-    }>;
+    }[];
 
   return rows.map((r) => ({
     id: r.id,

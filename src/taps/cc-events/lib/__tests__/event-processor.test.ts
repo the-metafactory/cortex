@@ -160,7 +160,7 @@ describe("EventProcessor", () => {
     test("invoked once per filtered event with the published shape", () => {
       const rawFile = join(RAW_DIR, "hook.jsonl");
       const pubFile = join(PUB_DIR, "hook.jsonl");
-      const captured: Array<{ event_id: string; event_type: string }> = [];
+      const captured: { event_id: string; event_type: string }[] = [];
 
       const processor = new EventProcessor(testPolicy, {
         onPublished: (event) => {

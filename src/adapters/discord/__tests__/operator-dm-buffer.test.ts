@@ -108,11 +108,11 @@ function makeAdapter(opts: {
   return { adapter, sends, health, client };
 }
 
-function getBuffer(adapter: DiscordAdapter): Array<{ text: string; createdAt: number }> {
-  return (adapter as unknown as { pendingOperatorDMs: Array<{ text: string; createdAt: number }> }).pendingOperatorDMs;
+function getBuffer(adapter: DiscordAdapter): { text: string; createdAt: number }[] {
+  return (adapter as unknown as { pendingOperatorDMs: { text: string; createdAt: number }[] }).pendingOperatorDMs;
 }
-function setBuffer(adapter: DiscordAdapter, items: Array<{ text: string; createdAt: number }>): void {
-  (adapter as unknown as { pendingOperatorDMs: Array<{ text: string; createdAt: number }> }).pendingOperatorDMs = items;
+function setBuffer(adapter: DiscordAdapter, items: { text: string; createdAt: number }[]): void {
+  (adapter as unknown as { pendingOperatorDMs: { text: string; createdAt: number }[] }).pendingOperatorDMs = items;
 }
 async function callDrain(adapter: DiscordAdapter): Promise<void> {
   await (adapter as unknown as { drainPendingOperatorDMs: () => Promise<void> }).drainPendingOperatorDMs();
@@ -260,7 +260,7 @@ describe("drainPendingOperatorDMs", () => {
   });
 
   test("propagates users.fetch failure: drains nothing, surfaces the error via console", async () => {
-    let errorMessages: string[] = [];
+    const errorMessages: string[] = [];
     console.error = (...args: unknown[]) => { errorMessages.push(args.join(" ")); };
     const fetchUser = async (): Promise<FakeUser> => {
       throw new Error("operator-fetch-failed");
@@ -278,7 +278,7 @@ describe("drainPendingOperatorDMs", () => {
 
   test("per-message send failure: keeps draining remaining messages", async () => {
     const sends: string[] = [];
-    let errorMessages: string[] = [];
+    const errorMessages: string[] = [];
     console.error = (...args: unknown[]) => { errorMessages.push(args.join(" ")); };
     let calls = 0;
     const fetchUser = async (): Promise<FakeUser> => ({

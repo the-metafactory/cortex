@@ -64,7 +64,7 @@ async function fetchDMChannels(
       { headers: { Authorization: `Bearer ${apiToken}` } }
     );
     if (!res.ok) return [];
-    const channels = await res.json() as Array<{ id: string; type: string }>;
+    const channels = await res.json() as { id: string; type: string }[];
     return channels.filter((ch) => ch.type === "D").map((ch) => ch.id);
   } catch {
     return [];
@@ -182,8 +182,8 @@ export async function fetchMattermostFileInfos(
   fileIds: string[],
   apiUrl: string,
   apiToken: string
-): Promise<Array<{ originalName: string; url: string; contentType: string; size: number; source: "mattermost" }>> {
-  const results: Array<{ originalName: string; url: string; contentType: string; size: number; source: "mattermost" }> = [];
+): Promise<{ originalName: string; url: string; contentType: string; size: number; source: "mattermost" }[]> {
+  const results: { originalName: string; url: string; contentType: string; size: number; source: "mattermost" }[] = [];
 
   for (const fileId of fileIds) {
     try {
@@ -230,7 +230,7 @@ export async function uploadMattermostFile(
     });
 
     if (!res.ok) return null;
-    const data = await res.json() as { file_infos?: Array<{ id: string }> };
+    const data = await res.json() as { file_infos?: { id: string }[] };
     return data.file_infos?.[0]?.id ?? null;
   } catch {
     return null;

@@ -66,7 +66,7 @@ describe("processAttachment onTimeoutAbort hook", () => {
     const sessionDir = join(tmpdir(), `cortex-c104-${Date.now()}-${Math.random()}`);
     mkdirSync(sessionDir, { recursive: true });
 
-    const calls: Array<{ source: string; attachmentName: string }> = [];
+    const calls: { source: string; attachmentName: string }[] = [];
     const info = makeInfo({ originalName: "hangs.png" });
 
     // The default attachment_fetch timeout is 30 s; that's too long for a

@@ -33,7 +33,7 @@ export type FilterValue =
   | string
   | number
   | boolean
-  | { "anything-but": string | number | boolean | Array<string | number | boolean> }
+  | { "anything-but": string | number | boolean | (string | number | boolean)[] }
   | { prefix: string }
   | { exists: boolean }
   | { "equals-ignore-case": string };
