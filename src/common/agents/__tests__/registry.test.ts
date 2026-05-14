@@ -111,7 +111,7 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
     // include it explicitly. Registry tests don't exercise capabilities; an
     // empty array is the right zero-value.
     capabilities: [],
-  } as CortexConfig;
+  };
 }
 
 // =============================================================================
@@ -362,7 +362,7 @@ describe("AgentRegistry — immutability", () => {
     ]);
     const luna = registry.getById("luna");
     expect(() => {
-      (luna.trust as string[]).push("evil");
+      luna.trust.push("evil");
     }).toThrow();
   });
 

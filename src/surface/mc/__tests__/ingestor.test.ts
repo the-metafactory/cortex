@@ -133,10 +133,10 @@ describe("ingestEvents", () => {
   it("logs unregistered session drops to stderr", () => {
     const written: string[] = [];
     const origWrite = process.stderr.write;
-    process.stderr.write = ((chunk: string) => {
+    process.stderr.write = (chunk: string) => {
       written.push(chunk);
       return true;
-    }) as typeof process.stderr.write;
+    };
 
     try {
       const events = [makeRawEvent("e-1", "totally-unknown-session")];

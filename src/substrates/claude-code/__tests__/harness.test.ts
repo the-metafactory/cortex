@@ -94,7 +94,7 @@ function captureFactory(result: CCSessionResult): {
     factory,
     opts: seen,
     get killCalls() { return killCalls; },
-  } as { factory: CCSessionFactory; opts: CCSessionOpts[]; killCalls: number };
+  };
 }
 
 async function drain(it: AsyncIterable<MyelinEnvelope>): Promise<MyelinEnvelope[]> {

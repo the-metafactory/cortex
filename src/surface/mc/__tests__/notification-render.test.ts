@@ -13,7 +13,6 @@ import {
   truncateWordBoundary,
   type RenderContext,
 } from "../notifications/render";
-import type { BlockReason } from "../types";
 import type { NotificationIntent } from "../notifications/should-notify";
 
 const intentP1Err: NotificationIntent = {
@@ -32,7 +31,7 @@ function ctx(overrides: Partial<RenderContext> = {}): RenderContext {
     blockReason: {
       kind: "tool.error",
       payload: { tool_name: "bash", error_message: "permission denied" },
-    } as BlockReason,
+    },
     cycle: 3,
     observedAgo: "2s ago",
     deepLink: "https://grove.meta-factory.ai/?focus=assignment/01HZ&from=dm",

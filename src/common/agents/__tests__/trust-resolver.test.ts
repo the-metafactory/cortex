@@ -22,7 +22,6 @@ import {
 import {
   PlatformIdAlreadyRegisteredError,
   TrustResolver,
-  type Platform,
 } from "../trust-resolver";
 import type { Agent } from "../../types/cortex-config";
 
@@ -346,7 +345,7 @@ describe("TrustResolver — platform key encoding", () => {
     // platformId portion survives.
     const resolver = new TrustResolver(registryOf(agentFixture({ id: "luna" })));
     const weirdId = "abc|def|ghi";
-    resolver.register("discord" as Platform, weirdId, "luna");
+    resolver.register("discord", weirdId, "luna");
     expect(resolver.lookupAgentId("discord", weirdId)).toBe("luna");
     const owned = resolver.identitiesOf("luna");
     expect(owned).toEqual([{ platform: "discord", platformId: weirdId }]);

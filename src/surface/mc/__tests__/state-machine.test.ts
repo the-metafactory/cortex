@@ -228,7 +228,7 @@ describe("state machine — exhaustive matrix", () => {
     if (type === "block") {
       return { type, reason: permissionBlock };
     }
-    return { type } as Action;
+    return { type };
   }
 
   for (const from of STATES) {

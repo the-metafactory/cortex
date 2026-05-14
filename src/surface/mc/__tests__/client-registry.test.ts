@@ -1,12 +1,12 @@
 import { describe, it, expect } from "bun:test";
 import { WsClientRegistry } from "../ws/client-registry";
-import type { WsData, WsServerMessage } from "../ws/types";
+import type { WsServerMessage } from "../ws/types";
 
 // Minimal fake ServerWebSocket for unit testing
 function fakeWs(clientId: string): { ws: any; sent: string[] } {
   const sent: string[] = [];
   const ws = {
-    data: { clientId } as WsData,
+    data: { clientId },
     send(msg: string) {
       sent.push(msg);
     },

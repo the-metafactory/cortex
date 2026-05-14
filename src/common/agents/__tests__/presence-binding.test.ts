@@ -434,8 +434,8 @@ describe("PresenceBinding — multi-platform per agent", () => {
 
     expect(resolver.size).toBe(2);
     expect(resolver.identitiesOf("luna")).toEqual([
-      { platform: "discord" as Platform, platformId: "1487100000000000001" },
-      { platform: "mattermost" as Platform, platformId: "luna-mm-userid-abc123" },
+      { platform: "discord", platformId: "1487100000000000001" },
+      { platform: "mattermost", platformId: "luna-mm-userid-abc123" },
     ]);
 
     await discordBinding.unbindAndStop();

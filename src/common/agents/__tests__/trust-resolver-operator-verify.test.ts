@@ -114,7 +114,7 @@ function agentFixture(): Agent {
     roles: [],
     trust: [],
     presence: {},
-  } as Agent;
+  };
 }
 
 function registryWithLuna(): AgentRegistry {
@@ -261,7 +261,7 @@ describe("verifyOperatorSignedRequest", () => {
 
   test("malformed_envelope — missing fields", () => {
     const result = verifyOperatorSignedRequest(
-      { subject: "x", userJwt: "y" } as unknown,
+      { subject: "x", userJwt: "y" },
       trustedAccountSigningKey.getPublicKey(),
       { expectedSubject: "x" },
     );

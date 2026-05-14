@@ -263,7 +263,7 @@ export function createOperatorCurationEvent(
   return insertEvent(db, {
     sessionId,
     type: "operator.curation",
-    payload: payload as unknown as Record<string, unknown>,
+    payload,
   });
 }
 

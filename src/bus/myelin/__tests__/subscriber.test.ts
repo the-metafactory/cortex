@@ -123,7 +123,7 @@ async function makeLink() {
   const link = await NatsLink.connect({
     url: "nats://localhost:4222",
     name: "myelin-test",
-    connectImpl: (async () => fake.nc) as never,
+    connectImpl: async () => fake.nc,
   });
   return { link, fake };
 }

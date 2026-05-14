@@ -582,7 +582,7 @@ presence:
             trustedBotIds: [],
           },
         },
-      } as Agent,
+      },
       {
         id: "echo",
         displayName: "EchoFromInline",
@@ -612,7 +612,7 @@ presence:
             trustedBotIds: [],
           },
         },
-      } as Agent,
+      },
     ];
 
     const handle = await startCortex(minimalConfig(), {

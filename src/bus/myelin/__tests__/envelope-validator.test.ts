@@ -72,7 +72,7 @@ describe("envelope-validator", () => {
 
   test("rejects an envelope missing required type field", () => {
     const bad = { ...(validEnvelope as { type?: string }) };
-    delete (bad as { type?: string }).type;
+    delete bad.type;
     const result = validateEnvelope(bad);
     expect(result.ok).toBe(false);
   });
