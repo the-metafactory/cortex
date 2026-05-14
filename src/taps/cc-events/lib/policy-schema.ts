@@ -14,10 +14,17 @@ const regexString = z.string().check((ctx) => {
   try {
     new RegExp(ctx.value);
   } catch {
+    // Zod v4's $ZodIssueBase is a heavily-discriminated union; the
+    // `custom` issue shape is the simplest manual literal we can push.
+    // The union signature doesn't widen to accept `{ code: "custom", ... }`
+    // without a cast, so suppress here at the boundary instead of widening
+    // the project-wide types.
+    /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument */
     ctx.issues.push({
       code: "custom",
       message: `Invalid regex pattern: ${ctx.value}`,
     } as any);
+    /* eslint-enable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument */
   }
 });
 

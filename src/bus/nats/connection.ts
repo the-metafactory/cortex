@@ -167,19 +167,18 @@ export class NatsLink {
     try {
       await Promise.race([
         this.raw.drain(),
-        new Promise<void>((_, reject) =>
-          setTimeout(
-            () => reject(new Error(`drain timed out after ${drainTimeoutMs}ms`)),
-            drainTimeoutMs,
-          ),
-        ),
+        new Promise<void>((_, reject) => {
+          setTimeout(() => {
+            reject(new Error(`drain timed out after ${drainTimeoutMs}ms`));
+          }, drainTimeoutMs);
+        }),
       ]);
     } catch (err) {
       // Drain can fail if already closed by the server, or hit our timeout.
       // Log and proceed — caller wants close() to resolve.
       console.error(
         `nats-connection: "${this.name}" drain error:`,
-        err instanceof Error ? err.message : err,
+        err instanceof Error ? err.message : String(err),
       );
     }
     // Wait for the status loop to drain so close() is deterministic.
@@ -198,12 +197,12 @@ export class NatsLink {
         switch (status.type) {
           case Events.Disconnect:
             console.warn(
-              `nats-connection: "${this.name}" disconnected from ${status.data}`,
+              `nats-connection: "${this.name}" disconnected from ${String(status.data)}`,
             );
             break;
           case Events.Reconnect:
             console.info(
-              `nats-connection: "${this.name}" reconnected to ${status.data}`,
+              `nats-connection: "${this.name}" reconnected to ${String(status.data)}`,
             );
             break;
           case Events.Error:

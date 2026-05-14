@@ -113,6 +113,10 @@ export class MattermostAdapter implements PlatformAdapter {
     }
   }
 
+  // PlatformAdapter contract — start/stop/clearProgress/createThread MUST be
+  // Promise<void>. Mattermost's polling loop and per-channel state mutations
+  // are sync today; suppress require-await for the interface conformance.
+  /* eslint-disable @typescript-eslint/require-await */
   async start(onMessage: (msg: InboundMessage) => Promise<void>): Promise<void> {
     const { stop } = createMattermostPoller({
       agentName: this.agent.id,
@@ -208,7 +212,9 @@ export class MattermostAdapter implements PlatformAdapter {
     console.log(`mattermost-adapter[${this.instanceId}]: config updated`);
   }
 
-  async fetchContext(msg: InboundMessage, depth: number): Promise<ContextMessage[]> {
+  /* eslint-enable @typescript-eslint/require-await */
+
+  async fetchContext(msg: InboundMessage, _depth: number): Promise<ContextMessage[]> {
     const mmMsg = msg._native as MattermostInboundMessage | undefined;
     if (!mmMsg) return [];
 
@@ -286,12 +292,14 @@ export class MattermostAdapter implements PlatformAdapter {
     );
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await
   async clearProgress(target: ResponseTarget): Promise<void> {
     const key = target.threadId ?? target.channelId;
     this.progressSent.delete(key);
     // Mattermost: no easy delete — leave the single progress message
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await
   async createThread(msg: InboundMessage, _name: string): Promise<ResponseTarget> {
     // Mattermost threading: reply to the original post (rootId)
     const mmMsg = msg._native as MattermostInboundMessage | undefined;

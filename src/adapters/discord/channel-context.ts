@@ -35,10 +35,10 @@ export function resolveChannelContext(
 ): ChannelContext {
   const empty: ChannelContext = { repo: null, repoShort: null, entityType: null, entityRef: null };
 
-  if (!repos || repos.length === 0) return empty;
+  if (repos.length === 0) return empty;
 
   for (const fullRepo of repos) {
-    const short = fullRepo.split("/").pop()!;
+    const short = fullRepo.split("/").pop() ?? fullRepo;
     if (channelName !== short) continue;
 
     if (!threadName) {
@@ -53,18 +53,18 @@ export function resolveChannelContext(
 
     const rest = threadName.slice(prefix.length);
 
-    const issueMatch = rest.match(/^issue\/(\d+)$/);
+    const issueMatch = /^issue\/(\d+)$/.exec(rest);
     if (issueMatch) {
       return { repo: fullRepo, repoShort: short, entityType: "issue", entityRef: issueMatch[1] ?? null };
     }
 
-    const prMatch = rest.match(/^pr\/(\d+)$/);
+    const prMatch = /^pr\/(\d+)$/.exec(rest);
     if (prMatch) {
       return { repo: fullRepo, repoShort: short, entityType: "pr", entityRef: prMatch[1] ?? null };
     }
 
     // Feature ID patterns: g-204, f-007, i-400, dd-49
-    const featureMatch = rest.match(/^(g|f|i|dd)-(\d+)$/i);
+    const featureMatch = /^(g|f|i|dd)-(\d+)$/i.exec(rest);
     if (featureMatch) {
       return { repo: fullRepo, repoShort: short, entityType: "feature", entityRef: rest };
     }

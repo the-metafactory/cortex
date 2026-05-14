@@ -45,7 +45,7 @@ function makeFakeConnection() {
   const statusIterator = (async function* () {
     while (true) {
       const next = await new Promise<{ type: string; data: unknown } | null>((resolve) => {
-        pushStatus = resolve as (s: { type: string; data: unknown }) => void;
+        pushStatus = resolve;
         closeStatus = () => resolve(null);
       });
       if (next === null) return;
@@ -146,7 +146,7 @@ describe("NatsLink", () => {
     const link = await NatsLink.connect({
       url: "nats://localhost:4222",
       name: "test-link",
-      connectImpl: connectImpl as never,
+      connectImpl,
     });
     expect(link.name).toBe("test-link");
     expect(link.raw).toBe(fake.nc);
@@ -230,7 +230,7 @@ describe("NatsLink", () => {
       throw new Error("ECONNREFUSED");
     });
     await expect(
-      NatsLink.connect({ url: "nats://nowhere", connectImpl: failing as never }),
+      NatsLink.connect({ url: "nats://nowhere", connectImpl: failing }),
     ).rejects.toThrow(/ECONNREFUSED/);
   });
 
@@ -306,7 +306,7 @@ describe("NatsLink", () => {
       const link = await NatsLink.connect({
         url: "nats://localhost:4222",
         credsPath: credsFile,
-        connectImpl: connectImpl as never,
+        connectImpl,
       });
       const opts = capturedOpts[0]!;
       expect(typeof opts.authenticator).toBe("function");
@@ -350,7 +350,7 @@ describe("NatsLink", () => {
         name: "creds-vs-token",
         token: "ignored-token-value",
         credsPath: credsFile,
-        connectImpl: connectImpl as never,
+        connectImpl,
       });
       expect(consoleSpy.warn).toHaveBeenCalled();
       const warnMsg = String(consoleSpy.warn.mock.calls[0]?.[0] ?? "");
