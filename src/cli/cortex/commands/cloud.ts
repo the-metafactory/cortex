@@ -26,7 +26,7 @@ import YAML from "yaml";
  * Generate a cryptographically random hex string.
  * @param bytes Number of random bytes (default 32 = 64 hex chars)
  */
-export function generateSecret(bytes: number = 32): string {
+export function generateSecret(bytes = 32): string {
   const buf = new Uint8Array(bytes);
   crypto.getRandomValues(buf);
   return Array.from(buf)
@@ -39,7 +39,7 @@ export function generateSecret(bytes: number = 32): string {
  * Expected line: `database_id = "UUID"`
  */
 export function parseD1CreateOutput(output: string): string | null {
-  const match = output.match(/database_id\s*=\s*"([^"]+)"/);
+  const match = /database_id\s*=\s*"([^"]+)"/.exec(output);
   return match?.[1] ?? null;
 }
 
@@ -48,7 +48,7 @@ export function parseD1CreateOutput(output: string): string | null {
  * Expected line: `id = "HEX"`
  */
 export function parseKvCreateOutput(output: string): string | null {
-  const match = output.match(/^id\s*=\s*"([^"]+)"/m);
+  const match = /^id\s*=\s*"([^"]+)"/m.exec(output);
   return match?.[1] ?? null;
 }
 
@@ -134,23 +134,22 @@ export function parseArgs(argv: string[]): {
   // If "cloud" is not in argv (direct script invocation), treat first arg as command
   const cloudIdx = argv.indexOf("cloud");
   const commandIdx = cloudIdx >= 0 ? cloudIdx + 1 : 0;
-  const command = argv.length > commandIdx
-    ? argv[commandIdx]!
-    : "help";
+  const command = argv.length > commandIdx ? (argv[commandIdx] ?? "help") : "help";
 
   const flags: Record<string, string> = {};
   const startIdx = commandIdx + 1;
 
   for (let i = startIdx; i < argv.length; i++) {
-    const arg = argv[i]!;
-    if (arg.startsWith("--") && i + 1 < argv.length && !argv[i + 1]!.startsWith("--")) {
+    const arg = argv[i] ?? "";
+    const next = argv[i + 1];
+    if (arg.startsWith("--") && next !== undefined && !next.startsWith("--")) {
       const key = arg.slice(2);
-      flags[key] = argv[i + 1]!;
+      flags[key] = next;
       i++;
     }
   }
 
-  return { command: command!, flags };
+  return { command, flags };
 }
 
 // =============================================================================
@@ -203,9 +202,11 @@ async function runWranglerSecretPut(
     },
   );
 
-  // Write the secret value to stdin and close
-  proc.stdin.write(secretValue);
-  proc.stdin.end();
+  // Write the secret value to stdin and close. Both write/end return
+  // Promise<void>; the stdin is fully consumed before we await stdout
+  // below, so it's safe to fire-and-forget here.
+  void proc.stdin.write(secretValue);
+  void proc.stdin.end();
 
   const stdout = await new Response(proc.stdout).text();
   const stderr = await new Response(proc.stderr).text();
@@ -278,7 +279,7 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
   // --- Step 2: Create D1 database ---
   step(2, TOTAL_STEPS, "Creating D1 database: grove-events...");
   const d1Result = await runWrangler(["d1", "create", "grove-events"], cfEnv, workerDir);
-  let d1Id: string | null = null;
+  let d1Id: string | null;
   if (d1Result.ok) {
     d1Id = parseD1CreateOutput(d1Result.stdout);
     if (d1Id) {
@@ -305,7 +306,7 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
   // --- Step 3: Create KV namespace ---
   step(3, TOTAL_STEPS, "Creating KV namespace: grove-keys...");
   const kvResult = await runWrangler(["kv", "namespace", "create", "grove-keys"], cfEnv, workerDir);
-  let kvId: string | null = null;
+  let kvId: string | null;
   if (kvResult.ok) {
     kvId = parseKvCreateOutput(kvResult.stdout);
     if (kvId) {
@@ -317,7 +318,7 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
     if (kvResult.stderr.includes("already exists") || kvResult.stdout.includes("already exists")) {
       console.log("  KV namespace may already exist. Checking wrangler.toml for existing ID...");
       const existingToml = readFileSync(wranglerTomlPath, "utf-8");
-      const existingKvMatch = existingToml.match(/\[kv_namespaces\][\s\S]*?id\s*=\s*"([^"]+)"/);
+      const existingKvMatch = /\[kv_namespaces\][\s\S]*?id\s*=\s*"([^"]+)"/.exec(existingToml);
       kvId = existingKvMatch?.[1] ?? null;
       if (kvId) {
         success(`Using existing kv id = ${kvId}`);
@@ -385,9 +386,9 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
     if (existsSync(configPath)) {
       const configContent = readFileSync(configPath, "utf-8");
       // Simple yaml parsing — look for repos array under github:
-      const reposMatch = configContent.match(/repos:\s*\n((?:\s+-\s+.+\n?)+)/);
-      if (reposMatch) {
-        const parsed = reposMatch[1]!
+      const reposMatch = /repos:\s*\n((?:\s+-\s+.+\n?)+)/.exec(configContent);
+      if (reposMatch?.[1]) {
+        const parsed = reposMatch[1]
           .split("\n")
           .map((l) => l.trim().replace(/^-\s+/, "").replace(/["']/g, ""))
           .filter(Boolean);
@@ -408,7 +409,7 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
   }
 
   // --- Step 8b: Set GITHUB_TOKEN (optional, needed for /api/sync) ---
-  const ghToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+  const ghToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
   if (ghToken) {
     const ghTokenResult = await runWranglerSecretPut("GITHUB_TOKEN", ghToken, cfEnv, workerDir);
     if (ghTokenResult.ok) {
@@ -432,14 +433,10 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
   }
 
   // Extract worker URL from deploy output
-  let workerUrl = "";
-  const urlMatch = deployResult.stdout.match(/https:\/\/[^\s]+\.workers\.dev/);
-  if (urlMatch) {
-    workerUrl = urlMatch[0];
-  } else {
-    // Fall back to conventional name
-    workerUrl = "https://grove-api.<your-subdomain>.workers.dev";
-  }
+  const urlMatch = /https:\/\/[^\s]+\.workers\.dev/.exec(deployResult.stdout);
+  const workerUrl = urlMatch
+    ? urlMatch[0]
+    : "https://grove-api.<your-subdomain>.workers.dev";
   success(`Deployed to ${workerUrl}`);
 
   // --- Step 10: Create first operator key ---
@@ -479,7 +476,7 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
       );
     }
   } catch (err) {
-    fail(`Could not reach worker: ${err instanceof Error ? err.message : err}`);
+    fail(`Could not reach worker: ${err instanceof Error ? err.message : String(err)}`);
     console.error("The worker may still be propagating. Try creating a key manually:");
     console.error(
       `  curl -X POST ${workerUrl}/admin/keys -H "Authorization: Bearer ${adminSecret}" -H "Content-Type: application/json" -d '{"operator_id":"${operatorId}","name":"${agentName}"}'`,
@@ -541,9 +538,9 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
 // =============================================================================
 
 async function cloudAddOperator(flags: Record<string, string>): Promise<void> {
-  const name = flags["name"];
+  const name = flags.name;
   const agentName = flags["agent-name"];
-  const endpoint = flags["endpoint"];
+  const endpoint = flags.endpoint;
   const adminKey = flags["admin-key"];
 
   if (!name || !agentName || !endpoint || !adminKey) {
@@ -591,7 +588,7 @@ async function cloudAddOperator(flags: Record<string, string>): Promise<void> {
     );
     console.log("─".repeat(40));
   } catch (err) {
-    throw new Error(`Error: ${err instanceof Error ? err.message : err}`);
+    throw new Error(`Error: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
   }
 }
 
@@ -600,8 +597,11 @@ async function cloudAddOperator(flags: Record<string, string>): Promise<void> {
 // =============================================================================
 
 async function cloudStatus(flags: Record<string, string>): Promise<void> {
-  const endpoint = flags["endpoint"];
-  const adminKey = flags["admin-key"];
+  const endpoint = flags.endpoint;
+  // Note: `--admin-key` flag is accepted by the parser for future admin-only
+  // queries (e.g., operator-key listings) but the current `status` command
+  // only reads public endpoints. The flag stays in the usage line so the
+  // help text matches the parser's contract.
 
   if (!endpoint) {
     throw new Error("Usage: grove-bot cloud status --endpoint <URL> [--admin-key <SECRET>]");
@@ -615,13 +615,13 @@ async function cloudStatus(flags: Record<string, string>): Promise<void> {
     const healthRes = await fetch(`${base}/api/health`);
     if (healthRes.ok) {
       const health = (await healthRes.json()) as Record<string, unknown>;
-      console.log(`  Status:  ${health.status}`);
-      console.log(`  Runtime: ${health.runtime}`);
+      console.log(`  Status:  ${String(health.status)}`);
+      console.log(`  Runtime: ${String(health.runtime)}`);
     } else {
       console.error(`  Health check failed: HTTP ${healthRes.status}`);
     }
   } catch (err) {
-    console.error(`  Cannot reach endpoint: ${err instanceof Error ? err.message : err}`);
+    console.error(`  Cannot reach endpoint: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
 
@@ -660,7 +660,7 @@ async function cloudStatus(flags: Record<string, string>): Promise<void> {
       console.error(`  State fetch failed: HTTP ${stateRes.status}`);
     }
   } catch (err) {
-    console.error(`  Error: ${err instanceof Error ? err.message : err}`);
+    console.error(`  Error: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -691,7 +691,7 @@ interface BotYaml {
 
 /** S-058: Inject CF Access service token headers for M2M auth if configured. */
 function injectCfAccessHeaders(headers: Record<string, string>, api: BotYamlApi | undefined): void {
-  if (api?.cfAccessClientId && api?.cfAccessClientSecret) {
+  if (api?.cfAccessClientId && api.cfAccessClientSecret) {
     headers["CF-Access-Client-Id"] = api.cfAccessClientId;
     headers["CF-Access-Client-Secret"] = api.cfAccessClientSecret;
   }
@@ -708,25 +708,29 @@ function readAdminSecret(): string | null {
   const credPath = join(process.env.HOME ?? "~", ".config", "grove", "cloud-credentials.txt");
   if (!existsSync(credPath)) return null;
   const content = readFileSync(credPath, "utf-8");
-  const match = content.match(/Admin Secret:\s+(\S+)/);
+  const match = /Admin Secret:\s+(\S+)/.exec(content);
   return match?.[1] ?? null;
 }
 
 async function cloudRepos(subcommand: string, flags: Record<string, string>, extraArgs: string[]): Promise<void> {
-  const configPath = flags["config"] ?? DEFAULT_CONFIG_PATH;
+  const configPath = flags.config ?? DEFAULT_CONFIG_PATH;
 
   switch (subcommand) {
     case "list":
       await cloudReposList(configPath);
       break;
-    case "add":
-      if (extraArgs.length === 0) throw new Error("Usage: grove-bot cloud repos add <owner/repo>");
-      await cloudReposAdd(configPath, extraArgs[0]!, flags);
+    case "add": {
+      const target = extraArgs[0];
+      if (!target) throw new Error("Usage: grove-bot cloud repos add <owner/repo>");
+      await cloudReposAdd(configPath, target, flags);
       break;
-    case "remove":
-      if (extraArgs.length === 0) throw new Error("Usage: grove-bot cloud repos remove <owner/repo>");
-      await cloudReposRemove(configPath, extraArgs[0]!, flags);
+    }
+    case "remove": {
+      const target = extraArgs[0];
+      if (!target) throw new Error("Usage: grove-bot cloud repos remove <owner/repo>");
+      await cloudReposRemove(configPath, target, flags);
       break;
+    }
     default:
       console.log("grove-bot cloud repos — Manage tracked repositories\n");
       console.log("Commands:");
@@ -745,7 +749,11 @@ async function cloudRepos(subcommand: string, flags: Record<string, string>, ext
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/require-await
 async function cloudReposList(configPath: string): Promise<void> {
+  // Body is sync; signature stays async to match the cloud command
+  // handler's `await fn(...)` invocation pattern alongside the I/O-
+  // bound `cloudReposAdd` / `cloudReposRemove` siblings.
   const { parsed } = loadBotYaml(configPath);
   const repos = parsed.github?.repos ?? [];
 
@@ -758,7 +766,7 @@ async function cloudReposList(configPath: string): Promise<void> {
 async function cloudReposAdd(configPath: string, repo: string, flags: Record<string, string>): Promise<void> {
   if (!repo.includes("/")) throw new Error(`Repo must be in owner/name format: ${repo}`);
 
-  const { raw, parsed } = loadBotYaml(configPath);
+  const { parsed } = loadBotYaml(configPath);
   const repos = parsed.github?.repos ?? [];
 
   if (repos.includes(repo)) {
@@ -802,7 +810,7 @@ async function cloudReposAdd(configPath: string, repo: string, flags: Record<str
 async function cloudReposRemove(configPath: string, repo: string, flags: Record<string, string>): Promise<void> {
   if (!repo.includes("/")) throw new Error(`Repo must be in owner/name format: ${repo}`);
 
-  const { raw, parsed } = loadBotYaml(configPath);
+  const { parsed } = loadBotYaml(configPath);
   const repos = parsed.github?.repos ?? [];
 
   if (!repos.includes(repo)) {
@@ -814,7 +822,6 @@ async function cloudReposRemove(configPath: string, repo: string, flags: Record<
   console.log(`[1/3] Removing ${repo} from bot.yaml...`);
   const updated_repos = repos.filter((r) => r !== repo);
 
-  const YAML = require("yaml");
   parsed.github = parsed.github ?? {};
   parsed.github.repos = updated_repos;
   const updated = YAML.stringify(parsed, { lineWidth: 120 });
@@ -875,14 +882,14 @@ async function triggerSync(config: BotYaml, flags: Record<string, string>): Prom
     });
     if (res.ok) {
       const data = await res.json() as Record<string, unknown>;
-      success(`Sync complete: ${data.repos} repos`);
+      success(`Sync complete: ${String(data.repos)} repos`);
       return data;
     } else {
       fail(`Sync failed: HTTP ${res.status}`);
       return null;
     }
   } catch (err) {
-    fail(`Sync request failed: ${err instanceof Error ? err.message : err}`);
+    fail(`Sync request failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }
@@ -918,7 +925,7 @@ async function pruneRepoFromD1(repo: string, config: BotYaml, flags: Record<stri
       fail(`D1 prune failed: HTTP ${res.status} — ${await res.text()}`);
     }
   } catch (err) {
-    fail(`D1 prune request failed: ${err instanceof Error ? err.message : err}`);
+    fail(`D1 prune request failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -927,7 +934,7 @@ async function pruneRepoFromD1(repo: string, config: BotYaml, flags: Record<stri
 // =============================================================================
 
 async function cloudWebhooksCheck(flags: Record<string, string>): Promise<void> {
-  const configPath = flags["config"] ?? DEFAULT_CONFIG_PATH;
+  const configPath = flags.config ?? DEFAULT_CONFIG_PATH;
   const { parsed } = loadBotYaml(configPath);
   const repos = parsed.github?.repos ?? [];
 
@@ -972,14 +979,14 @@ async function cloudWebhooksCheck(flags: Record<string, string>): Promise<void> 
         last_response: { code: number; message: string };
       }[];
 
-      const groveHook = hooks.find((h) => h.config.url?.includes("/api/github/webhook"));
+      const groveHook = hooks.find((h) => h.config.url.includes("/api/github/webhook"));
       if (!groveHook) {
         fail(`${repo}: no Grove webhook configured`);
         unhealthy++;
         continue;
       }
 
-      const code = groveHook.last_response?.code;
+      const code = groveHook.last_response.code;
       const active = groveHook.active;
 
       if (!active) {
@@ -992,11 +999,11 @@ async function cloudWebhooksCheck(flags: Record<string, string>): Promise<void> 
         warn(`${repo}: no deliveries yet or timeout (code 0)`);
         unhealthy++;
       } else {
-        fail(`${repo}: last delivery failed (code ${code}: ${groveHook.last_response?.message ?? "unknown"})`);
+        fail(`${repo}: last delivery failed (code ${code}: ${groveHook.last_response.message})`);
         unhealthy++;
       }
     } catch (err) {
-      fail(`${repo}: ${err instanceof Error ? err.message : err}`);
+      fail(`${repo}: ${err instanceof Error ? err.message : String(err)}`);
       unhealthy++;
     }
   }
@@ -1029,11 +1036,11 @@ export async function runCloudCommand(argv: string[]): Promise<void> {
     case "repos": {
       // Parse repos subcommand: cloud repos <sub> [args...]
       const reposIdx = argv.indexOf("repos");
-      const sub = reposIdx >= 0 && argv.length > reposIdx + 1 ? argv[reposIdx + 1]! : "help";
+      const sub = reposIdx >= 0 && argv.length > reposIdx + 1 ? (argv[reposIdx + 1] ?? "help") : "help";
       // Collect non-flag arguments after the subcommand
       const extraArgs: string[] = [];
       for (let i = reposIdx + 2; i < argv.length; i++) {
-        const arg = argv[i]!;
+        const arg = argv[i] ?? "";
         if (arg.startsWith("--")) { i++; continue; } // skip --flag value pairs
         extraArgs.push(arg);
       }
@@ -1065,7 +1072,7 @@ export async function runCloudCommand(argv: string[]): Promise<void> {
 
 // If run directly as a script (not imported)
 if (import.meta.main) {
-  runCloudCommand(process.argv.slice(2)).catch((err) => {
+  runCloudCommand(process.argv.slice(2)).catch((err: unknown) => {
     console.error("Fatal:", err);
     process.exit(1);
   });
