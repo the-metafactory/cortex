@@ -17,7 +17,7 @@ import { NatsLink } from "../connection";
  * (until drained).
  */
 function makeFakeSubscription() {
-  type Msg = { subject: string; data: Uint8Array };
+  interface Msg { subject: string; data: Uint8Array }
   const queue: Msg[] = [];
   let waiter: ((m: Msg | null) => void) | null = null;
   let drained = false;
@@ -141,7 +141,7 @@ async function makeLink() {
   const link = await NatsLink.connect({
     url: "nats://localhost:4222",
     name: "subscription-test",
-    connectImpl: (async () => fake.nc) as never,
+    connectImpl: (async () => fake.nc),
   });
   return { link, fake };
 }
@@ -231,7 +231,7 @@ describe("NatsSubscription", () => {
       onMessage: () => {},
     });
     expect(fake.subscribe).toHaveBeenCalledTimes(1);
-    fake.pushStatus({ type: Events.Reconnect, data: "nats://localhost:4222" } as Status);
+    fake.pushStatus({ type: Events.Reconnect, data: "nats://localhost:4222" });
     await flushMicrotasks(8);
     expect(fake.subscribe).toHaveBeenCalledTimes(2);
     expect(fake.subscribe.mock.calls[1]?.[0]).toBe("local.acme.>");
@@ -260,7 +260,7 @@ describe("NatsSubscription", () => {
         received.push(subject);
       },
     });
-    fake.pushStatus({ type: Events.Reconnect, data: "nats://localhost:4222" } as Status);
+    fake.pushStatus({ type: Events.Reconnect, data: "nats://localhost:4222" });
     await flushMicrotasks(8);
     // Old subscription (subAt 0) — pushing into it must NOT reach the
     // active onMessage since the consume loop reading it has exited.
@@ -280,7 +280,7 @@ describe("NatsSubscription", () => {
         received.push(subject);
       },
     });
-    fake.pushStatus({ type: Events.Reconnect, data: "nats://localhost:4222" } as Status);
+    fake.pushStatus({ type: Events.Reconnect, data: "nats://localhost:4222" });
     await flushMicrotasks(8);
     // New subscription (subAt 1) — pushing into it MUST reach onMessage.
     fake.subAt(1)!.push("local.acme.new", new TextEncoder().encode("fresh"));
@@ -325,7 +325,7 @@ describe("NatsSubscription", () => {
       callCount++;
       if (callCount === 2) throw new Error("auth revoked between disconnect and reconnect");
       return realSubscribe(...args);
-    }) as typeof realSubscribe;
+    });
 
     const errors: string[] = [];
     const infos: string[] = [];
@@ -342,7 +342,7 @@ describe("NatsSubscription", () => {
       pattern: "local.acme.>",
       onMessage: () => {},
     });
-    fake.pushStatus({ type: Events.Reconnect, data: "nats://localhost:4222" } as Status);
+    fake.pushStatus({ type: Events.Reconnect, data: "nats://localhost:4222" });
     await flushMicrotasks(8);
 
     console.error = origError;

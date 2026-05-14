@@ -193,7 +193,7 @@ describe("convertBotYaml — trustedAgentBots", () => {
       discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
       trustedAgentBots: [
         // production shape — id + role only, no symbolic name
-        ({ id: "1487180524542890144", role: "agent-restricted" } as unknown) as LegacyBotYaml["trustedAgentBots"] extends (infer U)[] | undefined ? U : never,
+        { id: "1487180524542890144", role: "agent-restricted" },
       ],
     };
     const result = convertBotYaml(legacy);
@@ -210,7 +210,7 @@ describe("convertBotYaml — trustedAgentBots", () => {
       agent: { name: "ivy", displayName: "Ivy", operatorId: "jc" },
       discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
       trustedAgentBots: [
-        ({ discordId: "9999", role: "agent-restricted" } as unknown) as LegacyBotYaml["trustedAgentBots"] extends (infer U)[] | undefined ? U : never,
+        { discordId: "9999", role: "agent-restricted" },
       ],
     };
     const result = convertBotYaml(legacy);
@@ -224,9 +224,9 @@ describe("convertBotYaml — trustedAgentBots", () => {
       discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
       trustedAgentBots: [
         { name: "luna" },
-        ({ id: "abc", role: "agent-restricted" } as unknown) as LegacyBotYaml["trustedAgentBots"] extends (infer U)[] | undefined ? U : never,
+        { id: "abc", role: "agent-restricted" },
         { name: "holly" },
-        ({ id: "def" } as unknown) as LegacyBotYaml["trustedAgentBots"] extends (infer U)[] | undefined ? U : never,
+        { id: "def" },
       ],
     };
     const result = convertBotYaml(legacy);
@@ -343,7 +343,7 @@ describe("convertBotYaml — persona-file validation", () => {
     const result = convertBotYaml(legacy, {});
     // file-existence warning suppressed without a configDir
     const personaWarn = result.warnings.find(
-      (w) => w.field === "agents[ghost].persona" && /not found/.test(w.message),
+      (w) => w.field === "agents[ghost].persona" && w.message.includes("not found"),
     );
     expect(personaWarn).toBeUndefined();
   });
@@ -402,7 +402,7 @@ describe("convertBotYaml — full fixture", () => {
     const dash = result.cortex.renderers.find((r) => r.kind === "dashboard");
     expect(dash).toBeDefined();
     expect(dash!.kind).toBe("dashboard");
-    if (dash && dash.kind === "dashboard") {
+    if (dash?.kind === "dashboard") {
       expect(dash.port).toBe(8767);
     }
     expect(result.warnings.some((w) => w.field === "api")).toBe(true);
@@ -641,7 +641,7 @@ describe("convertBotYaml — schema-sourced defaults", () => {
     const legacy: LegacyBotYaml = {
       agent: { name: "luna", displayName: "Luna", personaFile: "./personas/luna.md" },
       discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
-      renderers: [{ kind: "dashbord" } as unknown],
+      renderers: [{ kind: "dashbord" }],
     };
     expect(() => convertBotYaml(legacy, {})).toThrow();
   });

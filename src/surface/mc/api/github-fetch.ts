@@ -160,6 +160,11 @@ export async function fetchIssueOrPr(
     exitCode = code;
   } catch (err) {
     clearTimeout(timer);
+    // sigkillTimer + timedOut are nullable/false at the start; the rule
+    // sees them as always-falsy because the only assignments happen
+    // inside callbacks the executor scheduled. Real runtime updates fire
+    // post-timeout — these guards are load-bearing.
+    /* eslint-disable @typescript-eslint/no-unnecessary-condition */
     if (sigkillTimer) clearTimeout(sigkillTimer);
     if (timedOut) {
       return {
@@ -167,12 +172,14 @@ export async function fetchIssueOrPr(
         message: "GitHub took too long to respond. Try again.",
       };
     }
+    /* eslint-enable @typescript-eslint/no-unnecessary-condition */
     return {
       kind: "spawn_failed",
-      message: `gh CLI failed: ${(err as Error).message}`,
+      message: `gh CLI failed: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
   clearTimeout(timer);
+  /* eslint-disable @typescript-eslint/no-unnecessary-condition */
   if (sigkillTimer) clearTimeout(sigkillTimer);
 
   if (timedOut) {
@@ -181,6 +188,7 @@ export async function fetchIssueOrPr(
       message: "GitHub took too long to respond. Try again.",
     };
   }
+  /* eslint-enable @typescript-eslint/no-unnecessary-condition */
 
   if (exitCode !== 0) {
     // Map gh's common stderr shapes to kinds.
@@ -253,7 +261,7 @@ export async function fetchIssueOrPr(
   const labels: string[] = Array.isArray(raw.labels)
     ? raw.labels
         .map((l) =>
-          typeof l === "string" ? l : typeof l?.name === "string" ? l.name : null
+          typeof l === "string" ? l : typeof l.name === "string" ? l.name : null
         )
         .filter((s): s is string => s !== null)
     : [];
@@ -277,6 +285,11 @@ export async function fetchIssueOrPr(
 export function isGitHubFetchError(
   x: GitHubIssueOrPr | GitHubFetchError
 ): x is GitHubFetchError {
+  // TS sees `kind` as non-undefined on the GitHubFetchError branch (literal
+  // union) — but isGitHubFetchError is the runtime narrower for unions
+  // where TS can't yet prove the discriminant. Suppress the dead-condition
+  // warning since the check IS the type guard.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   return (x as GitHubFetchError).kind !== undefined;
 }
 

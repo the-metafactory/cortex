@@ -312,6 +312,7 @@ function resolvePersona(
   configDir: string | undefined,
   warnings: ConversionWarning[],
 ): string {
+  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
   const personaPath = legacyPersonaFile?.trim() || `./personas/${agentId}.md`;
 
   if (configDir) {
@@ -346,7 +347,8 @@ function buildTrustList(
 ): string[] {
   const out: string[] = [];
   for (let i = 0; i < legacyTrust.length; i++) {
-    const t = legacyTrust[i]!;
+    const t = legacyTrust[i];
+    if (!t) continue;
     // Production grove-v2 carries trustedAgentBots entries with only a
     // Discord/Mattermost id and no symbolic agent name. Surface those as
     // warnings (operator hand-maps post-migration) rather than crashing.
@@ -548,11 +550,9 @@ function buildAgents(
         });
       }
     }
-    if (!id) {
-      // Fallback: agent.name (only safe for the first variant — subsequent
-      // variants need a distinct id, hence the numeric suffix at index ≥1).
-      id = i === 0 ? baseId : `${baseId}-${i + 1}`;
-    }
+    // Fallback: agent.name (only safe for the first variant — subsequent
+    // variants need a distinct id, hence the numeric suffix at index ≥1).
+    id ??= i === 0 ? baseId : `${baseId}-${i + 1}`;
     // Last-resort: a role-hint produced an id that collides with one
     // already claimed by an earlier adapter. Fall through to numeric.
     // cortex#106 item 1: drop the off-by-one — `variantIds.length` is the
@@ -584,7 +584,8 @@ function buildAgents(
 
   const agents: CortexConfig["agents"] = [];
   for (let i = 0; i < variantCount; i++) {
-    const variantId = variantIds[i]!;
+    const variantId = variantIds[i];
+    if (!variantId) continue;
     const presence: CortexConfig["agents"][number]["presence"] = {};
     const d = discordInstances[i];
     const m = mattermostInstances[i];
@@ -643,7 +644,7 @@ function buildRenderers(legacy: LegacyBotYaml, warnings: ConversionWarning[]): C
     }
   }
 
-  if (legacy.api && legacy.api.enabled === true) {
+  if (legacy.api?.enabled === true) {
     const port = typeof legacy.api.port === "number" ? legacy.api.port : 8767;
     renderers.push(RendererSchema.parse({ kind: "dashboard", port }));
     warnings.push({
@@ -672,12 +673,17 @@ export function convertBotYaml(
   legacy: LegacyBotYaml,
   opts: ConvertOptions = {},
 ): ConversionResult {
+  // TS narrows `legacy: LegacyBotYaml` to non-null, but the function is a
+  // public API surface and callers may hand in raw YAML parse output;
+  // runtime defence is load-bearing.
+  /* eslint-disable @typescript-eslint/no-unnecessary-condition */
   if (!legacy || typeof legacy !== "object") {
     throw new Error("input is not an object");
   }
   if (!legacy.agent || typeof legacy.agent !== "object") {
     throw new Error("bot.yaml missing required `agent:` block");
   }
+  /* eslint-enable @typescript-eslint/no-unnecessary-condition */
   if (!legacy.agent.name || typeof legacy.agent.name !== "string") {
     throw new Error("bot.yaml missing required `agent.name`");
   }
