@@ -22,6 +22,12 @@ const groveAgentName = process.env.GROVE_AGENT_NAME;
 // Context Injection
 // =============================================================================
 
+interface HookInput {
+  hook_event_name?: string;
+  hook_type?: string;
+  prompt?: string;
+}
+
 async function main() {
   try {
     const input = await new Response(Bun.stdin.stream()).text();
@@ -30,7 +36,7 @@ async function main() {
       process.exit(0);
     }
 
-    const hookInput = JSON.parse(input);
+    const hookInput = JSON.parse(input) as HookInput;
 
     // Only inject on SessionStart
     const hookType = hookInput.hook_event_name ?? hookInput.hook_type ?? "unknown";
@@ -89,4 +95,4 @@ This session is instrumented for Grove event tracking and dashboard visibility.
   process.exit(0);
 }
 
-main();
+void main();

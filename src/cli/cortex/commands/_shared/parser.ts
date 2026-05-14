@@ -122,14 +122,14 @@ export function parseSubcommandArgs<S extends string>(
 
   const activeRule: SubcommandRule | undefined =
     out.subcommand !== "unknown" && out.subcommand !== "help"
-      ? spec.subcommands[out.subcommand as S]
+      ? spec.subcommands[out.subcommand]
       : undefined;
 
   // Second pass: walk argv, accumulating flags + positionals.
   let positionalIdx = -1; // -1 = subcommand slot, 0+ = subcommand's positionals
   let i = 0;
   while (i < argv.length) {
-    const arg = argv[i]!;
+    const arg = argv[i] ?? "";
 
     if (arg === "--help" || arg === "-h") {
       if (positionalIdx === -1 && out.rawSubcommand === "") {
@@ -144,10 +144,11 @@ export function parseSubcommandArgs<S extends string>(
     if (arg.startsWith("-")) {
       const kind = resolveFlagKind(spec, activeRule, out.subcommand, arg);
       if (kind === "value") {
-        if (i + 1 >= argv.length || argv[i + 1]!.startsWith("-")) {
+        const next = argv[i + 1];
+        if (next === undefined || next.startsWith("-")) {
           throw new CliArgsError(spec.cliName, `${arg} requires a value argument`);
         }
-        out.flags[arg] = argv[i + 1]!;
+        out.flags[arg] = next;
         i += 2;
       } else {
         out.flags[arg] = true;
@@ -180,7 +181,7 @@ export function parseSubcommandArgs<S extends string>(
         `unexpected extra positional argument: "${arg}"`,
       );
     }
-    out.positionals[declared[nameIdx]!] = arg;
+    out.positionals[declared[nameIdx] ?? ""] = arg;
     i++;
   }
 
@@ -217,7 +218,7 @@ function findFirstPositional<S extends string>(
 ): string | undefined {
   let i = 0;
   while (i < argv.length) {
-    const arg = argv[i]!;
+    const arg = argv[i] ?? "";
     if (!arg.startsWith("-")) return arg;
     const kind = lookupFlagKindAcrossSpec(spec, arg);
     if (kind === "value") {
@@ -247,7 +248,14 @@ function buildFlagKindMap<S extends string>(
   for (const [flag, kind] of Object.entries(spec.universal)) {
     map.set(flag, kind);
   }
-  for (const rule of Object.values(spec.subcommands) as SubcommandRule[]) {
+  // `Object.values<S>(spec.subcommands)` returns `unknown[]` when the
+  // generic key type is unconstrained-string; the cast is load-bearing
+  // for downstream `rule.flags` access. ESLint disagrees (the type-aware
+  // checker sees `SubcommandRule[]` already), but tsc requires it.
+  // Confirmed during sweep #1: blanket auto-fix removed this and broke tsc.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+  const rules = Object.values(spec.subcommands) as SubcommandRule[];
+  for (const rule of rules) {
     if (!rule.flags) continue;
     for (const [flag, kind] of Object.entries(rule.flags)) {
       const existing = map.get(flag);
@@ -299,13 +307,15 @@ function resolveFlagKind<S extends string>(
   // `Map.get`; this function preserves its own subcommand-scoping
   // logic but with the same defense.
   if (Object.prototype.hasOwnProperty.call(spec.universal, flag)) {
-    return spec.universal[flag]!;
+    const kind = spec.universal[flag];
+    if (kind !== undefined) return kind;
   }
   if (
     activeRule?.flags &&
     Object.prototype.hasOwnProperty.call(activeRule.flags, flag)
   ) {
-    return activeRule.flags[flag]!;
+    const kind = activeRule.flags[flag];
+    if (kind !== undefined) return kind;
   }
   // Echo cortex#66 round-1 M3 — restore the legacy "unknown flag: X"
   // wording across both code paths (subcommand-known-but-flag-disallowed

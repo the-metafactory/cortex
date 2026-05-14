@@ -125,14 +125,18 @@ export async function startMyelinRuntime(
   // of whether NATS is configured; making this a no-op (rather than a
   // throw) keeps adapter code simple. The `enabled === false` flag is the
   // explicit signal for callers who DO want to gate.
+  // eslint-disable-next-line @typescript-eslint/no-empty-function, @typescript-eslint/require-await
   const publishDisabled = async (_envelope: Envelope) => {};
+
+  // eslint-disable-next-line @typescript-eslint/no-empty-function, @typescript-eslint/require-await
+  const stopDisabled = async () => {};
 
   if (!config.nats?.url) {
     return {
       enabled: false,
       onEnvelope,
       publish: publishDisabled,
-      stop: async () => {},
+      stop: stopDisabled,
     };
   }
 
@@ -159,7 +163,7 @@ export async function startMyelinRuntime(
       enabled: false,
       onEnvelope,
       publish: publishDisabled,
-      stop: async () => {},
+      stop: stopDisabled,
     };
   }
 
@@ -182,13 +186,13 @@ export async function startMyelinRuntime(
   } catch (err) {
     console.error(
       "myelin-runtime: failed to connect — continuing without NATS:",
-      err instanceof Error ? err.message : err,
+      err instanceof Error ? err.message : String(err),
     );
     return {
       enabled: false,
       onEnvelope,
       publish: publishDisabled,
-      stop: async () => {},
+      stop: stopDisabled,
     };
   }
 
@@ -209,7 +213,7 @@ export async function startMyelinRuntime(
             } catch (err) {
               console.error(
                 "myelin-runtime: onEnvelope handler threw:",
-                err instanceof Error ? err.message : err,
+                err instanceof Error ? err.message : String(err),
               );
             }
           }
@@ -220,7 +224,7 @@ export async function startMyelinRuntime(
     } catch (err) {
       console.error(
         `myelin-runtime: failed to subscribe to "${pattern}":`,
-        err instanceof Error ? err.message : err,
+        err instanceof Error ? err.message : String(err),
       );
     }
   }
@@ -228,17 +232,23 @@ export async function startMyelinRuntime(
   if (subscribers.length === 0) {
     // Nothing actually subscribed — close the link so we don't hold a
     // socket open for nothing.
-    await link.close().catch(() => {});
+    await link.close().catch(() => {
+      // best-effort close on no-subscribers path; ignore errors
+    });
     return {
       enabled: false,
       onEnvelope,
       publish: publishDisabled,
-      stop: async () => {},
+      stop: stopDisabled,
     };
   }
 
   let stopped = false;
 
+  // Signature stays Promise<void> for symmetry with `publishDisabled` and
+  // the MyelinRuntime contract; the body is sync-by-design today (NatsLink
+  // .publish is fire-and-forget). Future implementations may await.
+  // eslint-disable-next-line @typescript-eslint/require-await
   const publishEnabled = async (envelope: Envelope): Promise<void> => {
     if (stopped) {
       // Post-stop publish: short-circuit. The runtime's `link.drain()`
@@ -288,10 +298,10 @@ export async function startMyelinRuntime(
       // Drain subscribers first so they exit cleanly; then close the
       // underlying link.
       await Promise.allSettled(subscribers.map((s) => s.stop()));
-      await link.close().catch((err) => {
+      await link.close().catch((err: unknown) => {
         console.error(
           "myelin-runtime: close error:",
-          err instanceof Error ? err.message : err,
+          err instanceof Error ? err.message : String(err),
         );
       });
       console.log("myelin-runtime: stopped");
