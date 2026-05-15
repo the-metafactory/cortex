@@ -533,3 +533,165 @@ export function createSystemBusPeerDispatchReceivedEvent(
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// system.access.allowed / system.access.denied — IAW Phase C.4 (cortex#115)
+// ---------------------------------------------------------------------------
+
+/**
+ * Sovereignty constraints the PolicyEngine saw on the originating
+ * envelope. Mirrors `IntentSovereignty` from `src/common/policy/types.ts`
+ * exactly — surfaces (audit pipeline, dashboard) get the same shape they'd
+ * see if they read `envelope.sovereignty` directly. Carried verbatim on
+ * every `system.access.*` envelope so consumers don't need a join back to
+ * the originating envelope to render the decision context.
+ */
+export interface SystemAccessSovereignty {
+  classification: "local" | "federated" | "public";
+  data_residency: string;
+  max_hop: number;
+  frontier_ok: boolean;
+  model_class: "local-only" | "frontier" | "any";
+}
+
+/**
+ * `signed_by[]` stamp shape carried on `system.access.*` envelopes
+ * (C.4.3). Mirrors the wire shape from
+ * `src/bus/myelin/envelope-validator.ts:SignedBy` — duplicating
+ * structurally here keeps system-events independent of the
+ * envelope-validator module's internal types while preserving the
+ * cryptographic attribution chain. The audit pipeline can correlate
+ * `signed_by[0].principal` between the original envelope and the
+ * audit one without re-parsing either.
+ */
+export type SystemAccessSignedBy = Record<string, unknown>;
+
+/**
+ * Common shape for `system.access.allowed` and `system.access.denied`.
+ * Split into a base interface so the two helpers don't drift on the
+ * shared fields (source, principal_id, intent, signed_by). Each adds
+ * its own discriminator-specific payload (`capabilities` on allowed,
+ * `reason` on denied).
+ */
+interface SystemAccessCommonOpts {
+  source: SystemEventSource;
+  /** Principal id the gate authorised (bare, no `did:mf:` prefix). */
+  principalId: string;
+  /** Capability claim the gate evaluated. */
+  capability: string;
+  /** Sovereignty constraints carried verbatim from the originating envelope. */
+  sovereignty: SystemAccessSovereignty;
+  /**
+   * `correlation_id` from the originating envelope. The audit envelope
+   * shares this id so consumers can join "envelope X was gated → here
+   * is the decision". Required because every audit envelope describes
+   * exactly one originating envelope.
+   */
+  correlationId: string;
+  /**
+   * `signed_by[]` chain from the originating envelope (C.4.3). May be
+   * empty for legacy unsigned envelopes — surface as `[]` rather than
+   * dropping the field so the audit record always carries the
+   * attribution slot.
+   */
+  signedBy: SystemAccessSignedBy[];
+  /**
+   * Subject of the originating envelope — lets surfaces filter audit
+   * traffic by the wire path they care about (e.g. only audit
+   * `local.{org}.dispatch.task.received` decisions).
+   */
+  envelopeSubject: string;
+  /**
+   * Envelope id of the originating envelope (distinct from
+   * `correlationId` — the originating envelope may have been part of
+   * a larger workflow whose correlation_id was set upstream).
+   */
+  envelopeId: string;
+  /** Classification override; defaults to the system.* convention. */
+  classification?: Classification;
+}
+
+/**
+ * Options for `createSystemAccessAllowedEvent`. The `capabilities`
+ * field is the engine's effective-capability set surfaced on the
+ * allow branch (union of all the principal's role grants); audit
+ * consumers can verify that the actually-requested capability was
+ * within scope without re-running the engine.
+ */
+export interface SystemAccessAllowedOpts extends SystemAccessCommonOpts {
+  capabilities: readonly string[];
+}
+
+/**
+ * Options for `createSystemAccessDeniedEvent`. The `reason` field is
+ * the engine's structured `PolicyDenyReason` — carried verbatim as a
+ * record so subscribers can branch on `reason.kind` without coupling
+ * system-events.ts to the policy module's type module.
+ */
+export interface SystemAccessDeniedOpts extends SystemAccessCommonOpts {
+  reason: Record<string, unknown>;
+}
+
+/**
+ * Construct a `system.access.allowed` envelope (C.4.1).
+ *
+ * Emitted by every gate that accepts a dispatch. Today the only
+ * caller is the dispatch-listener's policy gate; future gates
+ * (substrate-side validation, federation hub stamps) will emit on
+ * the same subject.
+ *
+ * Subject convention: `local.{org}.system.access.allowed` — surfaces
+ * subscribe to `system.access.>` for the full access stream.
+ */
+export function createSystemAccessAllowedEvent(
+  opts: SystemAccessAllowedOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.access.allowed",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    correlationId: opts.correlationId,
+    payload: {
+      principal_id: opts.principalId,
+      capability: opts.capability,
+      capabilities: [...opts.capabilities],
+      intent_sovereignty: opts.sovereignty,
+      envelope_id: opts.envelopeId,
+      envelope_subject: opts.envelopeSubject,
+      signed_by: opts.signedBy,
+    },
+  });
+}
+
+/**
+ * Construct a `system.access.denied` envelope (C.4.2).
+ *
+ * Emitted by every gate that rejects a dispatch. The `reason` payload
+ * carries the engine's structured `PolicyDenyReason` so subscribers
+ * can render the specific deny path without parsing free-form text.
+ *
+ * C.4.3 — `signed_by[]` from the originating envelope is carried
+ * verbatim so denied envelopes are still cryptographically
+ * attributable (the rejection itself is part of the audit trail).
+ *
+ * Subject convention: `local.{org}.system.access.denied`.
+ */
+export function createSystemAccessDeniedEvent(
+  opts: SystemAccessDeniedOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.access.denied",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    correlationId: opts.correlationId,
+    payload: {
+      principal_id: opts.principalId,
+      capability: opts.capability,
+      reason: opts.reason,
+      intent_sovereignty: opts.sovereignty,
+      envelope_id: opts.envelopeId,
+      envelope_subject: opts.envelopeSubject,
+      signed_by: opts.signedBy,
+    },
+  });
+}

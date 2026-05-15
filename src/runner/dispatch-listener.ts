@@ -63,7 +63,15 @@ import type {
   SurfaceAdapter,
   SurfaceRouter,
 } from "../bus/surface-router";
-import type { SystemEventSource } from "../bus/system-events";
+import type {
+  SystemAccessSignedBy,
+  SystemAccessSovereignty,
+  SystemEventSource,
+} from "../bus/system-events";
+import {
+  createSystemAccessAllowedEvent,
+  createSystemAccessDeniedEvent,
+} from "../bus/system-events";
 import type {
   DispatchRequest,
   SessionHarness,
@@ -413,20 +421,50 @@ async function handleDispatchEnvelope(
   let gatedPrincipal: Principal | undefined;
   if (policyEngine !== undefined) {
     const decision = checkDispatchPolicy(policyEngine, envelope, payload);
+    // C.4.3 — carry `signed_by[]` from the originating envelope
+    // verbatim so the audit record is cryptographically attributable
+    // (even on deny). Normalised to an array via `getSignedByChain`;
+    // empty for legacy unsigned envelopes.
+    const signedBy: SystemAccessSignedBy[] = getSignedByChain(envelope).map(
+      (stamp) => ({ ...stamp }),
+    );
+    const auditSovereignty: SystemAccessSovereignty = {
+      classification: envelope.sovereignty.classification,
+      data_residency: envelope.sovereignty.data_residency,
+      max_hop: envelope.sovereignty.max_hop,
+      frontier_ok: envelope.sovereignty.frontier_ok,
+      model_class: envelope.sovereignty.model_class,
+    };
+    const auditCommon = {
+      source,
+      principalId: decision.principalId,
+      capability: decision.capability,
+      sovereignty: auditSovereignty,
+      correlationId: envelope.correlation_id ?? payload.task_id,
+      envelopeId: envelope.id,
+      envelopeSubject: `local.${source.org}.dispatch.task.received`,
+      signedBy,
+    };
+
     if (!decision.allow) {
       console.error(
         `cortex-runner: dispatch-listener: denied envelope id=${envelope.id} task_id=${payload.task_id} agent=${payload.agent_id} — reason=${decision.reason.kind}`,
       );
-      // Echo cortex#220 round 2 M-1: synthesise a `dispatch.task.failed`
-      // terminal envelope on the same correlation_id so subscribers
-      // correlating on task_id (worklog-manager.ts, agent-team.ts) see
-      // a terminal lifecycle event and don't hang waiting on a
-      // completion that will never arrive. The structured `reason`
-      // field lets them branch on the policy_denied case distinctly
-      // from substrate-side errors; C.4's `system.access.denied`
-      // audit envelope lives on a different subject and serves
-      // different consumers (audit pipeline, dashboard) — both
-      // envelopes are emitted for a denied dispatch.
+      // C.4.2 — emit `system.access.denied` carrying the structured
+      // engine deny reason + signed_by chain. Lives on a different
+      // subject than the dispatch.task.* lifecycle so audit consumers
+      // (dashboard, pipeline) get a stable wire path.
+      const denied = createSystemAccessDeniedEvent({
+        ...auditCommon,
+        reason: { ...decision.reason },
+      });
+      await runtime.publish(denied);
+      // Echo cortex#220 round 2 M-1 — also synthesise a terminal
+      // `dispatch.task.failed` so subscribers correlating on
+      // task_id (worklog-manager.ts, agent-team.ts) see a terminal
+      // lifecycle event. Both envelopes are emitted on a denied
+      // dispatch: one on system.access.* (audit), one on
+      // dispatch.task.* (lifecycle).
       const now = new Date();
       const failed = createDispatchTaskFailedEvent({
         source,
@@ -443,6 +481,15 @@ async function handleDispatchEnvelope(
       await runtime.publish(failed);
       return;
     }
+    // C.4.1 — emit `system.access.allowed` for every accepted
+    // dispatch. The audit consumer can see the gate-effective
+    // capability set and the sovereignty constraints the engine
+    // accepted, without re-running the engine.
+    const allowed = createSystemAccessAllowedEvent({
+      ...auditCommon,
+      capabilities: decision.capabilities,
+    });
+    await runtime.publish(allowed);
     gatedPrincipal = decision.principal;
   }
 
@@ -477,8 +524,22 @@ async function handleDispatchEnvelope(
  * reason for the stderr log (and the future C.4 audit envelope).
  */
 type DispatchPolicyResult =
-  | { allow: true; principal: Principal | undefined }
-  | { allow: false; reason: PolicyDenyReason };
+  | {
+      allow: true;
+      principal: Principal | undefined;
+      /** Effective capabilities surfaced on the allow branch (C.4.1). */
+      capabilities: readonly string[];
+      /** Capability the gate evaluated — carried onto the audit envelope. */
+      capability: string;
+      /** Principal id the gate resolved — carried onto the audit envelope. */
+      principalId: string;
+    }
+  | {
+      allow: false;
+      reason: PolicyDenyReason;
+      capability: string;
+      principalId: string;
+    };
 
 /**
  * Build an `Intent` from the envelope + payload and ask the engine.
@@ -545,7 +606,12 @@ function checkDispatchPolicy(
 
   const decision = engine.check(principalId, intent);
   if (!decision.allow) {
-    return { allow: false, reason: decision.reason };
+    return {
+      allow: false,
+      reason: decision.reason,
+      capability: intent.capability,
+      principalId,
+    };
   }
   // The engine doesn't return a Principal — only the decision +
   // effective capabilities. The dispatch-listener doesn't need the
@@ -553,7 +619,13 @@ function checkDispatchPolicy(
   // consumers haven't shipped); we forward `undefined` for now so
   // the contract is in place but no harness branches on the value.
   // C.3b adds engine.getPrincipal(id) and threads it through.
-  return { allow: true, principal: undefined };
+  return {
+    allow: true,
+    principal: undefined,
+    capabilities: decision.capabilities,
+    capability: intent.capability,
+    principalId,
+  };
 }
 
 /**
