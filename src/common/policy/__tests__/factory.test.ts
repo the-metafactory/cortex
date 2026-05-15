@@ -8,9 +8,9 @@
  *   4. Round-trip: parsed `Policy` flows into the engine without
  *      mutation (id, role[], trust[] all preserved).
  *
- * Schema-side validation (dangling role/trust refs, malformed id
- * grammar) is covered in `cortex-config.test.ts` since the refines
- * live on `PolicySchema` there.
+ * Schema-side validation (dangling role/trust refs, duplicate ids,
+ * batched issues, malformed id grammar, empty defaults) is covered
+ * by the `PolicySchema cross-validation` describe block below.
  */
 
 import { describe, expect, test } from "bun:test";
