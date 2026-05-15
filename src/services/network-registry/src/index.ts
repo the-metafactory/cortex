@@ -74,33 +74,57 @@ app.use(
 // ---------------------------------------------------------------------------
 // On-boot: derive the registry pubkey from the signing key if not provided
 // explicitly. We piggyback on a request-scoped initialiser to keep the
-// global state simple — the derived key is cached at module scope.
+// global state simple — the derived key is cached at module scope and
+// read by `signAssertion` without mutating `c.env`.
+//
+// Echo cortex#225 issue #4: previously we patched `c.env.REGISTRY_PUBLIC_KEY`
+// per-request. Treating `env` as mutable works on Bun (plain object) but is
+// a footgun on real Workers, where `env` is frozen-ish and the runtime may
+// snapshot it. Module-scoped cache + explicit getter is the safer shape.
 // ---------------------------------------------------------------------------
 
 let derivedPublicKey: string | undefined;
 let derivedFromKey: string | undefined;
 
 async function ensurePublicKey(env: Env): Promise<void> {
-  if (env.REGISTRY_PUBLIC_KEY) return;
-  if (!env.REGISTRY_SIGNING_KEY) return;
-  if (derivedFromKey === env.REGISTRY_SIGNING_KEY && derivedPublicKey) {
-    // Already derived for this signing key — patch env (per-request) and exit.
-    env.REGISTRY_PUBLIC_KEY = derivedPublicKey;
+  if (env.REGISTRY_PUBLIC_KEY) {
+    // Caller-provided pubkey wins; mirror into the module cache so
+    // `getRegistryPublicKey` short-circuits without re-checking env.
+    if (derivedFromKey !== env.REGISTRY_SIGNING_KEY) {
+      derivedPublicKey = env.REGISTRY_PUBLIC_KEY;
+      derivedFromKey = env.REGISTRY_SIGNING_KEY ?? "explicit";
+    }
     return;
   }
+  if (!env.REGISTRY_SIGNING_KEY) return;
+  if (derivedFromKey === env.REGISTRY_SIGNING_KEY && derivedPublicKey) return;
   try {
     const pub = await pubkeyFromPkcs8(env.REGISTRY_SIGNING_KEY);
     derivedPublicKey = pub;
     derivedFromKey = env.REGISTRY_SIGNING_KEY;
-    env.REGISTRY_PUBLIC_KEY = pub;
   } catch (err) {
     // Surface as a 500 once a request lands; do not throw at boot
     // because the Worker would crash-loop and lose the diagnostic.
     // The pubkey route emits the structured error.
-    process.stderr.write(
-      `[network-registry] failed to derive pubkey: ${err instanceof Error ? err.message : String(err)}\n`,
+    console.error(
+      `[network-registry] failed to derive pubkey: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+}
+
+/**
+ * Read the registry public key without mutating `env`. Routes that need
+ * the pubkey at request time call this; `signAssertion` resolves it via
+ * the same path. Returns `undefined` if the Worker is unconfigured.
+ */
+export function getRegistryPublicKey(env: Env): string | undefined {
+  return env.REGISTRY_PUBLIC_KEY ?? derivedPublicKey;
+}
+
+/** Test-only — reset module-scoped derivation cache between cases. */
+export function _resetDerivedPublicKeyForTest(): void {
+  derivedPublicKey = undefined;
+  derivedFromKey = undefined;
 }
 
 app.use("*", async (c, next) => {
@@ -123,7 +147,8 @@ app.get("/api/health", (c) =>
 );
 
 app.get("/registry/pubkey", (c) => {
-  if (!c.env.REGISTRY_PUBLIC_KEY) {
+  const pub = getRegistryPublicKey(c.env);
+  if (!pub) {
     return c.json(
       {
         error: "registry_unconfigured",
@@ -133,7 +158,7 @@ app.get("/registry/pubkey", (c) => {
       503,
     );
   }
-  return c.json({ algorithm: "Ed25519", public_key: c.env.REGISTRY_PUBLIC_KEY });
+  return c.json({ algorithm: "Ed25519", public_key: pub });
 });
 
 // ---------------------------------------------------------------------------
@@ -155,7 +180,7 @@ app.notFound((c) => c.json({ error: "not_found" }, 404));
 // ---------------------------------------------------------------------------
 
 app.onError((err, c) => {
-  process.stderr.write(`[network-registry] unhandled error: ${err.message}\n${err.stack ?? ""}\n`);
+  console.error(`[network-registry] unhandled error: ${err.message}\n${err.stack ?? ""}`);
   return c.json({ error: "internal_error" }, 500);
 });
 

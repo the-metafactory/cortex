@@ -10,6 +10,7 @@
 import { canonicalJSON, generateKeypair, signEd25519 } from "../src/signing";
 import type { Capability, RegistrationClaim, StackIdentity } from "../src/types";
 import { _setNonceCacheForTest, _setStoreForTest } from "../src/store";
+import { _resetDerivedPublicKeyForTest } from "../src/index";
 
 export interface OperatorKey {
   privateKeyB64: string;
@@ -36,10 +37,11 @@ export async function makeRegistryKey(): Promise<{
   return { signingKey: kp.privateKeyB64, publicKey: kp.publicKeyB64 };
 }
 
-/** Reset module-scoped store + nonce cache between tests. */
+/** Reset all module-scoped state between tests (store, nonce cache, derived pubkey). */
 export function resetStores(): void {
   _setStoreForTest(undefined);
   _setNonceCacheForTest(undefined);
+  _resetDerivedPublicKeyForTest();
 }
 
 /**

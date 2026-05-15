@@ -38,6 +38,25 @@ In-memory per-isolate. Acceptable for the initial endpoint surface +
 test rig. **Persistence (D1 or KV) is a follow-up** before any
 production traffic — see "Roadmap" below.
 
+The POST `/operators/.../register` handler returns **503** when the
+Worker is unconfigured (no `REGISTRY_SIGNING_KEY`) so mutation cannot
+happen without a producible signed receipt. GET endpoints degrade to
+an unsigned-but-structured response in the same condition; cortex
+peers refuse to trust assertions with `registry: "unconfigured"`.
+
+## Discovery vs. traffic gating
+
+Operators announce themselves into networks by listing the network in
+`capability.networks[]`. Anyone can announce into any network id —
+the registry treats `network_id` as a public namespace label, and
+attribution (operator A learns operator B exists in `secret-research`)
+is visible without a join handshake. **This is intentional for v1**:
+runtime gating (`accept_subjects` / `deny_subjects` from PR #223)
+protects the *traffic* path; the discovery surface is open by design
+to keep the registry an indexable directory rather than a sealed
+membership registry. A join handshake is filed as a follow-up if a
+deployment needs sealed namespaces.
+
 ## Local dev
 
 ```bash
@@ -77,14 +96,28 @@ These are explicitly out of scope for D.4 v1 and tracked as separate
 issues (see cortex#116):
 
 1. **Durable persistence.** Swap `InMemoryRegistryStore` for a D1
-   implementation. Schema lives in `schema.sql`. The store interface
-   in `store.ts` is the single seam.
-2. **Pubkey rotation.** Accept a transition claim co-signed by the
+   implementation. The store interface in `store.ts` is the single
+   seam; the SQL schema will land alongside the D1 implementation
+   (intentionally NOT shipped as an empty stub in this PR).
+2. **Durable nonce cache.** The per-isolate `InMemoryNonceCache`
+   protects against delayed replays via the 5-minute skew check, but
+   an in-flight replay against a different isolate within the skew
+   window CAN succeed. Move nonce storage into D1 (or a dedicated KV
+   namespace with strict consistency) at the same time as #1 so the
+   replay window collapses to the route-layer skew bound.
+3. **Pubkey rotation.** Accept a transition claim co-signed by the
    previous key. Currently silent rotation is rejected with HTTP 409.
-3. **Pagination on `/capabilities`.** Hard-capped at 500 hits for v1.
-4. **Per-operator publish rate limiting.** Replay protection covers
-   one axis; throughput limiting is the other.
-5. **Cortex-side consumer.** A `RegistryClient` in `src/bus/registry/`
+4. **Pagination on `/capabilities`.** Hard-capped at 500 hits for v1.
+5. **Per-operator publish rate limiting + CORS origin allowlist on
+   POST.** Replay protection covers one axis; throughput limiting +
+   tightening from `origin: "*"` to a known operator-tooling origin
+   list is the other. Bundled because both are about hardening the
+   mutation surface before public DNS goes live.
+6. **Cortex-side consumer.** A `RegistryClient` in `src/bus/registry/`
    that consults the registry at startup + on schedule and invalidates
    on `system.operator.published` events (D.4.3). Filed alongside the
    D.2 / D.3 work — this service is the producer half.
+7. **Sealed-network join handshake.** If a deployment needs network
+   membership to require explicit consent from existing members
+   (rather than open-announce), add a per-network join protocol with
+   an admission signature from a network admin's key.

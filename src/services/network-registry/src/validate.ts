@@ -127,7 +127,7 @@ export function validateRegistrationClaim(
   }
 
   // stacks
-  let stacks: StackIdentity[] = [];
+  const stacks: StackIdentity[] = [];
   if (!Array.isArray(c.stacks)) {
     errors.push({ field: "stacks", message: "must be an array (possibly empty)" });
   } else {
@@ -206,7 +206,7 @@ export function validateRegistrationClaim(
   }
 
   // capabilities
-  let capabilities: Capability[] = [];
+  const capabilities: Capability[] = [];
   if (!Array.isArray(c.capabilities)) {
     errors.push({ field: "capabilities", message: "must be an array (possibly empty)" });
   } else {
@@ -239,7 +239,7 @@ export function validateRegistrationClaim(
         });
         return;
       }
-      let networks: string[] = [];
+      const networks: string[] = [];
       if (capObj.networks !== undefined) {
         if (!Array.isArray(capObj.networks)) {
           errors.push({

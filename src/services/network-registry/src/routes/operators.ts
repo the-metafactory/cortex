@@ -14,7 +14,7 @@
  */
 
 import { Hono } from "hono";
-import type { Env } from "../index";
+import { getRegistryPublicKey, type Env } from "../index";
 import { signEd25519, verifyEd25519, canonicalJSON } from "../signing";
 import { getNonceCache, getStore } from "../store";
 import type { OperatorRecord, SignedAssertion } from "../types";
@@ -31,6 +31,24 @@ export function operatorRoutes(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
 
   app.post("/operators/:operator_id/register", async (c) => {
+    // Echo cortex#225 issue #1: refuse to mutate state when we can't
+    // produce a signed receipt. The GET surface already returns 503
+    // for `/registry/pubkey` when unconfigured; without this guard
+    // POST silently accepts registrations with an empty signature and
+    // burns TOFU slots, blocking the next legitimate register with
+    // HTTP 409. The unsigned-fallback path remains in `signAssertion`
+    // only so that GET responses can degrade gracefully in dev — POST
+    // is the mutation surface and gets stricter handling.
+    if (!c.env.REGISTRY_SIGNING_KEY || !getRegistryPublicKey(c.env)) {
+      return c.json(
+        {
+          error: "registry_unconfigured",
+          details:
+            "REGISTRY_SIGNING_KEY not provisioned; cannot accept registrations without producing a signed receipt",
+        },
+        503,
+      );
+    }
     const operatorId = c.req.param("operator_id");
     if (!isValidOperatorId(operatorId)) {
       return c.json({ error: "invalid operator_id in path" }, 400);
@@ -155,15 +173,17 @@ export async function signAssertion<T>(
   payload: T,
 ): Promise<SignedAssertion<T>> {
   const issued_at = new Date().toISOString();
-  const registry = env.REGISTRY_PUBLIC_KEY;
+  const registry = getRegistryPublicKey(env);
   if (!env.REGISTRY_SIGNING_KEY || !registry) {
-    // No key configured — return an unsigned-but-structured response.
-    // The registry pubkey field is required by the type, so we set it
-    // to a sentinel string clients can detect ("unconfigured"). Cortex
-    // peers MUST refuse to trust a sentinel-keyed assertion; the bot
-    // logs this loudly via the audit channel. In dev/local this is
-    // expected (no real key); in production wrangler secrets gate the
-    // deploy.
+    // No key configured — return an unsigned-but-structured response
+    // ONLY for GET-path callers; POST `/operators/.../register` rejects
+    // before reaching here (see the 503 guard in the register handler,
+    // Echo cortex#225 issue #1). The registry pubkey field is required
+    // by the type, so set it to a sentinel string clients can detect
+    // ("unconfigured"). Cortex peers MUST refuse to trust a sentinel-
+    // keyed assertion; the bot logs this loudly via the audit channel.
+    // In dev/local this is the documented degradation; in production
+    // wrangler secrets gate the deploy.
     return {
       payload,
       issued_at,

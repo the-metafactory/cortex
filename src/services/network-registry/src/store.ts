@@ -68,15 +68,21 @@ export interface RegistryStore {
  * signed registration; the registry refuses any nonce it has seen
  * inside the configured window.
  *
- * The window is shorter than the practical clock-skew tolerance
- * (10 minutes here vs. 5-minute skew check at the route layer), so
- * a replay caught by the nonce check necessarily falls outside the
- * skew window too — defense-in-depth.
+ * The nonce window (10 minutes) is wider than the route-layer skew
+ * window (5 minutes) so that the nonce cache is the FIRST line of
+ * defense against in-window replays and the skew check is the
+ * fallback against delayed/captured-and-replayed claims.
  *
- * Storage is in-memory per isolate; like the operator store, this
- * is acceptable for v1 because a successful replay would also need
- * a fresh-enough timestamp, which the skew check enforces independent
- * of the nonce cache.
+ * Caveat (Echo cortex#225 issue #2): storage is in-memory per isolate.
+ * A captured-in-flight registration replayed within the 5-minute skew
+ * window CAN succeed against a different isolate / colo whose nonce
+ * map is empty for that key. Defense-in-depth only holds for delayed
+ * replays here, not in-window ones. The fix is to pull nonce storage
+ * into the same durable layer as operators when D1 lands — see the
+ * README §Roadmap "Durable nonce cache" follow-up. v1 ships as-is
+ * because (a) the operator's private key is still the gate and (b)
+ * a successful in-window replay only re-applies the same claim, with
+ * no privilege escalation versus the original.
  */
 export interface NonceCache {
   /** Returns true if the nonce was fresh (and is now recorded). */
@@ -89,12 +95,19 @@ export const NONCE_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
 class InMemoryNonceCache implements NonceCache {
   private readonly seen = new Map<string, number>();
 
+  /** Sweep threshold — only walk the map when it grows past this. */
+  private static readonly SWEEP_THRESHOLD = 64;
+
   async recordIfFresh(nonce: string, now: number): Promise<boolean> {
-    // Sweep expired entries opportunistically — bounded by O(n) but
-    // n is the number of registrations in the last 10 minutes, which
-    // is tiny in federation traffic patterns.
-    for (const [key, ts] of this.seen) {
-      if (now - ts > NONCE_WINDOW_MS) this.seen.delete(key);
+    // Threshold-gated sweep (Echo cortex#225 issue #7). At federation
+    // scale (hundreds of operators), the per-call O(n) sweep was fine,
+    // but gating on size keeps the steady-state cost flat regardless
+    // of bursty traffic. We sweep only when the map grows past the
+    // threshold; the 10-minute eviction window is unchanged.
+    if (this.seen.size > InMemoryNonceCache.SWEEP_THRESHOLD) {
+      for (const [key, ts] of this.seen) {
+        if (now - ts > NONCE_WINDOW_MS) this.seen.delete(key);
+      }
     }
     if (this.seen.has(nonce)) return false;
     this.seen.set(nonce, now);

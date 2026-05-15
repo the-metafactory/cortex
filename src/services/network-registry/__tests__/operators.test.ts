@@ -200,8 +200,11 @@ describe("POST /operators/:id/register — auth failures", () => {
     expect(res2.status).toBe(409);
   });
 
-  test("permits re-register with same pubkey (update stacks)", async () => {
-    const body1 = await makeSignedRegistration("andreas", opKey);
+  test("permits re-register with same pubkey (replaces stacks, no leftover)", async () => {
+    // Echo cortex#225 nit: tighten the symmetric "old stacks gone" assertion.
+    const body1 = await makeSignedRegistration("andreas", opKey, {
+      stacks: [{ stack_id: "andreas/laptop" }],
+    });
     const res1 = await post("/operators/andreas/register", body1);
     expect(res1.status).toBe(201);
 
@@ -213,6 +216,38 @@ describe("POST /operators/:id/register — auth failures", () => {
     const json = (await res2.json()) as SignedAssertion<OperatorRecord>;
     expect(json.payload.stacks).toHaveLength(1);
     expect(json.payload.stacks[0]!.stack_id).toBe("andreas/server");
+    // Confirm the old `andreas/laptop` is fully gone — not just that
+    // the new list has length 1.
+    const ids = json.payload.stacks.map((s) => s.stack_id);
+    expect(ids).not.toContain("andreas/laptop");
+  });
+});
+
+describe("POST /operators/:id/register — unconfigured registry", () => {
+  // Echo cortex#225 issue #1: refuse to mutate state when the Worker
+  // cannot produce a signed receipt.
+  test("returns 503 and does not mutate state when REGISTRY_SIGNING_KEY is absent", async () => {
+    const body = await makeSignedRegistration("andreas", opKey);
+    const unconfigured: Env = { ENVIRONMENT: "test" };
+    const res = await app.fetch(
+      new Request("http://localhost/operators/andreas/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      unconfigured,
+    );
+    expect(res.status).toBe(503);
+    const json = (await res.json()) as { error: string };
+    expect(json.error).toBe("registry_unconfigured");
+
+    // Switch to a configured env on the same module-shared store and
+    // confirm the operator was NOT silently persisted by the 503 path.
+    const getRes = await app.fetch(
+      new Request("http://localhost/operators/andreas"),
+      env,
+    );
+    expect(getRes.status).toBe(404);
   });
 });
 
