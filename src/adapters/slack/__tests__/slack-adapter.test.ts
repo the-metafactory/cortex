@@ -28,6 +28,14 @@ interface FakeSlackClientState {
   botUserId: string;
   /** Throw on next postMessage when set. */
   postMessageError?: Error;
+  /**
+   * Sequence of client-method calls in invocation order — used to
+   * assert that `getBotUserId` resolves BEFORE `start` opens the
+   * socket (Echo cortex#233 self-loop TOCTOU fix).
+   */
+  callOrder: ("start" | "stop" | "postMessage" | "getBotUserId")[];
+  /** When set, the next `getBotUserId` call rejects with this error. */
+  getBotUserIdError?: Error;
 }
 
 function makeFakeClient(initial: Partial<FakeSlackClientState> = {}): {
@@ -40,22 +48,29 @@ function makeFakeClient(initial: Partial<FakeSlackClientState> = {}): {
     startCount: 0,
     stopCount: 0,
     botUserId: initial.botUserId ?? "UBOT123",
+    callOrder: [],
     ...(initial.postMessageError !== undefined && { postMessageError: initial.postMessageError }),
+    ...(initial.getBotUserIdError !== undefined && { getBotUserIdError: initial.getBotUserIdError }),
   };
 
   let onEvent: ((event: SlackInboundEvent) => Promise<void>) | null = null;
 
   const client: SlackClient = {
+    // eslint-disable-next-line @typescript-eslint/require-await
     async start(opts) {
       state.startCount++;
+      state.callOrder.push("start");
       onEvent = opts.onEvent;
     },
+    // eslint-disable-next-line @typescript-eslint/require-await
     async stop() {
       state.stopCount++;
+      state.callOrder.push("stop");
       onEvent = null;
     },
     // eslint-disable-next-line @typescript-eslint/require-await
     async postMessage(channel, text, threadTs) {
+      state.callOrder.push("postMessage");
       if (state.postMessageError) throw state.postMessageError;
       state.postedMessages.push({
         channel,
@@ -66,6 +81,8 @@ function makeFakeClient(initial: Partial<FakeSlackClientState> = {}): {
     },
     // eslint-disable-next-line @typescript-eslint/require-await
     async getBotUserId() {
+      state.callOrder.push("getBotUserId");
+      if (state.getBotUserIdError) throw state.getBotUserIdError;
       return state.botUserId;
     },
   };
@@ -225,6 +242,35 @@ describe("SlackAdapter — lifecycle", () => {
     const id = await adapter.getPlatformUserId();
     expect(id).toBe("UFRESH");
   });
+
+  test("start fetches getBotUserId BEFORE opening the socket (TOCTOU fix)", async () => {
+    // Echo cortex#233 (review #2): the self-loop guard depends on
+    // `botUserId` being non-null at the moment any inbound event is
+    // translated. Before this fix, `client.start()` was awaited first
+    // and `getBotUserId()` second — opening a ~auth.test-round-trip
+    // window where events could arrive with the cache still null. Lock
+    // in the new ordering: getBotUserId → start.
+    const { adapter, state } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+    const getIdx = state.callOrder.indexOf("getBotUserId");
+    const startIdx = state.callOrder.indexOf("start");
+    expect(getIdx).toBeGreaterThanOrEqual(0);
+    expect(startIdx).toBeGreaterThanOrEqual(0);
+    expect(getIdx).toBeLessThan(startIdx);
+  });
+
+  test("start aborts (fail-closed) when getBotUserId rejects", async () => {
+    // Fail-closed companion to the TOCTOU fix: if we can't resolve our
+    // own bot id, opening the socket is unsafe — any self-echo would
+    // dispatch as a real message. Surface the error to the caller.
+    const { adapter, state } = makeAdapter({
+      clientState: { getBotUserIdError: new Error("auth.test 403") },
+    });
+    const cap = captureInbound();
+    await expect(adapter.start(cap.onMessage)).rejects.toThrow(/auth\.test/);
+    expect(state.startCount).toBe(0); // socket never opened
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -311,6 +357,37 @@ describe("SlackAdapter — translateEvent", () => {
     expect(cap.received).toHaveLength(1);
     expect(cap.received[0]?.authorId).toBe("BPEER");
     expect(cap.received[0]?.content).toBe("from peer");
+  });
+
+  test("dedups when the same ts arrives twice (message + app_mention)", async () => {
+    // Echo cortex#233 (review #1): Slack fires BOTH `message` and
+    // `app_mention` for the same user message when the bot is a
+    // channel member. The client subscribes to both for coverage; the
+    // adapter must collapse them by `ts` so the dispatch pipeline only
+    // sees one InboundMessage.
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+
+    const sharedTs = "1700000000.555555";
+    await emit(makeSlackEvent({ type: "message", ts: sharedTs, text: "@bot hi" }));
+    await emit(makeSlackEvent({ type: "app_mention", ts: sharedTs, text: "@bot hi" }));
+
+    expect(cap.received).toHaveLength(1);
+    expect(cap.received[0]?.content).toBe("@bot hi");
+  });
+
+  test("does NOT dedup distinct ts values", async () => {
+    // Sanity check on the dedup gate — different messages must both
+    // dispatch even when they share other fields.
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+
+    await emit(makeSlackEvent({ ts: "1700000000.111111", text: "first" }));
+    await emit(makeSlackEvent({ ts: "1700000000.222222", text: "second" }));
+
+    expect(cap.received).toHaveLength(2);
   });
 
   test("maps Slack files to InboundMessage attachments", async () => {

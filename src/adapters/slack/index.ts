@@ -77,7 +77,21 @@ export class SlackAdapter implements PlatformAdapter {
   /** Resolved bot user id, fetched on first `start()`. Used for self-loop guards. */
   private botUserId: string | null = null;
   /** Operator-explicit + adapter-side anti-self-loop set. */
-  private trustedBotIds: ReadonlySet<string>;
+  private readonly trustedBotIds: ReadonlySet<string>;
+  /**
+   * Echo cortex#233: bounded FIFO dedup ring of recently-seen Slack
+   * message `ts` values. Slack's Socket Mode fires BOTH the `message`
+   * and `app_mention` events for a single user message when the bot is
+   * a member of the channel where it was mentioned — the client
+   * subscribes to both events (so DMs + outside-channel mentions still
+   * arrive), and this set collapses the duplicate at the adapter layer
+   * before the dispatch pipeline sees it. Capacity 256 is generous
+   * versus the bot's effective ingest rate (one human + a few trusted
+   * bots) and is small enough to be irrelevant for memory.
+   */
+  private readonly seenTs = new Set<string>();
+  private readonly seenTsOrder: string[] = [];
+  private static readonly DEDUP_CAPACITY = 256;
 
   constructor(agent: Agent, presence: SlackPresence, infra: SlackAdapterInfra) {
     this.agent = agent;
@@ -102,6 +116,17 @@ export class SlackAdapter implements PlatformAdapter {
   }
 
   async start(onMessage: (msg: InboundMessage) => Promise<void>): Promise<void> {
+    // Echo cortex#233 (review #2): close the self-loop TOCTOU window by
+    // resolving `botUserId` BEFORE opening the Socket Mode connection.
+    // `auth.test` uses the bot token (xoxb-) — it does NOT need a live
+    // Socket Mode session. If we fetched the id after `client.start()`,
+    // any inbound event arriving in the millisecond gap between
+    // socket-connected and auth.test-resolved would pass through
+    // `translateEvent` with `botUserId === null`, silently failing-open
+    // on the self-loop guard. Fail-closed: if `getBotUserId()` rejects,
+    // abort startup rather than open a socket whose self-echo will be
+    // dispatched as a real message.
+    this.botUserId = await this.client.getBotUserId();
     await this.client.start({
       onEvent: async (event) => {
         const msg = this.translateEvent(event);
@@ -109,18 +134,6 @@ export class SlackAdapter implements PlatformAdapter {
         await onMessage(msg);
       },
     });
-    // Resolve the bot user id after start so subsequent
-    // `getPlatformUserId()` calls are zero-RPC. Best-effort: if auth.test
-    // fails we leave `botUserId` null and let `getPlatformUserId()` retry
-    // on demand — better than aborting startup.
-    try {
-      this.botUserId = await this.client.getBotUserId();
-    } catch (err) {
-      process.stderr.write(
-        `slack-${this.instanceId}: getBotUserId failed during start (will retry on demand): ` +
-          `${err instanceof Error ? err.message : String(err)}\n`,
-      );
-    }
   }
 
   async stop(): Promise<void> {
@@ -319,6 +332,26 @@ export class SlackAdapter implements PlatformAdapter {
    * keep the dispatch pipeline focused on actual chat content.
    */
   private translateEvent(event: SlackInboundEvent): InboundMessage | null {
+    // Echo cortex#233 (review #1): collapse the `message`/`app_mention`
+    // double-dispatch by ts BEFORE doing any other work. Events without
+    // a `ts` (defensive — real Slack messages always carry one) skip
+    // dedup and pass through. See `seenTs` field docstring for the
+    // ring's capacity rationale.
+    if (event.ts) {
+      if (this.seenTs.has(event.ts)) {
+        // Second sighting — drop. This is the expected path for a
+        // channel-member mention, where Slack fires both the
+        // `message` and `app_mention` events for the same `ts`.
+        return null;
+      }
+      this.seenTs.add(event.ts);
+      this.seenTsOrder.push(event.ts);
+      if (this.seenTsOrder.length > SlackAdapter.DEDUP_CAPACITY) {
+        const evicted = this.seenTsOrder.shift();
+        if (evicted !== undefined) this.seenTs.delete(evicted);
+      }
+    }
+
     // Drop self-authored messages at the source — both via user id
     // (when we know our own id) and via the bot_id-shaped subtype path
     // (when Slack doesn't include `user`).

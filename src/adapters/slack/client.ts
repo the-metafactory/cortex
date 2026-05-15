@@ -100,17 +100,24 @@ export class RealSlackClient implements SlackClient {
   async start(opts: { onEvent: (event: SlackInboundEvent) => Promise<void> }): Promise<void> {
     // Slack's Socket Mode delivers `events_api` envelopes; the inner event
     // type (`message`, `app_mention`) is re-emitted by SocketModeClient as
-    // a top-level event. We listen for both since `app_mention` events
-    // ALSO arrive as `message` events with a mention in the text — we want
-    // to handle them once, via the `message` channel, with the
-    // `app_mention` listener acting as a safety net for DMs/channels
-    // where the bot is mentioned without being a member.
+    // a top-level event.
+    //
+    // Subscribe to BOTH `message` and `app_mention` because:
+    //   - `message` covers DMs + posts in channels the bot is a member of
+    //   - `app_mention` covers mentions in channels where the bot is NOT
+    //     a member (Slack still delivers an app_mention there as a
+    //     conversation-starter)
+    // When the bot IS a member of the channel AND is mentioned, Slack
+    // fires BOTH events for the same message — the dedup ring below
+    // collapses them to a single dispatch keyed on `event.ts`.
     const handle = async (
       payload: { ack: () => Promise<void>; event: SlackInboundEvent },
     ): Promise<void> => {
       // Ack first — the Slack contract is "ack within 3 seconds" and our
       // downstream pipeline can run much longer. A delayed ack triggers
-      // duplicate redelivery.
+      // duplicate redelivery. Dedup of `message`/`app_mention`
+      // double-dispatch lives in `SlackAdapter.translateEvent` (one
+      // place to test, mock-friendly).
       try {
         await payload.ack();
       } catch (err) {
