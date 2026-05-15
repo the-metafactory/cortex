@@ -9,6 +9,7 @@
 
 import { Hono } from "hono";
 import type { Env } from "../index";
+import type { Classification } from "../../../../bus/myelin/envelope-validator";
 
 // ---------------------------------------------------------------------------
 // G-406: Module-level cache
@@ -255,17 +256,9 @@ async function getActiveAgents(
     params.push(project);
   }
 
-  // IAW D.5.2 — `home_operator=local` is the dashboard default and
-  // matches sessions with NULL home_operator (purely local traffic). Any
-  // other value matches that operator's federated traffic. We deliberately
-  // do NOT collapse local + federated by default; the operator opts in to
-  // cross-operator visibility via the filter chip.
-  if (homeOperator === "local") {
-    sql += ` AND home_operator IS NULL`;
-  } else if (homeOperator) {
-    sql += ` AND home_operator = ?`;
-    params.push(homeOperator);
-  }
+  const homeFilter = applyHomeOperatorFilter(homeOperator);
+  sql += homeFilter.sql;
+  params.push(...homeFilter.params);
 
   sql += ` ORDER BY started_at DESC`;
 
@@ -317,17 +310,47 @@ async function getActiveAgents(
 }
 
 /**
+ * IAW D.5.2 — translate the `home_operator` query param into a parameterised
+ * SQL fragment for chaining onto a `sessions` WHERE clause.
+ *
+ *   - `undefined` / `null` / `""` → no slicing (snapshot covers all rows).
+ *   - `"local"`                   → `home_operator IS NULL` (purely local
+ *                                   traffic, the dashboard default chip).
+ *   - any other string            → `home_operator = ?` (specific operator).
+ *
+ * Returns `{ sql, params }` rather than mutating in place so the caller's
+ * SELECT is constructible without hidden side-effects on a shared array.
+ *
+ * Echo cortex#224 round 1 — extracted to fold three (and eventually more)
+ * `getActiveAgents` / `getRecentCompletions` / future-helper copies through
+ * one place. Adding `"federated"` (all stamped traffic) or `"public"` (a
+ * specific classification cut) becomes a one-file change.
+ */
+function applyHomeOperatorFilter(homeOperator?: string | null): {
+  sql: string;
+  params: unknown[];
+} {
+  if (homeOperator === "local") {
+    return { sql: ` AND home_operator IS NULL`, params: [] };
+  }
+  if (homeOperator) {
+    return { sql: ` AND home_operator = ?`, params: [homeOperator] };
+  }
+  return { sql: "", params: [] };
+}
+
+/**
  * IAW D.5.3 — build the snapshot's `sovereignty` block from a session row.
  * Returns `null` when none of the three sovereignty fields are populated so
  * the frontend can fast-path the "pre-IAW row, render nothing" case without
  * a per-field truthy check.
  */
 function buildSovereignty(r: Record<string, unknown>): {
-  classification: "local" | "federated" | "public" | null;
+  classification: Classification | null;
   dataResidency: string | null;
   homeOperator: string | null;
 } | null {
-  const classification = r.classification as "local" | "federated" | "public" | null | undefined;
+  const classification = r.classification as Classification | null | undefined;
   const dataResidency = r.data_residency as string | null | undefined;
   const homeOperator = r.home_operator as string | null | undefined;
   if (classification == null && dataResidency == null && homeOperator == null) {
@@ -393,13 +416,9 @@ async function getRecentCompletions(
     params.push(project);
   }
 
-  // IAW D.5.2 — mirror the home_operator slicing applied to active agents.
-  if (homeOperator === "local") {
-    sql += ` AND home_operator IS NULL`;
-  } else if (homeOperator) {
-    sql += ` AND home_operator = ?`;
-    params.push(homeOperator);
-  }
+  const homeFilter = applyHomeOperatorFilter(homeOperator);
+  sql += homeFilter.sql;
+  params.push(...homeFilter.params);
 
   sql += ` ORDER BY completed_at DESC LIMIT ?`;
   params.push(limit);

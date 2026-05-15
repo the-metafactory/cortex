@@ -1,3 +1,11 @@
+// IAW D.5 — `Classification` is the canonical sovereignty-classification
+// union, exported by the envelope validator. Re-exported here as a type-only
+// import so consumers of `IngestEvent` / `SessionSovereignty` don't need to
+// reach into `bus/myelin/` for a one-token union, and so a future widening
+// of the union (e.g. adding `"restricted"`) flows from one definition.
+// The import is type-only — `common/types.ts` stays runtime-dep-free.
+import type { Classification } from "../bus/myelin/envelope-validator";
+
 /** Data shape for inserting a GitHub event into the store */
 export interface GitHubEventData {
   eventId: string;
@@ -62,7 +70,7 @@ export interface PullRequestUpsertData {
  *     the work originated from. For purely-local traffic the two match.
  */
 export interface SessionSovereignty {
-  classification: "local" | "federated" | "public" | null;
+  classification: Classification | null;
   dataResidency: string | null;
   homeOperator: string | null;
 }
@@ -125,7 +133,7 @@ export interface IngestEvent {
    * cloud worker stores nulls. See `SessionSovereignty` for semantics.
    */
   sovereignty?: {
-    classification?: "local" | "federated" | "public";
+    classification?: Classification;
     data_residency?: string;
     home_operator?: string;
   };
