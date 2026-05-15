@@ -1002,6 +1002,64 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     expect(allowed.payload.signed_by).toEqual([]);
   });
 
+  test("C.4.3 — multi-stamp signed_by chain (origin + hub-stamp) carried verbatim onto audit", async () => {
+    // Echo cortex#221 round 1 — lock the federation-case
+    // attribution contract: a hub-stamped envelope's full chain
+    // must round-trip onto `system.access.allowed.payload.signed_by`
+    // exactly as emitted, so future federation audit consumers
+    // can verify the hub re-stamp without re-parsing the
+    // originating envelope.
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+    });
+    await listener.start();
+    await router.start();
+
+    const env = makeReceivedEnvelope();
+    env.signed_by = [
+      {
+        method: "ed25519",
+        principal: "did:mf:cortex",
+        signature: "a".repeat(88),
+        at: "2026-05-15T12:00:00Z",
+        role: "origin",
+      },
+      {
+        method: "hub-stamp",
+        principal: "did:mf:cortex",
+        stamped_by: "did:mf:metafactory-hub",
+        signature: "b".repeat(88),
+        at: "2026-05-15T12:00:01Z",
+        role: "accountability",
+      },
+    ];
+    r.trigger(env, "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const allowed = r.published.find((e) => e.type === "system.access.allowed");
+    expect(allowed).toBeDefined();
+    if (!allowed) return;
+    const signedBy = allowed.payload.signed_by as {
+      method: string;
+      principal: string;
+      role?: string;
+      stamped_by?: string;
+    }[];
+    expect(signedBy).toHaveLength(2);
+    expect(signedBy[0]!.method).toBe("ed25519");
+    expect(signedBy[0]!.role).toBe("origin");
+    expect(signedBy[1]!.method).toBe("hub-stamp");
+    expect(signedBy[1]!.stamped_by).toBe("did:mf:metafactory-hub");
+    expect(signedBy[1]!.role).toBe("accountability");
+  });
+
   test("C.4.2 — system.access.denied carries structured reason + signed_by", async () => {
     const r = recordingRuntime();
     const router = createSurfaceRouter(r.runtime);

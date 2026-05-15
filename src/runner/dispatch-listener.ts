@@ -425,6 +425,18 @@ async function handleDispatchEnvelope(
     // verbatim so the audit record is cryptographically attributable
     // (even on deny). Normalised to an array via `getSignedByChain`;
     // empty for legacy unsigned envelopes.
+    //
+    // TODO(phase-D, Echo cortex#221 round 1): audit envelopes are
+    // always emitted with `local` sovereignty via
+    // `defaultSystemSovereignty` — the originating envelope's
+    // classification rides on `payload.intent_sovereignty` only.
+    // Once federated dispatch is gated by this same surface,
+    // consumers subscribing to `federated.{org}.system.access.>`
+    // will miss federated denials. Decide then whether to (a)
+    // mirror `intent_sovereignty.classification` onto the audit
+    // envelope itself, (b) emit two envelopes (local + federated),
+    // or (c) keep audit local-only and expose a federated audit
+    // surface separately. Tracked here so the trade-off is visible.
     const signedBy: SystemAccessSignedBy[] = getSignedByChain(envelope).map(
       (stamp) => ({ ...stamp }),
     );

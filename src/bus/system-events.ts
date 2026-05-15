@@ -564,7 +564,45 @@ export interface SystemAccessSovereignty {
  * `signed_by[0].principal` between the original envelope and the
  * audit one without re-parsing either.
  */
-export type SystemAccessSignedBy = Record<string, unknown>;
+export interface SystemAccessSignedBy {
+  /** Originating principal — `did:mf:<name>` per myelin convention. */
+  principal: string;
+  /** Stamp method — `"ed25519"` | `"hub-stamp"` today; extensible. */
+  method?: string;
+  /** ISO-8601 timestamp the signature was produced. */
+  at?: string;
+  /**
+   * Variant-specific fields ride through verbatim: `signature`,
+   * `stamped_by` (hub-stamp), `role` (myelin#31 chain semantics).
+   * Keeps the surface loose-but-typed so new variants don't break
+   * the audit module before it catches up. Echo cortex#221 round 1.
+   */
+  [k: string]: unknown;
+}
+
+/**
+ * Structured reason payload on `system.access.denied` envelopes.
+ * Loosely mirrors `policy/types.ts:PolicyDenyReason` but keeps the
+ * audit surface independent of the policy module (subscribers
+ * consume the wire; they shouldn't re-import the engine types).
+ * `kind` is required so callers can branch on it at compile time;
+ * variant-specific fields ride through. Echo cortex#221 round 1.
+ */
+export interface SystemAccessDeniedReason {
+  /**
+   * Discriminator — `"unknown_principal"` | `"insufficient_role"`
+   * | `"sovereignty_mismatch"` today. Future kinds append per
+   * G-1111 §3.1 (no wire break).
+   */
+  kind: string;
+  /**
+   * Variant-specific fields ride through:
+   *   - `principal_id` (always present today)
+   *   - `missing_capability` (insufficient_role)
+   *   - `reason` (sovereignty_mismatch — free-form text)
+   */
+  [k: string]: unknown;
+}
 
 /**
  * Common shape for `system.access.allowed` and `system.access.denied`.
@@ -629,7 +667,7 @@ export interface SystemAccessAllowedOpts extends SystemAccessCommonOpts {
  * system-events.ts to the policy module's type module.
  */
 export interface SystemAccessDeniedOpts extends SystemAccessCommonOpts {
-  reason: Record<string, unknown>;
+  reason: SystemAccessDeniedReason;
 }
 
 /**
