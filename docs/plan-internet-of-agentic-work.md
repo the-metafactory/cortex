@@ -395,14 +395,14 @@ Pre-Phase-B caveat (Echo cortex#220 round 1): the dispatch-listener policy gate 
 
 ### D.4 Cloud-side network registry service
 
-- [ ] **D.4.1** New service alongside `grove-api` (renamed to `cortex-api` post-MIG-7); hosted at `network.meta-factory.ai` or similar. Hono REST API.
-- [ ] **D.4.2** Endpoints:
+- [x] **D.4.1** New service alongside `grove-api` (renamed to `cortex-api` post-MIG-7); hosted at `network.meta-factory.ai` or similar. Hono REST API. — `src/services/network-registry/` (this PR).
+- [x] **D.4.2** Endpoints:
   - `POST /operators/{operator_id}/register` — operator publishes their operator NKey + stack identities + capability declaration (signed assertion).
   - `GET /operators/{operator_id}` — peers query operator's current pubkey + stack list.
   - `GET /networks/{network_id}/roster` — query who's in this network.
   - `GET /capabilities?query=...` — capability search across networks.
-- [ ] **D.4.3** Cortex consults the registry at startup + on schedule to refresh peer pubkeys; in-memory cache invalidated on operator-publish events.
-- [ ] **D.4.4** Registry signs assertions; cortex verifies before trusting.
+- [ ] **D.4.3** Cortex consults the registry at startup + on schedule to refresh peer pubkeys; in-memory cache invalidated on operator-publish events. — consumer side (cortex-side `RegistryClient`) is a separate follow-up; this PR ships the producer surface.
+- [x] **D.4.4** Registry signs assertions; cortex verifies before trusting. — registry-side signing landed; cortex-side verification lands with D.4.3 consumer.
 
 ### D.5 Cloud dashboard multi-operator slicing (cortex#107 Step H)
 

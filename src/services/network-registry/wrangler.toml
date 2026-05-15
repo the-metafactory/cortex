@@ -1,0 +1,72 @@
+name = "cortex-network-registry"
+main = "src/index.ts"
+compatibility_date = "2026-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+# IAW D.4 — cloud-side network registry service. Public REST surface
+# at network.meta-factory.ai (per the plan; the operational DNS choice
+# is finalised at deploy time). Auth model:
+#
+#   POST /operators/{operator_id}/register
+#     — open endpoint. Authenticity is enforced by the request BODY
+#     carrying a signed assertion: the operator signs their own
+#     registration with their operator NKey. The registry verifies the
+#     signature against the operator's CURRENT pubkey (or, on first
+#     register, trust-on-first-use; rotation requires the previous key
+#     to sign the new one — out of scope for v1, follow-up).
+#
+#   GET endpoints
+#     — public read. Responses are SIGNED ASSERTIONS produced by the
+#     registry's own Ed25519 key (REGISTRY_SIGNING_KEY) so that cortex
+#     peers verify the chain before trusting cached pubkeys.
+#
+# No CF Access bypass policies on this Worker. M2M traffic (operator
+# cortex publishing their pubkey, peer cortex querying) authenticates
+# at the application layer via Ed25519 signatures — same defense-in-
+# depth pattern as S-058 in grove-api.
+workers_dev = false
+
+# Base vars for local dev (wrangler dev)
+[vars]
+ENVIRONMENT = "local"
+
+# ──────────────────────────────────────────────────────────────────
+# Environment: Development
+# ──────────────────────────────────────────────────────────────────
+[env.dev]
+name = "cortex-network-registry-dev"
+workers_dev = false
+
+# Routes for dev are TBD — typically network-dev.meta-factory.ai once
+# DNS is provisioned. Listed here as placeholder; uncomment + tune at
+# deploy time. Same-zone TLS + CF Access still apply.
+# routes = [
+#   { pattern = "network-dev.meta-factory.ai/*", zone_name = "meta-factory.ai" }
+# ]
+
+[env.dev.vars]
+ENVIRONMENT = "development"
+
+# ──────────────────────────────────────────────────────────────────
+# Environment: Production (network.meta-factory.ai)
+# ──────────────────────────────────────────────────────────────────
+[env.production]
+name = "cortex-network-registry"
+workers_dev = false
+
+# routes = [
+#   { pattern = "network.meta-factory.ai/*", zone_name = "meta-factory.ai" }
+# ]
+
+[env.production.vars]
+ENVIRONMENT = "production"
+
+# Secrets (set via `wrangler secret put --env production`):
+#   REGISTRY_SIGNING_KEY  — base64-encoded Ed25519 private key used to
+#                           sign GET responses (registry assertions).
+#                           Generate with:
+#                             bunx wrangler secret put REGISTRY_SIGNING_KEY
+#                           Format: 64 raw bytes (seed + pubkey),
+#                           base64-encoded. The corresponding public key
+#                           is exposed at GET /registry/pubkey so peers
+#                           can pin it at config time.

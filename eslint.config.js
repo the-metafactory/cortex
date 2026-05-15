@@ -128,6 +128,7 @@ export default tseslint.config(
       "src/worker/",
       "src/webhook-proxy/",
       "src/surface/mc/worker/",
+      "src/services/network-registry/",
       "src/taps/gh-webhook/",
       "src/surface/mc/dashboard-v2/",
       "**/*.bak.ts",

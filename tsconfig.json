@@ -30,6 +30,7 @@
     "src/worker",
     "src/webhook-proxy",
     "src/surface/mc/worker",
+    "src/services/network-registry",
     "src/taps/gh-webhook",
     "../grove-auth"
   ]
