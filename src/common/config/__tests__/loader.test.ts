@@ -525,7 +525,9 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     const cfg = minimalCortex();
     const firstAgent = (cfg.agents as Record<string, unknown>[])[0]!;
     const discordPresence = (firstAgent.presence as Record<string, unknown>).discord as Record<string, unknown>;
-    discordPresence.surfaceFallbackChannelId = 12345 as unknown as string;
+    // discordPresence is typed `Record<string, unknown>`, so a numeric
+    // assignment doesn't need a cast — `unknown` accepts any value.
+    discordPresence.surfaceFallbackChannelId = 12345;
     const path = writeCortexConfig(testDir, cfg);
     const { config } = loadConfigWithAgents(path);
     expect(typeof config.discord[0]!.surfaceFallbackChannelId).toBe("string");
