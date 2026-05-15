@@ -51,8 +51,10 @@ import type {
   Agent,
   DiscordPresence,
   MattermostPresence,
+  Policy,
   StackConfig,
 } from "./common/types/cortex-config";
+import { policyEngineFromConfig } from "./common/policy/factory";
 import { MattermostAdapter } from "./adapters/mattermost";
 import type { PlatformAdapter } from "./adapters/types";
 
@@ -177,6 +179,22 @@ export interface StartCortexOptions {
    * @internal — not part of the public API; semver does not apply.
    */
   stack?: StackConfig;
+  /**
+   * IAW Phase C.3.1 (refs cortex#115) — optional `policy:` block from
+   * `CortexConfig`, threaded through from the loader so the boot path
+   * can build the PolicyEngine once and pass it to the dispatch-
+   * listener. Undefined for legacy `bot.yaml` input (the block lives
+   * on `CortexConfigSchema` only) AND for cortex-shape input where
+   * the operator hasn't declared a `policy:` block — the engine
+   * factory returns `undefined` for both, and the dispatch-listener
+   * falls back to the legacy unauthenticated path.
+   *
+   * C.2b removes the legacy path; until then, this seam keeps the
+   * existing dev-mode bots booting unchanged.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  policy?: Policy;
 }
 
 /**
@@ -841,8 +859,25 @@ export async function startCortex(
     }
   }
 
+  // IAW Phase C.3.1 — build the PolicyEngine from the optional
+  // `policy:` block on cortex.yaml. `policyEngineFromConfig` returns
+  // `undefined` when no block was declared or it has no principals;
+  // the dispatch-listener falls back to the legacy unauthenticated
+  // path in that case (C.2b removes the legacy path).
+  const policyEngine = policyEngineFromConfig(options.policy);
+  if (policyEngine !== undefined) {
+    console.log(
+      `cortex: policy-engine active — principals=${policyEngine.principalCount} roles=${policyEngine.roleCount}`,
+    );
+  }
+
   // Dispatch-listener — bus envelope → CC spawn.
-  const dispatchListener: DispatchListener = createDispatchListener({ runtime, router, source: systemEventSource });
+  const dispatchListener: DispatchListener = createDispatchListener({
+    runtime,
+    router,
+    source: systemEventSource,
+    ...(policyEngine !== undefined && { policyEngine }),
+  });
   await dispatchListener.start();
 
   // Start router AFTER all surfaces register so the first envelope
@@ -1382,11 +1417,12 @@ if (import.meta.main) {
       // block when the operator declared one — `startCortex` calls
       // `deriveStackId` and logs the resolved stack id. Today this is
       // observational only; emit subjects are unchanged.
-      const { config, inlineAgents, stack } = loadConfigWithAgents(options.config);
+      const { config, inlineAgents, stack, policy } = loadConfigWithAgents(options.config);
       const handle = await startCortex(config, {
         configPath: options.config,
         ...(inlineAgents.length > 0 && { inlineAgents }),
         ...(stack !== undefined && { stack }),
+        ...(policy !== undefined && { policy }),
       });
 
       const shutdown = async () => {

@@ -66,6 +66,7 @@
  */
 
 import type { Envelope } from "../../bus/myelin/envelope-validator";
+import type { Principal } from "../policy/types";
 
 // ---------------------------------------------------------------------------
 // MyelinEnvelope alias
@@ -397,6 +398,20 @@ export interface DispatchRequest {
       harness?: HarnessId;
     };
   };
+  /**
+   * IAW Phase C.3.2 — the authenticated principal whose authority
+   * this dispatch carries. Populated by the dispatch-listener after
+   * the PolicyEngine accepts the call; absent when the runner is
+   * booted without a `policy:` block (legacy / dev path) so the
+   * existing test surface keeps compiling unchanged.
+   *
+   * Shape mirrors `src/common/policy/types.ts` Principal. We import
+   * the type from there to keep the engine and the harness on one
+   * definition of "who is acting" — the harness can read
+   * `principal.home_operator` / `home_stack` for sovereignty-aware
+   * substrate decisions without re-parsing the envelope.
+   */
+  principal?: Principal;
   /**
    * Q5 lock-in (design doc §5, 2026-05-13).
    *

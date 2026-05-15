@@ -702,3 +702,160 @@ describe("dispatch-listener — subject filtering", () => {
     expect(r.published).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// IAW Phase C.3.1 — PolicyEngine gating
+// ---------------------------------------------------------------------------
+
+import { PolicyEngine } from "../../common/policy/engine";
+
+/**
+ * Build a single-principal engine for gating tests. The principal id
+ * matches the envelope helper's default `agent_id` of `"cortex"` so
+ * the implicit capability `dispatch.cortex` resolves cleanly.
+ */
+function engineGranting(capabilities: readonly string[]): PolicyEngine {
+  return new PolicyEngine({
+    principals: [
+      {
+        id: "cortex",
+        home_operator: "andreas",
+        home_stack: "andreas/research",
+        role: ["operator"],
+        trust: [],
+      },
+    ],
+    roles: [{ id: "operator", capabilities }],
+  });
+}
+
+describe("dispatch-listener — policy gating (C.3.1)", () => {
+  test("no engine → legacy pass-through (dispatch proceeds, started+completed)", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      // no policyEngine → legacy path
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(r.published.map((e) => e.type)).toEqual([
+      "dispatch.task.started",
+      "dispatch.task.completed",
+    ]);
+  });
+
+  test("engine + allow → dispatch proceeds normally", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(r.published.map((e) => e.type)).toEqual([
+      "dispatch.task.started",
+      "dispatch.task.completed",
+    ]);
+  });
+
+  test("engine + deny (insufficient_role) → no lifecycle envelopes, no harness call", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      // Grant a *different* capability so dispatch.cortex misses.
+      policyEngine: engineGranting(["other.thing"]),
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // No envelopes published — the dispatch was gated before the
+    // harness was constructed.
+    expect(r.published).toHaveLength(0);
+    expect(optsCaptured).toHaveLength(0);
+  });
+
+  test("engine + deny (unknown_principal) → no lifecycle envelopes", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    // Engine has only `cortex`; envelope targets `ghost-agent` which
+    // is not declared as a principal.
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.ghost-agent"]),
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(
+      makeReceivedEnvelope({ agent_id: "ghost-agent" }),
+      "local.metafactory.dispatch.task.received",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(r.published).toHaveLength(0);
+    expect(optsCaptured).toHaveLength(0);
+  });
+
+  test("engine + signed_by[0].principal as did:mf:NAME → prefix stripped, principal resolved", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+    });
+    await listener.start();
+    await router.start();
+
+    const env = makeReceivedEnvelope();
+    env.signed_by = [
+      {
+        method: "ed25519",
+        principal: "did:mf:cortex",
+        signature: "a".repeat(88),
+        at: "2026-05-15T12:00:00Z",
+      },
+    ];
+
+    r.trigger(env, "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(r.published.map((e) => e.type)).toEqual([
+      "dispatch.task.started",
+      "dispatch.task.completed",
+    ]);
+  });
+});

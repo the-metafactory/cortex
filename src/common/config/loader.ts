@@ -17,6 +17,7 @@ import {
   type CortexConfig,
   type DiscordPresence,
   type MattermostPresence,
+  type Policy,
   type StackConfig,
 } from "../types/cortex-config";
 
@@ -78,6 +79,16 @@ export interface LoadedConfig {
    * `src/common/types/stack.ts` for the boot-time resolver that consumes this.
    */
   stack?: StackConfig;
+  /**
+   * Optional policy block (IAW C.3.1, cortex#115). Populated only when
+   * the input was cortex-shape AND the operator declared a `policy:`
+   * block. Legacy bot.yaml input always yields `undefined`. The boot
+   * path passes this through to `policyEngineFromConfig` which returns
+   * `undefined` when the block is absent OR has no principals — in
+   * which case the dispatch-listener falls back to the legacy
+   * unauthenticated path until C.2b removes it.
+   */
+  policy?: Policy;
 }
 
 /**
@@ -315,6 +326,11 @@ function loadCortexShape(
     // simple: `const { stack } = loadConfigWithAgents(path)` is safe whether
     // or not the operator declared the block.
     ...(cortexConfig.stack !== undefined && { stack: cortexConfig.stack }),
+    // IAW C.3.1 — same pattern for the `policy:` block. Surfaced raw so
+    // the boot path passes it to `policyEngineFromConfig` once. The
+    // schema layer (PolicySchema.superRefine) has already enforced
+    // cross-references + uniqueness, so this is a pure carry-through.
+    ...(cortexConfig.policy !== undefined && { policy: cortexConfig.policy }),
   };
 }
 
