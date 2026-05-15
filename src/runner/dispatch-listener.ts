@@ -497,31 +497,15 @@ async function handleDispatchEnvelope(
       // C.4.2 / D.3.2 — emit `system.access.denied` carrying the
       // structured engine deny reason + signed_by chain. Lives on a
       // different subject than the dispatch.task.* lifecycle so audit
-      // consumers (dashboard, pipeline) get a stable wire path.
-      //
-      // IAW Phase D.3.2 — stamp `source_network` onto the audit
-      // reason payload whenever the dispatch arrived on a federated
-      // subject, even when the deny kind isn't one of the D.3
-      // federation-specific variants (e.g. `insufficient_role` on a
-      // federated dispatch). Audit consumers branching on
-      // `reason.kind` can read `reason.source_network` uniformly and
-      // render which network the deny came from. D.3 federation-
-      // specific reasons already carry the field via the
-      // discriminator; the merge is a no-op for those.
-      //
-      // The audit reason rides on `SystemAccessDeniedReason` whose
-      // `[k: string]: unknown` index allows additive fields without
-      // a wire-schema bump — distinct from `PolicyDenyReason` which
-      // is a tight discriminated union and would reject the spread.
-      // Echo cortex#221 round 1 carved the audit/policy split for
-      // exactly this kind of audit-only enrichment.
-      const auditReason: Record<string, unknown> = {
-        ...(decision.reason as unknown as Record<string, unknown>),
-        ...(sourceNetwork !== undefined && { source_network: sourceNetwork }),
-      };
+      // consumers (dashboard, pipeline) get a stable wire path. The
+      // `source_network` enrichment is delegated to `enrichDenyReason`
+      // so the cast that bridges `PolicyDenyReason` (tight discriminated
+      // union) → `SystemAccessDeniedReason` (`[k: string]: unknown`
+      // open record) lives in one localised helper rather than on the
+      // dispatch path (Echo cortex#227 round 1).
       const denied = createSystemAccessDeniedEvent({
         ...auditCommon,
-        reason: auditReason as unknown as SystemAccessDeniedReason,
+        reason: enrichDenyReason(decision.reason, sourceNetwork),
       });
       await runtime.publish(denied);
       // Echo cortex#220 round 2 M-1 — also synthesise a terminal
@@ -718,6 +702,44 @@ function resolvePrincipalId(
   const origin = chain[0];
   if (origin === undefined) return payload.agent_id;
   return extractAgentIdFromDid(origin.principal) ?? origin.principal;
+}
+
+/**
+ * IAW Phase D.3.2 (cortex#116, Echo cortex#227 round 1) — produce the
+ * `SystemAccessDeniedReason` payload for a deny audit envelope from
+ * an engine `PolicyDenyReason`, optionally enriched with the
+ * `source_network` that the dispatch arrived on.
+ *
+ * The audit reason rides on `SystemAccessDeniedReason` whose `kind:
+ * string` + `[k: string]: unknown` shape was carved by Echo cortex#221
+ * round 1 to decouple the audit surface from the tighter
+ * `PolicyDenyReason` discriminated union — additive fields like
+ * `source_network` can land on the wire without forcing every audit
+ * consumer to update its types. Keeping the enrichment in one place
+ * gives operators a single function to inspect when reasoning about
+ * "what shape does a deny envelope land with for federated traffic?"
+ *
+ * D.3 federation-specific reasons (`unknown_network`,
+ * `stack_not_in_network`) already carry `source_network` via the
+ * discriminator — the merge is a no-op for those; the value lives on
+ * the same field name and the spread overwrites with an identical
+ * literal.
+ */
+function enrichDenyReason(
+  reason: PolicyDenyReason,
+  source_network: string | undefined,
+): SystemAccessDeniedReason {
+  // `SystemAccessDeniedReason` is structurally `{ kind: string; [k:
+  // string]: unknown }` — open enough to accept any spread of a
+  // `PolicyDenyReason` discriminated-union member directly. No cast
+  // needed (Echo cortex#227 round 1 — kept the helper for the
+  // localisation reasons in the JSDoc, even though the cast that
+  // motivated extraction is no longer required at the assignment
+  // site).
+  return {
+    ...reason,
+    ...(source_network !== undefined && { source_network }),
+  };
 }
 
 /**
