@@ -17,3 +17,4 @@ export type {
   Principal,
   RoleDefinition,
 } from "./types";
+export { policyEngineFromConfig } from "./factory";
