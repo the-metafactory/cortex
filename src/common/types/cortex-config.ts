@@ -970,9 +970,177 @@ export type PolicyRole = z.infer<typeof PolicyRoleSchema>;
  * Phase D extends with `policy.federated.networks[]` per the
  * Q4 lock-in (`docs/design-internet-of-agentic-work.md` §3.4).
  */
+/**
+ * A single peer in a federation network — IAW Phase D.1 (cortex#116).
+ *
+ * Every peer is a remote operator's stack-NKey identity that this
+ * operator's cortex will accept federated traffic from. The triple
+ * `{operator_id, stack_id, operator_pubkey}` is the verifiable
+ * attribution slot: incoming federated envelopes carry
+ * `signed_by[].principal = did:mf:<stack_id>` + a signature that
+ * verifies against `operator_pubkey`. Phase D verification wiring
+ * lands in D.2/D.3; the schema lands first so operators can declare
+ * their federation topology before the verification path is live.
+ */
+export const PolicyFederatedPeerSchema = z.object({
+  /**
+   * Peer operator id — same letter-prefix grammar as `OperatorSchema.id`.
+   * Distinct from the operator's local id; the local operator's id
+   * doesn't appear in `federated.networks[].peers[]` (the local
+   * operator IS the consumer of the peer list).
+   */
+  operator_id: z.string().regex(
+    /^[a-z][a-z0-9-]*$/,
+    "peer.operator_id must match the operator id grammar (lowercase alphanumeric + hyphen, starting with a letter)",
+  ),
+  /**
+   * Peer stack id in `{operator_id}/{stack_id}` form — same shape as
+   * `PolicyPrincipalSchema.home_stack`. The `operator_id` prefix MUST
+   * match the sibling `operator_id` field (cross-validated below);
+   * the redundancy is deliberate so operators can read the file and
+   * see "yes, this is jcfischer's sage-host stack" without splitting
+   * the identity across fields.
+   */
+  stack_id: z.string().regex(
+    /^[a-z][a-z0-9_-]*\/[a-z][a-z0-9_-]*$/,
+    "peer.stack_id must match {operator_id}/{stack_id} format",
+  ),
+  /**
+   * Peer operator's NKey public key — same 56-char U-prefixed base32
+   * grammar as every other NKey on the schema (StackConfigSchema,
+   * PolicyPrincipalSchema). Phase D.4 swaps this static declaration
+   * for a registry-resolved lookup; until then, operators paste the
+   * peer's pubkey directly into cortex.yaml.
+   */
+  operator_pubkey: z.string().regex(
+    /^U[A-Z2-7]{55}$/,
+    "peer.operator_pubkey must be a base32 NKey public key (U-prefixed, 56 chars total)",
+  ),
+});
+
+export type PolicyFederatedPeer = z.infer<typeof PolicyFederatedPeerSchema>;
+
+/**
+ * NATS subject pattern with `*` / `>` wildcards. Used for
+ * `accept_subjects[]` and `deny_subjects[]` lists on a federated
+ * network. Format: dotted lowercase-alphanumeric segments,
+ * optional `*` (single-segment wildcard) or `>` (trailing
+ * multi-segment wildcard, only as the final segment).
+ *
+ * Conservative grammar — matches what cortex actually produces +
+ * what the surface-router's `adapterMatches()` will gate against
+ * in D.2. Operators can always relax via additional patterns
+ * rather than building a regex string.
+ */
+const NATS_SUBJECT_PATTERN_RE = /^([a-z][a-z0-9_-]*|\*)(\.([a-z][a-z0-9_-]*|\*))*(\.>)?$/;
+
+/**
+ * A single federation network — IAW Phase D.1 (cortex#116).
+ *
+ * Networks are the unit of federation policy in cortex per Q4
+ * lock-in: a cortex instance participates in N networks; each
+ * network has its own peer roster, accept/deny lists, and hop
+ * budget. Multi-link transport (one MyelinRuntime per network)
+ * lands in Phase E; Phase D operates one network's leaf-node at a
+ * time, named via `leaf_node`.
+ */
+export const PolicyFederatedNetworkSchema = z.object({
+  /**
+   * Network id — same letter-prefix grammar as principal/role ids.
+   * Appears in NATS subject prefixes
+   * (`federated.{network_id}.<...>`); kept short and
+   * dash-separated for readability on the wire.
+   */
+  id: z.string().regex(
+    /^[a-z][a-z0-9-]*$/,
+    "network id must be lowercase alphanumeric + hyphen, starting with a letter (e.g. 'research-collab')",
+  ),
+  /**
+   * Reference to a named NATS leaf-node connection. In Phase D only
+   * one leaf-node is operable concurrently; the `leaf_node` field
+   * exists for forward compat with Phase E's multi-link
+   * MyelinRuntime. Field grammar matches the agent/network id
+   * pattern (letter-prefix lowercase alphanumeric + hyphen).
+   */
+  leaf_node: z.string().regex(
+    /^[a-z][a-z0-9-]*$/,
+    "network.leaf_node must match the connection id grammar (lowercase alphanumeric + hyphen, starting with a letter)",
+  ),
+  /**
+   * Peer operators reachable on this network. Each entry declares
+   * one peer stack's NKey identity. The list is the trust closure
+   * for the network: a `signed_by[].principal` not in this list
+   * fails verification on the inbound side.
+   */
+  peers: z.array(PolicyFederatedPeerSchema).default([]),
+  /**
+   * Accept-list of NATS subject patterns. An inbound `federated.*`
+   * envelope is dispatched only if its subject matches at least one
+   * entry here (and no entry in `deny_subjects[]`). Empty means
+   * "accept nothing" — operators must explicitly enumerate accepted
+   * subject patterns. D.2 wires the surface-router gate.
+   */
+  accept_subjects: z.array(
+    z.string().regex(
+      NATS_SUBJECT_PATTERN_RE,
+      "accept_subjects[] entries must be NATS subject patterns (dotted lowercase + optional * / > wildcards)",
+    ),
+  ).default([]),
+  /**
+   * Deny-list of NATS subject patterns. A match here overrides
+   * `accept_subjects[]` and rejects the inbound envelope with
+   * `peer_deny_list` (D.2 audit). Useful for "accept all
+   * code-review.* except *.private.*" patterns.
+   */
+  deny_subjects: z.array(
+    z.string().regex(
+      NATS_SUBJECT_PATTERN_RE,
+      "deny_subjects[] entries must be NATS subject patterns (dotted lowercase + optional * / > wildcards)",
+    ),
+  ).default([]),
+  /**
+   * Capability ids this stack announces on the network. Mirrors the
+   * Phase A.6 capability registry — the network publishes these on
+   * `system.capability.announced.<network_id>` so peers can route
+   * tasks by capability without having to know each operator's
+   * agent inventory. Empty = "announce nothing" (a silent
+   * participant — consumes but doesn't offer work).
+   */
+  announce_capabilities: z.array(
+    z.string().regex(
+      /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/,
+      "announce_capabilities[] entries must follow the <domain>.<entity> capability id grammar (e.g. 'code-review.typescript')",
+    ),
+  ).default([]),
+  /**
+   * Maximum chain length on inbound envelopes. `signed_by[].length`
+   * over this value rejects with `max_hop_exceeded` (D.2.3). Zero
+   * means "no hops" — accept only directly-signed envelopes, no
+   * relay. Hop budgets bound the federation graph and prevent
+   * unbounded forwarding loops.
+   */
+  max_hop: z.number().int().min(0),
+});
+
+export type PolicyFederatedNetwork = z.infer<typeof PolicyFederatedNetworkSchema>;
+
+/**
+ * `policy.federated` block — IAW Phase D.1 (cortex#116). Optional
+ * on cortex.yaml; absence means "no federation declared" and the
+ * surface-router treats inbound `federated.*` envelopes as
+ * unrecognised (rejected at the validator layer). When present,
+ * carries the operator's network roster.
+ */
+export const PolicyFederatedSchema = z.object({
+  networks: z.array(PolicyFederatedNetworkSchema).default([]),
+});
+
+export type PolicyFederated = z.infer<typeof PolicyFederatedSchema>;
+
 export const PolicySchema = z.object({
   principals: z.array(PolicyPrincipalSchema).default([]),
   roles: z.array(PolicyRoleSchema).default([]),
+  federated: PolicyFederatedSchema.optional(),
 }).superRefine((policy, ctx) => {
   // Per-offender path emission so a YAML-aware loader can render
   // the error inline at the bad token (Echo cortex#219 round 1).
@@ -1038,6 +1206,75 @@ export const PolicySchema = z.object({
       }
     });
   });
+
+  // IAW Phase D.1 — federation cross-validation. Same per-offender
+  // path pattern as the principal/role rules above; consistent
+  // failure shape across the policy block.
+  if (policy.federated !== undefined) {
+    // Uniqueness — networks[].id.
+    const seenNetwork = new Map<string, number>();
+    policy.federated.networks.forEach((n, networkIdx) => {
+      const dupAt = seenNetwork.get(n.id);
+      if (dupAt !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: `network id "${n.id}" already declared at federated.networks[${dupAt}]`,
+          path: ["federated", "networks", networkIdx, "id"],
+        });
+      } else {
+        seenNetwork.set(n.id, networkIdx);
+      }
+
+      // Per-network peer cross-validation.
+      const seenPeerStack = new Map<string, number>();
+      const seenPeerPubkey = new Map<string, number>();
+      n.peers.forEach((peer, peerIdx) => {
+        // stack_id prefix must match operator_id — the two fields
+        // are deliberately redundant so the file reads naturally,
+        // but they MUST agree. A drift between them would let an
+        // operator declare "peer X has stack Y" where Y belongs to
+        // a different operator — the surface-router would then
+        // accept federated traffic claiming a forged identity.
+        const expectedPrefix = `${peer.operator_id}/`;
+        if (!peer.stack_id.startsWith(expectedPrefix)) {
+          ctx.addIssue({
+            code: "custom",
+            message: `peer.stack_id "${peer.stack_id}" must start with peer.operator_id "${peer.operator_id}" — got prefix "${peer.stack_id.split("/")[0]}/" instead`,
+            path: ["federated", "networks", networkIdx, "peers", peerIdx, "stack_id"],
+          });
+        }
+
+        // Uniqueness — peer.stack_id within a network. Two
+        // declarations of the same stack are operator error; the
+        // schema rejects rather than silently dedup.
+        const dupStackAt = seenPeerStack.get(peer.stack_id);
+        if (dupStackAt !== undefined) {
+          ctx.addIssue({
+            code: "custom",
+            message: `peer.stack_id "${peer.stack_id}" already declared at federated.networks[${networkIdx}].peers[${dupStackAt}]`,
+            path: ["federated", "networks", networkIdx, "peers", peerIdx, "stack_id"],
+          });
+        } else {
+          seenPeerStack.set(peer.stack_id, peerIdx);
+        }
+
+        // Uniqueness — peer.operator_pubkey within a network. A
+        // single pubkey appearing twice signals a copy-paste error
+        // (operator pasted the same key into two peer entries with
+        // different stack_ids); the schema catches it.
+        const dupKeyAt = seenPeerPubkey.get(peer.operator_pubkey);
+        if (dupKeyAt !== undefined) {
+          ctx.addIssue({
+            code: "custom",
+            message: `peer.operator_pubkey already declared at federated.networks[${networkIdx}].peers[${dupKeyAt}] (pubkey collision — paste error?)`,
+            path: ["federated", "networks", networkIdx, "peers", peerIdx, "operator_pubkey"],
+          });
+        } else {
+          seenPeerPubkey.set(peer.operator_pubkey, peerIdx);
+        }
+      });
+    });
+  }
 });
 
 export type Policy = z.infer<typeof PolicySchema>;
