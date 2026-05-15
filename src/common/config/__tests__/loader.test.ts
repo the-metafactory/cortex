@@ -514,17 +514,37 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     expect(config.discord[0]!.surfaceFallbackChannelId).toBeUndefined();
   });
 
-  test("surfaceFallbackChannelId coerces numeric snowflake to string", () => {
-    // Discord snowflakes are large integers that yaml may parse as numbers
-    // when unquoted. The z.coerce.string() schema coerces, matching the
-    // surrounding fields' pattern (agentChannelId, logChannelId).
+  test("surfaceFallbackChannelId coerces a safely-representable numeric to a string", () => {
+    // Discord snowflakes are 64-bit IDs that exceed Number.MAX_SAFE_INTEGER —
+    // testing with a real snowflake as a JS Number literal silently rounds
+    // at source-parse time and proves nothing about round-trip safety. Use
+    // a small numeric to demonstrate ONLY the z.coerce.string() behavior:
+    // operator passes a number, schema returns a string of that number.
+    // The separate "preserves quoted snowflake string verbatim" test below
+    // exercises the realistic path (operator quotes the snowflake in yaml).
     const cfg = minimalCortex();
     const firstAgent = (cfg.agents as Record<string, unknown>[])[0]!;
     const discordPresence = (firstAgent.presence as Record<string, unknown>).discord as Record<string, unknown>;
-    discordPresence.surfaceFallbackChannelId = 1487029848164536361 as unknown as string;
+    discordPresence.surfaceFallbackChannelId = 12345 as unknown as string;
     const path = writeCortexConfig(testDir, cfg);
     const { config } = loadConfigWithAgents(path);
     expect(typeof config.discord[0]!.surfaceFallbackChannelId).toBe("string");
+    expect(config.discord[0]!.surfaceFallbackChannelId).toBe("12345");
+  });
+
+  test("surfaceFallbackChannelId preserves a quoted snowflake string verbatim", () => {
+    // The realistic operator path: yaml configs surrounding `agentChannelId`,
+    // `logChannelId`, etc. all quote Discord snowflakes as strings. Verify
+    // a quoted snowflake survives the round-trip without any digit-loss
+    // from JS Number precision.
+    const snowflake = "1487029848164536361"; // Echo's actual agent-channel snowflake
+    const cfg = minimalCortex();
+    const firstAgent = (cfg.agents as Record<string, unknown>[])[0]!;
+    const discordPresence = (firstAgent.presence as Record<string, unknown>).discord as Record<string, unknown>;
+    discordPresence.surfaceFallbackChannelId = snowflake;
+    const path = writeCortexConfig(testDir, cfg);
+    const { config } = loadConfigWithAgents(path);
+    expect(config.discord[0]!.surfaceFallbackChannelId).toBe(snowflake);
   });
 
   // ---------------------------------------------------------------------------
