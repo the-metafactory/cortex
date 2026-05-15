@@ -661,10 +661,17 @@ export function evaluateFederationGate(
   // is technically a network announcement subject but D.2 only gates
   // dispatch traffic, which always has trailing segments. We deny
   // the malformed shape to fail closed.
+  //
+  // Echo cortex#226 round 1: report a sentinel `"<malformed>"` rather
+  // than the literal empty string for the network id — operators
+  // filtering the access stream by `payload.network_id` get a
+  // searchable token instead of an empty cell. `unknown_network: true`
+  // still flags this branch separately from "id present but not
+  // declared" so the dashboard can render the more specific message.
   if (parts.length < 3 || parts[1] === undefined || parts[1].length === 0) {
     return {
       kind: "peer_not_in_accept_list",
-      networkId: parts[1] ?? "",
+      networkId: "<malformed>",
       unknown_network: true,
     };
   }

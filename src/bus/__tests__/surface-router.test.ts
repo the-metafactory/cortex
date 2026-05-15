@@ -1547,13 +1547,17 @@ describe("evaluateFederationGate — unknown network", () => {
     });
   });
 
-  test("malformed subject (no network id segment) → unknown_network", () => {
+  test("malformed subject (no network id segment) → unknown_network with <malformed> sentinel", () => {
     const decision = evaluateFederationGate(
       "federated.",
       makeFederatedEnvelope(),
       networksMap([makeNetwork()]),
     );
-    expect(decision).toMatchObject({ kind: "peer_not_in_accept_list", unknown_network: true });
+    expect(decision).toEqual({
+      kind: "peer_not_in_accept_list",
+      networkId: "<malformed>",
+      unknown_network: true,
+    });
   });
 
   test("non-federated subject passes through (defensive fail-open)", () => {

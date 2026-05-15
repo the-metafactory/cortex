@@ -485,10 +485,11 @@ export async function startCortex(
   //
   // IAW Phase D.2 (refs cortex#116) — also receives `policy.federated`
   // so inbound `federated.*` envelopes get gated against the operator's
-  // declared accept/deny/max_hop config before adapter fan-out.
-  // Absence (no `policy:` block, or `policy:` block without `federated:`)
-  // means "no federation declared" — federated subjects are rejected
-  // with `peer_not_in_accept_list` (`unknown_network: true`).
+  // declared accept/deny/max_hop config before adapter fan-out. When
+  // `policy.federated` is absent or `networks[]` is empty, the gate is
+  // fully inert — `federated.*` envelopes pass through unchanged
+  // (mirrors the C.3.1 policy-engine contract: no policy → no gating).
+  // Federation enforcement is opt-in.
   const router: SurfaceRouter = createSurfaceRouter(runtime, {
     systemEventSource,
     ...(options.policy?.federated !== undefined && { federated: options.policy.federated }),
