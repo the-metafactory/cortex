@@ -864,10 +864,31 @@ export async function startCortex(
   // `undefined` when no block was declared or it has no principals;
   // the dispatch-listener falls back to the legacy unauthenticated
   // path in that case (C.2b removes the legacy path).
-  const policyEngine = policyEngineFromConfig(options.policy);
-  if (policyEngine !== undefined) {
+  //
+  // SECURITY GATE (Echo cortex#220 round 1): until Phase B (cortex#114)
+  // makes signature verification mandatory at the envelope-validator
+  // layer, the dispatch-listener's policy gate authorises on an
+  // unverified `signed_by[0].principal` claim. Acceptable for
+  // single-operator / dev-mode deployments where the bus is local
+  // and every publisher is trusted; NOT acceptable for multi-
+  // principal trust over a federated bus. We refuse to build the
+  // engine unless the operator explicitly acknowledges this trade-
+  // off via the env var below — making the limitation impossible to
+  // adopt accidentally. The variable can be retired together with
+  // C.2b once Phase B verification is wired.
+  const UNVERIFIED_ACK = "CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK";
+  let policyEngine = policyEngineFromConfig(options.policy);
+  if (policyEngine !== undefined && process.env[UNVERIFIED_ACK] !== "1") {
+    console.warn(
+      `cortex: policy: block declared in cortex.yaml but ${UNVERIFIED_ACK}=1 not set — ignoring the block.\n` +
+        `        Pre-Phase-B verification (cortex#114) the gate authorises on an unverified signed_by[0].principal claim;\n` +
+        `        any bus publisher can fabricate principal identity. Set ${UNVERIFIED_ACK}=1 in the cortex env\n` +
+        `        to acknowledge the trade-off and enable the engine. See dispatch-listener.ts checkDispatchPolicy() docs.`,
+    );
+    policyEngine = undefined;
+  } else if (policyEngine !== undefined) {
     console.log(
-      `cortex: policy-engine active — principals=${policyEngine.principalCount} roles=${policyEngine.roleCount}`,
+      `cortex: policy-engine active — principals=${policyEngine.principalCount} roles=${policyEngine.roleCount} (${UNVERIFIED_ACK}=1; pre-Phase-B unverified-principal mode)`,
     );
   }
 

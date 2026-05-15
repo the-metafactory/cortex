@@ -457,14 +457,40 @@ type DispatchPolicyResult =
 /**
  * Build an `Intent` from the envelope + payload and ask the engine.
  *
+ * **⚠ SECURITY — pre-Phase-B authorization-without-authentication.**
+ * The principal claim read here (`signed_by[0].principal`) is
+ * **not yet cryptographically verified at the envelope-validator
+ * layer**. Per `src/bus/myelin/envelope-validator.ts:125-126`:
+ * *"IAW Phase A.2: `signed_by` is surfaced but not yet consumed
+ * for trust decisions."* That means a publisher to the bus can
+ * fabricate `signed_by[0].principal = "did:mf:operator"` and
+ * acquire the operator role's capabilities until Phase B's
+ * signature verification is mandatory at the validator. Echo
+ * cortex#220 round 1.
+ *
+ * **What this gate IS safe for (today):**
+ *   - Single-operator / dev-mode deployments where the bus is a
+ *     local leaf node with no untrusted publishers.
+ *   - Multi-operator deployments where every adapter+harness on
+ *     the bus is operated by the same trust boundary.
+ *
+ * **What this gate is NOT safe for (today):**
+ *   - Multi-principal trust in a deployment where untrusted
+ *     processes can publish onto the bus.
+ *   - Federation across operators (Phase D) — verification is
+ *     mandatory there.
+ *
+ * The `CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK=1` opt-in below makes
+ * this trade-off explicit at boot. Phase B (cortex#114) wires the
+ * verifier into the validator and closes the gap.
+ *
  * **Principal resolution.** Read `envelope.signed_by[0].principal`
  * (originator stamp per myelin#31 chain semantics). Strip the
  * `did:mf:` prefix to match `Principal.id`. If no chain is present
  * (legacy unsigned envelope), fall back to `payload.agent_id` —
  * the engine will reject with `unknown_principal` unless the
- * agent is also a declared principal in the policy block. Once
- * Phase B's verification is mandatory at the envelope-validator
- * layer, the fallback can be dropped.
+ * agent is also a declared principal in the policy block. Both
+ * paths are equally unverified today (Echo cortex#220 round 1).
  *
  * **Capability claim.** `dispatch.<agent_id>` — the dispatch surface
  * is "may principal X invoke agent Y on this stack?". C.2b will let
