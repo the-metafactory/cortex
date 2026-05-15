@@ -1126,6 +1126,15 @@ export const PolicyFederatedNetworkSchema = z.object({
    * means "no hops" — accept only directly-signed envelopes, no
    * relay. Hop budgets bound the federation graph and prevent
    * unbounded forwarding loops.
+   *
+   * **No default — required field.** Every other list-shaped field
+   * on this schema defaults to `[]`, but `max_hop` is deliberately
+   * not defaulted: a hop budget MUST be a conscious operator
+   * choice. A silent `.default(0)` would let a typoed `max_hop:`
+   * line pass parse with the most-restrictive setting and confuse
+   * operators wondering why federated traffic stopped arriving;
+   * a missing line should fail loudly at config-load instead.
+   * Echo cortex#223 round 2.
    */
   max_hop: z.number().int().min(0),
 });
