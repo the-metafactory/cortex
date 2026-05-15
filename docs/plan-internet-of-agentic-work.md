@@ -273,17 +273,18 @@ Most of Phase C is paper until B.4 ships, but the paper can be drafted now:
 - Q6 lock-in confirmed (audit ownership) — DONE 2026-05-13.
 - Q7 lock-in confirmed (stack-aware namespace) — DONE 2026-05-13. Phase C is the last natural moment to absorb the stack-aware namespace into cortex.yaml's principal model without re-flipping later.
 
-### C.1 PolicyEngine module
+### C.1 PolicyEngine module — DONE (cortex#218)
 
-- [ ] **C.1.1** Create `src/common/policy/` directory.
-- [ ] **C.1.2** `PolicyEngine.check(principal, intent) → { allow, capabilities } | { allow: false, reason }` API.
-- [ ] **C.1.3** Inputs: a `Principal { id, home_operator, home_stack, role[], trust[] }`; an `Intent { capability, sovereignty, payload_summary }`.
-- [ ] **C.1.4** Decision logic: principal's role grants → intersection with required capabilities; sovereignty constraints (max_classification, allowed_residency); per-peer accept/deny lists (Phase D extends).
-- [ ] **C.1.5** Audit emission: every check emits `system.access.{allowed,denied}` envelope (cortex#97 audit envelopes) on `local.{operator}.{stack}.system.access.{allowed|denied}`.
+- [x] **C.1.1** Create `src/common/policy/` directory. — cortex#218
+- [x] **C.1.2** `PolicyEngine.check(principalId, intent) → { allow, capabilities } | { allow: false, reason }` API. (Note: takes `principalId: string`, not a Principal object — Echo cortex#218 round 1 closed the spoofing footgun.) — cortex#218
+- [x] **C.1.3** Inputs: a `Principal { id, home_operator, home_stack, role[], trust[] }`; an `Intent { capability, sovereignty, payload_summary }`. — cortex#218
+- [x] **C.1.4** Decision logic: principal's role grants → effective capabilities; sovereignty fields surfaced on `intent` for C.4 carry-through (sovereignty enforcement deferred to Phase D per design). — cortex#218
+- [x] **C.1.5** Audit emission: implemented in C.4 (cortex#221), not C.1 — engine is pure, audit envelopes emitted by the dispatch-listener with the engine's structured decision.
 
-### C.2 cortex.yaml schema flip
+### C.2 cortex.yaml schema flip — C.2a DONE (cortex#219); C.2b/C.2c DEFERRED (post-MIG-8 v2.0.0)
 
-- [ ] **C.2.1** Schema migration: per-adapter `roles[]` removed; top-level `policy: { principals[], roles[] }` added.
+- [x] **C.2.1 (additive — C.2a)** Top-level `policy: { principals[], roles[] }` added; schema cross-refines uniqueness + role/trust referential integrity. Legacy per-adapter `roles[]` retained for backward compatibility (removal in C.2b). — cortex#219
+- [ ] **C.2.1.b (breaking — C.2b)** Per-adapter `roles[]` removed from `DiscordPresenceSchema` + `MattermostPresenceSchema` + adapter role-resolver code; v2.0.0 bump. — deferred (out of Phase C scope; expands adapter surface; tracked separately).
 - [ ] **C.2.2** `policy.principals[]` schema:
   ```yaml
   policy:
@@ -304,35 +305,44 @@ Most of Phase C is paper until B.4 ships, but the paper can be drafted now:
         sovereignty:
           max_classification: federated
   ```
-- [ ] **C.2.3** Discord/Mattermost adapters thin to ~30 LOC: translate inbound event → `Principal`; call `PolicyEngine.check`; act on result. No role-resolver logic in adapter.
-- [ ] **C.2.4** `migrate-config` CLI extension: lift existing per-adapter roles into top-level `policy:` with warnings on inconsistencies between adapters.
+- [ ] **C.2.3** Discord/Mattermost adapters thin to ~30 LOC: translate inbound event → `Principal`; call `PolicyEngine.check`; act on result. No role-resolver logic in adapter. — deferred with C.2b.
+- [ ] **C.2.4 (C.2c)** `migrate-config` CLI extension: lift existing per-adapter roles into top-level `policy:` with warnings on inconsistencies between adapters. — deferred with C.2b.
 
-### C.3 Integration with substrate harness
+### C.3 Integration with substrate harness — DONE (cortex#220)
 
-- [ ] **C.3.1** Dispatch-handler calls `PolicyEngine.check()` before invoking `SessionHarness.dispatch()`.
-- [ ] **C.3.2** Substrate harness receives the `Principal` object as part of the dispatch request (already specified in cortex#91 spec).
-- [ ] **C.3.3** Sovereignty fields flow: envelope.sovereignty → PolicyEngine input → harness has visibility for downstream LLM calls (e.g. frontier-ok gates frontier model calls).
+- [x] **C.3.1** Dispatch-listener calls `PolicyEngine.check()` before invoking `SessionHarness.dispatch()`. Gated behind `CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK=1` env var (Echo cortex#220 round 1 — pre-Phase-B authorization-without-authentication acknowledgement). — cortex#220
+- [x] **C.3.2** `DispatchRequest.principal?: Principal` added to substrate contract. Forwarded as `undefined` today; C.3b will thread the resolved Principal through. — cortex#220
+- [x] **C.3.3** Sovereignty fields flow envelope → Intent.sovereignty → engine.check verbatim. — cortex#220
 
-### C.4 Audit envelopes (cortex#97 tie-in)
+### C.4 Audit envelopes (cortex#97 tie-in) — DONE (cortex#221)
 
-- [ ] **C.4.1** PolicyEngine emits `system.access.allowed` for every accepted dispatch.
-- [ ] **C.4.2** PolicyEngine emits `system.access.denied` for every rejected dispatch with a structured reason code (`unknown_principal`, `insufficient_role`, `sovereignty_mismatch`, `peer_deny_list`).
-- [ ] **C.4.3** Audit envelopes carry `signed_by[]` from the originating event (so denied envelopes are still cryptographically attributable).
+- [x] **C.4.1** Dispatch-listener emits `system.access.allowed` for every accepted dispatch with principal_id, capability, capabilities, intent_sovereignty, envelope_id/subject, signed_by[]. — cortex#221
+- [x] **C.4.2** Dispatch-listener emits `system.access.denied` for every rejected dispatch with structured `SystemAccessDeniedReason` ({ kind, ...variant_fields }). — cortex#221
+- [x] **C.4.3** Audit envelopes carry `signed_by[]` from the originating event verbatim (multi-stamp chain preserved — ed25519 + hub-stamp). — cortex#221
 
 ### C.5 Tests + migration
 
-- [ ] **C.5.1** PolicyEngine unit tests cover allow/deny matrix.
-- [ ] **C.5.2** Migration test: a representative grove-v2 `bot.yaml` flips to cortex-shaped `cortex.yaml` with the new `policy:` block; round-trip identity (same auth decisions).
-- [ ] **C.5.3** Integration test: end-to-end inbound Discord event → adapter → dispatch-handler → PolicyEngine → harness → envelope-emitted reply, with audit envelopes asserted.
+- [x] **C.5.1** PolicyEngine unit tests cover allow/deny matrix (engine.test.ts + factory.test.ts in C.1/C.2a). — cortex#218, cortex#219
+- [ ] **C.5.2** Migration test: a representative grove-v2 `bot.yaml` flips to cortex-shaped `cortex.yaml` with the new `policy:` block; round-trip identity (same auth decisions). — DEFERRED (gated on C.2b — without removing legacy per-adapter `roles[]` the migration story isn't load-bearing yet).
+- [x] **C.5.3** Integration test: end-to-end inbound `dispatch.task.received` → dispatch-listener → PolicyEngine → harness → lifecycle envelopes + audit envelopes asserted. Implemented as 29 listener tests in `src/runner/__tests__/dispatch-listener.test.ts` exercising allow/deny paths, signed_by single + multi-stamp, sovereignty flow, audit payload shape, double-emit ordering on deny. (Note: Discord adapter still uses the legacy role-resolver path; full adapter→engine wiring lands with C.2b.) — cortex#220, cortex#221
 
 ### Phase C acceptance criteria
 
-- `src/common/policy/` module exists with `PolicyEngine.check()`.
-- Discord/Mattermost adapters reduced to ~30 LOC each.
-- cortex.yaml schema has `policy: { principals[], roles[] }` at top level; per-adapter `roles[]` removed.
-- `migrate-config` CLI lifts existing per-surface roles into top-level `policy:`.
-- `system.access.{allowed,denied}` envelopes emitted by PolicyEngine.
-- cortex.yaml schema migration is one-way (post-flip, no rollback in v1).
+- [x] `src/common/policy/` module exists with `PolicyEngine.check()`. — cortex#218
+- [ ] Discord/Mattermost adapters reduced to ~30 LOC each. — DEFERRED with C.2b.
+- [x] cortex.yaml schema has `policy: { principals[], roles[] }` at top level (additive). — cortex#219
+- [ ] Per-adapter `roles[]` removed. — DEFERRED with C.2b.
+- [ ] `migrate-config` CLI lifts existing per-surface roles into top-level `policy:`. — DEFERRED with C.2c.
+- [x] `system.access.{allowed,denied}` envelopes emitted by dispatch-listener (with engine decision). — cortex#221
+- cortex.yaml schema migration is one-way (post-flip, no rollback in v1). — C.2b breaking change pending.
+
+**Phase C closeout status (2026-05-15):**
+
+Phase C primary objective — *PolicyEngine as the single AAA decision point with audit envelopes* — is **DONE** (C.1 + C.2a + C.3 + C.4 + C.5.1 + C.5.3 all merged). What ships as Phase C of IAW closes cortex#115.
+
+What's **DEFERRED to v2.0.0 cleanup** (C.2b/C.2c/C.5.2): the breaking removal of per-adapter `roles[]` from `DiscordPresenceSchema` / `MattermostPresenceSchema`, the adapter role-resolver refactor (~30 LOC), the `migrate-config` CLI extension, and the migration-fidelity round-trip test. The legacy per-adapter path is parallel to (not in conflict with) the new top-level `policy:` block; both shapes coexist until v2.0.0 cuts.
+
+Pre-Phase-B caveat (Echo cortex#220 round 1): the dispatch-listener policy gate authorises on an unverified `signed_by[0].principal` claim until cortex#114 (Phase B verification) wires the verifier into the envelope-validator. The gate is `CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK=1` opt-in until that closes.
 
 **Critical insight (from design doc §6):** This is the ONLY phase where the operator-facing config schema changes. Sequencing Phases A and B before Phase C means the flip happens once. Q7 lock-in is absorbed here — the stack-aware namespace already lands at Phase A as a structurally additive `stack:` block; Phase C's `policy.principals[]` carries `home_operator` + `home_stack` so the principal table is stack-aware from the moment the flip happens.
 
