@@ -245,7 +245,42 @@ export interface DispatchTaskFailedOpts extends DispatchTaskCommonOpts {
    * error; "aborted" implies an outside force terminated it.
    */
   errorSummary: string;
+  /**
+   * IAW Phase C.3.1 — structured machine-readable reason for failures
+   * that come from upstream of the substrate (Echo cortex#220 round 2
+   * M-1). Today the only producer is the dispatch-listener's policy
+   * gate, which sets `kind: "policy_denied"` with a copy of the
+   * engine's `PolicyDenyReason`. Subscribers correlating on task_id
+   * (worklog-manager, agent-team) can branch on `payload.reason.kind`
+   * to render the gate decision distinctly from substrate-side errors.
+   *
+   * Surfaces as `payload.reason` on the envelope (snake_case is
+   * already in the wire idiom; the field shape is the discriminated
+   * union below).
+   *
+   * Future kinds (added as new gates appear, no schema flip needed):
+   *   - `substrate_unavailable` — runner couldn't construct a harness.
+   *   - `validator_rejected`    — envelope validator failed late.
+   *
+   * Append-only per G-1111 §3.1.
+   */
+  reason?: DispatchTaskFailedReason;
 }
+
+/**
+ * Discriminated reason for `dispatch.task.failed` envelopes synthesised
+ * from upstream-of-the-substrate failure modes. C.3.1 ships
+ * `policy_denied`; later kinds are append-only siblings.
+ */
+export type DispatchTaskFailedReason = {
+  kind: "policy_denied";
+  /**
+   * The engine's structured deny reason, carried verbatim so
+   * subscribers can render the specific deny path
+   * (`unknown_principal` / `insufficient_role` / ...).
+   */
+  deny: Record<string, unknown>;
+};
 
 /**
  * Construct a `dispatch.task.failed` envelope per G-1111 §3.4.
@@ -261,6 +296,7 @@ export function createDispatchTaskFailedEvent(
     started_at: opts.startedAt.toISOString(),
     failed_at: opts.failedAt.toISOString(),
     error_summary: opts.errorSummary,
+    ...(opts.reason !== undefined && { reason: opts.reason }),
   });
 }
 

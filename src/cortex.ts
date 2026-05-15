@@ -876,6 +876,19 @@ export async function startCortex(
   // off via the env var below — making the limitation impossible to
   // adopt accidentally. The variable can be retired together with
   // C.2b once Phase B verification is wired.
+  // Echo cortex#220 round 2 S-2 — surface the silent-degradation case
+  // (policy: block present but principals[] empty → factory returns
+  // undefined → legacy unauthenticated path) so operators editing
+  // cortex.yaml see it in the boot log rather than guessing why the
+  // gate didn't engage.
+  if (
+    options.policy !== undefined &&
+    options.policy.principals.length === 0
+  ) {
+    console.warn(
+      `cortex: policy: block declared with empty principals[] — no authorisation gate engages; the dispatch-listener stays on the legacy path.`,
+    );
+  }
   const UNVERIFIED_ACK = "CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK";
   let policyEngine = policyEngineFromConfig(options.policy);
   if (policyEngine !== undefined && process.env[UNVERIFIED_ACK] !== "1") {

@@ -69,11 +69,16 @@ import type {
   SessionHarness,
 } from "../common/substrates/types";
 import type { PolicyEngine } from "../common/policy/engine";
+import { extractAgentIdFromDid } from "../common/policy/did";
 import type {
   Intent,
   PolicyDenyReason,
   Principal,
 } from "../common/policy/types";
+import {
+  createDispatchTaskFailedEvent,
+  type DispatchEventSource,
+} from "../bus/dispatch-events";
 import {
   ClaudeCodeHarness,
   type CCSessionFactory as ClaudeCodeFactory,
@@ -415,6 +420,30 @@ async function handleDispatchEnvelope(
       console.error(
         `cortex-runner: dispatch-listener: denied envelope id=${envelope.id} task_id=${payload.task_id} agent=${payload.agent_id} — reason=${decision.reason.kind}`,
       );
+      // Echo cortex#220 round 2 M-1: synthesise a `dispatch.task.failed`
+      // terminal envelope on the same correlation_id so subscribers
+      // correlating on task_id (worklog-manager.ts, agent-team.ts) see
+      // a terminal lifecycle event and don't hang waiting on a
+      // completion that will never arrive. The structured `reason`
+      // field lets them branch on the policy_denied case distinctly
+      // from substrate-side errors; C.4's `system.access.denied`
+      // audit envelope lives on a different subject and serves
+      // different consumers (audit pipeline, dashboard) — both
+      // envelopes are emitted for a denied dispatch.
+      const now = new Date();
+      const failed = createDispatchTaskFailedEvent({
+        source: source as DispatchEventSource,
+        taskId: payload.task_id,
+        agentId: payload.agent_id,
+        startedAt: now,
+        failedAt: now,
+        errorSummary: `policy gate denied dispatch: ${decision.reason.kind}`,
+        reason: {
+          kind: "policy_denied",
+          deny: { ...decision.reason },
+        },
+      });
+      await runtime.publish(failed);
       return;
     }
     gatedPrincipal = decision.principal;
@@ -532,19 +561,21 @@ function checkDispatchPolicy(
 
 /**
  * Strip the `did:mf:` prefix from the originator stamp's principal
- * field. Falls back to `payload.agent_id` when the envelope has no
- * `signed_by[]` chain.
+ * via the shared `extractAgentIdFromDid` helper (also used by
+ * `verify-signed-by-chain.ts` — Echo cortex#220 round 2 S-1). Falls
+ * back to `payload.agent_id` when the envelope has no chain, AND
+ * surfaces the raw DID string when the parser rejects it (malformed
+ * DID method, empty tail, multi-segment colon) so the engine
+ * receives a deterministic `unknown_principal` rather than silent
+ * coercion.
  */
 function resolvePrincipalId(
   envelope: Envelope,
   payload: DispatchTaskReceivedPayload,
 ): string {
   const chain = getSignedByChain(envelope);
-  if (chain.length === 0) return payload.agent_id;
   const origin = chain[0];
-  if (!origin) return payload.agent_id;
-  const did = origin.principal;
-  const DID_PREFIX = "did:mf:";
-  return did.startsWith(DID_PREFIX) ? did.slice(DID_PREFIX.length) : did;
+  if (origin === undefined) return payload.agent_id;
+  return extractAgentIdFromDid(origin.principal) ?? origin.principal;
 }
 

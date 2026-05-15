@@ -65,6 +65,7 @@ import {
 } from "./myelin/envelope-validator";
 import { TrustResolver } from "../common/agents/trust-resolver";
 import type { AgentRegistry } from "../common/agents/registry";
+import { extractAgentIdFromDid } from "../common/policy/did";
 
 // =============================================================================
 // Result types
@@ -365,28 +366,10 @@ function verifyOneStamp(
   return { kind: "accept" };
 }
 
-/**
- * Parse a `did:mf:<name>` principal into its agent-id segment. Returns
- * `undefined` for any other DID method or malformed input — the caller
- * surfaces `undefined` as `unknown_principal` rather than throwing,
- * because the inbound-envelope path must never crash on a malformed
- * stamp (an attacker controls the bytes; a thrown exception inside the
- * subscription callback bubbles into nats.js's reconnection logic).
- *
- * `did:mf:` is myelin's convention (see `myelin/specs/`). Other DID
- * methods (`did:key:`, `did:web:`) are out of scope until Phase D
- * federation introduces hub-trust paths.
- */
-function extractAgentIdFromDid(principal: string): string | undefined {
-  const prefix = "did:mf:";
-  if (!principal.startsWith(prefix)) return undefined;
-  const tail = principal.slice(prefix.length);
-  if (tail.length === 0) return undefined;
-  // The myelin convention is `did:mf:<name>` with no further segments;
-  // a colon in the tail signals an unsupported DID variant.
-  if (tail.includes(":")) return undefined;
-  return tail;
-}
+// `extractAgentIdFromDid` lives in `src/common/policy/did.ts` so the
+// bus-side verifier and the dispatch-listener's policy gate share
+// one parser (Echo cortex#220 round 2 S-1). Re-imported at the top
+// of this file.
 
 // =============================================================================
 // Principal-registry bridge (B.1c)

@@ -29,6 +29,8 @@ import {
   type DispatchTaskReceivedPayload,
 } from "../dispatch-listener";
 import type { CCSessionResult } from "../cc-session";
+import { PolicyEngine } from "../../common/policy/engine";
+import type { Intent } from "../../common/policy/types";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -707,8 +709,6 @@ describe("dispatch-listener — subject filtering", () => {
 // IAW Phase C.3.1 — PolicyEngine gating
 // ---------------------------------------------------------------------------
 
-import { PolicyEngine } from "../../common/policy/engine";
-
 /**
  * Build a single-principal engine for gating tests. The principal id
  * matches the envelope helper's default `agent_id` of `"cortex"` so
@@ -776,7 +776,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     ]);
   });
 
-  test("engine + deny (insufficient_role) → no lifecycle envelopes, no harness call", async () => {
+  test("engine + deny (insufficient_role) → emits dispatch.task.failed with policy_denied reason; no harness call", async () => {
     const r = recordingRuntime();
     const router = createSurfaceRouter(r.runtime);
     const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
@@ -794,13 +794,27 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    // No envelopes published — the dispatch was gated before the
-    // harness was constructed.
-    expect(r.published).toHaveLength(0);
+    // Echo cortex#220 round 2 M-1 — the deny path now emits a
+    // terminal `dispatch.task.failed` envelope on the same
+    // correlation_id so worklog/agent-team subscribers don't hang.
+    expect(r.published).toHaveLength(1);
+    const failed = r.published[0]!;
+    expect(failed.type).toBe("dispatch.task.failed");
+    expect(failed.correlation_id).toBe(TASK_ID);
+    expect(failed.payload.task_id).toBe(TASK_ID);
+    expect(failed.payload.agent_id).toBe("cortex");
+    const reason = failed.payload.reason as {
+      kind: string;
+      deny: { kind: string; missing_capability?: string };
+    };
+    expect(reason.kind).toBe("policy_denied");
+    expect(reason.deny.kind).toBe("insufficient_role");
+    expect(reason.deny.missing_capability).toBe("dispatch.cortex");
+    // Harness never constructed.
     expect(optsCaptured).toHaveLength(0);
   });
 
-  test("engine + deny (unknown_principal) → no lifecycle envelopes", async () => {
+  test("engine + deny (unknown_principal) → emits dispatch.task.failed with policy_denied reason", async () => {
     const r = recordingRuntime();
     const router = createSurfaceRouter(r.runtime);
     const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
@@ -822,8 +836,81 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    expect(r.published).toHaveLength(0);
+    expect(r.published).toHaveLength(1);
+    const failed = r.published[0]!;
+    expect(failed.type).toBe("dispatch.task.failed");
+    const reason = failed.payload.reason as {
+      kind: string;
+      deny: { kind: string; principal_id?: string };
+    };
+    expect(reason.kind).toBe("policy_denied");
+    expect(reason.deny.kind).toBe("unknown_principal");
+    expect(reason.deny.principal_id).toBe("ghost-agent");
     expect(optsCaptured).toHaveLength(0);
+  });
+
+  test("engine receives envelope.sovereignty verbatim on intent (S-3)", async () => {
+    // Echo cortex#220 round 2 S-3 — assert sovereignty flows envelope
+    // → intent → engine.check() so C.4 audit envelopes carry the same
+    // constraints the engine saw without an extra read path.
+    const captured: Array<{ principalId: string; intent: Intent }> = [];
+    const engine: PolicyEngine = new PolicyEngine({
+      principals: [
+        {
+          id: "cortex",
+          home_operator: "andreas",
+          home_stack: "andreas/research",
+          role: ["operator"],
+          trust: [],
+        },
+      ],
+      roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
+    });
+    // Wrap engine.check to capture inputs.
+    const origCheck = engine.check.bind(engine);
+    engine.check = (principalId, intent) => {
+      captured.push({ principalId, intent });
+      return origCheck(principalId, intent);
+    };
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engine,
+    });
+    await listener.start();
+    await router.start();
+
+    // Envelope with a non-default sovereignty block — the values
+    // below must surface on `Intent.sovereignty` exactly.
+    const env = makeReceivedEnvelope();
+    env.sovereignty = {
+      classification: "federated",
+      data_residency: "DE",
+      max_hop: 3,
+      frontier_ok: true,
+      model_class: "frontier",
+    };
+
+    r.trigger(env, "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(captured).toHaveLength(1);
+    const seen = captured[0]!;
+    expect(seen.principalId).toBe("cortex");
+    expect(seen.intent.capability).toBe("dispatch.cortex");
+    expect(seen.intent.sovereignty).toEqual({
+      classification: "federated",
+      data_residency: "DE",
+      max_hop: 3,
+      frontier_ok: true,
+      model_class: "frontier",
+    });
   });
 
   test("engine + signed_by[0].principal as did:mf:NAME → prefix stripped, principal resolved", async () => {
