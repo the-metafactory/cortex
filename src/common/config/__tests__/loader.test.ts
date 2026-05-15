@@ -491,6 +491,42 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     expect(config.discord[0]!.surfaceSubjects).toEqual([]);
   });
 
+  // cortex#207 — companion field to surfaceSubjects: where the adapter
+  // posts inbound bus envelopes. Without this, surfaceSubjects matches
+  // but renderEnvelope drops the envelope with a one-shot warning.
+  test("threads agents[].presence.discord.surfaceFallbackChannelId through to DiscordInstance.surfaceFallbackChannelId", () => {
+    const cfg = minimalCortex();
+    const firstAgent = (cfg.agents as Record<string, unknown>[])[0]!;
+    const discordPresence = (firstAgent.presence as Record<string, unknown>).discord as Record<string, unknown>;
+    discordPresence.surfaceFallbackChannelId = "1234567890";
+    const path = writeCortexConfig(testDir, cfg);
+    const { config } = loadConfigWithAgents(path);
+    expect(config.discord).toHaveLength(1);
+    expect(config.discord[0]!.surfaceFallbackChannelId).toBe("1234567890");
+  });
+
+  test("surfaceFallbackChannelId is undefined when omitted from presence.discord", () => {
+    const path = writeCortexConfig(testDir, minimalCortex());
+    const { config } = loadConfigWithAgents(path);
+    // Optional field — omission round-trips as undefined, not empty string.
+    // The adapter's runtime guard discriminates on `=== undefined` to fire
+    // the drop-with-warning path (preserves v0 behaviour for legacy configs).
+    expect(config.discord[0]!.surfaceFallbackChannelId).toBeUndefined();
+  });
+
+  test("surfaceFallbackChannelId coerces numeric snowflake to string", () => {
+    // Discord snowflakes are large integers that yaml may parse as numbers
+    // when unquoted. The z.coerce.string() schema coerces, matching the
+    // surrounding fields' pattern (agentChannelId, logChannelId).
+    const cfg = minimalCortex();
+    const firstAgent = (cfg.agents as Record<string, unknown>[])[0]!;
+    const discordPresence = (firstAgent.presence as Record<string, unknown>).discord as Record<string, unknown>;
+    discordPresence.surfaceFallbackChannelId = 1487029848164536361 as unknown as string;
+    const path = writeCortexConfig(testDir, cfg);
+    const { config } = loadConfigWithAgents(path);
+    expect(typeof config.discord[0]!.surfaceFallbackChannelId).toBe("string");
+  });
+
   // ---------------------------------------------------------------------------
   // IAW Phase A.5 (refs cortex#113) — cortex-shape `stack:` block plumbed
   // through to `LoadedConfig.stack`. The boot path (`startCortex`) calls

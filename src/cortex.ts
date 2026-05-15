@@ -450,6 +450,9 @@ export async function startCortex(
       ...(instance.operatorRoleId !== undefined && { operatorRoleId: instance.operatorRoleId }),
       trustedBotIds: instance.trustedBotIds,
       surfaceSubjects: instance.surfaceSubjects,
+      ...(instance.surfaceFallbackChannelId !== undefined && {
+        surfaceFallbackChannelId: instance.surfaceFallbackChannelId,
+      }),
     };
     // MIG-7.2e: prefer the cortex-shape `inlineAgents` lookup when present —
     // per-instance identity (real id, persona, roles, trust) flows from
@@ -493,6 +496,13 @@ export async function startCortex(
           // `["local.metafactory.tasks.code-review.>"]` wires pilot's
           // IoAW review-requests into the Discord render path.
           surfaceSubjects: presence.surfaceSubjects,
+          // cortex#207: fallback channel for envelopes that don't carry
+          // their own routing. Spread-conditionally because the field
+          // is optional and `renderEnvelope` discriminates on its
+          // presence (undefined → drop-with-warning, configured → post).
+          ...(presence.surfaceFallbackChannelId !== undefined && {
+            surfaceFallbackChannelId: presence.surfaceFallbackChannelId,
+          }),
         },
       );
       // Register the adapter's surface-router face. Empty `surfaceSubjects`

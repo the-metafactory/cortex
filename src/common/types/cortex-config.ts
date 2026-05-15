@@ -216,6 +216,26 @@ export const DiscordPresenceSchema = z.object({
    * subscription list is enough to unblock the bus→Discord render path.
    */
   surfaceSubjects: z.array(z.string().min(1)).default([]),
+  /**
+   * MIG-3b / cortex#207: Discord channel id where `renderEnvelope` posts
+   * inbound bus envelopes that don't carry their own channel routing.
+   * Threaded into `DiscordAdapterInfra.surfaceFallbackChannelId` at
+   * construction.
+   *
+   * Unset (default) → the adapter receives matching envelopes (per
+   * `surfaceSubjects`) but drops each one with a one-shot warning
+   * (`discord-{instanceId}: has no surfaceFallbackChannelId configured
+   * — dropping envelope ...`). This is the v0 behaviour preserved for
+   * configs that subscribe-without-render (e.g. observability-only
+   * deployments that log envelope receipts but don't post to chat).
+   *
+   * Operators typically set this to `agentChannelId` so review-requests
+   * and similar bus events land in the agent's primary channel.
+   * Future per-event-type routing (MIG-7.2d Renderer model) will
+   * override on a per-envelope basis; this remains the fallback when
+   * no per-event rule matches.
+   */
+  surfaceFallbackChannelId: z.coerce.string().optional(),
 });
 
 export type DiscordPresence = z.infer<typeof DiscordPresenceSchema>;

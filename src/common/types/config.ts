@@ -171,6 +171,15 @@ export const DiscordInstanceSchema = z.object({
    * canonical operator-facing description, IoAW examples, and contract.
    */
   surfaceSubjects: z.array(z.string().min(1)).default([]),
+  /**
+   * MIG-3b / cortex#207: Discord channel id for the bus → chat render
+   * fallback. Mirror of the cortex-shape field — `flattenDiscordPresences`
+   * threads it through verbatim.
+   *
+   * @see DiscordPresenceSchema.surfaceFallbackChannelId in `cortex-config.ts`
+   * for the canonical operator-facing description.
+   */
+  surfaceFallbackChannelId: z.coerce.string().optional(),
 });
 
 export type DiscordInstance = z.infer<typeof DiscordInstanceSchema>;
