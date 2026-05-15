@@ -75,10 +75,7 @@ import type {
   PolicyDenyReason,
   Principal,
 } from "../common/policy/types";
-import {
-  createDispatchTaskFailedEvent,
-  type DispatchEventSource,
-} from "../bus/dispatch-events";
+import { createDispatchTaskFailedEvent } from "../bus/dispatch-events";
 import {
   ClaudeCodeHarness,
   type CCSessionFactory as ClaudeCodeFactory,
@@ -432,7 +429,7 @@ async function handleDispatchEnvelope(
       // envelopes are emitted for a denied dispatch.
       const now = new Date();
       const failed = createDispatchTaskFailedEvent({
-        source: source as DispatchEventSource,
+        source,
         taskId: payload.task_id,
         agentId: payload.agent_id,
         startedAt: now,

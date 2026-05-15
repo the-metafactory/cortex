@@ -853,7 +853,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     // Echo cortex#220 round 2 S-3 — assert sovereignty flows envelope
     // → intent → engine.check() so C.4 audit envelopes carry the same
     // constraints the engine saw without an extra read path.
-    const captured: Array<{ principalId: string; intent: Intent }> = [];
+    const captured: { principalId: string; intent: Intent }[] = [];
     const engine: PolicyEngine = new PolicyEngine({
       principals: [
         {

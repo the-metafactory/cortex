@@ -272,7 +272,7 @@ export interface DispatchTaskFailedOpts extends DispatchTaskCommonOpts {
  * from upstream-of-the-substrate failure modes. C.3.1 ships
  * `policy_denied`; later kinds are append-only siblings.
  */
-export type DispatchTaskFailedReason = {
+export interface DispatchTaskFailedReason {
   kind: "policy_denied";
   /**
    * The engine's structured deny reason, carried verbatim so
@@ -280,7 +280,7 @@ export type DispatchTaskFailedReason = {
    * (`unknown_principal` / `insufficient_role` / ...).
    */
   deny: Record<string, unknown>;
-};
+}
 
 /**
  * Construct a `dispatch.task.failed` envelope per G-1111 §3.4.

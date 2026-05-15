@@ -881,10 +881,7 @@ export async function startCortex(
   // undefined → legacy unauthenticated path) so operators editing
   // cortex.yaml see it in the boot log rather than guessing why the
   // gate didn't engage.
-  if (
-    options.policy !== undefined &&
-    options.policy.principals.length === 0
-  ) {
+  if (options.policy?.principals.length === 0) {
     console.warn(
       `cortex: policy: block declared with empty principals[] — no authorisation gate engages; the dispatch-listener stays on the legacy path.`,
     );
