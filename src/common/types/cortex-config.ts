@@ -225,6 +225,11 @@ export type DiscordPresence = z.infer<typeof DiscordPresenceSchema>;
  * grove-v2's `MattermostInstanceSchema` minus the operator/role-override fields
  * that move to the parent agent.
  */
+// TODO(cortex#205-followup): add `surfaceSubjects` mirror —
+// `MattermostAdapter` already accepts it in its infra type
+// (`src/adapters/mattermost/index.ts:57`), so today the bus→chat render
+// path is operator-configurable via cortex.yaml for Discord but silently
+// unreachable for Mattermost.
 export const MattermostPresenceSchema = z.object({
   /** Whether this presence is active. Default: true. */
   enabled: z.boolean().default(true),

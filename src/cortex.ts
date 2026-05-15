@@ -483,11 +483,16 @@ export async function startCortex(
           systemEventSource,
           trustedBotIds: explicitTrustedBotIds,
           // cortex#205: plumb the operator's configured subject patterns
-          // through to the surface-router. Empty (default) keeps v0
-          // behaviour — adapter registers but never matches and warns once
-          // at startup. Setting e.g. `["local.metafactory.tasks.code-review.>"]`
-          // wires pilot's IoAW review-requests into Discord render.
-          ...(presence.surfaceSubjects.length > 0 && { surfaceSubjects: presence.surfaceSubjects }),
+          // through to the surface-router. Pass the array verbatim — `[]`
+          // included — so the adapter's one-shot empty-array warning at
+          // `discord/index.ts:178` actually fires for the "operator
+          // forgot / typoed surfaceSubjects" case the schema docstrings
+          // promise. A conditional short-circuit here would convert
+          // `[]` → `undefined` on the infra side and silently disable
+          // the diagnostic. Setting e.g.
+          // `["local.metafactory.tasks.code-review.>"]` wires pilot's
+          // IoAW review-requests into the Discord render path.
+          surfaceSubjects: presence.surfaceSubjects,
         },
       );
       // Register the adapter's surface-router face. Empty `surfaceSubjects`
