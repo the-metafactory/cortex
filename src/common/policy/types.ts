@@ -110,6 +110,34 @@ export interface Intent {
    * have to fabricate one.
    */
   payload_summary?: string;
+  /**
+   * IAW Phase D.3 (cortex#116) — federation source-network id.
+   *
+   * When the inbound envelope arrived via a `federated.{network_id}.>`
+   * subject, the caller sets `source_network` to the matched
+   * `{network_id}` segment. The engine then consults
+   * `policy.federated.networks[]` by id and applies that network's
+   * policy slice: the principal MUST be a declared peer on the
+   * network, AND the principal's `home_stack` MUST appear in the
+   * network's `peers[].stack_id` roster. Either miss → deny with
+   * the network-scoped reason kinds (`unknown_network`,
+   * `unknown_federated_peer`, `stack_not_in_network`).
+   *
+   * `undefined` (local dispatch) leaves the engine's C.3 behaviour
+   * unchanged — the federation branch is skipped entirely.
+   *
+   * **⚠ Pre-Phase-B caveat.** The principal claim on
+   * `signed_by[0].principal` (which the dispatch-listener strips to
+   * derive the principal id passed to `check()`) is NOT yet
+   * cryptographically verified at the envelope-validator layer
+   * (cortex#114). Until Phase B wires verification, the federation
+   * branch is authorisation-without-authentication: a forged
+   * `signed_by[0].principal` would let an attacker pose as a
+   * declared peer. The check is still useful as defence-in-depth
+   * against misconfigured peers, but operators MUST treat the
+   * federation gate as binding only after cortex#114 lands.
+   */
+  source_network?: string;
 }
 
 /**
@@ -155,6 +183,54 @@ export type PolicyDenyReason =
       kind: "sovereignty_mismatch";
       /** Human-readable description of the mismatch. */
       reason: string;
+    }
+  | {
+      /**
+       * IAW Phase D.3 (cortex#116) — `intent.source_network` referenced
+       * a network id that is not declared in `policy.federated.networks[]`.
+       * Indicates either a misconfigured peer (the inbound envelope
+       * names a network this operator doesn't participate in) or a
+       * stale config snapshot. Distinct from `unknown_federated_peer`
+       * (the network IS declared but the principal isn't a member).
+       */
+      kind: "unknown_network";
+      /** The network id the caller tried to dispatch on. */
+      source_network: string;
+      principal_id: string;
+    }
+  | {
+      /**
+       * IAW Phase D.3 (cortex#116) — principal id resolved locally but
+       * the principal's `home_stack` does not appear in the source
+       * network's `peers[].stack_id` roster. Indicates a principal who
+       * exists in `policy.principals[]` but is not authorised to act on
+       * the federated network the envelope arrived on (e.g. an internal
+       * agent attempting to dispatch on a partner-only network).
+       */
+      kind: "stack_not_in_network";
+      principal_id: string;
+      /** The network id the dispatch arrived on. */
+      source_network: string;
+      /** The principal's local `home_stack` — diagnostic for operators. */
+      home_stack: string;
+    }
+  | {
+      /**
+       * IAW Phase D.3 (cortex#116) — reserved for future federation
+       * paths that resolve principals directly from a peer roster
+       * (e.g. D.4's cloud registry) without requiring a local
+       * `policy.principals[]` entry. The D.3 engine doesn't emit
+       * this kind today: an unknown principal on a federated edge
+       * is caught by `unknown_principal` at the top of `check()`,
+       * which fires before the federation branch. The variant lives
+       * in the discriminator now so audit consumers (dashboard,
+       * pipeline) can compile against the full set without a wire-
+       * schema bump when D.4 lands.
+       */
+      kind: "unknown_federated_peer";
+      principal_id: string;
+      /** The network id the dispatch arrived on. */
+      source_network: string;
     };
 
 /**

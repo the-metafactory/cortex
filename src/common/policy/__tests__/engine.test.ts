@@ -244,3 +244,263 @@ describe("PolicyEngine — boot accessors", () => {
     expect(engine.roleCount).toBe(2);
   });
 });
+
+// =============================================================================
+// IAW Phase D.3 (cortex#116) — per-network policy slicing
+// =============================================================================
+
+describe("PolicyEngine — federation slicing (D.3)", () => {
+  test("local dispatch (no source_network) → C.3 behaviour unchanged: federation branch inert", () => {
+    // Engine has a federated config, but the intent doesn't reference
+    // a source_network — the federation branch must not fire. This is
+    // the backward-compatibility check: pre-D.3 callers (everyone
+    // dispatching locally) see no behaviour change.
+    const engine = new PolicyEngine({
+      principals: [principal({ id: "luna", role: ["operator"] })],
+      roles: [role("operator", ["code-review.typescript"])],
+      federated: {
+        networks: [
+          { id: "research-collab", peers: [{ stack_id: "andreas/research" }] },
+        ],
+      },
+    });
+
+    const result = engine.check("luna", intent());
+    expect(result.allow).toBe(true);
+  });
+
+  test("federated dispatch + principal in peer roster → allow (capability check still applies)", () => {
+    const engine = new PolicyEngine({
+      principals: [
+        principal({
+          id: "luna",
+          home_stack: "andreas/research",
+          role: ["operator"],
+        }),
+      ],
+      roles: [role("operator", ["code-review.typescript"])],
+      federated: {
+        networks: [
+          {
+            id: "research-collab",
+            peers: [{ stack_id: "andreas/research" }],
+          },
+        ],
+      },
+    });
+
+    const result = engine.check(
+      "luna",
+      intent({ source_network: "research-collab" }),
+    );
+    expect(result.allow).toBe(true);
+    if (result.allow) {
+      expect(new Set(result.capabilities)).toEqual(
+        new Set(["code-review.typescript"]),
+      );
+    }
+  });
+
+  test("federated dispatch + unknown network id → unknown_network deny", () => {
+    const engine = new PolicyEngine({
+      principals: [
+        principal({
+          id: "luna",
+          home_stack: "andreas/research",
+          role: ["operator"],
+        }),
+      ],
+      roles: [role("operator", ["code-review.typescript"])],
+      federated: {
+        networks: [
+          {
+            id: "research-collab",
+            peers: [{ stack_id: "andreas/research" }],
+          },
+        ],
+      },
+    });
+
+    const result = engine.check(
+      "luna",
+      intent({ source_network: "phantom-network" }),
+    );
+
+    expect(result.allow).toBe(false);
+    if (!result.allow) {
+      expect(result.reason).toEqual({
+        kind: "unknown_network",
+        source_network: "phantom-network",
+        principal_id: "luna",
+      });
+    }
+  });
+
+  test("federated dispatch + principal's home_stack not in peer roster → stack_not_in_network deny", () => {
+    const engine = new PolicyEngine({
+      principals: [
+        // luna's home_stack is `andreas/research`...
+        principal({
+          id: "luna",
+          home_stack: "andreas/research",
+          role: ["operator"],
+        }),
+      ],
+      roles: [role("operator", ["code-review.typescript"])],
+      federated: {
+        networks: [
+          {
+            id: "partner-only",
+            // ...but `partner-only` lists only `jcfischer/sage-host`.
+            peers: [{ stack_id: "jcfischer/sage-host" }],
+          },
+        ],
+      },
+    });
+
+    const result = engine.check(
+      "luna",
+      intent({ source_network: "partner-only" }),
+    );
+
+    expect(result.allow).toBe(false);
+    if (!result.allow) {
+      expect(result.reason).toEqual({
+        kind: "stack_not_in_network",
+        principal_id: "luna",
+        source_network: "partner-only",
+        home_stack: "andreas/research",
+      });
+    }
+  });
+
+  test("federation deny fires AFTER capability check — insufficient_role wins on a federated dispatch with capability miss", () => {
+    // Closest-miss principle: a principal who lacks the capability
+    // AND is not in the network's peer roster should see
+    // `insufficient_role` (the local issue) rather than
+    // `stack_not_in_network` (the federation issue). Operators
+    // triaging deny logs see the nearest failure first.
+    const engine = new PolicyEngine({
+      principals: [
+        principal({
+          id: "luna",
+          home_stack: "andreas/research",
+          role: ["operator"],
+        }),
+      ],
+      // operator role has NO capabilities — capability check misses.
+      roles: [role("operator", [])],
+      federated: {
+        networks: [
+          { id: "partner-only", peers: [{ stack_id: "jcfischer/sage-host" }] },
+        ],
+      },
+    });
+
+    const result = engine.check(
+      "luna",
+      intent({
+        capability: "code-review.typescript",
+        source_network: "partner-only",
+      }),
+    );
+
+    expect(result.allow).toBe(false);
+    if (!result.allow) {
+      // Capability check (C.3) fires before the federation branch (D.3).
+      expect(result.reason.kind).toBe("insufficient_role");
+    }
+  });
+
+  test("federated dispatch + engine has no federated config → unknown_network (federated config absent === network undeclared)", () => {
+    // Without a federated config, every federated dispatch denies
+    // with `unknown_network`. This matches the policy intent: if the
+    // operator hasn't declared any networks, no inbound federated
+    // traffic should be authorised regardless of the principal.
+    const engine = new PolicyEngine({
+      principals: [
+        principal({
+          id: "luna",
+          home_stack: "andreas/research",
+          role: ["operator"],
+        }),
+      ],
+      roles: [role("operator", ["code-review.typescript"])],
+      // No `federated` field — engine has no networks.
+    });
+
+    const result = engine.check(
+      "luna",
+      intent({ source_network: "research-collab" }),
+    );
+
+    expect(result.allow).toBe(false);
+    if (!result.allow) {
+      expect(result.reason).toEqual({
+        kind: "unknown_network",
+        source_network: "research-collab",
+        principal_id: "luna",
+      });
+    }
+  });
+
+  test("unknown_principal still fires before the federation branch on a federated dispatch", () => {
+    // Sanity: an envelope arriving on a federated subject whose
+    // signed_by[0].principal isn't a declared local principal denies
+    // at the very first gate — the federation branch never runs.
+    const engine = new PolicyEngine({
+      principals: [],
+      roles: [],
+      federated: {
+        networks: [
+          { id: "research-collab", peers: [{ stack_id: "andreas/research" }] },
+        ],
+      },
+    });
+
+    const result = engine.check(
+      "ghost",
+      intent({ source_network: "research-collab" }),
+    );
+
+    expect(result.allow).toBe(false);
+    if (!result.allow) {
+      expect(result.reason).toEqual({
+        kind: "unknown_principal",
+        principal_id: "ghost",
+      });
+    }
+  });
+
+  test("multiple peers in a network — match against any peer stack_id allows", () => {
+    const engine = new PolicyEngine({
+      principals: [
+        principal({
+          id: "luna",
+          home_stack: "andreas/research",
+          role: ["operator"],
+        }),
+      ],
+      roles: [role("operator", ["code-review.typescript"])],
+      federated: {
+        networks: [
+          {
+            id: "research-collab",
+            peers: [
+              { stack_id: "jcfischer/sage-host" },
+              { stack_id: "andreas/research" },
+              { stack_id: "ben/atlas" },
+            ],
+          },
+        ],
+      },
+    });
+
+    const result = engine.check(
+      "luna",
+      intent({ source_network: "research-collab" }),
+    );
+
+    expect(result.allow).toBe(true);
+  });
+});

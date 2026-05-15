@@ -1,5 +1,6 @@
 /**
  * IAW Phase C.1 (cortex#115) — PolicyEngine implementation.
+ * IAW Phase D.3 (cortex#116) — per-network slicing on federated dispatches.
  *
  * The single authorization decision point for cortex. Replaces the
  * per-surface role-resolver duplication today (Discord adapter +
@@ -10,9 +11,14 @@
  * inbound dispatch passes through `check` before reaching a
  * substrate harness; Phase C.4 emits `system.access.{allowed,denied}`
  * audit envelopes carrying the decision shape this engine returns.
+ * Phase D.3 extends `check()` with per-network policy slicing — when
+ * `intent.source_network` is set, the engine consults the matching
+ * `policy.federated.networks[]` entry and rejects principals that
+ * aren't peers of the named network.
  *
  * Cross-references:
  *   - `docs/design-internet-of-agentic-work.md` §cortex#107.
+ *   - `docs/plan-internet-of-agentic-work.md` §D.3.
  *   - `./types.ts` — `Principal`, `Intent`, `RoleDefinition`,
  *     `PolicyDecision`, `PolicyDenyReason`.
  *
@@ -22,11 +28,14 @@
  *     it, but the engine doesn't yet reject on sovereignty
  *     mismatches. The `sovereignty_mismatch` deny reason exists
  *     in the discriminator for forward compatibility; today it
- *     never fires. Phase D extends with per-network sovereignty
- *     slicing.
- *   - **No per-peer accept/deny.** Phase D adds
+ *     never fires.
+ *   - **No subject-level accept/deny.** Phase D.2 gates inbound
+ *     `federated.*` envelopes at the surface-router by
  *     `policy.federated.networks[].accept_subjects[]` /
- *     `deny_subjects[]` enforcement; not in C.1's scope.
+ *     `deny_subjects[]` BEFORE they reach this engine. D.3 runs
+ *     after that gate and answers the residual question: "now that
+ *     the envelope was admitted by the router, is the originating
+ *     principal actually authorised to act on this network?"
  *   - **No glob expansion on capability matches.** Literal
  *     `===` matching only; PRs after Phase C may add patterns.
  */
@@ -37,6 +46,42 @@ import type {
   Principal,
   RoleDefinition,
 } from "./types";
+
+/**
+ * IAW Phase D.3 (cortex#116) — slim federation slice the engine
+ * consumes for per-network membership checks.
+ *
+ * Structurally compatible with `PolicyFederated` from
+ * `src/common/types/cortex-config.ts` (the Zod-parsed shape) — the
+ * factory passes the parsed `Policy.federated` through verbatim.
+ * Declared here as a local type so the engine module stays
+ * independent of the config schema's module graph (avoids
+ * `engine.ts` importing from `common/types/`, which today imports
+ * from elsewhere in `common/`).
+ *
+ * Only the fields D.3 actually reads are typed; the wider federated
+ * config carries `accept_subjects` / `deny_subjects` / `max_hop` etc.
+ * which are surface-router concerns (D.2), not engine concerns.
+ */
+export interface FederatedPolicy {
+  /** Networks this operator participates in. */
+  readonly networks: readonly FederatedNetwork[];
+}
+
+export interface FederatedNetwork {
+  /** Network id — matches `intent.source_network`. */
+  readonly id: string;
+  /**
+   * Peer stacks declared on this network. The engine reads
+   * `stack_id` to validate that an incoming principal's
+   * `home_stack` belongs to the network's peer roster.
+   *
+   * Other peer fields (`operator_id`, `operator_pubkey`) are
+   * consumed elsewhere (verifier, registry); the engine doesn't
+   * read them.
+   */
+  readonly peers: readonly { readonly stack_id: string }[];
+}
 
 export interface PolicyEngineOptions {
   /**
@@ -51,15 +96,39 @@ export interface PolicyEngineOptions {
    * capabilities to compute the effective grant set.
    */
   roles: readonly RoleDefinition[];
+  /**
+   * IAW Phase D.3 (cortex#116) — optional federation slice. When
+   * present, the engine evaluates `intent.source_network` against
+   * the matching network's peer roster on every `check()` call.
+   * When absent, the federation branch is inert — federated
+   * dispatches (those with `intent.source_network` set) reject
+   * with `unknown_network` because nothing is declared.
+   *
+   * The default-undefined shape preserves backward compatibility:
+   * a caller that doesn't pass `federated` gets the C.3 behaviour
+   * for every check (no federation gate, no federation deny
+   * reasons).
+   */
+  federated?: FederatedPolicy;
 }
 
 export class PolicyEngine {
   private readonly principalsById: ReadonlyMap<string, Principal>;
   private readonly rolesById: ReadonlyMap<string, RoleDefinition>;
+  /**
+   * IAW Phase D.3 — networks indexed by id for O(1) lookup on the
+   * federation branch. `undefined` when no federated policy was
+   * passed at construction; callers see `unknown_network` deny on
+   * any federated `check()` in that case.
+   */
+  private readonly networksById: ReadonlyMap<string, FederatedNetwork> | undefined;
 
   constructor(opts: PolicyEngineOptions) {
     this.principalsById = new Map(opts.principals.map((p) => [p.id, p]));
     this.rolesById = new Map(opts.roles.map((r) => [r.id, r]));
+    this.networksById = opts.federated
+      ? new Map(opts.federated.networks.map((n) => [n.id, n]))
+      : undefined;
   }
 
   /**
@@ -75,10 +144,26 @@ export class PolicyEngine {
    *      at config load).
    *   3. Match `intent.capability` against the effective set.
    *      Miss → `insufficient_role`.
-   *   4. (Phase D extends with sovereignty / per-peer checks; the
-   *      `intent.sovereignty` field is part of the input shape so
-   *      C.4 audit envelopes carry it without an extra read.)
-   *   5. Allow with the full effective set.
+   *   4. **(D.3)** When `intent.source_network` is set, evaluate the
+   *      federation slice:
+   *        - Network not declared in `policy.federated.networks[]`
+   *          → `unknown_network`.
+   *        - Principal known locally but `home_stack` not in the
+   *          network's `peers[].stack_id` roster →
+   *          `stack_not_in_network`.
+   *      Local dispatches (`source_network === undefined`) skip
+   *      this branch entirely and preserve C.3 behaviour.
+   *   5. (Future phase) Sovereignty rejection. `intent.sovereignty`
+   *      is on the input shape today for audit envelopes; the
+   *      rejection branch is deferred.
+   *   6. Allow with the full effective set.
+   *
+   * The federation branch is placed AFTER capability matching so
+   * the deny reason surfaces the most-specific failure: a principal
+   * that lacks the capability gets `insufficient_role` (the local
+   * issue) rather than `stack_not_in_network` (the federation
+   * issue). Operators triaging deny logs see the closest miss
+   * first.
    *
    * Taking an id (not a `Principal` object) is deliberate: the
    * registry is authoritative for roles/trust, and accepting a
@@ -87,6 +172,15 @@ export class PolicyEngine {
    * dispatch-handler integration in C.3 strips `did:mf:` from a
    * verified `signed_by[].principal` and passes the bare id here
    * (Echo cortex#218 round 1).
+   *
+   * **⚠ Pre-Phase-B caveat (federation branch).** The principal
+   * claim resolved from `signed_by[0].principal` is NOT yet
+   * cryptographically verified at the validator (cortex#114). The
+   * D.3 federation gate inherits this: a forged
+   * `signed_by[0].principal` matching a declared local principal
+   * would pass `home_stack`-vs-`peers[].stack_id` check until
+   * Phase B's signature verification is mandatory. Defence in
+   * depth, not authentication.
    */
   check(principalId: string, intent: Intent): PolicyDecision {
     const known = this.principalsById.get(principalId);
@@ -110,14 +204,84 @@ export class PolicyEngine {
       };
     }
 
-    // TODO(phase-D): enforce `intent.sovereignty` — classification,
-    // residency, frontier-ok, model-class. C.4 audit envelopes
-    // already carry the field; Phase D wires the rejection branch.
+    // IAW Phase D.3 — federation slice. Inert for local dispatches.
+    if (intent.source_network !== undefined) {
+      const networkDecision = this.checkFederation(
+        principalId,
+        known,
+        intent.source_network,
+      );
+      if (networkDecision !== undefined) {
+        return networkDecision;
+      }
+    }
+
+    // TODO(phase-D, sovereignty): enforce `intent.sovereignty` —
+    // classification, residency, frontier-ok, model-class. C.4 audit
+    // envelopes already carry the field; the rejection branch is
+    // deferred until the sovereignty taxonomy stabilises across
+    // myelin#31 + cortex#109.
 
     return {
       allow: true,
       capabilities: [...effectiveCapabilities],
     };
+  }
+
+  /**
+   * IAW Phase D.3 — federation membership check. Returns a deny
+   * decision when the source network rejects the principal, or
+   * `undefined` to pass through to the allow branch.
+   *
+   * Two failure modes:
+   *   - Network not in `policy.federated.networks[]` (either no
+   *     federated slice configured, or this network id isn't
+   *     declared) → `unknown_network`.
+   *   - Network declared but principal's `home_stack` doesn't
+   *     appear in the network's `peers[].stack_id` roster →
+   *     `stack_not_in_network`.
+   *
+   * The "unknown principal on a federated edge"
+   * (`unknown_federated_peer`) path doesn't fire here — that case
+   * is already caught by the `unknown_principal` branch at the top
+   * of `check()`, which runs before the federation slice. The deny
+   * reason is in the discriminator for forward-compat with future
+   * federation paths that resolve principals directly from peer
+   * rosters (D.4 cloud registry) without a local
+   * `policy.principals[]` entry.
+   */
+  private checkFederation(
+    principalId: string,
+    principal: Principal,
+    sourceNetwork: string,
+  ): PolicyDecision | undefined {
+    const network = this.networksById?.get(sourceNetwork);
+    if (network === undefined) {
+      return {
+        allow: false,
+        reason: {
+          kind: "unknown_network",
+          source_network: sourceNetwork,
+          principal_id: principalId,
+        },
+      };
+    }
+
+    const stackInNetwork = network.peers.some(
+      (peer) => peer.stack_id === principal.home_stack,
+    );
+    if (!stackInNetwork) {
+      return {
+        allow: false,
+        reason: {
+          kind: "stack_not_in_network",
+          principal_id: principalId,
+          source_network: sourceNetwork,
+          home_stack: principal.home_stack,
+        },
+      };
+    }
+    return undefined;
   }
 
   /**

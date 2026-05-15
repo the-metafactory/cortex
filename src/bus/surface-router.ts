@@ -83,8 +83,21 @@ export interface SurfaceAdapter {
    * but synchronous CPU (mocks, formatters) MAY accept the parameter and
    * ignore it; the contract is opt-in for backwards compatibility with
    * existing render functions.
+   *
+   * **IAW Phase D.3 (cortex#116) — `subject`.** Optional third argument
+   * carrying the matched NATS subject. Adapters that need to derive
+   * federation context from the wire path (e.g. the dispatch-listener
+   * deriving `source_network` from `federated.{network_id}.>`) read
+   * this directly rather than re-parsing the envelope. Existing
+   * adapters that match `(envelope, signal)` continue to work — the
+   * parameter is additive and ignored by adapters that don't accept
+   * it.
    */
-  render(envelope: Envelope, signal?: AbortSignal): Promise<void>;
+  render(
+    envelope: Envelope,
+    signal?: AbortSignal,
+    subject?: string,
+  ): Promise<void>;
   /** Optional liveness probe. Currently unused by the router; reserved
    *  for the dashboard's adapter-health panel (G-1111.E follow-on). */
   health?(): Promise<{ ok: boolean; lag?: number }>;
@@ -295,7 +308,15 @@ export function createSurfaceRouter(
       if (matched.length === 0) return;
 
       const settled = await Promise.allSettled(
-        matched.map((a) => renderWithIsolation(a, envelope, renderTimeoutMs, onAdapterError)),
+        matched.map((a) =>
+          renderWithIsolation(
+            a,
+            envelope,
+            effectiveSubject,
+            renderTimeoutMs,
+            onAdapterError,
+          ),
+        ),
       );
 
       // `renderWithIsolation` already swallows; the allSettled here is
@@ -510,6 +531,7 @@ function emitAccessFiltered(
 async function renderWithIsolation(
   adapter: SurfaceAdapter,
   envelope: Envelope,
+  subject: string,
   timeoutMs: number,
   onAdapterError: SurfaceRouterOptions["onAdapterError"],
 ): Promise<void> {
@@ -525,8 +547,12 @@ async function renderWithIsolation(
     });
 
     // Defensively wrap the render call in case it throws synchronously
-    // before returning a promise.
-    const renderPromise = (async () => adapter.render(envelope, ac.signal))();
+    // before returning a promise. The third positional argument is the
+    // IAW Phase D.3 (cortex#116) `subject` channel — adapters that
+    // don't declare it on their render signature ignore the value
+    // (positional-args extension is backward-compatible).
+    const renderPromise = (async () =>
+      adapter.render(envelope, ac.signal, subject))();
 
     await Promise.race([renderPromise, timeoutPromise]);
   } catch (err) {

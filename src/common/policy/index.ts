@@ -8,7 +8,12 @@
  * add a `./schema.ts` for the Zod schema of the new `policy:` block).
  */
 
-export { PolicyEngine, type PolicyEngineOptions } from "./engine";
+export {
+  PolicyEngine,
+  type PolicyEngineOptions,
+  type FederatedPolicy,
+  type FederatedNetwork,
+} from "./engine";
 export type {
   Intent,
   IntentSovereignty,

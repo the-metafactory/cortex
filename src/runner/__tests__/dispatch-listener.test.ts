@@ -1060,6 +1060,291 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     expect(signedBy[1]!.role).toBe("accountability");
   });
 
+  // -------------------------------------------------------------------------
+  // IAW Phase D.3 (cortex#116) — per-network slicing on federated dispatches
+  // -------------------------------------------------------------------------
+
+  /**
+   * Engine for D.3 tests — declares one principal (`cortex` with
+   * `home_stack=andreas/research`) and one federated network
+   * (`research-collab`) whose peer roster includes that home_stack.
+   * Capability set is parameterised so individual tests can flip
+   * allow/deny on the role grant.
+   */
+  function engineWithFederation(opts: {
+    capabilities: readonly string[];
+    networkId?: string;
+    peerStackIds?: readonly string[];
+    homeStack?: string;
+  }): PolicyEngine {
+    const networkId = opts.networkId ?? "research-collab";
+    const peerStackIds = opts.peerStackIds ?? ["andreas/research"];
+    const homeStack = opts.homeStack ?? "andreas/research";
+    return new PolicyEngine({
+      principals: [
+        {
+          id: "cortex",
+          home_operator: "andreas",
+          home_stack: homeStack,
+          role: ["operator"],
+          trust: [],
+        },
+      ],
+      roles: [{ id: "operator", capabilities: opts.capabilities }],
+      federated: {
+        networks: [
+          {
+            id: networkId,
+            peers: peerStackIds.map((stack_id) => ({ stack_id })),
+          },
+        ],
+      },
+    });
+  }
+
+  test("D.3 — federated dispatch + principal in peer roster → allow path matches local C.3 behaviour", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      // Subscribe to the federated subject so the router fans the
+      // envelope to this listener.
+      subjects: ["federated.research-collab.dispatch.task.received"],
+      ccSessionFactory: factory,
+      policyEngine: engineWithFederation({ capabilities: ["dispatch.cortex"] }),
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(
+      makeReceivedEnvelope(),
+      "federated.research-collab.dispatch.task.received",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.allowed",
+      "dispatch.task.started",
+      "dispatch.task.completed",
+    ]);
+    // The audit envelope carries the federated wire subject verbatim
+    // — pre-D.3 synthesised `local.{org}...` regardless.
+    const allowed = r.published[0]!;
+    expect(allowed.payload.envelope_subject).toBe(
+      "federated.research-collab.dispatch.task.received",
+    );
+  });
+
+  test("D.3 — federated dispatch + principal NOT in peer roster → stack_not_in_network deny", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      subjects: ["federated.partner-only.dispatch.task.received"],
+      ccSessionFactory: factory,
+      policyEngine: engineWithFederation({
+        capabilities: ["dispatch.cortex"],
+        networkId: "partner-only",
+        // Network's peers do NOT include andreas/research — cortex's
+        // home_stack misses.
+        peerStackIds: ["jcfischer/sage-host"],
+      }),
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(
+      makeReceivedEnvelope(),
+      "federated.partner-only.dispatch.task.received",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.denied",
+      "dispatch.task.failed",
+    ]);
+    const denied = r.published[0]!;
+    const reason = denied.payload.reason as {
+      kind: string;
+      principal_id?: string;
+      source_network?: string;
+      home_stack?: string;
+    };
+    expect(reason.kind).toBe("stack_not_in_network");
+    expect(reason.principal_id).toBe("cortex");
+    expect(reason.source_network).toBe("partner-only");
+    expect(reason.home_stack).toBe("andreas/research");
+    // Harness never constructed.
+    expect(optsCaptured).toHaveLength(0);
+  });
+
+  test("D.3 — federated dispatch + unknown network id → unknown_network deny", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      // Subscribe to the catch-all federated dispatch pattern so the
+      // listener receives envelopes from networks it doesn't know.
+      subjects: ["federated.>"],
+      ccSessionFactory: factory,
+      policyEngine: engineWithFederation({
+        capabilities: ["dispatch.cortex"],
+        networkId: "research-collab",
+      }),
+    });
+    await listener.start();
+    await router.start();
+
+    // Envelope arrives on a federated subject whose network id isn't
+    // declared in policy.federated.networks[].
+    r.trigger(
+      makeReceivedEnvelope(),
+      "federated.phantom-network.dispatch.task.received",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.denied",
+      "dispatch.task.failed",
+    ]);
+    const denied = r.published[0]!;
+    const reason = denied.payload.reason as {
+      kind: string;
+      source_network?: string;
+      principal_id?: string;
+    };
+    expect(reason.kind).toBe("unknown_network");
+    expect(reason.source_network).toBe("phantom-network");
+    expect(reason.principal_id).toBe("cortex");
+  });
+
+  test("D.3.2 — source_network is stamped onto reason for non-federation deny kinds too (insufficient_role on a federated dispatch)", async () => {
+    // The capability check fires before the federation branch, so a
+    // federated dispatch whose principal lacks the capability denies
+    // with `insufficient_role` (the C.3 reason kind). D.3.2 still
+    // requires the audit envelope to carry `source_network` so
+    // operators can see which network the deny came from.
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      subjects: ["federated.research-collab.dispatch.task.received"],
+      ccSessionFactory: factory,
+      policyEngine: engineWithFederation({
+        // No dispatch.cortex grant — capability check misses.
+        capabilities: ["other.cap"],
+      }),
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(
+      makeReceivedEnvelope(),
+      "federated.research-collab.dispatch.task.received",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const denied = r.published.find((e) => e.type === "system.access.denied");
+    expect(denied).toBeDefined();
+    if (!denied) return;
+    const reason = denied.payload.reason as {
+      kind: string;
+      missing_capability?: string;
+      source_network?: string;
+    };
+    expect(reason.kind).toBe("insufficient_role");
+    expect(reason.missing_capability).toBe("dispatch.cortex");
+    // D.3.2 — source_network rides on the reason payload even for
+    // non-federation deny kinds.
+    expect(reason.source_network).toBe("research-collab");
+  });
+
+  test("D.3 — local dispatch path is unaffected even when federated config is present (no source_network on intent)", async () => {
+    // Belt-and-braces: a fully-configured federated engine must still
+    // pass-through local dispatches. The federation branch is gated
+    // on `intent.source_network`; subjects starting with `local.>`
+    // yield `undefined` and skip the branch.
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineWithFederation({
+        capabilities: ["dispatch.cortex"],
+        // No peer matches cortex's home_stack — would deny on the
+        // federation branch IF the dispatch was federated.
+        peerStackIds: ["jcfischer/sage-host"],
+      }),
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.allowed",
+      "dispatch.task.started",
+      "dispatch.task.completed",
+    ]);
+    // Audit envelope carries the original local subject, no
+    // source_network stamped on the allow path (it's a deny-side
+    // concern for audit consumers correlating denied federated
+    // traffic).
+    const allowed = r.published[0]!;
+    expect(allowed.payload.envelope_subject).toBe(
+      "local.metafactory.dispatch.task.received",
+    );
+  });
+
+  test("D.3 — engine sees source_network on Intent when dispatch arrives via federated subject (S-3 analogue)", async () => {
+    const captured: { principalId: string; intent: Intent }[] = [];
+    const engine = engineWithFederation({ capabilities: ["dispatch.cortex"] });
+    const origCheck = engine.check.bind(engine);
+    engine.check = (principalId, intent) => {
+      captured.push({ principalId, intent });
+      return origCheck(principalId, intent);
+    };
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      subjects: ["federated.research-collab.dispatch.task.received"],
+      ccSessionFactory: factory,
+      policyEngine: engine,
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(
+      makeReceivedEnvelope(),
+      "federated.research-collab.dispatch.task.received",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.intent.source_network).toBe("research-collab");
+  });
+
   test("C.4.2 — system.access.denied carries structured reason + signed_by", async () => {
     const r = recordingRuntime();
     const router = createSurfaceRouter(r.runtime);

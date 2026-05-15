@@ -64,6 +64,7 @@ import type {
   SurfaceRouter,
 } from "../bus/surface-router";
 import type {
+  SystemAccessDeniedReason,
   SystemAccessSignedBy,
   SystemAccessSovereignty,
   SystemEventSource,
@@ -243,8 +244,15 @@ export function createDispatchListener(
     // iteration can wire `signal.aborted` to `harness.shutdown({ graceful:
     // false })` so surface-router timeouts end the CC process eagerly
     // rather than waiting for cc-session's internal timer to fire.
-    render: (envelope, _signal) =>
-      handleDispatchEnvelope(envelope, runtime, source, ccSessionFactory, policyEngine),
+    render: (envelope, _signal, subject) =>
+      handleDispatchEnvelope(
+        envelope,
+        subject,
+        runtime,
+        source,
+        ccSessionFactory,
+        policyEngine,
+      ),
   };
 
   return {
@@ -391,6 +399,7 @@ function buildDispatchRequest(
  */
 async function handleDispatchEnvelope(
   envelope: Envelope,
+  subject: string | undefined,
   runtime: MyelinRuntime,
   source: SystemEventSource,
   ccSessionFactory: CCSessionFactory | undefined,
@@ -418,9 +427,19 @@ async function handleDispatchEnvelope(
   // When the engine is undefined the listener falls back to the
   // legacy unauthenticated path — the runner is booted without a
   // `policy:` block. C.2b removes the legacy path entirely.
+  // IAW Phase D.3 — derive `source_network` from the matched
+  // subject when the envelope arrived via `federated.{id}.>`. Local
+  // dispatches (subjects like `local.{org}.dispatch.task.received`)
+  // leave it `undefined` so the engine skips the federation branch.
+  const sourceNetwork = extractSourceNetwork(subject);
   let gatedPrincipal: Principal | undefined;
   if (policyEngine !== undefined) {
-    const decision = checkDispatchPolicy(policyEngine, envelope, payload);
+    const decision = checkDispatchPolicy(
+      policyEngine,
+      envelope,
+      payload,
+      sourceNetwork,
+    );
     // C.4.3 — carry `signed_by[]` from the originating envelope
     // verbatim so the audit record is cryptographically attributable
     // (even on deny). Normalised to an array via `getSignedByChain`;
@@ -447,6 +466,17 @@ async function handleDispatchEnvelope(
       frontier_ok: envelope.sovereignty.frontier_ok,
       model_class: envelope.sovereignty.model_class,
     };
+    // IAW Phase D.3 — when the inbound envelope's subject was a real
+    // wire subject (the surface-router forwards it on `render`), use
+    // it verbatim on the audit envelope. The pre-D.3 path always
+    // synthesised `local.{org}.dispatch.task.received` regardless of
+    // whether the envelope arrived locally or on `federated.{net}.*`.
+    // Synthesising the local subject on federated traffic would
+    // misrepresent the wire path on audit consumers. Fall back to the
+    // synthesised local subject when `subject` is undefined (legacy
+    // callers / unit tests that don't pass a subject).
+    const auditEnvelopeSubject =
+      subject ?? `local.${source.org}.dispatch.task.received`;
     const auditCommon = {
       source,
       principalId: decision.principalId,
@@ -454,21 +484,44 @@ async function handleDispatchEnvelope(
       sovereignty: auditSovereignty,
       correlationId: envelope.correlation_id ?? payload.task_id,
       envelopeId: envelope.id,
-      envelopeSubject: `local.${source.org}.dispatch.task.received`,
+      envelopeSubject: auditEnvelopeSubject,
       signedBy,
     };
 
     if (!decision.allow) {
       console.error(
-        `cortex-runner: dispatch-listener: denied envelope id=${envelope.id} task_id=${payload.task_id} agent=${payload.agent_id} — reason=${decision.reason.kind}`,
+        `cortex-runner: dispatch-listener: denied envelope id=${envelope.id} task_id=${payload.task_id} agent=${payload.agent_id} — reason=${decision.reason.kind}${
+          sourceNetwork !== undefined ? ` source_network=${sourceNetwork}` : ""
+        }`,
       );
-      // C.4.2 — emit `system.access.denied` carrying the structured
-      // engine deny reason + signed_by chain. Lives on a different
-      // subject than the dispatch.task.* lifecycle so audit consumers
-      // (dashboard, pipeline) get a stable wire path.
+      // C.4.2 / D.3.2 — emit `system.access.denied` carrying the
+      // structured engine deny reason + signed_by chain. Lives on a
+      // different subject than the dispatch.task.* lifecycle so audit
+      // consumers (dashboard, pipeline) get a stable wire path.
+      //
+      // IAW Phase D.3.2 — stamp `source_network` onto the audit
+      // reason payload whenever the dispatch arrived on a federated
+      // subject, even when the deny kind isn't one of the D.3
+      // federation-specific variants (e.g. `insufficient_role` on a
+      // federated dispatch). Audit consumers branching on
+      // `reason.kind` can read `reason.source_network` uniformly and
+      // render which network the deny came from. D.3 federation-
+      // specific reasons already carry the field via the
+      // discriminator; the merge is a no-op for those.
+      //
+      // The audit reason rides on `SystemAccessDeniedReason` whose
+      // `[k: string]: unknown` index allows additive fields without
+      // a wire-schema bump — distinct from `PolicyDenyReason` which
+      // is a tight discriminated union and would reject the spread.
+      // Echo cortex#221 round 1 carved the audit/policy split for
+      // exactly this kind of audit-only enrichment.
+      const auditReason: Record<string, unknown> = {
+        ...(decision.reason as unknown as Record<string, unknown>),
+        ...(sourceNetwork !== undefined && { source_network: sourceNetwork }),
+      };
       const denied = createSystemAccessDeniedEvent({
         ...auditCommon,
-        reason: { ...decision.reason },
+        reason: auditReason as unknown as SystemAccessDeniedReason,
       });
       await runtime.publish(denied);
       // Echo cortex#220 round 2 M-1 — also synthesise a terminal
@@ -601,9 +654,15 @@ function checkDispatchPolicy(
   engine: PolicyEngine,
   envelope: Envelope,
   payload: DispatchTaskReceivedPayload,
+  sourceNetwork: string | undefined,
 ): DispatchPolicyResult {
   const principalId = resolvePrincipalId(envelope, payload);
 
+  // IAW Phase D.3 — surface `source_network` onto the intent when the
+  // inbound wire subject was `federated.{network_id}.>`. The engine
+  // uses it to evaluate the per-network policy slice; local
+  // dispatches leave it `undefined` so the federation branch stays
+  // inert (preserves C.3 behaviour for the legacy path).
   const intent: Intent = {
     capability: `dispatch.${payload.agent_id}`,
     sovereignty: {
@@ -614,6 +673,7 @@ function checkDispatchPolicy(
       model_class: envelope.sovereignty.model_class,
     },
     payload_summary: `dispatch agent=${payload.agent_id} task_id=${payload.task_id}`,
+    ...(sourceNetwork !== undefined && { source_network: sourceNetwork }),
   };
 
   const decision = engine.check(principalId, intent);
@@ -658,5 +718,36 @@ function resolvePrincipalId(
   const origin = chain[0];
   if (origin === undefined) return payload.agent_id;
   return extractAgentIdFromDid(origin.principal) ?? origin.principal;
+}
+
+/**
+ * IAW Phase D.3 (cortex#116) — derive the federation network id from
+ * a NATS subject of the form `federated.{network_id}.<...>`. Returns
+ * `undefined` for any other subject shape (including local dispatches
+ * and undefined inputs).
+ *
+ * The `{network_id}` grammar matches `PolicyFederatedNetworkSchema.id`
+ * — lowercase alphanumeric + hyphen, starting with a letter. A
+ * subject whose second segment doesn't match this grammar yields
+ * `undefined` (defensive — the schema rejects malformed network ids
+ * at config-load, but the wire path could still surface unexpected
+ * subjects).
+ *
+ * Examples:
+ *   `federated.research-collab.tasks.code-review` → `"research-collab"`
+ *   `federated.research-collab` → `undefined` (no trailing segments,
+ *     not a dispatch subject)
+ *   `local.metafactory.dispatch.task.received` → `undefined`
+ *   `undefined` → `undefined`
+ */
+function extractSourceNetwork(subject: string | undefined): string | undefined {
+  if (subject === undefined) return undefined;
+  const parts = subject.split(".");
+  if (parts.length < 3) return undefined;
+  if (parts[0] !== "federated") return undefined;
+  const networkId = parts[1];
+  if (networkId === undefined || networkId.length === 0) return undefined;
+  if (!/^[a-z][a-z0-9-]*$/.test(networkId)) return undefined;
+  return networkId;
 }
 

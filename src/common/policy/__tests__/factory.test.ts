@@ -55,6 +55,76 @@ describe("policyEngineFromConfig", () => {
     expect(engine?.roleCount).toBe(1);
   });
 
+  test("D.3 — parsed federated block round-trips into engine; federated check() honours peer roster", () => {
+    const pubkey = "U" + "D".repeat(55);
+    const policy = parsePolicy({
+      principals: [
+        {
+          id: "luna",
+          home_operator: "andreas",
+          home_stack: "andreas/research",
+          role: ["operator"],
+          trust: [],
+        },
+      ],
+      roles: [{ id: "operator", capabilities: ["code-review.typescript"] }],
+      federated: {
+        networks: [
+          {
+            id: "research-collab",
+            leaf_node: "leaf",
+            peers: [
+              {
+                operator_id: "andreas",
+                stack_id: "andreas/research",
+                operator_pubkey: pubkey,
+              },
+            ],
+            accept_subjects: ["federated.research-collab.>"],
+            deny_subjects: [],
+            announce_capabilities: [],
+            max_hop: 0,
+          },
+        ],
+      },
+    });
+    const engine = policyEngineFromConfig(policy);
+    expect(engine).toBeDefined();
+    if (!engine) return;
+
+    // Federated dispatch — principal's home_stack is in the network's
+    // peer roster; allow.
+    const allowResult = engine.check("luna", {
+      capability: "code-review.typescript",
+      sovereignty: {
+        classification: "federated",
+        data_residency: "NZ",
+        max_hop: 1,
+        frontier_ok: false,
+        model_class: "any",
+      },
+      source_network: "research-collab",
+    });
+    expect(allowResult.allow).toBe(true);
+
+    // Federated dispatch — unknown network id; deny.
+    const unknownNetworkResult = engine.check("luna", {
+      capability: "code-review.typescript",
+      sovereignty: {
+        classification: "federated",
+        data_residency: "NZ",
+        max_hop: 1,
+        frontier_ok: false,
+        model_class: "any",
+      },
+      source_network: "phantom",
+    });
+    expect(unknownNetworkResult.allow).toBe(false);
+    if (!unknownNetworkResult.allow) {
+      expect(unknownNetworkResult.reason.kind).toBe("unknown_network");
+    }
+  });
+
   test("round-trip: parsed Policy flows into engine and check() respects it", () => {
     const policy = parsePolicy({
       principals: [
