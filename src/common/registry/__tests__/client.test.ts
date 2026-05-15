@@ -414,6 +414,62 @@ describe("RegistryClient — periodic refresh + shutdown", () => {
     expect(fetchCalls.length).toBe(callsAfterStart);
   });
 
+  test("concurrent refreshAll() invocations are coalesced — the second call short-circuits while the first is in flight", async () => {
+    // Echo cortex#230 round 1: without the in-flight guard, a
+    // setInterval tick firing while the previous cycle still drains
+    // would reassign `cycleAbort` and orphan the previous controller.
+    // We model that by stalling the first fetch on a manually-resolved
+    // promise, then invoking `refreshAll()` a second time before the
+    // first completes. The fake `fetch` records every call; with the
+    // guard the second invocation must NOT issue any GET.
+    const kp = await generateKeypair();
+    const op = makeOperator("andreas");
+    const assertion = await signAssertion(kp.privateKey, kp.publicKeyB64, op);
+
+    const fetchCalls: string[] = [];
+    let release: (() => void) | undefined;
+    const block = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fakeFetch: FakeFetchHandler = async (url: string) => {
+      fetchCalls.push(url);
+      await block;
+      return jsonResponse(assertion);
+    };
+    const errs: string[] = [];
+    const client = new RegistryClient({
+      url: "https://registry.example",
+      pubkey: kp.publicKeyB64,
+      operatorIds: ["andreas"],
+      refreshIntervalMs: 0,
+      fetch: fakeFetch as typeof fetch,
+      logError: (m) => errs.push(m),
+    });
+    try {
+      // Start a refresh cycle; do NOT await — it'll block on `release`.
+      const inFlight = client.refreshAll();
+      // Yield so the cycle reaches its first fetch and registers the
+      // call. Without this microtask boundary the second refreshAll
+      // could race the first into the `refreshInFlight = true` set.
+      await Promise.resolve();
+      // Second invocation while the first is still pending: must
+      // short-circuit (no additional fetch).
+      await client.refreshAll();
+      expect(fetchCalls.length).toBe(1);
+      expect(errs.some((e) => e.includes("previous cycle still draining"))).toBe(true);
+      // Now release the first cycle and let it complete.
+      release?.();
+      await inFlight;
+      expect(client.getOperator("andreas")).toBeDefined();
+      // A subsequent refresh after the cycle drained must run normally.
+      await client.refreshAll();
+      expect(fetchCalls.length).toBe(2);
+    } finally {
+      release?.();
+      client.stop();
+    }
+  });
+
   test("invalidate() drops a cache entry; the next refresh repopulates it", async () => {
     const kp = await generateKeypair();
     const op = makeOperator("andreas");

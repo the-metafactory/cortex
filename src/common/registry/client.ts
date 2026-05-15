@@ -91,6 +91,16 @@ export class RegistryClient implements RegistryClientReader {
   private refreshTimer: ReturnType<typeof setInterval> | undefined;
   /** Abort controller scoped to the current cycle's in-flight requests. */
   private cycleAbort: AbortController | undefined;
+  /**
+   * Re-entrancy guard for `refreshAll()`. Set on entry, cleared in the
+   * finally block. If a `setInterval` tick (or a manual caller) fires
+   * while the previous cycle is still draining, the new invocation
+   * logs and returns rather than reassigning `cycleAbort` — that
+   * reassignment would orphan the older cycle's controller and
+   * `stop()` could only cancel the newest one. Echo cortex#230
+   * round 1.
+   */
+  private refreshInFlight = false;
   private stopped = false;
 
   constructor(options: RegistryClientOptions) {
@@ -199,6 +209,15 @@ export class RegistryClient implements RegistryClientReader {
    * Drive one refresh cycle manually. Tests use this to avoid waiting
    * for the `setInterval` tick. Exposed as an internal seam — not on
    * `RegistryClientReader`.
+   *
+   * Serial: each peer is fetched + verified in turn. A cycle runs at
+   * most one at a time across the whole client — if a `setInterval`
+   * tick (or a concurrent manual caller) fires while the previous
+   * cycle is still draining, the new invocation logs and returns.
+   * Without this guard the new cycle would overwrite `this.cycleAbort`
+   * and orphan the older cycle's controller — `stop()` could then only
+   * cancel the newest cycle, leaving older in-flight requests to run
+   * to their per-request timeout. Echo cortex#230 round 1.
    */
   async refreshAll(): Promise<void> {
     if (this.stopped) return;
@@ -206,17 +225,32 @@ export class RegistryClient implements RegistryClientReader {
       this.logError("refreshAll() called before pubkey was pinned; skipping");
       return;
     }
+    if (this.refreshInFlight) {
+      // Worst-case: peer-list × per-request timeout > refreshIntervalMs.
+      // Drop the redundant cycle rather than queue — by the time the
+      // current cycle finishes, the network state is fresher than what
+      // a queued cycle would have observed anyway.
+      this.logError(
+        "refreshAll() invoked while previous cycle still draining; skipping this tick",
+      );
+      return;
+    }
+    this.refreshInFlight = true;
     // Fresh AbortController per cycle so stop() during the cycle
     // cancels in-flight requests but doesn't poison the next cycle.
     this.cycleAbort = new AbortController();
     const signal = this.cycleAbort.signal;
 
-    // Serial rather than parallel: peer lists are short (single-digit
-    // typical, dozens worst-case), the registry is shared, and serial
-    // is more polite under load. Parallelise later if measured-needed.
-    for (const operatorId of this.operatorIds) {
-      if (signal.aborted) break;
-      await this.refreshOperator(operatorId, signal);
+    try {
+      // Serial rather than parallel: peer lists are short (single-digit
+      // typical, dozens worst-case), the registry is shared, and serial
+      // is more polite under load. Parallelise later if measured-needed.
+      for (const operatorId of this.operatorIds) {
+        if (signal.aborted) break;
+        await this.refreshOperator(operatorId, signal);
+      }
+    } finally {
+      this.refreshInFlight = false;
     }
   }
 
