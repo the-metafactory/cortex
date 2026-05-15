@@ -66,7 +66,16 @@ async function signAssertion<T>(
   };
 }
 
-function makeOperator(operator_id: string, pubkeyB64 = "AAAA"): OperatorRecord {
+/**
+ * Structurally-valid base64 Ed25519 pubkey (44 chars: 43 of alphabet
+ * + one `=` of padding). Real keys come out of WebCrypto's
+ * `generateKeypair`; tests only need the regex to pass at the
+ * payload-grammar gate. Echo cortex#230 round 1 added that gate.
+ */
+const FAKE_PEER_PUBKEY_V1 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+const FAKE_PEER_PUBKEY_V2 = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=";
+
+function makeOperator(operator_id: string, pubkeyB64 = FAKE_PEER_PUBKEY_V1): OperatorRecord {
   return {
     operator_id,
     operator_pubkey: pubkeyB64,
@@ -170,7 +179,7 @@ describe("RegistryClient — TOFU + pinned pubkey", () => {
 describe("RegistryClient — getOperator()", () => {
   test("returns the verified record after a successful refresh", async () => {
     const kp = await generateKeypair();
-    const op = makeOperator("andreas", "PEER_PUBKEY_BASE64=");
+    const op = makeOperator("andreas", FAKE_PEER_PUBKEY_V1);
     const assertion = await signAssertion(kp.privateKey, kp.publicKeyB64, op);
 
     const fakeFetch = makeRouteFetch({
@@ -348,12 +357,138 @@ describe("RegistryClient — getOperator()", () => {
       client.stop();
     }
   });
+
+  test("returns undefined when the payload's operator_pubkey is signed but malformed", async () => {
+    // Echo cortex#230 round 1: a signed-but-malformed peer pubkey is
+    // still a wire-contract violation. The signature verifies and the
+    // operator_id matches, but the pubkey field is the wrong shape;
+    // the post-verify grammar gate must catch it before the cache
+    // accepts a poison value.
+    const kp = await generateKeypair();
+    const op: OperatorRecord = {
+      ...makeOperator("andreas"),
+      operator_pubkey: "definitely-not-base64-ed25519", // wrong length + alphabet
+    };
+    const assertion = await signAssertion(kp.privateKey, kp.publicKeyB64, op);
+    const fakeFetch = makeRouteFetch({
+      "/operators/andreas": () => jsonResponse(assertion),
+    });
+    const errs: string[] = [];
+    const client = new RegistryClient({
+      url: "https://registry.example",
+      pubkey: kp.publicKeyB64,
+      operatorIds: ["andreas"],
+      refreshIntervalMs: 0,
+      fetch: fakeFetch as typeof fetch,
+      logError: (m) => errs.push(m),
+    });
+    await client.start();
+    try {
+      expect(client.getOperator("andreas")).toBeUndefined();
+      expect(errs.some((e) => e.includes("not base64-Ed25519"))).toBe(true);
+    } finally {
+      client.stop();
+    }
+  });
+});
+
+describe("RegistryClient — start()/stop() idempotency", () => {
+  test("start() is idempotent under refreshIntervalMs=0 (no setInterval timer)", async () => {
+    // Without a dedicated `started` flag, the previous implementation
+    // used `refreshTimer !== undefined` as the "already started" guard.
+    // With refreshIntervalMs=0 there is no timer, so a second start()
+    // would re-run TOFU + the eager refresh — visible here as a
+    // doubled fetch count. The `started` flag fixes that. Echo
+    // cortex#230 round 1.
+    const kp = await generateKeypair();
+    const op = makeOperator("andreas");
+    const assertion = await signAssertion(kp.privateKey, kp.publicKeyB64, op);
+    const fetchCalls: string[] = [];
+    const fakeFetch: FakeFetchHandler = async (url: string) => {
+      fetchCalls.push(url);
+      if (url.endsWith("/registry/pubkey")) {
+        return jsonResponse({ algorithm: "Ed25519", public_key: kp.publicKeyB64 });
+      }
+      if (url.endsWith("/operators/andreas")) return jsonResponse(assertion);
+      return new Response("nope", { status: 404 });
+    };
+    const client = new RegistryClient({
+      url: "https://registry.example",
+      // No pubkey → TOFU mode → /registry/pubkey is called on start.
+      operatorIds: ["andreas"],
+      refreshIntervalMs: 0,
+      fetch: fakeFetch as typeof fetch,
+      logError: () => {},
+    });
+    await client.start();
+    const callsAfterFirst = fetchCalls.length;
+    expect(callsAfterFirst).toBe(2); // /registry/pubkey + /operators/andreas
+
+    await client.start(); // second invocation must short-circuit
+    try {
+      expect(fetchCalls.length).toBe(callsAfterFirst);
+    } finally {
+      client.stop();
+    }
+  });
+
+  test("TOFU failure at boot is recoverable — subsequent refreshAll() retries the pubkey fetch", async () => {
+    // Echo cortex#230 round 1: previously, a transient outage on the
+    // initial /registry/pubkey call left the client permanently dead —
+    // pinnedPubkey stayed undefined and every cycle bailed at the top.
+    // The fix: when in TOFU mode, retry the pubkey fetch at the start
+    // of each refreshAll() until it succeeds.
+    //
+    // The fake registry simulates a registry that's down for the first
+    // TWO calls (boot TOFU + boot eager-refresh's retry) and recovers
+    // by the third (manual refreshAll). This proves the retry
+    // semantics persist beyond start() — not just "TOFU plus one
+    // eager-refresh retry then give up".
+    const kp = await generateKeypair();
+    const op = makeOperator("andreas");
+    const assertion = await signAssertion(kp.privateKey, kp.publicKeyB64, op);
+
+    let pubkeyAttempts = 0;
+    const fakeFetch: FakeFetchHandler = async (url: string) => {
+      if (url.endsWith("/registry/pubkey")) {
+        pubkeyAttempts++;
+        if (pubkeyAttempts <= 2) {
+          return new Response("warming", { status: 503 });
+        }
+        return jsonResponse({ algorithm: "Ed25519", public_key: kp.publicKeyB64 });
+      }
+      if (url.endsWith("/operators/andreas")) return jsonResponse(assertion);
+      return new Response("nope", { status: 404 });
+    };
+    const client = new RegistryClient({
+      url: "https://registry.example",
+      // TOFU mode (no pubkey from config).
+      operatorIds: ["andreas"],
+      refreshIntervalMs: 0,
+      fetch: fakeFetch as typeof fetch,
+      logError: () => {},
+    });
+    await client.start();
+    try {
+      // After start: 2 TOFU attempts (boot + eager-refresh retry), both
+      // failed, cache still empty.
+      expect(pubkeyAttempts).toBe(2);
+      expect(client.getOperator("andreas")).toBeUndefined();
+      // Third cycle: TOFU retries and succeeds → cache populates. The
+      // client recovered without external intervention.
+      await client.refreshAll();
+      expect(pubkeyAttempts).toBe(3);
+      expect(client.getOperator("andreas")).toBeDefined();
+    } finally {
+      client.stop();
+    }
+  });
 });
 
 describe("RegistryClient — periodic refresh + shutdown", () => {
   test("periodic refresh updates the cache on each cycle", async () => {
     const kp = await generateKeypair();
-    let currentPubkey = "PUBKEY_V1_BASE64_FAKE=";
+    let currentPubkey = FAKE_PEER_PUBKEY_V1;
     const fakeFetch: FakeFetchHandler = async (url: string) => {
       if (url.endsWith("/operators/andreas")) {
         const op = makeOperator("andreas", currentPubkey);
@@ -375,11 +510,11 @@ describe("RegistryClient — periodic refresh + shutdown", () => {
     });
     await client.start();
     try {
-      expect(client.getOperator("andreas")?.operator_pubkey).toBe("PUBKEY_V1_BASE64_FAKE=");
+      expect(client.getOperator("andreas")?.operator_pubkey).toBe(FAKE_PEER_PUBKEY_V1);
       // Operator rotates their pubkey upstream.
-      currentPubkey = "PUBKEY_V2_BASE64_FAKE=";
+      currentPubkey = FAKE_PEER_PUBKEY_V2;
       await client.refreshAll();
-      expect(client.getOperator("andreas")?.operator_pubkey).toBe("PUBKEY_V2_BASE64_FAKE=");
+      expect(client.getOperator("andreas")?.operator_pubkey).toBe(FAKE_PEER_PUBKEY_V2);
     } finally {
       client.stop();
     }

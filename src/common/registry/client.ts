@@ -56,11 +56,7 @@
  * successful verify writes.
  */
 
-import {
-  base64ToBytes,
-  canonicalJSON,
-  verifyEd25519,
-} from "./signing";
+import { canonicalJSON, verifyEd25519 } from "./signing";
 import type {
   OperatorRecord,
   RegistryClientOptions,
@@ -85,6 +81,15 @@ export class RegistryClient implements RegistryClientReader {
 
   /** Pinned registry pubkey. Set in ctor (config) or in `start()` (TOFU). */
   private pinnedPubkey: string | undefined;
+  /**
+   * Whether the pubkey was supplied at construction time (config-pin)
+   * or must be discovered via TOFU. Drives the "retry TOFU each cycle
+   * until it succeeds" behaviour in `refreshAll()` — without it, a
+   * transient failure on the initial TOFU attempt would leave the
+   * client permanently dead even though every subsequent cycle had a
+   * fresh chance. Echo cortex#230 round 1.
+   */
+  private readonly tofuMode: boolean;
   /** In-memory cache: `operator_id → verified OperatorRecord`. */
   private readonly cache = new Map<string, OperatorRecord>();
 
@@ -101,6 +106,15 @@ export class RegistryClient implements RegistryClientReader {
    * round 1.
    */
   private refreshInFlight = false;
+  /**
+   * Idempotency flag for `start()`. Set on first entry, never cleared
+   * (a stopped client can't be restarted — see `stop()`). Distinct
+   * from `refreshTimer !== undefined` because tests run with
+   * `refreshIntervalMs = 0` and a `refreshTimer`-based check would
+   * fail to short-circuit a second `start()` in that mode. Echo
+   * cortex#230 round 1.
+   */
+  private started = false;
   private stopped = false;
 
   constructor(options: RegistryClientOptions) {
@@ -121,6 +135,7 @@ export class RegistryClient implements RegistryClientReader {
         process.stderr.write(`registry-client: ${msg}\n`);
       });
     this.pinnedPubkey = options.pubkey;
+    this.tofuMode = options.pubkey === undefined;
   }
 
   /**
@@ -129,20 +144,27 @@ export class RegistryClient implements RegistryClientReader {
    *      `GET /registry/pubkey` and pin the response.
    *   2. Run one immediate refresh cycle so the cache is warm before
    *      callers start querying.
-   *   3. Install the `setInterval` background refresh loop.
+   *   3. Install the `setInterval` background refresh loop (skipped
+   *      when `refreshIntervalMs === 0`).
    *
-   * Safe to call once. Calling twice is a no-op after the first
-   * successful start.
+   * Idempotent: a second `start()` call is a no-op regardless of
+   * whether a `setInterval` timer was installed. This matters for
+   * test setups using `refreshIntervalMs: 0`, where a `refreshTimer`-
+   * based guard would not short-circuit. Echo cortex#230 round 1.
+   *
+   * Note that when TOFU fails on the initial call, the client stays
+   * "started" but with `pinnedPubkey === undefined` — every subsequent
+   * `refreshAll()` retries TOFU at the top of the cycle and pins the
+   * key on first success. The client recovers automatically without
+   * an external nudge. Echo cortex#230 round 1.
    */
   async start(): Promise<void> {
     if (this.stopped) {
       this.logError("start() called after stop(); ignoring");
       return;
     }
-    if (this.refreshTimer !== undefined) {
-      // Already started.
-      return;
-    }
+    if (this.started) return;
+    this.started = true;
 
     if (this.pinnedPubkey === undefined) {
       await this.fetchAndPinRegistryPubkey();
@@ -221,10 +243,6 @@ export class RegistryClient implements RegistryClientReader {
    */
   async refreshAll(): Promise<void> {
     if (this.stopped) return;
-    if (this.pinnedPubkey === undefined) {
-      this.logError("refreshAll() called before pubkey was pinned; skipping");
-      return;
-    }
     if (this.refreshInFlight) {
       // Worst-case: peer-list × per-request timeout > refreshIntervalMs.
       // Drop the redundant cycle rather than queue — by the time the
@@ -242,6 +260,19 @@ export class RegistryClient implements RegistryClientReader {
     const signal = this.cycleAbort.signal;
 
     try {
+      // Recovery path: if we're in TOFU mode and the initial attempt
+      // at boot failed, retry it at the top of every cycle. Without
+      // this, a transient outage at boot would leave the client
+      // permanently dead. Echo cortex#230 round 1.
+      if (this.pinnedPubkey === undefined && this.tofuMode) {
+        await this.fetchAndPinRegistryPubkey();
+      }
+      if (this.pinnedPubkey === undefined) {
+        this.logError(
+          "refreshAll: no pinned pubkey (TOFU still failing or pubkey never supplied); skipping operator fetches this cycle",
+        );
+        return;
+      }
       // Serial rather than parallel: peer lists are short (single-digit
       // typical, dozens worst-case), the registry is shared, and serial
       // is more polite under load. Parallelise later if measured-needed.
@@ -370,6 +401,22 @@ export class RegistryClient implements RegistryClientReader {
       );
       return undefined;
     }
+    // Shape-validate the peer pubkey grammar AFTER the signature
+    // verifies — a signed-but-malformed peer pubkey is still a wire-
+    // contract violation, and downstream callers expect to get a
+    // string that decodes as a 32-byte Ed25519 key. Defend at the
+    // boundary so the cache never holds a poison value. Echo
+    // cortex#230 round 1.
+    //
+    // Grammar: 43 chars of standard-base64 alphabet + one `=` of
+    // padding = 44 chars total, matching `OperatorRecord.operator_pubkey`
+    // on the producer side (base64 of 32 raw bytes).
+    if (!/^[A-Za-z0-9+/]{43}=$/.test(payload.operator_pubkey)) {
+      this.logError(
+        `refresh(${operatorId}): payload.operator_pubkey is not base64-Ed25519 (got "${payload.operator_pubkey.slice(0, 12)}…"); ignoring`,
+      );
+      return undefined;
+    }
 
     // Reconstruct the canonical bound triple and verify.
     const bound = canonicalJSON({
@@ -466,5 +513,3 @@ export class RegistryClient implements RegistryClientReader {
   }
 }
 
-// Re-export the verify primitive so consumers + tests can share it.
-export { base64ToBytes, canonicalJSON, verifyEd25519 };
