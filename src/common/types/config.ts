@@ -161,6 +161,21 @@ export const DiscordInstanceSchema = z.object({
    * since the resolver only sees adapters started in its own process.
    */
   trustedBotIds: z.array(z.coerce.string()).default([]),
+
+  /**
+   * MIG-3b / cortex#205: NATS subject patterns this Discord adapter renders
+   * to chat. Mirror of `DiscordPresenceSchema.surfaceSubjects`; the cortex.yaml
+   * loader threads the value through via `flattenDiscordPresences`. cortex.ts
+   * passes it into `DiscordAdapterInfra.surfaceSubjects` at construction,
+   * which the surface-router registers as the adapter's match set.
+   *
+   * Empty (default) → the adapter never matches in the router; `DiscordAdapter`
+   * logs a one-shot "surfaceSubjects is empty" warning at startup. Operators
+   * who want bus→chat rendering set this to e.g.
+   * `["local.metafactory.tasks.code-review.>"]` to consume pilot's IoAW
+   * review-request envelopes.
+   */
+  surfaceSubjects: z.array(z.string().min(1)).default([]),
 });
 
 export type DiscordInstance = z.infer<typeof DiscordInstanceSchema>;

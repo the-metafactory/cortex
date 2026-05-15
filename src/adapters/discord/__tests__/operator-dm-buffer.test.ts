@@ -68,6 +68,7 @@ function makeAdapter(opts: {
     defaultRole: "allow-all",
     dm: DMConfigSchema.parse({}),
     trustedBotIds: [],
+    surfaceSubjects: [],
   };
   const agent: Agent = {
     id: "test",

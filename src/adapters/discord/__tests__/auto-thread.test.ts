@@ -190,6 +190,7 @@ function makeAdapter(): { adapter: DiscordAdapter; client: FakeClient } {
     defaultRole: "allow-all",
     dm: DMConfigSchema.parse({}),
     trustedBotIds: [],
+    surfaceSubjects: [],
   };
   const agent: Agent = {
     id: "test-agent",

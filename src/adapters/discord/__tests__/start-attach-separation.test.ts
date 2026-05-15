@@ -96,6 +96,7 @@ function makeAdapter(instanceId = "discord-test"): {
     defaultRole: "allow-all",
     dm: DMConfigSchema.parse({}),
     trustedBotIds: [],
+    surfaceSubjects: [],
   };
   const agent: Agent = {
     id: "test-agent",
@@ -190,6 +191,7 @@ describe("DiscordAdapter.attachInboundDispatch: pre-start guard (cortex#108)", (
       defaultRole: "allow-all",
       dm: DMConfigSchema.parse({}),
       trustedBotIds: [],
+      surfaceSubjects: [],
     };
     const agent: Agent = {
       id: "test-agent",

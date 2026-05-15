@@ -464,6 +464,33 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     expect(config.discord[0]!.trustedBotIds).toEqual([]);
   });
 
+  // cortex#205 — schema parity: `presence.discord.surfaceSubjects` is
+  // preserved through the cortex-shape → legacy BotConfig synthesizer so
+  // operators can wire bus-envelope subjects into the Discord adapter's
+  // surface-router match set. Before this fix, the field was absent from
+  // both DiscordPresenceSchema and DiscordInstanceSchema, so zod's
+  // unknown-key-strip silently dropped any operator-set value.
+  test("threads agents[].presence.discord.surfaceSubjects through to DiscordInstance.surfaceSubjects", () => {
+    const cfg = minimalCortex();
+    const firstAgent = (cfg.agents as Record<string, unknown>[])[0]!;
+    const discordPresence = (firstAgent.presence as Record<string, unknown>).discord as Record<string, unknown>;
+    discordPresence.surfaceSubjects = [
+      "local.metafactory.tasks.code-review.>",
+    ];
+    const path = writeCortexConfig(testDir, cfg);
+    const { config } = loadConfigWithAgents(path);
+    expect(config.discord).toHaveLength(1);
+    expect(config.discord[0]!.surfaceSubjects).toEqual([
+      "local.metafactory.tasks.code-review.>",
+    ]);
+  });
+
+  test("surfaceSubjects defaults to [] when omitted from presence.discord", () => {
+    const path = writeCortexConfig(testDir, minimalCortex());
+    const { config } = loadConfigWithAgents(path);
+    expect(config.discord[0]!.surfaceSubjects).toEqual([]);
+  });
+
   // ---------------------------------------------------------------------------
   // IAW Phase A.5 (refs cortex#113) — cortex-shape `stack:` block plumbed
   // through to `LoadedConfig.stack`. The boot path (`startCortex`) calls
