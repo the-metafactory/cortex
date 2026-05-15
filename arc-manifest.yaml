@@ -47,6 +47,16 @@ provides:
     - source: src/cli/discord/skill
       target: ~/.claude/skills/Discord
 
+    # IAW cortex#232 — `cortex-wait-for-review` is a thin NATS
+    # subscriber that the pilot-review-loop skill calls in place of
+    # the bash polling block. Blocks on `local.{org}.github.>` events
+    # filtered by (repo, pr_number, reviewer) until a match or the
+    # caller's `--timeout` elapses; exits 0 (match), 124 (timeout),
+    # 1 (runtime), or 2 (usage). Producer is the existing
+    # `gh-webhook-receiver`; this binary is pure consumer.
+    - source: src/cli/cortex/commands/wait-for-review.ts
+      target: ~/bin/cortex-wait-for-review
+
     # ─── Claude Code hooks ────────────────────────────────────
     # Hook source filenames keep grove-era names (GroveContext.hook.ts,
     # EventLogger.hook.ts, bash-guard.hook.ts) so the in-repo tree stays
