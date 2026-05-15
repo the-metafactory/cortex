@@ -401,12 +401,16 @@ export class RegistryClient implements RegistryClientReader {
       );
       return undefined;
     }
-    // Shape-validate the peer pubkey grammar AFTER the signature
-    // verifies — a signed-but-malformed peer pubkey is still a wire-
-    // contract violation, and downstream callers expect to get a
-    // string that decodes as a 32-byte Ed25519 key. Defend at the
+    // Shape-validate the peer pubkey grammar BEFORE the signature
+    // verifies — a cheap structural gate runs first so we don't pay
+    // for an Ed25519 verify on a payload we'd reject anyway. A
+    // signed-but-malformed peer pubkey is still a wire-contract
+    // violation, and downstream callers expect to get a string that
+    // decodes as a 32-byte Ed25519 key. Either ordering catches the
+    // attack (sig-verifying-but-malformed cannot bypass either
+    // gate); pre-verify is the perf-conscious choice. Defend at the
     // boundary so the cache never holds a poison value. Echo
-    // cortex#230 round 1.
+    // cortex#230 rounds 1 + 3.
     //
     // Grammar: 43 chars of standard-base64 alphabet + one `=` of
     // padding = 44 chars total, matching `OperatorRecord.operator_pubkey`

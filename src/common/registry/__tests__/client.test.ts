@@ -359,11 +359,12 @@ describe("RegistryClient — getOperator()", () => {
   });
 
   test("returns undefined when the payload's operator_pubkey is signed but malformed", async () => {
-    // Echo cortex#230 round 1: a signed-but-malformed peer pubkey is
-    // still a wire-contract violation. The signature verifies and the
-    // operator_id matches, but the pubkey field is the wrong shape;
-    // the post-verify grammar gate must catch it before the cache
-    // accepts a poison value.
+    // Echo cortex#230 rounds 1 + 3: a signed-but-malformed peer
+    // pubkey is still a wire-contract violation. The structural
+    // grammar gate runs BEFORE the signature verify (cheap-check-
+    // first ordering — no wasted crypto on garbage payloads), so a
+    // wrong-shape pubkey is rejected even if the rest of the
+    // assertion would have verified.
     const kp = await generateKeypair();
     const op: OperatorRecord = {
       ...makeOperator("andreas"),
