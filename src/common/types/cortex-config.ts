@@ -889,10 +889,15 @@ export const PolicyPrincipalSchema = z.object({
     "principal.home_stack must match {operator_id}/{stack_id} format",
   ),
   /**
-   * Stack signing NKey public key. Optional — a principal without
-   * `nkey_pub` cannot be the signer of an inbound envelope (B.1c
-   * cryptoVerify rejects with `principal_has_no_nkey_pub`) but
-   * can still be authorised for local-only operations.
+   * Stack signing NKey public key. **Declared at C.2a for forward
+   * compat — not yet consumed by any verification path.** B.1c
+   * cryptoVerify currently reads `agents[].nkey_pub` from the
+   * agent registry (`src/bus/verify-signed-by-chain.ts`); C.2b/C.3
+   * will migrate the signature-verification lookup to
+   * `policy.principals[].nkey_pub` and retire the agent-side
+   * field. Until then, declaring `nkey_pub` on a principal parses
+   * cleanly but nothing gates on it (Echo cortex#219 round 1).
+   *
    * Same regex as `StackConfigSchema.nkey_pub` (56-char U-prefixed
    * base32).
    */
@@ -968,31 +973,72 @@ export type PolicyRole = z.infer<typeof PolicyRoleSchema>;
 export const PolicySchema = z.object({
   principals: z.array(PolicyPrincipalSchema).default([]),
   roles: z.array(PolicyRoleSchema).default([]),
-}).refine(
-  (policy) => {
-    const knownRoles = new Set(policy.roles.map((r) => r.id));
-    return policy.principals.every((p) =>
-      p.role.every((r) => knownRoles.has(r)),
-    );
-  },
-  {
-    message:
-      "every principal.role[] id must resolve to a declared role in policy.roles[]",
-    path: ["principals"],
-  },
-).refine(
-  (policy) => {
-    const knownPrincipals = new Set(policy.principals.map((p) => p.id));
-    return policy.principals.every((p) =>
-      p.trust.every((t) => knownPrincipals.has(t)),
-    );
-  },
-  {
-    message:
-      "every principal.trust[] id must resolve to a declared principal in policy.principals[]",
-    path: ["principals"],
-  },
-);
+}).superRefine((policy, ctx) => {
+  // Per-offender path emission so a YAML-aware loader can render
+  // the error inline at the bad token (Echo cortex#219 round 1).
+  // Capability-catalog precedent: `superRefine` with batch
+  // `ctx.addIssue` per offender at the same nesting depth.
+
+  // Uniqueness — principals[].id.
+  const seenPrincipal = new Map<string, number>();
+  policy.principals.forEach((p, i) => {
+    const dupAt = seenPrincipal.get(p.id);
+    if (dupAt !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: `principal id "${p.id}" already declared at principals[${dupAt}]`,
+        path: ["principals", i, "id"],
+      });
+    } else {
+      seenPrincipal.set(p.id, i);
+    }
+  });
+
+  // Uniqueness — roles[].id.
+  const seenRole = new Map<string, number>();
+  policy.roles.forEach((r, i) => {
+    const dupAt = seenRole.get(r.id);
+    if (dupAt !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: `role id "${r.id}" already declared at roles[${dupAt}]`,
+        path: ["roles", i, "id"],
+      });
+    } else {
+      seenRole.set(r.id, i);
+    }
+  });
+
+  // Cross-ref: every principal.role[] resolves to a declared role.
+  // Batch-emit (not first-failure) so an operator with multiple
+  // dangling refs sees all of them on one parse pass.
+  const knownRoles = new Set(policy.roles.map((r) => r.id));
+  policy.principals.forEach((p, principalIdx) => {
+    p.role.forEach((roleId, roleIdx) => {
+      if (!knownRoles.has(roleId)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `principal "${p.id}" references undeclared role "${roleId}" — declare it in policy.roles[]`,
+          path: ["principals", principalIdx, "role", roleIdx],
+        });
+      }
+    });
+  });
+
+  // Cross-ref: every principal.trust[] resolves to a declared principal.
+  const knownPrincipals = new Set(policy.principals.map((p) => p.id));
+  policy.principals.forEach((p, principalIdx) => {
+    p.trust.forEach((peerId, trustIdx) => {
+      if (!knownPrincipals.has(peerId)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `principal "${p.id}" trusts undeclared peer "${peerId}" — declare it in policy.principals[]`,
+          path: ["principals", principalIdx, "trust", trustIdx],
+        });
+      }
+    });
+  });
+});
 
 export type Policy = z.infer<typeof PolicySchema>;
 

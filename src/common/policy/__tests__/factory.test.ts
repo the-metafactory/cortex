@@ -111,7 +111,7 @@ describe("policyEngineFromConfig", () => {
 });
 
 describe("PolicySchema cross-validation", () => {
-  test("rejects dangling principal.role[] ref to undeclared role", () => {
+  test("rejects dangling principal.role[] ref to undeclared role (with per-offender path)", () => {
     expect(() =>
       parsePolicy({
         principals: [
@@ -125,7 +125,7 @@ describe("PolicySchema cross-validation", () => {
         ],
         roles: [{ id: "operator", capabilities: [] }],
       }),
-    ).toThrow(/principal\.role\[\] id must resolve/);
+    ).toThrow(/references undeclared role/);
   });
 
   test("rejects dangling principal.trust[] ref to undeclared principal", () => {
@@ -142,7 +142,75 @@ describe("PolicySchema cross-validation", () => {
         ],
         roles: [],
       }),
-    ).toThrow(/principal\.trust\[\] id must resolve/);
+    ).toThrow(/trusts undeclared peer/);
+  });
+
+  test("rejects duplicate principal id", () => {
+    expect(() =>
+      parsePolicy({
+        principals: [
+          {
+            id: "luna",
+            home_operator: "andreas",
+            home_stack: "andreas/research",
+            role: [],
+            trust: [],
+          },
+          {
+            id: "luna",
+            home_operator: "andreas",
+            home_stack: "andreas/research",
+            role: [],
+            trust: [],
+          },
+        ],
+        roles: [],
+      }),
+    ).toThrow(/principal id.*luna.*already declared/);
+  });
+
+  test("rejects duplicate role id", () => {
+    expect(() =>
+      parsePolicy({
+        principals: [],
+        roles: [
+          { id: "operator", capabilities: ["deploy.staging"] },
+          { id: "operator", capabilities: ["deploy.prod"] },
+        ],
+      }),
+    ).toThrow(/role id.*operator.*already declared/);
+  });
+
+  test("batches all dangling refs across multiple principals (not first-only)", () => {
+    try {
+      parsePolicy({
+        principals: [
+          {
+            id: "luna",
+            home_operator: "andreas",
+            home_stack: "andreas/research",
+            role: ["ghost-role-1"],
+            trust: [],
+          },
+          {
+            id: "echo",
+            home_operator: "andreas",
+            home_stack: "andreas/research",
+            role: ["ghost-role-2"],
+            trust: [],
+          },
+        ],
+        roles: [],
+      });
+      throw new Error("expected parse to throw");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Both offenders surface in one parse pass (Echo cortex#219
+      // round 1 — superRefine batches issues rather than failing on
+      // the first one).
+      expect(message).toContain("ghost-role-1");
+      expect(message).toContain("ghost-role-2");
+    }
   });
 
   test("rejects malformed principal id grammar (digit prefix)", () => {
