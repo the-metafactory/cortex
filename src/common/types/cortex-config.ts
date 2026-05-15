@@ -1031,6 +1031,14 @@ export type PolicyFederatedPeer = z.infer<typeof PolicyFederatedPeerSchema>;
  * what the surface-router's `adapterMatches()` will gate against
  * in D.2. Operators can always relax via additional patterns
  * rather than building a regex string.
+ *
+ * **Bare `>` is intentionally rejected** (Echo cortex#223 round 1).
+ * A naked top-level wildcard on `accept_subjects[]` would defeat
+ * the purpose of a federation accept-list; the maximal valid
+ * accept pattern is `federated.{network_id}.>`. The cross-validation
+ * below enforces the `federated.{network_id}.` prefix on every
+ * entry — this regex covers only the grammar of the trailing
+ * portion.
  */
 const NATS_SUBJECT_PATTERN_RE = /^([a-z][a-z0-9_-]*|\*)(\.([a-z][a-z0-9_-]*|\*))*(\.>)?$/;
 
@@ -1224,6 +1232,31 @@ export const PolicySchema = z.object({
       } else {
         seenNetwork.set(n.id, networkIdx);
       }
+
+      // Subject-pattern scope: every accept/deny pattern MUST begin
+      // with `federated.{network.id}.` so the network can't
+      // accidentally subscribe to or block out-of-scope subjects.
+      // Echo cortex#223 round 1 — without this guard, a typo like
+      // `accept_subjects: ["internal.private.>"]` parses cleanly
+      // and the surface-router gate (D.2) has to defend against it.
+      // Enforce at parse time instead.
+      const expectedSubjectPrefix = `federated.${n.id}.`;
+      const validateSubjectScope = (
+        list: readonly string[],
+        listName: "accept_subjects" | "deny_subjects",
+      ) => {
+        list.forEach((pattern, patternIdx) => {
+          if (!pattern.startsWith(expectedSubjectPrefix)) {
+            ctx.addIssue({
+              code: "custom",
+              message: `${listName}[${patternIdx}] "${pattern}" must begin with "federated.${n.id}." — the network's own subject scope`,
+              path: ["federated", "networks", networkIdx, listName, patternIdx],
+            });
+          }
+        });
+      };
+      validateSubjectScope(n.accept_subjects, "accept_subjects");
+      validateSubjectScope(n.deny_subjects, "deny_subjects");
 
       // Per-network peer cross-validation.
       const seenPeerStack = new Map<string, number>();

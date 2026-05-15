@@ -480,6 +480,55 @@ describe("PolicyFederatedSchema cross-validation", () => {
     }
   });
 
+  test("rejects accept_subjects[] entry not prefixed with federated.{network.id}. (Echo cortex#223 round 1)", () => {
+    expect(() =>
+      PolicySchema.parse({
+        federated: {
+          networks: [{
+            id: "research-collab", leaf_node: "leaf", peers: [],
+            // Out-of-scope subject — surface-router would have to
+            // defend at runtime. Schema rejects.
+            accept_subjects: ["internal.private.>"],
+            deny_subjects: [],
+            announce_capabilities: [], max_hop: 0,
+          }],
+        },
+      }),
+    ).toThrow(/must begin with.*federated.*research-collab/);
+  });
+
+  test("rejects deny_subjects[] entry not prefixed with federated.{network.id}. (Echo cortex#223 round 1)", () => {
+    expect(() =>
+      PolicySchema.parse({
+        federated: {
+          networks: [{
+            id: "research-collab", leaf_node: "leaf", peers: [],
+            accept_subjects: ["federated.research-collab.>"],
+            deny_subjects: ["local.metafactory.>"],
+            announce_capabilities: [], max_hop: 0,
+          }],
+        },
+      }),
+    ).toThrow(/must begin with.*federated.*research-collab/);
+  });
+
+  test("accepts subject patterns within the network's own federated.{id}. scope", () => {
+    const policy = PolicySchema.parse({
+      federated: {
+        networks: [{
+          id: "research-collab", leaf_node: "leaf", peers: [],
+          accept_subjects: [
+            "federated.research-collab.tasks.code-review.*",
+            "federated.research-collab.>",
+          ],
+          deny_subjects: ["federated.research-collab.tasks.*.private.*"],
+          announce_capabilities: [], max_hop: 0,
+        }],
+      },
+    });
+    expect(policy.federated?.networks[0]?.accept_subjects).toHaveLength(2);
+  });
+
   test("federated block plus principals + roles parses cleanly together", () => {
     const policy = PolicySchema.parse({
       principals: [{
