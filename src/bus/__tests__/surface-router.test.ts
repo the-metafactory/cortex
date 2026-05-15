@@ -14,11 +14,21 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { RendererVisibility } from "../../common/types/cortex-config";
-import type { Envelope } from "../myelin/envelope-validator";
+import type {
+  PolicyFederated,
+  PolicyFederatedNetwork,
+  RendererVisibility,
+} from "../../common/types/cortex-config";
+import type { Envelope, SignedBy } from "../myelin/envelope-validator";
 import type { MyelinRuntime } from "../myelin/runtime";
 import { validateEnvelope } from "../myelin/envelope-validator";
-import { createSurfaceRouter, evaluateVisibility, subjectMatches, type SurfaceAdapter } from "../surface-router";
+import {
+  createSurfaceRouter,
+  evaluateFederationGate,
+  evaluateVisibility,
+  subjectMatches,
+  type SurfaceAdapter,
+} from "../surface-router";
 import type { SystemEventSource } from "../system-events";
 
 // ---------------------------------------------------------------------------
@@ -1392,5 +1402,542 @@ describe("createSurfaceRouter — visibility filter wiring", () => {
     expect(a.calls).toHaveLength(0);
     await new Promise((r) => setTimeout(r, 0));
     expect(fake.published).toHaveLength(0); // no emit (no source)
+  });
+});
+
+// ---------------------------------------------------------------------------
+// IAW Phase D.2 — federation accept/deny gate
+// ---------------------------------------------------------------------------
+
+function makeFederatedEnvelope(overrides: Partial<Envelope> = {}): Envelope {
+  return makeEnvelope({
+    sovereignty: {
+      classification: "federated",
+      data_residency: "NZ",
+      max_hop: 1,
+      frontier_ok: true,
+      model_class: "any",
+    },
+    ...overrides,
+  });
+}
+
+function makeSignedByChain(principals: string[]): SignedBy[] {
+  return principals.map((principal, i) => ({
+    method: "ed25519" as const,
+    principal,
+    signature: `sig-${i}`,
+    at: "2026-05-09T12:00:00Z",
+  }));
+}
+
+function makeNetwork(overrides: Partial<PolicyFederatedNetwork> = {}): PolicyFederatedNetwork {
+  return {
+    id: "research-collab",
+    leaf_node: "leaf-research",
+    peers: [],
+    accept_subjects: ["federated.research-collab.tasks.code-review.>"],
+    deny_subjects: [],
+    announce_capabilities: [],
+    max_hop: 1,
+    ...overrides,
+  };
+}
+
+function networksMap(networks: PolicyFederatedNetwork[]): Map<string, PolicyFederatedNetwork> {
+  return new Map(networks.map((n) => [n.id, n]));
+}
+
+describe("evaluateFederationGate — accept-list", () => {
+  test("accept-list match → allow", () => {
+    const decision = evaluateFederationGate(
+      "federated.research-collab.tasks.code-review.typescript",
+      makeFederatedEnvelope(),
+      networksMap([makeNetwork()]),
+    );
+    expect(decision).toBe("allow");
+  });
+
+  test("accept-list miss → peer_not_in_accept_list (network known)", () => {
+    const decision = evaluateFederationGate(
+      "federated.research-collab.tasks.other.thing",
+      makeFederatedEnvelope(),
+      networksMap([makeNetwork()]),
+    );
+    expect(decision).toEqual({
+      kind: "peer_not_in_accept_list",
+      networkId: "research-collab",
+    });
+  });
+
+  test("empty accept_subjects[] denies everything for that network", () => {
+    const decision = evaluateFederationGate(
+      "federated.research-collab.tasks.code-review.ts",
+      makeFederatedEnvelope(),
+      networksMap([makeNetwork({ accept_subjects: [] })]),
+    );
+    expect(decision).toMatchObject({ kind: "peer_not_in_accept_list", networkId: "research-collab" });
+  });
+});
+
+describe("evaluateFederationGate — deny-list precedence", () => {
+  test("deny-list match overrides accept-list → peer_deny_list", () => {
+    const decision = evaluateFederationGate(
+      "federated.research-collab.tasks.code-review.private.secret",
+      makeFederatedEnvelope(),
+      networksMap([
+        makeNetwork({
+          accept_subjects: ["federated.research-collab.tasks.code-review.>"],
+          deny_subjects: ["federated.research-collab.tasks.*.private.>"],
+        }),
+      ]),
+    );
+    expect(decision).toEqual({
+      kind: "peer_deny_list",
+      networkId: "research-collab",
+      matched_pattern: "federated.research-collab.tasks.*.private.>",
+    });
+  });
+
+  test("deny-list reports the first matching pattern", () => {
+    const decision = evaluateFederationGate(
+      "federated.research-collab.tasks.x",
+      makeFederatedEnvelope(),
+      networksMap([
+        makeNetwork({
+          accept_subjects: ["federated.research-collab.>"],
+          deny_subjects: [
+            "federated.research-collab.tasks.>",
+            "federated.research-collab.tasks.x",
+          ],
+        }),
+      ]),
+    );
+    expect(decision).toMatchObject({
+      kind: "peer_deny_list",
+      matched_pattern: "federated.research-collab.tasks.>",
+    });
+  });
+});
+
+describe("evaluateFederationGate — unknown network", () => {
+  test("no network entry → peer_not_in_accept_list with unknown_network: true", () => {
+    const decision = evaluateFederationGate(
+      "federated.unknown-net.tasks.x",
+      makeFederatedEnvelope(),
+      networksMap([makeNetwork()]),
+    );
+    expect(decision).toEqual({
+      kind: "peer_not_in_accept_list",
+      networkId: "unknown-net",
+      unknown_network: true,
+    });
+  });
+
+  test("empty networks map → unknown_network for every federated subject", () => {
+    const decision = evaluateFederationGate(
+      "federated.research-collab.tasks.code-review.ts",
+      makeFederatedEnvelope(),
+      new Map(),
+    );
+    expect(decision).toEqual({
+      kind: "peer_not_in_accept_list",
+      networkId: "research-collab",
+      unknown_network: true,
+    });
+  });
+
+  test("malformed subject (no network id segment) → unknown_network", () => {
+    const decision = evaluateFederationGate(
+      "federated.",
+      makeFederatedEnvelope(),
+      networksMap([makeNetwork()]),
+    );
+    expect(decision).toMatchObject({ kind: "peer_not_in_accept_list", unknown_network: true });
+  });
+
+  test("non-federated subject passes through (defensive fail-open)", () => {
+    // Out-of-scope subjects shouldn't be denied by this helper — the
+    // caller is supposed to pre-filter on `startsWith("federated.")`.
+    const decision = evaluateFederationGate(
+      "local.metafactory.review.cycle.completed",
+      makeFederatedEnvelope(),
+      networksMap([makeNetwork()]),
+    );
+    expect(decision).toBe("allow");
+  });
+});
+
+describe("evaluateFederationGate — max_hop", () => {
+  test("signed_by.length > max_hop → max_hop_exceeded", () => {
+    const decision = evaluateFederationGate(
+      "federated.research-collab.tasks.code-review.ts",
+      makeFederatedEnvelope({
+        signed_by: makeSignedByChain(["did:mf:alpha", "did:mf:beta"]),
+      }),
+      networksMap([makeNetwork({ max_hop: 1 })]),
+    );
+    expect(decision).toEqual({
+      kind: "max_hop_exceeded",
+      networkId: "research-collab",
+      observed_hops: 2,
+      max_hop: 1,
+    });
+  });
+
+  test("signed_by.length == max_hop → allow (cap is inclusive)", () => {
+    const decision = evaluateFederationGate(
+      "federated.research-collab.tasks.code-review.ts",
+      makeFederatedEnvelope({
+        signed_by: makeSignedByChain(["did:mf:alpha"]),
+      }),
+      networksMap([makeNetwork({ max_hop: 1 })]),
+    );
+    expect(decision).toBe("allow");
+  });
+
+  test("max_hop=0 + unsigned envelope → allow (no relay required)", () => {
+    const decision = evaluateFederationGate(
+      "federated.research-collab.tasks.code-review.ts",
+      makeFederatedEnvelope(),
+      networksMap([makeNetwork({ max_hop: 0 })]),
+    );
+    expect(decision).toBe("allow");
+  });
+
+  test("max_hop=0 + 1 stamp → max_hop_exceeded", () => {
+    const decision = evaluateFederationGate(
+      "federated.research-collab.tasks.code-review.ts",
+      makeFederatedEnvelope({
+        signed_by: makeSignedByChain(["did:mf:alpha"]),
+      }),
+      networksMap([makeNetwork({ max_hop: 0 })]),
+    );
+    expect(decision).toMatchObject({ kind: "max_hop_exceeded", observed_hops: 1, max_hop: 0 });
+  });
+
+  test("deny-list precedence: hop overage on a deny-listed subject reports peer_deny_list", () => {
+    // Deny-list runs before hop counting; the deny reason is what
+    // the operator sees, not the hop fact.
+    const decision = evaluateFederationGate(
+      "federated.research-collab.tasks.private.secret",
+      makeFederatedEnvelope({
+        signed_by: makeSignedByChain(["a", "b", "c"]),
+      }),
+      networksMap([
+        makeNetwork({
+          accept_subjects: ["federated.research-collab.>"],
+          deny_subjects: ["federated.research-collab.tasks.private.>"],
+          max_hop: 0,
+        }),
+      ]),
+    );
+    expect(decision).toMatchObject({ kind: "peer_deny_list" });
+  });
+});
+
+describe("createSurfaceRouter — D.2 federation gating end-to-end", () => {
+  function withFederation(networks: PolicyFederatedNetwork[]): PolicyFederated {
+    return { networks };
+  }
+
+  test("accepted federated.* envelope fans out to matching adapter", async () => {
+    const { runtime, published } = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+      federated: withFederation([makeNetwork()]),
+    });
+    const a = recordingAdapter({
+      id: "fed-adapter",
+      subjects: ["federated.research-collab.>"],
+    });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeFederatedEnvelope({ type: "tasks.code-review.typescript" }),
+      "federated.research-collab.tasks.code-review.typescript",
+    );
+
+    expect(a.calls).toHaveLength(1);
+    // No deny envelope emitted on allow.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(published).toHaveLength(0);
+  });
+
+  test("accept-list miss drops fan-out AND emits system.access.denied", async () => {
+    const { runtime, published } = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+      federated: withFederation([makeNetwork()]),
+    });
+    const a = recordingAdapter({
+      id: "fed-adapter",
+      subjects: ["federated.research-collab.>"],
+    });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeFederatedEnvelope({ type: "tasks.other.thing" }),
+      "federated.research-collab.tasks.other.thing",
+    );
+
+    expect(a.calls).toHaveLength(0);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(published).toHaveLength(1);
+    const denied = published[0]!;
+    expect(denied.type).toBe("system.access.denied");
+    expect(denied.payload).toMatchObject({
+      capability: "federated.subject_dispatch",
+      network_id: "research-collab",
+      envelope_subject: "federated.research-collab.tasks.other.thing",
+      reason: { kind: "peer_not_in_accept_list" },
+    });
+  });
+
+  test("deny-list match drops fan-out AND emits peer_deny_list", async () => {
+    const { runtime, published } = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+      federated: withFederation([
+        makeNetwork({
+          accept_subjects: ["federated.research-collab.tasks.>"],
+          deny_subjects: ["federated.research-collab.tasks.*.private.>"],
+        }),
+      ]),
+    });
+    const a = recordingAdapter({
+      id: "fed-adapter",
+      subjects: ["federated.research-collab.>"],
+    });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeFederatedEnvelope({ type: "tasks.code-review.private.secret" }),
+      "federated.research-collab.tasks.code-review.private.secret",
+    );
+
+    expect(a.calls).toHaveLength(0);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(published).toHaveLength(1);
+    expect(published[0]?.payload).toMatchObject({
+      reason: {
+        kind: "peer_deny_list",
+        matched_pattern: "federated.research-collab.tasks.*.private.>",
+      },
+      network_id: "research-collab",
+    });
+  });
+
+  test("hop overage drops fan-out AND emits max_hop_exceeded", async () => {
+    const { runtime, published } = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+      federated: withFederation([makeNetwork({ max_hop: 1 })]),
+    });
+    const a = recordingAdapter({
+      id: "fed-adapter",
+      subjects: ["federated.research-collab.>"],
+    });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeFederatedEnvelope({
+        type: "tasks.code-review.typescript",
+        signed_by: makeSignedByChain(["did:mf:alpha", "did:mf:beta", "did:mf:gamma"]),
+      }),
+      "federated.research-collab.tasks.code-review.typescript",
+    );
+
+    expect(a.calls).toHaveLength(0);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(published).toHaveLength(1);
+    expect(published[0]?.payload).toMatchObject({
+      reason: {
+        kind: "max_hop_exceeded",
+        observed_hops: 3,
+        max_hop: 1,
+      },
+      network_id: "research-collab",
+    });
+  });
+
+  test("no federated config → gate inert, federated.* envelopes flow through", async () => {
+    // Mirror of the C.3.1 policy-engine contract: an unconfigured
+    // gate is a no-op. cortex.yaml without `federated:` keeps
+    // pre-D.2 behaviour — federated.* subjects flow to matching
+    // adapters via classification alone.
+    const { runtime, published } = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+      // No `federated:` block — operator hasn't declared any networks.
+    });
+    const a = recordingAdapter({
+      id: "fed-adapter",
+      subjects: ["federated.research-collab.>"],
+    });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeFederatedEnvelope({ type: "tasks.code-review.ts" }),
+      "federated.research-collab.tasks.code-review.ts",
+    );
+
+    // Adapter receives the envelope: gate didn't engage.
+    expect(a.calls).toHaveLength(1);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(published).toHaveLength(0);
+  });
+
+  test("empty networks[] → gate inert (same as omitting the block)", async () => {
+    const { runtime, published } = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+      federated: { networks: [] },
+    });
+    const a = recordingAdapter({
+      id: "fed-adapter",
+      subjects: ["federated.research-collab.>"],
+    });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeFederatedEnvelope({ type: "tasks.code-review.ts" }),
+      "federated.research-collab.tasks.code-review.ts",
+    );
+
+    expect(a.calls).toHaveLength(1);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(published).toHaveLength(0);
+  });
+
+  test("unknown network id in subject → denied with unknown_network: true", async () => {
+    const { runtime, published } = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+      federated: withFederation([makeNetwork({ id: "research-collab" })]),
+    });
+    const a = recordingAdapter({
+      id: "fed-adapter",
+      subjects: ["federated.>"],
+    });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeFederatedEnvelope({ type: "tasks.x" }),
+      "federated.some-other-net.tasks.x",
+    );
+
+    expect(a.calls).toHaveLength(0);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(published).toHaveLength(1);
+    expect(published[0]?.payload).toMatchObject({
+      reason: { kind: "peer_not_in_accept_list", unknown_network: true },
+      network_id: "some-other-net",
+    });
+  });
+
+  test("local.* envelopes pass the federation gate unchanged", async () => {
+    const { runtime, published } = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+      // No federated config: local.* still flows.
+    });
+    const a = recordingAdapter({
+      id: "local-adapter",
+      subjects: ["local.metafactory.review.>"],
+    });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeEnvelope(),
+      "local.metafactory.review.cycle.completed",
+    );
+
+    expect(a.calls).toHaveLength(1);
+    await new Promise((r) => setTimeout(r, 0));
+    // No federation denial — the gate didn't run on a local.* subject.
+    expect(published).toHaveLength(0);
+  });
+
+  test("denied envelope carries signed_by chain verbatim (audit attribution)", async () => {
+    const { runtime, published } = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+      federated: withFederation([makeNetwork()]),
+    });
+
+    const chain = makeSignedByChain(["did:mf:alpha-stack", "did:mf:beta-stack"]);
+    await router.dispatch(
+      makeFederatedEnvelope({
+        type: "tasks.other.thing",
+        signed_by: chain,
+      }),
+      "federated.research-collab.tasks.other.thing",
+    );
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(published).toHaveLength(1);
+    const denied = published[0]!;
+    const payload = denied.payload;
+    expect(payload.principal_id).toBe("did:mf:alpha-stack");
+    expect(payload.signed_by).toHaveLength(2);
+    expect((payload.signed_by as { principal: string }[])[0]?.principal).toBe(
+      "did:mf:alpha-stack",
+    );
+  });
+
+  test("denied envelope is schema-valid (round-trips through validateEnvelope)", async () => {
+    const { runtime, published } = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+      federated: withFederation([makeNetwork()]),
+    });
+
+    await router.dispatch(
+      makeFederatedEnvelope({ type: "tasks.other.thing" }),
+      "federated.research-collab.tasks.other.thing",
+    );
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(published).toHaveLength(1);
+    const result = validateEnvelope(published[0]!);
+    expect(result.ok).toBe(true);
+  });
+
+  test("denial without systemEventSource is silent (no envelope emitted)", async () => {
+    const { runtime, published } = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(runtime, {
+      // No systemEventSource — emission is a no-op + console log.
+      federated: withFederation([makeNetwork()]),
+    });
+    const a = recordingAdapter({ id: "x", subjects: ["federated.>"] });
+    router.register(a.adapter);
+
+    await router.dispatch(
+      makeFederatedEnvelope({ type: "tasks.other.thing" }),
+      "federated.research-collab.tasks.other.thing",
+    );
+
+    // Adapter still drops because the gate fired.
+    expect(a.calls).toHaveLength(0);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(published).toHaveLength(0);
+  });
+
+  test("unsigned denied envelope reports principal_id=\"unknown\"", async () => {
+    const { runtime, published } = fakeRuntimeWithPublishLog();
+    const router = createSurfaceRouter(runtime, {
+      systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+      federated: withFederation([makeNetwork()]),
+    });
+
+    await router.dispatch(
+      makeFederatedEnvelope({ type: "tasks.other.thing" }),
+      "federated.research-collab.tasks.other.thing",
+    );
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(published).toHaveLength(1);
+    expect(published[0]!.payload.principal_id).toBe("unknown");
   });
 });

@@ -32,13 +32,24 @@
  * optional `onAdapterError` hook and never thrown out of `dispatch()`.
  */
 
-import type { RendererVisibility } from "../common/types/cortex-config";
+import type {
+  PolicyFederated,
+  PolicyFederatedNetwork,
+  RendererVisibility,
+} from "../common/types/cortex-config";
 import {
+  createSystemAccessFederationDeniedEvent,
   createSystemAccessFilteredEvent,
+  type SystemAccessFederationDeniedOpts,
   type SystemAccessFilteredReason,
+  type SystemAccessSignedBy,
+  type SystemAccessSovereignty,
   type SystemEventSource,
 } from "./system-events";
-import type { Envelope } from "./myelin/envelope-validator";
+import {
+  getSignedByChain,
+  type Envelope,
+} from "./myelin/envelope-validator";
 import type { MyelinRuntime } from "./myelin/runtime";
 import { matchesFilter, type PayloadFilter } from "./payload-filter";
 
@@ -109,6 +120,28 @@ export interface SurfaceRouterOptions {
    * correct operator/agent/instance segments.
    */
   systemEventSource?: SystemEventSource;
+  /**
+   * IAW Phase D.2 — `policy.federated` block from cortex.yaml. When
+   * supplied, the router gates every inbound `federated.*` envelope
+   * against the declared network's `accept_subjects` / `deny_subjects`
+   * lists + `max_hop` budget BEFORE adapter fan-out. Denials drop the
+   * envelope from dispatch AND emit `system.access.denied` carrying the
+   * structured reason (mirror of the C.4 dispatch-listener gate's audit
+   * pattern).
+   *
+   * When omitted or `networks[]` is empty, the gate is fully inert —
+   * `federated.*` envelopes pass through to adapter matching unchanged.
+   * This mirrors the C.3.1 policy-engine contract (no `policy:` block
+   * → no dispatch gating) and keeps cortex.yaml without `federated:`
+   * fully back-compat with pre-D.2 behaviour. Operators opt into
+   * federation enforcement by declaring at least one network.
+   *
+   * Subject-pattern gating only applies to envelopes whose subject
+   * starts with `federated.`. Subjects in the `local.*` / `public.*`
+   * domains pass through this gate untouched (visibility / dispatch
+   * gates handle those).
+   */
+  federated?: PolicyFederated;
 }
 
 export interface SurfaceRouter {
@@ -217,6 +250,17 @@ export function createSurfaceRouter(
   const onAdapterError = opts?.onAdapterError;
   const systemEventSource = opts?.systemEventSource;
 
+  // IAW Phase D.2 — index networks by id for O(1) prefix lookup. The
+  // schema's cross-validation (`PolicySchema.superRefine`) already
+  // guarantees uniqueness of `network.id`, so this Map is collision-free.
+  // We build it once at construction time; reloading the federation
+  // policy at runtime requires reconstructing the router, which matches
+  // the policy-block contract (engine is rebuilt on cortex.yaml reload).
+  const federatedNetworksById = new Map<string, PolicyFederatedNetwork>();
+  for (const network of opts?.federated?.networks ?? []) {
+    federatedNetworksById.set(network.id, network);
+  }
+
   let started = false;
   let stopped = false;
   let envelopeReg: { unregister: () => void } | null = null;
@@ -266,6 +310,53 @@ export function createSurfaceRouter(
       if (stopped) return;
 
       const effectiveSubject = subject ?? envelope.type;
+
+      // IAW Phase D.2 — federation gate runs BEFORE per-adapter
+      // matching. The gate decides whether the envelope is allowed
+      // onto our in-process bus at all; visibility filters on
+      // individual adapters are a per-renderer concern that only
+      // matters once the envelope has been admitted.
+      //
+      // Gate engages only when the operator has declared a
+      // `policy.federated.networks[]` block. Mirror of the C.3.1
+      // policy-engine pattern: an unconfigured gate is a no-op (the
+      // operator opted out). This keeps cortex.yaml without a
+      // `federated:` block fully back-compat with pre-D.2 behaviour
+      // — existing renderers continue to receive whatever traffic
+      // happened to land on `federated.*` subjects via classification
+      // alone, exactly as they did before this PR. Federation
+      // enforcement is opt-in; absence ≠ "deny everything".
+      //
+      // Subjects that don't start with `federated.` always pass
+      // through untouched — the gate is scoped to the federation
+      // domain by design (D.2.1 explicitly: "gate inbound
+      // `federated.*` envelopes"). Local/public-domain subjects are
+      // governed by other gates (visibility for local, none for
+      // public).
+      if (
+        federatedNetworksById.size > 0 &&
+        effectiveSubject.startsWith("federated.")
+      ) {
+        const decision = evaluateFederationGate(
+          effectiveSubject,
+          envelope,
+          federatedNetworksById,
+        );
+        if (decision !== "allow") {
+          emitFederationDenied(
+            runtime,
+            systemEventSource,
+            envelope,
+            effectiveSubject,
+            decision,
+          );
+          // Hard drop — denied envelopes never reach adapters. The
+          // audit envelope above is the operator's only signal that
+          // this dispatch was attempted; without it the deny is
+          // silent.
+          return;
+        }
+      }
 
       // Two-pass match so we can distinguish "didn't subscribe" from
       // "subscribed but visibility blocked". Visibility-drops emit a
@@ -483,6 +574,243 @@ function emitAccessFiltered(
     // dispatch loop.
     console.error(
       `surface-router: failed to emit system.access.filtered for renderer="${rendererId}":`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+// =============================================================================
+// IAW Phase D.2 — federation accept/deny gate
+// =============================================================================
+
+/**
+ * The router-internal verdict from the federation gate. Shaped as a
+ * discriminated union so `dispatch()` can branch once and pass the
+ * verdict straight into the `system.access.denied` emit helper without
+ * re-deriving the variant fields.
+ *
+ * `"allow"` short-circuits all later work — the envelope flows through
+ * to adapter matching exactly as it did pre-D.2.
+ *
+ * Every deny branch carries the network id we resolved (or attempted
+ * to resolve, in the `unknown_network` case) so the audit envelope can
+ * surface "peer claimed network 'x'" without `dispatch()` re-parsing
+ * the subject.
+ */
+type FederationGateDecision =
+  | "allow"
+  | {
+      kind: "peer_not_in_accept_list";
+      networkId: string;
+      unknown_network?: boolean;
+    }
+  | {
+      kind: "peer_deny_list";
+      networkId: string;
+      matched_pattern: string;
+    }
+  | {
+      kind: "max_hop_exceeded";
+      networkId: string;
+      observed_hops: number;
+      max_hop: number;
+    };
+
+/**
+ * Parse `federated.{network_id}.<...>` and check the subject against
+ * the resolved network's policy. Pure function — exported so tests can
+ * probe each branch in isolation without spinning up a runtime + router.
+ *
+ * Decision order (matches D.2 spec semantics):
+ *
+ *   1. Subject must declare a network id (`federated.<id>.<...>`).
+ *      Bare `federated` or `federated.` is rejected as
+ *      `peer_not_in_accept_list` with `unknown_network: true`.
+ *   2. The network id must be in `policy.federated.networks[]`.
+ *      Missing → same deny kind with `unknown_network: true`.
+ *   3. `deny_subjects[]` is checked BEFORE `accept_subjects[]` —
+ *      operator intent on the deny list overrides any accept hit.
+ *      D.2 spec: "A match here overrides accept_subjects[]".
+ *   4. `accept_subjects[]` must contain a matching pattern. Empty
+ *      accept list means "accept nothing" (D.1 schema doc); the
+ *      envelope is rejected even when no deny pattern matched.
+ *   5. Hop budget last — by spec it's the cheapest check but
+ *      conceptually it's "you're allowed but you've travelled too
+ *      far", so running it after the accept-list keeps the deny
+ *      reason precedence intuitive (accept-misses report first).
+ */
+export function evaluateFederationGate(
+  subject: string,
+  envelope: Envelope,
+  networksById: Map<string, PolicyFederatedNetwork>,
+): FederationGateDecision {
+  // Subject MUST start with `federated.` — caller guards this, but
+  // the function is exported for tests and we'd rather fail-closed
+  // than trust the precondition.
+  if (!subject.startsWith("federated.")) {
+    // Outside our domain — treat as "no policy applies, no deny" so
+    // standalone tests of this function don't accidentally deny
+    // local.* subjects. Caller should not reach this branch in
+    // production (dispatch() already filters on the prefix).
+    return "allow";
+  }
+
+  const parts = subject.split(".");
+  // `federated.{id}.<...>` requires at least 3 segments — `federated`,
+  // `{id}`, and one or more rest segments. A 2-segment `federated.x`
+  // is technically a network announcement subject but D.2 only gates
+  // dispatch traffic, which always has trailing segments. We deny
+  // the malformed shape to fail closed.
+  if (parts.length < 3 || parts[1] === undefined || parts[1].length === 0) {
+    return {
+      kind: "peer_not_in_accept_list",
+      networkId: parts[1] ?? "",
+      unknown_network: true,
+    };
+  }
+
+  const networkId = parts[1];
+  const network = networksById.get(networkId);
+  if (!network) {
+    return {
+      kind: "peer_not_in_accept_list",
+      networkId,
+      unknown_network: true,
+    };
+  }
+
+  // Deny-list precedence (D.2 spec): a match here ends evaluation
+  // even if an accept pattern would also fire.
+  for (const pattern of network.deny_subjects) {
+    if (subjectMatches(pattern, subject)) {
+      return {
+        kind: "peer_deny_list",
+        networkId,
+        matched_pattern: pattern,
+      };
+    }
+  }
+
+  // Accept-list — at least one pattern must match. Empty list means
+  // "accept nothing" by the D.1 schema doc; the loop naturally falls
+  // through to the deny.
+  let acceptHit = false;
+  for (const pattern of network.accept_subjects) {
+    if (subjectMatches(pattern, subject)) {
+      acceptHit = true;
+      break;
+    }
+  }
+  if (!acceptHit) {
+    return {
+      kind: "peer_not_in_accept_list",
+      networkId,
+    };
+  }
+
+  // Hop budget. `signed_by[].length` is the chain length per
+  // myelin#31; getSignedByChain normalises the optional single-stamp
+  // legacy shape. `max_hop = 0` means "no hops allowed" — accept only
+  // directly-attributed envelopes (chain length ≤ 0 ⇒ unsigned only,
+  // matching the schema doc's "accept only directly-signed envelopes,
+  // no relay").
+  //
+  // Comparison is `length > max_hop` (strict) so an exact-budget
+  // envelope passes — the budget is the cap, not the limit-minus-one.
+  const observedHops = getSignedByChain(envelope).length;
+  if (observedHops > network.max_hop) {
+    return {
+      kind: "max_hop_exceeded",
+      networkId,
+      observed_hops: observedHops,
+      max_hop: network.max_hop,
+    };
+  }
+
+  return "allow";
+}
+
+/**
+ * Emit a `system.access.denied` envelope describing a federation-gate
+ * rejection. Mirrors `emitAccessFiltered` — best-effort, runtime
+ * errors swallowed internally, no-op when `systemEventSource` is
+ * undefined (the test-only path).
+ */
+function emitFederationDenied(
+  runtime: MyelinRuntime,
+  source: SystemEventSource | undefined,
+  envelope: Envelope,
+  envelopeSubject: string,
+  decision: Exclude<FederationGateDecision, "allow">,
+): void {
+  if (!source) {
+    // Test-only path: log + return without emitting a half-formed
+    // envelope. Same contract as `emitAccessFiltered` — operators
+    // wiring the router in production must pass `systemEventSource`.
+    console.info(
+      `surface-router: federation deny subject="${envelopeSubject}" network="${decision.networkId}" reason=${decision.kind} ` +
+        `(no systemEventSource configured — system.access.denied envelope NOT emitted)`,
+    );
+    return;
+  }
+
+  // Carry `signed_by[]` verbatim per the C.4.3 contract — denied
+  // envelopes stay cryptographically attributable.
+  const signedBy: SystemAccessSignedBy[] = getSignedByChain(envelope).map(
+    (stamp) => ({ ...stamp }),
+  );
+  const sovereignty: SystemAccessSovereignty = {
+    classification: envelope.sovereignty.classification,
+    data_residency: envelope.sovereignty.data_residency,
+    max_hop: envelope.sovereignty.max_hop,
+    frontier_ok: envelope.sovereignty.frontier_ok,
+    model_class: envelope.sovereignty.model_class,
+  };
+
+  let reason: SystemAccessFederationDeniedOpts["reason"];
+  switch (decision.kind) {
+    case "peer_not_in_accept_list":
+      reason = {
+        kind: "peer_not_in_accept_list",
+        ...(decision.unknown_network === true && { unknown_network: true }),
+      };
+      break;
+    case "peer_deny_list":
+      reason = {
+        kind: "peer_deny_list",
+        matched_pattern: decision.matched_pattern,
+      };
+      break;
+    case "max_hop_exceeded":
+      reason = {
+        kind: "max_hop_exceeded",
+        observed_hops: decision.observed_hops,
+        max_hop: decision.max_hop,
+      };
+      break;
+  }
+
+  try {
+    const env = createSystemAccessFederationDeniedEvent({
+      source,
+      signedBy,
+      sovereignty,
+      envelopeId: envelope.id,
+      envelopeSubject,
+      // Fall back to envelopeId for joinability when the peer
+      // envelope lacked a correlation_id. Audit consumers always
+      // get a non-empty join key.
+      correlationId: envelope.correlation_id ?? envelope.id,
+      networkId: decision.networkId,
+      reason,
+    });
+    void runtime.publish(env);
+  } catch (err) {
+    // Defensive — buildBaseEnvelope shouldn't throw on schema-valid
+    // inputs, but if a future refactor makes it synchronous-throwing
+    // we don't want it to poison dispatch().
+    console.error(
+      `surface-router: failed to emit federation system.access.denied for subject="${envelopeSubject}":`,
       err instanceof Error ? err.message : err,
     );
   }

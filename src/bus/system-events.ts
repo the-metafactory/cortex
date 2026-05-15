@@ -733,3 +733,160 @@ export function createSystemAccessDeniedEvent(
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// system.access.denied — IAW Phase D.2 federation-router variant
+// ---------------------------------------------------------------------------
+
+/**
+ * Reason kinds the surface-router emits when gating inbound
+ * `federated.*` envelopes against `policy.federated.networks[]`
+ * (D.2). Wire-shape is the same `system.access.denied` envelope as
+ * the C.4 dispatch-listener gate; only the `reason.kind` discriminator
+ * + variant fields differ.
+ *
+ *   - `"peer_not_in_accept_list"` — subject didn't match any
+ *     `accept_subjects[]` pattern, OR no matching network entry was
+ *     declared for the `federated.{network_id}.<...>` prefix (D.2.1).
+ *   - `"peer_deny_list"` — subject matched a `deny_subjects[]`
+ *     pattern (overrides any accept-list hit) (D.2.1 / D.2.2).
+ *   - `"max_hop_exceeded"` — `signed_by[].length > network.max_hop`
+ *     (D.2.3). Variant fields carry the observed hop count + the
+ *     network's budget so subscribers can render "3 stamps > 1
+ *     allowed" without re-parsing the envelope.
+ *
+ * Subjects (the actual `deny_subjects` / `accept_subjects` patterns
+ * are operator data, not enum values — they ride on `reason.subject`
+ * as free-form strings).
+ */
+export type SystemAccessFederationDeniedReasonKind =
+  | "peer_not_in_accept_list"
+  | "peer_deny_list"
+  | "max_hop_exceeded";
+
+/**
+ * Options for `createSystemAccessFederationDeniedEvent` — the D.2
+ * router-gate variant. Sibling to {@link SystemAccessDeniedOpts}
+ * but shaped for the router's natural inputs (subject + network
+ * id + observed hop count) rather than the dispatch-listener's
+ * principal/capability vocabulary.
+ *
+ * Wire-format note: the resulting envelope still has the same
+ * top-level `type: "system.access.denied"` so audit consumers
+ * subscribing to `system.access.>` see both gate flavours. They
+ * branch on `payload.reason.kind` to render the variant.
+ *
+ * `principal_id` / `capability` on the payload reuse the C.4 fields
+ * so the wire shape stays stable; for federation denials they
+ * carry, respectively:
+ *
+ *   - `principal_id` — the originating signer (`signed_by[0].principal`)
+ *     or `"unknown"` for unsigned envelopes (legacy / pre-Phase-B).
+ *   - `capability` — the literal string `"federated.subject_dispatch"`,
+ *     since federation denials are gating the wire-level dispatch
+ *     itself rather than a named capability claim. Surfaces filter on
+ *     this fixed value to separate federation gating from C.4 dispatch
+ *     gating.
+ */
+export interface SystemAccessFederationDeniedOpts {
+  source: SystemEventSource;
+  /**
+   * `signed_by[]` chain from the originating envelope (D.2 audit).
+   * Carried verbatim — even-on-deny attribution per C.4.3 contract.
+   * Empty array for legacy unsigned envelopes; surfaces should
+   * render "unknown signer" without crashing.
+   */
+  signedBy: SystemAccessSignedBy[];
+  /** Sovereignty constraints from the originating envelope. */
+  sovereignty: SystemAccessSovereignty;
+  /** Envelope id of the rejected envelope (for join back to source). */
+  envelopeId: string;
+  /** Subject of the rejected envelope (full NATS subject). */
+  envelopeSubject: string;
+  /**
+   * Correlation id from the originating envelope, if any. When the
+   * peer envelope carried no correlation_id, falls back to
+   * `envelopeId` so the audit record always carries a non-empty
+   * join key.
+   */
+  correlationId: string;
+  /**
+   * Federation network id parsed from the envelope subject's
+   * second segment (`federated.{network_id}.<...>`). Present even
+   * when the network id has no policy entry — in that case it
+   * still appears here for triage ("peer claimed network 'x' but
+   * we don't recognise it").
+   */
+  networkId: string;
+  /** Structured reason — see {@link SystemAccessFederationDeniedReasonKind}. */
+  reason:
+    | {
+        kind: "peer_not_in_accept_list";
+        /**
+         * `true` when no declared network matched the subject prefix
+         * at all (vs. matched-the-network-but-subject-wasn't-in-list).
+         * Both cases share the same kind because operationally
+         * they're the same denial — "we don't accept this subject
+         * pattern" — but the flag lets dashboards render the more
+         * specific message when triaging.
+         */
+        unknown_network?: boolean;
+      }
+    | {
+        kind: "peer_deny_list";
+        /** Which deny pattern matched. */
+        matched_pattern: string;
+      }
+    | {
+        kind: "max_hop_exceeded";
+        /** Observed `signed_by[].length`. */
+        observed_hops: number;
+        /** Configured `network.max_hop`. */
+        max_hop: number;
+      };
+  /** Classification override; defaults to local per system.* convention. */
+  classification?: Classification;
+}
+
+/**
+ * Construct a `system.access.denied` envelope from the surface-router's
+ * federation gate (D.2).
+ *
+ * Shares the wire type + most payload fields with the C.4
+ * dispatch-listener variant — surfaces subscribing to
+ * `system.access.>` see both flavours and branch on `reason.kind`.
+ *
+ * The `principal_id` + `capability` payload fields are fixed for
+ * federation denials:
+ *
+ *   - `principal_id` = first stamp's principal, or `"unknown"` for
+ *     unsigned envelopes.
+ *   - `capability` = `"federated.subject_dispatch"` — a stable
+ *     filter for "this denial came from the router's subject gate,
+ *     not the dispatch policy gate".
+ *
+ * `payload.network_id` carries the parsed network id so subscribers
+ * can slice the access stream by network without re-parsing the
+ * envelope subject.
+ */
+export function createSystemAccessFederationDeniedEvent(
+  opts: SystemAccessFederationDeniedOpts,
+): Envelope {
+  const principalId = opts.signedBy[0]?.principal ?? "unknown";
+  return buildBaseEnvelope({
+    type: "system.access.denied",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    correlationId: opts.correlationId,
+    payload: {
+      principal_id: principalId,
+      capability: "federated.subject_dispatch",
+      reason: { ...opts.reason },
+      intent_sovereignty: opts.sovereignty,
+      envelope_id: opts.envelopeId,
+      envelope_subject: opts.envelopeSubject,
+      signed_by: opts.signedBy,
+      network_id: opts.networkId,
+    },
+  });
+}

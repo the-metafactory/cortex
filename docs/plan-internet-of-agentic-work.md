@@ -384,9 +384,9 @@ Pre-Phase-B caveat (Echo cortex#220 round 1): the dispatch-listener policy gate 
 
 ### D.2 Surface-router accept/deny gating
 
-- [ ] **D.2.1** Surface-router extends `adapterMatches()` to gate inbound `federated.*` envelopes against the originating network's `accept_subjects` / `deny_subjects` lists.
-- [ ] **D.2.2** Match-failure emits `system.access.denied` with reason `peer_deny_list` or `peer_not_in_accept_list`.
-- [ ] **D.2.3** Hop counting: `signed_by[].length` vs. `max_hop` — over-budget envelopes rejected with `max_hop_exceeded`.
+- [x] **D.2.1** Surface-router extends `adapterMatches()` to gate inbound `federated.*` envelopes against the originating network's `accept_subjects` / `deny_subjects` lists.
+- [x] **D.2.2** Match-failure emits `system.access.denied` with reason `peer_deny_list` or `peer_not_in_accept_list`.
+- [x] **D.2.3** Hop counting: `signed_by[].length` vs. `max_hop` — over-budget envelopes rejected with `max_hop_exceeded`.
 
 ### D.3 PolicyEngine extends for per-peer slicing
 
