@@ -129,11 +129,17 @@ async function persistProcessedEvent(db: D1Database, processed: ProcessedSession
 }
 
 async function upsertSession(db: D1Database, session: SessionUpsertData): Promise<void> {
+  // IAW D.5 — sovereignty fields are optional; pre-IAW publishers omit them
+  // and the D1 columns stay NULL. On conflict we COALESCE so later events
+  // for the same session can backfill (e.g. task_started without envelope,
+  // then a progress event from a federated source carries sovereignty).
+  const sov = session.sovereignty;
   await db.prepare(`
     INSERT INTO sessions
     (session_id, operator_id, agent_id, agent_name, project, description, github_issue,
-     started_at, status, events_count, last_event, last_event_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 1, ?, ?)
+     started_at, status, events_count, last_event, last_event_at,
+     classification, data_residency, home_operator)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 1, ?, ?, ?, ?, ?)
     ON CONFLICT(session_id) DO UPDATE SET
       status = 'active',
       operator_id = COALESCE(excluded.operator_id, operator_id),
@@ -143,7 +149,10 @@ async function upsertSession(db: D1Database, session: SessionUpsertData): Promis
       github_issue = COALESCE(excluded.github_issue, github_issue),
       last_event = excluded.last_event,
       last_event_at = excluded.last_event_at,
-      events_count = events_count + 1
+      events_count = events_count + 1,
+      classification = COALESCE(excluded.classification, classification),
+      data_residency = COALESCE(excluded.data_residency, data_residency),
+      home_operator = COALESCE(excluded.home_operator, home_operator)
   `).bind(
     session.sessionId,
     session.operatorId ?? null,
@@ -155,6 +164,9 @@ async function upsertSession(db: D1Database, session: SessionUpsertData): Promis
     session.startedAt,
     session.lastEvent,
     session.lastEventAt,
+    sov?.classification ?? null,
+    sov?.dataResidency ?? null,
+    sov?.homeOperator ?? null,
   ).run();
 }
 
@@ -190,11 +202,16 @@ async function insertSessionDirect(
   session: SessionUpsertData,
   completion: SessionCompleteData,
 ): Promise<void> {
+  // IAW D.5 — same late-join semantics as upsertSession but on a fresh row,
+  // so we insert sovereignty straight (no COALESCE needed; there's nothing
+  // to merge with).
+  const sov = session.sovereignty;
   await db.prepare(`
     INSERT OR IGNORE INTO sessions
     (session_id, operator_id, agent_id, agent_name, project, description, github_issue,
-     started_at, completed_at, duration_ms, pr_url, status, last_event, last_event_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     started_at, completed_at, duration_ms, pr_url, status, last_event, last_event_at,
+     classification, data_residency, home_operator)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     session.sessionId,
     session.operatorId ?? null,
@@ -210,6 +227,9 @@ async function insertSessionDirect(
     completion.status,
     session.lastEvent,
     session.lastEventAt,
+    sov?.classification ?? null,
+    sov?.dataResidency ?? null,
+    sov?.homeOperator ?? null,
   ).run();
 }
 

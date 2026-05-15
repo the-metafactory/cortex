@@ -1,5 +1,6 @@
 import type {
   IngestEvent,
+  SessionSovereignty,
   SessionUpsertData,
   SessionCompleteData,
   UsageSnapshotData,
@@ -9,6 +10,31 @@ import {
   extractProgress,
   extractGitHubIssue,
 } from "./event-utils";
+
+/**
+ * IAW D.5 — lift sovereignty fields off an ingest event into the
+ * normalised `SessionSovereignty` shape persisted on `sessions`. Returns
+ * `undefined` when no sovereignty fields are present so the worker can
+ * leave the D1 columns as NULL rather than inserting empty strings.
+ *
+ * The relay is responsible for hoisting `envelope.sovereignty.*` and
+ * `signed_by[0].principal` (after `did:mf:` strip → operator segment) onto
+ * the ingest event before publishing. This processor is purely defensive —
+ * it never invents sovereignty data, only reflects what arrived.
+ */
+function extractSovereignty(event: IngestEvent): SessionSovereignty | undefined {
+  const s = event.sovereignty;
+  if (!s) return undefined;
+  // At least one field must be present; otherwise treat as absent.
+  if (s.classification == null && s.data_residency == null && s.home_operator == null) {
+    return undefined;
+  }
+  return {
+    classification: s.classification ?? null,
+    dataResidency: s.data_residency ?? null,
+    homeOperator: s.home_operator ?? null,
+  };
+}
 
 function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
@@ -90,6 +116,7 @@ function processTaskStarted(
       lastEventAt: event.timestamp,
       progressCompleted: null,
       progressTotal: null,
+      sovereignty: extractSovereignty(event),
     },
   };
 }
@@ -136,6 +163,7 @@ function processTaskCompleted(
       lastEventAt: event.timestamp,
       progressCompleted: null,
       progressTotal: null,
+      sovereignty: extractSovereignty(event),
     },
   };
 }
@@ -216,6 +244,7 @@ function processProgressEvent(
       lastEventAt: event.timestamp,
       progressCompleted: progress?.completed ?? null,
       progressTotal: progress?.total ?? null,
+      sovereignty: extractSovereignty(event),
     },
   };
 }

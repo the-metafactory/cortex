@@ -28,7 +28,12 @@ CREATE TABLE IF NOT EXISTS sessions (
   input_tokens INTEGER,
   output_tokens INTEGER,
   cache_read_tokens INTEGER,
-  cost_usd REAL
+  cost_usd REAL,
+  -- IAW D.5: sovereignty fields lifted off the originating myelin envelope.
+  -- All three are NULL for pre-IAW publishers. See migrations/0003_sovereignty.sql.
+  classification TEXT,        -- 'local' | 'federated' | 'public' | NULL
+  data_residency TEXT,        -- e.g. 'nz', 'eu', NULL
+  home_operator TEXT          -- principal.home_operator (post-`did:mf:` strip)
 );
 
 CREATE TABLE IF NOT EXISTS github_events (
@@ -132,6 +137,8 @@ CREATE INDEX IF NOT EXISTS idx_session_activity_session ON session_activity(sess
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_completed ON sessions(completed_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_operator ON sessions(operator_id);
+-- IAW D.5 — slicing the dashboard snapshot by home_operator on every poll
+CREATE INDEX IF NOT EXISTS idx_sessions_home_operator ON sessions(home_operator) WHERE home_operator IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_github_repo ON github_events(repo, created_at);
 CREATE INDEX IF NOT EXISTS idx_github_agent ON github_events(agent_authored, created_at);
 CREATE INDEX IF NOT EXISTS idx_github_operator ON github_events(operator_id);
