@@ -317,6 +317,15 @@ describe("matchesReview", () => {
     expect(matchesReview(env, { ...FILTER_BASE, requireState: "approved" })).toBeNull();
   });
 
+  test("preserves newlines in body_summary on JSON path (formatMatchText collapses them, but raw match keeps them)", () => {
+    const env = makeReviewEnvelope({
+      event: "pull_request_review",
+      body: "line one\nline two\nline three",
+    });
+    const m = matchesReview(env, FILTER_BASE);
+    expect(m?.body_summary).toBe("line one\nline two\nline three");
+  });
+
   test("truncates body_summary at 240 chars", () => {
     const long = "x".repeat(300);
     const env = makeReviewEnvelope({ event: "pull_request_review", body: long });
@@ -442,9 +451,7 @@ describe("runWaitForReview — integration", () => {
   });
 
   test("--help short-circuits before any IO", async () => {
-    const args = parseWaitForReviewArgs(["--help"]);
     const result = await dispatchWaitForReview(["--help"]);
-    void args;
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("cortex wait-for-review");
   });

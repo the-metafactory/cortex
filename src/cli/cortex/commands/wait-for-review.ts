@@ -86,7 +86,7 @@ interface ParsedWaitForReviewArgs {
   require?: string;
   /** Path to cortex.yaml (default `~/.config/cortex/cortex.yaml`). */
   config?: string;
-  /** Emit JSON envelope on success (default true — overridable to text). */
+  /** Emit JSON envelope instead of text (default: text; --json opts in). */
   json: boolean;
   help: boolean;
 }
@@ -530,11 +530,22 @@ export async function runWaitForReview(
     resolveMatch = resolve;
   });
 
+  // First-match short-circuit (Echo cortex#234 round 1). Even though
+  // the second `resolveMatch` call is a no-op on a settled promise,
+  // skipping additional matcher work after the first hit makes the
+  // intent obvious and avoids silently swallowing later matching
+  // envelopes — if more arrive between match and `stop()`, the
+  // skipped-matcher branch makes the drop visible to a future reader.
+  let matched = false;
   const subscriber = subscriberStart(link, {
     pattern: subjectPattern,
     onEnvelope: (envelope) => {
+      if (matched) return;
       const m = matchesReview(envelope, filter);
-      if (m !== null) resolveMatch(m);
+      if (m !== null) {
+        matched = true;
+        resolveMatch(m);
+      }
     },
   });
 
@@ -641,7 +652,12 @@ function safeUrl(url: string): string {
 
 function formatMatchText(m: ReviewMatch): string {
   const stateLine = m.state ? ` (state=${m.state})` : "";
-  return `${m.kind}.${m.action}${stateLine}  ${m.repo}#${m.pr}  by ${m.reviewer}\nbody: ${m.body_summary}`;
+  // Collapse any internal whitespace (newlines, tabs, runs of spaces)
+  // in the body summary so the text path stays one event = one line
+  // for shell pipelines (Echo cortex#234 round 1). JSON path keeps the
+  // raw body_summary verbatim.
+  const oneLineBody = m.body_summary.replace(/\s+/g, " ");
+  return `${m.kind}.${m.action}${stateLine}  ${m.repo}#${m.pr}  by ${m.reviewer}\nbody: ${oneLineBody}`;
 }
 
 // =============================================================================
@@ -673,7 +689,12 @@ export async function dispatchWaitForReview(
       return { exitCode: 0, stdout: topLevelHelp(), stderr: "" };
     case "unknown":
       if (args.rawSubcommand === "") {
-        return usageMissing("--pr (run `cortex wait-for-review --help`)");
+        // Route the help hint through `usage()` directly so the
+        // "missing flag" slot doesn't carry prose (Echo cortex#234
+        // round 1 nit).
+        return usage(
+          "no args given; --pr / --reviewer / --timeout required. Run `cortex wait-for-review --help` for details",
+        );
       }
       return {
         exitCode: 2,
