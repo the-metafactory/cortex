@@ -1,0 +1,436 @@
+/**
+ * IAW Phase D.4.3 — Cortex-side RegistryClient consumer.
+ *
+ * Consults the cortex-network-registry service
+ * (`src/services/network-registry/`) at boot and on a background
+ * refresh schedule to populate an in-memory cache of verified peer
+ * pubkeys. Cortex consumers read via `getOperator(operatorId)` and
+ * receive `undefined` on every failure path — federation issues must
+ * not crash the bot.
+ *
+ * ## Trust anchor (Phase-B caveat)
+ *
+ * Every `GET` response from the registry is wrapped in a
+ * `SignedAssertion<T>` signed by the registry's own Ed25519 key. The
+ * client verifies each assertion against a single pinned `registryPubkey`
+ * before mutating its cache.
+ *
+ *   - If `options.pubkey` is supplied, the client pins it at
+ *     construction time. This is the recommended posture — the
+ *     trust anchor is operator-supplied, out-of-band.
+ *   - If `options.pubkey` is absent, the client performs Trust-
+ *     On-First-Use at `start()` via `GET /registry/pubkey`. The
+ *     first response is pinned for the lifetime of the process.
+ *     This is the Phase-B caveat: an attacker controlling the
+ *     network path between cortex and the registry on first boot
+ *     could substitute their own pubkey. Operators wanting
+ *     zero-TOFU should populate `policy.federated.registry.pubkey`
+ *     in cortex.yaml.
+ *
+ * ## Cache invalidation
+ *
+ * The client refreshes every entry every `refreshIntervalMs` (default
+ * 5 minutes). When the eventual `system.operator.published` bus event
+ * lands (filed as a follow-up — the producer side isn't wired yet),
+ * `invalidate(operatorId)` provides the seam to short-circuit the
+ * refresh. Until then, TTL is the only invalidation mechanism — the
+ * worst-case staleness is one refresh interval.
+ *
+ * ## Failure modes
+ *
+ * Every error path is logged via `logError` (defaults to
+ * `process.stderr.write`) and returns control — never throws to the
+ * caller. The exhaustive list:
+ *
+ *   - `fetch` rejects (network) → log, leave cache entry as-is
+ *   - `fetch` returns non-2xx → log, leave cache entry as-is
+ *   - JSON body unparseable → log, leave cache entry as-is
+ *   - Assertion shape malformed → log, leave cache entry as-is
+ *   - Registry pubkey mismatch → log, leave cache entry as-is
+ *   - Signature does not verify → log, leave cache entry as-is
+ *   - Assertion `registry === "unconfigured"` → log, leave cache as-is
+ *   - Shutdown signalled mid-refresh → AbortError swallowed
+ *
+ * "Leave cache as-is" is deliberate: a transient failure should not
+ * blank a previously-verified record. The cache is fail-safe; only a
+ * successful verify writes.
+ */
+
+import {
+  base64ToBytes,
+  canonicalJSON,
+  verifyEd25519,
+} from "./signing";
+import type {
+  OperatorRecord,
+  RegistryClientOptions,
+  RegistryClientReader,
+} from "./types";
+
+const DEFAULT_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * `RegistryClient` — single-process, in-memory cache of registry-
+ * resolved peer operator records. Construct, `start()`, query via
+ * `getOperator()`, `stop()` at shutdown.
+ */
+export class RegistryClient implements RegistryClientReader {
+  private readonly url: string;
+  private readonly operatorIds: readonly string[];
+  private readonly refreshIntervalMs: number;
+  private readonly requestTimeoutMs: number;
+  private readonly fetchImpl: typeof globalThis.fetch;
+  private readonly logError: (msg: string) => void;
+
+  /** Pinned registry pubkey. Set in ctor (config) or in `start()` (TOFU). */
+  private pinnedPubkey: string | undefined;
+  /** In-memory cache: `operator_id → verified OperatorRecord`. */
+  private readonly cache = new Map<string, OperatorRecord>();
+
+  private refreshTimer: ReturnType<typeof setInterval> | undefined;
+  /** Abort controller scoped to the current cycle's in-flight requests. */
+  private cycleAbort: AbortController | undefined;
+  private stopped = false;
+
+  constructor(options: RegistryClientOptions) {
+    // Trailing slash normalisation so callers can pass either form.
+    this.url = options.url.replace(/\/+$/, "");
+    this.operatorIds = [...options.operatorIds];
+    this.refreshIntervalMs =
+      options.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS;
+    this.requestTimeoutMs =
+      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.logError =
+      options.logError ??
+      ((msg: string) => {
+        // Per CLAUDE.md "no empty catches": every failure path logs to
+        // stderr. Surface through the same channel the rest of cortex
+        // uses for non-fatal warnings.
+        process.stderr.write(`registry-client: ${msg}\n`);
+      });
+    this.pinnedPubkey = options.pubkey;
+  }
+
+  /**
+   * Start the client. Steps:
+   *   1. If no pubkey was supplied to the ctor, perform TOFU via
+   *      `GET /registry/pubkey` and pin the response.
+   *   2. Run one immediate refresh cycle so the cache is warm before
+   *      callers start querying.
+   *   3. Install the `setInterval` background refresh loop.
+   *
+   * Safe to call once. Calling twice is a no-op after the first
+   * successful start.
+   */
+  async start(): Promise<void> {
+    if (this.stopped) {
+      this.logError("start() called after stop(); ignoring");
+      return;
+    }
+    if (this.refreshTimer !== undefined) {
+      // Already started.
+      return;
+    }
+
+    if (this.pinnedPubkey === undefined) {
+      await this.fetchAndPinRegistryPubkey();
+    }
+
+    // One eager refresh so the cache is populated before any caller
+    // queries `getOperator()`. Errors are already logged inside the
+    // cycle; we deliberately don't propagate — a refresh failure must
+    // not block cortex boot.
+    await this.refreshAll();
+
+    // Re-check `stopped`: `refreshAll()` above is async, so stop() may
+    // have arrived during the eager-refresh window. Don't install a
+    // timer that would race a concurrent shutdown.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+    if (this.refreshIntervalMs > 0 && !this.stopped) {
+      const timer = setInterval(() => {
+        void this.refreshAll();
+      }, this.refreshIntervalMs);
+      // Don't keep the event loop alive solely for refreshing peer
+      // pubkeys — cortex's shutdown path explicitly calls `stop()`.
+      // In Node/Bun, `setInterval` returns a `Timeout` object with an
+      // `unref()` method; in pure browser-DOM lib targets it's just a
+      // number, hence the runtime guard.
+      const maybeUnrefable = timer as unknown as { unref?: () => void };
+      if (typeof maybeUnrefable.unref === "function") {
+        maybeUnrefable.unref();
+      }
+      this.refreshTimer = timer;
+    }
+  }
+
+  /**
+   * Stop the client. Cancels the refresh timer, aborts any in-flight
+   * request, and prevents further `start()` calls. Idempotent.
+   */
+  stop(): void {
+    this.stopped = true;
+    if (this.refreshTimer !== undefined) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = undefined;
+    }
+    if (this.cycleAbort !== undefined) {
+      this.cycleAbort.abort();
+      this.cycleAbort = undefined;
+    }
+  }
+
+  /** RegistryClientReader.getOperator — see interface JSDoc. */
+  getOperator(operatorId: string): OperatorRecord | undefined {
+    return this.cache.get(operatorId);
+  }
+
+  /**
+   * Invalidate a single cache entry. The next `refreshAll()` (or an
+   * explicit `refreshOperator(operatorId)`) will repopulate it.
+   * Exposed for the future `system.operator.published` event handler.
+   */
+  invalidate(operatorId: string): void {
+    this.cache.delete(operatorId);
+  }
+
+  /**
+   * Drive one refresh cycle manually. Tests use this to avoid waiting
+   * for the `setInterval` tick. Exposed as an internal seam — not on
+   * `RegistryClientReader`.
+   */
+  async refreshAll(): Promise<void> {
+    if (this.stopped) return;
+    if (this.pinnedPubkey === undefined) {
+      this.logError("refreshAll() called before pubkey was pinned; skipping");
+      return;
+    }
+    // Fresh AbortController per cycle so stop() during the cycle
+    // cancels in-flight requests but doesn't poison the next cycle.
+    this.cycleAbort = new AbortController();
+    const signal = this.cycleAbort.signal;
+
+    // Serial rather than parallel: peer lists are short (single-digit
+    // typical, dozens worst-case), the registry is shared, and serial
+    // is more polite under load. Parallelise later if measured-needed.
+    for (const operatorId of this.operatorIds) {
+      if (signal.aborted) break;
+      await this.refreshOperator(operatorId, signal);
+    }
+  }
+
+  // =============================================================================
+  // Private — TOFU + per-operator refresh
+  // =============================================================================
+
+  private async fetchAndPinRegistryPubkey(): Promise<void> {
+    const url = `${this.url}/registry/pubkey`;
+    const raw = await this.fetchJson(url, undefined);
+    if (raw === undefined) {
+      this.logError(
+        `TOFU failed: could not fetch ${url}; client will start with no pinned key and reject all operators`,
+      );
+      return;
+    }
+    // Treat the response as untrusted JSON until we've verified shape.
+    if (
+      typeof raw !== "object" ||
+      raw === null ||
+      (raw as { algorithm?: unknown }).algorithm !== "Ed25519" ||
+      typeof (raw as { public_key?: unknown }).public_key !== "string"
+    ) {
+      this.logError(`TOFU failed: malformed /registry/pubkey response`);
+      return;
+    }
+    const publicKey = (raw as { public_key: string }).public_key;
+    // Refuse the unconfigured sentinel — it means the registry has no
+    // signing key, and we cannot verify any assertion against it.
+    if (publicKey === "" || publicKey === "unconfigured") {
+      this.logError(
+        "TOFU failed: registry returned unconfigured pubkey; refusing to pin",
+      );
+      return;
+    }
+    this.pinnedPubkey = publicKey;
+  }
+
+  private async refreshOperator(
+    operatorId: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const url = `${this.url}/operators/${encodeURIComponent(operatorId)}`;
+    const raw = await this.fetchJson(url, signal);
+    if (raw === undefined) return; // already logged inside fetchJson
+
+    const verified = await this.verifyAssertion(operatorId, raw);
+    if (verified === undefined) return; // already logged inside verifyAssertion
+    this.cache.set(operatorId, verified);
+  }
+
+  /**
+   * Verify a registry assertion against the pinned pubkey. Returns the
+   * payload on success, `undefined` on any failure (with a log line).
+   *
+   * Accepts `unknown` rather than a typed assertion: at this layer the
+   * input is untrusted JSON straight off the wire, and the shape checks
+   * below ARE the validation. Trusting the type at the boundary would
+   * defeat the purpose of the check.
+   */
+  private async verifyAssertion(
+    operatorId: string,
+    raw: unknown,
+  ): Promise<OperatorRecord | undefined> {
+    const pinned = this.pinnedPubkey;
+    if (pinned === undefined) {
+      this.logError(
+        `refresh(${operatorId}): no pinned pubkey; refusing to trust assertion`,
+      );
+      return undefined;
+    }
+    // Shape check first — cheaper than crypto and gives a clearer log.
+    if (raw === null || typeof raw !== "object") {
+      this.logError(`refresh(${operatorId}): assertion not an object; ignoring`);
+      return undefined;
+    }
+    const assertion = raw as Record<string, unknown>;
+    if (
+      typeof assertion.signature !== "string" ||
+      typeof assertion.issued_at !== "string" ||
+      typeof assertion.registry !== "string" ||
+      assertion.payload === null ||
+      typeof assertion.payload !== "object"
+    ) {
+      this.logError(
+        `refresh(${operatorId}): malformed assertion envelope; ignoring`,
+      );
+      return undefined;
+    }
+    const registry = assertion.registry;
+    if (registry === "unconfigured") {
+      this.logError(
+        `refresh(${operatorId}): registry assertion says "unconfigured"; refusing`,
+      );
+      return undefined;
+    }
+    if (registry !== pinned) {
+      this.logError(
+        `refresh(${operatorId}): registry pubkey mismatch (got ${registry.slice(0, 8)}…, pinned ${pinned.slice(0, 8)}…); ignoring`,
+      );
+      return undefined;
+    }
+    // Sanity-check the payload looks like an OperatorRecord. We don't
+    // re-validate the deep structure here — the registry is the source
+    // of truth for its own shape — but we do require the same
+    // operator_id we requested, defending against a swapped payload.
+    const payload = assertion.payload as Record<string, unknown>;
+    if (payload.operator_id !== operatorId) {
+      this.logError(
+        `refresh(${operatorId}): payload.operator_id mismatch (got "${String(payload.operator_id)}"); ignoring`,
+      );
+      return undefined;
+    }
+    if (typeof payload.operator_pubkey !== "string") {
+      this.logError(
+        `refresh(${operatorId}): payload.operator_pubkey missing or non-string; ignoring`,
+      );
+      return undefined;
+    }
+
+    // Reconstruct the canonical bound triple and verify.
+    const bound = canonicalJSON({
+      payload: assertion.payload,
+      issued_at: assertion.issued_at,
+      registry,
+    });
+    const message = new TextEncoder().encode(bound);
+    let ok: boolean;
+    try {
+      ok = await verifyEd25519(pinned, assertion.signature, message);
+    } catch (err) {
+      this.logError(
+        `refresh(${operatorId}): verify threw: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return undefined;
+    }
+    if (!ok) {
+      this.logError(
+        `refresh(${operatorId}): signature did not verify; ignoring`,
+      );
+      return undefined;
+    }
+    // Defensive: the producer types include arrays we trust the
+    // service to populate, but a corrupted payload could send the
+    // wrong shape past the structural checks above. Normalise.
+    return {
+      operator_id: operatorId,
+      operator_pubkey: payload.operator_pubkey,
+      stacks: Array.isArray(payload.stacks) ? (payload.stacks as OperatorRecord["stacks"]) : [],
+      capabilities: Array.isArray(payload.capabilities) ? (payload.capabilities as OperatorRecord["capabilities"]) : [],
+      updated_at: typeof payload.updated_at === "string" ? payload.updated_at : "",
+    };
+  }
+
+  // =============================================================================
+  // Private — transport
+  // =============================================================================
+
+  /**
+   * Issue a JSON GET. Wraps timeout + abort + non-2xx + parse failure
+   * into a single `undefined` return path with a structured log line.
+   * `cycleSignal`, when supplied, is OR'd with the per-request timeout
+   * via the controller below so `stop()` cancels in-flight work.
+   */
+  private async fetchJson(
+    url: string,
+    cycleSignal: AbortSignal | undefined,
+  ): Promise<unknown> {
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(
+      () => { controller.abort(); },
+      this.requestTimeoutMs,
+    );
+    const cycleAbortListener = (): void => { controller.abort(); };
+    if (cycleSignal !== undefined) {
+      if (cycleSignal.aborted) {
+        clearTimeout(timeoutHandle);
+        return undefined;
+      }
+      cycleSignal.addEventListener("abort", cycleAbortListener, { once: true });
+    }
+    try {
+      const res = await this.fetchImpl(url, { signal: controller.signal });
+      if (!res.ok) {
+        this.logError(`GET ${url} returned ${res.status}`);
+        return undefined;
+      }
+      try {
+        return await res.json();
+      } catch (err) {
+        this.logError(
+          `GET ${url} JSON parse failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return undefined;
+      }
+    } catch (err) {
+      // AbortError on shutdown is expected — log at a lower fidelity
+      // but do log, so silent stop-mid-fetch is still observable.
+      if (err instanceof Error && err.name === "AbortError") {
+        this.logError(`GET ${url} aborted`);
+      } else {
+        this.logError(
+          `GET ${url} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return undefined;
+    } finally {
+      clearTimeout(timeoutHandle);
+      if (cycleSignal !== undefined) {
+        cycleSignal.removeEventListener("abort", cycleAbortListener);
+      }
+    }
+  }
+}
+
+// Re-export the verify primitive so consumers + tests can share it.
+export { base64ToBytes, canonicalJSON, verifyEd25519 };

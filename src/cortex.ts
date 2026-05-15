@@ -62,6 +62,8 @@ import { createDispatchListener, type DispatchListener } from "./runner/dispatch
 import { WorklogManager } from "./runner/worklog-manager";
 
 import { CloudPublisher } from "./taps/cc-events/cloud-publisher";
+import { RegistryClient } from "./common/registry";
+import type { RegistryClientReader } from "./common/registry";
 import { JsonlReader } from "./taps/cc-events/lib/jsonl-reader";
 import { PublishedEventSchema } from "./taps/cc-events/hooks/lib/event-types";
 import { formatEventForDiscord } from "./adapters/discord/event-formatter";
@@ -106,6 +108,13 @@ export interface CortexHandle {
    * them.
    */
   readonly agentRegistry: AgentRegistry;
+  /**
+   * IAW Phase D.4.3 — registry-resolved peer pubkey reader. Exposed
+   * read-only so D.6 integration tests + future consumers can verify
+   * that the federation roster gets populated from the registry.
+   * `null` when no registry was configured on this cortex instance.
+   */
+  readonly registryClient: RegistryClientReader | null;
 }
 
 /** Optional test-only injection points. Production callers omit. */
@@ -497,6 +506,56 @@ export async function startCortex(
       console.error(`cortex: surface adapter "${adapterId}" render error:`, err.message);
     },
   });
+
+  // IAW Phase D.4.3 (refs cortex#116) — registry client. Opt-in:
+  // instantiated only when `policy.federated.registry.url` is set
+  // AND `policy.federated.networks[].peers[]` declares at least one
+  // peer. When dormant, callers asking for an operator simply get
+  // `undefined` — the rest of cortex never has to special-case
+  // "no registry configured".
+  //
+  // The client populates an in-memory cache of registry-verified peer
+  // pubkeys (base64 Ed25519) on a 5-minute refresh schedule. Each
+  // fetched assertion is verified against the pinned registry pubkey
+  // before mutating the cache; verification failures log to stderr
+  // and leave the cache untouched (fail-safe).
+  //
+  // Phase-B caveat: the registry trust anchor is operator-supplied
+  // via `policy.federated.registry.pubkey` (pinned at config time) OR
+  // TOFU at boot via `GET /registry/pubkey`. The TOFU window is
+  // exactly the first call against an unknown registry; operators
+  // wanting zero-TOFU populate the pubkey field out-of-band. See
+  // `src/common/registry/client.ts` JSDoc for the full failure-mode
+  // table.
+  let registryClient: RegistryClient | null = null;
+  const registryConfig = options.policy?.federated?.registry;
+  if (registryConfig !== undefined) {
+    const peerOperatorIds = Array.from(
+      new Set(
+        (options.policy?.federated?.networks ?? []).flatMap((n) =>
+          n.peers.map((p) => p.operator_id),
+        ),
+      ),
+    );
+    if (peerOperatorIds.length === 0) {
+      console.log(
+        `cortex: policy.federated.registry configured (${registryConfig.url}) but no peers declared — registry client dormant`,
+      );
+    } else {
+      registryClient = new RegistryClient({
+        url: registryConfig.url,
+        ...(registryConfig.pubkey !== undefined && { pubkey: registryConfig.pubkey }),
+        operatorIds: peerOperatorIds,
+      });
+      // Boot the client asynchronously — TOFU + initial refresh must
+      // not block the rest of cortex boot. Errors inside `start()`
+      // are already logged via the client's own `logError` seam.
+      void registryClient.start();
+      console.log(
+        `cortex: registry client started (${registryConfig.url}, tracking ${peerOperatorIds.length} peer(s))`,
+      );
+    }
+  }
 
   // Dispatch-handler — synchronous platform-message → CC pipeline.
   //
@@ -1027,6 +1086,7 @@ export async function startCortex(
       ...adapterStopNames,
       ...rendererStopNames,
       "cloud publisher close",
+      "registry client stop",
       "runtime stop",
     ];
     for (const slot of allSlots) pending.add(slot);
@@ -1080,6 +1140,7 @@ export async function startCortex(
         if (renderer && name) await completeAsync(name, renderer.stop());
       }
       await completeAsync("cloud publisher close", cloudPublisher?.close());
+      completeSync("registry client stop", () => registryClient?.stop());
       await completeAsync("runtime stop", runtime.stop());
     };
 
@@ -1116,6 +1177,9 @@ export async function startCortex(
     },
     get agentRegistry() {
       return agentRegistry;
+    },
+    get registryClient() {
+      return registryClient;
     },
   };
 }

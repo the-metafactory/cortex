@@ -1142,14 +1142,72 @@ export const PolicyFederatedNetworkSchema = z.object({
 export type PolicyFederatedNetwork = z.infer<typeof PolicyFederatedNetworkSchema>;
 
 /**
+ * IAW Phase D.4.3 — optional `policy.federated.registry` block.
+ *
+ * Declares the cortex-network-registry endpoint the operator wants
+ * cortex to consult for peer-pubkey resolution. When present, the
+ * `RegistryClient` (in `src/common/registry/`) is instantiated at
+ * boot and consults `{url}/operators/{id}` on a refresh schedule
+ * to populate an in-memory cache of verified peer pubkeys.
+ *
+ * The trust anchor is the registry's own Ed25519 pubkey:
+ *
+ *   - If `pubkey` is set, cortex pins it from config and refuses
+ *     any assertion whose `registry` field disagrees.
+ *   - If `pubkey` is absent, cortex performs Trust-On-First-Use
+ *     (TOFU) at boot via `GET /registry/pubkey` and pins whatever
+ *     comes back. This is the documented Phase-B caveat: the TOFU
+ *     window is exactly the first boot against an unknown registry,
+ *     and operators preferring zero-TOFU should populate `pubkey`
+ *     out-of-band before first run.
+ *
+ * Absence of the block is the default — cortex runs without a
+ * registry client and the federation roster is whatever lives
+ * statically in `policy.federated.networks[].peers[]`. The block
+ * is fully additive; existing configs are unaffected.
+ */
+export const PolicyFederatedRegistrySchema = z.object({
+  /**
+   * Registry base URL. Trailing slashes are tolerated but the client
+   * normalises before joining endpoint paths. Must be `https://` in
+   * production; `http://` is accepted so test rigs can run against a
+   * local in-process Hono app without TLS.
+   */
+  url: z.url("registry.url must be a valid URL"),
+  /**
+   * Optional pinned registry pubkey (base64-encoded Ed25519, 32 raw
+   * bytes before encoding). When set, the client refuses any
+   * assertion whose `registry` field does not match this value. When
+   * absent, TOFU at boot — the first `/registry/pubkey` response is
+   * pinned for the lifetime of the process. Operators wanting a
+   * persistent pin across restarts must paste it here.
+   *
+   * Grammar matches the registry service's `OperatorRecord.operator_pubkey`
+   * shape (base64 of 32 raw bytes → 44 chars including `=` padding).
+   * Validated softly (length + base64 alphabet) — strict 32-byte
+   * decoding happens at the client during initial fetch.
+   */
+  pubkey: z.string().regex(
+    /^[A-Za-z0-9+/]{43}=$/,
+    "registry.pubkey must be base64-encoded Ed25519 (44 chars including padding)",
+  ).optional(),
+});
+
+export type PolicyFederatedRegistry = z.infer<typeof PolicyFederatedRegistrySchema>;
+
+/**
  * `policy.federated` block — IAW Phase D.1 (cortex#116). Optional
  * on cortex.yaml; absence means "no federation declared" and the
  * surface-router treats inbound `federated.*` envelopes as
  * unrecognised (rejected at the validator layer). When present,
  * carries the operator's network roster.
+ *
+ * IAW Phase D.4.3 extends with the optional `registry` sub-block —
+ * see `PolicyFederatedRegistrySchema` for the trust-anchor model.
  */
 export const PolicyFederatedSchema = z.object({
   networks: z.array(PolicyFederatedNetworkSchema).default([]),
+  registry: PolicyFederatedRegistrySchema.optional(),
 });
 
 export type PolicyFederated = z.infer<typeof PolicyFederatedSchema>;

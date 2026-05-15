@@ -29,6 +29,8 @@ import {
   OperatorSchema,
   PagerDutyRendererSchema,
   PathsConfigSchema,
+  PolicyFederatedRegistrySchema,
+  PolicyFederatedSchema,
   RendererSchema,
 } from "../cortex-config";
 
@@ -793,6 +795,56 @@ describe("CortexConfigSchema", () => {
 // additions/removals AND default drift. Known divergence — `paths.logDir`
 // (grove → cortex rename) — is asserted as a key-set match plus per-field
 // equality on the non-divergent fields.
+
+describe("PolicyFederatedRegistrySchema — IAW D.4.3", () => {
+  test("accepts a fully populated registry block (url + pubkey)", () => {
+    const r = PolicyFederatedRegistrySchema.parse({
+      url: "https://network.meta-factory.ai",
+      // 43-char base64 alphabet + "=" padding → 44 chars total. The
+      // value here is structural only; signature paths exercise real
+      // keys at the client test layer.
+      pubkey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    });
+    expect(r.url).toBe("https://network.meta-factory.ai");
+    expect(r.pubkey).toBe("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+  });
+
+  test("accepts a url-only block (TOFU posture)", () => {
+    const r = PolicyFederatedRegistrySchema.parse({
+      url: "https://network.meta-factory.ai/",
+    });
+    expect(r.pubkey).toBeUndefined();
+  });
+
+  test("rejects a malformed url", () => {
+    expect(() =>
+      PolicyFederatedRegistrySchema.parse({ url: "not-a-url" }),
+    ).toThrow();
+  });
+
+  test("rejects a pubkey that isn't base64 of the right length", () => {
+    expect(() =>
+      PolicyFederatedRegistrySchema.parse({
+        url: "https://network.meta-factory.ai",
+        pubkey: "tooshort",
+      }),
+    ).toThrow();
+  });
+
+  test("PolicyFederatedSchema accepts an optional registry sub-block", () => {
+    // Absence is allowed (no registry → no consultation).
+    const without = PolicyFederatedSchema.parse({});
+    expect(without.registry).toBeUndefined();
+    expect(without.networks).toEqual([]);
+
+    // Presence parses through and round-trips.
+    const withReg = PolicyFederatedSchema.parse({
+      networks: [],
+      registry: { url: "https://network.meta-factory.ai" },
+    });
+    expect(withReg.registry?.url).toBe("https://network.meta-factory.ai");
+  });
+});
 
 describe("MIRROR sync — cortex cross-cutting schemas vs BotConfigSchema", () => {
   // Minimum BotConfig that exposes inner defaults on every cross-cutting block.
