@@ -174,15 +174,18 @@ describe("PresenceBinding — construction", () => {
   });
 
   test("UnsupportedPlatformError carries the offending platform and known list", () => {
-    const adapter = new FakeAdapter({ platform: "slack" });
+    // Pick a platform name that is NOT in the `Platform` union — `mock` is
+    // the standing placeholder used by the test adapter (was `slack`
+    // before the Slack adapter landed and `slack` joined the union).
+    const adapter = new FakeAdapter({ platform: "mock" });
     try {
       new PresenceBinding("luna", adapter, resolver);
       throw new Error("should have thrown");
     } catch (err) {
       expect(err).toBeInstanceOf(UnsupportedPlatformError);
       const e = err as UnsupportedPlatformError;
-      expect(e.platform).toBe("slack");
-      expect(e.knownPlatforms).toEqual(["discord", "mattermost"]);
+      expect(e.platform).toBe("mock");
+      expect(e.knownPlatforms).toEqual(["discord", "mattermost", "slack"]);
     }
   });
 });

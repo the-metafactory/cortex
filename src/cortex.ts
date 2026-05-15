@@ -52,10 +52,12 @@ import type {
   DiscordPresence,
   MattermostPresence,
   Policy,
+  SlackPresence,
   StackConfig,
 } from "./common/types/cortex-config";
 import { policyEngineFromConfig } from "./common/policy/factory";
 import { MattermostAdapter } from "./adapters/mattermost";
+import { SlackAdapter } from "./adapters/slack";
 import type { PlatformAdapter } from "./adapters/types";
 
 import { createDispatchListener, type DispatchListener } from "./runner/dispatch-listener";
@@ -601,10 +603,14 @@ export async function startCortex(
   // `presence.mattermost.apiToken` for Mattermost.
   const agentByDiscordToken = new Map<string, Agent>();
   const agentByMattermostApiToken = new Map<string, Agent>();
+  const agentBySlackBotToken = new Map<string, Agent>();
   for (const a of mergedAgents) {
     if (a.presence.discord?.token) agentByDiscordToken.set(a.presence.discord.token, a);
     if (a.presence.mattermost?.apiToken) {
       agentByMattermostApiToken.set(a.presence.mattermost.apiToken, a);
+    }
+    if (a.presence.slack?.botToken) {
+      agentBySlackBotToken.set(a.presence.slack.botToken, a);
     }
   }
 
@@ -885,6 +891,89 @@ export async function startCortex(
     } catch (err) {
       console.error(`cortex: mattermost adapter ${instanceId} failed to start:`, err instanceof Error ? err.message : err);
     }
+  }
+
+  // F-slack: Slack adapter boot — sibling to Discord + Mattermost above.
+  // Same shape: iterate `config.slack` (synthesized from `agents[].presence.slack`
+  // by `flattenSlackPresences` in the loader), build a `SlackPresence`, look up
+  // the declaring agent by bot token, instantiate the adapter, register its
+  // surface-router face, and start it. Errors during start are logged
+  // per-instance so one bad workspace doesn't block the rest of the boot.
+  for (const instance of config.slack) {
+    if (!instance.enabled) {
+      console.log(`cortex: slack instance ${instance.instanceId ?? instance.workspaceId} disabled — skipping`);
+      continue;
+    }
+    const slackIndex = config.slack.indexOf(instance);
+    const instanceId = instance.instanceId ?? (config.slack.length > 1
+      ? `${config.agent.name}-slack-${slackIndex}`
+      : `${config.agent.name}-slack`);
+    // Build the `SlackPresence` from the legacy `SlackInstance` shape.
+    // Schema defaults have already been applied by `BotConfigSchema` —
+    // this is a structural map, not a parse.
+    const presence: SlackPresence = {
+      enabled: instance.enabled,
+      botToken: instance.botToken,
+      appToken: instance.appToken,
+      workspaceId: instance.workspaceId,
+      channels: instance.channels,
+      allowedUserIds: instance.allowedUserIds,
+      trustedBotIds: instance.trustedBotIds,
+      roles: instance.roles,
+      defaultRole: instance.defaultRole,
+      surfaceSubjects: instance.surfaceSubjects,
+      ...(instance.surfaceFallbackChannelId !== undefined && {
+        surfaceFallbackChannelId: instance.surfaceFallbackChannelId,
+      }),
+    };
+    const matchedAgent = agentBySlackBotToken.get(instance.botToken);
+    const agent: Agent = matchedAgent ?? {
+      id: config.agent.name,
+      displayName: config.agent.displayName,
+      persona: "(deferred-mig-7.2e)",
+      roles: [],
+      trust: [],
+      presence: { slack: presence },
+    };
+    try {
+      const adapter = new SlackAdapter(
+        agent,
+        presence,
+        {
+          instanceId,
+          operator: {
+            ...(config.agent.operatorSlackId !== undefined && { slackId: config.agent.operatorSlackId }),
+          },
+          surfaceSubjects: presence.surfaceSubjects,
+          ...(presence.surfaceFallbackChannelId !== undefined && {
+            surfaceFallbackChannelId: presence.surfaceFallbackChannelId,
+          }),
+          trustedBotIds: new Set(instance.trustedBotIds),
+        },
+      );
+      router.register(adapter.surfaceConfig);
+      await adapter.start((msg) => dispatchHandler.handleMessage(adapter, msg));
+      adapters.push(adapter);
+      // Best-effort trust-resolver registration matches the Discord pattern.
+      if (agentRegistry.tryGetById(agent.id)) {
+        try {
+          const botUserId = await adapter.getPlatformUserId();
+          trustResolver.register("slack", botUserId, agent.id);
+        } catch (err) {
+          console.error(
+            `cortex: trust-resolver register for "${agent.id}" (slack) failed (non-fatal):`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+      console.log(`cortex: slack adapter started (instance: ${instanceId}, workspace: ${instance.workspaceId}, ${instance.channels.length} channel(s))`);
+    } catch (err) {
+      console.error(`cortex: slack adapter ${instanceId} failed to start:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  if (config.slack.length === 0) {
+    console.log("cortex: no slack instances configured");
   }
 
   // MIG-7.2d: non-agent-bound renderers (dashboard, pagerduty, …).

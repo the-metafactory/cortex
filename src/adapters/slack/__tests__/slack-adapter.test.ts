@@ -1,0 +1,559 @@
+/**
+ * F-slack: SlackAdapter unit tests.
+ *
+ * Mirror of the Mattermost / Discord adapter test patterns. We inject a
+ * fake `SlackClient` via the adapter's infra so no real Socket Mode
+ * connection is opened and no Slack API is hit. Each test exercises one
+ * adapter responsibility: translateEvent, resolveAccess, postResponse,
+ * createThread, notifyOperator, surfaceConfig.render.
+ */
+
+import { test, expect, describe, beforeEach, afterEach } from "bun:test";
+import { SlackAdapter, type SlackAdapterInfra } from "../index";
+import type { SlackClient, SlackInboundEvent } from "../client";
+import type { Agent, SlackPresence } from "../../../common/types/cortex-config";
+import type { InboundMessage } from "../../types";
+import type { Envelope } from "../../../bus/myelin/envelope-validator";
+
+// ---------------------------------------------------------------------------
+// Fake SlackClient — records calls and exposes a hook to simulate inbound
+// events. Tests assert against `postedMessages` / `wasStopped` and drive
+// events via `emitEvent`.
+// ---------------------------------------------------------------------------
+
+interface FakeSlackClientState {
+  postedMessages: { channel: string; text: string; threadTs?: string }[];
+  startCount: number;
+  stopCount: number;
+  botUserId: string;
+  /** Throw on next postMessage when set. */
+  postMessageError?: Error;
+}
+
+function makeFakeClient(initial: Partial<FakeSlackClientState> = {}): {
+  client: SlackClient;
+  state: FakeSlackClientState;
+  emit: (event: SlackInboundEvent) => Promise<void>;
+} {
+  const state: FakeSlackClientState = {
+    postedMessages: [],
+    startCount: 0,
+    stopCount: 0,
+    botUserId: initial.botUserId ?? "UBOT123",
+    ...(initial.postMessageError !== undefined && { postMessageError: initial.postMessageError }),
+  };
+
+  let onEvent: ((event: SlackInboundEvent) => Promise<void>) | null = null;
+
+  const client: SlackClient = {
+    async start(opts) {
+      state.startCount++;
+      onEvent = opts.onEvent;
+    },
+    async stop() {
+      state.stopCount++;
+      onEvent = null;
+    },
+    // eslint-disable-next-line @typescript-eslint/require-await
+    async postMessage(channel, text, threadTs) {
+      if (state.postMessageError) throw state.postMessageError;
+      state.postedMessages.push({
+        channel,
+        text,
+        ...(threadTs !== undefined && { threadTs }),
+      });
+      return { ts: "1700000000.000001" };
+    },
+    // eslint-disable-next-line @typescript-eslint/require-await
+    async getBotUserId() {
+      return state.botUserId;
+    },
+  };
+
+  const emit = async (event: SlackInboundEvent) => {
+    if (!onEvent) throw new Error("client.start() not called");
+    await onEvent(event);
+  };
+
+  return { client, state, emit };
+}
+
+function makePresence(overrides: Partial<SlackPresence> = {}): SlackPresence {
+  return {
+    enabled: true,
+    botToken: "xoxb-TEST-TOKEN-12345",
+    appToken: "xapp-TEST-APP-12345",
+    workspaceId: "T0WORKSPACE",
+    channels: [{ id: "C0CHAN1", name: "cortex" }],
+    allowedUserIds: [],
+    trustedBotIds: [],
+    roles: [],
+    defaultRole: "allow-all",
+    surfaceSubjects: [],
+    ...overrides,
+  };
+}
+
+function makeAgent(presence: SlackPresence): Agent {
+  return {
+    id: "luna",
+    displayName: "Luna",
+    persona: "(test)",
+    roles: [],
+    trust: [],
+    presence: { slack: presence },
+  };
+}
+
+function makeAdapter(opts: {
+  presence?: Partial<SlackPresence>;
+  infra?: Partial<SlackAdapterInfra>;
+  clientState?: Partial<FakeSlackClientState>;
+} = {}) {
+  const presence = makePresence(opts.presence);
+  const agent = makeAgent(presence);
+  const fake = makeFakeClient(opts.clientState);
+  const infra: SlackAdapterInfra = {
+    instanceId: "slack-test",
+    operator: {},
+    client: fake.client,
+    ...opts.infra,
+  };
+  const adapter = new SlackAdapter(agent, presence, infra);
+  return { adapter, ...fake };
+}
+
+// Helpers for asserting captured inbound messages from `start(onMessage)`.
+function captureInbound() {
+  const received: InboundMessage[] = [];
+  return {
+    received,
+    onMessage: async (msg: InboundMessage) => {
+      received.push(msg);
+    },
+  };
+}
+
+function makeSlackEvent(overrides: Partial<SlackInboundEvent> = {}): SlackInboundEvent {
+  return {
+    type: "message",
+    user: "U0HUMAN",
+    team: "T0WORKSPACE",
+    channel: "C0CHAN1",
+    text: "hello bot",
+    ts: "1700000000.000123",
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Console suppression for warning-emitting tests.
+// ---------------------------------------------------------------------------
+
+let originalWarn: typeof console.warn;
+let originalError: typeof console.error;
+const warnings: string[] = [];
+
+beforeEach(() => {
+  warnings.length = 0;
+  originalWarn = console.warn;
+  originalError = console.error;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map(String).join(" "));
+  };
+  console.error = () => {};
+});
+
+afterEach(() => {
+  console.warn = originalWarn;
+  console.error = originalError;
+});
+
+// ---------------------------------------------------------------------------
+// Construction
+// ---------------------------------------------------------------------------
+
+describe("SlackAdapter — construction", () => {
+  test("platform is 'slack'", () => {
+    const { adapter } = makeAdapter();
+    expect(adapter.platform).toBe("slack");
+  });
+
+  test("instanceId mirrors infra.instanceId", () => {
+    const { adapter } = makeAdapter({ infra: { instanceId: "luna-slack" } });
+    expect(adapter.instanceId).toBe("luna-slack");
+  });
+
+  test("warns at construction when surfaceSubjects is explicitly []", () => {
+    makeAdapter({ infra: { surfaceSubjects: [] } });
+    expect(
+      warnings.some((w) => w.includes("surfaceSubjects is empty")),
+    ).toBe(true);
+  });
+
+  test("does NOT warn when surfaceSubjects is undefined", () => {
+    makeAdapter();
+    expect(warnings.some((w) => w.includes("surfaceSubjects is empty"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lifecycle: start / stop / getPlatformUserId
+// ---------------------------------------------------------------------------
+
+describe("SlackAdapter — lifecycle", () => {
+  test("start opens the client and caches bot user id", async () => {
+    const { adapter, state } = makeAdapter({ clientState: { botUserId: "UBOTLUNA" } });
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+    expect(state.startCount).toBe(1);
+    expect(await adapter.getPlatformUserId()).toBe("UBOTLUNA");
+  });
+
+  test("stop closes the client and drops the cached id", async () => {
+    const { adapter, state } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+    await adapter.stop();
+    expect(state.stopCount).toBe(1);
+  });
+
+  test("getPlatformUserId fetches on demand when not yet cached", async () => {
+    const { adapter, state } = makeAdapter({ clientState: { botUserId: "UFRESH" } });
+    // Don't start — call getPlatformUserId directly.
+    expect(state.startCount).toBe(0);
+    const id = await adapter.getPlatformUserId();
+    expect(id).toBe("UFRESH");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// translateEvent — via the start(onMessage) seam
+// ---------------------------------------------------------------------------
+
+describe("SlackAdapter — translateEvent", () => {
+  test("translates a plain message into an InboundMessage", async () => {
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+
+    await emit(makeSlackEvent({ user: "U0HUMAN", text: "hello", channel: "C0CHAN1" }));
+
+    expect(cap.received).toHaveLength(1);
+    const msg = cap.received[0]!;
+    expect(msg.platform).toBe("slack");
+    expect(msg.authorId).toBe("U0HUMAN");
+    expect(msg.content).toBe("hello");
+    expect(msg.channelId).toBe("C0CHAN1");
+    expect(msg.channelName).toBe("cortex");
+    expect(msg.guildId).toBe("T0WORKSPACE");
+    expect(msg.threadId).toBeUndefined();
+  });
+
+  test("populates threadId from thread_ts when present", async () => {
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+
+    await emit(makeSlackEvent({ thread_ts: "1700000000.000000" }));
+
+    expect(cap.received[0]?.threadId).toBe("1700000000.000000");
+  });
+
+  test("drops self-authored messages (botUserId matches)", async () => {
+    const { adapter, emit } = makeAdapter({ clientState: { botUserId: "UBOTSELF" } });
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+
+    await emit(makeSlackEvent({ user: "UBOTSELF" }));
+
+    expect(cap.received).toHaveLength(0);
+  });
+
+  test("drops system subtypes like channel_join", async () => {
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+
+    await emit(makeSlackEvent({ subtype: "channel_join" }));
+
+    expect(cap.received).toHaveLength(0);
+  });
+
+  test("drops bot_message when the bot id is not in trustedBotIds", async () => {
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+
+    await emit(makeSlackEvent({
+      subtype: "bot_message",
+      user: undefined,
+      bot_id: "BPEER",
+    }));
+
+    expect(cap.received).toHaveLength(0);
+  });
+
+  test("accepts bot_message when the bot id is in trustedBotIds", async () => {
+    const { adapter, emit } = makeAdapter({
+      infra: { trustedBotIds: new Set(["BPEER"]) },
+    });
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+
+    await emit(makeSlackEvent({
+      subtype: "bot_message",
+      user: undefined,
+      bot_id: "BPEER",
+      text: "from peer",
+    }));
+
+    expect(cap.received).toHaveLength(1);
+    expect(cap.received[0]?.authorId).toBe("BPEER");
+    expect(cap.received[0]?.content).toBe("from peer");
+  });
+
+  test("maps Slack files to InboundMessage attachments", async () => {
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+
+    await emit(makeSlackEvent({
+      files: [
+        { url_private: "https://files.slack.com/x.png", name: "x.png", mimetype: "image/png", size: 42 },
+      ],
+    }));
+
+    expect(cap.received[0]?.attachments).toEqual([{
+      url: "https://files.slack.com/x.png",
+      filename: "x.png",
+      contentType: "image/png",
+      size: 42,
+    }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveAccess
+// ---------------------------------------------------------------------------
+
+describe("SlackAdapter — resolveAccess", () => {
+  function makeInbound(authorId: string): InboundMessage {
+    return {
+      platform: "slack",
+      instanceId: "slack-test",
+      authorId,
+      authorName: authorId,
+      content: "hi",
+      channelId: "C0CHAN1",
+      attachments: [],
+      timestamp: new Date(0),
+    };
+  }
+
+  test("allow-all role grants all features when no roles configured", () => {
+    const { adapter } = makeAdapter();
+    const decision = adapter.resolveAccess(makeInbound("U0HUMAN"));
+    expect(decision.allowed).toBe(true);
+    expect(decision.features.chat).toBe(true);
+    expect(decision.features.async).toBe(true);
+    expect(decision.features.team).toBe(true);
+  });
+
+  test("denies when allowedUserIds is set and user is not in it", () => {
+    const { adapter } = makeAdapter({
+      presence: { allowedUserIds: ["UOPERATOR"] },
+    });
+    const decision = adapter.resolveAccess(makeInbound("U0RANDO"));
+    expect(decision.allowed).toBe(false);
+    expect(decision.denyReason).toContain("specific users");
+  });
+
+  test("allows when allowedUserIds is set and user is in it", () => {
+    const { adapter } = makeAdapter({
+      presence: { allowedUserIds: ["UOPERATOR"] },
+    });
+    const decision = adapter.resolveAccess(makeInbound("UOPERATOR"));
+    expect(decision.allowed).toBe(true);
+  });
+
+  test("denies a self-loop message even if the user is in allowedUserIds", async () => {
+    const { adapter } = makeAdapter({
+      presence: { allowedUserIds: ["UBOTSELF"] },
+      clientState: { botUserId: "UBOTSELF" },
+    });
+    // start() to populate the cached bot user id.
+    await adapter.start(captureInbound().onMessage);
+    const decision = adapter.resolveAccess(makeInbound("UBOTSELF"));
+    expect(decision.allowed).toBe(false);
+    expect(decision.denyReason).toContain("Self-loop");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// postResponse
+// ---------------------------------------------------------------------------
+
+describe("SlackAdapter — postResponse", () => {
+  test("posts via the client with channel + text", async () => {
+    const { adapter, state } = makeAdapter();
+    await adapter.postResponse({ instanceId: "slack-test", channelId: "C0CHAN1" }, "ok");
+    expect(state.postedMessages).toEqual([{ channel: "C0CHAN1", text: "ok" }]);
+  });
+
+  test("threads the response when threadId is set", async () => {
+    const { adapter, state } = makeAdapter();
+    await adapter.postResponse(
+      { instanceId: "slack-test", channelId: "C0CHAN1", threadId: "1700000000.000000" },
+      "ok",
+    );
+    expect(state.postedMessages[0]?.threadTs).toBe("1700000000.000000");
+  });
+
+  test("warns and drops file attachments (v1 text-only)", async () => {
+    const { adapter, state } = makeAdapter();
+    await adapter.postResponse(
+      { instanceId: "slack-test", channelId: "C0CHAN1" },
+      "see attached",
+      [{ content: Buffer.from("data"), filename: "x.txt" }],
+    );
+    expect(warnings.some((w) => w.includes("file attachments not yet supported"))).toBe(true);
+    // Text still posts.
+    expect(state.postedMessages).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sendProgress / createThread / notifyOperator
+// ---------------------------------------------------------------------------
+
+describe("SlackAdapter — sendProgress + createThread + notifyOperator", () => {
+  test("sendProgress posts once and skips subsequent calls", async () => {
+    const { adapter, state } = makeAdapter();
+    const target = { instanceId: "slack-test", channelId: "C0CHAN1", threadId: "T123" };
+    await adapter.sendProgress(target, "step 1");
+    await adapter.sendProgress(target, "step 2");
+    expect(state.postedMessages).toHaveLength(1);
+    expect(state.postedMessages[0]?.text).toBe("> step 1");
+  });
+
+  test("clearProgress allows a subsequent sendProgress to post again", async () => {
+    const { adapter, state } = makeAdapter();
+    const target = { instanceId: "slack-test", channelId: "C0CHAN1", threadId: "T123" };
+    await adapter.sendProgress(target, "first");
+    await adapter.clearProgress(target);
+    await adapter.sendProgress(target, "second");
+    expect(state.postedMessages).toHaveLength(2);
+    expect(state.postedMessages[1]?.text).toBe("> second");
+  });
+
+  test("createThread returns threadId rooted on the source message's ts", async () => {
+    const { adapter } = makeAdapter();
+    const msg: InboundMessage = {
+      platform: "slack",
+      instanceId: "slack-test",
+      authorId: "U0HUMAN",
+      authorName: "U0HUMAN",
+      content: "spawn a thread",
+      channelId: "C0CHAN1",
+      attachments: [],
+      timestamp: new Date(0),
+      _native: makeSlackEvent({ ts: "1700000000.999999" }),
+    };
+    const target = await adapter.createThread(msg, "ignored-name");
+    expect(target.channelId).toBe("C0CHAN1");
+    expect(target.threadId).toBe("1700000000.999999");
+  });
+
+  test("notifyOperator no-ops when operator.slackId is not configured", async () => {
+    const { adapter, state } = makeAdapter();
+    await adapter.notifyOperator("ping");
+    expect(state.postedMessages).toHaveLength(0);
+  });
+
+  test("notifyOperator DMs the operator when slackId is configured", async () => {
+    const { adapter, state } = makeAdapter({
+      infra: { operator: { slackId: "UOPERATOR" } },
+    });
+    await adapter.notifyOperator("ping");
+    expect(state.postedMessages).toEqual([{ channel: "UOPERATOR", text: "ping" }]);
+  });
+
+  test("notifyOperator swallows post errors (log + drop)", async () => {
+    const { adapter } = makeAdapter({
+      infra: { operator: { slackId: "UOPERATOR" } },
+      clientState: { postMessageError: new Error("403 not_in_channel") },
+    });
+    // Must not throw — the operator's notification path is best-effort.
+    await expect(adapter.notifyOperator("ping")).resolves.toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// surfaceConfig.render — bus envelope rendering
+// ---------------------------------------------------------------------------
+
+describe("SlackAdapter.surfaceConfig", () => {
+  function makeEnvelope(overrides: Partial<Envelope> = {}): Envelope {
+    return {
+      id: "00000000-0000-4000-8000-000000000099",
+      source: "metafactory.pilot.local",
+      type: "review.cycle.completed",
+      timestamp: "2026-05-09T12:00:00Z",
+      sovereignty: {
+        classification: "local",
+        data_residency: "NZ",
+        max_hop: 0,
+        frontier_ok: true,
+        model_class: "any",
+      },
+      payload: { repo: "cortex" },
+      ...overrides,
+    };
+  }
+
+  test("id matches instanceId, subjects mirror surfaceSubjects", () => {
+    const { adapter } = makeAdapter({
+      infra: { surfaceSubjects: ["local.metafactory.review.>"] },
+    });
+    expect(adapter.surfaceConfig.id).toBe("slack-test");
+    expect(adapter.surfaceConfig.subjects).toEqual(["local.metafactory.review.>"]);
+  });
+
+  test("renders the envelope to the fallback channel when configured", async () => {
+    const { adapter, state } = makeAdapter({
+      infra: { surfaceFallbackChannelId: "C0FALLBACK" },
+    });
+    await adapter.surfaceConfig.render(makeEnvelope());
+    expect(state.postedMessages).toHaveLength(1);
+    expect(state.postedMessages[0]?.channel).toBe("C0FALLBACK");
+    expect(state.postedMessages[0]?.text).toContain("**review.cycle.completed**");
+  });
+
+  test("renders top-level (no threading) when posting bus envelopes", async () => {
+    const { adapter, state } = makeAdapter({
+      infra: { surfaceFallbackChannelId: "C0FALLBACK" },
+    });
+    await adapter.surfaceConfig.render(makeEnvelope());
+    expect(state.postedMessages[0]?.threadTs).toBeUndefined();
+  });
+
+  test("drops + warns when no surfaceFallbackChannelId is configured", async () => {
+    const { adapter, state } = makeAdapter();
+    await adapter.surfaceConfig.render(makeEnvelope());
+    expect(state.postedMessages).toHaveLength(0);
+    expect(
+      warnings.some((w) => w.includes("no surfaceFallbackChannelId configured")),
+    ).toBe(true);
+  });
+
+  test("does not throw when postMessage fails (log + drop)", async () => {
+    const { adapter } = makeAdapter({
+      infra: { surfaceFallbackChannelId: "C0FALLBACK" },
+      clientState: { postMessageError: new Error("rate limited") },
+    });
+    await expect(
+      adapter.surfaceConfig.render(makeEnvelope()),
+    ).resolves.toBeUndefined();
+  });
+});

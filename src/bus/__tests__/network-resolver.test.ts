@@ -27,6 +27,7 @@ function makeNetwork(id: string, overrides: Partial<NetworkFile> = {}): NetworkF
     },
     discord: [],
     mattermost: [],
+    slack: [],
     github: { repos: [], webhookSecret: "", iterationLabel: "iteration", agentDetection: { commitTrailers: [], branchPatterns: [], commentPatterns: [] } },
     ...overrides,
   };
@@ -37,6 +38,7 @@ function makeConfig(networks: NetworkFile[]): BotConfig {
     agent: { name: "test", displayName: "Test" },
     discord: networks.flatMap(n => n.discord),
     mattermost: networks.flatMap(n => n.mattermost),
+    slack: networks.flatMap(n => n.slack),
     claude: {
       timeoutMs: 120000,
       asyncTimeoutMs: 900000,

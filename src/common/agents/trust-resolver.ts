@@ -73,7 +73,7 @@ import { AgentNotFoundError, AgentRegistry } from "./registry";
  * — adding a new platform requires adding the value here AND a presence-block
  * variant in `cortex-config.ts`.
  */
-export type Platform = "discord" | "mattermost";
+export type Platform = "discord" | "mattermost" | "slack";
 
 /** A `(platform, platformId)` pair that uniquely identifies a connected presence. */
 export interface PlatformIdentity {

@@ -111,6 +111,8 @@ export const OperatorSchema = z.object({
   discordId: z.string().optional(),
   /** Operator's Mattermost user id — same purpose, Mattermost-side. */
   mattermostId: z.string().optional(),
+  /** Operator's Slack user id (`U...`) — same purpose, Slack-side. */
+  slackId: z.string().optional(),
   /**
    * Data residency stamped into `sovereignty.data_residency` on emitted
    * envelopes. ISO-3166-1 alpha-2 country code (two uppercase ASCII letters).
@@ -272,6 +274,99 @@ export const MattermostPresenceSchema = z.object({
 export type MattermostPresence = z.infer<typeof MattermostPresenceSchema>;
 
 /**
+ * Slack presence — an agent's identity in a Slack workspace. Mirrors the
+ * Discord/Mattermost presence shape: tokens + workspace id + channels +
+ * trusted user/bot ids + platform-side role allowlists.
+ *
+ * Transport choice: Socket Mode (`xapp-` app-level token paired with the
+ * `xoxb-` bot token). Socket Mode keeps cortex behind NAT without needing a
+ * public webhook URL — the same fit as Mattermost's outgoing-webhook
+ * polling model and unlike Discord's gateway-with-public-bot path. HTTP /
+ * Events API mode is deferred until a deployment actually needs it.
+ *
+ * Architecture §9.3 coupling rules: no `persona` or `roles` overrides at
+ * this layer — those live on the parent agent. `roles` here is the
+ * platform-side allowlist that maps the agent's cortex-wide capability
+ * set onto Slack user ids.
+ */
+export const SlackPresenceSchema = z.object({
+  /** Whether this presence is active. Default: true. */
+  enabled: z.boolean().default(true),
+  /**
+   * Bot user OAuth token (`xoxb-...`). Required. Used by the Web API
+   * client for `chat.postMessage`, `conversations.replies`, etc.
+   */
+  botToken: z.string().regex(
+    /^xoxb-/,
+    "slack.botToken must be a bot user OAuth token (xoxb-...)",
+  ),
+  /**
+   * App-level token (`xapp-...`) with `connections:write`. Required for
+   * Socket Mode — the adapter opens a WebSocket connection to Slack using
+   * this token. Distinct from `botToken`: `xoxb-` posts as the bot,
+   * `xapp-` opens the events stream.
+   */
+  appToken: z.string().regex(
+    /^xapp-/,
+    "slack.appToken must be an app-level token (xapp-...)",
+  ),
+  /**
+   * Slack workspace (team) id, `T...`. Stamped into the inbound message's
+   * `guildId` field so network resolution and trust paths can disambiguate
+   * across workspaces the same way they do across Discord guilds.
+   */
+  workspaceId: z.coerce.string().regex(
+    /^T[A-Z0-9]+$/,
+    "slack.workspaceId must be a Slack team id (T...)",
+  ),
+  /**
+   * Channels the adapter listens on / posts to. `id` is the canonical
+   * `C...` channel id used by Slack APIs; `name` is the human-readable
+   * label (no leading `#`) carried into `InboundMessage.channelName` for
+   * routing.
+   */
+  channels: z.array(z.object({
+    id: z.string().regex(
+      /^[CG][A-Z0-9]+$/,
+      "slack channel id must be a Slack channel/group id (C... or G...)",
+    ),
+    name: z.string().min(1),
+  })).default([]),
+  /**
+   * Slack user ids (`U...`) allowed to trigger the bot. Empty = allow all
+   * (subject to the platform-side `roles` allowlist below). Mirrors
+   * `MattermostPresenceSchema.allowedUsers`.
+   */
+  allowedUserIds: z.array(z.string()).default([]),
+  /**
+   * Operator-set Slack bot user ids (`U...`) of peer bots permitted to
+   * trigger this presence. Mirrors `DiscordPresenceSchema.trustedBotIds`
+   * — same cross-process bridge semantics. The bot's own user id is
+   * never allowed regardless of this list (anti-self-loop guard in
+   * `SlackAdapter`).
+   */
+  trustedBotIds: z.array(z.coerce.string()).default([]),
+  /** Platform-side role config (see DiscordPresenceSchema.roles). */
+  roles: z.array(RoleSchema).default([]),
+  defaultRole: z.string().default("allow-all"),
+  /**
+   * MIG-3b mirror: NATS subject patterns this Slack adapter renders to
+   * chat. Empty/undefined → adapter never matches in the surface-router.
+   * See `DiscordPresenceSchema.surfaceSubjects` for the canonical
+   * docstring and IoAW examples.
+   */
+  surfaceSubjects: z.array(z.string().min(1)).default([]),
+  /**
+   * MIG-3b mirror: Slack channel id where `renderEnvelope` posts
+   * inbound bus envelopes that don't carry their own channel routing.
+   * Unset → drop-with-warning per the Discord/Mattermost pattern.
+   */
+  surfaceFallbackChannelId: z.coerce.string().optional(),
+});
+
+export type SlackPresence = z.infer<typeof SlackPresenceSchema>;
+
+/**
  * An agent's presence map — keyed by platform. Architecture §9.1 puts
  * presence under the parent agent, not the other way around. Adding a new
  * platform (Slack, etc.) adds a new optional key here at the time the
@@ -280,6 +375,7 @@ export type MattermostPresence = z.infer<typeof MattermostPresenceSchema>;
 export const PresenceSchema = z.object({
   discord: DiscordPresenceSchema.optional(),
   mattermost: MattermostPresenceSchema.optional(),
+  slack: SlackPresenceSchema.optional(),
 });
 
 export type Presence = z.infer<typeof PresenceSchema>;

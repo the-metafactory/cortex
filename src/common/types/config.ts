@@ -208,6 +208,38 @@ export const MattermostInstanceSchema = z.object({
 
 export type MattermostInstance = z.infer<typeof MattermostInstanceSchema>;
 
+/**
+ * Slack instance (legacy BotConfig shape). Mirror of
+ * `SlackPresenceSchema` in `./cortex-config.ts` — `flattenSlackPresences`
+ * in `src/common/config/loader.ts` threads cortex.yaml's
+ * `agents[].presence.slack` blocks through to entries of this shape so
+ * the boot path in `src/cortex.ts` can iterate `config.slack` uniformly
+ * with `config.discord` and `config.mattermost`.
+ *
+ * See `SlackPresenceSchema` for the canonical field docstrings.
+ */
+export const SlackInstanceSchema = z.object({
+  /** Unique instance ID. Auto-generated if not provided. */
+  instanceId: z.string().optional(),
+  /** Whether this instance is active. Default: true. */
+  enabled: z.boolean().default(true),
+  botToken: z.string().regex(/^xoxb-/),
+  appToken: z.string().regex(/^xapp-/),
+  workspaceId: z.coerce.string().regex(/^T[A-Z0-9]+$/),
+  channels: z.array(z.object({
+    id: z.string().regex(/^[CG][A-Z0-9]+$/),
+    name: z.string().min(1),
+  })).default([]),
+  allowedUserIds: z.array(z.string()).default([]),
+  trustedBotIds: z.array(z.coerce.string()).default([]),
+  roles: z.array(RoleSchema).default([]),
+  defaultRole: z.string().default("allow-all"),
+  surfaceSubjects: z.array(z.string().min(1)).default([]),
+  surfaceFallbackChannelId: z.coerce.string().optional(),
+});
+
+export type SlackInstance = z.infer<typeof SlackInstanceSchema>;
+
 // =============================================================================
 // Preprocessing: upgrade legacy flat format → instance arrays
 // =============================================================================
@@ -295,11 +327,13 @@ export const NetworkFileSchema = z.object({
   cloud: NetworkCloudSchema.optional(),
   discord: z.preprocess(normalizeToArray, z.array(DiscordInstanceSchema)).default([]),
   mattermost: z.preprocess(normalizeToArray, z.array(MattermostInstanceSchema)).default([]),
+  slack: z.preprocess(normalizeToArray, z.array(SlackInstanceSchema)).default([]),
   github: NetworkGithubSchema,
   claude: NetworkClaudeSchema.optional(),
   operator: z.object({
     operatorDiscordId: z.string().optional(),
     operatorMattermostId: z.string().optional(),
+    operatorSlackId: z.string().optional(),
   }).optional(),
 });
 
@@ -321,6 +355,8 @@ export const BotConfigSchema = z.object({
     operatorDiscordId: z.string().optional(),
     /** Operator's Mattermost user ID — receives DM notifications when others talk to the bot */
     operatorMattermostId: z.string().optional(),
+    /** Operator's Slack user ID (`U...`) — receives DM notifications when others talk to the bot */
+    operatorSlackId: z.string().optional(),
     /** Operator data residency stamped into `sovereignty.data_residency` on emitted
      *  envelopes (system.*, dispatch.task.*, cc.*). ISO-3166 country code; defaults
      *  to "NZ" when omitted. Operators in AU/EU/US/etc. set this to match their
@@ -338,6 +374,16 @@ export const BotConfigSchema = z.object({
   mattermost: z.preprocess(
     normalizeToArray,
     z.array(MattermostInstanceSchema).default([]),
+  ),
+
+  /**
+   * Slack instances — synthesized from `agents[].presence.slack` by the
+   * cortex.yaml loader. Empty by default so legacy bot.yaml deployments
+   * (which never declared Slack) keep parsing unchanged.
+   */
+  slack: z.preprocess(
+    normalizeToArray,
+    z.array(SlackInstanceSchema).default([]),
   ),
 
   claude: z.object({
@@ -624,6 +670,10 @@ export function scopeConfigToMattermostInstance(config: BotConfig, instance: Mat
   return { ...config, mattermost: [instance] };
 }
 
+export function scopeConfigToSlackInstance(config: BotConfig, instance: SlackInstance): BotConfig {
+  return { ...config, slack: [instance] };
+}
+
 /**
  * Get the first Discord instance config (for backward-compat code that
  * expects `config.discord.*` as a flat object). Returns undefined if no instances.
@@ -634,6 +684,10 @@ export function getFirstDiscordInstance(config: BotConfig): DiscordInstance | un
 
 export function getFirstMattermostInstance(config: BotConfig): MattermostInstance | undefined {
   return config.mattermost[0];
+}
+
+export function getFirstSlackInstance(config: BotConfig): SlackInstance | undefined {
+  return config.slack[0];
 }
 
 /**

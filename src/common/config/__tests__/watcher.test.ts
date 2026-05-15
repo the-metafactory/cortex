@@ -16,6 +16,7 @@ const TEST_CONFIG: BotConfig = {
   },
   discord: [],
   mattermost: [],
+  slack: [],
   claude: {
     timeoutMs: 120_000,
     asyncTimeoutMs: 900_000,

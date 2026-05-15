@@ -18,6 +18,7 @@ import {
   type DiscordPresence,
   type MattermostPresence,
   type Policy,
+  type SlackPresence,
   type StackConfig,
 } from "../types/cortex-config";
 
@@ -290,6 +291,9 @@ function loadCortexShape(
     ...(cortexConfig.operator.mattermostId !== undefined && {
       operatorMattermostId: cortexConfig.operator.mattermostId,
     }),
+    ...(cortexConfig.operator.slackId !== undefined && {
+      operatorSlackId: cortexConfig.operator.slackId,
+    }),
     dataResidency: cortexConfig.operator.dataResidency,
     personaFile: firstAgent.persona,
   };
@@ -299,6 +303,7 @@ function loadCortexShape(
   // convention so `system.adapter.*` envelope ids stay stable.
   const discord = flattenDiscordPresences(cortexConfig.agents);
   const mattermost = flattenMattermostPresences(cortexConfig.agents);
+  const slack = flattenSlackPresences(cortexConfig.agents);
 
   // Build the merged BotConfig-shaped object. Networks behave the same
   // way they do in the legacy path; renderers + nats + the *Config blocks
@@ -307,6 +312,7 @@ function loadCortexShape(
     agent: synthesizedAgent,
     discord,
     mattermost,
+    slack,
     networks,
     networksDir: cortexConfig.networksDir,
     renderers: cortexConfig.renderers,
@@ -360,6 +366,22 @@ function flattenMattermostPresences(agents: readonly Agent[]) {
     const p = a.presence.mattermost;
     if (!p) continue;
     out.push({ ...p, instanceId: `${a.id}-mattermost` });
+  }
+  return out;
+}
+
+/**
+ * Convert each agent's optional Slack presence into a flat BotConfig
+ * slack entry. Mirror of `flattenDiscordPresences` /
+ * `flattenMattermostPresences` — empty when no agent declares a
+ * `presence.slack` block.
+ */
+function flattenSlackPresences(agents: readonly Agent[]) {
+  const out: (SlackPresence & { instanceId: string })[] = [];
+  for (const a of agents) {
+    const p = a.presence.slack;
+    if (!p) continue;
+    out.push({ ...p, instanceId: `${a.id}-slack` });
   }
   return out;
 }

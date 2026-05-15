@@ -64,6 +64,7 @@ import { type Platform, type TrustResolver } from "./trust-resolver";
 const KNOWN_PLATFORMS = {
   discord: true,
   mattermost: true,
+  slack: true,
 } as const satisfies Record<Platform, true>;
 
 const KNOWN_PLATFORM_LIST: readonly Platform[] = Object.keys(KNOWN_PLATFORMS) as Platform[];

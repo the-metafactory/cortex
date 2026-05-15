@@ -26,6 +26,8 @@
     "@nats-io/jwt": "^0.0.11",
     "@octokit/webhooks": "^14.2.0",
     "@octokit/webhooks-methods": "^6.0.0",
+    "@slack/socket-mode": "^2.0.7",
+    "@slack/web-api": "^7.16.0",
     "@the-metafactory/myelin": "github:the-metafactory/myelin#5a0e2619a4af5c91c78f552b88fafd3ad40a227f",
     "@xyflow/react": "^12.10.2",
     "ajv": "^8.20.0",
