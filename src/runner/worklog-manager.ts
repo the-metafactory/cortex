@@ -262,11 +262,15 @@ export class WorklogManager {
    *
    * @param adapterId — defaults to `worklog-manager`. Configurable so a
    *   future multi-channel worklog (one channel per repo) can disambiguate.
-   * @param subjects — defaults to `local.{org}.dispatch.task.>`. Caller
-   *   passes the org segment because worklog-manager doesn't know it (the
+   * @param org — operator id segment. Worklog-manager doesn't store it (the
    *   manager is constructed with a Discord client + channel ID, not a
    *   bot config). Passing it explicitly keeps the dependency direction
    *   clean (no config import here).
+   * @param stack — optional operator stack segment (IAW Phase A.5,
+   *   cortex#268). When supplied, the manager subscribes on the 6-segment
+   *   grammar `local.{org}.{stack}.dispatch.task.>` matching sage's
+   *   emit-side post-A.5. When omitted, falls through to the legacy
+   *   5-segment form — bit-identical to pre-cortex#268.
    *
    * KNOWN LIMITATION (Echo round-1 s4): the bus path keys threads by
    * `task_id` and shares the `sessionThreads` map with the direct-call
@@ -280,8 +284,21 @@ export class WorklogManager {
    * summary (graceful degradation, not data loss). Callers that need a
    * different window pass `maxAgeMs` explicitly.
    */
-  surfaceConfig(opts: { org: string; adapterId?: string }): SurfaceAdapter {
-    const subjects = [`local.${opts.org}.dispatch.task.>`];
+  surfaceConfig(opts: {
+    org: string;
+    adapterId?: string;
+    stack?: string;
+  }): SurfaceAdapter {
+    // cortex#268 — stack-aware subscription. When the caller supplies
+    // `stack` (sourced from `deriveStackId(loadedConfig).stack` at boot),
+    // emit the 6-segment subject grammar. Otherwise, fall through to the
+    // legacy 5-segment form for backward compat with deployments that
+    // haven't wired stack identity.
+    const subject =
+      opts.stack === undefined
+        ? `local.${opts.org}.dispatch.task.>`
+        : `local.${opts.org}.${opts.stack}.dispatch.task.>`;
+    const subjects = [subject];
     return {
       id: opts.adapterId ?? "worklog-manager",
       subjects,

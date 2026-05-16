@@ -149,12 +149,34 @@ function makeAborted(): Envelope {
 // ---------------------------------------------------------------------------
 
 describe("WorklogManager.surfaceConfig — shape", () => {
-  test("default subject pattern uses org placeholder substitution", () => {
+  test("5-segment subject pattern when stack is omitted (legacy compat)", () => {
     const { client } = makeFakeClient("worklog-channel-id");
     const wlm = new WorklogManager(client, "worklog-channel-id");
     const cfg = wlm.surfaceConfig({ org: "metafactory" });
     expect(cfg.subjects).toEqual(["local.metafactory.dispatch.task.>"]);
     expect(cfg.id).toBe("worklog-manager");
+  });
+
+  // cortex#268 — stack-aware subscription. When boot path supplies
+  // `stack` (from `deriveStackId(loadedConfig).stack`), the manager
+  // subscribes on 6-segment grammar matching sage's emit-side. Multi-
+  // stack operators (`andreas/research`) get correct work isolation.
+  test("6-segment subject pattern when stack is supplied (cortex#268)", () => {
+    const { client } = makeFakeClient("worklog-channel-id");
+    const wlm = new WorklogManager(client, "worklog-channel-id");
+    const cfg = wlm.surfaceConfig({ org: "metafactory", stack: "default" });
+    expect(cfg.subjects).toEqual([
+      "local.metafactory.default.dispatch.task.>",
+    ]);
+  });
+
+  test("subscribe pattern honours multi-stack operator config", () => {
+    const { client } = makeFakeClient("worklog-channel-id");
+    const wlm = new WorklogManager(client, "worklog-channel-id");
+    const cfg = wlm.surfaceConfig({ org: "andreas", stack: "research" });
+    expect(cfg.subjects).toEqual([
+      "local.andreas.research.dispatch.task.>",
+    ]);
   });
 
   test("custom adapter id honored", () => {
