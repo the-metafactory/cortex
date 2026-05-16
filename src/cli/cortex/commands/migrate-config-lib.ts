@@ -22,8 +22,18 @@ import {
   DiscordPresenceSchema,
   type MattermostPresence,
   MattermostPresenceSchema,
+  type PolicyPrincipal,
+  type PolicyRole,
   RendererSchema,
 } from "../../../common/types/cortex-config";
+import {
+  buildPolicy,
+  policyPreflight,
+  type LegacyDMConfig,
+  type PolicyAdapterView,
+  type PolicyBuilderInput,
+  type PolicyPreflightGap,
+} from "./migrate-config-policy";
 
 // =============================================================================
 // Legacy input shape — permissive
@@ -104,7 +114,49 @@ export interface LegacyTrustedAgentBot {
 }
 
 export interface LegacyBotYaml {
-  agent: LegacyAgent;
+  /** grove-v2 singular `agent:` block. Required for grove-v2-shape input. */
+  agent?: LegacyAgent;
+  /**
+   * Cortex-shape `operator:` block. Used when the input is already a
+   * cortex.yaml (e.g. Andreas's `~/.config/cortex/cortex.yaml`) that has
+   * agents under `agents[]` instead of the singular legacy `agent:`.
+   */
+  operator?: {
+    id?: string;
+    displayName?: string;
+    discordId?: string;
+    mattermostId?: string;
+    slackId?: string;
+    dataResidency?: string;
+  };
+  /**
+   * Cortex-shape `stack:` block — gives the policy builder the
+   * `home_stack` value for synthesised principals. Defaults to
+   * `<operator_id>/default` per `deriveStackId`.
+   */
+  stack?: { id?: string; displayName?: string };
+  /**
+   * Cortex-shape `agents[]` array. When set, the migrator reads
+   * presence-side role declarations out of `agents[].presence.<platform>.roles[]`
+   * for policy synthesis (cortex#295). The shape mirrors the cortex.yaml
+   * `agents[]` schema; we accept it loosely here because input may carry
+   * malformed entries that the migrator should warn about rather than
+   * reject.
+   */
+  agents?: {
+    id?: string;
+    displayName?: string;
+    persona?: string;
+    roles?: unknown[];
+    trust?: string[];
+    presence?: {
+      discord?: Record<string, unknown>;
+      mattermost?: Record<string, unknown>;
+      slack?: Record<string, unknown>;
+    };
+  }[];
+  /** Cortex-shape pre-existing `policy:` block — preserved + normalised. */
+  policy?: { principals?: PolicyPrincipal[]; roles?: PolicyRole[] };
   discord?: LegacyDiscordInstance[] | LegacyDiscordInstance;
   mattermost?: LegacyMattermostInstance[] | LegacyMattermostInstance;
   trustedAgentBots?: LegacyTrustedAgentBot[];
@@ -119,6 +171,7 @@ export interface LegacyBotYaml {
   networks?: unknown[];
   nats?: unknown;
   renderers?: unknown[];
+  capabilities?: unknown[];
   [key: string]: unknown;
 }
 
@@ -150,6 +203,19 @@ export interface ConversionResult {
    * one new agent presence (plan §4 7.2e validation criterion #1).
    */
   mappings: InstanceMapping[];
+  /**
+   * Adapter views that drove the policy synthesis. Retained on the result
+   * so the CLI's `--check` mode can run `policyPreflight` without
+   * re-walking the input. Empty when the input had no `roles[]` blocks.
+   */
+  adapterViews: PolicyAdapterView[];
+  /**
+   * Gaps detected by `policyPreflight` against the synthesised policy
+   * block. Empty (length 0) means parallel-mode activation is safe.
+   * Populated when at least one legacy user-id or defaultRole reference
+   * doesn't resolve through the new policy block — see cortex#296.
+   */
+  preflightGaps: PolicyPreflightGap[];
 }
 
 /**
@@ -164,7 +230,24 @@ export interface ConvertOptions {
    * fixtures via in-memory strings rather than file paths).
    */
   configDir?: string;
+  /**
+   * Optional principal-label overrides — `{ "<platform>:<id>" → "principal-id" }`.
+   * Loaded by the CLI from `--labels labels.yaml` and forwarded verbatim
+   * to the policy builder. Lets operators replace synthesised principal
+   * ids (`user-d567890`) with friendlier names (`mike`) without losing
+   * idempotency (the same label map produces the same output on every run).
+   */
+  labels?: Map<string, string>;
 }
+
+// Re-export policy types so CLI callers and external consumers can hold
+// onto them without importing the policy submodule directly. Mirrors the
+// pattern existing convertBotYaml callers use for ConversionWarning.
+export type {
+  PolicyAdapterView,
+  PolicyPreflightGap,
+} from "./migrate-config-policy";
+export { policyPreflight, formatPreflightReport } from "./migrate-config-policy";
 
 // =============================================================================
 // Conversion
@@ -204,6 +287,11 @@ function buildOperator(
   legacy: LegacyBotYaml,
   warnings: ConversionWarning[],
 ): CortexConfig["operator"] {
+  // Caller (convertBotYaml) guards `legacy.agent` is set on the grove-v2
+  // path before reaching here. Re-assert for the type narrowing.
+  if (!legacy.agent) {
+    throw new Error("internal: buildOperator called without legacy.agent");
+  }
   const a = legacy.agent;
 
   const rawOperatorId = a.operatorId ?? a.name;
@@ -499,20 +587,25 @@ function buildAgents(
   mappings: InstanceMapping[],
   configDir: string | undefined,
 ): { agents: CortexConfig["agents"]; baseId: string } {
+  // Caller (convertBotYaml) guards `legacy.agent` on the grove-v2 path.
+  if (!legacy.agent) {
+    throw new Error("internal: buildAgents called without legacy.agent");
+  }
+  const legacyAgent = legacy.agent;
   const discordInstances = toArray(legacy.discord);
   const mattermostInstances = toArray(legacy.mattermost);
-  const baseId = deriveAgentId(legacy.agent.name);
+  const baseId = deriveAgentId(legacyAgent.name);
 
   if (!AGENT_ID_PATTERN.test(baseId)) {
     throw new Error(
-      `agent.name "${legacy.agent.name}" cannot be derived to a valid agent id (^[a-z0-9-]+$)`,
+      `agent.name "${legacyAgent.name}" cannot be derived to a valid agent id (^[a-z0-9-]+$)`,
     );
   }
 
   const trust = buildTrustList(legacy.trustedAgentBots ?? [], warnings);
 
-  const persona = resolvePersona(legacy.agent.personaFile, baseId, configDir, warnings);
-  const displayName = legacy.agent.displayName || legacy.agent.name;
+  const persona = resolvePersona(legacyAgent.personaFile, baseId, configDir, warnings);
+  const displayName = legacyAgent.displayName || legacyAgent.name;
 
   const variantCount = Math.max(discordInstances.length, mattermostInstances.length, 1);
 
@@ -690,22 +783,42 @@ export function convertBotYaml(
   if (!legacy || typeof legacy !== "object") {
     throw new Error("input is not an object");
   }
-  if (!legacy.agent || typeof legacy.agent !== "object") {
-    throw new Error("bot.yaml missing required `agent:` block");
+  // cortex#295 — accept BOTH legacy bot.yaml (singular `agent:`) and
+  // cortex.yaml (plural `agents[]` + `operator:` + `stack:`) shapes.
+  // Legacy bot.yaml requires `agent.name` + `agent.displayName`.
+  // cortex-shape requires `agents[]` + `operator.id` and bypasses
+  // `buildAgents`/`buildOperator`.
+  const isCortexShape =
+    !legacy.agent &&
+    Array.isArray(legacy.agents) &&
+    legacy.agents.length > 0 &&
+    legacy.operator !== undefined;
+  if (!isCortexShape) {
+    if (!legacy.agent || typeof legacy.agent !== "object") {
+      throw new Error("bot.yaml missing required `agent:` block");
+    }
+    /* eslint-enable @typescript-eslint/no-unnecessary-condition */
+    if (!legacy.agent.name || typeof legacy.agent.name !== "string") {
+      throw new Error("bot.yaml missing required `agent.name`");
+    }
+    if (!legacy.agent.displayName || typeof legacy.agent.displayName !== "string") {
+      throw new Error("bot.yaml missing required `agent.displayName`");
+    }
   }
   /* eslint-enable @typescript-eslint/no-unnecessary-condition */
-  if (!legacy.agent.name || typeof legacy.agent.name !== "string") {
-    throw new Error("bot.yaml missing required `agent.name`");
-  }
-  if (!legacy.agent.displayName || typeof legacy.agent.displayName !== "string") {
-    throw new Error("bot.yaml missing required `agent.displayName`");
-  }
 
   const warnings: ConversionWarning[] = [];
   const mappings: InstanceMapping[] = [];
 
-  const operator = buildOperator(legacy, warnings);
-  const { agents } = buildAgents(legacy, warnings, mappings, opts.configDir);
+  let operator: CortexConfig["operator"];
+  let agents: CortexConfig["agents"];
+  if (isCortexShape) {
+    operator = buildOperatorFromCortexShape(legacy, warnings);
+    agents = buildAgentsFromCortexShape(legacy, warnings, mappings);
+  } else {
+    operator = buildOperator(legacy, warnings);
+    agents = buildAgents(legacy, warnings, mappings, opts.configDir).agents;
+  }
   detectSharedAgentChannelId(agents, warnings);
   const renderers = buildRenderers(legacy, warnings);
 
@@ -722,6 +835,9 @@ export function convertBotYaml(
     renderers,
   };
 
+  if (legacy.stack !== undefined) cortex.stack = legacy.stack;
+  if (legacy.capabilities !== undefined) cortex.capabilities = legacy.capabilities;
+
   if (legacy.claude !== undefined) cortex.claude = legacy.claude;
   else cortex.claude = {};
 
@@ -733,8 +849,283 @@ export function convertBotYaml(
   if (legacy.networks !== undefined) cortex.networks = legacy.networks;
   if (legacy.nats !== undefined) cortex.nats = convertNats(legacy.nats, warnings);
 
+  // cortex#295 — synthesise policy block from legacy roles[] declarations.
+  // Sources:
+  //   - bot.yaml input → `legacy.discord[i].roles[]` + `legacy.mattermost[i].roles[]`
+  //   - cortex.yaml input → `legacy.agents[].presence.<platform>.roles[]`
+  // Both collapse into PolicyAdapterView[] which the builder consumes.
+  const adapterViews = collectAdapterViews(legacy, agents);
+  const homeStack = resolveHomeStack(legacy, operator.id);
+  const declaredAgentIds = new Set(agents.map((a) => a.id));
+  const operatorPlatformIds: PolicyBuilderInput["operatorPlatformIds"] = {};
+  if (operator.discordId) operatorPlatformIds.discord = operator.discordId;
+  if (operator.mattermostId) operatorPlatformIds.mattermost = operator.mattermostId;
+  if (operator.slackId) operatorPlatformIds.slack = operator.slackId;
+
+  const existingPolicy =
+    legacy.policy && (legacy.policy.principals !== undefined || legacy.policy.roles !== undefined)
+      ? legacy.policy
+      : undefined;
+
+  const policyBuild = buildPolicy({
+    operatorId: operator.id,
+    homeStack,
+    declaredAgentIds,
+    operatorPlatformIds,
+    views: adapterViews,
+    existingPolicy: existingPolicy
+      ? { principals: existingPolicy.principals, roles: existingPolicy.roles }
+      : undefined,
+    labels: opts.labels,
+  });
+  warnings.push(...policyBuild.warnings);
+
+  // Only emit policy block when there's something to say (avoid silent
+  // empty-block churn on grove-v2 inputs that don't declare any roles).
+  if (
+    policyBuild.policy.principals.length > 0 ||
+    policyBuild.policy.roles.length > 0 ||
+    existingPolicy !== undefined
+  ) {
+    cortex.policy = policyBuild.policy;
+  }
+
   const parsed = CortexConfigSchema.parse(cortex);
-  return { cortex: parsed, warnings, mappings };
+
+  // Compute parallel-mode pre-flight gaps against the FINAL policy block.
+  const preflightGaps = policyPreflight({
+    views: adapterViews,
+    policy: parsed.policy ?? { principals: [], roles: [] },
+  });
+
+  return { cortex: parsed, warnings, mappings, adapterViews, preflightGaps };
+}
+
+// =============================================================================
+// cortex#295 — view collection + cortex-shape input helpers
+// =============================================================================
+
+/**
+ * Walk the input legacy or cortex-shape config and project every adapter
+ * presence carrying a `roles[]` block onto a single uniform list. The
+ * policy builder consumes this directly.
+ *
+ * For grove-v2 inputs the roles live under `legacy.discord[i].roles[]`
+ * and `legacy.mattermost[i].roles[]`; the `agents[]` array we synthesised
+ * carries the cortex-shape agent ids. We zip `i` against `agents[i].id`
+ * so the resulting view's `agentId` is the same cortex-shape id the
+ * principal will reference.
+ *
+ * For cortex-shape inputs the roles live under
+ * `legacy.agents[i].presence.<platform>.roles[]` directly.
+ */
+function collectAdapterViews(
+  legacy: LegacyBotYaml,
+  agents: CortexConfig["agents"],
+): PolicyAdapterView[] {
+  const views: PolicyAdapterView[] = [];
+  // Path 1: cortex-shape input — read from the SCHEMA-PARSED `agents[]`
+  // (not the raw `legacy.agents[]`), so the per-presence DM defaults
+  // applied by `emptyDefault(DMConfigSchema)` are visible. Reading the
+  // raw input loses the operatorRole+defaultRole defaults that Zod
+  // injects, which breaks idempotency: round 1 sees no DM block, round
+  // 2 sees the schema-default DM block parsed from round 1's output,
+  // and the policy block drifts between runs.
+  const cortexShape = Array.isArray(legacy.agents) && legacy.agents.length > 0;
+  // Both paths read off the SCHEMA-PARSED `agents[]` (not the raw legacy
+  // input), so the per-presence DM defaults applied by
+  // `emptyDefault(DMConfigSchema)` are visible. Reading the raw input
+  // loses the operatorRole+defaultRole defaults Zod injects and breaks
+  // idempotency: round 1 sees no DM block, round 2 sees the schema-
+  // default DM block parsed from round 1's output, and the policy block
+  // drifts between runs.
+  //
+  // The two paths are otherwise identical — `agents[]` is synthesised
+  // from grove-v2 `discord[]/mattermost[]` in the legacy path and read
+  // directly from cortex-shape `agents[]` in the new path.
+  void cortexShape; // explicit no-op — kept for grep/intent traceability
+  for (const parsed of agents) {
+    if (parsed.presence.discord) {
+      const p = parsed.presence.discord;
+      const dm = p.dm as LegacyDMConfig | undefined;
+      // `p.defaultRole` always defaults to "allow-all" via the schema,
+      // so it's never `undefined`. Surface it verbatim.
+      const defaultRole = p.defaultRole;
+      if (p.roles.length > 0 || dm !== undefined) {
+        views.push({
+          agentId: parsed.id,
+          platform: "discord",
+          roles: p.roles,
+          defaultRole,
+          dm,
+        });
+      }
+    }
+    if (parsed.presence.mattermost) {
+      const p = parsed.presence.mattermost;
+      const defaultRole = p.defaultRole;
+      if (p.roles.length > 0) {
+        views.push({
+          agentId: parsed.id,
+          platform: "mattermost",
+          roles: p.roles,
+          defaultRole,
+          dm: undefined,
+        });
+      }
+    }
+    if (parsed.presence.slack) {
+      const p = parsed.presence.slack;
+      const defaultRole = p.defaultRole;
+      if (p.roles.length > 0) {
+        views.push({
+          agentId: parsed.id,
+          platform: "slack",
+          roles: p.roles,
+          defaultRole,
+          dm: undefined,
+        });
+      }
+    }
+  }
+  return views;
+}
+
+/**
+ * Resolve the `home_stack` value for synthesised principals. Cortex-shape
+ * input carries it under `stack.id`; legacy bot.yaml has no equivalent
+ * so we default to `<operator_id>/default` (matches `deriveStackId`).
+ */
+function resolveHomeStack(legacy: LegacyBotYaml, operatorId: string): string {
+  const stackId = legacy.stack?.id;
+  if (typeof stackId === "string" && stackId.length > 0) return stackId;
+  return `${operatorId}/default`;
+}
+
+/**
+ * Lift the cortex-shape `operator:` block straight through, with the
+ * same normalisations `buildOperator` applies (lowercase id, ISO-3166
+ * residency).
+ */
+function buildOperatorFromCortexShape(
+  legacy: LegacyBotYaml,
+  warnings: ConversionWarning[],
+): CortexConfig["operator"] {
+  const op = legacy.operator ?? {};
+  if (typeof op.id !== "string" || op.id.length === 0) {
+    throw new Error("cortex.yaml-shape input requires `operator.id`");
+  }
+  const operatorId = deriveAgentId(op.id);
+  if (operatorId !== op.id) {
+    warnings.push({
+      field: "operator.id",
+      message: `operator.id "${op.id}" normalized to "${operatorId}" (cortex requires lowercase alphanumeric + hyphen)`,
+    });
+  }
+  let dataResidency = op.dataResidency;
+  if (dataResidency === undefined) dataResidency = "NZ";
+  else if (!/^[A-Z]{2}$/.test(dataResidency)) {
+    const fixed = dataResidency.toUpperCase();
+    if (/^[A-Z]{2}$/.test(fixed)) {
+      warnings.push({
+        field: "operator.dataResidency",
+        message: `dataResidency "${dataResidency}" upcased to "${fixed}"`,
+      });
+      dataResidency = fixed;
+    } else {
+      warnings.push({
+        field: "operator.dataResidency",
+        message: `dataResidency "${dataResidency}" not a 2-letter ISO-3166 code; defaulting to "NZ"`,
+      });
+      dataResidency = "NZ";
+    }
+  }
+  const operator: CortexConfig["operator"] = { id: operatorId, dataResidency };
+  if (op.displayName) operator.displayName = op.displayName;
+  if (op.discordId) operator.discordId = op.discordId;
+  if (op.mattermostId) operator.mattermostId = op.mattermostId;
+  if (op.slackId) operator.slackId = op.slackId;
+  return operator;
+}
+
+/**
+ * Lift cortex-shape `agents[]` to the validated CortexConfig.agents[]. The
+ * presence blocks pass through the per-platform Zod schemas so each
+ * agent's id and presence land normalised. Mappings get a synthetic entry
+ * per (agent, platform) so `--check` output reflects the cortex-shape
+ * path symmetrically with the legacy path.
+ */
+function buildAgentsFromCortexShape(
+  legacy: LegacyBotYaml,
+  warnings: ConversionWarning[],
+  mappings: InstanceMapping[],
+): CortexConfig["agents"] {
+  const out: CortexConfig["agents"] = [];
+  const sourceAgents = legacy.agents ?? [];
+  for (let i = 0; i < sourceAgents.length; i++) {
+    const a = sourceAgents[i];
+    if (!a) continue;
+    const rawId = a.id;
+    if (typeof rawId !== "string" || rawId.length === 0) {
+      throw new Error(`agents[${i}].id is required`);
+    }
+    const id = deriveAgentId(rawId);
+    if (id !== rawId) {
+      warnings.push({
+        field: `agents[${i}].id`,
+        message: `agent id "${rawId}" normalized to "${id}"`,
+      });
+    }
+    if (!AGENT_ID_PATTERN.test(id)) {
+      throw new Error(`agents[${i}].id "${rawId}" cannot be derived to a valid agent id (^[a-z0-9-]+$)`);
+    }
+    const displayName = a.displayName ?? rawId;
+    const persona = typeof a.persona === "string" && a.persona.length > 0
+      ? a.persona
+      : `./personas/${id}.md`;
+    const trust = Array.isArray(a.trust) ? a.trust.filter((t): t is string => typeof t === "string") : [];
+    const presence: CortexConfig["agents"][number]["presence"] = {};
+    if (a.presence?.discord) {
+      presence.discord = DiscordPresenceSchema.parse(a.presence.discord);
+      mappings.push({
+        legacyKind: "discord",
+        legacyIndex: i,
+        legacyInstanceId: undefined,
+        newAgentId: id,
+        newPresence: "discord",
+      });
+    }
+    if (a.presence?.mattermost) {
+      presence.mattermost = MattermostPresenceSchema.parse(a.presence.mattermost);
+      mappings.push({
+        legacyKind: "mattermost",
+        legacyIndex: i,
+        legacyInstanceId: undefined,
+        newAgentId: id,
+        newPresence: "mattermost",
+      });
+    }
+    // Note: slack pass-through goes through PresenceSchema validation
+    // when CortexConfigSchema.parse runs at the end of convertBotYaml.
+    // We don't gate it here.
+    const agentOut: CortexConfig["agents"][number] = {
+      id,
+      displayName,
+      persona,
+      roles: Array.isArray(a.roles)
+        ? a.roles.filter((r): r is string => typeof r === "string")
+        : [],
+      trust,
+      presence,
+    };
+    if (a.presence?.slack) {
+      // Pass-through: let the top-level CortexConfigSchema.parse validate
+      // it. Cast keeps the assignment shape.
+      (agentOut.presence as Record<string, unknown>).slack = a.presence.slack;
+    }
+    out.push(agentOut);
+  }
+  return out;
 }
 
 /**
@@ -851,6 +1242,28 @@ export function formatCheckReport(result: ConversionResult): string {
     }
     lines.push("");
   }
+  const policy = result.cortex.policy;
+  if (policy && (policy.principals.length > 0 || policy.roles.length > 0)) {
+    lines.push("");
+    lines.push(`policy.principals: ${policy.principals.length}`);
+    for (const p of policy.principals) {
+      const platforms = Object.entries(p.platform_ids)
+        .map(([plat, ids]) => `${plat}=${ids.length}`)
+        .join(", ");
+      const dm = p.session_config?.dm ? " +dm" : "";
+      lines.push(`  - ${p.id} (home_operator=${p.home_operator}, home_stack=${p.home_stack}) roles=[${p.role.join(", ")}] platforms=[${platforms}]${dm}`);
+    }
+    lines.push(`policy.roles: ${policy.roles.length}`);
+    for (const r of policy.roles) {
+      lines.push(`  - ${r.id} (${r.capabilities.length} caps)`);
+    }
+    lines.push("");
+    lines.push(`policy preflight: ${result.preflightGaps.length === 0 ? "OK" : `${result.preflightGaps.length} gap(s)`}`);
+    for (const g of result.preflightGaps) {
+      lines.push(`  [${g.kind}] ${g.hint}`);
+    }
+  }
+  lines.push("");
   if (result.warnings.length > 0) {
     lines.push(`warnings (${result.warnings.length}):`);
     for (const w of result.warnings) {

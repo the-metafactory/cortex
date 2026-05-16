@@ -33,6 +33,7 @@ import {
 interface ParsedArgs {
   input: string | undefined;
   out: string | undefined;
+  labels: string | undefined;
   check: boolean;
   strict: boolean;
   help: boolean;
@@ -46,6 +47,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   const args: ParsedArgs = {
     input: undefined,
     out: undefined,
+    labels: undefined,
     check: false,
     strict: false,
     help: false,
@@ -67,6 +69,15 @@ export function parseArgs(argv: string[]): ParsedArgs {
       i++;
     } else if (a.startsWith("--out=")) {
       args.out = a.slice("--out=".length);
+    } else if (a === "--labels") {
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith("--")) {
+        throw new Error("--labels requires a path argument");
+      }
+      args.labels = next;
+      i++;
+    } else if (a.startsWith("--labels=")) {
+      args.labels = a.slice("--labels=".length);
     } else if (a.startsWith("--")) {
       throw new Error(`unknown flag: ${a}`);
     } else if (args.input === undefined) {
@@ -79,12 +90,13 @@ export function parseArgs(argv: string[]): ParsedArgs {
 }
 
 function printHelp(): void {
-  console.log("cortex migrate-config — convert grove-v2 bot.yaml to cortex.yaml\n");
+  console.log("cortex migrate-config — convert grove-v2 bot.yaml or cortex.yaml to cortex.yaml + policy block\n");
   console.log("Usage:");
   console.log("  bun src/cli/cortex/commands/migrate-config.ts <input.yaml> [options]\n");
   console.log("Options:");
   console.log("  --out FILE     Write to FILE (default: stdout)");
-  console.log("  --check        Validate only — print mapping table + warnings; don't emit yaml");
+  console.log("  --labels FILE  Principal-id label overrides ({\"<platform>:<id>\": \"<principal-id>\"})");
+  console.log("  --check        Validate + emit pre-flight gap report; exits 1 if gaps found");
   console.log("  --strict       Fail on warnings (default: warnings → stderr, exit 0)");
   console.log("  -h, --help     Show this help");
 }
@@ -133,33 +145,79 @@ export async function runMigrateConfig(argv: string[]): Promise<number> {
     return 1;
   }
 
+  let labels: Map<string, string> | undefined;
+  if (args.labels) {
+    const labelsPath = resolve(args.labels);
+    try {
+      const labelsRaw = readFileSync(labelsPath, "utf-8");
+      const parsed = YAML.parse(labelsRaw) as unknown;
+      if (!parsed || typeof parsed !== "object") {
+        throw new Error("labels file must be a YAML mapping");
+      }
+      labels = new Map();
+      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof v !== "string") {
+          throw new Error(`labels: value for "${k}" must be a string`);
+        }
+        labels.set(k, v);
+      }
+    } catch (err) {
+      console.error(`Error: cannot read labels file ${labelsPath}: ${err instanceof Error ? err.message : String(err)}`);
+      return 1;
+    }
+  }
+
   let result;
   try {
-    result = convertBotYaml(legacy, { configDir: dirname(inputPath) });
+    result = convertBotYaml(legacy, { configDir: dirname(inputPath), labels });
   } catch (err) {
     console.error(`Error: conversion failed: ${err instanceof Error ? err.message : String(err)}`);
     return 1;
+  }
+
+  // cortex#295 / #296 — `--check` is the operator pre-flight for
+  // parallel-mode activation. The legacy mapping table is still useful
+  // diagnostically (operators eyeballing the conversion), so emit it
+  // alongside the preflight gap report. Exit non-zero ONLY when there
+  // are preflight gaps so CI / a future automated activator can gate on it.
+  if (args.check) {
+    for (const w of result.warnings) {
+      process.stderr.write(`warning [${w.field}] ${w.message}\n`);
+    }
+    console.log(formatCheckReport(result));
+    if (result.preflightGaps.length > 0) {
+      process.stderr.write(
+        `\nmigrate-config --check: ${result.preflightGaps.length} pre-flight gap(s) — parallel-mode activation BLOCKED. ` +
+        `See policy preflight section above for the field-level breakdown.\n`,
+      );
+      return 1;
+    }
+    // `--strict` keeps its pre-existing semantic in --check mode too:
+    // any warnings → exit 2 (legacy migrate-config.test.ts pins this).
+    if (args.strict && result.warnings.length > 0) {
+      return 2;
+    }
+    return 0;
   }
 
   for (const w of result.warnings) {
     console.error(`warning [${w.field}] ${w.message}`);
   }
 
-  if (args.check) {
-    console.log(formatCheckReport(result));
+  const yamlOut = YAML.stringify(result.cortex, { indent: 2, lineWidth: 0 });
+  if (args.out) {
+    const outPath = resolve(args.out);
+    // cortex#88 item 5: a fresh host has no `~/.config/cortex/`, so
+    // writeFileSync ENOENTs unless we ensure the parent exists. mkdir
+    // recursive is idempotent — pre-existing dirs are a no-op.
+    mkdirSync(dirname(outPath), { recursive: true });
+    writeFileSync(outPath, yamlOut, "utf-8");
+    const policySummary = result.cortex.policy
+      ? `, ${result.cortex.policy.principals.length} principal(s), ${result.cortex.policy.roles.length} role(s)`
+      : "";
+    console.error(`wrote ${outPath} (${result.cortex.agents.length} agent(s), ${result.cortex.renderers.length} renderer(s)${policySummary})`);
   } else {
-    const yamlOut = YAML.stringify(result.cortex, { indent: 2, lineWidth: 0 });
-    if (args.out) {
-      const outPath = resolve(args.out);
-      // cortex#88 item 5: a fresh host has no `~/.config/cortex/`, so
-      // writeFileSync ENOENTs unless we ensure the parent exists. mkdir
-      // recursive is idempotent — pre-existing dirs are a no-op.
-      mkdirSync(dirname(outPath), { recursive: true });
-      writeFileSync(outPath, yamlOut, "utf-8");
-      console.error(`wrote ${outPath} (${result.cortex.agents.length} agent(s), ${result.cortex.renderers.length} renderer(s))`);
-    } else {
-      process.stdout.write(yamlOut);
-    }
+    process.stdout.write(yamlOut);
   }
 
   if (args.strict && result.warnings.length > 0) {

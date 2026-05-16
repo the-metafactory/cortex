@@ -1,0 +1,41 @@
+# Minimal pre-cutover cortex.yaml — one operator, one agent (Luna), one
+# Discord adapter, no `policy:` block. Run through `cortex migrate-config`
+# to produce the matching `after-single-adapter.yaml`.
+
+operator:
+  id: andreas
+  displayName: Andreas
+  discordId: "1134325176796987522"
+  dataResidency: NZ
+
+stack:
+  id: andreas/example
+
+agents:
+  - id: luna
+    displayName: Luna
+    persona: ./personas/luna.md
+    roles: []
+    trust: []
+    presence:
+      discord:
+        enabled: true
+        token: REDACTED
+        guildId: "111"
+        agentChannelId: "222"
+        logChannelId: "333"
+        defaultRole: denied
+        roles:
+          - name: operator
+            users: ["1134325176796987522"]
+            features: [chat, async, team]
+          - name: user
+            users: ["285727653603049472"]
+            features: [chat]
+          - name: agent-echo
+            users: ["999000111"]
+            features: [chat, async, team]
+        dm:
+          operatorRole:
+            features: [chat, async, team]
+            allowedDirs: ["~/Developer"]

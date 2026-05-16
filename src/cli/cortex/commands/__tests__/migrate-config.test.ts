@@ -432,6 +432,7 @@ describe("convertBotYaml — structural failures", () => {
   });
 
   test("throws when agent block is missing", () => {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- runtime malformed input
     expect(() => convertBotYaml({ discord: [] } as unknown as LegacyBotYaml)).toThrow(/missing required `agent:`/);
   });
 

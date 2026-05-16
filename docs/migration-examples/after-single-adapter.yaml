@@ -1,0 +1,197 @@
+operator:
+  id: andreas
+  displayName: Andreas
+  discordId: "1134325176796987522"
+  dataResidency: NZ
+stack:
+  id: andreas/example
+capabilities: []
+policy:
+  principals:
+    - id: anonymous-discord-luna
+      home_operator: andreas
+      home_stack: andreas/example
+      role: []
+      trust: []
+      platform_ids: {}
+    - id: echo
+      home_operator: unknown
+      home_stack: unknown/unknown
+      role:
+        - agent-echo
+      trust: []
+      platform_ids:
+        discord:
+          - "999000111"
+    - id: operator
+      home_operator: andreas
+      home_stack: andreas/example
+      role:
+        - operator
+      trust: []
+      platform_ids:
+        discord:
+          - "1134325176796987522"
+      session_config:
+        default:
+          bash_guard: true
+        dm:
+          allowed_dirs:
+            - ~/Developer
+          bash_guard: true
+    - id: user-d049472
+      home_operator: andreas
+      home_stack: andreas/example
+      role:
+        - user
+      trust: []
+      platform_ids:
+        discord:
+          - "285727653603049472"
+  roles:
+    - id: agent-echo
+      capabilities:
+        - dispatch.luna
+        - keyword.async
+        - keyword.chat
+        - keyword.team
+        - tool.agent
+        - tool.bash
+        - tool.bashoutput
+        - tool.edit
+        - tool.glob
+        - tool.grep
+        - tool.killshell
+        - tool.notebookedit
+        - tool.read
+        - tool.skill
+        - tool.todowrite
+        - tool.webfetch
+        - tool.websearch
+        - tool.write
+    - id: operator
+      capabilities:
+        - dispatch.luna
+        - keyword.async
+        - keyword.chat
+        - keyword.team
+        - operator
+        - tool.agent
+        - tool.bash
+        - tool.bashoutput
+        - tool.edit
+        - tool.glob
+        - tool.grep
+        - tool.killshell
+        - tool.notebookedit
+        - tool.read
+        - tool.skill
+        - tool.todowrite
+        - tool.webfetch
+        - tool.websearch
+        - tool.write
+    - id: user
+      capabilities:
+        - dispatch.luna
+        - keyword.chat
+        - tool.agent
+        - tool.bash
+        - tool.bashoutput
+        - tool.edit
+        - tool.glob
+        - tool.grep
+        - tool.killshell
+        - tool.notebookedit
+        - tool.read
+        - tool.skill
+        - tool.todowrite
+        - tool.webfetch
+        - tool.websearch
+        - tool.write
+agents:
+  - id: luna
+    displayName: Luna
+    persona: ./personas/luna.md
+    roles: []
+    trust: []
+    presence:
+      discord:
+        enabled: true
+        token: REDACTED
+        guildId: "111"
+        agentChannelId: "222"
+        logChannelId: "333"
+        contextDepth: 10
+        enableAgentLog: false
+        roles:
+          - name: operator
+            users:
+              - "1134325176796987522"
+            features:
+              - chat
+              - async
+              - team
+          - name: user
+            users:
+              - "285727653603049472"
+            features:
+              - chat
+          - name: agent-echo
+            users:
+              - "999000111"
+            features:
+              - chat
+              - async
+              - team
+        defaultRole: denied
+        dm:
+          operatorRole:
+            features:
+              - chat
+              - async
+              - team
+            disallowedTools: []
+            allowedDirs:
+              - ~/Developer
+            bashGuard: true
+          defaultRole: denied
+          userRoles: []
+        trustedBotIds: []
+        surfaceSubjects: []
+renderers: []
+claude:
+  timeoutMs: 120000
+  asyncTimeoutMs: 900000
+  additionalArgs: []
+  allowedTools: []
+  disallowedTools: []
+  allowedDirs: []
+  readOnlyDirs: []
+attachments:
+  enabled: true
+  maxFileSizeBytes: 10485760
+  maxTotalSizeBytes: 26214400
+  maxAttachmentsPerMessage: 10
+execution:
+  default: local
+  backends: []
+github:
+  webhookSecret: ""
+  repos: []
+  agentDetection:
+    commitTrailers:
+      - "Co-Authored-By: Claude"
+    branchPatterns:
+      - ^feat/(g|f|i)-\d+
+    commentPatterns:
+      - "^Starting:"
+      - "^Completed:"
+  receiver:
+    enabled: false
+    port: 8770
+    hostname: 127.0.0.1
+paths:
+  publishedEventsDir: ~/.claude/events/published
+  logDir: ~/.config/cortex/logs
+networksDir: ./networks
+networks: []
