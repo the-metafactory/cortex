@@ -143,6 +143,16 @@ export class SlackAdapter implements PlatformAdapter {
   private warnedMissingSource = false;
   private readonly runtime: MyelinRuntime | undefined;
   private readonly systemEventSource: SystemEventSource | undefined;
+  /**
+   * cortex#235 r1#7 — two-pass dispatch gate. `start()` stores the
+   * caller's `onMessage` here so `attachInboundDispatch()` (Pass 2)
+   * can later flip the dispatch gate. Pre-attach events queue in
+   * `pendingMessages` and drain in arrival order at attach time —
+   * Slack's equivalent of discord.js's gateway-buffered events.
+   */
+  private onMessageRef: ((msg: InboundMessage) => Promise<void>) | null = null;
+  private inboundDispatchAttached = false;
+  private pendingMessages: InboundMessage[] = [];
 
   constructor(agent: Agent, presence: SlackPresence, infra: SlackAdapterInfra) {
     this.agent = agent;
@@ -179,11 +189,27 @@ export class SlackAdapter implements PlatformAdapter {
     // `getBotIdentity()` rejects, abort startup rather than open a
     // socket whose self-echo will be dispatched as a real message.
     this.botIdentity = await this.client.getBotIdentity();
+    // cortex#235 r1#7 — two-pass boot. Stash `onMessage` so
+    // `attachInboundDispatch()` can later flip the dispatch gate.
+    // Inbound events arriving BEFORE `attachInboundDispatch()` are
+    // queued in `pendingMessages`; drained in arrival order on
+    // attach. This is the Slack equivalent of discord.js's
+    // gateway-buffered events. Without this gate, cortex.ts's Pass-2
+    // trust-resolver merge happens AFTER inbound events have already
+    // been delivered with the operator-only `trustedBotIds` set —
+    // bot-to-bot traffic at boot time would be silently rejected
+    // until the merge lands (the [major/security] bug Echo flagged
+    // on cortex#105 for Discord, ported here for Slack parity).
+    this.onMessageRef = onMessage;
     await this.client.start({
       onEvent: async (event) => {
         const msg = this.translateEvent(event);
         if (!msg) return;
-        await onMessage(msg);
+        if (this.inboundDispatchAttached) {
+          await onMessage(msg);
+        } else {
+          this.pendingMessages.push(msg);
+        }
       },
       // cortex#235 r1#4 — Socket Mode lifecycle hooks.
       // - `onConnected` fires on EVERY Socket Mode reconnect, not just the
@@ -196,6 +222,68 @@ export class SlackAdapter implements PlatformAdapter {
       onConnected: () => { this.handleConnected(); },
       onDisconnected: (info) => { this.handleDisconnected(info); },
     });
+  }
+
+  /**
+   * cortex#235 r1#7 — Pass-2 hook for cortex.ts. Flips the dispatch
+   * gate to live; drains queued pre-attach messages in arrival
+   * order. Latched once attached so re-calls are no-ops.
+   *
+   * The caller MUST call this AFTER `setTrustedBotIds(merged)` has
+   * populated the resolver-merged allowlist. Otherwise queued events
+   * would dispatch against the operator-only set and bot-to-bot
+   * traffic that arrived during the start→attach window would be
+   * silently dropped at `resolveAccess`. Mirrors the TOCTOU
+   * invariant Echo round-1 on cortex#105 locked in for Discord.
+   */
+  attachInboundDispatch(): void {
+    if (this.inboundDispatchAttached) return;
+    if (!this.onMessageRef) {
+      throw new Error(
+        `slack-adapter[${this.instanceId}]: attachInboundDispatch() called before start() completed — onMessage not stored. ` +
+          `cortex.ts must await start() (Pass 1) before attachInboundDispatch() (Pass 2).`,
+      );
+    }
+    this.inboundDispatchAttached = true;
+    const onMessage = this.onMessageRef;
+    const queued = this.pendingMessages;
+    this.pendingMessages = [];
+    // Fire-and-forget drain: events queued pre-attach flow through
+    // the live onMessage callback in arrival order. Each await
+    // serialises with the next so concurrent re-entrancy can't
+    // re-order them; the `.catch` keeps a slow downstream from
+    // blocking subsequent drains.
+    void (async () => {
+      for (const msg of queued) {
+        try {
+          await onMessage(msg);
+        } catch (err) {
+          console.warn(
+            `slack-adapter[${this.instanceId}]: drain of queued message threw:`,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      }
+    })();
+  }
+
+  /**
+   * cortex#235 r1#7 — Pass-2 hook for cortex.ts. Replaces the
+   * trusted-bot-ids reference atomically (single assignment); the
+   * existing self-loop guard reads from the live reference on each
+   * inbound event, so subsequent events see the post-merge set with
+   * zero race window.
+   */
+  setTrustedBotIds(next: ReadonlySet<string>): void {
+    this.trustedBotIds = next;
+  }
+
+  /**
+   * Diagnostic accessor for the boot log line. Matches Discord's
+   * `trustedBotIdCount` getter — same call site shape in cortex.ts.
+   */
+  get trustedBotIdCount(): number {
+    return this.trustedBotIds.size;
   }
 
   async stop(): Promise<void> {
@@ -223,6 +311,16 @@ export class SlackAdapter implements PlatformAdapter {
     this.connectedOnce = false;
     this.lastDisconnectedAt = null;
     this.warnedMissingSource = false;
+    // cortex#235 r1#7 — reset the two-pass gate so a subsequent
+    // start() → attachInboundDispatch() cycle on the same instance
+    // operates against a clean slate. Without this reset, a reused
+    // adapter would skip the queueing path entirely (the latch is
+    // already flipped) and pre-Pass-2 events would short-circuit
+    // straight through with the stale `trustedBotIds` from before
+    // stop().
+    this.inboundDispatchAttached = false;
+    this.pendingMessages = [];
+    this.onMessageRef = null;
   }
 
   async getPlatformUserId(): Promise<string> {

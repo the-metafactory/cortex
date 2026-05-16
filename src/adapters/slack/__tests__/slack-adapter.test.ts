@@ -253,6 +253,7 @@ describe("SlackAdapter — lifecycle", () => {
     const { adapter, state } = makeAdapter({ clientState: { botUserId: "UBOTLUNA" } });
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
     expect(state.startCount).toBe(1);
     expect(await adapter.getPlatformUserId()).toBe("UBOTLUNA");
   });
@@ -261,6 +262,7 @@ describe("SlackAdapter — lifecycle", () => {
     const { adapter, state } = makeAdapter();
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
     await adapter.stop();
     expect(state.stopCount).toBe(1);
   });
@@ -273,11 +275,13 @@ describe("SlackAdapter — lifecycle", () => {
     const { adapter, emit } = makeAdapter();
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
     await emit(makeSlackEvent({ ts: "1700000000.111111", text: "first" }));
     expect(cap.received).toHaveLength(1);
 
     await adapter.stop();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
 
     // Same ts replayed AFTER stop+start — must NOT be dropped by the
     // ring, because stop() cleared it.
@@ -304,6 +308,7 @@ describe("SlackAdapter — lifecycle", () => {
     const { adapter, state } = makeAdapter();
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
     const getIdx = state.callOrder.indexOf("getBotIdentity");
     const startIdx = state.callOrder.indexOf("start");
     expect(getIdx).toBeGreaterThanOrEqual(0);
@@ -333,6 +338,7 @@ describe("SlackAdapter — translateEvent", () => {
     const { adapter, emit } = makeAdapter();
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
     // Slack ts: "1700000000.123456" = 1,700,000,000.123456 seconds.
     // Old impl split on "." and dropped fractional → 1700000000000 ms.
     // New impl multiplies float * 1000 + floor → 1700000000123 ms.
@@ -348,6 +354,7 @@ describe("SlackAdapter — translateEvent", () => {
     const { adapter, emit } = makeAdapter();
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
 
     await emit(makeSlackEvent({ user: "U0HUMAN", text: "hello", channel: "C0CHANNEL1" }));
 
@@ -366,6 +373,7 @@ describe("SlackAdapter — translateEvent", () => {
     const { adapter, emit } = makeAdapter();
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
 
     await emit(makeSlackEvent({ thread_ts: "1700000000.000000" }));
 
@@ -376,6 +384,7 @@ describe("SlackAdapter — translateEvent", () => {
     const { adapter, emit } = makeAdapter({ clientState: { botUserId: "UBOTSELF" } });
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
 
     await emit(makeSlackEvent({ user: "UBOTSELF" }));
 
@@ -392,6 +401,7 @@ describe("SlackAdapter — translateEvent", () => {
     });
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
 
     await emit(makeSlackEvent({
       subtype: "bot_message",
@@ -413,6 +423,7 @@ describe("SlackAdapter — translateEvent", () => {
     });
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
 
     await emit(makeSlackEvent({
       subtype: "bot_message",
@@ -437,6 +448,7 @@ describe("SlackAdapter — translateEvent", () => {
     });
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
 
     await emit(makeSlackEvent({
       subtype: "bot_message",
@@ -452,6 +464,7 @@ describe("SlackAdapter — translateEvent", () => {
     const { adapter, emit } = makeAdapter();
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
 
     await emit(makeSlackEvent({ subtype: "channel_join" }));
 
@@ -462,6 +475,7 @@ describe("SlackAdapter — translateEvent", () => {
     const { adapter, emit } = makeAdapter();
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
 
     await emit(makeSlackEvent({
       subtype: "bot_message",
@@ -478,6 +492,7 @@ describe("SlackAdapter — translateEvent", () => {
     });
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
 
     await emit(makeSlackEvent({
       subtype: "bot_message",
@@ -500,6 +515,7 @@ describe("SlackAdapter — translateEvent", () => {
     const { adapter, emit } = makeAdapter();
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
 
     const sharedTs = "1700000000.555555";
     await emit(makeSlackEvent({ type: "message", ts: sharedTs, text: "@bot hi" }));
@@ -515,6 +531,7 @@ describe("SlackAdapter — translateEvent", () => {
     const { adapter, emit } = makeAdapter();
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
 
     await emit(makeSlackEvent({ ts: "1700000000.111111", text: "first" }));
     await emit(makeSlackEvent({ ts: "1700000000.222222", text: "second" }));
@@ -526,6 +543,7 @@ describe("SlackAdapter — translateEvent", () => {
     const { adapter, emit } = makeAdapter();
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
 
     await emit(makeSlackEvent({
       files: [
@@ -1069,6 +1087,7 @@ describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () 
     const { adapter, emit } = makeAdapter();
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
     // Update to add a trusted bot id; verify the bot-id message no
     // longer trips the self-loop guard.
     adapter.updateConfig(makeBotConfig({ trustedBotIds: ["B0PEERBOT"] }));
@@ -1124,5 +1143,92 @@ describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () 
     adapter.updateConfig(updated);
     expect((adapter as unknown as { agent: Agent }).agent.id).toBe("luna-rebranded");
     expect((adapter as unknown as { agent: Agent }).agent.displayName).toBe("Luna v2");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#235 r1#7 — start() / attachInboundDispatch() two-pass separation
+// ---------------------------------------------------------------------------
+
+describe("SlackAdapter — two-pass dispatch gate (cortex#235 r1#7)", () => {
+  test("events arriving before attachInboundDispatch() are queued + drained on attach", async () => {
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+    // Note: NO attachInboundDispatch() yet — events should queue.
+    await emit(makeSlackEvent({ ts: "1700000000.000001", text: "pre-attach 1" }));
+    await emit(makeSlackEvent({ ts: "1700000000.000002", text: "pre-attach 2" }));
+    expect(cap.received).toHaveLength(0); // queued, not dispatched
+
+    // Flip the gate — queued events drain in arrival order.
+    adapter.attachInboundDispatch();
+    // The drain is an awaited loop inside a fire-and-forget async
+    // IIFE; let the microtask queue settle.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(cap.received).toHaveLength(2);
+    expect(cap.received[0]!.content).toBe("pre-attach 1");
+    expect(cap.received[1]!.content).toBe("pre-attach 2");
+
+    // Post-attach events flow directly (no queue indirection).
+    await emit(makeSlackEvent({ ts: "1700000000.000003", text: "post-attach" }));
+    expect(cap.received).toHaveLength(3);
+    expect(cap.received[2]!.content).toBe("post-attach");
+    await adapter.stop();
+  });
+
+  test("attachInboundDispatch is idempotent (second call no-ops)", async () => {
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
+    adapter.attachInboundDispatch(); // no throw
+    await emit(makeSlackEvent({ text: "hello" }));
+    expect(cap.received).toHaveLength(1);
+    await adapter.stop();
+  });
+
+  test("attachInboundDispatch before start throws", () => {
+    const { adapter } = makeAdapter();
+    expect(() => adapter.attachInboundDispatch()).toThrow(
+      /attachInboundDispatch.*before start/,
+    );
+  });
+
+  test("stop() resets the gate so a subsequent start cycle queues afresh", async () => {
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    // First cycle
+    await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
+    await emit(makeSlackEvent({ text: "first cycle" }));
+    expect(cap.received).toHaveLength(1);
+    await adapter.stop();
+
+    // Second cycle — events arriving pre-attach should queue, not
+    // short-circuit through the still-flipped latch from before
+    // stop().
+    const cap2 = captureInbound();
+    await adapter.start(cap2.onMessage);
+    await emit(makeSlackEvent({ ts: "1700000001.000001", text: "queued in second cycle" }));
+    expect(cap2.received).toHaveLength(0);
+    adapter.attachInboundDispatch();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(cap2.received).toHaveLength(1);
+    expect(cap2.received[0]!.content).toBe("queued in second cycle");
+    await adapter.stop();
+  });
+
+  test("setTrustedBotIds replaces the lookup set atomically", async () => {
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+    // Pre-merge: adapter has the operator-explicit set (empty).
+    // A peer-bot message would trip the self-loop guard / role check.
+    adapter.setTrustedBotIds(new Set(["B0PEERMERGED"]));
+    adapter.attachInboundDispatch();
+    await emit(makeSlackEvent({ bot_id: "B0PEERMERGED", user: undefined, text: "peer hi" }));
+    expect(cap.received).toHaveLength(1);
+    expect(cap.received[0]!.authorId).toBe("B0PEERMERGED");
+    await adapter.stop();
   });
 });

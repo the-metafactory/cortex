@@ -930,6 +930,24 @@ export async function startCortex(
   // the declaring agent by bot token, instantiate the adapter, register its
   // surface-router face, and start it. Errors during start are logged
   // per-instance so one bad workspace doesn't block the rest of the boot.
+  //
+  // cortex#235 r1#7 — two-pass boot, mirror of the Discord pattern above.
+  // Pass 1 starts each adapter with its operator-explicit trustedBotIds
+  // set + registers the adapter's bot user id in the TrustResolver.
+  // Pass 2 walks each adapter's `agent.trust[]` list, resolves peer
+  // agent ids to in-process Slack user ids via the resolver, merges
+  // those into the adapter's allowlist via `setTrustedBotIds`, and
+  // calls `attachInboundDispatch` to drain any pre-merge queued events
+  // (Slack's analogue to discord.js's gateway-buffered events).
+  interface StartedSlack {
+    adapter: SlackAdapter;
+    agent: Agent;
+    instance: BotConfig["slack"][number];
+    instanceId: string;
+    explicitTrustedBotIds: ReadonlySet<string>;
+  }
+  const startedSlack: StartedSlack[] = [];
+
   for (const instance of config.slack) {
     if (!instance.enabled) {
       console.log(`cortex: slack instance ${instance.instanceId ?? instance.workspaceId} disabled — skipping`);
@@ -989,6 +1007,12 @@ export async function startCortex(
         },
       );
       router.register(adapter.surfaceConfig);
+      // Pass 1: open Socket Mode but do NOT dispatch inbound events
+      // yet. Events arriving here queue in the adapter's
+      // `pendingMessages` until Pass 2 calls
+      // `attachInboundDispatch()`. This is the Slack equivalent of
+      // discord.js's buffered-events-before-listener pattern.
+      const explicitTrustedBotIds: ReadonlySet<string> = new Set(instance.trustedBotIds);
       await adapter.start((msg) => dispatchHandler.handleMessage(adapter, msg));
       adapters.push(adapter);
       // Best-effort trust-resolver registration matches the Discord pattern.
@@ -1003,10 +1027,47 @@ export async function startCortex(
           );
         }
       }
-      console.log(`cortex: slack adapter started (instance: ${instanceId}, workspace: ${instance.workspaceId}, ${instance.channels.length} channel(s))`);
+      startedSlack.push({
+        adapter,
+        agent,
+        instance,
+        instanceId,
+        explicitTrustedBotIds,
+      });
     } catch (err) {
       console.error(`cortex: slack adapter ${instanceId} failed to start:`, err instanceof Error ? err.message : err);
     }
+  }
+
+  // cortex#235 r1#7 — Pass 2: merge resolver-derived in-process peer
+  // bot ids on top of each adapter's operator-explicit set, log the
+  // final allowlist size, then attachInboundDispatch() to drain
+  // queued events through the merged allowlist. Order is
+  // load-bearing: setTrustedBotIds MUST complete before
+  // attachInboundDispatch, so queued events see the post-merge set.
+  for (const { adapter, agent, instance, instanceId, explicitTrustedBotIds } of startedSlack) {
+    const merged = new Set<string>(explicitTrustedBotIds);
+    const resolvedPeers: string[] = [];
+    const skippedPeers: string[] = [];
+    for (const peerAgentId of agent.trust) {
+      if (peerAgentId === agent.id) continue; // self-loop guard owns this case
+      const peerBotId = trustResolver.lookupPlatformIdByAgent("slack", peerAgentId);
+      if (peerBotId !== undefined) {
+        merged.add(peerBotId);
+        resolvedPeers.push(peerAgentId);
+      } else {
+        skippedPeers.push(peerAgentId);
+      }
+    }
+    adapter.setTrustedBotIds(merged);
+    adapter.attachInboundDispatch();
+    console.log(
+      `cortex: slack adapter started (instance: ${instanceId}, workspace: ${instance.workspaceId}, ${instance.channels.length} channel(s), ` +
+        `trustedBotIds: ${adapter.trustedBotIdCount}` +
+        (resolvedPeers.length > 0 ? ` [resolver: ${resolvedPeers.join(", ")}]` : "") +
+        (skippedPeers.length > 0 ? ` [cross-process: ${skippedPeers.join(", ")}]` : "") +
+        `)`,
+    );
   }
 
   if (config.slack.length === 0) {
