@@ -43,8 +43,42 @@ import { validateEnvelope, type Envelope } from "./envelope-validator";
 
 export type { ErrorObject };
 
-/** Per-envelope handler. Errors thrown propagate to onError. */
-export type EnvelopeHandler = (envelope: Envelope, subject: string) => void | Promise<void>;
+/**
+ * Discriminated ack decision a handler may return to drive JetStream
+ * ack/nak/term explicitly. Only meaningful in `mode: "pull"`; in push
+ * mode the return value is ignored (Core NATS has no per-message ack).
+ *
+ * - `{ kind: "ack" }`              — equivalent to `void`/`undefined` return.
+ * - `{ kind: "nak", delayMs? }`    — redeliver after `delayMs` (server-paced
+ *                                    when omitted). Equivalent to `nak()` with
+ *                                    optional millisecond hint.
+ * - `{ kind: "term", reason? }`    — permanent rejection; envelope is moved
+ *                                    to the dead-letter side by JetStream and
+ *                                    not redelivered.
+ *
+ * Default (handler returns nothing or void) is ack — preserves the
+ * pre-cortex#237 contract byte-identically. Handler `throw` still maps
+ * to nak() (no delay) per the established semantics; the new return
+ * channel is the *intentional* nak/term path used by the review consumer
+ * (cortex#237 PR-6) to implement the four-way nak taxonomy without
+ * conflating "I refuse" with "I crashed". See
+ * `docs/design-capability-dispatch-review-consumer.md` §2.3 + §7.5.
+ */
+export type AckDecision =
+  | { kind: "ack" }
+  | { kind: "nak"; delayMs?: number }
+  | { kind: "term"; reason?: string };
+
+/**
+ * Per-envelope handler. Errors thrown propagate to onError (and trigger
+ * nak in pull mode). A returned `AckDecision` drives ack/nak/term
+ * explicitly; returning `void`/`undefined` keeps the legacy "resolve = ack"
+ * default and is fully backwards-compatible.
+ */
+export type EnvelopeHandler = (
+  envelope: Envelope,
+  subject: string,
+) => void | AckDecision | Promise<void | AckDecision>;
 
 /** Optional sink for *handler* errors (NOT for invalid envelopes — those are
  *  always logged and dropped by the validator branch, never surfaced as a
@@ -213,7 +247,13 @@ export class MyelinSubscriber {
    *   - Handler throws                       → `msg.nak()`. The payload
    *     is well-formed but the handler couldn't process it; let the
    *     server redeliver per its `max_deliver` policy.
-   *   - Handler resolves                     → `msg.ack()`. Done.
+   *   - Handler resolves with no decision    → `msg.ack()`. Done.
+   *   - Handler resolves with `AckDecision`  → driven by the discriminator:
+   *       `ack`  → `msg.ack()`
+   *       `nak`  → `msg.nak(delayMs?)`
+   *       `term` → `msg.term(reason)`
+   *     Used by the review consumer (cortex#237 PR-6) to implement the
+   *     four-way nak taxonomy without conflating "I refuse" with "I crashed".
    *
    * In push mode all of the above are no-ops on `msg` (it's null).
    */
@@ -250,8 +290,8 @@ export class MyelinSubscriber {
     }
 
     try {
-      await this.onEnvelope(result.envelope, subject);
-      if (msg) safeAck(msg);
+      const decision = await this.onEnvelope(result.envelope, subject);
+      if (msg) applyAckDecision(msg, decision);
     } catch (err) {
       this.onError(
         err instanceof Error ? err : new Error(String(err)),
@@ -259,6 +299,30 @@ export class MyelinSubscriber {
       );
       if (msg) safeNak(msg);
     }
+  }
+}
+
+/**
+ * Map a handler-returned {@link AckDecision} (or `void` / `undefined` for
+ * the default-ack contract) onto the JetStream message control surface.
+ * Centralises the dispatch so the `handleRaw` path stays focused on
+ * envelope flow.
+ */
+function applyAckDecision(msg: JsMsg, decision: void | AckDecision): void {
+  if (decision === undefined || decision === null) {
+    safeAck(msg);
+    return;
+  }
+  switch (decision.kind) {
+    case "ack":
+      safeAck(msg);
+      return;
+    case "nak":
+      safeNak(msg, decision.delayMs);
+      return;
+    case "term":
+      safeTerm(msg, decision.reason ?? "(no reason)");
+      return;
   }
 }
 
@@ -449,9 +513,13 @@ function safeAck(m: JsMsg): void {
   }
 }
 
-function safeNak(m: JsMsg): void {
+function safeNak(m: JsMsg, delayMs?: number): void {
   try {
-    m.nak();
+    if (delayMs !== undefined) {
+      m.nak(delayMs);
+    } else {
+      m.nak();
+    }
   } catch (err) {
     console.error(
       "myelin-subscriber: nak failed:",
