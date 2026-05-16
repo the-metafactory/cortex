@@ -469,4 +469,222 @@ describe("BusPeerHarness — round-trip + verification gate", () => {
     const done = await iterator.next();
     expect(done.done).toBe(true);
   });
+
+  test("dispatch.task.failed terminal closes the iterator (cortex#197 gap 1)", async () => {
+    const luna = agentFixture({ id: "luna", trust: ["echo"] });
+    const echo = agentFixture({
+      id: "echo",
+      displayName: "Echo",
+      nkey_pub: NKEY_ECHO,
+    });
+    const resolver = resolverWith(luna, echo);
+    const { runtime, deliverInbound } = fakeRuntime();
+
+    const harness = new BusPeerHarness({
+      runtime,
+      resolver,
+      receivingAgentId: "luna",
+      source: SOURCE,
+    });
+
+    const req = dispatchRequest();
+    const iterator = harness.dispatch(req)[Symbol.asyncIterator]();
+
+    const started = await iterator.next();
+    expect(started.done).toBe(false);
+
+    deliverInbound(
+      inboundEnvelope({
+        correlationId: req.requestId,
+        type: "dispatch.task.failed",
+        signerPrincipal: "did:mf:echo",
+      }),
+    );
+
+    const terminal = await iterator.next();
+    expect(terminal.done).toBe(false);
+    expect(terminal.value?.type).toBe("dispatch.task.failed");
+
+    const closed = await iterator.next();
+    expect(closed.done).toBe(true);
+  });
+
+  test("dispatch.task.aborted terminal closes the iterator (cortex#197 gap 2)", async () => {
+    const luna = agentFixture({ id: "luna", trust: ["echo"] });
+    const echo = agentFixture({
+      id: "echo",
+      displayName: "Echo",
+      nkey_pub: NKEY_ECHO,
+    });
+    const resolver = resolverWith(luna, echo);
+    const { runtime, deliverInbound } = fakeRuntime();
+
+    const harness = new BusPeerHarness({
+      runtime,
+      resolver,
+      receivingAgentId: "luna",
+      source: SOURCE,
+    });
+
+    const req = dispatchRequest();
+    const iterator = harness.dispatch(req)[Symbol.asyncIterator]();
+
+    const started = await iterator.next();
+    expect(started.done).toBe(false);
+
+    deliverInbound(
+      inboundEnvelope({
+        correlationId: req.requestId,
+        type: "dispatch.task.aborted",
+        signerPrincipal: "did:mf:echo",
+      }),
+    );
+
+    const terminal = await iterator.next();
+    expect(terminal.done).toBe(false);
+    expect(terminal.value?.type).toBe("dispatch.task.aborted");
+
+    const closed = await iterator.next();
+    expect(closed.done).toBe(true);
+  });
+
+  test("filters own outbound envelope re-delivered by runtime fan-out (cortex#197 gap 3)", async () => {
+    // Single-process runtimes can fan out a published envelope back to
+    // the same harness's onEnvelope handler. The harness drops these
+    // by `envelope.id === requestEnvelope.id` so the consumer never
+    // sees its own outbound as inbound. Without this filter, the
+    // `started` yield could be followed by a phantom self-yield before
+    // any real peer envelope arrives.
+    const luna = agentFixture({ id: "luna", trust: ["echo"] });
+    const echo = agentFixture({
+      id: "echo",
+      displayName: "Echo",
+      nkey_pub: NKEY_ECHO,
+    });
+    const resolver = resolverWith(luna, echo);
+    const { runtime, published, deliverInbound } = fakeRuntime();
+
+    const harness = new BusPeerHarness({
+      runtime,
+      resolver,
+      receivingAgentId: "luna",
+      source: SOURCE,
+    });
+
+    const req = dispatchRequest();
+    const yielded: MyelinEnvelope[] = [];
+
+    const iterator = harness.dispatch(req)[Symbol.asyncIterator]();
+
+    const started = await iterator.next();
+    expect(started.done).toBe(false);
+    if (!started.done) yielded.push(started.value);
+
+    // Loop the harness's own outbound back into its inbound stream —
+    // exactly what a single-process runtime does when publish + onEnvelope
+    // share fan-out. The id and correlation_id both match this dispatch,
+    // so without the self-filter this would be yielded.
+    expect(published).toHaveLength(1);
+    const ownOutbound = published[0];
+    expect(ownOutbound).toBeDefined();
+    if (ownOutbound) deliverInbound(ownOutbound);
+
+    // The actual peer terminal arrives next; only this should yield.
+    deliverInbound(
+      inboundEnvelope({
+        correlationId: req.requestId,
+        type: "dispatch.task.completed",
+        signerPrincipal: "did:mf:echo",
+      }),
+    );
+
+    const next = await iterator.next();
+    expect(next.done).toBe(false);
+    if (!next.done) yielded.push(next.value);
+
+    const closed = await iterator.next();
+    expect(closed.done).toBe(true);
+
+    // started → completed; the looped-back outbound must NOT appear.
+    expect(yielded).toHaveLength(2);
+    expect(yielded[0]?.type).toBe("dispatch.task.started");
+    expect(yielded[1]?.type).toBe("dispatch.task.completed");
+    // Sanity: the self-filter is by id, so prove the outbound and the
+    // terminal don't share an id (otherwise we'd be filtering the wrong
+    // envelope).
+    expect(yielded[1]?.id).not.toBe(ownOutbound?.id);
+  });
+
+  test("rejects an unsigned inbound envelope (rejectEmpty: true) (cortex#197 gap 4)", async () => {
+    // The harness passes `rejectEmpty: true` to verifySignedByChain,
+    // so an inbound with no signed_by stamp is rejected at the boundary.
+    // The drop must be logged to stderr with `empty_chain` and the
+    // consumer must not see the envelope.
+    const luna = agentFixture({ id: "luna", trust: ["echo"] });
+    const echo = agentFixture({
+      id: "echo",
+      displayName: "Echo",
+      nkey_pub: NKEY_ECHO,
+    });
+    const resolver = resolverWith(luna, echo);
+    const { runtime, deliverInbound } = fakeRuntime();
+
+    const stderrLines: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk: string | Uint8Array): boolean => {
+      stderrLines.push(typeof chunk === "string" ? chunk : chunk.toString());
+      return true;
+    };
+
+    try {
+      const harness = new BusPeerHarness({
+        runtime,
+        resolver,
+        receivingAgentId: "luna",
+        source: SOURCE,
+      });
+
+      const req = dispatchRequest();
+      const iterator = harness.dispatch(req)[Symbol.asyncIterator]();
+
+      const started = await iterator.next();
+      expect(started.done).toBe(false);
+
+      // Unsigned inbound matching this correlation — must be dropped.
+      // `signerPrincipal` omitted → no signed_by stamp on the envelope.
+      deliverInbound(
+        inboundEnvelope({
+          correlationId: req.requestId,
+          type: "dispatch.task.completed",
+        }),
+      );
+
+      // Legitimate signed terminal from echo must still pass.
+      deliverInbound(
+        inboundEnvelope({
+          correlationId: req.requestId,
+          type: "dispatch.task.completed",
+          signerPrincipal: "did:mf:echo",
+        }),
+      );
+
+      const next = await iterator.next();
+      expect(next.done).toBe(false);
+      if (!next.done) {
+        // Must be the signed envelope, not the unsigned one.
+        const signedBy = next.value.signed_by;
+        const stamp = Array.isArray(signedBy) ? signedBy[0] : signedBy;
+        expect(stamp?.principal).toBe("did:mf:echo");
+      }
+
+      const closed = await iterator.next();
+      expect(closed.done).toBe(true);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+
+    const stderrOutput = stderrLines.join("");
+    expect(stderrOutput).toContain("bus-peer:luna");
+    expect(stderrOutput).toContain("empty_chain");
+  });
 });
