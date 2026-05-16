@@ -729,7 +729,7 @@ function extractSummary(verdictEnvelope: Envelope): string | undefined {
  */
 function reasonOf(failedEnvelope: Envelope): DispatchTaskFailedReason | undefined {
   const p = failedEnvelope.payload as { reason?: unknown } | undefined;
-  if (!p || !p.reason || typeof p.reason !== "object") return undefined;
+  if (!p?.reason || typeof p.reason !== "object") return undefined;
   return p.reason as DispatchTaskFailedReason;
 }
 
@@ -759,11 +759,20 @@ export function failedReasonToAckDecision(
       return { kind: "term", reason: `cant_do: ${reason.detail}` };
     case "wont_do":
       return { kind: "term", reason: `wont_do: ${reason.detail}` };
-    case "policy_denied":
+    case "policy_denied": {
+      // The engine's structured deny payload (`reason.deny`) is a
+      // free-form record. Summarise its keys for the term reason so
+      // operators see WHICH deny path fired (`unknown_principal`,
+      // `insufficient_role`, …) without serialising the entire blob into
+      // a JetStream control header.
+      const denyKeys = Object.keys(reason.deny);
+      const summary =
+        denyKeys.length > 0 ? denyKeys.join(",") : "(no deny detail)";
       return {
         kind: "term",
-        reason: `policy_denied: ${reason.reason ?? "(no detail)"}`,
+        reason: `policy_denied: ${summary}`,
       };
+    }
     case "not_now": {
       const out: AckDecision = { kind: "nak" };
       if (reason.retry_after_ms !== undefined) {

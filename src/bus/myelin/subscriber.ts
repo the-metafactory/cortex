@@ -75,10 +75,17 @@ export type AckDecision =
  * explicitly; returning `void`/`undefined` keeps the legacy "resolve = ack"
  * default and is fully backwards-compatible.
  */
+// Handlers may legitimately return nothing (default-ack contract) OR an
+// `AckDecision`; `void` in the union is required so callers can assign a
+// function whose return type is `void` without an explicit `: undefined`
+// annotation. Same rationale applies to `applyAckDecision`'s parameter
+// below.
+/* eslint-disable @typescript-eslint/no-invalid-void-type */
 export type EnvelopeHandler = (
   envelope: Envelope,
   subject: string,
 ) => void | AckDecision | Promise<void | AckDecision>;
+/* eslint-enable @typescript-eslint/no-invalid-void-type */
 
 /** Optional sink for *handler* errors (NOT for invalid envelopes — those are
  *  always logged and dropped by the validator branch, never surfaced as a
@@ -308,6 +315,12 @@ export class MyelinSubscriber {
  * Centralises the dispatch so the `handleRaw` path stays focused on
  * envelope flow.
  */
+// Mirrors `EnvelopeHandler`'s return type; accepting `void` here lets
+// `handleRaw` pass through a handler's bare `return` without coercion. The
+// `null` check is the defensive contract for the default-ack path — a
+// handler may explicitly `return null;` (legacy paths), and treating it as
+// "ack" is the safer default than nak-on-unknown.
+/* eslint-disable @typescript-eslint/no-invalid-void-type, @typescript-eslint/no-unnecessary-condition */
 function applyAckDecision(msg: JsMsg, decision: void | AckDecision): void {
   if (decision === undefined || decision === null) {
     safeAck(msg);
@@ -325,6 +338,7 @@ function applyAckDecision(msg: JsMsg, decision: void | AckDecision): void {
       return;
   }
 }
+/* eslint-enable @typescript-eslint/no-invalid-void-type, @typescript-eslint/no-unnecessary-condition */
 
 // ---------------------------------------------------------------------------
 // Backends
