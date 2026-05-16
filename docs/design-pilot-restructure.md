@@ -6,7 +6,7 @@
 **Related docs (load-bearing):**
 
 - `docs/design-pi-dev-review-agent.md` — §4 + §8: the canonical capability-dispatch envelope shapes (`local.{org}.tasks.code-review.<flavor>`, `local.{org}.review.verdict.{approved,changes-requested,commented}`, `dispatch.task.*`). This document is the architectural anchor; this spec is its caller-side redux from pilot's perspective.
-- `docs/design-internet-of-agentic-work.md` — §3.4 (multi-network, network-scoped capabilities); §6 (phased roadmap, capability registration in Phase D).
+- `docs/design-internet-of-agentic-work.md` — §3.4 (multi-network: network-as-scope, NOT per-peer capability scoping — Q4 lock-in); §6 (phased roadmap, capability registration in Phase D).
 - `docs/architecture.md` — §3 (four subject classes, hot/cold path), §7 (capability-driven dispatch, three distribution modes, nak taxonomy, sovereignty modes).
 - `docs/plan-internet-of-agentic-work.md` — Phase D §D.4 (capability registry / federation handshake).
 - Reverted source (still readable in git history) — `git show 3a88dd8:src/cli/cortex/commands/wait-for-review.ts` (the cortex#234 CLI; PR #236 reverts it). The new `pilot wait-for-review` CLI lifts shape from here.
@@ -22,7 +22,7 @@
 
 Three forces converge:
 
-1. **The capability-dispatch wire format has stabilised.** `docs/design-pi-dev-review-agent.md` §4 pins the subject grammar (`local.{org}.tasks.code-review.<flavor>` request, `local.{org}.review.verdict.{approved,changes-requested,commented}` verdict, `dispatch.task.{started,progress,completed,failed,aborted}` lifecycle). The cortex bus already publishes `tasks.code-review.*` from pilot's `nats-publish.ts` (closes pilot#86), and the request side is wire-stable.
+1. **The capability-dispatch wire format has stabilised.** `docs/design-pi-dev-review-agent.md` §4 pins the subject grammar (`local.{org}.tasks.code-review.<flavor>` request, `local.{org}.review.verdict.{approved,changes-requested,commented}` verdict, `dispatch.task.{started,progress,completed,failed,aborted}` lifecycle). Pilot already publishes `tasks.code-review.*` envelopes onto the cortex bus from `src/nats-publish.ts` (closed pilot#86), and the request side is wire-stable.
 2. **The cortex#234 wait-for-review CLI was reverted (PR #236).** Cohesion of the review bundle wins: pilot owns the CLI + the skill + the workflow logic. The reverted source is the template for `pilot wait-for-review` (github.* fallback, identical exit-code grammar) and `pilot wait-for-verdict` (the capability-dispatch successor; same shape, different subject pattern).
 3. **Pilot's internal layout no longer reflects its concerns.** 50 files in a flat `src/` directory mix four distinct subsystems (bus transport, review workflow, forge integration, persistent state) into one namespace. Test files mirror src 1:1; cross-concern imports tangle. The `LUNA_DISCORD_ID` hardcode and twin "ping" code paths (`ping.ts` → Discord post; `forge-ping.ts` → GitLab MR note; `dispatch.ts` → Discord ping at re-review) are the visible symptom.
 
@@ -152,6 +152,7 @@ The fragility is the **registry of Discord IDs**, not a single var. Every site:
 | `src/tick.ts:177` | `reviewerMentionOrName(reviewerInfo)` | Claim-announcement body in `buildClaimContext` (inert per docstring — `allowedUserIds: []`). |
 | `src/cli.ts:41` | `import { REVIEWERS, reviewerMentionOrName }` | Used in `pilot release` claim-re-announcement flow. |
 | `src/merge-orchestrator.ts:64-77` | `validateReviewerIdentity(prState.reviews, config.reviewerInfo)` | Reviewer-identity check; reads `reviewer.githubLogin`, NOT `discordId`, but couples the bot-identity model to a static registry. |
+| `src/agent-state.ts:142-148` | `claim.requested-by-mention` event payload carries reviewer identity through the work-item event log | Soft coupling — not a literal `discordId`, but a reviewer-name field whose semantics derive from the static `REVIEWERS` registry. Phase D's "retire LUNA_DISCORD_ID" deliverable retires this too. (Echo cortex#238 round 1 suggestion.) |
 | `tests/discord.test.ts:53-54` | `expect(REVIEWERS.luna.discordId).toBe("1487180524542890144")` | Test pins the literal snowflake. |
 
 **Why the registry is a fragility:** every reviewer addition is a source change. Adding a sixth reviewer (e.g. Sage when sage subscribes to `tasks.code-review.generic`) requires editing `reviewers.ts`, updating tests, redeploying. Replacing the static registry with capability-dispatch retires this: pilot publishes a task, the bus dispatches to whatever agent claims the capability. The reviewer's Discord ID becomes a presence detail, not a routing key.
@@ -205,7 +206,7 @@ cli.ts ──► (everything below — 50 modules)
    ├─► nats-publish.ts ◄── ping, nats-review-io
    │       (the request-side bus client)
    │
-   ├─► nats-review-io.ts ◄── (nobody imports it today — gated behind cli.ts:85 wire-up gap, see §2.5)
+   ├─► nats-review-io.ts ◄── (nobody imports it today — wire-up gap, see §2.5)
    │
    ├─► forge.ts (interface) ◄── github-backend, gitlab-backend, forge-fetch, forge-ping, forge-detect, review-cycle-io
    │       (the forge abstraction)
@@ -356,12 +357,14 @@ src/
 | `persistence/` | `shared/` | (none — kept clean.) |
 | `cli.ts` | all of the above | Dispatch table. |
 
-**Forbidden directions** (enforced by review, not tooling — tooling could be a later follow-up):
+**Forbidden directions** (enforced mechanically by ESLint `no-restricted-imports` zone config in PR-A.7 — Echo cortex#238 round 1 warning rejected the original "enforced by review" stance; layer discipline must not depend on contributor diligence):
 
 - `bus/ → workflow/` — bus must stay a leaf.
 - `forge/ → workflow/` or `forge/ → bus/` — forge is platform-neutral.
 - `persistence/ → bus/` or `persistence/ → forge/` or `persistence/ → workflow/` — persistence is a leaf.
 - `shared/ → anything internal` — shared is the bottom of the graph.
+
+PR-A.7 ships the rule alongside the moves. The CI gate fails any new import that violates a forbidden direction. See §6.2.
 
 ### §3.4 Where the `LUNA_DISCORD_ID` registry goes
 
@@ -404,14 +407,16 @@ bus/
 - **Option A — split CLI.** Move each verb-handler into a `cli/verbs/<verb>.ts` file. ~30 new files. Clean per-verb cohesion.
 - **Option B — keep flat.** `cli.ts` stays at `src/cli.ts`; only its imports change to the new subtree paths.
 
-**Picked: B.** Reasoning:
+**Picked: B.** Reasoning (Echo cortex#238 round 1 suggestion — strengthen vs original "tractable" hand-wave):
 
-1. `cli.ts` is not the source of confusion in the current layout — its verbs are well-named and follow a consistent shape (parse args → call `workflow/` entrypoint → render result). Splitting it for the sake of splitting it doesn't improve cohesion meaningfully.
-2. The restructure's payoff is in `workflow/` ↔ `bus/` ↔ `forge/` separation. Adding `cli/verbs/<verb>.ts` muddies that — a per-verb file adds a layer of indirection between the dispatch table and the workflow entry-points.
-3. Splitting `cli.ts` doubles the file-count churn in a PR that's already heavy on file moves. Risk asymmetry: option A adds significant review surface without reducing risk in the load-bearing changes.
-4. If `cli.ts` becomes painful to navigate at 3000+ LoC, splitting it is a clean follow-up that touches no other files.
+1. **Each verb branch is independent.** No shared state between branches, no fall-through. Cyclomatic complexity per verb stays flat at the verb-handler boundary; the file's overall complexity is the SUM of independent branches, not a multiplicative function of their interactions. A 3000-LoC dispatch table is qualitatively different from a 3000-LoC monolith.
+2. **Grep-ability is O(1) on verb names.** A reviewer chasing "what does `pilot triage` do?" finds the answer with `grep -n "case \"triage\"" cli.ts` — one hit, one location. Splitting into `cli/verbs/triage.ts` adds an extra indirection (grep filename, open file) without reducing cognitive load.
+3. **`cli.ts` is the onboarding surface for new contributors.** It's the ONE file where a newcomer lands to learn pilot's verb surface and the shape of each entry-point call. Splitting pessimises onboarding — newcomers would have to discover 30 verb files plus a registry.
+4. **Restructure payoff is in `workflow/` ↔ `bus/` ↔ `forge/` separation.** Adding `cli/verbs/<verb>.ts` muddies that — a per-verb file adds a layer of indirection between the dispatch table and the workflow entry-points without contributing to the layer-separation goal.
+5. **PR churn asymmetry.** Splitting `cli.ts` doubles the file-count churn in a PR that's already heavy on file moves. Option A adds significant review surface without reducing risk in the load-bearing changes (the subtree moves).
+6. **Reversibility.** If `cli.ts` becomes painful to navigate at 3000+ LoC, splitting it is a clean follow-up that touches no other files — the dispatch-table shape (each verb a single `if/else if` block, no shared state) makes that split mechanical.
 
-Trade-off acknowledged: `cli.ts` will remain the longest file in the repo post-restructure. The dispatch-table shape (each verb a single `if/else if` block, no shared state) makes that tractable.
+Trade-off acknowledged: `cli.ts` remains the longest file in the repo post-restructure. The properties above make that tractable rather than painful.
 
 ### §3.7 Total file movement
 
@@ -433,7 +438,18 @@ Approximate counts:
 
 ## §4 — Capability-dispatch contract — pilot's caller perspective
 
-This section is **redux** — the source of truth is `docs/design-pi-dev-review-agent.md` §4 and §7. The shapes here are pinned to pilot's perspective: what pilot publishes, what pilot subscribes to.
+> **Anchor doc:** `docs/design-pi-dev-review-agent.md` §4 and §7 — that file is the source of truth for the subject grammar and lifecycle. **The envelope-shape JSON in this §4 is a pilot-side proposal, not a ratified contract.** What this section adds is pilot's caller-side view: which subjects pilot publishes to, which it subscribes to, the correlation_id contract, and the proposed payload shapes pilot's consumers will read. Where the anchor doc and this section diverge, the anchor doc wins after the cortex-side PRs in §6.2 Phase A (the cortex prerequisites) land.
+
+**Contract maturity (2026-05-16):**
+
+| Sub-section | Status | Source of truth |
+|---|---|---|
+| §4.1 Request envelope | **Shipped.** Wire-stable since `nats-publish.ts:87-104`. | Existing code + anchor doc §4.1. |
+| §4.2 Verdict envelope payload | **Proposed.** The subject grammar is anchored; the JSON payload (`github_review_id`, `github_review_url`, `submitted_at`, `commit_id`, `findings`, `inline_comments`) is **NOT** in the anchor doc. Pilot is specifying what its consumer expects to read; cortex#237 (or a companion PR to `design-pi-dev-review-agent.md`) must ratify before pilot CLIs can ship past §6.2 Phase A.7. See §8.1. | Anchor doc §4.2 (subjects only) + this section (payload, proposed). |
+| §4.3 Lifecycle envelopes | **Subject grammar shipped** (`dispatch.task.*` exists in cortex `src/bus/dispatch-events.ts`). **Per-envelope payloads partially shipped** — `DispatchTaskFailedReason` discriminated union ships only `kind: "policy_denied"` today; the four-way nak taxonomy in §4.4 is not yet wired. See §4.4 + §8.1. | Anchor doc §4.2 + cortex `src/bus/dispatch-events.ts:251-284`. |
+| §4.4 Nak taxonomy | **Specified, not implemented.** Architecture `docs/architecture.md` §7.3 (nak reasons referenced as "lines 498-503") names the four reasons; cortex's `DispatchTaskFailedReason` does NOT yet include them. Cortex-side extension PR is a §6.2 Phase A blocker. See §8.1. | Architecture §7.3 + cortex `src/bus/dispatch-events.ts:267-284`. |
+| §4.5 Github.* fallback | **Shipped.** Producer is the existing `gh-webhook-receiver`. | Existing code. |
+
 
 ### §4.1 Request envelope (pilot → bus)
 
@@ -543,7 +559,9 @@ Pilot's **base case** is to wait for `review.verdict.*` (terminal). The `dispatc
 
 ### §4.4 Nak handling
 
-When Echo (or any code-review-capable agent) naks a task, pilot's `subscribe-verdict.ts` receives a `dispatch.task.failed` envelope with `payload.reason` in `{cant-do, wont-do, not-now, compliance-block}`.
+> **⚠ Gated on cortex-side prerequisite work** — see §8.1 (now reframed as a Phase A blocker, not an open question). Cortex's `DispatchTaskFailedReason` (`src/bus/dispatch-events.ts:267-284`) currently ships a single `kind: "policy_denied"` discriminator; the four-way nak taxonomy below mirrors `docs/architecture.md` §7.3's named vocabulary but is **not yet wired** in `createDispatchTaskFailedEvent`. Pilot's nak handling MUST NOT ship until cortex extends `DispatchTaskFailedReason` with these four kinds. Phase A PR-A.0 (cortex) tracks the extension.
+
+When Echo (or any code-review-capable agent) naks a task, pilot's `subscribe-verdict.ts` receives a `dispatch.task.failed` envelope with `payload.reason.kind` in `{cant-do, wont-do, not-now, compliance-block}` (post-extension).
 
 | Reason | Pilot interpretation | CLI exit |
 |---|---|---|
@@ -562,7 +580,7 @@ Exit 3 = "permanent failure, retrying won't help"; exit 4 = "transient, retry sa
 - IF cortex#237's Echo-side consumer has landed: Echo claims, reviews, posts `review.verdict.*` → pilot's `wait-for-verdict` returns the verdict envelope.
 - IF cortex#237 hasn't landed (or any code-review consumer is offline): pilot's `wait-for-review` subscribes to github.* and matches on the GitHub-side review event (Echo's reviewer bot still posts the GitHub PR review even when the bus consumer is offline, because the legacy bot-mention path remains active until cortex#237 cutover).
 
-`wait-for-review` retires when cortex#237 ships AND has been operationally proven for ≥1 review-cycle iteration. Retirement is by deleting the CLI subcommand — the underlying github.* matcher in `bus/matchers/github-review.ts` can stay as a generic primitive (small, pure, useful for future github-event-driven workflows).
+`wait-for-review` retires when the §6.4 Phase C quantitative cutover gate passes (≥5 consecutive cycles over ≥48h on the capability-dispatch path). Retirement is by deleting the CLI subcommand — the underlying github.* matcher in `bus/matchers/github-review.ts` stays as a generic primitive (small, pure, useful for future github-event-driven workflows).
 
 ### §4.6 What pilot's verdict subscriber does NOT do
 
@@ -778,20 +796,36 @@ The plan is **phase-by-phase**, each phase shipping a discrete PR (or PR cluster
 
 **Goal:** the four-subtree layout is in place; new bus primitives exist and are unit-tested; nothing in production behaviour changes.
 
-**PR cluster:**
+**Cortex-side prerequisite PRs (A.0 cluster — block all pilot-side work in this phase):**
 
-1. **PR-A.1** — this spec. Merges into cortex (per the design-docs-in-cortex precedent set by `design-pi-dev-review-agent.md`). Title: `docs(design): pilot restructure spec — capability-dispatch alignment (refs cortex#232, cortex#237)`.
-2. **PR-A.2 (pilot)** — file moves only. 50 src files relocate to the four subtrees per §3.1. All test files get import-path rewrites. No behavioural changes. **One mega-commit with the moves**; subsequent PRs in the phase pile small adjustments on top. CI gate: `bun test` green, `bunx tsc --noEmit -p src/tsconfig.json` clean.
+| PR | Repo | Scope | Blocks |
+|---|---|---|---|
+| **PR-A.0a** | cortex | Extend `DispatchTaskFailedReason` (`src/bus/dispatch-events.ts:267-284`) with the four nak kinds named in `docs/architecture.md` §7.3: `cant_do` / `wont_do` / `not_now` / `compliance_block`. Each is a sibling discriminator to today's `policy_denied`. Tests cover the new builder paths. **Resolves** the warning flagged in this spec's §4.4. | A.5 (pilot's `bus/subscribe-verdict.ts` cannot consume nak envelopes that cortex doesn't yet emit). |
+| **PR-A.0b** | cortex | Add `exports` map to cortex's `package.json` exposing named entry points: `@the-metafactory/cortex/bus` (NatsLink + MyelinSubscriber + envelope-validator), `@the-metafactory/cortex/config-loader` (`loadConfigWithAgents`). Cortex's `"private": true` flag stays — exports map is independent of npm-publication. **Resolves** §8.1. | A.6 (pilot's `package.json` cortex dep can't resolve deep imports without this — see §7.3 caveat). |
+| **PR-A.0c** | cortex | Ratify the `review.verdict.*` envelope payload shape per §4.2 of this spec, either as an update to `docs/design-pi-dev-review-agent.md` §4 or as a sibling `docs/design-review-verdict-envelope.md`. **Resolves** the warning flagged in this spec's §4.2 (today the payload is pilot-proposed; once this lands, it's the canonical contract). | A.5 + cortex#237's Echo emitter — both consumers/producers need the ratified shape. |
+
+**Pilot-side PR cluster (gated on the A.0 cluster above):**
+
+1. **PR-A.1** — this spec. Merges into cortex (per the design-docs-in-cortex precedent set by `design-pi-dev-review-agent.md`). Title: `docs(design): pilot restructure spec — capability-dispatch alignment (refs cortex#232, cortex#237)`. **Not gated on A.0** — this is the design landing first.
+2. **PR-A.2 (pilot) — file moves, split per subtree.** Four sub-PRs land in order, each a clean `git mv` cluster with import-path rewrites. Each is independently CI-green so reviewers can diff per-cluster without rubber-stamping a 50-file mega-commit (Echo cortex#238 round 1 warning):
+   - **A.2.1** — `persistence/` moves (`db.ts`, `agent-state.ts`, `dashboard.ts`). Smallest cluster; first to land because nothing else moves before it (it's a graph leaf).
+   - **A.2.2** — `forge/` moves (`forge.ts`, `forge-detect.ts`, `forge-fetch.ts`, `forge-ping.ts`, `github-backend.ts`, `gitlab-backend.ts`, `gitlab-monitor.ts`, `gh.ts`).
+   - **A.2.3** — `bus/` moves (`nats-publish.ts` → `bus/publish-review-request.ts`; legacy files into `bus/legacy/`).
+   - **A.2.4** — `workflow/` moves (everything remaining: `review-loop.ts`, `claim-loop.ts`, `tick.ts`, `ping.ts`, `dispatch.ts`, `triage.ts`, `apply.ts`, `merge.ts`, `implement.ts`, `interrupt.ts`, `cleanup*.ts`, `next-pick.ts`, `open-pr.ts`, `parse-review.ts`, `replay.ts`, `review*.ts`, `tiers.ts`, `watch.ts`, `sync.ts`, `llm-loop.ts`, `mention-dispatch.ts`). `cli.ts` import-path rewrites land in the same PR.
+   - CI gate on each: `bun test` green, `bunx tsc --noEmit -p src/tsconfig.json` clean. Runtime behaviour byte-identical.
 3. **PR-A.3 (pilot)** — `bus/matchers/verdict.ts` lands as pure code with unit tests (no subscriber wiring yet).
 4. **PR-A.4 (pilot)** — `bus/matchers/github-review.ts` lands as pure code with unit tests (lifted verbatim from cortex#234's matcher).
-5. **PR-A.5 (pilot)** — `bus/subscribe-verdict.ts` and `bus/subscribe-github.ts` land as full implementations with stub-based integration tests. Nothing in `cli.ts` calls them yet.
-6. **PR-A.6 (pilot)** — `package.json` adds the cortex dependency (mechanism per §7). `bus/envelope.ts` and `bus/nats-link.ts` re-export the cortex internals. `tsc` clean.
+5. **PR-A.5 (pilot) — gated on A.0a + A.0c.** `bus/subscribe-verdict.ts` and `bus/subscribe-github.ts` land as full implementations with stub-based integration tests. Nothing in `cli.ts` calls them yet. The verdict subscriber consumes the ratified payload shape from A.0c; the nak path consumes the extended `DispatchTaskFailedReason` from A.0a.
+6. **PR-A.6 (pilot) — gated on A.0b.** `package.json` adds the cortex dependency (mechanism per §7). `bus/envelope.ts` and `bus/nats-link.ts` re-export the cortex internals via the exports map A.0b just landed. `tsc` clean.
+7. **PR-A.7 (pilot) — layer enforcement.** Add ESLint `no-restricted-imports` (or equivalent `tsconfig.json` `paths` zone config) that enforces the forbidden import directions in §3.3 mechanically. Without this, layer discipline degrades the moment a contributor doesn't read the spec (Echo cortex#238 round 1 warning). Ships alongside A.2.4 (after all subtree moves are in place so the rule has something to enforce).
 
 **Acceptance criteria for Phase A:**
 
+- All A.0 cortex-side prerequisites merged.
 - All 50 src files live under the four subtrees.
 - `bun test` green (test count: unchanged from pre-restructure; should be 47 test files green).
 - `bunx tsc --noEmit` clean.
+- `bun run lint` clean against the new `no-restricted-imports` rule from PR-A.7 — confirms no cross-subtree forbidden imports slipped in during A.2.*.
 - `pilot --help` shows the existing verb list (no new verbs yet).
 - The pilot binary's runtime behaviour is **byte-identical** to pre-restructure (the only difference is internal file paths).
 - New bus primitives have ≥80% unit-test coverage of pure logic (matchers) and ≥80% integration coverage (subscribers) via stubs.
@@ -806,6 +840,7 @@ The plan is **phase-by-phase**, each phase shipping a discrete PR (or PR cluster
 - All 47 existing test files (with updated import paths).
 - New unit tests for `bus/matchers/{verdict,github-review}.ts`.
 - New integration tests for `bus/subscribe-{verdict,github}.ts`.
+- ESLint `no-restricted-imports` rule (PR-A.7) — green on the post-A.2.4 tree.
 
 ### §6.3 Phase B — Workflow rewrite consumes new primitives
 
@@ -843,11 +878,7 @@ The plan is **phase-by-phase**, each phase shipping a discrete PR (or PR cluster
 
 **Goal:** Echo subscribes to `tasks.code-review.*` and emits `review.verdict.*`. Pilot flips to the capability-dispatch path as the **default**.
 
-**Cortex#237 deliverable (out of pilot's scope; tracked for context):**
-
-- Echo's bus consumer subscribes to `local.{org}.tasks.code-review.>` via a pull consumer keyed on capability `code-review` (with optional language specialisation).
-- Echo emits `dispatch.task.{started,progress,completed}` lifecycle envelopes.
-- Echo emits `review.verdict.{approved,changes-requested,commented}` with `correlation_id` matching the inbound task envelope.
+**Cortex#237 deliverable** (out of pilot's scope; see [cortex#237](https://github.com/the-metafactory/cortex/issues/237) for the authoritative work list — Echo's bus-consumer subscription, lifecycle emission, and verdict emission. This spec does not restate the deliverable to avoid drift with #237's acceptance criteria. Echo cortex#238 round 1 suggestion).
 
 **PR cluster (in pilot):**
 
@@ -856,12 +887,17 @@ The plan is **phase-by-phase**, each phase shipping a discrete PR (or PR cluster
 3. **PR-C.3 (cortex docs)** — update `docs/design-pi-dev-review-agent.md` and this spec to mark cutover-complete. Tick the relevant checkboxes in the migration plan.
 4. **PR-C.4 (pilot)** — observability: `pilot request-review --wait` emits OTLP spans (Tier 3 visibility) covering publish → first-progress-envelope → verdict. Consumer chain on architecture §3.6 Tier 3.
 
-**Acceptance criteria for Phase C:**
+**Acceptance criteria for Phase C** (tightened to gate-able bars per Echo cortex#238 round 1 warning — "≥1 review cycle" was observational, not measurable):
 
 - A `pilot request-review --pr the-metafactory/cortex#X --capability code-review.typescript --wait` invocation receives an Echo-published `review.verdict.*` envelope and exits 0 with the documented JSON payload, end-to-end against the live cortex bus.
 - The pilot-review-loop skill drives a full PR through review using the new path: open PR → `pilot request-review --wait` → Echo reviews → `review.verdict.changes-requested` → operator/agent fixes → `pilot request-review --wait` (cycle 2) → `review.verdict.approved` → merge.
 - The bot-mention path remains as a **secondary signal** but no longer gates the loop.
-- ≥1 real review cycle completes against the new path before Phase D opens.
+- **Quantitative cutover gate (replaces "≥1 review cycle"):** ≥5 consecutive real review cycles across ≥2 PRs over ≥48 hours of wall-clock time, with all five satisfying:
+  - exit 0 from `pilot request-review --wait` (no timeouts).
+  - zero invocations of the github.* fallback recorded in pilot's stderr log (i.e. the capability-dispatch path was the actual transport on every cycle, not just nominally enabled).
+  - verdict correlation_id matches the request envelope.id on every cycle (no silent miscorrelations).
+  - `dispatch.task.completed` arrives within 60s of `review.verdict.*` on every cycle (lifecycle envelopes co-emitted as §4.3 specifies).
+  - If any one of the five cycles fails any of these checks, the 48h window restarts. Phase D does not open until five consecutive cycles pass.
 
 **Tests that must pass:**
 
@@ -962,11 +998,13 @@ Pilot's `bus/` subtree imports `NatsLink`, `MyelinSubscriber`, `Envelope`, `vali
 - Each cortex-side change to bus internals requires a coordinated pilot bump: update sha in pilot's `package.json`, push, `arc upgrade Pilot`. During heavy co-development, this adds friction.
 - The cortex repo is private. Bun needs auth. Already handled for myelin (which is also private) via the operator's git credentials.
 
-### §7.3 Decision — Option B
+### §7.3 Decision — Option B (gated on PR-A.0b)
 
-**Pick: Option B (git URL with pinned sha).** Justification:
+**Pick: Option B (git URL with pinned sha) — conditional on cortex shipping an `exports` map first** (PR-A.0b in §6.2 — Echo cortex#238 round 1 warning resolution). Cortex is `"private": true` and has no `exports` field today; without one, `bun install <git-url>` resolves but pilot's deep imports (`@the-metafactory/cortex/src/bus/...`) become fragile to cortex's internal restructuring. Option B is the right destination; PR-A.0b is the precondition that makes it correct.
 
-1. **Matches the existing pattern.** Myelin already lives in `package.json` as `"https://github.com/the-metafactory/myelin.git#2a58668"`. Cortex slots in identically. Operators know how to update sha-pinned deps.
+Justification:
+
+1. **Matches the existing pattern.** Myelin already lives in `package.json` as `"https://github.com/the-metafactory/myelin.git#2a58668"`. Cortex slots in identically once A.0b's exports map ships. Operators know how to update sha-pinned deps.
 2. **arc-upgrade-friendly.** The `arc upgrade Pilot` distribution story is load-bearing — pilot ships to operator machines via arc, not via a co-checkout assumption. Option A breaks this.
 3. **Pinning matters during the cortex#237 lockstep.** Phase C explicitly requires cortex#237 to have shipped. Pinning pilot's cortex dep to a sha AT OR AFTER cortex#237's merge commit is the natural way to encode that dependency. Operators updating cortex+pilot together get a coordinated upgrade.
 4. **The cost (sha-bump friction during co-dev) is bounded.** During active development, an operator can:
@@ -974,20 +1012,22 @@ Pilot's `bus/` subtree imports `NatsLink`, `MyelinSubscriber`, `Envelope`, `vali
    - Use bun's `link` feature for local development without modifying `package.json`.
    The default `package.json` ships Option B for everyone else.
 
-**Concrete `package.json` addition** (during Phase A.6):
+**Concrete `package.json` addition** (lands in PR-A.6, after A.0b's exports map merges):
 
 ```json
 {
   "dependencies": {
     "@nats-io/jetstream": "^3.3.1",
     "@nats-io/transport-node": "^3.3.1",
-    "@the-metafactory/cortex": "https://github.com/the-metafactory/cortex.git#<sha-pinned-at-Phase-A.6-merge>",
+    "@the-metafactory/cortex": "https://github.com/the-metafactory/cortex.git#<sha-of-A.0b-or-later>",
     "@the-metafactory/myelin": "https://github.com/the-metafactory/myelin.git#2a58668"
   }
 }
 ```
 
-`<sha>` lands at the head of cortex's main branch at the time PR-A.6 merges. Subsequent bumps follow the same pattern as myelin (manual sha updates in `package.json`).
+`<sha>` lands at the head of cortex's main branch at or after A.0b's merge — pinning earlier would resurrect the deep-imports-without-exports-map problem. Subsequent bumps follow the same pattern as myelin (manual sha updates in `package.json`).
+
+**Fallback if A.0b slips:** if PR-A.0b doesn't land before pilot Phase A.6 is ready to ship, pilot temporarily uses deep imports (`@the-metafactory/cortex/src/bus/nats/connection`) with an inline TODO comment per import site pointing at PR-A.0b. Pilot's `bus/envelope.ts` consolidates the deep-import surface to a single file so the fan-out is one edit when A.0b lands. This is explicitly a **Plan B**; the Plan A path (A.0b → A.6) is preferred.
 
 ### §7.4 What gets imported
 
@@ -1001,7 +1041,7 @@ From `@the-metafactory/cortex`, pilot's `bus/` directory imports:
 | `validateEnvelope` | `src/bus/myelin/envelope-validator.ts` | `bus/publish-review-request.ts` |
 | `loadConfigWithAgents` | `src/common/config/loader.ts` | `bus/nats-link.ts` (config bootstrap) |
 
-Cortex's `package.json` MUST expose these via its `exports` field (or a flat `main` entry). If today's cortex doesn't have a clean public surface, that's a separate cortex-side cleanup PR (call out as an Open question in §8).
+Cortex's `package.json` exposes these via its `exports` field (post PR-A.0b in §6.2 — this is the cortex-side prerequisite, not a separate "open question"). Cortex remains `"private": true`; the exports map is an independent surface that doesn't require npm publication.
 
 **Reverse: what does cortex import from pilot?** Nothing. The dependency is one-way: pilot → cortex.
 
@@ -1017,14 +1057,11 @@ The alternative — vendoring the bus client into pilot — has been considered 
 
 These are genuine ambiguities NOT resolved from the design-doc set as of 2026-05-16. Surface for Andreas + Echo (cortex#237 driver) to decide before Phase A merges.
 
-### §8.1 — Cortex's public export surface for bus primitives
+### §8.1 — Cortex's public export surface for bus primitives — **RESOLVED**
 
-`@the-metafactory/cortex` does not, as of this writing, expose a clean `exports` map in its `package.json`. Pilot's imports would need to use deep-path imports like `@the-metafactory/cortex/src/bus/nats/connection`. Two options:
+Originally an open question; resolved by Echo cortex#238 round 1 review (warning flagged that §7.3 picked Option B as if this were already answered). **Decision:** cortex adds an `exports` map as a Phase A blocker, tracked as PR-A.0b in §6.2. Pilot's deep imports become named entry points (`@the-metafactory/cortex/bus`, `@the-metafactory/cortex/config-loader`); A.6 ships against the new surface.
 
-- **Cortex adds an `exports` field** (a small PR — `bus`, `envelope`, `config-loader` as named entry points). Cleaner. Pilot's `bus/` files import from `@the-metafactory/cortex/bus`, etc.
-- **Pilot uses deep imports** (fragile to cortex internal restructuring).
-
-Decision needed: is cortex willing to take on the `exports` map maintenance? If yes, Phase A.6 includes a coordinated cortex-side PR.
+Fallback path (deep imports with TODO comments) documented in §7.3 in case A.0b slips beyond Phase A.6.
 
 ### §8.2 — Capability-registry semantics for the `code-review.<flavor>` taxonomy
 
@@ -1039,7 +1076,7 @@ Recommendation: in Phase B, `pilot request-review` warns to stderr if the capabi
 
 ### §8.3 — Multi-network handling
 
-The IoAW Phase D federation work introduces `federated.*` namespaces and potentially multi-network bridge stacks (per IoAW §3.4). `pilot request-review` today implicitly assumes single-network: it reads `agent.operatorId` from cortex.yaml to form `local.{<org>}.*` and that's that.
+The IoAW Phase D federation work introduces `federated.*` namespaces and potentially multi-network bridge stacks (per IoAW §3.4 — network-as-scope, NOT per-peer capability scoping; Q4 lock-in). `pilot request-review` today implicitly assumes single-network: it reads `agent.operatorId` from cortex.yaml to form `local.{<org>}.*` and that's that.
 
 Two options for multi-network handling:
 
