@@ -30,7 +30,15 @@ import {
   createSystemAdapterDegradedEvent,
   createSystemAdapterDisconnectedEvent,
   createSystemAdapterRecoveredEvent,
+  createSystemAccessDisagreementEvent,
 } from "../../bus/system-events";
+import {
+  buildKeywordCapabilityChecks,
+  defaultParallelModeSovereignty,
+  runParallelModeChecks,
+  type PlatformPrincipalIndex,
+} from "../../common/policy";
+import type { PolicyEngine } from "../../common/policy";
 import { formatEnvelopeAsMarkdown } from "../envelope-renderer";
 import { parseReviewWireFormat, reviewThreadName } from "./wire-format";
 
@@ -92,6 +100,39 @@ export interface DiscordAdapterInfra {
    * `common/types/config.ts`.
    */
   trustedBotIds?: ReadonlySet<string>;
+  /**
+   * IAW Phase C.2b-242a (cortex#296) — PolicyEngine consulted alongside
+   * the legacy role-resolver when `parallelModeEnabled` is `true`.
+   * Resolved by `cortex.ts` from the parsed `policy:` block via
+   * `policyEngineFromConfig`. `undefined` when the deployment has not
+   * declared a `policy:` block yet — in that case parallel mode is
+   * inert regardless of the flag (graceful degradation: legacy gate
+   * remains the only authority, ERROR logged at first inbound message).
+   */
+  policyEngine?: PolicyEngine;
+  /**
+   * IAW Phase C.2b-242a (cortex#296) — `(platform, platformId) →
+   * principalId` lookup index built from `policy.principals[]`. Used
+   * by parallel mode to resolve inbound `message.author.id` to a
+   * principal id before consulting the engine. `undefined` follows
+   * the same conditions as `policyEngine` (no principals declared).
+   */
+  policyLookup?: PlatformPrincipalIndex;
+  /**
+   * IAW Phase C.2b-242a (cortex#296) — operator opt-in flag for the
+   * parallel-mode rollout. When `true`, every inbound message runs
+   * BOTH the legacy role-resolver AND the PolicyEngine; the
+   * effective decision is the most-restrictive intersection
+   * (`docs/design-policy-cutover.md` §9.1). When `false` (default),
+   * the adapter runs the legacy gate ONLY — pre-cutover behaviour.
+   *
+   * Sourced from `cortex.yaml.policy.parallel_mode_enabled`. Operator
+   * MUST run `migrate-config --check` (cortex#295) before flipping
+   * to `true` — without the pre-flight, intersection-wins denies
+   * every previously-authorised user not yet mapped to a
+   * `policy.principals[]` entry.
+   */
+  parallelModeEnabled?: boolean;
 }
 
 interface PendingResult {
@@ -642,6 +683,18 @@ export class DiscordAdapter implements PlatformAdapter {
   }
 
   resolveAccess(msg: InboundMessage): AccessDecision {
+    const legacy = this.legacyResolveAccess(msg);
+    return this.applyParallelMode(msg, legacy);
+  }
+
+  /**
+   * Legacy role-resolver gate — pre-cutover behaviour. cortex#297 (242b)
+   * deletes this method along with role-resolver.ts; for the C.2b-242a
+   * parallel-mode window it remains the SOLE authority when
+   * `parallelModeEnabled` is `false`, and runs alongside the new
+   * PolicyEngine when `true` (intersection-wins per §9.1).
+   */
+  private legacyResolveAccess(msg: InboundMessage): AccessDecision {
     // G-300: DM-specific role resolution
     if (msg.isDM) {
       return this.resolveDMAccess(msg);
@@ -670,6 +723,145 @@ export class DiscordAdapter implements PlatformAdapter {
       toolRestrictions: role.disallowedTools.length > 0 ? role.disallowedTools : undefined,
       dirRestrictions: role.allowedDirs,
       allowedSkills: role.allowedSkills,
+    };
+  }
+
+  /**
+   * cortex#296 — track whether we've already logged the "parallel mode
+   * enabled but no PolicyEngine wired" warning. Logged at most once
+   * per adapter lifetime so a misconfigured deployment doesn't spam
+   * the logs on every inbound message.
+   */
+  private warnedParallelModeUnwired = false;
+
+  /**
+   * IAW Phase C.2b-242a (cortex#296) — parallel-mode wrapper around
+   * the legacy `resolveAccess` result.
+   *
+   * When `parallelModeEnabled` is `false` (default), returns the
+   * legacy decision unchanged — pre-cutover behaviour preserved.
+   *
+   * When `parallelModeEnabled` is `true` AND a PolicyEngine + lookup
+   * index are wired, consults the engine for each keyword capability
+   * (`keyword.chat` / `keyword.async` / `keyword.team`), AND-merges
+   * with the legacy verdict per §9.1 intersection-wins, and emits a
+   * `system.access.disagreement` envelope per disagreement.
+   *
+   * When `parallelModeEnabled` is `true` but PolicyEngine or lookup
+   * is missing (deployment didn't declare a `policy:` block yet),
+   * logs an ERROR once and falls back to legacy-only — graceful
+   * degradation rather than blocking the deployment on a config gap.
+   *
+   * The DM-operator short-circuit (legacy fast path for `dm.operatorRole`)
+   * runs BEFORE this wrapper, so the operator's full-access semantic
+   * is preserved by the legacy verdict regardless of parallel-mode
+   * state. The parallel-mode check still runs on operator DMs so the
+   * disagreement envelope surfaces if the new gate is mis-configured
+   * (e.g. operator principal missing the `operator` capability).
+   */
+  private applyParallelMode(
+    msg: InboundMessage,
+    legacy: AccessDecision,
+  ): AccessDecision {
+    if (this.infra.parallelModeEnabled !== true) {
+      return legacy;
+    }
+    if (this.infra.policyEngine === undefined || this.infra.policyLookup === undefined) {
+      if (!this.warnedParallelModeUnwired) {
+        this.warnedParallelModeUnwired = true;
+        console.error(
+          `cortex-runner: discord-${this.instanceId}: parallel_mode_enabled=true but policyEngine/policyLookup not wired — falling back to legacy gate only`,
+        );
+      }
+      return legacy;
+    }
+
+    const checks = buildKeywordCapabilityChecks({
+      features: legacy.features,
+      isOperator: msg.dmType === "operator",
+    });
+    const sovereignty = defaultParallelModeSovereignty();
+    const { principalId, decisions } = runParallelModeChecks({
+      engine: this.infra.policyEngine,
+      index: this.infra.policyLookup,
+      platform: "discord",
+      platformAuthorId: msg.authorId,
+      sovereignty,
+      checks,
+    });
+
+    const source = this.systemEventSource;
+    const runtime = this.runtime;
+
+    for (const merged of decisions) {
+      if (merged.disagreement === undefined) continue;
+      if (runtime === undefined || source === undefined) {
+        // Bus wiring incomplete — surface a stderr line so the
+        // operator sees the disagreement event even when no
+        // subscriber is wired. Non-fatal: the effective (intersection)
+        // decision still applies below.
+        process.stderr.write(
+          `cortex-runner: discord-${this.instanceId}: parallel-mode disagreement (no runtime to publish) — capability=${merged.capability} legacy=${merged.disagreement.legacyDecision} new=${merged.disagreement.newDecision} effective=${merged.disagreement.effectiveDecision}\n`,
+        );
+        continue;
+      }
+      const envelope = createSystemAccessDisagreementEvent({
+        source,
+        principalId: principalId ?? "",
+        capability: merged.capability,
+        legacyDecision: merged.disagreement.legacyDecision,
+        legacyReason: merged.disagreement.legacyReason,
+        newDecision: merged.disagreement.newDecision,
+        newReason: merged.disagreement.newReason,
+        effectiveDecision: merged.disagreement.effectiveDecision,
+        sovereignty,
+        // `correlation_id` is UUID-only per envelope schema; omit and
+        // surface the platform-side message handle on `envelope_id`
+        // / `envelope_subject` instead. Subscribers join on
+        // `(payload.envelope_id, payload.envelope_subject)`.
+        signedBy: [],
+        envelopeSubject: `local.${source.org}.adapter.discord.${this.instanceId}.${msg.threadId ?? msg.channelId}.message.${msg.timestamp.toISOString()}`,
+        envelopeId: `${msg.channelId}:${msg.timestamp.toISOString()}:${msg.authorId}`,
+      });
+      void runtime.publish(envelope).catch((err: unknown) => {
+        process.stderr.write(
+          `cortex-runner: discord-${this.instanceId}: failed to publish system.access.disagreement — ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      });
+    }
+
+    // Intersection per §9.1 — a feature is effectively allowed only
+    // when BOTH gates allowed it. `merged.get(cap)` is `undefined`
+    // when parallel mode didn't consult that capability (shouldn't
+    // happen for keyword.* since `buildKeywordCapabilityChecks`
+    // always emits all three), in which case we fall back to the
+    // legacy verdict alone to avoid silent privilege loss.
+    const merged = new Map(decisions.map((d) => [d.capability, d.effective.allow] as const));
+    const effectiveFeatures = {
+      chat: legacy.features.chat && (merged.get("keyword.chat") ?? true),
+      async: legacy.features.async && (merged.get("keyword.async") ?? true),
+      team: legacy.features.team && (merged.get("keyword.team") ?? true),
+    };
+    // Lockout case: legacy allowed but the new gate denied every
+    // keyword feature → mirror a legacy-style deny so downstream
+    // callers (MessageRouter) behave the same as if role-resolver
+    // had denied. The disagreement envelope already fired above so
+    // the operator sees what happened on the dashboard.
+    const anyFeatureAllowed =
+      effectiveFeatures.chat || effectiveFeatures.async || effectiveFeatures.team;
+    if (legacy.allowed && !anyFeatureAllowed) {
+      return {
+        ...legacy,
+        allowed: false,
+        features: effectiveFeatures,
+        denyReason:
+          legacy.denyReason ??
+          "Sorry, your access was denied by the policy engine. Ask the operator to map your identity in policy.principals[].",
+      };
+    }
+    return {
+      ...legacy,
+      features: effectiveFeatures,
     };
   }
 

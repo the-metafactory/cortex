@@ -1531,6 +1531,37 @@ export const PolicySchema = z.object({
   principals: z.array(PolicyPrincipalSchema).default([]),
   roles: z.array(PolicyRoleSchema).default([]),
   federated: PolicyFederatedSchema.optional(),
+  /**
+   * IAW Phase C.2b-242a (cortex#296) — parallel-mode opt-in flag for
+   * the policy cutover validation window.
+   *
+   * When `false` (default), adapters run the legacy role-resolver
+   * gate ONLY. This preserves pre-cutover behaviour for every
+   * deployment that hasn't yet run `migrate-config` (cortex#295) —
+   * the new PolicyEngine is constructed but not consulted on the
+   * adapter side.
+   *
+   * When `true`, each adapter consults BOTH the legacy role-resolver
+   * AND the PolicyEngine on every inbound message. The effective
+   * decision is the most-restrictive intersection (allow only if
+   * both gates allow — `docs/design-policy-cutover.md` §9.1 security
+   * default). Disagreements emit `system.access.disagreement`
+   * envelopes carrying both verdicts, surfacing mis-migrations on
+   * the dashboard before cortex#297 (242b) retires the legacy gate.
+   *
+   * Operator pre-flight (§9.1): `migrate-config --check` (cortex#295)
+   * MUST pass before flipping this to `true`. Without the pre-flight
+   * every previously-authorised user the legacy gate knew about but
+   * isn't mapped to a `policy.principals[]` entry yet would be
+   * denied by intersection-wins. The flag is opt-in deliberately so
+   * operators commit to parallel-mode rollout after they've validated
+   * the migration locally.
+   *
+   * Retirement: cortex#297 (242b) removes both the flag AND the
+   * parallel-mode plumbing in adapters — PolicyEngine becomes the
+   * sole gate and this knob's surface disappears.
+   */
+  parallel_mode_enabled: z.boolean().default(false),
 }).superRefine((policy, ctx) => {
   // Per-offender path emission so a YAML-aware loader can render
   // the error inline at the bad token (Echo cortex#219 round 1).

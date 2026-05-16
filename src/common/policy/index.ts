@@ -23,3 +23,17 @@ export type {
   RoleDefinition,
 } from "./types";
 export { policyEngineFromConfig } from "./factory";
+export {
+  PlatformPrincipalIndex,
+  buildPlatformPrincipalIndex,
+  buildKeywordCapabilityChecks,
+  buildToolCapabilityChecks,
+  checkCapabilityViaEngine,
+  defaultParallelModeSovereignty,
+  mergeCapabilityDecision,
+  runParallelModeChecks,
+  type CapabilityCheck,
+  type GateDecision,
+  type MergedCapabilityDecision,
+  type ParallelModeSovereignty,
+} from "./parallel-mode";
