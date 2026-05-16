@@ -558,8 +558,18 @@ function buildAgents(
     // cortex#106 item 1: drop the off-by-one — `variantIds.length` is the
     // index of the variant being assigned, so `+1` yields the right suffix
     // (`luna-2` at i=1, `luna-3` at i=2), not `luna-3`/`luna-4`.
+    //
+    // cortex#119 fix: advance the counter inside the loop. The pre-fix
+    // body re-computed `${baseId}-${variantIds.length + 1}` on every
+    // iteration without advancing the counter, so if that candidate was
+    // also already claimed (e.g. an earlier adapter's hint claimed
+    // `luna-2`, then this adapter's numeric-fallback also picks `luna-2`),
+    // the loop spun forever. Using a local counter that advances guarantees
+    // termination — the candidate space is strictly monotonic in `n` and
+    // `claimedIds` is finite.
+    let n = variantIds.length + 1;
     while (claimedIds.has(id)) {
-      id = `${baseId}-${variantIds.length + 1}`;
+      id = `${baseId}-${n++}`;
     }
     // cortex#106 item 2: duplicate `agent-<X>` hint across adapters —
     // operator misconfigured two adapters to both claim the same identity.

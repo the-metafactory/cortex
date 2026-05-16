@@ -830,6 +830,67 @@ describe("convertBotYaml — agent id detection (cortex#88 item 3)", () => {
 // cortex#106 items 1 + 2 — collision-fallback off-by-one + duplicate-hint warn
 // ---------------------------------------------------------------------------
 
+describe("convertBotYaml — collision fallback termination (cortex#119)", () => {
+  test("numeric-fallback collision with earlier hint claim terminates (no infinite loop)", () => {
+    // Pre-cortex#119: the while-loop body re-computed
+    // `${baseId}-${variantIds.length + 1}` on every iteration without
+    // advancing the counter. If that candidate was itself already
+    // claimed — e.g. adapter[0]'s `agent-luna-2` hint claims `luna-2`,
+    // then adapter[1] falls to numeric and also computes `luna-2` —
+    // the loop spun forever.
+    //
+    // Post-fix: a local `n` counter advances inside the loop, so the
+    // candidate space is strictly monotonic and termination is
+    // guaranteed regardless of which ids `claimedIds` already holds.
+    //
+    // Concretely: adapter[0] hints `agent-luna-2` (id=`luna-2`),
+    // adapter[1] has NO hint so falls to numeric (`luna-${1+1}` =
+    // `luna-2`) which collides, the loop must walk to `luna-3`.
+    const legacy: LegacyBotYaml = {
+      agent: {
+        name: "luna",
+        displayName: "Luna",
+        personaFile: "./personas/luna.md",
+      },
+      discord: [
+        {
+          token: "t1",
+          guildId: "1",
+          agentChannelId: "2",
+          logChannelId: "3",
+          // adapter[0] uses a role-resolver hint claiming `luna-2`
+          // explicitly (operator-labelled, atypical but legal).
+          roles: [
+            {
+              name: "agent-luna-2",
+              users: ["100000000000000001"],
+              features: ["chat"],
+            },
+          ],
+        },
+        {
+          token: "t2",
+          guildId: "10",
+          agentChannelId: "20",
+          logChannelId: "30",
+          // adapter[1] has no `agent-*` hint — falls to numeric.
+          // Numeric formula yields `luna-2` which is already claimed
+          // by adapter[0]. Without the cortex#119 fix this hangs.
+        },
+      ],
+    };
+
+    // Termination check — pre-fix this assertion never gets reached
+    // because convertBotYaml would not return. With the fix it
+    // resolves the collision to `luna-3`.
+    const result = convertBotYaml(legacy, {});
+    expect(result.cortex.agents.map((a) => a.id)).toEqual([
+      "luna-2",
+      "luna-3",
+    ]);
+  });
+});
+
 describe("convertBotYaml — collision fallback numbering (cortex#106 item 1)", () => {
   test("three adapters all hinting the same id walk luna, luna-2, luna-3", () => {
     // Pathological config: three adapters all carry `agent-luna` hints. The
