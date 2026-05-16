@@ -293,10 +293,11 @@ export interface DispatchTaskFailedOpts extends DispatchTaskCommonOpts {
  *   - `compliance_block`  — agent's compliance attestation forbids it
  *                           (e.g. STD-NPW-AI-001 gate).
  *
- * Subscribers correlating on task_id (worklog-manager, agent-team, pilot's
- * `subscribe-verdict.ts`) branch on `payload.reason.kind` to render the
- * gate / nak decision distinctly from substrate-side errors. Surfaces as
- * `payload.reason` on the envelope.
+ * Subscribers correlating on task_id (worklog-manager, agent-team, and the
+ * planned pilot-side `subscribe-verdict.ts` per `design-pilot-restructure.md`
+ * §5) branch on `payload.reason.kind` to render the gate / nak decision
+ * distinctly from substrate-side errors. Surfaces as `payload.reason` on
+ * the envelope.
  *
  * Anchors: `docs/architecture.md` §7.3 (nak vocabulary, canonical),
  * `docs/design-pilot-restructure.md` §4.4 + §6.2 PR-A.0a (pilot-side

@@ -555,20 +555,20 @@ Per `docs/design-pi-dev-review-agent.md` §4.2 + architecture §7.3, Echo emits 
 
 Pilot's **base case** is to wait for `review.verdict.*` (terminal). The `dispatch.task.*` lifecycle is **optional progress** for Tier-2 visibility on the cortex dashboard (architecture §3.6). Pilot's `subscribe-verdict.ts` may consume `dispatch.task.completed` as a co-terminal signal for crash-resilience: if Echo posts `dispatch.task.completed` with no preceding `review.verdict.*`, pilot treats it as `commented` with a "verdict not emitted" warning.
 
-`dispatch.task.failed` with one of the four nak reasons (`cant-do`, `wont-do`, `not-now`, `compliance-block` — per architecture §7.3) MUST be surfaced to the caller. `pilot request-review --wait` exits non-zero with the reason embedded in the JSON envelope.
+`dispatch.task.failed` with one of the four nak reasons (`cant_do`, `wont_do`, `not_now`, `compliance_block` — per architecture §7.3) MUST be surfaced to the caller. `pilot request-review --wait` exits non-zero with the reason embedded in the JSON envelope.
 
 ### §4.4 Nak handling
 
 > **⚠ Gated on cortex-side prerequisite work** — see §8.1 (now reframed as a Phase A blocker, not an open question). Cortex's `DispatchTaskFailedReason` (`src/bus/dispatch-events.ts:267-284`) currently ships a single `kind: "policy_denied"` discriminator; the four-way nak taxonomy below mirrors `docs/architecture.md` §7.3's named vocabulary but is **not yet wired** in `createDispatchTaskFailedEvent`. Pilot's nak handling MUST NOT ship until cortex extends `DispatchTaskFailedReason` with these four kinds. Phase A PR-A.0 (cortex) tracks the extension.
 
-When Echo (or any code-review-capable agent) naks a task, pilot's `subscribe-verdict.ts` receives a `dispatch.task.failed` envelope with `payload.reason.kind` in `{cant-do, wont-do, not-now, compliance-block}` (post-extension).
+When Echo (or any code-review-capable agent) naks a task, pilot's `subscribe-verdict.ts` receives a `dispatch.task.failed` envelope with `payload.reason.kind` in `{cant_do, wont_do, not_now, compliance_block}` (post-extension).
 
 | Reason | Pilot interpretation | CLI exit |
 |---|---|---|
-| `cant-do` | No agent matches the capability. Likely the `<flavor>` doesn't have a registered consumer. | exit 3, JSON `{ ok: false, reason: "no-capability-match" }` |
-| `wont-do` | Sovereignty policy refused. Persistent — operator action needed. | exit 3, JSON `{ ok: false, reason: "sovereignty-refused" }` |
-| `not-now` | Backpressure. Try again later — capability is registered, just busy. | exit 4, JSON `{ ok: false, reason: "backpressure" }` (operator-facing retry semantics) |
-| `compliance-block` | Agent's compliance attestation forbids it. | exit 3, JSON `{ ok: false, reason: "compliance-block" }` |
+| `cant_do` | No agent matches the capability. Likely the `<flavor>` doesn't have a registered consumer. | exit 3, JSON `{ ok: false, reason: "no-capability-match" }` |
+| `wont_do` | Sovereignty policy refused. Persistent — operator action needed. | exit 3, JSON `{ ok: false, reason: "sovereignty-refused" }` |
+| `not_now` | Backpressure. Try again later — capability is registered, just busy. | exit 4, JSON `{ ok: false, reason: "backpressure" }` (operator-facing retry semantics) |
+| `compliance_block` | Agent's compliance attestation forbids it. | exit 3, JSON `{ ok: false, reason: "compliance-block" }` |
 
 Exit 3 = "permanent failure, retrying won't help"; exit 4 = "transient, retry safe."
 
@@ -647,8 +647,8 @@ pilot request-review --pr <owner/repo#N> --capability code-review.<flavor>
 | `0` | Publish succeeded (no `--wait`), OR publish + verdict received (with `--wait`). |
 | `1` | Runtime error (NATS connect failed, config load failed, etc.). |
 | `2` | Usage error (bad flags, malformed PR ref, invalid capability grammar). |
-| `3` | Permanent dispatch failure: `cant-do`, `wont-do`, or `compliance-block` nak. |
-| `4` | Transient dispatch failure: `not-now` nak (backpressure). |
+| `3` | Permanent dispatch failure: `cant_do`, `wont_do`, or `compliance_block` nak. |
+| `4` | Transient dispatch failure: `not_now` nak (backpressure). |
 | `124` | `--wait` timeout elapsed without a verdict. |
 
 **JSON output shape (--json --wait, success):**

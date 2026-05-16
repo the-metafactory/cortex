@@ -495,10 +495,10 @@ local.{org}.dispatch.task.aborted      ── operator-cancelled or system-abort
 
 **Structured nak reasons** — when an agent rejects (naks) a Broadcast task, the reason MUST be one of:
 
-- `cant-do` — capability mismatch (agent doesn't claim this capability)
-- `wont-do` — sovereignty refuses (agent could but policy says no)
-- `not-now` — backpressure (retry me later, capability still valid)
-- `compliance-block` — agent's compliance attestation forbids it (e.g. STD-NPW-AI-001 gate)
+- `cant_do` — capability mismatch (agent doesn't claim this capability)
+- `wont_do` — sovereignty refuses (agent could but policy says no)
+- `not_now` — backpressure (retry me later, capability still valid)
+- `compliance_block` — agent's compliance attestation forbids it (e.g. STD-NPW-AI-001 gate)
 
 This four-way discrimination is what makes Delegate-mode observability tractable. "Pilot couldn't drive this PR" is materially different from "Pilot won't drive this PR right now" or "Pilot is compliance-blocked from acting on this PR."
 
@@ -532,7 +532,7 @@ Cortex's M7 dispatch handler — the runtime that takes inbound work (Discord pi
 1. **Publish** the lifecycle envelope sequence per §7.3 (`local.{org}.dispatch.task.{received,assigned,started,progress,completed,failed,aborted}`) on the `events.>` class. Every routed task is an event stream — the lifecycle is the protocol.
 2. **Tag mode** in envelope payload so consumers can distinguish Broadcast / Direct / Delegate. For Delegate, the receiving agent owns sub-step progress emission.
 3. **Consume** via JetStream pull consumers filtered to the agent's capabilities, **not** hardcoded by subject. Each cortex-hosted agent (Luna, Echo, Forge, …) subscribes through a pull consumer keyed on its declared capability set.
-4. **Respect nak semantics with structured reasons** (§7.3) — surface `cant-do` vs `wont-do` vs `not-now` vs `compliance-block` to operators rather than collapsing to a generic failure.
+4. **Respect nak semantics with structured reasons** (§7.3) — surface `cant_do` vs `wont_do` vs `not_now` vs `compliance_block` to operators rather than collapsing to a generic failure.
 5. **Register** each agent's capabilities into the KV bucket on startup with signed writes (myelin#31). The registry is the M5 Discovery seed; future myelin#9 spec consumes it.
 6. **Support sovereignty declaration** — each agent's config carries a `sovereignty:` field that determines its claim behaviour. Maps to the four modes in §7.4.
 7. **Honour stratification (§7.5)** — keep capability declaration, compliance attestation, surface routing, and orchestrator policy in cortex's M7 layer; never push them into bus envelopes.
