@@ -82,8 +82,8 @@ Wired in `src/cortex.ts` alongside the existing `busDispatchListener` (which tod
 | **Queue group / consumer name** | `cortex-review-consumer-{instance-id}` where `instance-id` is the cortex daemon's `{operator}-cortex` triple. | Multiple cortex instances (e.g. dev + prod on the same operator account, or future fleet) all subscribe to the same JetStream durable. JetStream's competing-consumer semantics guarantee at-most-one delivery per envelope. Names tie consumer state to operator+instance so a daemon restart resumes from the same position. |
 | **Durable** | Yes, named per above | We want the operator's pending review queue to survive a cortex restart. A non-durable consumer would silently drop tasks during the restart window. |
 | **Ack policy** | `explicit` | We ack only after the lens pipeline produces a terminal lifecycle envelope. A crash mid-review re-delivers the task to a competing consumer. |
-| **Ack wait** | `15 minutes` | Longest realistic review is 5–10 minutes of lens work + GH-API roundtrip. 15min gives a 50% safety margin before JetStream re-queues. |
-| **Max delivery** | `3` | After 3 redeliveries (crash, re-delivery, crash again) the task moves to `local.{org}.tasks.dead-letter.code-review` per architecture §7.2. Operators investigate dead-letters out of band. |
+| **Ack wait** | `5 minutes` | Longest realistic review is 3–4 minutes of lens work + GH-API roundtrip. 5min gives ~30-50% safety margin before JetStream re-queues. Echo cortex#253 R1 (Major-3) flagged the original 15min as creating a 45min worst-case dead-letter window that would have exceeded pilot's `--wait` default (600s per `design-pilot-restructure.md` §5.2); 5min ack + 3 max-delivery = 15min worst case, which fits inside pilot's wait budget AND gives pilot a chance to re-publish on its own if needed. |
+| **Max delivery** | `3` | After 3 redeliveries (crash, re-delivery, crash again) the task moves to `local.{org}.tasks.dead-letter.code-review` per architecture §7.2. Operators investigate dead-letters out of band. **Co-emission of `dispatch.task.aborted` on redelivery > 1:** when the consumer detects it's processing an envelope for the second+ time (JetStream redelivery counter on the delivery metadata), emit `dispatch.task.aborted` with `reason: "redelivery"` to give pilot a structured "this task is in trouble" signal BEFORE the max-delivery threshold is reached. Operationally kinder than letting pilot's `--wait` time out on a struggling consumer. |
 | **Filter** | None (subscribed pattern IS the filter) | NATS's subject filter is the only matching layer we need; in-handler filtering (e.g. by `<flavor>` segment) happens after the envelope is parsed. |
 
 **Caveat — pull-consumer support in `MyelinSubscriber`.** The current `MyelinSubscriber` wraps `NatsSubscription`, which from a quick survey of `src/bus/nats/subscription.ts` is the **push** subscription primitive. We have two options:
@@ -123,13 +123,23 @@ Per architecture §7.2, agents self-register their capabilities into a NATS KV b
 
 ### §3.1 What exists today
 
-Survey result (cortex source as of 2026-05-16):
+Survey result (cortex source as of 2026-05-16, corrected after Echo round 1 — original survey understated Phase A.6's substrate):
 
-- **No KV-bucket primitive in `src/bus/`.** Architecture §7.2 specifies the bucket; cortex does not yet write to it. The closest existing primitive is the federation registry client (`src/common/registry/client.ts`) for federation pubkeys, which is a *different* registry serving a different purpose (peer-operator pubkey lookup, not capability advertisement).
-- **No capability-registration call site in `src/cortex.ts`.** The `mergedAgents` array carries each agent's `roles` / `trust` / `presence`; nothing publishes capabilities anywhere on startup.
-- **No `agents.capabilities.*` subject in any test fixture or test.** `grep -rn "agents.capabilities" src/` returns zero hits.
+**Schema substrate — ALREADY IN PLACE** (Phase A.6, refs cortex#113):
 
-So we need to **build the capability-registration primitive as part of cortex#237's PR cluster**. It is genuinely net new.
+- **`AgentRuntimeSchema.capabilities`** at `src/common/types/cortex-config.ts:433` — declared on `agents[].runtime.capabilities[]` in cortex.yaml. Each entry is a capability-id string (e.g. `code-review.typescript`).
+- **`CortexConfigSchema.capabilities`** (top-level) at `src/common/types/cortex-config.ts:1574` — the typed catalog. Per `src/common/types/capability.ts`, each `CapabilitySchema` entry has `id`, `description`, `tags`, `provided_by`, `rate`, `cost`.
+- **Cross-validation at parse time** (`cortex-config.ts:1545-1574`) — every id in `agents[].runtime.capabilities[]` MUST resolve to a top-level `capabilities[]` catalog entry. Dangling refs fail at config-load. This is the schema discipline the consumer routes against.
+- **`PolicyFederatedNetworkSchema.announce_capabilities`** at `cortex-config.ts:1249` — same `<domain>.<entity>` id grammar (`/^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/`) consistent across the policy surface.
+
+**Runtime gap — NET NEW work for cortex#237:**
+
+- **No publication site.** The schema declarations exist, but nothing in `src/cortex.ts` publishes the runtime form of these capabilities to `local.{org}.agents.capabilities.{agent_id}` per architecture §7.2. The cortex.yaml declarations are parsed and validated but never reach the bus.
+- **No KV-bucket primitive in `src/bus/`.** Architecture §7.2 specifies the bucket; cortex does not yet write to it. The closest existing primitive is the federation registry client (`src/common/registry/client.ts`) for federation pubkeys — different registry, different purpose.
+- **No bucket reader** — pilot's pre-publish "is anyone listening?" check (`design-pilot-restructure.md` §8.2) has nothing to read against. Reading is deferred (see §13).
+- **No `agents.capabilities.*` subject in any test fixture.** `grep -rn "agents.capabilities" src/` returns zero hits.
+
+So cortex#237's PR cluster does **runtime publication** (read the in-place schema, publish at boot, signed envelopes via the Phase B.3 signer) plus the **registration primitive**. The schema work itself is done — we consume it, we don't duplicate it.
 
 ### §3.2 What the registration payload looks like
 
@@ -169,29 +179,48 @@ In `src/cortex.ts`, immediately after `mergedAgents` is built and before the rev
 
 ```
 for each agent in mergedAgents:
-  if agent has any code-review capabilities (declared in cortex.yaml):
-    capabilityRegistry.register({ agentId: agent.id, capabilities: agent.capabilities, ... })
+  if agent.runtime?.capabilities?.length > 0:
+    capabilityRegistry.register({ agentId: agent.id, capabilities: agent.runtime.capabilities, ... })
 ```
 
-The "which capabilities does each agent claim?" data lives in **cortex.yaml**, not in the consumer code. New cortex.yaml schema field on `agents[]`:
+The "which capabilities does each agent claim?" data lives in **cortex.yaml** under `agents[].runtime.capabilities[]` — the field already shipped at Phase A.6 (`src/common/types/cortex-config.ts:433`). cortex#237 consumes this schema; it does NOT propose a new one. Echo round 1 (cortex#253) correctly flagged that an earlier draft of this spec proposed a sibling `agents[].capabilities` field which would have created schema drift against the existing `agents[].runtime.capabilities` + top-level `capabilities[]` catalog.
+
+**The cortex.yaml shape is therefore the existing Phase A.6 shape, NOT a new shape:**
 
 ```yaml
+capabilities:
+  # top-level catalog (existing, Phase A.6)
+  - id: code-review.typescript
+    description: TypeScript code review
+    provided_by: echo
+  - id: code-review.bun
+    description: Bun-specific code review
+    provided_by: echo
+  - id: code-review.generic
+    description: Generic code review
+    provided_by: echo
+
 agents:
   - id: echo
     persona: ./personas/echo.md
     roles: [agent-restricted]
     trust: [luna, holly, ivy]
-    capabilities:
-      - code-review.typescript
-      - code-review.bun
-      - code-review.generic
-    sovereignty: selective
-    maxConcurrent: 3
+    runtime:
+      # existing Phase A.6 field — capability ids the agent claims
+      capabilities:
+        - code-review.typescript
+        - code-review.bun
+        - code-review.generic
+      # NEW fields proposed by this spec (additions to AgentRuntimeSchema, siblings to capabilities/substrate/mode)
+      sovereignty: selective
+      maxConcurrent: 3
     presence:
       discord: { ... }
 ```
 
-`capabilities` is the new field (validated by `CortexConfigSchema` — addition is non-breaking, default empty array). The persona file stays the same; the skill restriction stays role-based (per the existing `access.allowedSkills` logic in `dispatch-handler.ts`); the bus subscription is gated on at least one agent declaring at least one capability.
+**What's net new on the schema:** only `agents[].runtime.sovereignty` (enum) and `agents[].runtime.maxConcurrent` (positive int). Both are additive sibling fields on `AgentRuntimeSchema`, not a new top-level surface. Cross-validation (Phase A.6.3, `cortex-config.ts:1545-1574`) already enforces that every id in `agents[].runtime.capabilities[]` resolves to a top-level `capabilities[]` catalog entry — cortex#237 inherits that discipline.
+
+The persona file stays the same; the skill restriction stays role-based (per the existing `access.allowedSkills` logic in `dispatch-handler.ts`); the bus subscription is gated on at least one agent declaring at least one capability via the existing `runtime.capabilities[]` field.
 
 ### §3.5 v1 minimal-viable registration
 
@@ -252,7 +281,7 @@ This is the meat of the consumer. Each inbound `tasks.code-review.<flavor>` enve
 | `src/cortex.ts` | Wire up `ReviewConsumer.start()` and `CapabilityRegistry.register()` after `mergedAgents` is built; add to shutdown sequence | Single entrypoint discipline (per CLAUDE.md "no ProcessManager" rule). |
 | `src/bus/myelin/subscriber.ts` | Add `mode: "push" \| "pull"` option (default `"push"` for backwards compat); pull-mode branch swaps to JetStream `pullSubscribe` | §2.3 caveat — pull-consumer support. |
 | `src/bus/nats/subscription.ts` | Sibling refactor to support both modes underneath | Same. |
-| `src/common/types/config.ts` (or wherever `CortexConfigSchema` lives) | Add `agents[].capabilities: string[]` + `agents[].sovereignty` + `agents[].maxConcurrent` schema fields | §3.4 — cortex.yaml carries the agent→capability mapping. |
+| `src/common/types/cortex-config.ts` | Extend `AgentRuntimeSchema` (line 421) with two NEW sibling fields: `sovereignty` (enum) + `maxConcurrent` (positive int). **The capability data itself uses the existing `agents[].runtime.capabilities[]` field (Phase A.6, line 433) — NOT a new field.** Echo cortex#253 R1 caught the original draft's schema-drift proposal. | §3.4 — cortex.yaml's agent→capability mapping already exists; cortex#237 adds only the two runtime knobs. |
 | `src/bus/index.ts` | Export the new `createReviewVerdictEvent` + `MyelinPullSubscriberOptions` types so pilot can read the contracts | Per `design-pilot-restructure.md` §7.4 — the public bus barrel needs to stay aligned. |
 
 **What does NOT change:**
@@ -327,7 +356,7 @@ Per anchor doc §7 (review workflow step 4) + architecture §7.3 lifecycle, the 
 - The skill marks lens transitions in its output. The simplest signal is: when the model writes a line matching `/^## Lens \d+:/`, the consumer emits a `dispatch.task.progress` envelope with `payload: { phase: "lens-{N}", lens_name: "<name>" }`.
 - This is a heuristic, not a contract. Missed progress envelopes are not fatal — pilot's primary signal is the terminal `review.verdict.*` envelope. Progress is a Tier-2 visibility nicety per `architecture.md` §3.6.
 
-Cleaner v2: the skill writes a synchronous side-channel JSON line per lens (e.g. `__cortex_progress__ { "lens": "CodeQuality", "status": "complete" }`) that the consumer picks up reliably. Defer to v2 — v1 ships heuristic progress and tracks the cleanup in §13.
+Cleaner v2: the skill writes a synchronous side-channel JSON line per lens (e.g. `__cortex_progress__ { "lens": "CodeQuality", "status": "complete" }`) that the consumer picks up reliably. Echo cortex#253 R1 Minor-2 flagged that the regex `/^## Lens \d+:/` will silently miss lens transitions if the model formats them as `### Lens 1 — CodeQuality` or other variants — we'll only notice via pilot's dashboard showing nothing for long stretches. **Filing the structured side-channel JSON contract as a dedicated cortex follow-up issue (NOT leaving in §13 open-questions)** so it surfaces in PR-8's skill update planning rather than slipping. Until that lands, v1 progress envelopes are best-effort, not contract.
 
 ### §4.7 Visibility of the consumer in cortex's existing dashboards
 
@@ -535,7 +564,7 @@ The consumer's preconditions decide which nak kind to emit. Concrete preconditio
 
 **Emit:** `dispatch.task.failed` with `reason: { kind: "compliance_block", detail: "<compliance rule>" }`. Ack — compliance refusal is permanent for this request.
 
-This kind is the most aspirational of the four — cortex does not yet have a compliance-attestation block in cortex.yaml (architecture §7.5 says "the slot exists" but the schema isn't there). For v1, this branch is wired in code (returning a `compliance_block` reason is possible structurally) but no precondition triggers it. Documented as §13 open question 5.
+This kind is the most aspirational of the four — cortex does not yet have a compliance-attestation block in cortex.yaml (architecture §7.5 says "the slot exists" but the schema isn't there). **Implementation decision (Echo cortex#253 R1 Minor-5):** v1 does NOT ship the dead `compliance_block` branch. The `switch` statement in the consumer's nak handler omits the `compliance_block` case entirely; when §13.5's compliance-attestation schema lands, we add the branch in the same PR that introduces the trigger conditions. This avoids the dead-branch-rot anti-pattern while keeping the taxonomy upstream (cortex#249) ready for the eventual extension. The discriminator kind stays declared in `DispatchTaskFailedReason` — only the consumer-side handling omits it for v1.
 
 ### §7.5 The nak emission point
 
@@ -554,7 +583,9 @@ This means a nakked task **does not** emit `dispatch.task.started`. Pilot's `wai
 
 ### §7.6 The CC-session-side failure case
 
-What if the preconditions all pass, `dispatch.task.started` emits, the CC session spawns, and the model crashes / times out / produces unparseable output? This is **not a nak** — it's an honest pipeline failure. We emit `dispatch.task.failed` with `reason: { kind: "cant_do", detail: "review pipeline failed: <error>" }` and ack. The model-side failure isn't truly capability-mismatch (the agent COULD do it; the substrate broke), but cortex#249's taxonomy doesn't yet have a `substrate_failed` discriminator. We use `cant_do` as the closest fit and document the gap in §13 open question 4 (architecture follow-up: extend `DispatchTaskFailedReason` with a `substrate_failed` kind).
+What if the preconditions all pass, `dispatch.task.started` emits, the CC session spawns, and the model crashes / times out / produces unparseable output? This is **not a nak** — it's an honest pipeline failure. We emit `dispatch.task.failed` with `reason: { kind: "not_now", detail: "review pipeline failed: <error>", retry_after_ms: 0 }` and ack. The model-side failure isn't truly capability-mismatch (the agent COULD do it; the substrate broke), and `cant_do` would tell pilot to exit 3 (permanent — don't retry) which is the wrong operational signal for a transient CC crash. `not_now` is the closest match in cortex#249's taxonomy — "transient, retry safe" — and pilot's `design-pilot-restructure.md` §4.4 maps it to exit 4 (transient), which is the right operational shape. The `retry_after_ms: 0` hint says "no enforced cooldown; retry whenever you want."
+
+Echo cortex#253 R1 (Major-2) correctly flagged the original `cant_do` choice. Filing a follow-up issue to extend `DispatchTaskFailedReason` with a dedicated `substrate_failed` discriminator (cortex#249's anticipated `substrate_unavailable` already namechecked in `dispatch-events.ts:260-264`) — once that lands, this section flips from `not_now` to `substrate_failed` for semantic precision. Tracked in §13 open question 4.
 
 In all cases, a `dispatch.task.failed` MUST follow any emitted `dispatch.task.started` — never leave pilot waiting on a phantom in-flight task.
 
@@ -718,6 +749,7 @@ Each PR is revertable individually. The terminal state (PR-6 merged + at least o
 - Shutdown drain (§2.4): start a review, request shutdown, verify `dispatch.task.aborted` emits before the cortex daemon exits.
 - Capability-routing: two agents claiming different `<flavor>`s; envelopes route to the right agent based on subject suffix.
 - Coexistence (§9.2): Discord-mention path and capability-dispatch path can run concurrently against the same PR without runtime collision.
+- **Negative coexistence (Echo cortex#253 R1 Minor-4):** Discord-mention path does NOT emit `review.verdict.*` envelopes. Send a `@Echo review the-metafactory/cortex#229` Discord message → assert ZERO `review.verdict.*` envelopes emitted on the bus during the review's full lifecycle. Protects against future drift where someone tries to unify the two paths and accidentally emits orphan verdicts onto pilot's subscription.
 
 **Layer 3 — end-to-end test (PR-9, stub bus + real cortex + stub CC).**
 
@@ -772,14 +804,14 @@ When the last bullet ticks, cortex#237 is operationally proven and pilot can fli
 
 These are genuine ambiguities not resolved by the existing design-doc set or the cortex#237 issue body. Surface for resolution before PR-6 (the integration PR) lands.
 
-### §13.1 — Capability registry bucket reader (§3.5 deferral)
+### §13.1 — Capability registry bucket reader (§3.5 deferral) — **BLOCKS PILOT PHASE B.4**
 
-v1 ships publish-only registration. Pilot's pre-publish capability check (`design-pilot-restructure.md` §8.2 recommendation: "warn if registry has zero consumers") needs a bucket reader. Two open questions:
+v1 ships publish-only registration. **Pilot Phase B.4's "capability-aware pre-publish gate" depends on this** — without the bucket reader, pilot can't honour `design-pilot-restructure.md` §8.2's "warn if registry has zero consumers for this capability" check. The wire contract is one-way today: cortex publishes, no one reads. Two open questions:
 
 - Does the reader live in cortex (`src/bus/capability-registry.ts` grows a `lookup(capability)` method) or in myelin (a generic primitive sibling to the federation registry client)?
 - Does pilot read it directly via NATS KV, or via a cortex-side HTTP endpoint that proxies the lookup?
 
-Recommendation: cortex-side reader in `capability-registry.ts`, exported via the bus barrel; pilot reads it via NATS KV directly using the same myelin KV primitive cortex publishes through. Defers the M5 Discovery formalisation (myelin#9) to a separate effort. Track as a follow-up.
+Recommendation: cortex-side reader in `capability-registry.ts`, exported via the bus barrel; pilot reads it via NATS KV directly using the same myelin KV primitive cortex publishes through. Defers the M5 Discovery formalisation (myelin#9) to a separate effort. **Filing as a dedicated cortex issue rather than leaving in open-questions** so it surfaces in pilot Phase B planning (Echo cortex#253 R1 Minor-1).
 
 ### §13.2 — Substrate decoupling follow-up (Path B as future migration)
 
