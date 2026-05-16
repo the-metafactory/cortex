@@ -22,6 +22,7 @@ import type {
   ContextMessage,
 } from "../types";
 import type { Agent, SlackPresence } from "../../common/types/cortex-config";
+import type { BotConfig } from "../../common/types/config";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
 import type { SurfaceAdapter } from "../../bus/surface-router";
@@ -88,8 +89,11 @@ export class SlackAdapter implements PlatformAdapter {
   readonly platform = "slack";
   readonly instanceId: string;
 
-  private readonly agent: Agent;
-  private readonly presence: SlackPresence;
+  // cortex#235 r1#5 — agent + presence are reassigned by
+  // `updateConfig` to reflect hot-reload state. Same pattern as
+  // Discord + Mattermost adapters.
+  private agent: Agent;
+  private presence: SlackPresence;
   private readonly infra: SlackAdapterInfra;
   private readonly client: SlackClient;
   /**
@@ -102,7 +106,11 @@ export class SlackAdapter implements PlatformAdapter {
    */
   private botIdentity: SlackBotIdentity | null = null;
   /** Operator-explicit + adapter-side anti-self-loop set. */
-  private readonly trustedBotIds: ReadonlySet<string>;
+  // cortex#235 r1#5 — mutable to support hot-reload of the trusted
+  // bot ids set via `updateConfig`. The runtime is still read-only:
+  // every consumer treats it as a `ReadonlySet<string>`. Only
+  // `updateConfig` reassigns the reference.
+  private trustedBotIds: ReadonlySet<string>;
   /**
    * Echo cortex#233: bounded FIFO dedup ring of recently-seen Slack
    * message `ts` values. Slack's Socket Mode fires BOTH the `message`
@@ -222,6 +230,74 @@ export class SlackAdapter implements PlatformAdapter {
     const identity = await this.client.getBotIdentity();
     this.botIdentity = identity;
     return identity.userId;
+  }
+
+  /**
+   * F-092 hot-reload (cortex#235 r1#5). Match the live presence by
+   * the immutable `workspaceId` (Slack's analogue to Mattermost's
+   * `apiUrl` and Discord's `guildId` — the operator-paste-stable
+   * identifier within `config.slack[]`).
+   *
+   * Hot-reload-safe fields (no socket reconnect required):
+   *   - channels[]               (router targets — pure data)
+   *   - roles[] / defaultRole    (access control — adapter-local)
+   *   - allowedUserIds[]         (access control — adapter-local)
+   *   - trustedBotIds            (self-loop guard — adapter-local)
+   *
+   * NOT reloaded (would require dropping + reopening Socket Mode):
+   *   - botToken, appToken       (auth — needs new Socket Mode session)
+   *   - workspaceId              (immutable identity — used as match key)
+   *
+   * Mirrors the Discord (`adapters/discord/index.ts:583`) and
+   * Mattermost (`adapters/mattermost/index.ts:182`) implementations
+   * — same shape, same invariants. The agent reference is rebuilt
+   * so `agent.presence.slack` reflects the post-reload state (the
+   * stale-agent invariant Holly flagged at MIG-7.2c-internal cycle
+   * 1).
+   */
+  // eslint-disable-next-line @typescript-eslint/require-await
+  updateConfig(config: BotConfig): void {
+    const newInstance = config.slack.find((inst) => inst.workspaceId === this.presence.workspaceId);
+    if (!newInstance) {
+      console.warn(
+        `slack-adapter[${this.instanceId}]: instance removed from config (workspaceId=${this.presence.workspaceId}), ignoring update`,
+      );
+      return;
+    }
+
+    this.presence = {
+      ...this.presence,
+      channels: newInstance.channels,
+      roles: newInstance.roles,
+      defaultRole: newInstance.defaultRole,
+      allowedUserIds: newInstance.allowedUserIds,
+      // The PresenceSchema field is `trustedBotIds: string[]` but the
+      // adapter caches a `ReadonlySet<string>` for O(1) lookup at the
+      // self-loop guard. Keep the schema-shape value on `presence`
+      // and rebuild the set below.
+      trustedBotIds: newInstance.trustedBotIds,
+    };
+
+    // Rebuild the trusted-bot-ids set the self-loop guard consults.
+    // Note: `infra.trustedBotIds` (the Pass-2 resolver-merged set)
+    // wins over `presence.trustedBotIds` at construction time per
+    // cortex#108 item 1; on hot-reload we go back to the
+    // presence-only set, which matches the Mattermost behaviour and
+    // is the operator-intent surface a config edit speaks to.
+    // Two-pass trust resolver merge is a separate follow-up (r1#7).
+    this.trustedBotIds = new Set(newInstance.trustedBotIds);
+
+    // Rebuild agent so `agent.presence.slack` + `agent.id` /
+    // `agent.displayName` reflect the post-reload state. Same
+    // invariant Holly flagged for Discord + Mattermost.
+    this.agent = {
+      ...this.agent,
+      id: config.agent.name,
+      displayName: config.agent.displayName,
+      presence: { ...this.agent.presence, slack: this.presence },
+    };
+
+    console.log(`slack-adapter[${this.instanceId}]: config updated`);
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await

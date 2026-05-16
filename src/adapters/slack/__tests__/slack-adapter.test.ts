@@ -991,3 +991,138 @@ describe("SlackAdapter — system.adapter.* envelopes (cortex#235 r1#4)", () => 
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// cortex#235 r1#5 — updateConfig hot-reload
+// ---------------------------------------------------------------------------
+
+import type { BotConfig } from "../../../common/types/config";
+
+describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () => {
+  /**
+   * Minimal BotConfig fixture with a single Slack instance. Mirrors the
+   * Discord/Mattermost test pattern. Only the fields we care about for
+   * hot-reload need realistic values; others get cheap defaults.
+   */
+  function makeBotConfig(slackOverrides: Partial<BotConfig["slack"][number]> = {}): BotConfig {
+    return {
+      agent: { name: "luna", displayName: "Luna" },
+      discord: [],
+      mattermost: [],
+      slack: [{
+        instanceId: "slack-test",
+        enabled: true,
+        botToken: "xoxb-TEST-TOKEN",
+        appToken: "xapp-TEST-APP",
+        workspaceId: "T0WORKSPACE",
+        channels: [{ id: "C0CHANNEL1", name: "cortex" }],
+        allowedUserIds: [],
+        trustedBotIds: [],
+        roles: [],
+        defaultRole: "allow-all",
+        surfaceSubjects: [],
+        ...slackOverrides,
+      }],
+      claude: {} as BotConfig["claude"],
+    // Adapter's `updateConfig` only reads `config.slack[i]` and
+    // `config.agent`; the rest of the BotConfig surface
+    // (attachments/execution/github/api/etc.) is unused here. Cast
+    // through unknown for test ergonomics.
+    } as unknown as BotConfig;
+  }
+
+  test("matches the live presence by workspaceId and hot-reloads channels", () => {
+    const { adapter } = makeAdapter();
+    const updated = makeBotConfig({
+      channels: [
+        { id: "C0CHANNEL1", name: "cortex" },
+        { id: "C0CHANNEL2", name: "research" },
+      ],
+    });
+    adapter.updateConfig(updated);
+    // Channels visible via surfaceConfig.subjects? No — easier check:
+    // updateConfig didn't throw and the workspaceId match succeeded.
+    // Detail-level assertion via the agent rebuild below.
+    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.channels).toHaveLength(2);
+    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.channels[1]?.name).toBe("research");
+  });
+
+  test("hot-reloads roles + defaultRole", () => {
+    const { adapter } = makeAdapter();
+    const updated = makeBotConfig({
+      roles: [{ name: "operator", users: ["U0OP"], features: ["chat"] }],
+      defaultRole: "denied",
+    });
+    adapter.updateConfig(updated);
+    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.roles).toHaveLength(1);
+    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.defaultRole).toBe("denied");
+  });
+
+  test("hot-reloads allowedUserIds", () => {
+    const { adapter } = makeAdapter();
+    const updated = makeBotConfig({ allowedUserIds: ["U0NEW1", "U0NEW2"] });
+    adapter.updateConfig(updated);
+    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.allowedUserIds).toEqual(["U0NEW1", "U0NEW2"]);
+  });
+
+  test("hot-reloads trustedBotIds (rebuilds the lookup set)", async () => {
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+    // Update to add a trusted bot id; verify the bot-id message no
+    // longer trips the self-loop guard.
+    adapter.updateConfig(makeBotConfig({ trustedBotIds: ["B0PEERBOT"] }));
+    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.trustedBotIds).toEqual(["B0PEERBOT"]);
+    // Smoke: send a message FROM the peer bot id; should be admitted
+    // (no longer dropped as self-loop).
+    await emit(makeSlackEvent({ bot_id: "B0PEERBOT", user: undefined, text: "peer hello" }));
+    expect(cap.received).toHaveLength(1);
+    expect(cap.received[0]!.authorId).toBe("B0PEERBOT");
+    await adapter.stop();
+  });
+
+  test("does not touch botToken/appToken/workspaceId (reconnect-only fields)", () => {
+    const { adapter } = makeAdapter();
+    const originalWorkspaceId = (adapter as unknown as { agent: Agent }).agent.presence.slack?.workspaceId;
+    // Pass an instance with rotated tokens — the match-by-workspaceId
+    // still works, and the presence's tokens carry through unchanged.
+    adapter.updateConfig(makeBotConfig({
+      botToken: "xoxb-ROTATED-IGNORED",
+      appToken: "xapp-ROTATED-IGNORED",
+      channels: [{ id: "C0CHANNEL1", name: "cortex" }],
+    }));
+    // workspaceId preserved (match key)
+    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.workspaceId).toBe(originalWorkspaceId);
+    // Tokens: preserved across spread (presence retains original).
+    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.botToken).toBe("xoxb-TEST-TOKEN-12345");
+    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.appToken).toBe("xapp-TEST-APP-12345");
+  });
+
+  test("warns and no-ops when workspaceId removed from config", () => {
+    const { adapter } = makeAdapter();
+    const originalRoles = (adapter as unknown as { agent: Agent }).agent.presence.slack?.roles ?? [];
+    const originalWarn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    try {
+      // No slack[] instance with our workspaceId.
+      adapter.updateConfig(makeBotConfig({ workspaceId: "T0DIFFERENT" }));
+      // Roles unchanged — update was ignored.
+      expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.roles).toEqual(originalRoles);
+      // Warning emitted.
+      expect(warnings.some((w) => w.includes("instance removed from config"))).toBe(true);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("rebuilds agent.id + agent.displayName from new config", () => {
+    const { adapter } = makeAdapter();
+    const updated = makeBotConfig();
+    updated.agent.name = "luna-rebranded";
+    updated.agent.displayName = "Luna v2";
+    adapter.updateConfig(updated);
+    expect((adapter as unknown as { agent: Agent }).agent.id).toBe("luna-rebranded");
+    expect((adapter as unknown as { agent: Agent }).agent.displayName).toBe("Luna v2");
+  });
+});
