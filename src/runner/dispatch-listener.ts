@@ -223,22 +223,33 @@ export interface DispatchListener {
 // ---------------------------------------------------------------------------
 
 /**
+ * Build the canonical `dispatch.task.received` subject for `{org}`
+ * (+ optional `{stack}`). Used by both `defaultSubjects` (subscribe-side)
+ * and the audit-envelope fallback in `handleDispatchEnvelope`
+ * (synthesised when an inbound envelope arrived without a wire
+ * subject). Single source of truth so the next subject-shape change
+ * (e.g. cortex#264 underscore-regex resolution) updates both paths in
+ * lockstep — cortex#276 Maintainability finding cycle 2.
+ *
+ * IAW Phase A.5 (cortex#267): emits the 6-segment stack-aware grammar
+ * when `stack` is supplied; falls through to the legacy 5-segment form
+ * for backward compatibility with pre-A.5 deployments.
+ */
+function dispatchReceivedSubject(org: string, stack?: string): string {
+  if (stack === undefined) {
+    return `local.${org}.dispatch.task.received`;
+  }
+  return `local.${org}.${stack}.dispatch.task.received`;
+}
+
+/**
  * Default subject for the runner's bus subscription. The `{org}` segment
  * is substituted at registration time using `source.org` so a misconfigured
  * runner with no operator id can still subscribe (it'll match nothing
  * unless someone publishes under `local.default.dispatch.task.received`).
- *
- * IAW Phase A.5 (cortex#267): when `stack` is supplied, emits the
- * 6-segment stack-aware grammar `local.{org}.{stack}.dispatch.task.received`
- * matching sage's emit-side. When omitted, falls through to the legacy
- * 5-segment form for backward compatibility with operators on the
- * pre-A.5 deployment.
  */
 function defaultSubjects(org: string, stack?: string): string[] {
-  if (stack === undefined) {
-    return [`local.${org}.dispatch.task.received`];
-  }
-  return [`local.${org}.${stack}.dispatch.task.received`];
+  return [dispatchReceivedSubject(org, stack)];
 }
 
 export function createDispatchListener(
@@ -503,16 +514,11 @@ async function handleDispatchEnvelope(
     // callers / unit tests that don't pass a subject).
     //
     // IAW Phase A.5 (cortex#267): the synthesised fallback honours the
-    // operator's stack. Stack-aware deployments synthesise the 6-segment
-    // form `local.{org}.{stack}.dispatch.task.received` so audit
-    // consumers correlate against the same wire grammar the listener
-    // actually subscribes to. Stack-less deployments fall through to
-    // the legacy 5-segment form bit-identical to pre-cortex#267.
-    const synthesisedSubject =
-      stack === undefined
-        ? `local.${source.org}.dispatch.task.received`
-        : `local.${source.org}.${stack}.dispatch.task.received`;
-    const auditEnvelopeSubject = subject ?? synthesisedSubject;
+    // operator's stack via the shared `dispatchReceivedSubject` helper —
+    // single source of truth across the listener's subscribe-side
+    // default AND this audit-envelope synthesis path (cortex#276
+    // Maintainability finding cycle 2).
+    const auditEnvelopeSubject = subject ?? dispatchReceivedSubject(source.org, stack);
     const auditCommon = {
       source,
       principalId: decision.principalId,
