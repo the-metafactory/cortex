@@ -10,8 +10,8 @@ import { describe, expect, test } from "bun:test";
 import {
   createCcEventEnvelope,
   createCcEventPublisher,
-  isUuid,
 } from "../cc-events";
+import { isUuid } from "../../../common/types/uuid";
 import type { PublishedEvent } from "../hooks/lib/event-types";
 import { validateEnvelope } from "../../../bus/myelin/envelope-validator";
 

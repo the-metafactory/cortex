@@ -17,6 +17,7 @@
 import type { Database } from "bun:sqlite";
 import type { ProcessManager } from "../session/process-manager";
 import type { SpawnFn } from "../session/endpoint-resolver";
+import { isUuidLoose } from "../../../common/types/uuid";
 import type { WsClientRegistry } from "../ws/client-registry";
 import type {
   ApiError,
@@ -580,7 +581,9 @@ export function _resetDispatchDebounceForTests(): void {
 // version bits — because the wrapper just needs *some* opaque string CC's
 // `--session-id` will accept and EventLogger will tag events with. Stricter
 // parsing has no operational benefit here.
-const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+// cortex#196 — loose UUID check (`isUuidLoose`) is shared in
+// `src/common/types/uuid.ts`. Same 8-4-4-4-12 hex layout, no
+// version/variant constraint (matches the comment above).
 
 // eslint-disable-next-line @typescript-eslint/require-await
 export async function handleCreateSession(
@@ -608,7 +611,7 @@ export async function handleCreateSession(
   if (kind === "local.observed") {
     if (
       typeof body.ccSessionId !== "string" ||
-      !UUID_RE.test(body.ccSessionId)
+      !isUuidLoose(body.ccSessionId)
     ) {
       return error(
         `'ccSessionId' must be a UUID when kind='local.observed'`,

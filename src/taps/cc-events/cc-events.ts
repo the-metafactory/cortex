@@ -53,6 +53,7 @@ import {
   type Envelope,
 } from "../../bus/myelin/envelope-validator";
 import { buildBaseEnvelope } from "../../bus/envelope-builder";
+import { isUuid } from "../../common/types/uuid";
 import type { NatsLink } from "../../bus/nats/connection";
 import type { PublishedEvent } from "./hooks/lib/event-types";
 
@@ -118,18 +119,12 @@ function defaultCcSovereignty(
   };
 }
 
-/**
- * UUID v4 pattern — the envelope schema's `correlation_id` field constrains
- * to UUID format. CC sessions sometimes use UUID-shaped session_ids and
- * sometimes use shorter strings ("unknown", numeric ids); only UUID-shaped
- * values are propagated to envelope.correlation_id, the rest land in payload.
- */
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-export function isUuid(value: string): boolean {
-  return UUID_RE.test(value);
-}
+// cortex#196 — UUID v1-v5 check (`isUuid`) is shared in
+// `src/common/types/uuid.ts`. CC sessions sometimes use
+// UUID-shaped session_ids and sometimes use shorter strings
+// ("unknown", numeric ids); only UUID-shaped values are
+// propagated to envelope.correlation_id, the rest land in
+// payload.
 
 export interface CreateCcEventEnvelopeOpts {
   /**

@@ -79,6 +79,7 @@ import type {
 } from "../common/substrates/types";
 import type { PolicyEngine } from "../common/policy/engine";
 import { extractAgentIdFromDid } from "../common/policy/did";
+import { isUuid } from "../common/types/uuid";
 import type {
   Intent,
   PolicyDenyReason,
@@ -288,10 +289,9 @@ export function createDispatchListener(
  * (a producer that emits `received` and never sees `started` knows
  * something went wrong).
  */
-// UUID v1-v5 shape per RFC 4122 §3 — same regex used by the envelope
-// validator on `envelope.id`, applied here at the payload layer for
-// `payload.task_id`.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// cortex#196 — strict UUID v1-v5 check (`isUuid`) is now shared in
+// `src/common/types/uuid.ts`; the local `UUID_RE` regex was inlined
+// here pre-extraction.
 
 function parsePayload(envelope: Envelope): DispatchTaskReceivedPayload | null {
   const p = envelope.payload as Partial<DispatchTaskReceivedPayload> | undefined;
@@ -305,7 +305,7 @@ function parsePayload(envelope: Envelope): DispatchTaskReceivedPayload | null {
   // `started` / `completed` / `failed` envelopes downstream. Reject at
   // parse time so no envelopes are published and no CC process is
   // spawned for a bad id.
-  if (!UUID_RE.test(p.task_id)) {
+  if (!isUuid(p.task_id)) {
     console.warn(
       `dispatch-listener: rejecting envelope ${envelope.id} — task_id missing or not UUID-shaped`,
     );

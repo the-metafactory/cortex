@@ -63,6 +63,7 @@
 import type { Classification, Envelope } from "./myelin/envelope-validator";
 import { buildBaseEnvelope } from "./envelope-builder";
 import type { SystemEventSource } from "./system-events";
+import { isUuid } from "../common/types/uuid";
 
 /**
  * Re-export `SystemEventSource` under a domain-neutral alias so callers in
@@ -105,13 +106,9 @@ function defaultGithubSovereignty(
   };
 }
 
-/** UUID v4 pattern — same regex used by `taps/cc-events/cc-events.ts`. */
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function isUuid(value: string): boolean {
-  return UUID_RE.test(value);
-}
+// cortex#196 — strict UUID check (`isUuid`) is shared in
+// `src/common/types/uuid.ts`. Same v1-v5 grammar previously
+// inlined here.
 
 /**
  * Sanitize a free-form segment for use inside `envelope.type`. The schema

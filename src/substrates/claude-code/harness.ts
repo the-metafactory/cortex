@@ -73,6 +73,7 @@
 import { randomUUID } from "crypto";
 
 import { CCSession, type CCSessionOpts, type CCSessionResult } from "../../runner/cc-session";
+import { isUuidLoose } from "../../common/types/uuid";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
 import type {
   Capability,
@@ -389,7 +390,7 @@ export class ClaudeCodeHarness implements SessionHarness {
    * comparison across envelopes.
    */
   private correlationFor(req: DispatchRequest): string {
-    if (isUuid(req.requestId)) return req.requestId;
+    if (isUuidLoose(req.requestId)) return req.requestId;
     if (!this.warnedNonUuidRequestId) {
       console.warn(
         `claude-code-harness: requestId "${req.requestId}" is not UUID-shaped — substituting a generated correlation_id (this warning fires once per harness instance)`,
@@ -532,19 +533,11 @@ export class ClaudeCodeHarness implements SessionHarness {
 
 /**
  * Cheap UUID v4-ish validator. The envelope schema requires UUID-shaped
- * `correlation_id`; this check avoids minting a fresh UUID when the
- * caller already supplied a valid one as `requestId`.
- *
- * Pattern lifted verbatim from `bus/dispatch-events.ts` / `dispatch-
- * listener.ts` conventions — we match the same 8-4-4-4-12 hex layout
- * without enforcing the version/variant nibbles (the JSON Schema does
- * the strict check downstream).
- */
-function isUuid(s: string): boolean {
-  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
-    s,
-  );
-}
+// cortex#196 — loose UUID check (`isUuidLoose`) is shared in
+// `src/common/types/uuid.ts`. We match any 8-4-4-4-12 hex layout
+// without enforcing the version/variant nibbles (the JSON Schema
+// does the strict check downstream); v6/v7 session ids from CC
+// pass cleanly.
 
 /**
  * Trim error messages so a verbose stack doesn't blow the worklog limit
