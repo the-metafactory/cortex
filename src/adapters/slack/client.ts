@@ -57,6 +57,19 @@ export interface SlackInboundEvent {
 }
 
 /**
+ * Bot identity resolved via `auth.test`. Slack messages identify the bot
+ * via either the user id (`U…`, on normal messages) or the bot id (`B…`,
+ * on `bot_message` subtype events) — the self-loop guard has to know
+ * both. See Echo cortex#233 round-2 N1.
+ */
+export interface SlackBotIdentity {
+  /** Slack user id of the bot (`U…`). */
+  userId: string;
+  /** Slack bot id (`B…`). May be undefined on older app installs. */
+  botId?: string;
+}
+
+/**
  * Pluggable Slack client surface. The real implementation wraps
  * `SocketModeClient` + `WebClient`; tests pass a mock.
  */
@@ -64,7 +77,10 @@ export interface SlackClient {
   start(opts: { onEvent: (event: SlackInboundEvent) => Promise<void> }): Promise<void>;
   stop(): Promise<void>;
   postMessage(channel: string, text: string, threadTs?: string): Promise<{ ts?: string }>;
+  /** Convenience accessor for `userId`. Kept for adapter call-site brevity. */
   getBotUserId(): Promise<string>;
+  /** Full identity (both `userId` and `botId`). Used by the self-loop guard. */
+  getBotIdentity(): Promise<SlackBotIdentity>;
 }
 
 export interface RealSlackClientOptions {
@@ -89,7 +105,7 @@ export class RealSlackClient implements SlackClient {
   private readonly socket: SocketModeClient;
   private readonly web: WebClient;
   private readonly instanceId: string;
-  private cachedBotUserId: string | null = null;
+  private cachedIdentity: SlackBotIdentity | null = null;
 
   constructor(opts: RealSlackClientOptions) {
     this.instanceId = opts.instanceId ?? "slack";
@@ -121,8 +137,11 @@ export class RealSlackClient implements SlackClient {
       try {
         await payload.ack();
       } catch (err) {
-        process.stderr.write(
-          `slack-client[${this.instanceId}]: ack failed: ${err instanceof Error ? err.message : String(err)}\n`,
+        // Echo cortex#233 r1#8: use `console.warn` consistently across
+        // the Slack module to match Discord + Mattermost adapters.
+        console.warn(
+          `slack-client[${this.instanceId}]: ack failed:`,
+          err instanceof Error ? err.message : String(err),
         );
       }
       try {
@@ -131,8 +150,9 @@ export class RealSlackClient implements SlackClient {
         // Adapters are expected to swallow per-message errors so the
         // event stream doesn't tear down on one bad message; log and
         // continue.
-        process.stderr.write(
-          `slack-client[${this.instanceId}]: onEvent threw: ${err instanceof Error ? err.message : String(err)}\n`,
+        console.warn(
+          `slack-client[${this.instanceId}]: onEvent threw:`,
+          err instanceof Error ? err.message : String(err),
         );
       }
     };
@@ -146,8 +166,9 @@ export class RealSlackClient implements SlackClient {
     // promise rejection in the listener wrapper).
     const dispatch = (payload: { ack: () => Promise<void>; event: SlackInboundEvent }): void => {
       handle(payload).catch((err: unknown) => {
-        process.stderr.write(
-          `slack-client[${this.instanceId}]: dispatch threw: ${err instanceof Error ? err.message : String(err)}\n`,
+        console.warn(
+          `slack-client[${this.instanceId}]: dispatch threw:`,
+          err instanceof Error ? err.message : String(err),
         );
       });
     };
@@ -170,20 +191,38 @@ export class RealSlackClient implements SlackClient {
   }
 
   /**
-   * Fetch the bot user id via `auth.test` and cache. The cortex
-   * `TrustResolver` (cortex#76) requires the platform user id of every
-   * bot adapter so peer agents resolve cleanly across processes.
+   * Fetch the full bot identity (userId + botId) via `auth.test` and
+   * cache. The cortex `TrustResolver` (cortex#76) requires the platform
+   * user id of every bot adapter so peer agents resolve cleanly across
+   * processes; the adapter additionally needs the `bot_id` so the
+   * self-loop guard catches `bot_message` subtype echoes (Echo
+   * cortex#233 round-2 N1).
+   *
+   * Error path intentionally omits `JSON.stringify(res)`: the
+   * `auth.test` response shape includes workspace metadata (`team`,
+   * `team_id`, `enterprise_id`, `url`) that, while not credentials,
+   * is operator-environment-identifying. Log only the missing-field
+   * diagnosis (Echo cortex#233 round-1 r1#10, deferred but worth
+   * fixing the new error path while we're here).
    */
-  async getBotUserId(): Promise<string> {
-    if (this.cachedBotUserId) return this.cachedBotUserId;
+  async getBotIdentity(): Promise<SlackBotIdentity> {
+    if (this.cachedIdentity) return this.cachedIdentity;
     const res = await this.web.auth.test();
-    const id = typeof res.user_id === "string" ? res.user_id : "";
-    if (!id) {
+    const userId = typeof res.user_id === "string" ? res.user_id : "";
+    if (!userId) {
       throw new Error(
-        `slack-client[${this.instanceId}]: auth.test returned no user_id (response: ${JSON.stringify(res)})`,
+        `slack-client[${this.instanceId}]: auth.test returned no user_id`,
       );
     }
-    this.cachedBotUserId = id;
-    return id;
+    const identity: SlackBotIdentity = {
+      userId,
+      ...(typeof res.bot_id === "string" && res.bot_id.length > 0 && { botId: res.bot_id }),
+    };
+    this.cachedIdentity = identity;
+    return identity;
+  }
+
+  async getBotUserId(): Promise<string> {
+    return (await this.getBotIdentity()).userId;
   }
 }

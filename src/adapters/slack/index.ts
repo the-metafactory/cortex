@@ -27,7 +27,7 @@ import type { SurfaceAdapter } from "../../bus/surface-router";
 import type { PayloadFilter } from "../../bus/payload-filter";
 import { resolveRole } from "../discord/role-resolver";
 import { formatEnvelopeAsMarkdown } from "../envelope-renderer";
-import { RealSlackClient, type SlackClient, type SlackInboundEvent } from "./client";
+import { RealSlackClient, type SlackClient, type SlackInboundEvent, type SlackBotIdentity } from "./client";
 
 /**
  * Cortex-deployment-level wiring passed alongside the agent + presence
@@ -74,8 +74,15 @@ export class SlackAdapter implements PlatformAdapter {
   private readonly presence: SlackPresence;
   private readonly infra: SlackAdapterInfra;
   private readonly client: SlackClient;
-  /** Resolved bot user id, fetched on first `start()`. Used for self-loop guards. */
-  private botUserId: string | null = null;
+  /**
+   * Resolved bot identity, fetched in `start()` BEFORE the socket opens
+   * (Echo cortex#233 round-1 TOCTOU fix). `userId` is the `U…` carried
+   * on normal messages; `botId` is the `B…` carried on `bot_message`
+   * subtype events. The self-loop guard checks BOTH so a `chat.postMessage`
+   * that round-trips through Slack as a `bot_message` cannot echo
+   * (Echo cortex#233 round-2 N1).
+   */
+  private botIdentity: SlackBotIdentity | null = null;
   /** Operator-explicit + adapter-side anti-self-loop set. */
   private readonly trustedBotIds: ReadonlySet<string>;
   /**
@@ -117,16 +124,15 @@ export class SlackAdapter implements PlatformAdapter {
 
   async start(onMessage: (msg: InboundMessage) => Promise<void>): Promise<void> {
     // Echo cortex#233 (review #2): close the self-loop TOCTOU window by
-    // resolving `botUserId` BEFORE opening the Socket Mode connection.
-    // `auth.test` uses the bot token (xoxb-) — it does NOT need a live
-    // Socket Mode session. If we fetched the id after `client.start()`,
-    // any inbound event arriving in the millisecond gap between
-    // socket-connected and auth.test-resolved would pass through
-    // `translateEvent` with `botUserId === null`, silently failing-open
-    // on the self-loop guard. Fail-closed: if `getBotUserId()` rejects,
-    // abort startup rather than open a socket whose self-echo will be
-    // dispatched as a real message.
-    this.botUserId = await this.client.getBotUserId();
+    // resolving the bot identity BEFORE opening the Socket Mode
+    // connection. `auth.test` uses the bot token (xoxb-) — it does NOT
+    // need a live Socket Mode session. Fetching identity after
+    // `client.start()` opens a ~one-round-trip gap where inbound events
+    // would pass through `translateEvent` with the cache null, silently
+    // failing-open on the self-loop guard. Fail-closed: if
+    // `getBotIdentity()` rejects, abort startup rather than open a
+    // socket whose self-echo will be dispatched as a real message.
+    this.botIdentity = await this.client.getBotIdentity();
     await this.client.start({
       onEvent: async (event) => {
         const msg = this.translateEvent(event);
@@ -138,16 +144,23 @@ export class SlackAdapter implements PlatformAdapter {
 
   async stop(): Promise<void> {
     await this.client.stop();
-    // Drop the cached bot id so a subsequent `start()` re-fetches —
+    // Drop the cached bot identity so a subsequent `start()` re-fetches —
     // guards against a token swap between sessions.
-    this.botUserId = null;
+    this.botIdentity = null;
+    // Echo cortex#233 round-2 N4: clear the dedup ring so a reused
+    // adapter instance doesn't carry over `ts` values from a prior run.
+    // For long-lived processes this is academic (the cap bounds memory),
+    // but for hot-restart and test-fixture reuse it prevents stale
+    // dedup decisions that would silently drop legitimate messages.
+    this.seenTs.clear();
+    this.seenTsOrder.length = 0;
   }
 
   async getPlatformUserId(): Promise<string> {
-    if (this.botUserId) return this.botUserId;
-    const id = await this.client.getBotUserId();
-    this.botUserId = id;
-    return id;
+    if (this.botIdentity) return this.botIdentity.userId;
+    const identity = await this.client.getBotIdentity();
+    this.botIdentity = identity;
+    return identity.userId;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -162,7 +175,12 @@ export class SlackAdapter implements PlatformAdapter {
 
   resolveAccess(msg: InboundMessage): AccessDecision {
     // Self-loop guard: never act on messages authored by this bot.
-    if (this.botUserId && msg.authorId === this.botUserId) {
+    // Check both the user id and the bot id — `chat.postMessage` from
+    // this bot can round-trip as a `bot_message` event where
+    // `authorId === botId`, not `botUserId` (Echo cortex#233 round-2 N1).
+    const isSelfUser = this.botIdentity?.userId === msg.authorId;
+    const isSelfBot = this.botIdentity?.botId !== undefined && this.botIdentity.botId === msg.authorId;
+    if (this.botIdentity && (isSelfUser || isSelfBot)) {
       return {
         allowed: false,
         features: { chat: false, async: false, team: false },
@@ -362,10 +380,14 @@ export class SlackAdapter implements PlatformAdapter {
       }
     }
 
-    // Drop self-authored messages at the source — both via user id
-    // (when we know our own id) and via the bot_id-shaped subtype path
-    // (when Slack doesn't include `user`).
-    if (this.botUserId && event.user === this.botUserId) return null;
+    // Self-loop drop at the source. Echo cortex#233 round-2 N1:
+    // `auth.test` exposes BOTH `user_id` (`U…`) and `bot_id` (`B…`);
+    // Slack delivers self-echoed `chat.postMessage` calls as either
+    // shape depending on subtype. Match both.
+    if (this.botIdentity) {
+      if (event.user === this.botIdentity.userId) return null;
+      if (event.bot_id !== undefined && event.bot_id === this.botIdentity.botId) return null;
+    }
 
     // Subtype gate: accept only "real" messages and trusted bot
     // messages. System notices like `channel_join`, `channel_leave`,
@@ -374,9 +396,15 @@ export class SlackAdapter implements PlatformAdapter {
       return null;
     }
     if (event.subtype === "bot_message") {
-      // bot_message events authenticate via `bot_id` instead of `user`.
-      // Require the operator to opt the bot in via `trustedBotIds`.
-      const author = event.user ?? event.bot_id ?? "";
+      // bot_message events authenticate via `bot_id` (`B…`) — NOT the
+      // `user_id` (`U…`) shape carried on normal messages. Echo
+      // cortex#233 round-2 N2: the schema doc previously said "user
+      // ids (`U…`)" while the runtime checked `event.user ?? event.bot_id`,
+      // which silently never matched the `B…` shape Slack actually
+      // delivers for bot_message events. Match `event.bot_id`
+      // explicitly; operators populate `trustedBotIds` with `B…`
+      // values (schema doc updated to reflect this).
+      const author = event.bot_id ?? "";
       if (!author || !this.trustedBotIds.has(author)) return null;
     }
 

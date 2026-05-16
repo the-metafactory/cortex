@@ -10,7 +10,7 @@
 
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { SlackAdapter, type SlackAdapterInfra } from "../index";
-import type { SlackClient, SlackInboundEvent } from "../client";
+import type { SlackClient, SlackInboundEvent, SlackBotIdentity } from "../client";
 import type { Agent, SlackPresence } from "../../../common/types/cortex-config";
 import type { InboundMessage } from "../../types";
 import type { Envelope } from "../../../bus/myelin/envelope-validator";
@@ -26,15 +26,17 @@ interface FakeSlackClientState {
   startCount: number;
   stopCount: number;
   botUserId: string;
+  /** Optional bot id (`B…`) returned alongside the user id by `getBotIdentity`. */
+  botId?: string;
   /** Throw on next postMessage when set. */
   postMessageError?: Error;
   /**
    * Sequence of client-method calls in invocation order — used to
-   * assert that `getBotUserId` resolves BEFORE `start` opens the
+   * assert that `getBotIdentity` resolves BEFORE `start` opens the
    * socket (Echo cortex#233 self-loop TOCTOU fix).
    */
-  callOrder: ("start" | "stop" | "postMessage" | "getBotUserId")[];
-  /** When set, the next `getBotUserId` call rejects with this error. */
+  callOrder: ("start" | "stop" | "postMessage" | "getBotUserId" | "getBotIdentity")[];
+  /** When set, the next identity call rejects with this error. */
   getBotUserIdError?: Error;
 }
 
@@ -49,6 +51,7 @@ function makeFakeClient(initial: Partial<FakeSlackClientState> = {}): {
     stopCount: 0,
     botUserId: initial.botUserId ?? "UBOT123",
     callOrder: [],
+    ...(initial.botId !== undefined && { botId: initial.botId }),
     ...(initial.postMessageError !== undefined && { postMessageError: initial.postMessageError }),
     ...(initial.getBotUserIdError !== undefined && { getBotUserIdError: initial.getBotUserIdError }),
   };
@@ -84,6 +87,15 @@ function makeFakeClient(initial: Partial<FakeSlackClientState> = {}): {
       state.callOrder.push("getBotUserId");
       if (state.getBotUserIdError) throw state.getBotUserIdError;
       return state.botUserId;
+    },
+    // eslint-disable-next-line @typescript-eslint/require-await
+    async getBotIdentity(): Promise<SlackBotIdentity> {
+      state.callOrder.push("getBotIdentity");
+      if (state.getBotUserIdError) throw state.getBotUserIdError;
+      return {
+        userId: state.botUserId,
+        ...(state.botId !== undefined && { botId: state.botId }),
+      };
     },
   };
 
@@ -235,6 +247,27 @@ describe("SlackAdapter — lifecycle", () => {
     expect(state.stopCount).toBe(1);
   });
 
+  test("stop clears the dedup ring so a re-started adapter sees fresh ts (Echo r2 N4)", async () => {
+    // Echo r2 N4: without clearing the ring on stop(), a hot-restart
+    // (config watcher / test fixture reuse) would carry over `ts`
+    // values from the prior session, silently dropping legitimate
+    // messages whose ts happened to match.
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+    await emit(makeSlackEvent({ ts: "1700000000.111111", text: "first" }));
+    expect(cap.received).toHaveLength(1);
+
+    await adapter.stop();
+    await adapter.start(cap.onMessage);
+
+    // Same ts replayed AFTER stop+start — must NOT be dropped by the
+    // ring, because stop() cleared it.
+    await emit(makeSlackEvent({ ts: "1700000000.111111", text: "first-replay" }));
+    expect(cap.received).toHaveLength(2);
+    expect(cap.received[1]?.content).toBe("first-replay");
+  });
+
   test("getPlatformUserId fetches on demand when not yet cached", async () => {
     const { adapter, state } = makeAdapter({ clientState: { botUserId: "UFRESH" } });
     // Don't start — call getPlatformUserId directly.
@@ -243,24 +276,24 @@ describe("SlackAdapter — lifecycle", () => {
     expect(id).toBe("UFRESH");
   });
 
-  test("start fetches getBotUserId BEFORE opening the socket (TOCTOU fix)", async () => {
+  test("start fetches getBotIdentity BEFORE opening the socket (TOCTOU fix)", async () => {
     // Echo cortex#233 (review #2): the self-loop guard depends on
-    // `botUserId` being non-null at the moment any inbound event is
+    // identity being non-null at the moment any inbound event is
     // translated. Before this fix, `client.start()` was awaited first
-    // and `getBotUserId()` second — opening a ~auth.test-round-trip
-    // window where events could arrive with the cache still null. Lock
-    // in the new ordering: getBotUserId → start.
+    // and identity second — opening a ~auth.test-round-trip window
+    // where events could arrive with the cache still null. Lock in
+    // the new ordering: getBotIdentity → start.
     const { adapter, state } = makeAdapter();
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
-    const getIdx = state.callOrder.indexOf("getBotUserId");
+    const getIdx = state.callOrder.indexOf("getBotIdentity");
     const startIdx = state.callOrder.indexOf("start");
     expect(getIdx).toBeGreaterThanOrEqual(0);
     expect(startIdx).toBeGreaterThanOrEqual(0);
     expect(getIdx).toBeLessThan(startIdx);
   });
 
-  test("start aborts (fail-closed) when getBotUserId rejects", async () => {
+  test("start aborts (fail-closed) when getBotIdentity rejects", async () => {
     // Fail-closed companion to the TOCTOU fix: if we can't resolve our
     // own bot id, opening the socket is unsafe — any self-echo would
     // dispatch as a real message. Surface the error to the caller.
@@ -312,6 +345,72 @@ describe("SlackAdapter — translateEvent", () => {
     await adapter.start(cap.onMessage);
 
     await emit(makeSlackEvent({ user: "UBOTSELF" }));
+
+    expect(cap.received).toHaveLength(0);
+  });
+
+  test("drops self-echo via bot_id path (Echo r2 N1)", async () => {
+    // When this bot's own `chat.postMessage` round-trips as a
+    // `bot_message` subtype event, the author is `event.bot_id` (`B…`),
+    // NOT `event.user`. The self-loop guard must catch that path too
+    // or the bot will echo itself.
+    const { adapter, emit } = makeAdapter({
+      clientState: { botUserId: "UBOTSELF", botId: "BSELF" },
+    });
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+
+    await emit(makeSlackEvent({
+      subtype: "bot_message",
+      user: undefined,
+      bot_id: "BSELF",
+      text: "self echo",
+    }));
+
+    expect(cap.received).toHaveLength(0);
+  });
+
+  test("accepts a peer bot when trustedBotIds contains its B-id (Echo r2 N2)", async () => {
+    // Echo r2 N2 contract: trustedBotIds is `B…` (bot ids), NOT `U…`
+    // (user ids). A peer bot's bot_message event arrives with
+    // `bot_id: B…` and must be matched against the B-id list.
+    const { adapter, emit } = makeAdapter({
+      infra: { trustedBotIds: new Set(["BPEER"]) },
+      clientState: { botUserId: "UBOTSELF", botId: "BSELF" },
+    });
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+
+    await emit(makeSlackEvent({
+      subtype: "bot_message",
+      user: undefined,
+      bot_id: "BPEER",
+      text: "trusted peer",
+    }));
+
+    expect(cap.received).toHaveLength(1);
+    expect(cap.received[0]?.authorId).toBe("BPEER");
+  });
+
+  test("rejects peer bot when only its U-id (not B-id) is in trustedBotIds (Echo r2 N2)", async () => {
+    // Operators following the OLD doc would populate trustedBotIds with
+    // a `U…` value. The runtime check against `event.bot_id` (a `B…`)
+    // never matches → trust silently fails to take effect. After the
+    // r2 fix, the documented contract is `B…`; populating `U…` no
+    // longer matches anything in the bot_message path, by design.
+    const { adapter, emit } = makeAdapter({
+      infra: { trustedBotIds: new Set(["UPEER"]) }, // wrong shape per new doc
+      clientState: { botUserId: "UBOTSELF", botId: "BSELF" },
+    });
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+
+    await emit(makeSlackEvent({
+      subtype: "bot_message",
+      user: undefined,
+      bot_id: "BPEER",
+      text: "would-be peer",
+    }));
 
     expect(cap.received).toHaveLength(0);
   });
@@ -462,6 +561,20 @@ describe("SlackAdapter — resolveAccess", () => {
     // start() to populate the cached bot user id.
     await adapter.start(captureInbound().onMessage);
     const decision = adapter.resolveAccess(makeInbound("UBOTSELF"));
+    expect(decision.allowed).toBe(false);
+    expect(decision.denyReason).toContain("Self-loop");
+  });
+
+  test("self-loop denial also fires for the bot_id (B-id) path (Echo r2 N1)", async () => {
+    // resolveAccess sees the post-translate InboundMessage where
+    // authorId may be either the U-id or the B-id depending on the
+    // event subtype. Both must trigger the self-loop deny so a
+    // late-stage echo can't slip through.
+    const { adapter } = makeAdapter({
+      clientState: { botUserId: "UBOTSELF", botId: "BSELF" },
+    });
+    await adapter.start(captureInbound().onMessage);
+    const decision = adapter.resolveAccess(makeInbound("BSELF"));
     expect(decision.allowed).toBe(false);
     expect(decision.denyReason).toContain("Self-loop");
   });

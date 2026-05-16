@@ -339,11 +339,21 @@ export const SlackPresenceSchema = z.object({
    */
   allowedUserIds: z.array(z.string()).default([]),
   /**
-   * Operator-set Slack bot user ids (`U...`) of peer bots permitted to
+   * Operator-set Slack **bot ids** (`B…`) of peer bots permitted to
    * trigger this presence. Mirrors `DiscordPresenceSchema.trustedBotIds`
-   * — same cross-process bridge semantics. The bot's own user id is
-   * never allowed regardless of this list (anti-self-loop guard in
-   * `SlackAdapter`).
+   * — same cross-process bridge semantics.
+   *
+   * Echo cortex#233 round-2 N2: this field used to say "user ids (`U…`)"
+   * but Slack delivers peer-bot messages as the `bot_message` subtype
+   * with author identified by `event.bot_id` (`B…`), NOT `event.user`.
+   * Operators populating `U…` values would silently never see their
+   * trust take effect. Always use the `B…` value Slack reports for
+   * the peer bot — visible in the peer bot's `auth.test.bot_id`, or
+   * on the peer's app manifest under "Bot User".
+   *
+   * The bot's own ids (`auth.test.user_id` AND `auth.test.bot_id`)
+   * are never allowed regardless of this list (anti-self-loop guard
+   * in `SlackAdapter`).
    */
   trustedBotIds: z.array(z.coerce.string()).default([]),
   /** Platform-side role config (see DiscordPresenceSchema.roles). */
