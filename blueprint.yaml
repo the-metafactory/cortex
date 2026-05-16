@@ -297,3 +297,76 @@ features:
     parent: I-106
     issue: 297
     depends_on: [I-243C, I-242A]
+
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # R-237 — Capability-dispatch review consumer (cortex#237)
+  # 9-PR cluster per docs/design-capability-dispatch-review-consumer.md §10.1.
+  # 8/9 PRs MERGED: #273 PR-1, #283 PR-2, #284 PR-3, #285 PR-4, #287 PR-5,
+  # #288 PR-7, #289 PR-8b, #290 PR-6 (integration gate).
+  # Remaining: PR-9 e2e rig with §11.1 Layer 2 round-trip.
+  # ─────────────────────────────────────────────────────────────────────────
+
+  R-237:
+    name: Capability-dispatch review consumer (cortex#237 cluster)
+    status: in-progress
+    description: >
+      Path A consumer landing Echo on `tasks.code-review.<flavor>` via MyelinSubscriber
+      pull mode; emits `review.verdict.{approved,changes-requested,commented}` +
+      `dispatch.task.failed` per cortex#249 nak taxonomy. See
+      docs/design-capability-dispatch-review-consumer.md §10.1 for PR phasing.
+      8/9 PRs MERGED. PR-9 e2e rig remains.
+    issue: 237
+    children: [R-237.9, R-237-followup-288, R-237-followup-214]
+    depends_on: [I-101]
+
+  R-237.9:
+    name: cortex#237 PR-9 — e2e test rig (§11.1 Layer 2 round-trip)
+    status: in-progress
+    description: >
+      Stub-NATS e2e rig per design spec §11.1 Layer 2. Closes the cortex#237
+      cluster on merge.
+    parent: R-237
+
+  R-237-followup-288:
+    name: cortex#288 follow-up — boot-log accuracy + ConfigWatcher TODO
+    status: in-progress
+    description: >
+      Architect non-blocking observations from cortex#288 review: boot-log
+      overcount on swallowed failures + missing inline TODO at ConfigWatcher
+      callback site.
+    parent: R-237
+
+  R-237-followup-214:
+    name: Verify cortex#214 — Echo review pipeline drops via #collaboration
+    status: planned
+    description: >
+      Pre-cortex#237 issue; cortex#290 supersedes the silent-drop path with
+      typed dispatch.task.failed envelopes. Verify in P-VERIFY window.
+    parent: R-237
+    issue: 214
+
+  W3-CUTOVER:
+    name: Wave 3 cutover — capability-dispatch path becomes default
+    status: in-progress
+    description: >
+      Phase C of docs/design-pilot-restructure.md. Flips Echo + pilot from
+      Discord-mention review loop to bus-native capability dispatch.
+    children: [W3-CUTOVER.C3]
+    depends_on: [R-237]
+
+  W3-CUTOVER.C3:
+    name: Wave 3 C.3 — cortex docs cutover-complete (cortex#271)
+    status: done
+    description: >
+      Flipped 6 rows in docs/design-pilot-restructure.md §4 maturity tables.
+    parent: W3-CUTOVER
+    issue: 271
+
+  W4-RETIRE:
+    name: Wave 4 — pilot legacy retirement + arc-manifest v1.0.0
+    status: planned
+    description: >
+      Pilot bus/legacy + mention-dispatch + Discord retirement, concluding
+      with pilot v1.0.0. Sub-features on pilot:P-D1..P-D4.
+    depends_on: [W3-CUTOVER]
