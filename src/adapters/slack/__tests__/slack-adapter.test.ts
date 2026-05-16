@@ -1280,3 +1280,174 @@ describe("SlackAdapter — two-pass dispatch gate (cortex#235 r1#7)", () => {
     await adapter.stop();
   });
 });
+
+// ---------------------------------------------------------------------------
+// cortex#235 r1#11 — coverage-gap tests (malformed payloads, FIFO eviction,
+// cache identity, surfaceFilter pass-through)
+// ---------------------------------------------------------------------------
+
+describe("SlackAdapter — translateEvent malformed payloads (cortex#235 r1#11)", () => {
+  test("event with missing ts passes through but skips dedup (documented behavior)", async () => {
+    // translateEvent: "Events without a `ts` (defensive — real
+    // Slack messages always carry one) skip dedup and pass
+    // through." That contract is intentional; assert it.
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
+    await emit({
+      type: "message",
+      user: "U0HUMAN",
+      channel: "C0CHANNEL1",
+      text: "no ts here",
+    } as unknown as SlackInboundEvent);
+    expect(cap.received).toHaveLength(1);
+    expect(cap.received[0]!.content).toBe("no ts here");
+    // The dedup-skip path means re-emitting the same content
+    // would dispatch again (no ts → no dedup key).
+    await emit({
+      type: "message",
+      user: "U0HUMAN",
+      channel: "C0CHANNEL1",
+      text: "no ts here",
+    } as unknown as SlackInboundEvent);
+    expect(cap.received).toHaveLength(2);
+    await adapter.stop();
+  });
+
+  test("event with missing channel passes through with undefined channelId (documented gap)", async () => {
+    // translateEvent does NOT defensively drop on missing
+    // `channel`. The InboundMessage emits with `channelId:
+    // undefined`; downstream postResponse would fail at the Slack
+    // API call site. Pinning current behaviour so a future
+    // defensive-drop change is intentional. Tracked on cortex#235
+    // for follow-up hardening.
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
+    await emit({
+      type: "message",
+      user: "U0HUMAN",
+      ts: "1700000000.000001",
+      text: "no channel",
+    } as unknown as SlackInboundEvent);
+    expect(cap.received).toHaveLength(1);
+    expect(cap.received[0]!.channelId).toBeUndefined();
+    await adapter.stop();
+  });
+
+  test("event with neither user nor bot_id is dropped (no plausible author)", async () => {
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
+    await emit(makeSlackEvent({ user: undefined, bot_id: undefined, text: "ghost" }));
+    expect(cap.received).toHaveLength(0);
+    await adapter.stop();
+  });
+
+  test("event with subtype=bot_message but no bot_id is dropped", async () => {
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
+    await emit(makeSlackEvent({
+      user: undefined,
+      bot_id: undefined,
+      subtype: "bot_message",
+      text: "headless bot",
+    }));
+    expect(cap.received).toHaveLength(0);
+    await adapter.stop();
+  });
+});
+
+describe("SlackAdapter — dedup ring FIFO eviction (cortex#235 r1#11)", () => {
+  test("ring evicts oldest at DEDUP_CAPACITY=256 boundary", async () => {
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
+    // Fill the ring with 257 distinct ts values. The first one
+    // (ts=0001) gets evicted at the 257th insert. A second sighting
+    // of ts=0001 should therefore NOT be deduped (the ring forgot
+    // it).
+    for (let i = 1; i <= 257; i++) {
+      const ts = `1700000000.${String(i).padStart(6, "0")}`;
+      await emit(makeSlackEvent({ ts, text: `msg-${i}` }));
+    }
+    expect(cap.received).toHaveLength(257);
+    // Re-emit the first ts. Pre-eviction this would dedup; post-
+    // eviction it dispatches a second time.
+    await emit(makeSlackEvent({
+      ts: `1700000000.${String(1).padStart(6, "0")}`,
+      text: "msg-1-resighted",
+    }));
+    expect(cap.received).toHaveLength(258);
+    expect(cap.received[257]!.content).toBe("msg-1-resighted");
+    await adapter.stop();
+  });
+
+  test("ring still dedups within capacity window", async () => {
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+    adapter.attachInboundDispatch();
+    await emit(makeSlackEvent({ ts: "1700000000.000001", text: "first" }));
+    await emit(makeSlackEvent({ ts: "1700000000.000001", text: "duplicate" }));
+    expect(cap.received).toHaveLength(1);
+    expect(cap.received[0]!.content).toBe("first");
+    await adapter.stop();
+  });
+});
+
+describe("SlackAdapter — surfaceConfig passes surfaceFilter through (cortex#235 r1#11)", () => {
+  test("surfaceFilter is plumbed onto surfaceConfig (operator filter visible to router)", () => {
+    // PayloadFilter is a structured pattern (envelope/payload field
+    // matchers), not a callback. The surface-router consumes
+    // `surfaceConfig.filter` for the post-subject-match filter step.
+    const filter = {
+      envelope: { type: ["tasks.code-review.typescript"] },
+    };
+    const presence = makePresence({ surfaceSubjects: ["local.metafactory.tasks.code-review.>"] });
+    const agent = makeAgent(presence);
+    const fake = makeFakeClient();
+    const adapter = new SlackAdapter(agent, presence, {
+      instanceId: "slack-test",
+      operator: {},
+      client: fake.client,
+      surfaceSubjects: presence.surfaceSubjects,
+      surfaceFilter: filter,
+    });
+    expect(adapter.surfaceConfig.filter).toBe(filter);
+    expect(adapter.surfaceConfig.subjects).toEqual([
+      "local.metafactory.tasks.code-review.>",
+    ]);
+  });
+
+  test("surfaceConfig.filter is undefined when no surfaceFilter declared", () => {
+    const { adapter } = makeAdapter({ presence: { surfaceSubjects: ["local.metafactory.>"] } });
+    expect(adapter.surfaceConfig.filter).toBeUndefined();
+  });
+});
+
+describe("SlackAdapter — getBotIdentity / getPlatformUserId cache (cortex#235 r1#11)", () => {
+  test("repeat calls to getPlatformUserId return same value without re-fetching", async () => {
+    const { adapter, state } = makeAdapter({ clientState: { botUserId: "UBOT123", botId: "B0BOT" } });
+    await adapter.start(async () => {});
+    adapter.attachInboundDispatch();
+    // First call resolves identity via start's getBotIdentity.
+    // Subsequent calls hit the cache — no additional API call.
+    const callsBefore = state.callOrder.filter((c) => c === "getBotIdentity" || c === "getBotUserId").length;
+    const id1 = await adapter.getPlatformUserId();
+    const id2 = await adapter.getPlatformUserId();
+    const callsAfter = state.callOrder.filter((c) => c === "getBotIdentity" || c === "getBotUserId").length;
+    expect(id1).toBe("UBOT123");
+    expect(id2).toBe("UBOT123");
+    // start() called getBotIdentity once; subsequent getPlatformUserId
+    // calls hit the cache (no new client-side fetches).
+    expect(callsAfter).toBe(callsBefore);
+    await adapter.stop();
+  });
+});
