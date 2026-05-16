@@ -301,13 +301,7 @@ export function createCcEventPublisher(
 
   return (event: PublishedEvent) => {
     const envelope = buildEnvelope(event, source);
-    // Subject mirrors envelope classification per IAW A.3 AND the
-    // operator stack per IAW A.5 (cortex#266). `stack` is undefined
-    // when the operator omitted the `cortex.yaml stack:` block; in
-    // that case `deriveNatsSubject` returns the legacy 5-segment form
-    // (bit-identical to pre-cortex#266 output). When supplied, the
-    // 6-segment form `local.{org}.{stack}.{type}` is emitted so this
-    // relay's wire grammar matches MyelinRuntime.publish post-#262.
+    // IAW A.3 classification + A.5 stack — see `CreateCcEventPublisherOpts.stack`.
     const subject = deriveNatsSubject(envelope, stack);
     try {
       opts.link.publish(subject, JSON.stringify(envelope));

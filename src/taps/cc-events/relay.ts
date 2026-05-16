@@ -195,12 +195,24 @@ program
       options.natsToken ?? process.env.NATS_TOKEN;
     const org: string =
       options.org ?? process.env.GROVE_OPERATOR ?? process.env.NATS_ORG ?? "default";
-    // cortex#266 — stack segment (IAW A.5). When supplied, the relay
-    // publishes on the 6-segment subject form matching
-    // MyelinRuntime.publish post-cortex#262 (and sage's bridge
-    // subscription). When omitted, falls through to legacy 5-segment.
+    // cortex#266 — IAW A.5 stack segment for 6-segment publishes.
     const stack: string | undefined =
       options.stack ?? process.env.CORTEX_STACK ?? undefined;
+    // cortex#275 (Sage cycle 1) — fail-fast stack validation. If the
+    // operator supplied a malformed stack value (`*`, `>`, empty,
+    // uppercase, etc.), reject at startup with a clear error rather
+    // than letting the bad value reach `deriveNatsSubject` per-event
+    // and producing a stream of stderr lines. Mirrors the same regex
+    // myelin's `assertSegment` uses; inlined here so the relay doesn't
+    // depend on a non-barreled internal export.
+    if (stack !== undefined && !/^[a-z][a-z0-9-]{0,62}$/.test(stack)) {
+      console.error(
+        `cortex-relay: invalid --stack / CORTEX_STACK value ${JSON.stringify(stack)} — ` +
+          `must match /^[a-z][a-z0-9-]{0,62}$/ (lowercase alphanumeric + hyphens, ` +
+          `start with letter, 1–63 chars)`,
+      );
+      process.exit(1);
+    }
 
     let natsLink: NatsLink | undefined;
     let onPublished: ((e: import("./hooks/lib/event-types").PublishedEvent) => void) | undefined;
