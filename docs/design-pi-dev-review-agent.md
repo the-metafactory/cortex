@@ -140,6 +140,58 @@ Same subjects, same envelopes as any cortex agent. The only difference is the so
 
 Nak reasons: `cant-do`, `wont-do`, `not-now`, `compliance-block` (unchanged per architecture §7.3).
 
+#### 4.2.1 `review.verdict.*` envelope payload — canonical contract
+
+The three `review.verdict.*` subjects share a single payload shape. This is the **canonical contract** that any review-capable agent (Echo, future reviewers) MUST emit, and any caller (pilot, dashboard, future review consumers) MAY rely on. Originating proposal: `docs/design-pilot-restructure.md` §4.2; ratified here as the authoritative spec per Wave 0 PR-A.0c (refs cortex#238).
+
+**Subjects** (one per verdict kind):
+
+- `local.{org}.review.verdict.approved`
+- `local.{org}.review.verdict.changes-requested`
+- `local.{org}.review.verdict.commented`
+
+**Envelope payload (`payload.*`):**
+
+```json
+{
+  "repo": "the-metafactory/cortex",
+  "pr": 229,
+  "reviewer": "echo",
+  "verdict": "changes-requested",
+  "summary": "verdict: blockers=0 majors=2 nits=3 — recommend: request-changes",
+  "github_review_id": 2459183744,
+  "github_review_url": "https://github.com/the-metafactory/cortex/pull/229#pullrequestreview-2459183744",
+  "submitted_at": "2026-05-16T09:51:30Z",
+  "commit_id": "abc123def456789",
+  "findings": { "blockers": 0, "majors": 2, "nits": 3 },
+  "inline_comments": 5
+}
+```
+
+**Field semantics:**
+
+| Field | Type | Semantics |
+|-------|------|-----------|
+| `repo` | string | `owner/repo` GitHub form (e.g. `the-metafactory/cortex`). |
+| `pr` | integer | PR number on the GitHub repo. |
+| `reviewer` | string | GitHub login of the reviewer (e.g. `echo`). |
+| `verdict` | enum | Discriminator: `approved` \| `changes-requested` \| `commented`. MUST match the subject suffix. |
+| `summary` | string | Reviewer's one-line verdict text. Mirrors the verdict line in the reviewer's GitHub review body so the bus payload and the GitHub-side artefact stay in sync. |
+| `github_review_id` | integer | Numeric GitHub review ID. Used for GitHub API correlation (e.g. fetching inline comments, audit cross-reference). |
+| `github_review_url` | string | Direct GitHub URL to the review. For human navigation from dashboard / Discord / CLI output. |
+| `submitted_at` | string (ISO 8601) | Timestamp the reviewer submitted on GitHub. Distinct from the envelope's `timestamp`, which is the bus-publish moment. |
+| `commit_id` | string (SHA) | Commit SHA the review was conducted against. Lets consumers detect "review is stale" when subsequent commits land. |
+| `findings` | object | Counts by severity (`blockers`, `majors`, `nits`). The machine-parsed form of the numbers in `summary`. |
+| `inline_comments` | integer | Number of inline comments posted on the PR as part of this review. |
+
+**Envelope-level requirement — `correlation_id`:**
+
+The reviewer MUST set the verdict envelope's `correlation_id` to the **`id` of the originating request envelope** (the envelope that asked for the review — typically a `dispatch.task.requested` or capability-dispatch request). Pilot's `pilot wait-for-verdict --correlation-id <uuid>` relies on this to filter unambiguously across N parallel reviews in flight on the same `review.verdict.>` subject. Without this, parallel callers cannot disambiguate which verdict belongs to which request.
+
+**Payload-shape compatibility:** This shape deliberately mirrors `nats-review-io.ts`'s legacy `ReviewCompletedPayload` (the `mf.{network}.review.completed` shape from cortex's pre-capability-dispatch era). Workflow-side consumers (e.g. the existing `runReviewCycle` ReviewCycleIO) MUST NOT need behavioural changes when migrating from the legacy subject to the canonical `review.verdict.*` subjects — only the subject string and the `correlation_id` field are new.
+
+**Out of scope for this contract** (deliberately): retry semantics, multi-agent quorum, persistence. See `docs/design-pilot-restructure.md` §4.6 for what pilot's verdict subscriber does NOT do.
+
 ---
 
 ## 5. Implementation — PAI-pi Extension (two layers)
