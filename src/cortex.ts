@@ -262,19 +262,20 @@ export async function startCortex(
   console.log(`  Config: ${options.configPath ?? "(in-memory)"}`);
   console.log(`  PID: ${process.pid}`);
 
-  // IAW Phase A.5 (refs cortex#113) — resolve the deployment's stack identity
-  // at boot. `deriveStackId` returns `{operator, stack, id}`; today we only
-  // log the canonical id and stash nothing on the runtime. Once myelin#113
-  // lands and A.5.5 wires the stack segment into envelope subject derivation,
-  // the resolved value flows into `MyelinRuntime.publish()` — until then this
-  // is observational only (no behaviour change on emitted subjects).
+  // IAW Phase A.5 (refs cortex#113, closes cortex#262) — resolve the
+  // deployment's stack identity at boot. `deriveStackId` returns
+  // `{operator, stack, id}`; the `stack` segment flows into
+  // `MyelinRuntime.publish()` below so emitted envelopes land in the
+  // 6-segment `local.{org}.{stack}.{type}` grammar that sage's bridge
+  // and pilot's review-request subscriber both expect.
   //
   // The helper accepts a narrow `DeriveStackIdInput` shape (operator?.id +
   // optional stack.id) — we synthesise it from the loader-passed
   // `options.stack` (the top-level cortex.yaml `stack:` block, when present)
   // plus an `operator.id` derived from the BotConfig projection. The
   // fallback path (no `options.stack`, no `agent.operatorId`) returns
-  // `default/default` and the helper never throws.
+  // `default/default` and the helper never throws — that default matches
+  // sage's bridge default (`SAGE_STACK=default`).
   const derivedStack = deriveStackId({
     operator: { id: config.agent.operatorId ?? "default" },
     ...(options.stack !== undefined && { stack: options.stack }),
@@ -383,10 +384,17 @@ export async function startCortex(
     runtime = options.injectRuntime;
   } else {
     try {
-      runtime = await startMyelinRuntime(
-        config,
-        signer !== undefined ? { signer } : undefined,
-      );
+      // IAW Phase A.5 (cortex#262) — surface the resolved stack identity
+      // into the runtime so `publish()` emits 6-segment subjects matching
+      // sage's `local.{org}.{stack}.>` subscription. `derivedStack.stack`
+      // is the second segment of the canonical `{operator}/{stack}` id;
+      // when the operator omitted the `stack:` block, `deriveStackId`
+      // default-derived it to `'default'` (cortex.ts:278-281). That value
+      // is what sage's bridge listens for by default (`SAGE_STACK=default`).
+      runtime = await startMyelinRuntime(config, {
+        ...(signer !== undefined && { signer }),
+        stack: derivedStack.stack,
+      });
     } catch (err) {
       console.error("cortex: myelin runtime startup error (non-fatal):", err instanceof Error ? err.message : err);
     }

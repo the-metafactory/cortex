@@ -145,6 +145,24 @@ export interface MyelinRuntimeOptions {
    * mode to choose).
    */
   signFailureMode?: "fallback" | "drop";
+  /**
+   * IAW Phase A.5 (cortex#113 / closes cortex#262) — operator stack
+   * segment slotted into the published subject between `{org}` and
+   * `{type}`. When set, `publish()` derives subjects in the 6-segment
+   * stack-aware shape `local.{org}.{stack}.{type}` matching post-myelin#113
+   * subscribers (sage's bridge, cedar's dispatch, pilot's review-request
+   * subscriber). When undefined, `publish()` falls through to the legacy
+   * 5-segment form `local.{org}.{type}` — preserves identity for callers
+   * that haven't wired stack identity yet.
+   *
+   * The entrypoint (`src/cortex.ts` ~line 386) sources this from
+   * `deriveStackId(loadedConfig)` so a multi-stack deployment routes
+   * envelopes through the right wildcard. The `'default'` fallback that
+   * `deriveStackId` provides is what arrives here when the operator
+   * omits the `stack:` block — that matches sage's bridge default
+   * (`SAGE_STACK=default`) so the broadcast loop closes end-to-end.
+   */
+  stack?: string;
 }
 
 /**
@@ -318,6 +336,12 @@ export async function startMyelinRuntime(
   // `MyelinRuntime.publish: (env) => Promise<void>` contract.
   const signer = options?.signer;
   const signFailureMode = options?.signFailureMode ?? "fallback";
+  // Stack identity (cortex#262) — captured at runtime init so per-publish
+  // `deriveNatsSubject` calls don't re-read options on every emit. When
+  // undefined the publish path falls through to the legacy 5-segment
+  // grammar via `deriveNatsSubject(envelope)`; explicit stack flows
+  // through as `deriveNatsSubject(envelope, stack)`.
+  const stack = options?.stack;
   // Pre-encode the seed to the base64 shape myelin's `signEnvelope`
   // consumes — done once at runtime init rather than per-publish so
   // every call doesn't reallocate the encoding. Tests can pass a
@@ -351,7 +375,13 @@ export async function startMyelinRuntime(
     // without further changes. `envelope.source`'s first segment is the
     // same value `agent.operatorId` produces when emit-site helpers
     // assemble it, so subscribe-side `{org}` substitution stays symmetric.
-    const subject = deriveNatsSubject(envelope);
+    //
+    // IAW Phase A.5 (cortex#262 closes): pass `stack` so subjects land in
+    // the 6-segment `local.{org}.{stack}.{type}` grammar that sage's
+    // bridge + pilot's review-request subscriber expect. When undefined,
+    // `deriveNatsSubject` returns the legacy 5-segment shape — preserving
+    // emit-site behavior for deployments that haven't wired stack identity.
+    const subject = deriveNatsSubject(envelope, stack);
 
     // IAW Phase B.3: sign before publish if the runtime was started
     // with a signer. The chain-aware `signEnvelope` appends to any

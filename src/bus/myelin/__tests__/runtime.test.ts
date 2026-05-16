@@ -401,6 +401,71 @@ describe("MyelinRuntime", () => {
       await runtime.stop();
     });
 
+    test("IAW Phase A.5 (cortex#262): tasks.* envelopes land in sage's 6-segment subscribe wildcard", async () => {
+      // Literal cortex#262 AC#3 — `Published subjects are 6-segment on
+      // tasks.* domain`. This is the wire shape pilot's `request-review`
+      // publish + sage's bridge subscribe both depend on; the test pins
+      // the exact subject so a future regression in either side surfaces
+      // here before the cross-repo loop breaks silently.
+      const fake = makeFakeNatsConnection();
+      const runtime = await startMyelinRuntime(
+        makeConfig({
+          url: "nats://localhost:4222",
+          name: "grove-bot",
+          subjects: ["local.{org}.>"],
+        }),
+        { connectImpl: async () => fake.nc, stack: "default" },
+      );
+      await runtime.publish(makeEnvelope({ type: "tasks.review.requested" }));
+      expect(fake.publishes[0]?.subject).toBe(
+        "local.metafactory.default.tasks.review.requested",
+      );
+      await runtime.stop();
+    });
+
+    test("IAW Phase A.5 (cortex#262): publish derives 6-segment local.{org}.{stack}.{type} when stack option is set", async () => {
+      // Stack-aware emit — operator config carries `stack: { id: andreas/research }`
+      // and the entrypoint passes `stack: "research"` through to the runtime.
+      // The resulting subject lands inside sage's `local.{org}.{stack}.>`
+      // subscription wildcard, closing the broadcast loop end-to-end.
+      const fake = makeFakeNatsConnection();
+      const runtime = await startMyelinRuntime(
+        makeConfig({
+          url: "nats://localhost:4222",
+          name: "grove-bot",
+          subjects: ["local.{org}.>"],
+        }),
+        { connectImpl: async () => fake.nc, stack: "research" },
+      );
+      await runtime.publish(makeEnvelope({ type: "system.adapter.degraded" }));
+      expect(fake.publish).toHaveBeenCalledTimes(1);
+      expect(fake.publishes[0]?.subject).toBe(
+        "local.metafactory.research.system.adapter.degraded",
+      );
+      await runtime.stop();
+    });
+
+    test("IAW Phase A.5 (cortex#262): publish falls through to legacy 5-segment when stack option is omitted", async () => {
+      // Backward compat — deployments that haven't wired stack identity
+      // continue to emit the legacy 5-segment shape. The runtime relays
+      // `stack: undefined` to `deriveNatsSubject` which short-circuits
+      // back to the pre-A.5 grammar. No behavior change for these callers.
+      const fake = makeFakeNatsConnection();
+      const runtime = await startMyelinRuntime(
+        makeConfig({
+          url: "nats://localhost:4222",
+          name: "grove-bot",
+          subjects: ["local.{org}.>"],
+        }),
+        { connectImpl: async () => fake.nc },
+      );
+      await runtime.publish(makeEnvelope({ type: "system.adapter.degraded" }));
+      expect(fake.publishes[0]?.subject).toBe(
+        "local.metafactory.system.adapter.degraded",
+      );
+      await runtime.stop();
+    });
+
     test("publish swallows underlying NATS errors (logs, never throws)", async () => {
       const fake = makeFakeNatsConnection();
       // Force the underlying nc.publish to throw — simulates connection-closed
