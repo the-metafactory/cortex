@@ -69,3 +69,26 @@ export {
   type CreateReviewTaskFailedEventOpts,
   type ReviewTaskFailedReason,
 } from "./review-events";
+
+// --- Capability registry publisher (cortex#237 PR-3) ---
+//
+// Per `docs/design-capability-dispatch-review-consumer.md` §3 + §10.1
+// PR-3. Re-exported here so PR-7's boot wiring (in `src/cortex.ts`) and
+// pilot's deferred bucket reader (§13.1) consume the publisher + its
+// constant from one place. The event-type constant
+// (`CAPABILITY_REGISTERED_EVENT_TYPE`) is the load-bearing string both
+// the publisher and any future subscriber filter against.
+//
+// PR-7 will additionally export the verdict + pull-subscriber types
+// alongside these; until then the capability-registry surface lands
+// here on its own per PR-3's brief.
+export {
+  CAPABILITY_REGISTERED_EVENT_TYPE,
+  buildCapabilityRegisteredEnvelope,
+  publishCapabilityRegistry,
+  type BuildCapabilityRegisteredEnvelopeOpts,
+  type CapabilityRegistryEntry,
+  type CapabilityRegistrySource,
+  type PublishCapabilityRegistryOptions,
+  type PublishFn,
+} from "./capability-registry";
