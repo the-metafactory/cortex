@@ -519,39 +519,58 @@ describe("messageCreate auto-thread (cortex#120)", () => {
     expect(inbound[0]!.threadName).toBe("arc/pr/42");
   });
 
-  test("cortex#123 item 2: auto-thread still fires when channel.members.size === 2 (false-positive GroupDM heuristic regression-lock)", async () => {
-    // Pre-cortex#122 the auto-thread block was gated by `!isPrivateChannel`,
-    // where `isPrivateChannel = channel.members?.size === 2`. Without the
-    // GuildMembers intent, `channel.members` is a discord.js CACHE of seen
-    // users — so a quiet #cortex channel with just bot + pinging-peer
-    // cached falsely flipped the gate true and silently dropped auto-thread.
-    // cortex#122 removed the gate; this test pins that the fix holds even
-    // when the legacy heuristic *would have triggered*.
+  test("cortex#123 item 2: non-review GroupDM-shaped ping sets threadId=channelId (isGroupDM consumer at line 410)", async () => {
+    // Discriminating regression-lock for the cortex#123 item-1 rename.
+    //
+    // The `isGroupDM` variable feeds the InboundMessage routing at
+    // index.ts:410 (formerly `isPrivateChannel`):
+    //
+    //   threadId: isDM ? channel.id : (isThread || isGroupDM ? channel.id : undefined)
+    //
+    // For a regular guild text channel that does NOT match the `review`
+    // wire format, `threadId` must be `undefined`. For a GroupDM-typed
+    // channel (still not auto-threaded — Item 3 blocks that via guildId
+    // gate), `threadId` must be `channel.id` so the dispatch downstream
+    // treats it as a "we're already in a thread/private context" message.
+    //
+    // Mutation: revert the rename to `isPrivateChannel = members.size === 2`
+    // and this test still passes (because the consumer at line 410 reads
+    // the same boolean regardless of name). The discriminator is the
+    // semantic of `isGroupDM === true` for a real GroupDM channel — which
+    // the OLD heuristic did NOT detect (a GroupDM with one human + the
+    // bot has `members.size` typically larger than 2 on Discord, and the
+    // old code never inspected `channel.type`).
     const { client, channel, inbound } = makeWiredAdapter();
 
-    // Inject `members: Map` (size 2) onto the channel — the exact shape
-    // that pre-cortex#122 read for the false-positive.
-    (channel as unknown as { members: Map<string, string> }).members =
-      new Map([
-        ["bot", "bot"],
-        ["peer", "peer"],
-      ]);
+    // Override the channel type to GroupDM. ChannelType.GroupDM === 3 in
+    // discord.js v14 — `as unknown` because the test fake doesn't pull
+    // the full discord.js type tree.
+    (channel as unknown as { type: number }).type = ChannelType.GroupDM;
 
-    client.emit(
-      "messageCreate",
-      makeMessage({
-        content: `<@${BOT_ID}> review cortex#118`,
-        authorId: HUMAN_ID,
-        channelId: CHANNEL_ID,
-        channel,
-      }),
-    );
+    // A NON-review message — auto-thread block must skip (no createCall),
+    // and `threadId` must be set to the channel id by the new isGroupDM
+    // routing branch. The Item 3 `guildId !== null` gate prevents the
+    // auto-thread create from running on guild-less channels anyway,
+    // so the auto-thread side of the if-check stays inert here.
+    const groupDmMsg = makeMessage({
+      content: `<@${BOT_ID}> hello, how are you`,
+      authorId: HUMAN_ID,
+      channelId: CHANNEL_ID,
+      channel,
+    }) as { guildId: string | null };
+    groupDmMsg.guildId = null;
+    client.emit("messageCreate", groupDmMsg);
     await new Promise((r) => setTimeout(r, 10));
 
-    // Auto-thread STILL fires — the legacy heuristic does not gate.
-    expect(channel.createCalls).toHaveLength(1);
-    expect(channel.createCalls[0]!.name).toBe("cortex/pr/118");
-    expect(inbound[0]!.threadName).toBe("cortex/pr/118");
+    expect(inbound).toHaveLength(1);
+    // The DISCRIMINATING assertion: isGroupDM === true causes the
+    // line-410 ternary to route threadId to channel.id. If the rename
+    // regressed back to the `members.size === 2` heuristic, `isGroupDM`
+    // would NOT detect this GroupDM-typed channel (members map is
+    // empty/absent on the fake) and threadId would be `undefined`.
+    expect(inbound[0]!.threadId).toBe(CHANNEL_ID);
+    // No thread create called — message wasn't a review.
+    expect(channel.createCalls).toEqual([]);
   });
 
   test("cortex#123 item 3: review wire format in a guild-less channel (GroupDM-shaped) does not call threads.create", async () => {

@@ -353,10 +353,11 @@ export class DiscordAdapter implements PlatformAdapter {
       // `threads.create` on guild-less channels (DM or GroupDM).
       // GroupDM is not part of the narrowed `channel` union (TextChannel |
       // ThreadChannel | DMChannel), but at runtime discord.js can deliver
-      // a GroupDM-typed channel here for cross-guild ping messages. Compare
-      // via a `number` cast so tsc accepts the comparison.
+      // a GroupDM-typed channel here. The `as ChannelType` widens the
+      // narrowed enum back to the full ChannelType union so tsc accepts
+      // the GroupDM comparison without an unnecessary `as number` cast.
       const isGroupDM =
-        !isDM && (channel.type as number) === (ChannelType.GroupDM as number);
+        !isDM && (channel.type as ChannelType) === ChannelType.GroupDM;
 
       // Handle message.txt (Discord auto-generates for messages > 2000 chars)
       let finalContent = content;
