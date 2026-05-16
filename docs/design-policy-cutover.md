@@ -1,6 +1,6 @@
 # Design — v2.0.0 policy cutover (cortex#243 + cortex#242)
 
-**Status:** draft for discussion — schema extensions + CLI algorithm not yet ratified
+**Status:** ratified — all 8 design questions resolved (§13); pressure-tested against IoAW future surfaces (§15); schema delta locked (§16)
 **Owners:** Andreas + Luna
 **Targets:** cortex#243 (migrate-config CLI extension), cortex#242 (breaking schema removal + role-resolver retirement)
 
@@ -124,6 +124,8 @@ This puts everything authorization-shaped into capabilities, and everything sess
 
 ### 5.1 Extend `PolicyPrincipal` with `platform_ids`
 
+> **⚠ Superseded by §15.5 + §16.** The closed-enum shape below is the original proposal; the pressure-test in §15.5 found it blocks every future adapter (MCP, HTTP API, email, voice, cron, webhook). §16's locked schema uses an **open record** `Record<platform_name, string[]>` instead. The §5.1 shape is retained here for narrative context only — implementers must read §16 for the canonical schema.
+
 ```ts
 PolicyPrincipalSchema = z.object({
   id: ...,
@@ -132,7 +134,7 @@ PolicyPrincipalSchema = z.object({
   nkey_pub: ...,
   role: ...,
   trust: ...,
-  // NEW
+  // NEW — INITIAL PROPOSAL, SUPERSEDED BY §15.5/§16
   platform_ids: z.object({
     discord: z.array(z.string()).default([]),
     mattermost: z.array(z.string()).default([]),
@@ -278,13 +280,35 @@ Once cortex#243 ships and operators have a migration path:
 
 ## 9. Suggested PR sequence
 
-1. **cortex#243a (schema extension)** — add `platform_ids` + `session_config` to PolicyPrincipal. Additive; no behavioural change yet. Capability conventions documented but adapters still consult legacy roles.
-2. **cortex#243b (canonical tool inventory)** — add `src/common/policy/tool-inventory.ts`. Used by migrate-config to invert `disallowedTools`.
-3. **cortex#243c (migrate-config CLI extension)** — implement the conversion in §6. Idempotent. Sample inputs/outputs in `docs/migration-examples/`. SOP in `docs/sop-migrate-config.md`.
-4. **cortex#242a (adapter PolicyEngine wiring)** — DiscordAdapter / MattermostAdapter / SlackAdapter call PolicyEngine for each authorization decision. Legacy role-resolver still runs in parallel as a sanity check (logs disagreements but trusts PolicyEngine when present).
-5. **cortex#242b (legacy schema removal)** — drop `roles[]` + `defaultRole` + `dm` from per-adapter schemas. Drop role-resolver.ts. Bump v2.0.0. Strict-mode parse error on legacy configs with a pointer to migrate-config.
+1. **cortex#243a (schema extension)** — add `platform_ids` + `session_config` + multi-stack-uniqueness scoping (§15.4) to PolicyPrincipal. Additive; no behavioural change yet. Capability conventions documented but adapters still consult legacy roles.
+2. **cortex#243b (canonical tool inventory)** — add `src/common/policy/tool-inventory.ts`. Used by migrate-config to invert `disallowedTools`. **Parallelisable with 243a** — no schema dependency.
+3. **cortex#243c (migrate-config CLI extension)** — implement the conversion in §6. Idempotent. Sample inputs/outputs in `docs/migration-examples/`. SOP in `docs/sop-migrate-config.md`. Depends on 243a (schema) + 243b (tool inventory).
+4. **cortex#242a (adapter PolicyEngine wiring)** — DiscordAdapter / MattermostAdapter / SlackAdapter call PolicyEngine for each authorization decision. Legacy role-resolver still runs in parallel as a sanity check. Depends on 243a only (NOT 243c — parallel mode runs against legacy configs).
+5. **cortex#242b (legacy schema removal)** — drop `roles[]` + `defaultRole` + `dm` from per-adapter schemas. Drop role-resolver.ts. Bump v2.0.0. Strict-mode parse error on legacy configs with a pointer to migrate-config. Depends on 242a (parallel validated) **and** 243c (operators have migration path).
 
-Five PRs, deliberately small, in a strict dependency order. The intermediate parallel-mode in 242a lets us catch any disagreements between legacy and new gates before committing irrevocably to PolicyEngine-only.
+Five PRs. Dependency DAG: 243a + 243b parallel → 243c. 243a → 242a (independent of 243b/c). 243c + 242a → 242b.
+
+### 9.1 Parallel-mode conflict resolution (242a)
+
+When 242a wires PolicyEngine alongside legacy role-resolver, both gates run on every dispatch. Authorization disagreements WILL occur — that's the validation surface the parallel mode exists to expose. The doc must specify the resolution semantic so 242a implementers don't pick the wrong default:
+
+**Decision: most-restrictive wins (intersection of grants).**
+
+The dispatch is allowed only if **both** gates allow. If either gate denies, the dispatch is denied. Disagreements are logged as `system.access.disagreement` envelopes carrying:
+- `principal_id`
+- `intent.capability`
+- `legacy_decision: "allow" | "deny"` + `legacy_reason`
+- `new_decision: "allow" | "deny"` + `new_reason`
+- `effective_decision: "allow" | "deny"` (always the intersection)
+
+**Why most-restrictive, not new-system-wins:**
+1. Security cutovers default to most-restrictive shadow-mode posture. A new gate that mistakenly allows what legacy denies is a silent privilege-expansion vector during the validation window.
+2. The operator can monitor `system.access.disagreement` envelopes on the dashboard to spot mis-migrations *without* exposure — if PolicyEngine wrongly grants, legacy still blocks.
+3. The migration is operator-driven (operators must run `migrate-config` between 243c and 242b); the parallel mode protects against half-migrated configs where the new gate is missing principal entries the legacy role-resolver would have authorised correctly.
+
+**242b removes the parallel mode** — once legacy is gone, PolicyEngine is the only gate and disagreement detection is no longer applicable. The `system.access.disagreement` envelope shape retires with role-resolver.ts.
+
+**Implementation note:** 242a's PolicyEngine call SHOULD short-circuit on the first deny (legacy or new) to avoid running the full check twice when the answer is "no". But the log envelope captures both decisions when at least one allows — the validation surface needs visibility into the case where new grants and legacy denies (the dangerous direction).
 
 ---
 
@@ -325,7 +349,14 @@ Anchoring the design in operational config. Two files: `~/.config/cortex/cortex.
 | `agent-pilot` | external Pilot bot | `1498571063582392390` | ✓ identical bare `features: [chat]` on all 3 |
 | `agent-juniper` | external Juniper bot | `1498328127259021404` | ✓ identical bare `features: [chat]` on all 3 |
 
-**Total distinct principals after unification: 12** (3 local agents + 2 humans + 6 external bots + 1 unused template role).
+**Total distinct principals after unification: 13** — counted as:
+- 3 local agent bots (luna, echo, forge)
+- 2 humans (operator-of-andreas, mike)
+- 4 external bots (ivy, holly, pilot, juniper)
+- 1 unused template role (`agent-restricted` — emitted as PolicyRole with zero principals, per §13 Q7)
+- 3 synthetic anonymous-per-instance principals (`anonymous-discord-{luna,echo,forge}`, per §5.4 — landing place for `defaultRole: denied`)
+
+The "12" figure cited earlier in drafts dropped the synthetic anonymous principals; they're real principals in the new model (operators will see them after `migrate-config` runs) so they belong in the count.
 
 **DM model on Luna only carries real depth:**
 - `operatorRole` — features `[chat, async, team]`, no tool denies, rich `allowedDirs` (24 repos), `bashGuard: true`, custom `bashAllowlist` (broader patterns + 40 repos)
@@ -584,14 +615,49 @@ They CAN share capability id strings — that's good ergonomics — but they don
 
 **Scenario:** Luna runs on both `andreas/meta-factory` and `andreas/work`. The Discord bot user ID is the same (it's the same bot). Federated traffic carries `did:mf:luna` — which Luna?
 
-**Walk-through:**
+**Walk-through within Andreas's own cortex instances:**
 - Within `cortex.yaml`, `policy.principals[]` has ONE entry for `luna` with `home_stack: andreas/meta-factory`
 - Within `cortex.work.yaml`, separate file, ONE entry for `luna` with `home_stack: andreas/work`
 - The Discord bot id `1487180524542890144` appears in `platform_ids.discord` in both files
-- Each stack reads its own config — there's no cross-file collision detection needed
+- Each stack reads its own config — no cross-file collision detection needed within Andreas's deployment
 - Federated envelopes carry `signed_by[].principal` AND the chain identifies the originating stack via the stack NKey — the receiving cortex resolves which Luna by `(principal_id, originating_stack)` not just principal_id
 
-✓ **Composes naturally.** The `home_stack` field on the principal does the disambiguation work. The wire format's signed chain carries the resolving context.
+✓ **Local composition is clean.** Each stack file has independent `policy.principals[]` arrays; `home_stack` does within-array disambiguation.
+
+**But one hop away — at a federated peer (e.g. sage's cortex) — the problem arises.** Sage's cortex wants to authorise dispatches from **both** Andreas Luna instances:
+- An envelope from `andreas/meta-factory` carrying `signed_by[0].principal = did:mf:luna`
+- An envelope from `andreas/work` carrying the same `signed_by[0].principal = did:mf:luna`
+
+Sage's `policy.principals[]` would need two entries:
+```yaml
+principals:
+  - id: luna             # ← collision
+    home_operator: andreas
+    home_stack: andreas/meta-factory
+    role: [federation-peer]
+  - id: luna             # ← collision
+    home_operator: andreas
+    home_stack: andreas/work
+    role: [federation-peer]
+```
+
+With principal-id uniqueness scoped to `id` alone (the implicit Zod array semantics), sage's cortex.yaml fails to parse. The wire format disambiguates via the stack NKey on `signed_by[0]`, but **sage's principal registry has no resolution path** because the two principals share an id.
+
+**Three options:**
+
+**(a) Scope uniqueness to `(id, home_stack)` rather than `id` alone** — schema-level change. PolicyEngine.check() takes a stack-qualified principal lookup; the wire `signed_by[0]` mapping derives the qualifier from the stack-NKey. Cleanest because the lookup contract matches the wire contract.
+
+**(b) Require composite ids on the peer side** (`luna-meta-factory`, `luna-work`) — operator-managed convention. Peer-side principal id ≠ envelope `signed_by[0].principal`; an operator-maintained mapping table resolves. Brittle: the peer's id space drifts from the originator's.
+
+**(c) Defer multi-stack-receive to Phase E** — v2.0.0 only supports single-stack-per-operator at the peer side. Federation peers don't yet receive from multi-stack operators. Punts the problem but ships v2.0.0 sooner.
+
+**Locked-in decision: (a).** Scope `policy.principals[]` uniqueness to `(id, home_stack)` rather than `id` alone. PolicyEngine.check() signature gains a `home_stack` qualifier when looking up by federated principal claim; local-dispatch lookups (which already know the local stack) ignore it. This is a schema-level change (the `.refine()` uniqueness validator) that needs to land in **cortex#243a** alongside `platform_ids` and `session_config`. Added to §16.
+
+**Why not (b) or (c)?**
+- (b) introduces an out-of-band id mapping table that sage and Andreas must coordinate manually — operator pain that scales with peer count.
+- (c) freezes IoAW at single-stack-per-operator on the receive path, which contradicts §3.2's multi-stack-per-operator lock-in.
+
+✓ **Composes with (a) — schema delta updated in §16.**
 
 ### 15.5 Non-Discord/Mattermost/Slack adapter surfaces
 
@@ -721,6 +787,17 @@ const SessionConfigShape = z.object({
 - `SlackInstanceSchema.roles[]` + `defaultRole`
 - Entire `DMConfigSchema` (operator + DM userRoles → operator principal's `session_config.dm`)
 - `AgentSchema.operatorDiscordId/Mattermost/Slack` → operator principal's `platform_ids`
+- `AgentSchema.roles[]` — top-level agent-roles array. Always empty in operator configs in practice; agent-level authorization is fully covered by `policy.principals[].role[]` post-cutover.
+
+**Retained at agent level (NOT removed):**
+- `AgentSchema.trust[]` — agents' bus-trust list. Distinct from `policy.principals[].trust[]`:
+  - `agents[].trust[]` — adapter-level "which OTHER bots' inbound messages this agent's adapter accepts" (surface-router filtering, paired with chain-of-stamps in B.1c)
+  - `policy.principals[].trust[]` — principal-level "which peer principals this principal routes work to" (outbound dispatch authorization)
+  Two layers, two concerns. v2.0.0 keeps both.
+
+**Cross-validation rules added with the schema (cortex#243a):**
+- Principal-id uniqueness scoped to `(id, home_stack)` — not `id` alone. Enables peer-side multi-stack identity per §15.4 option (a).
+- `(platform_name, platform_id)` tuple uniqueness across all principals in `policy.principals[]` — no platform identity claimed by two principals.
 
 **New canonical artifact:**
 - `src/common/policy/tool-inventory.ts` — canonical list of Claude tool names for `disallowedTools[]` inversion
@@ -729,5 +806,8 @@ const SessionConfigShape = z.object({
 - `operator` — short-circuits DM access gating, only granted by operator role
 - `keyword.{chat,async,team}` — message-keyword authorization
 - `tool.<name>` — Claude tool authorization
+
+**Convention placeholders (operator-curated post-migration):**
+- External-peer principals emit with `home_operator: "unknown"` and `home_stack: "unknown/unknown"` per §12.3 — schema still parses, operator labels manually as they discover origin.
 
 **No schema changes outside the policy block.** Bus, federation, audit envelope, dispatch lifecycle all unchanged.
