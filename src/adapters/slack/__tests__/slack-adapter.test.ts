@@ -1218,6 +1218,54 @@ describe("SlackAdapter — two-pass dispatch gate (cortex#235 r1#7)", () => {
     await adapter.stop();
   });
 
+  test("mid-drain arrivals preserve arrival order (Echo cortex#257 r1 M1)", async () => {
+    const calls: string[] = [];
+    const slow = async (msg: InboundMessage): Promise<void> => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+      calls.push(msg.content);
+    };
+    const { adapter, emit } = makeAdapter();
+    await adapter.start(slow);
+    await emit(makeSlackEvent({ ts: "1700000000.000001", text: "queued-1" }));
+    await emit(makeSlackEvent({ ts: "1700000000.000002", text: "queued-2" }));
+    adapter.attachInboundDispatch();
+    // Mid-drain arrival — `draining` flag forces queue, drain
+    // picks it up via the per-iteration length check, arrival
+    // order preserved.
+    await emit(makeSlackEvent({ ts: "1700000000.000003", text: "mid-drain-3" }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    expect(calls).toEqual(["queued-1", "queued-2", "mid-drain-3"]);
+    await adapter.stop();
+  });
+
+  test("stop() during drain awaits settlement; no bleed across cycles (Echo cortex#257 r1 M2)", async () => {
+    const cycle1Calls: string[] = [];
+    const slow = async (msg: InboundMessage): Promise<void> => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+      cycle1Calls.push(msg.content);
+    };
+    const { adapter, emit } = makeAdapter();
+    await adapter.start(slow);
+    await emit(makeSlackEvent({ ts: "1700000000.000001", text: "cycle1-A" }));
+    await emit(makeSlackEvent({ ts: "1700000000.000002", text: "cycle1-B" }));
+    adapter.attachInboundDispatch();
+    // stop() awaits drainPromise; the drain bails when the gate
+    // flips to false. Cycle 2's callbacks must not see any cycle 1
+    // messages.
+    await adapter.stop();
+    const cycle2Calls: string[] = [];
+    const fast = async (msg: InboundMessage): Promise<void> => {
+      cycle2Calls.push(msg.content);
+    };
+    await adapter.start(fast);
+    await emit(makeSlackEvent({ ts: "1700000001.000001", text: "cycle2-A" }));
+    adapter.attachInboundDispatch();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(cycle2Calls).toEqual(["cycle2-A"]);
+    expect(cycle1Calls.every((c) => c.startsWith("cycle1-"))).toBe(true);
+    await adapter.stop();
+  });
+
   test("setTrustedBotIds replaces the lookup set atomically", async () => {
     const { adapter, emit } = makeAdapter();
     const cap = captureInbound();

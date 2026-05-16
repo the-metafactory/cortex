@@ -153,6 +153,22 @@ export class SlackAdapter implements PlatformAdapter {
   private onMessageRef: ((msg: InboundMessage) => Promise<void>) | null = null;
   private inboundDispatchAttached = false;
   private pendingMessages: InboundMessage[] = [];
+  /**
+   * Drain serialisation. While true, NEW events arriving via
+   * `onEvent` queue into `pendingMessages` even though
+   * `inboundDispatchAttached` is true — the drain loop reads
+   * `pendingMessages.shift()` each iteration, so anything pushed
+   * mid-drain is picked up in arrival order. Without this, a new
+   * post-attach event could race the in-flight drain and complete
+   * before a queued one (Echo cortex#257 round 1 M1).
+   */
+  private draining = false;
+  /**
+   * Promise that resolves when the in-flight drain settles. `stop()`
+   * awaits this so a teardown-during-drain doesn't bleed messages
+   * from cycle N into cycle N+1 (Echo cortex#257 round 1 M2).
+   */
+  private drainPromise: Promise<void> = Promise.resolve();
 
   constructor(agent: Agent, presence: SlackPresence, infra: SlackAdapterInfra) {
     this.agent = agent;
@@ -205,10 +221,17 @@ export class SlackAdapter implements PlatformAdapter {
       onEvent: async (event) => {
         const msg = this.translateEvent(event);
         if (!msg) return;
-        if (this.inboundDispatchAttached) {
-          await onMessage(msg);
-        } else {
+        // cortex#257 r1 M1 — queue if either pre-attach OR an
+        // in-flight drain is processing the existing queue. The
+        // drain loop reads `pendingMessages.shift()` on each
+        // iteration, so anything pushed mid-drain is picked up in
+        // arrival order. Without the `draining` check, a new event
+        // arriving mid-drain would take the direct path and could
+        // complete before a queued one (out-of-order delivery).
+        if (!this.inboundDispatchAttached || this.draining) {
           this.pendingMessages.push(msg);
+        } else {
+          await onMessage(msg);
         }
       },
       // cortex#235 r1#4 — Socket Mode lifecycle hooks.
@@ -245,26 +268,49 @@ export class SlackAdapter implements PlatformAdapter {
       );
     }
     this.inboundDispatchAttached = true;
-    const onMessage = this.onMessageRef;
-    const queued = this.pendingMessages;
-    this.pendingMessages = [];
-    // Fire-and-forget drain: events queued pre-attach flow through
-    // the live onMessage callback in arrival order. Each await
-    // serialises with the next so concurrent re-entrancy can't
-    // re-order them; the `.catch` keeps a slow downstream from
-    // blocking subsequent drains.
-    void (async () => {
-      for (const msg of queued) {
+    this.drainPromise = this.drainPendingMessages();
+  }
+
+  /**
+   * Sequentially deliver every queued message. While running, the
+   * `onEvent` callback continues to push new arrivals onto
+   * `pendingMessages` (because `this.draining === true` is checked
+   * there) — the `while` loop below re-reads `length` per iteration
+   * and picks up anything added mid-drain in arrival order.
+   *
+   * Bails if `stop()` flips `inboundDispatchAttached` to false
+   * mid-drain — that's the Echo cortex#257 round 1 M2 contract:
+   * stop()-during-drain MUST NOT bleed messages from cycle N into
+   * cycle N+1. The remaining queue is dropped by stop() itself.
+   */
+  private async drainPendingMessages(): Promise<void> {
+    if (this.draining) return;
+    this.draining = true;
+    try {
+      while (
+        this.inboundDispatchAttached &&
+        this.pendingMessages.length > 0 &&
+        this.onMessageRef !== null
+      ) {
+        const msg = this.pendingMessages.shift();
+        if (msg === undefined) break;
         try {
-          await onMessage(msg);
+          await this.onMessageRef(msg);
         } catch (err) {
+          // cortex#257 r1 nit — adapter event-loop errors stay on
+          // console.warn (matches the `ack failed:` and `onEvent
+          // threw:` patterns in client.ts; the `system.error`
+          // envelope path is reserved for state machine violations
+          // operators should page on).
           console.warn(
             `slack-adapter[${this.instanceId}]: drain of queued message threw:`,
             err instanceof Error ? err.message : String(err),
           );
         }
       }
-    })();
+    } finally {
+      this.draining = false;
+    }
   }
 
   /**
@@ -287,6 +333,19 @@ export class SlackAdapter implements PlatformAdapter {
   }
 
   async stop(): Promise<void> {
+    // cortex#257 r1 M2 — flip the dispatch gate BEFORE awaiting
+    // client.stop() so any in-flight drain bails on its next
+    // iteration. Then await the drain promise so a stop()-during-
+    // drain doesn't bleed messages from cycle N into cycle N+1.
+    this.inboundDispatchAttached = false;
+    try {
+      await this.drainPromise;
+    } catch (err) {
+      console.warn(
+        `slack-adapter[${this.instanceId}]: drain settle on stop() threw:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
     await this.client.stop();
     // Drop the cached bot identity so a subsequent `start()` re-fetches —
     // guards against a token swap between sessions.
@@ -311,16 +370,17 @@ export class SlackAdapter implements PlatformAdapter {
     this.connectedOnce = false;
     this.lastDisconnectedAt = null;
     this.warnedMissingSource = false;
-    // cortex#235 r1#7 — reset the two-pass gate so a subsequent
-    // start() → attachInboundDispatch() cycle on the same instance
-    // operates against a clean slate. Without this reset, a reused
-    // adapter would skip the queueing path entirely (the latch is
-    // already flipped) and pre-Pass-2 events would short-circuit
-    // straight through with the stale `trustedBotIds` from before
-    // stop().
-    this.inboundDispatchAttached = false;
+    // cortex#235 r1#7 / cortex#257 r1 — reset the two-pass gate so a
+    // subsequent start() → attachInboundDispatch() cycle on the same
+    // instance operates against a clean slate. `inboundDispatchAttached`
+    // is already false (we flipped it at the top of stop() before
+    // awaiting the drain); reset the rest. Any messages still in
+    // `pendingMessages` after the drain settle are intentionally
+    // dropped — they belonged to the cycle stop() just ended.
     this.pendingMessages = [];
     this.onMessageRef = null;
+    this.draining = false;
+    this.drainPromise = Promise.resolve();
   }
 
   async getPlatformUserId(): Promise<string> {
