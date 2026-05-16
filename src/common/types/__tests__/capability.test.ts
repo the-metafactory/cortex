@@ -684,6 +684,235 @@ describe("CortexConfigSchema — agents[].runtime.capabilities → catalog (A.6.
 });
 
 // =============================================================================
+// cortex#237 PR-4 — AgentRuntimeSchema sovereignty + maxConcurrent extension
+// =============================================================================
+//
+// Both new fields are OPTIONAL siblings on `agents[].runtime`. The load-bearing
+// invariant is back-compat: every cortex.yaml that parsed before PR-4 MUST
+// continue to parse byte-identically. The new fields add validation only when
+// the operator opts in.
+//
+// Runtime consumption of these values (sovereignty checks in the per-envelope
+// pipeline, maxConcurrent backpressure naks) is PR-5/PR-6's concern — these
+// tests assert schema parsing only.
+
+describe("AgentRuntimeSchema — cortex#237 PR-4 sovereignty + maxConcurrent", () => {
+  test("runtime without sovereignty/maxConcurrent parses unchanged (back-compat)", () => {
+    // THE load-bearing test: every existing cortex.yaml that omits the new
+    // fields parses with the same shape it did before PR-4.
+    const parsed = CortexConfigSchema.parse(
+      minConfig({
+        agents: [
+          minAgent({
+            id: "luna",
+            runtime: {
+              substrate: "claude-code",
+              mode: "in-process",
+              capabilities: [],
+            },
+          }),
+        ],
+      }),
+    );
+    const rt = parsed.agents[0]?.runtime;
+    expect(rt).toBeDefined();
+    expect(rt?.sovereignty).toBeUndefined();
+    expect(rt?.maxConcurrent).toBeUndefined();
+  });
+
+  test("runtime with sovereignty: selective parses", () => {
+    const parsed = CortexConfigSchema.parse(
+      minConfig({
+        agents: [
+          minAgent({
+            id: "luna",
+            runtime: {
+              substrate: "claude-code",
+              mode: "in-process",
+              capabilities: [],
+              sovereignty: "selective",
+            },
+          }),
+        ],
+      }),
+    );
+    expect(parsed.agents[0]?.runtime?.sovereignty).toBe("selective");
+  });
+
+  test("all four sovereignty modes are accepted (open/selective/strict/bidding)", () => {
+    // The enum mirrors myelin's `sovereignty_required` taxonomy (vendor
+    // envelope.schema.json:159, F-021 + F-10) and architecture §7.4. The test
+    // pins the full set so a future enum trim shows up here, not in runtime.
+    for (const mode of ["open", "selective", "strict", "bidding"] as const) {
+      const parsed = CortexConfigSchema.parse(
+        minConfig({
+          agents: [
+            minAgent({
+              id: "luna",
+              runtime: {
+                substrate: "claude-code",
+                mode: "in-process",
+                capabilities: [],
+                sovereignty: mode,
+              },
+            }),
+          ],
+        }),
+      );
+      expect(parsed.agents[0]?.runtime?.sovereignty).toBe(mode);
+    }
+  });
+
+  test("sovereignty with an unknown value is rejected", () => {
+    expect(() =>
+      CortexConfigSchema.parse(
+        minConfig({
+          agents: [
+            minAgent({
+              id: "luna",
+              runtime: {
+                substrate: "claude-code",
+                mode: "in-process",
+                capabilities: [],
+                sovereignty: "lenient", // not a valid mode
+              },
+            }),
+          ],
+        }),
+      ),
+    ).toThrow();
+  });
+
+  test("maxConcurrent: 5 parses", () => {
+    const parsed = CortexConfigSchema.parse(
+      minConfig({
+        agents: [
+          minAgent({
+            id: "luna",
+            runtime: {
+              substrate: "claude-code",
+              mode: "in-process",
+              capabilities: [],
+              maxConcurrent: 5,
+            },
+          }),
+        ],
+      }),
+    );
+    expect(parsed.agents[0]?.runtime?.maxConcurrent).toBe(5);
+  });
+
+  test("maxConcurrent: 1 parses (lower bound)", () => {
+    const parsed = CortexConfigSchema.parse(
+      minConfig({
+        agents: [
+          minAgent({
+            id: "luna",
+            runtime: {
+              substrate: "claude-code",
+              mode: "in-process",
+              capabilities: [],
+              maxConcurrent: 1,
+            },
+          }),
+        ],
+      }),
+    );
+    expect(parsed.agents[0]?.runtime?.maxConcurrent).toBe(1);
+  });
+
+  test("maxConcurrent: 0 is rejected with a helpful message", () => {
+    expect(() =>
+      CortexConfigSchema.parse(
+        minConfig({
+          agents: [
+            minAgent({
+              id: "luna",
+              runtime: {
+                substrate: "claude-code",
+                mode: "in-process",
+                capabilities: [],
+                maxConcurrent: 0,
+              },
+            }),
+          ],
+        }),
+      ),
+    ).toThrow(/positive integer/);
+  });
+
+  test("maxConcurrent: -1 is rejected", () => {
+    expect(() =>
+      CortexConfigSchema.parse(
+        minConfig({
+          agents: [
+            minAgent({
+              id: "luna",
+              runtime: {
+                substrate: "claude-code",
+                mode: "in-process",
+                capabilities: [],
+                maxConcurrent: -1,
+              },
+            }),
+          ],
+        }),
+      ),
+    ).toThrow(/positive integer/);
+  });
+
+  test("maxConcurrent: 1.5 is rejected (must be integer)", () => {
+    expect(() =>
+      CortexConfigSchema.parse(
+        minConfig({
+          agents: [
+            minAgent({
+              id: "luna",
+              runtime: {
+                substrate: "claude-code",
+                mode: "in-process",
+                capabilities: [],
+                maxConcurrent: 1.5,
+              },
+            }),
+          ],
+        }),
+      ),
+    ).toThrow(/integer/);
+  });
+
+  test("sovereignty + maxConcurrent compose with declared capabilities (full PR-4 shape)", () => {
+    // The shape the design spec uses in its cortex.yaml example (§3.4):
+    // capabilities[] + sovereignty + maxConcurrent as siblings under runtime.
+    const parsed = CortexConfigSchema.parse(
+      minConfig({
+        agents: [
+          minAgent({
+            id: "echo",
+            displayName: "Echo",
+            persona: "./personas/echo.md",
+            runtime: {
+              substrate: "claude-code",
+              mode: "in-process",
+              capabilities: ["code-review.typescript"],
+              sovereignty: "selective",
+              maxConcurrent: 3,
+            },
+          }),
+        ],
+        capabilities: [
+          minCapability({ id: "code-review.typescript", provided_by: ["echo"] }),
+        ],
+      }),
+    );
+    const rt = parsed.agents[0]?.runtime;
+    expect(rt?.capabilities).toEqual(["code-review.typescript"]);
+    expect(rt?.sovereignty).toBe("selective");
+    expect(rt?.maxConcurrent).toBe(3);
+  });
+});
+
+// =============================================================================
 // Type round-trip — exported type aliases match the schema
 // =============================================================================
 

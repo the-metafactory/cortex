@@ -439,6 +439,53 @@ export const AgentRuntimeSchema = z.object({
    *  declared elsewhere (e.g. inferred from `roles`); for `standalone`
    *  agents, at least one capability is required — see refine below. */
   capabilities: z.array(z.string().min(1)).default([]),
+  /**
+   * cortex#237 PR-4 — per-agent sovereignty mode declaration. One of the
+   * four modes from `docs/architecture.md` §7.4:
+   *
+   *   - `open`      — auto-ack all matching tasks (no per-envelope evaluation).
+   *   - `selective` — agent evaluates each envelope's sovereignty axes
+   *                   (`classification`, `data_residency`, `model_class`) and
+   *                   may nak with `wont_do` per design §7.2.
+   *   - `strict`    — explicit capability + sovereignty match required;
+   *                   any mismatch on any axis naks.
+   *   - `bidding`   — triggers a request/reply (M6 pattern) for selection
+   *                   optimisation. Reserved for future bidding rollout.
+   *
+   * **Optional.** When unset the runtime consumer (PR-6) applies a
+   * deployment-wide default — schema does not pick a default here so an
+   * absent value remains observable downstream. Existing cortex.yaml
+   * configs that pre-date this field continue to parse unchanged.
+   *
+   * Enum lifted verbatim from myelin's `sovereignty_required` (vendor
+   * `envelope.schema.json:159` — F-021 + F-10 bidding) so the agent-side
+   * declaration and the envelope-side requirement share one taxonomy.
+   * Runtime consumption is PR-5/PR-6's concern; this PR is schema-only.
+   */
+  sovereignty: z.enum(["open", "selective", "strict", "bidding"]).optional(),
+  /**
+   * cortex#237 PR-4 — upper bound on the number of concurrent dispatched
+   * tasks this agent will admit. When the in-flight count reaches this
+   * value the consumer (PR-6) emits `dispatch.task.failed` with
+   * `reason.kind = "not_now"` and naks the JetStream message per design
+   * §7.3 (backpressure). The retry_after_ms hint is consumer-side
+   * derived — this schema only carries the bound itself.
+   *
+   * **Optional.** Treated as "unbounded" by downstream consumers when
+   * absent. A value of `0` is rejected (zero would mean "never accept
+   * any work", which is more clearly expressed by omitting the agent
+   * from the capability catalog entirely). Non-integer and negative
+   * values are rejected at parse time so a typo (`maxConcurrent: 1.5`,
+   * `maxConcurrent: -1`) surfaces immediately at config load rather
+   * than as a runtime error on first dispatch.
+   *
+   * Runtime consumption is PR-5/PR-6's concern; this PR is schema-only.
+   */
+  maxConcurrent: z
+    .number()
+    .int("agent.runtime.maxConcurrent must be an integer (got a fractional number)")
+    .positive("agent.runtime.maxConcurrent must be a positive integer (omit the field for unbounded concurrency)")
+    .optional(),
 }).refine(
   // Echo M2 on cortex#62 — a `standalone` agent with zero capabilities parses
   // fine but routes zero work. The daemon connects to NATS, publishes nothing
