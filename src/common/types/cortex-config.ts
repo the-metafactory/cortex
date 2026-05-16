@@ -1035,6 +1035,64 @@ export type PathsConfig = z.infer<typeof PathsConfigSchema>;
 // =============================================================================
 
 /**
+ * Session-construction parameters attached to a principal.
+ *
+ * IAW Phase C.2b — schema extension (cortex#243a). Carries the
+ * legacy `allowedDirs`, `allowedSkills`, `bashGuard`, and
+ * `bashAllowlist` knobs that grove-v2 hung off `presence.discord.dm`
+ * + `presence.discord.roles[].users[]`. The cutover moves these
+ * onto the principal so the dispatch path — not the adapter — picks
+ * them up when a CC session is constructed.
+ *
+ * Used by `PolicyPrincipalSchema.session_config.{default,dm}`
+ * (see `docs/design-policy-cutover.md` §5.3 + §12.2). Splitting
+ * `default` vs `dm` lets a principal carry a broader bash
+ * allowlist in 1:1 DMs than they get in channels — the divergence
+ * Andreas's live config exercises today.
+ */
+const SessionConfigShape = z.object({
+  /**
+   * Absolute or `~/`-prefixed directory paths the principal may
+   * touch in a CC session. The dispatch path expands `~/` and
+   * passes the result to `claude --add-dir`. Unset → no
+   * per-principal restriction; the global default applies.
+   */
+  allowed_dirs: z.array(z.string()).optional(),
+  /**
+   * Skill ids the principal is allowed to load into a CC session.
+   * Matches the runner's skill-resolution pass. Unset → no
+   * per-principal restriction.
+   */
+  allowed_skills: z.array(z.string()).optional(),
+  /**
+   * Whether the cortex bash-guard hook is active for this
+   * principal's sessions. Defaults to `true` — guard ON unless
+   * an operator explicitly opts out (e.g. for their own `operator`
+   * principal in a DM). Preserves the legacy `bashGuard` default.
+   */
+  bash_guard: z.boolean().default(true),
+  /**
+   * Optional bash command allowlist. Each rule pairs a regex
+   * `pattern` with an optional `repos[]` scope; if `repos` is
+   * present the rule only matches when the session is anchored
+   * to one of those repos. Top-level `repos[]` carries the
+   * always-allowed repo set (e.g. operator's own work tree).
+   *
+   * Shape mirrors grove-v2's `presence.discord.dm.operatorRole.
+   * bashAllowlist` so the cortex#243 migration CLI can copy
+   * values across without re-shaping. The runner-side guard
+   * consumes this directly post-C.2b (cortex#244).
+   */
+  bash_allowlist: z.object({
+    rules: z.array(z.object({
+      pattern: z.string(),
+      repos: z.array(z.string()).optional(),
+    })).default([]),
+    repos: z.array(z.string()).default([]),
+  }).optional(),
+});
+
+/**
  * A principal — identity-bearing actor the PolicyEngine authorises.
  * Top-level on `cortex.yaml.policy.principals[]` post-C.2a; the
  * PolicyEngine consumes the parsed shape via the
@@ -1043,6 +1101,35 @@ export type PathsConfig = z.infer<typeof PathsConfigSchema>;
  * Mirrors the `Principal` type from `src/common/policy/types.ts`
  * (C.1); kept as a Zod schema here so config parse validation is
  * authoritative.
+ *
+ * IAW Phase C.2b — schema extension (cortex#243a). Two additive
+ * fields land here:
+ *
+ *   - `platform_ids` — open record of `<platform_name>: string[]`,
+ *     letting any current or future adapter (Discord, Mattermost,
+ *     Slack, MCP, HTTP, email, voice, cron, webhook, …) attach a
+ *     list of platform-native user ids to a principal. The
+ *     pressure-test §15.5 finding flips this to an open `z.record`
+ *     so adding a new adapter never requires a schema bump.
+ *   - `session_config` — split `{ default, dm? }` carrying CC
+ *     session construction parameters (§5.3 + §12.2). `default`
+ *     is the channel/group context baseline; optional `dm` overrides
+ *     when the message arrived via a 1:1 DM. The dispatch path picks
+ *     the right one so adapters stop deciding this.
+ *
+ * **Convention — federation peers do NOT carry `platform_ids`.**
+ * A principal that represents a remote operator's stack (a
+ * federation peer) is authenticated by the `signed_by[]` chain's
+ * stack NKey, not by any platform-side identity. Setting
+ * `platform_ids` on such a principal is meaningless at best and
+ * misleading at worst; the schema does not refuse it (operators
+ * may carry both during transition) but the migration CLI
+ * (cortex#243) emits peer principals with empty `platform_ids`
+ * and the dispatch path never consults the field for federated
+ * traffic.
+ *
+ * See `docs/design-policy-cutover.md` §16 for the locked-in schema
+ * delta this implements.
  */
 export const PolicyPrincipalSchema = z.object({
   /**
@@ -1114,6 +1201,47 @@ export const PolicyPrincipalSchema = z.object({
       "principal.trust[] entries must be principal ids — same grammar as principal.id",
     ),
   ).default([]),
+  /**
+   * Platform-native user ids this principal answers for, keyed by
+   * platform name. **Open record by deliberate design (§15.5)** —
+   * any letter-prefix lowercase platform name is accepted, so
+   * adding a new adapter (Discord, Mattermost, Slack, MCP, HTTP,
+   * email, voice, cron, webhook, …) does not require a schema
+   * change. Values are platform-native string ids (e.g. Discord
+   * snowflakes), opaque to cortex; the adapter that owns the
+   * platform decides what they mean.
+   *
+   * Uniqueness across the policy block is enforced by
+   * `PolicySchema.superRefine` below: no `(platform_name, platform_id)`
+   * tuple may appear in two principals.
+   *
+   * **Convention — federation peer principals SHOULD NOT carry
+   * `platform_ids`.** Their identity is asserted via the
+   * `signed_by[]` chain's stack NKey, not via platform ids. The
+   * schema does not enforce this (operators may carry transition
+   * state); the migration CLI and dispatch path simply do not
+   * populate or consult it for peers.
+   */
+  platform_ids: z.record(
+    z.string().regex(
+      LETTER_PREFIX_ID_REGEX,
+      "platform name must be lowercase alphanumeric + hyphen, starting with a letter (e.g. 'discord', 'mattermost', 'mcp', 'email')",
+    ),
+    z.array(z.string()).default([]),
+  ).default({}),
+  /**
+   * CC session construction parameters, split between the
+   * channel/group context (`default`) and an optional 1:1 DM
+   * override (`dm`). The dispatch-listener picks the right block
+   * when constructing a session for a verified principal; adapters
+   * no longer decide this. See `docs/design-policy-cutover.md`
+   * §5.3 + §12.2 for the channel-vs-DM divergence Andreas's
+   * config exercises.
+   */
+  session_config: z.object({
+    default: SessionConfigShape,
+    dm: SessionConfigShape.optional(),
+  }).optional(),
 });
 
 export type PolicyPrincipal = z.infer<typeof PolicyPrincipalSchema>;
@@ -1409,18 +1537,56 @@ export const PolicySchema = z.object({
   // Capability-catalog precedent: `superRefine` with batch
   // `ctx.addIssue` per offender at the same nesting depth.
 
-  // Uniqueness — principals[].id.
+  // Uniqueness — principals[] keyed on `(id, home_stack)` (§15.4,
+  // cortex#243a). Federated peers in multi-stack deployments may
+  // legitimately register two principals with the same id but
+  // different home_stacks — e.g. sage records both
+  // `luna@andreas/meta-factory` and `luna@andreas/work`. The pre-
+  // cutover key was `id` alone, which rejected that pattern. The
+  // tuple key preserves the original intent (no two principals
+  // collide within a stack) while permitting cross-stack
+  // homonyms.
   const seenPrincipal = new Map<string, number>();
   policy.principals.forEach((p, i) => {
-    const dupAt = seenPrincipal.get(p.id);
+    const key = `${p.id} ${p.home_stack}`;
+    const dupAt = seenPrincipal.get(key);
     if (dupAt !== undefined) {
       ctx.addIssue({
         code: "custom",
-        message: `principal id "${p.id}" already declared at principals[${dupAt}]`,
+        message: `principal id "${p.id}" already declared for home_stack "${p.home_stack}" at principals[${dupAt}] — multi-stack peers may share an id only if their home_stack differs`,
         path: ["principals", i, "id"],
       });
     } else {
-      seenPrincipal.set(p.id, i);
+      seenPrincipal.set(key, i);
+    }
+  });
+
+  // Uniqueness — `(platform_name, platform_id)` tuple across all
+  // principals (§16, cortex#243a). No platform-side identity may
+  // be claimed by two principals; that would let the dispatch path
+  // resolve an inbound platform message to either of them
+  // non-deterministically. Caught at parse time with a per-offender
+  // path so operators see the second declaration as the offender.
+  // Federation peer principals SHOULD NOT carry platform_ids (see
+  // PolicyPrincipalSchema JSDoc); when they do, this rule still
+  // applies — the convention is operator-side, the uniqueness
+  // rule is schema-side.
+  const seenPlatformTuple = new Map<string, { principalIdx: number; principalId: string }>();
+  policy.principals.forEach((p, principalIdx) => {
+    for (const [platformName, ids] of Object.entries(p.platform_ids)) {
+      ids.forEach((platformId, idIdx) => {
+        const key = `${platformName} ${platformId}`;
+        const prior = seenPlatformTuple.get(key);
+        if (prior !== undefined) {
+          ctx.addIssue({
+            code: "custom",
+            message: `platform_ids.${platformName} entry "${platformId}" already claimed by principal "${prior.principalId}" at principals[${prior.principalIdx}] — a platform-side identity may belong to only one principal`,
+            path: ["principals", principalIdx, "platform_ids", platformName, idIdx],
+          });
+        } else {
+          seenPlatformTuple.set(key, { principalIdx, principalId: p.id });
+        }
+      });
     }
   });
 

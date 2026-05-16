@@ -308,6 +308,360 @@ describe("PolicySchema cross-validation", () => {
 });
 
 // ---------------------------------------------------------------------------
+// IAW Phase C.2b — cortex#243a schema extension
+// `PolicyPrincipal.platform_ids` (open record) + `session_config`
+// ({default, dm?}) + multi-stack id uniqueness + platform-tuple
+// uniqueness. See `docs/design-policy-cutover.md` §16 for the
+// locked-in schema delta.
+// ---------------------------------------------------------------------------
+
+describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
+  describe("platform_ids (open record, §15.5)", () => {
+    test("parses with multiple platform names (discord, slack, email, mcp, http)", () => {
+      const policy = PolicySchema.parse({
+        principals: [
+          {
+            id: "luna",
+            home_operator: "andreas",
+            home_stack: "andreas/research",
+            role: [],
+            trust: [],
+            platform_ids: {
+              discord: ["1487123456789012345"],
+              slack: ["U01ABCDEF"],
+              email: ["luna@meta-factory.ai"],
+              mcp: ["mcp://luna/inbox"],
+              http: ["bearer:abc123"],
+            },
+          },
+        ],
+        roles: [],
+      });
+      expect(policy.principals[0]?.platform_ids).toEqual({
+        discord: ["1487123456789012345"],
+        slack: ["U01ABCDEF"],
+        email: ["luna@meta-factory.ai"],
+        mcp: ["mcp://luna/inbox"],
+        http: ["bearer:abc123"],
+      });
+    });
+
+    test("defaults to empty object when omitted", () => {
+      const policy = PolicySchema.parse({
+        principals: [
+          {
+            id: "luna",
+            home_operator: "andreas",
+            home_stack: "andreas/research",
+            role: [],
+            trust: [],
+          },
+        ],
+        roles: [],
+      });
+      expect(policy.principals[0]?.platform_ids).toEqual({});
+    });
+
+    test("rejects platform name with uppercase (must match LETTER_PREFIX_ID_REGEX)", () => {
+      expect(() =>
+        PolicySchema.parse({
+          principals: [
+            {
+              id: "luna",
+              home_operator: "andreas",
+              home_stack: "andreas/research",
+              role: [],
+              trust: [],
+              platform_ids: { Discord: ["1487"] },
+            },
+          ],
+          roles: [],
+        }),
+      ).toThrow(/lowercase alphanumeric \+ hyphen/);
+    });
+
+    test("rejects platform name with digit prefix", () => {
+      expect(() =>
+        PolicySchema.parse({
+          principals: [
+            {
+              id: "luna",
+              home_operator: "andreas",
+              home_stack: "andreas/research",
+              role: [],
+              trust: [],
+              platform_ids: { "2chat": ["abc"] },
+            },
+          ],
+          roles: [],
+        }),
+      ).toThrow(/lowercase alphanumeric \+ hyphen/);
+    });
+  });
+
+  describe("session_config (§5.3 + §12.2)", () => {
+    test("session_config.default alone parses", () => {
+      const policy = PolicySchema.parse({
+        principals: [
+          {
+            id: "luna",
+            home_operator: "andreas",
+            home_stack: "andreas/research",
+            role: [],
+            trust: [],
+            session_config: {
+              default: {
+                allowed_dirs: ["~/Developer/cortex"],
+                allowed_skills: ["code-review"],
+                bash_guard: true,
+              },
+            },
+          },
+        ],
+        roles: [],
+      });
+      expect(policy.principals[0]?.session_config?.default.allowed_dirs).toEqual([
+        "~/Developer/cortex",
+      ]);
+      expect(policy.principals[0]?.session_config?.dm).toBeUndefined();
+    });
+
+    test("session_config.{default, dm} both parse with bash_allowlist", () => {
+      const policy = PolicySchema.parse({
+        principals: [
+          {
+            id: "operator-andreas",
+            home_operator: "andreas",
+            home_stack: "andreas/research",
+            role: [],
+            trust: [],
+            session_config: {
+              default: {
+                bash_guard: true,
+                bash_allowlist: {
+                  rules: [{ pattern: "^git status", repos: ["cortex"] }],
+                  repos: ["cortex"],
+                },
+              },
+              dm: {
+                bash_guard: false,
+                allowed_dirs: ["~/Developer", "~/Documents/andreas_brain"],
+                bash_allowlist: {
+                  rules: [
+                    { pattern: "^git " },
+                    { pattern: "^gh " },
+                    { pattern: "^bun " },
+                  ],
+                  repos: [
+                    "cortex",
+                    "pilot",
+                    "signal-collector",
+                    "myelin",
+                  ],
+                },
+              },
+            },
+          },
+        ],
+        roles: [],
+      });
+      const sc = policy.principals[0]?.session_config;
+      expect(sc?.default.bash_guard).toBe(true);
+      expect(sc?.dm?.bash_guard).toBe(false);
+      expect(sc?.dm?.bash_allowlist?.rules).toHaveLength(3);
+      expect(sc?.dm?.bash_allowlist?.repos).toContain("pilot");
+    });
+
+    test("session_config.default.bash_guard defaults to true when omitted", () => {
+      const policy = PolicySchema.parse({
+        principals: [
+          {
+            id: "luna",
+            home_operator: "andreas",
+            home_stack: "andreas/research",
+            role: [],
+            trust: [],
+            session_config: { default: {} },
+          },
+        ],
+        roles: [],
+      });
+      expect(policy.principals[0]?.session_config?.default.bash_guard).toBe(true);
+    });
+
+    test("session_config is optional — omission parses cleanly", () => {
+      const policy = PolicySchema.parse({
+        principals: [
+          {
+            id: "luna",
+            home_operator: "andreas",
+            home_stack: "andreas/research",
+            role: [],
+            trust: [],
+          },
+        ],
+        roles: [],
+      });
+      expect(policy.principals[0]?.session_config).toBeUndefined();
+    });
+  });
+
+  describe("multi-stack principal-id uniqueness (§15.4)", () => {
+    test("accepts same id on different home_stacks (federated multi-stack peer)", () => {
+      const policy = PolicySchema.parse({
+        principals: [
+          {
+            id: "luna",
+            home_operator: "andreas",
+            home_stack: "andreas/meta-factory",
+            role: [],
+            trust: [],
+          },
+          {
+            id: "luna",
+            home_operator: "andreas",
+            home_stack: "andreas/work",
+            role: [],
+            trust: [],
+          },
+        ],
+        roles: [],
+      });
+      expect(policy.principals).toHaveLength(2);
+      expect(policy.principals.map((p) => p.home_stack)).toEqual([
+        "andreas/meta-factory",
+        "andreas/work",
+      ]);
+    });
+
+    test("rejects same id on same home_stack (intra-stack collision)", () => {
+      expect(() =>
+        PolicySchema.parse({
+          principals: [
+            {
+              id: "luna",
+              home_operator: "andreas",
+              home_stack: "andreas/research",
+              role: [],
+              trust: [],
+            },
+            {
+              id: "luna",
+              home_operator: "andreas",
+              home_stack: "andreas/research",
+              role: [],
+              trust: [],
+            },
+          ],
+          roles: [],
+        }),
+      ).toThrow(/principal id.*luna.*already declared for home_stack.*andreas\/research/);
+    });
+  });
+
+  describe("(platform_name, platform_id) tuple uniqueness (§16)", () => {
+    test("rejects same (platform, id) tuple on two principals", () => {
+      expect(() =>
+        PolicySchema.parse({
+          principals: [
+            {
+              id: "luna",
+              home_operator: "andreas",
+              home_stack: "andreas/research",
+              role: [],
+              trust: [],
+              platform_ids: { discord: ["1487123456789012345"] },
+            },
+            {
+              id: "echo",
+              home_operator: "andreas",
+              home_stack: "andreas/research",
+              role: [],
+              trust: [],
+              platform_ids: { discord: ["1487123456789012345"] },
+            },
+          ],
+          roles: [],
+        }),
+      ).toThrow(/platform_ids\.discord entry.*1487123456789012345.*already claimed by principal.*luna/);
+    });
+
+    test("accepts same id under different platforms (no cross-platform collision)", () => {
+      const policy = PolicySchema.parse({
+        principals: [
+          {
+            id: "luna",
+            home_operator: "andreas",
+            home_stack: "andreas/research",
+            role: [],
+            trust: [],
+            platform_ids: { discord: ["1487"] },
+          },
+          {
+            id: "echo",
+            home_operator: "andreas",
+            home_stack: "andreas/research",
+            role: [],
+            trust: [],
+            platform_ids: { slack: ["1487"] },
+          },
+        ],
+        roles: [],
+      });
+      expect(policy.principals).toHaveLength(2);
+    });
+
+    test("accepts disjoint platform_ids across principals on the same platform", () => {
+      const policy = PolicySchema.parse({
+        principals: [
+          {
+            id: "luna",
+            home_operator: "andreas",
+            home_stack: "andreas/research",
+            role: [],
+            trust: [],
+            platform_ids: { discord: ["1487123"] },
+          },
+          {
+            id: "echo",
+            home_operator: "andreas",
+            home_stack: "andreas/research",
+            role: [],
+            trust: [],
+            platform_ids: { discord: ["1487999"] },
+          },
+        ],
+        roles: [],
+      });
+      expect(policy.principals[0]?.platform_ids.discord).toEqual(["1487123"]);
+      expect(policy.principals[1]?.platform_ids.discord).toEqual(["1487999"]);
+    });
+  });
+
+  describe("backward compatibility", () => {
+    test("pre-cutover policy block (no platform_ids, no session_config) parses cleanly", () => {
+      const policy = PolicySchema.parse({
+        principals: [
+          {
+            id: "luna",
+            home_operator: "andreas",
+            home_stack: "andreas/research",
+            role: ["operator"],
+            trust: [],
+          },
+        ],
+        roles: [{ id: "operator", capabilities: ["code-review.typescript"] }],
+      });
+      expect(policy.principals[0]?.platform_ids).toEqual({});
+      expect(policy.principals[0]?.session_config).toBeUndefined();
+      // Existing fields preserved.
+      expect(policy.principals[0]?.role).toEqual(["operator"]);
+      expect(policy.principals[0]?.id).toBe("luna");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // IAW Phase D.1 (cortex#116) — federated network schema
 // ---------------------------------------------------------------------------
 
