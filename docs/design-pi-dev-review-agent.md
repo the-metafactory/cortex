@@ -162,7 +162,7 @@ The three `review.verdict.*` subjects share a single payload shape. This is the 
   "github_review_id": 2459183744,
   "github_review_url": "https://github.com/the-metafactory/cortex/pull/229#pullrequestreview-2459183744",
   "submitted_at": "2026-05-16T09:51:30Z",
-  "commit_id": "abc123def456789",
+  "commit_id": "a1b2c3d4e5f6789012345678901234567890abcd",
   "findings": { "blockers": 0, "majors": 2, "nits": 3 },
   "inline_comments": 5
 }
@@ -177,7 +177,7 @@ The three `review.verdict.*` subjects share a single payload shape. This is the 
 | `reviewer` | string | GitHub login of the reviewer (e.g. `echo`). |
 | `verdict` | enum | Discriminator: `approved` \| `changes-requested` \| `commented`. MUST match the subject suffix. |
 | `summary` | string | Reviewer's one-line verdict text. Mirrors the verdict line in the reviewer's GitHub review body so the bus payload and the GitHub-side artefact stay in sync. |
-| `github_review_id` | integer | Numeric GitHub review ID. Used for GitHub API correlation (e.g. fetching inline comments, audit cross-reference). |
+| `github_review_id` | integer (int64-compatible; today's IDs are well below 2^53) | Numeric GitHub review ID. Used for GitHub API correlation (e.g. fetching inline comments, audit cross-reference). |
 | `github_review_url` | string | Direct GitHub URL to the review. For human navigation from dashboard / Discord / CLI output. |
 | `submitted_at` | string (ISO 8601) | Timestamp the reviewer submitted on GitHub. Distinct from the envelope's `timestamp`, which is the bus-publish moment. |
 | `commit_id` | string (SHA) | Commit SHA the review was conducted against. Lets consumers detect "review is stale" when subsequent commits land. |
@@ -191,6 +191,8 @@ The reviewer MUST set the verdict envelope's `correlation_id` to the **`id` of t
 **Payload-shape compatibility:** This shape deliberately mirrors `nats-review-io.ts`'s legacy `ReviewCompletedPayload` (the `mf.{network}.review.completed` shape from cortex's pre-capability-dispatch era). Workflow-side consumers (e.g. the existing `runReviewCycle` ReviewCycleIO) MUST NOT need behavioural changes when migrating from the legacy subject to the canonical `review.verdict.*` subjects — only the subject string and the `correlation_id` field are new.
 
 **Out of scope for this contract** (deliberately): retry semantics, multi-agent quorum, persistence. See `docs/design-pilot-restructure.md` §4.6 for what pilot's verdict subscriber does NOT do.
+
+**Follow-up:** `docs/design-pilot-restructure.md` §4 maturity table currently marks §4.2 as "Proposed — cortex#237 (or a companion PR to `design-pi-dev-review-agent.md`) must ratify." With this ratification merged at cortex#238, that row should flip to "Shipped — ratified at cortex#238 §4.2.1" in a follow-up pilot-spec PR.
 
 ---
 
