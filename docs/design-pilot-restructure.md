@@ -445,9 +445,9 @@ Approximate counts:
 | Sub-section | Status | Source of truth |
 |---|---|---|
 | §4.1 Request envelope | **Shipped.** Wire-stable since `nats-publish.ts:87-104`. | Existing code + anchor doc §4.1. |
-| §4.2 Verdict envelope payload | **Proposed.** The subject grammar is anchored; the JSON payload (`github_review_id`, `github_review_url`, `submitted_at`, `commit_id`, `findings`, `inline_comments`) is **NOT** in the anchor doc. Pilot is specifying what its consumer expects to read; cortex#237 (or a companion PR to `design-pi-dev-review-agent.md`) must ratify before pilot CLIs can ship past §6.2 Phase A.7. See §8.1. | Anchor doc §4.2 (subjects only) + this section (payload, proposed). |
-| §4.3 Lifecycle envelopes | **Subject grammar shipped** (`dispatch.task.*` exists in cortex `src/bus/dispatch-events.ts`). **Per-envelope payloads partially shipped** — `DispatchTaskFailedReason` discriminated union ships only `kind: "policy_denied"` today; the four-way nak taxonomy in §4.4 is not yet wired. See §4.4 + §8.1. | Anchor doc §4.2 + cortex `src/bus/dispatch-events.ts:251-284`. |
-| §4.4 Nak taxonomy | **Specified, not implemented.** Architecture `docs/architecture.md` §7.3 (nak reasons referenced as "lines 498-503") names the four reasons; cortex's `DispatchTaskFailedReason` does NOT yet include them. Cortex-side extension PR is a §6.2 Phase A blocker. See §8.1. | Architecture §7.3 + cortex `src/bus/dispatch-events.ts:267-284`. |
+| §4.2 Verdict envelope payload | **Shipped — ratified at cortex#248.** The JSON payload (`github_review_id`, `github_review_url`, `submitted_at`, `commit_id`, `findings`, `inline_comments`) is now the canonical contract. Pilot's verdict subscriber (pilot#102) and cortex#237's emitter (pending) both target this shape. | Anchor doc §4.2 + cortex#248 (payload ratification). |
+| §4.3 Lifecycle envelopes | **Shipped — cortex#249.** Subject grammar (`dispatch.task.*`) was already in cortex `src/bus/dispatch-events.ts`; the four-way nak taxonomy in §4.4 is now wired via the extended `DispatchTaskFailedReason` discriminated union (`cant_do`, `wont_do`, `not_now`, `compliance_block` alongside the original `policy_denied`). | Anchor doc §4.2 + cortex `src/bus/dispatch-events.ts` (post-cortex#249). |
+| §4.4 Nak taxonomy | **Shipped — cortex#249.** Architecture `docs/architecture.md` §7.3's four-way taxonomy (`cant_do` / `wont_do` / `not_now` / `compliance_block`) is implemented in cortex's `DispatchTaskFailedReason`. Pilot's nak-handling subscriber (pilot#102) consumes the new discriminators. | Architecture §7.3 + cortex `src/bus/dispatch-events.ts` (post-cortex#249). |
 | §4.5 Github.* fallback | **Shipped.** Producer is the existing `gh-webhook-receiver`. | Existing code. |
 
 
@@ -559,9 +559,9 @@ Pilot's **base case** is to wait for `review.verdict.*` (terminal). The `dispatc
 
 ### §4.4 Nak handling
 
-> **⚠ Gated on cortex-side prerequisite work** — see §8.1 (now reframed as a Phase A blocker, not an open question). Cortex's `DispatchTaskFailedReason` (`src/bus/dispatch-events.ts:267-284`) currently ships a single `kind: "policy_denied"` discriminator; the four-way nak taxonomy below mirrors `docs/architecture.md` §7.3's named vocabulary but is **not yet wired** in `createDispatchTaskFailedEvent`. Pilot's nak handling MUST NOT ship until cortex extends `DispatchTaskFailedReason` with these four kinds. Phase A PR-A.0 (cortex) tracks the extension.
+> **✅ Cortex-side prerequisite landed — cortex#249.** The four-way nak taxonomy below is wired into cortex's `DispatchTaskFailedReason` (`src/bus/dispatch-events.ts`) as sibling discriminators to the original `policy_denied`. Pilot's nak handling shipped at pilot#102 against the extended union.
 
-When Echo (or any code-review-capable agent) naks a task, pilot's `subscribe-verdict.ts` receives a `dispatch.task.failed` envelope with `payload.reason.kind` in `{cant_do, wont_do, not_now, compliance_block}` (post-extension).
+When Echo (or any code-review-capable agent) naks a task, pilot's `subscribe-verdict.ts` receives a `dispatch.task.failed` envelope with `payload.reason.kind` in `{cant_do, wont_do, not_now, compliance_block}`.
 
 | Reason | Pilot interpretation | CLI exit |
 |---|---|---|
@@ -1116,8 +1116,8 @@ Recommendation: stub-based primary; one or two live-server "smoke" tests in CI t
 
 The full restructure is complete when:
 
-- [ ] Phase A merged: file moves done; new bus primitives unit-tested; tsc + tests green.
-- [ ] Phase B merged: three new CLIs ship; skill knows about them; capability-dispatch publish path works against real bus; verdict-wait times out cleanly until cortex#237.
+- [x] Phase A merged: file moves done; new bus primitives unit-tested; tsc + tests green. **Shipped — Wave 1 (cortex#248, cortex#249, cortex#250; pilot#94-#102, #105).**
+- [x] Phase B merged: three new CLIs ship; skill knows about them; capability-dispatch publish path works against real bus; verdict-wait times out cleanly until cortex#237. **Shipped — Wave 2 (pilot#104, #106-#109).** Note: pilot#109 ships the `pingCommand` opt-in path behind `PILOT_BUS_VERDICT_WAIT=1`; retirement of the env-var gate is Wave 3 C.1.
 - [ ] Phase C merged (lockstep with cortex#237): default review path uses capability dispatch; bot-mention transport demoted to secondary signal.
 - [ ] Phase D merged: legacy Discord transport deleted; `REVIEWERS` registry deleted; `arc-manifest.yaml` cleaned of Discord deps.
 - [ ] Skill rewritten to use `pilot request-review --wait` as the primary verb.
