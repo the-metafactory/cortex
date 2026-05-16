@@ -932,6 +932,28 @@ describe("SlackAdapter — system.adapter.* envelopes (cortex#235 r1#4)", () => 
     await adapter.stop();
   });
 
+  test("stop() → start() resets latches; next initial connect is silent (Echo cortex#254 r1 M2)", async () => {
+    const runtime = makeRecordingRuntime();
+    const { adapter, simulateConnect, simulateDisconnect } = makeAdapter({
+      infra: { runtime, systemEventSource: SOURCE },
+    });
+    // First session: initial connect (silent) → unclean disconnect →
+    // recovered. Two envelopes expected.
+    await adapter.start(async () => {});
+    simulateConnect();
+    simulateDisconnect({ wasClean: false });
+    simulateConnect();
+    expect(runtime.publishes).toHaveLength(2);
+    await adapter.stop();
+    // Second session: WITHOUT latch reset on stop(), the next initial
+    // connect would be classified as a "recovery" and emit a spurious
+    // `system.adapter.recovered`. Assert it stays at 2.
+    await adapter.start(async () => {});
+    simulateConnect();
+    expect(runtime.publishes).toHaveLength(2);
+    await adapter.stop();
+  });
+
   test("runtime present but systemEventSource missing → silent + one-time warning", async () => {
     const runtime = makeRecordingRuntime();
     const originalWarn = console.warn;

@@ -202,6 +202,19 @@ export class SlackAdapter implements PlatformAdapter {
     // dedup decisions that would silently drop legitimate messages.
     this.seenTs.clear();
     this.seenTsOrder.length = 0;
+    // Echo cortex#254 round 1 — reset system.adapter.* latches so a
+    // subsequent `start()` on the same instance has clean state:
+    //   - `connectedOnce` would otherwise treat the next initial
+    //     connect as a recovery, emitting a spurious `recovered`.
+    //   - `lastDisconnectedAt` could falsely pair with that
+    //     synthetic recovered.
+    //   - `warnedMissingSource` is process-lifetime in spirit but
+    //     resetting on stop()/start() boundaries is fine (operator
+    //     restarting an adapter probably wants the diagnostic again
+    //     if they fixed nothing in between).
+    this.connectedOnce = false;
+    this.lastDisconnectedAt = null;
+    this.warnedMissingSource = false;
   }
 
   async getPlatformUserId(): Promise<string> {

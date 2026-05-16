@@ -131,6 +131,23 @@ export class RealSlackClient implements SlackClient {
   private readonly web: WebClient;
   private readonly instanceId: string;
   private cachedIdentity: SlackBotIdentity | null = null;
+  /**
+   * Tracks whether `stop()` initiated the next `disconnected` event,
+   * so the `wasClean` classification on `system.adapter.disconnected`
+   * is correct.
+   *
+   * Why explicit state rather than reading the event argument: as of
+   * `@slack/socket-mode` v2, the `disconnected` event emits with no
+   * arguments — the previous implementation's `(err?: Error)`
+   * derivation would always classify every disconnect as
+   * `wasClean=true`, which is exactly backwards. Echo cortex#254
+   * round 1 caught this.
+   *
+   * Set to true at the top of `stop()`; reset to false after the
+   * next `disconnected` event fires (so a subsequent unexpected
+   * drop classifies correctly).
+   */
+  private stopInitiated = false;
 
   constructor(opts: RealSlackClientOptions) {
     this.instanceId = opts.instanceId ?? "slack";
@@ -226,15 +243,22 @@ export class RealSlackClient implements SlackClient {
     }
     if (opts.onDisconnected !== undefined) {
       const onDisconnected = opts.onDisconnected;
-      this.socket.on("disconnected", (err?: Error) => {
+      this.socket.on("disconnected", () => {
+        // @slack/socket-mode v2 emits `disconnected` with NO
+        // arguments — earlier versions of this file took an
+        // `(err?: Error)` and derived `wasClean = err === undefined`,
+        // which classified every disconnect as clean. Echo
+        // cortex#254 round 1.
+        //
+        // Correct derivation: was THIS disconnect initiated by our
+        // own `stop()` call (clean), or did the socket drop on its
+        // own (unclean — Socket Mode will then trigger an internal
+        // reconnect; if that also fails, fires `disconnected`
+        // again with the same wasClean=false reading)?
+        const wasClean = this.stopInitiated;
+        this.stopInitiated = false;
         try {
-          // @slack/socket-mode `disconnected` event passes an Error
-          // when the disconnect was unexpected; absent for clean
-          // shutdowns (`stop()` path).
-          onDisconnected({
-            wasClean: err === undefined,
-            ...(err !== undefined && { closeReason: err.message }),
-          });
+          onDisconnected({ wasClean });
         } catch (cbErr) {
           console.warn(
             `slack-client[${this.instanceId}]: onDisconnected threw:`,
@@ -248,6 +272,7 @@ export class RealSlackClient implements SlackClient {
   }
 
   async stop(): Promise<void> {
+    this.stopInitiated = true;
     await this.socket.disconnect();
   }
 
