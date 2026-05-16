@@ -51,16 +51,23 @@ export function canonicalJSON(value: unknown): string {
 // Base64 (URL-safe NOT used — operators paste standard base64)
 // =============================================================================
 
-export function base64ToBytes(b64: string): Uint8Array {
+export function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   // Workers + Bun + modern Node all have atob(). Wrap so a malformed input
   // surfaces as a recognisable Error rather than a DOMException.
+  //
+  // Return type is narrowed to `Uint8Array<ArrayBuffer>` (not the default
+  // `Uint8Array<ArrayBufferLike>`) so the result satisfies `BufferSource`
+  // for `crypto.subtle.importKey` / `sign` / `verify` under TS 5.7+ strict
+  // typings. `new Uint8Array(length)` always allocates an `ArrayBuffer`
+  // backing store, never `SharedArrayBuffer`, so the narrowing is sound.
   let bin: string;
   try {
     bin = atob(b64);
   } catch (_err) {
     throw new Error("invalid base64");
   }
-  const out = new Uint8Array(bin.length);
+  const buf = new ArrayBuffer(bin.length);
+  const out = new Uint8Array(buf);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
 }
@@ -91,10 +98,10 @@ export function bytesToBase64(bytes: Uint8Array): string {
 export async function verifyEd25519(
   pubkeyB64: string,
   signatureB64: string,
-  message: Uint8Array,
+  message: Uint8Array<ArrayBuffer>,
 ): Promise<boolean> {
-  let pubBytes: Uint8Array;
-  let sigBytes: Uint8Array;
+  let pubBytes: Uint8Array<ArrayBuffer>;
+  let sigBytes: Uint8Array<ArrayBuffer>;
   try {
     pubBytes = base64ToBytes(pubkeyB64);
     sigBytes = base64ToBytes(signatureB64);
@@ -131,7 +138,7 @@ export async function verifyEd25519(
  */
 export async function signEd25519(
   privateKeyB64: string,
-  message: Uint8Array,
+  message: Uint8Array<ArrayBuffer>,
 ): Promise<string> {
   const pkcs8 = base64ToBytes(privateKeyB64);
   const key = await crypto.subtle.importKey(
