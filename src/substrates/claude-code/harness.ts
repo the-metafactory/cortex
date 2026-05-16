@@ -94,6 +94,25 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
+ * Module-scope warn-once latch for non-UUID `requestId` substitution
+ * (Echo cortex#127 item 4).
+ *
+ * The harness was originally instance-scoped, but dispatch-listener.ts
+ * constructs a fresh harness per dispatch — so an instance field re-armed
+ * the warning every dispatch and the "once per harness instance" guarantee
+ * was effectively never honoured under the production wiring. Module scope
+ * keeps the latch durable across every harness construction in the
+ * process, which matches what operators expect from a noise-suppression
+ * warning. Reset is exposed for tests via `__resetWarnedNonUuidRequestId`.
+ */
+let warnedNonUuidRequestId = false;
+
+/** Test-only reset of the module-scope warn-once latch. */
+export function __resetWarnedNonUuidRequestId(): void {
+  warnedNonUuidRequestId = false;
+}
+
+/**
  * Mirror of `CCSessionLike` in `runner/dispatch-listener.ts` — kept here
  * to avoid a circular dependency between the new substrates module and the
  * legacy runner module. Once A.1b flips the listener over, the two shapes
@@ -365,13 +384,12 @@ export class ClaudeCodeHarness implements SessionHarness {
     return opts;
   }
 
-  /**
-   * Latches once a non-UUID `requestId` has been seen so the diagnostic
-   * fires exactly once per harness instance — a misconfigured producer
-   * dispatching dozens of bad ids per minute does not flood the log.
-   * Mirrors the same warn-once pattern in `DispatchHandler.warnedMissingSource`.
-   */
-  private warnedNonUuidRequestId = false;
+  // Latch moved to module scope (see `warnedNonUuidRequestId` near the top
+  // of this file). Echo cortex#127 item 4: ClaudeCodeHarness is constructed
+  // per-dispatch in `dispatch-listener.ts:549`, so an instance field re-
+  // armed the warning every dispatch — defeating the warn-once goal.
+  // Module-scope flag persists across dispatches; the singleton harness
+  // case (used by tests + future direct-call sites) is unaffected.
 
   /**
    * Per-dispatch correlation key. Uses `requestId` when valid (UUID), else
@@ -391,11 +409,11 @@ export class ClaudeCodeHarness implements SessionHarness {
    */
   private correlationFor(req: DispatchRequest): string {
     if (isUuidLoose(req.requestId)) return req.requestId;
-    if (!this.warnedNonUuidRequestId) {
+    if (!warnedNonUuidRequestId) {
       console.warn(
-        `claude-code-harness: requestId "${req.requestId}" is not UUID-shaped — substituting a generated correlation_id (this warning fires once per harness instance)`,
+        `claude-code-harness: requestId "${req.requestId}" is not UUID-shaped — substituting a generated correlation_id (this warning fires once per process)`,
       );
-      this.warnedNonUuidRequestId = true;
+      warnedNonUuidRequestId = true;
     }
     return randomUUID();
   }

@@ -27,7 +27,11 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { ClaudeCodeHarness, type CCSessionFactory } from "../harness";
+import {
+  __resetWarnedNonUuidRequestId,
+  ClaudeCodeHarness,
+  type CCSessionFactory,
+} from "../harness";
 import type { CCSessionOpts, CCSessionResult } from "../../../runner/cc-session";
 import type { DispatchEventSource } from "../../../bus/dispatch-events";
 import type {
@@ -320,7 +324,7 @@ describe("ClaudeCodeHarness — DispatchRequest → CCSessionOpts mapping", () =
     expect(cap.opts[0]?.bashGuardDisabled).toBe(false);
   });
 
-  test("A.1b: req.runtime takes precedence over env-kind context on conflict", async () => {
+  test("A.1b: req.runtime and env-kind context coexist (no overlapping fields today)", async () => {
     // If a payload happens to populate BOTH `req.runtime` AND a
     // `context[kind=env]` block (defence in depth — different upstream
     // adapters might use either path), `req.runtime` wins. This is the
@@ -489,5 +493,45 @@ describe("ClaudeCodeHarness — shutdown", () => {
     const envelopes = await dispatchPromise;
     expect(killOrder).toEqual(["killed"]);
     expect(envelopes[1]?.type).toBe("dispatch.task.aborted");
+  });
+
+  test("cortex#127 item 4: non-UUID requestId warn-once latch is module-scoped (survives across harness instances)", async () => {
+    __resetWarnedNonUuidRequestId();
+    const warnCalls: string[] = [];
+    const originalWarn = console.warn.bind(console);
+    console.warn = (msg: string) => {
+      warnCalls.push(msg);
+    };
+
+    try {
+      const cap = captureFactory(makeResult());
+      // Two fresh harness instances dispatched with non-UUID requestIds —
+      // production wires a new ClaudeCodeHarness per dispatch in
+      // dispatch-listener.ts. Pre-fix, each instance's `warnedNonUuidRequestId`
+      // field started false, so every dispatch warned. Post-fix, the latch
+      // is module-scope and the warning fires exactly once across both.
+      const h1 = new ClaudeCodeHarness({
+        source: SOURCE,
+        ccSessionFactory: cap.factory,
+      });
+      const h2 = new ClaudeCodeHarness({
+        source: SOURCE,
+        ccSessionFactory: cap.factory,
+      });
+
+      await drain(h1.dispatch(makeRequest({ requestId: "not-a-uuid" })));
+      await drain(h2.dispatch(makeRequest({ requestId: "also-not-uuid" })));
+
+      const nonUuidWarnings = warnCalls.filter((m) =>
+        m.includes("is not UUID-shaped"),
+      );
+      expect(nonUuidWarnings).toHaveLength(1);
+      // The single warning must be for the FIRST non-UUID id (latch fired
+      // on h1's dispatch); h2's bad id is silently substituted.
+      expect(nonUuidWarnings[0]).toContain("not-a-uuid");
+    } finally {
+      console.warn = originalWarn;
+      __resetWarnedNonUuidRequestId();
+    }
   });
 });
