@@ -156,9 +156,23 @@ export interface DispatchListenerOptions {
   /** Source identity for the lifecycle envelopes the listener emits. */
   source: SystemEventSource;
   /**
-   * Subject pattern(s) to subscribe to. Defaults to
-   * `local.{org}.dispatch.task.received` per the plan §4.5. Tests can
-   * override with broader patterns (`local.test.dispatch.task.received`).
+   * Operator stack segment (IAW Phase A.5, cortex#267) used to build the
+   * subscription subject and the audit-envelope `dispatch.task.received`
+   * synthesis path. When supplied, both subjects land on the 6-segment
+   * stack-aware grammar `local.{org}.{stack}.dispatch.task.received`
+   * matching sage's emit-side post-IAW A.5. When omitted, the legacy
+   * 5-segment form is used — bit-identical to pre-cortex#267 output, so
+   * deployments without a `cortex.yaml stack:` block see no change.
+   *
+   * Production callers source this from `deriveStackId(loadedConfig).stack`
+   * — same value `MyelinRuntime.publish` receives post-cortex#262.
+   */
+  stack?: string;
+  /**
+   * Subject pattern(s) to subscribe to. When omitted, the listener
+   * derives the default from `source.org` + optional `stack` per
+   * the IAW A.5 grammar. Tests can override with broader patterns
+   * (`local.test.dispatch.task.received`).
    */
   subjects?: string[];
   /**
@@ -213,9 +227,18 @@ export interface DispatchListener {
  * is substituted at registration time using `source.org` so a misconfigured
  * runner with no operator id can still subscribe (it'll match nothing
  * unless someone publishes under `local.default.dispatch.task.received`).
+ *
+ * IAW Phase A.5 (cortex#267): when `stack` is supplied, emits the
+ * 6-segment stack-aware grammar `local.{org}.{stack}.dispatch.task.received`
+ * matching sage's emit-side. When omitted, falls through to the legacy
+ * 5-segment form for backward compatibility with operators on the
+ * pre-A.5 deployment.
  */
-function defaultSubjects(org: string): string[] {
-  return [`local.${org}.dispatch.task.received`];
+function defaultSubjects(org: string, stack?: string): string[] {
+  if (stack === undefined) {
+    return [`local.${org}.dispatch.task.received`];
+  }
+  return [`local.${org}.${stack}.dispatch.task.received`];
 }
 
 export function createDispatchListener(
@@ -229,7 +252,7 @@ export function createDispatchListener(
     policyEngine,
     adapterId = "runner-dispatch-listener",
   } = opts;
-  const subjects = opts.subjects ?? defaultSubjects(source.org);
+  const subjects = opts.subjects ?? defaultSubjects(source.org, opts.stack);
 
   let registration: { unregister: () => void } | null = null;
 
@@ -254,6 +277,7 @@ export function createDispatchListener(
         source,
         ccSessionFactory,
         policyEngine,
+        opts.stack,
       ),
   };
 
@@ -405,6 +429,7 @@ async function handleDispatchEnvelope(
   source: SystemEventSource,
   ccSessionFactory: CCSessionFactory | undefined,
   policyEngine: PolicyEngine | undefined,
+  stack: string | undefined,
 ): Promise<void> {
   const payload = parsePayload(envelope);
   if (!payload) {
@@ -476,8 +501,18 @@ async function handleDispatchEnvelope(
     // misrepresent the wire path on audit consumers. Fall back to the
     // synthesised local subject when `subject` is undefined (legacy
     // callers / unit tests that don't pass a subject).
-    const auditEnvelopeSubject =
-      subject ?? `local.${source.org}.dispatch.task.received`;
+    //
+    // IAW Phase A.5 (cortex#267): the synthesised fallback honours the
+    // operator's stack. Stack-aware deployments synthesise the 6-segment
+    // form `local.{org}.{stack}.dispatch.task.received` so audit
+    // consumers correlate against the same wire grammar the listener
+    // actually subscribes to. Stack-less deployments fall through to
+    // the legacy 5-segment form bit-identical to pre-cortex#267.
+    const synthesisedSubject =
+      stack === undefined
+        ? `local.${source.org}.dispatch.task.received`
+        : `local.${source.org}.${stack}.dispatch.task.received`;
+    const auditEnvelopeSubject = subject ?? synthesisedSubject;
     const auditCommon = {
       source,
       principalId: decision.principalId,

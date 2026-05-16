@@ -200,6 +200,59 @@ describe("createDispatchListener — surfaceConfig", () => {
     ]);
   });
 
+  // cortex#267 — stack-aware default subjects. When the boot path
+  // supplies `stack` (from `deriveStackId(loadedConfig).stack`), the
+  // listener subscribes on the 6-segment grammar matching sage's
+  // emit-side post-IAW A.5. Stack-less callers stay on the legacy
+  // 5-segment form.
+  test("default subjects use 6-segment grammar when stack is supplied (cortex#267)", () => {
+    const { runtime } = recordingRuntime();
+    const router = createSurfaceRouter(runtime);
+    const listener = createDispatchListener({
+      runtime,
+      router,
+      source: SOURCE,
+      stack: "default",
+      ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
+    });
+    expect(listener.surfaceConfig.subjects).toEqual([
+      "local.metafactory.default.dispatch.task.received",
+    ]);
+  });
+
+  test("default subjects honour multi-stack operator config", () => {
+    const { runtime } = recordingRuntime();
+    const router = createSurfaceRouter(runtime);
+    const listener = createDispatchListener({
+      runtime,
+      router,
+      source: SOURCE,
+      stack: "research",
+      ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
+    });
+    expect(listener.surfaceConfig.subjects).toEqual([
+      "local.metafactory.research.dispatch.task.received",
+    ]);
+  });
+
+  test("custom subjects bypass stack-aware default", () => {
+    // Operators supplying explicit `subjects` keep full control; the
+    // listener does not re-write their patterns.
+    const { runtime } = recordingRuntime();
+    const router = createSurfaceRouter(runtime);
+    const listener = createDispatchListener({
+      runtime,
+      router,
+      source: SOURCE,
+      stack: "default",
+      subjects: ["federated.{net}.dispatch.task.received"],
+      ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
+    });
+    expect(listener.surfaceConfig.subjects).toEqual([
+      "federated.{net}.dispatch.task.received",
+    ]);
+  });
+
   test("adapter id defaults to runner-dispatch-listener", () => {
     const { runtime } = recordingRuntime();
     const router = createSurfaceRouter(runtime);
