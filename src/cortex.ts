@@ -551,15 +551,30 @@ export async function startCortex(
       capabilities: a.runtime.capabilities,
     }));
   if (capabilityEntries.length > 0) {
+    // cortex#288 follow-up — closure-scoped success/failure counters.
+    //
+    // `publishCapabilityRegistry`'s contract is "I called publish() for each
+    // envelope" — it pushes to its returned `published[]` *after* awaiting
+    // publish(), regardless of whether the boot site swallows the rejection.
+    // Our `wrappedPublish` below DOES swallow per-envelope failures (so one
+    // bad publish doesn't abort the loop), which means `published.length` is
+    // really "publishes that returned without throwing into the publisher",
+    // not "publishes that actually landed on the wire". The boot log should
+    // report wire-side reality. We count outcomes locally here; the publisher
+    // contract stays correct and unchanged.
+    let successfulPublishes = 0;
+    let failedPublishes = 0;
     const wrappedPublish = async (env: Parameters<typeof runtime.publish>[0]): Promise<void> => {
       try {
         await runtime.publish(env);
+        successfulPublishes++;
       } catch (err) {
         // Per CLAUDE.md "no empty catch blocks": log every error. We use
         // stderr (not the system-events pipeline) because the system-events
         // emitter shares the same runtime we just failed to publish on —
         // routing the error through it would be a credible re-failure loop.
         // Continue without rethrowing so sibling envelopes still emit.
+        failedPublishes++;
         process.stderr.write(
           `cortex: capability-registry publish failed for ${env.type} ` +
             `(agent_id=${(env.payload as { agent_id?: string }).agent_id ?? "?"}): ` +
@@ -568,13 +583,14 @@ export async function startCortex(
       }
     };
     try {
-      const published = await publishCapabilityRegistry({
+      await publishCapabilityRegistry({
         source: systemEventSource,
         entries: capabilityEntries,
         publish: wrappedPublish,
       });
+      const failureSuffix = failedPublishes > 0 ? ` (${failedPublishes} failure(s))` : "";
       console.log(
-        `cortex: published ${published.length} capability registration(s) ` +
+        `cortex: published ${successfulPublishes} capability registration(s)${failureSuffix} ` +
           `for ${capabilityEntries.length} agent(s)`,
       );
     } catch (err) {
@@ -1434,6 +1450,10 @@ export async function startCortex(
     && existsSync(expandedConfigPath)
   ) {
     configWatcher = new ConfigWatcher(expandedConfigPath, config, (event) => {
+      // cortex#237: capability-registry re-publish lands here once
+      // AgentsDirectoryWatcher is wired — see boot block ~line 540 for
+      // rationale (BotConfig hot-reload's SAFE_FIELDS doesn't include
+      // capabilities; mergedAgents isn't re-built).
       dispatchHandler.updateConfig(event.config, expandedConfigPath);
       for (const adapter of adapters) adapter.updateConfig?.(event.config);
       if (cloudPublisher) {

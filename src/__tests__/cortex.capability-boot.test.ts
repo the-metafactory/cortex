@@ -180,6 +180,29 @@ function withCapturedStderr<T>(fn: () => Promise<T>): Promise<{ result: T; stder
     });
 }
 
+// cortex#288 follow-up — boot-log capture. The success/failure counter fix
+// reports via `console.log`. Mirror the stderr capture pattern so tests can
+// assert on the exact boot-log line. Restoring the original is critical:
+// without it, downstream tests would leak captured output and lose stdout.
+function withCapturedConsoleLog<T>(
+  fn: () => Promise<T>,
+): Promise<{ result: T; logs: string[] }> {
+  const original = console.log;
+  const logs: string[] = [];
+  console.log = (...args: unknown[]) => {
+    logs.push(args.map((a) => (typeof a === "string" ? a : String(a))).join(" "));
+  };
+  return fn()
+    .then((result) => {
+      console.log = original;
+      return { result, logs };
+    })
+    .catch((err: unknown) => {
+      console.log = original;
+      throw err;
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -251,15 +274,17 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
       makeAgent("holly", ["research.web"]),
     ];
 
-    const { result: handle, stderr } = await withCapturedStderr(() =>
-      startCortex(minimalConfig(), {
-        disableConfigWatcher: true,
-        disableDashboard: true,
-        disableOutboundPoller: true,
-        agentsDir: tmpAgentsDir,
-        injectRuntime: runtime,
-        inlineAgents,
-      }),
+    const { result: { result: handle, logs }, stderr } = await withCapturedStderr(() =>
+      withCapturedConsoleLog(() =>
+        startCortex(minimalConfig(), {
+          disableConfigWatcher: true,
+          disableDashboard: true,
+          disableOutboundPoller: true,
+          agentsDir: tmpAgentsDir,
+          injectRuntime: runtime,
+          inlineAgents,
+        }),
+      ),
     );
 
     // The recording runtime only pushes envelopes onto `published` on
@@ -279,8 +304,59 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
     expect(stderr).toContain("agent_id=echo");
     expect(stderr).toContain("simulated bus failure");
 
+    // cortex#288 follow-up — boot log must reflect wire-side reality, not
+    // the publisher's "calls invoked" count. With one publish throwing and
+    // one succeeding, the operator should see "1 ... (1 failure(s)) for 2".
+    // We grep the captured logs rather than asserting a single match: other
+    // boot-side `console.log` calls (router start, dispatch wiring) may
+    // also land in `logs`, but the capability line is unambiguously
+    // identified by its leading "cortex: published ... capability
+    // registration" substring.
+    const bootLog = logs.find((l) => l.startsWith("cortex: published") && l.includes("capability registration"));
+    expect(bootLog).toBeDefined();
+    expect(bootLog).toContain("1 capability registration(s)");
+    expect(bootLog).toContain("(1 failure(s))");
+    expect(bootLog).toContain("for 2 agent(s)");
+
     // Boot still produced a handle — the per-envelope failure must not
     // abort startup.
+    expect(handle).toBeDefined();
+    await handle.stop();
+    rmSync(tmpAgentsDir, { recursive: true, force: true });
+  });
+
+  test("cortex#288 follow-up — all publishes succeed → boot log shows success count, omits failure suffix", async () => {
+    // Counterpart to the per-envelope failure test: when nothing fails the
+    // failure suffix must be ABSENT from the boot log (architect's spec:
+    // "only show failure count if non-zero"). With no publishOutcomes
+    // entries, every publish resolves successfully.
+    const runtime = createRecordingRuntime();
+    const tmpAgentsDir = mkdtempSync(join(tmpdir(), "cortex-capboot-allok-"));
+    const inlineAgents: Agent[] = [
+      makeAgent("echo", ["code-review.typescript"]),
+      makeAgent("holly", ["research.web"]),
+    ];
+
+    const { result: handle, logs } = await withCapturedConsoleLog(() =>
+      startCortex(minimalConfig(), {
+        disableConfigWatcher: true,
+        disableDashboard: true,
+        disableOutboundPoller: true,
+        agentsDir: tmpAgentsDir,
+        injectRuntime: runtime,
+        inlineAgents,
+      }),
+    );
+
+    expect(runtime.published.length).toBe(2);
+
+    const bootLog = logs.find((l) => l.startsWith("cortex: published") && l.includes("capability registration"));
+    expect(bootLog).toBeDefined();
+    expect(bootLog).toContain("2 capability registration(s)");
+    expect(bootLog).toContain("for 2 agent(s)");
+    // The crux: no failure suffix in the all-success path.
+    expect(bootLog).not.toContain("failure");
+
     expect(handle).toBeDefined();
     await handle.stop();
     rmSync(tmpAgentsDir, { recursive: true, force: true });
