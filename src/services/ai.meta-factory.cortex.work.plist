@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>ai.meta-factory.cortex.bot</string>
+    <string>ai.meta-factory.cortex.work</string>
     <key>ProgramArguments</key>
     <array>
         <string>__HOME__/bin/cortex</string>
         <string>start</string>
         <string>--config</string>
-        <string>__HOME__/.config/cortex/cortex.yaml</string>
+        <string>__HOME__/.config/cortex/cortex.work.yaml</string>
     </array>
     <key>WorkingDirectory</key>
     <string>__CORTEX_DIR__</string>
@@ -18,17 +18,21 @@
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>__HOME__/.config/cortex/logs/cortex-bot.log</string>
+    <string>__HOME__/.config/cortex/work-logs/cortex-work-bot.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.config/cortex/logs/cortex-bot.error.log</string>
+    <string>__HOME__/.config/cortex/work-logs/cortex-work-bot.error.log</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>HOME</key>
         <string>__HOME__</string>
         <key>PATH</key>
         <string>__HOME__/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
-        <key>GROVE_CHANNEL</key>
-        <string>__AGENT_NAME__</string>
+        <key>CORTEX_CHANNEL</key>
+        <string>work</string>
+        <key>CORTEX_AGENT_NAME</key>
+        <string>luna</string>
+        <key>CORTEX_AGENT_ID</key>
+        <string>luna-work</string>
     </dict>
 </dict>
 </plist>

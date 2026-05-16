@@ -774,7 +774,7 @@ Independent of cortex#92 — can land in parallel.
 - `arc install github:the-metafactory/arc-skill-recon` — drops skill + slash command
 - `cp <fragment-example> ~/.config/cortex/agents.d/gh-repo-recon-agent.yaml`
 - Restart cortex so the new agent loads. Restart command is operator-deployment-specific:
-  - On macOS (Andreas' deployment): `launchctl kickstart -k gui/$(id -u)/ai.meta-factory.cortex.bot`
+  - On macOS (Andreas' deployment): `launchctl kickstart -k gui/$(id -u)/ai.meta-factory.cortex.meta-factory` (or `.work` for the parallel work stack)
   - On Linux / containers: per the operator's process manager (systemd unit, docker restart, etc.)
 - Smoke test: `/recon the-metafactory/cortex` (slash command) AND publish a `dispatch.recon.<id>` envelope to verify the bus path (different resolution path, same verdict shape).
 
