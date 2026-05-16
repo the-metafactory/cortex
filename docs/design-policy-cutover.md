@@ -304,7 +304,9 @@ The dispatch is allowed only if **both** gates allow. If either gate denies, the
 **Why most-restrictive, not new-system-wins:**
 1. Security cutovers default to most-restrictive shadow-mode posture. A new gate that mistakenly allows what legacy denies is a silent privilege-expansion vector during the validation window.
 2. The operator can monitor `system.access.disagreement` envelopes on the dashboard to spot mis-migrations *without* exposure — if PolicyEngine wrongly grants, legacy still blocks.
-3. The migration is operator-driven (operators must run `migrate-config` between 243c and 242b); the parallel mode protects against half-migrated configs where the new gate is missing principal entries the legacy role-resolver would have authorised correctly.
+3. The protection is **one-directional** — intersection-wins catches the dangerous case (new gate mistakenly **allows** what legacy denies → effective decision is deny → safe). It does **not** protect against the opposite case (new gate denies what legacy allows → effective decision is deny → previously-authorised users are blocked). That asymmetry is acceptable because the missing-principal case is operator-detectable via `system.access.disagreement` envelopes BEFORE 242b removes the legacy gate — see operator pre-flight below.
+
+**Operator pre-flight before activating 242a parallel mode:** `migrate-config` MUST have been run against the live cortex.yaml; every user the legacy role-resolver currently authorises MUST resolve to a principal in `policy.principals[]`. Without this pre-flight, intersection-wins denies every previously-authorised dispatch from unmapped legacy-known users during the validation window. The `system.access.disagreement` envelopes surface the mismatch on the dashboard, but only *after* auth has already broken for those users. The pre-flight check itself is mechanically a `migrate-config --check` invocation that fails when the legacy role-resolver's principal set is not a subset of the new `policy.principals[]` lookup space — to be implemented as part of cortex#243c.
 
 **242b removes the parallel mode** — once legacy is gone, PolicyEngine is the only gate and disagreement detection is no longer applicable. The `system.access.disagreement` envelope shape retires with role-resolver.ts.
 
@@ -393,7 +395,7 @@ policy:
         - team
 ```
 
-**Critical: capabilities are bare strings (`chat`, `async`, `team`), NOT namespaced `keyword.chat`.** This contradicts §5.2's earlier proposal — the design must align with what's already shipped on the work stack. **Revision required (see §12.1).**
+**Note:** the work stack's bare-string capabilities (`chat`, `async`, `team`) predate the namespace decision in §12.1. They'll be rewritten to the namespaced form (`keyword.chat`, etc.) by `migrate-config` at cutover time — one-line update, no operator pain.
 
 ### 11.3 What this reality-check changes
 
@@ -798,6 +800,8 @@ const SessionConfigShape = z.object({
 **Cross-validation rules added with the schema (cortex#243a):**
 - Principal-id uniqueness scoped to `(id, home_stack)` — not `id` alone. Enables peer-side multi-stack identity per §15.4 option (a).
 - `(platform_name, platform_id)` tuple uniqueness across all principals in `policy.principals[]` — no platform identity claimed by two principals.
+
+> **Convention — federation-peer principals SHOULD NOT carry `platform_ids`.** Federation peer identity is asserted via the `signed_by` chain's stack NKey (Phase B verification + Phase D federation gate), not via platform-side IDs. The two uniqueness rules above appear contradictory at first read — sage's two Andreas-Luna principals would each have `home_stack` set but the same Discord bot id `1487...` if `platform_ids` were populated. They're not contradictory in practice because federation-peer principals' `platform_ids` SHOULD be empty: the local cortex never receives Discord-routed messages directly from Andreas's bot via sage's adapter — it receives federated NATS envelopes whose principal-resolution path is `(signed_by[0].principal, signed_by[0].stack-nkey) → policy.principals[id, home_stack]`, completely orthogonal to platform-side adapter lookup. Operators populating `platform_ids` on a federation-peer principal will hit a parse error from rule 2; the error message should point at this convention.
 
 **New canonical artifact:**
 - `src/common/policy/tool-inventory.ts` — canonical list of Claude tool names for `disallowedTools[]` inversion
