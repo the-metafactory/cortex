@@ -33,6 +33,7 @@ import type { UsageStats } from "./runner/stream-parser";
 import { buildSecurityPreamble } from "./runner/security-preamble";
 import { DispatchHandler } from "./bus/dispatch-handler";
 import {
+  makeSubjectPlaceholderSubstituter,
   startMyelinRuntime,
   type BusEnvelopeSigner,
   type MyelinRuntime,
@@ -1096,13 +1097,18 @@ export async function startCortex(
   // never matches an actual envelope's wire subject. The `{stack}.`
   // placeholder includes the trailing dot so stack-less deployments
   // collapse cleanly to `local.{org}.system.>`.
-  const rendererOrgValue = config.agent.operatorId ?? "default";
-  const rendererStackToken = `${derivedStack.stack}.`;
-  function substituteRendererSubjects(subscribe: readonly string[]): string[] {
-    return subscribe.map((s) =>
-      s.replaceAll("{org}", rendererOrgValue).replaceAll("{stack}.", rendererStackToken),
-    );
-  }
+  //
+  // cortex#279 cycle 2 — extracted to a shared helper so renderer- and
+  // runtime-side substitution can't drift. The stack-less branch
+  // (`{stack}.` → empty) mirrors `MyelinRuntime.publish`'s same-named
+  // helper, satisfying Sage's "renderer stack-less collapse missing"
+  // finding even though `derivedStack.stack` is currently always
+  // defined in production. Symmetric logic keeps future refactors
+  // honest if the boot ever passes `undefined`.
+  const subjectPlaceholderSubstituter = makeSubjectPlaceholderSubstituter({
+    org: config.agent.operatorId ?? "default",
+    stack: options.stack !== undefined ? derivedStack.stack : undefined,
+  });
 
   const renderers: Renderer[] = [];
   for (const raw of config.renderers ?? []) {
@@ -1121,7 +1127,7 @@ export async function startCortex(
     }
     const rendererConfig = {
       ...parseResult.data,
-      subscribe: substituteRendererSubjects(parseResult.data.subscribe),
+      subscribe: subjectPlaceholderSubstituter(parseResult.data.subscribe),
     };
     try {
       const renderer = createRenderer(rendererConfig);

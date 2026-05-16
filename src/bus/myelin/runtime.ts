@@ -189,6 +189,31 @@ export interface BusEnvelopeSigner {
   principal: string;
 }
 
+/**
+ * Build a `{org}` + `{stack}.` placeholder substituter for operator-
+ * configured subject patterns (cortex#269 / cortex#279 cycle 2).
+ *
+ * Used by `MyelinRuntime.publish`'s `nats.subjects` resolution and by
+ * `cortex.ts`'s renderer-config boot path. Extracted so both call
+ * sites can't drift on the substitution rule (stack-less deployments
+ * collapse `{stack}.` to empty; stack-aware deployments emit
+ * `${stack}.`).
+ *
+ * Returns a closure so the resolved `(org, stack)` pair is captured
+ * once and applied to N pattern strings without reallocating the
+ * substitution rules per call.
+ */
+export function makeSubjectPlaceholderSubstituter(opts: {
+  org: string;
+  stack?: string;
+}): (subjects: readonly string[]) => string[] {
+  const stackToken = opts.stack !== undefined ? `${opts.stack}.` : "";
+  return (subjects: readonly string[]) =>
+    subjects.map((s) =>
+      s.replaceAll("{org}", opts.org).replaceAll("{stack}.", stackToken),
+    );
+}
+
 export async function startMyelinRuntime(
   config: BotConfig,
   options?: MyelinRuntimeOptions,
@@ -244,6 +269,9 @@ export async function startMyelinRuntime(
   // deployments collapse `{stack}.` to empty, preserving legacy 5-segment
   // subscribe patterns. The default `["local.{org}.>"]` pattern is
   // unaffected — multi-segment `>` wildcard already matches both shapes.
+  // A pattern like `local.{org}.{stack}.system.>` resolves to either
+  // `local.{org}.{stack}.system.>` (stack-aware) or `local.{org}.system.>`
+  // (legacy) depending on whether the boot path supplied a stack.
   const substituter = makeSubjectPlaceholderSubstituter({
     org: orgFromConfig(config.agent.operatorId),
     stack: options?.stack,
