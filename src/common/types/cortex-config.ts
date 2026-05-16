@@ -1548,7 +1548,7 @@ export const PolicySchema = z.object({
   // homonyms.
   const seenPrincipal = new Map<string, number>();
   policy.principals.forEach((p, i) => {
-    const key = `${p.id} ${p.home_stack}`;
+    const key = `${p.id}\u0001${p.home_stack}`;
     const dupAt = seenPrincipal.get(key);
     if (dupAt !== undefined) {
       ctx.addIssue({
@@ -1575,12 +1575,12 @@ export const PolicySchema = z.object({
   policy.principals.forEach((p, principalIdx) => {
     for (const [platformName, ids] of Object.entries(p.platform_ids)) {
       ids.forEach((platformId, idIdx) => {
-        const key = `${platformName} ${platformId}`;
+        const key = `${platformName}\u0001${platformId}`;
         const prior = seenPlatformTuple.get(key);
         if (prior !== undefined) {
           ctx.addIssue({
             code: "custom",
-            message: `platform_ids.${platformName} entry "${platformId}" already claimed by principal "${prior.principalId}" at principals[${prior.principalIdx}] — a platform-side identity may belong to only one principal`,
+            message: `platform_ids.${platformName} entry "${platformId}" already claimed by principal "${prior.principalId}" at principals[${prior.principalIdx}] — a platform-side identity may belong to only one principal. Note: federation-peer principals should not carry platform_ids; their identity is asserted via the signed_by chain's stack NKey (see PolicyPrincipalSchema JSDoc + docs/design-policy-cutover.md §16)`,
             path: ["principals", principalIdx, "platform_ids", platformName, idIdx],
           });
         } else {
