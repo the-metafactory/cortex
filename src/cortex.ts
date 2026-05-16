@@ -13,7 +13,7 @@
 
 import { Command } from "commander";
 import { existsSync, writeFileSync, readFileSync, unlinkSync, mkdirSync, readdirSync } from "fs";
-import { join, dirname } from "path";
+import { basename, join, dirname } from "path";
 import { parse as parseYaml } from "yaml";
 import type { TextChannel } from "discord.js";
 
@@ -106,11 +106,8 @@ export function pidFileFor(configPath: string | undefined): string {
   if (configPath === undefined || configPath === DEFAULT_CONFIG) {
     return PID_FILE;
   }
-  const base = configPath
-    .split("/")
-    .pop()
-    ?.replace(/\.ya?ml$/i, "");
-  if (base === undefined || base.length === 0) return PID_FILE;
+  const base = basename(configPath).replace(/\.ya?ml$/i, "");
+  if (base.length === 0) return PID_FILE;
   return join(STATE_DIR, `cortex-${base}.pid`);
 }
 
