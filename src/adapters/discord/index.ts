@@ -343,13 +343,20 @@ export class DiscordAdapter implements PlatformAdapter {
       const content = isDM ? message.content.trim() : extractContent(message, this.client);
       const channel = message.channel as TextChannel | ThreadChannel | DMChannel;
       const isThread = !isDM && (channel.type === ChannelType.PublicThread || channel.type === ChannelType.PrivateThread || channel.type === ChannelType.AnnouncementThread);
-      // Private text channels expose `.members` as a Collection; DM/thread
-      // channels do not. Narrow via duck-typing without `as any` — TextChannel
-      // doesn't carry `members` in the discord.js type tree, so a structural
-      // cast lets us peek without lying about the channel type.
-      const isPrivateChannel =
-        !isDM && !isThread &&
-        (channel as unknown as { members?: { size: number } }).members?.size === 2;
+      // cortex#123 item 1: detect group DMs by `channel.type === ChannelType.GroupDM`,
+      // the actual semantic discord.js carries. The prior heuristic was
+      // `channel.members?.size === 2`, which without the `GuildMembers` intent
+      // (cortex's client only enables `Guilds` + `GuildMessages`) was a CACHE
+      // hit count, not a real group-DM signal — and it falsely flipped true
+      // in quiet text channels whose member cache happened to hold exactly
+      // bot + peer. Group DMs need their own gating because Discord rejects
+      // `threads.create` on guild-less channels (DM or GroupDM).
+      // GroupDM is not part of the narrowed `channel` union (TextChannel |
+      // ThreadChannel | DMChannel), but at runtime discord.js can deliver
+      // a GroupDM-typed channel here for cross-guild ping messages. Compare
+      // via a `number` cast so tsc accepts the comparison.
+      const isGroupDM =
+        !isDM && (channel.type as number) === (ChannelType.GroupDM as number);
 
       // Handle message.txt (Discord auto-generates for messages > 2000 chars)
       let finalContent = content;
@@ -407,7 +414,7 @@ export class DiscordAdapter implements PlatformAdapter {
         authorName: message.author.displayName,
         content: finalContent,
         channelId: channel.id,
-        threadId: isDM ? channel.id : (isThread || isPrivateChannel ? channel.id : undefined),
+        threadId: isDM ? channel.id : (isThread || isGroupDM ? channel.id : undefined),
         channelName,
         threadName,
         guildId: message.guildId ?? undefined,
@@ -445,17 +452,19 @@ export class DiscordAdapter implements PlatformAdapter {
       //     but with `trustedBotIds` peer-mentions can also reach this
       //     point — we don't want adapter A auto-threading on a message
       //     that mentions adapter B.
-      // cortex#122: drop the `!isPrivateChannel` gate. That heuristic is
-      // `channel.members?.size === 2` — without the `GuildMembers` intent
-      // (cortex's client only enables `Guilds` + `GuildMessages`), the
-      // bot's `members` collection is a CACHE of users it has seen, not
-      // the real guild member list. In #cortex with only the bot + the
-      // pinging peer cached, `members.size === 2` evaluates true → the
-      // auto-thread block skips when it shouldn't. We don't need the
-      // private-channel gate here anyway: a real group DM would have
-      // `channel.type === ChannelType.GroupDM` and we'd want auto-thread
-      // there too in principle. The DM + thread gates remain.
-      if (!isDM && !isThread) {
+      // cortex#122: dropped the broken `!isPrivateChannel` heuristic
+      // (`channel.members?.size === 2`) that falsely flipped true in quiet
+      // text channels without the `GuildMembers` intent.
+      //
+      // cortex#123 item 3: tightened the gate to `message.guildId` to
+      // explicitly skip DMs and Group DMs. Discord's threads API is
+      // guild-only — `threads.create()` rejects on DM and GroupDM
+      // channels, which would surface as a hot-path throw from
+      // `findOrCreateThreadByName`. The `isDM` + `isThread` checks above
+      // already cover regular DMs; the `guildId` gate adds GroupDM
+      // coverage without depending on the discord.js channel-type ladder
+      // staying in sync.
+      if (!isDM && !isThread && message.guildId !== null) {
         // Match against the RAW Discord content (`message.content`),
         // not `finalContent` — the latter has the @-mention stripped by
         // `extractContent`, and the wire format anchors on `<@bot>`.

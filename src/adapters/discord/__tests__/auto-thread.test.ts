@@ -518,4 +518,65 @@ describe("messageCreate auto-thread (cortex#120)", () => {
     expect(channel.createCalls[0]!.name).toBe("arc/pr/42");
     expect(inbound[0]!.threadName).toBe("arc/pr/42");
   });
+
+  test("cortex#123 item 2: auto-thread still fires when channel.members.size === 2 (false-positive GroupDM heuristic regression-lock)", async () => {
+    // Pre-cortex#122 the auto-thread block was gated by `!isPrivateChannel`,
+    // where `isPrivateChannel = channel.members?.size === 2`. Without the
+    // GuildMembers intent, `channel.members` is a discord.js CACHE of seen
+    // users — so a quiet #cortex channel with just bot + pinging-peer
+    // cached falsely flipped the gate true and silently dropped auto-thread.
+    // cortex#122 removed the gate; this test pins that the fix holds even
+    // when the legacy heuristic *would have triggered*.
+    const { client, channel, inbound } = makeWiredAdapter();
+
+    // Inject `members: Map` (size 2) onto the channel — the exact shape
+    // that pre-cortex#122 read for the false-positive.
+    (channel as unknown as { members: Map<string, string> }).members =
+      new Map([
+        ["bot", "bot"],
+        ["peer", "peer"],
+      ]);
+
+    client.emit(
+      "messageCreate",
+      makeMessage({
+        content: `<@${BOT_ID}> review cortex#118`,
+        authorId: HUMAN_ID,
+        channelId: CHANNEL_ID,
+        channel,
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Auto-thread STILL fires — the legacy heuristic does not gate.
+    expect(channel.createCalls).toHaveLength(1);
+    expect(channel.createCalls[0]!.name).toBe("cortex/pr/118");
+    expect(inbound[0]!.threadName).toBe("cortex/pr/118");
+  });
+
+  test("cortex#123 item 3: review wire format in a guild-less channel (GroupDM-shaped) does not call threads.create", async () => {
+    // Group DMs lack a `guildId`. Discord rejects `threads.create()` on
+    // guild-less channels — letting auto-thread run on a GroupDM-shaped
+    // message would surface as a hot-path throw out of
+    // `findOrCreateThreadByName`. The cortex#123 item 3 fix gates the
+    // auto-thread block on `message.guildId !== null` so the dispatch
+    // is delivered as a channel-level inbound (no thread).
+    const { client, channel, inbound } = makeWiredAdapter();
+
+    // `guildId: null` simulates a Group-DM-shaped message. `makeMessage`
+    // coalesces undefined → "g1", so we override post-construction.
+    const groupDmMsg = makeMessage({
+      content: `<@${BOT_ID}> review cortex#118`,
+      authorId: HUMAN_ID,
+      channelId: CHANNEL_ID,
+      channel,
+    }) as { guildId: string | null };
+    groupDmMsg.guildId = null;
+    client.emit("messageCreate", groupDmMsg);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(inbound).toHaveLength(1);
+    expect(inbound[0]!.threadName).toBeUndefined();
+    expect(channel.createCalls).toEqual([]);
+  });
 });
