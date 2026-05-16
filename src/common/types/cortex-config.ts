@@ -43,6 +43,7 @@ import {
   RoleSchema,
 } from "./config";
 import { NKEY_PUBKEY_REGEX } from "./nkey";
+import { LETTER_PREFIX_ID_REGEX } from "./id";
 import { StackConfigSchema } from "./stack";
 
 // =============================================================================
@@ -103,7 +104,7 @@ export const OperatorSchema = z.object({
    * digits with a letter-prefixed token).
    */
   id: z.string().min(1).regex(
-    /^[a-z][a-z0-9-]*$/,
+    LETTER_PREFIX_ID_REGEX,
     "operator id must be lowercase alphanumeric + hyphen, starting with a letter (e.g. 'andreas', 'team-research'); rename digit-prefixed ids like '2andreas' to 'team2andreas' or 'andreas-2026'",
   ),
   /** Display name shown on the dashboard. Defaults to `id`. */
@@ -474,7 +475,7 @@ export const AgentSchema = z.object({
    * `agent-2026` (prepend / wrap the digits with a letter-prefixed token).
    */
   id: z.string().regex(
-    /^[a-z][a-z0-9-]*$/,
+    LETTER_PREFIX_ID_REGEX,
     "agent id must be lowercase alphanumeric + hyphen, starting with a letter (e.g. 'luna', 'echo', 'team-research'); rename digit-prefixed ids like '2agent' to 'team-2agent' or 'agent-2026'",
   ),
   /** Display name shown to humans. */
@@ -510,7 +511,7 @@ export const AgentSchema = z.object({
    */
   trust: z.array(
     z.string().regex(
-      /^[a-z][a-z0-9-]*$/,
+      LETTER_PREFIX_ID_REGEX,
       "trust entries must be agent ids — lowercase alphanumeric + hyphen, starting with a letter (e.g. 'echo', 'team-research'); rename digit-prefixed entries like '2agent' to 'team-2agent' or 'agent-2026'",
     ),
   ).default([]),
@@ -1005,7 +1006,7 @@ export const PolicyPrincipalSchema = z.object({
    * this id by stripping the prefix.
    */
   id: z.string().regex(
-    /^[a-z][a-z0-9-]*$/,
+    LETTER_PREFIX_ID_REGEX,
     "principal id must be lowercase alphanumeric + hyphen, starting with a letter (e.g. 'luna', 'echo')",
   ),
   /**
@@ -1016,7 +1017,7 @@ export const PolicyPrincipalSchema = z.object({
    * to defend against.
    */
   home_operator: z.string().regex(
-    /^[a-z][a-z0-9-]*$/,
+    LETTER_PREFIX_ID_REGEX,
     "principal.home_operator must match the operator id grammar (lowercase alphanumeric + hyphen, starting with a letter)",
   ),
   /**
@@ -1051,7 +1052,7 @@ export const PolicyPrincipalSchema = z.object({
    */
   role: z.array(
     z.string().regex(
-      /^[a-z][a-z0-9-]*$/,
+      LETTER_PREFIX_ID_REGEX,
       "principal.role[] entries must be role ids — lowercase alphanumeric + hyphen, starting with a letter",
     ),
   ).default([]),
@@ -1062,7 +1063,7 @@ export const PolicyPrincipalSchema = z.object({
    */
   trust: z.array(
     z.string().regex(
-      /^[a-z][a-z0-9-]*$/,
+      LETTER_PREFIX_ID_REGEX,
       "principal.trust[] entries must be principal ids — same grammar as principal.id",
     ),
   ).default([]),
@@ -1078,7 +1079,7 @@ export type PolicyPrincipal = z.infer<typeof PolicyPrincipalSchema>;
  */
 export const PolicyRoleSchema = z.object({
   id: z.string().regex(
-    /^[a-z][a-z0-9-]*$/,
+    LETTER_PREFIX_ID_REGEX,
     "role id must be lowercase alphanumeric + hyphen, starting with a letter (e.g. 'operator', 'code-reviewer')",
   ),
   /**
@@ -1129,7 +1130,7 @@ export const PolicyFederatedPeerSchema = z.object({
    * operator IS the consumer of the peer list).
    */
   operator_id: z.string().regex(
-    /^[a-z][a-z0-9-]*$/,
+    LETTER_PREFIX_ID_REGEX,
     "peer.operator_id must match the operator id grammar (lowercase alphanumeric + hyphen, starting with a letter)",
   ),
   /**
@@ -1199,7 +1200,7 @@ export const PolicyFederatedNetworkSchema = z.object({
    * dash-separated for readability on the wire.
    */
   id: z.string().regex(
-    /^[a-z][a-z0-9-]*$/,
+    LETTER_PREFIX_ID_REGEX,
     "network id must be lowercase alphanumeric + hyphen, starting with a letter (e.g. 'research-collab')",
   ),
   /**
@@ -1210,7 +1211,7 @@ export const PolicyFederatedNetworkSchema = z.object({
    * pattern (letter-prefix lowercase alphanumeric + hyphen).
    */
   leaf_node: z.string().regex(
-    /^[a-z][a-z0-9-]*$/,
+    LETTER_PREFIX_ID_REGEX,
     "network.leaf_node must match the connection id grammar (lowercase alphanumeric + hyphen, starting with a letter)",
   ),
   /**

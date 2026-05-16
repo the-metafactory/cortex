@@ -80,6 +80,7 @@ import type {
 import type { PolicyEngine } from "../common/policy/engine";
 import { extractAgentIdFromDid } from "../common/policy/did";
 import { isUuid } from "../common/types/uuid";
+import { LETTER_PREFIX_ID_REGEX } from "../common/types/id";
 import type {
   Intent,
   PolicyDenyReason,
@@ -769,7 +770,7 @@ function extractSourceNetwork(subject: string | undefined): string | undefined {
   if (parts[0] !== "federated") return undefined;
   const networkId = parts[1];
   if (networkId === undefined || networkId.length === 0) return undefined;
-  if (!/^[a-z][a-z0-9-]*$/.test(networkId)) return undefined;
+  if (!LETTER_PREFIX_ID_REGEX.test(networkId)) return undefined;
   return networkId;
 }
 

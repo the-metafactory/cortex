@@ -30,7 +30,7 @@
  *   - **No network registry registration.** Phase D, D.4 cloud-side
  *     registry service.
  *   - **Mirrors `AgentSchema.id` grammar.** `provided_by` uses the same
- *     letter-prefix regex `/^[a-z][a-z0-9-]*$/` as `AgentSchema.id` so the
+ *     letter-prefix regex `LETTER_PREFIX_ID_REGEX` as `AgentSchema.id` so the
  *     two cannot drift — closing the operator/stack/agent letter-prefix
  *     trilogy (cortex#141 → cortex#144 → cortex#145). A future change to
  *     the agent-id grammar is a single coordinated edit to both regexes.
@@ -44,6 +44,7 @@
  */
 
 import { z } from "zod/v4";
+import { LETTER_PREFIX_ID_REGEX } from "./id";
 
 // =============================================================================
 // Sub-schemas — rate / cost envelopes
@@ -193,7 +194,7 @@ const CapabilityTagSchema = z
 /**
  * Provider-id grammar — references an agent's `id` declared in the same
  * `cortex.yaml`'s `agents[]` array. The format mirrors `AgentSchema.id`:
- * `/^[a-z][a-z0-9-]*$/` (letter-prefix). cortex#145 closed the operator/
+ * `LETTER_PREFIX_ID_REGEX` (letter-prefix). cortex#145 closed the operator/
  * stack/agent letter-prefix trilogy (cortex#141 → cortex#144 → cortex#145);
  * `provided_by` tightened in the same PR for one-segment grammar parity.
  *
@@ -207,7 +208,7 @@ const CapabilityTagSchema = z
 const CapabilityProviderIdSchema = z
   .string()
   .regex(
-    /^[a-z][a-z0-9-]*$/,
+    LETTER_PREFIX_ID_REGEX,
     "capability.provided_by entries must be agent ids — lowercase alphanumeric + hyphen, starting with a letter (matches AgentSchema.id grammar — operator/stack/agent letter-prefix trilogy closed by cortex#145); rename digit-prefixed ids like '2agent' to 'team-2agent' or 'agent-2026'",
   );
 
