@@ -215,6 +215,25 @@ export interface CreateCcEventPublisherOpts {
    */
   org?: string;
   /**
+   * Operator stack segment slotted between `{org}` and `{type}` on the
+   * derived NATS subject (myelin#113 — IAW Phase A.5; closes cortex#266).
+   * When supplied, relay-lifted cc-events publish on the 6-segment shape
+   * `local.{org}.{stack}.{type}` matching sage's bridge subscription
+   * and the MyelinRuntime.publish path post-cortex#262. When undefined,
+   * the legacy 5-segment form `local.{org}.{type}` is emitted —
+   * bit-identical to today's output, so callers that haven't wired
+   * stack identity see no change.
+   *
+   * Production callers (the cortex boot path in `src/cortex.ts`) source
+   * this from `deriveStackId(loadedConfig).stack` — the same value
+   * `MyelinRuntime.publish` receives, so the runtime path and the
+   * cc-events relay agree on the wire grammar for one operator instance.
+   * `public.` classification ignores `stack` (per myelin's
+   * `deriveNatsSubject` semantics — `public` subjects carry no org or
+   * stack segments).
+   */
+  stack?: string;
+  /**
    * Override the envelope `source.agent` segment. Defaults to `"cortex"`.
    */
   agent?: string;
@@ -267,6 +286,7 @@ export function createCcEventPublisher(
   opts: CreateCcEventPublisherOpts,
 ): (event: PublishedEvent) => void {
   const org = opts.org ?? "default";
+  const stack = opts.stack;
   const source: CcEventSource = {
     org,
     agent: opts.agent ?? "cortex",
@@ -281,8 +301,14 @@ export function createCcEventPublisher(
 
   return (event: PublishedEvent) => {
     const envelope = buildEnvelope(event, source);
-    // Subject mirrors envelope classification per IAW A.3.
-    const subject = deriveNatsSubject(envelope);
+    // Subject mirrors envelope classification per IAW A.3 AND the
+    // operator stack per IAW A.5 (cortex#266). `stack` is undefined
+    // when the operator omitted the `cortex.yaml stack:` block; in
+    // that case `deriveNatsSubject` returns the legacy 5-segment form
+    // (bit-identical to pre-cortex#266 output). When supplied, the
+    // 6-segment form `local.{org}.{stack}.{type}` is emitted so this
+    // relay's wire grammar matches MyelinRuntime.publish post-#262.
+    const subject = deriveNatsSubject(envelope, stack);
     try {
       opts.link.publish(subject, JSON.stringify(envelope));
     } catch (err) {

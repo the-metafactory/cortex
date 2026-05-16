@@ -24,6 +24,7 @@ interface StartOptions {
   natsUrl?: string;
   natsToken?: string;
   org?: string;
+  stack?: string;
 }
 interface TestOptions {
   policy: string;
@@ -162,6 +163,10 @@ program
     "--org <org>",
     "Operator/org segment for published subjects (local.{org}.{type}). Falls back to env var GROVE_OPERATOR or NATS_ORG.",
   )
+  .option(
+    "--stack <stack>",
+    "Operator stack segment for stack-aware subjects (local.{org}.{stack}.{type}). Matches the cortex.yaml stack: block. Falls back to env var CORTEX_STACK. When omitted, relay publishes on the legacy 5-segment form.",
+  )
   .action(async (options: StartOptions) => {
     if (!existsSync(options.policy)) {
       console.error(`Policy file not found: ${options.policy}`);
@@ -190,6 +195,12 @@ program
       options.natsToken ?? process.env.NATS_TOKEN;
     const org: string =
       options.org ?? process.env.GROVE_OPERATOR ?? process.env.NATS_ORG ?? "default";
+    // cortex#266 — stack segment (IAW A.5). When supplied, the relay
+    // publishes on the 6-segment subject form matching
+    // MyelinRuntime.publish post-cortex#262 (and sage's bridge
+    // subscription). When omitted, falls through to legacy 5-segment.
+    const stack: string | undefined =
+      options.stack ?? process.env.CORTEX_STACK ?? undefined;
 
     let natsLink: NatsLink | undefined;
     let onPublished: ((e: import("./hooks/lib/event-types").PublishedEvent) => void) | undefined;
@@ -204,10 +215,12 @@ program
         onPublished = createCcEventPublisher({
           link: natsLink,
           org,
+          ...(stack !== undefined && { stack }),
         });
         const safeUrl = natsUrl.replace(/\/\/[^@/]+@/, "//***@");
+        const stackSuffix = stack !== undefined ? ` stack="${stack}"` : "";
         console.log(
-          `cortex-relay: nats publishing enabled — ${safeUrl} (org="${org}")`,
+          `cortex-relay: nats publishing enabled — ${safeUrl} (org="${org}"${stackSuffix})`,
         );
       } catch (err) {
         // Per the design rule: failed NATS startup must NOT crash the

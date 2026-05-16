@@ -220,12 +220,46 @@ describe("createCcEventPublisher", () => {
     };
   }
 
-  test("publishes to local.{org}.{type}", () => {
+  test("publishes legacy 5-segment local.{org}.{type} when stack is omitted", () => {
     const link = makeLink();
     const pub = createCcEventPublisher({ link: link.stub, org: "metafactory" });
     pub(makeEvent({ event_type: "tool.bash.executed" }));
     expect(link.calls).toHaveLength(1);
     expect(link.calls[0]!.subject).toBe("local.metafactory.tool.bash.executed");
+  });
+
+  // cortex#266 — stack-aware publish path. When the boot path supplies
+  // `stack` (sourced from `deriveStackId(loadedConfig).stack`), the relay
+  // emits the 6-segment subject form matching `MyelinRuntime.publish`
+  // post-cortex#262 and sage's bridge subscription.
+  test("publishes stack-aware 6-segment local.{org}.{stack}.{type} when stack is supplied (cortex#266)", () => {
+    const link = makeLink();
+    const pub = createCcEventPublisher({
+      link: link.stub,
+      org: "metafactory",
+      stack: "default",
+    });
+    pub(makeEvent({ event_type: "tool.bash.executed" }));
+    expect(link.calls).toHaveLength(1);
+    expect(link.calls[0]!.subject).toBe(
+      "local.metafactory.default.tool.bash.executed",
+    );
+  });
+
+  test("stack-aware emit honours multi-stack operator config", () => {
+    // Different stack value routes to a different subscriber wildcard.
+    // Multi-stack operators (`andreas/research`, `andreas/production`)
+    // depend on this isolation.
+    const link = makeLink();
+    const pub = createCcEventPublisher({
+      link: link.stub,
+      org: "andreas",
+      stack: "research",
+    });
+    pub(makeEvent({ event_type: "session.started" }));
+    expect(link.calls[0]!.subject).toBe(
+      "local.andreas.research.session.started",
+    );
   });
 
   test("default org is 'default' when omitted", () => {
