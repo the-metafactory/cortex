@@ -44,6 +44,10 @@ function makeFakeClient(initial: Partial<FakeSlackClientState> = {}): {
   client: SlackClient;
   state: FakeSlackClientState;
   emit: (event: SlackInboundEvent) => Promise<void>;
+  /** cortex#235 r1#4 — drive the Socket Mode `connected` lifecycle callback. */
+  simulateConnect: () => void;
+  /** cortex#235 r1#4 — drive the Socket Mode `disconnected` lifecycle callback. */
+  simulateDisconnect: (info?: { wasClean?: boolean; closeReason?: string }) => void;
 } {
   const state: FakeSlackClientState = {
     postedMessages: [],
@@ -57,6 +61,8 @@ function makeFakeClient(initial: Partial<FakeSlackClientState> = {}): {
   };
 
   let onEvent: ((event: SlackInboundEvent) => Promise<void>) | null = null;
+  let onConnected: (() => void) | null = null;
+  let onDisconnected: ((info: { wasClean?: boolean; closeReason?: string }) => void) | null = null;
 
   const client: SlackClient = {
     // eslint-disable-next-line @typescript-eslint/require-await
@@ -64,6 +70,8 @@ function makeFakeClient(initial: Partial<FakeSlackClientState> = {}): {
       state.startCount++;
       state.callOrder.push("start");
       onEvent = opts.onEvent;
+      onConnected = opts.onConnected ?? null;
+      onDisconnected = opts.onDisconnected ?? null;
     },
     // eslint-disable-next-line @typescript-eslint/require-await
     async stop() {
@@ -104,7 +112,17 @@ function makeFakeClient(initial: Partial<FakeSlackClientState> = {}): {
     await onEvent(event);
   };
 
-  return { client, state, emit };
+  const simulateConnect = (): void => {
+    if (!onConnected) return;
+    onConnected();
+  };
+
+  const simulateDisconnect = (info: { wasClean?: boolean; closeReason?: string } = {}): void => {
+    if (!onDisconnected) return;
+    onDisconnected(info);
+  };
+
+  return { client, state, emit, simulateConnect, simulateDisconnect };
 }
 
 function makePresence(overrides: Partial<SlackPresence> = {}): SlackPresence {
@@ -792,5 +810,147 @@ describe("SlackAdapter.surfaceConfig", () => {
     await expect(
       adapter.surfaceConfig.render(makeEnvelope()),
     ).resolves.toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#235 r1#4 — system.adapter.* envelope emission
+// ---------------------------------------------------------------------------
+
+describe("SlackAdapter — system.adapter.* envelopes (cortex#235 r1#4)", () => {
+  interface RecordingRuntime {
+    enabled: boolean;
+    onEnvelope: () => { unregister: () => void };
+    publish: (envelope: Envelope) => Promise<void>;
+    stop: () => Promise<void>;
+    publishes: Envelope[];
+  }
+  function makeRecordingRuntime(): RecordingRuntime {
+    const publishes: Envelope[] = [];
+    return {
+      enabled: true,
+      onEnvelope: () => ({ unregister: () => {} }),
+      publish: async (envelope: Envelope) => { publishes.push(envelope); },
+      stop: async () => {},
+      publishes,
+    };
+  }
+
+  const SOURCE = { org: "metafactory", agent: "luna", instance: "local" };
+
+  test("initial connect after start() is silent (no envelope emitted)", async () => {
+    const runtime = makeRecordingRuntime();
+    const { adapter, simulateConnect } = makeAdapter({
+      infra: { runtime, systemEventSource: SOURCE },
+    });
+    await adapter.start(async () => {});
+    simulateConnect();
+    expect(runtime.publishes).toHaveLength(0);
+    await adapter.stop();
+  });
+
+  test("disconnect emits system.adapter.disconnected with wasClean=false on unclean drop", async () => {
+    const runtime = makeRecordingRuntime();
+    const { adapter, simulateDisconnect } = makeAdapter({
+      infra: { runtime, systemEventSource: SOURCE },
+    });
+    await adapter.start(async () => {});
+    simulateDisconnect({ wasClean: false, closeReason: "network drop" });
+    expect(runtime.publishes).toHaveLength(1);
+    const env = runtime.publishes[0]!;
+    expect(env.type).toBe("system.adapter.disconnected");
+    expect(env.payload.platform).toBe("slack");
+    expect(env.payload.adapter_id).toBe("slack-test");
+    expect(env.payload.was_clean).toBe(false);
+    expect(env.payload.close_reason).toBe("network drop");
+    await adapter.stop();
+  });
+
+  test("disconnect followed by reconnect emits disconnected + recovered pair", async () => {
+    const runtime = makeRecordingRuntime();
+    const { adapter, simulateConnect, simulateDisconnect } = makeAdapter({
+      infra: { runtime, systemEventSource: SOURCE },
+    });
+    await adapter.start(async () => {});
+    // Initial connect — silent
+    simulateConnect();
+    expect(runtime.publishes).toHaveLength(0);
+    // Drop
+    simulateDisconnect({ wasClean: false });
+    expect(runtime.publishes).toHaveLength(1);
+    expect(runtime.publishes[0]!.type).toBe("system.adapter.disconnected");
+    // Reconnect — emits recovered
+    simulateConnect();
+    expect(runtime.publishes).toHaveLength(2);
+    const recovered = runtime.publishes[1]!;
+    expect(recovered.type).toBe("system.adapter.recovered");
+    expect(recovered.payload.platform).toBe("slack");
+    expect(recovered.payload.adapter_id).toBe("slack-test");
+    expect(typeof recovered.payload.degraded_for_ms).toBe("number");
+    expect(recovered.payload.degraded_for_ms as number).toBeGreaterThanOrEqual(0);
+    await adapter.stop();
+  });
+
+  test("recovered envelope carries the original disconnect timestamp", async () => {
+    const runtime = makeRecordingRuntime();
+    const { adapter, simulateConnect, simulateDisconnect } = makeAdapter({
+      infra: { runtime, systemEventSource: SOURCE },
+    });
+    await adapter.start(async () => {});
+    simulateConnect();
+    simulateDisconnect({ wasClean: false });
+    const disconnectedAt = (runtime.publishes[0]!.payload as { disconnected_since: string })
+      .disconnected_since;
+    simulateConnect();
+    const recovered = runtime.publishes[1]!;
+    expect(recovered.payload.disconnected_since).toBe(disconnectedAt);
+    await adapter.stop();
+  });
+
+  test("clean disconnect (stop() path) sets wasClean=true on envelope", async () => {
+    const runtime = makeRecordingRuntime();
+    const { adapter, simulateDisconnect } = makeAdapter({
+      infra: { runtime, systemEventSource: SOURCE },
+    });
+    await adapter.start(async () => {});
+    simulateDisconnect({ wasClean: true });
+    const env = runtime.publishes[0]!;
+    expect(env.payload.was_clean).toBe(true);
+    expect(env.payload.close_reason).toBeUndefined();
+    await adapter.stop();
+  });
+
+  test("no runtime configured → lifecycle silent (no crash)", async () => {
+    const { adapter, simulateConnect, simulateDisconnect } = makeAdapter({
+      // intentionally no runtime/systemEventSource
+    });
+    await adapter.start(async () => {});
+    simulateConnect();
+    simulateDisconnect({ wasClean: false });
+    simulateConnect();
+    // No throw; no publish observable from the outside.
+    await adapter.stop();
+  });
+
+  test("runtime present but systemEventSource missing → silent + one-time warning", async () => {
+    const runtime = makeRecordingRuntime();
+    const originalWarn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    try {
+      const { adapter, simulateConnect, simulateDisconnect } = makeAdapter({
+        infra: { runtime }, // no systemEventSource
+      });
+      await adapter.start(async () => {});
+      simulateDisconnect({ wasClean: false });
+      simulateConnect();
+      // First disconnect fires the warning; second wouldn't (latched).
+      simulateDisconnect({ wasClean: false });
+      expect(runtime.publishes).toHaveLength(0);
+      expect(warnings.filter((w) => w.includes("systemEventSource is missing"))).toHaveLength(1);
+      await adapter.stop();
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 });

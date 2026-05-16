@@ -975,6 +975,12 @@ export async function startCortex(
           operator: {
             ...(config.agent.operatorSlackId !== undefined && { slackId: config.agent.operatorSlackId }),
           },
+          // cortex#235 r1#4 — wire runtime + source so the adapter
+          // can emit `system.adapter.{disconnected,recovered}` on
+          // Socket Mode lifecycle transitions. Same pattern as the
+          // Discord adapter above.
+          runtime,
+          systemEventSource,
           surfaceSubjects: presence.surfaceSubjects,
           ...(presence.surfaceFallbackChannelId !== undefined && {
             surfaceFallbackChannelId: presence.surfaceFallbackChannelId,

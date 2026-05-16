@@ -73,8 +73,33 @@ export interface SlackBotIdentity {
  * Pluggable Slack client surface. The real implementation wraps
  * `SocketModeClient` + `WebClient`; tests pass a mock.
  */
+/**
+ * Lifecycle info plumbed from Socket Mode's `disconnect` event onto
+ * the adapter-side handler. `closeReason` is best-effort — Socket
+ * Mode doesn't always supply it; the adapter falls back to a
+ * conservative default. cortex#235 r1#4.
+ */
+export interface SlackDisconnectInfo {
+  /** True if the disconnect was a clean shutdown (e.g. `stop()`); false on unexpected drops. */
+  wasClean?: boolean;
+  /** Human-readable close reason from the WebSocket layer, if Socket Mode supplies one. */
+  closeReason?: string;
+}
+
 export interface SlackClient {
-  start(opts: { onEvent: (event: SlackInboundEvent) => Promise<void> }): Promise<void>;
+  /**
+   * Open the Socket Mode connection and start delivering events to
+   * `onEvent`. The optional `onConnected` / `onDisconnected` hooks
+   * fire on every Socket Mode lifecycle transition — the adapter
+   * uses them to emit `system.adapter.*` envelopes (cortex#235
+   * r1#4). Mocks can invoke them at will for test coverage of the
+   * envelope path.
+   */
+  start(opts: {
+    onEvent: (event: SlackInboundEvent) => Promise<void>;
+    onConnected?: () => void;
+    onDisconnected?: (info: SlackDisconnectInfo) => void;
+  }): Promise<void>;
   stop(): Promise<void>;
   postMessage(channel: string, text: string, threadTs?: string): Promise<{ ts?: string }>;
   /** Convenience accessor for `userId`. Kept for adapter call-site brevity. */
@@ -113,7 +138,11 @@ export class RealSlackClient implements SlackClient {
     this.web = new WebClient(opts.botToken);
   }
 
-  async start(opts: { onEvent: (event: SlackInboundEvent) => Promise<void> }): Promise<void> {
+  async start(opts: {
+    onEvent: (event: SlackInboundEvent) => Promise<void>;
+    onConnected?: () => void;
+    onDisconnected?: (info: SlackDisconnectInfo) => void;
+  }): Promise<void> {
     // Slack's Socket Mode delivers `events_api` envelopes; the inner event
     // type (`message`, `app_mention`) is re-emitted by SocketModeClient as
     // a top-level event.
@@ -174,6 +203,47 @@ export class RealSlackClient implements SlackClient {
     };
     this.socket.on("message", dispatch);
     this.socket.on("app_mention", dispatch);
+
+    // cortex#235 r1#4 — Socket Mode lifecycle → adapter callbacks.
+    // SocketModeClient emits `connected` on every reconnect (initial
+    // + recoveries) and `disconnected` on every drop (clean or
+    // unclean). The adapter's `handleConnected` distinguishes
+    // initial-connect from recovery via a latch. Listeners are
+    // best-effort: any throw inside the callback is logged but does
+    // not interrupt the socket loop.
+    if (opts.onConnected !== undefined) {
+      const onConnected = opts.onConnected;
+      this.socket.on("connected", () => {
+        try {
+          onConnected();
+        } catch (err) {
+          console.warn(
+            `slack-client[${this.instanceId}]: onConnected threw:`,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      });
+    }
+    if (opts.onDisconnected !== undefined) {
+      const onDisconnected = opts.onDisconnected;
+      this.socket.on("disconnected", (err?: Error) => {
+        try {
+          // @slack/socket-mode `disconnected` event passes an Error
+          // when the disconnect was unexpected; absent for clean
+          // shutdowns (`stop()` path).
+          onDisconnected({
+            wasClean: err === undefined,
+            ...(err !== undefined && { closeReason: err.message }),
+          });
+        } catch (cbErr) {
+          console.warn(
+            `slack-client[${this.instanceId}]: onDisconnected threw:`,
+            cbErr instanceof Error ? cbErr.message : String(cbErr),
+          );
+        }
+      });
+    }
+
     await this.socket.start();
   }
 

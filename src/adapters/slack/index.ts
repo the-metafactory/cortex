@@ -23,8 +23,14 @@ import type {
 } from "../types";
 import type { Agent, SlackPresence } from "../../common/types/cortex-config";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
+import type { MyelinRuntime } from "../../bus/myelin/runtime";
 import type { SurfaceAdapter } from "../../bus/surface-router";
 import type { PayloadFilter } from "../../bus/payload-filter";
+import {
+  type SystemEventSource,
+  createSystemAdapterDisconnectedEvent,
+  createSystemAdapterRecoveredEvent,
+} from "../../bus/system-events";
 import { resolveRole } from "../discord/role-resolver";
 import { formatEnvelopeAsMarkdown } from "../envelope-renderer";
 import { RealSlackClient, type SlackClient, type SlackInboundEvent, type SlackBotIdentity } from "./client";
@@ -45,6 +51,18 @@ export interface SlackAdapterInfra {
   instanceId: string;
   /** Operator's platform identity. */
   operator: { slackId?: string };
+  /**
+   * MyelinRuntime for `system.adapter.*` envelope emission (cortex#235
+   * r1#4). Optional — adapters started without NATS still track
+   * connection state locally; bus emission is additive.
+   */
+  runtime?: MyelinRuntime;
+  /**
+   * `{org}.{agent}.{instance}` source triple stamped onto emitted
+   * `system.*` envelopes. Required for any `system.adapter.*` envelope
+   * to fire — see `canPublishSystemEvent()`.
+   */
+  systemEventSource?: SystemEventSource;
   /** MIG-3b: NATS subject patterns this adapter renders to Slack. */
   surfaceSubjects?: string[];
   /** MIG-3b: optional payload filter applied AFTER subject match. */
@@ -100,11 +118,31 @@ export class SlackAdapter implements PlatformAdapter {
   private readonly seenTsOrder: string[] = [];
   private static readonly DEDUP_CAPACITY = 256;
 
+  /**
+   * cortex#235 r1#4 — connection-state tracking for `system.adapter.*`
+   * envelope emission. Slack's Socket Mode is a single connection (no
+   * shard concept), so this is simpler than Discord's per-shard health
+   * map.
+   *
+   * `lastDisconnectedAt` is set when `disconnected` fires; cleared
+   * after the next `connected` recovers. `connectedOnce` distinguishes
+   * the initial successful connect (no envelope emitted — matches
+   * Discord which doesn't emit `connected` either) from a recovery
+   * after a prior disconnect (emit `system.adapter.recovered`).
+   */
+  private lastDisconnectedAt: Date | null = null;
+  private connectedOnce = false;
+  private warnedMissingSource = false;
+  private readonly runtime: MyelinRuntime | undefined;
+  private readonly systemEventSource: SystemEventSource | undefined;
+
   constructor(agent: Agent, presence: SlackPresence, infra: SlackAdapterInfra) {
     this.agent = agent;
     this.presence = presence;
     this.infra = infra;
     this.instanceId = infra.instanceId;
+    this.runtime = infra.runtime;
+    this.systemEventSource = infra.systemEventSource;
     this.trustedBotIds = infra.trustedBotIds ?? new Set(presence.trustedBotIds);
     this.client = infra.client ?? new RealSlackClient({
       botToken: presence.botToken,
@@ -139,6 +177,16 @@ export class SlackAdapter implements PlatformAdapter {
         if (!msg) return;
         await onMessage(msg);
       },
+      // cortex#235 r1#4 — Socket Mode lifecycle hooks.
+      // - `onConnected` fires on EVERY Socket Mode reconnect, not just the
+      //   initial connect; the adapter's `connectedOnce` latch
+      //   distinguishes initial-connect (silent) from recovery
+      //   (emit system.adapter.recovered).
+      // - `onDisconnected` fires on every Socket Mode disconnect; emits
+      //   system.adapter.disconnected unconditionally (mirrors Discord's
+      //   per-shard disconnect emission).
+      onConnected: () => { this.handleConnected(); },
+      onDisconnected: (info) => { this.handleDisconnected(info); },
     });
   }
 
@@ -436,5 +484,96 @@ export class SlackAdapter implements PlatformAdapter {
       timestamp: new Date(Number(event.ts.split(".")[0]) * 1000),
       _native: event,
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // cortex#235 r1#4 — Socket Mode lifecycle → system.adapter.* envelopes.
+  //
+  // Mirror of Discord's per-shard emission pattern, simplified for
+  // Socket Mode's single-connection model:
+  //   - No shard_id field on emitted envelopes (Slack has no shards).
+  //   - No `degraded` event: degraded requires a wall-clock threshold
+  //     timer ("disconnected longer than X seconds"). Slack's Socket
+  //     Mode reconnect cadence is typically faster than any reasonable
+  //     threshold; the disconnected → recovered pair carries the
+  //     duration on `degraded_for_ms` directly.
+  //   - Initial connect is silent (matches Discord — no
+  //     `system.adapter.connected` envelope kind exists).
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Common gate for `system.adapter.*` emission. Returns the bound
+   * runtime + source pair when both are configured, or `null`
+   * otherwise. Mirrors Discord's `canPublishSystemEvent`.
+   */
+  private canPublishSystemEvent(): { runtime: MyelinRuntime; source: SystemEventSource } | null {
+    const runtime = this.runtime;
+    if (!runtime) return null;
+    const source = this.systemEventSource;
+    if (!source) {
+      if (!this.warnedMissingSource) {
+        console.warn(
+          `slack-${this.instanceId}: runtime is configured but systemEventSource is missing — system.* events will not be emitted`,
+        );
+        this.warnedMissingSource = true;
+      }
+      return null;
+    }
+    return { runtime, source };
+  }
+
+  /**
+   * Socket Mode `connected` event. First-ever connect is silent
+   * (matches Discord — initial connect is the expected steady state);
+   * any subsequent connect is a recovery from a prior disconnect and
+   * emits `system.adapter.recovered`.
+   */
+  private handleConnected(): void {
+    if (!this.connectedOnce) {
+      this.connectedOnce = true;
+      return;
+    }
+    const disconnectedSince = this.lastDisconnectedAt;
+    this.lastDisconnectedAt = null;
+    if (disconnectedSince === null) return;
+    const wiring = this.canPublishSystemEvent();
+    if (!wiring) return;
+    const env = createSystemAdapterRecoveredEvent({
+      source: wiring.source,
+      adapterId: this.instanceId,
+      platform: "slack",
+      degradedForMs: Date.now() - disconnectedSince.getTime(),
+      disconnectedSince,
+    });
+    void wiring.runtime.publish(env);
+  }
+
+  /**
+   * Socket Mode `disconnected` event. Emits `system.adapter.disconnected`
+   * unconditionally — mirrors Discord which emits on every shard
+   * disconnect (clean or unclean). Surfaces filter on `was_clean` to
+   * separate routine reconnects from genuine outages.
+   *
+   * `info.wasClean` is plumbed from Socket Mode's close reason; if
+   * the upstream event doesn't supply it, default to `false` (the
+   * conservative-for-incidents path — surfaces err on the alerting
+   * side).
+   */
+  private handleDisconnected(info: { wasClean?: boolean; closeReason?: string }): void {
+    const now = new Date();
+    this.lastDisconnectedAt = now;
+    const wiring = this.canPublishSystemEvent();
+    if (!wiring) return;
+    const env = createSystemAdapterDisconnectedEvent({
+      source: wiring.source,
+      adapterId: this.instanceId,
+      platform: "slack",
+      disconnectedSince: now,
+      wasClean: info.wasClean ?? false,
+      ...(info.closeReason !== undefined && info.closeReason !== "" && {
+        closeReason: info.closeReason,
+      }),
+    });
+    void wiring.runtime.publish(env);
   }
 }
