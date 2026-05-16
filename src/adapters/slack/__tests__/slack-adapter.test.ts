@@ -131,7 +131,7 @@ function makePresence(overrides: Partial<SlackPresence> = {}): SlackPresence {
     botToken: "xoxb-TEST-TOKEN-12345",
     appToken: "xapp-TEST-APP-12345",
     workspaceId: "T0WORKSPACE",
-    channels: [{ id: "C0CHAN1", name: "cortex" }],
+    channels: [{ id: "C0CHANNEL1", name: "cortex" }],
     allowedUserIds: [],
     trustedBotIds: [],
     roles: [],
@@ -186,7 +186,7 @@ function makeSlackEvent(overrides: Partial<SlackInboundEvent> = {}): SlackInboun
     type: "message",
     user: "U0HUMAN",
     team: "T0WORKSPACE",
-    channel: "C0CHAN1",
+    channel: "C0CHANNEL1",
     text: "hello bot",
     ts: "1700000000.000123",
     ...overrides,
@@ -329,19 +329,34 @@ describe("SlackAdapter — lifecycle", () => {
 // ---------------------------------------------------------------------------
 
 describe("SlackAdapter — translateEvent", () => {
+  test("preserves millisecond precision on timestamp (cortex#235 r1#9)", async () => {
+    const { adapter, emit } = makeAdapter();
+    const cap = captureInbound();
+    await adapter.start(cap.onMessage);
+    // Slack ts: "1700000000.123456" = 1,700,000,000.123456 seconds.
+    // Old impl split on "." and dropped fractional → 1700000000000 ms.
+    // New impl multiplies float * 1000 + floor → 1700000000123 ms.
+    await emit(makeSlackEvent({ ts: "1700000000.123456" }));
+    expect(cap.received).toHaveLength(1);
+    const expectedMs = Math.floor(1700000000.123456 * 1000);
+    expect(cap.received[0]!.timestamp.getTime()).toBe(expectedMs);
+    // Sanity: NOT the second-resolution truncation the old impl produced.
+    expect(cap.received[0]!.timestamp.getTime()).not.toBe(1700000000 * 1000);
+  });
+
   test("translates a plain message into an InboundMessage", async () => {
     const { adapter, emit } = makeAdapter();
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
 
-    await emit(makeSlackEvent({ user: "U0HUMAN", text: "hello", channel: "C0CHAN1" }));
+    await emit(makeSlackEvent({ user: "U0HUMAN", text: "hello", channel: "C0CHANNEL1" }));
 
     expect(cap.received).toHaveLength(1);
     const msg = cap.received[0]!;
     expect(msg.platform).toBe("slack");
     expect(msg.authorId).toBe("U0HUMAN");
     expect(msg.content).toBe("hello");
-    expect(msg.channelId).toBe("C0CHAN1");
+    expect(msg.channelId).toBe("C0CHANNEL1");
     expect(msg.channelName).toBe("cortex");
     expect(msg.guildId).toBe("T0WORKSPACE");
     expect(msg.threadId).toBeUndefined();
@@ -539,7 +554,7 @@ describe("SlackAdapter — resolveAccess", () => {
       authorId,
       authorName: authorId,
       content: "hi",
-      channelId: "C0CHAN1",
+      channelId: "C0CHANNEL1",
       attachments: [],
       timestamp: new Date(0),
     };
@@ -605,14 +620,14 @@ describe("SlackAdapter — resolveAccess", () => {
 describe("SlackAdapter — postResponse", () => {
   test("posts via the client with channel + text", async () => {
     const { adapter, state } = makeAdapter();
-    await adapter.postResponse({ instanceId: "slack-test", channelId: "C0CHAN1" }, "ok");
-    expect(state.postedMessages).toEqual([{ channel: "C0CHAN1", text: "ok" }]);
+    await adapter.postResponse({ instanceId: "slack-test", channelId: "C0CHANNEL1" }, "ok");
+    expect(state.postedMessages).toEqual([{ channel: "C0CHANNEL1", text: "ok" }]);
   });
 
   test("threads the response when threadId is set", async () => {
     const { adapter, state } = makeAdapter();
     await adapter.postResponse(
-      { instanceId: "slack-test", channelId: "C0CHAN1", threadId: "1700000000.000000" },
+      { instanceId: "slack-test", channelId: "C0CHANNEL1", threadId: "1700000000.000000" },
       "ok",
     );
     expect(state.postedMessages[0]?.threadTs).toBe("1700000000.000000");
@@ -621,7 +636,7 @@ describe("SlackAdapter — postResponse", () => {
   test("warns and drops file attachments (v1 text-only)", async () => {
     const { adapter, state } = makeAdapter();
     await adapter.postResponse(
-      { instanceId: "slack-test", channelId: "C0CHAN1" },
+      { instanceId: "slack-test", channelId: "C0CHANNEL1" },
       "see attached",
       [{ content: Buffer.from("data"), filename: "x.txt" }],
     );
@@ -638,7 +653,7 @@ describe("SlackAdapter — postResponse", () => {
 describe("SlackAdapter — sendProgress + createThread + notifyOperator", () => {
   test("sendProgress posts once and skips subsequent calls", async () => {
     const { adapter, state } = makeAdapter();
-    const target = { instanceId: "slack-test", channelId: "C0CHAN1", threadId: "T123" };
+    const target = { instanceId: "slack-test", channelId: "C0CHANNEL1", threadId: "T123" };
     await adapter.sendProgress(target, "step 1");
     await adapter.sendProgress(target, "step 2");
     expect(state.postedMessages).toHaveLength(1);
@@ -647,7 +662,7 @@ describe("SlackAdapter — sendProgress + createThread + notifyOperator", () => 
 
   test("clearProgress allows a subsequent sendProgress to post again", async () => {
     const { adapter, state } = makeAdapter();
-    const target = { instanceId: "slack-test", channelId: "C0CHAN1", threadId: "T123" };
+    const target = { instanceId: "slack-test", channelId: "C0CHANNEL1", threadId: "T123" };
     await adapter.sendProgress(target, "first");
     await adapter.clearProgress(target);
     await adapter.sendProgress(target, "second");
@@ -663,13 +678,13 @@ describe("SlackAdapter — sendProgress + createThread + notifyOperator", () => 
       authorId: "U0HUMAN",
       authorName: "U0HUMAN",
       content: "spawn a thread",
-      channelId: "C0CHAN1",
+      channelId: "C0CHANNEL1",
       attachments: [],
       timestamp: new Date(0),
       _native: makeSlackEvent({ ts: "1700000000.999999" }),
     };
     const target = await adapter.createThread(msg, "ignored-name");
-    expect(target.channelId).toBe("C0CHAN1");
+    expect(target.channelId).toBe("C0CHANNEL1");
     expect(target.threadId).toBe("1700000000.999999");
   });
 
@@ -687,13 +702,13 @@ describe("SlackAdapter — sendProgress + createThread + notifyOperator", () => 
       authorId: "U0HUMAN",
       authorName: "U0HUMAN",
       content: "no native event attached",
-      channelId: "C0CHAN1",
+      channelId: "C0CHANNEL1",
       attachments: [],
       timestamp: new Date(0),
       // intentionally no _native and no threadId
     };
     const target = await adapter.createThread(msg, "ignored-name");
-    expect(target.channelId).toBe("C0CHAN1");
+    expect(target.channelId).toBe("C0CHANNEL1");
     expect(target.threadId).toBeUndefined();
   });
 
@@ -708,7 +723,7 @@ describe("SlackAdapter — sendProgress + createThread + notifyOperator", () => 
       authorId: "U0HUMAN",
       authorName: "U0HUMAN",
       content: "reply in existing thread",
-      channelId: "C0CHAN1",
+      channelId: "C0CHANNEL1",
       attachments: [],
       timestamp: new Date(0),
       _native: makeSlackEvent({

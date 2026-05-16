@@ -494,7 +494,15 @@ export class SlackAdapter implements PlatformAdapter {
         ...(f.mimetype !== undefined && { contentType: f.mimetype }),
         ...(f.size !== undefined && { size: f.size }),
       })),
-      timestamp: new Date(Number(event.ts.split(".")[0]) * 1000),
+      // cortex#235 r1#9 — preserve millisecond precision. Slack's
+      // event.ts is a string like "1700000000.000123" (seconds.micros).
+      // The old `split(".")[0]) * 1000` derivation dropped the
+      // fractional portion entirely, so the dedup ring + downstream
+      // ordering both saw second-resolution timestamps. Multiplying
+      // the full float by 1000 + flooring keeps millisecond precision
+      // (Slack doesn't fire enough events per ms for sub-ms detail to
+      // matter; Math.floor avoids the rounding edge cases on .5).
+      timestamp: new Date(Math.floor(Number(event.ts) * 1000)),
       _native: event,
     };
   }

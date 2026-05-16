@@ -316,8 +316,12 @@ export const SlackPresenceSchema = z.object({
    * across workspaces the same way they do across Discord guilds.
    */
   workspaceId: z.coerce.string().regex(
-    /^T[A-Z0-9]+$/,
-    "slack.workspaceId must be a Slack team id (T...)",
+    // cortex#235 r1#6 — bound the regex. Real Slack team ids are
+    // 9-11 chars (T + 8-10 base32-ish). 16 gives Slack headroom for
+    // future expansion without admitting unbounded operator-pasted
+    // garbage that would bloat downstream subject strings.
+    /^T[A-Z0-9]{8,16}$/,
+    "slack.workspaceId must be a Slack team id (T... with 8-16 trailing chars)",
   ),
   /**
    * Channels the adapter listens on / posts to. `id` is the canonical
@@ -327,8 +331,10 @@ export const SlackPresenceSchema = z.object({
    */
   channels: z.array(z.object({
     id: z.string().regex(
-      /^[CG][A-Z0-9]+$/,
-      "slack channel id must be a Slack channel/group id (C... or G...)",
+      // cortex#235 r1#6 — same upper-bound logic as workspaceId.
+      // Real Slack channel/group ids are 11 chars; 16 leaves headroom.
+      /^[CG][A-Z0-9]{8,16}$/,
+      "slack channel id must be a Slack channel/group id (C... or G... with 8-16 trailing chars)",
     ),
     name: z.string().min(1),
   })).default([]),

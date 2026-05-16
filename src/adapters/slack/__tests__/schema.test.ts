@@ -15,7 +15,7 @@ const VALID_PRESENCE = {
   botToken: "xoxb-TEST-TOKEN-12345",
   appToken: "xapp-TEST-APP-12345",
   workspaceId: "T0WORKSPACE",
-  channels: [{ id: "C0CHAN1", name: "cortex" }],
+  channels: [{ id: "C0CHANNEL1", name: "cortex" }],
 };
 
 describe("SlackPresenceSchema", () => {
@@ -62,11 +62,38 @@ describe("SlackPresenceSchema", () => {
     const parsed = SlackPresenceSchema.parse({
       ...VALID_PRESENCE,
       channels: [
-        { id: "C0PUB", name: "pub" },
-        { id: "G0PRIV", name: "priv" },
+        { id: "C0PUBLIC01", name: "pub" },
+        { id: "G0PRIVATE1", name: "priv" },
       ],
     });
     expect(parsed.channels).toHaveLength(2);
+  });
+
+  test("rejects too-short channel id (cortex#235 r1#6)", () => {
+    expect(() =>
+      SlackPresenceSchema.parse({
+        ...VALID_PRESENCE,
+        channels: [{ id: "C0SHORT", name: "tooshort" }], // 7 chars after C, below 8 min
+      }),
+    ).toThrow(/8-16/);
+  });
+
+  test("rejects too-long channel id (cortex#235 r1#6)", () => {
+    expect(() =>
+      SlackPresenceSchema.parse({
+        ...VALID_PRESENCE,
+        channels: [{ id: "C" + "0".repeat(17), name: "toolong" }],
+      }),
+    ).toThrow(/8-16/);
+  });
+
+  test("rejects too-long workspaceId (cortex#235 r1#6)", () => {
+    expect(() =>
+      SlackPresenceSchema.parse({
+        ...VALID_PRESENCE,
+        workspaceId: "T" + "0".repeat(17),
+      }),
+    ).toThrow(/8-16/);
   });
 
   test("passes through optional surfaceFallbackChannelId", () => {
