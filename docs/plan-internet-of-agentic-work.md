@@ -281,32 +281,15 @@ Most of Phase C is paper until B.4 ships, but the paper can be drafted now:
 - [x] **C.1.4** Decision logic: principal's role grants → effective capabilities; sovereignty fields surfaced on `intent` for C.4 carry-through (sovereignty enforcement deferred to Phase D per design). — cortex#218
 - [x] **C.1.5** Audit emission: implemented in C.4 (cortex#221), not C.1 — engine is pure, audit envelopes emitted by the dispatch-listener with the engine's structured decision.
 
-### C.2 cortex.yaml schema flip — C.2a DONE (cortex#219); C.2b/C.2c DEFERRED (post-MIG-8 v2.0.0)
+### C.2 cortex.yaml schema flip — C.2a DONE (cortex#219); C.2b/C.2c ratified, execution NEXT
 
-- [x] **C.2.1 (additive — C.2a)** Top-level `policy: { principals[], roles[] }` added; schema cross-refines uniqueness + role/trust referential integrity. Legacy per-adapter `roles[]` retained for backward compatibility (removal in C.2b). — cortex#219
-- [ ] **C.2.1.b (breaking — C.2b)** Per-adapter `roles[]` removed from `DiscordPresenceSchema` + `MattermostPresenceSchema` + adapter role-resolver code; v2.0.0 bump. — deferred (out of Phase C scope; expands adapter surface; tracked separately).
-- [ ] **C.2.2** `policy.principals[]` schema:
-  ```yaml
-  policy:
-    principals:
-      - id: agent-luna
-        home_operator: andreas
-        home_stack: andreas/research
-        nkey_pub: SAA…
-        role: [chat, async]
-        trust: [agent-echo, agent-holly]
-      - id: agent-echo
-        home_operator: andreas
-        home_stack: andreas/code
-        ...
-    roles:
-      - id: chat
-        capabilities: [...]
-        sovereignty:
-          max_classification: federated
-  ```
-- [ ] **C.2.3** Discord/Mattermost adapters thin to ~30 LOC: translate inbound event → `Principal`; call `PolicyEngine.check`; act on result. No role-resolver logic in adapter. — deferred with C.2b.
-- [ ] **C.2.4 (C.2c)** `migrate-config` CLI extension: lift existing per-adapter roles into top-level `policy:` with warnings on inconsistencies between adapters. — deferred with C.2b.
+**Status as of 2026-05-16:** Design ratified in [PR #291](https://github.com/the-metafactory/cortex/pull/291). See [`docs/design-policy-cutover.md`](./design-policy-cutover.md) for the locked schema + 5-PR sequence and [`docs/iteration-policy-cutover.md`](./iteration-policy-cutover.md) for the operator-facing iteration checklist.
+
+- [x] **C.2.1 (additive — C.2a)** Top-level `policy: { principals[], roles[] }` added; schema cross-refines uniqueness + role/trust referential integrity. Legacy per-adapter `roles[]` retained for backward compatibility. — cortex#219
+- [ ] **C.2.1.b (breaking — C.2b)** Per-adapter `roles[]` removed from `DiscordPresenceSchema` + `MattermostPresenceSchema` + `SlackPresenceSchema`; adapter role-resolver retired; v2.0.0 bump. — cortex#242 umbrella (split into 242a parallel-mode + 242b breaking removal per design §9).
+- [ ] **C.2.2** `policy.principals[]` schema extended — adds `platform_ids` (open record), `session_config: {default, dm?}`, multi-stack `(id, home_stack)` uniqueness scoping. Capability namespace adopted: `keyword.{chat,async,team}`, `tool.<name>`, `dispatch.<agent>`, `operator`, `<domain>.<entity>`. — cortex#243a (schema extension)
+- [ ] **C.2.3** Discord/Mattermost/Slack adapters call `PolicyEngine.check()` directly; role-resolver retired. Wired in parallel mode first (most-restrictive intersection), then exclusive at v2.0.0. — cortex#242a → cortex#242b
+- [ ] **C.2.4 (C.2c)** `migrate-config` CLI extension: lift legacy per-adapter `roles[]` into top-level `policy:`. Idempotent, with `--check` mode for the 242a operator pre-flight. Canonical tool inventory via cortex#243b. SOP + migration examples. — cortex#243c
 
 ### C.3 Integration with substrate harness — DONE (cortex#220)
 
@@ -323,16 +306,16 @@ Most of Phase C is paper until B.4 ships, but the paper can be drafted now:
 ### C.5 Tests + migration
 
 - [x] **C.5.1** PolicyEngine unit tests cover allow/deny matrix (engine.test.ts + factory.test.ts in C.1/C.2a). — cortex#218, cortex#219
-- [ ] **C.5.2** Migration test: a representative grove-v2 `bot.yaml` flips to cortex-shaped `cortex.yaml` with the new `policy:` block; round-trip identity (same auth decisions). — DEFERRED (gated on C.2b — without removing legacy per-adapter `roles[]` the migration story isn't load-bearing yet).
+- [ ] **C.5.2** Migration-fidelity test: a representative `cortex.yaml` flips to `policy:`-only with `migrate-config`; round-trip identity (same auth decisions). — lands with cortex#243c.
 - [x] **C.5.3** Integration test: end-to-end inbound `dispatch.task.received` → dispatch-listener → PolicyEngine → harness → lifecycle envelopes + audit envelopes asserted. Implemented as 29 listener tests in `src/runner/__tests__/dispatch-listener.test.ts` exercising allow/deny paths, signed_by single + multi-stamp, sovereignty flow, audit payload shape, double-emit ordering on deny. (Note: Discord adapter still uses the legacy role-resolver path; full adapter→engine wiring lands with C.2b.) — cortex#220, cortex#221
 
 ### Phase C acceptance criteria
 
 - [x] `src/common/policy/` module exists with `PolicyEngine.check()`. — cortex#218
-- [ ] Discord/Mattermost adapters reduced to ~30 LOC each. — DEFERRED with C.2b.
+- [ ] Discord/Mattermost/Slack adapters call `PolicyEngine.check()` directly; role-resolver retired. — cortex#242a (parallel) → cortex#242b (exclusive)
 - [x] cortex.yaml schema has `policy: { principals[], roles[] }` at top level (additive). — cortex#219
-- [ ] Per-adapter `roles[]` removed. — DEFERRED with C.2b.
-- [ ] `migrate-config` CLI lifts existing per-surface roles into top-level `policy:`. — DEFERRED with C.2c.
+- [ ] Per-adapter `roles[]` removed. — cortex#242b
+- [ ] `migrate-config` CLI lifts existing per-surface roles into top-level `policy:`. — cortex#243c
 - [x] `system.access.{allowed,denied}` envelopes emitted by dispatch-listener (with engine decision). — cortex#221
 - cortex.yaml schema migration is one-way (post-flip, no rollback in v1). — C.2b breaking change pending.
 
@@ -340,7 +323,7 @@ Most of Phase C is paper until B.4 ships, but the paper can be drafted now:
 
 Phase C primary objective — *PolicyEngine as the single AAA decision point with audit envelopes* — is **DONE** (C.1 + C.2a + C.3 + C.4 + C.5.1 + C.5.3 all merged). What ships as Phase C of IAW closes cortex#115.
 
-What's **DEFERRED to v2.0.0 cleanup** (C.2b/C.2c/C.5.2): the breaking removal of per-adapter `roles[]` from `DiscordPresenceSchema` / `MattermostPresenceSchema`, the adapter role-resolver refactor (~30 LOC), the `migrate-config` CLI extension, and the migration-fidelity round-trip test. The legacy per-adapter path is parallel to (not in conflict with) the new top-level `policy:` block; both shapes coexist until v2.0.0 cuts.
+**v2.0.0 cleanup (C.2b/C.2c/C.5.2) — ratified, execution NEXT.** The breaking removal of per-adapter `roles[]`, adapter role-resolver retirement, `migrate-config` CLI extension, and migration-fidelity round-trip test have a ratified design in [PR #291](https://github.com/the-metafactory/cortex/pull/291) and a 5-PR iteration plan in [`docs/iteration-policy-cutover.md`](./iteration-policy-cutover.md). The 5 sub-issues (cortex#243a/b/c, cortex#242a/b) execute in the dependency order documented there.
 
 Pre-Phase-B caveat (Echo cortex#220 round 1): the dispatch-listener policy gate authorises on an unverified `signed_by[0].principal` claim until cortex#114 (Phase B verification) wires the verifier into the envelope-validator. The gate is `CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK=1` opt-in until that closes.
 
