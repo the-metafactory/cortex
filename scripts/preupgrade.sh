@@ -90,19 +90,21 @@ if [ "$(uname)" = "Darwin" ]; then
   # cortex#251: bot plist renamed to meta-factory. Unload the new
   # label here; the old-label sweep one section above this picks up
   # any lingering pre-rename plists on first upgrade after merge.
-  if launchctl list 2>/dev/null | grep -q "ai.meta-factory.cortex.meta-factory"; then
+  # Anchor on column 3 (registered label) to avoid partial-match
+  # false-positives — same pattern as the legacy sweep.
+  if launchctl list 2>/dev/null | awk '{print $3}' | grep -qx "ai.meta-factory.cortex.meta-factory"; then
     launchctl unload "${LAUNCH_DIR}/ai.meta-factory.cortex.meta-factory.plist" 2>/dev/null || true
     echo "  ✓ Meta-factory daemon stopped"
   fi
 
   # cortex#244: optional work stack — only unload if the operator
   # has it.
-  if launchctl list 2>/dev/null | grep -q "ai.meta-factory.cortex.work"; then
+  if launchctl list 2>/dev/null | awk '{print $3}' | grep -qx "ai.meta-factory.cortex.work"; then
     launchctl unload "${LAUNCH_DIR}/ai.meta-factory.cortex.work.plist" 2>/dev/null || true
     echo "  ✓ Work daemon stopped"
   fi
 
-  if launchctl list 2>/dev/null | grep -q "ai.meta-factory.cortex.relay"; then
+  if launchctl list 2>/dev/null | awk '{print $3}' | grep -qx "ai.meta-factory.cortex.relay"; then
     launchctl unload "${LAUNCH_DIR}/ai.meta-factory.cortex.relay.plist" 2>/dev/null || true
     echo "  ✓ Relay daemon stopped"
   fi

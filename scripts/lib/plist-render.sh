@@ -119,6 +119,18 @@ render_cortex_plists() {
         "${work_src}" > "${work_dst}"
     echo "  ✓ Work plist rendered → ${work_dst}"
   elif [ -f "${work_src}" ]; then
-    echo "  ⊘ Work plist skipped — ${work_yaml} not present (operator has not scaffolded the second stack)"
+    # Subagent review on cortex#251 round 2 — if the operator deleted
+    # cortex.work.yaml after a prior upgrade rendered the work plist,
+    # launchd would crash-loop trying to start the daemon against a
+    # missing --config target. Remove the stale rendered plist (after
+    # postupgrade.sh's load attempt sees the missing file and skips).
+    # Idempotent: rm -f swallows no-such-file.
+    if [ -f "${work_dst}" ]; then
+      launchctl unload "${work_dst}" 2>/dev/null || true
+      rm -f "${work_dst}"
+      echo "  ⊘ Work plist removed — ${work_yaml} not present (operator un-scaffolded the second stack)"
+    else
+      echo "  ⊘ Work plist skipped — ${work_yaml} not present (operator has not scaffolded the second stack)"
+    fi
   fi
 }

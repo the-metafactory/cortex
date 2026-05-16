@@ -719,7 +719,7 @@ nsc describe account ANDREAS_AGENTS | awk '/Account ID/ {print $3}'
      no `operator mode requires account nkeys in remotes` error.
    - `nats stream ls --server nats://localhost:4222 --creds ~/.nats/user.creds`
      should return without auth errors.
-7. **Verify cortex.** `cortex start --config ~/.config/cortex/cortex.yaml --dry-run` confirms the config still parses (cortex#88 item 2); `cortex status` after `launchctl load …cortex.bot.plist` shows the bot connected to the operator-mode server.
+7. **Verify cortex.** `cortex start --config ~/.config/cortex/cortex.yaml --dry-run` confirms the config still parses (cortex#88 item 2); `cortex status` after `launchctl load …cortex.meta-factory.plist` (renamed from `cortex.bot.plist` at cortex#251) shows the daemon connected to the operator-mode server.
 
 ### 9.4 Rollback
 
