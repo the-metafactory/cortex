@@ -39,9 +39,12 @@ import type {
 } from "../myelin/runtime";
 import {
   ReviewConsumer,
+  failedReasonToAckDecision,
   type ReviewConsumerAgent,
   type ReviewConsumerOpts,
 } from "../review-consumer";
+import type { DispatchTaskFailedReason } from "../dispatch-events";
+import type { AckDecision } from "../myelin/subscriber";
 import {
   createReviewRequestEvent,
   createReviewVerdictEvent,
@@ -665,4 +668,79 @@ describe("ReviewConsumer.processEnvelope — cortex#237 PR-6", () => {
       reason: "v1 does not handle compliance_block",
     });
   });
+});
+
+// ---------------------------------------------------------------------------
+// failedReasonToAckDecision — cortex#290 coverage-gap test (Architect Finding 2a)
+//
+// The mapping table in `failedReasonToAckDecision` is the contract PR-9's
+// e2e tests + pilot's wait-for-verdict exit-code mapping lock onto. The
+// processEnvelope tests above exercise the helper indirectly through one
+// or two `kind` variants; this parametric block hits all five
+// `DispatchTaskFailedReason` discriminators plus the `undefined`
+// defensive path so a regression in the table immediately surfaces
+// here instead of as a downstream e2e-only failure.
+// ---------------------------------------------------------------------------
+
+describe("failedReasonToAckDecision (cortex#237 PR-6 — Architect Finding 2a)", () => {
+  type Case = readonly [
+    label: string,
+    reason: DispatchTaskFailedReason | undefined,
+    expected: AckDecision,
+  ];
+
+  const cases: Case[] = [
+    [
+      "cant_do → term with prefixed detail",
+      { kind: "cant_do", detail: "payload validation failed" },
+      { kind: "term", reason: "cant_do: payload validation failed" },
+    ],
+    [
+      "wont_do → term with prefixed detail",
+      { kind: "wont_do", detail: "policy refuses this repo" },
+      { kind: "term", reason: "wont_do: policy refuses this repo" },
+    ],
+    [
+      "policy_denied → term with comma-joined deny key summary",
+      {
+        kind: "policy_denied",
+        deny: { unknown_principal: true, insufficient_role: "reviewer" },
+      },
+      {
+        kind: "term",
+        reason: "policy_denied: unknown_principal,insufficient_role",
+      },
+    ],
+    [
+      "policy_denied with empty deny block → term with placeholder summary",
+      { kind: "policy_denied", deny: {} },
+      { kind: "term", reason: "policy_denied: (no deny detail)" },
+    ],
+    [
+      "not_now with retry_after_ms → nak carrying the delay hint",
+      { kind: "not_now", detail: "queue full", retry_after_ms: 5000 },
+      { kind: "nak", delayMs: 5000 },
+    ],
+    [
+      "not_now WITHOUT retry_after_ms → nak with NO delayMs key",
+      { kind: "not_now", detail: "queue full" },
+      { kind: "nak" },
+    ],
+    [
+      "compliance_block → term with the documented v1 message",
+      { kind: "compliance_block", detail: "attestation forbids" },
+      { kind: "term", reason: "v1 does not handle compliance_block" },
+    ],
+    [
+      "undefined → defensive ack (failed envelope without a reason is rare; ack-on-unknown beats nak-loop)",
+      undefined,
+      { kind: "ack" },
+    ],
+  ];
+
+  for (const [label, reason, expected] of cases) {
+    test(label, () => {
+      expect(failedReasonToAckDecision(reason)).toEqual(expected);
+    });
+  }
 });

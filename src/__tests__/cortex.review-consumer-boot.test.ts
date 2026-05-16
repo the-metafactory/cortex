@@ -16,11 +16,11 @@
  *   3. One consumer constructor throws → siblings still wire; boot completes;
  *      stderr carries the failing agent id.
  *
- * The pure-instantiation contract is the right boot-test surface because the
- * actual pull-mode `consumer.start({ link })` is deferred to a follow-up PR
- * once the runtime exposes its `NatsLink` (see the boot wiring's
- * "Subscription deferral" docblock in `src/cortex.ts`). Per-envelope
- * behaviour is covered by `src/bus/__tests__/review-consumer.test.ts`.
+ * The boot test exercises instantiation + subscribe. Per-envelope behaviour
+ * is covered by `src/bus/__tests__/review-consumer.test.ts`. The runtime
+ * stub records `subscribePull` invocations so the test asserts the
+ * subscription was actually opened (cortex#290 — fix for the original
+ * subscription-deferral gap flagged by Architect REQUEST-CHANGES on PR-6).
  *
  * Test infrastructure mirrors `cortex.capability-boot.test.ts`:
  *   - `minimalConfig` factory for a NATS-absent BotConfig.
@@ -39,7 +39,12 @@ import { BotConfigSchema, type BotConfig } from "../common/types/config";
 import type { Agent, AgentRuntime } from "../common/types/cortex-config";
 import { startCortex } from "../cortex";
 import type { Envelope } from "../bus/myelin/envelope-validator";
-import type { EnvelopeHandler, MyelinRuntime } from "../bus/myelin/runtime";
+import type {
+  EnvelopeHandler,
+  MyelinRuntime,
+  MyelinSubscribePullOpts,
+} from "../bus/myelin/runtime";
+import type { MyelinSubscriber } from "../bus/myelin/subscriber";
 
 // ---------------------------------------------------------------------------
 // Test helpers — mirror cortex.capability-boot.test.ts so reviewers see one
@@ -65,15 +70,26 @@ function minimalConfig(overrides: Partial<Record<string, unknown>> = {}): BotCon
 interface RecordingRuntime extends MyelinRuntime {
   onEnvelopeHandlers: Set<EnvelopeHandler>;
   published: Envelope[];
+  /**
+   * Captured `subscribePull` invocations. Each call appends the opts so
+   * the boot test can assert (a) one call per code-review-capable agent
+   * and (b) the per-agent durable name + subject pattern. The recorder
+   * returns a synthetic `MyelinSubscriber`-shaped stub whose `ready`
+   * resolves immediately so the await in `consumer.start()` completes
+   * without standing up the JetStream harness.
+   */
+  subscribePullCalls: MyelinSubscribePullOpts[];
 }
 
 function createRecordingRuntime(): RecordingRuntime {
   const onEnvelopeHandlers = new Set<EnvelopeHandler>();
   const published: Envelope[] = [];
+  const subscribePullCalls: MyelinSubscribePullOpts[] = [];
   return {
     enabled: false,
     onEnvelopeHandlers,
     published,
+    subscribePullCalls,
     onEnvelope(handler) {
       onEnvelopeHandlers.add(handler);
       return {
@@ -84,6 +100,19 @@ function createRecordingRuntime(): RecordingRuntime {
     },
     publish: async (envelope: Envelope) => {
       published.push(envelope);
+    },
+    subscribePull: (opts: MyelinSubscribePullOpts): MyelinSubscriber => {
+      subscribePullCalls.push(opts);
+      // Synthetic subscriber stub — the boot path only needs `ready` to
+      // resolve and `stop` to be callable (the shutdown drain awaits it
+      // alongside the in-flight set). Cast through unknown because the
+      // real MyelinSubscriber has private fields we deliberately don't
+      // synthesise; the test surface is the public lifecycle pair.
+      return {
+        pattern: opts.pattern,
+        ready: Promise.resolve(),
+        stop: async () => {},
+      } as unknown as MyelinSubscriber;
     },
     stop: async () => {},
   };
@@ -210,6 +239,29 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
     );
     expect(skipLines.length).toBe(0);
 
+    // cortex#290 fix — subscribePull was invoked once per consumer.
+    // Without this assertion the boot wiring could regress to its
+    // earlier "instantiate but never subscribe" state (the bug
+    // Architect REQUEST-CHANGES flagged). Each call carries the
+    // canonical subject pattern + per-agent durable name from the
+    // boot wiring's design-doc-aligned convention.
+    expect(runtime.subscribePullCalls.length).toBe(2);
+    const patterns = runtime.subscribePullCalls.map((c) => c.pattern);
+    expect(patterns).toEqual([
+      "local.test-op.tasks.code-review.>",
+      "local.test-op.tasks.code-review.>",
+    ]);
+    const durables = runtime.subscribePullCalls.map((c) => c.durable).sort();
+    expect(durables).toEqual([
+      "cortex-review-consumer-test-op-echo",
+      "cortex-review-consumer-test-op-luna",
+    ]);
+    // All calls bind to the same stream — operationally provisioned by
+    // ops tooling; the consumer side only binds, never provisions.
+    for (const call of runtime.subscribePullCalls) {
+      expect(call.stream).toBe("CODE_REVIEW");
+    }
+
     await handle.stop();
     rmSync(tmpAgentsDir, { recursive: true, force: true });
   });
@@ -250,6 +302,12 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
     expect(skipLines[0]!).toContain(
       "0 agents declare code-review capabilities",
     );
+
+    // cortex#290 fix — zero code-review-capable agents must mean zero
+    // subscribePull invocations. Catches a regression where the boot
+    // wiring would subscribe a "default" consumer even with no agents
+    // claiming the capability.
+    expect(runtime.subscribePullCalls.length).toBe(0);
 
     expect(handle).toBeDefined();
     await handle.stop();
@@ -316,6 +374,16 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
       (l) => l.includes("review consumer ready") && l.includes("agent=echo"),
     );
     expect(echoReadyLine).toBeUndefined();
+
+    // cortex#290 fix — exactly ONE subscribePull call (luna only). Echo
+    // threw before reaching `consumer.start()` and therefore must NOT
+    // have left a subscription open. This guards the contract that a
+    // partial-failure boot doesn't leak dangling JetStream consumers
+    // for agents whose init crashed.
+    expect(runtime.subscribePullCalls.length).toBe(1);
+    expect(runtime.subscribePullCalls[0]!.durable).toBe(
+      "cortex-review-consumer-test-op-luna",
+    );
 
     await handle.stop();
     rmSync(tmpAgentsDir, { recursive: true, force: true });

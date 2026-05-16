@@ -16,7 +16,11 @@
 import type { ConnectionOptions, NatsConnection } from "nats";
 import type { BotConfig } from "../../common/types/config";
 import { NatsLink } from "../nats/connection";
-import { MyelinSubscriber } from "./subscriber";
+import {
+  MyelinSubscriber,
+  type EnvelopeErrorHandler,
+  type EnvelopeHandler as SubscriberEnvelopeHandler,
+} from "./subscriber";
 import {
   deriveNatsSubject,
   orgFromConfig,
@@ -84,8 +88,66 @@ export interface MyelinRuntime {
    * `JetStream.publish` (which IS async) without breaking callers.
    */
   publish(envelope: Envelope): Promise<void>;
+  /**
+   * Bind a JetStream pull-consumer subscription via the runtime's
+   * private `NatsLink`. The runtime stays the single owner of the raw
+   * connection lifecycle — callers see a `MyelinSubscriber` handle and
+   * never the bare link.
+   *
+   * Used by `ReviewConsumer.start` (cortex#237 PR-6) and any future
+   * capability-dispatch consumer that needs JetStream pull semantics
+   * (architecture §7.2). Push-mode subscribers continue to flow via
+   * `onEnvelope()` fan-out and don't go through this helper.
+   *
+   * **Returns `null` when the runtime is disabled** (no NATS configured
+   * or connect failed). Callers that need a hard "subscribe or fail"
+   * signal MUST check `runtime.enabled` first or treat the `null` return
+   * as a deliberate no-op (boot wiring's contract: capability-side
+   * features remain dormant when the bus is absent).
+   *
+   * **Optional on the interface** so existing fake-runtime test stubs
+   * (surface-router, slack-adapter, bus-dispatch-listener, …) keep
+   * their byte-identical shapes without an in-bulk update — the
+   * additivity constraint per Architect's cortex#290 review. Callers
+   * that depend on the helper (today: `ReviewConsumer.start`) MUST
+   * treat an undefined property as equivalent to `null` — i.e. "no
+   * pull subscriptions wired" — and stay dormant.
+   */
+  subscribePull?(opts: MyelinSubscribePullOpts): MyelinSubscriber | null;
   /** Best-effort shutdown — drains subscribers, closes the link. */
   stop(): Promise<void>;
+}
+
+/**
+ * Pull-mode subscription parameters surfaced by {@link MyelinRuntime.subscribePull}.
+ *
+ * Mirrors `MyelinSubscriberOptions.pull` + the outer `pattern` / `onEnvelope`
+ * fields but keeps the bare `NatsLink` private to the runtime. Caller
+ * passes the JetStream stream + durable consumer name (the consumer MUST
+ * already exist server-side — `subscribePull` binds, it does NOT
+ * provision); the runtime threads its captured link into
+ * `MyelinSubscriber.start` on the caller's behalf.
+ *
+ * The handler may return an `AckDecision` to drive JetStream ack/nak/term
+ * explicitly (cortex#237 PR-1 — the four-way nak taxonomy the review
+ * consumer relies on). A void / undefined return remains the legacy
+ * resolve-as-ack default.
+ */
+export interface MyelinSubscribePullOpts {
+  /** Subject pattern, e.g. `local.{org}.tasks.code-review.>`. */
+  pattern: string;
+  /** JetStream stream name carrying the bound consumer. */
+  stream: string;
+  /** Durable consumer name. The consumer MUST exist server-side. */
+  durable: string;
+  /** Per-envelope handler. May return an AckDecision (see subscriber.ts). */
+  onEnvelope: SubscriberEnvelopeHandler;
+  /** Optional sink for handler throws. */
+  onError?: EnvelopeErrorHandler;
+  /** Optional consume() tuning forwarded to the subscriber. */
+  maxMessages?: number;
+  expiresMs?: number;
+  thresholdMessages?: number;
 }
 
 /**
@@ -241,6 +303,14 @@ export async function startMyelinRuntime(
   // eslint-disable-next-line @typescript-eslint/no-empty-function, @typescript-eslint/require-await
   const publishDisabled = async (_envelope: Envelope) => {};
 
+  // Subscribe-pull no-op for the disabled paths (no NATS configured,
+  // connect failed, or subscriber pattern list empty). Returning `null`
+  // is the documented signal — capability-side features such as the
+  // review consumer treat it as "bus dormant, stay dormant" and skip
+  // their pull subscription without aborting boot. See
+  // `MyelinRuntime.subscribePull` docblock.
+  const subscribePullDisabled = (_opts: MyelinSubscribePullOpts): null => null;
+
   // eslint-disable-next-line @typescript-eslint/no-empty-function, @typescript-eslint/require-await
   const stopDisabled = async () => {};
 
@@ -249,6 +319,7 @@ export async function startMyelinRuntime(
       enabled: false,
       onEnvelope,
       publish: publishDisabled,
+      subscribePull: subscribePullDisabled,
       stop: stopDisabled,
     };
   }
@@ -296,6 +367,7 @@ export async function startMyelinRuntime(
       enabled: false,
       onEnvelope,
       publish: publishDisabled,
+      subscribePull: subscribePullDisabled,
       stop: stopDisabled,
     };
   }
@@ -325,6 +397,7 @@ export async function startMyelinRuntime(
       enabled: false,
       onEnvelope,
       publish: publishDisabled,
+      subscribePull: subscribePullDisabled,
       stop: stopDisabled,
     };
   }
@@ -372,6 +445,7 @@ export async function startMyelinRuntime(
       enabled: false,
       onEnvelope,
       publish: publishDisabled,
+      subscribePull: subscribePullDisabled,
       stop: stopDisabled,
     };
   }
@@ -503,10 +577,54 @@ export async function startMyelinRuntime(
     }
   };
 
+  // Subscribe-pull helper for the enabled path — wraps
+  // `MyelinSubscriber.start` against the closure-captured `link` so
+  // capability-side consumers (e.g. ReviewConsumer, future
+  // capability-dispatch consumers) can bind to JetStream pull consumers
+  // without seeing the bare link. Each subscriber is tracked on the
+  // local `subscribers[]` array so `stop()` drains it alongside the
+  // runtime's own subscriptions.
+  const subscribePullEnabled = (
+    opts: MyelinSubscribePullOpts,
+  ): MyelinSubscriber => {
+    if (stopped) {
+      // Post-stop subscribe attempts are a contract violation — the
+      // runtime is no longer servicing new subscriptions. Throw rather
+      // than silently return a dormant subscriber so the operator-
+      // facing call site (consumer.start) surfaces the misuse via its
+      // own try/catch + stderr path.
+      throw new Error(
+        "myelin-runtime: subscribePull called after stop()",
+      );
+    }
+    const pull: {
+      stream: string;
+      durable: string;
+      maxMessages?: number;
+      expiresMs?: number;
+      thresholdMessages?: number;
+    } = { stream: opts.stream, durable: opts.durable };
+    if (opts.maxMessages !== undefined) pull.maxMessages = opts.maxMessages;
+    if (opts.expiresMs !== undefined) pull.expiresMs = opts.expiresMs;
+    if (opts.thresholdMessages !== undefined) {
+      pull.thresholdMessages = opts.thresholdMessages;
+    }
+    const sub = MyelinSubscriber.start(link, {
+      pattern: opts.pattern,
+      mode: "pull",
+      pull,
+      onEnvelope: opts.onEnvelope,
+      ...(opts.onError !== undefined && { onError: opts.onError }),
+    });
+    subscribers.push(sub);
+    return sub;
+  };
+
   return {
     enabled: true,
     onEnvelope,
     publish: publishEnabled,
+    subscribePull: subscribePullEnabled,
     stop: async () => {
       if (stopped) return;
       stopped = true;

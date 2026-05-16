@@ -66,9 +66,9 @@
 
 import type { ConsumerMessages, JsMsg } from "nats";
 import type { MyelinRuntime } from "./myelin/runtime";
-import type { NatsLink } from "./nats/connection";
 import type { Envelope } from "./myelin/envelope-validator";
-import { MyelinSubscriber, type AckDecision } from "./myelin/subscriber";
+import type { MyelinSubscriber } from "./myelin/subscriber";
+import type { AckDecision } from "./myelin/subscriber";
 import {
   createReviewTaskFailedEvent,
   type DispatchTaskFailedReason,
@@ -178,10 +178,16 @@ export interface ReviewConsumerOpts {
  * Options for {@link ReviewConsumer.start} when binding to a real
  * JetStream pull consumer. The consumer MUST already exist on the
  * server (this primitive binds, it does NOT provision).
+ *
+ * The bare `NatsLink` is intentionally NOT exposed here — the consumer
+ * routes through {@link MyelinRuntime.subscribePull}, which captures
+ * the runtime's private link and threads it into a `MyelinSubscriber`
+ * on the caller's behalf. Inverted from the original PR-6 wiring (which
+ * required the boot path to plumb a link accessor) per the cortex#290
+ * Architect review: the runtime owns connection lifecycle; consumers
+ * declare what they want subscribed and the runtime threads the link.
  */
 export interface ReviewConsumerStartOpts {
-  /** The opened NATS link. */
-  link: NatsLink;
   /** Subject pattern, e.g. `local.{org}.tasks.code-review.>`. */
   pattern: string;
   /** JetStream stream name carrying the bound consumer. */
@@ -284,25 +290,49 @@ export class ReviewConsumer {
         `review-consumer: already started for agent="${this.agent.id}"`,
       );
     }
-    const pull: {
+    const subscribePullOpts: {
+      pattern: string;
       stream: string;
       durable: string;
+      onEnvelope: (envelope: Envelope, subject: string) => Promise<AckDecision>;
       maxMessages?: number;
       expiresMs?: number;
       thresholdMessages?: number;
-    } = { stream: opts.stream, durable: opts.durable };
-    if (opts.maxMessages !== undefined) pull.maxMessages = opts.maxMessages;
-    if (opts.expiresMs !== undefined) pull.expiresMs = opts.expiresMs;
-    if (opts.thresholdMessages !== undefined) {
-      pull.thresholdMessages = opts.thresholdMessages;
-    }
-    this.subscriber = MyelinSubscriber.start(opts.link, {
+    } = {
       pattern: opts.pattern,
-      mode: "pull",
-      pull,
+      stream: opts.stream,
+      durable: opts.durable,
       onEnvelope: async (envelope, subject) =>
         this.processEnvelope(envelope, subject, null),
-    });
+    };
+    if (opts.maxMessages !== undefined) {
+      subscribePullOpts.maxMessages = opts.maxMessages;
+    }
+    if (opts.expiresMs !== undefined) {
+      subscribePullOpts.expiresMs = opts.expiresMs;
+    }
+    if (opts.thresholdMessages !== undefined) {
+      subscribePullOpts.thresholdMessages = opts.thresholdMessages;
+    }
+    // `subscribePull` is OPTIONAL on the MyelinRuntime interface (the
+    // additivity constraint per Architect cortex#290 review — legacy
+    // fake runtime stubs across the test tree must continue to satisfy
+    // `MyelinRuntime` byte-identically). Treat an undefined property
+    // the same as a `null` return: the consumer stays dormant.
+    const sub = this.runtime.subscribePull
+      ? this.runtime.subscribePull(subscribePullOpts)
+      : null;
+    if (sub === null) {
+      // Runtime is disabled (no NATS configured / connect failed /
+      // empty subject list) OR the runtime doesn't ship the optional
+      // subscribePull helper. Either way this is a structurally-valid
+      // no-op for capability-side features — the consumer stays
+      // dormant and shutdown drain works against the empty `inFlight`
+      // set. The boot path logs the disabled-runtime case once at
+      // startup; we don't double-log here.
+      return { agentId: this.agent.id, flavors: this.flavors };
+    }
+    this.subscriber = sub;
     await this.subscriber.ready;
     return { agentId: this.agent.id, flavors: this.flavors };
   }

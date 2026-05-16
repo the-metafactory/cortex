@@ -528,4 +528,77 @@ describe("MyelinSubscriber — pull mode", () => {
     await pushH.link.close();
     await pullH.cleanup();
   });
+
+  // ---------------------------------------------------------------------------
+  // 8) AckDecision return channel — cortex#290 coverage-gap (Architect Finding 2b)
+  //
+  // PR-1's subscriber.ts:319-339 added the `applyAckDecision` glue so a
+  // handler may return `{ kind: "ack" | "nak" | "term", ... }` and have
+  // those discriminators flow through to JetStream's `JsMsg` control
+  // surface. The tests in §3-§5 above cover the implicit paths
+  // (resolve = ack, throw = nak, invalid envelope = term). These three
+  // tests pin the EXPLICIT return-channel paths the ReviewConsumer
+  // depends on (cortex#237 PR-6 §7 nak taxonomy).
+  // ---------------------------------------------------------------------------
+  test("AckDecision: handler returns { kind: 'ack' } → JsMsg.ack called (no nak/term)", async () => {
+    const h = await makePullLink();
+    const sub = MyelinSubscriber.start(h.link, {
+      pattern: "local.acme.>",
+      mode: "pull",
+      pull: { stream: "ACME_TASKS", durable: "myelin-test-consumer" },
+      onEnvelope: async () => ({ kind: "ack" } as const),
+    });
+    await sub.ready;
+    const m = h.deliver("local.acme.deploy", bytes(validEnvelope));
+    await flushMicrotasks();
+    expect(m.ack).toHaveBeenCalledTimes(1);
+    expect(m.nak).not.toHaveBeenCalled();
+    expect(m.term).not.toHaveBeenCalled();
+    await sub.stop();
+    await h.cleanup();
+  });
+
+  test("AckDecision: handler returns { kind: 'nak', delayMs: 1500 } → JsMsg.nak called with 1500", async () => {
+    const h = await makePullLink();
+    const sub = MyelinSubscriber.start(h.link, {
+      pattern: "local.acme.>",
+      mode: "pull",
+      pull: { stream: "ACME_TASKS", durable: "myelin-test-consumer" },
+      onEnvelope: async () => ({ kind: "nak", delayMs: 1500 } as const),
+    });
+    await sub.ready;
+    const m = h.deliver("local.acme.deploy", bytes(validEnvelope));
+    await flushMicrotasks();
+    // The delay hint is the load-bearing assertion — pilot's `not_now`
+    // path threads `retry_after_ms` through the AckDecision return
+    // channel; if the delayMs is dropped on the floor here, JetStream
+    // redelivers on its server-paced default and pilot's exit-code
+    // mapping silently desyncs from the operator-visible delay.
+    expect(m.nak).toHaveBeenCalledTimes(1);
+    expect(m.nak.mock.calls[0]).toEqual([1500]);
+    expect(m.ack).not.toHaveBeenCalled();
+    expect(m.term).not.toHaveBeenCalled();
+    await sub.stop();
+    await h.cleanup();
+  });
+
+  test("AckDecision: handler returns { kind: 'term', reason: 'no capability match' } → JsMsg.term called with that reason", async () => {
+    const h = await makePullLink();
+    const sub = MyelinSubscriber.start(h.link, {
+      pattern: "local.acme.>",
+      mode: "pull",
+      pull: { stream: "ACME_TASKS", durable: "myelin-test-consumer" },
+      onEnvelope: async () =>
+        ({ kind: "term", reason: "no capability match" } as const),
+    });
+    await sub.ready;
+    const m = h.deliver("local.acme.deploy", bytes(validEnvelope));
+    await flushMicrotasks();
+    expect(m.term).toHaveBeenCalledTimes(1);
+    expect(m.term.mock.calls[0]).toEqual(["no capability match"]);
+    expect(m.ack).not.toHaveBeenCalled();
+    expect(m.nak).not.toHaveBeenCalled();
+    await sub.stop();
+    await h.cleanup();
+  });
 });
