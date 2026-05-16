@@ -7,6 +7,7 @@
  */
 
 import { z } from "zod/v4";
+import { NKEY_PUBKEY_REGEX } from "./nkey";
 
 // =============================================================================
 // Helper: typed empty default for nested Zod object schemas.
@@ -599,7 +600,7 @@ export const BotConfigSchema = z.object({
     identity: z.object({
       seedPath: z.string().min(1),
       publicKey: z.string().regex(
-        /^U[A-Z2-7]{55}$/,
+        NKEY_PUBKEY_REGEX,
         "publicKey must be a 56-char NKey user identifier (U + 55 base32 chars)",
       ),
     }).optional(),

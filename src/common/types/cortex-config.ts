@@ -42,6 +42,7 @@ import {
   NetworkFileSchema,
   RoleSchema,
 } from "./config";
+import { NKEY_PUBKEY_REGEX } from "./nkey";
 import { StackConfigSchema } from "./stack";
 
 // =============================================================================
@@ -530,7 +531,7 @@ export const AgentSchema = z.object({
    * this off `AgentSchema` onto `policy.principals[]`.
    */
   nkey_pub: z.string().regex(
-    /^U[A-Z2-7]{55}$/,
+    NKEY_PUBKEY_REGEX,
     "agent.nkey_pub must be a base32 NKey public key (U-prefixed, 56 chars total)",
   ).optional(),
   /**
@@ -800,7 +801,7 @@ export const NatsIdentitySchema = z.object({
    * Reference: `nkeys` package — `Codec.encode(NKeysPrefixByte.User, …)`.
    */
   publicKey: z.string().regex(
-    /^U[A-Z2-7]{55}$/,
+    NKEY_PUBKEY_REGEX,
     "publicKey must be a 56-char NKey user identifier (U + 55 base32 chars)",
   ),
 });
@@ -1040,7 +1041,7 @@ export const PolicyPrincipalSchema = z.object({
    * base32).
    */
   nkey_pub: z.string().regex(
-    /^U[A-Z2-7]{55}$/,
+    NKEY_PUBKEY_REGEX,
     "principal.nkey_pub must be a base32 NKey public key (U-prefixed, 56 chars total)",
   ).optional(),
   /**
@@ -1151,7 +1152,7 @@ export const PolicyFederatedPeerSchema = z.object({
    * peer's pubkey directly into cortex.yaml.
    */
   operator_pubkey: z.string().regex(
-    /^U[A-Z2-7]{55}$/,
+    NKEY_PUBKEY_REGEX,
     "peer.operator_pubkey must be a base32 NKey public key (U-prefixed, 56 chars total)",
   ),
 });

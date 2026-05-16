@@ -40,6 +40,7 @@
  */
 
 import { z } from "zod/v4";
+import { NKEY_PUBKEY_REGEX } from "./nkey";
 
 // =============================================================================
 // Schema
@@ -102,7 +103,7 @@ export const StackConfigSchema = z.object({
    * fails fast — the format check predates the use-site, deliberately.
    */
   nkey_pub: z.string().regex(
-    /^U[A-Z2-7]{55}$/,
+    NKEY_PUBKEY_REGEX,
     "stack.nkey_pub must be a base32 NKey public key (U-prefixed, 56 chars total)",
   ).optional(),
   /**
