@@ -44,6 +44,10 @@ import { DID_RE } from "@the-metafactory/myelin/identity";
 import { createSurfaceRouter, type SurfaceRouter } from "./bus/surface-router";
 import { createNetworkResolver } from "./bus/network-resolver";
 import type { SystemEventSource } from "./bus/system-events";
+import {
+  publishCapabilityRegistry,
+  type CapabilityRegistryEntry,
+} from "./bus";
 
 import { DiscordAdapter } from "./adapters/discord";
 import { createRenderer, type Renderer } from "./renderers";
@@ -491,6 +495,99 @@ export async function startCortex(
       dataResidency: config.agent.dataResidency,
     }),
   };
+
+  // cortex#237 PR-7 — capability-registry boot wiring.
+  //
+  // Per `docs/design-capability-dispatch-review-consumer.md` §3.4: for each
+  // agent in `mergedAgents` with at least one `runtime.capabilities[]` entry,
+  // publish one `agents.capabilities.registered` envelope so the rest of the
+  // network (today: pilot's deferred bucket reader per §13.1; tomorrow: the
+  // operator-side dashboard) can discover what each agent claims to do.
+  //
+  // **Ordering rationale.** This block runs AFTER:
+  //   - the runtime is constructed (line ~395) so `runtime.publish` is wired
+  //     (no-op stub when NATS is absent; production runtime when present),
+  //   - `mergedAgents` is built (line ~439) so we know who claims what,
+  //   - `systemEventSource` is built (immediately above) so we share the same
+  //     `{org}.cortex.{instance}` envelope source with `system.*` emissions.
+  //
+  // It runs BEFORE the bus-dispatch-listener + surface-router start so the
+  // registry envelope is on the wire before any dispatch envelope can arrive
+  // — peers that gate on "is the registration there yet?" (pilot Phase B.4,
+  // deferred per §13.1) see it before the first `tasks.code-review.*` is
+  // accepted. Even though pilot's reader doesn't exist yet, putting the
+  // emission first keeps the future ordering contract obvious.
+  //
+  // **Error handling (per task spec + CLAUDE.md "no empty catch blocks").**
+  // `publishCapabilityRegistry` itself does NOT catch publish errors — its
+  // doc explicitly says they propagate to the caller. So we wrap the
+  // injected `publish` here and trap per-envelope failures with a
+  // `process.stderr.write` log + a non-throw resolve. Net effect: one bad
+  // publish doesn't abort the rest of the loop OR abort boot.
+  //
+  // **Idempotency.** Re-invoking `publishCapabilityRegistry` with the same
+  // entries re-emits envelopes with fresh ids/timestamps; the bucket
+  // consumer keys on the payload `agent_id` and overwrites — see the
+  // publisher's idempotency doc. So this boot-time call is safe under
+  // restart-and-replay; we do NOT wire a re-publish into the BotConfig
+  // hot-reload path because (a) capabilities live on `Agent`, not
+  // `BotConfig`, and (b) cortex.ts does not currently run an agents.d/
+  // fragment watcher at the daemon level — when one is wired, the
+  // re-publish belongs in its callback, not the BotConfig one.
+  //
+  // **Scope (per §10.1 PR-7).** Publish-only. No subscriber wiring here —
+  // the consumer is operator-dashboard side and lands in a future PR.
+  const capabilityEntries: CapabilityRegistryEntry[] = mergedAgents
+    .filter((a): a is Agent & { runtime: { capabilities: readonly string[] } } =>
+      (a.runtime?.capabilities.length ?? 0) > 0,
+    )
+    .map((a) => ({
+      agentId: a.id,
+      capabilities: a.runtime.capabilities,
+    }));
+  if (capabilityEntries.length > 0) {
+    const wrappedPublish = async (env: Parameters<typeof runtime.publish>[0]): Promise<void> => {
+      try {
+        await runtime.publish(env);
+      } catch (err) {
+        // Per CLAUDE.md "no empty catch blocks": log every error. We use
+        // stderr (not the system-events pipeline) because the system-events
+        // emitter shares the same runtime we just failed to publish on —
+        // routing the error through it would be a credible re-failure loop.
+        // Continue without rethrowing so sibling envelopes still emit.
+        process.stderr.write(
+          `cortex: capability-registry publish failed for ${env.type} ` +
+            `(agent_id=${(env.payload as { agent_id?: string }).agent_id ?? "?"}): ` +
+            `${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
+    };
+    try {
+      const published = await publishCapabilityRegistry({
+        source: systemEventSource,
+        entries: capabilityEntries,
+        publish: wrappedPublish,
+      });
+      console.log(
+        `cortex: published ${published.length} capability registration(s) ` +
+          `for ${capabilityEntries.length} agent(s)`,
+      );
+    } catch (err) {
+      // Defensive — `publishCapabilityRegistry` is pure orchestration and
+      // shouldn't throw once `wrappedPublish` traps per-envelope failures,
+      // but a `clock()` or `buildBaseEnvelope` throw would still surface
+      // here. Boot continues; the bucket simply stays unpopulated until
+      // the next restart.
+      console.error(
+        "cortex: capability-registry boot wiring failed (non-fatal — boot continues):",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  } else {
+    console.log(
+      "cortex: capability-registry skipped — 0 agents declare runtime.capabilities[]",
+    );
+  }
 
   // IAW Phase B.2a (refs cortex#114) — inbound peer-dispatch listener.
   // Subscribes via the runtime's onEnvelope fan-out, filters for
