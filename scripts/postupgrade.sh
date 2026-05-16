@@ -41,8 +41,16 @@ if [ "$(uname)" = "Darwin" ]; then
   launchctl load "${LAUNCH_DIR}/ai.meta-factory.cortex.relay.plist" 2>/dev/null || true
   echo "  ✓ Relay daemon started"
 
-  launchctl load "${LAUNCH_DIR}/ai.meta-factory.cortex.bot.plist" 2>/dev/null || true
-  echo "  ✓ Bot daemon started"
+  launchctl load "${LAUNCH_DIR}/ai.meta-factory.cortex.meta-factory.plist" 2>/dev/null || true
+  echo "  ✓ Meta-factory daemon started"
+
+  # cortex#244: work stack is optional. Only load if `plist-render.sh`
+  # actually rendered it (gated on cortex.work.yaml existence). Same
+  # `|| true` non-fatal pattern as the others.
+  if [ -f "${LAUNCH_DIR}/ai.meta-factory.cortex.work.plist" ]; then
+    launchctl load "${LAUNCH_DIR}/ai.meta-factory.cortex.work.plist" 2>/dev/null || true
+    echo "  ✓ Work daemon started"
+  fi
 fi
 
 echo "  ✓ Cortex upgrade complete"

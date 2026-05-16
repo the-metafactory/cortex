@@ -91,17 +91,34 @@ render_cortex_plists() {
     echo "  ✓ Relay plist rendered → ${relay_dst}"
   fi
 
-  # Bot plist
-  local bot_src="${cortex_dir}/src/services/ai.meta-factory.cortex.bot.plist"
-  local bot_dst="${launch_dir}/ai.meta-factory.cortex.bot.plist"
+  # Meta-factory plist (renamed from cortex.bot — cortex#251)
+  local mf_src="${cortex_dir}/src/services/ai.meta-factory.cortex.meta-factory.plist"
+  local mf_dst="${launch_dir}/ai.meta-factory.cortex.meta-factory.plist"
   local agent_name
   agent_name="$(extract_agent_name "${config_dir}/cortex.yaml")" || return 1
-  if [ -f "${bot_src}" ]; then
+  if [ -f "${mf_src}" ]; then
     sed -e "s|__CORTEX_DIR__|${cortex_dir}|g" \
         -e "s|__BUN_PATH__|${bun_path}|g" \
         -e "s|__HOME__|${HOME}|g" \
         -e "s|__AGENT_NAME__|${agent_name}|g" \
-        "${bot_src}" > "${bot_dst}"
-    echo "  ✓ Bot plist rendered → ${bot_dst} (agent=${agent_name})"
+        "${mf_src}" > "${mf_dst}"
+    echo "  ✓ Meta-factory plist rendered → ${mf_dst} (agent=${agent_name})"
+  fi
+
+  # Work plist (cortex#244 — second stack, only rendered when the
+  # operator has scaffolded the work-stack config). Gating on the
+  # config file's existence avoids a launchd respawn loop if the
+  # plist points at a non-existent --config target.
+  local work_src="${cortex_dir}/src/services/ai.meta-factory.cortex.work.plist"
+  local work_dst="${launch_dir}/ai.meta-factory.cortex.work.plist"
+  local work_yaml="${config_dir}/cortex.work.yaml"
+  if [ -f "${work_src}" ] && [ -f "${work_yaml}" ]; then
+    sed -e "s|__CORTEX_DIR__|${cortex_dir}|g" \
+        -e "s|__BUN_PATH__|${bun_path}|g" \
+        -e "s|__HOME__|${HOME}|g" \
+        "${work_src}" > "${work_dst}"
+    echo "  ✓ Work plist rendered → ${work_dst}"
+  elif [ -f "${work_src}" ]; then
+    echo "  ⊘ Work plist skipped — ${work_yaml} not present (operator has not scaffolded the second stack)"
   fi
 }

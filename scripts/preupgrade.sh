@@ -60,13 +60,18 @@ if [ "$(uname)" = "Darwin" ]; then
     fi
   fi
 
-  # MIG-7.8 — legacy launchd plist cutover. The `com.grove.bot` and
-  # `com.grove.relay` plists may linger at ~/Library/LaunchAgents/ if
-  # grove's own uninstall lifecycle didn't run (operator removed the repo
-  # manually, or `arc uninstall Grove` was skipped). Unload + remove them
-  # so the new `ai.meta-factory.cortex.*` plists own launchd cleanly.
+  # MIG-7.8 + cortex#251 — legacy launchd plist cutover.
+  #
+  # - `com.grove.bot` / `com.grove.relay`: grove-v2 era plists that may
+  #   linger if grove's uninstall lifecycle didn't run.
+  # - `ai.meta-factory.cortex.bot`: pre-cortex#251 name for the
+  #   metafactory dev stack plist (renamed to `.meta-factory` to make
+  #   the identity legible alongside the `andreas/work` sibling). First
+  #   `arc upgrade Cortex` after merge unloads + removes the stale
+  #   `.bot` plist so the renamed one owns launchd cleanly.
+  #
   # Idempotent: short-circuits when the legacy plist is absent.
-  for legacy_label in com.grove.bot com.grove.relay; do
+  for legacy_label in com.grove.bot com.grove.relay ai.meta-factory.cortex.bot; do
     legacy_plist="${LAUNCH_DIR}/${legacy_label}.plist"
     if [ ! -e "${legacy_plist}" ]; then
       continue
@@ -82,9 +87,19 @@ if [ "$(uname)" = "Darwin" ]; then
     echo "  ✓ Removed legacy ${legacy_plist}"
   done
 
-  if launchctl list 2>/dev/null | grep -q "ai.meta-factory.cortex.bot"; then
-    launchctl unload "${LAUNCH_DIR}/ai.meta-factory.cortex.bot.plist" 2>/dev/null || true
-    echo "  ✓ Bot daemon stopped"
+  # cortex#251: bot plist renamed to meta-factory. Unload the new
+  # label here; the old-label sweep one section above this picks up
+  # any lingering pre-rename plists on first upgrade after merge.
+  if launchctl list 2>/dev/null | grep -q "ai.meta-factory.cortex.meta-factory"; then
+    launchctl unload "${LAUNCH_DIR}/ai.meta-factory.cortex.meta-factory.plist" 2>/dev/null || true
+    echo "  ✓ Meta-factory daemon stopped"
+  fi
+
+  # cortex#244: optional work stack — only unload if the operator
+  # has it.
+  if launchctl list 2>/dev/null | grep -q "ai.meta-factory.cortex.work"; then
+    launchctl unload "${LAUNCH_DIR}/ai.meta-factory.cortex.work.plist" 2>/dev/null || true
+    echo "  ✓ Work daemon stopped"
   fi
 
   if launchctl list 2>/dev/null | grep -q "ai.meta-factory.cortex.relay"; then

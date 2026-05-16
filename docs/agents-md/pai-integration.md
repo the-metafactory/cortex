@@ -18,7 +18,7 @@ CORTEX_CHANNEL=<name> CORTEX_AGENT_NAME=<display> CORTEX_AGENT_ID=<id> claude
 
 During the MIG-7 cutover window the legacy `GROVE_*` env vars remain accepted by the EventLogger for backward compatibility; new sessions should prefer the `CORTEX_*` names. The deprecation shim retires at MIG-8.
 
-**Event pipeline:** CC hooks → `~/.claude/events/raw/` → cortex-relay (policy filter) → `~/.claude/events/published/` → cortex-bot → bus → dashboard API → `cortex.meta-factory.ai`
+**Event pipeline:** CC hooks → `~/.claude/events/raw/` → cortex-relay (policy filter) → `~/.claude/events/published/` → cortex daemon (`ai.meta-factory.cortex.meta-factory` and/or `.work` plist) → bus → dashboard API → `cortex.meta-factory.ai`
 
 **Pre-configured wrapper:** `cldyo-live` (at `~/.local/bin/`) starts an instrumented Opus session. Plain `cldyo` stays dark (no events). Use `cldyo-live` when you want your work visible on the dashboard.
 
