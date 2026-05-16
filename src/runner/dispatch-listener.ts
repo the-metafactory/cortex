@@ -281,15 +281,13 @@ export function createDispatchListener(
     // false })` so surface-router timeouts end the CC process eagerly
     // rather than waiting for cc-session's internal timer to fire.
     render: (envelope, _signal, subject) =>
-      handleDispatchEnvelope(
-        envelope,
-        subject,
+      handleDispatchEnvelope(envelope, subject, {
         runtime,
         source,
         ccSessionFactory,
         policyEngine,
-        opts.stack,
-      ),
+        stack: opts.stack,
+      }),
   };
 
   return {
@@ -433,15 +431,25 @@ function buildDispatchRequest(
  * worth the savings for A.1b. Shared infrastructure (the CC factory)
  * is threaded through via constructor opts.
  */
+/**
+ * Per-dispatch wiring grouped into one shape so the handler signature
+ * stays narrow (cortex#276 cycle 3 — Sage Maintainability suggestion).
+ * Mutates nothing — pure dependency injection.
+ */
+interface DispatchHandlerContext {
+  runtime: MyelinRuntime;
+  source: SystemEventSource;
+  ccSessionFactory: CCSessionFactory | undefined;
+  policyEngine: PolicyEngine | undefined;
+  stack: string | undefined;
+}
+
 async function handleDispatchEnvelope(
   envelope: Envelope,
   subject: string | undefined,
-  runtime: MyelinRuntime,
-  source: SystemEventSource,
-  ccSessionFactory: CCSessionFactory | undefined,
-  policyEngine: PolicyEngine | undefined,
-  stack: string | undefined,
+  ctx: DispatchHandlerContext,
 ): Promise<void> {
+  const { runtime, source, ccSessionFactory, policyEngine, stack } = ctx;
   const payload = parsePayload(envelope);
   if (!payload) {
     console.error(
