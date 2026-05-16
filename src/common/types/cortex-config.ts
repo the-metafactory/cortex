@@ -527,7 +527,12 @@ export const AgentSchema = z.object({
     /^U[A-Z2-7]{55}$/,
     "agent.nkey_pub must be a base32 NKey public key (U-prefixed, 56 chars total)",
   ).optional(),
-  /** Per-platform presence blocks — at least one is required. */
+  /**
+   * Per-platform presence blocks. Empty object (`presence: {}`) is
+   * valid — it declares a headless agent (cortex#245). The field
+   * itself is still required, so a missing or mistyped `presence:`
+   * key is rejected by Zod's required-field check.
+   */
   presence: PresenceSchema,
   /**
    * F-2 (cortex#60 §5) — substrate harness + dispatch mode. Optional in v1:
@@ -542,11 +547,23 @@ export const AgentSchema = z.object({
 // platform presence). A valid headless agent declares `presence: {}` —
 // it still runs CC sessions via the dispatch-listener, emits
 // envelopes onto the bus, and surfaces on the dashboard, but has no
-// human-facing surface. The empty `presence` is intentional: removing
-// the refine costs us a friendly error for operator typos
-// (`presnce:` instead of `presence:` no longer fails here), but each
-// individual platform schema still enforces its own structural
-// requirements when an operator DOES declare a platform block.
+// human-facing surface.
+//
+// What changes vs. the pre-#245 schema:
+//   - `presence: {}`         was rejected, now ACCEPTED (headless).
+//   - `presence:` missing    was rejected, still REJECTED
+//                            (the `presence` field on AgentSchema is
+//                             required, so an absent key fails at the
+//                             field-presence layer, not the refine).
+//   - `presnce:` (typo)      was rejected (because the agent ended up
+//                            with no `presence` key at all), still
+//                            REJECTED for the same reason.
+//   - Platform sub-blocks    each enforce their own structural
+//                            requirements (token/guildId/...) when
+//                            an operator DOES declare a platform.
+//
+// Net effect: operator-friendliness is preserved for the typo case;
+// the relaxation is narrowly scoped to "explicit empty object."
 
 export type Agent = z.infer<typeof AgentSchema>;
 
