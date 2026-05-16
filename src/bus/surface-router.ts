@@ -587,7 +587,18 @@ function emitAccessFiltered(
     // Fire-and-forget: runtime.publish is async but its contract is that it
     // never throws (errors are logged + swallowed internally). The floating
     // Promise resolves cleanly when the next event-loop tick runs.
-    void runtime.publish(env);
+    //
+    // cortex#137 — defensive .catch() so a regression of the
+    // "never throws" contract (refactor, new pluggable transport,
+    // unhandled async path) surfaces an operator-visible signal
+    // instead of silently dropping the audit envelope. Goes to
+    // stderr directly rather than another bus publish so a broken
+    // runtime can't swallow the alert about itself.
+    runtime.publish(env).catch((publishErr: unknown) => {
+      process.stderr.write(
+        `[surface-router] failed to emit system.access.filtered audit envelope: ${publishErr instanceof Error ? publishErr.message : String(publishErr)}\n`,
+      );
+    });
   } catch (err) {
     // Defensive: createSystemAccessFilteredEvent shouldn't throw on
     // schema-valid inputs, but a future change could surface a synchronous
@@ -832,7 +843,17 @@ function emitFederationDenied(
       networkId: decision.networkId,
       reason,
     });
-    void runtime.publish(env);
+    // cortex#137 — defensive .catch() so a regression of the
+    // runtime.publish "never throws" contract surfaces an
+    // operator-visible signal instead of dropping the federation
+    // audit envelope silently. Same pattern as
+    // `emitAccessFiltered` above. Direct stderr — a broken
+    // runtime can't swallow alerts about itself.
+    runtime.publish(env).catch((publishErr: unknown) => {
+      process.stderr.write(
+        `[surface-router] failed to emit system.access.federation_denied audit envelope: ${publishErr instanceof Error ? publishErr.message : String(publishErr)}\n`,
+      );
+    });
   } catch (err) {
     // Defensive — buildBaseEnvelope shouldn't throw on schema-valid
     // inputs, but if a future refactor makes it synchronous-throwing

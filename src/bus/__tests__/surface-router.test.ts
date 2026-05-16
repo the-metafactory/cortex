@@ -1945,3 +1945,59 @@ describe("createSurfaceRouter — D.2 federation gating end-to-end", () => {
     expect(published[0]!.payload.principal_id).toBe("unknown");
   });
 });
+
+// ---------------------------------------------------------------------------
+// cortex#137 — defensive .catch() on emitAccessFiltered runtime.publish
+// ---------------------------------------------------------------------------
+
+describe("emitAccessFiltered — defensive .catch on publish failure (cortex#137)", () => {
+  test("a rejecting runtime.publish surfaces stderr instead of unhandled rejection", async () => {
+    // Build a runtime whose publish() REJECTS — simulates a future
+    // regression of the "never throws" contract on MyelinRuntime.
+    const rejectingRuntime: MyelinRuntime = {
+      enabled: true,
+      onEnvelope: () => ({ unregister: () => {} }),
+      publish: async () => { throw new Error("simulated publish failure"); },
+      stop: async () => {},
+    };
+    // Capture stderr writes.
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    const captured: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (process.stderr as { write: (chunk: unknown) => boolean }).write = (chunk) => {
+      captured.push(typeof chunk === "string" ? chunk : String(chunk));
+      return true;
+    };
+    try {
+      const router = createSurfaceRouter(rejectingRuntime, {
+        systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+      });
+      const a = recordingAdapter({
+        id: "dashboard",
+        subjects: [">"],
+        visibility: { hide_residency_outside: ["CH", "DE"] },
+      });
+      router.register(a.adapter);
+      await router.dispatch(
+        makeEnvelope({
+          sovereignty: {
+            classification: "federated", data_residency: "US", max_hop: 1,
+            frontier_ok: true, model_class: "any",
+          },
+        }),
+        "federated.metafactory.x.y.z",
+      );
+      // Yield so the catch fires.
+      await new Promise((r) => setTimeout(r, 0));
+      // Adapter was filtered (no render).
+      expect(a.calls).toHaveLength(0);
+      // Stderr got the audit-failure alert — operator-visible signal
+      // instead of silent drop.
+      const alert = captured.find((c) => c.includes("system.access.filtered"));
+      expect(alert).toBeDefined();
+      expect(alert).toContain("simulated publish failure");
+    } finally {
+      (process.stderr as { write: typeof originalWrite }).write = originalWrite;
+    }
+  });
+});
