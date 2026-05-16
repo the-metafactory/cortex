@@ -542,6 +542,53 @@ describe("SlackAdapter — sendProgress + createThread + notifyOperator", () => 
     expect(target.threadId).toBe("1700000000.999999");
   });
 
+  test("createThread returns threadId undefined when no ts is available (Echo r2)", async () => {
+    // Echo cortex#233 round-2: the previous fallback chain ended in
+    // `msg.channelId`, which is a `C...`/`G...` id, not a `thread_ts`
+    // (`1700000000.123456`). `chat.postMessage` silently treated the
+    // channel id as "no thread" — bug masked. Lock in the new
+    // behaviour: if no legitimate ts source is available, return
+    // `threadId: undefined` and let the caller post top-level.
+    const { adapter } = makeAdapter();
+    const msg: InboundMessage = {
+      platform: "slack",
+      instanceId: "slack-test",
+      authorId: "U0HUMAN",
+      authorName: "U0HUMAN",
+      content: "no native event attached",
+      channelId: "C0CHAN1",
+      attachments: [],
+      timestamp: new Date(0),
+      // intentionally no _native and no threadId
+    };
+    const target = await adapter.createThread(msg, "ignored-name");
+    expect(target.channelId).toBe("C0CHAN1");
+    expect(target.threadId).toBeUndefined();
+  });
+
+  test("createThread prefers _native.thread_ts over _native.ts", async () => {
+    // If we're already in a thread (`thread_ts` set), new replies stay
+    // in the parent thread rather than spawning a sub-thread under our
+    // own ts. Slack doesn't support nested threads anyway.
+    const { adapter } = makeAdapter();
+    const msg: InboundMessage = {
+      platform: "slack",
+      instanceId: "slack-test",
+      authorId: "U0HUMAN",
+      authorName: "U0HUMAN",
+      content: "reply in existing thread",
+      channelId: "C0CHAN1",
+      attachments: [],
+      timestamp: new Date(0),
+      _native: makeSlackEvent({
+        ts: "1700000000.222222",
+        thread_ts: "1700000000.111111",
+      }),
+    };
+    const target = await adapter.createThread(msg, "ignored");
+    expect(target.threadId).toBe("1700000000.111111");
+  });
+
   test("notifyOperator no-ops when operator.slackId is not configured", async () => {
     const { adapter, state } = makeAdapter();
     await adapter.notifyOperator("ping");

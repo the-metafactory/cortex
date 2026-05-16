@@ -249,16 +249,26 @@ export class SlackAdapter implements PlatformAdapter {
   // eslint-disable-next-line @typescript-eslint/require-await
   async createThread(msg: InboundMessage, _name: string): Promise<ResponseTarget> {
     // Slack threads are implicit: post with `thread_ts` set to the parent
-    // message's ts and the reply lands in that thread. Same pattern as
-    // Mattermost's rootId. The "thread name" parameter is irrelevant on
-    // Slack (no thread titles) — we mirror Mattermost's behaviour of
-    // returning a target keyed on the original message's id.
+    // message's ts and the reply lands in that thread. The "thread name"
+    // parameter is irrelevant on Slack (no thread titles).
+    //
+    // Echo cortex#233 round-2: `thread_ts` is a Slack message timestamp
+    // (`1700000000.123456`), NEVER a channel id (`C...`/`G...`). The
+    // legitimate sources are, in order:
+    //   1. `_native.thread_ts` — message arrived inside a thread
+    //   2. `_native.ts`         — root of a new thread (this message)
+    //   3. `msg.threadId`       — already-translated thread id
+    // If none of these are available we cannot synthesise a thread root;
+    // return `threadId: undefined` so the caller posts top-level. (The
+    // old fallback used `msg.channelId`, which `chat.postMessage`
+    // silently treated as "no thread" — same effect, but masked the
+    // bug.)
     const ev = msg._native as SlackInboundEvent | undefined;
-    const threadTs = ev?.thread_ts ?? ev?.ts ?? msg.threadId ?? msg.channelId;
+    const threadTs = ev?.thread_ts ?? ev?.ts ?? msg.threadId;
     return {
       instanceId: this.instanceId,
       channelId: msg.channelId,
-      threadId: threadTs,
+      ...(threadTs !== undefined && { threadId: threadTs }),
     };
   }
 
