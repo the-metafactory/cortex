@@ -152,6 +152,148 @@ describe("createDispatchTaskFailedEvent", () => {
     expect(env.correlation_id).toBe(TASK_ID);
     expect(validateEnvelope(env).ok).toBe(true);
   });
+
+  // -----------------------------------------------------------------------
+  // IAW Wave 0 PR-A.0a (refs cortex#232, cortex#238) — nak taxonomy
+  // extension. Mirrors `docs/architecture.md` §7.3 and is the producer-side
+  // contract consumed by pilot per `docs/design-pilot-restructure.md` §4.4.
+  // -----------------------------------------------------------------------
+
+  test("reason kind=policy_denied round-trips (back-compat — unchanged C.3.1 path)", () => {
+    const env = createDispatchTaskFailedEvent({
+      source: SOURCE,
+      taskId: TASK_ID,
+      agentId: "cortex",
+      startedAt: STARTED_AT,
+      failedAt: COMPLETED_AT,
+      errorSummary: "policy gate refused",
+      reason: {
+        kind: "policy_denied",
+        deny: { code: "unknown_principal", principal: "ghost" },
+      },
+    });
+    const payload = env.payload as { reason?: { kind: string; deny?: unknown } };
+    expect(payload.reason?.kind).toBe("policy_denied");
+    expect(payload.reason?.deny).toEqual({
+      code: "unknown_principal",
+      principal: "ghost",
+    });
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("reason kind=cant_do round-trips with detail", () => {
+    const env = createDispatchTaskFailedEvent({
+      source: SOURCE,
+      taskId: TASK_ID,
+      agentId: "cortex",
+      startedAt: STARTED_AT,
+      failedAt: COMPLETED_AT,
+      errorSummary: "no consumer for capability",
+      reason: {
+        kind: "cant_do",
+        detail: "no agent registered for code-review.rust",
+      },
+    });
+    const payload = env.payload as {
+      reason?: { kind: string; detail?: string };
+    };
+    expect(payload.reason?.kind).toBe("cant_do");
+    expect(payload.reason?.detail).toBe(
+      "no agent registered for code-review.rust",
+    );
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("reason kind=wont_do round-trips with detail", () => {
+    const env = createDispatchTaskFailedEvent({
+      source: SOURCE,
+      taskId: TASK_ID,
+      agentId: "cortex",
+      startedAt: STARTED_AT,
+      failedAt: COMPLETED_AT,
+      errorSummary: "sovereignty refused",
+      reason: {
+        kind: "wont_do",
+        detail: "agent sovereignty: strict mode rejects external requesters",
+      },
+    });
+    const payload = env.payload as {
+      reason?: { kind: string; detail?: string };
+    };
+    expect(payload.reason?.kind).toBe("wont_do");
+    expect(payload.reason?.detail).toBe(
+      "agent sovereignty: strict mode rejects external requesters",
+    );
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("reason kind=not_now round-trips without retry_after_ms", () => {
+    const env = createDispatchTaskFailedEvent({
+      source: SOURCE,
+      taskId: TASK_ID,
+      agentId: "cortex",
+      startedAt: STARTED_AT,
+      failedAt: COMPLETED_AT,
+      errorSummary: "backpressure",
+      reason: {
+        kind: "not_now",
+        detail: "queue full; try again shortly",
+      },
+    });
+    const payload = env.payload as {
+      reason?: { kind: string; detail?: string; retry_after_ms?: number };
+    };
+    expect(payload.reason?.kind).toBe("not_now");
+    expect(payload.reason?.detail).toBe("queue full; try again shortly");
+    expect(payload.reason?.retry_after_ms).toBeUndefined();
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("reason kind=not_now round-trips with retry_after_ms hint", () => {
+    const env = createDispatchTaskFailedEvent({
+      source: SOURCE,
+      taskId: TASK_ID,
+      agentId: "cortex",
+      startedAt: STARTED_AT,
+      failedAt: COMPLETED_AT,
+      errorSummary: "backpressure with hint",
+      reason: {
+        kind: "not_now",
+        detail: "queue at capacity",
+        retry_after_ms: 30000,
+      },
+    });
+    const payload = env.payload as {
+      reason?: { kind: string; detail?: string; retry_after_ms?: number };
+    };
+    expect(payload.reason?.kind).toBe("not_now");
+    expect(payload.reason?.detail).toBe("queue at capacity");
+    expect(payload.reason?.retry_after_ms).toBe(30000);
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("reason kind=compliance_block round-trips with detail", () => {
+    const env = createDispatchTaskFailedEvent({
+      source: SOURCE,
+      taskId: TASK_ID,
+      agentId: "cortex",
+      startedAt: STARTED_AT,
+      failedAt: COMPLETED_AT,
+      errorSummary: "compliance attestation forbids",
+      reason: {
+        kind: "compliance_block",
+        detail: "STD-NPW-AI-001 gate: external review not attested",
+      },
+    });
+    const payload = env.payload as {
+      reason?: { kind: string; detail?: string };
+    };
+    expect(payload.reason?.kind).toBe("compliance_block");
+    expect(payload.reason?.detail).toBe(
+      "STD-NPW-AI-001 gate: external review not attested",
+    );
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
 });
 
 describe("createDispatchTaskAbortedEvent", () => {

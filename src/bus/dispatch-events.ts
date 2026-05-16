@@ -269,18 +269,76 @@ export interface DispatchTaskFailedOpts extends DispatchTaskCommonOpts {
 
 /**
  * Discriminated reason for `dispatch.task.failed` envelopes synthesised
- * from upstream-of-the-substrate failure modes. C.3.1 ships
- * `policy_denied`; later kinds are append-only siblings.
+ * from upstream-of-the-substrate failure modes. C.3.1 shipped
+ * `policy_denied`; IAW Wave 0 PR-A.0a (refs cortex#232, cortex#238)
+ * extends the union with the four-way nak taxonomy named in
+ * `docs/architecture.md` §7.3 and surfaced to pilot per
+ * `docs/design-pilot-restructure.md` §4.4. New kinds are append-only
+ * siblings per G-1111 §3.1.
+ *
+ * The discriminator `kind` enumerates five values today:
+ *
+ *   - `policy_denied`     — dispatch-listener's policy gate refused (carries
+ *                           the engine's structured `deny` reason verbatim).
+ *   - `cant_do`           — no agent matches the requested capability
+ *                           (capability mismatch; persistent until a
+ *                           consumer registers).
+ *   - `wont_do`           — sovereignty policy refused (agent could but
+ *                           policy says no; persistent — operator action
+ *                           needed).
+ *   - `not_now`           — backpressure (capability is registered, just
+ *                           busy; transient, retry safe). Optional
+ *                           `retry_after_ms` hints at a backpressure
+ *                           window.
+ *   - `compliance_block`  — agent's compliance attestation forbids it
+ *                           (e.g. STD-NPW-AI-001 gate).
+ *
+ * Subscribers correlating on task_id (worklog-manager, agent-team, pilot's
+ * `subscribe-verdict.ts`) branch on `payload.reason.kind` to render the
+ * gate / nak decision distinctly from substrate-side errors. Surfaces as
+ * `payload.reason` on the envelope.
+ *
+ * Anchors: `docs/architecture.md` §7.3 (nak vocabulary, canonical),
+ * `docs/design-pilot-restructure.md` §4.4 + §6.2 PR-A.0a (pilot-side
+ * consumption + this PR's scope), `docs/design-pi-dev-review-agent.md`
+ * §4 (envelope grammar).
  */
-export interface DispatchTaskFailedReason {
-  kind: "policy_denied";
-  /**
-   * The engine's structured deny reason, carried verbatim so
-   * subscribers can render the specific deny path
-   * (`unknown_principal` / `insufficient_role` / ...).
-   */
-  deny: Record<string, unknown>;
-}
+export type DispatchTaskFailedReason =
+  | {
+      kind: "policy_denied";
+      /**
+       * The engine's structured deny reason, carried verbatim so
+       * subscribers can render the specific deny path
+       * (`unknown_principal` / `insufficient_role` / ...).
+       */
+      deny: Record<string, unknown>;
+    }
+  | {
+      kind: "cant_do";
+      /** Human-readable explanation (free-form). */
+      detail: string;
+    }
+  | {
+      kind: "wont_do";
+      /** Human-readable explanation (free-form). */
+      detail: string;
+    }
+  | {
+      kind: "not_now";
+      /** Human-readable explanation (free-form). */
+      detail: string;
+      /**
+       * Optional backpressure hint: producer may suggest a retry window
+       * in milliseconds. Operator-facing; pilot's CLI translates to its
+       * own retry semantics (exit 4 = transient, retry safe).
+       */
+      retry_after_ms?: number;
+    }
+  | {
+      kind: "compliance_block";
+      /** Human-readable explanation (free-form). */
+      detail: string;
+    };
 
 /**
  * Construct a `dispatch.task.failed` envelope per G-1111 §3.4.
