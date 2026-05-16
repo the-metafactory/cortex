@@ -237,6 +237,14 @@ export interface CreateCcEventPublisherOpts {
    * Override the envelope-construction helper. Lets tests assert on the
    * envelope shape without needing a real NATS connection. Defaults to
    * `createCcEventEnvelope`.
+   *
+   * **Caller owns classification when overriding.** The closure-captured
+   * `opts.classification` is applied by the default-path helper only.
+   * If you pass `buildEnvelope`, the override is fully responsible for
+   * setting `envelope.sovereignty.classification` to whatever value you
+   * configured via `opts.classification` — otherwise the subject
+   * (derived from the envelope) and the operator-intended classification
+   * can silently diverge (cortex#130 item 3, Echo's suggestion).
    */
   buildEnvelope?: (event: PublishedEvent, source: CcEventSource) => Envelope;
 }

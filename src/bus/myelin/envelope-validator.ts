@@ -405,6 +405,34 @@ function firstSegment(s: string): string {
   return seg;
 }
 
+/**
+ * IAW Phase A.3 follow-up (cortex#130 item 1) — symmetric `{org}` extractor
+ * for the publish-side. Publish derives `{org}` from `envelope.source`'s
+ * leading segment; subscribe substitutes `{org}` in subject patterns from
+ * `agent.operatorId` at startup. These two values MUST agree for any
+ * envelope this stack emits, or subjects diverge between publish/subscribe.
+ *
+ * Use {@link orgFromConfig} on the subscribe-side and {@link orgFromEnvelope}
+ * on the publish-side. The unit test in
+ * `src/bus/myelin/__tests__/runtime-org-symmetry.test.ts` pins the invariant
+ * that for envelopes emitted by this stack's helpers, the two return
+ * identical strings.
+ */
+export function orgFromEnvelope(envelope: Envelope): string {
+  return firstSegment(envelope.source);
+}
+
+/**
+ * Subscribe-side `{org}` resolver. See {@link orgFromEnvelope} for the
+ * symmetric publish-side helper and the invariant they jointly preserve.
+ *
+ * Falls back to `"default"` when `operatorId` is unset — matches the
+ * legacy inline expression at runtime.ts subscribe-site.
+ */
+export function orgFromConfig(operatorId: string | undefined): string {
+  return operatorId ?? "default";
+}
+
 export function deriveNatsSubject(envelope: Envelope, stack?: string): string {
   return deriveSubject(
     envelope.sovereignty.classification,

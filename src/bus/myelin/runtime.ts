@@ -17,7 +17,11 @@ import type { ConnectionOptions, NatsConnection } from "nats";
 import type { BotConfig } from "../../common/types/config";
 import { NatsLink } from "../nats/connection";
 import { MyelinSubscriber } from "./subscriber";
-import { deriveNatsSubject, type Envelope } from "./envelope-validator";
+import {
+  deriveNatsSubject,
+  orgFromConfig,
+  type Envelope,
+} from "./envelope-validator";
 // IAW Phase B.3 — sign outbound envelopes via myelin's chain-aware
 // signer. Import discipline matches B.1c: the constrained `/identity`
 // subpath keeps tsc out of myelin's full source tree.
@@ -225,8 +229,16 @@ export async function startMyelinRuntime(
   }
 
   const nats = config.nats;
+  // IAW Phase A.3 follow-up (cortex#130 item 1): subscribe-side `{org}` is
+  // resolved via the shared `orgFromConfig` helper. The publish-side
+  // (`deriveNatsSubject` → `orgFromEnvelope`) extracts the same segment
+  // from `envelope.source` at emit time. Both helpers live in
+  // `envelope-validator.ts` and the invariant they jointly preserve
+  // (subscribe `{org}` === publish `{org}` for envelopes this stack emits)
+  // has a regression test at
+  // `src/bus/myelin/__tests__/runtime-org-symmetry.test.ts`.
   const subjects = nats.subjects.map((s) =>
-    s.replaceAll("{org}", config.agent.operatorId ?? "default"),
+    s.replaceAll("{org}", orgFromConfig(config.agent.operatorId)),
   );
 
   if (subjects.length === 0) {
