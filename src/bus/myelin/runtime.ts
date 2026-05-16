@@ -237,9 +237,18 @@ export async function startMyelinRuntime(
   // (subscribe `{org}` === publish `{org}` for envelopes this stack emits)
   // has a regression test at
   // `src/bus/myelin/__tests__/runtime-org-symmetry.test.ts`.
-  const subjects = nats.subjects.map((s) =>
-    s.replaceAll("{org}", orgFromConfig(config.agent.operatorId)),
-  );
+  //
+  // cortex#269 — `{stack}.` substituted alongside `{org}` via the shared
+  // `makeSubjectPlaceholderSubstituter` helper (defined above; also used
+  // by the renderer-config boot path in `src/cortex.ts`). Stack-less
+  // deployments collapse `{stack}.` to empty, preserving legacy 5-segment
+  // subscribe patterns. The default `["local.{org}.>"]` pattern is
+  // unaffected — multi-segment `>` wildcard already matches both shapes.
+  const substituter = makeSubjectPlaceholderSubstituter({
+    org: orgFromConfig(config.agent.operatorId),
+    stack: options?.stack,
+  });
+  const subjects = substituter(nats.subjects);
 
   if (subjects.length === 0) {
     // cortex#88 item 6: empty `subjects` is the typical state today —

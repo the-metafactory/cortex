@@ -1089,6 +1089,21 @@ export async function startCortex(
   // classes covering `local.{org}.system.>` so an operational alert
   // reliably reaches the operator even if one sink is the thing that
   // broke. Renderers never publish on the bus (architecture §9.3).
+  // cortex#269 — substitute `{org}` AND `{stack}` in renderer subscribe
+  // patterns so they resolve against the same canonical shape that
+  // `MyelinRuntime` already substitutes for `nats.subjects`. Without
+  // this, an operator-written `local.{org}.{stack}.system.>` pattern
+  // never matches an actual envelope's wire subject. The `{stack}.`
+  // placeholder includes the trailing dot so stack-less deployments
+  // collapse cleanly to `local.{org}.system.>`.
+  const rendererOrgValue = config.agent.operatorId ?? "default";
+  const rendererStackToken = `${derivedStack.stack}.`;
+  function substituteRendererSubjects(subscribe: readonly string[]): string[] {
+    return subscribe.map((s) =>
+      s.replaceAll("{org}", rendererOrgValue).replaceAll("{stack}.", rendererStackToken),
+    );
+  }
+
   const renderers: Renderer[] = [];
   for (const raw of config.renderers ?? []) {
     // BotConfig types renderers as z.unknown() so legacy bot.yaml loads
@@ -1104,7 +1119,10 @@ export async function startCortex(
       );
       continue;
     }
-    const rendererConfig = parseResult.data;
+    const rendererConfig = {
+      ...parseResult.data,
+      subscribe: substituteRendererSubjects(parseResult.data.subscribe),
+    };
     try {
       const renderer = createRenderer(rendererConfig);
       await renderer.start();

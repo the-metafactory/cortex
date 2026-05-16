@@ -223,6 +223,66 @@ describe("MyelinRuntime", () => {
     await runtime.stop();
   });
 
+  // cortex#269 — `{stack}.` token substitution. Operator-written narrow
+  // subscribe patterns can now reference the operator's stack identity
+  // alongside `{org}` and have it expanded at boot. The `.` is part of
+  // the placeholder so stack-less deployments collapse cleanly to the
+  // legacy 5-segment shape.
+  test("subjects placeholder {stack}. is substituted from options.stack", async () => {
+    const fake = makeFakeNatsConnection();
+    const config = makeConfig({
+      url: "nats://localhost:4222",
+      name: "grove-bot",
+      subjects: ["local.{org}.{stack}.attention.>"],
+    });
+    const runtime = await startMyelinRuntime(config, {
+      connectImpl: async () => fake.nc,
+      stack: "research",
+    });
+    expect(runtime.enabled).toBe(true);
+    expect(fake.subscribePatterns[0]).toBe(
+      "local.andreas.research.attention.>",
+    );
+    await runtime.stop();
+  });
+
+  test("subjects placeholder {stack}. collapses to empty when options.stack is omitted (legacy compat)", async () => {
+    const fake = makeFakeNatsConnection();
+    const config = makeConfig({
+      url: "nats://localhost:4222",
+      name: "grove-bot",
+      subjects: ["local.{org}.{stack}.attention.>"],
+    });
+    const runtime = await startMyelinRuntime(config, {
+      connectImpl: async () => fake.nc,
+      // no stack supplied
+    });
+    expect(runtime.enabled).toBe(true);
+    // `{stack}.` collapses; resulting pattern matches legacy 5-segment
+    // shape so pre-A.5 publishers stay observable.
+    expect(fake.subscribePatterns[0]).toBe("local.andreas.attention.>");
+    await runtime.stop();
+  });
+
+  test("subjects without {stack} placeholder are unchanged regardless of options.stack", async () => {
+    // Default `["local.{org}.>"]` pattern uses multi-segment wildcard
+    // — already matches both 5-seg and 6-seg emissions. No substitution
+    // needed; the runtime must NOT corrupt this pattern when stack is
+    // supplied (`local.{org}.>` → `local.andreas.>`, not `local.andreas.research.>`).
+    const fake = makeFakeNatsConnection();
+    const config = makeConfig({
+      url: "nats://localhost:4222",
+      name: "grove-bot",
+      subjects: ["local.{org}.>"],
+    });
+    const runtime = await startMyelinRuntime(config, {
+      connectImpl: async () => fake.nc,
+      stack: "research",
+    });
+    expect(fake.subscribePatterns[0]).toBe("local.andreas.>");
+    await runtime.stop();
+  });
+
   test("redacts token-form credentials from NATS URL in log output", async () => {
     const fake = makeFakeNatsConnection();
     const config = makeConfig({
