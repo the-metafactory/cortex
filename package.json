@@ -1,8 +1,18 @@
 {
-  "name": "grove",
+  "name": "@the-metafactory/cortex",
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "exports": {
+    "./bus": {
+      "types": "./src/bus/index.ts",
+      "default": "./src/bus/index.ts"
+    },
+    "./config-loader": {
+      "types": "./src/common/config/loader.ts",
+      "default": "./src/common/config/loader.ts"
+    }
+  },
   "scripts": {
     "build:dashboard": "bun build src/mission-control/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser",
     "watch:dashboard": "bun build src/mission-control/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser --watch",

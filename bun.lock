@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "grove",
+      "name": "@the-metafactory/cortex",
       "dependencies": {
         "@metafactory/content-filter": "github:the-metafactory/content-filter",
         "@nats-io/jwt": "^0.0.11",
