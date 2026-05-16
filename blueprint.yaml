@@ -139,6 +139,7 @@ features:
       - I-103
       - I-104
       - I-105
+      - I-106
     depends_on: [C-108]
 
   I-101:
@@ -205,3 +206,94 @@ features:
     parent: I-100
     issue: 117
     depends_on: [I-104]
+
+  I-106:
+    name: IAW Phase C cleanup — v2.0.0 policy cutover
+    status: in-progress
+    description: >
+      Retire legacy per-adapter roles[] from Discord/Mattermost/Slack
+      PresenceSchemas. Top-level policy:{principals[], roles[]} becomes the
+      single source of truth for authorization. PolicyEngine (shipped in C.1)
+      becomes the sole decision point; adapters thin to lookup-and-call.
+      Operator migration via extended migrate-config CLI. Design ratified in
+      PR #291 (docs/design-policy-cutover.md); iteration plan in PR #292
+      (docs/iteration-policy-cutover.md). 5-PR sequence — 243a + 243b
+      parallelisable, then 243c, with 242a in parallel after 243a, finishing
+      with 242b at v2.0.0.
+    parent: I-100
+    children:
+      - I-243A
+      - I-243B
+      - I-243C
+      - I-242A
+      - I-242B
+    depends_on: [I-103]
+
+  I-243A:
+    name: cortex#293 — PolicyPrincipal schema extension (243a)
+    status: planned
+    description: >
+      Additive schema extension. Adds platform_ids (open Record<platform_name,
+      string[]> — NOT closed enum), session_config {default, dm?} split,
+      principal-id uniqueness scoped to (id, home_stack), (platform_name,
+      platform_id) tuple uniqueness, federation-peer convention JSDoc.
+      ~150 LOC + tests. Schema-only — no consumer changes, no migration.
+    parent: I-106
+    issue: 293
+
+  I-243B:
+    name: cortex#294 — Canonical Claude tool inventory (243b)
+    status: planned
+    description: >
+      New file src/common/policy/tool-inventory.ts. Exports
+      CLAUDE_TOOL_INVENTORY, invertDisallowedTools(), toolCapability().
+      ~50 LOC + tests. Independent of I-243A — can ship in parallel.
+    parent: I-106
+    issue: 294
+
+  I-243C:
+    name: cortex#295 — migrate-config CLI extension (243c)
+    status: planned
+    description: >
+      Reads legacy per-adapter roles[], unifies per-user across adapter
+      copies, emits top-level policy.principals[] + policy.roles[] with
+      namespaced capabilities. Synthesises anonymous-per-instance principals
+      for defaultRole; operator principal with session_config.dm split;
+      external-peer principals with home_operator=unknown placeholders.
+      NEW --check mode = 242a operator pre-flight gate. Idempotent. SOP +
+      migration examples. ~400 LOC + tests + docs. Biggest slice.
+    parent: I-106
+    issue: 295
+    depends_on: [I-243A, I-243B]
+
+  I-242A:
+    name: cortex#296 — Adapter PolicyEngine wiring (parallel mode, 242a)
+    status: planned
+    description: >
+      Wires PolicyEngine alongside legacy role-resolver in Discord/
+      Mattermost/Slack adapters. Effective decision = most-restrictive
+      intersection (security default — NOT new-system-wins). New
+      system.access.disagreement envelope for dashboard visibility. New
+      cortex.yaml flag policy.parallel_mode_enabled (default off; operator
+      opts in AFTER migrate-config --check passes). ~250 LOC + tests.
+      Depends only on schema (I-243A) — parallel mode runs against legacy
+      configs.
+    parent: I-106
+    issue: 296
+    depends_on: [I-243A]
+
+  I-242B:
+    name: cortex#297 — Legacy roles[] removal + v2.0.0 bump (242b)
+    status: planned
+    description: >
+      The breaking removal. Drops per-adapter roles[] + defaultRole +
+      DMConfigSchema + AgentSchema.operatorDiscordId/Mattermost/Slack +
+      AgentSchema.roles[]. Retains agents[].trust[] (adapter-level bus-trust,
+      distinct from policy.principals[].trust[]). Deletes role-resolver.ts.
+      Strict-mode parse error on legacy configs. arc-manifest.yaml → v2.0.0.
+      ~300 LOC removed + ~30 tests updated. Depends on CLI (I-243C — operators
+      have migration path) AND parallel-mode validation (I-242A — zero
+      disagreement envelopes for ≥24h).
+    parent: I-106
+    issue: 297
+    depends_on: [I-243C, I-242A]
