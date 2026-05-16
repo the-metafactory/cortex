@@ -45,3 +45,27 @@ export {
   type Classification,
   type ValidationResult,
 } from "./myelin/envelope-validator";
+
+// --- Review-pipeline envelope builders (cortex#237 PR-2) ---
+//
+// Producer-side helpers for the capability-dispatch review pipeline per
+// `docs/design-capability-dispatch-review-consumer.md` §6 and
+// `docs/design-pilot-restructure.md` §4.1–§4.2. Re-exported on the public
+// surface so pilot's caller-side (request publisher) and any external
+// review consumer share one symbol table. The builders themselves are
+// pure — no NATS, no I/O — so this barrel addition is safe to consume
+// from any context.
+export {
+  createReviewRequestEvent,
+  createReviewVerdictEvent,
+  createReviewTaskFailedEvent,
+  type ReviewEventSource,
+  type ReviewFlavor,
+  type ReviewVerdictKind,
+  type ReviewRequestPayload,
+  type ReviewVerdictPayload,
+  type CreateReviewRequestEventOpts,
+  type CreateReviewVerdictEventOpts,
+  type CreateReviewTaskFailedEventOpts,
+  type ReviewTaskFailedReason,
+} from "./review-events";
