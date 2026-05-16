@@ -80,6 +80,40 @@ const STATE_DIR = join(process.env.HOME ?? "~", ".config", "grove", "state");
 const PID_FILE = join(STATE_DIR, "cortex.pid");
 const DEFAULT_CONFIG = join(process.env.HOME ?? "~", ".config", "grove", "bot.yaml");
 
+/**
+ * Resolve the PID file path for a given `--config` value.
+ *
+ * Operators running multiple cortex instances on a single machine (per
+ * Phase A.5's stack-aware namespace — e.g. `andreas/research` and
+ * `andreas/work` side-by-side) need distinct PID files so the
+ * singleton check in {@link checkSingleton} only blocks duplicates of
+ * the same stack, not unrelated stacks.
+ *
+ * Resolution:
+ *   - Default config (or unspecified) → legacy `cortex.pid` (preserves
+ *     single-instance backward compat — operators on the default path
+ *     see no behaviour change).
+ *   - Custom config → `cortex-<config-basename>.pid` (derived from the
+ *     config filename without the `.yaml`/`.yml` extension). Two stacks
+ *     with different `--config` paths get different PID files.
+ *
+ * The basename derivation deliberately omits the directory portion so
+ * `~/.config/cortex/cortex.work.yaml` and `./cortex.work.yaml` resolve
+ * to the same PID file — moving a config doesn't accidentally orphan
+ * the prior PID file.
+ */
+export function pidFileFor(configPath: string | undefined): string {
+  if (configPath === undefined || configPath === DEFAULT_CONFIG) {
+    return PID_FILE;
+  }
+  const base = configPath
+    .split("/")
+    .pop()
+    ?.replace(/\.ya?ml$/i, "");
+  if (base === undefined || base.length === 0) return PID_FILE;
+  return join(STATE_DIR, `cortex-${base}.pid`);
+}
+
 /** Lifecycle handle returned by `startCortex`. Capped at 15s — components
  *  that don't drain are abandoned (logged). */
 export interface CortexHandle {
@@ -1491,22 +1525,22 @@ function getVersion(): string {
   }
 }
 
-function checkSingleton(): void {
-  if (!existsSync(PID_FILE)) return;
-  const raw = readFileSync(PID_FILE, "utf-8").trim();
+function checkSingleton(pidFile: string): void {
+  if (!existsSync(pidFile)) return;
+  const raw = readFileSync(pidFile, "utf-8").trim();
   const pid = parseInt(raw, 10);
   if (isNaN(pid)) {
-    console.error(`cortex: removing invalid PID file (contents: "${raw}")`);
-    unlinkSync(PID_FILE);
+    console.error(`cortex: removing invalid PID file (${pidFile} contents: "${raw}")`);
+    unlinkSync(pidFile);
     return;
   }
   try {
     process.kill(pid, 0);
-    console.error(`cortex: already running (PID ${pid}). Stop it first with: cortex stop`);
+    console.error(`cortex: already running (PID ${pid}, ${pidFile}). Stop it first with: cortex stop`);
     process.exit(1);
   } catch {
-    console.error(`cortex: removing stale PID file (PID ${pid} not running)`);
-    unlinkSync(PID_FILE);
+    console.error(`cortex: removing stale PID file ${pidFile} (PID ${pid} not running)`);
+    unlinkSync(pidFile);
   }
 }
 
@@ -1591,8 +1625,9 @@ if (import.meta.main) {
       }
 
       mkdirSync(STATE_DIR, { recursive: true });
-      checkSingleton();
-      writeFileSync(PID_FILE, String(process.pid));
+      const pidFile = pidFileFor(options.config);
+      checkSingleton(pidFile);
+      writeFileSync(pidFile, String(process.pid));
 
       process.on("uncaughtException", (err) => {
         console.error("cortex: uncaught exception (non-fatal):", err.message);
@@ -1620,7 +1655,7 @@ if (import.meta.main) {
 
       const shutdown = async () => {
         await handle.stop();
-        if (existsSync(PID_FILE)) unlinkSync(PID_FILE);
+        if (existsSync(pidFile)) unlinkSync(pidFile);
         // Echo round-1 N2: surface dirty shutdown to launchd / operators
         // via a non-zero exit code. `lastShutdownAbandoned` is non-empty
         // only when the 15s drain timeout fired with subsystems still in
@@ -1635,37 +1670,41 @@ if (import.meta.main) {
   program
     .command("stop")
     .description("Stop the bot")
-    .action(() => {
-      if (!existsSync(PID_FILE)) {
-        console.log("cortex: not running");
+    .option("--config <path>", "Path to bot config YAML (selects which stack to stop)", DEFAULT_CONFIG)
+    .action((options: { config: string }) => {
+      const pidFile = pidFileFor(options.config);
+      if (!existsSync(pidFile)) {
+        console.log(`cortex: not running (${pidFile})`);
         return;
       }
-      const pid = parseInt(readFileSync(PID_FILE, "utf-8").trim());
+      const pid = parseInt(readFileSync(pidFile, "utf-8").trim());
       try {
         process.kill(pid, "SIGTERM");
-        unlinkSync(PID_FILE);
-        console.log(`cortex: stopped (PID ${pid})`);
+        unlinkSync(pidFile);
+        console.log(`cortex: stopped (PID ${pid}, ${pidFile})`);
       } catch {
-        console.log(`cortex: process ${pid} not found, cleaning up`);
-        unlinkSync(PID_FILE);
+        console.log(`cortex: process ${pid} not found, cleaning up ${pidFile}`);
+        unlinkSync(pidFile);
       }
     });
 
   program
     .command("status")
     .description("Check bot status")
-    .action(() => {
-      if (!existsSync(PID_FILE)) {
-        console.log("cortex: not running");
+    .option("--config <path>", "Path to bot config YAML (selects which stack to query)", DEFAULT_CONFIG)
+    .action((options: { config: string }) => {
+      const pidFile = pidFileFor(options.config);
+      if (!existsSync(pidFile)) {
+        console.log(`cortex: not running (${pidFile})`);
         return;
       }
-      const pid = parseInt(readFileSync(PID_FILE, "utf-8").trim());
+      const pid = parseInt(readFileSync(pidFile, "utf-8").trim());
       try {
         process.kill(pid, 0);
-        console.log(`cortex: running (PID ${pid})`);
+        console.log(`cortex: running (PID ${pid}, ${pidFile})`);
       } catch {
-        console.log("cortex: stale PID file");
-        unlinkSync(PID_FILE);
+        console.log(`cortex: stale PID file ${pidFile}`);
+        unlinkSync(pidFile);
       }
     });
 

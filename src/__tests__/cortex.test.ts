@@ -29,7 +29,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { BotConfigSchema, type BotConfig } from "../common/types/config";
 import type { Agent } from "../common/types/cortex-config";
-import { runDryRun, startCortex } from "../cortex";
+import { pidFileFor, runDryRun, startCortex } from "../cortex";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { EnvelopeHandler, MyelinRuntime } from "../bus/myelin/runtime";
 
@@ -776,5 +776,50 @@ describe("runDryRun — config validator (cortex#88 item 2)", () => {
     expect(result.stderr).toMatch(/has no agents — config invalid/);
     expect(result.stdout).toBe("");
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pidFileFor — multi-instance support (cortex#246)
+// ---------------------------------------------------------------------------
+
+describe("pidFileFor — per-config PID file derivation", () => {
+  const DEFAULT_CONFIG = join(process.env.HOME ?? "~", ".config", "grove", "bot.yaml");
+  const LEGACY_PID = join(process.env.HOME ?? "~", ".config", "grove", "state", "cortex.pid");
+
+  test("undefined config → legacy cortex.pid (backward compat)", () => {
+    expect(pidFileFor(undefined)).toBe(LEGACY_PID);
+  });
+
+  test("default config path → legacy cortex.pid (no behaviour change)", () => {
+    expect(pidFileFor(DEFAULT_CONFIG)).toBe(LEGACY_PID);
+  });
+
+  test("custom config in same dir → derived from basename", () => {
+    const result = pidFileFor("/Users/andreas/.config/cortex/cortex.work.yaml");
+    expect(result).toBe(join(process.env.HOME ?? "~", ".config", "grove", "state", "cortex-cortex.work.pid"));
+  });
+
+  test("two distinct custom configs → two distinct PID files", () => {
+    const a = pidFileFor("/Users/andreas/.config/cortex/cortex.work.yaml");
+    const b = pidFileFor("/Users/andreas/.config/cortex/cortex.research.yaml");
+    expect(a).not.toBe(b);
+  });
+
+  test("config with .yml extension also normalises", () => {
+    const result = pidFileFor("/tmp/foo.yml");
+    expect(result).toBe(join(process.env.HOME ?? "~", ".config", "grove", "state", "cortex-foo.pid"));
+  });
+
+  test("config path moves don't change the PID file (basename-only derivation)", () => {
+    const a = pidFileFor("/somewhere/cortex.work.yaml");
+    const b = pidFileFor("/elsewhere/cortex.work.yaml");
+    expect(a).toBe(b);
+  });
+
+  test("relative config path → same PID file as absolute (basename match)", () => {
+    const rel = pidFileFor("./cortex.work.yaml");
+    const abs = pidFileFor("/Users/andreas/.config/cortex/cortex.work.yaml");
+    expect(rel).toBe(abs);
   });
 });
