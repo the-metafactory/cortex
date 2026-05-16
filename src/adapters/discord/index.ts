@@ -557,6 +557,13 @@ export class DiscordAdapter implements PlatformAdapter {
    * id is never allowed regardless of what `next` contains.
    */
   setTrustedBotIds(next: ReadonlySet<string>): void {
+    // cortex#108 item 3: single reference reassignment — atomic in
+    // single-threaded JS, so the messageCreate hot path always observes
+    // either the pre-call or the post-call ReadonlySet (never a partially
+    // mutated set). If you extend this mutator to touch more than one
+    // field, replace the bare assignment with a coordinated swap (e.g.
+    // build the next state in a local + assign once) so the same
+    // atomicity property is preserved.
     this.trustedBotIds = next;
   }
 
