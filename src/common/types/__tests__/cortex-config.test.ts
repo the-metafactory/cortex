@@ -209,13 +209,20 @@ describe("AgentSchema", () => {
     expect(() => AgentSchema.parse(minAgent({ id: "my agent" }))).toThrow();
   });
 
-  test("rejects agent with no presence blocks", () => {
-    expect(() => AgentSchema.parse({
+  test("accepts headless agent with empty presence (cortex#245)", () => {
+    // A headless agent runs CC sessions via the dispatch-listener,
+    // emits envelopes onto the bus, and surfaces on the dashboard,
+    // but has no human-facing platform. Valid for the multi-stack
+    // pattern (cortex#244) where a second stack is bus-only until
+    // its platform presence is wired in.
+    const parsed = AgentSchema.parse({
       id: "luna",
       displayName: "Luna",
       persona: "./personas/luna.md",
       presence: {},
-    })).toThrow(/at least one presence/);
+    });
+    expect(parsed.id).toBe("luna");
+    expect(parsed.presence).toEqual({});
   });
 
   // ---------------------------------------------------------------------
@@ -752,8 +759,9 @@ describe("CortexConfigSchema", () => {
     // Top-level `discord:[]` was the grove-v2 sibling of `agent:`. In cortex,
     // per-instance credentials live under `agents[<id>].presence.discord`.
     // Without this guard, a hand-migration miss strips the legacy block
-    // silently and the operator only sees the indirect "at least one presence
-    // block" failure on each agent.
+    // silently and the operator gets a headless agent without an obvious
+    // migration signal (cortex#245 removed the per-agent "at least one
+    // presence" refine, so headless is no longer a useful proxy alert).
     expect(() => CortexConfigSchema.parse({
       ...minConfig(),
       discord: [{ token: "x", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
