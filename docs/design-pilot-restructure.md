@@ -1041,7 +1041,9 @@ From `@the-metafactory/cortex`, pilot's `bus/` directory imports:
 | `validateEnvelope` | `src/bus/myelin/envelope-validator.ts` | `bus/publish-review-request.ts` |
 | `loadConfigWithAgents` | `src/common/config/loader.ts` | `bus/nats-link.ts` (config bootstrap) |
 
-Cortex's `package.json` exposes these via its `exports` field (post PR-A.0b in §6.2 — this is the cortex-side prerequisite, not a separate "open question"). Cortex remains `"private": true`; the exports map is an independent surface that doesn't require npm publication.
+Plus the ancillary handler / stamp / classification types the subscribers need at typed wiring sites: `EnvelopeHandler`, `EnvelopeErrorHandler`, `InvalidEnvelopeHandler`, `InvalidEnvelopeReason`, `MyelinSubscriberOptions`, `NatsLinkOptions` (option/handler shapes), `SignedBy`/`SignedByEd25519`/`SignedByHubStamp` (stamp chain typing), `Classification`, `ValidationResult`, `getSignedByChain` (chain helper). Surfaced via the same `@the-metafactory/cortex/bus` entry — see `src/bus/index.ts` in cortex (post PR-A.0b at cortex#250). Cortex's barrel keeps the surface intentionally narrow — internal symbols (`tryParseEnvelope`, `deriveNatsSubject`, etc.) stay internal.
+
+Cortex's `package.json` exposes these via its `exports` field (PR-A.0b shipped at cortex#250). Cortex remains `"private": true`; the exports map is an independent surface that doesn't require npm publication.
 
 **Reverse: what does cortex import from pilot?** Nothing. The dependency is one-way: pilot → cortex.
 
