@@ -138,7 +138,7 @@ Same subjects, same envelopes as any cortex agent. The only difference is the so
 | `review.verdict.changes-requested` | Blocking findings |
 | `review.verdict.commented` | Non-blocking findings |
 
-Nak reasons: `cant-do`, `wont-do`, `not-now`, `compliance-block` (unchanged per architecture §7.3).
+Nak reasons: `cant_do`, `wont_do`, `not_now`, `compliance_block` (unchanged per architecture §7.3).
 
 #### 4.2.1 `review.verdict.*` envelope payload — canonical contract
 
@@ -381,7 +381,7 @@ No cortex changes needed at all.
 | NATS disconnect | No heartbeat | Auto-reconnect, replay from last_event_id |
 | Review timeout (>5 min) | TaskTracker timeout | Emit `dispatch.task.failed` |
 | Model unavailable | API error | Fallback to secondary model |
-| GitHub rate limit | GH CLI 403 | `dispatch.task.failed` with `not-now` |
+| GitHub rate limit | GH CLI 403 | `dispatch.task.failed` with `not_now` |
 | pi.dev crash | Process exit | Dashboard shows failed; operator re-dispatches |
 
 ---

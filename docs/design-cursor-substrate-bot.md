@@ -192,7 +192,7 @@ Same subjects, same envelopes as any cortex agent (per `docs/architecture.md` §
 | `local.{org}.dispatch.task.failed` | Outbound | Error/crash |
 | `local.{org}.code.pr.review.{approved\|changes-requested\|commented}` | Outbound | Verdict envelope |
 
-Nak reasons (`cant-do`, `wont-do`, `not-now`, `compliance-block`) unchanged per architecture §7.3.
+Nak reasons (`cant_do`, `wont_do`, `not_now`, `compliance_block`) unchanged per architecture §7.3.
 
 ---
 
@@ -263,7 +263,7 @@ This is the cortex#112 Q5 lock-in for competing-consumers: NATS queue group, cla
 ```
 cortex publishes → with target_principal: "did:mf:alpha"
                  → only alpha's `local.{org}.tasks.@did-mf-alpha.>` subscription receives
-                 → alpha claims unconditionally (or naks `not-now` if at capacity)
+                 → alpha claims unconditionally (or naks `not_now` if at capacity)
 ```
 
 Operators use this when they specifically want the Cursor substrate (for example, to exercise the `DeepArchitecture` lens or to investigate a substrate-A/B disagreement).
