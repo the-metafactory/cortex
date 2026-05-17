@@ -1183,3 +1183,49 @@ describe("runMigrateConfig", () => {
     expect(code).toBe(0);
   });
 });
+
+describe("convertBotYaml — disabled-adapter does not leak policy (PR #306 r1 M4 fix)", () => {
+  test("agent with enabled:false discord presence does not synthesise allow-all anonymous principal", () => {
+    // Echo PR #306 r1 M4 caught: the headless placeholder presence in
+    // cortex.work.yaml (`enabled: false, token: placeholder-disabled,
+    // guildId: "0"`) flowed through to buildPolicy and synthesised an
+    // `anonymous-discord-<agent>` principal with `allow-all` capabilities
+    // (schema-default defaultRole). Disabled = no auth surface = no
+    // policy effect should leak.
+    const legacy: LegacyBotYaml = {
+      operator: {
+        id: "andreas",
+        displayName: "Andreas",
+        dataResidency: "NZ",
+      },
+      stack: { id: "andreas/work", displayName: "Andreas — Work" },
+      agents: [
+        {
+          id: "luna",
+          displayName: "Luna",
+          persona: "./personas/luna.md",
+          roles: [],
+          trust: [],
+          presence: {
+            discord: {
+              enabled: false,
+              token: "placeholder-disabled",
+              guildId: "0",
+              agentChannelId: "0",
+              logChannelId: "0",
+            },
+          },
+        },
+      ],
+    } satisfies LegacyBotYaml;
+    const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
+    // The disabled adapter should not produce ANY synthetic anonymous-*
+    // principal nor any allow-all role.
+    const anonPrincipals = result.cortex.policy?.principals.filter((p) =>
+      p.id.startsWith("anonymous-"),
+    ) ?? [];
+    expect(anonPrincipals).toHaveLength(0);
+    const allowAllRole = result.cortex.policy?.roles.find((r) => r.id === "allow-all");
+    expect(allowAllRole).toBeUndefined();
+  });
+});

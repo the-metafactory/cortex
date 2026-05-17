@@ -945,7 +945,13 @@ function collectAdapterViews(
   // directly from cortex-shape `agents[]` in the new path.
   void cortexShape; // explicit no-op — kept for grep/intent traceability
   for (const parsed of agents) {
-    if (parsed.presence.discord) {
+    // Skip disabled adapters entirely. Echo PR #306 r1 M4: a headless
+    // placeholder presence (e.g. cortex.work.yaml's `enabled: false` discord
+    // block) would otherwise flow through to `buildPolicy` and synthesise
+    // an `anonymous-discord-<agent>` principal with `allow-all` capabilities
+    // (the schema-default `defaultRole`). Disabled = no auth surface = no
+    // policy effect should leak.
+    if (parsed.presence.discord?.enabled) {
       const p = parsed.presence.discord;
       const dm = p.dm as LegacyDMConfig | undefined;
       // `p.defaultRole` always defaults to "allow-all" via the schema,
@@ -961,7 +967,7 @@ function collectAdapterViews(
         });
       }
     }
-    if (parsed.presence.mattermost) {
+    if (parsed.presence.mattermost?.enabled) {
       const p = parsed.presence.mattermost;
       const defaultRole = p.defaultRole;
       if (p.roles.length > 0) {
@@ -974,7 +980,7 @@ function collectAdapterViews(
         });
       }
     }
-    if (parsed.presence.slack) {
+    if (parsed.presence.slack?.enabled) {
       const p = parsed.presence.slack;
       const defaultRole = p.defaultRole;
       if (p.roles.length > 0) {

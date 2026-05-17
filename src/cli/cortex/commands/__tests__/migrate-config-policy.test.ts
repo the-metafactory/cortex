@@ -631,3 +631,67 @@ describe("bare-string capability rewriting", () => {
     expect(role.capabilities).toContain("dispatch.luna");
   });
 });
+
+describe("nkey_pub round-trip (PR #306 r1 blocker fix)", () => {
+  test("pre-existing principal.nkey_pub is preserved on round-trip", () => {
+    // Echo PR #306 r1 caught: the work-stack's luna principal carries
+    // nkey_pub (NATS stack signing key, Phase D federation identity).
+    // The original implementation dropped it on round-trip — silent
+    // data loss. This regression test pins the fix.
+    const result = buildPolicy({
+      operatorId: "andreas",
+      homeStack: "andreas/work",
+      declaredAgentIds: new Set(["luna"]),
+      operatorPlatformIds: {},
+      views: [],
+      existingPolicy: {
+        principals: [
+          {
+            id: "luna",
+            home_operator: "andreas",
+            home_stack: "andreas/work",
+            role: ["operator"],
+            trust: [],
+            platform_ids: {},
+            nkey_pub: "UDEQUP3NUQAGUJIZ5ZSOBZKAF73CW6BPMEQX6476E66Q37FONADJ75EB",
+          },
+        ],
+        roles: [
+          {
+            id: "operator",
+            capabilities: ["dispatch.luna"],
+          },
+        ],
+      },
+    });
+    const luna = result.policy.principals.find((p) => p.id === "luna");
+    expect(luna).toBeDefined();
+    expect(luna?.nkey_pub).toBe("UDEQUP3NUQAGUJIZ5ZSOBZKAF73CW6BPMEQX6476E66Q37FONADJ75EB");
+  });
+
+  test("principal without nkey_pub emits without it (no spurious field)", () => {
+    const result = buildPolicy({
+      operatorId: "andreas",
+      homeStack: "andreas/work",
+      declaredAgentIds: new Set(["luna"]),
+      operatorPlatformIds: {},
+      views: [],
+      existingPolicy: {
+        principals: [
+          {
+            id: "luna",
+            home_operator: "andreas",
+            home_stack: "andreas/work",
+            role: ["operator"],
+            trust: [],
+            platform_ids: {},
+          },
+        ],
+        roles: [{ id: "operator", capabilities: ["dispatch.luna"] }],
+      },
+    });
+    const luna = result.policy.principals.find((p) => p.id === "luna");
+    expect(luna).toBeDefined();
+    expect(luna?.nkey_pub).toBeUndefined();
+  });
+});

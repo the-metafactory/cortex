@@ -300,6 +300,13 @@ interface PrincipalAccumulator {
   platform_ids: Record<string, Set<string>>;
   roles: Set<string>;
   trust: Set<string>;
+  /**
+   * NATS stack signing key (NKey public key). Preserved verbatim from a
+   * pre-existing principal block on round-trip — Echo PR #306 r1 blocker
+   * caught that this field was dropped, silently losing the work-stack's
+   * Phase D federation signing identity.
+   */
+  nkey_pub: string | undefined;
   /** session_config.default — the channel/group context baseline. */
   sessionDefault: SessionConfigAcc;
   /** session_config.dm — populated only when a DM override applies. */
@@ -409,6 +416,9 @@ export function buildPolicy(input: PolicyBuilderInput): PolicyBuilderOutput {
       platform_ids: platformIds,
       roles: new Set(p.role),
       trust: new Set(p.trust),
+      // Preserve nkey_pub verbatim from the existing principal — federation
+      // signing identity (Phase D). Echo PR #306 r1 blocker fix.
+      nkey_pub: p.nkey_pub,
       sessionDefault: emptySessionConfig(),
       sessionDm: undefined,
       external: false,
@@ -548,6 +558,7 @@ export function buildPolicy(input: PolicyBuilderInput): PolicyBuilderOutput {
             platform_ids: {},
             roles: new Set(),
             trust: new Set(),
+            nkey_pub: undefined,
             sessionDefault: emptySessionConfig(),
             sessionDm: undefined,
             external: isExternal,
@@ -586,6 +597,7 @@ export function buildPolicy(input: PolicyBuilderInput): PolicyBuilderOutput {
         platform_ids: {},
         roles: new Set(),
         trust: new Set(),
+        nkey_pub: undefined,
         sessionDefault: emptySessionConfig(),
         sessionDm: undefined,
         external: false,
@@ -631,6 +643,7 @@ export function buildPolicy(input: PolicyBuilderInput): PolicyBuilderOutput {
           platform_ids: {},
           roles: new Set([allowAllRoleId]),
           trust: new Set(),
+          nkey_pub: undefined,
           sessionDefault: emptySessionConfig(),
           sessionDm: undefined,
           external: false,
@@ -652,6 +665,7 @@ export function buildPolicy(input: PolicyBuilderInput): PolicyBuilderOutput {
           platform_ids: {},
           roles: new Set(["operator"]),
           trust: new Set(),
+          nkey_pub: undefined,
           sessionDefault: emptySessionConfig(),
           sessionDm: undefined,
           external: false,
@@ -723,6 +737,7 @@ export function buildPolicy(input: PolicyBuilderInput): PolicyBuilderOutput {
             platform_ids: {},
             roles: new Set(),
             trust: new Set(),
+            nkey_pub: undefined,
             sessionDefault: emptySessionConfig(),
             sessionDm: undefined,
             external: false,
@@ -907,6 +922,11 @@ function serialisePolicy(
       trust: [...acc.trust].sort(),
       platform_ids: platformIds,
     };
+    // Preserve nkey_pub if present (Echo PR #306 r1 blocker fix — work-stack
+    // luna principal carries its NATS signing key; must round-trip verbatim).
+    if (acc.nkey_pub !== undefined) {
+      p.nkey_pub = acc.nkey_pub;
+    }
     const hasSessionDefault = !isSessionConfigDefault(acc.sessionDefault);
     if (hasSessionDefault || acc.sessionDm !== undefined) {
       p.session_config = {
