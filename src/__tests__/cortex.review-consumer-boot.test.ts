@@ -313,6 +313,59 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
     rmSync(tmpAgentsDir, { recursive: true, force: true });
   });
 
+  test("cortex#314 — zero code-review-capable agents → stderr carries an operator-actionable WARNING (not just info-level log)", async () => {
+    // First-install safety regression guard. Mirror of the capability-
+    // registry-side test in `cortex.capability-boot.test.ts`. The
+    // review-consumer wiring used to log a single info-level
+    // `console.log("…skipped…")` line, which an operator running
+    // interactively (or with a non-debug log handler) does NOT notice.
+    // The result was a fresh `pilot request-review --wait` silently
+    // exiting 0 with no review having happened.
+    //
+    // cortex#314's fix promotes the skip to a stderr WARNING with
+    // actionable fix-path text. This test pins the contract: when zero
+    // agents declare code-review capabilities, stderr MUST carry the
+    // WARNING tag AND the actionable hint pointing at cortex.yaml.
+    const runtime = createRecordingRuntime();
+    const tmpAgentsDir = mkdtempSync(join(tmpdir(), "cortex-revboot-warn-"));
+    const inlineAgents: Agent[] = [
+      makeAgent("luna", undefined),
+      makeAgent("holly", ["research.web"]),
+      makeAgent("ivy", []),
+    ];
+
+    const { result: bootResult, stderr } = await withCapturedStderr(() =>
+      withCapturedConsoleLog(() =>
+        startCortex(minimalConfig(), {
+          disableConfigWatcher: true,
+          disableDashboard: true,
+          disableOutboundPoller: true,
+          agentsDir: tmpAgentsDir,
+          injectRuntime: runtime,
+          inlineAgents,
+        }),
+      ),
+    );
+    const { result: handle, logs } = bootResult;
+
+    // Info-level log line stays (operability — daemon-side log shipping
+    // still benefits from the structured info entry). The WARNING is
+    // additive, not a replacement.
+    const infoSkipLines = logs.filter((l) =>
+      l.includes("cortex: review-consumer skipped"),
+    );
+    expect(infoSkipLines.length).toBe(1);
+
+    // stderr carries the WARNING + the actionable fix-path text.
+    expect(stderr).toContain("WARNING: review-consumer skipped");
+    expect(stderr).toContain("0 agents declare code-review capabilities");
+    expect(stderr).toContain("pilot request-review");
+    expect(stderr).toContain("cortex.yaml");
+
+    await handle.stop();
+    rmSync(tmpAgentsDir, { recursive: true, force: true });
+  });
+
   test("one consumer init throws → siblings still wire; boot completes; stderr logged with failing agent id", async () => {
     // The boot wiring filters `mergedAgents` by `a.runtime?.capabilities`
     // (reads `capabilities`) and then, inside a try/catch, reads

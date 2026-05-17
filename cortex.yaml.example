@@ -1,0 +1,290 @@
+# cortex.yaml — example configuration for a fresh install
+#
+# Copy this file to one of the locations the cortex CLI scans (default:
+# `~/.config/cortex/cortex.yaml`) and replace every `<REPLACE_ME>` marker
+# below with your own values. The file parses cleanly out of the box —
+# replace markers gradually as you wire each surface.
+#
+# Refs: cortex#314 (first-install safety). See docs/architecture.md §9.1
+# for the full schema and docs/plan-cortex-migration.md for migration
+# context if you are coming from grove-v2 bot.yaml.
+#
+# IMPORTANT — capability-dispatch contract
+# ----------------------------------------
+# cortex has TWO related capability surfaces:
+#
+#   1. Top-level `capabilities[]` — the STACK CATALOG. This is the source
+#      of truth that the dispatch consumer + future network registry
+#      consult. Add an entry here for every capability your agents
+#      provide.
+#
+#   2. Per-agent `runtime.capabilities[]` — the AGENT's declaration of
+#      intent. Listing a capability on an agent is how the boot loop
+#      knows to instantiate a review consumer for that agent.
+#
+# The cross-validator at `src/common/types/cortex-config.ts` enforces
+# that every id in `agents[].runtime.capabilities[]` ALSO appears as an
+# `id:` in the top-level `capabilities[]` block. A reference that does
+# not resolve fails config load with a pointed error.
+#
+# The two surfaces are NOT symmetric: the top-level catalog is the
+# registry. Adding to the catalog is almost always the right fix when
+# the validator complains.
+
+# -----------------------------------------------------------------------------
+# operator — who is running this cortex instance
+# -----------------------------------------------------------------------------
+operator:
+  # Lowercase letter-prefixed id. Surfaces as the `{org}` segment in NATS
+  # subjects (`local.{org}.>`) and as the stack-id default. Must match
+  # `^[a-z][a-z0-9-]*$` — replace the placeholder below with your own
+  # short slug (e.g. `andreas`, `team-research`).
+  id: operator-name  # <REPLACE_ME>
+  # Human-readable display name shown on the dashboard.
+  displayName: Operator Name  # <REPLACE_ME>
+  # Your Discord snowflake (numeric string). Used by the policy block's
+  # `operator` principal so the bot recognises you as the operator on
+  # Discord. Remove the line if you are not using Discord.
+  discordId: "000000000000000000"  # <REPLACE_ME>: paste your numeric Discord id
+  # ISO-3166 country code stamped into `sovereignty.data_residency` on
+  # every emitted envelope. Defaults to "NZ" when omitted.
+  dataResidency: NZ
+
+# -----------------------------------------------------------------------------
+# stack — optional identity of this cortex deployment within the operator
+# -----------------------------------------------------------------------------
+# When omitted, `deriveStackId` defaults to `${operator.id}/default`. Declare
+# explicitly once you run more than one stack per operator.
+stack:
+  # Must match `{operator_id}/{stack_id}` grammar — both segments lowercase
+  # alphanumeric + hyphen/underscore, each starting with a letter. Keep the
+  # operator-id half in sync with `operator.id` above.
+  id: operator-name/meta-factory  # <REPLACE_ME>: keep operator-name half in sync with operator.id
+
+# -----------------------------------------------------------------------------
+# capabilities — STACK CATALOG (source of truth for capability-dispatch)
+# -----------------------------------------------------------------------------
+# Each entry is a constrained-schema declaration with `id`, `description`,
+# and `provided_by[]` (≥1 declared agent id). Optional fields are `tags`,
+# `rate`, `cost` — see `src/common/types/capability.ts` for the full grammar.
+#
+# The 8 code-review.* flavors below match the arc-skill-code-review skill
+# pack shipped with Echo. Pilot's `pilot request-review --capability X`
+# requests resolve against this catalog, so every `--capability X` value
+# an operator might invoke must have a matching entry here.
+capabilities:
+  - id: code-review.typescript
+    description: TypeScript code review (correctness, types, idioms)
+    provided_by: [echo]
+  - id: code-review.documentation
+    description: Documentation review (markdown specs, design docs, READMEs)
+    provided_by: [echo]
+  - id: code-review.security
+    description: Security review (auth, secrets, OWASP, defensive coding)
+    provided_by: [echo]
+  - id: code-review.architecture
+    description: Architecture review (layering, dependencies, design fit)
+    provided_by: [echo]
+  - id: code-review.performance
+    description: Performance review (algorithmic complexity, hot paths, allocations)
+    provided_by: [echo]
+  - id: code-review.ecosystem-compliance
+    description: Ecosystem compliance review (CLAUDE.md, SOP adherence, conventions)
+    provided_by: [echo]
+  - id: code-review.hardening
+    description: Hardening review (defensive boundaries, failure handling, error paths)
+    provided_by: [echo]
+  - id: code-review.skill-quality
+    description: Skill quality review (AGENTSKILLS.io structure, triggers, tests)
+    provided_by: [echo]
+
+# -----------------------------------------------------------------------------
+# policy — principal + role registry consumed by the PolicyEngine
+# -----------------------------------------------------------------------------
+# Minimal single-principal example: declare yourself as the operator so
+# the bot recognises your Discord identity. Extend with per-agent
+# principals (one entry per `agents[]` member) once you wire agent-side
+# trust + capability gating.
+policy:
+  principals:
+    - id: operator
+      # <REPLACE_ME>: keep both fields in sync with `operator.id` and `stack.id` above.
+      home_operator: operator-name
+      home_stack: operator-name/meta-factory
+      role:
+        - operator
+      trust: []
+      platform_ids:
+        discord:
+          - "000000000000000000"  # <REPLACE_ME>: your operator Discord id
+    - id: echo
+      home_operator: operator-name  # <REPLACE_ME>
+      home_stack: operator-name/meta-factory  # <REPLACE_ME>
+      role:
+        - agent-echo
+      trust: []
+      platform_ids: {}
+  roles:
+    - id: operator
+      capabilities:
+        - keyword.chat
+        - keyword.async
+        - keyword.team
+        - operator
+        - tool.bash
+        - tool.read
+        - tool.write
+        - tool.edit
+        - tool.glob
+        - tool.grep
+    - id: agent-echo
+      capabilities:
+        - keyword.chat
+        - tool.bash
+        - tool.read
+        - tool.glob
+        - tool.grep
+
+# -----------------------------------------------------------------------------
+# agents — first-class agents on this stack
+# -----------------------------------------------------------------------------
+# Each agent declares its platform presence (Discord/Mattermost/Slack —
+# all optional — declare `presence: {}` for a headless bus-only agent)
+# AND optionally a `runtime` block with capabilities[]. The capabilities
+# array on each agent MUST be a subset of the top-level capabilities[]
+# block ids declared above (cross-validator at
+# src/common/types/cortex-config.ts).
+agents:
+  - id: echo
+    displayName: Echo
+    persona: ./personas/echo.md
+    trust: []
+    runtime:
+      substrate: claude-code
+      mode: in-process
+      # Echo's declared code-review flavors. Every entry here MUST also
+      # appear in the top-level capabilities[] catalog above — that's
+      # the cross-validator's invariant. Remove an entry only if echo
+      # genuinely should NOT provide that capability; otherwise keep
+      # both surfaces in sync.
+      capabilities:
+        - code-review.typescript
+        - code-review.documentation
+        - code-review.security
+        - code-review.architecture
+        - code-review.performance
+        - code-review.ecosystem-compliance
+        - code-review.hardening
+        - code-review.skill-quality
+    presence:
+      discord:
+        enabled: true
+        token: <REPLACE_ME>
+        guildId: "<REPLACE_ME>"
+        agentChannelId: "<REPLACE_ME>"
+        logChannelId: "<REPLACE_ME>"
+        contextDepth: 10
+        enableAgentLog: false
+        trustedBotIds: []
+        # Bus-side subjects this agent subscribes to via the
+        # surface-router. The pattern below routes inbound code-review
+        # tasks at the stack level — the segment after `local.` is your
+        # operator id (substitute as you populate the file).
+        surfaceSubjects:
+          - local.operator-name.tasks.code-review.>  # <REPLACE_ME>: replace operator-name with your operator.id
+
+# -----------------------------------------------------------------------------
+# renderers — non-agent-bound surfaces (dashboards, pagerduty, etc.)
+# -----------------------------------------------------------------------------
+renderers:
+  - kind: dashboard
+    port: 8766
+    subscribe:
+      - local.{org}.>
+    projections: []
+
+# -----------------------------------------------------------------------------
+# claude — runtime config shared across all agents' dispatch sessions
+# -----------------------------------------------------------------------------
+claude:
+  timeoutMs: 300000
+  asyncTimeoutMs: 900000
+  additionalArgs: []
+  allowedTools: []
+  # Defense-in-depth — these tools are denied even when a session would
+  # otherwise have them. Remove an entry only if you accept the risk of
+  # the agent writing/editing files on this machine.
+  disallowedTools:
+    - Write
+    - Edit
+    - NotebookEdit
+  allowedDirs: []
+  readOnlyDirs: []
+
+# -----------------------------------------------------------------------------
+# attachments — shared by all platform presences
+# -----------------------------------------------------------------------------
+attachments:
+  enabled: true
+  maxFileSizeBytes: 10485760       # 10 MiB
+  maxTotalSizeBytes: 26214400      # 25 MiB
+  maxAttachmentsPerMessage: 10
+
+# -----------------------------------------------------------------------------
+# execution — local default, optional remote backends
+# -----------------------------------------------------------------------------
+execution:
+  default: local
+  backends: []
+
+# -----------------------------------------------------------------------------
+# github — webhook ingestion (the taps side)
+# -----------------------------------------------------------------------------
+# Leave `webhookSecret` empty to disable webhooks. Once you wire the
+# GitHub App, paste the HMAC secret here. The receiver block stays
+# disabled by default — opt in once you intend to expose the local
+# HTTP receiver.
+github:
+  webhookSecret: "<REPLACE_ME>"
+  repos: []
+  agentDetection:
+    commitTrailers:
+      - "Co-Authored-By: Claude"
+    branchPatterns:
+      - ^feat/(g|f|i)-\d+
+    commentPatterns:
+      - "^Starting:"
+      - "^Completed:"
+  receiver:
+    enabled: false
+    port: 8770
+    hostname: 127.0.0.1
+
+# -----------------------------------------------------------------------------
+# paths — filesystem locations used by the runner + taps
+# -----------------------------------------------------------------------------
+paths:
+  publishedEventsDir: ~/.claude/events/published
+  logDir: ~/.config/cortex/logs
+
+# -----------------------------------------------------------------------------
+# networks — optional cross-stack federation files (G-500)
+# -----------------------------------------------------------------------------
+networksDir: ./networks
+networks: []
+
+# -----------------------------------------------------------------------------
+# nats — myelin / NATS configuration (optional — cortex stays installable
+# without NATS; review-consumer-side wiring stays dormant until NATS is
+# configured AND at least one agent declares code-review capabilities).
+# -----------------------------------------------------------------------------
+# Uncomment + populate once you wire NATS:
+# nats:
+#   url: nats://127.0.0.1:4222
+#   name: cortex
+#   subjects:
+#     - local.<REPLACE_ME>.tasks.code-review.>
+#   identity:
+#     seedPath: ~/.config/nats/cortex.nk
+#     publicKey: <REPLACE_ME>
+#   accountSigningKeyPath: <REPLACE_ME>

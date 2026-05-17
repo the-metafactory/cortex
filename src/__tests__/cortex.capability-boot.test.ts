@@ -389,6 +389,56 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
     rmSync(tmpAgentsDir, { recursive: true, force: true });
   });
 
+  test("cortex#314 — zero agents-with-capabilities → stderr carries an operator-actionable WARNING (not just info-level log)", async () => {
+    // First-install safety regression guard. The boot wiring used to log
+    // a single info-level `console.log("…skipped…")` line, which an
+    // operator running interactively (or tailing a non-debug log) does
+    // NOT notice. The capability-dispatch consumer then rejects every
+    // inbound request with `cant_do` and the operator has no surface
+    // signal pointing at the missing capabilities[] block in cortex.yaml.
+    //
+    // cortex#314's fix promotes the skip to a stderr WARNING with
+    // actionable fix-path text. This test pins the contract: when zero
+    // agents declare runtime.capabilities[], stderr MUST carry the
+    // WARNING tag AND the actionable hint pointing at cortex.yaml.
+    const runtime = createRecordingRuntime();
+    const tmpAgentsDir = mkdtempSync(join(tmpdir(), "cortex-capboot-warn-"));
+    const inlineAgents: Agent[] = [
+      makeAgent("luna", undefined),
+      makeAgent("holly", []),
+    ];
+
+    const { result: { result: handle, logs }, stderr } = await withCapturedStderr(() =>
+      withCapturedConsoleLog(() =>
+        startCortex(minimalConfig(), {
+          disableConfigWatcher: true,
+          disableDashboard: true,
+          disableOutboundPoller: true,
+          agentsDir: tmpAgentsDir,
+          injectRuntime: runtime,
+          inlineAgents,
+        }),
+      ),
+    );
+
+    // Info-level log line stays (operability — daemon-side log shipping
+    // still benefits from the structured info entry). The WARNING is
+    // additive, not a replacement.
+    const infoSkipLines = logs.filter((l) =>
+      l.includes("cortex: capability-registry skipped"),
+    );
+    expect(infoSkipLines.length).toBe(1);
+
+    // stderr carries the WARNING + the actionable fix-path text.
+    expect(stderr).toContain("WARNING: capability-registry skipped");
+    expect(stderr).toContain("0 agents declare runtime.capabilities[]");
+    expect(stderr).toContain("cant_do");
+    expect(stderr).toContain("cortex.yaml");
+
+    await handle.stop();
+    rmSync(tmpAgentsDir, { recursive: true, force: true });
+  });
+
   test("mixed roster — only agents with capabilities publish; others silently skipped", async () => {
     const runtime = createRecordingRuntime();
     const tmpAgentsDir = mkdtempSync(join(tmpdir(), "cortex-capboot-mix-"));

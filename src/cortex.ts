@@ -624,8 +624,23 @@ export async function startCortex(
       );
     }
   } else {
+    // cortex#314 — promote skipped notice to stderr WARNING with
+    // operator-actionable text. The capability-dispatch consumer rejects
+    // every inbound request with `cant_do` until at least one agent
+    // declares runtime.capabilities[], so the boot-time silence was a
+    // first-install footgun (fresh `pilot request-review --wait` exits 0
+    // with no review having happened). Keep the original info-level
+    // `console.log` for normal observability AND emit a stderr WARNING
+    // so operators tailing logs OR running interactively see the
+    // actionable fix-path.
     console.log(
       "cortex: capability-registry skipped — 0 agents declare runtime.capabilities[]",
+    );
+    process.stderr.write(
+      "WARNING: capability-registry skipped — 0 agents declare runtime.capabilities[].\n" +
+        "  The capability-dispatch consumer will reject every request with cant_do.\n" +
+        "  Add runtime.capabilities[] to at least one agent in cortex.yaml.\n" +
+        "  See cortex.yaml.example for a working configuration.\n",
     );
   }
 
@@ -745,8 +760,21 @@ export async function startCortex(
     }
   }
   if (reviewConsumers.length === 0) {
+    // cortex#314 — same first-install-safety promotion as the
+    // capability-registry skip above. Zero code-review-capable agents
+    // means inbound `tasks.code-review.>` envelopes have no consumer
+    // listening; pilot's `request-review --wait` will eventually
+    // time out (or, worse, silently exit 0 pre-pilot#129). Keep the
+    // info-level log AND emit a stderr WARNING with the actionable
+    // fix-path.
     console.log(
       "cortex: review-consumer skipped — 0 agents declare code-review capabilities",
+    );
+    process.stderr.write(
+      "WARNING: review-consumer skipped — 0 agents declare code-review capabilities.\n" +
+        "  Inbound code-review tasks have no consumer; pilot request-review will not be serviced.\n" +
+        "  Add code-review.* entries to an agent's runtime.capabilities[] in cortex.yaml.\n" +
+        "  See cortex.yaml.example for a working configuration.\n",
     );
   }
 

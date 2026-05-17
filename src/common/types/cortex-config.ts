@@ -1978,13 +1978,30 @@ export const CortexConfigSchema = z.object({
       for (let claimIdx = 0; claimIdx < claimed.length; claimIdx++) {
         const capId = claimed[claimIdx];
         if (capId !== undefined && !catalogIds.has(capId)) {
+          // cortex#314 — reworded for first-install safety. The previous
+          // "Either add ... or remove ..." framing implied symmetric
+          // choice; in practice (especially for code-review.* flavors)
+          // the right fix is almost always to add the capability to the
+          // top-level catalog. The catalog is the source of truth that
+          // the dispatch consumer + future network registry consult;
+          // the agent's runtime.capabilities[] is the agent's
+          // declaration of intent. Spell that asymmetry out so a fresh
+          // operator hitting this error knows which surface to edit.
           ctx.addIssue({
             code: "custom",
             message:
               `agent "${agent.id}" claims capability "${capId}" in runtime.capabilities[], ` +
               `but no matching entry exists in the top-level capabilities[] catalog ` +
-              `(declared capability ids: ${declaredCatalog}). ` +
-              `Either add a "${capId}" entry to capabilities[] or remove the reference from agent "${agent.id}".`,
+              `(declared capability ids: ${declaredCatalog}).\n\n` +
+              `Fix: add a "${capId}" entry to capabilities[] at the top level of cortex.yaml. ` +
+              `The top-level capabilities[] is the source of truth that the dispatch consumer ` +
+              `consults; the agent's runtime.capabilities[] is the agent's declaration of intent.\n\n` +
+              `Example minimal entry:\n` +
+              `  - id: ${capId}\n` +
+              `    description: <one-line description>\n` +
+              `    provided_by: [${agent.id}]\n\n` +
+              `(Only remove from agent "${agent.id}" runtime.capabilities[] if the agent should NOT ` +
+              `actually provide that capability.)`,
             path: ["agents", agentIdx, "runtime", "capabilities", claimIdx],
           });
         }

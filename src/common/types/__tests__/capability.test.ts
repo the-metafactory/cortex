@@ -595,6 +595,62 @@ describe("CortexConfigSchema — agents[].runtime.capabilities → catalog (A.6.
     }
   });
 
+  test("cortex#314 — error message points at 'Fix:' add-to-catalog asymmetry, not symmetric 'Either…or…' framing", () => {
+    // First-install safety regression guard. The previous error wording
+    // was "Either add ... or remove ..." which implied symmetric choice.
+    // In practice the right fix (especially for code-review.* flavors
+    // pilot dispatches against) is almost always to add the capability
+    // to the top-level catalog — the catalog is the source of truth.
+    //
+    // The reworded message:
+    //   - Leads with the verb "Fix:" so an operator scanning the error
+    //     finds the actionable line immediately.
+    //   - Spells out the asymmetry between catalog (registry consumed
+    //     by the dispatch consumer) and runtime.capabilities[] (agent
+    //     declaration of intent).
+    //   - Includes a copy-pasteable minimal capability entry naming
+    //     the offending capability id AND the offending agent id (the
+    //     agent becomes the catalog entry's provided_by[]).
+    //   - Keeps a parenthetical pointing at the remove-from-agent
+    //     escape hatch as the rarer fix.
+    try {
+      CortexConfigSchema.parse(
+        minConfig({
+          agents: [
+            minAgent({
+              id: "echo",
+              runtime: {
+                substrate: "claude-code",
+                mode: "in-process",
+                capabilities: ["code-review.typescript"],
+              },
+            }),
+          ],
+          // capabilities: omitted → defaults to []
+        }),
+      );
+      throw new Error("expected parse to throw");
+    } catch (e) {
+      const msg = (e as Error).message;
+      // Leads with the actionable verb + the catalog as target.
+      expect(msg).toContain("Fix:");
+      expect(msg).toContain("add a");
+      expect(msg).toContain("entry to capabilities[] at the top level of cortex.yaml");
+      // Spells out the asymmetry rather than the previous "Either…or…".
+      expect(msg).toContain("source of truth");
+      expect(msg).toContain("declaration of intent");
+      // Carries the copy-pasteable example block naming the offender +
+      // provider in their canonical YAML shape.
+      expect(msg).toContain("Example minimal entry");
+      expect(msg).toContain("- id: code-review.typescript");
+      expect(msg).toContain("provided_by: [echo]");
+      // Keeps the remove-from-agent escape hatch as the rarer fix.
+      expect(msg).toContain("Only remove from agent");
+      // Does NOT carry the old symmetric "Either…or…" framing.
+      expect(msg).not.toContain("Either add");
+    }
+  });
+
   test("empty catalog + empty agent runtime.capabilities parses cleanly", () => {
     // Backward-compat path: deployments not yet declaring any capabilities
     // continue to parse without surfacing a refine error.
