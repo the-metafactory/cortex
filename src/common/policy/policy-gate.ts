@@ -48,7 +48,9 @@ export class PlatformPrincipalIndex {
           // Schema-side uniqueness guarantees no collision; if a duplicate
           // slips through (caller bypassed parse), prefer the first-declared
           // principal as the deterministic choice.
-          const key = `${platformName}${platformId}`;
+          // PR #310 r1 N-1 fix — use `:` separator so a future platform
+          // whose name is a prefix of another doesn't alias keys.
+          const key = `${platformName}:${platformId}`;
           if (!m.has(key)) m.set(key, p.id);
         }
       }
@@ -62,7 +64,7 @@ export class PlatformPrincipalIndex {
    * denies the inbound message at the resolve-access path.
    */
   resolve(platform: string, platformId: string): string | undefined {
-    return this.map.get(`${platform}${platformId}`);
+    return this.map.get(`${platform}:${platformId}`);
   }
 
   /** Number of `(platform, id)` tuples in the index. Useful for boot logs. */

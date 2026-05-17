@@ -974,6 +974,55 @@ function collectAdapterViews(
     visit("mattermost", false);
     visit("slack", false);
   }
+
+  // cortex#297 r1 B-1 fix — bot.yaml (grove-v2 legacy) shape carries roles
+  // at top-level `legacy.discord[i].roles[]` + `legacy.mattermost[i].roles[]`,
+  // not under `legacy.agents[].presence`. Without this branch the policy
+  // synthesis silently dropped every authorization declaration in every
+  // grove-v2 upgrade — the dominant install shape pre-MIG-7.9.
+  //
+  // Zip top-level platform arrays against the synthesised `agents[]` by
+  // index: `legacy.discord[i]` maps to `agents[i]` (which `buildAgents`
+  // synthesised in the same order).
+  const isBotYamlShape = !Array.isArray(legacy.agents) || rawAgents.length === 0;
+  if (isBotYamlShape) {
+    const visitTopLevel = (
+      platform: "discord" | "mattermost" | "slack",
+      raw: unknown,
+      includeDm: boolean,
+    ): void => {
+      const instances = toArray<unknown>(raw);
+      if (instances.length === 0) return;
+      for (let i = 0; i < instances.length; i++) {
+        const block = instances[i] as Record<string, unknown> | undefined;
+        if (!block || typeof block !== "object") continue;
+        if (block.enabled === false) continue;
+        const agent = agents[i];
+        if (agent === undefined) continue;
+        const rawRoles = Array.isArray(block.roles)
+          ? (block.roles as LegacyRoleEntry[])
+          : [];
+        const defaultRole =
+          typeof block.defaultRole === "string" ? block.defaultRole : "allow-all";
+        const dm = includeDm
+          ? (block.dm as LegacyDMConfig | undefined)
+          : undefined;
+        if (rawRoles.length > 0 || dm !== undefined) {
+          views.push({
+            agentId: agent.id,
+            platform,
+            roles: rawRoles,
+            defaultRole,
+            dm,
+          });
+        }
+      }
+    };
+    visitTopLevel("discord", legacy.discord, true);
+    visitTopLevel("mattermost", legacy.mattermost, false);
+    // bot.yaml has no top-level `slack[]` (Slack was post-MIG-7 only) — no third visit.
+  }
+
   return views;
 }
 

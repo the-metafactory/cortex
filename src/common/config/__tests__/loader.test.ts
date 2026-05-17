@@ -606,4 +606,103 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     const loaded = loadConfigWithAgents(configPath);
     expect(loaded.stack).toBeUndefined();
   });
+
+  // -------------------------------------------------------------------------
+  // v2.0.0 legacy authorisation rejection (PR #310 r1 M-1 fix)
+  //
+  // Echo PR #310 r1 caught: removing the entire pre-Zod legacy-detection
+  // throw block left 109/109 loader tests passing — the loud-error claim
+  // was structurally fragile. These tests pin the rejection path so future
+  // refactors can't silently regress it.
+  // -------------------------------------------------------------------------
+
+  test("v2.0.0 rejects agents[].presence.discord.roles[] with migrate-config pointer", () => {
+    const cfg = minimalCortex();
+    const agent = (cfg.agents as Record<string, unknown>[])[0]!;
+    const presence = agent.presence as Record<string, unknown>;
+    const discord = presence.discord as Record<string, unknown>;
+    discord.roles = [
+      { name: "operator", users: ["100000000000000999"], features: ["chat"] },
+    ];
+    const path = writeCortexConfig(testDir, cfg);
+    expect(() => loadConfigWithAgents(path)).toThrow(
+      /agents\[0\]\.presence\.discord\.roles\[\]/,
+    );
+    expect(() => loadConfigWithAgents(path)).toThrow(/migrate-config\.ts/);
+  });
+
+  test("v2.0.0 rejects agents[].presence.discord.defaultRole", () => {
+    const cfg = minimalCortex();
+    const agent = (cfg.agents as Record<string, unknown>[])[0]!;
+    const presence = agent.presence as Record<string, unknown>;
+    const discord = presence.discord as Record<string, unknown>;
+    discord.defaultRole = "denied";
+    const path = writeCortexConfig(testDir, cfg);
+    expect(() => loadConfigWithAgents(path)).toThrow(
+      /agents\[0\]\.presence\.discord\.defaultRole/,
+    );
+    expect(() => loadConfigWithAgents(path)).toThrow(/migrate-config\.ts/);
+  });
+
+  test("v2.0.0 rejects agents[].presence.discord.dm block", () => {
+    const cfg = minimalCortex();
+    const agent = (cfg.agents as Record<string, unknown>[])[0]!;
+    const presence = agent.presence as Record<string, unknown>;
+    const discord = presence.discord as Record<string, unknown>;
+    discord.dm = { operatorRole: { features: ["chat"] } };
+    const path = writeCortexConfig(testDir, cfg);
+    expect(() => loadConfigWithAgents(path)).toThrow(
+      /agents\[0\]\.presence\.discord\.dm/,
+    );
+    expect(() => loadConfigWithAgents(path)).toThrow(/migrate-config\.ts/);
+  });
+
+  test("v2.0.0 rejects agents[].roles[] (legacy top-level agent-roles field)", () => {
+    const cfg = minimalCortex();
+    const agent = (cfg.agents as Record<string, unknown>[])[0]!;
+    agent.roles = [{ name: "operator", users: ["100000000000000999"] }];
+    const path = writeCortexConfig(testDir, cfg);
+    expect(() => loadConfigWithAgents(path)).toThrow(/agents\[0\]\.roles\[\]/);
+    expect(() => loadConfigWithAgents(path)).toThrow(/migrate-config\.ts/);
+  });
+
+  test("v2.0.0 rejects policy.parallel_mode_enabled (retired with cortex#296 parallel-mode plumbing)", () => {
+    const cfg = minimalCortex();
+    cfg.policy = {
+      principals: [],
+      roles: [],
+      parallel_mode_enabled: false,
+    };
+    const path = writeCortexConfig(testDir, cfg);
+    expect(() => loadConfigWithAgents(path)).toThrow(/policy\.parallel_mode_enabled/);
+    expect(() => loadConfigWithAgents(path)).toThrow(/migrate-config\.ts/);
+  });
+
+  test("v2.0.0 lists every offender in a single error message", () => {
+    // Multi-offender case: operator left BOTH presence.discord.roles[] AND
+    // presence.discord.dm in the file. The error should enumerate both so
+    // they can fix everything in one migrate-config run.
+    const cfg = minimalCortex();
+    const agent = (cfg.agents as Record<string, unknown>[])[0]!;
+    const presence = agent.presence as Record<string, unknown>;
+    const discord = presence.discord as Record<string, unknown>;
+    discord.roles = [{ name: "user", users: ["111"], features: ["chat"] }];
+    discord.dm = { operatorRole: { features: ["chat"] } };
+    const path = writeCortexConfig(testDir, cfg);
+    try {
+      loadConfigWithAgents(path);
+      throw new Error("expected loadConfigWithAgents to throw");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      expect(msg).toContain("agents[0].presence.discord.roles[]");
+      expect(msg).toContain("agents[0].presence.discord.dm");
+      expect(msg).toContain("migrate-config.ts");
+    }
+  });
+
+  test("v2.0.0 accepts a clean cortex.yaml with no legacy fields", () => {
+    // Positive case — minimal cortex-shape with no auth fields parses OK.
+    const path = writeCortexConfig(testDir, minimalCortex());
+    expect(() => loadConfigWithAgents(path)).not.toThrow();
+  });
 });
