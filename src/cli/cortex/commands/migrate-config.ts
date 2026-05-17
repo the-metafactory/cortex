@@ -36,6 +36,13 @@ interface ParsedArgs {
   labels: string | undefined;
   check: boolean;
   strict: boolean;
+  /**
+   * cortex#324 (v2.0.3) — when set, the migrator reuses the legacy
+   * `nats.identity` block (seedPath + publicKey) for `stack.nkey_seed_path`
+   * + `stack.nkey_pub`. Off by default; without the flag, the migrator
+   * only emits a warning that stack signing is not configured.
+   */
+  autoStackKey: boolean;
   help: boolean;
 }
 
@@ -50,6 +57,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     labels: undefined,
     check: false,
     strict: false,
+    autoStackKey: false,
     help: false,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -60,6 +68,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
       args.check = true;
     } else if (a === "--strict") {
       args.strict = true;
+    } else if (a === "--auto-stack-key") {
+      args.autoStackKey = true;
     } else if (a === "--out") {
       const next = argv[i + 1];
       if (next === undefined || next.startsWith("--")) {
@@ -98,6 +108,7 @@ function printHelp(): void {
   console.log("  --labels FILE  Principal-id label overrides ({\"<platform>:<id>\": \"<principal-id>\"})");
   console.log("  --check        Validate + emit pre-flight gap report; exits 1 if gaps found");
   console.log("  --strict       Fail on warnings (default: warnings → stderr, exit 0)");
+  console.log("  --auto-stack-key  Reuse nats.identity NKey for stack.nkey_seed_path (cortex#324)");
   console.log("  -h, --help     Show this help");
 }
 
@@ -169,7 +180,11 @@ export async function runMigrateConfig(argv: string[]): Promise<number> {
 
   let result;
   try {
-    result = convertBotYaml(legacy, { configDir: dirname(inputPath), labels });
+    result = convertBotYaml(legacy, {
+      configDir: dirname(inputPath),
+      labels,
+      autoStackKey: args.autoStackKey,
+    });
   } catch (err) {
     console.error(`Error: conversion failed: ${err instanceof Error ? err.message : String(err)}`);
     return 1;

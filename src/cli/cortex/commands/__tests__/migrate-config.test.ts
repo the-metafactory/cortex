@@ -1253,3 +1253,125 @@ describe("convertBotYaml — disabled-adapter does not leak policy (PR #306 r1 M
     expect(allowAllRole).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// cortex#324 (v2.0.3) — stack signing default-on
+// ---------------------------------------------------------------------------
+
+describe("convertBotYaml — stack signing (cortex#324)", () => {
+  test("no stack.nkey_seed_path on input → emits warning suggesting the field be set", () => {
+    const legacy = loadFixture("minimal.bot.yaml");
+    const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
+    const w = result.warnings.find((w) => w.field === "stack.nkey_seed_path");
+    expect(w).toBeDefined();
+    expect(w!.message).toContain("UNSIGNED");
+    expect(w!.message).toContain("docs/sop-stack-identity.md");
+  });
+
+  test("autoStackKey + legacy nats.identity present → reuses seedPath + publicKey", () => {
+    // full.bot.yaml's nats.identity is in the legacy {did, keyPath} shape,
+    // which gets stripped by convertNats. Use a cortex-shape input where
+    // nats.identity already carries seedPath + publicKey.
+    const legacy: LegacyBotYaml = {
+      agent: {
+        name: "test-agent",
+        displayName: "Test",
+        operatorId: "test-op",
+      },
+      discord: [
+        {
+          token: "discord-token-xxxx",
+          guildId: "100000000000000001",
+          agentChannelId: "100000000000000002",
+          logChannelId: "100000000000000003",
+        },
+      ],
+      stack: { id: "test-op/research" },
+      nats: {
+        url: "nats://localhost:4222",
+        identity: {
+          seedPath: "~/.config/nats/cortex.nk",
+          publicKey: "UD7OGEVBNJAUQ57H5NHSPJZOKKOXOZ4DEUJVAO5URHBIUAVSVTJGL4QV",
+        },
+      },
+    };
+    const result = convertBotYaml(legacy, {
+      configDir: FIXTURE_DIR,
+      autoStackKey: true,
+    });
+    expect(result.cortex.stack).toBeDefined();
+    expect(result.cortex.stack?.nkey_seed_path).toBe("~/.config/nats/cortex.nk");
+    expect(result.cortex.stack?.nkey_pub).toBe(
+      "UD7OGEVBNJAUQ57H5NHSPJZOKKOXOZ4DEUJVAO5URHBIUAVSVTJGL4QV",
+    );
+    const w = result.warnings.find((w) => w.field === "stack.nkey_seed_path");
+    expect(w).toBeDefined();
+    expect(w!.message).toContain("auto-populated");
+  });
+
+  test("autoStackKey but no legacy nats.identity → falls through to warning, no field added", () => {
+    const legacy = loadFixture("minimal.bot.yaml");
+    const result = convertBotYaml(legacy, {
+      configDir: FIXTURE_DIR,
+      autoStackKey: true,
+    });
+    // No seedPath to reuse — stack stays untouched (or absent), warning fires.
+    expect(result.cortex.stack?.nkey_seed_path).toBeUndefined();
+    const w = result.warnings.find((w) => w.field === "stack.nkey_seed_path");
+    expect(w).toBeDefined();
+    expect(w!.message).toContain("UNSIGNED");
+  });
+
+  test("idempotent — input already has stack.nkey_seed_path → no warning, no overwrite", () => {
+    const legacy: LegacyBotYaml = {
+      agent: {
+        name: "test-agent",
+        displayName: "Test",
+        operatorId: "test-op",
+      },
+      discord: [
+        {
+          token: "discord-token-xxxx",
+          guildId: "100000000000000001",
+          agentChannelId: "100000000000000002",
+          logChannelId: "100000000000000003",
+        },
+      ],
+      stack: {
+        id: "test-op/research",
+        nkey_seed_path: "~/.config/nats/pre-existing.nk",
+        nkey_pub: "UD7OGEVBNJAUQ57H5NHSPJZOKKOXOZ4DEUJVAO5URHBIUAVSVTJGL4QV",
+      } as unknown as LegacyBotYaml["stack"],
+      nats: {
+        url: "nats://localhost:4222",
+        identity: {
+          seedPath: "~/.config/nats/different.nk",
+          publicKey: "UDEQUP3NUQAGUJIZ5ZSOBZKAF73CW6BPMEQX6476E66Q37FONADJ75EB",
+        },
+      },
+    };
+    const result = convertBotYaml(legacy, {
+      configDir: FIXTURE_DIR,
+      autoStackKey: true,
+    });
+    // Pre-existing field preserved verbatim — NOT overwritten by autoStackKey.
+    expect(result.cortex.stack?.nkey_seed_path).toBe(
+      "~/.config/nats/pre-existing.nk",
+    );
+    // No new warning — the field was already set, idempotent no-op.
+    const w = result.warnings.find((w) => w.field === "stack.nkey_seed_path");
+    expect(w).toBeUndefined();
+  });
+});
+
+describe("parseArgs — --auto-stack-key (cortex#324)", () => {
+  test("parses --auto-stack-key flag", () => {
+    const args = parseArgs(["in.yaml", "--auto-stack-key"]);
+    expect(args.autoStackKey).toBe(true);
+  });
+
+  test("default is false", () => {
+    const args = parseArgs(["in.yaml"]);
+    expect(args.autoStackKey).toBe(false);
+  });
+});

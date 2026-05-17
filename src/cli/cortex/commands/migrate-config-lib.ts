@@ -239,6 +239,19 @@ export interface ConvertOptions {
    * idempotency (the same label map produces the same output on every run).
    */
   labels?: Map<string, string>;
+  /**
+   * cortex#324 (v2.0.3) — when `true`, the migrator auto-populates
+   * `stack.nkey_seed_path` (and `stack.nkey_pub` when derivable) from
+   * the legacy `nats.identity` block, on the theory that the operator
+   * is already using one NKey for NATS auth and is happy to reuse it
+   * for stack-envelope signing too. Idempotent: if the input already
+   * declared `stack.nkey_seed_path`, no-op.
+   *
+   * Off by default. The CLI flag is `--auto-stack-key`; without it,
+   * the migrator emits a warning suggesting the operator add the field
+   * (or re-run with the flag).
+   */
+  autoStackKey?: boolean;
 }
 
 // Re-export policy types so CLI callers and external consumers can hold
@@ -837,6 +850,19 @@ export function convertBotYaml(
   };
 
   if (legacy.stack !== undefined) cortex.stack = legacy.stack;
+  // cortex#324 (v2.0.3) — walk-the-talk: stack signing should be ON by
+  // default. Surface a warning when the migrated config lacks
+  // `stack.nkey_seed_path`. With `--auto-stack-key`, reuse the legacy
+  // `nats.identity.seedPath` + `nats.identity.publicKey` for the stack
+  // signing identity (single-NKey deployment — same key signs envelopes
+  // it already authenticates with). Idempotent: skipped if the input
+  // already declared `stack.nkey_seed_path`.
+  cortex.stack = annotateStackSigning(
+    cortex.stack as Record<string, unknown> | undefined,
+    legacy,
+    opts.autoStackKey ?? false,
+    warnings,
+  );
   if (legacy.capabilities !== undefined) cortex.capabilities = legacy.capabilities;
 
   if (legacy.claude !== undefined) cortex.claude = legacy.claude;
@@ -1219,6 +1245,92 @@ function rewritePaths(legacyPaths: unknown, warnings: ConversionWarning[]): unkn
  * Any other unknown fields under `nats` pass through; only the
  * shape-mismatched identity block is stripped.
  */
+/**
+ * cortex#324 (v2.0.3) — annotate the migrated `stack:` block with signing
+ * material so cortex defaults to publishing signed envelopes.
+ *
+ * Three branches:
+ *   1. `stack.nkey_seed_path` already set on the input → no-op (idempotent).
+ *      The operator hand-managed signing; the migrator preserves it.
+ *   2. `autoStackKey=true` AND legacy `nats.identity.seedPath` is set →
+ *      reuse the NATS auth NKey for stack signing. Cortex's NKey loader
+ *      enforces a `SU` (user-class) prefix gate (see
+ *      `src/common/config/stack-signing-key.ts`); operators running NATS
+ *      with a user-class NKey for auth pass that gate automatically.
+ *      `nats.identity.publicKey` (when present) carries forward as
+ *      `stack.nkey_pub` for the consistency pin.
+ *   3. Neither — emit a warning telling the operator to set
+ *      `stack.nkey_seed_path` (or re-run with `--auto-stack-key` when the
+ *      legacy config already has a NATS NKey).
+ *
+ * Returns the (possibly updated) stack block, or `undefined` when the
+ * input had no stack block AND no auto-population was performed. The
+ * caller stores the return value back onto `cortex.stack`.
+ */
+function annotateStackSigning(
+  existingStack: Record<string, unknown> | undefined,
+  legacy: LegacyBotYaml,
+  autoStackKey: boolean,
+  warnings: ConversionWarning[],
+): Record<string, unknown> | undefined {
+  // Branch 1: nkey_seed_path already declared — idempotent no-op.
+  if (
+    existingStack !== undefined &&
+    typeof existingStack.nkey_seed_path === "string" &&
+    existingStack.nkey_seed_path.length > 0
+  ) {
+    return existingStack;
+  }
+
+  // Extract the NATS-side identity (used by branches 2 + 3 messaging).
+  const natsIdentity =
+    legacy.nats && typeof legacy.nats === "object"
+      ? (legacy.nats as Record<string, unknown>).identity
+      : undefined;
+  const natsSeedPath =
+    natsIdentity && typeof natsIdentity === "object"
+      ? typeof (natsIdentity as Record<string, unknown>).seedPath === "string"
+        ? ((natsIdentity as Record<string, unknown>).seedPath as string)
+        : undefined
+      : undefined;
+  const natsPublicKey =
+    natsIdentity && typeof natsIdentity === "object"
+      ? typeof (natsIdentity as Record<string, unknown>).publicKey === "string"
+        ? ((natsIdentity as Record<string, unknown>).publicKey as string)
+        : undefined
+      : undefined;
+
+  // Branch 2: --auto-stack-key + NATS NKey available → reuse it.
+  if (autoStackKey && natsSeedPath !== undefined) {
+    const next: Record<string, unknown> = { ...(existingStack ?? {}) };
+    next.nkey_seed_path = natsSeedPath;
+    if (natsPublicKey !== undefined) next.nkey_pub = natsPublicKey;
+    warnings.push({
+      field: "stack.nkey_seed_path",
+      message:
+        `auto-populated stack.nkey_seed_path from nats.identity.seedPath (${natsSeedPath}) — ` +
+        `cortex will sign outbound envelopes with the NATS auth NKey. ` +
+        `Verify the seed is user-class (SU-prefixed) — operator/account NKeys (SO/SA) will fail at boot.`,
+    });
+    return next;
+  }
+
+  // Branch 3: warn — stack signing will stay off until the operator
+  // declares the field. Wording mirrors the cortex.ts boot WARNING so
+  // operators see consistent fix-paths across migrate-config + boot.
+  const hint = natsSeedPath
+    ? ` Re-run with \`--auto-stack-key\` to reuse \`${natsSeedPath}\` (NATS auth NKey) for stack signing.`
+    : " Generate one via `nsc generate nkey -u > ~/.config/nats/cortex.nk && chmod 600 ~/.config/nats/cortex.nk` and add the path to cortex.yaml.";
+  warnings.push({
+    field: "stack.nkey_seed_path",
+    message:
+      "stack.nkey_seed_path is not set — cortex will publish UNSIGNED envelopes (peers running " +
+      "verifySignedByChain will reject them). See docs/sop-stack-identity.md." +
+      hint,
+  });
+  return existingStack;
+}
+
 function convertNats(legacyNats: unknown, warnings: ConversionWarning[]): unknown {
   if (!legacyNats || typeof legacyNats !== "object") return legacyNats;
   const nats = { ...(legacyNats as Record<string, unknown>) };

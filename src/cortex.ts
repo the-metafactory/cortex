@@ -393,6 +393,37 @@ export async function startCortex(
         err instanceof Error ? err.message : String(err),
       );
     }
+  } else {
+    // cortex#324 (v2.0.3) — walk the talk: stack signing should be ON by
+    // default. When the operator hasn't declared `stack.nkey_seed_path`,
+    // every outbound envelope is published UNSIGNED, which means peers
+    // on the bus that run `verifySignedByChain` (cortex#320 / v2.0.2)
+    // will reject the messages — silently for plain `dispatch.*`, loudly
+    // once federation is on. The opt-in default is a footgun: operators
+    // upgrade from a working unsigned deployment, don't notice the
+    // missing field, and traffic looks fine until a peer enforces.
+    //
+    // For v2.0.3 we emit a LOUD stderr WARNING so operators tailing logs
+    // OR running interactively see the actionable fix-path. Boot stays
+    // non-fatal — existing deployments degrade gracefully (same shape as
+    // today's unsigned publish), and v2.0.4 promotes this to a refuse-to-
+    // boot once arc upgrade auto-provisions the field on every install.
+    //
+    // Same wording pattern as the cortex#314 capability-registry and
+    // review-consumer skip warnings (`src/cortex.ts:~640, ~774`): info
+    // log + stderr WARNING with the `arc upgrade Cortex` fix-path AND
+    // the manual cortex.yaml fix-path, plus a docs/sop-stack-identity.md
+    // cross-link for the rotation / threat-model background.
+    console.log(
+      "cortex: stack signing key not configured — outbound envelopes will be unsigned",
+    );
+    process.stderr.write(
+      "WARNING: stack identity not configured — cortex will publish unsigned envelopes.\n" +
+        "  Peers that verify signed_by[] will reject these messages.\n" +
+        "  Run `arc upgrade Cortex --force` to auto-provision, or add\n" +
+        "  `stack.nkey_seed_path` (+ optionally `stack.nkey_pub`) to cortex.yaml.\n" +
+        "  See docs/sop-stack-identity.md for the full SOP.\n",
+    );
   }
 
   // Bus runtime (M2-M6) — no-op when `config.nats?` is absent. Tests inject

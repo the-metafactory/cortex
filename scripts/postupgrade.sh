@@ -29,13 +29,25 @@ ln -sf "${CORTEX_DIR}/src/taps/cc-events"          "${CLAUDE_DIR}/relay/cortex"
 ln -sf "${CORTEX_DIR}/src/cli/discord/skill"       "${CLAUDE_DIR}/skills/Discord"
 echo "  ✓ Nested symlinks refreshed"
 
-# ─── 2. Re-template launchd plists (shared with postinstall.sh) ──
+# ─── 2. Auto-provision stack signing identity (cortex#324 / v2.0.3) ──
+# Walk-the-talk: stack signing is ON by default. When the operator's
+# cortex.yaml (or cortex.work.yaml) lacks `stack.nkey_seed_path`, the
+# helper generates an NKey at the canonical path and wires the field
+# into the config. Idempotent — skipped when the field is already set.
+echo "  Provisioning stack signing identity..."
+source "${SCRIPT_DIR}/lib/stack-identity-provision.sh"
+provision_stack_identity "${CONFIG_DIR}/cortex.yaml"      "cortex" || true
+if [ -f "${CONFIG_DIR}/cortex.work.yaml" ]; then
+  provision_stack_identity "${CONFIG_DIR}/cortex.work.yaml" "cortex-work" || true
+fi
+
+# ─── 3. Re-template launchd plists (shared with postinstall.sh) ──
 source "${SCRIPT_DIR}/lib/plist-render.sh"
 if [ "$(uname)" = "Darwin" ]; then
   LAUNCH_DIR="${HOME}/Library/LaunchAgents"
   render_cortex_plists "${CORTEX_DIR}" "${LAUNCH_DIR}" "${CONFIG_DIR}"
 
-  # ─── 3. Restart daemons ─────────────────────────────────────────
+  # ─── 4. Restart daemons ─────────────────────────────────────────
   # `|| true` keeps a partial upgrade non-fatal — if a daemon was already
   # unloaded by preupgrade.sh, load just re-loads cleanly.
   launchctl load "${LAUNCH_DIR}/ai.meta-factory.cortex.relay.plist" 2>/dev/null || true

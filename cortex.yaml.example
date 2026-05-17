@@ -51,15 +51,35 @@ operator:
   dataResidency: NZ
 
 # -----------------------------------------------------------------------------
-# stack — optional identity of this cortex deployment within the operator
+# stack — identity of this cortex deployment within the operator
 # -----------------------------------------------------------------------------
+# v2.0.3 (cortex#324) — stack signing is ON by default. `arc upgrade Cortex`
+# auto-provisions `nkey_seed_path` + `nkey_pub` if you don't declare them;
+# the values below are the worked example a fresh install renders. Without
+# a `nkey_seed_path`, cortex emits a stderr WARNING and publishes envelopes
+# UNSIGNED — peers running `verifySignedByChain` (cortex#320 / v2.0.2) will
+# reject those messages. See docs/sop-stack-identity.md for rotation +
+# threat-model background.
+#
 # When omitted, `deriveStackId` defaults to `${operator.id}/default`. Declare
-# explicitly once you run more than one stack per operator.
+# `stack:` explicitly once you run more than one stack per operator.
 stack:
   # Must match `{operator_id}/{stack_id}` grammar — both segments lowercase
   # alphanumeric + hyphen/underscore, each starting with a letter. Keep the
   # operator-id half in sync with `operator.id` above.
   id: operator-name/meta-factory  # <REPLACE_ME>: keep operator-name half in sync with operator.id
+  # NKey seed file (NATS user-class, `SU…`-prefixed). Must be chmod 600.
+  # `arc upgrade Cortex` provisions one at this path if missing. Rotate
+  # by regenerating the seed + updating `nkey_pub` below; see SOP.
+  nkey_seed_path: ~/.config/nats/cortex.nk  # <REPLACE_ME or rely on arc upgrade auto-provision>
+  # 56-char base32 NKey public key (`U…`-prefixed). Optional but
+  # recommended — cortex pins the loaded seed against this value at
+  # boot to catch operator-rotation split-brain (seed file rotated but
+  # peers' trust: list still references the old pubkey). Omit on first
+  # install; copy from the cortex log line (`stack signing key staged —
+  # principal=…`) into the field after first boot for the consistency
+  # check to kick in.
+  nkey_pub: UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA  # <REPLACE_ME>: paste the U-prefixed pubkey from the seed
 
 # -----------------------------------------------------------------------------
 # capabilities — STACK CATALOG (source of truth for capability-dispatch)
