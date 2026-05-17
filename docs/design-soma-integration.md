@@ -35,17 +35,21 @@ The unit of federation isn't the agent, isn't the stack, isn't even the network 
 
 ---
 
-## §1 — Why Soma is not an M-layer
+## §1 — Soma is an M7-layer body protocol
 
-The instinct is to ask "is Soma M6.5? M7-sibling? a new M8?" That's the wrong question. The M1–M7 stack is the **bus/transport/composition** spine. Soma is a **cross-cutting concern** that applies wherever an assistant is instantiated, regardless of substrate.
+The instinct is to ask "is Soma M6.5? M7-sibling? a new M8?" The operative test is: *does X provide a contract that lower layers depend on?* M2–M6 are entirely unchanged by Soma's presence or absence — the bus, envelope, namespace, JetStream consumer, and surface-router are identical whether Soma is installed or not. So Soma is **an M7-layer body protocol** — hostable inside any M7 surface (cortex's agent surface, pilot, signal-collector) **or runnable as its own M7 process** (Soma daemon mode, equivalent to a headless agent with `presence: {}` per cortex#245's `AgentSchema`). The daemon mode is not "non-M-layer"; it's an M7 application that happens to advertise no platform presence.
+
+What's special about Soma — and worth saying without rhetorical sleight-of-hand — is that **it's an M7 contract that other M7 surfaces (cortex, pilot, future apps) host on behalf of an assistant body owned by the assistant's source-of-truth (`~/.soma/`)**. Cortex doesn't *contain* Luna; cortex hosts a Luna presence projected from Soma. Pilot doesn't contain Echo; pilot hosts an Echo presence projected from Soma. The body lives in Soma; the M7 surface materialises it.
 
 Re-read Soma's `CONTEXT.md` glossary on `substrate` and `daemon mode` together:
 
 > **substrate:** The host runtime that Soma projects into. Examples: Claude Code, OpenAI Codex, Pi.dev, **Cortex/Myelin**.
 
-> **daemon:** Soma runs as a long-lived process subscribing to **Myelin subjects**. No substrate involved.
+> **daemon mode:** Soma runs as a long-lived process subscribing to Myelin subjects. No substrate involved. (From Soma `CONTEXT.md`'s Runtime modes table.)
 
-Cortex/Myelin is listed as a *substrate* AND Soma's daemon mode subscribes to *Myelin subjects directly without substrate*. That isn't a contradiction — it means **Myelin is the bus** (where Soma daemons live as M7-equivalent application processes) and **Cortex is one possible M7 substrate atop Myelin** (where Soma projects into agent surfaces). Soma sits **across** layers, not at any one of them:
+Cortex/Myelin is listed as a *substrate* AND Soma's daemon mode subscribes to *Myelin subjects directly without substrate*. That isn't a contradiction — it's the same M7-protocol-with-two-deployment-shapes pattern cortex already uses internally (cf. the cortex#245 headless-agent shape, where an agent declared with `presence: {}` runs as a bus-only participant with no chat-surface adapter). Soma's daemon mode is the same pattern at the body-protocol layer.
+
+The placement diagram below is unchanged in shape — Soma above the M-stack with downward arrows to substrates — but the right *label* is "M7 cross-stack body protocol" rather than "cross-cutting non-M-layer concern":
 
 ```
                 Soma assistant body
@@ -92,10 +96,10 @@ These are not future hypotheticals — they're shipped or in-design cortex code 
 
 | Cortex code | What it does | What Soma would do |
 |---|---|---|
-| `src/runner/cc-session.ts` (ClaudeCodeHarness) | Spawns `claude --print` with `CLAUDE.md` + `agents.d/*.md` fragments already on disk | Soma's `home` mode already projects into `~/.claude/`. ClaudeCodeHarness becomes a pure *substrate harness* (dispatch transport); projection is Soma's job, not the harness's. |
+| `src/substrates/claude-code/harness.ts` (`ClaudeCodeHarness`, IAW Phase A.1 / cortex#113) — and the underlying spawner `src/runner/cc-session.ts` (`CCSession`, used as `ccSessionFactory` and instantiated at `dispatch-listener.ts:615`) | Harness wraps the substrate; `CCSession` spawns `claude --print` with `CLAUDE.md` + `agents.d/*.md` fragments already on disk | Soma's `home` mode already projects into `~/.claude/`. The harness stays as the dispatch-transport abstraction (it already IS one); projection is Soma's job, not the harness's. |
 | `the-metafactory/alpha` `src/cursor/workdir.ts` (per `docs/design-cursor-substrate-bot.md` §4) | Per-dispatch: `mkdtemp` workdir, shallow clone PR, **strip YAML frontmatter from `alpha.md` and write to `.cursor/rules/persona.mdc`**, stage PR.md + diff.patch | Soma's `workspace` mode + Cursor adapter projects the persona once at install; the workdir shim only needs to clone the PR + invoke `cursor-agent`. The frontmatter-stripping is Soma adapter logic, not per-dispatch shim logic. |
 | `the-metafactory/sage` (pi.dev agent) | Sage's persona-staging into pi.dev's instruction surface (mirror of the alpha pattern, also reimplemented) | Soma's Pi.dev adapter (`buildPiDevContext` + `buildPiDevHomeContext` already exist on the Soma side) |
-| `src/common/types/cortex-config.ts:253` `substrate: z.enum([...])` | Substrate enum gates which harness runs | Same enum value; Soma reuses the substrate identifier as the projection target |
+| `src/common/types/cortex-config.ts` `AgentRuntimeSchema.substrate` (currently around line 421 — cite by symbol; the line number has drifted with cortex#245 schema growth) | Substrate enum (`claude-code / codex / pi-dev / cursor / custom`) gates which harness runs | Same enum value; Soma reuses the substrate identifier as the projection target |
 | `agents.d/*.md` fragment with frontmatter (`id`, `did`, `runtime`, `roles`, `trust`, `capabilities`) + persona body | Mixes infrastructure config (runtime, trust, bus identity) with assistant body (persona, capabilities) | Frontmatter stays in cortex.yaml / arc-rendered fragment; persona body, capability declarations, and skill library move to Soma. The fragment becomes a thin pointer (`body: soma://<assistant-id>`). |
 
 The cursor-design example is the load-bearing one. §4 of `docs/design-cursor-substrate-bot.md` walks through the persona-staging shim — strips YAML frontmatter (because `.mdc` doesn't parse it), writes to `.cursor/rules/persona.mdc`, cleans up the workdir after dispatch. **That is, verbatim, a Soma `projection` performed by a `workspace`-mode adapter, with frontmatter-stripping inlined into the host code rather than the adapter.** The cursor design even names the structural gap ("the single structural gap is the missing `--system-prompt` flag, which forces a per-dispatch workdir-staging step") without observing that the gap is already filled in Soma's adapter contract — it's just not yet wired in.
@@ -138,7 +142,7 @@ The original §7 strawman showed three Luna presences pointing at the same `body
 
 ### Not implied (anti-claim)
 
-This spectrum does **not** mean "thin assistants don't need Soma." They still need: a portable persona, a portable skill registry, and a portable substrate-projection adapter. Without Soma, Echo today is `agents.d/echo.md` in cortex, plus a separate skill registry inside `~/.claude/skills/` (or wherever), plus an ad-hoc projection that lives in cortex's `cc-session.ts`. With Soma, Echo is `~/.soma/profile/echo/` (persona + skill refs) and the projection is the adapter's job. The win for thin assistants is *less reinvention*, not *less Soma*.
+This spectrum does **not** mean "thin assistants don't need Soma." They still need: a portable persona, a portable skill registry, and a portable substrate-projection adapter. Without Soma, Echo today is `agents.d/echo.md` in cortex, plus a separate skill registry inside `~/.claude/skills/` (or wherever), plus an ad-hoc projection that lives in cortex's substrate harness layer (the `ClaudeCodeHarness` at `src/substrates/claude-code/harness.ts` + `CCSession` spawner at `src/runner/cc-session.ts`). With Soma, Echo is `~/.soma/profile/echo/` (persona + skill refs) and the projection is the adapter's job. The win for thin assistants is *less reinvention*, not *less Soma*.
 
 ---
 
@@ -151,19 +155,30 @@ These are not in conflict — they're complementary along **different axes**:
 - **NKey identity** (cortex / Myelin) — *"I am cryptographically agent X on stack Y of operator Z, and here's the signature to prove it."* Bus-level. Lives in `policy.principals[]` (post-Phase-C) and in the chain-of-stamps. Answers: *who signed this envelope?*
 - **Soma Identity** (Soma) — *"I am Luna; this is my voice, my profile, my preferences, my history."* Body-level. Lives in `~/.soma/profile/`. Answers: *who is the assistant?*
 
-The join key is the principal record. Phase C's `policy.principals[]` schema (`{ id, home_operator, home_stack, role[], trust[] }`) gains one field: `body: soma://<assistant-id>`. Now the principal table is the cross-layer pivot:
+The join key is the principal record. Post-cortex#243a the actual `PolicyPrincipalSchema` shape (`src/common/types/cortex-config.ts:1124`) is:
+
+```
+{ id, home_operator, home_stack, nkey_pub?, role[], trust[], platform_ids, session_config? }
+```
+
+`nkey_pub?` is already on the principal — it's *exactly* where the bus-level NKey identity lives. Soma integration adds **one field**: `body: soma://<assistant-id>`. Critically, this is additive next to `nkey_pub?`, not in competition with it. The two fields **co-live on the same record**, which is what makes the join clean — one principal carries both its bus-side cryptographic identity and its body-side Soma reference. Now the principal table is the cross-layer pivot:
 
 ```
 chain-of-stamps signed_by[].principal
                     │
                     ▼
 cortex.yaml policy.principals[<id>]
-   ├── home_operator      (bus identity)
-   ├── home_stack         (bus identity)
-   ├── nkey_pub           (bus identity)
-   ├── role[]             (cortex policy)
-   └── body: soma://...   (→ Soma assistant body)
+   ├── home_operator     (bus identity)
+   ├── home_stack        (bus identity)
+   ├── nkey_pub?         (bus identity — already shipped)
+   ├── platform_ids      (cortex adapter binding)
+   ├── role[]            (cortex policy)
+   ├── trust[]           (cortex policy)
+   ├── session_config?   (cortex runtime)
+   └── body: soma://...  (→ Soma assistant body — ADDED)
 ```
+
+**Where else `body:` may need to live (see §10 / §9 Q10).** For projection-time use (deciding *which* Soma body to project into *which* substrate at agent-spawn time), the more natural location is `AgentSchema.body` (next to `presence:` and `runtime:`). For federation-time use (resolving a remote principal's body across operators via the Phase D cloud network registry), `PolicyPrincipalSchema.body` is the right home. **Both locations are valid for different consumers** — projection vs federation — and the validation rule is that an agent's `body:` MUST equal the matching principal's `body:` for the same id.
 
 This is what makes "Andreas's Luna calls jcfischer's sage" coherent across operator boundaries: both Luna and sage are Soma assistants; their identities resolve through the Phase D cloud network registry; the chain-of-stamps proves *which Soma assistant on which stack* signed which step.
 
@@ -188,7 +203,7 @@ No naming conflict needs resolving in code; both can keep their names because th
 
 ## §5 — Where it sequences in the IAW pipeline
 
-The IAW plan (`docs/plan-internet-of-agentic-work.md`) has one and only one operator-facing schema flip — Phase C. The constraint is sharp: **cortex.yaml flips ONCE**. If Soma adoption requires reshaping `agents[]` fragments (lifting persona body out, leaving substrate pointer in), that should ride with the Phase C flip or it forces a second flip.
+The IAW plan (`docs/plan-internet-of-agentic-work.md`) framed Phase C as the **single** operator-facing cortex.yaml schema flip. Soma adoption requires reshaping `agents[]` fragments (lifting inline `persona:` / `capabilities:` / `trust:` out, leaving a `body: soma://...` substrate-binding pointer in), which is a second schema flip. The honest framing is: **we accept a second flip.** v2.0.0 = C.2b/c policy cutover (in flight); v3.0.0 = Soma factor-out (post-stabilisation). Two flips, each small and testable on its own. The original IAW plan's "one flip" was a *target*, not a hard constraint; this design's review process forced the trade.
 
 Current Phase C status (`plan-internet-of-agentic-work.md` §4):
 
@@ -197,27 +212,36 @@ Current Phase C status (`plan-internet-of-agentic-work.md` §4):
 - **C.2b/c** Breaking removal of per-adapter `roles[]` + `migrate-config` extension — **in flight, ratified design** ([PR #291](https://github.com/the-metafactory/cortex/pull/291), iteration plan in [`docs/iteration-policy-cutover.md`](./iteration-policy-cutover.md))
 - **C.3 / C.4** Substrate-harness integration + audit envelopes — done
 
-The natural Soma insertion point is **Phase C.5 (new) or Phase D.0**, sequenced AFTER C.2b/c lands (don't pile on the policy cutover mid-execution) but BEFORE Phase D's federation locks in a non-Soma assistant-body model:
+The Soma integration lands as **its own v3.0.0 cycle**, sequenced AFTER C.2b/c v2.0.0 stabilises (don't pile on the policy cutover mid-execution) but compatible with Phase D's federation (federation MAY consume Soma metadata when present, falls back to opaque-principal otherwise — see §6):
 
 ```
-Phase C (in flight) ─── schema flip #1: policy: { principals[], roles[] }
+Phase C (in flight)  ─── v2.0.0 schema flip:
+                            policy: { principals[], roles[] }
+                            (cortex#293, #295, #302, #305, #306 — running)
         │
-Phase C.5 (NEW)    ─── (option A) absorbed into the SAME flip:
-        │              agents[].persona/capabilities → soma://<assistant-id>
-        │              policy.principals[].body: soma://<assistant-id>
-        │              SomaCortexAdapter exists; migrate-config lifts persona too
+        ▼ stabilise + ratify
         │
-Phase D            ─── federation: principals resolve to Soma assistants
-        │              across operators; network-registry returns Soma metadata
+v3.0.0 (post-C.2b/c) ─── Soma factor-out schema flip:
+                            agents[].body: soma://<id>            (projection target)
+                            policy.principals[].body: soma://<id> (federation join)
+                            SomaCortexAdapter ships
+                            migrate-config v2 → v3 lifts inline
+                                  persona/capabilities into ~/.soma/profile/<id>/
         │
-Phase E            ─── orchestrator pattern: one assistant IS a Soma; can be
-                       projected into N substrates concurrently for substrate
-                       diversity; daemon mode adds bus-direct presence
+Phase D              ─── federation: peers resolve via cloud network registry.
+        │                If peer principal carries body: → option (a) Soma-federated.
+        │                If not: → option (b) opaque-principal. Both work.
+        │
+Phase E              ─── orchestrator pattern: one assistant IS a Soma; can be
+                         projected into N substrates concurrently for substrate
+                         diversity; daemon mode adds bus-direct presence.
 ```
 
-The strategic call worth making explicitly: **fold the Soma factor-out into the Phase C breaking change** so cortex.yaml flips once for both `policy:` AND for `body: soma://`. Operators run `migrate-config` once. Otherwise the metafactory pays a second v3.0.0 churn cycle later doing the Soma migration on its own. The cost of folding is design + adapter work in the Phase C window; the cost of deferring is operator-facing migration churn.
+**Recommendation: defer to v3.0.0.** Earlier drafts of this doc equivocated between fold-and-defer; ratification round 1 (Echo-equivalent review) pressure-tested that equivocation and made the call concrete. C.2b/c is mid-execution as of 2026-05-17 — cortex#293 + #295 + #302 + #305 + #306 are all visible on `main` running the iteration in `docs/iteration-policy-cutover.md`. Growing scope mid-cutover is the kind of thing the metafactory ecosystem has consistently moved away from (the cost is measured in *operator-migration confidence*, not just engineering hours). **Defer Soma factor-out to a separate v3.0.0 cycle once C.2b/c lands and stabilises.** Operators pay two migrations, but each one is small, testable, and ratifiable in isolation.
 
-If C.2b/c timing doesn't allow it (the cutover is mid-execution and shouldn't grow), then the explicit acceptance is: **v2 for policy now, v3 for Soma later**. That's a coherent choice — but call it.
+**Runner-up: fold into v2.1.0, not v2.0.0.** If folding has to happen, the safer landing is a minor-bump-with-additive-field in v2.1.0 (`body:` as optional on both schemas, no removal of the inline persona path yet) once C.2c's `migrate-config` is stable. The breaking removal of inline persona then lands in v2.2.0 or v3.0.0. This is still two cycles, but the operator-facing burden is split: v2.1 = "you can move to Soma", v3.0 = "you must move to Soma."
+
+**What's explicitly off the table: fold into v2.0.0.** The original framing in earlier drafts; rejected here on schedule-risk grounds. Documented as the rejected option so future readers see what was considered.
 
 ---
 
@@ -246,6 +270,8 @@ Now consider the federation case. Andreas's Luna delegates a TypeScript review t
 The Phase E delegation pattern (§3.6) becomes meaningful in (a), thin in (b). Without (a), "delegate to the best assistant for this task" reduces to "delegate to the best public key advertising this capability tag" — a marketplace primitive, not an assistant primitive. (a) is the form that matches the operator-vision script's intent.
 
 The substrate-independence claim — the thing this design is named after — is what makes (a) operable. An assistant identity that is portable across substrates is the prerequisite for an assistant identity that is portable across *operators*.
+
+**Concrete delegation example (the operator benefit of (a) made specific).** Andreas's Luna has a Telos line that says *"keep customer-facing prose warm; favour reviewers whose declared voice is conversational"*. She receives a `tasks.code-review.typescript` request that includes a customer-facing docs file. She queries the Phase D network registry for candidates with `code-review.typescript` capability and receives three peers: `jcfischer/sage` (Soma voice `terse-empirical`), `acme/holly` (Soma voice `conversational-warm`), `bigcorp/atlas` (no Soma body — option-(b) opaque principal). Under **option (a)**, Luna routes to `acme/holly` based on the voice-style match; under **option (b)**, she has no introspection, so the choice is round-robin or first-claim, defeating her Telos-driven routing. This is the kind of capability-aware-but-also-identity-aware delegation §3.6 of the IAW design promised; it requires (a).
 
 ---
 
@@ -329,6 +355,17 @@ policy:
       home_stack: andreas/main
       body: soma://andreas/echo         # ← join key into Soma body (thin)
       role: [agent-restricted]          # narrower role for thin reviewer agent
+  roles:
+    - id: agent
+      grants: [keyword.chat, keyword.async, keyword.team, dispatch.*]
+    - id: agent-restricted               # ← reinforces §2.5's "thin assistants
+      grants:                            #    declare a subset" at the policy layer
+        - code-review.typescript
+        - code-review.docs
+        - security-review
+        # No keyword.chat / keyword.async / keyword.team / dispatch.* —
+        # thin agents typically don't accept open-ended chat or dispatch to
+        # other agents; they execute their declared review capabilities only.
 ```
 
 The same `policy.principals[].body` join key handles both ends of the spectrum — Soma resolves to whatever subset of the body the assistant has declared. The cortex side doesn't care whether the body has Memory or not; it cares about identity (NKey), routing (capabilities), and the projection adapter call. Thin Echo's projection is small; thick Luna's projection is large; the contract is identical.
@@ -344,7 +381,7 @@ The first concrete deliverable, once this design ratifies:
 1. **`SomaCortexAdapter`** (Soma-side, new) — implements Soma's adapter contract for the Cortex/Myelin substrate. Two projection shapes per `docs/substrate-adapters.md`:
    - **In-process** (`home` mode): projects a Soma assistant into `~/.config/cortex/agents.d/<name>.md` as the thin frontmatter+pointer fragment shown in §7.
    - **Daemon** (`daemon` mode): arc-installs a standalone bot from the Soma package; bot subscribes to Myelin subjects via the existing `MyelinRuntime` interface (no SessionHarness, no in-process spawn — pattern matches sage today).
-2. **`SCHEMA_SOURCE_COMMIT` bump on the cortex side** — add `body: soma://...` to `AgentSchema` and `PolicyPrincipalSchema` in `src/common/types/cortex-config.ts`. Optional string field at first (back-compat with pre-Soma agents that carry inline persona); MAY become required at Phase C.5 cutover.
+2. **Schema additions on the cortex side** — add `body: soma://...` to **both** `AgentSchema` (around line 421, for projection) and `PolicyPrincipalSchema` (around line 1124, for federation join) in `src/common/types/cortex-config.ts`. Optional string field at first (back-compat with pre-Soma agents that carry inline persona); cross-field validation enforces that when both are present they agree per id. Becomes the only path at v3.0.0 cutover.
 3. **`migrate-config` extension** — when an agent fragment carries inline persona + capabilities + trust, offer to lift those into a new Soma assistant scaffold under `~/.soma/profile/<id>/` and rewrite the fragment to `body: soma://...`. Idempotent. Operator pre-flight via `--check`.
 4. **Substrate provenance on chain-of-stamps** — coordinate with myelin#31 on whether `signed_by[].substrate` should be added before Phase D federation locks in. (See §9 Q3 — small extension, much cheaper to add in Phase B/C than retrofit in Phase E.)
 
@@ -356,23 +393,26 @@ None of these is large. The harder work is the design ratification — once §5 
 
 | # | Question | Impact |
 |---|----------|--------|
-| **Q1** | **Fold into Phase C, or defer to v3?** §5 makes the case for folding the Soma factor-out into the same C.2b/c schema flip. C.2b/c is mid-execution ([PR #291](https://github.com/the-metafactory/cortex/pull/291)); growing scope mid-cutover is risky. Defer-to-v3 is safer but pays operator migration churn twice. | Schema-flip count: 1 vs 2 |
+| **Q1** | ~~Fold into Phase C, or defer to v3?~~ **RESOLVED (this round):** defer to v3.0.0. C.2b/c is mid-execution ([PR #291](https://github.com/the-metafactory/cortex/pull/291)) and the metafactory ecosystem consistently moves away from growing scope mid-cutover. Operators pay two migrations; each is small and ratifiable in isolation. See §5 for the runner-up (v2.1.0 additive landing) and what's off the table (v2.0.0 fold). | ~~Schema-flip count: 1 vs 2~~ → committed to 2 |
 | **Q2** | **Reference URL grammar.** `body: soma://andreas/luna` or `body: did:mf:luna` (reuse existing DID grammar)? The DID form is already in agent fragments (`did: did:mf:luna`); using it as the Soma reference avoids inventing a new URL scheme. The `soma://` form makes the Soma layer explicit. Lean: reuse `did:mf:` for the operator-facing reference; Soma uses `did` → assistant lookup internally. | Documentation clarity; one fewer URL scheme |
 | **Q3** | **Substrate provenance on chain-of-stamps.** If alpha-as-Luna (Cursor) and luna-as-Luna (Claude Code) both sign with the same stack NKey, the audit trail loses substrate provenance. Add `signed_by[].substrate: "cursor" \| "claude-code" \| ...` before Phase D federation locks the envelope schema? | Audit fidelity post-federation |
 | **Q4** | **Federation model (§6 option (a) vs (b)).** Should the Phase D cloud network registry return Soma assistant metadata (profile, voice, public capability declarations) — option (a) — or just opaque principal data — option (b)? (a) is the profound version and matches the operator-vision script; (b) is simpler. | Phase D registry schema |
 | **Q5** | **Multi-presence trust.** If Luna's `claude-code` presence and `codex` presence are both online for the same operator on the same stack, how does the surface-router decide which one renders a Discord message? Today there's exactly one presence per agent. Soma multi-presence breaks that 1:1 mapping. | Surface-router routing logic |
 | **Q6** | **Soma-locality vs federation.** Soma is filesystem-local at `~/.soma/`. Federation means principals from other operators show up. Either (a) extend Soma to cover *remote* assistants discoverable via Phase D cloud registry, or (b) keep Soma local-only and let cortex/Myelin handle remote principals as opaque NKey identities. Q4 and Q6 are the same question viewed from different sides. | Soma scope |
 | **Q7** | **Daemon mode + Soma.** Soma's `daemon` mode subscribes to Myelin subjects directly. In cortex's worldview that's an `arc`-installable bot of `type: agent`. Does the Soma daemon ship as its own arc-installable repo (analogous to sage, alpha) or as a Soma command-line mode that the operator invokes from inside the Soma install? The two paths converge in implementation but diverge in operator ergonomics. | Distribution model |
-| **Q8** | **Writeback policy reconciliation.** Soma's writeback gate decides what cortex-substrate sessions are allowed to write back to Soma source. Today cortex has no concept of writeback (sessions run, emit envelopes, terminate; no body mutation). Adding writeback means the ClaudeCodeHarness needs a hook to capture session-end mutations and hand them to the Soma adapter. Phase scoping. | New cortex hook surface |
+| **Q8** | **Writeback policy reconciliation.** Soma's writeback gate decides what cortex-substrate sessions are allowed to write back to Soma source. Today cortex has no concept of writeback (sessions run, emit envelopes, terminate; no body mutation). Adding writeback means the `ClaudeCodeHarness` needs a hook to capture session-end mutations and hand them to the Soma adapter. Phase scoping. | New cortex hook surface |
+| **Q9** | **Source-of-truth for `body:` — agent fragment, principal table, or both?** Per §3, `PolicyPrincipalSchema.body` is the federation-side join. But the *projection-time* consumer (the harness deciding which Soma body to materialise into which substrate at agent spawn) more naturally reads `AgentSchema.body`. Both? Then which is source-of-truth on conflict? Lean: both fields exist, an equality validation rule enforces they agree, agent fragment is source-of-truth (the agent declares its body; the principal table reflects it for federation lookups). | Where `body:` lives |
+| **Q10** | **`body:` URL grammar revisited.** Earlier draft listed `soma://andreas/luna` vs `did:mf:luna` as options. With §3 now showing `body:` co-living next to `nkey_pub?` on the principal record, and `did:mf:<name>` already being the assistant DID in `signed_by[].principal`, the natural call is `body: did:mf:luna` — reuse the existing DID, no new URL scheme. The `soma://` form survives only inside Soma's own filesystem layout (`~/.soma/profile/<did-tail>/`). | Documentation clarity |
 
 ---
 
 ## §10 — Non-goals
 
 - **Not a Soma rewrite.** Soma's core is shipped; this design wires cortex/Myelin in.
-- **Not a cortex.yaml redesign.** The §7 delta is additive (`body:` field) until Phase C.5 (if folded).
+- **Not a cortex.yaml redesign.** The §7 delta is additive (`body:` field on `AgentSchema` and `PolicyPrincipalSchema`); the breaking removal of inline `persona:` waits for the v3.0.0 cycle per §5.
+- **Not in the v2.0.0 schema flip.** §5 commits to v3.0.0 — the in-flight C.2b/c v2.0.0 cutover ships unchanged.
 - **Not an attempt to unify Cortex's PolicyEngine and Soma's writeback gate.** They decide different things (§4); they keep separate identities.
-- **Not a Phase F.** This is properly an extension/insertion into Phase C or D, not a new IAW phase. If it lands as Phase C.5, it ships with the v2.0.0 cutover; if as Phase D.0, it precedes federation.
+- **Not a new IAW phase.** This is a v3.0.0 cycle on its own (post-C.2b/c stabilisation); the Phase D federation work continues to consume Soma metadata if available, or fall back to opaque-principal otherwise per §6.
 - **Not the federation registry schema design.** §6 Q4 surfaces the option but the actual Phase D D.1 registry-side spec is a separate doc.
 
 ---
@@ -386,13 +426,14 @@ None of these is large. The harder work is the design ratification — once §5 
 - `docs/design-cursor-substrate-bot.md` §4 — the persona-staging shim that's a Soma projection in disguise
 - `docs/design-pi-dev-review-agent.md` — sage's reference implementation; same persona-staging pattern
 - `docs/architecture.md` §6 + §9 — bus contracts + agent / presence / renderer model
-- `src/common/types/cortex-config.ts:253` — substrate enum (claude-code / codex / pi-dev / cursor / custom)
-- `src/runner/cc-session.ts` — ClaudeCodeHarness (the in-process projection point)
+- `src/common/types/cortex-config.ts` — `AgentRuntimeSchema.substrate` (substrate enum: claude-code / codex / pi-dev / cursor / custom; currently around line 421); `PolicyPrincipalSchema` (around line 1124, post-cortex#243a)
+- `src/substrates/claude-code/harness.ts` — `ClaudeCodeHarness` (the substrate-pluggable wrapper, IAW Phase A.1 / cortex#113); instantiated at `src/runner/dispatch-listener.ts:615`
+- `src/runner/cc-session.ts` — `CCSession` (the per-dispatch `claude --print` spawner; used as the harness's `ccSessionFactory`)
 
 ### Soma (`the-metafactory/soma`)
 - [`CONTEXT.md`](https://github.com/the-metafactory/soma/blob/main/CONTEXT.md) — domain glossary (substrate, project/projection, presence, install, writeback, daemon mode, runtime modes, eager/indexed/on-demand, private/protected/generated)
 - [`docs/architecture.md`](https://github.com/the-metafactory/soma/blob/main/docs/architecture.md) — SomaCore (Identity, Telos, ISA, Skills, Memory, Policy, Learning)
-- [`docs/substrate-adapters.md`](https://github.com/the-metafactory/soma/blob/main/docs/substrate-adapters.md) — adapter contract; existing Codex / Pi.dev / Claude Code / Cortor/Myelin sections (this design extends the last)
+- [`docs/substrate-adapters.md`](https://github.com/the-metafactory/soma/blob/main/docs/substrate-adapters.md) — adapter contract; existing Codex / Pi.dev / Claude Code / Cortex/Myelin sections (this design extends the last)
 - [`docs/writeback-and-policy.md`](https://github.com/the-metafactory/soma/blob/main/docs/writeback-and-policy.md) — writeback gate (substrate → Soma mutation policy)
 - [`docs/boundaries.md`](https://github.com/the-metafactory/soma/blob/main/docs/boundaries.md) — what's portable vs substrate-native vs substrate-neutral
 - [`docs/portability-proof.md`](https://github.com/the-metafactory/soma/blob/main/docs/portability-proof.md) — proof that the same Soma core projects into multiple substrates correctly
@@ -407,4 +448,4 @@ None of these is large. The harder work is the design ratification — once §5 
 
 ---
 
-*This document is the design specification for Soma integration into the cortex/myelin stack. It does NOT include implementation — once §9 questions are answered (in particular Q1 fold-or-defer), a sibling plan doc will sequence the Phase C.5 (or Phase D.0) work. Authored 2026-05-17 by Andreas + Luna; ratification awaits review from @jcfischer + Echo (code-review lens) + Luna (design lens).*
+*This document is the design specification for Soma integration into the cortex/myelin stack. It does NOT include implementation — once the remaining §9 questions (Q2–Q10) ratify (Q1 fold-or-defer was resolved in round 1: defer to v3.0.0), a sibling plan doc will sequence the v3.0.0 cycle. Authored 2026-05-17 by Andreas + Luna; round-1 review by Echo (in-session Architect equivalent, see PR #309 comment thread) applied as commit-after-review. Round-2 ratification awaits @jcfischer.*
