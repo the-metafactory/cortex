@@ -939,17 +939,16 @@ export async function startCortex(
   // ONCE so the three adapter loops below share the same instances. The
   // policy block is parsed at config-load time; the factory + index
   // builders are idempotent over the same input.
-  // SECURITY GATE: same `CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK` env var as
-  // the dispatch-listener gate below — we refuse to build the engine in
-  // production without explicit operator ack of the pre-Phase-B
-  // verification trade-off. The check is duplicated here (rather than
-  // re-using the value built below) because adapter wiring runs BEFORE
-  // the dispatch-listener engine builder; consolidating the gate into a
-  // single block is a follow-up.
-  const adapterPolicyEngine =
-    process.env.CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK === "1"
-      ? policyEngineFromConfig(options.policy)
-      : undefined;
+  //
+  // v2.0.1 (cortex#311): retired the `CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK`
+  // env-var gate. PolicyEngine activates whenever a `policy:` block is
+  // declared (which v2.0.0's schema already enforces for boot). The
+  // pre-Phase-B unverified-principal-claim trade-off is now an
+  // informational boot-log notice from the dispatch-listener builder
+  // below — gating it behind an env var created an M-3 split-brain where
+  // adapters denied every inbound while bus dispatches bypassed auth
+  // entirely (Echo PR #310 r1 finding, cortex#311).
+  const adapterPolicyEngine = policyEngineFromConfig(options.policy);
   const adapterPolicyLookup = buildPlatformPrincipalIndex(options.policy);
   const adapterPolicyRegistry = buildPrincipalRegistry(options.policy);
 
@@ -1430,40 +1429,37 @@ export async function startCortex(
   // the dispatch-listener falls back to the legacy unauthenticated
   // path in that case (C.2b removes the legacy path).
   //
-  // SECURITY GATE (Echo cortex#220 round 1): until Phase B (cortex#114)
-  // makes signature verification mandatory at the envelope-validator
-  // layer, the dispatch-listener's policy gate authorises on an
-  // unverified `signed_by[0].principal` claim. Acceptable for
-  // single-operator / dev-mode deployments where the bus is local
-  // and every publisher is trusted; NOT acceptable for multi-
-  // principal trust over a federated bus. We refuse to build the
-  // engine unless the operator explicitly acknowledges this trade-
-  // off via the env var below — making the limitation impossible to
-  // adopt accidentally. The variable can be retired together with
-  // C.2b once Phase B verification is wired.
-  // Echo cortex#220 round 2 S-2 — surface the silent-degradation case
-  // (policy: block present but principals[] empty → factory returns
-  // undefined → legacy unauthenticated path) so operators editing
-  // cortex.yaml see it in the boot log rather than guessing why the
-  // gate didn't engage.
+  // v2.0.0 (cortex#297): the schema requires a `policy:` block at boot.
+  // PolicyEngine activates unconditionally when at least one principal
+  // is declared (`policyEngineFromConfig` returns undefined for an empty
+  // `policy.principals[]` — the M-1 silent-degradation case captured in
+  // the warning below).
+  //
+  // v2.0.1 (cortex#311): retired the `CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK`
+  // env-var gate. The gate was Echo's cortex#220 round-1 safeguard against
+  // pre-Phase-B (cortex#114) unverified `signed_by[0].principal` claims —
+  // but in v2.0.0 (where role-resolver is gone and PolicyEngine is the
+  // sole gate) the gate created an M-3 split-brain: with the env var
+  // unset, adapters denied every inbound message while bus dispatches
+  // bypassed auth entirely. The pre-Phase-B trade-off is now an
+  // informational boot-log notice rather than an opt-in gate — operators
+  // running v2.0.0+ accept it by deploying.
+  //
+  // The eventual hardening is Phase B's cryptographic verifier
+  // (cortex#114) wired into envelope-validator so `signed_by[0].principal`
+  // claims authenticate against the operator's NKey registry. Until that
+  // wiring lands on the dispatch-listener inbound path, the policy gate
+  // here is authorisation-without-authentication; bus access is the
+  // attack surface.
   if (options.policy?.principals.length === 0) {
     console.warn(
       `cortex: policy: block declared with empty principals[] — no authorisation gate engages; the dispatch-listener stays on the legacy path.`,
     );
   }
-  const UNVERIFIED_ACK = "CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK";
-  let policyEngine = policyEngineFromConfig(options.policy);
-  if (policyEngine !== undefined && process.env[UNVERIFIED_ACK] !== "1") {
-    console.warn(
-      `cortex: policy: block declared in cortex.yaml but ${UNVERIFIED_ACK}=1 not set — ignoring the block.\n` +
-        `        Pre-Phase-B verification (cortex#114) the gate authorises on an unverified signed_by[0].principal claim;\n` +
-        `        any bus publisher can fabricate principal identity. Set ${UNVERIFIED_ACK}=1 in the cortex env\n` +
-        `        to acknowledge the trade-off and enable the engine. See dispatch-listener.ts checkDispatchPolicy() docs.`,
-    );
-    policyEngine = undefined;
-  } else if (policyEngine !== undefined) {
+  const policyEngine = policyEngineFromConfig(options.policy);
+  if (policyEngine !== undefined) {
     console.log(
-      `cortex: policy-engine active — principals=${policyEngine.principalCount} roles=${policyEngine.roleCount} (${UNVERIFIED_ACK}=1; pre-Phase-B unverified-principal mode)`,
+      `cortex: policy-engine active — principals=${policyEngine.principalCount} roles=${policyEngine.roleCount} (pre-Phase-B unverified-principal mode: signed_by[0].principal claims authenticate at face value until cortex#114 ships)`,
     );
   }
 

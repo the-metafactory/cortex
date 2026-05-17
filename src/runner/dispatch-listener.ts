@@ -475,27 +475,61 @@ async function handleDispatchEnvelope(
     return;
   }
 
-  // IAW Phase C.3.1 — policy gate. When the engine is configured we
-  // resolve the originating principal from `envelope.signed_by[0]`
-  // (the first stamp is the originator per myelin#31 chain ordering;
-  // hub-stamps later in the chain re-attest but don't replace
-  // origin). The capability claim is a placeholder
-  // `dispatch.<agent_id>` derived from the dispatch target — until
-  // C.2b carries an explicit capability tag on the payload, the
-  // dispatch surface is "may principal X invoke agent Y on this
-  // stack?". Sovereignty flows through verbatim so audit envelopes
-  // (C.4) carry the same constraints the engine saw.
+  // IAW Phase C.3.1 — policy gate. The engine resolves the originating
+  // principal from `envelope.signed_by[0]` (the first stamp is the
+  // originator per myelin#31 chain ordering; hub-stamps later in the
+  // chain re-attest but don't replace origin). The capability claim is
+  // a placeholder `dispatch.<agent_id>` derived from the dispatch
+  // target — until cortex#237's review-consumer surface carries an
+  // explicit capability tag on the payload, the dispatch surface is
+  // "may principal X invoke agent Y on this stack?". Sovereignty flows
+  // through verbatim so audit envelopes (C.4) carry the same
+  // constraints the engine saw.
   //
-  // When the engine is undefined the listener falls back to the
-  // legacy unauthenticated path — the runner is booted without a
-  // `policy:` block. C.2b removes the legacy path entirely.
+  // v2.0.0 (cortex#297) + v2.0.1 (cortex#311): the schema requires a
+  // `policy:` block at boot, AND `cortex.ts` no longer re-binds the
+  // engine to undefined via env-var ack. So `policyEngine` here is
+  // undefined ONLY when the operator declared `policy: { principals: [] }`
+  // — an explicit "no auth surface" deployment. We fail closed in that
+  // case: deny every dispatch with a clear reason so audit consumers
+  // see the misconfiguration immediately rather than every dispatch
+  // succeeding silently.
+  //
   // IAW Phase D.3 — derive `source_network` from the matched
   // subject when the envelope arrived via `federated.{id}.>`. Local
   // dispatches (subjects like `local.{org}.dispatch.task.received`)
   // leave it `undefined` so the engine skips the federation branch.
   const sourceNetwork = extractSourceNetwork(subject);
   let gatedPrincipal: Principal | undefined;
-  if (policyEngine !== undefined) {
+  if (policyEngine === undefined) {
+    // v2.0.1 (cortex#311): fail-closed when policy engine is unavailable.
+    // In v2.0.0+ this only happens when operator declared empty
+    // principals[]; cortex.ts has already emitted a boot warning, so we
+    // just deny + emit a terminal failure for any dispatch that arrives.
+    console.error(
+      `cortex-runner: dispatch-listener: policy engine uninitialised (empty principals[]?) — denying envelope id=${envelope.id} task_id=${payload.task_id} agent=${payload.agent_id}`,
+    );
+    const now = new Date();
+    const failed = createDispatchTaskFailedEvent({
+      source,
+      taskId: payload.task_id,
+      agentId: payload.agent_id,
+      startedAt: now,
+      failedAt: now,
+      errorSummary: "policy engine uninitialised — declare at least one principal in policy.principals[] to enable the authorisation gate",
+      reason: {
+        kind: "policy_denied",
+        deny: {
+          kind: "policy_engine_uninitialised",
+          detail: "operator declared empty policy.principals[]; declare at least one principal to engage the authorisation gate",
+        },
+      },
+    });
+    await runtime.publish(failed);
+    return;
+  }
+
+  {
     const decision = checkDispatchPolicy(
       policyEngine,
       envelope,
@@ -683,9 +717,12 @@ type DispatchPolicyResult =
  *   - Federation across operators (Phase D) — verification is
  *     mandatory there.
  *
- * The `CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK=1` opt-in below makes
- * this trade-off explicit at boot. Phase B (cortex#114) wires the
- * verifier into the validator and closes the gap.
+ * v2.0.1 (cortex#311) — the `CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK`
+ * env-var opt-in that previously made this trade-off explicit at boot
+ * has been retired. Operators running v2.0.0+ accept the trade-off by
+ * deploying; cortex.ts emits an informational boot-log line naming the
+ * pre-Phase-B mode rather than gating the engine. Phase B (cortex#114)
+ * wires the verifier into the validator and closes the gap entirely.
  *
  * **Principal resolution.** Read `envelope.signed_by[0].principal`
  * (originator stamp per myelin#31 chain semantics). Strip the

@@ -29,17 +29,6 @@
         <string>__HOME__/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
         <key>GROVE_CHANNEL</key>
         <string>__AGENT_NAME__</string>
-        <!--
-            v2.0.0 (cortex#297): the `policy:` block is now the sole
-            authorisation gate, but Phase B (cortex#114) verification of
-            `signed_by[0].principal` is not yet wired into the envelope
-            validator. The operator acknowledges via this env var that
-            principal claims authenticate at face value during the
-            pre-Phase-B window. Tracked as cortex#311 (retire the env-var
-            gate once cortex#114 ships).
-        -->
-        <key>CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK</key>
-        <string>1</string>
     </dict>
 </dict>
 </plist>

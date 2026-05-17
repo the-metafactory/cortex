@@ -293,6 +293,7 @@ describe("dispatch-listener — success path", () => {
       router,
       source: SOURCE,
       ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
     });
     await listener.start();
     await router.start();
@@ -303,16 +304,21 @@ describe("dispatch-listener — success path", () => {
     // Wait briefly for async render to complete
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    // Should have emitted exactly two lifecycle events
-    expect(r.published).toHaveLength(2);
+    // v2.0.1: policy engine is active, so an audit envelope precedes lifecycle.
+    expect(r.published).toHaveLength(3);
     const types = r.published.map((e) => e.type);
     expect(types).toEqual([
+      "system.access.allowed",
       "dispatch.task.started",
       "dispatch.task.completed",
     ]);
-    // All share one correlation_id (the task_id)
+    // All envelopes share one correlation_id (the task_id).
     for (const env of r.published) {
       expect(env.correlation_id).toBe(TASK_ID);
+    }
+    // task_id/agent_id only appear on the lifecycle envelopes (the audit
+    // envelope's payload shape is different per C.4 SystemAccessAllowed).
+    for (const env of r.published.slice(1)) {
       expect(env.payload.task_id).toBe(TASK_ID);
       expect(env.payload.agent_id).toBe("cortex");
     }
@@ -327,6 +333,7 @@ describe("dispatch-listener — success path", () => {
       router,
       source: SOURCE,
       ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
     });
     await listener.start();
     await router.start();
@@ -348,6 +355,7 @@ describe("dispatch-listener — success path", () => {
       router,
       source: SOURCE,
       ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
     });
     await listener.start();
     await router.start();
@@ -406,6 +414,7 @@ describe("dispatch-listener — success path", () => {
       router,
       source: SOURCE,
       ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
     });
     await listener.start();
     await router.start();
@@ -434,6 +443,7 @@ describe("dispatch-listener — success path", () => {
       router,
       source: SOURCE,
       ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
     });
     await listener.start();
     await router.start();
@@ -473,6 +483,7 @@ describe("dispatch-listener — failure paths", () => {
       router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(FAIL_RESULT).factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
     });
     await listener.start();
     await router.start();
@@ -481,10 +492,11 @@ describe("dispatch-listener — failure paths", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.allowed",
       "dispatch.task.started",
       "dispatch.task.failed",
     ]);
-    const failed = r.published[1]!;
+    const failed = r.published[2]!;
     expect(failed.payload.error_summary).toBe("claude exited 1");
     expect(failed.correlation_id).toBe(TASK_ID);
   });
@@ -497,6 +509,7 @@ describe("dispatch-listener — failure paths", () => {
       router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(TIMEOUT_RESULT).factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
     });
     await listener.start();
     await router.start();
@@ -505,10 +518,11 @@ describe("dispatch-listener — failure paths", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.allowed",
       "dispatch.task.started",
       "dispatch.task.aborted",
     ]);
-    expect(r.published[1]!.payload.reason).toBe("timeout");
+    expect(r.published[2]!.payload.reason).toBe("timeout");
   });
 
   test("aborted=true + exitCode=1 (canonical inactivity timeout) → started → aborted", async () => {
@@ -522,6 +536,7 @@ describe("dispatch-listener — failure paths", () => {
       router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(ABORTED_BY_FLAG_RESULT).factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
     });
     await listener.start();
     await router.start();
@@ -530,10 +545,11 @@ describe("dispatch-listener — failure paths", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.allowed",
       "dispatch.task.started",
       "dispatch.task.aborted",
     ]);
-    expect(r.published[1]!.payload.reason).toBe("timeout");
+    expect(r.published[2]!.payload.reason).toBe("timeout");
   });
 
   test("factory throws → started → failed", async () => {
@@ -547,6 +563,7 @@ describe("dispatch-listener — failure paths", () => {
       router,
       source: SOURCE,
       ccSessionFactory: throwingFactory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
     });
     await listener.start();
     await router.start();
@@ -555,10 +572,11 @@ describe("dispatch-listener — failure paths", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.allowed",
       "dispatch.task.started",
       "dispatch.task.failed",
     ]);
-    expect(r.published[1]!.payload.error_summary).toContain("session spawn failed");
+    expect(r.published[2]!.payload.error_summary).toContain("session spawn failed");
   });
 });
 
@@ -684,6 +702,7 @@ describe("dispatch-listener — start/stop", () => {
       router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
     });
     await listener.start();
     await listener.start(); // should be a no-op
@@ -694,6 +713,7 @@ describe("dispatch-listener — start/stop", () => {
 
     // Single registration → exactly one started + one completed (not double)
     expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.allowed",
       "dispatch.task.started",
       "dispatch.task.completed",
     ]);
@@ -707,6 +727,7 @@ describe("dispatch-listener — start/stop", () => {
       router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
     });
     await listener.start();
     await router.start();
@@ -726,6 +747,7 @@ describe("dispatch-listener — start/stop", () => {
       router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
     });
     await listener.start();
     await listener.stop();
@@ -783,7 +805,12 @@ function engineGranting(capabilities: readonly string[]): PolicyEngine {
 }
 
 describe("dispatch-listener — policy gating (C.3.1)", () => {
-  test("no engine → legacy pass-through (dispatch proceeds, started+completed)", async () => {
+  test("no engine → fail-closed (denied with policy_engine_uninitialised — v2.0.1 cortex#311)", async () => {
+    // v2.0.1 (cortex#311): the legacy `if (policyEngine !== undefined)`
+    // pass-through is retired. When the listener is constructed without
+    // an engine (deployment declared empty `policy.principals[]`), every
+    // dispatch fails closed with a clear deny reason — there's no
+    // authorisation surface to consult.
     const r = recordingRuntime();
     const router = createSurfaceRouter(r.runtime);
     const { factory } = fakeFactory(SUCCESS_RESULT);
@@ -792,7 +819,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
       router,
       source: SOURCE,
       ccSessionFactory: factory,
-      // no policyEngine → legacy path
+      // no policyEngine → fail-closed deny
     });
     await listener.start();
     await router.start();
@@ -800,10 +827,11 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    expect(r.published.map((e) => e.type)).toEqual([
-      "dispatch.task.started",
-      "dispatch.task.completed",
-    ]);
+    expect(r.published.map((e) => e.type)).toEqual(["dispatch.task.failed"]);
+    const failed = r.published[0]!;
+    const reason = failed.payload.reason as { kind: string; deny: { kind: string } };
+    expect(reason.kind).toBe("policy_denied");
+    expect(reason.deny.kind).toBe("policy_engine_uninitialised");
   });
 
   test("engine + allow → dispatch proceeds normally", async () => {
