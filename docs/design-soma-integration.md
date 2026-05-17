@@ -9,7 +9,12 @@
 
 ![Soma + cortex/myelin — the two-axis substrate-independence claim](./diagrams/2026-05-17-soma-integration.png)
 
-> **The diagram above is the whole thesis in one glance.** Two orthogonal axes of substrate-independence: the *body axis* (one Soma assistant body → four substrate-native projections) and the *runtime axis* (cortex/myelin's M1–M7 stack with IAW phases). The join key (`policy.principals[].body: soma://...`) ties them together. The three bottom insets (A reinvention / B identity / C policy) are the load-bearing reconciliations §2–§4 unpack in prose. (Simplified thumbnail: [diagrams/2026-05-17-soma-integration-thumb.png](./diagrams/2026-05-17-soma-integration-thumb.png).)
+> **The diagram above is the whole thesis in one glance.** Two orthogonal axes of substrate-independence: the *body axis* (one Soma assistant body → four substrate-native projections) and the *runtime axis* (cortex/myelin's M1–M7 stack with IAW phases). The join key (`policy.principals[].body: soma://...`) ties them together. The three bottom insets (A reinvention / B identity / C policy) are the load-bearing reconciliations §2–§4 unpack in prose.
+>
+> **Two diagram variants:**
+> - **Hero (above)** — overview, optimised for "thesis in 10 seconds". This is the version to put in a slide.
+> - **[Reference poster](./diagrams/2026-05-17-soma-integration-reference-poster.png)** — dense reference-poster variant with the full IAW Phase A–E ladder, exact file paths verbatim, the load-bearing-claim summary panel, and the federation inset annotated with the §6 option-(a) claim. SVG source at [`./diagrams/2026-05-17-soma-integration-reference-poster.svg`](./diagrams/2026-05-17-soma-integration-reference-poster.svg) — re-rasterise with `rsvg-convert` if you want to iterate.
+> - **[Thumbnail](./diagrams/2026-05-17-soma-integration-thumb.png)** — simplified two-axis-only variant for inline embedding in narrower contexts.
 
 ## TL;DR
 

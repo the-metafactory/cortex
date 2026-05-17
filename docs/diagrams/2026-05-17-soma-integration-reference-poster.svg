@@ -1,0 +1,394 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 2000" font-family="Inter, -apple-system, 'Helvetica Neue', sans-serif">
+  <defs>
+    <!-- arrow markers -->
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2c2a26"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3f7d4a"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e4d7b"/>
+    </marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b56522"/>
+    </marker>
+    <pattern id="diag" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="6" stroke="#3f7d4a" stroke-width="1" opacity="0.18"/>
+    </pattern>
+  </defs>
+
+  <!-- background -->
+  <rect width="1600" height="2000" fill="#EFE7D5"/>
+
+  <!-- =================== TITLE =================== -->
+  <text x="60" y="78" font-size="56" font-weight="700" fill="#1d1c19" font-style="italic" font-family="Georgia, 'Times New Roman', serif">soma  ×  cortex / myelin</text>
+  <text x="60" y="118" font-size="22" fill="#3a3833">Two orthogonal axes of substrate-independence — body-layer (Soma) and runtime-layer (cortex/myelin IAW)</text>
+  <text x="60" y="146" font-size="16" fill="#6b665d" font-style="italic">Design ref: docs/design-soma-integration.md  ·  cortex#110 (Internet of Agentic Work)  ·  2026-05-17</text>
+
+  <!-- horizontal divider -->
+  <line x1="60" y1="170" x2="1540" y2="170" stroke="#1d1c19" stroke-width="2"/>
+
+  <!-- ============================================================ -->
+  <!-- ============ TOP HALF — BODY-LAYER (SOMA) ================== -->
+  <!-- ============================================================ -->
+
+  <!-- axis label (left rotated) -->
+  <g transform="translate(38,560) rotate(-90)">
+    <text x="0" y="0" font-size="20" font-weight="700" fill="#3f7d4a" letter-spacing="3">BODY-LAYER INDEPENDENCE  ·  SOMA</text>
+  </g>
+
+  <!-- SOMA assistant body block -->
+  <rect x="380" y="200" width="840" height="170" rx="14" fill="#dfead4" stroke="#3f7d4a" stroke-width="3"/>
+  <text x="800" y="232" text-anchor="middle" font-size="22" font-weight="700" fill="#1d3a22">SOMA  —  Portable Assistant Body</text>
+  <text x="800" y="256" text-anchor="middle" font-size="13" fill="#3a4a34" font-style="italic">one body, projected into many substrates  ·  ~/.soma/profile/&lt;assistant&gt;/</text>
+
+  <!-- six soma core pillars -->
+  <g font-size="13" fill="#1d3a22" font-weight="600" text-anchor="middle">
+    <g transform="translate(450,290)">
+      <rect x="-58" y="-26" width="116" height="62" rx="6" fill="#ffffff" stroke="#3f7d4a" stroke-width="1.5"/>
+      <text y="-4">Identity</text>
+      <text y="14" font-size="10" font-weight="400" fill="#3a4a34">profile · voice ·</text>
+      <text y="26" font-size="10" font-weight="400" fill="#3a4a34">DID  did:mf:&lt;name&gt;</text>
+    </g>
+    <g transform="translate(580,290)">
+      <rect x="-58" y="-26" width="116" height="62" rx="6" fill="#ffffff" stroke="#3f7d4a" stroke-width="1.5"/>
+      <text y="-4">Telos</text>
+      <text y="14" font-size="10" font-weight="400" fill="#3a4a34">goals · north-star ·</text>
+      <text y="26" font-size="10" font-weight="400" fill="#3a4a34">operator intent</text>
+    </g>
+    <g transform="translate(710,290)">
+      <rect x="-58" y="-26" width="116" height="62" rx="6" fill="#ffffff" stroke="#3f7d4a" stroke-width="1.5"/>
+      <text y="-4">ISA</text>
+      <text y="14" font-size="10" font-weight="400" fill="#3a4a34">instructions ·</text>
+      <text y="26" font-size="10" font-weight="400" fill="#3a4a34">situated awareness</text>
+    </g>
+    <g transform="translate(840,290)">
+      <rect x="-58" y="-26" width="116" height="62" rx="6" fill="#ffffff" stroke="#3f7d4a" stroke-width="1.5"/>
+      <text y="-4">Skills</text>
+      <text y="14" font-size="10" font-weight="400" fill="#3a4a34">capabilities ·</text>
+      <text y="26" font-size="10" font-weight="400" fill="#3a4a34">tool library</text>
+    </g>
+    <g transform="translate(970,290)">
+      <rect x="-58" y="-26" width="116" height="62" rx="6" fill="#ffffff" stroke="#3f7d4a" stroke-width="1.5"/>
+      <text y="-4">Memory</text>
+      <text y="14" font-size="10" font-weight="400" fill="#3a4a34">learnings ·</text>
+      <text y="26" font-size="10" font-weight="400" fill="#3a4a34">history · ledger</text>
+    </g>
+    <g transform="translate(1100,290)">
+      <rect x="-58" y="-26" width="116" height="62" rx="6" fill="#ffffff" stroke="#3f7d4a" stroke-width="1.5"/>
+      <text y="-4">Policy</text>
+      <text y="14" font-size="10" font-weight="400" fill="#3a4a34">writeback gate ·</text>
+      <text y="26" font-size="10" font-weight="400" fill="#3a4a34">private/protected</text>
+    </g>
+  </g>
+
+  <!-- projection label -->
+  <text x="800" y="408" text-anchor="middle" font-size="14" fill="#3f7d4a" font-style="italic" font-weight="600">↓  Soma adapter contract  ·  projects body → substrate-native file shape  ↓</text>
+
+  <!-- 4 substrate projections -->
+  <g font-size="13" fill="#5a3210" text-anchor="middle">
+    <!-- Claude Code -->
+    <g transform="translate(310,470)">
+      <rect x="-115" y="-30" width="230" height="90" rx="8" fill="#fbe5d0" stroke="#b56522" stroke-width="2"/>
+      <text y="-10" font-size="14" font-weight="700" fill="#5a3210">Claude Code</text>
+      <text y="10" font-size="11" font-family="'JetBrains Mono', Menlo, monospace" fill="#5a3210">~/.claude/CLAUDE.md</text>
+      <text y="26" font-size="11" font-family="'JetBrains Mono', Menlo, monospace" fill="#5a3210">+ agents.d/*.md</text>
+      <text y="46" font-size="10" font-style="italic" fill="#7a4220">in-process via SessionHarness</text>
+    </g>
+    <!-- Cursor -->
+    <g transform="translate(620,470)">
+      <rect x="-115" y="-30" width="230" height="90" rx="8" fill="#fbe5d0" stroke="#b56522" stroke-width="2"/>
+      <text y="-10" font-size="14" font-weight="700" fill="#5a3210">Cursor (alpha)</text>
+      <text y="10" font-size="11" font-family="'JetBrains Mono', Menlo, monospace" fill="#5a3210">.cursor/rules/</text>
+      <text y="26" font-size="11" font-family="'JetBrains Mono', Menlo, monospace" fill="#5a3210">persona.mdc</text>
+      <text y="46" font-size="10" font-style="italic" fill="#7a4220">workdir-staged per dispatch</text>
+    </g>
+    <!-- Codex -->
+    <g transform="translate(930,470)">
+      <rect x="-115" y="-30" width="230" height="90" rx="8" fill="#fbe5d0" stroke="#b56522" stroke-width="2"/>
+      <text y="-10" font-size="14" font-weight="700" fill="#5a3210">OpenAI Codex</text>
+      <text y="10" font-size="11" font-family="'JetBrains Mono', Menlo, monospace" fill="#5a3210">AGENTS.md</text>
+      <text y="26" font-size="11" font-family="'JetBrains Mono', Menlo, monospace" fill="#5a3210">+ repo-rooted</text>
+      <text y="46" font-size="10" font-style="italic" fill="#7a4220">standalone substrate</text>
+    </g>
+    <!-- Soma daemon -->
+    <g transform="translate(1240,470)">
+      <rect x="-115" y="-30" width="230" height="90" rx="8" fill="#dfead4" stroke="#3f7d4a" stroke-width="2" stroke-dasharray="4,3"/>
+      <text y="-10" font-size="14" font-weight="700" fill="#1d3a22">Soma daemon</text>
+      <text y="10" font-size="11" font-family="'JetBrains Mono', Menlo, monospace" fill="#1d3a22">NATS subscription</text>
+      <text y="26" font-size="11" font-family="'JetBrains Mono', Menlo, monospace" fill="#1d3a22">(no substrate)</text>
+      <text y="46" font-size="10" font-style="italic" fill="#3a4a34">bus-direct, M7-equivalent</text>
+    </g>
+  </g>
+
+  <!-- fan-out arrows from soma block to four projections -->
+  <g stroke="#3f7d4a" stroke-width="2" fill="none" opacity="0.85">
+    <path d="M 800 370 L 800 410 L 310 410 L 310 440" marker-end="url(#arrow-green)"/>
+    <path d="M 800 410 L 620 410 L 620 440" marker-end="url(#arrow-green)"/>
+    <path d="M 800 410 L 930 410 L 930 440" marker-end="url(#arrow-green)"/>
+    <path d="M 800 410 L 1240 410 L 1240 440" marker-end="url(#arrow-green)"/>
+  </g>
+
+  <!-- substrate-native note -->
+  <text x="775" y="588" text-anchor="middle" font-size="13" fill="#7a4220" font-style="italic">↑ orange = substrate-native projections  ·  same body, four file shapes  ·  Soma adapter owns the projection (not the host)</text>
+
+  <!-- =================== JOIN KEY (CENTER CONNECTOR) =================== -->
+  <g transform="translate(800, 670)">
+    <rect x="-380" y="-48" width="760" height="96" rx="10" fill="#fff8e8" stroke="#1d1c19" stroke-width="2.5"/>
+    <text x="0" y="-22" text-anchor="middle" font-size="14" font-weight="700" fill="#1d1c19">JOIN KEY  —  one new schema field on policy.principals[]</text>
+    <text x="0" y="6" text-anchor="middle" font-size="20" font-family="'JetBrains Mono', Menlo, monospace" font-weight="700" fill="#1d1c19">policy.principals[].body : soma://&lt;operator&gt;/&lt;assistant&gt;</text>
+    <text x="0" y="30" text-anchor="middle" font-size="12" fill="#3a3833" font-style="italic">ties NKey-stamped bus principal  ↔  Soma assistant body  ·  schema flip lands in Phase C.2b/c (PR #291)</text>
+  </g>
+
+  <!-- vertical join lines -->
+  <g stroke="#1d1c19" stroke-width="1.5" fill="none" stroke-dasharray="5,4" opacity="0.7">
+    <line x1="800" y1="600" x2="800" y2="622"/>
+    <line x1="800" y1="718" x2="800" y2="760"/>
+  </g>
+
+  <!-- divider between halves -->
+  <line x1="60" y1="790" x2="1540" y2="790" stroke="#1d1c19" stroke-width="2"/>
+  <text x="800" y="785" text-anchor="middle" font-size="11" fill="#1d1c19" font-style="italic" font-weight="600">— body-layer above  ·  runtime-layer below  —  the two axes compose through the join key above —</text>
+
+  <!-- ============================================================ -->
+  <!-- ========= BOTTOM HALF — RUNTIME-LAYER (M1–M7) ============== -->
+  <!-- ============================================================ -->
+
+  <g transform="translate(38,1370) rotate(-90)">
+    <text x="0" y="0" font-size="20" font-weight="700" fill="#2e4d7b" letter-spacing="3">RUNTIME-LAYER INDEPENDENCE  ·  CORTEX / MYELIN  ·  IAW</text>
+  </g>
+
+  <text x="80" y="830" font-size="18" font-weight="700" fill="#1d1c19">M1 – M7  Myelin stack  ·  the bus / transport / composition spine</text>
+  <text x="80" y="852" font-size="13" fill="#3a3833" font-style="italic">cortex consumes M2–M6, owns no part of M1–M6, shares M7 with sibling apps (pilot, signal-collector, future).  Soma is NOT an M-layer — it crosses them.</text>
+
+  <!-- M-layer stack (left column, full width-ish) -->
+  <g font-size="14" fill="#0e2647">
+    <!-- M7 -->
+    <g transform="translate(80,880)">
+      <rect width="900" height="58" rx="6" fill="#cfdcef" stroke="#2e4d7b" stroke-width="2"/>
+      <text x="20" y="24" font-size="14" font-weight="700">M7  SURFACES</text>
+      <text x="20" y="44" font-size="12">cortex (this app)  ·  pilot  ·  signal-collector  ·  future M7 apps   —   all can host Soma assistants</text>
+      <rect x="710" y="12" width="174" height="34" rx="4" fill="#fff" stroke="#2e4d7b" opacity="0.9"/>
+      <text x="797" y="34" text-anchor="middle" font-size="12" font-weight="600" fill="#0e2647">cortex (M7 application)</text>
+    </g>
+    <!-- M6 -->
+    <g transform="translate(80,946)">
+      <rect width="900" height="58" rx="6" fill="#d6e0f0" stroke="#2e4d7b" stroke-width="2"/>
+      <text x="20" y="24" font-size="14" font-weight="700">M6  COMPOSITION</text>
+      <text x="20" y="44" font-size="12">surface-router  ·  dispatch-handler  ·  PolicyEngine  ·  pipeline / fan-out / fan-in / request-reply  (myelin)</text>
+    </g>
+    <!-- M5 -->
+    <g transform="translate(80,1012)">
+      <rect width="900" height="48" rx="6" fill="#dde6f3" stroke="#2e4d7b" stroke-width="2"/>
+      <text x="20" y="20" font-size="14" font-weight="700">M5  DISCOVERY</text>
+      <text x="20" y="38" font-size="12">capability registry  ·  JetStream consumers  ·  network-registry (Phase D cloud-side)</text>
+    </g>
+    <!-- M4 -->
+    <g transform="translate(80,1068)">
+      <rect width="900" height="48" rx="6" fill="#dde6f3" stroke="#2e4d7b" stroke-width="2"/>
+      <text x="20" y="20" font-size="14" font-weight="700">M4  IDENTITY</text>
+      <text x="20" y="38" font-size="12">verifiable principal per envelope  ·  subject routing local / federated / public  ·  PrincipalRegistry</text>
+    </g>
+    <!-- M3 -->
+    <g transform="translate(80,1124)">
+      <rect width="900" height="48" rx="6" fill="#dde6f3" stroke="#2e4d7b" stroke-width="2"/>
+      <text x="20" y="20" font-size="14" font-weight="700">M3  ENVELOPE</text>
+      <text x="20" y="38" font-size="12">message format + sovereignty  ·  chain-of-stamps  signed_by[]  ·  NKey signatures  ·  (myelin · shipped)</text>
+    </g>
+    <!-- M2 (greyed — abstract bus) -->
+    <g transform="translate(80,1180)">
+      <rect width="900" height="48" rx="6" fill="#cfcfc6" stroke="#5a5a52" stroke-width="2"/>
+      <text x="20" y="20" font-size="14" font-weight="700" fill="#1d1c19">M2  TRANSPORT</text>
+      <text x="20" y="38" font-size="12" fill="#1d1c19">abstract bus  ·  pub/sub  ·  request/reply  ·  MyelinRuntime interface  (NATS abstraction)</text>
+    </g>
+    <!-- M1 -->
+    <g transform="translate(80,1236)">
+      <rect width="900" height="48" rx="6" fill="#dde6f3" stroke="#2e4d7b" stroke-width="2"/>
+      <text x="20" y="20" font-size="14" font-weight="700">M1  CONNECTIVITY</text>
+      <text x="20" y="38" font-size="12">TCP / TLS / leaf-nodes / federation  ·  NATS  ·  cloud registry endpoints  (Phase D)</text>
+    </g>
+  </g>
+
+  <!-- IAW phase ladder annotations on right -->
+  <g transform="translate(1010,880)">
+    <rect x="0" y="0" width="490" height="404" rx="10" fill="#fff8e8" stroke="#2e4d7b" stroke-width="2"/>
+    <text x="20" y="28" font-size="15" font-weight="700" fill="#0e2647">IAW Phase ladder  —  cortex#110</text>
+    <text x="20" y="48" font-size="11" fill="#3a3833" font-style="italic">where the substrate-independence work lands on the stack</text>
+
+    <g font-size="12" fill="#0e2647">
+      <!-- Phase A -->
+      <g transform="translate(20,72)">
+        <rect width="450" height="52" rx="5" fill="#cfdcef" stroke="#2e4d7b"/>
+        <text x="12" y="20" font-weight="700">Phase A  ·  SessionHarness</text>
+        <text x="12" y="38" font-size="11">M6 / M7  ·  dispatch into any LLM substrate via a common interface  ·  done</text>
+      </g>
+      <!-- Phase B -->
+      <g transform="translate(20,134)">
+        <rect width="450" height="52" rx="5" fill="#cfdcef" stroke="#2e4d7b"/>
+        <text x="12" y="20" font-weight="700">Phase B  ·  NKey chain-of-stamps</text>
+        <text x="12" y="38" font-size="11">M3 / M4  ·  3-tier identity: operator → stack → agent  ·  shipped</text>
+      </g>
+      <!-- Phase C -->
+      <g transform="translate(20,196)">
+        <rect width="450" height="68" rx="5" fill="#ffe6b8" stroke="#a87410" stroke-width="2"/>
+        <text x="12" y="20" font-weight="700" fill="#5a3d04">Phase C  ·  PolicyEngine  +  policy.principals[]   ◀ IN FLIGHT</text>
+        <text x="12" y="38" font-size="11" fill="#5a3d04">M6  ·  PR #291  C.2b/c breaking schema flip  ·  Soma join field rides here (C.5)</text>
+        <text x="12" y="54" font-size="11" font-style="italic" fill="#7a4d10">↳ one and only operator-facing schema flip in the IAW plan</text>
+      </g>
+      <!-- Phase D -->
+      <g transform="translate(20,274)">
+        <rect width="450" height="52" rx="5" fill="#cfdcef" stroke="#2e4d7b"/>
+        <text x="12" y="20" font-weight="700">Phase D  ·  Federation</text>
+        <text x="12" y="38" font-size="11">M1 (leaf-nodes) + M5 (cloud network-registry)  ·  cross-operator dispatch</text>
+      </g>
+      <!-- Phase E -->
+      <g transform="translate(20,336)">
+        <rect width="450" height="52" rx="5" fill="#cfdcef" stroke="#2e4d7b"/>
+        <text x="12" y="20" font-weight="700">Phase E  ·  Multi-network  +  delegation</text>
+        <text x="12" y="38" font-size="11">M5–M7  ·  one assistant projects into N substrates  ·  requires Soma</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- arrow from join-key down into M-stack -->
+  <g stroke="#2e4d7b" stroke-width="2" fill="none">
+    <path d="M 800 760 L 800 830" marker-end="url(#arrow-blue)" stroke-dasharray="6,4"/>
+  </g>
+  <text x="815" y="800" font-size="11" fill="#2e4d7b" font-style="italic">join-key consumed by M6 PolicyEngine + M3 envelope chain-of-stamps</text>
+
+  <!-- ============================================================ -->
+  <!-- =========== BOTTOM ROW — INSETS ============================ -->
+  <!-- ============================================================ -->
+
+  <!-- LEFT INSET — reinvention callout -->
+  <g transform="translate(60,1320)">
+    <rect width="620" height="240" rx="10" fill="#fbe5d0" stroke="#b56522" stroke-width="2"/>
+    <text x="20" y="32" font-size="16" font-weight="700" fill="#5a3210">What cortex reinvents today  →  one Soma adapter contract</text>
+    <text x="20" y="52" font-size="11" font-style="italic" fill="#7a4220">Three substrate adapters, three hand-rolled persona-projection shims, no common contract.  Soma absorbs all three.</text>
+
+    <g font-size="11" font-family="'JetBrains Mono', Menlo, monospace" fill="#5a3210">
+      <!-- box 1 -->
+      <g transform="translate(20,80)">
+        <rect width="180" height="80" rx="6" fill="#fff" stroke="#b56522" stroke-width="1.5"/>
+        <text x="10" y="20" font-weight="700">cc-session.ts</text>
+        <text x="10" y="38" font-size="10">cortex / runner /</text>
+        <text x="10" y="52" font-size="10">ClaudeCodeHarness</text>
+        <text x="10" y="68" font-size="10" font-style="italic" fill="#7a4220">spawns CLAUDE.md +</text>
+      </g>
+      <!-- box 2 -->
+      <g transform="translate(218,80)">
+        <rect width="180" height="80" rx="6" fill="#fff" stroke="#b56522" stroke-width="1.5"/>
+        <text x="10" y="20" font-weight="700">cursor / workdir.ts</text>
+        <text x="10" y="38" font-size="10">alpha / src / cursor /</text>
+        <text x="10" y="52" font-size="10">workdir.ts</text>
+        <text x="10" y="68" font-size="10" font-style="italic" fill="#7a4220">strips YAML, writes .mdc</text>
+      </g>
+      <!-- box 3 -->
+      <g transform="translate(416,80)">
+        <rect width="180" height="80" rx="6" fill="#fff" stroke="#b56522" stroke-width="1.5"/>
+        <text x="10" y="20" font-weight="700">sage  (pi.dev)</text>
+        <text x="10" y="38" font-size="10">sage / persona-stage</text>
+        <text x="10" y="52" font-size="10">into pi.dev surface</text>
+        <text x="10" y="68" font-size="10" font-style="italic" fill="#7a4220">third reinvention</text>
+      </g>
+
+      <!-- merging arrow -->
+      <g stroke="#b56522" stroke-width="2" fill="none">
+        <path d="M 110 168 L 110 188 L 310 188 L 310 200" marker-end="url(#arrow-orange)"/>
+        <path d="M 308 168 L 308 188" marker-end="url(#arrow-orange)"/>
+        <path d="M 506 168 L 506 188 L 310 188" marker-end="url(#arrow-orange)"/>
+      </g>
+      <g transform="translate(218,200)">
+        <rect width="180" height="28" rx="5" fill="#dfead4" stroke="#3f7d4a" stroke-width="2"/>
+        <text x="90" y="19" text-anchor="middle" font-weight="700" fill="#1d3a22">SomaCortexAdapter</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- RIGHT INSET — federation diagram -->
+  <g transform="translate(720,1320)">
+    <rect width="820" height="240" rx="10" fill="#e6efde" stroke="#3f7d4a" stroke-width="2"/>
+    <text x="20" y="32" font-size="16" font-weight="700" fill="#1d3a22">Federation across the operator boundary  —  the Soma-federated model (option a)</text>
+    <text x="20" y="52" font-size="11" font-style="italic" fill="#3a4a34">Andreas's Luna delegates to JC Fischer's sage. Both backed by Soma bodies; both signed under their own stack NKeys; both addressable across operators.</text>
+
+    <!-- left operator -->
+    <g transform="translate(40,86)">
+      <rect width="320" height="130" rx="8" fill="#fff" stroke="#3f7d4a" stroke-width="1.5"/>
+      <text x="160" y="22" text-anchor="middle" font-size="13" font-weight="700" fill="#1d3a22">operator: andreas</text>
+      <text x="160" y="38" text-anchor="middle" font-size="10" font-style="italic" fill="#3a4a34">stack: andreas/main · nkey_pub SAA…</text>
+
+      <g transform="translate(20,52)">
+        <rect width="280" height="62" rx="5" fill="#dfead4" stroke="#3f7d4a"/>
+        <text x="140" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="#1d3a22">Luna  (assistant body)</text>
+        <text x="140" y="36" text-anchor="middle" font-size="10" font-family="'JetBrains Mono', Menlo, monospace" fill="#1d3a22">body: soma://andreas/luna</text>
+        <text x="140" y="52" text-anchor="middle" font-size="10" font-style="italic" fill="#3a4a34">projects → claude-code · codex · daemon</text>
+      </g>
+    </g>
+
+    <!-- right operator -->
+    <g transform="translate(460,86)">
+      <rect width="320" height="130" rx="8" fill="#fff" stroke="#3f7d4a" stroke-width="1.5"/>
+      <text x="160" y="22" text-anchor="middle" font-size="13" font-weight="700" fill="#1d3a22">operator: jcfischer</text>
+      <text x="160" y="38" text-anchor="middle" font-size="10" font-style="italic" fill="#3a4a34">stack: jcfischer/main · nkey_pub SAB…</text>
+
+      <g transform="translate(20,52)">
+        <rect width="280" height="62" rx="5" fill="#dfead4" stroke="#3f7d4a"/>
+        <text x="140" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="#1d3a22">sage  (assistant body)</text>
+        <text x="140" y="36" text-anchor="middle" font-size="10" font-family="'JetBrains Mono', Menlo, monospace" fill="#1d3a22">body: soma://jcfischer/sage</text>
+        <text x="140" y="52" text-anchor="middle" font-size="10" font-style="italic" fill="#3a4a34">projects → pi-dev</text>
+      </g>
+    </g>
+
+    <!-- federation arrow -->
+    <g stroke="#3f7d4a" stroke-width="2.5" fill="none">
+      <path d="M 360 158 L 460 158" marker-end="url(#arrow-green)" marker-start="url(#arrow-green)"/>
+    </g>
+    <text x="410" y="148" text-anchor="middle" font-size="10" font-weight="700" fill="#1d3a22">M1 leaf-node</text>
+    <text x="410" y="178" text-anchor="middle" font-size="10" font-style="italic" fill="#3a4a34">cloud network-registry</text>
+    <text x="410" y="194" text-anchor="middle" font-size="10" font-style="italic" fill="#3a4a34">(network.meta-factory.ai)</text>
+  </g>
+
+  <!-- ===== LEGEND ===== -->
+  <g transform="translate(60,1600)">
+    <text x="0" y="0" font-size="14" font-weight="700" fill="#1d1c19">Legend  —  color encoding</text>
+    <g transform="translate(0,16)" font-size="12" fill="#1d1c19">
+      <g transform="translate(0,16)"><rect width="22" height="14" fill="#cfdcef" stroke="#2e4d7b"/><text x="32" y="12">cortex / myelin  (runtime layer)</text></g>
+      <g transform="translate(0,40)"><rect width="22" height="14" fill="#dfead4" stroke="#3f7d4a"/><text x="32" y="12">Soma  (assistant-body layer)</text></g>
+      <g transform="translate(0,64)"><rect width="22" height="14" fill="#fbe5d0" stroke="#b56522"/><text x="32" y="12">substrate-native projection / reinvented host code</text></g>
+      <g transform="translate(0,88)"><rect width="22" height="14" fill="#cfcfc6" stroke="#5a5a52"/><text x="32" y="12">M2 abstract bus  (NATS transport)</text></g>
+      <g transform="translate(0,112)"><rect width="22" height="14" fill="#ffe6b8" stroke="#a87410"/><text x="32" y="12">in-flight schema cutover  (Phase C.2b/c · PR #291)</text></g>
+    </g>
+  </g>
+
+  <!-- ===== KEY CLAIMS PANEL ===== -->
+  <g transform="translate(560,1600)">
+    <rect width="980" height="370" rx="10" fill="#fff8e8" stroke="#1d1c19" stroke-width="1.5"/>
+    <text x="20" y="28" font-size="15" font-weight="700" fill="#1d1c19">The load-bearing claim  —  two orthogonal axes of the same independence story</text>
+    <g font-size="12" fill="#1d1c19">
+      <text x="20" y="58" font-weight="700" fill="#2e4d7b">RUNTIME-LAYER  (cortex / myelin · IAW)</text>
+      <text x="20" y="78">·  SessionHarness  (A)  — dispatch into ANY LLM substrate via one interface</text>
+      <text x="20" y="96">·  NKey chain-of-stamps  (B)  — substrate-independent cryptographic identity</text>
+      <text x="20" y="114">·  PolicyEngine  (C)  — authorization lifted out of substrate-coupled adapters</text>
+      <text x="20" y="132">·  Federation  (D/E)  — stacks compose across operators regardless of substrate</text>
+      <text x="20" y="150" font-style="italic" fill="#3a3833">↳ answers: how does the BUS dispatch + identify + authorize, substrate-neutrally?</text>
+
+      <text x="20" y="186" font-weight="700" fill="#3f7d4a">BODY-LAYER  (Soma)</text>
+      <text x="20" y="206">·  Identity, Telos, ISA, Skills, Memory, Policy — the assistant's portable body</text>
+      <text x="20" y="224">·  Projection contract — one body → CLAUDE.md, .cursor/rules/persona.mdc, AGENTS.md, NATS sub</text>
+      <text x="20" y="242">·  Writeback gate — substrate sessions writing back to Soma source, gated by policy</text>
+      <text x="20" y="260">·  Daemon mode — Soma assistant subscribing to Myelin subjects directly, no substrate</text>
+      <text x="20" y="278" font-style="italic" fill="#3a3833">↳ answers: how is the ASSISTANT itself portable, substrate-neutrally?</text>
+
+      <text x="20" y="312" font-weight="700" fill="#1d1c19">They compose through  policy.principals[].body : soma://&lt;assistant-id&gt;</text>
+      <text x="20" y="330" font-size="11" font-style="italic" fill="#3a3833">A Phase E delegation —  "your main assistant delegates around and coordinates on your behalf"  —  is only coherent if your main</text>
+      <text x="20" y="346" font-size="11" font-style="italic" fill="#3a3833">assistant exists independently of any one substrate.  Soma gives the body.  cortex/myelin gives the bus.  Both are needed.</text>
+    </g>
+  </g>
+
+  <!-- footer -->
+  <text x="60" y="1990" font-size="11" fill="#6b665d" font-style="italic">Source: docs/design-soma-integration.md §1–§9  ·  the-metafactory/cortex#110  ·  the-metafactory/soma  ·  visual harmonised with docs/diagrams/cortex-architecture.jpg</text>
+  <text x="1540" y="1990" text-anchor="end" font-size="11" fill="#6b665d" font-style="italic">2026-05-17  ·  technical architecture diagram</text>
+
+</svg>
