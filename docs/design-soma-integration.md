@@ -31,6 +31,8 @@ Nothing in IAW makes the **assistant body** substrate-independent. Luna's person
 
 The unit of federation isn't the agent, isn't the stack, isn't even the network — it's **the (Soma-assistant, NKey-stack) tuple addressable across operators**.
 
+**One refinement up front (operator feedback, 2026-05-17 in `#soma`):** the assistant body is a *spectrum*, not a monolith. Luna and Ivy live at the thick end — full Identity / Telos / ISA / Skills / Memory / Policy. Echo lives at the thin end — "a wrapper around two slash commands with a persona file as an example." Soma must serve both. The `SomaCore` layer set is the *maximal* shape; thin assistants declare a subset. §2.5 unpacks this; §7's strawman shows both a thick (Luna) and a thin (Echo) entry side-by-side.
+
 ---
 
 ## §1 — Why Soma is not an M-layer
@@ -99,6 +101,44 @@ These are not future hypotheticals — they're shipped or in-design cortex code 
 The cursor-design example is the load-bearing one. §4 of `docs/design-cursor-substrate-bot.md` walks through the persona-staging shim — strips YAML frontmatter (because `.mdc` doesn't parse it), writes to `.cursor/rules/persona.mdc`, cleans up the workdir after dispatch. **That is, verbatim, a Soma `projection` performed by a `workspace`-mode adapter, with frontmatter-stripping inlined into the host code rather than the adapter.** The cursor design even names the structural gap ("the single structural gap is the missing `--system-prompt` flag, which forces a per-dispatch workdir-staging step") without observing that the gap is already filled in Soma's adapter contract — it's just not yet wired in.
 
 When alpha ships and the metafactory then adds (say) a Codex agent and then a Gemini agent, the projection logic gets reinvented 2–3 more times. That's exactly the failure mode Soma was built to prevent — and the failure mode IAW's substrate harness work alone does NOT prevent (the harness abstracts *dispatch*, not *persona*).
+
+---
+
+## §2.5 — The assistant-body spectrum (thin Echo ↔ thick Luna)
+
+Operator feedback during this design's review window (Andreas, in `#soma`, 2026-05-17 at 01:12 PM, verbatim):
+
+> "Soma would need to handle the thin persona and wrapping layer around tooling and skills without all of the other stuff that we have in Luna and Ivy. Echo is a wrapper around two slash commands with a persona file as an example.
+>
+> This is what I was thinking when I mentioned the meta-factory stack in Soma but reading your context document solidified that thinking..."
+
+This is a load-bearing refinement to §1's framing. The diagram and §1 prose show the Soma body as one block with six pillars (Identity · Telos · ISA · Skills · Memory · Policy · Learning). That's the *maximal* shape. Real assistants in the metafactory ecosystem sit on a **spectrum** of body thickness:
+
+| Tier | Example | Body shape | Typical projection |
+|---|---|---|---|
+| **Thin** | Echo (cortex code-reviewer) | Persona file + skill index (2 slash commands) + role/trust scoping. No Telos. No long-running Memory. No Learning loop. | One `agents.d/echo.md` fragment + a couple of skill references. |
+| **Medium** | Sage, Alpha (cortex review peers) | Persona + capability declarations + per-substrate workdir lifecycle (clone, project, cleanup). Operational, not biographical. | The persona-staging shim from `design-cursor-substrate-bot.md` §4. |
+| **Thick** | Luna, Ivy (operator's primary assistants) | Full `SomaCore`: Identity + Telos + ISA + Skills + Memory + Policy + Learning. Long-running, biographical, evolving. | Full `~/.soma/profile/<name>/` tree with all compartments populated. |
+
+### Implications for the Soma adapter contract
+
+The `SomaCore` layer set is the **maximal** shape. Thin and medium assistants **declare a subset**. The adapter contract has to handle "this assistant has only persona + skill registry; do not look for Telos or Memory because none exist" without that being an error path. Two design consequences:
+
+1. **Optionality on every layer.** Each of Identity / Telos / ISA / Skills / Memory / Policy / Learning is optional in the body schema. Only the **persona** (Identity layer's profile facts + voice) is required — without persona the assistant has no voice at all, which is the minimum for "an assistant exists here". Everything else is opt-in.
+
+2. **Projection scales with declared body.** A thin Echo projection into Claude Code is `~/.claude/agents.d/echo.md` with persona + skill references. Period. No `~/.claude/MEMORY/`, no Telos appendix, no Learning hook. A thick Luna projection into Claude Code is the full `~/.claude/PAI/` tree. Same `SomaCortexAdapter`, same projection mechanism — different declared body, different output volume.
+
+### Implications for §7 strawman
+
+The original §7 strawman showed three Luna presences pointing at the same `body: soma://andreas/luna`. That's *one half* of the spectrum (thick + multi-substrate). The refined §7 below adds an **Echo** entry to show the *other half* (thin + single-substrate + capability-scoped). The two together demonstrate that the adapter contract has to handle both ends cleanly.
+
+### Implications for the M1–M7 placement (§1)
+
+§1 framed Soma as "the assistant-body protocol that any M7 surface can host." That's still right — but with the spectrum in mind, "host" means *"materialise whatever subset of SomaCore this assistant has declared, in the substrate-native shape, and route the substrate's events to whichever subset of writeback hooks the assistant has registered."* Thin assistants exercise less of the protocol; thick assistants exercise all of it. The protocol surface is the same.
+
+### Not implied (anti-claim)
+
+This spectrum does **not** mean "thin assistants don't need Soma." They still need: a portable persona, a portable skill registry, and a portable substrate-projection adapter. Without Soma, Echo today is `agents.d/echo.md` in cortex, plus a separate skill registry inside `~/.claude/skills/` (or wherever), plus an ad-hoc projection that lives in cortex's `cc-session.ts`. With Soma, Echo is `~/.soma/profile/echo/` (persona + skill refs) and the projection is the adapter's job. The win for thin assistants is *less reinvention*, not *less Soma*.
 
 ---
 
@@ -240,19 +280,20 @@ policy:
       grants: [keyword.chat, keyword.async, keyword.team, dispatch.*]
 ```
 
-Post-Soma:
+Post-Soma — showing **both ends of the §2.5 spectrum** side-by-side. Thick Luna (multi-substrate, full SomaCore) and thin Echo (single-substrate, persona + slash-commands only):
 
 ```yaml
 operator: { id: andreas }
 stack:    { id: andreas/main, nkey_pub: SAA… }
 
 agents:
+  # ─── THICK: Luna (full SomaCore, three substrate presences) ───
   - id: luna
-    body: soma://andreas/luna           # ← Soma assistant reference
+    body: soma://andreas/luna           # ← thick body (Identity/Telos/ISA/
+                                        #    Skills/Memory/Policy/Learning all
+                                        #    populated in ~/.soma/profile/luna/)
     presence: { discord: { ... }, mattermost: { ... } }
     runtime:  { substrate: claude-code, mode: in-process }
-    # persona, capabilities, trust now live in ~/.soma/profile/luna + ISA + Skills
-    # The fragment is now a thin substrate-binding pointer.
 
   - id: luna-codex                      # ← same Soma, different substrate
     body: soma://andreas/luna           # ← identical reference
@@ -262,18 +303,37 @@ agents:
     body: soma://andreas/luna
     runtime:  { substrate: soma-daemon, mode: standalone }
 
+  # ─── THIN: Echo (persona + 2 slash-commands, single substrate) ───
+  - id: echo
+    body: soma://andreas/echo           # ← thin body: ~/.soma/profile/echo/
+                                        #    has persona.md + skills/ pointing at
+                                        #    /code-review and /security-review.
+                                        #    NO telos, ISA, memory, learning.
+    presence: { discord: { agentDisplayId: "...", … } }
+    runtime:  { substrate: claude-code, mode: in-process }
+    capabilities: [code-review.typescript, security-review]   # declared at cortex
+                                                              # for capability
+                                                              # routing; matches
+                                                              # the thin body's
+                                                              # declared skills
+
 policy:
   principals:
     - id: luna
       home_operator: andreas
       home_stack: andreas/main
-      body: soma://andreas/luna         # ← join key into Soma body
+      body: soma://andreas/luna         # ← join key into Soma body (thick)
       role: [agent]
+    - id: echo
+      home_operator: andreas
+      home_stack: andreas/main
+      body: soma://andreas/echo         # ← join key into Soma body (thin)
+      role: [agent-restricted]          # narrower role for thin reviewer agent
 ```
 
-Three substrate presences of the same Luna, all signing with the stack NKey, all backed by the same Soma body. That's substrate independence made operable.
+The same `policy.principals[].body` join key handles both ends of the spectrum — Soma resolves to whatever subset of the body the assistant has declared. The cortex side doesn't care whether the body has Memory or not; it cares about identity (NKey), routing (capabilities), and the projection adapter call. Thin Echo's projection is small; thick Luna's projection is large; the contract is identical.
 
-Note the `id: luna` / `id: luna-codex` / `id: luna-daemon` are *presence handles* (cortex's perspective — three runtime processes); they all resolve to the same `body: soma://andreas/luna` (one Soma assistant). The `policy.principals[].id: luna` is the bus-level principal; all three presences sign as that principal. The chain-of-stamps may need to carry `signed_by[].substrate` to distinguish *which presence* did the work — see §9 Q3.
+Note the `id: luna` / `id: luna-codex` / `id: luna-daemon` are *presence handles* (cortex's perspective — three runtime processes); they all resolve to the same `body: soma://andreas/luna` (one Soma assistant). The `policy.principals[].id: luna` is the bus-level principal; all three presences sign as that principal. Echo only has one presence (single runtime) — typical for thin agents. The chain-of-stamps may need to carry `signed_by[].substrate` to distinguish *which presence* did the work for multi-presence assistants — see §9 Q3.
 
 ---
 
