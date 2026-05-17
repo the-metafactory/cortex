@@ -246,9 +246,14 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
     // boot wiring's design-doc-aligned convention.
     expect(runtime.subscribePullCalls.length).toBe(2);
     const patterns = runtime.subscribePullCalls.map((c) => c.pattern);
+    // cortex#318 — subscribe pattern includes the stack segment to match
+    // pilot's 6-segment publish grammar (`local.{org}.{stack}.tasks.code-
+    // review.<flavor>`). Test config omits the stack: block so
+    // `deriveStackId` default-derives `'default'`. Pre-cortex#318 this
+    // was a 4-segment pattern that never matched stack-aware publishes.
     expect(patterns).toEqual([
-      "local.test-op.tasks.code-review.>",
-      "local.test-op.tasks.code-review.>",
+      "local.test-op.default.tasks.code-review.>",
+      "local.test-op.default.tasks.code-review.>",
     ]);
     const durables = runtime.subscribePullCalls.map((c) => c.durable).sort();
     expect(durables).toEqual([

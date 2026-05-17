@@ -700,7 +700,15 @@ export async function startCortex(
   // share competing-consumer semantics and a daemon restart resumes from
   // the same JetStream offset.
   const reviewOperatorId = config.agent.operatorId ?? "default";
-  const reviewSubjectPattern = `local.${reviewOperatorId}.tasks.code-review.>`;
+  // cortex#318 — include the stack segment to match the 6-segment grammar
+  // `deriveSubject` produces for stack-scoped publishes (cortex#262 / IAW
+  // Phase A.5 + canonical helper at `@the-metafactory/myelin/subjects`).
+  // Pilot publishes to `local.{org}.{stack}.tasks.code-review.<flavor>`;
+  // the consumer must subscribe to the same grammar or the wildcard
+  // `>` never matches (NATS requires literal segments before the `>`).
+  // Reuses `derivedStack.stack` resolved at boot (line 308) — same source
+  // sage's bridge subscription already uses for `local.{org}.{stack}.>`.
+  const reviewSubjectPattern = `local.${reviewOperatorId}.${derivedStack.stack}.tasks.code-review.>`;
   const reviewStream = "CODE_REVIEW";
   for (const agent of reviewCapableAgents) {
     try {
