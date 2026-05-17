@@ -796,6 +796,18 @@ export async function startCortex(
 
       // cortex#331 Phase 1 — substrate-aware pipelineRunner selection.
       //
+      // **Why this lives in cortex (not sage).** Sage went in-process at
+      // sage#41 — its standalone launchd daemon and standalone NATS
+      // subscribe path are retired. Cortex's review-consumer is now the
+      // sole receiver for sage-owned review flavors. The cross-repo scope
+      // split (sage#40 / sage#41 / cortex#331) deliberately puts
+      // cortex-side wiring HERE in cortex#331, NOT in sage's Phase 1 —
+      // sage stepped DOWN from owning its own bus subscription, cortex
+      // stepped UP to own substrate dispatch for in-process agents. The
+      // selection below is the substrate-dispatch fork that closes the
+      // round-trip; the adapter itself lives in
+      // `src/runner/substrate/pi-dev-runner.ts`.
+      //
       // Agents that declare `runtime.substrate: "pi-dev"` get the sage
       // adapter wired in via `makePiDevPipelineRunner`. Every other agent
       // (including those with the substrate field unset, which defaults

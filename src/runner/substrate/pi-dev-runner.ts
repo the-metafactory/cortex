@@ -1,6 +1,29 @@
 /**
  * cortex#331 Phase 1 — `pi-dev` substrate pipeline runner.
  *
+ * **Cross-repo scope split (sage#40 / sage#41 / cortex#331).** Sage's local
+ * ISA referred to "zero cortex changes" within the SAGE repo's Phase 1 —
+ * that scope is preserved: no cortex edits land in sage#41 (sage's
+ * in-process migration). cortex#331 is the separate, parallel issue that
+ * owns the cortex-side wiring; this file implements its Phase 1.
+ *
+ * **Architectural shift.** Sage went in-process (sage#41) — its standalone
+ * launchd daemon and standalone NATS subscribe path are retired. Cortex's
+ * review-consumer is now the sole receiver for sage-owned review flavors.
+ * That is the load-bearing change: sage stepped DOWN from owning its own
+ * bus subscription; cortex stepped UP to own substrate dispatch for
+ * in-process agents. This runner is the cortex-side adapter that closes
+ * the round-trip.
+ *
+ * **Topology after sage#41 + cortex#331 ship:**
+ *
+ *   pilot publishes `tasks.code-review.<flavor>` envelope
+ *     → cortex's `ReviewConsumer` for sage receives + verifies signature (cortex#330)
+ *     → this runner spawns `sage review <pr-ref> --substrate pi` subprocess
+ *     → captures sage stdout, builds `review.verdict.commented` envelope
+ *     → cortex publishes verdict back to bus
+ *     → pilot's `--wait` catches it
+ *
  * **What this module is.** A `ReviewPipelineRunner` factory that targets
  * sage's `pi-dev` substrate. Returns an async function with the same
  * signature `runReviewPipeline` exposes (see `src/runner/review-pipeline.ts`),
@@ -345,12 +368,5 @@ function verdict(
       inline_comments: 0,
     },
   });
-  // Surface the startedAt anchor in close range so a future refactor
-  // adding `dispatch.task.completed` emission here has the timestamp
-  // ready. (Review-consumer emits `started`/`completed` around the
-  // pipelineRunner call; this runner emits only the terminal verdict /
-  // failed envelope per `ReviewPipelineResult`'s contract.)
-  void pipeline;
-  void correlationId;
   return { kind: "verdict", envelope };
 }
