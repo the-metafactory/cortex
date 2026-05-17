@@ -134,41 +134,59 @@ function buildPilotShapeRequest(): Envelope {
   });
 }
 
+/**
+ * Shared fixture for the cases below. Builds the pilot keypair, the
+ * resolver (with cortex's trust list optionally including pilot), and the
+ * signed pilot-shape envelope. Extracted in cycle-2 (Sage Maintainability
+ * suggestion) so the shared shape — keypair → resolver → envelope build
+ * → signEnvelope — lives in one place. Future changes to the pilot
+ * round-trip shape (different DID format, different agent registry shape,
+ * different signing key encoding) edit this helper, not three test bodies.
+ *
+ * `trusted: false` produces a resolver whose cortex agent's trust list
+ * omits pilot — pilot is still registered (so the structural check has a
+ * complete picture) but the trust-resolver rejects the principal.
+ */
+async function signedPilotRequest(opts: { trusted?: boolean } = {}): Promise<{
+  signed: Envelope;
+  resolver: TrustResolver;
+  request: Envelope;
+}> {
+  const trusted = opts.trusted ?? true;
+  const { nkeyPub: pilotNKey, privateKeyBase64: pilotSeed } =
+    generateEd25519KeyPair();
+  const cortex = agentFixture({ id: "cortex", trust: trusted ? ["pilot"] : [] });
+  const pilot = agentFixture({
+    id: "pilot",
+    displayName: "Pilot",
+    nkey_pub: pilotNKey,
+  });
+  const resolver = new TrustResolver(AgentRegistry.fromAgents([cortex, pilot]));
+
+  const request = buildPilotShapeRequest();
+  // The unsigned envelope has `signed_by: undefined`; cortex's `Envelope`
+  // keeps a back-compat `SignedBy | SignedBy[] | undefined` union while
+  // myelin's `MyelinEnvelope` tightens to array-only. The cast is the same
+  // structural widening used in `verify-signed-by-chain.test.ts`.
+  const signed = await signEnvelope(
+    request as Parameters<typeof signEnvelope>[0],
+    pilotSeed,
+    "did:mf:pilot",
+  );
+  return { signed, resolver, request };
+}
+
 // =============================================================================
 // Cases
 // =============================================================================
 
 describe("Thread C — signed pilot-shape envelope round-trip (P-VERIFY)", () => {
   test("happy path — pilot-shape envelope signed by pilot principal verifies under cortex's chain validator", async () => {
-    // Pilot's keypair: would in production come from
-    // `~/.config/nats/pilot.creds`'s seed via the standard NSC path; we
-    // generate ephemerally for hermetic testing. The Principal DID is the
-    // shape cortex's `extractAgentIdFromDid` parses (`did:mf:<agent-id>`).
-    const { nkeyPub: pilotNKey, privateKeyBase64: pilotSeed } =
-      generateEd25519KeyPair();
-
-    // Receiver (cortex agent) trusts pilot. Both agents need NKeys so the
-    // structural-trust + crypto-trust layers each have the data they need.
-    const cortex = agentFixture({ id: "cortex", trust: ["pilot"] });
-    const pilot = agentFixture({
-      id: "pilot",
-      displayName: "Pilot",
-      nkey_pub: pilotNKey,
-    });
-    const resolver = new TrustResolver(AgentRegistry.fromAgents([cortex, pilot]));
-
-    // Build the production envelope shape, then sign it. Cast is the
-    // same back-compat-union widening used in `verify-signed-by-chain.test.ts`:
-    // cortex's `Envelope.signed_by` keeps a `SignedBy | SignedBy[] | undefined`
-    // back-compat shape while myelin's `MyelinEnvelope` tightens to array
-    // only. The unsigned envelope has `signed_by: undefined` so the cast
-    // is structurally safe.
-    const request = buildPilotShapeRequest();
-    const signed = await signEnvelope(
-      request as Parameters<typeof signEnvelope>[0],
-      pilotSeed,
-      "did:mf:pilot",
-    );
+    // Production analogue: pilot's signing seed comes from
+    // `~/.config/nats/pilot.creds` via the standard NSC path; the helper
+    // generates ephemerally for hermetic testing. DID format `did:mf:<id>`
+    // is the shape cortex's `extractAgentIdFromDid` parses.
+    const { signed, resolver, request } = await signedPilotRequest();
 
     const result: ChainVerificationResult = await verifySignedByChain(signed, {
       resolver,
@@ -200,22 +218,7 @@ describe("Thread C — signed pilot-shape envelope round-trip (P-VERIFY)", () =>
     // This is the load-bearing safety property: a man-in-the-middle on
     // the bus can't change PR numbers, repo paths, or reviewer identity
     // without invalidating the chain.
-    const { nkeyPub: pilotNKey, privateKeyBase64: pilotSeed } =
-      generateEd25519KeyPair();
-    const cortex = agentFixture({ id: "cortex", trust: ["pilot"] });
-    const pilot = agentFixture({
-      id: "pilot",
-      displayName: "Pilot",
-      nkey_pub: pilotNKey,
-    });
-    const resolver = new TrustResolver(AgentRegistry.fromAgents([cortex, pilot]));
-
-    const request = buildPilotShapeRequest();
-    const signed = await signEnvelope(
-      request as Parameters<typeof signEnvelope>[0],
-      pilotSeed,
-      "did:mf:pilot",
-    );
+    const { signed, resolver } = await signedPilotRequest();
 
     // Tamper: bump the PR number on the published envelope. Signature
     // still attaches but covers the wrong canonical bytes now.
@@ -250,23 +253,7 @@ describe("Thread C — signed pilot-shape envelope round-trip (P-VERIFY)", () =>
     // envelopes from this principal" — structural-trust rejection at
     // `signer_not_trusted` (which is the structural-trust class for "the
     // bytes might verify but you can't accept them anyway").
-    const { nkeyPub: pilotNKey, privateKeyBase64: pilotSeed } =
-      generateEd25519KeyPair();
-    // Note: cortex's `trust:` list omits "pilot".
-    const cortex = agentFixture({ id: "cortex", trust: [] });
-    const pilot = agentFixture({
-      id: "pilot",
-      displayName: "Pilot",
-      nkey_pub: pilotNKey,
-    });
-    const resolver = new TrustResolver(AgentRegistry.fromAgents([cortex, pilot]));
-
-    const request = buildPilotShapeRequest();
-    const signed = await signEnvelope(
-      request as Parameters<typeof signEnvelope>[0],
-      pilotSeed,
-      "did:mf:pilot",
-    );
+    const { signed, resolver } = await signedPilotRequest({ trusted: false });
 
     const result = await verifySignedByChain(signed, {
       resolver,
