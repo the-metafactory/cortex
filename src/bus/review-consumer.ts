@@ -488,19 +488,23 @@ export class ReviewConsumer {
     if (this.signatureVerifier !== undefined) {
       const verifyResult = await this.signatureVerifier(envelope);
       if (!verifyResult.valid) {
+        // Build the failure detail once and thread it through both the
+        // emitted envelope's `reason.detail` and the JsMsg term reason
+        // so the two stay in lockstep — Sage cycle-1 Maintainability
+        // suggestion. Operators reading either the dispatch.task.failed
+        // envelope or `nats consumer info`'s dead-letter view see the
+        // same string.
+        const failureDetail = `chain verification failed: ${verifyResult.reason}`;
         process.stderr.write(
           `cortex/review-consumer: chain verification rejected envelope ${envelope.id} ` +
             `for agent="${this.agent.id}" subject=${subject} — ${verifyResult.reason}\n`,
         );
         await this.publishFailed(
           envelope,
-          {
-            kind: "cant_do",
-            detail: `chain verification failed: ${verifyResult.reason}`,
-          },
+          { kind: "cant_do", detail: failureDetail },
           `chain verification failed for ${subject}`,
         );
-        return { kind: "term", reason: `chain verification failed: ${verifyResult.reason}` };
+        return { kind: "term", reason: failureDetail };
       }
     }
 
