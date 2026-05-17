@@ -19,6 +19,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { createUser } from "@nats-io/nkeys";
+import { signEnvelope } from "@the-metafactory/myelin/identity";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
 import { createSurfaceRouter, type SurfaceRouter } from "../../bus/surface-router";
@@ -31,6 +33,9 @@ import {
 import type { CCSessionResult } from "../cc-session";
 import { PolicyEngine } from "../../common/policy/engine";
 import type { Intent } from "../../common/policy/types";
+import { AgentRegistry } from "../../common/agents/registry";
+import { TrustResolver } from "../../common/agents/trust-resolver";
+import type { Agent } from "../../common/types/cortex-config";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -1468,5 +1473,362 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     const signedBy = denied.payload.signed_by as { principal: string }[];
     expect(signedBy).toHaveLength(1);
     expect(signedBy[0]!.principal).toBe("did:mf:cortex");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// IAW Phase B wiring (cortex#320) — chain verification
+// ---------------------------------------------------------------------------
+
+/**
+ * Test fixtures for chain-verification tests. Mirrors the patterns in
+ * `src/bus/__tests__/verify-signed-by-chain.test.ts` — minimal agent
+ * shape + a `TrustResolver` factory. Crypto tests generate fresh
+ * ed25519 NATS user keypairs and sign envelopes via myelin's
+ * `signEnvelope`.
+ */
+function discordPresenceForRunner() {
+  return {
+    enabled: true,
+    token: "discord-bot-token",
+    guildId: "1487000000000000000",
+    agentChannelId: "1487000000000000001",
+    logChannelId: "1487000000000000002",
+    contextDepth: 10,
+    enableAgentLog: false,
+    roles: [],
+    defaultRole: "allow-all",
+    dm: {
+      operatorRole: {
+        features: ["chat", "async", "team"] as const,
+        disallowedTools: [],
+        bashGuard: true,
+      },
+      defaultRole: "denied" as const,
+      userRoles: [],
+    },
+  };
+}
+
+function agentFixtureForRunner(overrides: Partial<Agent> = {}): Agent {
+  return {
+    id: "cortex",
+    displayName: "Cortex",
+    persona: "./personas/cortex.md",
+    roles: [],
+    trust: [],
+    presence: { discord: discordPresenceForRunner() },
+    ...overrides,
+  } as Agent;
+}
+
+function runnerResolverWith(...agents: Agent[]): TrustResolver {
+  return new TrustResolver(AgentRegistry.fromAgents(agents));
+}
+
+function runnerEd25519Stamp(principal: string) {
+  return {
+    method: "ed25519" as const,
+    principal,
+    signature: "A".repeat(88),
+    at: "2026-05-15T12:00:00.000Z",
+  };
+}
+
+function generateEd25519KeyPairForRunner(): {
+  nkeyPub: string;
+  privateKeyBase64: string;
+} {
+  const kp = createUser();
+  const nkeyPub = kp.getPublicKey();
+  const rawSeed = (kp as unknown as { getRawSeed(): Uint8Array }).getRawSeed();
+  const privateKeyBase64 = Buffer.from(rawSeed).toString("base64");
+  return { nkeyPub, privateKeyBase64 };
+}
+
+describe("dispatch-listener — chain verification (cortex#320)", () => {
+  test("[1] valid structural chain + PolicyEngine allow → audit + lifecycle envelopes flow", async () => {
+    // Receiving agent `cortex` trusts itself; envelope is signed by
+    // cortex (self-dispatch case modeled as the simplest happy path).
+    // `cryptoVerify: false` here because the stamp signature is a
+    // placeholder — structural-only path is exercised.
+    const cortex = agentFixtureForRunner({
+      id: "cortex",
+      trust: ["cortex"],
+      nkey_pub: "U" + "B".repeat(55),
+    });
+    const resolver = runnerResolverWith(cortex);
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      trustResolver: resolver,
+      receivingAgentId: "cortex",
+      operatorId: "andreas",
+      cryptoVerify: false,
+    });
+    await listener.start();
+    await router.start();
+
+    const env = makeReceivedEnvelope();
+    env.signed_by = [runnerEd25519Stamp("did:mf:cortex")];
+
+    r.trigger(env, "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Verifier accepts → policy gate sees verified principal → allow →
+    // audit envelope + lifecycle pair.
+    expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.allowed",
+      "dispatch.task.started",
+      "dispatch.task.completed",
+    ]);
+  });
+
+  test("[2] empty chain + rejectEmpty:false (default) → falls through to PolicyEngine path", async () => {
+    // Adapter-originated dispatches (Discord/Mattermost/Slack/cc-events)
+    // arrive with no `signed_by[]`. The v2.0.2 default
+    // `rejectEmpty: false` accepts them and falls through to the
+    // policy gate, which decides on `payload.agent_id`.
+    const cortex = agentFixtureForRunner({ id: "cortex" });
+    const resolver = runnerResolverWith(cortex);
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      trustResolver: resolver,
+      receivingAgentId: "cortex",
+      operatorId: "andreas",
+      cryptoVerify: true,
+    });
+    await listener.start();
+    await router.start();
+
+    // No signed_by on the envelope — legitimate adapter shape.
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Verifier sees empty chain, returns `valid: true` (rejectEmpty=false).
+    // Policy gate sees the empty-chain fallback principal id (agent_id)
+    // and allows; lifecycle envelopes flow.
+    expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.allowed",
+      "dispatch.task.started",
+      "dispatch.task.completed",
+    ]);
+  });
+
+  test("[3] signed chain with principal not in TrustResolver → chain_verification_failed deny", async () => {
+    // Receiving agent `cortex` doesn't trust `ghost` (or even know it).
+    // A signed envelope claiming `did:mf:ghost` as the principal must
+    // be rejected with `unknown_agent`.
+    const cortex = agentFixtureForRunner({ id: "cortex", trust: [] });
+    const resolver = runnerResolverWith(cortex);
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      trustResolver: resolver,
+      receivingAgentId: "cortex",
+      operatorId: "andreas",
+      // cryptoVerify omitted → defaults true; the structural check
+      // rejects before crypto runs, so the test doesn't need real bytes.
+    });
+    await listener.start();
+    await router.start();
+
+    const env = makeReceivedEnvelope();
+    env.signed_by = [runnerEd25519Stamp("did:mf:ghost")];
+
+    r.trigger(env, "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.denied",
+      "dispatch.task.failed",
+    ]);
+    const denied = r.published[0]!;
+    const failed = r.published[1]!;
+
+    const auditReason = denied.payload.reason as {
+      kind: string;
+      chain_reason?: { kind: string };
+    };
+    expect(auditReason.kind).toBe("chain_verification_failed");
+    expect(auditReason.chain_reason?.kind).toBe("unknown_agent");
+
+    const failedReason = failed.payload.reason as {
+      kind: string;
+      deny: { kind: string; chain_reason?: { kind: string } };
+    };
+    expect(failedReason.kind).toBe("policy_denied");
+    expect(failedReason.deny.kind).toBe("chain_verification_failed");
+    expect(failedReason.deny.chain_reason?.kind).toBe("unknown_agent");
+
+    // Harness never constructed — verification short-circuits before
+    // the policy gate, never mind the substrate.
+    expect(optsCaptured).toHaveLength(0);
+  });
+
+  test("[4] empty chain + explicit rejectEmpty override → not reachable; verifier wired with rejectEmpty:false; empty must pass", async () => {
+    // The listener intentionally pins `rejectEmpty: false` so adapter
+    // dispatches always pass. This test documents the contract: a
+    // listener constructed with the default options cannot be made
+    // to reject empty chains. The "opt-in rejectEmpty" path is not
+    // exposed (operators wanting that flip a yet-to-ship config knob
+    // — see cortex#320 follow-up). We assert here that even with
+    // `cryptoVerify: true`, an empty-chain envelope is accepted.
+    const cortex = agentFixtureForRunner({ id: "cortex" });
+    const resolver = runnerResolverWith(cortex);
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      trustResolver: resolver,
+      receivingAgentId: "cortex",
+      operatorId: "andreas",
+      cryptoVerify: true,
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Empty chain accepted; lifecycle flows.
+    expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.allowed",
+      "dispatch.task.started",
+      "dispatch.task.completed",
+    ]);
+  });
+
+  test("[5] cryptoVerify:true + crypto-valid signed chain → allow path", async () => {
+    const { nkeyPub, privateKeyBase64 } = generateEd25519KeyPairForRunner();
+    const cortex = agentFixtureForRunner({
+      id: "cortex",
+      trust: ["cortex"],
+      nkey_pub: nkeyPub,
+    });
+    const resolver = runnerResolverWith(cortex);
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      trustResolver: resolver,
+      receivingAgentId: "cortex",
+      operatorId: "andreas",
+      cryptoVerify: true,
+    });
+    await listener.start();
+    await router.start();
+
+    // Build an envelope with no signed_by, sign it via myelin so the
+    // chain is canonically bound to the envelope bytes.
+    const base = makeReceivedEnvelope() as Parameters<typeof signEnvelope>[0];
+    const signed = await signEnvelope(base, privateKeyBase64, "did:mf:cortex");
+
+    r.trigger(signed, "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.allowed",
+      "dispatch.task.started",
+      "dispatch.task.completed",
+    ]);
+  });
+
+  test("[6] cryptoVerify:true + tampered signature → chain_verification_failed deny", async () => {
+    const { nkeyPub, privateKeyBase64 } = generateEd25519KeyPairForRunner();
+    const cortex = agentFixtureForRunner({
+      id: "cortex",
+      trust: ["cortex"],
+      nkey_pub: nkeyPub,
+    });
+    const resolver = runnerResolverWith(cortex);
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      trustResolver: resolver,
+      receivingAgentId: "cortex",
+      operatorId: "andreas",
+      cryptoVerify: true,
+    });
+    await listener.start();
+    await router.start();
+
+    const base = makeReceivedEnvelope() as Parameters<typeof signEnvelope>[0];
+    const signed = await signEnvelope(base, privateKeyBase64, "did:mf:cortex");
+
+    // Tamper: flip the signature so the bytes no longer match.
+    const chain = Array.isArray(signed.signed_by)
+      ? signed.signed_by
+      : signed.signed_by
+        ? [signed.signed_by]
+        : [];
+    const firstStamp = chain[0];
+    if (firstStamp?.method !== "ed25519") {
+      throw new Error("test fixture: expected ed25519 stamp at index 0");
+    }
+    const tamperedSig = firstStamp.signature.startsWith("A")
+      ? "B" + firstStamp.signature.slice(1)
+      : "A" + firstStamp.signature.slice(1);
+    const tampered: Envelope = {
+      ...(signed as Envelope),
+      signed_by: [{ ...firstStamp, signature: tamperedSig }],
+    };
+
+    r.trigger(tampered, "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.denied",
+      "dispatch.task.failed",
+    ]);
+    const denied = r.published[0]!;
+    const reason = denied.payload.reason as {
+      kind: string;
+      chain_reason?: { kind: string };
+    };
+    expect(reason.kind).toBe("chain_verification_failed");
+    expect(reason.chain_reason?.kind).toBe("crypto_verify_failed");
+    expect(optsCaptured).toHaveLength(0);
   });
 });

@@ -87,6 +87,12 @@ import type {
   Principal,
 } from "../common/policy/types";
 import { createDispatchTaskFailedEvent } from "../bus/dispatch-events";
+import type { TrustResolver } from "../common/agents/trust-resolver";
+import {
+  verifySignedByChain,
+  type ChainRejectionReason,
+  type ChainVerificationResult,
+} from "../bus/verify-signed-by-chain";
 import {
   ClaudeCodeHarness,
   type CCSessionFactory as ClaudeCodeFactory,
@@ -218,6 +224,57 @@ export interface DispatchListenerOptions {
    * passed through verbatim here).
    */
   policyEngine?: PolicyEngine;
+  /**
+   * IAW Phase B wiring (cortex#320 / v2.0.2) — when supplied, every
+   * inbound `dispatch.task.received` envelope is run through
+   * `verifySignedByChain` before its principal is resolved or the
+   * `PolicyEngine` is consulted. A failed chain short-circuits the
+   * dispatch with a `system.access.denied` + `dispatch.task.failed`
+   * pair and never reaches the policy gate or a harness.
+   *
+   * When `undefined` the verifier is skipped entirely — preserves
+   * the legacy path for tests that don't care about chain trust.
+   * Production wiring in `cortex.ts` always supplies it.
+   */
+  trustResolver?: TrustResolver;
+  /**
+   * When `true` (default, v2.0.2), the chain verifier runs both the
+   * structural trust check AND myelin's ed25519 verification over
+   * the JCS-canonical envelope bytes. Operators with `signed_by[]`
+   * peers on the bus need `nkey_pub` declared on those principals
+   * for the crypto layer to admit them.
+   *
+   * When `false`, only the structural check runs (legacy / opt-out).
+   *
+   * **Note on the default.** Adapter-originated dispatches
+   * (Discord/Mattermost/Slack/cc-events) arrive with an empty
+   * `signed_by[]` and fall through cleanly thanks to
+   * `rejectEmpty: false`. `cryptoVerify: true` therefore costs
+   * nothing for legitimate adapter traffic and closes the spoof
+   * vector for any signed bus-to-runner envelope.
+   */
+  cryptoVerify?: boolean;
+  /**
+   * Operator id (e.g. `andreas`). Required by `verifySignedByChain`'s
+   * crypto layer (when `cryptoVerify: true`) to thread into each
+   * constructed myelin Principal. When the verifier is enabled in
+   * the default `cryptoVerify: true` mode AND any envelope arrives
+   * with a non-empty chain, `operatorId` must be supplied or
+   * verification throws.
+   */
+  operatorId?: string;
+  /**
+   * Agent id of the receiving side — whose `trust:` list governs
+   * which peer signers we admit on inbound dispatches. Mirrors
+   * `BusDispatchListenerOpts.receivingAgentId`; production wiring
+   * picks the first registered agent (single-agent stacks) or the
+   * designated peer-router agent (future multi-agent stacks).
+   *
+   * When `trustResolver` is supplied this field is required —
+   * verification is skipped if either is omitted (defensive: tests
+   * that supply only one configure deliberately incomplete state).
+   */
+  receivingAgentId?: string;
 }
 
 export interface DispatchListener {
@@ -278,8 +335,15 @@ export function createDispatchListener(
     source,
     ccSessionFactory,
     policyEngine,
+    trustResolver,
+    receivingAgentId,
+    operatorId,
     adapterId = "runner-dispatch-listener",
   } = opts;
+  // v2.0.2 default: structural trust + ed25519 crypto verification.
+  // Adapter-originated dispatches arrive with empty `signed_by[]` and
+  // fall through `rejectEmpty: false`; signed bus traffic MUST verify.
+  const cryptoVerify = opts.cryptoVerify ?? true;
   const subjects = opts.subjects ?? defaultSubjects(source.org, opts.stack);
 
   let registration: { unregister: () => void } | null = null;
@@ -304,6 +368,10 @@ export function createDispatchListener(
         ccSessionFactory,
         policyEngine,
         stack: opts.stack,
+        trustResolver,
+        cryptoVerify,
+        operatorId,
+        receivingAgentId,
       }),
   };
 
@@ -459,6 +527,15 @@ interface DispatchHandlerContext {
   ccSessionFactory: CCSessionFactory | undefined;
   policyEngine: PolicyEngine | undefined;
   stack: string | undefined;
+  /**
+   * IAW Phase B wiring (cortex#320). When `trustResolver` and
+   * `receivingAgentId` are both supplied, every inbound envelope is
+   * chain-verified before principal resolution.
+   */
+  trustResolver: TrustResolver | undefined;
+  cryptoVerify: boolean;
+  operatorId: string | undefined;
+  receivingAgentId: string | undefined;
 }
 
 async function handleDispatchEnvelope(
@@ -466,13 +543,92 @@ async function handleDispatchEnvelope(
   subject: string | undefined,
   ctx: DispatchHandlerContext,
 ): Promise<void> {
-  const { runtime, source, ccSessionFactory, policyEngine, stack } = ctx;
+  const {
+    runtime,
+    source,
+    ccSessionFactory,
+    policyEngine,
+    stack,
+    trustResolver,
+    cryptoVerify,
+    operatorId,
+    receivingAgentId,
+  } = ctx;
   const payload = parsePayload(envelope);
   if (!payload) {
     console.error(
       `cortex-runner: dispatch-listener: malformed dispatch.task.received envelope id=${envelope.id} — required fields missing`,
     );
     return;
+  }
+
+  // IAW Phase B wiring (cortex#320, v2.0.2) — verify the envelope's
+  // `signed_by[]` chain BEFORE resolving the principal. The runner used
+  // to read `signed_by[0].principal` at face value (cortex#220 round 1's
+  // "authorization-without-authentication" gap). Now we structurally
+  // trust-check every ed25519 stamp and, by default, also cryptographically
+  // verify each stamp's signature over the JCS-canonical envelope bytes.
+  //
+  // **`rejectEmpty: false`** — adapter-originated dispatches
+  // (Discord/Mattermost/Slack/cc-events) arrive with no `signed_by[]`.
+  // Empty chains are legitimate and fall through to the existing
+  // PolicyEngine path; only signed chains must verify.
+  //
+  // Verification is skipped iff either `trustResolver` OR
+  // `receivingAgentId` is undefined — defensive against tests that
+  // configure incomplete state. Production wiring in `cortex.ts`
+  // supplies both.
+  if (trustResolver !== undefined && receivingAgentId !== undefined) {
+    let verification: ChainVerificationResult;
+    try {
+      verification = await verifySignedByChain(envelope, {
+        resolver: trustResolver,
+        receivingAgentId,
+        rejectEmpty: false,
+        cryptoVerify,
+        ...(cryptoVerify && operatorId !== undefined && { operatorId }),
+      });
+    } catch (err) {
+      // `verifySignedByChain` throws when `cryptoVerify: true` and
+      // `operatorId` is missing on a non-empty chain. Treat as a
+      // verification failure (deny + log) so the runner doesn't crash.
+      const detail = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `[runner/dispatch-listener] chain verification threw on ` +
+          `envelope ${envelope.id} (correlation_id=` +
+          `${envelope.correlation_id ?? "<none>"}): ${detail}\n`,
+      );
+      await emitChainVerificationDeny(
+        runtime,
+        source,
+        envelope,
+        payload,
+        subject,
+        stack,
+        { kind: "crypto_verify_failed", myelinReason: detail },
+      );
+      return;
+    }
+
+    if (!verification.valid) {
+      process.stderr.write(
+        `[runner/dispatch-listener] dropped envelope ${envelope.id} ` +
+          `(correlation_id=${envelope.correlation_id ?? "<none>"} ` +
+          `task_id=${payload.task_id} agent=${payload.agent_id}): ` +
+          `${verification.reason.kind} at chain index ` +
+          `${verification.rejectedAt}\n`,
+      );
+      await emitChainVerificationDeny(
+        runtime,
+        source,
+        envelope,
+        payload,
+        subject,
+        stack,
+        verification.reason,
+      );
+      return;
+    }
   }
 
   // IAW Phase C.3.1 — policy gate. The engine resolves the originating
@@ -694,43 +850,23 @@ type DispatchPolicyResult =
 /**
  * Build an `Intent` from the envelope + payload and ask the engine.
  *
- * **⚠ SECURITY — pre-Phase-B authorization-without-authentication.**
- * The principal claim read here (`signed_by[0].principal`) is
- * **not yet cryptographically verified at the envelope-validator
- * layer**. Per `src/bus/myelin/envelope-validator.ts:125-126`:
- * *"IAW Phase A.2: `signed_by` is surfaced but not yet consumed
- * for trust decisions."* That means a publisher to the bus can
- * fabricate `signed_by[0].principal = "did:mf:operator"` and
- * acquire the operator role's capabilities until Phase B's
- * signature verification is mandatory at the validator. Echo
- * cortex#220 round 1.
- *
- * **What this gate IS safe for (today):**
- *   - Single-operator / dev-mode deployments where the bus is a
- *     local leaf node with no untrusted publishers.
- *   - Multi-operator deployments where every adapter+harness on
- *     the bus is operated by the same trust boundary.
- *
- * **What this gate is NOT safe for (today):**
- *   - Multi-principal trust in a deployment where untrusted
- *     processes can publish onto the bus.
- *   - Federation across operators (Phase D) — verification is
- *     mandatory there.
- *
- * v2.0.1 (cortex#311) — the `CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK`
- * env-var opt-in that previously made this trade-off explicit at boot
- * has been retired. Operators running v2.0.0+ accept the trade-off by
- * deploying; cortex.ts emits an informational boot-log line naming the
- * pre-Phase-B mode rather than gating the engine. Phase B (cortex#114)
- * wires the verifier into the validator and closes the gap entirely.
+ * **Chain verification (cortex#320, v2.0.2).** Inbound envelopes are
+ * chain-verified by `handleDispatchEnvelope` BEFORE this function is
+ * called: `signed_by[]` is structurally trust-checked against the
+ * receiving agent's `trust:` list, and (by default) cryptographically
+ * verified against the operator's NKey roster via myelin's
+ * `verifyEnvelopeIdentity`. Empty chains — produced today by all
+ * adapter-originated dispatches (Discord/Mattermost/Slack/cc-events) —
+ * are accepted and fall through to this gate; signed chains must
+ * verify. This closes the cortex#220 round-1
+ * "authorization-without-authentication" gap that lived here pre-Phase-B.
  *
  * **Principal resolution.** Read `envelope.signed_by[0].principal`
  * (originator stamp per myelin#31 chain semantics). Strip the
  * `did:mf:` prefix to match `Principal.id`. If no chain is present
- * (legacy unsigned envelope), fall back to `payload.agent_id` —
- * the engine will reject with `unknown_principal` unless the
- * agent is also a declared principal in the policy block. Both
- * paths are equally unverified today (Echo cortex#220 round 1).
+ * (legitimate for adapter-originated dispatches), fall back to
+ * `payload.agent_id` — the engine will reject with `unknown_principal`
+ * unless the agent is also a declared principal in the policy block.
  *
  * **Capability claim.** `dispatch.<agent_id>` — the dispatch surface
  * is "may principal X invoke agent Y on this stack?". C.2b will let
@@ -875,5 +1011,89 @@ function extractSourceNetwork(subject: string | undefined): string | undefined {
   if (networkId === undefined || networkId.length === 0) return undefined;
   if (!LETTER_PREFIX_ID_REGEX.test(networkId)) return undefined;
   return networkId;
+}
+
+// ---------------------------------------------------------------------------
+// Chain-verification deny path (cortex#320)
+// ---------------------------------------------------------------------------
+
+/**
+ * Emit the audit + lifecycle envelope pair for a chain-verification
+ * failure (cortex#320, v2.0.2). Mirrors the policy-gate deny pair —
+ * `system.access.denied` (audit) plus `dispatch.task.failed`
+ * (lifecycle terminal, Echo cortex#220 round 2 M-1 contract) — but
+ * tags the reason with `kind: "chain_verification_failed"` so audit
+ * consumers can distinguish a forged / unsigned envelope from a
+ * legitimate principal failing the policy gate.
+ *
+ * The `principalId` on the audit envelope is set to the raw
+ * `signed_by[0].principal` (or `"<unverified>"` for empty chains)
+ * deliberately — the chain didn't verify, so we don't claim a
+ * resolved principal. Subscribers correlating on principal id
+ * branch on `reason.kind === "chain_verification_failed"` first.
+ */
+async function emitChainVerificationDeny(
+  runtime: MyelinRuntime,
+  source: SystemEventSource,
+  envelope: Envelope,
+  payload: DispatchTaskReceivedPayload,
+  subject: string | undefined,
+  stack: string | undefined,
+  chainReason: ChainRejectionReason,
+): Promise<void> {
+  const chain = getSignedByChain(envelope);
+  const claimedPrincipal = chain[0]?.principal ?? "<unverified>";
+  // Strip did:mf: prefix when present so audit consumers see a bare id
+  // shape consistent with the engine's principal-id idiom; fall through
+  // to the raw DID otherwise (preserves the wire claim verbatim).
+  const principalId =
+    extractAgentIdFromDid(claimedPrincipal) ?? claimedPrincipal;
+
+  const signedBy: SystemAccessSignedBy[] = chain.map((stamp) => ({ ...stamp }));
+  const auditSovereignty: SystemAccessSovereignty = {
+    classification: envelope.sovereignty.classification,
+    data_residency: envelope.sovereignty.data_residency,
+    max_hop: envelope.sovereignty.max_hop,
+    frontier_ok: envelope.sovereignty.frontier_ok,
+    model_class: envelope.sovereignty.model_class,
+  };
+  const auditEnvelopeSubject =
+    subject ?? dispatchReceivedSubject(source.org, stack);
+
+  const reasonPayload: SystemAccessDeniedReason = {
+    kind: "chain_verification_failed",
+    chain_reason: chainReason,
+  };
+
+  const denied = createSystemAccessDeniedEvent({
+    source,
+    principalId,
+    capability: `dispatch.${payload.agent_id}`,
+    sovereignty: auditSovereignty,
+    correlationId: envelope.correlation_id ?? payload.task_id,
+    envelopeId: envelope.id,
+    envelopeSubject: auditEnvelopeSubject,
+    signedBy,
+    reason: reasonPayload,
+  });
+  await runtime.publish(denied);
+
+  const now = new Date();
+  const failed = createDispatchTaskFailedEvent({
+    source,
+    taskId: payload.task_id,
+    agentId: payload.agent_id,
+    startedAt: now,
+    failedAt: now,
+    errorSummary: `chain verification failed: ${chainReason.kind}`,
+    reason: {
+      kind: "policy_denied",
+      deny: {
+        kind: "chain_verification_failed",
+        chain_reason: chainReason,
+      },
+    },
+  });
+  await runtime.publish(failed);
 }
 

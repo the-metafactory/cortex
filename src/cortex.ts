@@ -1464,21 +1464,18 @@ export async function startCortex(
   // the warning below).
   //
   // v2.0.1 (cortex#311): retired the `CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK`
-  // env-var gate. The gate was Echo's cortex#220 round-1 safeguard against
-  // pre-Phase-B (cortex#114) unverified `signed_by[0].principal` claims —
-  // but in v2.0.0 (where role-resolver is gone and PolicyEngine is the
-  // sole gate) the gate created an M-3 split-brain: with the env var
-  // unset, adapters denied every inbound message while bus dispatches
-  // bypassed auth entirely. The pre-Phase-B trade-off is now an
-  // informational boot-log notice rather than an opt-in gate — operators
-  // running v2.0.0+ accept it by deploying.
+  // env-var gate that had been Echo's cortex#220 round-1 safeguard against
+  // pre-Phase-B (cortex#114) unverified `signed_by[0].principal` claims.
   //
-  // The eventual hardening is Phase B's cryptographic verifier
-  // (cortex#114) wired into envelope-validator so `signed_by[0].principal`
-  // claims authenticate against the operator's NKey registry. Until that
-  // wiring lands on the dispatch-listener inbound path, the policy gate
-  // here is authorisation-without-authentication; bus access is the
-  // attack surface.
+  // v2.0.2 (cortex#320): wired `verifySignedByChain` into the runner
+  // dispatch-listener so inbound envelopes are now chain-verified
+  // before principal resolution — structural trust against the
+  // receiving agent's `trust:` list AND ed25519 signature verification
+  // over the JCS-canonical envelope bytes (`cryptoVerify: true` by
+  // default). Empty chains (adapter-originated dispatches) are
+  // accepted and fall through to the policy gate; signed chains must
+  // verify against the operator's NKey roster. The pre-Phase-B
+  // authorization-without-authentication gap is closed.
   if (options.policy?.principals.length === 0) {
     console.warn(
       `cortex: policy: block declared with empty principals[] — no authorisation gate engages; the dispatch-listener stays on the legacy path.`,
@@ -1487,16 +1484,27 @@ export async function startCortex(
   const policyEngine = policyEngineFromConfig(options.policy);
   if (policyEngine !== undefined) {
     console.log(
-      `cortex: policy-engine active — principals=${policyEngine.principalCount} roles=${policyEngine.roleCount} (pre-Phase-B unverified-principal mode: signed_by[0].principal claims authenticate at face value until cortex#114 ships)`,
+      `cortex: policy-engine active — principals=${policyEngine.principalCount} roles=${policyEngine.roleCount} (signed_by chain verified; empty chains accepted for adapter-originated dispatches)`,
     );
   }
 
   // Dispatch-listener — bus envelope → CC spawn.
+  //
+  // v2.0.2 (cortex#320): also receives `trustResolver` + `receivingAgentId`
+  // + `operatorId` so the listener can chain-verify every inbound
+  // envelope. Mirrors the `BusDispatchListener` wiring above
+  // (`firstAgent.id` + `config.agent.operatorId`). `cryptoVerify`
+  // defaults to `true` in `createDispatchListener`; explicit here for
+  // operator clarity.
   const dispatchListener: DispatchListener = createDispatchListener({
     runtime,
     router,
     source: systemEventSource,
     ...(policyEngine !== undefined && { policyEngine }),
+    trustResolver,
+    cryptoVerify: true,
+    operatorId: config.agent.operatorId ?? "default",
+    ...(firstAgent !== undefined && { receivingAgentId: firstAgent.id }),
   });
   await dispatchListener.start();
 
