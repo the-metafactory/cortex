@@ -574,10 +574,40 @@ async function handleDispatchEnvelope(
   // Empty chains are legitimate and fall through to the existing
   // PolicyEngine path; only signed chains must verify.
   //
-  // Verification is skipped iff either `trustResolver` OR
-  // `receivingAgentId` is undefined — defensive against tests that
-  // configure incomplete state. Production wiring in `cortex.ts`
-  // supplies both.
+  // **Fail-closed when `trustResolver` is wired but `receivingAgentId`
+  // is not.** PR #322 round-1 caught this: `cortex.ts:mergedAgents` is
+  // empty when the operator's config declares no agents (or when an
+  // intermediate boot stage hasn't populated yet), `receivingAgentId`
+  // becomes `undefined`, and the prior bypass-branch silently skipped
+  // verification while the boot log claimed `signed_by chain verified`
+  // — re-opening exactly the cortex#220 round-1 gap this PR was
+  // supposed to close. The bus-side `BusDispatchListener` already
+  // guards this state by refusing to construct without a
+  // `receivingAgentId`; the runner-side equivalent is this fail-closed
+  // deny inside the handler so the contract is enforced regardless
+  // of caller wiring.
+  if (trustResolver !== undefined && receivingAgentId === undefined) {
+    process.stderr.write(
+      `[runner/dispatch-listener] receivingAgentId not configured — denying ` +
+        `envelope ${envelope.id} (correlation_id=` +
+        `${envelope.correlation_id ?? "<none>"}): trustResolver wired but ` +
+        `no local agent identity available for chain verification\n`,
+    );
+    await emitReceivingAgentUnconfiguredDeny(
+      runtime,
+      source,
+      envelope,
+      payload,
+      subject,
+      stack,
+    );
+    return;
+  }
+
+  // When `trustResolver` is undefined (deployment hasn't wired one —
+  // tests or pre-v2.0.2 configs), skip verification entirely. This is
+  // the only legitimate skip path; production wiring in `cortex.ts`
+  // always supplies `trustResolver`.
   if (trustResolver !== undefined && receivingAgentId !== undefined) {
     let verification: ChainVerificationResult;
     try {
@@ -1091,6 +1121,80 @@ async function emitChainVerificationDeny(
       deny: {
         kind: "chain_verification_failed",
         chain_reason: chainReason,
+      },
+    },
+  });
+  await runtime.publish(failed);
+}
+
+/**
+ * Emit the deny pair when verification is wired but `receivingAgentId`
+ * is unconfigured — a runner-level config error, not a chain-content
+ * rejection. PR #322 round-1 M-1 fix: the prior bypass branch silently
+ * skipped verification when the operator's config produced no local
+ * agents (mergedAgents empty), re-opening cortex#220 round-1's gap.
+ * Fail-closed here so the contract is enforced regardless of upstream
+ * wiring; operators see the deny on the audit surface and the
+ * dispatch fails loudly rather than slipping through unverified.
+ */
+async function emitReceivingAgentUnconfiguredDeny(
+  runtime: MyelinRuntime,
+  source: SystemEventSource,
+  envelope: Envelope,
+  payload: DispatchTaskReceivedPayload,
+  subject: string | undefined,
+  stack: string | undefined,
+): Promise<void> {
+  const chain = getSignedByChain(envelope);
+  const claimedPrincipal = chain[0]?.principal ?? "<unverified>";
+  const principalId =
+    extractAgentIdFromDid(claimedPrincipal) ?? claimedPrincipal;
+
+  const signedBy: SystemAccessSignedBy[] = chain.map((stamp) => ({ ...stamp }));
+  const auditSovereignty: SystemAccessSovereignty = {
+    classification: envelope.sovereignty.classification,
+    data_residency: envelope.sovereignty.data_residency,
+    max_hop: envelope.sovereignty.max_hop,
+    frontier_ok: envelope.sovereignty.frontier_ok,
+    model_class: envelope.sovereignty.model_class,
+  };
+  const auditEnvelopeSubject =
+    subject ?? dispatchReceivedSubject(source.org, stack);
+
+  const denied = createSystemAccessDeniedEvent({
+    source,
+    principalId,
+    capability: `dispatch.${payload.agent_id}`,
+    sovereignty: auditSovereignty,
+    correlationId: envelope.correlation_id ?? payload.task_id,
+    envelopeId: envelope.id,
+    envelopeSubject: auditEnvelopeSubject,
+    signedBy,
+    reason: {
+      kind: "receiving_agent_unconfigured",
+      detail:
+        "runner has no local agent identity configured — cortex.yaml " +
+        "must declare at least one agent before verification can run; " +
+        "see cortex#322 + cortex#220 for the contract details",
+    },
+  });
+  await runtime.publish(denied);
+
+  const now = new Date();
+  const failed = createDispatchTaskFailedEvent({
+    source,
+    taskId: payload.task_id,
+    agentId: payload.agent_id,
+    startedAt: now,
+    failedAt: now,
+    errorSummary:
+      "receiving_agent_unconfigured — runner has no local agent identity for chain verification",
+    reason: {
+      kind: "policy_denied",
+      deny: {
+        kind: "receiving_agent_unconfigured",
+        detail:
+          "cortex.yaml declared 0 agents — chain verification can't run without a local receivingAgentId",
       },
     },
   });

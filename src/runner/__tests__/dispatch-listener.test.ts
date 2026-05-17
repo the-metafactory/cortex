@@ -1831,4 +1831,45 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     expect(reason.chain_reason?.kind).toBe("crypto_verify_failed");
     expect(optsCaptured).toHaveLength(0);
   });
+
+  test("PR #322 r1 M-1 — trustResolver wired but receivingAgentId undefined → fail-closed deny", async () => {
+    // Echo PR #322 r1 caught: when cortex.ts builds the listener with
+    // `mergedAgents` empty (operator's config declares no agents), the
+    // call site spreads `receivingAgentId` conditionally and the prior
+    // bypass branch silently skipped verification while the boot log
+    // claimed `signed_by chain verified` — re-opening cortex#220 r1's
+    // gap. Fix: fail-closed inside the handler with a `receiving_agent
+    // _unconfigured` deny so the contract is enforced regardless of
+    // caller wiring.
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      // trustResolver wired but receivingAgentId deliberately omitted
+      // — simulates the cortex.ts:mergedAgents-empty boot state.
+      trustResolver: new TrustResolver(AgentRegistry.fromAgents([])),
+      // receivingAgentId: undefined (omitted)
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Both audit (system.access.denied) and lifecycle (dispatch.task.failed)
+    // envelopes emitted; harness never constructed.
+    expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.denied",
+      "dispatch.task.failed",
+    ]);
+    const denied = r.published[0]!;
+    const reason = denied.payload.reason as { kind: string };
+    expect(reason.kind).toBe("receiving_agent_unconfigured");
+    expect(optsCaptured).toHaveLength(0);
+  });
 });
