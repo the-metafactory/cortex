@@ -52,6 +52,7 @@ import type { AckDecision } from "../bus/myelin/subscriber";
 import {
   ReviewConsumer,
   type ReviewConsumerAgent,
+  type SignatureVerifier,
 } from "../bus/review-consumer";
 import {
   createReviewRequestEvent,
@@ -559,5 +560,167 @@ describe("cortex#237 PR-9 — review-consumer end-to-end round-trip (§11.1 Laye
     // side.
     const termCall = msg.term.mock.calls[0]!;
     expect(String(termCall[0])).toContain("no capability match");
+  });
+});
+
+// =============================================================================
+// cortex#327 — signature-chain verification gate
+// =============================================================================
+//
+// Pins the wiring landed in `src/bus/review-consumer.ts` for cortex#327:
+// when `ReviewConsumerOpts.signatureVerifier` is supplied, the consumer
+// runs the verifier between payload validation and the capability gate;
+// a `valid: false` result terminates the envelope as `cant_do` permanent
+// failure (term ack) before any work happens.
+//
+// Uses the in-process bus harness from §11.2 just like the unsigned
+// round-trip cases above. The verifier is a stub returning the literal
+// the test wants — proving the integration without standing up real
+// crypto here. Real `verifySignedByChain` + `signEnvelope` are pinned
+// against pilot-shape envelopes in `signed-pilot-roundtrip.test.ts`;
+// this file pins the wiring into the consumer's processing pipeline.
+// =============================================================================
+
+describe("cortex#327 — signature verification gate", () => {
+  let runtime: BusRuntime;
+  let consumer: ReviewConsumer;
+  let verifyCalls: { envelopeId: string }[] = [];
+  let verifierVerdict: { valid: true } | { valid: false; reason: string } = { valid: true };
+
+  beforeAll(async () => {
+    runtime = createBusRuntime();
+    const agent: ReviewConsumerAgent = {
+      id: "echo",
+      capabilities: ["code-review.typescript"],
+    };
+    const verifier: SignatureVerifier = async (envelope) => {
+      verifyCalls.push({ envelopeId: envelope.id });
+      return verifierVerdict;
+    };
+    consumer = new ReviewConsumer({
+      agent,
+      source: SOURCE,
+      runtime,
+      ccSessionFactory: STUB_CC_FACTORY,
+      promptBuilder: ({ payload }) => `/review ${payload.repo}#${payload.pr}`,
+      signatureVerifier: verifier,
+      pipelineRunner: async (opts: ReviewPipelineOpts): Promise<ReviewPipelineResult> => ({
+        kind: "verdict",
+        envelope: buildVerdictEnvelope(opts.requestEnvelope, "approved"),
+      }),
+    });
+    await consumer.start({
+      pattern: REVIEW_SUBJECT_PATTERN,
+      stream: REVIEW_STREAM,
+      durable: "cortex-review-consumer-metafactory-echo-signed",
+    });
+  });
+
+  afterAll(async () => {
+    await consumer.stop();
+    await runtime.stop();
+  });
+
+  test("signed-accepted: verifier returns valid → full pipeline runs + ack", async () => {
+    verifyCalls = [];
+    verifierVerdict = { valid: true };
+    const publishedBefore = runtime.published.length;
+    const subBefore = runtime.subscriptions[0]!.msgs.length;
+
+    const request = makeRequest("typescript");
+    const requestSubject = subjectFor(request);
+    const { handlersCalled, decisions } = await runtime.deliver(request, requestSubject);
+
+    // Verifier saw the envelope.
+    expect(verifyCalls).toHaveLength(1);
+    expect(verifyCalls[0]!.envelopeId).toBe(request.id);
+
+    // Full pipeline runs — started + verdict + completed emissions, ack on JsMsg.
+    expect(handlersCalled).toBe(1);
+    expect(decisions[0]).toEqual({ kind: "ack" });
+    const emitted = runtime.published.slice(publishedBefore);
+    expect(emitted.length).toBe(3);
+    expect(emitted[1]!.type).toBe("review.verdict.approved");
+
+    const sub = runtime.subscriptions[0]!;
+    expect(sub.msgs.length).toBe(subBefore + 1);
+    const msg = sub.msgs[subBefore]!;
+    expect(msg.ack).toHaveBeenCalledTimes(1);
+    expect(msg.term).toHaveBeenCalledTimes(0);
+  });
+
+  test("signed-rejected: verifier returns valid: false → cant_do + term, NO pipeline run", async () => {
+    verifyCalls = [];
+    verifierVerdict = { valid: false, reason: "empty_chain" };
+    const publishedBefore = runtime.published.length;
+    const subBefore = runtime.subscriptions[0]!.msgs.length;
+
+    const request = makeRequest("typescript");
+    const requestSubject = subjectFor(request);
+    const { handlersCalled, decisions } = await runtime.deliver(request, requestSubject);
+
+    // Verifier was called.
+    expect(verifyCalls).toHaveLength(1);
+
+    expect(handlersCalled).toBe(1);
+    expect(decisions[0]!.kind).toBe("term");
+    if (decisions[0]!.kind === "term") {
+      // Term reason carries the chain-verification class so dead-letter
+      // observability surfaces WHY the envelope was dropped.
+      expect(decisions[0]!.reason).toContain("chain verification failed");
+      expect(decisions[0]!.reason).toContain("empty_chain");
+    }
+
+    // Exactly one envelope emitted: dispatch.task.failed (no started, no
+    // verdict — the gate fired before any pipeline work).
+    const emitted = runtime.published.slice(publishedBefore);
+    expect(emitted.length).toBe(1);
+    const failed = emitted[0]!;
+    expect(failed.type).toBe("dispatch.task.failed");
+    expect(failed.correlation_id).toBe(request.id);
+    const reason = (failed.payload as { reason: { kind: string; detail: string } }).reason;
+    expect(reason.kind).toBe("cant_do");
+    expect(reason.detail).toContain("chain verification failed");
+    expect(reason.detail).toContain("empty_chain");
+
+    // JsMsg.term() called once; ack/nak NOT called.
+    const sub = runtime.subscriptions[0]!;
+    expect(sub.msgs.length).toBe(subBefore + 1);
+    const msg = sub.msgs[subBefore]!;
+    expect(msg.term).toHaveBeenCalledTimes(1);
+    expect(msg.ack).toHaveBeenCalledTimes(0);
+    expect(msg.nak).toHaveBeenCalledTimes(0);
+
+    // The term reason argument surfaced on the dead-letter side echoes
+    // the verifier's reason verbatim — operators reading `nats consumer info`
+    // can grep `chain verification failed: <class>` directly.
+    const termCall = msg.term.mock.calls[0]!;
+    expect(String(termCall[0])).toContain("chain verification failed");
+  });
+
+  test("gate runs BEFORE the capability check — wrong-flavor envelope still fails on signature first", async () => {
+    // A python-flavor envelope would normally fail on `no capability match`
+    // (the agent claims only typescript). With a verifier rejection in
+    // place, the chain failure fires first — the failure detail is the
+    // verifier's reason, NOT the capability mismatch. Pins the ordering
+    // documented in the §2.5 gate placement comment in
+    // `src/bus/review-consumer.ts`.
+    verifyCalls = [];
+    verifierVerdict = { valid: false, reason: "signer_not_trusted" };
+    const publishedBefore = runtime.published.length;
+
+    const request = makeRequest("python");
+    const { decisions } = await runtime.deliver(request, subjectFor(request));
+
+    expect(decisions[0]!.kind).toBe("term");
+    if (decisions[0]!.kind === "term") {
+      expect(decisions[0]!.reason).toContain("chain verification failed");
+      expect(decisions[0]!.reason).not.toContain("no capability match");
+    }
+    const emitted = runtime.published.slice(publishedBefore);
+    expect(emitted.length).toBe(1);
+    const failed = emitted[0]!;
+    const reason = (failed.payload as { reason: { kind: string; detail: string } }).reason;
+    expect(reason.detail).toContain("signer_not_trusted");
   });
 });

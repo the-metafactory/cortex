@@ -24,7 +24,7 @@
  * | Outcome                                          | wire envelope            | JetStream control                  |
  * |--------------------------------------------------|--------------------------|------------------------------------|
  * | verdict (approved/changes-requested/commented)   | `review.verdict.<kind>`  | `ack`                               |
- * | failed/`cant_do` (capability mismatch / bad pl.) | `dispatch.task.failed`   | `term(reason.detail)` (permanent)  |
+ * | failed/`cant_do` (capability mismatch / bad pl. / chain verify) | `dispatch.task.failed`   | `term(reason.detail)` (permanent)  |
  * | failed/`wont_do` (policy refusal)                | `dispatch.task.failed`   | `term(reason.detail)` (permanent)  |
  * | failed/`policy_denied` (compliance gate)         | `dispatch.task.failed`   | `term(reason.detail)` (permanent)  |
  * | failed/`not_now` (transient / backpressure)      | `dispatch.task.failed`   | `nak(retry_after_ms ?? 0)`         |
@@ -132,6 +132,50 @@ export type ReviewPromptBuilder = (input: {
 }) => string;
 
 /**
+ * Outcome of `SignatureVerifier`. Discriminated union so the consumer's
+ * call site branches on `valid` without parsing free-form error strings.
+ *
+ * `reason` carries a human-readable summary destined for both the
+ * structured stderr log line and the `dispatch.task.failed` `reason.detail`
+ * field — short enough to scan, specific enough that an operator can
+ * grep `pilot/cortex stderr` and identify the rejection class without
+ * cross-referencing internal tables.
+ */
+export type SignatureVerifierResult =
+  | { valid: true }
+  | { valid: false; reason: string };
+
+/**
+ * Inbound envelope signature verifier. Optional — when omitted, the
+ * consumer skips chain verification entirely (matches pre-cortex#327
+ * behaviour; gradual rollout). When provided, the consumer calls it
+ * after subject + payload validation but BEFORE the capability gate;
+ * a `valid: false` result terminates the envelope as a `cant_do`
+ * permanent failure with the verifier's `reason` carried verbatim into
+ * the `dispatch.task.failed` envelope's `reason.detail`.
+ *
+ * Returned as an injectable function (rather than e.g. taking a
+ * `TrustResolver` directly) so the consumer stays decoupled from
+ * cortex's trust internals — same pattern as {@link ReviewConsumerOpts.pipelineRunner}
+ * which decouples from CC-session internals. Production callers in
+ * `src/cortex.ts` close over `verifySignedByChain` with the runtime's
+ * resolver + receiving agent + operatorId; tests inject stubs that
+ * return a literal verdict without standing up a registry.
+ *
+ * **Why not extend `DispatchTaskFailedReason` with a new `chain_verification_failed`
+ * kind.** Adding a wire-level reason class ripples into pilot's CLI
+ * exit-code mapping, dispatch-listener's nak-handler, and every
+ * subscriber that exhaustively switches on the union. Chain
+ * verification is operationally a `cant_do` (permanent, term ack —
+ * resigning doesn't help if the receiver doesn't trust the signer),
+ * so we reuse `cant_do` with an explicit `detail` prefix `chain verification failed: <reason>`
+ * — a small structured-string convention rather than a schema break.
+ * If the surface needs to grow beyond detail-string parsing later,
+ * promoting to a dedicated kind is the natural follow-up.
+ */
+export type SignatureVerifier = (envelope: Envelope) => Promise<SignatureVerifierResult>;
+
+/**
  * Construction options. Every dependency is injected — no module-scope
  * singletons, no environment-derived defaults. Production callers wire
  * the real `runtime` + `ccSessionFactory`; tests inject doubles.
@@ -167,6 +211,19 @@ export interface ReviewConsumerOpts {
    * deterministic result without spawning CC.
    */
   pipelineRunner?: (opts: ReviewPipelineOpts) => Promise<ReviewPipelineResult>;
+  /**
+   * Optional inbound signature-chain verifier (cortex#327). When provided,
+   * runs after subject + payload validation but BEFORE the capability
+   * gate. A `valid: false` result terminates the envelope as `cant_do`
+   * permanent failure (term ack) so a forged or untrusted publisher
+   * can't reach the CC subprocess. Omit to disable verification — the
+   * pre-#327 behaviour — for operators still rolling out signing.
+   *
+   * See {@link SignatureVerifier} for the function signature + the
+   * design note on why this stays a pluggable closure rather than a
+   * `TrustResolver` import.
+   */
+  signatureVerifier?: SignatureVerifier;
   /**
    * Test seam — clock. Defaults to `() => new Date()`. Tests inject a
    * fixed clock so emitted `startedAt`/`completedAt` are deterministic.
@@ -245,6 +302,8 @@ export class ReviewConsumer {
   private readonly pipelineRunner: (
     opts: ReviewPipelineOpts,
   ) => Promise<ReviewPipelineResult>;
+  /** Optional inbound signature verifier (cortex#327). Undefined disables the gate. */
+  private readonly signatureVerifier: SignatureVerifier | undefined;
   private readonly clock: () => Date;
 
   /** Promises for in-flight pipelines so `stop()` can drain. */
@@ -269,6 +328,7 @@ export class ReviewConsumer {
       this.policyCheck = opts.policyCheck;
     }
     this.pipelineRunner = opts.pipelineRunner ?? runReviewPipeline;
+    this.signatureVerifier = opts.signatureVerifier;
     this.clock = opts.clock ?? (() => new Date());
 
     this.flavors = deriveFlavors(opts.agent.capabilities);
@@ -408,6 +468,40 @@ export class ReviewConsumer {
         `bad payload for ${subject}`,
       );
       return { kind: "term", reason: "payload validation failed" };
+    }
+
+    // 2.5. Signature-chain verification gate (cortex#327). Runs after the
+    //      cheap structural checks (subject + payload shape) so a
+    //      malformed envelope still fails with `cant_do: payload validation`
+    //      rather than masquerading as a verify failure — but BEFORE the
+    //      capability gate so an unverified envelope can't influence which
+    //      agent matters. The verifier is optional (gradual rollout); when
+    //      omitted, this block is a no-op.
+    //
+    //      Failure shape: `cant_do` + `term` ack. Chain rejection is
+    //      operationally permanent — resigning the envelope on a retry
+    //      doesn't change cortex's trust list or fix tampered bytes.
+    //      Detail prefix `chain verification failed:` lets operators grep
+    //      stderr / dead-letter for this specific rejection class without
+    //      a new wire-level reason kind (see `SignatureVerifier` design
+    //      note for the schema-stability rationale).
+    if (this.signatureVerifier !== undefined) {
+      const verifyResult = await this.signatureVerifier(envelope);
+      if (!verifyResult.valid) {
+        process.stderr.write(
+          `cortex/review-consumer: chain verification rejected envelope ${envelope.id} ` +
+            `for agent="${this.agent.id}" subject=${subject} — ${verifyResult.reason}\n`,
+        );
+        await this.publishFailed(
+          envelope,
+          {
+            kind: "cant_do",
+            detail: `chain verification failed: ${verifyResult.reason}`,
+          },
+          `chain verification failed for ${subject}`,
+        );
+        return { kind: "term", reason: `chain verification failed: ${verifyResult.reason}` };
+      }
     }
 
     // 3. Capability routing — does THIS agent claim the requested flavor?
