@@ -48,8 +48,6 @@ function makePresence(overrides: Partial<MattermostPresence> = {}): MattermostPr
     channels: ["c-initial"],
     pollIntervalMs: 3000,
     allowedUsers: [],
-    roles: [],
-    defaultRole: "allow-all",
     ...overrides,
   };
 }
@@ -59,7 +57,6 @@ function makeAgent(presence: MattermostPresence): Agent {
     id: "luna",
     displayName: "Luna",
     persona: "(test)",
-    roles: [],
     trust: [],
     presence: { mattermost: presence },
   };
@@ -88,7 +85,6 @@ function makeBotConfig(overrides: Partial<{
         channels: overrides.channels ?? ["c-initial"],
         pollIntervalMs: overrides.pollIntervalMs ?? 3000,
         allowedUsers: overrides.allowedUsers ?? [],
-        roles: [],
         defaultRole: overrides.defaultRole ?? "allow-all",
         ...(overrides.triggerWord !== undefined && { triggerWord: overrides.triggerWord }),
       },

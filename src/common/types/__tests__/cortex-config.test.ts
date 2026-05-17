@@ -196,7 +196,7 @@ describe("AgentSchema", () => {
   test("accepts minimal Discord-only agent", () => {
     const parsed = AgentSchema.parse(minAgent());
     expect(parsed.id).toBe("luna");
-    expect(parsed.roles).toEqual([]);
+    // v2.0.0 (cortex#297) — `AgentSchema.roles[]` retired.
     expect(parsed.trust).toEqual([]);
     expect(parsed.presence.discord?.token).toBe("discord-bot-token");
   });

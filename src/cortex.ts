@@ -66,6 +66,10 @@ import type {
   StackConfig,
 } from "./common/types/cortex-config";
 import { policyEngineFromConfig } from "./common/policy/factory";
+import {
+  buildPlatformPrincipalIndex,
+  buildPrincipalRegistry,
+} from "./common/policy";
 import { MattermostAdapter } from "./adapters/mattermost";
 import { SlackAdapter } from "./adapters/slack";
 import type { PlatformAdapter } from "./adapters/types";
@@ -247,6 +251,21 @@ export interface StartCortexOptions {
    * @internal — not part of the public API; semver does not apply.
    */
   policy?: Policy;
+  /**
+   * v2.0.0 cutover (cortex#297) — operator's platform-side ids surfaced
+   * from `OperatorSchema` via `LoadedConfig.operator`. Replaces the
+   * `BotConfig.agent.operatorDiscordId/Mattermost/Slack` fields retired
+   * in cortex#297. `undefined` for legacy `bot.yaml` input — adapters
+   * then have no operator-DM target and `notifyOperator` is a no-op.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  operator?: {
+    id: string;
+    discordId?: string;
+    mattermostId?: string;
+    slackId?: string;
+  };
 }
 
 /**
@@ -916,6 +935,24 @@ export async function startCortex(
   }
   const startedDiscord: StartedDiscord[] = [];
 
+  // v2.0.0 (cortex#297) — build engine + lookup index + principal registry
+  // ONCE so the three adapter loops below share the same instances. The
+  // policy block is parsed at config-load time; the factory + index
+  // builders are idempotent over the same input.
+  // SECURITY GATE: same `CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK` env var as
+  // the dispatch-listener gate below — we refuse to build the engine in
+  // production without explicit operator ack of the pre-Phase-B
+  // verification trade-off. The check is duplicated here (rather than
+  // re-using the value built below) because adapter wiring runs BEFORE
+  // the dispatch-listener engine builder; consolidating the gate into a
+  // single block is a follow-up.
+  const adapterPolicyEngine =
+    process.env.CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK === "1"
+      ? policyEngineFromConfig(options.policy)
+      : undefined;
+  const adapterPolicyLookup = buildPlatformPrincipalIndex(options.policy);
+  const adapterPolicyRegistry = buildPrincipalRegistry(options.policy);
+
   for (const instance of config.discord) {
     if (!instance.enabled) {
       console.log(`cortex: discord instance ${instance.instanceId ?? instance.guildId} disabled — skipping`);
@@ -944,9 +981,7 @@ export async function startCortex(
       ...(instance.worklogChannelId !== undefined && { worklogChannelId: instance.worklogChannelId }),
       contextDepth: instance.contextDepth,
       enableAgentLog: instance.enableAgentLog,
-      roles: instance.roles,
-      defaultRole: instance.defaultRole,
-      dm: instance.dm,
+      // v2.0.0 (cortex#297) — roles/defaultRole/dm retired.
       ...(instance.operatorRoleId !== undefined && { operatorRoleId: instance.operatorRoleId }),
       trustedBotIds: instance.trustedBotIds,
       surfaceSubjects: instance.surfaceSubjects,
@@ -963,7 +998,6 @@ export async function startCortex(
       id: config.agent.name,
       displayName: config.agent.displayName,
       persona: "(deferred-mig-7.2e)",
-      roles: [],
       trust: [],
       presence: { discord: presence },
     };
@@ -980,11 +1014,14 @@ export async function startCortex(
         {
           instanceId,
           operator: {
-            ...(config.agent.operatorDiscordId !== undefined && { discordId: config.agent.operatorDiscordId }),
+            ...(options.operator?.discordId !== undefined && { discordId: options.operator.discordId }),
           },
           runtime,
           systemEventSource,
           trustedBotIds: explicitTrustedBotIds,
+          ...(adapterPolicyEngine !== undefined && { policyEngine: adapterPolicyEngine }),
+          ...(adapterPolicyLookup !== undefined && { policyLookup: adapterPolicyLookup }),
+          ...(adapterPolicyRegistry !== undefined && { policyRegistry: adapterPolicyRegistry }),
           // cortex#205: plumb the operator's configured subject patterns
           // through to the surface-router. Pass the array verbatim — `[]`
           // included — so the adapter's one-shot empty-array warning at
@@ -1135,8 +1172,7 @@ export async function startCortex(
       channels: instance.channels,
       pollIntervalMs: instance.pollIntervalMs,
       allowedUsers: instance.allowedUsers,
-      roles: instance.roles,
-      defaultRole: instance.defaultRole,
+      // v2.0.0 (cortex#297) — roles/defaultRole retired.
     };
     // MIG-7.2e: prefer the cortex-shape `inlineAgents` lookup when present —
     // same pattern as the Discord block above. apiToken is the cleanest
@@ -1148,7 +1184,6 @@ export async function startCortex(
       id: config.agent.name,
       displayName: config.agent.displayName,
       persona: "(deferred-mig-7.2e)",
-      roles: [],
       trust: [],
       presence: { mattermost: presence },
     };
@@ -1159,8 +1194,11 @@ export async function startCortex(
         {
           instanceId,
           operator: {
-            ...(config.agent.operatorMattermostId !== undefined && { mattermostId: config.agent.operatorMattermostId }),
+            ...(options.operator?.mattermostId !== undefined && { mattermostId: options.operator.mattermostId }),
           },
+          ...(adapterPolicyEngine !== undefined && { policyEngine: adapterPolicyEngine }),
+          ...(adapterPolicyLookup !== undefined && { policyLookup: adapterPolicyLookup }),
+          ...(adapterPolicyRegistry !== undefined && { policyRegistry: adapterPolicyRegistry }),
         },
       );
       router.register(adapter.surfaceConfig);
@@ -1216,8 +1254,7 @@ export async function startCortex(
       channels: instance.channels,
       allowedUserIds: instance.allowedUserIds,
       trustedBotIds: instance.trustedBotIds,
-      roles: instance.roles,
-      defaultRole: instance.defaultRole,
+      // v2.0.0 (cortex#297) — roles/defaultRole retired.
       surfaceSubjects: instance.surfaceSubjects,
       ...(instance.surfaceFallbackChannelId !== undefined && {
         surfaceFallbackChannelId: instance.surfaceFallbackChannelId,
@@ -1228,7 +1265,6 @@ export async function startCortex(
       id: config.agent.name,
       displayName: config.agent.displayName,
       persona: "(deferred-mig-7.2e)",
-      roles: [],
       trust: [],
       presence: { slack: presence },
     };
@@ -1239,8 +1275,11 @@ export async function startCortex(
         {
           instanceId,
           operator: {
-            ...(config.agent.operatorSlackId !== undefined && { slackId: config.agent.operatorSlackId }),
+            ...(options.operator?.slackId !== undefined && { slackId: options.operator.slackId }),
           },
+          ...(adapterPolicyEngine !== undefined && { policyEngine: adapterPolicyEngine }),
+          ...(adapterPolicyLookup !== undefined && { policyLookup: adapterPolicyLookup }),
+          ...(adapterPolicyRegistry !== undefined && { policyRegistry: adapterPolicyRegistry }),
           // cortex#235 r1#4 — wire runtime + source so the adapter
           // can emit `system.adapter.{disconnected,recovered}` on
           // Socket Mode lifecycle transitions. Same pattern as the
@@ -1999,12 +2038,13 @@ if (import.meta.main) {
       // block when the operator declared one — `startCortex` calls
       // `deriveStackId` and logs the resolved stack id. Today this is
       // observational only; emit subjects are unchanged.
-      const { config, inlineAgents, stack, policy } = loadConfigWithAgents(options.config);
+      const { config, inlineAgents, stack, policy, operator } = loadConfigWithAgents(options.config);
       const handle = await startCortex(config, {
         configPath: options.config,
         ...(inlineAgents.length > 0 && { inlineAgents }),
         ...(stack !== undefined && { stack }),
         ...(policy !== undefined && { policy }),
+        ...(operator !== undefined && { operator }),
       });
 
       const shutdown = async () => {

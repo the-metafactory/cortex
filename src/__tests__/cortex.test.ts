@@ -557,7 +557,6 @@ presence:
         id: "luna",
         displayName: "Luna",
         persona: "/tmp/luna-inline.md",
-        roles: [],
         trust: [],
         presence: {
           discord: {
@@ -568,17 +567,6 @@ presence:
             logChannelId: "2",
             contextDepth: 10,
             enableAgentLog: false,
-            roles: [],
-            defaultRole: "allow-all",
-            dm: {
-              operatorRole: {
-                features: ["chat", "async", "team"],
-                disallowedTools: [],
-                bashGuard: true,
-              },
-              defaultRole: "denied",
-              userRoles: [],
-            },
             trustedBotIds: [],
             surfaceSubjects: [],
           },
@@ -588,7 +576,6 @@ presence:
         id: "echo",
         displayName: "EchoFromInline",
         persona: "/tmp/echo-inline.md",
-        roles: [],
         trust: [],
         presence: {
           discord: {
@@ -599,17 +586,6 @@ presence:
             logChannelId: "2",
             contextDepth: 10,
             enableAgentLog: false,
-            roles: [],
-            defaultRole: "allow-all",
-            dm: {
-              operatorRole: {
-                features: ["chat", "async", "team"],
-                disallowedTools: [],
-                bashGuard: true,
-              },
-              defaultRole: "denied",
-              userRoles: [],
-            },
             trustedBotIds: [],
             surfaceSubjects: [],
           },

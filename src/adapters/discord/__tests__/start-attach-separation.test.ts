@@ -34,7 +34,6 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { EventEmitter } from "events";
 import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
-import { DMConfigSchema } from "../../../common/types/config";
 import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
 import type { InboundMessage } from "../../types";
 
@@ -92,9 +91,6 @@ function makeAdapter(instanceId = "discord-test"): {
     logChannelId: "c2",
     contextDepth: 0,
     enableAgentLog: false,
-    roles: [],
-    defaultRole: "allow-all",
-    dm: DMConfigSchema.parse({}),
     trustedBotIds: [],
     surfaceSubjects: [],
   };
@@ -102,7 +98,6 @@ function makeAdapter(instanceId = "discord-test"): {
     id: "test-agent",
     displayName: "TestAgent",
     persona: "(test)",
-    roles: [],
     trust: [],
     presence: { discord: presence },
   };
@@ -187,9 +182,6 @@ describe("DiscordAdapter.attachInboundDispatch: pre-start guard (cortex#108)", (
       logChannelId: "c2",
       contextDepth: 0,
       enableAgentLog: false,
-      roles: [],
-      defaultRole: "allow-all",
-      dm: DMConfigSchema.parse({}),
       trustedBotIds: [],
       surfaceSubjects: [],
     };
@@ -197,7 +189,6 @@ describe("DiscordAdapter.attachInboundDispatch: pre-start guard (cortex#108)", (
       id: "test-agent",
       displayName: "TestAgent",
       persona: "(test)",
-      roles: [],
       trust: [],
       presence: { discord: presence },
     };

@@ -294,7 +294,7 @@ export class AgentRegistry {
  */
 function deepFreezeAgent(agent: Agent): Agent {
   Object.freeze(agent.trust);
-  Object.freeze(agent.roles);
+  // v2.0.0 (cortex#297) — AgentSchema.roles[] retired.
   if (agent.presence.discord) Object.freeze(agent.presence.discord);
   if (agent.presence.mattermost) Object.freeze(agent.presence.mattermost);
   Object.freeze(agent.presence);

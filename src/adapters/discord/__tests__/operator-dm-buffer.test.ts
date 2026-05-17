@@ -18,7 +18,6 @@
 
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
-import { DMConfigSchema } from "../../../common/types/config";
 import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
 import type { ConnectionHealth } from "../client";
 
@@ -64,9 +63,6 @@ function makeAdapter(opts: {
     logChannelId: "c2",
     contextDepth: 0,
     enableAgentLog: false,
-    roles: [],
-    defaultRole: "allow-all",
-    dm: DMConfigSchema.parse({}),
     trustedBotIds: [],
     surfaceSubjects: [],
   };
@@ -74,7 +70,6 @@ function makeAdapter(opts: {
     id: "test",
     displayName: "Test",
     persona: "(test)",
-    roles: [],
     trust: [],
     presence: { discord: presence },
   };

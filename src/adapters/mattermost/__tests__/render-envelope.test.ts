@@ -97,14 +97,11 @@ function makeAdapter(opts: {
     channels: ["c-default"],
     pollIntervalMs: 1000,
     allowedUsers: [],
-    roles: [],
-    defaultRole: "allow-all",
   };
   const agent: Agent = {
     id: "test",
     displayName: "Test",
     persona: "(test)",
-    roles: [],
     trust: [],
     presence: { mattermost: presence },
   };

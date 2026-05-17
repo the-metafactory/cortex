@@ -15,7 +15,6 @@ import { describe, expect, test } from "bun:test";
 import { validateEnvelope } from "../myelin/envelope-validator";
 import {
   adapterCorrelationKey,
-  createSystemAccessDisagreementEvent,
   createSystemAccessFilteredEvent,
   createSystemAdapterDegradedEvent,
   createSystemAdapterDisconnectedEvent,
@@ -514,83 +513,6 @@ describe("createSystemAccessFilteredEvent", () => {
   });
 });
 
-describe("createSystemAccessDisagreementEvent (cortex#296)", () => {
-  const baseOpts = {
-    source: { org: "metafactory", agent: "cortex", instance: "local" },
-    principalId: "mike",
-    capability: "keyword.chat",
-    legacyDecision: "allow" as const,
-    legacyReason: "role.user.allows",
-    newDecision: "deny" as const,
-    newReason: "unknown_principal",
-    effectiveDecision: "deny" as const,
-    sovereignty: {
-      classification: "local" as const,
-      data_residency: "NZ",
-      max_hop: 0,
-      frontier_ok: false,
-      model_class: "local-only" as const,
-    },
-    signedBy: [],
-    envelopeSubject: "local.metafactory.adapter.discord.discord-luna.ch1.message.2026-05-17T00:00:00.000Z",
-    envelopeId: "ch1:2026-05-17T00:00:00.000Z:U123",
-  };
-
-  test("builds envelope with `system.access.disagreement` type and the §9.1 payload fields", () => {
-    const env = createSystemAccessDisagreementEvent(baseOpts);
-    expect(env.type).toBe("system.access.disagreement");
-    expect(env.source).toBe("metafactory.cortex.local");
-    expect(env.payload).toMatchObject({
-      principal_id: "mike",
-      capability: "keyword.chat",
-      legacy_decision: "allow",
-      legacy_reason: "role.user.allows",
-      new_decision: "deny",
-      new_reason: "unknown_principal",
-      effective_decision: "deny",
-    });
-    expect(env.payload).toHaveProperty("intent_sovereignty");
-    expect(env.payload).toHaveProperty("envelope_id");
-    expect(env.payload).toHaveProperty("envelope_subject");
-    expect(env.payload).toHaveProperty("signed_by");
-  });
-
-  test("envelope passes myelin schema validation (no correlation_id needed)", () => {
-    const env = createSystemAccessDisagreementEvent(baseOpts);
-    expect(validateEnvelope(env).ok).toBe(true);
-  });
-
-  test("stamps default sovereignty (local-only / NZ / max_hop=0)", () => {
-    const env = createSystemAccessDisagreementEvent(baseOpts);
-    expect(env.sovereignty).toEqual({
-      classification: "local",
-      data_residency: "NZ",
-      max_hop: 0,
-      frontier_ok: false,
-      model_class: "local-only",
-    });
-  });
-
-  test("source.dataResidency override flows through to sovereignty", () => {
-    const env = createSystemAccessDisagreementEvent({
-      ...baseOpts,
-      source: { ...baseOpts.source, dataResidency: "AU" },
-    });
-    expect(env.sovereignty.data_residency).toBe("AU");
-  });
-
-  test("each call returns a fresh envelope id", () => {
-    const a = createSystemAccessDisagreementEvent(baseOpts);
-    const b = createSystemAccessDisagreementEvent(baseOpts);
-    expect(a.id).not.toBe(b.id);
-  });
-
-  test("optional correlationId surfaces on the envelope when supplied as UUID", () => {
-    const env = createSystemAccessDisagreementEvent({
-      ...baseOpts,
-      correlationId: "f1381beb-1b5c-46d8-b5a7-f393f085ecf1",
-    });
-    expect(env.correlation_id).toBe("f1381beb-1b5c-46d8-b5a7-f393f085ecf1");
-    expect(validateEnvelope(env).ok).toBe(true);
-  });
-});
+// v2.0.0 (cortex#297) — `createSystemAccessDisagreementEvent` retired with
+// the parallel-mode plumbing. The disagreement envelope existed only for
+// the cortex#296 validation window; PolicyEngine is the sole gate now.

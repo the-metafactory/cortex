@@ -17,7 +17,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { Envelope } from "../../../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../../../bus/myelin/runtime";
-import { DMConfigSchema } from "../../../common/types/config";
 import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
 import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
 
@@ -34,9 +33,6 @@ function makePresence(overrides: Partial<DiscordPresence> = {}): DiscordPresence
     logChannelId: "ch2",
     contextDepth: 5,
     enableAgentLog: false,
-    roles: [],
-    defaultRole: "allow-all",
-    dm: DMConfigSchema.parse({}),
     trustedBotIds: [],
     surfaceSubjects: [],
     ...overrides,
@@ -48,7 +44,6 @@ function makeAgent(presence: DiscordPresence): Agent {
     id: "test",
     displayName: "Test",
     persona: "(test)",
-    roles: [],
     trust: [],
     presence: { discord: presence },
   };

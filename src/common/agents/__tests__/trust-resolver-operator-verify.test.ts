@@ -111,7 +111,6 @@ function agentFixture(): Agent {
     id: "luna",
     displayName: "Luna",
     persona: "./personas/luna.md",
-    roles: [],
     trust: [],
     presence: {},
   };

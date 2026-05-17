@@ -71,10 +71,10 @@ describe("getNetworkForGuild", () => {
   test("resolves guild ID to correct network", () => {
     const config = makeConfig([
       makeNetwork("alpha", {
-        discord: [{ token: "t1", guildId: "guild-a", agentChannelId: "c", logChannelId: "l", contextDepth: 10, enableAgentLog: false, roles: [], defaultRole: "allow-all", enabled: true, dm: {} as any }] as any,
+        discord: [{ token: "t1", guildId: "guild-a", agentChannelId: "c", logChannelId: "l", contextDepth: 10, enableAgentLog: false, enabled: true, dm: {} as any }] as any,
       }),
       makeNetwork("beta", {
-        discord: [{ token: "t2", guildId: "guild-b", agentChannelId: "c", logChannelId: "l", contextDepth: 10, enableAgentLog: false, roles: [], defaultRole: "allow-all", enabled: true, dm: {} as any }] as any,
+        discord: [{ token: "t2", guildId: "guild-b", agentChannelId: "c", logChannelId: "l", contextDepth: 10, enableAgentLog: false, enabled: true, dm: {} as any }] as any,
       }),
     ]);
 
@@ -85,7 +85,7 @@ describe("getNetworkForGuild", () => {
   test("returns undefined for unknown guild", () => {
     const config = makeConfig([
       makeNetwork("alpha", {
-        discord: [{ token: "t1", guildId: "guild-a", agentChannelId: "c", logChannelId: "l", contextDepth: 10, enableAgentLog: false, roles: [], defaultRole: "allow-all", enabled: true, dm: {} as any }] as any,
+        discord: [{ token: "t1", guildId: "guild-a", agentChannelId: "c", logChannelId: "l", contextDepth: 10, enableAgentLog: false, enabled: true, dm: {} as any }] as any,
       }),
     ]);
 
@@ -101,10 +101,10 @@ describe("getNetworkForChannel", () => {
   test("resolves Mattermost channel to correct network", () => {
     const config = makeConfig([
       makeNetwork("workplace", {
-        mattermost: [{ apiUrl: "https://mm.example.com", apiToken: "t", channels: ["ch-1", "ch-2"], enabled: true, pollIntervalMs: 3000, allowedUsers: [], roles: [], defaultRole: "allow-all", callbackPort: 8080 }],
+        mattermost: [{ apiUrl: "https://mm.example.com", apiToken: "t", channels: ["ch-1", "ch-2"], enabled: true, pollIntervalMs: 3000, allowedUsers: [], callbackPort: 8080 }],
       }),
       makeNetwork("personal", {
-        mattermost: [{ apiUrl: "https://mm2.example.com", apiToken: "t", channels: ["ch-3"], enabled: true, pollIntervalMs: 3000, allowedUsers: [], roles: [], defaultRole: "allow-all", callbackPort: 8081 }],
+        mattermost: [{ apiUrl: "https://mm2.example.com", apiToken: "t", channels: ["ch-3"], enabled: true, pollIntervalMs: 3000, allowedUsers: [], callbackPort: 8081 }],
       }),
     ]);
 
@@ -116,7 +116,7 @@ describe("getNetworkForChannel", () => {
   test("returns undefined for unknown channel", () => {
     const config = makeConfig([
       makeNetwork("workplace", {
-        mattermost: [{ apiUrl: "https://mm.example.com", apiToken: "t", channels: ["ch-1"], enabled: true, pollIntervalMs: 3000, allowedUsers: [], roles: [], defaultRole: "allow-all", callbackPort: 8080 }],
+        mattermost: [{ apiUrl: "https://mm.example.com", apiToken: "t", channels: ["ch-1"], enabled: true, pollIntervalMs: 3000, allowedUsers: [], callbackPort: 8080 }],
       }),
     ]);
 
@@ -185,10 +185,10 @@ describe("buildNetworkLookups", () => {
   test("builds lookup tables from config", () => {
     const config = makeConfig([
       makeNetwork("alpha", {
-        discord: [{ token: "t", guildId: "g1", agentChannelId: "c", logChannelId: "l", contextDepth: 10, enableAgentLog: false, roles: [], defaultRole: "allow-all", enabled: true, dm: {} as any }] as any,
+        discord: [{ token: "t", guildId: "g1", agentChannelId: "c", logChannelId: "l", contextDepth: 10, enableAgentLog: false, enabled: true, dm: {} as any }] as any,
       }),
       makeNetwork("beta", {
-        mattermost: [{ apiUrl: "https://mm", apiToken: "t", channels: ["ch-1", "ch-2"], enabled: true, pollIntervalMs: 3000, allowedUsers: [], roles: [], defaultRole: "allow-all", callbackPort: 8080 }],
+        mattermost: [{ apiUrl: "https://mm", apiToken: "t", channels: ["ch-1", "ch-2"], enabled: true, pollIntervalMs: 3000, allowedUsers: [], callbackPort: 8080 }],
       }),
     ]);
 

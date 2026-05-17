@@ -34,8 +34,6 @@ function discordPresence() {
     logChannelId: "1487000000000000002",
     contextDepth: 10,
     enableAgentLog: false,
-    roles: [],
-    defaultRole: "allow-all",
     dm: {
       operatorRole: {
         features: ["chat", "async", "team"] as const,
@@ -53,7 +51,6 @@ function agentFixture(overrides: Partial<Agent> = {}): Agent {
     id: "luna",
     displayName: "Luna",
     persona: "./personas/luna.md",
-    roles: [],
     trust: [],
     presence: { discord: discordPresence() },
     ...overrides,
@@ -341,12 +338,12 @@ describe("AgentRegistry — immutability", () => {
     // would silently bypass the trust closure invariant. Deep-freeze
     // closes the gap.
     const registry = AgentRegistry.fromAgents([
-      agentFixture({ id: "luna", roles: ["operator"], trust: [] }),
+      agentFixture({ id: "luna", trust: [] }),
     ]);
     const luna = registry.getById("luna");
     expect(Object.isFrozen(luna)).toBe(true);
     expect(Object.isFrozen(luna.trust)).toBe(true);
-    expect(Object.isFrozen(luna.roles)).toBe(true);
+    // v2.0.0 (cortex#297) — `agent.roles` retired; no array to freeze.
     expect(Object.isFrozen(luna.presence)).toBe(true);
     if (luna.presence.discord) {
       expect(Object.isFrozen(luna.presence.discord)).toBe(true);

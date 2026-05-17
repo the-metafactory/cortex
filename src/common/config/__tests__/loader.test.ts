@@ -340,12 +340,14 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
 
   test("synthesizes BotConfig.agent from operator + first agent", () => {
     const path = writeCortexConfig(testDir, minimalCortex());
-    const { config } = loadConfigWithAgents(path);
+    const { config, operator } = loadConfigWithAgents(path);
     expect(config.agent.name).toBe("ivy");
     expect(config.agent.displayName).toBe("Ivy");
     expect(config.agent.operatorId).toBe("jc");
-    expect(config.agent.operatorDiscordId).toBe("285727653603049472");
     expect(config.agent.operatorName).toBe("Jens-Christian");
+    // v2.0.0 (cortex#297) — operator*Id retired from BotConfig.agent;
+    // surfaced through LoadedConfig.operator instead.
+    expect(operator?.discordId).toBe("285727653603049472");
   });
 
   test("flattens agents[*].presence.discord into BotConfig.discord[]", () => {

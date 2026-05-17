@@ -137,7 +137,6 @@ function makeAgent(
     id,
     displayName: id.charAt(0).toUpperCase() + id.slice(1),
     persona: `/tmp/${id}-persona.md`,
-    roles: [],
     trust: [],
     presence: {},
     ...(runtime !== undefined && { runtime }),

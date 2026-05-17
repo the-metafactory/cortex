@@ -31,15 +31,13 @@ import {
   type SystemEventSource,
   createSystemAdapterDisconnectedEvent,
   createSystemAdapterRecoveredEvent,
-  createSystemAccessDisagreementEvent,
 } from "../../bus/system-events";
-import { resolveRole } from "../discord/role-resolver";
 import {
-  buildKeywordCapabilityChecks,
-  defaultParallelModeSovereignty,
-  runParallelModeChecks,
+  isOperatorPrincipal,
+  resolvePolicyAccess,
   type PlatformPrincipalIndex,
   type PolicyEngine,
+  type PrincipalRegistry,
 } from "../../common/policy";
 import { formatEnvelopeAsMarkdown } from "../envelope-renderer";
 import { RealSlackClient, type SlackClient, type SlackInboundEvent, type SlackBotIdentity } from "./client";
@@ -86,23 +84,12 @@ export interface SlackAdapterInfra {
    * `presence.appToken`. Tests inject a fake.
    */
   client?: SlackClient;
-  /**
-   * IAW Phase C.2b-242a (cortex#296) — PolicyEngine consulted alongside
-   * the legacy role-resolver when `parallelModeEnabled` is `true`.
-   * See `DiscordAdapterInfra.policyEngine` for full semantic.
-   */
+  /** v2.0.0 (cortex#297) — PolicyEngine is the sole authorisation gate. */
   policyEngine?: PolicyEngine;
-  /**
-   * IAW Phase C.2b-242a (cortex#296) — `(platform, platformId) →
-   * principalId` lookup index built from `policy.principals[]`.
-   */
+  /** v2.0.0 (cortex#297) — `(platform, platformId) → principalId` index. */
   policyLookup?: PlatformPrincipalIndex;
-  /**
-   * IAW Phase C.2b-242a (cortex#296) — operator opt-in flag for the
-   * parallel-mode rollout. See `DiscordAdapterInfra.parallelModeEnabled`
-   * for operator pre-flight contract.
-   */
-  parallelModeEnabled?: boolean;
+  /** v2.0.0 (cortex#297) — `principal_id → PolicyPrincipal` registry. */
+  policyRegistry?: PrincipalRegistry;
 }
 
 /**
@@ -451,8 +438,7 @@ export class SlackAdapter implements PlatformAdapter {
     this.presence = {
       ...this.presence,
       channels: newInstance.channels,
-      roles: newInstance.roles,
-      defaultRole: newInstance.defaultRole,
+      // v2.0.0 (cortex#297) — roles/defaultRole retired.
       allowedUserIds: newInstance.allowedUserIds,
       // The PresenceSchema field is `trustedBotIds: string[]` but the
       // adapter caches a `ReadonlySet<string>` for O(1) lookup at the
@@ -493,23 +479,14 @@ export class SlackAdapter implements PlatformAdapter {
     return [];
   }
 
-  resolveAccess(msg: InboundMessage): AccessDecision {
-    const legacy = this.legacyResolveAccess(msg);
-    // Hard-deny guards (self-loop, allowlist miss) short-circuit
-    // before parallel mode — they're adapter-side invariants the
-    // PolicyEngine doesn't model. Only run parallel mode when the
-    // legacy gate produced a feature-gating decision.
-    if (!legacy.allowed && (legacy.denyReason?.startsWith("Self-loop") || legacy.denyReason?.startsWith("Sorry, I'm only configured to respond to specific users"))) {
-      return legacy;
-    }
-    return this.applyParallelMode(msg, legacy);
-  }
-
   /**
-   * Legacy role-resolver gate — pre-cutover behaviour. cortex#297
-   * (242b) deletes this alongside role-resolver.ts.
+   * v2.0.0 (cortex#297) — single-gate authorisation via PolicyEngine.
+   * Adapter-side invariants (self-loop, allowedUserIds allowlist)
+   * short-circuit BEFORE the policy gate — they enforce platform
+   * preconditions the engine doesn't model. Once those pass,
+   * `resolvePolicyAccess` consults the engine + principal registry.
    */
-  private legacyResolveAccess(msg: InboundMessage): AccessDecision {
+  resolveAccess(msg: InboundMessage): AccessDecision {
     // Self-loop guard: never act on messages authored by this bot.
     // Check both the user id and the bot id — `chat.postMessage` from
     // this bot can round-trip as a `bot_message` event where
@@ -525,7 +502,7 @@ export class SlackAdapter implements PlatformAdapter {
     }
 
     // allowedUserIds gate (mirror of MattermostAdapter.allowedUsers).
-    // Empty list = "no allowlist" = fall through to role resolution.
+    // Empty list = "no allowlist" = fall through to policy gate.
     if (
       this.presence.allowedUserIds.length > 0 &&
       !this.presence.allowedUserIds.includes(msg.authorId)
@@ -537,124 +514,26 @@ export class SlackAdapter implements PlatformAdapter {
       };
     }
 
-    const role = resolveRole(msg.authorId, {
-      roles: this.presence.roles,
-      defaultRole: this.presence.defaultRole,
-    });
-
-    if (role.denied) {
-      return {
-        allowed: false,
-        features: { chat: false, async: false, team: false },
-        denyReason: "Sorry, I'm only configured to respond to my operator.",
-      };
-    }
-
-    return {
-      allowed: true,
-      features: {
-        chat: role.features.has("chat"),
-        async: role.features.has("async"),
-        team: role.features.has("team"),
-      },
-      toolRestrictions: role.disallowedTools.length > 0 ? role.disallowedTools : undefined,
-      dirRestrictions: role.allowedDirs,
-      allowedSkills: role.allowedSkills,
-    };
-  }
-
-  /** cortex#296 — at-most-once parallel-mode misconfiguration warning. */
-  private warnedParallelModeUnwired = false;
-
-  /**
-   * IAW Phase C.2b-242a (cortex#296) — parallel-mode wrapper. See
-   * `DiscordAdapter.applyParallelMode` for the full contract; this
-   * is the mechanical Slack mirror.
-   */
-  private applyParallelMode(
-    msg: InboundMessage,
-    legacy: AccessDecision,
-  ): AccessDecision {
-    if (this.infra.parallelModeEnabled !== true) {
-      return legacy;
-    }
-    if (this.infra.policyEngine === undefined || this.infra.policyLookup === undefined) {
-      if (!this.warnedParallelModeUnwired) {
-        this.warnedParallelModeUnwired = true;
-        console.error(
-          `cortex-runner: slack-${this.instanceId}: parallel_mode_enabled=true but policyEngine/policyLookup not wired — falling back to legacy gate only`,
-        );
-      }
-      return legacy;
-    }
-
-    const isOperator = this.infra.operator.slackId !== undefined && msg.authorId === this.infra.operator.slackId;
-    const checks = buildKeywordCapabilityChecks({
-      features: legacy.features,
-      isOperator,
-    });
-    const sovereignty = defaultParallelModeSovereignty();
-    const { principalId, decisions } = runParallelModeChecks({
+    return resolvePolicyAccess({
+      msg,
       engine: this.infra.policyEngine,
       index: this.infra.policyLookup,
-      platform: "slack",
-      platformAuthorId: msg.authorId,
-      sovereignty,
-      checks,
+      registry: this.infra.policyRegistry,
     });
+  }
 
-    const runtime = this.runtime;
-    const source = this.systemEventSource;
-    for (const merged of decisions) {
-      if (merged.disagreement === undefined) continue;
-      if (runtime === undefined || source === undefined) {
-        process.stderr.write(
-          `cortex-runner: slack-${this.instanceId}: parallel-mode disagreement (no runtime to publish) — capability=${merged.capability} legacy=${merged.disagreement.legacyDecision} new=${merged.disagreement.newDecision} effective=${merged.disagreement.effectiveDecision}\n`,
-        );
-        continue;
-      }
-      const envelope = createSystemAccessDisagreementEvent({
-        source,
-        principalId: principalId ?? "",
-        capability: merged.capability,
-        legacyDecision: merged.disagreement.legacyDecision,
-        legacyReason: merged.disagreement.legacyReason,
-        newDecision: merged.disagreement.newDecision,
-        newReason: merged.disagreement.newReason,
-        effectiveDecision: merged.disagreement.effectiveDecision,
-        sovereignty,
-        signedBy: [],
-        envelopeSubject: `local.${source.org}.adapter.slack.${this.instanceId}.${msg.threadId ?? msg.channelId}.message.${msg.timestamp.toISOString()}`,
-        envelopeId: `${msg.channelId}:${msg.timestamp.toISOString()}:${msg.authorId}`,
-      });
-      void runtime.publish(envelope).catch((err: unknown) => {
-        process.stderr.write(
-          `cortex-runner: slack-${this.instanceId}: failed to publish system.access.disagreement — ${err instanceof Error ? err.message : String(err)}\n`,
-        );
-      });
-    }
-
-    const mergedMap = new Map(decisions.map((d) => [d.capability, d.effective.allow] as const));
-    const effectiveFeatures = {
-      chat: legacy.features.chat && (mergedMap.get("keyword.chat") ?? true),
-      async: legacy.features.async && (mergedMap.get("keyword.async") ?? true),
-      team: legacy.features.team && (mergedMap.get("keyword.team") ?? true),
-    };
-    const anyFeatureAllowed = effectiveFeatures.chat || effectiveFeatures.async || effectiveFeatures.team;
-    if (legacy.allowed && !anyFeatureAllowed) {
-      return {
-        ...legacy,
-        allowed: false,
-        features: effectiveFeatures,
-        denyReason:
-          legacy.denyReason ??
-          "Sorry, your access was denied by the policy engine. Ask the operator to map your identity in policy.principals[].",
-      };
-    }
-    return {
-      ...legacy,
-      features: effectiveFeatures,
-    };
+  /**
+   * v2.0.0 (cortex#297) — operator detection via the policy `operator`
+   * capability. Kept for adapter-internal use; the `notifyOperator`
+   * path still routes by `infra.operator.slackId`.
+   */
+  protected isOperator(authorId: string): boolean {
+    return isOperatorPrincipal(
+      "slack",
+      authorId,
+      this.infra.policyEngine,
+      this.infra.policyLookup,
+    );
   }
 
   async postResponse(target: ResponseTarget, text: string, files?: OutboundFile[]): Promise<void> {

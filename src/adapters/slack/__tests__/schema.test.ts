@@ -25,7 +25,6 @@ describe("SlackPresenceSchema", () => {
     expect(parsed.appToken).toBe("xapp-TEST-APP-12345");
     expect(parsed.workspaceId).toBe("T0WORKSPACE");
     expect(parsed.enabled).toBe(true);
-    expect(parsed.defaultRole).toBe("allow-all");
     expect(parsed.allowedUserIds).toEqual([]);
     expect(parsed.trustedBotIds).toEqual([]);
     expect(parsed.surfaceSubjects).toEqual([]);
@@ -118,7 +117,6 @@ describe("SlackInstanceSchema", () => {
     const parsed = SlackInstanceSchema.parse(VALID_PRESENCE);
     expect(parsed.enabled).toBe(true);
     expect(parsed.channels).toHaveLength(1);
-    expect(parsed.defaultRole).toBe("allow-all");
   });
 
   test("instanceId is optional", () => {

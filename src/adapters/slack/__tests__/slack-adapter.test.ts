@@ -134,8 +134,6 @@ function makePresence(overrides: Partial<SlackPresence> = {}): SlackPresence {
     channels: [{ id: "C0CHANNEL1", name: "cortex" }],
     allowedUserIds: [],
     trustedBotIds: [],
-    roles: [],
-    defaultRole: "allow-all",
     surfaceSubjects: [],
     ...overrides,
   };
@@ -146,7 +144,6 @@ function makeAgent(presence: SlackPresence): Agent {
     id: "luna",
     displayName: "Luna",
     persona: "(test)",
-    roles: [],
     trust: [],
     presence: { slack: presence },
   };
@@ -578,13 +575,15 @@ describe("SlackAdapter — resolveAccess", () => {
     };
   }
 
-  test("allow-all role grants all features when no roles configured", () => {
+  test("denies when no policy block is configured (v2.0.0 cortex#297)", () => {
+    // v2.0.0 — without a `policy:` block, the adapter has no engine/
+    // index/registry; every inbound message is denied with a pointer
+    // at `migrate-config`. The legacy "allow-all fallback when no
+    // roles configured" behaviour retired with the role-resolver.
     const { adapter } = makeAdapter();
     const decision = adapter.resolveAccess(makeInbound("U0HUMAN"));
-    expect(decision.allowed).toBe(true);
-    expect(decision.features.chat).toBe(true);
-    expect(decision.features.async).toBe(true);
-    expect(decision.features.team).toBe(true);
+    expect(decision.allowed).toBe(false);
+    expect(decision.denyReason).toContain("migrate-config");
   });
 
   test("denies when allowedUserIds is set and user is not in it", () => {
@@ -596,12 +595,18 @@ describe("SlackAdapter — resolveAccess", () => {
     expect(decision.denyReason).toContain("specific users");
   });
 
-  test("allows when allowedUserIds is set and user is in it", () => {
+  test("falls through past allowedUserIds when user is in it (then policy gate denies without policy block)", () => {
+    // v2.0.0 — allowedUserIds is a platform-side allowlist preceding
+    // the policy gate. Membership lets the message THROUGH the
+    // allowlist; the policy gate then makes the authorisation call.
+    // With no policy declared here, the policy gate denies — exercising
+    // both stages of the resolveAccess pipeline.
     const { adapter } = makeAdapter({
       presence: { allowedUserIds: ["UOPERATOR"] },
     });
     const decision = adapter.resolveAccess(makeInbound("UOPERATOR"));
-    expect(decision.allowed).toBe(true);
+    expect(decision.allowed).toBe(false);
+    expect(decision.denyReason).toContain("migrate-config");
   });
 
   test("denies a self-loop message even if the user is in allowedUserIds", async () => {
@@ -1036,8 +1041,6 @@ describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () 
         channels: [{ id: "C0CHANNEL1", name: "cortex" }],
         allowedUserIds: [],
         trustedBotIds: [],
-        roles: [],
-        defaultRole: "allow-all",
         surfaceSubjects: [],
         ...slackOverrides,
       }],
@@ -1065,16 +1068,9 @@ describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () 
     expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.channels[1]?.name).toBe("research");
   });
 
-  test("hot-reloads roles + defaultRole", () => {
-    const { adapter } = makeAdapter();
-    const updated = makeBotConfig({
-      roles: [{ name: "operator", users: ["U0OP"], features: ["chat"] }],
-      defaultRole: "denied",
-    });
-    adapter.updateConfig(updated);
-    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.roles).toHaveLength(1);
-    expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.defaultRole).toBe("denied");
-  });
+  // v2.0.0 (cortex#297) — `roles[]` + `defaultRole` retired from Slack
+  // presence; hot-reload no longer touches them. Authorisation flows
+  // through the top-level `policy:` block.
 
   test("hot-reloads allowedUserIds", () => {
     const { adapter } = makeAdapter();
@@ -1119,15 +1115,16 @@ describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () 
 
   test("warns and no-ops when workspaceId removed from config", () => {
     const { adapter } = makeAdapter();
-    const originalRoles = (adapter as unknown as { agent: Agent }).agent.presence.slack?.roles ?? [];
+    const originalChannels = (adapter as unknown as { agent: Agent }).agent.presence.slack?.channels ?? [];
     const originalWarn = console.warn;
     const warnings: string[] = [];
     console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
     try {
       // No slack[] instance with our workspaceId.
       adapter.updateConfig(makeBotConfig({ workspaceId: "T0DIFFERENT" }));
-      // Roles unchanged — update was ignored.
-      expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.roles).toEqual(originalRoles);
+      // Presence unchanged — update was ignored (channels is a proxy for
+      // "the hot-reload didn't touch this presence").
+      expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.channels).toEqual(originalChannels);
       // Warning emitted.
       expect(warnings.some((w) => w.includes("instance removed from config"))).toBe(true);
     } finally {

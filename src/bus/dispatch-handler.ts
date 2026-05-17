@@ -859,13 +859,13 @@ export class DispatchHandler extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   private async notifyOperatorIfNeeded(adapter: PlatformAdapter, msg: InboundMessage): Promise<void> {
-    // Determine if this user is the operator — check platform-specific operator IDs
-    const operatorId =
-      msg.platform === "discord" ? this.config.agent.operatorDiscordId :
-      msg.platform === "mattermost" ? this.config.agent.operatorMattermostId :
-      undefined;
-
-    if (!operatorId || msg.authorId === operatorId) return;
+    // v2.0.0 (cortex#297) — operator identity is policy-driven now. The
+    // adapter sets `msg.dmType = "operator"` when the inbound author
+    // holds the `operator` capability (the new policy-driven equivalent
+    // of the legacy `config.agent.operatorDiscordId` comparison). Skip
+    // notification when the operator is talking to their own bot — they
+    // already know the message arrived.
+    if (msg.dmType === "operator") return;
 
     const preview = (msg.content || "(mention only)").slice(0, 200);
     const text = `**${msg.authorName}** talked to me on ${adapter.instanceId}:\n> ${preview}`;

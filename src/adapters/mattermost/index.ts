@@ -24,22 +24,18 @@ import {
 } from "./poller";
 import { fetchMattermostContext } from "./context";
 import { fetchBotUserId } from "./bot-user";
-import { resolveRole } from "../discord/role-resolver";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
 import type { SurfaceAdapter } from "../../bus/surface-router";
 import type { PayloadFilter } from "../../bus/payload-filter";
 import { formatEnvelopeAsMarkdown } from "../envelope-renderer";
+import { type SystemEventSource } from "../../bus/system-events";
 import {
-  type SystemEventSource,
-  createSystemAccessDisagreementEvent,
-} from "../../bus/system-events";
-import {
-  buildKeywordCapabilityChecks,
-  defaultParallelModeSovereignty,
-  runParallelModeChecks,
+  isOperatorPrincipal,
+  resolvePolicyAccess,
   type PlatformPrincipalIndex,
   type PolicyEngine,
+  type PrincipalRegistry,
 } from "../../common/policy";
 
 /**
@@ -75,36 +71,23 @@ export interface MattermostAdapterInfra {
    * Moves to Renderer at MIG-7.2d. */
   surfaceFallbackChannelId?: string;
   /**
-   * IAW Phase C.2b-242a (cortex#296) — myelin runtime used to publish
-   * `system.access.disagreement` envelopes when parallel mode is
-   * active. Optional: when absent, disagreements log to stderr only.
-   * Mirrors `DiscordAdapterInfra.runtime`.
+   * v2.0.0 (cortex#297) — myelin runtime preserved for forward compat
+   * with sibling `system.access.*` envelopes that may publish here in
+   * the future. Today's resolveAccess path doesn't publish; the field
+   * is optional and the adapter still works when absent.
    */
   runtime?: MyelinRuntime;
-  /**
-   * IAW Phase C.2b-242a (cortex#296) — `{org}.{agent}.{instance}` source
-   * triple stamped onto emitted `system.access.disagreement` envelopes.
-   * Required when `runtime` is set + `parallelModeEnabled` is `true`.
-   */
+  /** v2.0.0 (cortex#297) — `{org}.{agent}.{instance}` source triple. */
   systemEventSource?: SystemEventSource;
   /**
-   * IAW Phase C.2b-242a (cortex#296) — PolicyEngine consulted alongside
-   * the legacy role-resolver when `parallelModeEnabled` is `true`.
-   * `undefined` when no `policy:` block is declared yet — graceful
-   * degradation to legacy-only.
+   * v2.0.0 cutover (cortex#297) — PolicyEngine is the sole authorisation
+   * gate. See `DiscordAdapterInfra.policyEngine` for the full contract.
    */
   policyEngine?: PolicyEngine;
-  /**
-   * IAW Phase C.2b-242a (cortex#296) — `(platform, platformId) →
-   * principalId` lookup index built from `policy.principals[]`.
-   */
+  /** v2.0.0 (cortex#297) — `(platform, platformId) → principalId` index. */
   policyLookup?: PlatformPrincipalIndex;
-  /**
-   * IAW Phase C.2b-242a (cortex#296) — operator opt-in flag for
-   * parallel-mode rollout. See `DiscordAdapterInfra.parallelModeEnabled`
-   * for the full semantic + operator pre-flight contract.
-   */
-  parallelModeEnabled?: boolean;
+  /** v2.0.0 (cortex#297) — `principal_id → PolicyPrincipal` registry. */
+  policyRegistry?: PrincipalRegistry;
 }
 
 export class MattermostAdapter implements PlatformAdapter {
@@ -234,8 +217,7 @@ export class MattermostAdapter implements PlatformAdapter {
       ...this.presence,
       channels: newInstance.channels,
       pollIntervalMs: newInstance.pollIntervalMs,
-      roles: newInstance.roles,
-      defaultRole: newInstance.defaultRole,
+      // v2.0.0 (cortex#297) — roles/defaultRole retired.
       allowedUsers: newInstance.allowedUsers,
       ...(newInstance.triggerWord !== undefined && { triggerWord: newInstance.triggerWord }),
     };
@@ -269,134 +251,33 @@ export class MattermostAdapter implements PlatformAdapter {
     return messages;
   }
 
+  /**
+   * v2.0.0 (cortex#297) — single-gate authorisation via PolicyEngine.
+   * Mattermost messages aren't classified as DMs in the legacy shape;
+   * `dmType` synthesis is omitted. The operator short-circuit lives in
+   * `resolvePolicyAccess` via the `operator` capability.
+   */
   resolveAccess(msg: InboundMessage): AccessDecision {
-    const legacy = this.legacyResolveAccess(msg);
-    return this.applyParallelMode(msg, legacy);
-  }
-
-  /**
-   * Legacy role-resolver gate — pre-cutover behaviour. cortex#297
-   * (242b) deletes this method alongside role-resolver.ts.
-   */
-  private legacyResolveAccess(msg: InboundMessage): AccessDecision {
-    const role = resolveRole(msg.authorId, {
-      roles: this.presence.roles,
-      defaultRole: this.presence.defaultRole,
-    });
-
-    if (role.denied) {
-      return {
-        allowed: false,
-        features: { chat: false, async: false, team: false },
-        denyReason: "Sorry, I'm only configured to respond to my operator.",
-      };
-    }
-
-    return {
-      allowed: true,
-      features: {
-        chat: role.features.has("chat"),
-        async: role.features.has("async"),
-        team: role.features.has("team"),
-      },
-      toolRestrictions: role.disallowedTools.length > 0 ? role.disallowedTools : undefined,
-      dirRestrictions: role.allowedDirs,
-      allowedSkills: role.allowedSkills,
-    };
-  }
-
-  /** cortex#296 — at-most-once parallel-mode misconfiguration warning. */
-  private warnedParallelModeUnwired = false;
-
-  /**
-   * IAW Phase C.2b-242a (cortex#296) — parallel-mode wrapper. See
-   * `DiscordAdapter.applyParallelMode` for the full contract; this
-   * is the mechanical Mattermost mirror.
-   */
-  private applyParallelMode(
-    msg: InboundMessage,
-    legacy: AccessDecision,
-  ): AccessDecision {
-    if (this.infra.parallelModeEnabled !== true) {
-      return legacy;
-    }
-    if (this.infra.policyEngine === undefined || this.infra.policyLookup === undefined) {
-      if (!this.warnedParallelModeUnwired) {
-        this.warnedParallelModeUnwired = true;
-        console.error(
-          `cortex-runner: mattermost-${this.instanceId}: parallel_mode_enabled=true but policyEngine/policyLookup not wired — falling back to legacy gate only`,
-        );
-      }
-      return legacy;
-    }
-
-    const isOperator = this.infra.operator.mattermostId !== undefined && msg.authorId === this.infra.operator.mattermostId;
-    const checks = buildKeywordCapabilityChecks({
-      features: legacy.features,
-      isOperator,
-    });
-    const sovereignty = defaultParallelModeSovereignty();
-    const { principalId, decisions } = runParallelModeChecks({
+    return resolvePolicyAccess({
+      msg,
       engine: this.infra.policyEngine,
       index: this.infra.policyLookup,
-      platform: "mattermost",
-      platformAuthorId: msg.authorId,
-      sovereignty,
-      checks,
+      registry: this.infra.policyRegistry,
     });
+  }
 
-    const source = this.infra.systemEventSource;
-    const runtime = this.infra.runtime;
-    for (const merged of decisions) {
-      if (merged.disagreement === undefined) continue;
-      if (runtime === undefined || source === undefined) {
-        process.stderr.write(
-          `cortex-runner: mattermost-${this.instanceId}: parallel-mode disagreement (no runtime to publish) — capability=${merged.capability} legacy=${merged.disagreement.legacyDecision} new=${merged.disagreement.newDecision} effective=${merged.disagreement.effectiveDecision}\n`,
-        );
-        continue;
-      }
-      const envelope = createSystemAccessDisagreementEvent({
-        source,
-        principalId: principalId ?? "",
-        capability: merged.capability,
-        legacyDecision: merged.disagreement.legacyDecision,
-        legacyReason: merged.disagreement.legacyReason,
-        newDecision: merged.disagreement.newDecision,
-        newReason: merged.disagreement.newReason,
-        effectiveDecision: merged.disagreement.effectiveDecision,
-        sovereignty,
-        signedBy: [],
-        envelopeSubject: `local.${source.org}.adapter.mattermost.${this.instanceId}.${msg.threadId ?? msg.channelId}.message.${msg.timestamp.toISOString()}`,
-        envelopeId: `${msg.channelId}:${msg.timestamp.toISOString()}:${msg.authorId}`,
-      });
-      void runtime.publish(envelope).catch((err: unknown) => {
-        process.stderr.write(
-          `cortex-runner: mattermost-${this.instanceId}: failed to publish system.access.disagreement — ${err instanceof Error ? err.message : String(err)}\n`,
-        );
-      });
-    }
-
-    const mergedMap = new Map(decisions.map((d) => [d.capability, d.effective.allow] as const));
-    const effectiveFeatures = {
-      chat: legacy.features.chat && (mergedMap.get("keyword.chat") ?? true),
-      async: legacy.features.async && (mergedMap.get("keyword.async") ?? true),
-      team: legacy.features.team && (mergedMap.get("keyword.team") ?? true),
-    };
-    const anyFeatureAllowed = effectiveFeatures.chat || effectiveFeatures.async || effectiveFeatures.team;
-    if (legacy.allowed && !anyFeatureAllowed) {
-      return {
-        ...legacy,
-        allowed: false,
-        features: effectiveFeatures,
-        denyReason:
-          legacy.denyReason ??
-          "Sorry, your access was denied by the policy engine. Ask the operator to map your identity in policy.principals[].",
-      };
-    }
-    return {
-      ...legacy,
-      features: effectiveFeatures,
-    };
+  /**
+   * v2.0.0 (cortex#297) — operator detection via the policy `operator`
+   * capability. Used elsewhere (e.g. operator-DM notifier paths) to
+   * decide privileged actions.
+   */
+  protected isOperator(authorId: string): boolean {
+    return isOperatorPrincipal(
+      "mattermost",
+      authorId,
+      this.infra.policyEngine,
+      this.infra.policyLookup,
+    );
   }
 
   async postResponse(target: ResponseTarget, text: string, files?: OutboundFile[]): Promise<void> {

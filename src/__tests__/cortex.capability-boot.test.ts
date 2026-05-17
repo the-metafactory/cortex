@@ -143,7 +143,6 @@ function makeAgent(id: string, capabilities: readonly string[] | undefined): Age
     // Persona path is read-checked only when an adapter starts; for our
     // headless boot path nothing tries to open it.
     persona: `/tmp/${id}-persona.md`,
-    roles: [],
     trust: [],
     presence: {},
     ...(runtime !== undefined && { runtime }),

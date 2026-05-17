@@ -27,90 +27,19 @@ function emptyDefault<T>(): T {
 /* eslint-enable @typescript-eslint/no-unnecessary-type-parameters, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-explicit-any */
 
 // =============================================================================
-// Role schema (shared across platforms)
+// v2.0.0 cutover (cortex#297) — legacy per-adapter role / DM / role-resolver
+// schemas removed. Authorisation now flows exclusively through the top-level
+// `policy:` block on cortex.yaml (`PolicyPrincipalSchema` / `PolicyRoleSchema`
+// in `./cortex-config.ts`). Operators upgrading from <v2.0.0 MUST run
+// `bun src/cli/cortex/commands/migrate-config.ts <your-config.yaml>` first to
+// synthesise the new `policy:` block from their legacy `presence.<platform>.roles[]`
+// + `dm.*` blocks. See `docs/design-policy-cutover.md` §16 for the full schema
+// delta and `docs/iteration-policy-cutover.md` cortex#297 for the slice scope.
 // =============================================================================
-
-/** Role-based access control for platform users */
-export const RoleSchema = z.object({
-  /** Role name (e.g. "operator", "user", "viewer") */
-  name: z.string().min(1),
-  /** User IDs assigned to this role */
-  users: z.array(z.string()).default([]),
-  /** Features this role can use. Default: ["chat"] */
-  features: z.array(z.enum(["chat", "async", "team"])).default(["chat"]),
-  /** Additional tools to deny for this role (merged with global claude.disallowedTools) */
-  disallowedTools: z.array(z.string()).optional(),
-  /** Override allowedDirs for this role. If set, replaces global claude.allowedDirs. */
-  allowedDirs: z.array(z.string()).optional(),
-  /** G-121: Skills this role may invoke. absent/null → all allowed; [] → none allowed; [...] → only listed. */
-  allowedSkills: z.array(z.string()).optional(),
-});
-
-// Keep backward-compat alias
-export const DiscordRoleSchema = RoleSchema;
-export type DiscordRole = z.infer<typeof RoleSchema>;
 
 // =============================================================================
 // Instance schemas (new: each platform entry is an instance)
 // =============================================================================
-
-/** G-300: DM role configuration */
-export const DMRoleSchema = z.object({
-  features: z.array(z.enum(["chat", "async", "team"])).default(["chat"]),
-  disallowedTools: z.array(z.string()).default([]),
-  allowedDirs: z.array(z.string()).optional(),
-  /** G-121: Skills this role may invoke. absent/null → all allowed; [] → none allowed; [...] → only listed. */
-  allowedSkills: z.array(z.string()).optional(),
-  /** Whether bash guard is active for this DM role. Default: true. */
-  bashGuard: z.boolean().default(true),
-  /** Override bash allowlist for this DM role. If set, replaces global claude.bashAllowlist. */
-  bashAllowlist: z.object({
-    rules: z.array(z.object({
-      pattern: z.string(),
-      repos: z.array(z.string()).optional(),
-    })).default([]),
-    repos: z.array(z.string()).default([]),
-  }).optional(),
-});
-
-export type DMRole = z.infer<typeof DMRoleSchema>;
-
-/** G-300: Per-user DM role override */
-export const DMUserRoleSchema = z.object({
-  users: z.array(z.string()),
-  features: z.array(z.enum(["chat", "async", "team"])).default(["chat"]),
-  disallowedTools: z.array(z.string()).default([]),
-  allowedDirs: z.array(z.string()).optional(),
-  /** G-121: Skills this role may invoke. absent/null → all allowed; [] → none allowed; [...] → only listed. */
-  allowedSkills: z.array(z.string()).optional(),
-  bashGuard: z.boolean().default(true),
-});
-
-/**
- * G-300: DM configuration section.
- *
- * Defaults provide safe-by-default behavior:
- * - operatorRole: full feature access, bash guard ON (override via bashAllowlist)
- * - defaultRole: "denied" — unknown DMs silently ignored
- * - userRoles: empty — no per-user overrides
- *
- * The operator is identified by agent.operatorDiscordId in bot.yaml.
- * If not set, no DM user is treated as operator.
- */
-export const DMConfigSchema = z.object({
-  /** Role applied to operator DMs. Full access by default, bash guard stays active with relaxed rules. */
-  operatorRole: DMRoleSchema.default({
-    features: ["chat", "async", "team"],
-    disallowedTools: [],
-    bashGuard: true,
-  }),
-  /** Role applied to unknown DMs. "denied" = silently ignore. */
-  defaultRole: z.enum(["denied", "allow-all"]).default("denied"),
-  /** Per-user DM role overrides */
-  userRoles: z.array(DMUserRoleSchema).default([]),
-});
-
-export type DMConfig = z.infer<typeof DMConfigSchema>;
 
 export const DiscordInstanceSchema = z.object({
   /** Unique instance ID. Auto-generated from guildId if not provided. */
@@ -126,12 +55,6 @@ export const DiscordInstanceSchema = z.object({
   contextDepth: z.number().int().positive().default(10),
   /** Post agent events to #agent-log. Default: false (opt-in). */
   enableAgentLog: z.boolean().default(false),
-  /** Role-based access control. If empty, all users get full access (backward compat). */
-  roles: z.array(RoleSchema).default([]),
-  /** Role applied to users not listed in any role. "denied" = reject, or a role name. Default: allow all. */
-  defaultRole: z.string().default("allow-all"),
-  /** G-300: DM privilege configuration */
-  dm: DMConfigSchema.default(emptyDefault()),
   /**
    * F-11: Optional Discord role id to mention on high-priority block
    * notifications. When set, channel posts marked `severity = 'ping'`
@@ -201,10 +124,6 @@ export const MattermostInstanceSchema = z.object({
   pollIntervalMs: z.number().int().positive().default(3000),
   /** Mattermost user IDs allowed to trigger the bot. Empty = allow all. */
   allowedUsers: z.array(z.string()).default([]),
-  /** Role-based access control. If empty, falls back to allowedUsers (backward compat). */
-  roles: z.array(RoleSchema).default([]),
-  /** Role applied to users not listed in any role. Default: allow all. */
-  defaultRole: z.string().default("allow-all"),
 });
 
 export type MattermostInstance = z.infer<typeof MattermostInstanceSchema>;
@@ -233,8 +152,6 @@ export const SlackInstanceSchema = z.object({
   })).default([]),
   allowedUserIds: z.array(z.string()).default([]),
   trustedBotIds: z.array(z.coerce.string()).default([]),
-  roles: z.array(RoleSchema).default([]),
-  defaultRole: z.string().default("allow-all"),
   surfaceSubjects: z.array(z.string().min(1)).default([]),
   surfaceFallbackChannelId: z.coerce.string().optional(),
 });
@@ -352,12 +269,13 @@ export const BotConfigSchema = z.object({
     operatorId: z.string().optional(),
     /** Display name for the operator (shown on dashboard). Defaults to operatorId. */
     operatorName: z.string().optional(),
-    /** Operator's Discord user ID — receives DM notifications when others talk to the bot */
-    operatorDiscordId: z.string().optional(),
-    /** Operator's Mattermost user ID — receives DM notifications when others talk to the bot */
-    operatorMattermostId: z.string().optional(),
-    /** Operator's Slack user ID (`U...`) — receives DM notifications when others talk to the bot */
-    operatorSlackId: z.string().optional(),
+    /**
+     * v2.0.0 cutover (cortex#297) — `operatorDiscordId/Mattermost/Slack` retired.
+     * The operator's platform-side ids live on `OperatorSchema.discordId/mattermostId/slackId`
+     * in cortex-config.ts and are surfaced through `LoadedConfig.operator` for the
+     * boot path. Runtime "is this principal an operator?" decisions consult the
+     * PolicyEngine via the `operator` capability per the new model.
+     */
     /** Operator data residency stamped into `sovereignty.data_residency` on emitted
      *  envelopes (system.*, dispatch.task.*, cc.*). ISO-3166 country code; defaults
      *  to "NZ" when omitted. Operators in AU/EU/US/etc. set this to match their
@@ -656,12 +574,9 @@ export type NetworkResolver = (networkId: string | undefined) => NetworkConfig |
 
 /**
  * Build a "scoped" BotConfig where `discord` contains a single instance's config.
- * This lets existing modules (role-resolver, discord-client, etc.) that read
- * `config.discord.roles` or `config.discord.guildId` work without changes.
- *
- * Usage in adapters:
- *   const scopedConfig = scopeConfigToDiscordInstance(botConfig, instance);
- *   resolveRole(userId, scopedConfig); // reads scopedConfig.discord[0].roles
+ * v2.0.0 (cortex#297) — the legacy role-resolver retired; this scoping helper
+ * survives for adapters / discord-client code that reads `config.discord[0].guildId`
+ * etc. Authorisation flows through `policy:` block now.
  */
 export function scopeConfigToDiscordInstance(config: BotConfig, instance: DiscordInstance): BotConfig {
   return { ...config, discord: [instance] };

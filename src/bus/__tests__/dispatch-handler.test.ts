@@ -170,10 +170,17 @@ describe("DispatchHandler", () => {
     });
 
     test("operator does not trigger notification", async () => {
+      // v2.0.0 (cortex#297) — operator classification flows through
+      // `msg.dmType` (set by adapters via the PolicyEngine `operator`
+      // capability) instead of comparing `authorId` to a legacy
+      // `agent.operatorDiscordId` field. The notifier short-circuits
+      // on `msg.dmType === "operator"`.
       await router.handleMessage(adapter, makeMsg({
         platform: "discord",
         authorId: "operator1",
         content: "/help",
+        isDM: true,
+        dmType: "operator",
       }));
 
       expect(adapter.operatorNotifications).toHaveLength(0);

@@ -74,6 +74,19 @@ export interface LoadedConfig {
   config: BotConfig;
   inlineAgents: Agent[];
   /**
+   * v2.0.0 (cortex#297) — operator's platform-side ids surfaced through the
+   * loader after `agent.operatorDiscordId/Mattermost/Slack` retired from
+   * BotConfig. Populated only for cortex-shape configs (legacy bot.yaml
+   * input always yields `undefined`). The boot path reads these to wire
+   * `DiscordAdapterInfra.operator.discordId` etc.
+   */
+  operator?: {
+    id: string;
+    discordId?: string;
+    mattermostId?: string;
+    slackId?: string;
+  };
+  /**
    * Optional stack identity (IAW A.5.3, cortex#113). Populated only when the
    * input was cortex-shape AND the operator declared a `stack:` block.
    * Legacy bot.yaml input always yields `undefined`. See `deriveStackId` in
@@ -255,10 +268,68 @@ export function loadConfigWithAgents(path: string): LoadedConfig {
  *   5. Drop `trustedAgentBots:` (cortex expresses peer trust via per-agent
  *      `trust:` lists; legacy aggregation would lose the per-agent shape).
  */
+/**
+ * v2.0.0 cutover (cortex#297) — reject legacy `presence.<platform>.roles[]`,
+ * `presence.discord.dm`, and `agents[].roles[]` fields with an operator-
+ * actionable error pointing at `migrate-config`. Zod's default-strip
+ * behaviour would silently drop these fields post-cutover; legacy operators
+ * upgrading without running `migrate-config` first would see their auth
+ * configuration vanish without warning. Detection happens BEFORE Zod parse
+ * so the error message carries the exact field path operators see in their
+ * own cortex.yaml.
+ */
+function detectLegacyAuthorisationFields(raw: Record<string, unknown>): string[] {
+  const offenders: string[] = [];
+  const agents = raw.agents;
+  if (!Array.isArray(agents)) return offenders;
+  for (let i = 0; i < agents.length; i++) {
+    const agent = agents[i] as Record<string, unknown> | undefined;
+    if (!agent || typeof agent !== "object") continue;
+    if (Array.isArray(agent.roles) && agent.roles.length > 0) {
+      offenders.push(`agents[${i}].roles[]`);
+    }
+    const presence = agent.presence as Record<string, unknown> | undefined;
+    if (!presence || typeof presence !== "object") continue;
+    for (const platform of ["discord", "mattermost", "slack"] as const) {
+      const block = presence[platform] as Record<string, unknown> | undefined;
+      if (!block || typeof block !== "object") continue;
+      if (Array.isArray(block.roles) && block.roles.length > 0) {
+        offenders.push(`agents[${i}].presence.${platform}.roles[]`);
+      }
+      if (block.defaultRole !== undefined) {
+        offenders.push(`agents[${i}].presence.${platform}.defaultRole`);
+      }
+      if (platform === "discord" && block.dm !== undefined) {
+        offenders.push(`agents[${i}].presence.discord.dm`);
+      }
+    }
+  }
+  // Top-level policy.parallel_mode_enabled retired with the parallel-mode
+  // plumbing in cortex#297; surface a clear error for any leftover flag.
+  const policy = raw.policy as Record<string, unknown> | undefined;
+  if (policy && typeof policy === "object" && "parallel_mode_enabled" in policy) {
+    offenders.push("policy.parallel_mode_enabled");
+  }
+  return offenders;
+}
+
 function loadCortexShape(
   raw: Record<string, unknown>,
   networks: NetworkFile[],
 ): LoadedConfig {
+  // v2.0.0 cutover (cortex#297) — reject legacy authorisation fields with a
+  // clear pointer at the migrate-config CLI BEFORE Zod's strip-by-default
+  // semantics silently drop them.
+  const legacyOffenders = detectLegacyAuthorisationFields(raw);
+  if (legacyOffenders.length > 0) {
+    throw new Error(
+      `cortex.yaml carries legacy v1.x authorisation fields no longer supported in v2.0.0:\n` +
+        legacyOffenders.map((f) => `  - ${f}`).join("\n") +
+        `\n\nRun \`bun src/cli/cortex/commands/migrate-config.ts <your-config.yaml>\` first to ` +
+        `synthesise the new top-level \`policy:\` block (principals[] + roles[]), then re-launch cortex. ` +
+        `See docs/design-policy-cutover.md §16 for the schema delta.`,
+    );
+  }
   // Schema-strict parse. Any legacy field at the top level fails here with
   // the operator-friendly migration message baked into CortexConfigSchema.
   const cortexConfig: CortexConfig = CortexConfigSchema.parse(raw);
@@ -285,15 +356,10 @@ function loadCortexShape(
     ...(cortexConfig.operator.displayName !== undefined && {
       operatorName: cortexConfig.operator.displayName,
     }),
-    ...(cortexConfig.operator.discordId !== undefined && {
-      operatorDiscordId: cortexConfig.operator.discordId,
-    }),
-    ...(cortexConfig.operator.mattermostId !== undefined && {
-      operatorMattermostId: cortexConfig.operator.mattermostId,
-    }),
-    ...(cortexConfig.operator.slackId !== undefined && {
-      operatorSlackId: cortexConfig.operator.slackId,
-    }),
+    // v2.0.0 cutover (cortex#297) — `operator*Id` fields retired from
+    // BotConfig.agent. Operator's platform-side ids surface through
+    // `LoadedConfig.operator` (see return value below); the boot path in
+    // cortex.ts reads them from there.
     dataResidency: cortexConfig.operator.dataResidency,
     personaFile: firstAgent.persona,
   };
@@ -327,6 +393,19 @@ function loadCortexShape(
   return {
     config: BotConfigSchema.parse(merged),
     inlineAgents: [...cortexConfig.agents],
+    // v2.0.0 (cortex#297) — surface operator platform ids for the boot path.
+    operator: {
+      id: cortexConfig.operator.id,
+      ...(cortexConfig.operator.discordId !== undefined && {
+        discordId: cortexConfig.operator.discordId,
+      }),
+      ...(cortexConfig.operator.mattermostId !== undefined && {
+        mattermostId: cortexConfig.operator.mattermostId,
+      }),
+      ...(cortexConfig.operator.slackId !== undefined && {
+        slackId: cortexConfig.operator.slackId,
+      }),
+    },
     // IAW A.5.3 — surface the validated `stack:` block to the boot path.
     // Always carry-through (even when undefined) keeps callers' destructuring
     // simple: `const { stack } = loadConfigWithAgents(path)` is safe whether

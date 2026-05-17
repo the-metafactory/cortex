@@ -36,11 +36,9 @@ import { z } from "zod/v4";
 
 import { CapabilitySchema } from "./capability";
 import {
-  DMConfigSchema,
   NetworkClaudeSchema,
   NetworkCloudSchema,
   NetworkFileSchema,
-  RoleSchema,
 } from "./config";
 import { NKEY_PUBKEY_REGEX } from "./nkey";
 import { LETTER_PREFIX_ID_REGEX } from "./id";
@@ -156,23 +154,12 @@ export const DiscordPresenceSchema = z.object({
   /** Post agent events to #agent-log. Default: false (opt-in). */
   enableAgentLog: z.boolean().default(false),
   /**
-   * Platform-side role allowlists. Empty = all users get full access
-   * (backward compat with grove-v2). Architecture §9.3: this restricts the
-   * parent agent's `roles` to the subset that maps onto this platform's
-   * users — it never widens.
+   * v2.0.0 cutover (cortex#297) — `roles[]`, `defaultRole`, and `dm` retired.
+   * Per-adapter authorisation now flows through the top-level `policy:` block
+   * (`PolicyPrincipalSchema` / `PolicyRoleSchema`). Operators upgrading from
+   * <v2.0.0 MUST run `bun src/cli/cortex/commands/migrate-config.ts` first.
+   * See `docs/design-policy-cutover.md` §16.
    */
-  roles: z.array(RoleSchema).default([]),
-  /**
-   * Role applied to users not listed in any role. Default `"allow-all"` is
-   * preserved verbatim from grove-v2 to keep `migrate-config` (MIG-7.2e)
-   * a pure-translation step. Cortex deployments that want secure-by-default
-   * should set this to `"denied"` (or a named role) in their `cortex.yaml`.
-   * Flipping the default value is a deliberate-behaviour-change decision
-   * tracked as a follow-up — not part of the schema-flip PR.
-   */
-  defaultRole: z.string().default("allow-all"),
-  /** G-300: DM privilege configuration. */
-  dm: emptyDefault(DMConfigSchema),
   /**
    * F-11: Optional Discord role id to mention on `severity = 'ping'`
    * notifications. Unset → plain channel post with no mention.
@@ -268,9 +255,10 @@ export const MattermostPresenceSchema = z.object({
   pollIntervalMs: z.number().int().positive().default(3000),
   /** Mattermost user ids allowed to trigger the bot. Empty = allow all. */
   allowedUsers: z.array(z.string()).default([]),
-  /** Platform-side role config (see DiscordPresenceSchema.roles). */
-  roles: z.array(RoleSchema).default([]),
-  defaultRole: z.string().default("allow-all"),
+  /**
+   * v2.0.0 cutover (cortex#297) — `roles[]` + `defaultRole` retired.
+   * Authorisation flows through `policy.principals[]` / `policy.roles[]`.
+   */
 });
 
 export type MattermostPresence = z.infer<typeof MattermostPresenceSchema>;
@@ -364,9 +352,10 @@ export const SlackPresenceSchema = z.object({
    * in `SlackAdapter`).
    */
   trustedBotIds: z.array(z.coerce.string()).default([]),
-  /** Platform-side role config (see DiscordPresenceSchema.roles). */
-  roles: z.array(RoleSchema).default([]),
-  defaultRole: z.string().default("allow-all"),
+  /**
+   * v2.0.0 cutover (cortex#297) — `roles[]` + `defaultRole` retired.
+   * Authorisation flows through `policy.principals[]` / `policy.roles[]`.
+   */
   /**
    * MIG-3b mirror: NATS subject patterns this Slack adapter renders to
    * chat. Empty/undefined → adapter never matches in the surface-router.
@@ -534,11 +523,12 @@ export const AgentSchema = z.object({
    */
   persona: z.string().min(1),
   /**
-   * Cortex-wide capability set. Each role string maps to a capability bundle
-   * (defined elsewhere). Architecture §9.3: this is the agent's **maximum**
-   * capability set; presences may further restrict.
+   * v2.0.0 cutover (cortex#297) — `AgentSchema.roles[]` retired.
+   * Authorisation flows through `policy.principals[<agent_id>].role[]` →
+   * `policy.roles[].capabilities[]`. The agent block no longer carries
+   * an authorisation surface; capability declarations live in the
+   * top-level `policy:` block.
    */
-  roles: z.array(z.string().min(1)).default([]),
   /**
    * Peer agents this agent trusts (by logical agent id). When an inbound
    * message arrives from a trusted agent's platform user, the receiving
@@ -1531,37 +1521,9 @@ export const PolicySchema = z.object({
   principals: z.array(PolicyPrincipalSchema).default([]),
   roles: z.array(PolicyRoleSchema).default([]),
   federated: PolicyFederatedSchema.optional(),
-  /**
-   * IAW Phase C.2b-242a (cortex#296) — parallel-mode opt-in flag for
-   * the policy cutover validation window.
-   *
-   * When `false` (default), adapters run the legacy role-resolver
-   * gate ONLY. This preserves pre-cutover behaviour for every
-   * deployment that hasn't yet run `migrate-config` (cortex#295) —
-   * the new PolicyEngine is constructed but not consulted on the
-   * adapter side.
-   *
-   * When `true`, each adapter consults BOTH the legacy role-resolver
-   * AND the PolicyEngine on every inbound message. The effective
-   * decision is the most-restrictive intersection (allow only if
-   * both gates allow — `docs/design-policy-cutover.md` §9.1 security
-   * default). Disagreements emit `system.access.disagreement`
-   * envelopes carrying both verdicts, surfacing mis-migrations on
-   * the dashboard before cortex#297 (242b) retires the legacy gate.
-   *
-   * Operator pre-flight (§9.1): `migrate-config --check` (cortex#295)
-   * MUST pass before flipping this to `true`. Without the pre-flight
-   * every previously-authorised user the legacy gate knew about but
-   * isn't mapped to a `policy.principals[]` entry yet would be
-   * denied by intersection-wins. The flag is opt-in deliberately so
-   * operators commit to parallel-mode rollout after they've validated
-   * the migration locally.
-   *
-   * Retirement: cortex#297 (242b) removes both the flag AND the
-   * parallel-mode plumbing in adapters — PolicyEngine becomes the
-   * sole gate and this knob's surface disappears.
-   */
-  parallel_mode_enabled: z.boolean().default(false),
+  // v2.0.0 cutover (cortex#297) — `parallel_mode_enabled` retired with
+  // the parallel-mode plumbing in adapters. PolicyEngine is the sole
+  // authorisation gate; legacy role-resolver is gone.
 }).superRefine((policy, ctx) => {
   // Per-offender path emission so a YAML-aware loader can render
   // the error inline at the bad token (Echo cortex#219 round 1).
@@ -2037,19 +1999,16 @@ export type CortexConfig = z.infer<typeof CortexConfigSchema>;
 // =============================================================================
 
 export {
-  DMConfigSchema,
   NetworkClaudeSchema,
   NetworkCloudSchema,
   NetworkFileSchema,
-  RoleSchema,
 };
 
 /**
  * IAW Phase A.5 re-exports — the stack identity primitive ships in its own
  * module (`./stack.ts`) for tighter ownership, but downstream code that
  * already pulls `CortexConfigSchema` from this file shouldn't need a second
- * import path. Mirror the `DMConfigSchema` / `NetworkClaudeSchema` re-export
- * pattern above.
+ * import path. Mirror the `NetworkClaudeSchema` re-export pattern above.
  */
 export { StackConfigSchema, deriveStackId } from "./stack";
 export type { StackConfig, DerivedStackId, DeriveStackIdInput } from "./stack";

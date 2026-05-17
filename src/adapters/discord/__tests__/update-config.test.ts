@@ -21,7 +21,6 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
 import type { BotConfig } from "../../../common/types/config";
-import { DMConfigSchema } from "../../../common/types/config";
 import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
 
 let originalLog: typeof console.log;
@@ -48,9 +47,6 @@ function makePresence(overrides: Partial<DiscordPresence> = {}): DiscordPresence
     logChannelId: "ch-log",
     contextDepth: 5,
     enableAgentLog: false,
-    roles: [],
-    defaultRole: "allow-all",
-    dm: DMConfigSchema.parse({}),
     trustedBotIds: [],
     surfaceSubjects: [],
     ...overrides,
@@ -62,7 +58,6 @@ function makeAgent(presence: DiscordPresence, overrides: Partial<Agent> = {}): A
     id: "luna",
     displayName: "Luna",
     persona: "(test)",
-    roles: [],
     trust: [],
     presence: { discord: presence },
     ...overrides,
@@ -90,9 +85,7 @@ function makeBotConfig(overrides: Partial<{
         logChannelId: "ch-log",
         contextDepth: overrides.contextDepth ?? 5,
         enableAgentLog: false,
-        roles: [],
         defaultRole: overrides.defaultRole ?? "allow-all",
-        dm: DMConfigSchema.parse({}),
       },
     ],
   } as unknown as BotConfig;

@@ -618,10 +618,8 @@ describe("convertBotYaml — schema-sourced defaults", () => {
     const d = result.cortex.agents[0]!.presence.discord!;
     expect(d.contextDepth).toBe(10);
     expect(d.enableAgentLog).toBe(false);
-    expect(d.defaultRole).toBe("allow-all");
     expect(d.enabled).toBe(true);
-    // dm block defaults from DMConfigSchema (operatorRole defaulted from DMRoleSchema)
-    expect(d.dm.defaultRole).toBe("denied");
+    // v2.0.0 (cortex#297) — `defaultRole` / `dm` retired from presence.
   });
 
   test("mattermost presence fills schema defaults for unspecified fields", () => {
@@ -633,7 +631,7 @@ describe("convertBotYaml — schema-sourced defaults", () => {
     const m = result.cortex.agents[0]!.presence.mattermost!;
     expect(m.callbackPort).toBe(8080);
     expect(m.pollIntervalMs).toBe(3000);
-    expect(m.defaultRole).toBe("allow-all");
+    // v2.0.0 (cortex#297) — `defaultRole` retired from presence.
     expect(m.allowedUsers).toEqual([]);
     expect(m.channels).toEqual([]);
   });

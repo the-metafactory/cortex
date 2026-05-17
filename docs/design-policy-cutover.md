@@ -1,6 +1,6 @@
 # Design — v2.0.0 policy cutover (cortex#243 + cortex#242)
 
-**Status:** ratified — all 8 design questions resolved (§13); pressure-tested against IoAW future surfaces (§15); schema delta locked (§16)
+**Status:** shipped — v2.0.0 cutover landed in cortex#297. Legacy `roles[]` / `defaultRole` / `dm` removed from every adapter shape; `role-resolver.ts` retired; PolicyEngine is the sole authorisation gate; `parallel_mode_enabled` + `system.access.disagreement` envelope retired with it. Operators upgrading from <v2.0.0 MUST run `bun src/cli/cortex/commands/migrate-config.ts <config.yaml>` first.
 **Owners:** Andreas + Luna
 **Targets:** cortex#243 (migrate-config CLI extension), cortex#242 (breaking schema removal + role-resolver retirement)
 
