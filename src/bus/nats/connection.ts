@@ -157,11 +157,21 @@ export class NatsLink {
 
   /**
    * Close the connection cleanly. Drains in-flight subscriptions before
-   * disconnecting (per nats.js convention). Idempotent. Drain is bounded
-   * by `drainTimeoutMs` (default 5 s) so an unreachable server can't hang
-   * process exit.
+   * disconnecting (per nats.js convention). Idempotent.
+   *
+   * Both the `drain()` AND the `statusLoop` join are bounded by their own
+   * timeouts so an unreachable server can't hang process exit. The status
+   * loop is the load-bearing one — `for await (... status())` doesn't
+   * always end promptly under `reconnect: true` (pilot#129 root cause:
+   * status iteration kept the loop pinned through reconnects, blocking
+   * every downstream `await link.close()`). Bounding both keeps the
+   * close() contract — "resolves within (drainTimeout + statusTimeout)
+   * worst case, regardless of network state" — visible at the type level.
    */
-  async close(drainTimeoutMs = 5_000): Promise<void> {
+  async close(
+    drainTimeoutMs = 5_000,
+    statusTimeoutMs = 2_000,
+  ): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     try {
@@ -182,10 +192,29 @@ export class NatsLink {
       );
     }
     // Wait for the status loop to drain so close() is deterministic.
+    // Bounded by `statusTimeoutMs` so a hung `for await (... status())`
+    // (cortex#317 — pilot#129 root cause: nats.js status iterator doesn't
+    // end promptly under reconnect:true) can't pin downstream `await
+    // link.close()` callers. On budget miss, emit an operator-actionable
+    // stderr warning and let the loop drain in the background — process
+    // exit cleans up the orphaned iterator regardless.
+    let statusTimer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await this.statusLoop;
+      await Promise.race([
+        this.statusLoop,
+        new Promise<void>((resolve) => {
+          statusTimer = setTimeout(() => {
+            process.stderr.write(
+              `WARNING: nats-connection: "${this.name}" status loop exceeded ${statusTimeoutMs}ms during close() — continuing in background; result not held up\n`,
+            );
+            resolve();
+          }, statusTimeoutMs);
+        }),
+      ]);
     } catch {
       // Status loop logs its own errors; close() shouldn't fail because of them.
+    } finally {
+      if (statusTimer !== undefined) clearTimeout(statusTimer);
     }
   }
 

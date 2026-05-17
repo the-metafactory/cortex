@@ -361,6 +361,112 @@ describe("NatsLink", () => {
       await link.close();
     });
 
+    // (skip — bounded-statusLoop tests below)
+    test.skip("__bounded-statusLoop-tests-placeholder__", async () => {});
+  });
+
+  describe("bounded statusLoop (cortex#317)", () => {
+    // Builds a fake where drain() succeeds but the status iterator NEVER
+    // closes — simulates the pilot#129 root cause where nats.js
+    // `for await (... status())` doesn't end promptly under
+    // `reconnect: true`. Pre-fix `close()` would await statusLoop forever;
+    // post-fix it bounds with statusTimeoutMs and emits a stderr warning.
+    function makeHungStatusConnection() {
+      const statusIterator = (async function* () {
+        // Hang on a promise that never resolves — mimics the unresponsive
+        // status iterator from pilot#129's diagnostic trace.
+        await new Promise<never>(() => {});
+        yield { type: "x", data: null };
+      })();
+      const drain = mock(async () => {
+        // Drain itself succeeds — only statusLoop is hung.
+      });
+      const publish = mock(() => {});
+      const fakeNc = {
+        status: () => statusIterator,
+        drain,
+        publish,
+      } as unknown as NatsConnection;
+      return { nc: fakeNc, drain };
+    }
+
+    test("close() resolves within statusTimeoutMs when status loop hangs", async () => {
+      const fake = makeHungStatusConnection();
+      const link = await NatsLink.connect({
+        url: "nats://localhost:4222",
+        connectImpl: async () => fake.nc,
+      });
+      const stderrWrites: string[] = [];
+      const originalStderrWrite = process.stderr.write;
+      process.stderr.write = (chunk: unknown) => {
+        stderrWrites.push(String(chunk));
+        return true;
+      };
+      try {
+        const start = Date.now();
+        await link.close(/* drainTimeoutMs */ 100, /* statusTimeoutMs */ 100);
+        const elapsed = Date.now() - start;
+        // Drain returns immediately (mock resolves sync); status loop is
+        // bounded at 100ms. Total budget: ~100ms + slack. Pre-fix this
+        // would hang forever — we assert <500ms to leave generous CI slack.
+        expect(elapsed).toBeLessThan(500);
+      } finally {
+        process.stderr.write = originalStderrWrite;
+      }
+      // Warning emitted on stderr with operator-actionable text.
+      const warning = stderrWrites.find((w) =>
+        w.includes("status loop exceeded"),
+      );
+      expect(warning).toBeDefined();
+      expect(warning).toContain("WARNING");
+      expect(warning).toContain("continuing in background");
+    });
+
+    test("close() is fast (no warning) when status loop drains promptly", async () => {
+      // Healthy case: makeFakeConnection's drain calls closeStatus(), which
+      // makes the iterator return null → statusLoop completes immediately.
+      // This is the 99% path — we verify the new bounded-race doesn't add
+      // a perceptible delay or spurious warning.
+      const fake = makeFakeConnection();
+      const link = await NatsLink.connect({
+        url: "nats://localhost:4222",
+        connectImpl: async () => fake.nc,
+      });
+      const stderrWrites: string[] = [];
+      const originalStderrWrite = process.stderr.write;
+      process.stderr.write = (chunk: unknown) => {
+        stderrWrites.push(String(chunk));
+        return true;
+      };
+      try {
+        const start = Date.now();
+        await link.close();
+        const elapsed = Date.now() - start;
+        expect(elapsed).toBeLessThan(100);
+      } finally {
+        process.stderr.write = originalStderrWrite;
+      }
+      // Zero stderr warnings on the healthy path.
+      const warnings = stderrWrites.filter((w) =>
+        w.includes("status loop exceeded"),
+      );
+      expect(warnings).toEqual([]);
+    });
+  });
+
+  describe("creds-auth tilde (re-opened, was nested in creds-auth block above)", () => {
+    let tmpDir: string;
+    let credsFile: string;
+    beforeEach(() => {
+      tmpDir = mkdtempSync(join(tmpdir(), "natslink-creds-bound-"));
+      credsFile = join(tmpDir, "user.creds");
+      writeFileSync(credsFile, FAKE_CREDS_CONTENT, "utf8");
+      chmodSync(credsFile, 0o600);
+    });
+    afterEach(() => {
+      rmSync(tmpDir, { recursive: true, force: true });
+    });
+
     test("leading ~ in credsPath expands to homedir", async () => {
       // Place a creds file directly under $HOME so the ~-relative path
       // resolves to a real existing file. Cleanup at teardown.
