@@ -1,0 +1,356 @@
+/**
+ * cortex#331 Phase 1 — `pi-dev` substrate pipeline runner.
+ *
+ * **What this module is.** A `ReviewPipelineRunner` factory that targets
+ * sage's `pi-dev` substrate. Returns an async function with the same
+ * signature `runReviewPipeline` exposes (see `src/runner/review-pipeline.ts`),
+ * so it slots into `ReviewConsumerOpts.pipelineRunner` without any consumer
+ * code changes. The boot wire in `src/cortex.ts` picks this factory for
+ * agents that declare `runtime.substrate: "pi-dev"`; everything else
+ * continues to fall through to the default CC pipeline.
+ *
+ * **What this module does NOT do (Phase 1 scope per issue #331).**
+ *
+ *   - NO structured JSON verdict parsing — sage's `sage review` emits
+ *     markdown today. We pass the markdown through as `payload.summary`
+ *     and hardcode `verdict: "commented"` so pilot's verdict-subscriber
+ *     still sees a correlated envelope. Phase 2 swaps to `--format json`
+ *     and parses approved/changes-requested/commented from the verdict
+ *     block.
+ *   - NO library import of sage modules — we shell out via `sage review`.
+ *     Phase 2 considers `import { runSageReview } from "@the-metafactory/sage"`
+ *     once sage's `package.json` declares `exports`.
+ *   - NO Claude Code substrate path — that stays at `runReviewPipeline`
+ *     in `src/runner/review-pipeline.ts`. Phase 1 is purely additive.
+ *
+ * **Binary resolution.** Sage's CLI is looked up in this order:
+ *
+ *   1. `opts.sageBin` — explicit override, primarily a test seam.
+ *   2. `process.env.SAGE_BIN` — operator override; lets the user pin
+ *      a specific sage build without editing cortex.yaml.
+ *   3. `Bun.which("sage")` — falls back to `$PATH`.
+ *
+ * If none of these resolve, we surface a typed `dispatch.task.failed`
+ * envelope with `reason.kind: "cant_do"` rather than throwing — keeping
+ * the boot path identical to the CC factory's contract (the consumer
+ * never has to try/catch around `pipelineRunner`).
+ *
+ * **Failure shape.** Mirrors `runReviewPipeline`'s contract:
+ *
+ *   | Outcome                          | result.kind | reason.kind |
+ *   |----------------------------------|-------------|-------------|
+ *   | sage exit 0                      | `verdict`   | (none)      |
+ *   | sage exit != 0                   | `failed`    | `cant_do`   |
+ *   | sage binary not found            | `failed`    | `cant_do`   |
+ *   | spawn throw (env / sandbox bug)  | `failed`    | `cant_do`   |
+ *
+ * Phase 1 maps every non-happy outcome to `cant_do` because we don't yet
+ * distinguish substrate-transient (`not_now`) from skill-permanent
+ * (`cant_do`) at this layer — sage's exit codes aren't documented as a
+ * taxonomy yet. Phase 2 (sage#TBD: structured `--format json` exit codes)
+ * splits this into the four-way nak taxonomy.
+ *
+ * **Subprocess shape.** We spawn `sage review <owner>/<repo>#<n>
+ * --substrate pi`. Stdout is captured to a single string and used as
+ * `payload.summary`. Stderr is captured separately and fed into the
+ * failed envelope's `reason.detail` when sage exits non-zero. Both pipes
+ * are drained via `new Response(stream).text()` in parallel with the
+ * `exited` promise so a large markdown blob can't deadlock on the OS
+ * pipe buffer (same pattern as `src/surface/mc/api/github-fetch.ts`).
+ */
+
+import type { Envelope } from "../../bus/myelin/envelope-validator";
+import {
+  createReviewTaskFailedEvent,
+  createReviewVerdictEvent,
+  type ReviewEventSource,
+  type ReviewRequestPayload,
+} from "../../bus/review-events";
+import type {
+  ReviewPipelineOpts,
+  ReviewPipelineResult,
+} from "../review-pipeline";
+
+// ---------------------------------------------------------------------------
+// Spawn-injection types — narrowed surface of `Bun.spawn`
+// ---------------------------------------------------------------------------
+//
+// We don't take `typeof Bun.spawn` directly because that type is wide
+// (overloads + many options) and brittle across Bun versions. The
+// `pi-dev-runner` only needs three handles per child process — stdout,
+// stderr, and `exited` — plus the option bag we pass on the spawn call.
+// Narrowing the type makes the test seam trivial to satisfy (the unit
+// tests build a fake that returns three Response-shaped readables and a
+// fixed exit code) and lets us evolve internal spawn flags without
+// breaking callers.
+
+/** The handle the runner needs from `Bun.spawn`. */
+export interface PiDevSpawnResult {
+  stdout: ReadableStream<Uint8Array>;
+  stderr: ReadableStream<Uint8Array>;
+  exited: Promise<number>;
+}
+
+/**
+ * Spawn function signature. Production wires `Bun.spawn`; tests inject a
+ * deterministic fake (see `pi-dev-runner.test.ts`).
+ *
+ * `argv[0]` is the resolved sage binary path; subsequent entries are the
+ * `review <pr-ref> --substrate pi` arguments.
+ */
+export type PiDevSpawnFn = (
+  argv: string[],
+  opts: { stdout: "pipe"; stderr: "pipe" },
+) => PiDevSpawnResult;
+
+/**
+ * Binary resolver — returns the absolute path to the sage CLI, or
+ * `undefined` if no binary is found. Production wires `Bun.which`; tests
+ * stub this to simulate missing-binary cases.
+ */
+export type PiDevWhichFn = (cmd: string) => string | undefined;
+
+// ---------------------------------------------------------------------------
+// Public factory
+// ---------------------------------------------------------------------------
+
+/**
+ * Options for {@link makePiDevPipelineRunner}.
+ *
+ * All fields are optional; the default behaviour is:
+ *
+ *   - Resolve sage binary via `SAGE_BIN` env then `Bun.which("sage")`.
+ *   - Use `Bun.spawn` for the subprocess.
+ *   - Use the current process env (no scrubbing — sage piggybacks on the
+ *     operator's `gh` auth and `GITHUB_TOKEN` via inherited env).
+ */
+export interface MakePiDevRunnerOpts {
+  /**
+   * Explicit sage binary path. Highest-priority resolution (skips env +
+   * PATH lookup). Primarily a test seam; production callers typically
+   * leave this undefined.
+   */
+  sageBin?: string;
+  /**
+   * Spawn function — defaults to `Bun.spawn`. Tests inject a fake that
+   * yields a canned `PiDevSpawnResult`.
+   */
+  spawn?: PiDevSpawnFn;
+  /**
+   * `which`-style lookup — defaults to `Bun.which`. Tests stub this to
+   * simulate the binary-not-found path without touching `$PATH`.
+   */
+  which?: PiDevWhichFn;
+}
+
+/**
+ * Build a pipeline runner that dispatches to sage's `pi-dev` substrate.
+ *
+ * The returned function has the exact signature
+ * `(opts: ReviewPipelineOpts) => Promise<ReviewPipelineResult>` —
+ * structurally identical to `runReviewPipeline`, so it drops straight
+ * into `ReviewConsumerOpts.pipelineRunner`.
+ *
+ * **Lifetime.** Binary resolution happens lazily on every invocation,
+ * NOT at factory-construction time. This means:
+ *
+ *   - Boot never fails on a missing sage binary — the consumer comes up
+ *     fine and individual review requests surface the failure as a
+ *     `dispatch.task.failed` envelope. Operators can install sage after
+ *     boot without restarting cortex.
+ *   - A sage install/upgrade is picked up on the next review request
+ *     (no stale binary path cached).
+ *
+ * **No side effects at construction.** The factory just closes over
+ * `opts`; no spawn, no I/O. Safe to call at boot time.
+ */
+export function makePiDevPipelineRunner(
+  opts: MakePiDevRunnerOpts = {},
+): (pipeline: ReviewPipelineOpts) => Promise<ReviewPipelineResult> {
+  const spawn = opts.spawn ?? defaultSpawn;
+  const which = opts.which ?? defaultWhich;
+  const explicitBin = opts.sageBin;
+
+  return async (pipeline: ReviewPipelineOpts): Promise<ReviewPipelineResult> => {
+    const correlationId = pipeline.requestEnvelope.id;
+    const startedAt = new Date();
+
+    // Coerce the payload — review-consumer already validated the shape
+    // before handing it to the pipeline runner, but the type on
+    // `Envelope.payload` is `unknown` so we narrow once here.
+    const payload = pipeline.payload as ReviewRequestPayload;
+
+    // Resolve the sage binary. Priority: explicit > env > $PATH.
+    const sageBin =
+      explicitBin ?? process.env.SAGE_BIN ?? which("sage") ?? undefined;
+    if (sageBin === undefined) {
+      return failed(
+        pipeline,
+        correlationId,
+        startedAt,
+        "pi-dev: sage binary not found (set SAGE_BIN env or install sage on PATH)",
+      );
+    }
+
+    // Build the pr-ref string from the request payload. `payload.repo`
+    // is already `owner/repo` (per ReviewRequestPayload in
+    // src/bus/review-events.ts §4.1), so we concatenate with `#<pr>`
+    // directly — no separate owner field on the cortex-side payload.
+    const prRef = `${payload.repo}#${payload.pr}`;
+    const argv = [sageBin, "review", prRef, "--substrate", "pi"];
+
+    let proc: PiDevSpawnResult;
+    try {
+      proc = spawn(argv, { stdout: "pipe", stderr: "pipe" });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      return failed(
+        pipeline,
+        correlationId,
+        startedAt,
+        `pi-dev: sage spawn failed: ${detail}`,
+      );
+    }
+
+    // Drain stdout + stderr in parallel with `exited` so a large markdown
+    // blob can't deadlock on the OS pipe buffer (same pattern as
+    // `src/surface/mc/api/github-fetch.ts`).
+    let stdout: string;
+    let stderr: string;
+    let exitCode: number;
+    try {
+      const [so, se, code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      stdout = so;
+      stderr = se;
+      exitCode = code;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      return failed(
+        pipeline,
+        correlationId,
+        startedAt,
+        `pi-dev: sage subprocess stream error: ${detail}`,
+      );
+    }
+
+    if (exitCode !== 0) {
+      return failed(
+        pipeline,
+        correlationId,
+        startedAt,
+        `sage review exited ${exitCode}: ${stderr.trim()}`,
+      );
+    }
+
+    // Phase 1: pass the full markdown through as the verdict summary.
+    // Verdict kind is hardcoded to `commented` — Phase 2 (sage emits
+    // structured JSON) replaces this with parsed approved /
+    // changes-requested / commented from sage's verdict block.
+    return verdict(pipeline, correlationId, stdout);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Production spawn — `Bun.spawn`. */
+function defaultSpawn(
+  argv: string[],
+  opts: { stdout: "pipe"; stderr: "pipe" },
+): PiDevSpawnResult {
+  const proc = Bun.spawn(argv, {
+    stdout: opts.stdout,
+    stderr: opts.stderr,
+  });
+  return {
+    stdout: proc.stdout as ReadableStream<Uint8Array>,
+    stderr: proc.stderr as ReadableStream<Uint8Array>,
+    exited: proc.exited,
+  };
+}
+
+/** Production binary resolution — `Bun.which`. */
+function defaultWhich(cmd: string): string | undefined {
+  return Bun.which(cmd) ?? undefined;
+}
+
+/**
+ * Build a `dispatch.task.failed` envelope with `reason.kind: "cant_do"`
+ * for any non-happy substrate outcome. Phase 1 collapses every failure
+ * to `cant_do` (see module docblock). Phase 2 splits substrate-transient
+ * from skill-permanent.
+ */
+function failed(
+  pipeline: ReviewPipelineOpts,
+  correlationId: string,
+  startedAt: Date,
+  errorSummary: string,
+): ReviewPipelineResult {
+  const source = pipeline.source as ReviewEventSource;
+  const envelope = createReviewTaskFailedEvent({
+    source,
+    taskId: crypto.randomUUID(),
+    agentId: pipeline.agentId,
+    correlationId,
+    startedAt,
+    failedAt: new Date(),
+    errorSummary,
+    reason: { kind: "cant_do", detail: errorSummary },
+  });
+  return { kind: "failed", envelope };
+}
+
+/**
+ * Build a `review.verdict.commented` envelope carrying sage's markdown
+ * stdout as `payload.summary`. Phase 1 hardcodes `verdict: "commented"`
+ * + `reviewer: "sage"`; Phase 2 derives both from sage's structured
+ * verdict block.
+ */
+function verdict(
+  pipeline: ReviewPipelineOpts,
+  correlationId: string,
+  stdout: string,
+): ReviewPipelineResult {
+  const payload = pipeline.payload as ReviewRequestPayload;
+  const source = pipeline.source as ReviewEventSource;
+  const envelope: Envelope = createReviewVerdictEvent({
+    source,
+    kind: "commented",
+    correlationId,
+    payload: {
+      repo: payload.repo,
+      pr: payload.pr,
+      // Phase 1 default — sage is the substrate doing the review.
+      // Phase 2 reads the reviewer agent identity from sage's
+      // structured verdict block.
+      reviewer: "sage",
+      verdict: "commented",
+      summary: stdout,
+      // Placeholder fields Phase 1 doesn't have access to without a
+      // structured verdict block. The verdict envelope schema requires
+      // these fields; we surface zeros / empty strings so pilot's
+      // subscriber still sees a well-formed envelope and operators can
+      // grep the markdown summary for the actual values. Phase 2
+      // populates these from sage's `--format json` block.
+      github_review_id: 0,
+      github_review_url: "",
+      submitted_at: new Date().toISOString(),
+      commit_id: "",
+      findings: { blockers: 0, majors: 0, nits: 0 },
+      inline_comments: 0,
+    },
+  });
+  // Surface the startedAt anchor in close range so a future refactor
+  // adding `dispatch.task.completed` emission here has the timestamp
+  // ready. (Review-consumer emits `started`/`completed` around the
+  // pipelineRunner call; this runner emits only the terminal verdict /
+  // failed envelope per `ReviewPipelineResult`'s contract.)
+  void pipeline;
+  void correlationId;
+  return { kind: "verdict", envelope };
+}

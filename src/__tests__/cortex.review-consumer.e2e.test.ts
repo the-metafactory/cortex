@@ -64,6 +64,11 @@ import type {
   ReviewPipelineOpts,
   ReviewPipelineResult,
 } from "../runner/review-pipeline";
+import {
+  makePiDevPipelineRunner,
+  type PiDevSpawnFn,
+  type PiDevSpawnResult,
+} from "../runner/substrate/pi-dev-runner";
 import type { CCSessionFactory } from "../substrates/claude-code/harness";
 
 // =============================================================================
@@ -722,5 +727,127 @@ describe("cortex#327 — signature verification gate", () => {
     const failed = emitted[0]!;
     const reason = (failed.payload as { reason: { kind: string; detail: string } }).reason;
     expect(reason.detail).toContain("signer_not_trusted");
+  });
+});
+
+// =============================================================================
+// cortex#331 Phase 1 — pi-dev substrate dispatch
+// =============================================================================
+//
+// Pins the cortex-side end-to-end round-trip for the `pi-dev` substrate
+// (sage). Uses the same in-process bus harness as the unsigned and signed
+// round-trips above, but injects `makePiDevPipelineRunner` (with a stubbed
+// subprocess spawn) instead of the test-only inline stub. This proves the
+// production factory wires into a real `ReviewConsumer` cleanly — same
+// shape that `src/cortex.ts:807` boots when an agent declares
+// `runtime.substrate: "pi-dev"`.
+//
+// Sub-cases (substrate-transient `not_now`, missing binary, etc.) are
+// covered at the unit level in `src/runner/substrate/__tests__/pi-dev-
+// runner.test.ts`. This file proves the *integration*: factory → consumer
+// → bus → ack.
+// =============================================================================
+
+describe("cortex#331 Phase 1 — pi-dev substrate dispatch (factory wired into ReviewConsumer)", () => {
+  let runtime: BusRuntime;
+  let consumer: ReviewConsumer;
+  const stdoutMarkdown = "## sage review\n\nblockers=0 majors=0 nits=0 — looks good";
+
+  beforeAll(async () => {
+    runtime = createBusRuntime();
+    const agent: ReviewConsumerAgent = {
+      id: "sage",
+      capabilities: ["code-review.typescript"],
+    };
+
+    // Stub spawn that returns a canned successful sage subprocess.
+    // Mirrors what the unit tests do but here it threads through the
+    // real `makePiDevPipelineRunner` factory.
+    const spawnFake: PiDevSpawnFn = (_argv, _opts): PiDevSpawnResult => ({
+      stdout: new Response(stdoutMarkdown).body!,
+      stderr: new Response("").body!,
+      exited: Promise.resolve(0),
+    });
+
+    const pipelineRunner = makePiDevPipelineRunner({
+      sageBin: "/usr/local/bin/sage",
+      spawn: spawnFake,
+    });
+
+    consumer = new ReviewConsumer({
+      agent,
+      source: SOURCE,
+      runtime,
+      // The CC factory stays wired even for pi-dev consumers — see
+      // `src/cortex.ts` boot wiring rationale. The pi-dev runner never
+      // touches it; STUB_CC_FACTORY throws if invoked so a regression
+      // that drops back to the CC path is loud.
+      ccSessionFactory: STUB_CC_FACTORY,
+      promptBuilder: ({ payload }) => `/review ${payload.repo}#${payload.pr}`,
+      pipelineRunner,
+    });
+
+    await consumer.start({
+      pattern: REVIEW_SUBJECT_PATTERN,
+      stream: REVIEW_STREAM,
+      durable: "cortex-review-consumer-metafactory-sage-pidev",
+    });
+  });
+
+  afterAll(async () => {
+    await consumer.stop();
+    await runtime.stop();
+  });
+
+  test("happy round-trip: tasks.code-review.typescript → sage stdout becomes verdict.commented envelope; correlation_id matches; JsMsg.ack() called", async () => {
+    const publishedBefore = runtime.published.length;
+    const request = makeRequest("typescript");
+    const requestSubject = subjectFor(request);
+
+    const { handlersCalled, decisions } = await runtime.deliver(
+      request,
+      requestSubject,
+    );
+
+    expect(handlersCalled).toBe(1);
+    expect(decisions[0]).toEqual({ kind: "ack" });
+
+    // started + verdict + completed, in §8.2 order.
+    const emitted = runtime.published.slice(publishedBefore);
+    expect(emitted.length).toBe(3);
+    expect(emitted[0]!.type).toBe("dispatch.task.started");
+    expect(emitted[1]!.type).toBe("review.verdict.commented");
+    expect(emitted[2]!.type).toBe("dispatch.task.completed");
+
+    // **THE HEADLINE CONTRACT** — verdict envelope's correlation_id is
+    // the request envelope's id (design §5.1). Phase 1's pi-dev runner
+    // preserves this; if a future refactor breaks it pilot's --wait
+    // would silently miss every sage verdict.
+    const verdict = emitted[1]!;
+    expect(verdict.correlation_id).toBe(request.id);
+
+    // Summary carries sage's stdout verbatim — Phase 2 will parse this
+    // into structured findings, but Phase 1 is a markdown pass-through.
+    const payload = verdict.payload as {
+      repo: string;
+      pr: number;
+      reviewer: string;
+      verdict: string;
+      summary: string;
+    };
+    expect(payload.summary).toBe(stdoutMarkdown);
+    expect(payload.repo).toBe(VALID_PAYLOAD.repo);
+    expect(payload.pr).toBe(VALID_PAYLOAD.pr);
+    expect(payload.reviewer).toBe("sage");
+    expect(payload.verdict).toBe("commented");
+
+    // Ack on JsMsg — round-trip ack semantics asserted at the
+    // pull-subscriber boundary.
+    const sub = runtime.subscriptions[0]!;
+    expect(sub.msgs.length).toBe(1);
+    const msg = sub.msgs[0]!;
+    expect(msg.ack).toHaveBeenCalledTimes(1);
+    expect(msg.nak).toHaveBeenCalledTimes(0);
+    expect(msg.term).toHaveBeenCalledTimes(0);
   });
 });

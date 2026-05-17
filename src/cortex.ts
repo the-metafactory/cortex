@@ -55,6 +55,7 @@ import {
 } from "./bus/review-consumer";
 import { verifySignedByChain } from "./bus/verify-signed-by-chain";
 import { CCSession } from "./runner/cc-session";
+import { makePiDevPipelineRunner } from "./runner/substrate/pi-dev-runner";
 
 import { DiscordAdapter } from "./adapters/discord";
 import { createRenderer, type Renderer } from "./renderers";
@@ -793,6 +794,24 @@ export async function startCortex(
               return { valid: false, reason: r.reason.kind } as const;
             };
 
+      // cortex#331 Phase 1 — substrate-aware pipelineRunner selection.
+      //
+      // Agents that declare `runtime.substrate: "pi-dev"` get the sage
+      // adapter wired in via `makePiDevPipelineRunner`. Every other agent
+      // (including those with the substrate field unset, which defaults
+      // to claude-code semantics) gets no `pipelineRunner` opt so the
+      // ReviewConsumer falls through to the existing `runReviewPipeline`
+      // → CC path (`ccSessionFactory` stays wired for that path; we do
+      // NOT remove it — see the issue's "out of scope" list).
+      //
+      // The pi-dev runner resolves its sage binary lazily at first use
+      // (see `pi-dev-runner.ts`'s lifetime note), so a missing sage on
+      // boot does not crash this loop — review requests surface the
+      // failure as `dispatch.task.failed` envelopes instead.
+      const substrate = agent.runtime?.substrate ?? "claude-code";
+      const pipelineRunner =
+        substrate === "pi-dev" ? makePiDevPipelineRunner({}) : undefined;
+
       const consumer = new ReviewConsumer({
         agent: consumerAgent,
         source: systemEventSource,
@@ -803,7 +822,10 @@ export async function startCortex(
         // into the public bus surface). Tests don't reach the factory
         // unless `processEnvelope` is invoked; the boot test in
         // `src/__tests__/cortex.review-consumer-boot.test.ts` only
-        // exercises instantiation + subscribe.
+        // exercises instantiation + subscribe. Stays wired even when a
+        // non-CC pipelineRunner is selected — the consumer's type still
+        // requires the factory, and the CC path remains the default
+        // fallthrough for non-pi-dev substrates.
         ccSessionFactory: (opts) => new CCSession(opts),
         // PR-6 has no policy hook — that's a future PR (sovereignty /
         // compliance gate). Until then the pipeline goes straight to CC.
@@ -811,6 +833,7 @@ export async function startCortex(
           // Minimal prompt — the real skill-aware builder lands in PR-8.
           // Echo's skill consumes `/review <owner/repo>#<pr>` style today.
           `/review ${payload.repo}#${payload.pr}`,
+        ...(pipelineRunner !== undefined && { pipelineRunner }),
         ...(signatureVerifier !== undefined && { signatureVerifier }),
       });
       reviewConsumers.push(consumer);
@@ -831,8 +854,13 @@ export async function startCortex(
       // on this consumer so operators can grep `signed=on/off` to confirm
       // their trust:[] config landed where they expected.
       const signedTag = signatureVerifier !== undefined ? "on" : "off";
+      // cortex#331 Phase 1 — surface the dispatching substrate so
+      // operators can grep `substrate=pi-dev` / `substrate=claude-code`
+      // to confirm sage agents (or any future substrate) actually
+      // received the substrate-aware factory. Unset substrate defaults
+      // to `claude-code` in the log (matches the runtime fallthrough).
       console.log(
-        `cortex: review consumer ready for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag}`,
+        `cortex: review consumer ready for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} substrate=${substrate}`,
       );
     } catch (err) {
       // Per CLAUDE.md: log every error. A single agent's consumer crash
