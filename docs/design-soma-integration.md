@@ -7,6 +7,10 @@
 
 ---
 
+![Soma + cortex/myelin — the two-axis substrate-independence claim](./diagrams/2026-05-17-soma-integration.png)
+
+> **The diagram above is the whole thesis in one glance.** Two orthogonal axes of substrate-independence: the *body axis* (one Soma assistant body → four substrate-native projections) and the *runtime axis* (cortex/myelin's M1–M7 stack with IAW phases). The join key (`policy.principals[].body: soma://...`) ties them together. The three bottom insets (A reinvention / B identity / C policy) are the load-bearing reconciliations §2–§4 unpack in prose. (Simplified thumbnail: [diagrams/2026-05-17-soma-integration-thumb.png](./diagrams/2026-05-17-soma-integration-thumb.png).)
+
 ## TL;DR
 
 The Internet of Agentic Work pipeline (cortex#110, Phases A→E) has been incrementally building **substrate independence at the runtime layer**:
