@@ -51,7 +51,9 @@ import {
 import {
   ReviewConsumer,
   type ReviewConsumerAgent,
+  type SignatureVerifier,
 } from "./bus/review-consumer";
+import { verifySignedByChain } from "./bus/verify-signed-by-chain";
 import { CCSession } from "./runner/cc-session";
 
 import { DiscordAdapter } from "./adapters/discord";
@@ -751,6 +753,46 @@ export async function startCortex(
           maxConcurrent: agent.runtime.maxConcurrent,
         }),
       };
+      // cortex#327 follow-up (D1) — build the per-agent signature verifier
+      // closure when this agent declares a non-empty `trust:[]` list.
+      //
+      // **Default-ON, fail-open posture.** Agents with `trust: []` (the
+      // shape that says "I accept anything from anyone the runtime
+      // delivered") get NO verifier — the gate in `ReviewConsumer.processEnvelope`
+      // is a no-op, matching the pre-#329 behaviour. Agents with at least
+      // one trusted peer get the verifier wired and the gate enforces.
+      // This is the one-way ratchet: as operators add `trust:` entries
+      // to their cortex.yaml, signature enforcement strengthens
+      // automatically without any flag toggling.
+      //
+      // The closure captures `trustResolver`, `agent.id`, and the
+      // configured operatorId — same triple the bus-peer harness
+      // (`src/substrates/bus-peer/harness.ts`) supplies to
+      // verifySignedByChain on its inbound path. `cryptoVerify: true`
+      // engages B.1c canonical-bytes verification on top of B.1a
+      // structural-trust resolution.
+      //
+      // Reason mapping: discriminated `ChainRejectionReason` → short
+      // grep-friendly string ("empty_chain", "signer_not_trusted",
+      // "crypto_verify_failed", etc.) so the structured stderr line
+      // landed in #329 carries the rejection class verbatim. The full
+      // myelin-side detail is logged separately by the trust resolver.
+      const agentTrustList = agent.trust ?? [];
+      const verifyOperatorId = reviewOperatorId;
+      const signatureVerifier: SignatureVerifier | undefined =
+        agentTrustList.length === 0
+          ? undefined
+          : async (envelope) => {
+              const r = await verifySignedByChain(envelope, {
+                resolver: trustResolver,
+                receivingAgentId: agent.id,
+                cryptoVerify: true,
+                operatorId: verifyOperatorId,
+              });
+              if (r.valid) return { valid: true } as const;
+              return { valid: false, reason: r.reason.kind } as const;
+            };
+
       const consumer = new ReviewConsumer({
         agent: consumerAgent,
         source: systemEventSource,
@@ -769,6 +811,7 @@ export async function startCortex(
           // Minimal prompt — the real skill-aware builder lands in PR-8.
           // Echo's skill consumes `/review <owner/repo>#<pr>` style today.
           `/review ${payload.repo}#${payload.pr}`,
+        ...(signatureVerifier !== undefined && { signatureVerifier }),
       });
       reviewConsumers.push(consumer);
       // Subscribe via the runtime's subscribePull helper. When the
@@ -784,8 +827,12 @@ export async function startCortex(
       });
       const flavorSummary =
         consumer.flavors.length > 0 ? consumer.flavors.join(",") : "(none)";
+      // D1 visibility: surface whether signature verification is enforced
+      // on this consumer so operators can grep `signed=on/off` to confirm
+      // their trust:[] config landed where they expected.
+      const signedTag = signatureVerifier !== undefined ? "on" : "off";
       console.log(
-        `cortex: review consumer ready for agent=${agent.id} flavors=[${flavorSummary}]`,
+        `cortex: review consumer ready for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag}`,
       );
     } catch (err) {
       // Per CLAUDE.md: log every error. A single agent's consumer crash
