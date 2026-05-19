@@ -719,8 +719,14 @@ export class DispatchHandler extends EventEmitter {
 
         // Tool-use progress (single edit-in-place message, cleared on
         // result). Attached per-attempt because each session is fresh.
-        // CCSessionLike's optional EventEmitter shape is exposed via
-        // the substrate harness contract — only attach when present.
+        // The `on()` shape is NOT declared on `CCSessionLike` (see
+        // cortex#364 for the planned widening); the real `CCSession`
+        // extends EventEmitter and emits `tool-use`, but the substrate
+        // contract is currently silent on this — the double-cast below
+        // bridges that gap. Only attach when present.
+        // TODO(cortex#364): remove double-cast once CCSessionLike
+        // declares optional `on()` — see #364 for the two proposed shapes
+        // (extend interface vs. emitter-shape adapter helper).
         const sessionAsEmitter = session as unknown as {
           on?: (event: string, listener: (...args: unknown[]) => void) => void;
         };
