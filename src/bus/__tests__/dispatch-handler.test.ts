@@ -6,6 +6,11 @@ import type { BotConfig } from "../../common/types/config";
 import type { Envelope } from "../myelin/envelope-validator";
 import type { MyelinRuntime } from "../myelin/runtime";
 import { validateEnvelope } from "../myelin/envelope-validator";
+import type {
+  CCSessionFactory,
+  CCSessionLike,
+} from "../../substrates/claude-code/harness";
+import type { CCSessionResult, CCSessionOpts } from "../../runner/cc-session";
 
 // Minimal config that satisfies BotConfig shape for testing
 function makeConfig(overrides: Partial<BotConfig> = {}): BotConfig {
@@ -549,6 +554,336 @@ describe("DispatchHandler — system.inbound.aborted emission (MIG-3.8 / C-104)"
     for (const env of runtime.publishes) {
       expect(validateEnvelope(env).ok).toBe(true);
     }
+
+    await handler.shutdown();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#360 — Chat-path CC failure retry. The dispatch-handler's sync path
+// used to die on the first CC timeout, surfacing a single apology with no
+// retry. We now retry transient (`not_now`) failures up to 3 attempts within
+// a 20-minute wall-clock budget, posting "Still working…" between attempts.
+// Terminal failures emit a `dispatch.task.failed` envelope for cross-path
+// observability parity with the review-consumer path.
+// ---------------------------------------------------------------------------
+
+/** Build a CCSessionLike fake that resolves to a fixed CCSessionResult. */
+function makeFakeSession(result: CCSessionResult): CCSessionLike {
+  const fake: CCSessionLike = {
+    start() {
+      return fake;
+    },
+    wait() {
+      return Promise.resolve(result);
+    },
+  };
+  return fake;
+}
+
+/** Factory that yields a different CCSessionResult per attempt. */
+function makeStubFactory(results: CCSessionResult[]): {
+  factory: CCSessionFactory;
+  spawnCount: () => number;
+  optsLog: () => CCSessionOpts[];
+} {
+  let index = 0;
+  const log: CCSessionOpts[] = [];
+  const factory: CCSessionFactory = (opts) => {
+    log.push(opts);
+    const result = results[index] ?? results[results.length - 1];
+    if (!result) {
+      throw new Error("makeStubFactory: results array is empty");
+    }
+    index++;
+    return makeFakeSession(result);
+  };
+  return {
+    factory,
+    spawnCount: () => index,
+    optsLog: () => log,
+  };
+}
+
+function abortedResult(overrides: Partial<CCSessionResult> = {}): CCSessionResult {
+  return {
+    success: false,
+    response: "",
+    exitCode: 1,
+    durationMs: 5_000,
+    aborted: true,
+    abortReason: "timeout",
+    ...overrides,
+  };
+}
+
+function successResult(overrides: Partial<CCSessionResult> = {}): CCSessionResult {
+  return {
+    success: true,
+    response: "All good — here's your answer.",
+    exitCode: 0,
+    durationMs: 1_000,
+    sessionId: "sess-123",
+    ...overrides,
+  };
+}
+
+describe("DispatchHandler — chat-path CC failure retry (cortex#360)", () => {
+  let originalWarn: typeof console.warn;
+  let originalError: typeof console.error;
+  let originalLog: typeof console.log;
+
+  beforeEach(() => {
+    originalWarn = console.warn;
+    originalError = console.error;
+    originalLog = console.log;
+    console.warn = () => {};
+    console.error = () => {};
+    console.log = () => {};
+  });
+
+  afterEach(() => {
+    console.warn = originalWarn;
+    console.error = originalError;
+    console.log = originalLog;
+  });
+
+  test("retry-then-success: aborts on attempt 1, succeeds on attempt 2", async () => {
+    const runtime = makeRecordingRuntime();
+    const { factory, spawnCount } = makeStubFactory([
+      abortedResult(),
+      successResult({ response: "Recovered on retry — here's your answer." }),
+    ]);
+
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      runtime,
+      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      ccSessionFactory: factory,
+    });
+
+    await handler.handleMessage(adapter, makeMsg({ content: "do the thing" }));
+
+    // Two CC spawns: the failing first attempt and the recovering second.
+    expect(spawnCount()).toBe(2);
+
+    // Operator-visible messages: one "Still working… (attempt 2/3)" then the
+    // final response. No apology message.
+    const texts = adapter.sentMessages.map((m) => m.text);
+    expect(texts.length).toBe(2);
+    expect(texts[0]).toBe("Still working… (attempt 2/3)");
+    expect(texts[1]).toBe("Recovered on retry — here's your answer.");
+    expect(texts.some((t) => t.startsWith("Sorry, I couldn't process"))).toBe(false);
+
+    // No dispatch.task.failed envelope on a recovered run.
+    const failed = runtime.publishes.filter(
+      (e) => e.type === "dispatch.task.failed",
+    );
+    expect(failed.length).toBe(0);
+
+    await handler.shutdown();
+  });
+
+  test("all-three-attempts-fail: emits dispatch.task.failed with kind=not_now", async () => {
+    const runtime = makeRecordingRuntime();
+    const { factory, spawnCount } = makeStubFactory([
+      abortedResult(),
+      abortedResult(),
+      abortedResult(),
+    ]);
+
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      runtime,
+      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      ccSessionFactory: factory,
+    });
+
+    await handler.handleMessage(adapter, makeMsg({ content: "do the thing" }));
+
+    // Three CC spawns total.
+    expect(spawnCount()).toBe(3);
+
+    const texts = adapter.sentMessages.map((m) => m.text);
+    // Two "Still working…" status messages (before attempts 2 and 3), then
+    // the final apology. No success message.
+    expect(texts).toEqual([
+      "Still working… (attempt 2/3)",
+      "Still working… (attempt 3/3)",
+      "Sorry, I couldn't process that. (exit code: 1)",
+    ]);
+
+    // Exactly one dispatch.task.failed envelope on the bus.
+    const failed = runtime.publishes.filter(
+      (e) => e.type === "dispatch.task.failed",
+    );
+    expect(failed.length).toBe(1);
+    const env = failed[0]!;
+    expect(env.source).toBe("metafactory.cortex.local");
+    const payload = env.payload as {
+      task_id: string;
+      agent_id: string;
+      reason: { kind: string; detail?: string };
+      error_summary: string;
+    };
+    expect(payload.agent_id).toBe("test-agent");
+    expect(payload.reason.kind).toBe("not_now");
+    expect(payload.reason.detail).toContain("aborted");
+    // Stable correlation_id across the retry chain — the envelope's
+    // correlation_id is the retry chain's load-bearing observability key.
+    expect(typeof env.correlation_id).toBe("string");
+    expect(env.correlation_id?.length ?? 0).toBeGreaterThan(0);
+    // Schema-valid envelope (drift-detection against vendored myelin schema).
+    expect(validateEnvelope(env).ok).toBe(true);
+
+    await handler.shutdown();
+  });
+
+  test("clean-success-attempt-1: no retry, no extra messages, no failed envelope", async () => {
+    const runtime = makeRecordingRuntime();
+    const { factory, spawnCount } = makeStubFactory([
+      successResult({ response: "Done — no drama." }),
+    ]);
+
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      runtime,
+      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      ccSessionFactory: factory,
+    });
+
+    await handler.handleMessage(adapter, makeMsg({ content: "do the thing" }));
+
+    // Exactly one CC spawn.
+    expect(spawnCount()).toBe(1);
+
+    // Exactly one Discord message: the success response. No "Still working…",
+    // no apology.
+    expect(adapter.sentMessages.length).toBe(1);
+    expect(adapter.sentMessages[0]!.text).toBe("Done — no drama.");
+
+    // No dispatch.task.failed envelope on a clean run.
+    const failed = runtime.publishes.filter(
+      (e) => e.type === "dispatch.task.failed",
+    );
+    expect(failed.length).toBe(0);
+
+    await handler.shutdown();
+  });
+
+  test("terminal failure (cant_do) bails immediately — no retry", async () => {
+    // A non-zero exit WITH no captured response is classified as not_now
+    // (retryable). To exercise the terminal-failure-immediate-exit path we
+    // need a result whose classifier returns null — e.g. `success === true`
+    // but `!response`. That's the "cc exited cleanly but skill misbehaved"
+    // case — the chat-path treats it as cant_do (operator action needed)
+    // and surfaces the apology after attempt 1.
+    const runtime = makeRecordingRuntime();
+    const { factory, spawnCount } = makeStubFactory([
+      { success: true, response: "", exitCode: 0, durationMs: 1_000 },
+    ]);
+
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      runtime,
+      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      ccSessionFactory: factory,
+    });
+
+    await handler.handleMessage(adapter, makeMsg({ content: "do the thing" }));
+
+    // Single CC spawn — no retry on terminal failure.
+    expect(spawnCount()).toBe(1);
+
+    const texts = adapter.sentMessages.map((m) => m.text);
+    expect(texts.length).toBe(1);
+    expect(texts[0]).toBe("Sorry, I couldn't process that. (exit code: 0)");
+
+    // dispatch.task.failed with kind=cant_do.
+    const failed = runtime.publishes.filter(
+      (e) => e.type === "dispatch.task.failed",
+    );
+    expect(failed.length).toBe(1);
+    const payload = failed[0]!.payload as {
+      reason: { kind: string };
+    };
+    expect(payload.reason.kind).toBe("cant_do");
+
+    await handler.shutdown();
+  });
+
+  test("factory throws on spawn — treated as not_now, retries up to limit", async () => {
+    const runtime = makeRecordingRuntime();
+    let spawnAttempts = 0;
+    const factory: CCSessionFactory = () => {
+      spawnAttempts++;
+      throw new Error("CC binary missing");
+    };
+
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      runtime,
+      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      ccSessionFactory: factory,
+    });
+
+    await handler.handleMessage(adapter, makeMsg({ content: "do the thing" }));
+
+    // All three attempts blow up on factory spawn.
+    expect(spawnAttempts).toBe(3);
+
+    const texts = adapter.sentMessages.map((m) => m.text);
+    // Two retry-status lines + final apology.
+    expect(texts).toEqual([
+      "Still working… (attempt 2/3)",
+      "Still working… (attempt 3/3)",
+      "Sorry, I couldn't process that. (exit code: 1)",
+    ]);
+
+    // dispatch.task.failed emitted, kind=not_now.
+    const failed = runtime.publishes.filter(
+      (e) => e.type === "dispatch.task.failed",
+    );
+    expect(failed.length).toBe(1);
+    const payload = failed[0]!.payload as {
+      reason: { kind: string; detail?: string };
+    };
+    expect(payload.reason.kind).toBe("not_now");
+    expect(payload.reason.detail).toContain("CC binary missing");
+
+    await handler.shutdown();
+  });
+
+  test("maxAttempts=1 override disables retry — one attempt, immediate apology", async () => {
+    const runtime = makeRecordingRuntime();
+    const { factory, spawnCount } = makeStubFactory([abortedResult()]);
+
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      runtime,
+      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      ccSessionFactory: factory,
+      retry: { maxAttempts: 1 },
+    });
+
+    await handler.handleMessage(adapter, makeMsg({ content: "do the thing" }));
+
+    expect(spawnCount()).toBe(1);
+    const texts = adapter.sentMessages.map((m) => m.text);
+    expect(texts.length).toBe(1);
+    expect(texts[0]).toBe("Sorry, I couldn't process that. (exit code: 1)");
 
     await handler.shutdown();
   });

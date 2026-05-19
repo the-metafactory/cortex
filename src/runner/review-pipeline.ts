@@ -89,6 +89,10 @@ import type {
   CCSessionLike,
 } from "../substrates/claude-code/harness";
 import type { CCSessionOpts, CCSessionResult } from "./cc-session";
+import {
+  classifyCcFailure,
+  classifyCcSpawnError,
+} from "./cc-failure-classifier";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -244,6 +248,9 @@ export async function runReviewPipeline(
   // Spawn + await the CC session. Wrap factory + wait() in a single try
   // so any synchronous factory throw, async wait() rejection, or
   // mid-stream substrate crash collapses to the §7.6 not_now path.
+  // cortex#360: the factory-throw + result-classification logic is lifted
+  // into `cc-failure-classifier.ts` so the chat-path (dispatch-handler)
+  // can share the same taxonomy. Behaviour preserved byte-for-byte.
   let result: CCSessionResult;
   try {
     const session: CCSessionLike = opts.ccSessionFactory({
@@ -253,16 +260,21 @@ export async function runReviewPipeline(
     session.start();
     result = await session.wait();
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
     // §7.3 not_now bucket — "transient infrastructure failure (CC binary
     // not found; etc.). Operator-recoverable." Pilot maps to exit 4
     // (transient, retry safe) per design-pilot-restructure.md §4.4.
+    // `classifyCcSpawnError` always returns a `not_now` reason; the
+    // union narrowing here exists to keep TypeScript happy when the
+    // classifier signature gains other kinds in future.
+    const reason = classifyCcSpawnError(err);
+    const errorSummary =
+      reason.kind === "not_now" ? reason.detail : `cc session error: ${reason.kind}`;
     return failed(
       opts,
       correlationId,
       startedAt,
-      { kind: "not_now", detail: `cc session error: ${detail}`, retry_after_ms: 0 },
-      `cc session error: ${detail}`,
+      reason,
+      errorSummary,
     );
   }
 
@@ -270,31 +282,19 @@ export async function runReviewPipeline(
   // inactivity-timeout case (the canonical signature from cc-session.ts
   // is `exitCode: 1 + aborted: true`, not `exitCode: 143`). A non-zero
   // exit with no captured response is the "CC crashed mid-stream" case.
-  if (result.aborted) {
-    const reason = result.abortReason ?? "aborted";
+  // Classification lives in `cc-failure-classifier.classifyCcFailure`;
+  // `null` return means "no substrate failure, continue to verdict
+  // parsing below."
+  const substrateFailure = classifyCcFailure(result);
+  if (substrateFailure !== null) {
     return failed(
       opts,
       correlationId,
       startedAt,
-      {
-        kind: "not_now",
-        detail: `cc session aborted: ${reason}`,
-        retry_after_ms: 0,
-      },
-      `cc session aborted: ${reason}`,
-    );
-  }
-  if (!result.success && !result.response.trim()) {
-    return failed(
-      opts,
-      correlationId,
-      startedAt,
-      {
-        kind: "not_now",
-        detail: `cc session exited ${result.exitCode} with no output`,
-        retry_after_ms: 0,
-      },
-      `cc session exited ${result.exitCode} with no output`,
+      substrateFailure,
+      substrateFailure.kind === "not_now"
+        ? substrateFailure.detail
+        : `cc session failure: ${substrateFailure.kind}`,
     );
   }
 

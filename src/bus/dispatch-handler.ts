@@ -26,7 +26,19 @@ import type { AttachmentInfo } from "../adapters/discord/attachment-types";
 import { parseMessageKeywords } from "../runner/message-parser";
 import { buildPrompt } from "../runner/prompt-builder";
 import { scanPrompt } from "../runner/prompt-filter";
-import { CCSession, type CCSessionOpts } from "../runner/cc-session";
+import { CCSession, type CCSessionOpts, type CCSessionResult } from "../runner/cc-session";
+import type {
+  CCSessionFactory,
+  CCSessionLike,
+} from "../substrates/claude-code/harness";
+import {
+  classifyCcFailure,
+  classifyCcSpawnError,
+} from "../runner/cc-failure-classifier";
+import {
+  createDispatchTaskFailedEvent,
+  type DispatchTaskFailedReason,
+} from "./dispatch-events";
 import { AgentTeam } from "../runner/agent-team";
 import { SessionManager } from "../runner/session-manager";
 import { TaskTracker } from "../runner/task-tracker";
@@ -91,7 +103,34 @@ export interface DispatchHandlerOpts {
    * contract).
    */
   systemEventSource?: SystemEventSource;
+  /**
+   * cortex#360 — Optional CC session factory injection. Default
+   * constructs a real `CCSession`. Tests inject a deterministic fake to
+   * drive the chat-path retry loop without spawning the real `claude`
+   * binary. Mirrors the `ClaudeCodeHarness` factory-injection pattern.
+   */
+  ccSessionFactory?: CCSessionFactory;
+  /**
+   * cortex#360 — Optional chat-path retry tuning. Default 3 total
+   * attempts (initial + 2 retries) bounded by a 20-minute wall-clock
+   * cap. Tests override the maxAttempts to shrink to 1 (no retry) or
+   * exercise specific retry counts.
+   */
+  retry?: {
+    /** Maximum total CC attempts before surfacing the apology. Default 3. */
+    maxAttempts?: number;
+    /** Total wall-clock budget in ms across all attempts. Default 20min. */
+    maxTotalMs?: number;
+  };
 }
+
+/**
+ * cortex#360 — Default retry posture for the chat dispatch path. Three
+ * total attempts (initial + 2 retries) bounded by a 20-minute wall-clock
+ * cap so a wedged CC binary can't pile up retries indefinitely.
+ */
+const DEFAULT_RETRY_MAX_ATTEMPTS = 3;
+const DEFAULT_RETRY_MAX_TOTAL_MS = 20 * 60 * 1000;
 
 /** Format a tool-use event into a human-readable progress line */
 function formatToolProgress(toolName: string, input: Record<string, unknown>): string {
@@ -144,6 +183,16 @@ export class DispatchHandler extends EventEmitter {
    * `warnedMissingSource` pattern.
    */
   private warnedMissingSource = false;
+  /**
+   * cortex#360 — CC session factory. Default constructs a real CCSession
+   * that spawns `claude`. Tests inject a fake for deterministic retry
+   * loop behaviour. Stable across attempts so each retry uses the same
+   * factory (only the `CCSession` instance is fresh per attempt).
+   */
+  private readonly ccSessionFactory: CCSessionFactory;
+  /** cortex#360 — Chat-path retry config (maxAttempts + wall-clock cap). */
+  private readonly retryMaxAttempts: number;
+  private readonly retryMaxTotalMs: number;
 
   constructor(opts: DispatchHandlerOpts) {
     super();
@@ -157,6 +206,9 @@ export class DispatchHandler extends EventEmitter {
         });
     this.runtime = opts.runtime;
     this.systemEventSource = opts.systemEventSource;
+    this.ccSessionFactory = opts.ccSessionFactory ?? ((sessionOpts) => new CCSession(sessionOpts));
+    this.retryMaxAttempts = opts.retry?.maxAttempts ?? DEFAULT_RETRY_MAX_ATTEMPTS;
+    this.retryMaxTotalMs = opts.retry?.maxTotalMs ?? DEFAULT_RETRY_MAX_TOTAL_MS;
     this.sessions = new SessionManager({ idleTimeoutMs: 10 * 60 * 1000 });
     this.taskTracker = new TaskTracker();
 
@@ -235,6 +287,54 @@ export class DispatchHandler extends EventEmitter {
     void wiring.runtime.publish(env).catch((err: unknown) => {
       console.error(
         "dispatch-handler: publish(system.inbound.aborted) failed:",
+        err instanceof Error ? err.message : String(err),
+      );
+    });
+  }
+
+  /**
+   * cortex#360 — Publish a `dispatch.task.failed` envelope for the chat
+   * dispatch path after all retry attempts have been exhausted (or the
+   * failure was terminal-on-first-attempt). Mirrors the review-consumer
+   * path's failure-envelope emission so observers (worklog-manager,
+   * dashboard, pilot-side subscribers) get the same cross-path observability.
+   *
+   * Fire-and-forget: errors from `runtime.publish` are swallowed + logged
+   * so a bus outage can't break the apology-to-Discord response path.
+   * The operator still sees "Sorry, I couldn't process that" — the
+   * envelope is the structured-observability sibling.
+   */
+  private publishDispatchTaskFailed(opts: {
+    taskId: string;
+    correlationId: string;
+    startedAt: Date;
+    reason: DispatchTaskFailedReason;
+    errorSummary: string;
+  }): void {
+    const wiring = this.canPublishSystemEvent();
+    if (!wiring) return;
+    let env;
+    try {
+      env = createDispatchTaskFailedEvent({
+        source: wiring.source,
+        taskId: opts.taskId,
+        agentId: this.config.agent.name,
+        correlationId: opts.correlationId,
+        startedAt: opts.startedAt,
+        failedAt: new Date(),
+        errorSummary: opts.errorSummary,
+        reason: opts.reason,
+      });
+    } catch (err) {
+      console.error(
+        "dispatch-handler: createDispatchTaskFailedEvent threw:",
+        err instanceof Error ? err.message : String(err),
+      );
+      return;
+    }
+    void wiring.runtime.publish(env).catch((err: unknown) => {
+      console.error(
+        "dispatch-handler: publish(dispatch.task.failed) failed:",
         err instanceof Error ? err.message : String(err),
       );
     });
@@ -525,7 +625,30 @@ export class DispatchHandler extends EventEmitter {
   ): Promise<void> {
     const target = this.targetFromMsg(adapter, msg);
 
-    const session = new CCSession({
+    // cortex#360 — Chat-path retry loop. The CC failure-classification +
+    // retry plumbing previously lived only in the review-consumer path
+    // (JetStream-pull with `max_deliver=5`). Chat dispatches used to die
+    // on the first CC inactivity timeout, surfacing a single apology
+    // with no retry. We now retry transient (`not_now`) failures up to
+    // `retryMaxAttempts` times within a `retryMaxTotalMs` wall-clock
+    // budget, posting "Still working…" between attempts so the operator
+    // sees the bot didn't ghost. Terminal failures (any non-`not_now`
+    // reason, or the final retry) emit `dispatch.task.failed` for
+    // cross-path observability parity.
+    const taskId = randomUUID();
+    const correlationId = randomUUID();
+    const startedAt = new Date();
+
+    // Typing indicator — shared across attempts; the bot is "still
+    // typing" for the whole retry window from the operator's POV.
+    await adapter.sendTyping(target);
+    const typingInterval = setInterval(() => {
+      adapter.sendTyping(target).catch(() => {
+        // best-effort typing indicator; swallow Discord API errors
+      });
+    }, 8_000);
+
+    const sessionOpts: CCSessionOpts = {
       prompt,
       groveChannel: groveChannel,
       groveNetwork: groveNetwork,
@@ -543,29 +666,128 @@ export class DispatchHandler extends EventEmitter {
       project: groveProject,
       entity: groveEntity,
       operator: groveOperator,
-    });
+    };
 
-    // Typing indicator
-    await adapter.sendTyping(target);
-    const typingInterval = setInterval(() => {
-      adapter.sendTyping(target).catch(() => {
-        // best-effort typing indicator; swallow Discord API errors
-      });
-    }, 8_000);
+    let finalResult: CCSessionResult | null = null;
+    let finalReason: DispatchTaskFailedReason | null = null;
+    let attemptsConsumed = 0;
 
-    // Tool-use progress (single edit-in-place message, cleared on result)
-    session.on("tool-use", (toolName: string, toolInput: Record<string, unknown>) => {
-      void (async () => {
-        const detail = formatToolProgress(toolName, toolInput);
-        await adapter.sendProgress(target, detail);
-      })();
-    });
+    try {
+      for (let attempt = 1; attempt <= this.retryMaxAttempts; attempt++) {
+        attemptsConsumed = attempt;
 
-    const result = await session.start().wait();
-    clearInterval(typingInterval);
-    await adapter.clearProgress(target);
+        // Wall-clock guard — once we've burnt the total budget, stop
+        // even if attempts remain. Bounds the wedged-binary case so a
+        // retry storm can't pile up indefinitely.
+        const elapsed = Date.now() - startedAt.getTime();
+        if (elapsed > this.retryMaxTotalMs) {
+          finalReason = {
+            kind: "not_now",
+            detail: `retry budget exhausted: ${elapsed}ms > ${this.retryMaxTotalMs}ms (attempt ${attempt}/${this.retryMaxAttempts})`,
+            retry_after_ms: 0,
+          };
+          break;
+        }
 
-    if (result.success && result.response) {
+        // Build a fresh CC session per attempt. Each retry uses the
+        // same correlation_id (stable for observers stitching the
+        // retry chain) but a brand new substrate process.
+        let session: CCSessionLike;
+        try {
+          session = this.ccSessionFactory(sessionOpts);
+        } catch (err) {
+          finalReason = classifyCcSpawnError(err);
+          console.warn(
+            `dispatch-handler: cc spawn failed on attempt ${attempt}/${this.retryMaxAttempts} (correlation_id=${correlationId}): ${finalReason.kind === "not_now" ? finalReason.detail : String(err)}`,
+          );
+          if (finalReason.kind === "not_now" && attempt < this.retryMaxAttempts) {
+            await this.postRetryStatus(adapter, target, attempt + 1);
+            continue;
+          }
+          break;
+        }
+
+        // Tool-use progress (single edit-in-place message, cleared on
+        // result). Attached per-attempt because each session is fresh.
+        // CCSessionLike's optional EventEmitter shape is exposed via
+        // the substrate harness contract — only attach when present.
+        const sessionAsEmitter = session as unknown as {
+          on?: (event: string, listener: (...args: unknown[]) => void) => void;
+        };
+        if (typeof sessionAsEmitter.on === "function") {
+          sessionAsEmitter.on("tool-use", (toolName: unknown, toolInput: unknown) => {
+            const name = typeof toolName === "string" ? toolName : "tool";
+            const input = (typeof toolInput === "object" && toolInput !== null)
+              ? toolInput as Record<string, unknown>
+              : {};
+            void (async () => {
+              const detail = formatToolProgress(name, input);
+              await adapter.sendProgress(target, detail);
+            })();
+          });
+        }
+
+        let result: CCSessionResult;
+        try {
+          result = await session.start().wait();
+        } catch (err) {
+          // Async rejection from wait() — same not_now bucket as
+          // synchronous spawn throw per `cc-failure-classifier`.
+          finalReason = classifyCcSpawnError(err);
+          console.warn(
+            `dispatch-handler: cc wait() rejected on attempt ${attempt}/${this.retryMaxAttempts} (correlation_id=${correlationId}): ${finalReason.kind === "not_now" ? finalReason.detail : String(err)}`,
+          );
+          if (finalReason.kind === "not_now" && attempt < this.retryMaxAttempts) {
+            await this.postRetryStatus(adapter, target, attempt + 1);
+            continue;
+          }
+          break;
+        }
+
+        finalResult = result;
+
+        // Success path — clean response. Reset any failure reason so
+        // we emit no `dispatch.task.failed` envelope.
+        if (result.success && result.response) {
+          finalReason = null;
+          break;
+        }
+
+        // Classify the failure. `null` from the classifier means "no
+        // substrate failure detected" — e.g. `success && !response`
+        // or `!success && response.trim() !== ""`. Treat as terminal
+        // `cant_do` (skill exited without giving us output to forward
+        // or got partway and crashed); no retry — operator action
+        // needed (re-prompt with different inputs).
+        const classified = classifyCcFailure(result);
+        if (classified === null) {
+          finalReason = {
+            kind: "cant_do",
+            detail: `cc session exited ${result.exitCode} without a clean response`,
+          };
+          break;
+        }
+        finalReason = classified;
+
+        if (finalReason.kind === "not_now" && attempt < this.retryMaxAttempts) {
+          console.log(
+            `dispatch-handler: cc transient failure on attempt ${attempt}/${this.retryMaxAttempts} (correlation_id=${correlationId}): ${finalReason.detail}`,
+          );
+          await this.postRetryStatus(adapter, target, attempt + 1);
+          continue;
+        }
+
+        // Terminal failure (non-not_now kind, or last attempt). Fall
+        // through to the post-loop apology + envelope emission.
+        break;
+      }
+    } finally {
+      clearInterval(typingInterval);
+      await adapter.clearProgress(target);
+    }
+
+    // Terminal success — post the response and forward usage.
+    if (finalResult && finalResult.success && finalResult.response && finalReason === null) {
       const outputFiles = collectOutputFiles(attachmentSessionId);
       const files = outputFiles.length > 0
         ? await Promise.all(outputFiles.map(async (p) => ({
@@ -573,24 +795,75 @@ export class DispatchHandler extends EventEmitter {
             filename: basename(p),
           })))
         : undefined;
-      await adapter.postResponse(target, result.response, files);
+      await adapter.postResponse(target, finalResult.response, files);
 
-      if (useSession && result.sessionId) {
-        this.sessions.setSession(sessionKey, result.sessionId);
-        console.log(`dispatch-handler: ${resumeSessionId ? "resumed" : "new"} session ${result.sessionId} for ${sessionKey}`);
+      if (useSession && finalResult.sessionId) {
+        this.sessions.setSession(sessionKey, finalResult.sessionId);
+        console.log(`dispatch-handler: ${resumeSessionId ? "resumed" : "new"} session ${finalResult.sessionId} for ${sessionKey}`);
       }
-    } else {
-      await adapter.postResponse(target, `Sorry, I couldn't process that. (exit code: ${result.exitCode})`);
+
+      if (finalResult.usage) {
+        console.log(`dispatch-handler: responded in ${finalResult.durationMs}ms (${finalResult.usage.inputTokens}in/${finalResult.usage.outputTokens}out${finalResult.usage.costUsd ? ` $${finalResult.usage.costUsd.toFixed(4)}` : ""})${attemptsConsumed > 1 ? ` after ${attemptsConsumed} attempts` : ""}`);
+        // G-206: Forward usage to dashboard state
+        if (finalResult.sessionId) {
+          this.emit("session-usage", finalResult.sessionId, finalResult.usage);
+        }
+      } else {
+        console.log(`dispatch-handler: responded in ${finalResult.durationMs}ms${attemptsConsumed > 1 ? ` after ${attemptsConsumed} attempts` : ""}`);
+      }
+      return;
     }
 
-    if (result.usage) {
-      console.log(`dispatch-handler: responded in ${result.durationMs}ms (${result.usage.inputTokens}in/${result.usage.outputTokens}out${result.usage.costUsd ? ` $${result.usage.costUsd.toFixed(4)}` : ""})`);
-      // G-206: Forward usage to dashboard state
-      if (result.sessionId) {
-        this.emit("session-usage", result.sessionId, result.usage);
-      }
-    } else {
-      console.log(`dispatch-handler: responded in ${result.durationMs}ms`);
+    // Terminal failure — post apology + emit dispatch.task.failed.
+    const exitCode = finalResult?.exitCode ?? 1;
+    await adapter.postResponse(target, `Sorry, I couldn't process that. (exit code: ${exitCode})`);
+
+    // Build a reason if we have none (defensive — every loop exit sets
+    // finalReason on a failure path, but TypeScript can't prove it).
+    const reasonForEnvelope: DispatchTaskFailedReason = finalReason ?? {
+      kind: "not_now",
+      detail: `cc session failed (exit ${exitCode}, attempts ${attemptsConsumed}/${this.retryMaxAttempts})`,
+      retry_after_ms: 0,
+    };
+    const errorSummary =
+      reasonForEnvelope.kind === "policy_denied"
+        ? `chat-path policy denied after ${attemptsConsumed} attempt(s)`
+        : `${reasonForEnvelope.detail} (after ${attemptsConsumed}/${this.retryMaxAttempts} attempts)`;
+    this.publishDispatchTaskFailed({
+      taskId,
+      correlationId,
+      startedAt,
+      reason: reasonForEnvelope,
+      errorSummary,
+    });
+  }
+
+  /**
+   * cortex#360 — Post a "Still working… (attempt N/M)" status to the
+   * adapter before each retry so the operator sees the bot is still
+   * alive. Uses the same `postResponse` surface as the final apology;
+   * adapters render these as ordinary messages (Discord follow-ups,
+   * Mattermost replies) so there's no special channel.
+   *
+   * Failures from `postResponse` are logged but not propagated — the
+   * retry loop continues even if the status message fails to post
+   * (Discord 5xx, rate limit, etc.).
+   */
+  private async postRetryStatus(
+    adapter: PlatformAdapter,
+    target: ResponseTarget,
+    nextAttempt: number,
+  ): Promise<void> {
+    try {
+      await adapter.postResponse(
+        target,
+        `Still working… (attempt ${nextAttempt}/${this.retryMaxAttempts})`,
+      );
+    } catch (err) {
+      console.warn(
+        "dispatch-handler: postRetryStatus failed:",
+        err instanceof Error ? err.message : String(err),
+      );
     }
   }
 
