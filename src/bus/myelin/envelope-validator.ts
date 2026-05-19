@@ -426,14 +426,17 @@ export function getLastStampPrincipal(envelope: Envelope): string | undefined {
  * **Drift guard.** This is a vendored mirror of upstream:
  *   {@link import("@the-metafactory/myelin").getActorPrincipal}
  *   (definition at `node_modules/@the-metafactory/myelin/src/envelope.ts`).
- * `SCHEMA_SOURCE_COMMIT` above pins the schema-string copy of myelin; the
- * `getActorPrincipal upstream-parity contract` test in
- * `__tests__/envelope-validator.test.ts` imports the upstream helper and
- * asserts identical output across the three precedence cases — so a
- * future myelin bump that changes precedence (e.g. adds delegated-chain
- * walking) fails CI before the vendored copy silently diverges.
- * If you update this function, update the upstream too (or the contract
- * test will catch it).
+ * `SCHEMA_SOURCE_COMMIT` one screen above will surface a vendored-schema
+ * bump in code review; the three local-precedence tests in
+ * `__tests__/envelope-validator.test.ts` lock cortex's contract.
+ * **There is no upstream-parity contract test in this PR** — adding one
+ * is filed as a follow-up (blocked by a pre-existing upstream strict-null
+ * gap at `myelin/src/envelope.ts:527` unrelated to cortex#346; surfaces
+ * only when cortex's tsc walks myelin's `/envelope` subpath, which the
+ * runtime contract test would require).
+ * If you update this function, update myelin's `getActorPrincipal` too:
+ * the two implementations must agree on precedence, and nothing in CI
+ * will catch them if they diverge until that follow-up lands.
  */
 export function getActorPrincipal(envelope: Envelope): string | undefined {
   if (envelope.originator?.principal) return envelope.originator.principal;
