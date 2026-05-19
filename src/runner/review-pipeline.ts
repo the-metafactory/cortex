@@ -204,6 +204,29 @@ export interface ReviewPipelineOpts {
    * omitted, no policy gate runs and the pipeline goes straight to CC.
    */
   policyCheck?: ReviewPolicyCheck;
+  /**
+   * cortex#361 — optional lifecycle hook fired after the CC session is
+   * constructed + `start()` is called, before `wait()` resolves. The
+   * pipeline does NOT call `runtime.publish` from this hook itself —
+   * keeping the design-doc contract that this module never touches the
+   * bus runtime. Instead, the consumer (PR-6 `ReviewConsumer.runPipeline`)
+   * uses this hook to attach a `HeartbeatTicker` to the session so
+   * `system.agent.heartbeat` envelopes flow on the bus while CC streams.
+   *
+   * The hook receives the raw `CCSessionLike` the factory produced.
+   * Production factories return a `CCSession` (an `EventEmitter`), so
+   * heartbeat wiring can subscribe to `tool-use` / `text` / `result` /
+   * `error` / `exit` events; the hook checks `'on' in session` at
+   * runtime since the test-stub factories return plain objects without
+   * `.on` and would otherwise crash.
+   *
+   * Returns a `{ stop }` handle; the pipeline calls `stop()` after
+   * `await session.wait()` settles (success or failure), so the ticker
+   * tears down on the same code path that completes the dispatch.
+   * Errors thrown by `onSessionSpawned` are swallowed + logged — a
+   * heartbeat wiring failure must not crash the review.
+   */
+  onSessionSpawned?: (session: CCSessionLike) => { stop: () => void } | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -248,17 +271,53 @@ export async function runReviewPipeline(
   // Spawn + await the CC session. Wrap factory + wait() in a single try
   // so any synchronous factory throw, async wait() rejection, or
   // mid-stream substrate crash collapses to the §7.6 not_now path.
+  //
   // cortex#360: the factory-throw + result-classification logic is lifted
   // into `cc-failure-classifier.ts` so the chat-path (dispatch-handler)
   // can share the same taxonomy. Behaviour preserved byte-for-byte.
+  //
+  // cortex#361 — the heartbeat handle (if the consumer wired one) lives
+  // outside the try so the stop() in finally runs whether wait()
+  // resolves or rejects. Initialised to a no-op so the call site is
+  // uniform whether a hook was supplied or not. The handle's `stop()`
+  // is idempotent — the heartbeat ticker also self-stops when it sees
+  // the session's `result` / `error` / `exit` events, so calling
+  // `stop()` here is defence-in-depth for sessions whose factory throws
+  // before emitting any events.
   let result: CCSessionResult;
+  let heartbeatHandle: { stop: () => void } = {
+    stop: () => {
+      // no-op until an onSessionSpawned hook returns a real handle
+    },
+  };
   try {
     const session: CCSessionLike = opts.ccSessionFactory({
       prompt: opts.prompt,
       ...opts.sessionOpts,
     });
     session.start();
-    result = await session.wait();
+    if (opts.onSessionSpawned) {
+      try {
+        const handle = opts.onSessionSpawned(session);
+        if (handle) heartbeatHandle = handle;
+      } catch (hookErr) {
+        // Heartbeat wiring failure must NOT crash the review. Log loudly
+        // and continue without bus-side liveness for this dispatch.
+        process.stderr.write(
+          `review-pipeline: onSessionSpawned hook threw: ${
+            hookErr instanceof Error ? hookErr.message : String(hookErr)
+          }\n`,
+        );
+      }
+    }
+    try {
+      result = await session.wait();
+    } finally {
+      // Defence-in-depth: even when ticker listeners stop the ticker on
+      // the session's terminal events, an early reject path (e.g. wait()
+      // rejects synchronously) might bypass them. stop() is idempotent.
+      heartbeatHandle.stop();
+    }
   } catch (err) {
     // §7.3 not_now bucket — "transient infrastructure failure (CC binary
     // not found; etc.). Operator-recoverable." Pilot maps to exit 4
@@ -266,6 +325,13 @@ export async function runReviewPipeline(
     // `classifyCcSpawnError` always returns a `not_now` reason; the
     // union narrowing here exists to keep TypeScript happy when the
     // classifier signature gains other kinds in future.
+    //
+    // cortex#361 nit: the inner `try/finally` owns the heartbeat
+    // cleanup. We deliberately do NOT call `heartbeatHandle.stop()`
+    // again here — the outer catch only fires when the synchronous
+    // `opts.ccSessionFactory({...})` throws before the handle is ever
+    // assigned (heartbeatHandle is still the noop default at that
+    // point), so a second call would be redundant.
     const reason = classifyCcSpawnError(err);
     const errorSummary =
       reason.kind === "not_now" ? reason.detail : `cc session error: ${reason.kind}`;

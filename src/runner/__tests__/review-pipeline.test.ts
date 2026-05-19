@@ -577,3 +577,63 @@ describe("runReviewPipeline — schema conformance", () => {
     expect(validation.ok).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cortex#361 — `onSessionSpawned` hook (heartbeat wiring seam)
+// ---------------------------------------------------------------------------
+
+describe("runReviewPipeline — onSessionSpawned hook", () => {
+  test("hook fires on the happy path and the returned handle is stopped", async () => {
+    let hookCalled = 0;
+    let stopCalled = 0;
+    const { factory } = fakeFactory(
+      successResult(buildVerdictBlock("approved")),
+    );
+    const result = await runReviewPipeline(
+      baseOpts(factory, {
+        onSessionSpawned: () => {
+          hookCalled += 1;
+          return {
+            stop: () => {
+              stopCalled += 1;
+            },
+          };
+        },
+      }),
+    );
+    expect(result.kind).toBe("verdict");
+    expect(hookCalled).toBe(1);
+    // The handle's stop() is called from the inner try/finally so it
+    // fires whether the verdict parses cleanly or not.
+    expect(stopCalled).toBeGreaterThanOrEqual(1);
+  });
+
+  test("hook throwing does NOT crash the review", async () => {
+    const { factory } = fakeFactory(
+      successResult(buildVerdictBlock("approved")),
+    );
+    const result = await runReviewPipeline(
+      baseOpts(factory, {
+        onSessionSpawned: () => {
+          throw new Error("heartbeat wiring broken");
+        },
+      }),
+    );
+    expect(result.kind).toBe("verdict");
+  });
+
+  test("hook still gets a stop() call when the session rejects mid-stream", async () => {
+    let stopCalled = 0;
+    const result = await runReviewPipeline(
+      baseOpts(rejectingFactory("nats hiccup"), {
+        onSessionSpawned: () => ({
+          stop: () => {
+            stopCalled += 1;
+          },
+        }),
+      }),
+    );
+    expect(result.kind).toBe("failed");
+    expect(stopCalled).toBeGreaterThanOrEqual(1);
+  });
+});

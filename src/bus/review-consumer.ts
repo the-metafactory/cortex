@@ -86,8 +86,9 @@ import {
   type ReviewPipelineResult,
   type ReviewPolicyCheck,
 } from "../runner/review-pipeline";
-import type { CCSessionFactory } from "../substrates/claude-code/harness";
-import type { CCSessionOpts } from "../runner/cc-session";
+import type { CCSessionFactory, CCSessionLike } from "../substrates/claude-code/harness";
+import { CCSession, type CCSessionOpts } from "../runner/cc-session";
+import { HeartbeatTicker } from "../runner/heartbeat-ticker";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -676,6 +677,15 @@ export class ReviewConsumer {
         }),
         ...(this.sessionOpts !== undefined && { sessionOpts: this.sessionOpts }),
         ...(this.policyCheck !== undefined && { policyCheck: this.policyCheck }),
+        // cortex#361 — attach a bus-side heartbeat ticker to the CC
+        // session so `system.agent.heartbeat` envelopes flow while the
+        // review is in flight. The hook keeps `runtime.publish` calls
+        // inside the consumer (preserving the pipeline's "never touches
+        // MyelinRuntime" contract from `review-pipeline.ts` docs); the
+        // pipeline calls `stop()` on the returned handle after
+        // `session.wait()` resolves (or rejects).
+        onSessionSpawned: (session) =>
+          this.attachHeartbeatToSession(session, envelope.id),
       };
       result = await this.pipelineRunner(pipelineOpts);
     } catch (err) {
@@ -784,6 +794,78 @@ export class ReviewConsumer {
           `${err instanceof Error ? err.message : String(err)}\n`,
       );
     }
+  }
+
+  /**
+   * cortex#361 — attach a `HeartbeatTicker` to a freshly-spawned CC
+   * session so `system.agent.heartbeat` envelopes flow on the bus while
+   * the review is in flight. Wired from `runPipeline` via the pipeline's
+   * `onSessionSpawned` hook.
+   *
+   * Only attaches when the session is a real `CCSession` (an
+   * EventEmitter) — test-stub factories return a plain `{ start, wait }`
+   * object without `.on`, so attempting to subscribe would crash. The
+   * runtime instanceof check keeps the path safe for both.
+   *
+   * Returns a `{ stop }` handle the pipeline calls when `session.wait()`
+   * settles. `HeartbeatTicker.stop()` is idempotent and the ticker also
+   * self-stops on the session's `result` / `error` / `exit` events, so
+   * the redundancy is defence-in-depth.
+   */
+  private attachHeartbeatToSession(
+    session: CCSessionLike,
+    correlationId: string,
+  ): { stop: () => void } {
+    // Test stubs return a plain `{ start, wait }` object; only real
+    // `CCSession` instances expose the EventEmitter `.on` we need.
+    if (!(session instanceof CCSession)) {
+      return {
+        stop: () => {
+          /* test stub session — no ticker was attached */
+        },
+      };
+    }
+    const ticker = new HeartbeatTicker();
+    try {
+      ticker.start({
+        runtime: this.runtime,
+        source: this.source,
+        agentId: this.agent.id,
+        taskId: correlationId,
+        correlationId,
+      });
+    } catch (err) {
+      process.stderr.write(
+        `review-consumer: HeartbeatTicker.start failed (agent=${this.agent.id}): ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      return {
+        stop: () => {
+          /* ticker.start() failed; nothing to stop */
+        },
+      };
+    }
+    session.on("tool-use", () => {
+      ticker.notePhase("tool_use");
+    });
+    session.on("text", () => {
+      ticker.notePhase("streaming_response");
+    });
+    session.on("result", () => {
+      ticker.notePhase("publishing_verdict");
+      ticker.stop();
+    });
+    session.on("error", () => {
+      ticker.stop();
+    });
+    session.on("exit", () => {
+      ticker.stop();
+    });
+    return {
+      stop: () => {
+        ticker.stop();
+      },
+    };
   }
 }
 

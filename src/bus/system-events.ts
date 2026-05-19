@@ -53,6 +53,8 @@
 
 import type { Classification, Envelope } from "./myelin/envelope-validator";
 import { buildBaseEnvelope } from "./envelope-builder";
+import type { AgentHeartbeatPayload } from "../common/types/agent-heartbeat";
+import { AGENT_HEARTBEAT_TYPE } from "../common/types/agent-heartbeat";
 
 /**
  * Source identifier used by every `system.*` event. Three dotted segments
@@ -905,3 +907,84 @@ export function createSystemAccessFederationDeniedEvent(
 // removed exports were `SystemAccessDisagreementOpts` /
 // `createSystemAccessDisagreementEvent` / `SystemAccessDecision`. See
 // git history for the legacy shape.)
+
+// ---------------------------------------------------------------------------
+// system.agent.heartbeat (cortex#361)
+// ---------------------------------------------------------------------------
+
+export interface SystemAgentHeartbeatOpts {
+  source: SystemEventSource;
+  /** `payload.agent_id` — logical agent name (`echo`, `luna`, ...). */
+  agentId: string;
+  /**
+   * Dispatch-scoped task identifier. For chat-path: the `task-${uuid}`
+   * string. For review-pipeline: the inbound request envelope's
+   * `correlation_id`.
+   */
+  taskId: string;
+  /**
+   * UUID-shaped correlation key. Set on both `envelope.correlation_id`
+   * AND `payload.correlation_id` so subscribers can correlate via either
+   * the schema-validated envelope field or the payload (which travels
+   * intact across schema upgrades that touch the envelope shape).
+   */
+  correlationId: string;
+  phase: AgentHeartbeatPayload["phase"];
+  /**
+   * Milliseconds since the most recent cc-session stream event seen by
+   * the producer. Lands on `payload.last_activity_ms_ago`.
+   */
+  lastActivityMsAgo: number;
+  /**
+   * Monotonically-increasing tick counter for this dispatch. The
+   * `HeartbeatTicker` increments on every tick before publishing; the
+   * first heartbeat after `start()` carries `iteration: 1`.
+   */
+  iteration: number;
+  /**
+   * IAW Phase A.3 — optional sovereignty classification. Defaults to
+   * `"local"` (operator-private), matching the rest of `system.*`.
+   * Cross-operator heartbeats over `federated.*` are out of scope for
+   * cortex#361 (see file: `agent-heartbeat.ts` "Out of scope"); when
+   * that ships in a future iteration callers will opt into
+   * `"federated"` here.
+   */
+  classification?: Classification;
+}
+
+/**
+ * Construct a `system.agent.heartbeat` envelope per cortex#361.
+ *
+ * Bus-side liveness signal — emitted on a fixed interval (default 30 s) by
+ * `HeartbeatTicker` while a dispatch is in flight. Phase is best-effort
+ * metadata derived from the most recent cc-session stream event seen; the
+ * envelope's `signed_by[]` chain is the security boundary (heartbeat-
+ * spoofing is bounded by stack-key possession via the normal
+ * `runtime.publish` signing path).
+ *
+ * **Subject derivation.** The runtime's stack-aware `publish()` routes this
+ * to `local.{org}.{stack}.system.agent.heartbeat` — operator-managed
+ * namespace, no upstream myelin schema entry required for the cortex-local
+ * deployment. A myelin canonicalisation follow-up (filed against
+ * `the-metafactory/myelin`) will lift this onto `federated.*` for cross-
+ * operator use.
+ */
+export function createAgentHeartbeatEvent(
+  opts: SystemAgentHeartbeatOpts,
+): Envelope {
+  const payload: AgentHeartbeatPayload = {
+    agent_id: opts.agentId,
+    task_id: opts.taskId,
+    correlation_id: opts.correlationId,
+    phase: opts.phase,
+    last_activity_ms_ago: opts.lastActivityMsAgo,
+    iteration: opts.iteration,
+  };
+  return buildBaseEnvelope({
+    type: AGENT_HEARTBEAT_TYPE,
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    correlationId: opts.correlationId,
+    payload: payload as unknown as Record<string, unknown>,
+  });
+}

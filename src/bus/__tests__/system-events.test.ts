@@ -15,6 +15,7 @@ import { describe, expect, test } from "bun:test";
 import { validateEnvelope } from "../myelin/envelope-validator";
 import {
   adapterCorrelationKey,
+  createAgentHeartbeatEvent,
   createSystemAccessFilteredEvent,
   createSystemAdapterDegradedEvent,
   createSystemAdapterDisconnectedEvent,
@@ -516,3 +517,101 @@ describe("createSystemAccessFilteredEvent", () => {
 // v2.0.0 (cortex#297) — `createSystemAccessDisagreementEvent` retired with
 // the parallel-mode plumbing. The disagreement envelope existed only for
 // the cortex#296 validation window; PolicyEngine is the sole gate now.
+
+// ---------------------------------------------------------------------------
+// cortex#361 — `system.agent.heartbeat`
+// ---------------------------------------------------------------------------
+
+describe("createAgentHeartbeatEvent", () => {
+  const CORRELATION_UUID = "22222222-2222-4222-8222-222222222222";
+
+  test("required fields populated; envelope passes schema validation", () => {
+    const env = createAgentHeartbeatEvent({
+      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      agentId: "echo",
+      taskId: "task-abc",
+      correlationId: CORRELATION_UUID,
+      phase: "tool_use",
+      lastActivityMsAgo: 1500,
+      iteration: 7,
+    });
+    expect(env.type).toBe("system.agent.heartbeat");
+    expect(env.source).toBe("metafactory.cortex.local");
+    expect(env.correlation_id).toBe(CORRELATION_UUID);
+    expect(env.payload).toEqual({
+      agent_id: "echo",
+      task_id: "task-abc",
+      correlation_id: CORRELATION_UUID,
+      phase: "tool_use",
+      last_activity_ms_ago: 1500,
+      iteration: 7,
+    });
+    // Sovereignty defaults match operator-only / no frontier.
+    expect(env.sovereignty).toEqual({
+      classification: "local",
+      data_residency: "NZ",
+      max_hop: 0,
+      frontier_ok: false,
+      model_class: "local-only",
+    });
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("each invocation returns a fresh UUID id", () => {
+    const a = createAgentHeartbeatEvent({
+      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      agentId: "echo",
+      taskId: "task-abc",
+      correlationId: CORRELATION_UUID,
+      phase: "thinking",
+      lastActivityMsAgo: 0,
+      iteration: 1,
+    });
+    const b = createAgentHeartbeatEvent({
+      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      agentId: "echo",
+      taskId: "task-abc",
+      correlationId: CORRELATION_UUID,
+      phase: "thinking",
+      lastActivityMsAgo: 0,
+      iteration: 2,
+    });
+    expect(a.id).not.toBe(b.id);
+  });
+
+  test("federated classification opt-in for future cross-operator heartbeats", () => {
+    const env = createAgentHeartbeatEvent({
+      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      agentId: "echo",
+      taskId: "task-abc",
+      correlationId: CORRELATION_UUID,
+      phase: "thinking",
+      lastActivityMsAgo: 0,
+      iteration: 1,
+      classification: "federated",
+    });
+    expect(env.sovereignty?.classification).toBe("federated");
+  });
+
+  test("all four phase enum values are accepted", () => {
+    const phases = [
+      "thinking",
+      "tool_use",
+      "streaming_response",
+      "publishing_verdict",
+    ] as const;
+    for (const phase of phases) {
+      const env = createAgentHeartbeatEvent({
+        source: { org: "metafactory", agent: "cortex", instance: "local" },
+        agentId: "echo",
+        taskId: "task-abc",
+        correlationId: CORRELATION_UUID,
+        phase,
+        lastActivityMsAgo: 0,
+        iteration: 1,
+      });
+      expect(env.payload.phase).toBe(phase);
+      expect(validateEnvelope(env).ok).toBe(true);
+    }
+  });
+});
