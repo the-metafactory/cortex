@@ -1873,3 +1873,257 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     expect(optsCaptured).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cortex#346 — myelin#161 originator field consumed via getActorPrincipal
+// ---------------------------------------------------------------------------
+
+/**
+ * cortex#346 — runner consumes the new `Envelope.originator` field (myelin#161).
+ *
+ * Precedence rule we assert (delegates to myelin's `getActorPrincipal`):
+ *   1. `envelope.originator?.principal`  ← policy-attribution claim
+ *   2. `envelope.signed_by[0]?.principal` ← legacy compat for pre-#161 envelopes
+ *   3. `payload.agent_id`                 ← adapter-direct dispatches with no chain
+ *
+ * Tamper case is covered by the chain-verification suite above — `originator`
+ * is in myelin's SIGNABLE_FIELDS, so mutating either `principal` or
+ * `attribution` after signing invalidates the chain. We add one explicit
+ * tamper test here to pin the contract from cortex's side.
+ */
+describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
+  test("originator.principal wins over signed_by[0].principal for engine lookup", async () => {
+    // When both are present, the policy engine must see the originator's
+    // principal id (the actor the signer is attesting on behalf of), NOT
+    // the signer's principal id. This decouples policy attribution from
+    // signer identity — the cortex-bot-as-relay case.
+    const captured: { principalId: string; intent: Intent }[] = [];
+    const engine = new PolicyEngine({
+      principals: [
+        {
+          id: "alice",
+          home_operator: "andreas",
+          home_stack: "andreas/research",
+          role: ["operator"],
+          trust: [],
+        },
+      ],
+      roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
+    });
+    const origCheck = engine.check.bind(engine);
+    engine.check = (principalId, intent) => {
+      captured.push({ principalId, intent });
+      return origCheck(principalId, intent);
+    };
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engine,
+    });
+    await listener.start();
+    await router.start();
+
+    const env = makeReceivedEnvelope();
+    // Signer is cortex-bot; the originator is alice (the human the bot
+    // is acting on behalf of). Engine must resolve `alice`, not `cortex`.
+    env.signed_by = [
+      {
+        method: "ed25519",
+        principal: "did:mf:cortex",
+        signature: "a".repeat(88),
+        at: "2026-05-19T12:00:00Z",
+      },
+    ];
+    env.originator = {
+      principal: "did:mf:alice",
+      attribution: "adapter-resolved",
+    };
+
+    r.trigger(env, "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.principalId).toBe("alice");
+  });
+
+  test("originator absent + signed_by[0].principal present → falls back to signer (legacy compat)", async () => {
+    // Pre-myelin#161 envelopes have no `originator`. Behaviour must remain
+    // identical to the pre-#346 path: principal id is taken from the
+    // first stamp in the chain.
+    const captured: { principalId: string; intent: Intent }[] = [];
+    const engine = new PolicyEngine({
+      principals: [
+        {
+          id: "cortex",
+          home_operator: "andreas",
+          home_stack: "andreas/research",
+          role: ["operator"],
+          trust: [],
+        },
+      ],
+      roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
+    });
+    const origCheck = engine.check.bind(engine);
+    engine.check = (principalId, intent) => {
+      captured.push({ principalId, intent });
+      return origCheck(principalId, intent);
+    };
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engine,
+    });
+    await listener.start();
+    await router.start();
+
+    const env = makeReceivedEnvelope();
+    env.signed_by = [
+      {
+        method: "ed25519",
+        principal: "did:mf:cortex",
+        signature: "a".repeat(88),
+        at: "2026-05-19T12:00:00Z",
+      },
+    ];
+    // No env.originator on purpose — legacy envelope.
+
+    r.trigger(env, "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.principalId).toBe("cortex");
+  });
+
+  test("originator + signed_by both absent → falls back to payload.agent_id", async () => {
+    // Adapter-direct (non-bus) dispatch path: no signed chain, no
+    // originator. Runner accepts the payload's `agent_id` as the
+    // principal id (belt-and-braces fallback called out in cortex#346
+    // "Out of scope" — keep behaviour).
+    const captured: { principalId: string; intent: Intent }[] = [];
+    const engine = new PolicyEngine({
+      principals: [
+        {
+          id: "cortex",
+          home_operator: "andreas",
+          home_stack: "andreas/research",
+          role: ["operator"],
+          trust: [],
+        },
+      ],
+      roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
+    });
+    const origCheck = engine.check.bind(engine);
+    engine.check = (principalId, intent) => {
+      captured.push({ principalId, intent });
+      return origCheck(principalId, intent);
+    };
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engine,
+    });
+    await listener.start();
+    await router.start();
+
+    // makeReceivedEnvelope defaults `payload.agent_id = "cortex"` and
+    // adds no signed_by / no originator.
+    r.trigger(
+      makeReceivedEnvelope(),
+      "local.metafactory.dispatch.task.received",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.principalId).toBe("cortex");
+  });
+
+  test("cryptoVerify:true — tampered originator on signed envelope → chain_verification_failed deny", async () => {
+    // myelin#161 added `originator` to SIGNABLE_FIELDS. Mutating either
+    // sub-field (principal OR attribution) after signing must invalidate
+    // the chain — proving cortex inherits the protection automatically
+    // by delegating verification to myelin's canonicalize.
+    const { nkeyPub, privateKeyBase64 } = generateEd25519KeyPairForRunner();
+    const cortex = agentFixtureForRunner({
+      id: "cortex",
+      trust: ["cortex"],
+      nkey_pub: nkeyPub,
+    });
+    const resolver = runnerResolverWith(cortex);
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      trustResolver: resolver,
+      receivingAgentId: "cortex",
+      operatorId: "andreas",
+      cryptoVerify: true,
+    });
+    await listener.start();
+    await router.start();
+
+    // Sign the envelope WITH originator → signature commits to it.
+    const base = makeReceivedEnvelope() as Parameters<typeof signEnvelope>[0];
+    const baseWithOriginator: Parameters<typeof signEnvelope>[0] = {
+      ...base,
+      originator: {
+        principal: "did:mf:cortex",
+        attribution: "adapter-resolved",
+      },
+    };
+    const signed = await signEnvelope(
+      baseWithOriginator,
+      privateKeyBase64,
+      "did:mf:cortex",
+    );
+
+    // Tamper: swap the originator principal to a different DID
+    // post-sign. Chain bytes no longer match the signature.
+    const tampered: Envelope = {
+      ...(signed as Envelope),
+      originator: {
+        principal: "did:mf:mallory",
+        attribution: "adapter-resolved",
+      },
+    };
+
+    r.trigger(tampered, "local.metafactory.dispatch.task.received");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.denied",
+      "dispatch.task.failed",
+    ]);
+    const denied = r.published[0]!;
+    const reason = denied.payload.reason as {
+      kind: string;
+      chain_reason?: { kind: string };
+    };
+    expect(reason.kind).toBe("chain_verification_failed");
+    expect(reason.chain_reason?.kind).toBe("crypto_verify_failed");
+    expect(optsCaptured).toHaveLength(0);
+  });
+});

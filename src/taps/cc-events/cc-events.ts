@@ -149,6 +149,23 @@ export interface CreateCcEventEnvelopeOpts {
    * violation (see {@link validateSubjectEnvelopeAlignment}).
    */
   classification?: Classification;
+  /**
+   * cortex#346 / myelin#161 — optional originator principal DID
+   * (`did:mf:<name>`). When supplied, every emitted envelope carries
+   *
+   *   `originator: { principal, attribution: "adapter-resolved" }`
+   *
+   * The cc-events tap IS the adapter for the Claude-Code substrate: it
+   * lifts hook events from the operator's own stack into the bus.
+   * Attribution is always `"adapter-resolved"` because the relay maps the
+   * running CC session (a non-myelin identifier) to the stack's myelin
+   * principal at sign time.
+   *
+   * Omit (or pass `undefined`) to preserve pre-#346 behaviour — no
+   * `originator` field on the envelope. Legacy consumers that fall back
+   * to `signed_by[0].principal` keep working unchanged.
+   */
+  originatorPrincipal?: string;
 }
 
 /**
@@ -197,6 +214,16 @@ export function createCcEventEnvelope(
     },
   });
   envelope.timestamp = event.timestamp;
+  // cortex#346 / myelin#161 — attach the originator block when configured.
+  // Mutation-after-build is fine here: `buildBaseEnvelope` returns a fresh
+  // object per call (no aliasing risk), and the field lives at the top
+  // level so JSON serialisation picks it up downstream.
+  if (opts.originatorPrincipal !== undefined) {
+    envelope.originator = {
+      principal: opts.originatorPrincipal,
+      attribution: "adapter-resolved",
+    };
+  }
   return envelope;
 }
 
@@ -264,8 +291,29 @@ export interface CreateCcEventPublisherOpts {
    * configured via `opts.classification` — otherwise the subject
    * (derived from the envelope) and the operator-intended classification
    * can silently diverge (cortex#130 item 3, Echo's suggestion).
+   *
+   * **Caller also owns `originator` when overriding** — see
+   * `originatorPrincipal` below. The default helper applies it; an
+   * override must wire it through itself, otherwise published events
+   * silently drop the attribution claim.
    */
   buildEnvelope?: (event: PublishedEvent, source: CcEventSource) => Envelope;
+  /**
+   * cortex#346 / myelin#161 — optional originator principal DID. When set,
+   * every envelope this publisher emits carries
+   *
+   *   `originator: { principal: <originatorPrincipal>, attribution: "adapter-resolved" }`
+   *
+   * The cc-events tap IS the adapter for the Claude-Code substrate, and
+   * the relay maps the running CC session to the stack's myelin principal
+   * at sign time — hence the `adapter-resolved` attribution mode.
+   *
+   * Production callers source this from the operator's stack principal
+   * id (e.g. `did:mf:<stack-principal>` derived from cortex config).
+   * Omit to preserve pre-#346 behaviour (no originator field; receivers
+   * fall back to `signed_by[0].principal` for policy attribution).
+   */
+  originatorPrincipal?: string;
 }
 
 /**
@@ -302,10 +350,16 @@ export function createCcEventPublisher(
     ...(opts.dataResidency !== undefined && { dataResidency: opts.dataResidency }),
   };
   const classification: Classification = opts.classification ?? "local";
+  const originatorPrincipal = opts.originatorPrincipal;
   const buildEnvelope =
     opts.buildEnvelope ??
     ((event: PublishedEvent, src: CcEventSource) =>
-      createCcEventEnvelope({ event, source: src, classification }));
+      createCcEventEnvelope({
+        event,
+        source: src,
+        classification,
+        ...(originatorPrincipal !== undefined && { originatorPrincipal }),
+      }));
 
   return (event: PublishedEvent) => {
     const envelope = buildEnvelope(event, source);

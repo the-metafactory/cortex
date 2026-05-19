@@ -192,6 +192,43 @@ describe("createCcEventEnvelope", () => {
     }
     expect(result.ok).toBe(true);
   });
+
+  // cortex#346 / myelin#161 — originator field plumbing
+  test("originator omitted by default (backwards-compatible)", () => {
+    const env = createCcEventEnvelope({ event: makeEvent() });
+    expect(env.originator).toBeUndefined();
+  });
+
+  test("originator set when originatorPrincipal supplied → attribution=adapter-resolved", () => {
+    // cortex#346 — cc-events originates from the operator's own stack;
+    // the tap IS the adapter for the Claude-Code substrate. Attribution
+    // is `adapter-resolved` per the agreement to use that mode for all
+    // first-party in-process originators on cortex#346.
+    const env = createCcEventEnvelope({
+      event: makeEvent(),
+      source: { org: "metafactory" },
+      originatorPrincipal: "did:mf:cortex",
+    });
+    expect(env.originator).toEqual({
+      principal: "did:mf:cortex",
+      attribution: "adapter-resolved",
+    });
+  });
+
+  test("originator-bearing envelope passes Ajv validation against vendored schema", () => {
+    // Regression guard — the vendored schema for myelin#161 must accept
+    // the originator block as constructed here.
+    const env = createCcEventEnvelope({
+      event: makeEvent(),
+      source: { org: "metafactory" },
+      originatorPrincipal: "did:mf:cortex",
+    });
+    const result = validateEnvelope(env);
+    if (!result.ok) {
+      throw new Error(`envelope failed validation: ${JSON.stringify(result.errors)}`);
+    }
+    expect(result.ok).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -298,6 +335,35 @@ describe("createCcEventPublisher", () => {
     const pub = createCcEventPublisher({ link: link.stub, org: "default" });
     // Must not throw — the relay's primary path is JSONL append, not bus
     expect(() => pub(makeEvent())).not.toThrow();
+  });
+
+  // cortex#346 / myelin#161 — originator plumbing through the publisher
+  test("originatorPrincipal flows into every published envelope (cortex#346)", () => {
+    const link = makeLink();
+    const pub = createCcEventPublisher({
+      link: link.stub,
+      org: "metafactory",
+      stack: "default",
+      originatorPrincipal: "did:mf:cortex",
+    });
+    pub(makeEvent({ event_type: "tool.bash.executed" }));
+    pub(makeEvent({ event_type: "session.started" }));
+    expect(link.calls).toHaveLength(2);
+    for (const call of link.calls) {
+      const env = JSON.parse(call.payload);
+      expect(env.originator).toEqual({
+        principal: "did:mf:cortex",
+        attribution: "adapter-resolved",
+      });
+    }
+  });
+
+  test("originator omitted when originatorPrincipal not configured (default off)", () => {
+    const link = makeLink();
+    const pub = createCcEventPublisher({ link: link.stub, org: "metafactory" });
+    pub(makeEvent({ event_type: "tool.bash.executed" }));
+    const env = JSON.parse(link.calls[0]!.payload);
+    expect(env.originator).toBeUndefined();
   });
 
   test("buildEnvelope override is invoked per event", () => {

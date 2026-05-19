@@ -25,6 +25,7 @@ interface StartOptions {
   natsToken?: string;
   org?: string;
   stack?: string;
+  originatorPrincipal?: string;
 }
 interface TestOptions {
   policy: string;
@@ -167,6 +168,10 @@ program
     "--stack <stack>",
     "Operator stack segment for stack-aware subjects (local.{org}.{stack}.{type}). Matches the cortex.yaml stack: block. Falls back to env var CORTEX_STACK. When omitted, relay publishes on the legacy 5-segment form.",
   )
+  .option(
+    "--originator-principal <did>",
+    "cortex#346 / myelin#161 — DID (did:mf:<name>) stamped onto envelope.originator for every relay-lifted CC event. Attribution mode is fixed at 'adapter-resolved' (the relay maps the running CC session to the stack's myelin principal). Falls back to env var CORTEX_ORIGINATOR_PRINCIPAL. Omit to publish without an originator block (pre-#346 behaviour; receivers fall back to signed_by[0].principal).",
+  )
   .action(async (options: StartOptions) => {
     if (!existsSync(options.policy)) {
       console.error(`Policy file not found: ${options.policy}`);
@@ -198,6 +203,15 @@ program
     // cortex#266 — IAW A.5 stack segment for 6-segment publishes.
     const stack: string | undefined =
       options.stack ?? process.env.CORTEX_STACK ?? undefined;
+    // cortex#346 — myelin#161 originator principal stamped onto every
+    // relay-lifted CC envelope. Opt-in: omit to preserve pre-#346 wire
+    // format (no originator block). Validation of the DID format lives
+    // downstream in myelin's envelope validator — passing a malformed
+    // value fails AJV on first publish, surfacing the error in stderr.
+    const originatorPrincipal: string | undefined =
+      options.originatorPrincipal ??
+      process.env.CORTEX_ORIGINATOR_PRINCIPAL ??
+      undefined;
     // cortex#275 (Sage cycle 1) — fail-fast stack validation. If the
     // operator supplied a malformed stack value (`*`, `>`, empty,
     // uppercase, etc.), reject at startup with a clear error rather
@@ -228,11 +242,16 @@ program
           link: natsLink,
           org,
           ...(stack !== undefined && { stack }),
+          ...(originatorPrincipal !== undefined && { originatorPrincipal }),
         });
         const safeUrl = natsUrl.replace(/\/\/[^@/]+@/, "//***@");
         const stackSuffix = stack !== undefined ? ` stack="${stack}"` : "";
+        const originatorSuffix =
+          originatorPrincipal !== undefined
+            ? ` originator="${originatorPrincipal}"`
+            : "";
         console.log(
-          `cortex-relay: nats publishing enabled — ${safeUrl} (org="${org}"${stackSuffix})`,
+          `cortex-relay: nats publishing enabled — ${safeUrl} (org="${org}"${stackSuffix}${originatorSuffix})`,
         );
       } catch (err) {
         // Per the design rule: failed NATS startup must NOT crash the

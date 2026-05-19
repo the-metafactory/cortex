@@ -57,7 +57,10 @@
  */
 
 import type { Envelope } from "../bus/myelin/envelope-validator";
-import { getSignedByChain } from "../bus/myelin/envelope-validator";
+import {
+  getActorPrincipal,
+  getSignedByChain,
+} from "../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type {
   SurfaceAdapter,
@@ -955,23 +958,35 @@ function checkDispatchPolicy(
 }
 
 /**
- * Strip the `did:mf:` prefix from the originator stamp's principal
- * via the shared `extractAgentIdFromDid` helper (also used by
- * `verify-signed-by-chain.ts` — Echo cortex#220 round 2 S-1). Falls
- * back to `payload.agent_id` when the envelope has no chain, AND
- * surfaces the raw DID string when the parser rejects it (malformed
- * DID method, empty tail, multi-segment colon) so the engine
- * receives a deterministic `unknown_principal` rather than silent
- * coercion.
+ * Resolve the policy-attribution principal id for a dispatch envelope.
+ *
+ * cortex#346 / myelin#161 — defers to myelin's `getActorPrincipal()` so
+ * the precedence rule lives in ONE place (envelope schema owner):
+ *
+ *   1. `envelope.originator?.principal` ← policy-attribution claim,
+ *      covered by the envelope signature (SIGNABLE_FIELDS post-#161).
+ *      Tampering with `originator.principal` OR `originator.attribution`
+ *      invalidates the chain → caught by `verifySignedByChain` upstream.
+ *   2. `envelope.signed_by[0]?.principal` ← legacy compat for pre-#161
+ *      envelopes that never set an `originator`.
+ *   3. `payload.agent_id` ← adapter-direct (non-bus) dispatches with no
+ *      signed chain; belt-and-braces called out as out-of-scope-to-remove
+ *      in cortex#346.
+ *
+ * `getActorPrincipal` returns a DID (`did:mf:<name>`) for cases 1+2, so
+ * we still run the returned value through `extractAgentIdFromDid` to
+ * strip the `did:mf:` prefix. When the parser rejects the DID (malformed
+ * method, empty tail, multi-segment colon) we surface the raw string so
+ * the engine receives a deterministic `unknown_principal` rather than
+ * silent coercion (Echo cortex#220 round 2 S-1).
  */
 function resolvePrincipalId(
   envelope: Envelope,
   payload: DispatchTaskReceivedPayload,
 ): string {
-  const chain = getSignedByChain(envelope);
-  const origin = chain[0];
-  if (origin === undefined) return payload.agent_id;
-  return extractAgentIdFromDid(origin.principal) ?? origin.principal;
+  const actorDid = getActorPrincipal(envelope);
+  if (actorDid === undefined) return payload.agent_id;
+  return extractAgentIdFromDid(actorDid) ?? actorDid;
 }
 
 /**

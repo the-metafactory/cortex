@@ -172,6 +172,24 @@
       "type": "string",
       "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$",
       "description": "F-021: required when distribution_mode is direct or delegate. DID of the receiving agent."
+    },
+    "originator": {
+      "type": "object",
+      "description": "myelin#160: policy-level actor identity, separate from the cryptographic signed_by chain. The chain proves WHO signed; originator names WHO the signer claims to be acting on behalf of. Covered by the signature (signer commits to the attribution claim). When absent, the signer is the actor.",
+      "required": ["principal", "attribution"],
+      "properties": {
+        "principal": {
+          "type": "string",
+          "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$",
+          "description": "DID of the actor whose capabilities this envelope asserts."
+        },
+        "attribution": {
+          "type": "string",
+          "enum": ["adapter-resolved", "federated", "delegated"],
+          "description": "How the signer learned the originator identity. adapter-resolved: external (Discord/Slack/HTTP) id mapped to principal. federated: relayed claim from another operator. delegated: signer holds delegation credentials for the originator."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "allOf": [

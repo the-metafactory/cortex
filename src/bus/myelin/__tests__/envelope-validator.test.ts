@@ -11,6 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   deriveNatsSubject,
+  getActorPrincipal,
   getLastStampPrincipal,
   getSignedByChain,
   SCHEMA_SOURCE_COMMIT,
@@ -482,13 +483,54 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
     expect(getLastStampPrincipal(env!)).toBeUndefined();
   });
 
-  test("schema source commit points at the post-myelin#148 identity-strict pin", () => {
+  // cortex#346 / myelin#161 — vendored getActorPrincipal mirror
+  test("getActorPrincipal prefers originator.principal over signed_by chain", () => {
+    const env: Envelope = {
+      ...(validEnvelope as unknown as Envelope),
+      signed_by: [
+        {
+          method: "ed25519",
+          principal: "did:mf:cortex",
+          signature: ED25519_SIG,
+          at: "2026-05-08T09:00:00Z",
+        },
+      ],
+      originator: {
+        principal: "did:mf:alice",
+        attribution: "adapter-resolved",
+      },
+    };
+    expect(getActorPrincipal(env)).toBe("did:mf:alice");
+  });
+
+  test("getActorPrincipal falls back to signed_by[0].principal when originator absent", () => {
+    const env: Envelope = {
+      ...(validEnvelope as unknown as Envelope),
+      signed_by: [
+        {
+          method: "ed25519",
+          principal: "did:mf:cortex",
+          signature: ED25519_SIG,
+          at: "2026-05-08T09:00:00Z",
+        },
+      ],
+    };
+    expect(getActorPrincipal(env)).toBe("did:mf:cortex");
+  });
+
+  test("getActorPrincipal returns undefined for an unsigned envelope with no originator", () => {
+    const env = tryParseEnvelope(validEnvelope);
+    expect(env).not.toBeNull();
+    expect(getActorPrincipal(env!)).toBeUndefined();
+  });
+
+  test("schema source commit points at the post-myelin#161 originator pin", () => {
     // Lock the pin so future bumps surface in a code review.
-    // Updated at B.1c (cortex#114) — bump from b69c877 to 5a0e261 to
-    // pick up myelin#146 (./identity subpath export) + myelin#148
-    // (strict-null safety on identity submodule).
+    // Updated at cortex#346 — bump from 5a0e261 to 3ec0ace to pick up
+    // myelin#161 (Envelope.originator policy-attribution field +
+    // getActorPrincipal helper; originator added to SIGNABLE_FIELDS).
     expect(SCHEMA_SOURCE_COMMIT).toBe(
-      "5a0e2619a4af5c91c78f552b88fafd3ad40a227f",
+      "3ec0aceef960f16db41507d01df5849b0dc7744e",
     );
   });
 
