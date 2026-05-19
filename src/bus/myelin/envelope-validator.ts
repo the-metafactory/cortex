@@ -65,7 +65,16 @@ import {
 } from "@the-metafactory/myelin/subjects";
 import schema from "./vendor/envelope.schema.json" with { type: "json" };
 
-/** Pin so future maintainers know which myelin commit the schema was lifted from. */
+/**
+ * Pin so future maintainers know which myelin commit the schema was lifted from.
+ *
+ * Upstream issue/PR numbering note: myelin#160 is the design issue for the
+ * envelope `originator` field; myelin#161 is the merged PR. The vendored
+ * schema's description string preserves the `myelin#160:` reference
+ * verbatim (faithful vendoring of upstream wording); all cortex code +
+ * comments + tests use `myelin#161` to point at the merge that landed the
+ * feature — they're the same change, different ticket facets.
+ */
 export const SCHEMA_SOURCE_COMMIT = "3ec0aceef960f16db41507d01df5849b0dc7744e";
 
 /**
@@ -413,6 +422,18 @@ export function getLastStampPrincipal(envelope: Envelope): string | undefined {
  *      listener path).
  *
  * Pure function. No side effects.
+ *
+ * **Drift guard.** This is a vendored mirror of upstream:
+ *   {@link import("@the-metafactory/myelin").getActorPrincipal}
+ *   (definition at `node_modules/@the-metafactory/myelin/src/envelope.ts`).
+ * `SCHEMA_SOURCE_COMMIT` above pins the schema-string copy of myelin; the
+ * `getActorPrincipal upstream-parity contract` test in
+ * `__tests__/envelope-validator.test.ts` imports the upstream helper and
+ * asserts identical output across the three precedence cases — so a
+ * future myelin bump that changes precedence (e.g. adds delegated-chain
+ * walking) fails CI before the vendored copy silently diverges.
+ * If you update this function, update the upstream too (or the contract
+ * test will catch it).
  */
 export function getActorPrincipal(envelope: Envelope): string | undefined {
   if (envelope.originator?.principal) return envelope.originator.principal;

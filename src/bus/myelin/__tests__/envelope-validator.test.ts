@@ -524,6 +524,30 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
     expect(getActorPrincipal(env!)).toBeUndefined();
   });
 
+  // cortex#346 review-loop (Echo r1 architecture suggestion) — drift guard.
+  //
+  // The vendored `getActorPrincipal` mirrors `@the-metafactory/myelin`'s
+  // helper at `node_modules/@the-metafactory/myelin/src/envelope.ts`.
+  // `SCHEMA_SOURCE_COMMIT` pins the schema-string copy; the docstring
+  // `@see` breadcrumb on the local `getActorPrincipal` points future
+  // maintainers at the upstream definition with "keep this in sync".
+  //
+  // An upstream-helper parity test (importing myelin's getActorPrincipal
+  // and asserting identical output across the 3 precedence cases) was
+  // attempted but pulls myelin's `src/envelope.ts` into cortex's tsc
+  // surface, surfacing a pre-existing upstream strict-null gap
+  // (`envelope.ts:527` — `string | undefined` vs `string` on
+  // `envelope.source.split('.')[0]`) that's unrelated to this PR.
+  // Echo classified the upstream-parity test as a non-blocking
+  // suggestion and accepted the `@see` breadcrumb alone as sufficient
+  // for cortex#346. The full contract test belongs in a follow-up that
+  // can also patch the upstream gap (filed as a separate concern).
+  //
+  // The three local-precedence tests above plus the SCHEMA_SOURCE_COMMIT
+  // drift guard plus the `@see` breadcrumb together cover the maintainer-
+  // ergonomic side of Echo's suggestion without dragging upstream noise
+  // into this PR.
+
   test("schema source commit points at the post-myelin#161 originator pin", () => {
     // Lock the pin so future bumps surface in a code review.
     // Updated at cortex#346 — bump from 5a0e261 to 3ec0ace to pick up
