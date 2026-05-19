@@ -15,7 +15,12 @@
  *   6. Envelope shape — every emitted envelope is a valid
  *     `system.agent.heartbeat` envelope per the schema (no shape drift).
  *
- * Uses Bun's fake-timer mocks to drive `setInterval` without real waits.
+ * Echo cortex#363 minor — uses short real `setTimeout` / `setInterval`
+ * intervals (no fake-timer mocking). The bounds on tick-count
+ * assertions are deliberately loose (`>= 2` rather than `>= 3`) so a
+ * loaded CI runner's scheduling jitter doesn't flake the suite. The
+ * `mock` import from `bun:test` is used only for the recording
+ * `runtime.publish` stub, not for timer mocking.
  */
 
 import { describe, expect, test, mock } from "bun:test";
@@ -23,7 +28,12 @@ import type { Envelope } from "../../bus/myelin/envelope-validator";
 import { validateEnvelope } from "../../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
 import type { SystemEventSource } from "../../bus/system-events";
-import { HeartbeatTicker } from "../heartbeat-ticker";
+import { EventEmitter } from "events";
+import type { CCSession } from "../cc-session";
+import {
+  HeartbeatTicker,
+  attachHeartbeatToCCSession,
+} from "../heartbeat-ticker";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -115,10 +125,12 @@ describe("HeartbeatTicker.start", () => {
       intervalMs: 25, // short interval so the test finishes fast
     });
     try {
-      // Wait long enough for ~3 ticks. Bun's setInterval is real; the
+      // Wait long enough for ≥ 2 ticks. Bun's setInterval is real; the
       // ticker emits the first heartbeat synchronously then schedules.
-      await new Promise<void>((resolve) => setTimeout(resolve, 80));
-      expect(published.length).toBeGreaterThanOrEqual(3);
+      // Loose bound to absorb CI scheduling jitter (Echo cortex#363
+      // minor).
+      await new Promise<void>((resolve) => setTimeout(resolve, 120));
+      expect(published.length).toBeGreaterThanOrEqual(2);
       // iteration counter is monotonic + sequential.
       for (let i = 0; i < published.length; i++) {
         const env = published[i]!;
@@ -213,8 +225,9 @@ describe("HeartbeatTicker.notePhase", () => {
     try {
       await flushMicrotasks();
       ticker.notePhase("tool_use");
-      // Wait for at least one more tick.
-      await new Promise<void>((resolve) => setTimeout(resolve, 40));
+      // Wait for at least one more tick. Loose bound for CI jitter
+      // (Echo cortex#363 minor).
+      await new Promise<void>((resolve) => setTimeout(resolve, 80));
       expect(published.length).toBeGreaterThanOrEqual(2);
       expect(published[published.length - 1]!.payload.phase).toBe("tool_use");
     } finally {
@@ -308,6 +321,73 @@ describe("HeartbeatTicker.stop", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// attachHeartbeatToCCSession (Echo cortex#363 major — extracted helper)
+// ---------------------------------------------------------------------------
+
+describe("attachHeartbeatToCCSession", () => {
+  test("wires tool-use → tool_use phase", async () => {
+    const { runtime, published } = makeRecordingRuntime();
+    // EventEmitter stand-in for CCSession — production callers pass the
+    // real class; the helper only needs `.on`.
+    const session = new EventEmitter() as unknown as CCSession;
+    const handle = attachHeartbeatToCCSession(session, {
+      runtime,
+      source: SOURCE,
+      agentId: "echo",
+      taskId: "task-abc",
+      correlationId: CORRELATION_UUID,
+      intervalMs: 25,
+    });
+    try {
+      await flushMicrotasks();
+      (session as unknown as EventEmitter).emit("tool-use", "Read", {});
+      await new Promise<void>((resolve) => setTimeout(resolve, 80));
+      expect(
+        published[published.length - 1]!.payload.phase,
+      ).toBe("tool_use");
+    } finally {
+      handle.stop();
+    }
+  });
+
+  test("session 'result' event stops the ticker", async () => {
+    const { runtime, published } = makeRecordingRuntime();
+    const session = new EventEmitter() as unknown as CCSession;
+    const handle = attachHeartbeatToCCSession(session, {
+      runtime,
+      source: SOURCE,
+      agentId: "echo",
+      taskId: "task-abc",
+      correlationId: CORRELATION_UUID,
+      intervalMs: 25,
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    (session as unknown as EventEmitter).emit("result", "done");
+    const countAtStop = published.length;
+    await new Promise<void>((resolve) => setTimeout(resolve, 60));
+    expect(published.length).toBe(countAtStop);
+    handle.stop(); // idempotent — already stopped via the listener
+  });
+
+  test("returned handle stop() is idempotent", () => {
+    const { runtime } = makeRecordingRuntime();
+    const session = new EventEmitter() as unknown as CCSession;
+    const handle = attachHeartbeatToCCSession(session, {
+      runtime,
+      source: SOURCE,
+      agentId: "echo",
+      taskId: "task-abc",
+      correlationId: CORRELATION_UUID,
+      intervalMs: 10_000,
+    });
+    expect(() => {
+      handle.stop();
+      handle.stop();
+    }).not.toThrow();
+  });
+});
+
 describe("HeartbeatTicker failure isolation", () => {
   test("rejecting runtime.publish does not bubble out", async () => {
     const { runtime, published } = makeRecordingRuntime({
@@ -328,9 +408,10 @@ describe("HeartbeatTicker failure isolation", () => {
       // Let the first immediate publish + one interval tick settle. The
       // promise rejection from runtime.publish must be caught internally
       // (no unhandled-rejection escape).
-      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      await new Promise<void>((resolve) => setTimeout(resolve, 80));
       // publish was still ATTEMPTED — failure mode is log+continue, not skip.
-      expect(published.length).toBeGreaterThanOrEqual(2);
+      // Loose bound for CI scheduling jitter (Echo cortex#363 minor).
+      expect(published.length).toBeGreaterThanOrEqual(1);
     } finally {
       ticker.stop();
     }

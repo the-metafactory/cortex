@@ -42,7 +42,7 @@ import {
 import { AgentTeam } from "../runner/agent-team";
 import { SessionManager } from "../runner/session-manager";
 import { TaskTracker } from "../runner/task-tracker";
-import { HeartbeatTicker } from "../runner/heartbeat-ticker";
+import { attachHeartbeatToCCSession } from "../runner/heartbeat-ticker";
 import {
   processInboundAttachments,
   collectOutputFiles,
@@ -351,8 +351,10 @@ export class DispatchHandler extends EventEmitter {
   /**
    * cortex#361 — Attach a `HeartbeatTicker` to a `CCSession` so the dispatch
    * publishes `system.agent.heartbeat` envelopes on the bus while CC is in
-   * flight. Wires the ticker's `notePhase` to the session's stream events
-   * and stops the ticker on terminal events (`result`, `error`, `exit`).
+   * flight. Delegates to `attachHeartbeatToCCSession` so the wiring (event
+   * mapping, start failure handling) lives in one place and can't drift
+   * between this call site and `ReviewConsumer.attachHeartbeatToSession`
+   * (Echo cortex#363 major — duplication fix).
    *
    * cortex#360 interaction: the chat-path retry loop calls this once per
    * attempt (each attempt spawns a fresh CCSession). All heartbeats from
@@ -374,47 +376,13 @@ export class DispatchHandler extends EventEmitter {
         },
       };
     }
-    const ticker = new HeartbeatTicker();
-    try {
-      ticker.start({
-        runtime: wiring.runtime,
-        source: wiring.source,
-        agentId: this.config.agent.name,
-        taskId: opts.taskId,
-        correlationId: opts.correlationId,
-      });
-    } catch (err) {
-      console.error(
-        "dispatch-handler: HeartbeatTicker.start failed:",
-        err instanceof Error ? err.message : String(err),
-      );
-      return {
-        stop: () => {
-          /* ticker.start() failed; nothing to stop */
-        },
-      };
-    }
-    session.on("tool-use", () => {
-      ticker.notePhase("tool_use");
+    return attachHeartbeatToCCSession(session, {
+      runtime: wiring.runtime,
+      source: wiring.source,
+      agentId: this.config.agent.name,
+      taskId: opts.taskId,
+      correlationId: opts.correlationId,
     });
-    session.on("text", () => {
-      ticker.notePhase("streaming_response");
-    });
-    session.on("result", () => {
-      ticker.notePhase("publishing_verdict");
-      ticker.stop();
-    });
-    session.on("error", () => {
-      ticker.stop();
-    });
-    session.on("exit", () => {
-      ticker.stop();
-    });
-    return {
-      stop: () => {
-        ticker.stop();
-      },
-    };
   }
 
   /** Graceful shutdown: drain tasks, clear intervals */
@@ -1061,8 +1029,11 @@ export class DispatchHandler extends EventEmitter {
 
     // cortex#361 — bus-side liveness heartbeats. Ticker subscribes to the
     // session's own stream events; wiring is independent of typing /
-    // progress (EventEmitter fans out to every listener).
-    this.attachHeartbeatTicker(session, {
+    // progress (EventEmitter fans out to every listener). Echo cortex#363
+    // major — capture the handle + call stop() from terminal callbacks
+    // for defence-in-depth matching the sync path (line 651). Idempotent
+    // stop() makes the redundancy free.
+    const heartbeat = this.attachHeartbeatTicker(session, {
       taskId,
       correlationId: randomUUID(),
     });
@@ -1076,6 +1047,7 @@ export class DispatchHandler extends EventEmitter {
     });
 
     session.on("result", (text: string) => {
+      heartbeat.stop();
       void (async () => {
         clearInterval(typingInterval);
         await adapter.clearProgress(replyTarget);
@@ -1099,6 +1071,7 @@ export class DispatchHandler extends EventEmitter {
     });
 
     session.on("error", (err: Error) => {
+      heartbeat.stop();
       void (async () => {
         clearInterval(typingInterval);
         await adapter.clearProgress(replyTarget);
@@ -1112,6 +1085,7 @@ export class DispatchHandler extends EventEmitter {
     });
 
     session.on("exit", (code: number) => {
+      heartbeat.stop();
       clearInterval(typingInterval);
       if (session.usage) {
         console.log(`dispatch-handler: async task completed (exit ${code}, ${session.usage.inputTokens}in/${session.usage.outputTokens}out)`);

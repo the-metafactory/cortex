@@ -316,6 +316,12 @@ export async function runReviewPipeline(
       // Defence-in-depth: even when ticker listeners stop the ticker on
       // the session's terminal events, an early reject path (e.g. wait()
       // rejects synchronously) might bypass them. stop() is idempotent.
+      // Echo cortex#363 nit — this inner finally is the canonical owner
+      // of cleanup; the outer catch deliberately does NOT call stop()
+      // again. The outer catch only fires when the synchronous
+      // `opts.ccSessionFactory({...})` throws before the handle is ever
+      // assigned (heartbeatHandle is still the noop default at that
+      // point), so a second call would be redundant.
       heartbeatHandle.stop();
     }
   } catch (err) {

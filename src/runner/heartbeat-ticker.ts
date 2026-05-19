@@ -36,6 +36,7 @@ import type {
 } from "../bus/system-events";
 import { createAgentHeartbeatEvent } from "../bus/system-events";
 import type { AgentHeartbeatPayload } from "../common/types/agent-heartbeat";
+import type { CCSession } from "./cc-session";
 
 /** Default tick interval — 30 s, matching the cortex#361 issue body. */
 export const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -86,6 +87,15 @@ export class HeartbeatTicker {
   private lastActivityAt = Date.now();
   private phase: AgentHeartbeatPayload["phase"] = "thinking";
   private iteration = 0;
+  /**
+   * Echo cortex#363 minor — backpressure guard. Counts publishes that
+   * have been issued via `void runtime.publish(...).catch(...)` but not
+   * yet settled. Under a NATS hiccup where each publish stalls past
+   * `intervalMs`, unbounded ticks would accumulate pending promises;
+   * the guard skips a tick when a publish from the previous tick is
+   * still in flight so the in-flight count is bounded at 1.
+   */
+  private inFlight = 0;
 
   /**
    * Begin ticking. Publishes the first heartbeat synchronously (well —
@@ -152,6 +162,18 @@ export class HeartbeatTicker {
   private tick(): void {
     const opts = this.opts;
     if (!opts) return;
+    // Echo cortex#363 minor — bound the in-flight publish count to 1.
+    // If the previous tick's publish hasn't settled by the time this
+    // tick fires, the bus is slower than `intervalMs`; skip and log
+    // once per backpressure event so operators can see it forming
+    // without the log being chatty under steady-state operation.
+    if (this.inFlight > 0) {
+      console.warn(
+        `heartbeat-ticker: skipping tick — previous publish still in flight ` +
+          `(task=${opts.taskId} iteration=${this.iteration})`,
+      );
+      return;
+    }
     this.iteration += 1;
     const lastActivityMsAgo = Math.max(0, Date.now() - this.lastActivityAt);
     const envelopeOpts: SystemAgentHeartbeatOpts = {
@@ -171,19 +193,89 @@ export class HeartbeatTicker {
       // an operational one — but keeping the swallow here means a
       // mis-built envelope from a future schema-tightening doesn't kill
       // a long-running dispatch. Log loudly so it surfaces in stderr.
-      process.stderr.write(
-        `heartbeat-ticker: createAgentHeartbeatEvent failed: ${
-          err instanceof Error ? err.message : String(err)
-        }\n`,
+      console.error(
+        "heartbeat-ticker: createAgentHeartbeatEvent failed:",
+        err instanceof Error ? err.message : String(err),
       );
       return;
     }
-    void opts.runtime.publish(envelope).catch((err: unknown) => {
-      process.stderr.write(
-        `heartbeat-ticker: runtime.publish failed (task=${opts.taskId} iteration=${this.iteration}): ${
-          err instanceof Error ? err.message : String(err)
-        }\n`,
-      );
-    });
+    this.inFlight += 1;
+    const iterationForLog = this.iteration;
+    void opts.runtime
+      .publish(envelope)
+      .catch((err: unknown) => {
+        console.error(
+          `heartbeat-ticker: runtime.publish failed (task=${opts.taskId} iteration=${iterationForLog}):`,
+          err instanceof Error ? err.message : String(err),
+        );
+      })
+      .finally(() => {
+        this.inFlight -= 1;
+      });
   }
+}
+
+/**
+ * Echo cortex#363 major — single attachment helper. Both
+ * `DispatchHandler.attachHeartbeatTicker` and
+ * `ReviewConsumer.attachHeartbeatToSession` collapsed into this primitive
+ * to eliminate duplication. The two call sites now hold no per-call
+ * wiring logic of their own — they construct opts + call this function.
+ *
+ * Wires:
+ *   - `tool-use`          → `notePhase('tool_use')`
+ *   - `text`              → `notePhase('streaming_response')`
+ *   - `result`            → `notePhase('publishing_verdict')` + `stop()`
+ *   - `error`             → `stop()`
+ *   - `exit`              → `stop()`
+ *
+ * Returns a `{ stop }` handle. Calling it is safe at any point —
+ * `HeartbeatTicker.stop()` is idempotent and the registered event
+ * listeners ALSO stop the ticker, so callers can rely on either the
+ * handle or the session's terminal events (whichever fires first).
+ *
+ * When `HeartbeatTicker.start()` throws (only happens on a double-start
+ * — a programming bug, not an operational one), this function logs +
+ * returns a no-op handle so call sites don't have to branch on
+ * exceptions.
+ */
+export function attachHeartbeatToCCSession(
+  session: CCSession,
+  opts: HeartbeatTickerStartOpts,
+): { stop: () => void } {
+  const ticker = new HeartbeatTicker();
+  try {
+    ticker.start(opts);
+  } catch (err) {
+    console.error(
+      `heartbeat-ticker: attachHeartbeatToCCSession start failed (task=${opts.taskId}):`,
+      err instanceof Error ? err.message : String(err),
+    );
+    return {
+      stop: () => {
+        /* ticker.start() failed; nothing to stop */
+      },
+    };
+  }
+  session.on("tool-use", () => {
+    ticker.notePhase("tool_use");
+  });
+  session.on("text", () => {
+    ticker.notePhase("streaming_response");
+  });
+  session.on("result", () => {
+    ticker.notePhase("publishing_verdict");
+    ticker.stop();
+  });
+  session.on("error", () => {
+    ticker.stop();
+  });
+  session.on("exit", () => {
+    ticker.stop();
+  });
+  return {
+    stop: () => {
+      ticker.stop();
+    },
+  };
 }

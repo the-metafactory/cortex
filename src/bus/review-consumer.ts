@@ -88,7 +88,7 @@ import {
 } from "../runner/review-pipeline";
 import type { CCSessionFactory, CCSessionLike } from "../substrates/claude-code/harness";
 import { CCSession, type CCSessionOpts } from "../runner/cc-session";
-import { HeartbeatTicker } from "../runner/heartbeat-ticker";
+import { attachHeartbeatToCCSession } from "../runner/heartbeat-ticker";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -804,20 +804,15 @@ export class ReviewConsumer {
    *
    * Only attaches when the session is a real `CCSession` (an
    * EventEmitter) — test-stub factories return a plain `{ start, wait }`
-   * object without `.on`, so attempting to subscribe would crash. The
-   * runtime instanceof check keeps the path safe for both.
-   *
-   * Returns a `{ stop }` handle the pipeline calls when `session.wait()`
-   * settles. `HeartbeatTicker.stop()` is idempotent and the ticker also
-   * self-stops on the session's `result` / `error` / `exit` events, so
-   * the redundancy is defence-in-depth.
+   * object without `.on`. The runtime `instanceof` check keeps the path
+   * safe for both. Echo cortex#363 major — wiring delegated to
+   * `attachHeartbeatToCCSession` so this helper and
+   * `DispatchHandler.attachHeartbeatTicker` can't drift.
    */
   private attachHeartbeatToSession(
     session: CCSessionLike,
     correlationId: string,
   ): { stop: () => void } {
-    // Test stubs return a plain `{ start, wait }` object; only real
-    // `CCSession` instances expose the EventEmitter `.on` we need.
     if (!(session instanceof CCSession)) {
       return {
         stop: () => {
@@ -825,47 +820,13 @@ export class ReviewConsumer {
         },
       };
     }
-    const ticker = new HeartbeatTicker();
-    try {
-      ticker.start({
-        runtime: this.runtime,
-        source: this.source,
-        agentId: this.agent.id,
-        taskId: correlationId,
-        correlationId,
-      });
-    } catch (err) {
-      process.stderr.write(
-        `review-consumer: HeartbeatTicker.start failed (agent=${this.agent.id}): ` +
-          `${err instanceof Error ? err.message : String(err)}\n`,
-      );
-      return {
-        stop: () => {
-          /* ticker.start() failed; nothing to stop */
-        },
-      };
-    }
-    session.on("tool-use", () => {
-      ticker.notePhase("tool_use");
+    return attachHeartbeatToCCSession(session, {
+      runtime: this.runtime,
+      source: this.source,
+      agentId: this.agent.id,
+      taskId: correlationId,
+      correlationId,
     });
-    session.on("text", () => {
-      ticker.notePhase("streaming_response");
-    });
-    session.on("result", () => {
-      ticker.notePhase("publishing_verdict");
-      ticker.stop();
-    });
-    session.on("error", () => {
-      ticker.stop();
-    });
-    session.on("exit", () => {
-      ticker.stop();
-    });
-    return {
-      stop: () => {
-        ticker.stop();
-      },
-    };
   }
 }
 
