@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test";
 import {
   classifyCcFailure,
   classifyCcSpawnError,
+  isTransientFailure,
 } from "../cc-failure-classifier";
 import type { CCSessionResult } from "../cc-session";
 
@@ -134,9 +135,15 @@ describe("classifyCcSpawnError", () => {
 });
 
 describe("classification stability", () => {
-  test("isTransient helper agrees with classifier kind", () => {
+  test("isTransientFailure helper agrees with classifier kind", () => {
     // The retry-eligible kind is not_now; everything else is terminal.
     // This pins the contract that the chat-path retry loop consumes.
+    // Echo r3 review on cortex#360: the previous shape of this test
+    // asserted only the classifier output and never actually called
+    // `isTransientFailure`, which left the helper-classifier coupling
+    // untested. We now call BOTH so a future divergence between the
+    // classifier and the helper (e.g. adding a new transient kind to
+    // one but not the other) fails here loudly.
     const transientResult: CCSessionResult = {
       success: false,
       response: "",
@@ -146,6 +153,26 @@ describe("classification stability", () => {
       abortReason: "timeout",
     };
     const reason = classifyCcFailure(transientResult);
+    expect(reason).not.toBeNull();
     expect(reason?.kind).toBe("not_now");
+    // Helper agrees: transient classification → retryable.
+    if (reason !== null) {
+      expect(isTransientFailure(reason)).toBe(true);
+    }
+  });
+
+  test("isTransientFailure returns false for terminal kinds", () => {
+    // Pins the inverse direction: every non-`not_now` kind is terminal.
+    // Mirrors the four-way nak taxonomy from `architecture.md` §7.3.
+    expect(isTransientFailure({ kind: "cant_do", detail: "skill misbehaved" })).toBe(false);
+    expect(isTransientFailure({ kind: "wont_do", detail: "policy refused" })).toBe(false);
+    expect(isTransientFailure({ kind: "compliance_block", detail: "attestation forbidden" })).toBe(false);
+    expect(isTransientFailure({ kind: "policy_denied", deny: { reason: "unknown_principal" } })).toBe(false);
+  });
+
+  test("isTransientFailure returns true for spawn-error classifications", () => {
+    // classifyCcSpawnError always returns not_now → the helper agrees.
+    const reason = classifyCcSpawnError(new Error("CC binary missing"));
+    expect(isTransientFailure(reason)).toBe(true);
   });
 });

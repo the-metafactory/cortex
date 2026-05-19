@@ -296,8 +296,15 @@ export class DispatchHandler extends EventEmitter {
    * cortex#360 — Publish a `dispatch.task.failed` envelope for the chat
    * dispatch path after all retry attempts have been exhausted (or the
    * failure was terminal-on-first-attempt). Mirrors the review-consumer
-   * path's failure-envelope emission so observers (worklog-manager,
-   * dashboard, pilot-side subscribers) get the same cross-path observability.
+   * path's `dispatch.task.failed` emission so observers (worklog-manager,
+   * dashboard, pilot-side subscribers) see the same structured failure
+   * shape regardless of which path produced it.
+   *
+   * **Scope honestly stated:** this is **failure-path observability
+   * parity**, NOT full lifecycle parity. The chat-dispatch path does not
+   * (yet) emit `dispatch.task.started` / `.completed` / `.aborted` —
+   * those are tracked in cortex#365 as a separate feature. Successful
+   * chat dispatches remain invisible on the bus until that lands.
    *
    * Fire-and-forget: errors from `runtime.publish` are swallowed + logged
    * so a bus outage can't break the apology-to-Discord response path.
@@ -634,7 +641,10 @@ export class DispatchHandler extends EventEmitter {
     // budget, posting "Still working…" between attempts so the operator
     // sees the bot didn't ghost. Terminal failures (any non-`not_now`
     // reason, or the final retry) emit `dispatch.task.failed` for
-    // cross-path observability parity.
+    // failure-path observability parity with the review-consumer path.
+    // Full lifecycle parity (`.started` / `.completed` / `.aborted`) is
+    // tracked separately in cortex#365 — successful chat dispatches
+    // remain invisible on the bus until that ships.
     const taskId = randomUUID();
     const correlationId = randomUUID();
     const startedAt = new Date();
