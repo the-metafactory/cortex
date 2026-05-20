@@ -22,11 +22,15 @@ not break the signature — a tamper to a known principal could impersonate
 that principal. A clean install resolves the dependency correctly and
 restores the property.
 
-This release adds a CI regression guard
+This release adds a regression guard
 (`envelope-validator.test.ts` — `originator is covered by the signature`)
 that signs an envelope carrying an `originator` block, tampers the
 principal post-sign, and asserts crypto-verify rejects. A stale install
-now fails CI here rather than being found in production. Closes cortex#366.
+now fails the test suite here rather than being found in production. The
+guard is TDD-proven — it fails against a simulated stale install and
+passes against a correct one. (cortex CI does not yet run `bun test`;
+wiring the suite into CI so this guard runs there is tracked in
+cortex#376.) Closes cortex#366.
 
 ## v2.0.7 — chat-path CC failure retry
 

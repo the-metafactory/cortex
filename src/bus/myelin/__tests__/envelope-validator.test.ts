@@ -609,7 +609,14 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
 // they would both still pass while `node_modules` carried old bytes. THIS
 // test is the only one that exercises the actual installed `signEnvelope` +
 // crypto-verify round-trip against the `originator` field, so a stale install
-// fails CI here instead of being found by a security researcher in prod.
+// fails the test suite here instead of being found by a security researcher
+// in prod.
+//
+// NOTE: cortex CI does not yet run `bun test` (only lint + label-check), so
+// this guard does not run in CI *yet* — wiring the test suite into CI is
+// tracked separately in cortex#376. Until then, the guard protects any
+// developer running the suite locally and is TDD-proven (it fails against a
+// stale install and passes against a correct one).
 // ---------------------------------------------------------------------------
 
 describe("envelope-validator — originator signature coverage (cortex#366)", () => {
