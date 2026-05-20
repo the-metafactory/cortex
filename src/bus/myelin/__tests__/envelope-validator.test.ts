@@ -658,6 +658,11 @@ describe("envelope-validator — originator signature coverage (cortex#366)", ()
   } {
     const kp = createUser();
     const nkeyPub = kp.getPublicKey();
+    // `KP`'s concrete class exposes `getRawSeed()` returning the raw
+    // 32-byte ed25519 seed — the shape `signEnvelope` wants. The public
+    // `KeyPair` interface hides it (it only surfaces the wrapped 58-char
+    // NKey-encoded seed via `getSeed()`), so the double-cast reaches the
+    // concrete method. Test-only cast, mirrors verify-signed-by-chain.test.ts.
     const rawSeed = (
       kp as unknown as { getRawSeed(): Uint8Array }
     ).getRawSeed();
@@ -701,7 +706,12 @@ describe("envelope-validator — originator signature coverage (cortex#366)", ()
     });
     expect(ok.valid).toBe(true);
 
-    // Tamper: swap `originator.principal` to a different DID post-sign.
+    // Tamper: swap `originator.principal` to `did:mf:cortex` post-sign — a
+    // KNOWN, registered principal (cortex#366's acceptance criterion asks
+    // for a known principal specifically, because that is the precise
+    // impersonation loophole: an unknown principal would also be caught by
+    // the downstream policy layer, but a known one would not — only the
+    // signature covering `originator` stops it).
     // With a CORRECT myelin install, `originator` is a signable field, so the
     // canonical bytes no longer match the signature → crypto verify rejects.
     // With a STALE myelin install, `originator` is outside SIGNABLE_FIELDS,
@@ -710,7 +720,7 @@ describe("envelope-validator — originator signature coverage (cortex#366)", ()
     const tampered: Envelope = {
       ...(signed as Envelope),
       originator: {
-        principal: "did:mf:mallory",
+        principal: "did:mf:cortex",
         attribution: "adapter-resolved",
       },
     };

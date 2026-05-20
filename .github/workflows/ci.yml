@@ -60,3 +60,27 @@ jobs:
 
       - name: ESLint (errors only — blocking gate)
         run: bun run lint:errors
+
+  # ──────────────────────────────────────────────────────────────────
+  # Test — bun test suite. Added at cortex#366: the originator-signature
+  # regression incident (PR #358) merged green because CI never ran the
+  # test suite — only label-check + lint. `bun install --frozen-lockfile`
+  # resolves github-commit-pinned deps (e.g. @the-metafactory/myelin)
+  # from the locked SHA, so a stale dependency tree fails here rather
+  # than reaching production. Closes the enforcement gap cortex#366
+  # identifies.
+  # ──────────────────────────────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: bun test (blocking gate)
+        run: bun test
