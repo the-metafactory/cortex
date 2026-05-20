@@ -1,5 +1,12 @@
 import { describe, test, expect } from "bun:test";
 import { CCSession, type CCSessionOpts } from "../cc-session";
+import { hasClaude } from "../../common/test-utils";
+
+// Tests that spawn the real `claude` binary skip on CI runners where the
+// binary isn't installed. Locally they still run — keeping coverage close
+// to production behaviour without forcing CI maintainers to provision a
+// stub `claude`.
+const testClaude = test.skipIf(!hasClaude);
 
 describe("CCSession", () => {
   test("constructs with required opts", () => {
@@ -12,7 +19,7 @@ describe("CCSession", () => {
     expect(session.result).toBeUndefined();
   });
 
-  test("emits events in correct order for a successful run", async () => {
+  testClaude("emits events in correct order for a successful run", async () => {
     const session = new CCSession({
       prompt: "Say just the word hello, nothing else",
       groveChannel: "test",
@@ -51,7 +58,7 @@ describe("CCSession", () => {
     expect(events).toContain("exit");
   }, 60_000); // Allow up to 60s for Claude to respond
 
-  test("handles timeout", async () => {
+  testClaude("handles timeout", async () => {
     const session = new CCSession({
       prompt: "Write a very long essay about the history of the universe",
       groveChannel: "test",
@@ -71,7 +78,7 @@ describe("CCSession", () => {
     expect(result.exitCode).not.toBe(0);
   }, 10_000);
 
-  test("wait() auto-starts if not started", async () => {
+  testClaude("wait() auto-starts if not started", async () => {
     const session = new CCSession({
       prompt: "Say just the word ok",
       groveChannel: "test",
@@ -86,7 +93,7 @@ describe("CCSession", () => {
     expect(result).toHaveProperty("durationMs");
   }, 60_000);
 
-  test("result is stored on session object", async () => {
+  testClaude("result is stored on session object", async () => {
     const session = new CCSession({
       prompt: "Say just the word yes",
       groveChannel: "test",

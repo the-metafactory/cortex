@@ -60,3 +60,49 @@ jobs:
 
       - name: ESLint (errors only — blocking gate)
         run: bun run lint:errors
+
+  # ──────────────────────────────────────────────────────────────────
+  # Typecheck — `tsc --noEmit` against the project's tsconfig.json.
+  # Pre-cortex#376 there was no CI gate against type errors, so 5
+  # pre-existing errors sat on `main` undetected (cleared in PR #382).
+  # Blocking gate; matches the lint job's contract.
+  # ──────────────────────────────────────────────────────────────────
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: tsc --noEmit
+        run: bunx tsc --noEmit
+
+  # ──────────────────────────────────────────────────────────────────
+  # Test — `bun test` runs the full unit/integration suite. Pre-cortex#376
+  # CI never ran tests, so cortex#366 (originator security regression)
+  # sat on main even though a test covered it. This gate is the
+  # enforcement layer under every other correctness guarantee.
+  #
+  # Tests that spawn the real `claude` binary self-skip on CI via
+  # `test.skipIf(!hasClaude)` (src/common/test-utils.ts) — the binary
+  # is not installed on GitHub Actions runners.
+  # ──────────────────────────────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: bun test
+        run: bun test

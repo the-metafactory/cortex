@@ -47,21 +47,26 @@ interface TestContext {
   tmpDir: string;
 }
 
-function makePort(): number {
-  // Random high port to avoid conflicts when tests run in parallel.
-  return 19000 + Math.floor(Math.random() * 1000);
-}
+// Port 0 → OS assigns a free port; the bound port is read back from
+// `ctx.server.port`. The previous `19000 + random(1000)` approach
+// produced EADDRINUSE flakes under parallel test execution because
+// 120 tests against a 1000-port window collide with ~50% probability.
+const PORT_BIND_ANY = 0;
 
 async function setup(): Promise<TestContext> {
   const tmpDir = join(tmpdir(), `mc-api-test-${Date.now()}-${Math.random()}`);
   const db = initDatabase(join(tmpDir, "test.db"));
   const pm = new ProcessManager();
-  const port = makePort();
   const ctx = startServer(
-    { ...DEFAULT_CONFIG, port },
+    { ...DEFAULT_CONFIG, port: PORT_BIND_ANY },
     db,
     { processManager: pm, spawn: fakeCatSpawn }
   );
+  // Bun.serve guarantees a numeric port once started. The optional type
+  // on Server.port reflects pre-started state; here we have a running
+  // server so a missing port is a runtime invariant violation.
+  const port = ctx.server.port;
+  if (port === undefined) throw new Error("setup: server.port unresolved after start");
   return { db, ctx, pm, port, baseUrl: `http://localhost:${port}`, tmpDir };
 }
 
@@ -569,7 +574,6 @@ describe("POST /api/sessions — F-11 Discord notification hook", () => {
     const tmpDir = join(tmpdir(), `mc-api-f11-${Date.now()}-${Math.random()}`);
     const db = initDatabase(join(tmpDir, "test.db"));
     const pm = new ProcessManager();
-    const port = makePort();
     calls = [];
 
     // Fake notifier — never writes to Discord; just lets the test count
@@ -586,7 +590,7 @@ describe("POST /api/sessions — F-11 Discord notification hook", () => {
     };
 
     const ctx = startServer(
-      { ...DEFAULT_CONFIG, port },
+      { ...DEFAULT_CONFIG, port: PORT_BIND_ANY },
       db,
       {
         processManager: pm,
@@ -602,6 +606,8 @@ describe("POST /api/sessions — F-11 Discord notification hook", () => {
         },
       }
     );
+    const port = ctx.server.port;
+    if (port === undefined) throw new Error("F-11 setup: server.port unresolved after start");
     t = { db, ctx, pm, port, baseUrl: `http://localhost:${port}`, tmpDir };
   });
   afterEach(async () => {
@@ -1193,8 +1199,9 @@ describe("REST unavailable without ProcessManager", () => {
   it("returns 503 on POST /api/sessions", async () => {
     const tmpDir = join(tmpdir(), `mc-api-test-noop-${Date.now()}`);
     const db = initDatabase(join(tmpDir, "test.db"));
-    const port = makePort();
-    const ctx = startServer({ ...DEFAULT_CONFIG, port }, db);
+    const ctx = startServer({ ...DEFAULT_CONFIG, port: PORT_BIND_ANY }, db);
+    const port = ctx.server.port;
+    if (port === undefined) throw new Error("noop setup: server.port unresolved after start");
     try {
       const res = await fetch(`http://localhost:${port}/api/sessions`, {
         method: "POST",
