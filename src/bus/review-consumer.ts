@@ -873,28 +873,78 @@ export function extractFlavor(envelope: Envelope, _subject: string): string | nu
 }
 
 /**
- * Minimal payload parse — re-uses the spec's invariants (`repo` matches
- * `owner/name`; `pr` is a positive integer). Returns `null` on any shape
- * violation. The pipeline (PR-5) trusts an already-parsed payload, so
- * the validation must happen here.
+ * Sentinel reviewer name for Offer-dispatch envelopes that omit the
+ * `reviewer` field. The bus picks the assistant by capability +
+ * subject; the reviewer field is informational for surfaces only.
+ * Per cortex/CONTEXT.md the receiving being is the **assistant**;
+ * this constant stands in when the publisher hasn't named one.
+ */
+export const OFFER_DISPATCH_REVIEWER = "capability-dispatch";
+
+const SEGMENT_RE = /^[A-Za-z0-9][\w.-]*$/;
+const OWNER_REPO_RE = /^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/;
+
+/**
+ * Parse a review-request envelope payload into the canonical
+ * {@link ReviewRequestPayload}. Two wire shapes are accepted:
+ *
+ * 1. **Cortex legacy** (`tasks.code-review.<flavor>` builders prior to
+ *    cortex#346 / pilot#121): `{ repo: "owner/name", pr: number,
+ *    reviewer: string }`.
+ * 2. **Pilot / Sage Offer dispatch** (current `pilot request-review
+ *    --pr OWNER/REPO#N` shape and Sage's `sage dispatch` envelopes):
+ *    `{ owner: string, repo: string, number: number, pr_url?: string }`.
+ *    `pr_url` is ignored once `owner`/`repo`/`number` are present.
+ *
+ * Both shapes normalise to the canonical `{ repo, pr, reviewer }`
+ * triple before returning. An empty/absent `reviewer` is treated as
+ * an Offer-dispatch signal — the capability + subject pick the
+ * **assistant**, and the reviewer field is filled with
+ * {@link OFFER_DISPATCH_REVIEWER}. (cortex#384.)
+ *
+ * Returns `null` on any shape violation. The pipeline (PR-5) trusts
+ * an already-parsed payload, so the validation must happen here.
  */
 export function parseReviewRequestPayload(
   envelope: Envelope,
 ): ReviewRequestPayload | null {
   const p = envelope.payload as Record<string, unknown> | undefined;
   if (!p || typeof p !== "object") return null;
-  const repo = p.repo;
-  const pr = p.pr;
-  const reviewer = p.reviewer;
-  if (typeof repo !== "string" || !/^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/.test(repo)) {
+
+  let repo: string;
+  let pr: number;
+
+  if (typeof p.owner === "string" && typeof p.number === "number") {
+    // Pilot/Sage shape — fold `owner` + `repo` into the legacy
+    // `owner/name` form before downstream consumers see the payload.
+    if (typeof p.repo !== "string") return null;
+    if (!SEGMENT_RE.test(p.owner) || !SEGMENT_RE.test(p.repo)) return null;
+    repo = `${p.owner}/${p.repo}`;
+    pr = p.number;
+  } else {
+    // Cortex legacy shape.
+    if (typeof p.repo !== "string" || !OWNER_REPO_RE.test(p.repo)) return null;
+    if (typeof p.pr !== "number") return null;
+    repo = p.repo;
+    pr = p.pr;
+  }
+
+  if (!Number.isInteger(pr) || pr <= 0) return null;
+
+  // Reviewer is informational on Offer dispatch — the capability
+  // routes the envelope, not this field. Empty / absent / null all
+  // collapse to the OFFER_DISPATCH_REVIEWER sentinel so the downstream
+  // payload shape stays uniform.
+  const reviewerRaw = p.reviewer;
+  let reviewer: string;
+  if (reviewerRaw === undefined || reviewerRaw === null || reviewerRaw === "") {
+    reviewer = OFFER_DISPATCH_REVIEWER;
+  } else if (typeof reviewerRaw === "string") {
+    reviewer = reviewerRaw;
+  } else {
     return null;
   }
-  if (typeof pr !== "number" || !Number.isInteger(pr) || pr <= 0) {
-    return null;
-  }
-  if (typeof reviewer !== "string" || reviewer.length === 0) {
-    return null;
-  }
+
   const out: ReviewRequestPayload = { repo, pr, reviewer };
   if (typeof p.feature === "string") out.feature = p.feature;
   if (typeof p.title === "string") out.title = p.title;

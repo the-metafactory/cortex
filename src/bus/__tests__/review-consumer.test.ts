@@ -39,7 +39,9 @@ import type {
 } from "../myelin/runtime";
 import {
   ReviewConsumer,
+  OFFER_DISPATCH_REVIEWER,
   failedReasonToAckDecision,
+  parseReviewRequestPayload,
   type ReviewConsumerAgent,
   type ReviewConsumerOpts,
 } from "../review-consumer";
@@ -794,4 +796,172 @@ describe("failedReasonToAckDecision (cortex#237 PR-6 — Architect Finding 2a)",
       expect(failedReasonToAckDecision(reason)).toEqual(expected);
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// cortex#384 — parseReviewRequestPayload accepts both wire shapes
+// ---------------------------------------------------------------------------
+//
+// The Offer-dispatch envelope a **principal**'s pilot stack publishes
+// onto `local.{principal}.{stack}.tasks.code-review.<flavor>` carries
+// the **payload** in one of two grilled-vocabulary shapes:
+//
+//   1. **Cortex legacy** — pre-cortex#384 builders (`createReviewRequestEvent`)
+//      flatten `repo` as `"owner/name"` plus `pr` (number) + non-empty
+//      `reviewer` string.
+//   2. **Pilot / Sage Offer dispatch** — `pilot request-review --pr
+//      OWNER/REPO#N` and `sage dispatch` envelopes split the repo into
+//      `owner` + `repo` segments and rename `pr` to `number`; the
+//      `reviewer` field is empty because the **capability** routes the
+//      envelope, not the field.
+//
+// Both shapes must yield the same normalised `{ repo, pr, reviewer }`
+// triple downstream.
+
+function makeRequestEnvelope(payload: unknown): Envelope {
+  return {
+    id: "00000000-0000-4000-8000-000000000001",
+    type: "tasks.code-review.typescript",
+    source: "metafactory.pilot.local",
+    timestamp: new Date().toISOString(),
+    correlation_id: "00000000-0000-4000-8000-000000000002",
+    signed_by: [],
+    sovereignty: { classification: "local" },
+    payload,
+  } as unknown as Envelope;
+}
+
+describe("parseReviewRequestPayload — cortex#384 dual-shape acceptance", () => {
+  test("cortex-legacy shape parses to the canonical triple", () => {
+    const env = makeRequestEnvelope({
+      repo: "the-metafactory/cortex",
+      pr: 385,
+      reviewer: "sage",
+    });
+    const parsed = parseReviewRequestPayload(env);
+    expect(parsed).toEqual({
+      repo: "the-metafactory/cortex",
+      pr: 385,
+      reviewer: "sage",
+    });
+  });
+
+  test("pilot/sage shape (owner+repo+number) folds into legacy form", () => {
+    const env = makeRequestEnvelope({
+      owner: "the-metafactory",
+      repo: "soma",
+      number: 169,
+      pr_url: "https://github.com/the-metafactory/soma/pull/169",
+      reviewer: "",
+    });
+    const parsed = parseReviewRequestPayload(env);
+    expect(parsed).toEqual({
+      repo: "the-metafactory/soma",
+      pr: 169,
+      reviewer: OFFER_DISPATCH_REVIEWER,
+    });
+  });
+
+  test("pilot shape with non-empty reviewer is preserved", () => {
+    const env = makeRequestEnvelope({
+      owner: "the-metafactory",
+      repo: "cortex",
+      number: 1,
+      reviewer: "echo",
+    });
+    expect(parseReviewRequestPayload(env)?.reviewer).toBe("echo");
+  });
+
+  test("empty reviewer in legacy shape collapses to OFFER_DISPATCH_REVIEWER", () => {
+    const env = makeRequestEnvelope({
+      repo: "the-metafactory/cortex",
+      pr: 42,
+      reviewer: "",
+    });
+    expect(parseReviewRequestPayload(env)?.reviewer).toBe(OFFER_DISPATCH_REVIEWER);
+  });
+
+  test("absent reviewer in pilot shape collapses to OFFER_DISPATCH_REVIEWER", () => {
+    const env = makeRequestEnvelope({
+      owner: "the-metafactory",
+      repo: "cortex",
+      number: 7,
+    });
+    expect(parseReviewRequestPayload(env)?.reviewer).toBe(OFFER_DISPATCH_REVIEWER);
+  });
+
+  test("null reviewer collapses to OFFER_DISPATCH_REVIEWER", () => {
+    const env = makeRequestEnvelope({
+      repo: "the-metafactory/cortex",
+      pr: 1,
+      reviewer: null,
+    });
+    expect(parseReviewRequestPayload(env)?.reviewer).toBe(OFFER_DISPATCH_REVIEWER);
+  });
+
+  test("optional fields (feature/title/cycle/note) flow through both shapes", () => {
+    const legacy = parseReviewRequestPayload(
+      makeRequestEnvelope({
+        repo: "the-metafactory/cortex",
+        pr: 100,
+        reviewer: "echo",
+        feature: "C-237",
+        title: "feat: x",
+        cycle: 3,
+        note: "round 3",
+      }),
+    );
+    expect(legacy).toMatchObject({ feature: "C-237", title: "feat: x", cycle: 3, note: "round 3" });
+
+    const pilot = parseReviewRequestPayload(
+      makeRequestEnvelope({
+        owner: "the-metafactory",
+        repo: "cortex",
+        number: 200,
+        feature: "C-238",
+        title: "fix: y",
+      }),
+    );
+    expect(pilot).toMatchObject({ feature: "C-238", title: "fix: y" });
+  });
+
+  test("invalid: neither shape present → null", () => {
+    expect(parseReviewRequestPayload(makeRequestEnvelope({}))).toBeNull();
+  });
+
+  test("invalid: pilot shape with bad owner segment → null", () => {
+    const env = makeRequestEnvelope({
+      owner: "bad/owner",
+      repo: "cortex",
+      number: 1,
+    });
+    expect(parseReviewRequestPayload(env)).toBeNull();
+  });
+
+  test("invalid: legacy shape with negative pr → null", () => {
+    const env = makeRequestEnvelope({
+      repo: "the-metafactory/cortex",
+      pr: -1,
+      reviewer: "echo",
+    });
+    expect(parseReviewRequestPayload(env)).toBeNull();
+  });
+
+  test("invalid: pilot shape with non-integer number → null", () => {
+    const env = makeRequestEnvelope({
+      owner: "the-metafactory",
+      repo: "cortex",
+      number: 1.5,
+    });
+    expect(parseReviewRequestPayload(env)).toBeNull();
+  });
+
+  test("invalid: non-string non-null reviewer → null", () => {
+    const env = makeRequestEnvelope({
+      repo: "the-metafactory/cortex",
+      pr: 1,
+      reviewer: 42,
+    });
+    expect(parseReviewRequestPayload(env)).toBeNull();
+  });
 });
