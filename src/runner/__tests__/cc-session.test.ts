@@ -1,12 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { CCSession, type CCSessionOpts } from "../cc-session";
-import { hasClaude } from "../../common/test-utils";
-
-// Tests that spawn the real `claude` binary skip on CI runners where the
-// binary isn't installed. Locally they still run — keeping coverage close
-// to production behaviour without forcing CI maintainers to provision a
-// stub `claude`.
-const testClaude = test.skipIf(!hasClaude);
+import { testClaude } from "../../common/test-utils";
 
 describe("CCSession", () => {
   test("constructs with required opts", () => {

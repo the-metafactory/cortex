@@ -8,11 +8,7 @@ import {
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
 import type { TrustResolver } from "../../common/agents/trust-resolver";
 import type { DispatchEventSource } from "../../bus/dispatch-events";
-import { hasClaude } from "../../common/test-utils";
-
-// See cc-session.test.ts for the rationale: tests that spawn the real
-// `claude` binary skip on CI runners without it.
-const testClaude = test.skipIf(!hasClaude);
+import { testClaude } from "../../common/test-utils";
 
 // =============================================================================
 // Bus-peer test fixtures (IAW Phase B.2b)
