@@ -1,7 +1,7 @@
 // F-3 — cortex agents reload/list CLI tests.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync, copyFileSync, mkdirSync, readdirSync, readFileSync } from "fs";
+import { mkdtempSync, writeFileSync, copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -207,14 +207,16 @@ describe("runAgentsReload", () => {
     const home = process.env.HOME;
     if (!home) return; // skip if HOME unset (CI rarity)
     const personaHomeRel = `f3-b1-persona-${Date.now()}`;
-    const personaAbs = join(home, personaHomeRel, "echo.md");
-    mkdirSync(join(home, personaHomeRel), { recursive: true });
-    writeFileSync(personaAbs, `---\ndisplayName: Echo\n---\n`);
+    const personaHomeAbs = join(home, personaHomeRel);
+    const personaAbs = join(personaHomeAbs, "echo.md");
+    mkdirSync(personaHomeAbs, { recursive: true });
+    try {
+      writeFileSync(personaAbs, `---\ndisplayName: Echo\n---\n`);
 
-    const fragmentDir = mkdtempSync(join(tmpdir(), "f3-b1-frag-"));
-    writeFileSync(
-      join(fragmentDir, "echo.yaml"),
-      `id: echo
+      const fragmentDir = mkdtempSync(join(tmpdir(), "f3-b1-frag-"));
+      writeFileSync(
+        join(fragmentDir, "echo.yaml"),
+        `id: echo
 displayName: Echo
 persona: "~/${personaHomeRel}/echo.md"
 roles: [agent-restricted]
@@ -226,13 +228,16 @@ presence:
     agentChannelId: "1"
     logChannelId: "2"
 `,
-    );
+      );
 
-    const r = runAgentsReload(
-      parseAgentsArgs(["reload", "--fragment", join(fragmentDir, "echo.yaml")]),
-    );
-    expect(r.exitCode).toBe(0);
-    expect(r.stdout).toContain("echo");
+      const r = runAgentsReload(
+        parseAgentsArgs(["reload", "--fragment", join(fragmentDir, "echo.yaml")]),
+      );
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain("echo");
+    } finally {
+      rmSync(personaHomeAbs, { recursive: true, force: true });
+    }
   });
 
   test("--fragment routes a schema-validation failure (not just YAML-parse) — m3 nit", () => {

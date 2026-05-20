@@ -5,7 +5,7 @@
 // `../loader` — pure function, no side effects beyond reading disk.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "fs";
+import { mkdtempSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -388,20 +388,24 @@ runtime:
       }
       const dir = mkdtempSync(join(tmpdir(), "agents-d-tilde-"));
       const homeRelDir = mkdtempSync(join(home, "tilde-persona-"));
-      const personaName = "echo.md";
-      writeFileSync(
-        join(homeRelDir, personaName),
-        `---\ndisplayName: Echo\n---\n`,
-      );
-      // homeRelDir is e.g. /Users/x/tilde-persona-abc — strip $HOME to get the
-      // tilde-relative path: ~/tilde-persona-abc/echo.md
-      const tildePath = `~${homeRelDir.slice(home.length)}/${personaName}`;
-      writeFileSync(
-        join(dir, "echo.yaml"),
-        validFragmentYaml("echo", "Echo", tildePath),
-      );
-      const agents = loadAgentsDirectory(dir);
-      expect(agents[0]!.persona.startsWith(home)).toBe(true);
+      try {
+        const personaName = "echo.md";
+        writeFileSync(
+          join(homeRelDir, personaName),
+          `---\ndisplayName: Echo\n---\n`,
+        );
+        // homeRelDir is e.g. /Users/x/tilde-persona-abc — strip $HOME to get
+        // the tilde-relative path: ~/tilde-persona-abc/echo.md
+        const tildePath = `~${homeRelDir.slice(home.length)}/${personaName}`;
+        writeFileSync(
+          join(dir, "echo.yaml"),
+          validFragmentYaml("echo", "Echo", tildePath),
+        );
+        const agents = loadAgentsDirectory(dir);
+        expect(agents[0]!.persona.startsWith(home)).toBe(true);
+      } finally {
+        rmSync(homeRelDir, { recursive: true, force: true });
+      }
     });
   });
 });
