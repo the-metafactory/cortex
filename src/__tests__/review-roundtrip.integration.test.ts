@@ -87,9 +87,9 @@ function makeConfig(url: string): BotConfig {
   } as unknown as BotConfig;
 }
 
-function stubCcFactory(): CCSessionFactory {
+const stubCcFactory: CCSessionFactory = () => {
   throw new Error("integration test pipelineRunner should not spawn Claude Code");
-}
+};
 
 function buildVerdictEnvelope(request: Envelope): Envelope {
   return createReviewVerdictEvent({
@@ -102,6 +102,9 @@ function buildVerdictEnvelope(request: Envelope): Envelope {
       reviewer: "echo",
       verdict: "approved",
       summary: "integration smoke approved",
+      github_review_id: 1,
+      github_review_url: "https://github.com/example/repo/pull/1#pullrequestreview-1",
+      commit_id: "0000000000000000000000000000000000000000",
       findings: { blockers: 0, majors: 0, nits: 0 },
       inline_comments: 0,
       submitted_at: "2026-05-19T00:00:00Z",

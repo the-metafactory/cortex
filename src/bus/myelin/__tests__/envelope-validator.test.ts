@@ -700,7 +700,7 @@ describe("envelope-validator — originator signature coverage (cortex#366)", ()
         principal: "did:mf:echo",
         attribution: "adapter-resolved",
       },
-    } as Parameters<typeof signEnvelope>[0];
+    } as unknown as Parameters<typeof signEnvelope>[0];
     const signed = await signEnvelope(base, echoSeed, "did:mf:echo");
 
     // Sanity: the happy path verifies. If this fails the fixture is broken,

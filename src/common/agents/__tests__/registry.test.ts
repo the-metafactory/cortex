@@ -63,6 +63,16 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
       id: "andreas",
       dataResidency: "NZ",
     },
+    bus: {
+      review: {
+        stream: {
+          name: "CODE_REVIEW",
+          maxAgeSeconds: 86_400,
+          maxBytes: 512 * 1024 * 1024,
+        },
+        consumer: { maxDeliver: 5 },
+      },
+    },
     agents,
     renderers: [],
     claude: {

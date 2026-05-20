@@ -2087,13 +2087,13 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
 
     // Sign the envelope WITH originator → signature commits to it.
     const base = makeReceivedEnvelope() as Parameters<typeof signEnvelope>[0];
-    const baseWithOriginator: Parameters<typeof signEnvelope>[0] = {
+    const baseWithOriginator = {
       ...base,
       originator: {
         principal: "did:mf:cortex",
         attribution: "adapter-resolved",
       },
-    };
+    } as unknown as Parameters<typeof signEnvelope>[0];
     const signed = await signEnvelope(
       baseWithOriginator,
       privateKeyBase64,
