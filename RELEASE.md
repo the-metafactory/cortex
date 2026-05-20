@@ -1,5 +1,33 @@
 # Cortex Release Notes
 
+## v2.0.9 — security: restore originator signature coverage
+
+Fixes a dependency-install staleness that left the envelope `originator`
+field outside the signed field set — restoring tamper-detection on the
+policy-attribution claim.
+
+PR #358 (cortex#346, v2.0.6) wired myelin#161's `Envelope.originator`
+policy-attribution field through cortex on the contract that `originator`
+is in myelin's `SIGNABLE_FIELDS`, so tampering it post-sign invalidates the
+stack signature and the receiver rejects with a crypto failure. That
+contract did not hold on `main`: a worktree `bun install` during an
+unrelated rebase resolved the github-commit-pinned myelin dependency to a
+cached older tree whose `SIGNABLE_FIELDS` stopped at `target_principal`.
+`package.json` and `bun.lock` both pinned the correct SHA the whole time —
+only an installed `node_modules/@the-metafactory/myelin` could be stale.
+
+Consequence while stale: `signEnvelope()` signed over the old field set,
+`originator` never entered the signed bytes, and tampering it post-sign did
+not break the signature — a tamper to a known principal could impersonate
+that principal. A clean install resolves the dependency correctly and
+restores the property.
+
+This release adds a CI regression guard
+(`envelope-validator.test.ts` — `originator is covered by the signature`)
+that signs an envelope carrying an `originator` block, tampers the
+principal post-sign, and asserts crypto-verify rejects. A stale install
+now fails CI here rather than being found in production. Closes cortex#366.
+
 ## v2.0.7 — chat-path CC failure retry
 
 Chat-dispatch (Discord / Mattermost `@mention` and DM) now retries transient

@@ -9,6 +9,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { createUser } from "@nats-io/nkeys";
+import { signEnvelope } from "@the-metafactory/myelin/identity";
 import {
   deriveNatsSubject,
   getActorPrincipal,
@@ -20,6 +22,10 @@ import {
   validateSubjectEnvelopeAlignment,
   type Envelope,
 } from "../envelope-validator";
+import { verifySignedByChain } from "../../verify-signed-by-chain";
+import { AgentRegistry } from "../../../common/agents/registry";
+import { TrustResolver } from "../../../common/agents/trust-resolver";
+import type { Agent } from "../../../common/types/cortex-config";
 import validEnvelope from "../vendor/__fixtures__/valid-envelope.json" with { type: "json" };
 import invalidMissingSovereignty from "../vendor/__fixtures__/invalid-missing-sovereignty.json" with { type: "json" };
 
@@ -574,6 +580,152 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
     const match = /#([0-9a-f]{40})$/.exec(myelinDep!);
     expect(match).not.toBeNull();
     expect(match![1]).toBe(SCHEMA_SOURCE_COMMIT);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#366 — stale-myelin-install regression guard.
+//
+// WHY THIS GUARD EXISTS — DO NOT DELETE AS REDUNDANT.
+//
+// PR #358 (cortex#346, v2.0.6) wired myelin#161's `Envelope.originator`
+// policy-attribution field through cortex on the security contract that
+// `originator` is in myelin's `SIGNABLE_FIELDS` — so tampering it post-sign
+// invalidates the stack signature and the receiver rejects with a crypto
+// failure.
+//
+// That contract silently did NOT hold on `main`: a worktree `bun install`
+// during an unrelated rebase resolved the github-commit-pinned myelin dep to
+// a cached OLDER tree whose `SIGNABLE_FIELDS` stopped at `target_principal`
+// and did not include `originator`. `package.json` and `bun.lock` both pinned
+// the correct SHA (3ec0ace) the whole time — only the installed
+// `node_modules/@the-metafactory/myelin` was stale. The result: `signEnvelope`
+// signed over the stale field set, `originator` never entered the signed
+// bytes, and tampering it post-sign did not break the signature. Tamper to a
+// KNOWN principal would have impersonated that principal. (cortex#366, P1.)
+//
+// The `SCHEMA_SOURCE_COMMIT` guards above pin the *schema string* copy and
+// the package.json *pin*. Neither catches a stale *installed signing path* —
+// they would both still pass while `node_modules` carried old bytes. THIS
+// test is the only one that exercises the actual installed `signEnvelope` +
+// crypto-verify round-trip against the `originator` field, so a stale install
+// fails CI here instead of being found by a security researcher in prod.
+// ---------------------------------------------------------------------------
+
+describe("envelope-validator — originator signature coverage (cortex#366)", () => {
+  // Minimal Discord presence block so the Agent fixture type-checks; the
+  // crypto round-trip below does not touch presence.
+  function discordPresence() {
+    return {
+      enabled: true,
+      token: "discord-bot-token",
+      guildId: "1487000000000000000",
+      agentChannelId: "1487000000000000001",
+      logChannelId: "1487000000000000002",
+      contextDepth: 10,
+      enableAgentLog: false,
+      roles: [],
+      defaultRole: "allow-all",
+      dm: {
+        operatorRole: {
+          features: ["chat", "async", "team"] as const,
+          disallowedTools: [],
+          bashGuard: true,
+        },
+        defaultRole: "denied" as const,
+        userRoles: [],
+      },
+    };
+  }
+
+  function agentFixture(overrides: Partial<Agent> = {}): Agent {
+    return {
+      id: "luna",
+      displayName: "Luna",
+      persona: "./personas/luna.md",
+      roles: [],
+      trust: [],
+      presence: { discord: discordPresence() },
+      ...overrides,
+    } as Agent;
+  }
+
+  // Fresh ed25519 NATS user keypair — `nkeyPub` (U-prefixed base32) for the
+  // agent registry, `privateKeyBase64` (raw 32-byte seed) for `signEnvelope`.
+  function generateEd25519KeyPair(): {
+    nkeyPub: string;
+    privateKeyBase64: string;
+  } {
+    const kp = createUser();
+    const nkeyPub = kp.getPublicKey();
+    const rawSeed = (
+      kp as unknown as { getRawSeed(): Uint8Array }
+    ).getRawSeed();
+    const privateKeyBase64 = Buffer.from(rawSeed).toString("base64");
+    return { nkeyPub, privateKeyBase64 };
+  }
+
+  test("originator is covered by the signature — stale myelin install regression guard (cortex#366)", async () => {
+    // Receiver "cortex" trusts sender "echo".
+    const { nkeyPub: echoNKey, privateKeyBase64: echoSeed } =
+      generateEd25519KeyPair();
+    const cortex = agentFixture({ id: "cortex", trust: ["echo"] });
+    const echo = agentFixture({
+      id: "echo",
+      displayName: "Echo",
+      nkey_pub: echoNKey,
+    });
+    const resolver = new TrustResolver(
+      AgentRegistry.fromAgents([cortex, echo]),
+    );
+
+    // Build an envelope that carries an `originator` block, then sign it.
+    // If `originator` is in myelin's SIGNABLE_FIELDS (correct install), the
+    // signer commits to it; the canonical bytes include `originator`.
+    const base = {
+      ...(validEnvelope as object),
+      originator: {
+        principal: "did:mf:echo",
+        attribution: "adapter-resolved",
+      },
+    } as Parameters<typeof signEnvelope>[0];
+    const signed = await signEnvelope(base, echoSeed, "did:mf:echo");
+
+    // Sanity: the happy path verifies. If this fails the fixture is broken,
+    // not the security property.
+    const ok = await verifySignedByChain(signed, {
+      resolver,
+      receivingAgentId: "cortex",
+      cryptoVerify: true,
+      operatorId: "test-operator",
+    });
+    expect(ok.valid).toBe(true);
+
+    // Tamper: swap `originator.principal` to a different DID post-sign.
+    // With a CORRECT myelin install, `originator` is a signable field, so the
+    // canonical bytes no longer match the signature → crypto verify rejects.
+    // With a STALE myelin install, `originator` is outside SIGNABLE_FIELDS,
+    // the tampered bytes still match the signature, and this assertion FAILS
+    // (the verify returns valid:true) — which is exactly the cortex#366 bug.
+    const tampered: Envelope = {
+      ...(signed as Envelope),
+      originator: {
+        principal: "did:mf:mallory",
+        attribution: "adapter-resolved",
+      },
+    };
+
+    const result = await verifySignedByChain(tampered, {
+      resolver,
+      receivingAgentId: "cortex",
+      cryptoVerify: true,
+      operatorId: "test-operator",
+    });
+
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.reason.kind).toBe("crypto_verify_failed");
+    }
   });
 });
 
