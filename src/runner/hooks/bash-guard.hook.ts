@@ -10,10 +10,25 @@
  *   { "rules": [{ "pattern": "^gh\\s+pr", "repos": ["owner/repo"] }] }
  *
  * If no config env var, uses sensible defaults (gh, git read-only, ls, pwd).
+ *
+ * Block behaviour (cortex#bash-guard-observability):
+ *   - Emits Claude Code's structured PreToolUse *deny* decision on stdout
+ *     ({"hookSpecificOutput":{"hookEventName":"PreToolUse",
+ *       "permissionDecision":"deny","permissionDecisionReason":"…"}}).
+ *     The reason surfaces to the agent (and the Cortex→Discord relay)
+ *     instead of being lost in an exit-code-2 + stderr line.
+ *   - Also emits a `tool.bash.blocked` telemetry event into the cc-events
+ *     pipeline (HTTP POST to the dashboard ingest endpoint, with a JSONL
+ *     fallback) so blocks are observable. Best-effort — never blocks the
+ *     deny decision.
  */
 
+import { appendFileSync, mkdirSync, chmodSync, existsSync } from "fs";
+import { join } from "path";
+import { EVENT_TYPES } from "../../taps/cc-events/hooks/lib/event-taxonomy";
+
 interface HookInput {
-  session_id: string;
+  session_id?: string;
   tool_name: string;
   tool_input: { command?: string } | string;
 }
@@ -94,10 +109,107 @@ function stripEnvPrefix(command: string): string {
   );
 }
 
+// =============================================================================
+// Pass / deny output — Claude Code PreToolUse hook protocol.
+// =============================================================================
+
+/** Emit the pass-through decision (unchanged contract). */
+function allow(): void {
+  console.log(JSON.stringify({ continue: true }));
+}
+
+/**
+ * Emit Claude Code's structured PreToolUse *deny* decision. The
+ * `permissionDecisionReason` surfaces back to the agent (and the
+ * Cortex→Discord relay) — it replaces the old `process.exit(2)` +
+ * stderr line, which got swallowed on the way to the operator.
+ */
+function deny(reason: string): void {
+  console.log(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: reason,
+      },
+    }),
+  );
+}
+
+// =============================================================================
+// Telemetry — emit a `tool.bash.blocked` event into the cc-events pipeline.
+// Mirrors EventLogger.hook.ts: HTTP POST to the dashboard ingest endpoint as
+// primary delivery, JSONL append as fallback/archive. Best-effort — a failure
+// here must never affect the deny decision.
+// =============================================================================
+
+const INGEST_URL = "http://localhost:8766/api/events/ingest";
+const EVENTS_DIR = join(process.env.HOME ?? "~", ".claude", "events");
+const RAW_DIR = join(EVENTS_DIR, "raw");
+
+/** Shape mirrors `RawEvent` from src/taps/cc-events/hooks/lib/event-types.ts. */
+function buildBlockEvent(
+  sessionId: string,
+  reason: string,
+  command: string,
+): Record<string, unknown> {
+  return {
+    event_id: crypto.randomUUID(),
+    event_type: EVENT_TYPES.BASH_BLOCKED,
+    timestamp: new Date().toISOString(),
+    session_id: sessionId,
+    grove_channel: process.env.GROVE_CHANNEL,
+    agent_id: process.env.GROVE_AGENT_ID,
+    agent_name: process.env.GROVE_AGENT_NAME,
+    network_id: process.env.GROVE_NETWORK,
+    source: { hook: "PreToolUse", tool_name: "Bash" },
+    payload: {
+      reason,
+      command_preview: command.slice(0, 200),
+      project: process.env.GROVE_PROJECT,
+      entity: process.env.GROVE_ENTITY,
+      operator: process.env.GROVE_OPERATOR,
+    },
+  };
+}
+
+/**
+ * Emit the block event. Never throws — telemetry is observability, not a
+ * gate. Returns once both the POST attempt and the JSONL append have been
+ * tried (each independently best-effort).
+ */
+async function emitBlockEvent(
+  sessionId: string,
+  reason: string,
+  command: string,
+): Promise<void> {
+  const event = buildBlockEvent(sessionId, reason, command);
+
+  // Primary: HTTP POST to the dashboard ingest endpoint (500ms cap).
+  try {
+    await fetch(INGEST_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+      signal: AbortSignal.timeout(500),
+    });
+  } catch { /* dashboard down / refused — fall through to JSONL */ }
+
+  // Fallback/archive: JSONL append next to the EventLogger's raw events.
+  try {
+    if (!existsSync(RAW_DIR)) {
+      mkdirSync(RAW_DIR, { recursive: true, mode: 0o700 });
+    }
+    const filePath = join(RAW_DIR, `${sessionId}.jsonl`);
+    appendFileSync(filePath, JSON.stringify(event) + "\n");
+    chmodSync(filePath, 0o600);
+  } catch { /* filesystem unavailable — give up silently */ }
+}
+
 async function main(): Promise<void> {
   // Not a Grove session — pass through silently
   if (!process.env.GROVE_CHANNEL) {
-    console.log(JSON.stringify({ continue: true }));
+    allow();
     return;
   }
 
@@ -105,7 +217,7 @@ async function main(): Promise<void> {
   // Bot sessions also set GROVE_AGENT_ID but override via GROVE_BASH_GUARD config,
   // so they still get guarded by the loadConfig() path below.
   if (process.env.GROVE_AGENT_ID) {
-    console.log(JSON.stringify({ continue: true }));
+    allow();
     return;
   }
 
@@ -126,18 +238,18 @@ async function main(): Promise<void> {
     await Promise.race([readLoop, new Promise<void>((r) => setTimeout(r, 200))]);
 
     if (!raw.trim()) {
-      console.log(JSON.stringify({ continue: true }));
+      allow();
       return;
     }
     input = JSON.parse(raw) as HookInput;
   } catch {
-    console.log(JSON.stringify({ continue: true }));
+    allow();
     return;
   }
 
   // Only guard Bash commands
   if (input.tool_name !== "Bash") {
-    console.log(JSON.stringify({ continue: true }));
+    allow();
     return;
   }
 
@@ -149,9 +261,12 @@ async function main(): Promise<void> {
   const command = stripEnvPrefix(rawCommand).trim();
 
   if (!command) {
-    console.log(JSON.stringify({ continue: true }));
+    allow();
     return;
   }
+
+  const sessionId =
+    input.session_id ?? process.env.CLAUDE_SESSION_ID ?? "unknown";
 
   // Handle chained commands: split on && ; || and check each part
   const parts = command.split(/\s*(?:&&|\|\||;)\s*/);
@@ -159,7 +274,7 @@ async function main(): Promise<void> {
 
   // G-300: Guard disabled (operator DM) — allow everything
   if (config === null) {
-    console.log(JSON.stringify({ continue: true }));
+    allow();
     return;
   }
 
@@ -178,10 +293,13 @@ async function main(): Promise<void> {
             if (repos.length > 0) {
               const repo = extractGhRepo(trimmed);
               if (repo && !repos.includes(repo)) {
-                console.error(
-                  `[GROVE BASH GUARD] Blocked: repo "${repo}" not in allowlist [${repos.join(", ")}]`,
-                );
-                process.exit(2);
+                const reason =
+                  `[Grove Bash Guard] Blocked "${trimmed.slice(0, 80)}": ` +
+                  `repo "${repo}" is not in the allowed repo list ` +
+                  `[${repos.join(", ")}].`;
+                await emitBlockEvent(sessionId, reason, command);
+                deny(reason);
+                return;
               }
             }
           }
@@ -192,17 +310,20 @@ async function main(): Promise<void> {
     }
 
     if (!matched) {
-      console.error(
-        `[GROVE BASH GUARD] Blocked: "${trimmed.slice(0, 80)}" not in allowlist`,
-      );
-      process.exit(2);
+      const reason =
+        `[Grove Bash Guard] Blocked "${trimmed.slice(0, 80)}": ` +
+        `command does not match any rule in the bash allowlist. ` +
+        `Ask the operator to widen the allowlist if this command is needed.`;
+      await emitBlockEvent(sessionId, reason, command);
+      deny(reason);
+      return;
     }
   }
 
   // All parts matched — allow
-  console.log(JSON.stringify({ continue: true }));
+  allow();
 }
 
 main().catch(() => {
-  console.log(JSON.stringify({ continue: true }));
+  allow();
 });

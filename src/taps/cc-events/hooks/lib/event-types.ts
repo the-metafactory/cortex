@@ -19,7 +19,13 @@ export const RawEventSchema = z.object({
   agent_name: z.string().optional(),
   network_id: z.string().optional(),
   source: z.object({
-    hook: z.enum(["PostToolUse", "Stop", "UserPromptSubmit", "SessionStart"]),
+    hook: z.enum([
+      "PreToolUse",
+      "PostToolUse",
+      "Stop",
+      "UserPromptSubmit",
+      "SessionStart",
+    ]),
     tool_name: z.string().optional(),
   }),
   payload: z.record(z.string(), z.unknown()),

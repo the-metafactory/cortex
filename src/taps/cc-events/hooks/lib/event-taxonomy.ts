@@ -16,6 +16,10 @@ export const EVENT_TYPES = {
 
   // Tool usage
   BASH_EXECUTED: "tool.bash.executed",
+  // Emitted by the Grove bash-guard hook when a command is denied. Carries
+  // `reason` + `command_preview` in the payload so blocks are observable
+  // on the dashboard instead of being lost in the Cortex→Discord relay.
+  BASH_BLOCKED: "tool.bash.blocked",
   FILE_CHANGED: "tool.file.changed",
   FILE_READ: "tool.file.read",
   AGENT_SPAWNED: "tool.agent.spawned",
