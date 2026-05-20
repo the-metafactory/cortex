@@ -79,10 +79,32 @@ export interface AgentHeartbeatPayload {
    */
   last_activity_ms_ago: number;
   /**
-   * Monotonically-increasing tick counter for THIS dispatch. Starts at 1
-   * for the first heartbeat after `HeartbeatTicker.start()` and increments
-   * by 1 per tick. Lets a subscriber detect gaps (heartbeats lost on the
-   * wire) without timestamp arithmetic across clock-skewed peers.
+   * Monotonically-increasing tick counter scoped to **one
+   * `HeartbeatTicker` instance** — which in the cortex-bot wiring means
+   * "one CCSession attempt", NOT "one dispatch end-to-end". Starts at 1
+   * for the first heartbeat after `HeartbeatTicker.start()` and
+   * increments by 1 per tick.
+   *
+   * **Interaction with cortex#360 retry loop.** The chat-path dispatch
+   * handler attaches a fresh `HeartbeatTicker` per retry attempt
+   * (`dispatch-handler.ts` `handleSync`), so on a 3-attempt dispatch
+   * the iteration sequence is `1,2,3,…` → reset → `1,2,3,…` → reset →
+   * `1,2,3,…`, all carrying the same `correlation_id`. A strict
+   * gap-detector built from raw iteration arithmetic would mistake
+   * each retry boundary for "N-1 lost heartbeats" — so subscribers
+   * that stitch heartbeats across attempts MUST treat
+   * `(correlation_id continuing) + (iteration reset to 1)` as a
+   * retry-attempt boundary, not a wire-loss gap. The review-consumer
+   * + handleAsync paths do NOT retry today, so the simpler "iteration
+   * monotonic per dispatch" mental model still holds there — but
+   * subscribers should write detector code for the retry case
+   * (Echo cortex#363 N-2 — doc tightened post-cortex#360 merge).
+   *
+   * **In-attempt gap detection still works.** Within one ticker
+   * instance, the counter is strictly monotonic, so wire-loss
+   * detection inside a single attempt is straightforward:
+   * `published_iteration[k+1] > published_iteration[k] + 1` implies
+   * a lost intermediate heartbeat on the wire.
    */
   iteration: number;
 }

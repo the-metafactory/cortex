@@ -720,22 +720,33 @@ export class DispatchHandler extends EventEmitter {
     let finalReason: DispatchTaskFailedReason | null = null;
     let attemptsConsumed = 0;
 
-    // cortex#361 — bus-side liveness heartbeats. ONE ticker per dispatch
-    // (per the cortex#361 spec) covering all retry attempts under the
-    // same `correlation_id`. The ticker self-stops when the
-    // session emits `result` / `error` / `exit` — but since each
-    // retry attempt spawns a NEW CCSession, we wire the new session's
-    // listeners to the SAME ticker via `attachHeartbeatTicker` per
-    // attempt. The ticker keeps publishing across retries; operators
-    // see continuous "still working" for the entire dispatch instead
-    // of a heartbeat-blip per attempt.
+    // cortex#361 — bus-side liveness heartbeats. ONE ticker **per
+    // attempt** (NOT one ticker per dispatch): each retry attempt spawns
+    // a fresh `CCSession`, and `attachHeartbeatTicker` constructs a new
+    // `HeartbeatTicker` per call. All attempts share the same
+    // `correlation_id`, so subscribers stitch the heartbeat stream
+    // across the retry chain by grouping on `correlation_id`. Echo
+    // cortex#363 N-1 fix — earlier docstring claimed "one ticker per
+    // dispatch" which contradicted the inner per-attempt code; rewritten
+    // to match reality.
     //
-    // The previous attempt's session listeners may have already called
-    // `ticker.stop()` on `exit`, so we must reset before each attempt;
-    // we do that by constructing a fresh handle per attempt and tracking
-    // it for cleanup in the outer `finally`. The correlation_id is
-    // stable across attempts so subscribers stitch heartbeats together
-    // by correlation_id.
+    // **Subscriber contract for retry boundaries.** Because each
+    // attempt's ticker has its own `HeartbeatTicker` instance, the
+    // `iteration` counter resets to 1 at every retry. Gap-detectors
+    // built off raw iteration arithmetic would mistake a retry boundary
+    // for "N-1 lost heartbeats". Subscribers stitching across attempts
+    // must key on `(correlation_id continuing) + (iteration reset)` as
+    // a retry-attempt boundary, not a lost-heartbeat gap. There's also
+    // a brief silent window between attempts (previous attempt's ticker
+    // stops on `exit`; next attempt's ticker fires its
+    // immediate-first-tick a few ms later) — bounded by spawn latency,
+    // never by `intervalMs`.
+    //
+    // Every per-attempt handle is tracked in `heartbeatHandles[]` and
+    // stopped in the outer `finally` (idempotent, defence-in-depth) in
+    // case a future refactor renames / drops one of the
+    // `result` / `error` / `exit` events the per-session listeners
+    // currently watch.
     const heartbeatHandles: { stop: () => void }[] = [];
 
     try {
