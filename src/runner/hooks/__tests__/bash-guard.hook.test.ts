@@ -7,6 +7,7 @@
  *   - preserved GROVE_CHANNEL gate / GROVE_AGENT_ID bypass /
  *     GROVE_BASH_GUARD disabled behaviour
  *   - block telemetry event written to the JSONL fallback
+ *   - block telemetry event POSTed to the HTTP ingest endpoint
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
@@ -225,5 +226,80 @@ describe("bash-guard.hook — block telemetry", () => {
     expect(r.status).toBe(0);
     const rawFile = join(homeDir, ".claude", "events", "raw", `${sessionId}.jsonl`);
     expect(existsSync(rawFile)).toBe(false);
+  });
+
+  test("a block POSTs the event to the HTTP ingest endpoint", async () => {
+    // The hook POSTs to a hardcoded http://localhost:8766/api/events/ingest
+    // before falling back to JSONL. Stand up a real listener on that port so
+    // the POST "succeeds", and capture the request body to assert its shape.
+    //
+    // NOTE: the hook must be spawned *asynchronously* here. spawnSync would
+    // block the test's event loop, starving the in-process Bun.serve so the
+    // hook's fetch would time out and fall through to JSONL — never hitting
+    // the HTTP path this test exists to cover.
+    const sessionId = "http-ingest-session";
+    const seen: {
+      body: Record<string, unknown> | null;
+      path: string | null;
+      contentType: string | null;
+    } = { body: null, path: null, contentType: null };
+
+    const server = Bun.serve({
+      port: 8766,
+      async fetch(req) {
+        seen.path = new URL(req.url).pathname;
+        seen.contentType = req.headers.get("content-type");
+        seen.body = (await req.json()) as Record<string, unknown>;
+        return new Response("ok", { status: 200 });
+      },
+    });
+
+    try {
+      const groveOverrides = new Set(GROVE_ENV_KEYS);
+      const merged: Record<string, string> = {};
+      for (const [k, v] of Object.entries(process.env)) {
+        if (v !== undefined && !groveOverrides.has(k)) merged[k] = v;
+      }
+      Object.assign(merged, {
+        GROVE_CHANNEL: "test-channel",
+        HOME: homeDir,
+      });
+
+      const proc = Bun.spawn(["bun", HOOK_PATH], {
+        stdin: new TextEncoder().encode(
+          JSON.stringify({
+            session_id: sessionId,
+            tool_name: "Bash",
+            tool_input: { command: "curl http://evil.example" },
+          }),
+        ),
+        stdout: "pipe",
+        stderr: "pipe",
+        env: merged,
+      });
+      await proc.exited;
+      expect(proc.exitCode).toBe(0);
+
+      // The deny decision still lands on stdout.
+      const stdout = await new Response(proc.stdout).text();
+      const out = JSON.parse(stdout.trim());
+      expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+
+      // The event was POSTed to the ingest endpoint with the expected shape.
+      expect(seen.path).toBe("/api/events/ingest");
+      expect(seen.contentType).toContain("application/json");
+      expect(seen.body).not.toBeNull();
+      const event = seen.body as Record<string, any>;
+      expect(event.event_type).toBe("tool.bash.blocked");
+      expect(event.session_id).toBe(sessionId);
+      expect(event.source.hook).toBe("PreToolUse");
+      expect(event.source.tool_name).toBe("Bash");
+      expect(event.payload.reason).toContain("curl");
+      expect(event.payload.command_preview).toContain("curl");
+      expect(typeof event.event_id).toBe("string");
+      expect(typeof event.timestamp).toBe("string");
+    } finally {
+      server.stop(true);
+    }
   });
 });

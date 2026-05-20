@@ -297,8 +297,10 @@ async function main(): Promise<void> {
                   `[Grove Bash Guard] Blocked "${trimmed.slice(0, 80)}": ` +
                   `repo "${repo}" is not in the allowed repo list ` +
                   `[${repos.join(", ")}].`;
-                await emitBlockEvent(sessionId, reason, command);
+                // Write the security decision FIRST — telemetry I/O
+                // (a filesystem appendFileSync) must never delay a deny.
                 deny(reason);
+                await emitBlockEvent(sessionId, reason, command);
                 return;
               }
             }
@@ -314,8 +316,10 @@ async function main(): Promise<void> {
         `[Grove Bash Guard] Blocked "${trimmed.slice(0, 80)}": ` +
         `command does not match any rule in the bash allowlist. ` +
         `Ask the operator to widen the allowlist if this command is needed.`;
-      await emitBlockEvent(sessionId, reason, command);
+      // Write the security decision FIRST — telemetry I/O
+      // (a filesystem appendFileSync) must never delay a deny.
       deny(reason);
+      await emitBlockEvent(sessionId, reason, command);
       return;
     }
   }
