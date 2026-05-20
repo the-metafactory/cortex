@@ -1,5 +1,37 @@
 # Cortex Release Notes
 
+## v2.0.10 — deps: bump @metafactory/content-filter to layered scanner
+
+Bumps `@metafactory/content-filter` to the layered-scanner refactor (v0.2.0,
+the-metafactory/content-filter PR #17, merge SHA `0e4968c`). The package
+internals are reworked into an L0 + L1 stack; cortex's `scanPrompt()` facade
+in `src/runner/prompt-filter.ts` is unaffected — `filterContentString`
+signature and `FilterResult` shape are unchanged.
+
+**Fixes cortex#367 (operational P1).** The content-filter `EN-001` base64
+detector previously matched any 21+ char run of `[A-Za-z0-9+/]`, which
+false-positived on every GitHub URL path, every commit SHA and any long
+slash-delimited path — silently blocking review pings across cortex#358,
+#362, #363 and signal#51, #53. The new content-filter adds an entropy-aware
+gate: a regex hit is treated as base64 only if it is not a git-SHA-shaped
+hex token, not inside a `://` URL or a slash-delimited path of lowercase
+path-words, and clears a Shannon-entropy floor (~3.0 bits/char). Real
+random-bytes base64 (~4.5-6 bits/char) still flags; URLs, SHAs and code
+paths no longer do.
+
+The new L1 layer is a heuristic prompt-injection scorer ported from Rebuff
+(ProtectAI, MIT) — offline, zero-config, pure CPU. It runs alongside the L0
+regexes and catches paraphrased injection phrasing the regexes miss. Only
+its `block` band (near-verbatim known attack phrasing) makes cortex reject;
+the `review` band annotates without blocking.
+
+cortex#367 F-1 (the EN-001 regex fix) and F-2 (cortex-side URL/SHA
+pre-filter normalization) are resolved by this dependency bump. F-3
+(distinguished filter-block message) and F-4 (operator bypass) remain a
+separate small cortex-side patch.
+
+Refs cortex#370, cortex#367, content-filter#17.
+
 ## v2.0.9 — security: restore originator signature coverage
 
 Fixes a dependency-install staleness that left the envelope `originator`
