@@ -609,7 +609,7 @@ describe("MyelinRuntime", () => {
       expect(fake.publish).toHaveBeenCalledTimes(1);
       const payload = fake.publishes[0]?.payload as string;
       const published = JSON.parse(payload) as {
-        signed_by?: { method: string; principal: string; signature: string; at: string }[];
+        signed_by?: { method: string; identity?: string; principal?: string; signature: string; at: string }[];
         id: string;
       };
 
@@ -620,7 +620,10 @@ describe("MyelinRuntime", () => {
       expect(published.signed_by).toHaveLength(1);
       const stamp = published.signed_by?.[0];
       expect(stamp?.method).toBe("ed25519");
-      expect(stamp?.principal).toBe("did:mf:test-stack");
+      // R2 (vocabulary migration 2026-05) — myelin emits the canonical
+      // `identity` key now (PR-6 #169); the deprecated `principal` key
+      // would only appear on pre-migration / JetStream-replayed stamps.
+      expect(stamp?.identity ?? stamp?.principal).toBe("did:mf:test-stack");
       // Signature shape: base64 of 64 raw bytes ≈ 88 chars.
       expect(stamp?.signature.length).toBeGreaterThanOrEqual(86);
 
@@ -673,13 +676,16 @@ describe("MyelinRuntime", () => {
 
       const payload = fake.publishes[0]?.payload as string;
       const published = JSON.parse(payload) as {
-        signed_by: { principal: string }[];
+        signed_by: { identity?: string; principal?: string }[];
       };
 
-      // Two stamps in arrival order: peer-x first, then us.
+      // R2 (vocabulary migration 2026-05) — both stamps now emit the
+      // canonical `identity` key (myelin's signEnvelope writes `identity`
+      // post PR-6). The dual-read `identity ?? principal` keeps the test
+      // robust against the future breaking-major drop of `principal`.
       expect(published.signed_by).toHaveLength(2);
-      expect(published.signed_by[0]?.principal).toBe("did:mf:peer-x");
-      expect(published.signed_by[1]?.principal).toBe("did:mf:our-stack");
+      expect(published.signed_by[0]?.identity ?? published.signed_by[0]?.principal).toBe("did:mf:peer-x");
+      expect(published.signed_by[1]?.identity ?? published.signed_by[1]?.principal).toBe("did:mf:our-stack");
 
       await runtime.stop();
     });

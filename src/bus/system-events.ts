@@ -567,8 +567,20 @@ export interface SystemAccessSovereignty {
  * audit one without re-parsing either.
  */
 export interface SystemAccessSignedBy {
-  /** Originating principal — `did:mf:<name>` per myelin convention. */
-  principal: string;
+  /**
+   * Originating stamp DID — `did:mf:<name>` per myelin convention.
+   * Vocabulary migration 2026-05 R2 — canonical key is `identity`;
+   * the transition schema accepts `principal` too. Both are optional
+   * here so the audit pipeline can carry whichever the wire stamp
+   * actually shipped.
+   */
+  identity?: string;
+  /**
+   * @deprecated Renamed to `identity` (vocabulary migration 2026-05, R2).
+   * Pre-migration / JetStream-replayed stamps carry this key; accepted
+   * on read through the transition window. Removed in the breaking major.
+   */
+  principal?: string;
   /** Stamp method — `"ed25519"` | `"hub-stamp"` today; extensible. */
   method?: string;
   /** ISO-8601 timestamp the signature was produced. */
@@ -874,7 +886,10 @@ export interface SystemAccessFederationDeniedOpts {
 export function createSystemAccessFederationDeniedEvent(
   opts: SystemAccessFederationDeniedOpts,
 ): Envelope {
-  const principalId = opts.signedBy[0]?.principal ?? "unknown";
+  // R2 (vocabulary migration 2026-05) — dual-read stamp DID: canonical
+  // `identity` wins, fall back to deprecated `principal`.
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
+  const principalId = opts.signedBy[0]?.identity ?? opts.signedBy[0]?.principal ?? "unknown";
   return buildBaseEnvelope({
     type: "system.access.denied",
     source: buildSource(opts.source),

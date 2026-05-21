@@ -46,7 +46,7 @@
 import {
   verifyEnvelopeIdentity,
   createInMemoryRegistry,
-  type PrincipalRegistry,
+  type IdentityRegistry,
 } from "@the-metafactory/myelin/identity";
 import { Prefix } from "@nats-io/nkeys";
 // `Codec` is the internal NKey base32 + CRC + prefix-byte decoder.
@@ -175,7 +175,7 @@ export interface VerifySignedByChainOptions {
    * call sites keep their behaviour unchanged until they opt in.
    *
    * When `cryptoVerify: true`, the caller must also pass `operatorId`
-   * so the helper can build a myelin `PrincipalRegistry` from the
+   * so the helper can build a myelin `IdentityRegistry` from the
    * `TrustResolver`'s underlying `AgentRegistry`. Each agent with an
    * `nkey_pub` becomes a Principal whose `public_key` is the
    * base64-encoded raw ed25519 pubkey derived from the NATS NKey.
@@ -266,17 +266,24 @@ export async function verifySignedByChain(
           "myelin's Principal shape needs the operator field populated.",
       );
     }
-    const registry = buildPrincipalRegistry(
+    const registry = buildIdentityRegistry(
       opts.resolver.getRegistry(),
       opts.operatorId,
     );
     // Myelin's verifier expects `signed_by` normalised to array form;
     // cortex's `Envelope` keeps the back-compat shim of single-stamp
     // OR array. Normalise here before handing off.
+    //
+    // R2 (vocabulary migration 2026-05) — the cortex vendored SignedBy
+    // declares `identity?` AND `principal?` as optional so the transition
+    // window can carry either; upstream myelin's discriminated union
+    // requires exactly one. The runtime guarantee is identical (the
+    // envelope validator's `dual_field_conflict` check fires before this
+    // helper runs), so cast through `unknown` at the type boundary.
     const myelinEnvelope = {
       ...envelope,
       signed_by: chain,
-    };
+    } as unknown as Parameters<typeof verifyEnvelopeIdentity>[0];
     const myelinResult = await verifyEnvelopeIdentity(
       myelinEnvelope,
       registry,
@@ -327,7 +334,18 @@ function verifyOneStamp(
   }
   // Discriminated union — narrows to SignedByEd25519 once hub-stamp is out.
 
-  const principal = stamp.principal;
+  // R2 (vocabulary migration 2026-05) — dual-read the stamp DID:
+  // canonical `identity` wins, fall back to deprecated `principal`
+  // for pre-migration / JetStream-replayed stamps. The envelope-level
+  // dual_field_conflict check fires upstream at envelope validation.
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
+  const principal = stamp.identity ?? stamp.principal;
+  if (principal === undefined) {
+    return {
+      kind: "reject",
+      reason: { kind: "malformed_principal", principal: "<missing>" },
+    };
+  }
   const agentId = extractAgentIdFromDid(principal);
   if (agentId === undefined) {
     return {
@@ -376,7 +394,7 @@ function verifyOneStamp(
 // =============================================================================
 
 /**
- * Bridge cortex's `AgentRegistry` to myelin's `PrincipalRegistry` for the
+ * Bridge cortex's `AgentRegistry` to myelin's `IdentityRegistry` for the
  * crypto-verification step. Every agent with a declared `nkey_pub` becomes
  * a Principal whose `public_key` is the base64-encoded raw ed25519 pubkey
  * extracted from the NATS NKey via `@nats-io/nkeys`'s `fromPublic`.
@@ -398,10 +416,10 @@ function verifyOneStamp(
  * the caller has a stable agent set (future caching is a separate
  * concern — at B.1c, every cryptoVerify call rebuilds).
  */
-export function buildPrincipalRegistry(
+export function buildIdentityRegistry(
   agentRegistry: AgentRegistry,
   operatorId: string,
-): PrincipalRegistry {
+): IdentityRegistry {
   const registry = createInMemoryRegistry();
   const createdAt = new Date(0).toISOString();
   for (const agent of agentRegistry.getAll()) {
@@ -415,7 +433,11 @@ export function buildPrincipalRegistry(
     registry.add({
       id: `did:mf:${agent.id}`,
       display_name: agent.displayName,
-      operator: operatorId,
+      // R4 (vocabulary migration 2026-05) — myelin's `Identity` interface
+      // renamed `operator` → `network` (Luna's PR-5/PR-8 in #168/#171).
+      // `operatorId` is still cortex's variable name — it stores the
+      // network slug per the bus-addressing model.
+      network: operatorId,
       public_key: publicKey,
       type: "agent",
       created_at: createdAt,

@@ -1087,7 +1087,9 @@ async function emitChainVerificationDeny(
   chainReason: ChainRejectionReason,
 ): Promise<void> {
   const chain = getSignedByChain(envelope);
-  const claimedPrincipal = chain[0]?.principal ?? "<unverified>";
+  // R2 (vocabulary migration 2026-05) — dual-read stamp DID.
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
+  const claimedPrincipal = chain[0]?.identity ?? chain[0]?.principal ?? "<unverified>";
   // Strip did:mf: prefix when present so audit consumers see a bare id
   // shape consistent with the engine's principal-id idiom; fall through
   // to the raw DID otherwise (preserves the wire claim verbatim).
@@ -1161,7 +1163,9 @@ async function emitReceivingAgentUnconfiguredDeny(
   stack: string | undefined,
 ): Promise<void> {
   const chain = getSignedByChain(envelope);
-  const claimedPrincipal = chain[0]?.principal ?? "<unverified>";
+  // R2 (vocabulary migration 2026-05) — dual-read stamp DID.
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
+  const claimedPrincipal = chain[0]?.identity ?? chain[0]?.principal ?? "<unverified>";
   const principalId =
     extractAgentIdFromDid(claimedPrincipal) ?? claimedPrincipal;
 

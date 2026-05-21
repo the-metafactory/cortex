@@ -75,7 +75,7 @@ import schema from "./vendor/envelope.schema.json" with { type: "json" };
  * comments + tests use `myelin#161` to point at the merge that landed the
  * feature — they're the same change, different ticket facets.
  */
-export const SCHEMA_SOURCE_COMMIT = "3ec0aceef960f16db41507d01df5849b0dc7744e";
+export const SCHEMA_SOURCE_COMMIT = "e37b347f222a433b9715510f0eb88fc7564dce92";
 
 /**
  * Hand-typed Envelope shape matching the JSON Schema. We hand-write rather
@@ -155,18 +155,30 @@ export interface Envelope {
   /** F-021 — ISO-8601 absolute soft deadline. Informs nak `not-now` decisions. */
   deadline?: string;
   /**
-   * F-021 — operator-facing routing semantics.
+   * F-021 — principal-facing routing semantics. Vocabulary migration
+   * 2026-05 R11 renamed `broadcast` → `offer` on the wire; the transition
+   * schema accepts both. New publishers emit `offer`.
    *
    * | mode | semantics |
    * |---|---|
-   * | `broadcast` | competing consumers — first ack wins |
-   * | `direct` | named recipient — requires `target_principal` |
-   * | `delegate` | outcome handoff (multi-step orchestration) — requires `target_principal` |
+   * | `offer` | competing consumers — first ack wins (R11 canonical) |
+   * | `broadcast` | deprecated alias of `offer` (accepted on read) |
+   * | `direct` | named recipient — requires `target_assistant` |
+   * | `delegate` | outcome handoff (multi-step orchestration) — requires `target_assistant` |
    */
   distribution_mode?: DistributionMode;
   /**
    * F-021 — required when `distribution_mode` is `direct` or `delegate`.
-   * DID of the receiving agent (`did:mf:<name>`).
+   * DID of the receiving assistant (`did:mf:<name>`). Vocabulary migration
+   * 2026-05 R13 renamed from `target_principal`; the transition schema
+   * accepts both names — readers should prefer `target_assistant` and
+   * fall back to `target_principal` via {@link getTargetAssistant}.
+   */
+  target_assistant?: string;
+  /**
+   * @deprecated Renamed to `target_assistant` (vocabulary migration
+   * 2026-05, R13). Pre-migration envelopes carry this key; accepted on
+   * read through the transition window. Removed in the breaking major.
    */
   target_principal?: string;
   /**
@@ -192,8 +204,19 @@ export interface Envelope {
  * including the field in the canonical signature input.
  */
 export interface Originator {
-  /** DID of the actor whose capabilities this envelope asserts. */
-  principal: string;
+  /**
+   * DID of the actor whose capabilities this envelope asserts.
+   * Vocabulary migration 2026-05 R2 — canonical key is `identity`;
+   * the transition schema accepts `principal` too. Readers should use
+   * {@link getActorPrincipal} which dual-reads.
+   */
+  identity?: string;
+  /**
+   * @deprecated Renamed to `identity` (vocabulary migration 2026-05, R2).
+   * Pre-migration envelopes carry this key; accepted on read through the
+   * transition window. Removed in the breaking major.
+   */
+  principal?: string;
   /**
    * How the signer learned the originator identity:
    *   - `adapter-resolved` — adapter (Discord/Slack/Mattermost/HTTP/cc-events)
@@ -230,8 +253,20 @@ export type SignedBy = SignedByEd25519 | SignedByHubStamp;
  */
 export interface SignedByEd25519 {
   method: "ed25519";
-  /** Principal DID — `did:mf:<name>` per myelin convention. */
-  principal: string;
+  /**
+   * Stamp DID — `did:mf:<name>` per myelin convention. Vocabulary
+   * migration 2026-05 R2 — canonical key is `identity`; the transition
+   * schema accepts `principal` too. Readers should use
+   * {@link getLastStampPrincipal} or {@link stampIdentityDid} which
+   * dual-read.
+   */
+  identity?: string;
+  /**
+   * @deprecated Renamed to `identity` (vocabulary migration 2026-05, R2).
+   * Pre-migration / JetStream-replayed stamps carry this key; accepted
+   * on read through the transition window. Removed in the breaking major.
+   */
+  principal?: string;
   /** Base64-encoded ed25519 signature (88+ chars). */
   signature: string;
   /** ISO-8601 timestamp the signature was produced. */
@@ -247,9 +282,18 @@ export interface SignedByEd25519 {
  */
 export interface SignedByHubStamp {
   method: "hub-stamp";
-  /** Originating principal — `did:mf:<name>`. */
-  principal: string;
-  /** Hub principal that re-signed — `did:mf:<hub-name>`. */
+  /**
+   * Originating identity — `did:mf:<name>`. Vocabulary migration 2026-05
+   * R2 — canonical key is `identity`; transition schema accepts both.
+   */
+  identity?: string;
+  /**
+   * @deprecated Renamed to `identity` (vocabulary migration 2026-05, R2).
+   * Pre-migration / JetStream-replayed stamps carry this key; accepted
+   * on read through the transition window. Removed in the breaking major.
+   */
+  principal?: string;
+  /** Hub identity that re-signed — `did:mf:<hub-name>`. */
   stamped_by: string;
   /** Base64-encoded ed25519 signature from the hub. */
   signature: string;
@@ -281,8 +325,13 @@ export type SovereigntyRequirement =
   | "strict"
   | "bidding";
 
-/** F-021 — `distribution_mode` enum. */
-export type DistributionMode = "broadcast" | "direct" | "delegate";
+/**
+ * F-021 — `distribution_mode` enum. Vocabulary migration 2026-05 R11
+ * renamed `broadcast` → `offer` on the wire; the transition schema
+ * accepts both. Emitters publish `offer`; readers tolerate `broadcast`
+ * for JetStream replay of pre-migration envelopes.
+ */
+export type DistributionMode = "broadcast" | "offer" | "direct" | "delegate";
 
 /**
  * F-15 economics — token budget, actual usage, billing attribution.
@@ -399,7 +448,14 @@ export function getLastStampPrincipal(envelope: Envelope): string | undefined {
   const chain = getSignedByChain(envelope);
   if (chain.length === 0) return undefined;
   const last = chain[chain.length - 1];
-  return last?.principal;
+  if (!last) return undefined;
+  // R2 (vocabulary migration 2026-05) — dual-read: canonical `identity`
+  // wins, fall back to the deprecated `principal` for pre-migration /
+  // JetStream-replayed stamps. The validator's conflict-rejection rule
+  // (both keys present) fires upstream at envelope validation, so by
+  // the time this helper runs at most one key is set.
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
+  return last.identity ?? last.principal;
 }
 
 /**
@@ -439,9 +495,35 @@ export function getLastStampPrincipal(envelope: Envelope): string | undefined {
  * will catch them if they diverge until that follow-up lands.
  */
 export function getActorPrincipal(envelope: Envelope): string | undefined {
-  if (envelope.originator?.principal) return envelope.originator.principal;
+  // R2 (vocabulary migration 2026-05) — dual-read at both surfaces: the
+  // originator's actor DID and the first stamp's DID. Canonical key is
+  // `identity`; falls back to the deprecated `principal` for
+  // pre-migration / JetStream-replayed envelopes. The validator's
+  // conflict-rejection rule (both keys present) fires upstream.
+  if (envelope.originator) {
+    // eslint-disable-next-line @typescript-eslint/no-deprecated
+    const orig = envelope.originator.identity ?? envelope.originator.principal;
+    if (orig) return orig;
+  }
   const chain = getSignedByChain(envelope);
-  return chain[0]?.principal;
+  const first = chain[0];
+  if (!first) return undefined;
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
+  return first.identity ?? first.principal;
+}
+
+/**
+ * Resolve the `target_assistant` of a Direct/Delegate envelope across the
+ * R13 transition window (vocabulary migration 2026-05). Canonical key is
+ * `target_assistant`; falls back to the deprecated `target_principal`
+ * for pre-migration / JetStream-replayed envelopes.
+ *
+ * Returns `undefined` for envelopes that carry neither key (e.g. an
+ * Offer / broadcast dispatch).
+ */
+export function getTargetAssistant(envelope: Envelope): string | undefined {
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
+  return envelope.target_assistant ?? envelope.target_principal;
 }
 
 /**

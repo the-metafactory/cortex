@@ -554,13 +554,17 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
   // ergonomic side of Echo's suggestion without dragging upstream noise
   // into this PR.
 
-  test("schema source commit points at the post-myelin#161 originator pin", () => {
+  test("schema source commit points at the vocabulary-migration transition pin", () => {
     // Lock the pin so future bumps surface in a code review.
-    // Updated at cortex#346 — bump from 5a0e261 to 3ec0ace to pick up
-    // myelin#161 (Envelope.originator policy-attribution field +
-    // getActorPrincipal helper; originator added to SIGNABLE_FIELDS).
+    // Updated at cortex G1 (PR-8) — bump from 3ec0ace to e37b347 to pick
+    // up the myelin vocabulary migration 2026-05 transition release:
+    //   • PR-6 (#169) envelope wire transition (signed_by[].identity,
+    //     originator.identity, target_assistant, distribution_mode "offer")
+    //   • PR-7..PR-13 (#170–#176) the per-cluster downstream landings
+    // The transition schema accepts BOTH the deprecated and the renamed
+    // form so pre-migration / JetStream-replayed envelopes still validate.
     expect(SCHEMA_SOURCE_COMMIT).toBe(
-      "3ec0aceef960f16db41507d01df5849b0dc7744e",
+      "e37b347f222a433b9715510f0eb88fc7564dce92",
     );
   });
 

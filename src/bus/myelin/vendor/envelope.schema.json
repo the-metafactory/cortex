@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://myelin.metafactory.ai/schemas/envelope/v1",
+  "$id": "https://myelin.metafactory.ai/schemas/envelope/v2",
   "title": "Myelin Envelope",
-  "description": "Universal message envelope for the agentic nervous system. One schema for all signals — sovereignty travels with the message.",
+  "description": "Universal message envelope for the agentic nervous system. One schema for all signals — sovereignty travels with the message. v2 (vocabulary migration 2026-05, transition release): wire fields renamed — signed_by[].principal→identity, originator.principal→identity, target_principal→target_assistant, distribution_mode broadcast→offer, source grammar org.agent.instance→{principal}.{stack}.{assistant}. This transition schema accepts BOTH the deprecated and the renamed form so pre-migration / JetStream-replayed envelopes still validate; the breaking major drops the deprecated forms. v1 stays published for consumers pinned to the old grammar.",
   "type": "object",
   "required": ["id", "source", "type", "timestamp", "sovereignty", "payload"],
   "properties": {
@@ -14,8 +14,8 @@
     "source": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*){2,4}$",
-      "description": "Origin address. Minimum 3 segments (org.agent.instance), up to 5 for domain-scoped agents (org.domain.agent.instance.replica).",
-      "examples": ["acme.monitor.prod-01", "metafactory.pilot.local", "acme.security.scanner.prod-01"]
+      "description": "Origin address. Canonical grammar (R6, vocabulary migration 2026-05) is the fixed-3 form {principal}.{stack}.{assistant}. This transition schema keeps the legacy {2,4} pattern (3-5 segments, org.agent.instance) so pre-migration / JetStream-replayed envelopes still validate — the fixed-3 form is a strict subset. The breaking major tightens the pattern to exactly 3 segments.",
+      "examples": ["metafactory.security.luna", "metafactory.pilot.local", "acme.monitor.prod-01"]
     },
     "type": {
       "type": "string",
@@ -165,28 +165,41 @@
     },
     "distribution_mode": {
       "type": "string",
-      "enum": ["broadcast", "direct", "delegate"],
-      "description": "F-021: operator-facing routing semantics. broadcast = competing consumers; direct = named recipient; delegate = outcome handoff (multi-step orchestration)."
+      "enum": ["broadcast", "offer", "direct", "delegate"],
+      "description": "F-021: routing semantics. offer = competing consumers; direct = named recipient; delegate = outcome handoff (multi-step orchestration). R11 (vocabulary migration 2026-05): 'broadcast' renamed to 'offer'. Transition release accepts BOTH; 'broadcast' is deprecated and dropped in the breaking major."
+    },
+    "target_assistant": {
+      "type": "string",
+      "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$",
+      "description": "F-021: required when distribution_mode is direct or delegate. DID of the receiving assistant. R13 (vocabulary migration 2026-05): renamed from 'target_principal'."
     },
     "target_principal": {
       "type": "string",
       "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$",
-      "description": "F-021: required when distribution_mode is direct or delegate. DID of the receiving agent."
+      "description": "DEPRECATED (vocabulary migration 2026-05, R13) — renamed to 'target_assistant'. Accepted on read through the transition window for pre-migration / JetStream-replayed envelopes; an envelope carrying BOTH keys is rejected (dual_field_conflict). Removed in the breaking major."
     },
     "originator": {
       "type": "object",
-      "description": "myelin#160: policy-level actor identity, separate from the cryptographic signed_by chain. The chain proves WHO signed; originator names WHO the signer claims to be acting on behalf of. Covered by the signature (signer commits to the attribution claim). When absent, the signer is the actor.",
-      "required": ["principal", "attribution"],
+      "description": "myelin#160: policy-level actor identity, separate from the cryptographic signed_by chain. The chain proves WHO signed; originator names WHO the signer claims to be acting on behalf of. Covered by the signature (signer commits to the attribution claim). When absent, the signer is the actor. R2 (vocabulary migration 2026-05): the actor-DID field renamed 'principal'→'identity'; transition release accepts either, rejects both.",
+      "oneOf": [
+        { "required": ["identity", "attribution"] },
+        { "required": ["principal", "attribution"] }
+      ],
       "properties": {
+        "identity": {
+          "type": "string",
+          "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$",
+          "description": "DID of the actor whose capabilities this envelope asserts (R2 — renamed from 'principal')."
+        },
         "principal": {
           "type": "string",
           "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$",
-          "description": "DID of the actor whose capabilities this envelope asserts."
+          "description": "DEPRECATED (R2) — renamed to 'identity'. Accepted on read through the transition window; an originator carrying BOTH keys is rejected (dual_field_conflict)."
         },
         "attribution": {
           "type": "string",
           "enum": ["adapter-resolved", "federated", "delegated"],
-          "description": "How the signer learned the originator identity. adapter-resolved: external (Discord/Slack/HTTP) id mapped to principal. federated: relayed claim from another operator. delegated: signer holds delegation credentials for the originator."
+          "description": "How the signer learned the originator identity. adapter-resolved: external (Discord/Slack/HTTP) id mapped to an identity. federated: relayed claim from another network. delegated: signer holds delegation credentials for the originator."
         }
       },
       "additionalProperties": false
@@ -198,37 +211,59 @@
         "properties": { "distribution_mode": { "enum": ["direct", "delegate"] } },
         "required": ["distribution_mode"]
       },
-      "then": { "required": ["target_principal"] }
+      "then": {
+        "anyOf": [
+          { "required": ["target_assistant"] },
+          { "required": ["target_principal"] }
+        ]
+      }
+    },
+    {
+      "comment": "R13 dual_field_conflict — direct/delegate routing target must not carry BOTH the deprecated and renamed key.",
+      "not": { "required": ["target_principal", "target_assistant"] }
     }
   ],
   "additionalProperties": false,
   "$defs": {
     "signedByStamp": {
       "type": "object",
-      "description": "A single identity attestation in the chain (myelin#31). Discriminated on method.",
-      "oneOf": [
+      "description": "A single identity attestation in the chain (myelin#31). Discriminated on method. R2 (vocabulary migration 2026-05): the stamp DID field renamed 'principal'→'identity'. This transition schema accepts EITHER key (each method branch requires exactly one of them) and rejects a stamp carrying BOTH via the dualKeyExclusion constraint.",
+      "allOf": [
         {
-          "required": ["method", "principal", "signature", "at"],
-          "properties": {
-            "method": { "const": "ed25519" },
-            "principal": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
-            "signature": { "type": "string", "minLength": 88, "pattern": "^[A-Za-z0-9+/]+=*$" },
-            "at": { "type": "string", "format": "date-time" },
-            "role": { "$ref": "#/$defs/stampRole" }
-          },
-          "additionalProperties": false
+          "oneOf": [
+            {
+              "required": ["method", "signature", "at"],
+              "properties": {
+                "method": { "const": "ed25519" },
+                "identity": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
+                "principal": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
+                "signature": { "type": "string", "minLength": 88, "pattern": "^[A-Za-z0-9+/]+=*$" },
+                "at": { "type": "string", "format": "date-time" },
+                "role": { "$ref": "#/$defs/stampRole" }
+              },
+              "additionalProperties": false
+            },
+            {
+              "required": ["method", "stamped_by", "signature", "at"],
+              "properties": {
+                "method": { "const": "hub-stamp" },
+                "identity": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
+                "principal": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
+                "stamped_by": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
+                "signature": { "type": "string", "minLength": 88, "pattern": "^[A-Za-z0-9+/]+=*$" },
+                "at": { "type": "string", "format": "date-time" },
+                "role": { "$ref": "#/$defs/stampRole" }
+              },
+              "additionalProperties": false
+            }
+          ]
         },
         {
-          "required": ["method", "principal", "stamped_by", "signature", "at"],
-          "properties": {
-            "method": { "const": "hub-stamp" },
-            "principal": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
-            "stamped_by": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
-            "signature": { "type": "string", "minLength": 88, "pattern": "^[A-Za-z0-9+/]+=*$" },
-            "at": { "type": "string", "format": "date-time" },
-            "role": { "$ref": "#/$defs/stampRole" }
-          },
-          "additionalProperties": false
+          "comment": "R2 — a stamp must carry exactly one DID key: 'identity' (canonical) or 'principal' (deprecated). Neither-present and both-present are both rejected.",
+          "oneOf": [
+            { "required": ["identity"], "not": { "required": ["principal"] } },
+            { "required": ["principal"], "not": { "required": ["identity"] } }
+          ]
         }
       ]
     },

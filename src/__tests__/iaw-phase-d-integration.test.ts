@@ -471,12 +471,15 @@ describe("IAW Phase D.6.1 — cross-operator federated dispatch + reply (refs co
 
       // β's audit also preserves α's signed_by[] chain verbatim
       // (C.4.3 invariant). One stamp originally from α; α's DID on it.
+      // R2 (vocabulary migration 2026-05) — dual-read stamp DID:
+      // canonical `identity` wins; fall back to deprecated `principal`
+      // for pre-migration / JetStream-replayed stamps.
       const auditSignedBy = (
-        betaAllowed!.payload as { signed_by?: { principal: string }[] }
+        betaAllowed!.payload as { signed_by?: { identity?: string; principal?: string }[] }
       ).signed_by;
       expect(auditSignedBy).toBeDefined();
       expect(auditSignedBy!.length).toBeGreaterThanOrEqual(1);
-      expect(auditSignedBy![0]?.principal).toBe(alpha.signerPrincipalDid);
+      expect(auditSignedBy![0]?.identity ?? auditSignedBy![0]?.principal).toBe(alpha.signerPrincipalDid);
 
       // ─── β's reply is re-signed with β's stack key + replayed ────
       // The dispatch-listener publishes the harness's terminal envelope
@@ -538,7 +541,13 @@ describe("IAW Phase D.6.1 — cross-operator federated dispatch + reply (refs co
           ? [replyChain]
           : [];
       expect(replyStamps.length).toBe(1);
-      expect(replyStamps[0]?.principal).toBe(beta.signerPrincipalDid);
+      // R2 (vocabulary migration 2026-05) — myelin's signEnvelope emits
+      // the canonical `identity` key on every new stamp (PR-6 #169);
+      // the deprecated `principal` key would only appear on
+      // pre-migration / JetStream-replayed stamps. Dual-read keeps the
+      // test robust across the breaking-major drop.
+      // eslint-disable-next-line @typescript-eslint/no-deprecated
+      expect(replyStamps[0]?.identity ?? replyStamps[0]?.principal).toBe(beta.signerPrincipalDid);
 
       // The originating dispatch carried α's stamp — assert that too
       // so the test docs both halves of the cross-operator audit trail.
@@ -549,7 +558,8 @@ describe("IAW Phase D.6.1 — cross-operator federated dispatch + reply (refs co
           ? [dispatchChain]
           : [];
       expect(dispatchStamps.length).toBe(1);
-      expect(dispatchStamps[0]?.principal).toBe(alpha.signerPrincipalDid);
+      // eslint-disable-next-line @typescript-eslint/no-deprecated
+      expect(dispatchStamps[0]?.identity ?? dispatchStamps[0]?.principal).toBe(alpha.signerPrincipalDid);
     },
   );
 });
