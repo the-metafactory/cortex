@@ -268,7 +268,7 @@ function loadNotificationContext(
     taskTitle: row.task_title,
     priority: row.task_priority,
     taskSourceUrl: row.source_url,
-    operatorId: row.operator_id,
+    principalId: row.operator_id,
     observedAtMs: Date.now(),
   };
 }

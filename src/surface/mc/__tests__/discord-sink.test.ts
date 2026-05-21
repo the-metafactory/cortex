@@ -93,7 +93,7 @@ function ctx(overrides: Partial<NotificationContext> = {}): NotificationContext 
     taskTitle: "fix webhook HMAC",
     priority: 1,
     taskSourceUrl: null,
-    operatorId: "op-1",
+    principalId: "op-1",
     cycle: 3,
     observedAtMs: 1_700_000_000_000,
     ...overrides,

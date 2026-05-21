@@ -100,7 +100,7 @@ export interface NotificationContext {
   /** `tasks.source_url`. May be null for `internal` tasks. */
   taskSourceUrl: string | null;
   /** `tasks.operator_id`. Coalescing keys off this. */
-  operatorId: string;
+  principalId: string;
   /**
    * Cycle / dispatch count for this assignment. Optional — the renderer
    * omits the line if absent.
@@ -416,7 +416,7 @@ function enqueueDM(
   nowMs: number,
   scheduler: FlushScheduler
 ): void {
-  const key = ctx.operatorId;
+  const key = ctx.principalId;
   let buffer = dmBuffers.get(key);
   if (!buffer) {
     buffer = {

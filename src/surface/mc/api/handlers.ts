@@ -625,7 +625,7 @@ export async function handleCreateSession(
   // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
   const title = body.title?.trim() || "Untitled session";
   // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-  const operatorId = body.operatorId?.trim() || DEFAULT_OPERATOR_ID;
+  const principalId = body.principalId?.trim() || DEFAULT_OPERATOR_ID;
   // F-20 — when an observed session supplies an agentId we don't have on
   // file, register it on the spot using `agentName` as the display name.
   // Falls back to ensuring the default agent for unscoped controlled work.
@@ -682,7 +682,7 @@ export async function handleCreateSession(
       db.query(
         `INSERT INTO tasks (id, title, priority, operator_id, source_system)
          VALUES (?, ?, ?, ?, 'internal')`
-      ).run(taskId, title, DEFAULT_INTERNAL_TASK_PRIORITY, operatorId);
+      ).run(taskId, title, DEFAULT_INTERNAL_TASK_PRIORITY, principalId);
     }
 
     db.query(
@@ -841,7 +841,7 @@ export async function handleCreateSession(
         assignmentId,
         taskId,
         title,
-        operatorId
+        principalId
       );
       // Fire-and-forget — Discord errors must not block the API response.
       // The sink swallows + logs internally per Decision 9.
@@ -909,7 +909,7 @@ export async function handleCreateSession(
 /**
  * F-11: Build a `NotificationContext` for the freshly-created session.
  *
- * The handler only has `body.title` + `operatorId` + the generated ids in
+ * The handler only has `body.title` + `principalId` + the generated ids in
  * scope at hook time — the task row hasn't been re-read from the DB yet
  * (and we shouldn't take the round-trip on the hot path). This helper
  * reconstructs the minimum metadata `maybeNotifyDiscord` needs.
@@ -924,7 +924,7 @@ function buildNotificationContextFromCreate(
   assignmentId: string,
   taskId: string,
   taskTitle: string,
-  operatorId: string
+  principalId: string
 ): NotificationContext {
   return {
     assignmentId,
@@ -934,7 +934,7 @@ function buildNotificationContextFromCreate(
     taskTitle,
     priority: DEFAULT_INTERNAL_TASK_PRIORITY,
     taskSourceUrl: null, // 'internal' source for create-session.
-    operatorId,
+    principalId,
     observedAtMs: Date.now(),
   };
 }
@@ -1990,7 +1990,7 @@ export async function handleCreateTask(
   const taskId = generateId();
   const shadowAssignmentId = generateId();
   const shadowSessionId = generateId();
-  const operatorId = DEFAULT_OPERATOR_ID;
+  const principalId = DEFAULT_OPERATOR_ID;
 
   // All four writes (task + shadow assignment + shadow session + curation
   // event) land under one transaction so a partial failure leaves no
@@ -2010,7 +2010,7 @@ export async function handleCreateTask(
          (id, title, priority, operator_id,
           source_system, source_url, source_external_id)
        VALUES (?, ?, ?, ?, 'github', ?, ?)`
-    ).run(taskId, title, priority, operatorId, sourceUrl, canonical);
+    ).run(taskId, title, priority, principalId, sourceUrl, canonical);
 
     createShadowAssignmentAndSession(db, taskId, {
       assignmentId: shadowAssignmentId,

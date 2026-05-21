@@ -85,7 +85,7 @@ export interface CreateSessionRequest {
   /** Display name for the agent — used when `agentId` is supplied for a
    *  not-yet-known agent (e.g. operator's `cldyo-live` invocation). */
   agentName?: string;
-  operatorId?: string;
+  principalId?: string;
   /**
    * Optional initial operator turn. If provided, it is written to the
    * controlled session after spawn and recorded as an operator.input event.
