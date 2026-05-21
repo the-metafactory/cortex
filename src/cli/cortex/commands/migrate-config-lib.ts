@@ -137,9 +137,12 @@ export interface LegacyBotYaml {
     dataResidency?: string;
   };
   /**
-   * @deprecated R3 vocabulary migration (cortex#388) — legacy alias for
-   * `principal`. Still read on input for round-trip migration of pre-R3
-   * cortex.yaml files; the migrator always EMITS the `principal:` key.
+   * Legacy pre-R3 alias for `principal` (cortex#388 vocabulary migration).
+   * Still accepted on input so the migrator can round-trip a pre-R3
+   * cortex.yaml; the migrator always EMITS the `principal:` key. Deliberately
+   * NOT `@deprecated`-tagged — reading the legacy key is this migrator's whole
+   * job, so the tag would only fight `no-deprecated`; the rename nudge belongs
+   * on the canonical config types, not on this legacy-input shape.
    */
   operator?: {
     id?: string;
@@ -876,7 +879,6 @@ export function convertBotYaml(
       throw new Error("bot.yaml missing required `agent.displayName`");
     }
   }
-  /* eslint-enable @typescript-eslint/no-unnecessary-condition */
 
   const warnings: ConversionWarning[] = [];
   const mappings: InstanceMapping[] = [];
