@@ -9,7 +9,7 @@ echo "Stopping Cortex services for upgrade (${PAI_OLD_VERSION:-?} → ${PAI_NEW_
 if [ "$(uname)" = "Darwin" ]; then
   LAUNCH_DIR="${HOME}/Library/LaunchAgents"
 
-  # Kill running cortex bot processes before upgrading symlinks.
+  # Kill running cortex agent processes before upgrading symlinks.
   # Holly cortex#52 round 1 nit-3: previous `pgrep -f "cortex start"` matched
   # any commandline containing that substring (`grep cortex start`, vim
   # buffers, other users' editors on shared hosts). Constrain to the
@@ -20,7 +20,7 @@ if [ "$(uname)" = "Darwin" ]; then
     kill ${CORTEX_PIDS} 2>/dev/null || true
     sleep 1
     kill -9 ${CORTEX_PIDS} 2>/dev/null || true
-    echo "  ✓ Old cortex bot processes terminated"
+    echo "  ✓ Old cortex agent processes terminated"
   fi
 
   # Kill running cortex-relay processes — anchor to ~/bin path for the same

@@ -487,7 +487,7 @@ export async function startCortex(
   // we fall back to `~/.config/cortex/agents.d/`.
   //
   // Fragment-load errors are non-fatal at this stage of the migration: the
-  // bot must keep starting in BotConfig mode even when an operator's
+  // agent must keep starting in BotConfig mode even when an operator's
   // experimental fragment is malformed. Once the cortex.yaml migration is
   // complete (MIG-7.2e), the rule flips to strict per spec §FR-4.
   const agentsDir = options.agentsDir
@@ -2298,13 +2298,13 @@ export function runDryRun(configPath: string): DryRunResult {
 if (import.meta.main) {
   const program = new Command()
     .name("cortex")
-    .description("Cortex — PAI Discord bot, the M7 conscious processing surface")
+    .description("Cortex — the M7 conscious processing surface agent")
     .version(getVersion());
 
   program
     .command("start")
-    .description("Start the bot")
-    .option("--config <path>", "Path to bot config YAML", DEFAULT_CONFIG)
+    .description("Start the agent")
+    .option("--config <path>", "Path to agent config YAML", DEFAULT_CONFIG)
     .option("--dry-run", "Validate config file and exit (no adapter / NATS / daemon startup)")
     .action(async (options: { config: string; dryRun?: boolean }) => {
       // cortex#88 item 2 — short-circuit: skip PID file, signal handlers,
@@ -2363,8 +2363,8 @@ if (import.meta.main) {
 
   program
     .command("stop")
-    .description("Stop the bot")
-    .option("--config <path>", "Path to bot config YAML (selects which stack to stop)", DEFAULT_CONFIG)
+    .description("Stop the agent")
+    .option("--config <path>", "Path to agent config YAML (selects which stack to stop)", DEFAULT_CONFIG)
     .action((options: { config: string }) => {
       const pidFile = pidFileFor(options.config);
       if (!existsSync(pidFile)) {
@@ -2384,8 +2384,8 @@ if (import.meta.main) {
 
   program
     .command("status")
-    .description("Check bot status")
-    .option("--config <path>", "Path to bot config YAML (selects which stack to query)", DEFAULT_CONFIG)
+    .description("Check agent status")
+    .option("--config <path>", "Path to agent config YAML (selects which stack to query)", DEFAULT_CONFIG)
     .action((options: { config: string }) => {
       const pidFile = pidFileFor(options.config);
       if (!existsSync(pidFile)) {

@@ -18,9 +18,9 @@
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>__HOME__/.config/cortex/work-logs/cortex-work-bot.log</string>
+    <string>__HOME__/.config/cortex/work-logs/cortex-work-agent.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.config/cortex/work-logs/cortex-work-bot.error.log</string>
+    <string>__HOME__/.config/cortex/work-logs/cortex-work-agent.error.log</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>HOME</key>

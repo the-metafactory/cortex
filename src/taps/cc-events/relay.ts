@@ -13,6 +13,7 @@ import { processEvent } from "./lib/policy-engine";
 import { EventProcessor } from "./lib/event-processor";
 import { watchRawEvents } from "./lib/file-watcher";
 import { RawEventSchema } from "./hooks/lib/event-types";
+import { resolvePrincipalEnv } from "./hooks/lib/principal-env";
 import { NatsLink } from "../../bus/nats/connection";
 import { createCcEventPublisher } from "./cc-events";
 
@@ -162,7 +163,7 @@ program
   )
   .option(
     "--org <org>",
-    "Operator/org segment for published subjects (local.{org}.{type}). Falls back to env var GROVE_OPERATOR or NATS_ORG.",
+    "Operator/org segment for published subjects (local.{org}.{type}). Falls back to env var CORTEX_PRINCIPAL (legacy: CORTEX_OPERATOR, GROVE_OPERATOR) or NATS_ORG.",
   )
   .option(
     "--stack <stack>",
@@ -198,8 +199,11 @@ program
     const natsUrl: string | undefined = options.natsUrl ?? process.env.NATS_URL;
     const natsToken: string | undefined =
       options.natsToken ?? process.env.NATS_TOKEN;
+    // R9 (cortex#388 PR-3): the org/operator segment resolves through the
+    // principal env-var compat shim — CORTEX_PRINCIPAL with a fallback to
+    // the legacy CORTEX_OPERATOR / GROVE_OPERATOR names.
     const org: string =
-      options.org ?? process.env.GROVE_OPERATOR ?? process.env.NATS_ORG ?? "default";
+      options.org ?? resolvePrincipalEnv() ?? process.env.NATS_ORG ?? "default";
     // cortex#266 — IAW A.5 stack segment for 6-segment publishes.
     const stack: string | undefined =
       options.stack ?? process.env.CORTEX_STACK ?? undefined;

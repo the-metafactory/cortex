@@ -9,6 +9,7 @@ import { appendFileSync, mkdirSync, chmodSync, existsSync, readFileSync } from "
 import { join } from "path";
 import { createRawEvent, type RawEvent } from "./lib/event-types";
 import { mapHookToEventType, EVENT_TYPES } from "./lib/event-taxonomy";
+import { resolvePrincipalEnv } from "./lib/principal-env";
 
 // =============================================================================
 // Hook input shape — what Claude Code writes to stdin per hook firing.
@@ -87,7 +88,10 @@ if (!groveChannel) {
 const groveNetwork = process.env.GROVE_NETWORK;
 const groveProject = process.env.GROVE_PROJECT;
 const groveEntity = process.env.GROVE_ENTITY;
-const groveOperator = process.env.GROVE_OPERATOR;
+// R9 (cortex#388 PR-3): the operator-the-human concept is now `principal`.
+// Read `CORTEX_PRINCIPAL` with a compat fallback to the legacy
+// `CORTEX_OPERATOR` / `GROVE_OPERATOR` names (see principal-env.ts).
+const principal = resolvePrincipalEnv();
 
 // =============================================================================
 // Directory Setup (T-2.3)
@@ -200,10 +204,12 @@ async function main() {
       payload.command_preview = hookInput.tool_input.command.slice(0, 200);
     }
 
-    // H-001: Explicit metadata from spawn boundary
+    // H-001: Explicit metadata from spawn boundary. The `operator` payload
+    // key is a wire field (relay policy + dashboard read it) and is renamed
+    // separately under R2 — only the env-var source is `principal` here.
     if (groveProject !== undefined) payload.project = groveProject;
     if (groveEntity !== undefined) payload.entity = groveEntity;
-    if (groveOperator !== undefined) payload.operator = groveOperator;
+    if (principal !== undefined) payload.operator = principal;
 
     // TodoWrite payload: extract task names and statuses
     if (toolName === "TodoWrite" && hookInput.tool_input?.todos !== undefined) {
@@ -247,7 +253,7 @@ async function main() {
       const heartbeat = createRawEvent(
         EVENT_TYPES.SESSION_HEARTBEAT,
         hookType,
-        { project: groveProject, entity: groveEntity, operator: groveOperator },
+        { project: groveProject, entity: groveEntity, operator: principal },
         { sessionId, networkId: groveNetwork }
       );
       await postEvent(heartbeat);

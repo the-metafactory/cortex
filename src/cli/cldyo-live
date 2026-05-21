@@ -34,6 +34,11 @@ export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 export GROVE_CHANNEL="${1:-${LIVE_ID}}"
 export GROVE_AGENT_NAME="${BOT_NAME}"
 export GROVE_AGENT_ID="${LIVE_ID}"
+# R9 (cortex#388 PR-3): the operator-the-human concept is now `principal`.
+# Export the canonical CORTEX_PRINCIPAL name; keep the legacy GROVE_OPERATOR
+# export too during the transition so any unmigrated consumer still resolves.
+# The legacy export is removed in v3.0.0 (PR-11).
+export CORTEX_PRINCIPAL="${LIVE_NAME}"
 export GROVE_OPERATOR="${LIVE_NAME}"
 export GROVE_BASH_GUARD='{"disabled":true}'
 TASK_LABEL="${1:-${LIVE_ID}}"
