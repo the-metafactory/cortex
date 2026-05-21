@@ -382,9 +382,11 @@ function buildOperator(
     }
   }
 
-  // The local is keyed `operator` because `CortexConfig` still uses that key
-  // during the transition release; `convertBotYaml` re-keys the validated
-  // block to `principal:` for emission (R3, cortex#388).
+  // The local variable name `operator` is preserved here because this
+  // builder reads LEGACY `agent.operator*` fields off bot.yaml input;
+  // the variable holds the converted block en-route to the cortex.yaml
+  // output. `convertBotYaml` emits it under the canonical `principal:`
+  // key per v3.0.0 (cortex#388 manifest PR-11).
   const operator: CortexConfig["principal"] = { id: principalId, dataResidency };
   if (a.operatorName) operator.displayName = a.operatorName;
   if (a.operatorDiscordId) operator.discordId = a.operatorDiscordId;

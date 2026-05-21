@@ -292,7 +292,7 @@ describe("error reporting", () => {
 // returns the rich agents[] alongside via `inlineAgents` so `startCortex`
 // can route per-instance identity correctly.
 
-import { loadConfigWithAgents } from "../loader";
+import { loadConfigWithAgents, DualBlockConflictError } from "../loader";
 
 describe("MIG-7.2e — cortex-shape detection + transform", () => {
   function writeCortexConfig(dir: string, config: Record<string, unknown>): string {
@@ -754,9 +754,49 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     expect(loaded.config.agent.operatorId).toBe("jc");
   });
 
-  // v3.0.0 BREAKING (manifest PR-11) — the `operator:` reader and the
-  // `DualBlockConflictError` dual-block guard were REMOVED. cortex.yaml
-  // now requires the canonical `principal:` key. The migrate-config CLI
-  // continues to rewrite legacy `operator:`-shaped input — those tests
-  // live alongside `migrate-config.test.ts`, not here.
+  // v3.0.0 BREAKING (manifest PR-11) — cortex.yaml requires the
+  // canonical `principal:` key. The dual-block trust-boundary guard
+  // (`DualBlockConflictError`) is RETAINED: a config carrying BOTH
+  // `principal:` and `operator:` is still rejected with
+  // `dual_field_conflict` before any membership / capability decision.
+  // Legacy `operator:`-only configs no longer load via this path;
+  // operators rewrite via `cortex migrate-config <config.yaml>`.
+
+  test("v3 BREAKING — rejects a cortex.yaml carrying BOTH `principal:` and `operator:` with dual_field_conflict", () => {
+    // Trust-boundary regression: a hand-edited config mid-migration that
+    // kept the old block while adding the new one MUST be rejected, not
+    // silently resolved to one block.
+    const cfg = minimalCortexPrincipalShape();
+    cfg.operator = { id: "someone-else", discordId: "999" };
+    const path = writeCortexConfig(testDir, cfg);
+
+    expect(() => loadConfigWithAgents(path)).toThrow(DualBlockConflictError);
+    expect(() => loadConfigWithAgents(path)).toThrow(/dual|BOTH/i);
+  });
+
+  test("v3 BREAKING — the dual-block error carries the `dual_field_conflict` code", () => {
+    const cfg = minimalCortexPrincipalShape();
+    cfg.operator = { id: "someone-else" };
+    const path = writeCortexConfig(testDir, cfg);
+    try {
+      loadConfigWithAgents(path);
+      throw new Error("expected loadConfigWithAgents to throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(DualBlockConflictError);
+      expect((e as DualBlockConflictError).code).toBe("dual_field_conflict");
+    }
+  });
+
+  test("v3 BREAKING — dual-block conflict fires even when `agents:` is absent (trust boundary, not shape-gated)", () => {
+    // The conflict is a deployment-config trust boundary — it must surface
+    // regardless of whether the rest of the config is structurally
+    // cortex-shape. A config with both blocks and no agents must not
+    // fall through to the legacy bot.yaml path.
+    const cfg: Record<string, unknown> = {
+      principal: { id: "jc" },
+      operator: { id: "jc" },
+    };
+    const path = writeCortexConfig(testDir, cfg);
+    expect(() => loadConfigWithAgents(path)).toThrow(DualBlockConflictError);
+  });
 });

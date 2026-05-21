@@ -142,20 +142,66 @@ function isZodLikeError(err: unknown): err is ZodLikeError {
 }
 
 /**
- * R3 vocabulary migration (cortex#388) v3.0.0 BREAKING — the legacy
- * `operator:` block reader and the dual-block `DualBlockConflictError`
- * were REMOVED at v3.0.0 (manifest PR-11). cortex.yaml now requires the
- * canonical `principal:` key. Operators upgrading from v2.x run
- * `cortex migrate-config <config.yaml>` to rewrite their config; the
+ * R3 vocabulary migration (cortex#388) v3.0.0 BREAKING — typed error
+ * raised when a single `cortex.yaml` carries BOTH a legacy `operator:`
+ * block AND the canonical `principal:` block.
+ *
+ * The trust-boundary contract from v2.x is preserved at v3: a config
+ * declaring two principal blocks is ambiguous and MUST be rejected
+ * before any membership / capability decision. v3 drops the
+ * legacy-only acceptance path (operators upgrading from v2.x run
+ * `cortex migrate-config <config.yaml>` to delete the old block), but
+ * the dual-block rejection stays — a hand-edited config that kept the
+ * old block while adding the new one must surface the conflict
+ * loudly rather than be silently resolved.
+ */
+export class DualBlockConflictError extends Error {
+  /** Stable discriminator for programmatic handling by callers / tests. */
+  public readonly code = "dual_field_conflict" as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "DualBlockConflictError";
+  }
+}
+
+/**
+ * R3 vocabulary migration (cortex#388) v3.0.0 BREAKING — resolve the
+ * principal block from a cortex-shape config. cortex.yaml now requires
+ * the canonical `principal:` key; the legacy `operator:`-only path was
+ * removed at v3.0.0 (manifest PR-11). Operators upgrading from v2.x run
+ * `cortex migrate-config <config.yaml>` to rewrite their config — the
  * migrate-config CLI continues to read legacy `operator:`-shaped input
  * (historical record per cortex#388 completion-signal allow-list).
+ *
+ * Trust-boundary rule: if BOTH `principal:` and `operator:` keys are
+ * present (a hand-edited config mid-migration that kept the old block
+ * while adding the new one), raise `DualBlockConflictError` — the
+ * ambiguous config must surface rather than silently resolve to one
+ * block before any membership / capability decision.
  */
 function resolvePrincipalBlock(
   raw: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  if (raw.principal !== null && typeof raw.principal === "object") {
-    return raw.principal as Record<string, unknown>;
+  const hasPrincipal =
+    raw.principal !== null && typeof raw.principal === "object";
+  const hasOperator =
+    raw.operator !== null && typeof raw.operator === "object";
+
+  if (hasPrincipal && hasOperator) {
+    throw new DualBlockConflictError(
+      "cortex.yaml declares BOTH a `principal:` block and a legacy " +
+        "`operator:` block. v3.0.0 BREAKING (manifest PR-11) — the " +
+        "`operator:` block is no longer a valid cortex.yaml key, but a " +
+        "config declaring both is a deployment-config trust boundary and " +
+        "is rejected before any membership / capability decision is made. " +
+        "Delete the legacy `operator:` block (run `cortex migrate-config " +
+        "<your-config.yaml>` to regenerate a clean `principal:`-shaped " +
+        "config).",
+    );
   }
+
+  if (hasPrincipal) return raw.principal as Record<string, unknown>;
   return undefined;
 }
 
