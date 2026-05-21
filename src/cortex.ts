@@ -890,6 +890,34 @@ export async function startCortex(
       const pipelineRunner =
         substrate === "pi-dev" ? makePiDevPipelineRunner({}) : undefined;
 
+      // cortex#400 — propagate `config.claude` into the per-agent
+      // review-consumer's `sessionOpts` so the bus-side CC spawn
+      // mirrors the Discord path (`src/bus/dispatch-handler.ts`
+      // line ~1014). Without this, `runReviewPipeline → new
+      // CCSession({prompt})` boots CC with empty defaults — no
+      // `--permission-mode bypassPermissions`, no `allowedTools`,
+      // no `cwd`, no `additionalArgs` — and the spawned model sees
+      // only globally-configured MCP tools (no Bash/Read/gh), so a
+      // `/review owner/repo#N` slash command politely refuses with
+      // "I don't have access to GitHub CLI tools". `asyncTimeoutMs`
+      // matches the Discord path's choice (review work is async).
+      // `allowedDirs` collapses an empty array to `undefined` so the
+      // claude-invoker omits the flag entirely (passing `[]` would
+      // forbid every directory).
+      const reviewSessionOpts = {
+        agentName: agent.displayName,
+        agentId: agent.id,
+        additionalArgs: config.claude.additionalArgs,
+        allowedTools: config.claude.allowedTools,
+        disallowedTools: config.claude.disallowedTools,
+        allowedDirs:
+          config.claude.allowedDirs.length > 0
+            ? config.claude.allowedDirs
+            : undefined,
+        timeoutMs: config.claude.asyncTimeoutMs,
+        cwd: process.cwd(),
+      };
+
       const consumer = new ReviewConsumer({
         agent: consumerAgent,
         source: systemEventSource,
@@ -911,6 +939,7 @@ export async function startCortex(
           // Minimal prompt — the real skill-aware builder lands in PR-8.
           // Echo's skill consumes `/review <owner/repo>#<pr>` style today.
           `/review ${payload.repo}#${payload.pr}`,
+        sessionOpts: reviewSessionOpts,
         ...(pipelineRunner !== undefined && { pipelineRunner }),
         ...(signatureVerifier !== undefined && { signatureVerifier }),
       });
