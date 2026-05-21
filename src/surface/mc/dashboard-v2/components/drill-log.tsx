@@ -150,8 +150,8 @@ function RowBody({ row, isExpanded, onToggle, onOpenImage }: DrillRowProps) {
                   <img
                     key={i}
                     src={src}
-                    alt={`operator attachment ${i + 1}`}
-                    onClick={() => onOpenImage(src, `operator attachment ${i + 1}`)}
+                    alt={`principal attachment ${i + 1}`}
+                    onClick={() => onOpenImage(src, `principal attachment ${i + 1}`)}
                   />
                 );
               })}

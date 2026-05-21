@@ -420,7 +420,7 @@ export function DrillInput({ assignmentId, assignment, ws, onSend }: DrillInputP
     <div
       className={wrapperCls}
       role="region"
-      aria-label="Operator input"
+      aria-label="Principal input"
       onDragEnter={onDragEnter}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
@@ -472,7 +472,7 @@ export function DrillInput({ assignmentId, assignment, ws, onSend }: DrillInputP
         ref={textareaRef}
         rows={2}
         placeholder={placeholder}
-        aria-label="Operator message"
+        aria-label="Principal message"
         value={text}
         disabled={readonly}
         onChange={(e) => setText(e.target.value)}
@@ -481,7 +481,7 @@ export function DrillInput({ assignmentId, assignment, ws, onSend }: DrillInputP
       />
 
       {!readonly && (
-        <div className="canned-row" aria-label="Canned operator actions">
+        <div className="canned-row" aria-label="Canned principal actions">
           {CANNED_ACTIONS.map((c) => (
             <button
               key={c.label}
