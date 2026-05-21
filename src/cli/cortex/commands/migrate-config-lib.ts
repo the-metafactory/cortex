@@ -846,7 +846,6 @@ export function convertBotYaml(
   // `principal:` block and a legacy `operator:` block is a deployment-config
   // trust boundary. Reject it BEFORE any conversion work; the migrator must
   // never silently pick one. Mirrors the loader's `dual_field_conflict`.
-  /* eslint-disable @typescript-eslint/no-unnecessary-condition */
   if (legacy.principal !== undefined && legacy.operator !== undefined) {
     throw new Error(
       "input declares BOTH a `principal:` block and a legacy `operator:` " +
