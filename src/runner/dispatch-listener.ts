@@ -60,6 +60,7 @@ import type { Envelope } from "../bus/myelin/envelope-validator";
 import {
   getActorPrincipal,
   getSignedByChain,
+  getFirstStampPrincipal,
 } from "../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type {
@@ -1087,9 +1088,10 @@ async function emitChainVerificationDeny(
   chainReason: ChainRejectionReason,
 ): Promise<void> {
   const chain = getSignedByChain(envelope);
-  // R2 (vocabulary migration 2026-05) — dual-read stamp DID.
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
-  const claimedPrincipal = chain[0]?.identity ?? chain[0]?.principal ?? "<unverified>";
+  // R2 (vocabulary migration 2026-05) — dual-read via the shared
+  // `getFirstStampPrincipal` helper so the transition logic lives in
+  // one place. Sage cortex#396 maintainability suggestion.
+  const claimedPrincipal = getFirstStampPrincipal(envelope);
   // Strip did:mf: prefix when present so audit consumers see a bare id
   // shape consistent with the engine's principal-id idiom; fall through
   // to the raw DID otherwise (preserves the wire claim verbatim).
@@ -1163,9 +1165,8 @@ async function emitReceivingAgentUnconfiguredDeny(
   stack: string | undefined,
 ): Promise<void> {
   const chain = getSignedByChain(envelope);
-  // R2 (vocabulary migration 2026-05) — dual-read stamp DID.
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
-  const claimedPrincipal = chain[0]?.identity ?? chain[0]?.principal ?? "<unverified>";
+  // R2 (vocabulary migration 2026-05) — same shared dual-read helper.
+  const claimedPrincipal = getFirstStampPrincipal(envelope);
   const principalId =
     extractAgentIdFromDid(claimedPrincipal) ?? claimedPrincipal;
 

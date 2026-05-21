@@ -527,6 +527,29 @@ export function getTargetAssistant(envelope: Envelope): string | undefined {
 }
 
 /**
+ * Resolve the FIRST stamp's DID across the R2 transition window
+ * (vocabulary migration 2026-05). Canonical key is `identity`; falls
+ * back to the deprecated `principal` for pre-migration / JetStream-
+ * replayed stamps. Returns `fallback` when the chain is empty or the
+ * first stamp has neither key set.
+ *
+ * Audit emitters (`createSystemAccessFederationDeniedEvent`,
+ * `dispatch-listener` denial paths) use this so the same dual-read
+ * lives in one place — the next rename/drop touches one helper rather
+ * than every audit call-site.
+ */
+export function getFirstStampPrincipal(
+  envelope: Envelope,
+  fallback = "<unverified>",
+): string {
+  const chain = getSignedByChain(envelope);
+  const first = chain[0];
+  if (!first) return fallback;
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
+  return first.identity ?? first.principal ?? fallback;
+}
+
+/**
  * Sovereignty classification values per the myelin envelope schema. Exported
  * so emit-site helpers (`system-events.ts`, `dispatch-events.ts`,
  * `github-events.ts`, `taps/cc-events/cc-events.ts`) can accept an optional
