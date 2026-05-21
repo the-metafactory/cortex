@@ -320,7 +320,20 @@ describe("envelope-validator — F-021 task envelope fields (IAW Phase A.2)", ()
     }
   });
 
-  test("accepts a broadcast envelope with no target_principal", () => {
+  test("accepts an offer envelope with no target_assistant (canonical R11)", () => {
+    const env = {
+      ...(validEnvelope as object),
+      distribution_mode: "offer",
+      sovereignty_required: "open",
+    };
+    const result = validateEnvelope(env);
+    expect(result.ok).toBe(true);
+  });
+
+  test("accepts a broadcast envelope (deprecated alias, R11 back-compat)", () => {
+    // Vocabulary migration 2026-05 — `broadcast` is the deprecated alias
+    // of `offer`. The transition schema still accepts it on read so
+    // JetStream-replayed pre-migration envelopes route through unchanged.
     const env = {
       ...(validEnvelope as object),
       distribution_mode: "broadcast",
@@ -379,10 +392,13 @@ describe("envelope-validator — F-021 task envelope fields (IAW Phase A.2)", ()
   });
 
   test("accepts an envelope with the F-021 bidding sovereignty mode", () => {
+    // R11 (vocabulary migration 2026-05) — bidding sovereignty uses the
+    // canonical `offer` distribution_mode; the deprecated `broadcast`
+    // alias is exercised in the separate back-compat test above.
     const env = {
       ...(validEnvelope as object),
       sovereignty_required: "bidding",
-      distribution_mode: "broadcast",
+      distribution_mode: "offer",
     };
     const result = validateEnvelope(env);
     expect(result.ok).toBe(true);

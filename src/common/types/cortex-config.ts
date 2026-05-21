@@ -221,9 +221,10 @@ export const DiscordPresenceSchema = z.object({
    * configs).
    *
    * Common values:
-   *   - `local.{org}.tasks.code-review.>` — pilot review-requests (IoAW
-   *     Broadcast grammar per myelin/specs/namespace.md §Tasks Domain).
-   *   - `local.{org}.code.pr.review.>`    — sage review outcomes.
+   *   - `local.{principal}.tasks.code-review.>` — pilot review-requests (IoAW
+   *     Offer grammar per myelin/specs/namespace.md §Tasks Domain;
+   *     renamed from Broadcast — vocabulary migration 2026-05, R11).
+   *   - `local.{principal}.code.pr.review.>`    — sage review outcomes.
    *
    * Moves to per-renderer config at MIG-7.2d; for v1 the whole-adapter
    * subscription list is enough to unblock the bus→Discord render path.
