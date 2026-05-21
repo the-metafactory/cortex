@@ -51,7 +51,7 @@ interface Env {
    * `gh-webhook-receiver` (typically a tunnel exposing `127.0.0.1:8770`).
    * When set, the Worker forwards each validated webhook to this URL in
    * addition to `GROVE_API` so cortex can publish the
-   * `local.{org}.github.{event}.{action}` envelope onto the bus.
+   * `local.{principal}.github.{event}.{action}` envelope onto the bus.
    *
    * Posture:
    *   - The forward is best-effort: a failure here does NOT change the
@@ -174,7 +174,7 @@ app.post("/github", async (c) => {
 
   // 5b. MIG-5.6 (cortex#37): if a cortex forwarder URL is configured,
   //     additionally fire-and-forget the webhook at the local cortex
-  //     receiver so it can publish `local.{org}.github.{event}.{action}`
+  //     receiver so it can publish `local.{principal}.github.{event}.{action}`
   //     onto the bus. Failures are logged but never affect the response
   //     returned to GitHub — `GROVE_API` remains the authoritative store.
   const cortexUrl = c.env.CORTEX_FORWARDER_URL;

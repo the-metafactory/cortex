@@ -4,7 +4,7 @@
  * Forwards bus envelopes to PagerDuty's events-v2 API
  * (`https://events.pagerduty.com/v2/enqueue`). The G-1111 §4.6 fail-safe
  * rule recommends PagerDuty as one of the two distinct platform classes
- * subscribed to `local.{org}.system.>` so an operational alert reliably
+ * subscribed to `local.{principal}.system.>` so an operational alert reliably
  * pages even if the dashboard is the thing that broke.
  *
  * Operator chooses what counts as page-worthy via the `subscribe` patterns
@@ -13,9 +13,9 @@
  *     - kind: pagerduty
  *       routingKey: ${PAGERDUTY_ROUTING_KEY}
  *       subscribe:
- *         - "local.{org}.system.adapter.degraded"
- *         - "local.{org}.system.process.crashed"
- *         - "local.{org}.system.subscription.dropped"
+ *         - "local.{principal}.system.adapter.degraded"
+ *         - "local.{principal}.system.process.crashed"
+ *         - "local.{principal}.system.subscription.dropped"
  *
  * Mapping rules (events-v2 §payload):
  *   - `event_action` is always `"trigger"` for now. Future iteration could

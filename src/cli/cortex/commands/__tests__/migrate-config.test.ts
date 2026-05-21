@@ -435,6 +435,11 @@ describe("convertBotYaml — full fixture", () => {
     const legacy = loadFixture("full.bot.yaml");
     const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
     expect(result.cortex.nats?.url).toBe("nats://localhost:4222");
+    // Fixture carries the legacy `local.{org}.>` token verbatim — this
+    // test asserts the migrate-config converter passes nats config
+    // through UNCHANGED. The legacy bot.yaml fixture is intentionally
+    // NOT touched by the vocabulary migration (it's the source format
+    // migrate-config reads from).
     expect(result.cortex.nats?.subjects).toEqual(["local.{org}.>"]);
   });
 

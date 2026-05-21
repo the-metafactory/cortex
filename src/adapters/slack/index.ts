@@ -65,7 +65,7 @@ export interface SlackAdapterInfra {
    */
   runtime?: MyelinRuntime;
   /**
-   * `{org}.{agent}.{instance}` source triple stamped onto emitted
+   * `{principal}.{agent}.{instance}` source triple stamped onto emitted
    * `system.*` envelopes. Required for any `system.adapter.*` envelope
    * to fire — see `canPublishSystemEvent()`.
    */

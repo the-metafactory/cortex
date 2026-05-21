@@ -351,7 +351,7 @@ describe("RendererSchema", () => {
   test("dashboard renderer parses with kind + defaults", () => {
     const parsed = DashboardRendererSchema.parse({ kind: "dashboard" });
     expect(parsed.port).toBe(8767);
-    expect(parsed.subscribe).toEqual(["local.{org}.>"]);
+    expect(parsed.subscribe).toEqual(["local.{principal}.>"]);
     expect(parsed.projections).toEqual([]);
   });
 
@@ -360,7 +360,7 @@ describe("RendererSchema", () => {
     const parsed = PagerDutyRendererSchema.parse({
       kind: "pagerduty",
       routingKey: "PD-ROUTING-KEY",
-      subscribe: ["local.{org}.system.adapter.degraded"],
+      subscribe: ["local.{principal}.system.adapter.degraded"],
     });
     expect(parsed.routingKey).toBe("PD-ROUTING-KEY");
   });
@@ -677,12 +677,12 @@ describe("CortexConfigSchema", () => {
       ],
       renderers: [
         { kind: "dashboard", port: 8767, publicUrl: "https://cortex.meta-factory.ai" },
-        { kind: "pagerduty", routingKey: "PD-KEY", subscribe: ["local.{org}.system.>"] },
+        { kind: "pagerduty", routingKey: "PD-KEY", subscribe: ["local.{principal}.system.>"] },
       ],
       claude: {},
       nats: {
         url: "nats://localhost:4222",
-        subjects: ["local.{org}.>"],
+        subjects: ["local.{principal}.>"],
         identity: {
           seedPath: "/etc/cortex/andreas.nk",
           publicKey: VALID_NKEY,

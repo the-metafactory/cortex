@@ -12,7 +12,7 @@
  * **Out of scope for this iteration** (filed as follow-ups on cortex / myelin):
  *   - Dashboard rendering of "Echo last seen 12s ago" — separate cortex issue.
  *   - Canonical myelin schema entry for `system.agent.heartbeat` — Path B per
- *     cortex#361 ships on the operator-managed `local.{org}.{stack}.*`
+ *     cortex#361 ships on the operator-managed `local.{principal}.{stack}.*`
  *     namespace; cross-operator (`federated.*`) propagation needs a myelin
  *     spec round. Tracked as a follow-up issue on `the-metafactory/myelin`.
  *   - cc-session inactivity-timer "respect heartbeat" — separate cortex issue
@@ -38,7 +38,7 @@
  * Payload shape for the `system.agent.heartbeat` envelope type. Lands on
  * `envelope.payload`; `envelope.type` carries the literal
  * `"system.agent.heartbeat"` string and the runtime's stack-aware subject
- * derivation routes it to `local.{org}.{stack}.system.agent.heartbeat`.
+ * derivation routes it to `local.{principal}.{stack}.system.agent.heartbeat`.
  */
 export interface AgentHeartbeatPayload {
   /**
@@ -114,7 +114,7 @@ export interface AgentHeartbeatPayload {
  * as a constant so subscribers (dashboard, future surface-router liveness
  * checks) can filter without re-typing the string.
  *
- * Matches the cortex-local subject prefix `local.{org}.{stack}.` — the
+ * Matches the cortex-local subject prefix `local.{principal}.{stack}.` — the
  * runtime's stack-aware subject derivation prepends those segments
  * automatically (see `MyelinRuntime.publish` and the `stack` config option).
  */

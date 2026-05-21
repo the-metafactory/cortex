@@ -18,7 +18,7 @@
  *   - `timestamp` is the helper-call time (ISO 8601). Callers should not back-fill
  *     this — if you need an event-of-fact timestamp distinct from emit time
  *     (e.g. `disconnected_since`), it lives in the payload.
- *   - `source` is the dotted `{org}.{agent}.{instance}` form required by the
+ *   - `source` is the dotted `{principal}.{agent}.{instance}` form required by the
  *     myelin envelope schema (G-1100.B) — e.g. `metafactory.grove.local`.
  *     The helpers take the three segments separately so callers don't string-
  *     concatenate by hand. This matches the spec §3.6 example envelopes.
@@ -146,7 +146,7 @@ export function adapterCorrelationKey(
 // ---------------------------------------------------------------------------
 
 export interface SystemAdapterDegradedOpts {
-  /** Envelope source — `{org}.{agent}.{instance}` per schema. */
+  /** Envelope source — `{principal}.{agent}.{instance}` per schema. */
   source: SystemEventSource;
   /** Stable adapter instance ID, e.g. `discord-luna`. Mandatory per §3.5.4. */
   adapterId: string;
@@ -164,7 +164,7 @@ export interface SystemAdapterDegradedOpts {
   /**
    * IAW Phase A.3 — optional sovereignty classification. Defaults to
    * `"local"` (operator-private). Set to `"federated"` to publish on
-   * `federated.{org}.system.adapter.degraded` so peer dashboards in the
+   * `federated.{principal}.system.adapter.degraded` so peer dashboards in the
    * operator's federation policy can render the event; `"public"` for
    * global visibility. Mismatch with the publish-time subject is a
    * protocol violation (see {@link validateSubjectEnvelopeAlignment}).
@@ -650,7 +650,7 @@ interface SystemAccessCommonOpts {
   /**
    * Subject of the originating envelope — lets surfaces filter audit
    * traffic by the wire path they care about (e.g. only audit
-   * `local.{org}.dispatch.task.received` decisions).
+   * `local.{principal}.dispatch.task.received` decisions).
    */
   envelopeSubject: string;
   /**
@@ -692,7 +692,7 @@ export interface SystemAccessDeniedOpts extends SystemAccessCommonOpts {
  * (substrate-side validation, federation hub stamps) will emit on
  * the same subject.
  *
- * Subject convention: `local.{org}.system.access.allowed` — surfaces
+ * Subject convention: `local.{principal}.system.access.allowed` — surfaces
  * subscribe to `system.access.>` for the full access stream.
  */
 export function createSystemAccessAllowedEvent(
@@ -726,7 +726,7 @@ export function createSystemAccessAllowedEvent(
  * verbatim so denied envelopes are still cryptographically
  * attributable (the rejection itself is part of the audit trail).
  *
- * Subject convention: `local.{org}.system.access.denied`.
+ * Subject convention: `local.{principal}.system.access.denied`.
  */
 export function createSystemAccessDeniedEvent(
   opts: SystemAccessDeniedOpts,
@@ -978,7 +978,7 @@ export interface SystemAgentHeartbeatOpts {
  * `runtime.publish` signing path).
  *
  * **Subject derivation.** The runtime's stack-aware `publish()` routes this
- * to `local.{org}.{stack}.system.agent.heartbeat` — operator-managed
+ * to `local.{principal}.{stack}.system.agent.heartbeat` — operator-managed
  * namespace, no upstream myelin schema entry required for the cortex-local
  * deployment. A myelin canonicalisation follow-up (filed against
  * `the-metafactory/myelin`) will lift this onto `federated.*` for cross-

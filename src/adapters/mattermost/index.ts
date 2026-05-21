@@ -77,7 +77,7 @@ export interface MattermostAdapterInfra {
    * is optional and the adapter still works when absent.
    */
   runtime?: MyelinRuntime;
-  /** v2.0.0 (cortex#297) — `{org}.{agent}.{instance}` source triple. */
+  /** v2.0.0 (cortex#297) — `{principal}.{agent}.{instance}` source triple. */
   systemEventSource?: SystemEventSource;
   /**
    * v2.0.0 cutover (cortex#297) — PolicyEngine is the sole authorisation

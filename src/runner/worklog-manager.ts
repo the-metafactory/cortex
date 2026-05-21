@@ -268,7 +268,7 @@ export class WorklogManager {
    *   clean (no config import here).
    * @param stack — optional operator stack segment (IAW Phase A.5,
    *   cortex#268). When supplied, the manager subscribes on the 6-segment
-   *   grammar `local.{org}.{stack}.dispatch.task.>` matching sage's
+   *   grammar `local.{principal}.{stack}.dispatch.task.>` matching sage's
    *   emit-side post-A.5. When omitted, falls through to the legacy
    *   5-segment form — bit-identical to pre-cortex#268.
    *

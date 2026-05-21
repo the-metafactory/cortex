@@ -20,7 +20,7 @@
  *   - `id` is a fresh `crypto.randomUUID()` per call (envelope idempotency key).
  *   - `timestamp` is the helper-call time. Lifecycle moments distinct from
  *     emit time (`started_at`, `completed_at`, etc.) live in payload.
- *   - `source` is the dotted `{org}.{agent}.{instance}` per the schema.
+ *   - `source` is the dotted `{principal}.{agent}.{instance}` per the schema.
  *   - `correlation_id` is the **task UUID** when the caller provides one —
  *     the runner generates a UUID-shaped task_id at accept time so all four
  *     lifecycle events for a single task share one correlation_id. Surfaces

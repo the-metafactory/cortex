@@ -12,7 +12,7 @@
  *   runner adapter to drain the bus during integration tests.
  *
  * Lifecycle (per plan-cortex-migration.md §4.5–4.6, IAW Phase A.1b):
- *   1. Envelope arrives on `local.{org}.dispatch.task.received`.
+ *   1. Envelope arrives on `local.{principal}.dispatch.task.received`.
  *   2. Listener parses payload → builds a `DispatchRequest`.
  *   3. Listener instantiates a per-dispatch `ClaudeCodeHarness` and
  *      iterates `harness.dispatch(req)`.
@@ -186,7 +186,7 @@ export interface DispatchListenerOptions {
    * Operator stack segment (IAW Phase A.5, cortex#267) used to build the
    * subscription subject and the audit-envelope `dispatch.task.received`
    * synthesis path. When supplied, both subjects land on the 6-segment
-   * stack-aware grammar `local.{org}.{stack}.dispatch.task.received`
+   * stack-aware grammar `local.{principal}.{stack}.dispatch.task.received`
    * matching sage's emit-side post-IAW A.5. When omitted, the legacy
    * 5-segment form is used — bit-identical to pre-cortex#267 output, so
    * deployments without a `cortex.yaml stack:` block see no change.
@@ -301,7 +301,7 @@ export interface DispatchListener {
 // ---------------------------------------------------------------------------
 
 /**
- * Build the canonical `dispatch.task.received` subject for `{org}`
+ * Build the canonical `dispatch.task.received` subject for `{principal}`
  * (+ optional `{stack}`). Used by both `defaultSubjects` (subscribe-side)
  * and the audit-envelope fallback in `handleDispatchEnvelope`
  * (synthesised when an inbound envelope arrived without a wire
@@ -321,7 +321,7 @@ function dispatchReceivedSubject(org: string, stack?: string): string {
 }
 
 /**
- * Default subject for the runner's bus subscription. The `{org}` segment
+ * Default subject for the runner's bus subscription. The `{principal}` segment
  * is substituted at registration time using `source.org` so a misconfigured
  * runner with no operator id can still subscribe (it'll match nothing
  * unless someone publishes under `local.default.dispatch.task.received`).
@@ -687,7 +687,7 @@ async function handleDispatchEnvelope(
   //
   // IAW Phase D.3 — derive `source_network` from the matched
   // subject when the envelope arrived via `federated.{id}.>`. Local
-  // dispatches (subjects like `local.{org}.dispatch.task.received`)
+  // dispatches (subjects like `local.{principal}.dispatch.task.received`)
   // leave it `undefined` so the engine skips the federation branch.
   const sourceNetwork = extractSourceNetwork(subject);
   let gatedPrincipal: Principal | undefined;
@@ -736,7 +736,7 @@ async function handleDispatchEnvelope(
     // `defaultSystemSovereignty` — the originating envelope's
     // classification rides on `payload.intent_sovereignty` only.
     // Once federated dispatch is gated by this same surface,
-    // consumers subscribing to `federated.{org}.system.access.>`
+    // consumers subscribing to `federated.{principal}.system.access.>`
     // will miss federated denials. Decide then whether to (a)
     // mirror `intent_sovereignty.classification` onto the audit
     // envelope itself, (b) emit two envelopes (local + federated),
@@ -755,7 +755,7 @@ async function handleDispatchEnvelope(
     // IAW Phase D.3 — when the inbound envelope's subject was a real
     // wire subject (the surface-router forwards it on `render`), use
     // it verbatim on the audit envelope. The pre-D.3 path always
-    // synthesised `local.{org}.dispatch.task.received` regardless of
+    // synthesised `local.{principal}.dispatch.task.received` regardless of
     // whether the envelope arrived locally or on `federated.{net}.*`.
     // Synthesising the local subject on federated traffic would
     // misrepresent the wire path on audit consumers. Fall back to the

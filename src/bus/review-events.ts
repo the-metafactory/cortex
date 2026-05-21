@@ -25,7 +25,7 @@
  *   - `id` is a fresh `crypto.randomUUID()` per call (envelope idempotency key).
  *   - `timestamp` is the helper-call time. Domain-specific moments
  *     (`submitted_at`) live in payload.
- *   - `source` is the dotted `{org}.{agent}.{instance}` per the schema.
+ *   - `source` is the dotted `{principal}.{agent}.{instance}` per the schema.
  *   - `correlation_id` semantics differ per envelope family:
  *       - Request envelopes: no correlation_id (the envelope's `id` is the
  *         correlation root that the verdict envelope echoes — per §5.1).
@@ -41,7 +41,7 @@
  *     optional `classification` field (IAW Phase A.3 parameterisation pattern).
  *
  * **Subject derivation:** envelope `type` is `tasks.code-review.<flavor>` or
- * `review.verdict.<kind>`. The wire subject (`local.{org}.<type>` /
+ * `review.verdict.<kind>`. The wire subject (`local.{principal}.<type>` /
  * `federated.{network}.<type>`) is derived publish-side by
  * `MyelinRuntime.publish` via the namespace-derivation logic landed in
  * IAW Phase A.3 (cortex#129). This builder produces the in-memory envelope
@@ -244,7 +244,7 @@ export function createReviewRequestEvent(
 /**
  * The three verdict kinds per cortex#248 §4.2.1 and
  * `design-pilot-restructure.md` §4.2. The wire subject is
- * `local.{org}.review.verdict.<kind>`.
+ * `local.{principal}.review.verdict.<kind>`.
  */
 export type ReviewVerdictKind =
   | "approved"

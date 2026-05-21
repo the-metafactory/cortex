@@ -268,7 +268,7 @@ describe("startCortex — wire-up", () => {
 
   test("dispatch-listener registers with the right org-derived subject", async () => {
     // Echo round-1 N1: the listener's `surfaceConfig.subjects` is
-    // `local.{org}.dispatch.task.received` where `{org}` comes from
+    // `local.{principal}.dispatch.task.received` where `{principal}` comes from
     // `agent.operatorId ?? "default"`. Verify the fallback path: with
     // operatorId absent, the runtime sees envelopes on `local.default.*`.
     const runtime = createRecordingRuntime();

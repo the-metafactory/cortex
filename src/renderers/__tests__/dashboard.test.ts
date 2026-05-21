@@ -31,7 +31,7 @@ function makeEnvelope(id: string): Envelope {
 
 describe("DashboardRenderer", () => {
   test("buffers rendered envelopes in insertion order", async () => {
-    const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: ["local.{org}.>"], projections: [] });
+    const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: ["local.{principal}.>"], projections: [] });
     await r.render(makeEnvelope("e1"));
     await r.render(makeEnvelope("e2"));
     await r.render(makeEnvelope("e3"));
@@ -40,7 +40,7 @@ describe("DashboardRenderer", () => {
 
   test("respects the bufferSize bound (drops oldest)", async () => {
     const r = new DashboardRenderer(
-      { kind: "dashboard", port: 8767, subscribe: ["local.{org}.>"], projections: [] },
+      { kind: "dashboard", port: 8767, subscribe: ["local.{principal}.>"], projections: [] },
       { bufferSize: 3 },
     );
     await r.render(makeEnvelope("e1"));
@@ -51,7 +51,7 @@ describe("DashboardRenderer", () => {
   });
 
   test("getRecent() returns a snapshot copy — caller mutation does not leak", async () => {
-    const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: ["local.{org}.>"], projections: [] });
+    const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: ["local.{principal}.>"], projections: [] });
     await r.render(makeEnvelope("e1"));
     const snap = r.getRecent() as Envelope[];
     // Try to mutate the snapshot.
@@ -60,7 +60,7 @@ describe("DashboardRenderer", () => {
   });
 
   test("stop() drops the buffer", async () => {
-    const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: ["local.{org}.>"], projections: [] });
+    const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: ["local.{principal}.>"], projections: [] });
     await r.render(makeEnvelope("e1"));
     await r.render(makeEnvelope("e2"));
     await r.stop();
@@ -68,7 +68,7 @@ describe("DashboardRenderer", () => {
   });
 
   test("render() never throws even on absurd input", async () => {
-    const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: ["local.{org}.>"], projections: [] });
+    const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: ["local.{principal}.>"], projections: [] });
     // Cast to bypass type checking — simulates a malformed envelope leaking
     // past the router's validator (defense-in-depth on the renderer contract).
     const badEnv = null as unknown as Envelope;
@@ -76,7 +76,7 @@ describe("DashboardRenderer", () => {
   });
 
   test("render() silently drops null/non-object envelopes (does not leak into buffer)", async () => {
-    const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: ["local.{org}.>"], projections: [] });
+    const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: ["local.{principal}.>"], projections: [] });
     await r.render(makeEnvelope("e1"));
     // Malformed values must not corrupt the buffer — Holly cycle 1 W2.
     await r.render(null as unknown as Envelope);
@@ -92,7 +92,7 @@ describe("DashboardRenderer", () => {
     // ring buffer is the only state — re-filling after stop() is harmless
     // and matches the lifecycle (a fresh start() returns to the same
     // empty-buffer state). Tests can rely on this for clean iteration.
-    const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: ["local.{org}.>"], projections: [] });
+    const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: ["local.{principal}.>"], projections: [] });
     await r.render(makeEnvelope("e1"));
     await r.stop();
     expect(r.getRecent()).toEqual([]);
@@ -104,15 +104,15 @@ describe("DashboardRenderer", () => {
     const r = new DashboardRenderer({
       kind: "dashboard",
       port: 8767,
-      subscribe: ["local.{org}.review.>", "local.{org}.attention.>"],
+      subscribe: ["local.{principal}.review.>", "local.{principal}.attention.>"],
       projections: [],
     });
     expect(r.surfaceConfig.id).toBe("dashboard");
-    expect(r.surfaceConfig.subjects).toEqual(["local.{org}.review.>", "local.{org}.attention.>"]);
+    expect(r.surfaceConfig.subjects).toEqual(["local.{principal}.review.>", "local.{principal}.attention.>"]);
   });
 
   test("start() is a no-op (idempotent, fast)", async () => {
-    const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: ["local.{org}.>"], projections: [] });
+    const r = new DashboardRenderer({ kind: "dashboard", port: 8767, subscribe: ["local.{principal}.>"], projections: [] });
     await r.start();
     await r.start(); // idempotent
     expect(r.getRecent()).toEqual([]);

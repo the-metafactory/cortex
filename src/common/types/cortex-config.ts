@@ -645,7 +645,7 @@ export type Agent = z.infer<typeof AgentSchema>;
  * to known platform classes (dashboard, pagerduty, cli-tail, webhook-out).
  *
  * The G-1111 §4.6 fail-safe rule requires ≥2 distinct platform classes
- * covering `local.{org}.system.>` — that check fires at config-load (MIG-1.10),
+ * covering `local.{principal}.system.>` — that check fires at config-load (MIG-1.10),
  * not in the Zod schema.
  */
 export const RendererKindSchema = z.enum([
@@ -741,7 +741,7 @@ export const DashboardRendererSchema = z.object({
   kind: z.literal("dashboard"),
   port: z.number().int().positive().default(8767),
   publicUrl: z.url().optional(),
-  subscribe: z.array(z.string().min(1)).default(["local.{org}.>"]),
+  subscribe: z.array(z.string().min(1)).default(["local.{principal}.>"]),
   /**
    * Optional projection rules. Each entry maps an event source pattern to
    * a dashboard projection (kanban-card, inbox-row, status-banner, etc.).
@@ -788,7 +788,7 @@ export type PagerDutyRendererConfig = z.infer<typeof PagerDutyRendererSchema>;
  */
 export const CliTailRendererSchema = z.object({
   kind: z.literal("cli-tail"),
-  subscribe: z.array(z.string().min(1)).default(["local.{org}.>"]),
+  subscribe: z.array(z.string().min(1)).default(["local.{principal}.>"]),
   /**
    * IAW Phase A.4 — optional visibility guardrails. See
    * {@link RendererVisibilitySchema}.
@@ -883,7 +883,7 @@ export const NatsConfigSchema = z.object({
   /** Connection name surfaced on the server's varz endpoint. */
   name: z.string().default("cortex"),
   /**
-   * Subject patterns to subscribe to. Default empty. `{org}` is substituted
+   * Subject patterns to subscribe to. Default empty. `{principal}` is substituted
    * with `operator.id` at runtime.
    */
   subjects: z.array(z.string().min(1)).default([]),

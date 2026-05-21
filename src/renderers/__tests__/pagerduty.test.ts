@@ -69,7 +69,7 @@ describe("PagerDutyRenderer", () => {
   test("POSTs to the events-v2 endpoint with the routing key in the body", async () => {
     const { fetchImpl, calls } = makeFetch(() => new Response("", { status: 202 }));
     const renderer = new PagerDutyRenderer(
-      { kind: "pagerduty", routingKey: "rk-test-123", subscribe: ["local.{org}.system.>"] },
+      { kind: "pagerduty", routingKey: "rk-test-123", subscribe: ["local.{principal}.system.>"] },
       { fetchImpl },
     );
     await renderer.render(makeEnvelope());
@@ -179,10 +179,10 @@ describe("PagerDutyRenderer", () => {
 
   test("surfaceConfig exposes the configured subjects and renderer id", () => {
     const renderer = new PagerDutyRenderer(
-      { kind: "pagerduty", routingKey: "rk", subscribe: ["local.{org}.system.>"] },
+      { kind: "pagerduty", routingKey: "rk", subscribe: ["local.{principal}.system.>"] },
     );
     expect(renderer.surfaceConfig.id).toBe("pagerduty");
-    expect(renderer.surfaceConfig.subjects).toEqual(["local.{org}.system.>"]);
+    expect(renderer.surfaceConfig.subjects).toEqual(["local.{principal}.system.>"]);
   });
 
   test("custom endpoint override is honoured (for staging / tests)", async () => {

@@ -257,7 +257,7 @@ describe("createCcEventPublisher", () => {
     };
   }
 
-  test("publishes legacy 5-segment local.{org}.{type} when stack is omitted", () => {
+  test("publishes legacy 5-segment local.{principal}.{type} when stack is omitted", () => {
     const link = makeLink();
     const pub = createCcEventPublisher({ link: link.stub, org: "metafactory" });
     pub(makeEvent({ event_type: "tool.bash.executed" }));
@@ -269,7 +269,7 @@ describe("createCcEventPublisher", () => {
   // `stack` (sourced from `deriveStackId(loadedConfig).stack`), the relay
   // emits the 6-segment subject form matching `MyelinRuntime.publish`
   // post-cortex#262 and sage's bridge subscription.
-  test("publishes stack-aware 6-segment local.{org}.{stack}.{type} when stack is supplied (cortex#266)", () => {
+  test("publishes stack-aware 6-segment local.{principal}.{stack}.{type} when stack is supplied (cortex#266)", () => {
     const link = makeLink();
     const pub = createCcEventPublisher({
       link: link.stub,
@@ -449,9 +449,9 @@ describe("cc-events classification parameterisation (IAW A.3)", () => {
     expect(validateEnvelope(env).ok).toBe(true);
   });
 
-  test("createCcEventPublisher: federated classification yields federated.{org}.{type} subject", () => {
+  test("createCcEventPublisher: federated classification yields federated.{principal}.{type} subject", () => {
     // The end-to-end federation unblock for the cc-events tap. Prior code
-    // hardcoded `local.{org}.{type}` regardless of classification, leaving
+    // hardcoded `local.{principal}.{type}` regardless of classification, leaving
     // the relay unable to emit on `federated.*` even if the caller wanted
     // it. Now the subject mirrors the envelope's classification.
     const link = makeLink();
@@ -478,7 +478,7 @@ describe("cc-events classification parameterisation (IAW A.3)", () => {
     });
     pub(makeEvent({ event_type: "tool.bash.executed" }));
     expect(link.calls).toHaveLength(1);
-    // Public is global — no `{org}` segment per myelin grammar.
+    // Public is global — no `{principal}` segment per myelin grammar.
     expect(link.calls[0]!.subject).toBe("public.tool.bash.executed");
     const env = JSON.parse(link.calls[0]!.payload);
     expect(env.sovereignty.classification).toBe("public");
@@ -486,7 +486,7 @@ describe("cc-events classification parameterisation (IAW A.3)", () => {
 
   test("createCcEventPublisher: default classification 'local' preserves prior subject behaviour", () => {
     // Back-compat: omitting `classification` gives the same subject the
-    // pre-A.3 code path produced. Subscribers under `local.{org}.>` keep
+    // pre-A.3 code path produced. Subscribers under `local.{principal}.>` keep
     // seeing the events untouched.
     const link = makeLink();
     const pub = createCcEventPublisher({

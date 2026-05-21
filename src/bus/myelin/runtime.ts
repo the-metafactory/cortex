@@ -57,18 +57,18 @@ export interface MyelinRuntime {
    * Subject is derived from `envelope.sovereignty.classification` +
    * `envelope.type` per G-1111 §3.1 and the myelin grammar:
    *
-   *   - `classification === "local"`     → `local.{org}.{type}`
-   *   - `classification === "federated"` → `federated.{org}.{type}`
-   *   - `classification === "public"`    → `public.{type}` (no `{org}` segment)
+   *   - `classification === "local"`     → `local.{principal}.{type}`
+   *   - `classification === "federated"` → `federated.{principal}.{type}`
+   *   - `classification === "public"`    → `public.{type}` (no `{principal}` segment)
    *
-   * `{org}` is the first dotted segment of `envelope.source` (which
+   * `{principal}` is the first dotted segment of `envelope.source` (which
    * cortex's `system-events.ts` etc. populate from `agent.operatorId`).
    * The 1:1 alignment between subject prefix and `sovereignty.classification`
    * is myelin's protocol-level invariant — see
    * {@link validateSubjectEnvelopeAlignment}.
    *
    * **IAW Phase A.3:** prior to this slice the runtime hardcoded
-   * `local.{org}.{type}` here, making federated/public emission structurally
+   * `local.{principal}.{type}` here, making federated/public emission structurally
    * impossible. Subject derivation now mirrors classification, so an emit
    * site that opts into `classification: "federated"` flows end-to-end
    * (envelope + subject) without further runtime changes.
@@ -156,7 +156,7 @@ export interface MyelinRuntime {
  * resolve-as-ack default.
  */
 export interface MyelinSubscribePullOpts {
-  /** Subject pattern, e.g. `local.{org}.tasks.code-review.>`. */
+  /** Subject pattern, e.g. `local.{principal}.tasks.code-review.>`. */
   pattern: string;
   /** JetStream stream name carrying the bound consumer. */
   stream: string;
@@ -235,12 +235,12 @@ export interface MyelinRuntimeOptions {
   signFailureMode?: "fallback" | "drop";
   /**
    * IAW Phase A.5 (cortex#113 / closes cortex#262) — operator stack
-   * segment slotted into the published subject between `{org}` and
+   * segment slotted into the published subject between `{principal}` and
    * `{type}`. When set, `publish()` derives subjects in the 6-segment
-   * stack-aware shape `local.{org}.{stack}.{type}` matching post-myelin#113
+   * stack-aware shape `local.{principal}.{stack}.{type}` matching post-myelin#113
    * subscribers (sage's bridge, cedar's dispatch, pilot's review-request
    * subscriber). When undefined, `publish()` falls through to the legacy
-   * 5-segment form `local.{org}.{type}` — preserves identity for callers
+   * 5-segment form `local.{principal}.{type}` — preserves identity for callers
    * that haven't wired stack identity yet.
    *
    * The entrypoint (`src/cortex.ts` ~line 386) sources this from
@@ -274,7 +274,7 @@ export interface BusEnvelopeSigner {
 }
 
 /**
- * Build a `{org}` + `{stack}.` placeholder substituter for operator-
+ * Build a `{principal}` + `{stack}.` placeholder substituter for operator-
  * configured subject patterns (cortex#269 / cortex#279 cycle 2).
  *
  * Used by `MyelinRuntime.publish`'s `nats.subjects` resolution and by
@@ -294,7 +294,7 @@ export function makeSubjectPlaceholderSubstituter(opts: {
   const stackToken = opts.stack !== undefined ? `${opts.stack}.` : "";
   return (subjects: readonly string[]) =>
     subjects.map((s) =>
-      s.replaceAll("{org}", opts.org).replaceAll("{stack}.", stackToken),
+      s.replaceAll("{principal}", opts.org).replaceAll("{stack}.", stackToken),
     );
 }
 
@@ -355,23 +355,23 @@ export async function startMyelinRuntime(
   }
 
   const nats = config.nats;
-  // IAW Phase A.3 follow-up (cortex#130 item 1): subscribe-side `{org}` is
+  // IAW Phase A.3 follow-up (cortex#130 item 1): subscribe-side `{principal}` is
   // resolved via the shared `orgFromConfig` helper. The publish-side
   // (`deriveNatsSubject` → `orgFromEnvelope`) extracts the same segment
   // from `envelope.source` at emit time. Both helpers live in
   // `envelope-validator.ts` and the invariant they jointly preserve
-  // (subscribe `{org}` === publish `{org}` for envelopes this stack emits)
+  // (subscribe `{principal}` === publish `{principal}` for envelopes this stack emits)
   // has a regression test at
   // `src/bus/myelin/__tests__/runtime-org-symmetry.test.ts`.
   //
-  // cortex#269 — `{stack}.` substituted alongside `{org}` via the shared
+  // cortex#269 — `{stack}.` substituted alongside `{principal}` via the shared
   // `makeSubjectPlaceholderSubstituter` helper (defined above; also used
   // by the renderer-config boot path in `src/cortex.ts`). Stack-less
   // deployments collapse `{stack}.` to empty, preserving legacy 5-segment
-  // subscribe patterns. The default `["local.{org}.>"]` pattern is
+  // subscribe patterns. The default `["local.{principal}.>"]` pattern is
   // unaffected — multi-segment `>` wildcard already matches both shapes.
-  // A pattern like `local.{org}.{stack}.system.>` resolves to either
-  // `local.{org}.{stack}.system.>` (stack-aware) or `local.{org}.system.>`
+  // A pattern like `local.{principal}.{stack}.system.>` resolves to either
+  // `local.{principal}.{stack}.system.>` (stack-aware) or `local.{principal}.system.>`
   // (legacy) depending on whether the boot path supplied a stack.
   const substituter = makeSubjectPlaceholderSubstituter({
     org: orgFromConfig(config.agent.operatorId),
@@ -521,18 +521,18 @@ export async function startMyelinRuntime(
     }
     // IAW Phase A.3: subject derivation now mirrors
     // `envelope.sovereignty.classification`. Prior code hardcoded
-    // `local.{org}.{type}` here, making federated/public emission
-    // structurally impossible — `{org}` came from `config.agent.operatorId`
+    // `local.{principal}.{type}` here, making federated/public emission
+    // structurally impossible — `{principal}` came from `config.agent.operatorId`
     // and the classification prefix was always "local". `deriveNatsSubject`
-    // reads classification + extracts `{org}` from `envelope.source` so the
+    // reads classification + extracts `{principal}` from `envelope.source` so the
     // 1:1 subject↔classification invariant
     // (`validateSubjectEnvelopeAlignment`) holds for every emit site
     // without further changes. `envelope.source`'s first segment is the
     // same value `agent.operatorId` produces when emit-site helpers
-    // assemble it, so subscribe-side `{org}` substitution stays symmetric.
+    // assemble it, so subscribe-side `{principal}` substitution stays symmetric.
     //
     // IAW Phase A.5 (cortex#262 closes): pass `stack` so subjects land in
-    // the 6-segment `local.{org}.{stack}.{type}` grammar that sage's
+    // the 6-segment `local.{principal}.{stack}.{type}` grammar that sage's
     // bridge + pilot's review-request subscriber expect. When undefined,
     // `deriveNatsSubject` returns the legacy 5-segment shape — preserving
     // emit-site behavior for deployments that haven't wired stack identity.

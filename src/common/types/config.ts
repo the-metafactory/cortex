@@ -374,7 +374,7 @@ export const BotConfigSchema = z.object({
     }).default(emptyDefault()),
     /**
      * MIG-5.6 (C-106): Local HTTP receiver that publishes webhook payloads
-     * as `local.{org}.github.{event}.{action}` envelopes onto the bus.
+     * as `local.{principal}.github.{event}.{action}` envelopes onto the bus.
      *
      * Opt-in: only started when `enabled: true` AND `webhookSecret` is set
      * (the secret is required for HMAC re-verification at the local hop).
@@ -469,7 +469,7 @@ export const BotConfigSchema = z.object({
    * remains installable without NATS configured (per design doc §9
    * coupling rules); when absent, no subscriber is started and grove
    * runs as before. When `url` is present, the bot subscribes to each
-   * pattern in `subjects` (default `local.{org}.>`) and logs received
+   * pattern in `subjects` (default `local.{principal}.>`) and logs received
    * envelopes. Fan-out to specific event handlers lands in subsequent
    * features (G-1101 pilot errand projection, etc.).
    */
@@ -486,7 +486,7 @@ export const BotConfigSchema = z.object({
     /**
      * Subject patterns to subscribe to. Default empty — caller must
      * provide at least one pattern when enabling NATS. The placeholder
-     * `{org}` is substituted with `agent.operatorId` at runtime so a
+     * `{principal}` is substituted with `agent.operatorId` at runtime so a
      * single template works across operators.
      */
     subjects: z.array(z.string().min(1)).default([]),

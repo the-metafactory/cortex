@@ -155,7 +155,7 @@ program
   .option("--foreground", "Run in foreground (don't daemonize)")
   .option(
     "--nats-url <url>",
-    "Optional NATS URL — when set, the relay publishes filtered events as Myelin envelopes on local.{org}.{type}. Falls back to env var NATS_URL.",
+    "Optional NATS URL — when set, the relay publishes filtered events as Myelin envelopes on local.{principal}.{type}. Falls back to env var NATS_URL.",
   )
   .option(
     "--nats-token <token>",
@@ -163,11 +163,11 @@ program
   )
   .option(
     "--org <org>",
-    "Operator/org segment for published subjects (local.{org}.{type}). Falls back to env var CORTEX_PRINCIPAL (legacy: CORTEX_OPERATOR, GROVE_OPERATOR) or NATS_ORG.",
+    "Operator/org segment for published subjects (local.{principal}.{type}). Falls back to env var CORTEX_PRINCIPAL (legacy: CORTEX_OPERATOR, GROVE_OPERATOR) or NATS_ORG.",
   )
   .option(
     "--stack <stack>",
-    "Operator stack segment for stack-aware subjects (local.{org}.{stack}.{type}). Matches the cortex.yaml stack: block. Falls back to env var CORTEX_STACK. When omitted, relay publishes on the legacy 5-segment form.",
+    "Operator stack segment for stack-aware subjects (local.{principal}.{stack}.{type}). Matches the cortex.yaml stack: block. Falls back to env var CORTEX_STACK. When omitted, relay publishes on the legacy 5-segment form.",
   )
   .option(
     "--originator-principal <did>",

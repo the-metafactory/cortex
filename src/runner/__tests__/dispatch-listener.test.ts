@@ -1217,7 +1217,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
       "dispatch.task.completed",
     ]);
     // The audit envelope carries the federated wire subject verbatim
-    // — pre-D.3 synthesised `local.{org}...` regardless.
+    // — pre-D.3 synthesised `local.{principal}...` regardless.
     const allowed = r.published[0]!;
     expect(allowed.payload.envelope_subject).toBe(
       "federated.research-collab.dispatch.task.received",

@@ -209,10 +209,10 @@ interface BusRuntime extends MyelinRuntime {
 /**
  * Derive a NATS subject from an envelope per
  * `src/bus/myelin/envelope-validator.ts:deriveNatsSubject` — for the
- * tests we use only `local.{org}.{type}` (no stack-id segment) which is
+ * tests we use only `local.{principal}.{type}` (no stack-id segment) which is
  * the legacy 5-segment shape Echo + cortex publish on today.
  *
- * `envelope.source` is the dotted triple `"{org}.{agent}.{instance}"`;
+ * `envelope.source` is the dotted triple `"{principal}.{agent}.{instance}"`;
  * pull the first segment as the org for the subject prefix.
  */
 function subjectFor(envelope: Envelope): string {
@@ -263,7 +263,7 @@ function createBusRuntime(): BusRuntime {
       // emits its verdict/lifecycle envelopes via runtime.publish; those
       // emissions must NOT loop back into the consumer's own pull
       // subscription (subject patterns differ: verdict goes to
-      // `local.{org}.review.verdict.*`, not `tasks.code-review.>`).
+      // `local.{principal}.review.verdict.*`, not `tasks.code-review.>`).
       // Still call the matched pull subscribers so a misrouted publish
       // is observable in the test.
       for (const sub of subscriptions) {

@@ -311,7 +311,7 @@ export async function startCortex(
   // deployment's stack identity at boot. `deriveStackId` returns
   // `{operator, stack, id}`; the `stack` segment flows into
   // `MyelinRuntime.publish()` below so emitted envelopes land in the
-  // 6-segment `local.{org}.{stack}.{type}` grammar that sage's bridge
+  // 6-segment `local.{principal}.{stack}.{type}` grammar that sage's bridge
   // and pilot's review-request subscriber both expect.
   //
   // The helper accepts a narrow `DeriveStackIdInput` shape (operator?.id +
@@ -462,7 +462,7 @@ export async function startCortex(
     try {
       // IAW Phase A.5 (cortex#262) — surface the resolved stack identity
       // into the runtime so `publish()` emits 6-segment subjects matching
-      // sage's `local.{org}.{stack}.>` subscription. `derivedStack.stack`
+      // sage's `local.{principal}.{stack}.>` subscription. `derivedStack.stack`
       // is the second segment of the canonical `{operator}/{stack}` id;
       // when the operator omitted the `stack:` block, `deriveStackId`
       // default-derived it to `'default'` (cortex.ts:278-281). That value
@@ -580,7 +580,7 @@ export async function startCortex(
   //     (no-op stub when NATS is absent; production runtime when present),
   //   - `mergedAgents` is built (line ~439) so we know who claims what,
   //   - `systemEventSource` is built (immediately above) so we share the same
-  //     `{org}.cortex.{instance}` envelope source with `system.*` emissions.
+  //     `{principal}.cortex.{instance}` envelope source with `system.*` emissions.
   //
   // It runs BEFORE the bus-dispatch-listener + surface-router start so the
   // registry envelope is on the wire before any dispatch envelope can arrive
@@ -697,7 +697,7 @@ export async function startCortex(
   // PR-6: for each agent in `mergedAgents` that declares at least one
   // `code-review` / `code-review.<flavor>` capability, instantiate a
   // dedicated `ReviewConsumer` AND drive it through `start()` so it
-  // actually subscribes to the JetStream `local.{org}.tasks.code-review.>`
+  // actually subscribes to the JetStream `local.{principal}.tasks.code-review.>`
   // pull consumer. One consumer per agent — the spec's routing is
   // single-agent (the consumer's capability filter checks the owning
   // agent's claims only; multi-agent fan-out is the runtime's namespace
@@ -750,11 +750,11 @@ export async function startCortex(
   // cortex#318 — include the stack segment to match the 6-segment grammar
   // `deriveSubject` produces for stack-scoped publishes (cortex#262 / IAW
   // Phase A.5 + canonical helper at `@the-metafactory/myelin/subjects`).
-  // Pilot publishes to `local.{org}.{stack}.tasks.code-review.<flavor>`;
+  // Pilot publishes to `local.{principal}.{stack}.tasks.code-review.<flavor>`;
   // the consumer must subscribe to the same grammar or the wildcard
   // `>` never matches (NATS requires literal segments before the `>`).
   // Reuses `derivedStack.stack` resolved at boot (line 308) — same source
-  // sage's bridge subscription already uses for `local.{org}.{stack}.>`.
+  // sage's bridge subscription already uses for `local.{principal}.{stack}.>`.
   const reviewSubjectPattern = `local.${reviewOperatorId}.${derivedStack.stack}.tasks.code-review.>`;
   const reviewConfig = options.bus?.review;
   const reviewStream = reviewConfig?.stream.name ?? "CODE_REVIEW";
@@ -1627,16 +1627,16 @@ export async function startCortex(
   // Per architecture §9.2 these are activity-centric sinks that subscribe
   // to a slice of the bus and project envelopes into a UI / pager / log
   // stream. The G-1111 §4.6 fail-safe rule requires ≥2 distinct platform
-  // classes covering `local.{org}.system.>` so an operational alert
+  // classes covering `local.{principal}.system.>` so an operational alert
   // reliably reaches the operator even if one sink is the thing that
   // broke. Renderers never publish on the bus (architecture §9.3).
-  // cortex#269 — substitute `{org}` AND `{stack}` in renderer subscribe
+  // cortex#269 — substitute `{principal}` AND `{stack}` in renderer subscribe
   // patterns so they resolve against the same canonical shape that
   // `MyelinRuntime` already substitutes for `nats.subjects`. Without
-  // this, an operator-written `local.{org}.{stack}.system.>` pattern
+  // this, an operator-written `local.{principal}.{stack}.system.>` pattern
   // never matches an actual envelope's wire subject. The `{stack}.`
   // placeholder includes the trailing dot so stack-less deployments
-  // collapse cleanly to `local.{org}.system.>`.
+  // collapse cleanly to `local.{principal}.system.>`.
   //
   // cortex#279 cycle 2 — extracted to a shared helper so renderer- and
   // runtime-side substitution can't drift. The stack-less branch
@@ -1787,7 +1787,7 @@ export async function startCortex(
   }
 
   // MIG-5.6 (C-106): GitHub webhook receiver — opt-in via `github.receiver.enabled`
-  // AND a non-empty `github.webhookSecret`. Publishes `local.{org}.github.{event}.{action}`
+  // AND a non-empty `github.webhookSecret`. Publishes `local.{principal}.github.{event}.{action}`
   // envelopes via `runtime.publish`; that path is a no-op when NATS isn't configured
   // (see `myelin/runtime.ts`), so this block stays safe to run even without NATS.
   let githubReceiver: GithubWebhookReceiverHandle | null = null;

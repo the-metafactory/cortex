@@ -34,7 +34,7 @@
  * - Schema unchanged on the wire — myelin#113/#115 added subject-grammar
  *   surface area without altering envelope JSON Schema.
  * - `deriveNatsSubject(envelope, stack?)` now accepts an optional `stack`
- *   segment, emitting the 6-segment `{prefix}.{org}.{stack}.{type}` form
+ *   segment, emitting the 6-segment `{prefix}.{principal}.{stack}.{type}` form
  *   when supplied (myelin#113 — IAW Phase A.5). Omitting `stack` preserves
  *   the legacy 5-segment shape; subscribers default-derive missing stack
  *   to `default` per `specs/namespace.md` § Backward compatibility.
@@ -566,12 +566,12 @@ export type Classification = Envelope["sovereignty"]["classification"];
  * 1:1 alignment myelin enforces with
  * {@link validateSubjectEnvelopeAlignment}:
  *
- *   - `classification === "local"`     → `local.{org}.{type}` (legacy)
- *                                      → `local.{org}.{stack}.{type}` when `stack` supplied (myelin#113)
- *   - `classification === "federated"` → `federated.{org}.{type}` / `federated.{org}.{stack}.{type}`
+ *   - `classification === "local"`     → `local.{principal}.{type}` (legacy)
+ *                                      → `local.{principal}.{stack}.{type}` when `stack` supplied (myelin#113)
+ *   - `classification === "federated"` → `federated.{principal}.{type}` / `federated.{principal}.{stack}.{type}`
  *   - `classification === "public"`    → `public.{type}` (no org, no stack — public is global)
  *
- * `{org}` is the first dotted segment of `envelope.source` (the same value
+ * `{principal}` is the first dotted segment of `envelope.source` (the same value
  * cortex's MyelinRuntime captures from `agent.operatorId` at startup, so
  * subject and source stay symmetrical). `{stack}` is the operator's stack
  * identity — supplied by the caller when in stack-aware mode (IAW A.5),
@@ -601,9 +601,9 @@ function firstSegment(s: string): string {
 }
 
 /**
- * IAW Phase A.3 follow-up (cortex#130 item 1) — symmetric `{org}` extractor
- * for the publish-side. Publish derives `{org}` from `envelope.source`'s
- * leading segment; subscribe substitutes `{org}` in subject patterns from
+ * IAW Phase A.3 follow-up (cortex#130 item 1) — symmetric `{principal}` extractor
+ * for the publish-side. Publish derives `{principal}` from `envelope.source`'s
+ * leading segment; subscribe substitutes `{principal}` in subject patterns from
  * `agent.operatorId` at startup. These two values MUST agree for any
  * envelope this stack emits, or subjects diverge between publish/subscribe.
  *
@@ -618,7 +618,7 @@ export function orgFromEnvelope(envelope: Envelope): string {
 }
 
 /**
- * Subscribe-side `{org}` resolver. See {@link orgFromEnvelope} for the
+ * Subscribe-side `{principal}` resolver. See {@link orgFromEnvelope} for the
  * symmetric publish-side helper and the invariant they jointly preserve.
  *
  * Falls back to `"default"` when `operatorId` is unset — matches the

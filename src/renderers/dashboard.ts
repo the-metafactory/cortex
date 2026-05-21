@@ -11,7 +11,7 @@
  * For this slice the dashboard renderer is the *sink* that satisfies the
  * G-1111 §4.6 fail-safe rule's pairing requirement alongside
  * `PagerDutyRenderer` — operationally distinct platform classes both
- * subscribed to `local.{org}.system.>` so a degraded NATS subscription
+ * subscribed to `local.{principal}.system.>` so a degraded NATS subscription
  * for one doesn't blind the operator on the other.
  *
  * Implementation: a bounded ring buffer over the last N envelopes the

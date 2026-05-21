@@ -43,7 +43,7 @@
  * the redelivery.
  *
  * **Scope (per task spec + §10.1 PR-6):**
- *   - Subscribes pull-mode to `local.{org}.tasks.code-review.>`.
+ *   - Subscribes pull-mode to `local.{principal}.tasks.code-review.>`.
  *   - Looks up reviewer agent by the `<flavor>` capability segment.
  *   - Enforces per-agent `maxConcurrent` backpressure.
  *   - Hands valid envelopes to `runReviewPipeline` (PR-5).
@@ -184,7 +184,7 @@ export type SignatureVerifier = (envelope: Envelope) => Promise<SignatureVerifie
 export interface ReviewConsumerOpts {
   /** The agent this consumer serves. One consumer per agent (per task spec). */
   agent: ReviewConsumerAgent;
-  /** Envelope source (`{org}.{agent}.{instance}`) — same triple used by
+  /** Envelope source (`{principal}.{agent}.{instance}`) — same triple used by
    *  `system-events.ts` for `dispatch.task.*` lifecycle envelopes. */
   source: ReviewEventSource;
   /**
@@ -246,7 +246,7 @@ export interface ReviewConsumerOpts {
  * declare what they want subscribed and the runtime threads the link.
  */
 export interface ReviewConsumerStartOpts {
-  /** Subject pattern, e.g. `local.{org}.tasks.code-review.>`. */
+  /** Subject pattern, e.g. `local.{principal}.tasks.code-review.>`. */
   pattern: string;
   /** JetStream stream name carrying the bound consumer. */
   stream: string;
@@ -859,7 +859,7 @@ export function deriveFlavors(capabilities: readonly string[]): string[] {
  * `type` field. Returns `null` if the envelope isn't a review request.
  *
  * The envelope `type` (NOT the wire subject) is the canonical source —
- * the wire subject includes the namespace prefix (`local.{org}.`) and a
+ * the wire subject includes the namespace prefix (`local.{principal}.`) and a
  * malformed subject would falsely match a partial slice. Pull-mode
  * subjects pass through as-is in NATS but the type field is what the
  * validator-approved envelope carries.

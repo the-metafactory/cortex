@@ -51,10 +51,10 @@
  *   module independent of the connection layer and trivially testable.
  *
  * - NOT a KV-bucket primitive. Architecture §7.2 specifies
- *   `local.{org}.agents.capabilities.{agent_id}` as a NATS KV bucket;
+ *   `local.{principal}.agents.capabilities.{agent_id}` as a NATS KV bucket;
  *   myelin's signed-KV API (myelin#31) is the right home for that
  *   primitive and hasn't shipped. v1 publishes a wire envelope on the
- *   regular subject (`local.{org}.agents.capabilities.registered`, derived
+ *   regular subject (`local.{principal}.agents.capabilities.registered`, derived
  *   from the envelope type by the runtime's subject derivation per IAW
  *   Phase A.3). The KV-bucket write is a v2 layer on top.
  *
@@ -63,12 +63,12 @@
  * The runtime derives subjects from `(envelope.type, envelope.sovereignty.
  * classification, envelope.source's org segment)`:
  *
- *   - classification `"local"` → subject `local.{org}.{type}`
- *   - With stack segment (IAW A.5) → `local.{org}.{stack}.{type}`
+ *   - classification `"local"` → subject `local.{principal}.{type}`
+ *   - With stack segment (IAW A.5) → `local.{principal}.{stack}.{type}`
  *
  * So with `type: "agents.capabilities.registered"` and `classification:
  * "local"`, the published subject is
- * `local.{org}.agents.capabilities.registered` (or `local.{org}.{stack}.
+ * `local.{principal}.agents.capabilities.registered` (or `local.{principal}.{stack}.
  * agents.capabilities.registered` when a stack id is configured). The
  * `agent_id` discriminator lives in the **payload** (not the subject)
  * for v1; subscribers filter by payload field. The KV-bucket migration
@@ -94,7 +94,7 @@ import { buildBaseEnvelope } from "./envelope-builder";
 export type PublishFn = (envelope: Envelope) => Promise<void>;
 
 /**
- * Envelope source struct — `{org}.{agent}.{instance}` per
+ * Envelope source struct — `{principal}.{agent}.{instance}` per
  * `src/bus/system-events.ts:SystemEventSource`. Duplicated structurally
  * here rather than re-imported because the registry is an
  * `agents.*`-domain emitter; the structural identity with
@@ -194,8 +194,8 @@ export interface PublishCapabilityRegistryOptions {
  * "type: agents.capabilities.registered". The runtime derives the wire
  * subject from this (and from `sovereignty.classification`):
  *
- *   - local + no stack:  `local.{org}.agents.capabilities.registered`
- *   - local + stack:     `local.{org}.{stack}.agents.capabilities.registered`
+ *   - local + no stack:  `local.{principal}.agents.capabilities.registered`
+ *   - local + stack:     `local.{principal}.{stack}.agents.capabilities.registered`
  *   - federated:         `federated.{network}.agents.capabilities.registered`
  *
  * PR-7's subscriber matches against this constant rather than

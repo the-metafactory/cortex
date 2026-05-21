@@ -787,14 +787,14 @@ describe("deriveNatsSubject (IAW A.3)", () => {
     };
   }
 
-  test("local classification → local.{org}.{type}", () => {
+  test("local classification → local.{principal}.{type}", () => {
     const env = envWithClassification("local");
     expect(deriveNatsSubject(env)).toBe(
       "local.metafactory.system.adapter.degraded",
     );
   });
 
-  test("federated classification → federated.{org}.{type}", () => {
+  test("federated classification → federated.{principal}.{type}", () => {
     const env = envWithClassification("federated");
     expect(deriveNatsSubject(env)).toBe(
       "federated.metafactory.system.adapter.degraded",
@@ -806,7 +806,7 @@ describe("deriveNatsSubject (IAW A.3)", () => {
     expect(deriveNatsSubject(env)).toBe("public.system.adapter.degraded");
   });
 
-  test("derives {org} from envelope.source's first segment", () => {
+  test("derives {principal} from envelope.source's first segment", () => {
     // A different operator (`acme.*`) routes onto its own subject namespace
     // without any runtime-side configuration.
     const env = envWithClassification("local", "acme.cortex.prod-01");
@@ -816,14 +816,14 @@ describe("deriveNatsSubject (IAW A.3)", () => {
   });
 
   // IAW Phase A.5 — stack-aware subject emission (myelin#113 grammar).
-  test("local + stack → local.{org}.{stack}.{type}", () => {
+  test("local + stack → local.{principal}.{stack}.{type}", () => {
     const env = envWithClassification("local");
     expect(deriveNatsSubject(env, "research")).toBe(
       "local.metafactory.research.system.adapter.degraded",
     );
   });
 
-  test("federated + stack → federated.{org}.{stack}.{type}", () => {
+  test("federated + stack → federated.{principal}.{stack}.{type}", () => {
     const env = envWithClassification("federated");
     expect(deriveNatsSubject(env, "security")).toBe(
       "federated.metafactory.security.system.adapter.degraded",

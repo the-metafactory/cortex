@@ -12,7 +12,7 @@
  * `~/.claude/events/raw/`, applies the relay policy, writes published
  * events to `~/.claude/events/published/`, and ALSO — when a
  * `MyelinRuntime` is attached — wraps each published event in a Myelin
- * envelope and publishes it to `local.{org}.{type}`.
+ * envelope and publishes it to `local.{principal}.{type}`.
  *
  * **Why the relay (and not the hook)?** Hooks run as standalone Bun
  * processes spawned by Claude Code (`~/.claude/hooks/EventLogger.hook.ts`).
@@ -29,8 +29,8 @@
  *   - `timestamp` mirrors the PublishedEvent's `timestamp` so an envelope's
  *     ts equals the moment the hook fired, not the moment the relay published.
  *     Surfaces ordering hooks chronologically rather than by relay batch order.
- *   - `source` is the dotted `{org}.{agent}.{instance}` per the schema.
- *     For relay-emitted cc-events: `{org}.cortex.relay`.
+ *   - `source` is the dotted `{principal}.{agent}.{instance}` per the schema.
+ *     For relay-emitted cc-events: `{principal}.cortex.relay`.
  *   - `correlation_id` is the **session_id** when it's UUID-shaped — surfaces
  *     join all events from one CC session on this key. Non-UUID session ids
  *     (CC's defaults) cause the field to be omitted entirely; the
@@ -134,7 +134,7 @@ export interface CreateCcEventEnvelopeOpts {
    */
   event: PublishedEvent;
   /**
-   * Envelope source — `{org}.{agent}.{instance}` per schema. All fields
+   * Envelope source — `{principal}.{agent}.{instance}` per schema. All fields
    * have sensible defaults. Callers (the relay) typically override `org`
    * to match the bot's `agent.operatorId`.
    */
@@ -170,7 +170,7 @@ export interface CreateCcEventEnvelopeOpts {
 
 /**
  * Wrap a PublishedEvent in a Myelin envelope suitable for publishing on
- * `local.{org}.{type}`. The MyelinRuntime.publish contract (G-1100.E)
+ * `local.{principal}.{type}`. The MyelinRuntime.publish contract (G-1100.E)
  * expects the type field to be the dotted `domain.entity.action` form;
  * PublishedEvent's `event_type` already conforms.
  *
@@ -242,12 +242,12 @@ export interface CreateCcEventPublisherOpts {
    */
   org?: string;
   /**
-   * Operator stack segment slotted between `{org}` and `{type}` on the
+   * Operator stack segment slotted between `{principal}` and `{type}` on the
    * derived NATS subject (myelin#113 — IAW Phase A.5; closes cortex#266).
    * When supplied, relay-lifted cc-events publish on the 6-segment shape
-   * `local.{org}.{stack}.{type}` matching sage's bridge subscription
+   * `local.{principal}.{stack}.{type}` matching sage's bridge subscription
    * and the MyelinRuntime.publish path post-cortex#262. When undefined,
-   * the legacy 5-segment form `local.{org}.{type}` is emitted —
+   * the legacy 5-segment form `local.{principal}.{type}` is emitted —
    * bit-identical to today's output, so callers that haven't wired
    * stack identity see no change.
    *
@@ -328,11 +328,11 @@ export interface CreateCcEventPublisherOpts {
  * **IAW Phase A.3:** subject derivation now mirrors
  * `envelope.sovereignty.classification` via `deriveNatsSubject`:
  *
- *   - `classification === "local"`     → `local.{org}.{type}`
- *   - `classification === "federated"` → `federated.{org}.{type}`
- *   - `classification === "public"`    → `public.{type}` (no `{org}` segment)
+ *   - `classification === "local"`     → `local.{principal}.{type}`
+ *   - `classification === "federated"` → `federated.{principal}.{type}`
+ *   - `classification === "public"`    → `public.{type}` (no `{principal}` segment)
  *
- * Prior code hardcoded `local.{org}.{type}` here regardless of
+ * Prior code hardcoded `local.{principal}.{type}` here regardless of
  * classification. The 1:1 subject↔classification invariant
  * ({@link validateSubjectEnvelopeAlignment}) now holds for relay-lifted
  * CC events too. The default `classification: "local"` keeps existing

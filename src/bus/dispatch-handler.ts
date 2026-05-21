@@ -97,7 +97,7 @@ export interface DispatchHandlerOpts {
    */
   runtime?: MyelinRuntime;
   /**
-   * `{org}.{agent}.{instance}` triple stamped onto emitted `system.*`
+   * `{principal}.{agent}.{instance}` triple stamped onto emitted `system.*`
    * envelopes (spec §3.6). Required-with-`runtime`: if a caller passes
    * `runtime` without `systemEventSource` the handler logs a one-shot warn
    * and skips publication (mirroring the DiscordAdapter `canPublishSystemEvent`

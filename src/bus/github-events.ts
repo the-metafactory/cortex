@@ -2,21 +2,21 @@
  * MIG-5.6 (C-106) — `github.*` envelope constructor for GitHub webhook events.
  *
  * Per plan §4 MIG-5.6 + cortex#37: HMAC-validated GitHub webhooks must surface
- * on the bus as `local.{org}.github.{event}.{action}` envelopes so any sibling
+ * on the bus as `local.{principal}.github.{event}.{action}` envelopes so any sibling
  * agent / surface can subscribe (dashboard projection, pilot review router,
  * cortex worklog hints, future renderers).
  *
  * **Subject derivation** (mirrors `bus/system-events.ts` + `bus/dispatch-events.ts`):
  *   - `envelope.type` is the dotted `github.{event}.{action}` form.
- *   - `MyelinRuntime.publish` prepends `local.{org}.` at publish time, so the
- *     final NATS subject is `local.{org}.github.{event}.{action}` without
+ *   - `MyelinRuntime.publish` prepends `local.{principal}.` at publish time, so the
+ *     final NATS subject is `local.{principal}.github.{event}.{action}` without
  *     callers having to assemble it.
  *   - When the GitHub event has no natural `action` (e.g. `push`, `ping`,
  *     `release` payloads that don't carry an `action` field), the helper
  *     emits `github.{event}.received` so the type always has the
  *     `domain.entity.action` triplet the schema requires (pattern allows
  *     2-5 segments, but 3 is the canonical shape and keeps wildcard subs
- *     stable: `local.{org}.github.>` matches everything; `local.{org}.github.{event}.>`
+ *     stable: `local.{principal}.github.>` matches everything; `local.{principal}.github.{event}.>`
  *     matches all actions for an event).
  *
  * **Shape contract** (consistent with the rule-of-three established by
@@ -26,7 +26,7 @@
  *     timestamp (if available via `X-GitHub-Delivery` parsing or payload
  *     fields) lives in `payload` so envelope `timestamp` always reflects
  *     emit time — same convention as `system-events.ts`.
- *   - `source` is the dotted `{org}.{agent}.{instance}` form.
+ *   - `source` is the dotted `{principal}.{agent}.{instance}` form.
  *   - `correlation_id` is set to the GitHub delivery ID **only when it is
  *     UUID-shaped**. GitHub delivery IDs *are* UUIDs (e.g.
  *     `12345678-1234-1234-1234-123456789012`), so this is the normal path —
@@ -133,7 +133,7 @@ export function sanitizeTypeSegment(value: string): string {
 
 export interface CreateGithubEventEnvelopeOpts {
   /**
-   * Envelope source — `{org}.{agent}.{instance}` per schema. Callers (the
+   * Envelope source — `{principal}.{agent}.{instance}` per schema. Callers (the
    * webhook receiver wired in cortex.ts) pass the same `systemEventSource`
    * the rest of the bus uses, so all envelopes from one cortex process
    * carry identical `source` strings.
@@ -155,7 +155,7 @@ export interface CreateGithubEventEnvelopeOpts {
    * Optional: events without a natural action (e.g. `push`, `ping`) get
    * `"received"` as a synthetic action so the envelope type always carries
    * a 3-segment shape (`github.{event}.received`). This keeps the subject
-   * stable for subscribers — wildcard pattern `local.{org}.github.{event}.>`
+   * stable for subscribers — wildcard pattern `local.{principal}.github.{event}.>`
    * matches both action-bearing and action-less events.
    */
   action?: string;

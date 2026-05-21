@@ -15,7 +15,7 @@ describe("createRenderer", () => {
     const r = createRenderer({
       kind: "dashboard",
       port: 8767,
-      subscribe: ["local.{org}.>"],
+      subscribe: ["local.{principal}.>"],
       projections: [],
     });
     expect(r).toBeInstanceOf(DashboardRenderer);
@@ -26,7 +26,7 @@ describe("createRenderer", () => {
     const r = createRenderer({
       kind: "pagerduty",
       routingKey: "rk-test",
-      subscribe: ["local.{org}.system.>"],
+      subscribe: ["local.{principal}.system.>"],
     });
     expect(r).toBeInstanceOf(PagerDutyRenderer);
     expect(r.kind).toBe("pagerduty");
@@ -34,7 +34,7 @@ describe("createRenderer", () => {
 
   test("kind=cli-tail throws UnimplementedRendererKindError (deferred)", () => {
     expect(() =>
-      createRenderer({ kind: "cli-tail", subscribe: ["local.{org}.>"] }),
+      createRenderer({ kind: "cli-tail", subscribe: ["local.{principal}.>"] }),
     ).toThrow(UnimplementedRendererKindError);
   });
 
@@ -43,7 +43,7 @@ describe("createRenderer", () => {
       createRenderer({
         kind: "webhook-out",
         url: "https://example.com/hook",
-        subscribe: ["local.{org}.>"],
+        subscribe: ["local.{principal}.>"],
       }),
     ).toThrow(UnimplementedRendererKindError);
   });

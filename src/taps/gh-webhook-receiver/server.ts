@@ -49,7 +49,7 @@
  *     and is bundled separately (`wrangler deploy`). This receiver runs
  *     inside the cortex process.
  *   - NOT a GitHub event router. Subscribers consume envelopes from
- *     `local.{org}.github.*` via the surface-router; this file's job ends
+ *     `local.{principal}.github.*` via the surface-router; this file's job ends
  *     once the envelope is on the bus.
  *   - NOT a CF Worker → cortex forwarder. The actual cross-network glue
  *     (how the Worker reaches `127.0.0.1` on the operator's laptop)
@@ -130,7 +130,7 @@ export interface GithubWebhookReceiverOptions {
    */
   hostname?: string;
   /**
-   * Envelope source identifier (`{org}.{agent}.{instance}`). Passed
+   * Envelope source identifier (`{principal}.{agent}.{instance}`). Passed
    * through to `createGithubEventEnvelope`; identical to the
    * `systemEventSource` cortex uses for `system.*` envelopes so all
    * envelopes from one cortex process carry the same source segments.

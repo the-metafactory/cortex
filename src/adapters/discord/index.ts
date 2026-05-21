@@ -71,7 +71,7 @@ export interface DiscordAdapterInfra {
   /** Myelin runtime for `system.adapter.*` envelope emission. Optional — adapters started
    * without NATS still track degradation/reconnect locally. */
   runtime?: MyelinRuntime;
-  /** `{org}.{agent}.{instance}` source triple stamped onto emitted `system.*` envelopes
+  /** `{principal}.{agent}.{instance}` source triple stamped onto emitted `system.*` envelopes
    * (spec §3.6 names the agent, not the operator). */
   systemEventSource?: SystemEventSource;
   /** MIG-3b: NATS subject patterns this adapter renders to Discord. Empty/undefined → adapter
