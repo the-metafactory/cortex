@@ -195,7 +195,7 @@ PR-1..PR-7 are cortex-internal renames; PR-8..PR-10 are myelin-cascade renames t
 
 ## Tracking issue
 
-This manifest is filed under cortex#TBD (filed alongside this PR). Each PR-N entry above gets its own sub-issue under that tracking issue once execution begins.
+This manifest is filed under [cortex#388](https://github.com/the-metafactory/cortex/issues/388). Each PR-N entry above gets its own sub-issue under that tracking issue once execution begins.
 
 ## Cross-references
 
