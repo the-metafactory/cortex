@@ -16,6 +16,7 @@ import {
   convertBotYaml,
   formatCheckReport,
   type LegacyBotYaml,
+  type MigratedCortexConfig,
 } from "../migrate-config-lib";
 import { parseArgs, runMigrateConfig } from "../migrate-config";
 import { CortexConfigSchema } from "../../../../common/types/cortex-config";
@@ -25,6 +26,22 @@ const FIXTURE_DIR = join(import.meta.dir, "fixtures");
 function loadFixture(name: string): LegacyBotYaml {
   const raw = readFileSync(join(FIXTURE_DIR, name), "utf-8");
   return YAML.parse(raw) as LegacyBotYaml;
+}
+
+/**
+ * R3 vocabulary migration (cortex#388) — `convertBotYaml` emits a
+ * `principal:`-keyed cortex.yaml. `CortexConfigSchema` still keys the block
+ * `operator:` during the transition release (the breaking flip is manifest
+ * PR-11 / v3.0.0). The cortex loader normalises `principal:` → `operator:`
+ * before its `CortexConfigSchema.parse`; this test helper mirrors that
+ * normalisation so round-trip "output validates against the schema" tests
+ * exercise the same path.
+ */
+function asSchemaShape(
+  migrated: MigratedCortexConfig | Record<string, unknown>,
+): Record<string, unknown> {
+  const { principal, ...rest } = migrated as Record<string, unknown>;
+  return { ...rest, operator: principal };
 }
 
 // ---------------------------------------------------------------------------
@@ -73,9 +90,9 @@ describe("convertBotYaml — minimal single-agent", () => {
     const legacy = loadFixture("minimal.bot.yaml");
     const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
 
-    expect(result.cortex.operator.id).toBe("jc");
-    expect(result.cortex.operator.discordId).toBe("112233445566778899");
-    expect(result.cortex.operator.dataResidency).toBe("NZ");
+    expect(result.cortex.principal.id).toBe("jc");
+    expect(result.cortex.principal.discordId).toBe("112233445566778899");
+    expect(result.cortex.principal.dataResidency).toBe("NZ");
 
     expect(result.cortex.agents).toHaveLength(1);
     const agent = result.cortex.agents[0]!;
@@ -94,7 +111,7 @@ describe("convertBotYaml — minimal single-agent", () => {
     // convertBotYaml already calls schema.parse internally, but re-parsing the
     // returned object verifies the result is structurally complete (no fields
     // dropped by the strict refine).
-    expect(() => CortexConfigSchema.parse(result.cortex)).not.toThrow();
+    expect(() => CortexConfigSchema.parse(asSchemaShape(result.cortex))).not.toThrow();
   });
 
   test("produces a mapping entry for the single discord instance", () => {
@@ -369,13 +386,13 @@ describe("convertBotYaml — full fixture", () => {
   test("output passes CortexConfigSchema validation", () => {
     const legacy = loadFixture("full.bot.yaml");
     const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
-    expect(() => CortexConfigSchema.parse(result.cortex)).not.toThrow();
+    expect(() => CortexConfigSchema.parse(asSchemaShape(result.cortex))).not.toThrow();
   });
 
   test("operator block carries discord + mattermost + dataResidency", () => {
     const legacy = loadFixture("full.bot.yaml");
     const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
-    expect(result.cortex.operator).toEqual({
+    expect(result.cortex.principal).toEqual({
       id: "jc",
       displayName: "Jens-Christian",
       discordId: "112233445566778899",
@@ -492,8 +509,8 @@ describe("convertBotYaml — operator id normalization", () => {
       discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
     };
     const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
-    expect(result.cortex.operator.dataResidency).toBe("CH");
-    expect(result.warnings.some((w) => w.field === "operator.dataResidency")).toBe(true);
+    expect(result.cortex.principal.dataResidency).toBe("CH");
+    expect(result.warnings.some((w) => w.field === "principal.dataResidency")).toBe(true);
   });
 
   test("falls back to NZ when dataResidency is malformed", () => {
@@ -508,7 +525,7 @@ describe("convertBotYaml — operator id normalization", () => {
       discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
     };
     const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
-    expect(result.cortex.operator.dataResidency).toBe("NZ");
+    expect(result.cortex.principal.dataResidency).toBe("NZ");
   });
 
   test("normalizes mixed-case operatorId with a warning", () => {
@@ -522,8 +539,8 @@ describe("convertBotYaml — operator id normalization", () => {
       discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
     };
     const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
-    expect(result.cortex.operator.id).toBe("jc");
-    expect(result.warnings.some((w) => w.field === "operator.id")).toBe(true);
+    expect(result.cortex.principal.id).toBe("jc");
+    expect(result.warnings.some((w) => w.field === "principal.id")).toBe(true);
   });
 
   test("falls back operator.id to agent.name when operatorId unset", () => {
@@ -536,7 +553,7 @@ describe("convertBotYaml — operator id normalization", () => {
       discord: [{ token: "t", guildId: "1", agentChannelId: "2", logChannelId: "3" }],
     };
     const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
-    expect(result.cortex.operator.id).toBe("luna");
+    expect(result.cortex.principal.id).toBe("luna");
   });
 });
 
@@ -589,7 +606,7 @@ describe("convertBotYaml — mismatched discord/mattermost lengths", () => {
   test("output round-trips through CortexConfigSchema", () => {
     const legacy = loadFixture("mismatched-lengths.bot.yaml");
     const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
-    expect(() => CortexConfigSchema.parse(result.cortex)).not.toThrow();
+    expect(() => CortexConfigSchema.parse(asSchemaShape(result.cortex))).not.toThrow();
   });
 });
 
@@ -1114,11 +1131,12 @@ describe("convertBotYaml — shared agentChannelId warning (cortex#88 item 4)", 
 // ---------------------------------------------------------------------------
 
 describe("formatCheckReport", () => {
-  test("lists operator, agents, renderers, mappings and warnings", () => {
+  test("lists principal, agents, renderers, mappings and warnings", () => {
     const legacy = loadFixture("full.bot.yaml");
     const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
     const report = formatCheckReport(result);
-    expect(report).toMatch(/operator: jc/);
+    // R3 (cortex#388) — the report header is keyed `principal:` now.
+    expect(report).toMatch(/principal: jc/);
     expect(report).toMatch(/agents: +1/);
     expect(report).toMatch(/instance mappings:/);
     expect(report).toMatch(/warnings/);
@@ -1159,7 +1177,7 @@ describe("runMigrateConfig", () => {
     expect(existsSync(out)).toBe(true);
     const written = YAML.parse(readFileSync(out, "utf-8"));
     // Re-parse via the schema to confirm the file is a valid cortex.yaml
-    expect(() => CortexConfigSchema.parse(written)).not.toThrow();
+    expect(() => CortexConfigSchema.parse(asSchemaShape(written as Record<string, unknown>))).not.toThrow();
   });
 
   test("cortex#88 item 5: creates missing parent dir before writing --out", async () => {
@@ -1373,5 +1391,131 @@ describe("parseArgs — --auto-stack-key (cortex#324)", () => {
   test("default is false", () => {
     const args = parseArgs(["in.yaml"]);
     expect(args.autoStackKey).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3 vocabulary migration (cortex#388) — migrate-config emits `principal:`
+// ---------------------------------------------------------------------------
+
+describe("convertBotYaml — R3 principal block emission (cortex#388)", () => {
+  test("emits a `principal:` block, not a legacy `operator:` block", () => {
+    const legacy = loadFixture("minimal.bot.yaml");
+    const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
+    // The emitted object carries the new canonical key.
+    expect(result.cortex.principal).toBeDefined();
+    expect(result.cortex.principal.id).toBe("jc");
+    // The legacy `operator:` key is gone from the emitted shape.
+    expect((result.cortex as Record<string, unknown>).operator).toBeUndefined();
+  });
+
+  test("the emitted `principal:`-shaped YAML loads through CortexConfigSchema after normalisation", () => {
+    const legacy = loadFixture("full.bot.yaml");
+    const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
+    // YAML round-trip: stringify → parse → normalise principal→operator →
+    // schema-validate (mirrors what the cortex loader does at startup).
+    const yamlText = YAML.stringify(result.cortex);
+    const reparsed = YAML.parse(yamlText) as Record<string, unknown>;
+    expect(reparsed.principal).toBeDefined();
+    expect(reparsed.operator).toBeUndefined();
+    expect(() =>
+      CortexConfigSchema.parse(asSchemaShape(reparsed)),
+    ).not.toThrow();
+  });
+
+  test("round-trips a legacy `operator:`-shaped cortex.yaml into a `principal:`-shaped one", () => {
+    // Completion-signal #4: migrate-config takes a v2 `operator:`-shaped
+    // cortex.yaml as input and emits a v3 `principal:`-shaped one without
+    // losing fields.
+    const operatorShapedInput: LegacyBotYaml = {
+      operator: {
+        id: "andreas",
+        displayName: "Andreas",
+        discordId: "112233445566778899",
+        dataResidency: "NZ",
+      },
+      stack: { id: "andreas/work" },
+      agents: [
+        {
+          id: "luna",
+          displayName: "Luna",
+          persona: "./personas/luna.md",
+          trust: [],
+          presence: {
+            discord: {
+              token: "discord-token-xxxx",
+              guildId: "100000000000000001",
+              agentChannelId: "100000000000000002",
+              logChannelId: "100000000000000003",
+            },
+          },
+        },
+      ],
+    };
+    const result = convertBotYaml(operatorShapedInput, { configDir: FIXTURE_DIR });
+    expect(result.cortex.principal.id).toBe("andreas");
+    expect(result.cortex.principal.displayName).toBe("Andreas");
+    expect(result.cortex.principal.discordId).toBe("112233445566778899");
+    expect(result.cortex.principal.dataResidency).toBe("NZ");
+    expect((result.cortex as Record<string, unknown>).operator).toBeUndefined();
+    expect(result.cortex.agents).toHaveLength(1);
+    expect(result.cortex.agents[0]!.id).toBe("luna");
+  });
+
+  test("round-trips an already-migrated `principal:`-shaped cortex.yaml (idempotent)", () => {
+    const principalShapedInput: LegacyBotYaml = {
+      principal: {
+        id: "andreas",
+        displayName: "Andreas",
+        dataResidency: "NZ",
+      },
+      agents: [
+        {
+          id: "luna",
+          displayName: "Luna",
+          persona: "./personas/luna.md",
+          trust: [],
+          presence: {
+            discord: {
+              token: "discord-token-xxxx",
+              guildId: "100000000000000001",
+              agentChannelId: "100000000000000002",
+              logChannelId: "100000000000000003",
+            },
+          },
+        },
+      ],
+    };
+    const result = convertBotYaml(principalShapedInput, { configDir: FIXTURE_DIR });
+    expect(result.cortex.principal.id).toBe("andreas");
+    expect((result.cortex as Record<string, unknown>).operator).toBeUndefined();
+  });
+
+  test("rejects input carrying BOTH a `principal:` and a legacy `operator:` block", () => {
+    // Trust-boundary regression — a config with two principal blocks is
+    // ambiguous and must be rejected before any conversion work.
+    const dualBlockInput = {
+      principal: { id: "andreas" },
+      operator: { id: "someone-else" },
+      agents: [
+        {
+          id: "luna",
+          displayName: "Luna",
+          persona: "./personas/luna.md",
+          trust: [],
+          presence: {
+            discord: {
+              token: "t",
+              guildId: "1",
+              agentChannelId: "2",
+              logChannelId: "3",
+            },
+          },
+        },
+      ],
+    } as unknown as LegacyBotYaml;
+    expect(() => convertBotYaml(dualBlockInput, { configDir: FIXTURE_DIR })).toThrow(
+      /BOTH a `principal:` block and a legacy `operator:` block/,
+    );
   });
 });

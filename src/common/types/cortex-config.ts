@@ -76,18 +76,24 @@ function emptyDefault<T extends z.ZodObject<z.ZodRawShape>>(schema: T) {
 }
 
 // =============================================================================
-// Operator — who is running this cortex instance
+// Principal — who is running this cortex instance
 // =============================================================================
 
 /**
- * The operator is the human (or team) running this cortex deployment. Replaces
+ * The principal is the human (or team) running this cortex deployment. Replaces
  * grove-v2's `agent.operatorId` + `agent.operatorDiscordId` + `agent.operatorMattermostId`
  * fields by lifting them out of the (now removed) singular `agent:` block.
+ *
+ * R1 vocabulary migration (cortex#388) — formerly `OperatorSchema`. The
+ * `principal:` block in `cortex.yaml` is the new canonical key; the loader
+ * still accepts a legacy `operator:` block during the transition release
+ * (see `src/common/config/loader.ts`).
  */
-export const OperatorSchema = z.object({
+export const PrincipalConfigSchema = z.object({
   /**
-   * Operator identifier — used as the `{org}` subject segment on the bus
-   * (`local.{org}.…`). Must be safe to embed verbatim in NATS subjects.
+   * Principal identifier — used as the `{principal}` subject segment on the
+   * bus (`local.{principal}.…`). Must be safe to embed verbatim in NATS
+   * subjects.
    *
    * Grammar: lowercase alphanumeric + hyphen, **first character must be a
    * letter**. The letter-prefix rule mirrors `StackConfigSchema.id` segments
@@ -95,28 +101,28 @@ export const OperatorSchema = z.object({
    * with downstream pattern-matchers that treat segments as numeric literals.
    * Letter-prefix is the safe boundary.
    *
-   * Closing cortex#141 — the round-trip invariant `OperatorSchema.id →
+   * Closing cortex#141 — the round-trip invariant `PrincipalConfigSchema.id →
    * deriveStackId → StackConfigSchema.id` now holds for every value the
-   * upstream gate accepts. Migration hint for an operator hitting this rule:
+   * upstream gate accepts. Migration hint for a principal hitting this rule:
    * rename `2andreas` → `team2andreas` or `andreas-2026` (prepend / wrap the
    * digits with a letter-prefixed token).
    */
   id: z.string().min(1).regex(
     LETTER_PREFIX_ID_REGEX,
-    "operator id must be lowercase alphanumeric + hyphen, starting with a letter (e.g. 'andreas', 'team-research'); rename digit-prefixed ids like '2andreas' to 'team2andreas' or 'andreas-2026'",
+    "principal id must be lowercase alphanumeric + hyphen, starting with a letter (e.g. 'andreas', 'team-research'); rename digit-prefixed ids like '2andreas' to 'team2andreas' or 'andreas-2026'",
   ),
   /** Display name shown on the dashboard. Defaults to `id`. */
   displayName: z.string().optional(),
-  /** Operator's Discord user id — receives DM notifications from agents. */
+  /** Principal's Discord user id — receives DM notifications from agents. */
   discordId: z.string().optional(),
-  /** Operator's Mattermost user id — same purpose, Mattermost-side. */
+  /** Principal's Mattermost user id — same purpose, Mattermost-side. */
   mattermostId: z.string().optional(),
-  /** Operator's Slack user id (`U...`) — same purpose, Slack-side. */
+  /** Principal's Slack user id (`U...`) — same purpose, Slack-side. */
   slackId: z.string().optional(),
   /**
    * Data residency stamped into `sovereignty.data_residency` on emitted
    * envelopes. ISO-3166-1 alpha-2 country code (two uppercase ASCII letters).
-   * Defaults to "NZ" when omitted. Operators in AU/EU/US/etc. set this to
+   * Defaults to "NZ" when omitted. Principals in AU/EU/US/etc. set this to
    * match their jurisdiction.
    *
    * Format-enforced so a typo at config time fails fast rather than emitting
@@ -128,7 +134,23 @@ export const OperatorSchema = z.object({
     .default("NZ"),
 });
 
-export type Operator = z.infer<typeof OperatorSchema>;
+export type PrincipalConfig = z.infer<typeof PrincipalConfigSchema>;
+
+/**
+ * @deprecated R1 vocabulary migration (cortex#388) — renamed to
+ * `PrincipalConfigSchema`. This alias keeps the transition release
+ * source-compatible for any external importer; it is removed in the
+ * breaking v3.0.0 major (manifest PR-11).
+ */
+export const OperatorSchema = PrincipalConfigSchema;
+
+/**
+ * @deprecated R1 vocabulary migration (cortex#388) — renamed to
+ * `PrincipalConfig`. This alias keeps the transition release
+ * source-compatible for any external importer; it is removed in the
+ * breaking v3.0.0 major (manifest PR-11).
+ */
+export type Operator = PrincipalConfig;
 
 // =============================================================================
 // Agent presence — one block per platform an agent shows up on
@@ -1795,7 +1817,7 @@ export type Policy = z.infer<typeof PolicySchema>;
  */
 export const CortexConfigSchema = z.object({
   /** Who is running this cortex instance. */
-  operator: OperatorSchema,
+  operator: PrincipalConfigSchema,
   /**
    * IAW Phase A.5 (refs cortex#113) — optional stack identity. When set,
    * declares `{operator_id}/{stack_id}` for the deployment and the

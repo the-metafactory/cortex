@@ -113,14 +113,14 @@ export interface LoadedConfig {
 }
 
 /**
- * Detect whether `raw` is a cortex-shape config (operator + agents[]) vs
- * the legacy grove-v2 `bot.yaml` shape (singular agent + flat discord[]).
+ * Detect whether `raw` is a cortex-shape config (principal/operator + agents[])
+ * vs the legacy grove-v2 `bot.yaml` shape (singular agent + flat discord[]).
  *
- * The check is structural — must have `operator:` (object) AND `agents:`
- * (non-empty array). Either field on its own keeps the legacy path so a
- * partially-migrated config surfaces the relevant zod errors via
- * BotConfigSchema (legacy) rather than CortexConfigSchema's anti-field
- * rejections.
+ * The check is structural — must have a principal block (`principal:` or the
+ * legacy `operator:`, object) AND `agents:` (non-empty array). Either field on
+ * its own keeps the legacy path so a partially-migrated config surfaces the
+ * relevant zod errors via BotConfigSchema (legacy) rather than
+ * CortexConfigSchema's anti-field rejections.
  */
 interface ZodLikeIssue {
   path?: (string | number)[];
@@ -141,10 +141,81 @@ function isZodLikeError(err: unknown): err is ZodLikeError {
   return Array.isArray(e.issues) || Array.isArray(e.errors);
 }
 
+/**
+ * R3 vocabulary migration (cortex#388) — typed error raised when a single
+ * `cortex.yaml` carries BOTH a legacy `operator:` block AND the new
+ * `principal:` block.
+ *
+ * The principal block is a deployment-config trust boundary: it carries the
+ * principal id used as the `{principal}` subject segment, the platform-side
+ * ids that drive DM-elevation, and the data-residency stamp. If two blocks
+ * disagree, every downstream membership / capability decision becomes
+ * ambiguous. The loader MUST reject the config outright BEFORE any such
+ * decision is made rather than silently picking one block.
+ *
+ * The breaking v3.0.0 major (manifest PR-11) removes the `operator:` reader
+ * entirely; until then this conflict is the safe failure mode for a config
+ * that was hand-edited mid-migration.
+ */
+export class DualBlockConflictError extends Error {
+  /** Stable discriminator for programmatic handling by callers / tests. */
+  public readonly code = "dual_field_conflict" as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "DualBlockConflictError";
+  }
+}
+
+/**
+ * R3 transition (cortex#388) — resolve the principal block from a cortex-shape
+ * config, accepting BOTH the new `principal:` key and the legacy `operator:`
+ * key.
+ *
+ * Precedence: `principal:` is preferred. The legacy `operator:` key still
+ * works for the transition release.
+ *
+ * Trust-boundary rule: if BOTH keys are present, raise `DualBlockConflictError`
+ * (a typed `dual_field_conflict`) — this runs BEFORE any membership /
+ * capability decision so an ambiguous deployment config can never be acted on.
+ *
+ * Returns `undefined` when neither key carries an object (the caller's
+ * structural `isCortexShape` gate has usually already excluded that case).
+ */
+function resolvePrincipalBlock(
+  raw: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const hasPrincipal =
+    raw.principal !== null && typeof raw.principal === "object";
+  const hasOperator =
+    raw.operator !== null && typeof raw.operator === "object";
+
+  if (hasPrincipal && hasOperator) {
+    throw new DualBlockConflictError(
+      "cortex.yaml declares BOTH a `principal:` block and a legacy " +
+        "`operator:` block. The principal block is a deployment-config trust " +
+        "boundary — having two is ambiguous and is rejected before any " +
+        "membership/capability decision is made. Keep `principal:` (the " +
+        "canonical key) and delete the legacy `operator:` block. Run " +
+        "`cortex migrate-config <your-config.yaml>` to regenerate a clean " +
+        "`principal:`-shaped config.",
+    );
+  }
+
+  if (hasPrincipal) return raw.principal as Record<string, unknown>;
+  if (hasOperator) return raw.operator as Record<string, unknown>;
+  return undefined;
+}
+
 function isCortexShape(raw: Record<string, unknown>): boolean {
+  // R3 transition (cortex#388) — accept EITHER a `principal:` block (new
+  // canonical key) or a legacy `operator:` block. resolvePrincipalBlock
+  // raises `dual_field_conflict` when both are present; that throw is
+  // intentional — a config carrying both blocks is cortex-shape but
+  // unloadable, and the conflict must surface rather than fall through to
+  // the legacy bot.yaml path.
   return (
-    raw.operator !== null &&
-    typeof raw.operator === "object" &&
+    resolvePrincipalBlock(raw) !== undefined &&
     Array.isArray(raw.agents) &&
     raw.agents.length > 0
   );
@@ -324,10 +395,28 @@ function loadCortexShape(
   raw: Record<string, unknown>,
   networks: NetworkFile[],
 ): LoadedConfig {
+  // R3 transition (cortex#388) — resolve the principal block, accepting both
+  // the new `principal:` key and the legacy `operator:` key. Raises a typed
+  // `dual_field_conflict` (DualBlockConflictError) when both are present.
+  // This runs FIRST, before any other validation, because a config with two
+  // principal blocks is a deployment-config trust boundary and must never be
+  // partially acted on.
+  //
+  // CortexConfigSchema still keys the block as `operator:` during the
+  // transition release (the breaking flip to `principal:` is manifest PR-11
+  // / v3.0.0). We normalise the resolved block onto `operator:` here so the
+  // schema layer downstream stays untouched.
+  const principalBlock = resolvePrincipalBlock(raw);
+  const normalised: Record<string, unknown> = { ...raw };
+  delete normalised.principal;
+  if (principalBlock !== undefined) {
+    normalised.operator = principalBlock;
+  }
+
   // v2.0.0 cutover (cortex#297) — reject legacy authorisation fields with a
   // clear pointer at the migrate-config CLI BEFORE Zod's strip-by-default
   // semantics silently drop them.
-  const legacyOffenders = detectLegacyAuthorisationFields(raw);
+  const legacyOffenders = detectLegacyAuthorisationFields(normalised);
   if (legacyOffenders.length > 0) {
     throw new Error(
       `cortex.yaml carries legacy v1.x authorisation fields no longer supported in v2.0.0:\n` +
@@ -338,8 +427,8 @@ function loadCortexShape(
     );
   }
   // Schema-strict parse. Any legacy field at the top level fails here with
-  // the operator-friendly migration message baked into CortexConfigSchema.
-  const cortexConfig: CortexConfig = CortexConfigSchema.parse(raw);
+  // the principal-friendly migration message baked into CortexConfigSchema.
+  const cortexConfig: CortexConfig = CortexConfigSchema.parse(normalised);
 
   // CortexConfigSchema guarantees `agents.min(1)`, so [0] is always defined
   // at runtime; noUncheckedIndexedAccess still types it as possibly undefined.

@@ -118,9 +118,28 @@ export interface LegacyBotYaml {
   /** grove-v2 singular `agent:` block. Required for grove-v2-shape input. */
   agent?: LegacyAgent;
   /**
-   * Cortex-shape `operator:` block. Used when the input is already a
+   * Cortex-shape principal block. Used when the input is already a
    * cortex.yaml (e.g. Andreas's `~/.config/cortex/cortex.yaml`) that has
    * agents under `agents[]` instead of the singular legacy `agent:`.
+   *
+   * R3 vocabulary migration (cortex#388) — the canonical key is now
+   * `principal:`; the legacy `operator:` key is still accepted on input so
+   * the migrator can round-trip a pre-R3 cortex.yaml. The two share an
+   * identical inner shape. A config carrying BOTH keys is a deployment-config
+   * trust boundary — `convertBotYaml` rejects it (see the dual-block guard).
+   */
+  principal?: {
+    id?: string;
+    displayName?: string;
+    discordId?: string;
+    mattermostId?: string;
+    slackId?: string;
+    dataResidency?: string;
+  };
+  /**
+   * @deprecated R3 vocabulary migration (cortex#388) — legacy alias for
+   * `principal`. Still read on input for round-trip migration of pre-R3
+   * cortex.yaml files; the migrator always EMITS the `principal:` key.
    */
   operator?: {
     id?: string;
@@ -193,9 +212,27 @@ export interface InstanceMapping {
   newPresence: "discord" | "mattermost";
 }
 
+/**
+ * R3 vocabulary migration (cortex#388) — the emitted `cortex.yaml` shape.
+ *
+ * Identical to `CortexConfig` except the principal block is keyed `principal:`
+ * (the new canonical key) rather than the legacy `operator:`. The block's
+ * inner shape is unchanged — only the top-level key is renamed.
+ *
+ * `convertBotYaml` validates its output through `CortexConfigSchema` (which
+ * still keys the block `operator:` during the transition release — the
+ * breaking schema flip is manifest PR-11 / v3.0.0), then re-keys the
+ * validated result to `principal:` for emission. The cortex loader's
+ * `resolvePrincipalBlock` accepts both keys, so a `principal:`-shaped file
+ * loads cleanly.
+ */
+export type MigratedCortexConfig = Omit<CortexConfig, "operator"> & {
+  principal: CortexConfig["operator"];
+};
+
 export interface ConversionResult {
   /** The cortex.yaml-shaped object, ready to YAML.stringify and write. */
-  cortex: CortexConfig;
+  cortex: MigratedCortexConfig;
   /** Non-fatal warnings — surfaced to stderr by the CLI. */
   warnings: ConversionWarning[];
   /**
@@ -308,12 +345,17 @@ function buildOperator(
   }
   const a = legacy.agent;
 
-  const rawOperatorId = a.operatorId ?? a.name;
-  const operatorId = deriveAgentId(rawOperatorId);
-  if (operatorId !== rawOperatorId) {
+  // `a.operatorId` reads the legacy grove-v2 `bot.yaml` `agent.operatorId`
+  // field — a historical input shape, intentionally NOT renamed (R2 covers
+  // live cortex code; bot.yaml legacy-config paths are the migration
+  // allow-list carve-out). The warning `field:` below names the OUTPUT
+  // cortex.yaml key, which is `principal:` after R3.
+  const rawPrincipalId = a.operatorId ?? a.name;
+  const principalId = deriveAgentId(rawPrincipalId);
+  if (principalId !== rawPrincipalId) {
     warnings.push({
-      field: "operator.id",
-      message: `operatorId "${rawOperatorId}" normalized to "${operatorId}" (cortex requires lowercase alphanumeric + hyphen)`,
+      field: "principal.id",
+      message: `principal id "${rawPrincipalId}" normalized to "${principalId}" (cortex requires lowercase alphanumeric + hyphen)`,
     });
   }
 
@@ -324,20 +366,23 @@ function buildOperator(
     const fixed = dataResidency.toUpperCase();
     if (/^[A-Z]{2}$/.test(fixed)) {
       warnings.push({
-        field: "operator.dataResidency",
+        field: "principal.dataResidency",
         message: `dataResidency "${dataResidency}" upcased to "${fixed}"`,
       });
       dataResidency = fixed;
     } else {
       warnings.push({
-        field: "operator.dataResidency",
+        field: "principal.dataResidency",
         message: `dataResidency "${dataResidency}" not a 2-letter ISO-3166 code; defaulting to "NZ"`,
       });
       dataResidency = "NZ";
     }
   }
 
-  const operator: CortexConfig["operator"] = { id: operatorId, dataResidency };
+  // The local is keyed `operator` because `CortexConfig` still uses that key
+  // during the transition release; `convertBotYaml` re-keys the validated
+  // block to `principal:` for emission (R3, cortex#388).
+  const operator: CortexConfig["operator"] = { id: principalId, dataResidency };
   if (a.operatorName) operator.displayName = a.operatorName;
   if (a.operatorDiscordId) operator.discordId = a.operatorDiscordId;
   if (a.operatorMattermostId) operator.mattermostId = a.operatorMattermostId;
@@ -797,16 +842,29 @@ export function convertBotYaml(
   if (!legacy || typeof legacy !== "object") {
     throw new Error("input is not an object");
   }
+  // R3 vocabulary migration (cortex#388) — a cortex.yaml that carries BOTH a
+  // `principal:` block and a legacy `operator:` block is a deployment-config
+  // trust boundary. Reject it BEFORE any conversion work; the migrator must
+  // never silently pick one. Mirrors the loader's `dual_field_conflict`.
+  /* eslint-disable @typescript-eslint/no-unnecessary-condition */
+  if (legacy.principal !== undefined && legacy.operator !== undefined) {
+    throw new Error(
+      "input declares BOTH a `principal:` block and a legacy `operator:` " +
+        "block — ambiguous. Keep `principal:` (the canonical key) and delete " +
+        "the legacy `operator:` block, then re-run migrate-config.",
+    );
+  }
   // cortex#295 — accept BOTH legacy bot.yaml (singular `agent:`) and
-  // cortex.yaml (plural `agents[]` + `operator:` + `stack:`) shapes.
+  // cortex.yaml (plural `agents[]` + principal block + `stack:`) shapes.
   // Legacy bot.yaml requires `agent.name` + `agent.displayName`.
-  // cortex-shape requires `agents[]` + `operator.id` and bypasses
-  // `buildAgents`/`buildOperator`.
+  // cortex-shape requires `agents[]` + a principal block (`principal:` or
+  // the legacy `operator:`) and bypasses `buildAgents`/`buildOperator`.
+  const cortexPrincipalBlock = legacy.principal ?? legacy.operator;
   const isCortexShape =
     !legacy.agent &&
     Array.isArray(legacy.agents) &&
     legacy.agents.length > 0 &&
-    legacy.operator !== undefined;
+    cortexPrincipalBlock !== undefined;
   if (!isCortexShape) {
     if (!legacy.agent || typeof legacy.agent !== "object") {
       throw new Error("bot.yaml missing required `agent:` block");
@@ -843,6 +901,11 @@ export function convertBotYaml(
     });
   }
 
+  // The conversion object is keyed `operator:` for the `CortexConfigSchema`
+  // parse below — the schema still uses that key during the transition
+  // release (the breaking flip to `principal:` is manifest PR-11 / v3.0.0).
+  // After the parse the validated block is re-keyed to `principal:` so the
+  // EMITTED cortex.yaml carries the new canonical key (R3, cortex#388).
   const cortex: Record<string, unknown> = {
     operator,
     agents,
@@ -919,13 +982,23 @@ export function convertBotYaml(
 
   const parsed = CortexConfigSchema.parse(cortex);
 
+  // R3 vocabulary migration (cortex#388) — re-key the validated block from
+  // `operator:` to `principal:` for emission. The inner shape is unchanged;
+  // only the top-level key is renamed. The cortex loader's
+  // `resolvePrincipalBlock` accepts both keys, so the emitted file loads
+  // cleanly on the transition release. `operator` is non-optional on
+  // `CortexConfig` (required by the schema), so the destructured value is
+  // always defined.
+  const { operator: principal, ...restOfCortex } = parsed;
+  const migrated: MigratedCortexConfig = { principal, ...restOfCortex };
+
   // Compute parallel-mode pre-flight gaps against the FINAL policy block.
   const preflightGaps = policyPreflight({
     views: adapterViews,
     policy: parsed.policy ?? { principals: [], roles: [] },
   });
 
-  return { cortex: parsed, warnings, mappings, adapterViews, preflightGaps };
+  return { cortex: migrated, warnings, mappings, adapterViews, preflightGaps };
 }
 
 // =============================================================================
@@ -1064,23 +1137,29 @@ function resolveHomeStack(legacy: LegacyBotYaml, operatorId: string): string {
 }
 
 /**
- * Lift the cortex-shape `operator:` block straight through, with the
+ * Lift the cortex-shape principal block straight through, with the
  * same normalisations `buildOperator` applies (lowercase id, ISO-3166
  * residency).
+ *
+ * R3 vocabulary migration (cortex#388) — reads either the new `principal:`
+ * key or the legacy `operator:` key (the caller has already rejected configs
+ * carrying both). The returned object is keyed `operator:` because the
+ * `CortexConfig` type still uses that key during the transition release;
+ * `convertBotYaml` re-keys it to `principal:` for emission.
  */
 function buildOperatorFromCortexShape(
   legacy: LegacyBotYaml,
   warnings: ConversionWarning[],
 ): CortexConfig["operator"] {
-  const op = legacy.operator ?? {};
+  const op = legacy.principal ?? legacy.operator ?? {};
   if (typeof op.id !== "string" || op.id.length === 0) {
-    throw new Error("cortex.yaml-shape input requires `operator.id`");
+    throw new Error("cortex.yaml-shape input requires `principal.id`");
   }
   const operatorId = deriveAgentId(op.id);
   if (operatorId !== op.id) {
     warnings.push({
-      field: "operator.id",
-      message: `operator.id "${op.id}" normalized to "${operatorId}" (cortex requires lowercase alphanumeric + hyphen)`,
+      field: "principal.id",
+      message: `principal.id "${op.id}" normalized to "${operatorId}" (cortex requires lowercase alphanumeric + hyphen)`,
     });
   }
   let dataResidency = op.dataResidency;
@@ -1089,13 +1168,13 @@ function buildOperatorFromCortexShape(
     const fixed = dataResidency.toUpperCase();
     if (/^[A-Z]{2}$/.test(fixed)) {
       warnings.push({
-        field: "operator.dataResidency",
+        field: "principal.dataResidency",
         message: `dataResidency "${dataResidency}" upcased to "${fixed}"`,
       });
       dataResidency = fixed;
     } else {
       warnings.push({
-        field: "operator.dataResidency",
+        field: "principal.dataResidency",
         message: `dataResidency "${dataResidency}" not a 2-letter ISO-3166 code; defaulting to "NZ"`,
       });
       dataResidency = "NZ";
@@ -1367,7 +1446,7 @@ export function formatCheckReport(result: ConversionResult): string {
   const lines: string[] = [];
   lines.push("cortex migrate-config — dry-run report");
   lines.push("");
-  lines.push(`operator: ${result.cortex.operator.id} (dataResidency=${result.cortex.operator.dataResidency})`);
+  lines.push(`principal: ${result.cortex.principal.id} (dataResidency=${result.cortex.principal.dataResidency})`);
   lines.push(`agents:   ${result.cortex.agents.length}`);
   for (const a of result.cortex.agents) {
     const platforms = [
