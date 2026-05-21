@@ -32,11 +32,13 @@
 # the validator complains.
 
 # -----------------------------------------------------------------------------
-# operator — who is running this cortex instance
+# principal — who is running this cortex instance
+# (renamed from `operator:` at cortex v3.0.0 — vocabulary migration 2026-05;
+#  run `cortex migrate-config <your-config.yaml>` to upgrade an older file)
 # -----------------------------------------------------------------------------
-operator:
-  # Lowercase letter-prefixed id. Surfaces as the `{org}` segment in NATS
-  # subjects (`local.{org}.>`) and as the stack-id default. Must match
+principal:
+  # Lowercase letter-prefixed id. Surfaces as the `{principal}` segment in NATS
+  # subjects (`local.{principal}.>`) and as the stack-id default. Must match
   # `^[a-z][a-z0-9-]*$` — replace the placeholder below with your own
   # short slug (e.g. `andreas`, `team-research`).
   id: operator-name  # <REPLACE_ME>

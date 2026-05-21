@@ -84,10 +84,11 @@ function emptyDefault<T extends z.ZodObject<z.ZodRawShape>>(schema: T) {
  * grove-v2's `agent.operatorId` + `agent.operatorDiscordId` + `agent.operatorMattermostId`
  * fields by lifting them out of the (now removed) singular `agent:` block.
  *
- * R1 vocabulary migration (cortex#388) — formerly `OperatorSchema`. The
- * `principal:` block in `cortex.yaml` is the new canonical key; the loader
- * still accepts a legacy `operator:` block during the transition release
- * (see `src/common/config/loader.ts`).
+ * R1 vocabulary migration (cortex#388) — `principal:` is the canonical
+ * key in `cortex.yaml`. The transition-release `operator:` block alias
+ * was removed at v3.0.0 (manifest PR-11); operators upgrading from
+ * cortex v2.x run `cortex migrate-config` to rewrite their cortex.yaml
+ * before installing v3.
  */
 export const PrincipalConfigSchema = z.object({
   /**
@@ -136,21 +137,10 @@ export const PrincipalConfigSchema = z.object({
 
 export type PrincipalConfig = z.infer<typeof PrincipalConfigSchema>;
 
-/**
- * @deprecated R1 vocabulary migration (cortex#388) — renamed to
- * `PrincipalConfigSchema`. This alias keeps the transition release
- * source-compatible for any external importer; it is removed in the
- * breaking v3.0.0 major (manifest PR-11).
- */
-export const OperatorSchema = PrincipalConfigSchema;
-
-/**
- * @deprecated R1 vocabulary migration (cortex#388) — renamed to
- * `PrincipalConfig`. This alias keeps the transition release
- * source-compatible for any external importer; it is removed in the
- * breaking v3.0.0 major (manifest PR-11).
- */
-export type Operator = PrincipalConfig;
+// R1 vocabulary migration (cortex#388) v3.0.0 BREAKING — the
+// `OperatorSchema` / `Operator` deprecated aliases were removed at
+// v3.0.0 (manifest PR-11). External importers update to
+// `PrincipalConfigSchema` / `PrincipalConfig`.
 
 // =============================================================================
 // Agent presence — one block per platform an agent shows up on
@@ -1807,18 +1797,20 @@ export type Policy = z.infer<typeof PolicySchema>;
 // =============================================================================
 
 /**
- * The cortex deployment configuration. One file per operator
+ * The cortex deployment configuration. One file per principal
  * (`~/.config/cortex/cortex.yaml`). Loaded at startup; hot-reloaded by
  * `config-watcher.ts` for fields that don't require a restart.
  *
- * Architecture §9 compliance: there is exactly ONE singular block (`operator:`),
- * and the agent list is the canonical source. Renderers are top-level peers,
- * not properties of any agent. No `agent:` (singular) — that's the legacy
- * grove-v2 shape and is replaced by the agents[] array.
+ * Architecture §9 compliance: there is exactly ONE singular block
+ * (`principal:` — renamed from `operator:` per the vocabulary migration
+ * 2026-05 v3.0.0 BREAKING; manifest PR-11), and the agent list is the
+ * canonical source. Renderers are top-level peers, not properties of
+ * any agent. No `agent:` (singular) — that's the legacy grove-v2 shape
+ * and is replaced by the agents[] array.
  */
 export const CortexConfigSchema = z.object({
   /** Who is running this cortex instance. */
-  operator: PrincipalConfigSchema,
+  principal: PrincipalConfigSchema,
   /**
    * IAW Phase A.5 (refs cortex#113) — optional stack identity. When set,
    * declares `{operator_id}/{stack_id}` for the deployment and the

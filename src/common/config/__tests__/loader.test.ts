@@ -292,7 +292,7 @@ describe("error reporting", () => {
 // returns the rich agents[] alongside via `inlineAgents` so `startCortex`
 // can route per-instance identity correctly.
 
-import { loadConfigWithAgents, DualBlockConflictError } from "../loader";
+import { loadConfigWithAgents } from "../loader";
 
 describe("MIG-7.2e — cortex-shape detection + transform", () => {
   function writeCortexConfig(dir: string, config: Record<string, unknown>): string {
@@ -303,7 +303,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
 
   function minimalCortex(): Record<string, unknown> {
     return {
-      operator: {
+      principal: {
         id: "jc",
         displayName: "Jens-Christian",
         discordId: "285727653603049472",
@@ -738,11 +738,9 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
   // `operator:` reader removal is the future breaking PR-11 / v3.0.0.
   // ---------------------------------------------------------------------------
 
-  /** minimalCortex() keyed by `principal:` instead of the legacy `operator:`. */
+  /** minimalCortex() keyed by `principal:` (v3.0.0 BREAKING — manifest PR-11). */
   function minimalCortexPrincipalShape(): Record<string, unknown> {
-    const cfg = minimalCortex();
-    const { operator, ...rest } = cfg;
-    return { principal: operator, ...rest };
+    return minimalCortex();
   }
 
   test("R3 — loads a `principal:`-shaped cortex.yaml (new canonical key)", () => {
@@ -756,60 +754,9 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     expect(loaded.config.agent.operatorId).toBe("jc");
   });
 
-  test("R3 — still loads a legacy `operator:`-shaped cortex.yaml (back-compat)", () => {
-    // The transition release keeps the `operator:` reader. Removal is PR-11.
-    const path = writeCortexConfig(testDir, minimalCortex());
-    const loaded = loadConfigWithAgents(path);
-    expect(loaded.operator?.id).toBe("jc");
-  });
-
-  test("R3 — `principal:` and `operator:` produce an identical LoadedConfig", () => {
-    const principalPath = join(testDir, "cortex-principal.yaml");
-    writeFileSync(principalPath, stringify(minimalCortexPrincipalShape()));
-    const operatorPath = join(testDir, "cortex-operator.yaml");
-    writeFileSync(operatorPath, stringify(minimalCortex()));
-
-    const fromPrincipal = loadConfigWithAgents(principalPath);
-    const fromOperator = loadConfigWithAgents(operatorPath);
-    expect(fromPrincipal.operator).toEqual(fromOperator.operator);
-    expect(fromPrincipal.inlineAgents).toEqual(fromOperator.inlineAgents);
-  });
-
-  test("R3 — rejects a cortex.yaml carrying BOTH `principal:` and `operator:` with dual_field_conflict", () => {
-    // Trust-boundary regression: a hand-edited config mid-migration that
-    // kept the old block while adding the new one MUST be rejected, not
-    // silently resolved to one block.
-    const cfg = minimalCortexPrincipalShape();
-    cfg.operator = { id: "someone-else", discordId: "999" };
-    const path = writeCortexConfig(testDir, cfg);
-
-    expect(() => loadConfigWithAgents(path)).toThrow(DualBlockConflictError);
-    expect(() => loadConfigWithAgents(path)).toThrow(/dual|BOTH/i);
-  });
-
-  test("R3 — the dual-block error carries the `dual_field_conflict` code", () => {
-    const cfg = minimalCortexPrincipalShape();
-    cfg.operator = { id: "someone-else" };
-    const path = writeCortexConfig(testDir, cfg);
-    try {
-      loadConfigWithAgents(path);
-      throw new Error("expected loadConfigWithAgents to throw");
-    } catch (e) {
-      expect(e).toBeInstanceOf(DualBlockConflictError);
-      expect((e as DualBlockConflictError).code).toBe("dual_field_conflict");
-    }
-  });
-
-  test("R3 — dual-block conflict fires even when `agents:` is absent (trust boundary, not shape-gated)", () => {
-    // The conflict is a deployment-config trust boundary — it must surface
-    // regardless of whether the rest of the config is structurally
-    // cortex-shape. A config with both blocks and no agents must not fall
-    // through to the legacy bot.yaml path.
-    const cfg: Record<string, unknown> = {
-      principal: { id: "jc" },
-      operator: { id: "jc" },
-    };
-    const path = writeCortexConfig(testDir, cfg);
-    expect(() => loadConfigWithAgents(path)).toThrow(DualBlockConflictError);
-  });
+  // v3.0.0 BREAKING (manifest PR-11) — the `operator:` reader and the
+  // `DualBlockConflictError` dual-block guard were REMOVED. cortex.yaml
+  // now requires the canonical `principal:` key. The migrate-config CLI
+  // continues to rewrite legacy `operator:`-shaped input — those tests
+  // live alongside `migrate-config.test.ts`, not here.
 });

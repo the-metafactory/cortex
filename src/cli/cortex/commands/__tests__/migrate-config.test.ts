@@ -40,8 +40,12 @@ function loadFixture(name: string): LegacyBotYaml {
 function asSchemaShape(
   migrated: MigratedCortexConfig | Record<string, unknown>,
 ): Record<string, unknown> {
-  const { principal, ...rest } = migrated as Record<string, unknown>;
-  return { ...rest, operator: principal };
+  // v3.0.0 BREAKING (manifest PR-11) — `CortexConfigSchema` now keys the
+  // top-level block as `principal:` directly. `MigratedCortexConfig === CortexConfig`
+  // and the migrated value passes through unchanged; the helper is kept
+  // as a thin identity wrapper so the test surface still flows through it
+  // (future schema re-keys touch one helper rather than every assertion).
+  return migrated;
 }
 
 // ---------------------------------------------------------------------------

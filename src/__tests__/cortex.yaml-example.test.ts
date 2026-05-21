@@ -33,7 +33,7 @@ describe("cortex.yaml.example — first-install starter config (cortex#314)", ()
     // of a throw. We also assert the parse returns a populated config so
     // a future "everything optional" regression doesn't pass trivially.
     const parsed = CortexConfigSchema.parse(yamlObj);
-    expect(parsed.operator.id).toBeDefined();
+    expect(parsed.principal.id).toBeDefined();
     expect(parsed.agents.length).toBeGreaterThan(0);
   });
 

@@ -634,7 +634,7 @@ describe("runDryRun — config validator (cortex#88 item 2)", () => {
     writeFileSync(
       cfgPath,
       [
-        "operator:",
+        "principal:",
         "  id: jc",
         "  dataResidency: NZ",
         "agents:",
@@ -674,7 +674,7 @@ describe("runDryRun — config validator (cortex#88 item 2)", () => {
     writeFileSync(
       cfgPath,
       [
-        "operator:",
+        "principal:",
         "  id: jc",
         "agents:",
         "  - id: luna",
@@ -708,7 +708,7 @@ describe("runDryRun — config validator (cortex#88 item 2)", () => {
     writeFileSync(
       cfgPath,
       [
-        "operator:",
+        "principal:",
         "  id: jc",
         "agents:",
         "  - id: luna",

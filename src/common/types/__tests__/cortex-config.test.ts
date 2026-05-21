@@ -26,7 +26,7 @@ import {
   GithubConfigSchema,
   NatsConfigSchema,
   NatsIdentitySchema,
-  OperatorSchema,
+  PrincipalConfigSchema,
   PagerDutyRendererSchema,
   PathsConfigSchema,
   PolicyFederatedRegistrySchema,
@@ -70,7 +70,7 @@ function minAgent(overrides: Record<string, unknown> = {}) {
 
 function minConfig() {
   return {
-    operator: minOperator(),
+    principal: minOperator(),
     agents: [minAgent()],
     claude: {},
   };
@@ -80,30 +80,30 @@ function minConfig() {
 // Operator schema
 // =============================================================================
 
-describe("OperatorSchema", () => {
+describe("PrincipalConfigSchema", () => {
   test("requires id", () => {
-    expect(() => OperatorSchema.parse({})).toThrow();
+    expect(() => PrincipalConfigSchema.parse({})).toThrow();
   });
 
   test("rejects uppercase id", () => {
-    expect(() => OperatorSchema.parse({ id: "Andreas" })).toThrow(/lowercase/);
+    expect(() => PrincipalConfigSchema.parse({ id: "Andreas" })).toThrow(/lowercase/);
   });
 
   test("rejects id with dots (would break NATS subject segmentation)", () => {
-    expect(() => OperatorSchema.parse({ id: "andreas.private" })).toThrow();
+    expect(() => PrincipalConfigSchema.parse({ id: "andreas.private" })).toThrow();
   });
 
   test("rejects id with whitespace", () => {
-    expect(() => OperatorSchema.parse({ id: "andreas dev" })).toThrow();
+    expect(() => PrincipalConfigSchema.parse({ id: "andreas dev" })).toThrow();
   });
 
   test("rejects id with NATS wildcards", () => {
-    expect(() => OperatorSchema.parse({ id: "andreas*" })).toThrow();
-    expect(() => OperatorSchema.parse({ id: "andreas>" })).toThrow();
+    expect(() => PrincipalConfigSchema.parse({ id: "andreas*" })).toThrow();
+    expect(() => PrincipalConfigSchema.parse({ id: "andreas>" })).toThrow();
   });
 
   test("accepts lowercase alphanumeric + hyphen", () => {
-    const parsed = OperatorSchema.parse({ id: "andreas-dev-2026" });
+    const parsed = PrincipalConfigSchema.parse({ id: "andreas-dev-2026" });
     expect(parsed.id).toBe("andreas-dev-2026");
   });
 
@@ -113,19 +113,19 @@ describe("OperatorSchema", () => {
 
   test("accepts canonical letter-prefixed operator ids", () => {
     // The realistic operator population — all letter-prefixed today.
-    expect(OperatorSchema.parse({ id: "andreas" }).id).toBe("andreas");
-    expect(OperatorSchema.parse({ id: "jcfischer" }).id).toBe("jcfischer");
-    expect(OperatorSchema.parse({ id: "metafactory" }).id).toBe("metafactory");
-    expect(OperatorSchema.parse({ id: "team-research" }).id).toBe("team-research");
+    expect(PrincipalConfigSchema.parse({ id: "andreas" }).id).toBe("andreas");
+    expect(PrincipalConfigSchema.parse({ id: "jcfischer" }).id).toBe("jcfischer");
+    expect(PrincipalConfigSchema.parse({ id: "metafactory" }).id).toBe("metafactory");
+    expect(PrincipalConfigSchema.parse({ id: "team-research" }).id).toBe("team-research");
   });
 
   test("accepts operator id with internal digits (only the prefix is gated)", () => {
     // The rule is letter-PREFIX, not letter-only. Internal digits are fine
     // — `team-42-research`, `andreas-2026` etc. round-trip through both
     // schemas after cortex#141 closes the gap.
-    expect(OperatorSchema.parse({ id: "team-42-research" }).id).toBe("team-42-research");
-    expect(OperatorSchema.parse({ id: "andreas-2026" }).id).toBe("andreas-2026");
-    expect(OperatorSchema.parse({ id: "a1" }).id).toBe("a1");
+    expect(PrincipalConfigSchema.parse({ id: "team-42-research" }).id).toBe("team-42-research");
+    expect(PrincipalConfigSchema.parse({ id: "andreas-2026" }).id).toBe("andreas-2026");
+    expect(PrincipalConfigSchema.parse({ id: "a1" }).id).toBe("a1");
   });
 
   test("rejects digit-prefix operator id (cortex#141 — letter-prefix rule)", () => {
@@ -135,35 +135,35 @@ describe("OperatorSchema", () => {
     // schema rejects. Fail fast at the upstream Zod gate with an actionable
     // error message rather than letting the divergence surface later at
     // subject-derivation or self-consistency-check time.
-    expect(() => OperatorSchema.parse({ id: "2andreas" })).toThrow(
+    expect(() => PrincipalConfigSchema.parse({ id: "2andreas" })).toThrow(
       /starting with a letter/,
     );
     // The error message MUST surface the migration hint so operators see
     // what to do, not just what's wrong.
-    expect(() => OperatorSchema.parse({ id: "2andreas" })).toThrow(
+    expect(() => PrincipalConfigSchema.parse({ id: "2andreas" })).toThrow(
       /team2andreas|andreas-2026/,
     );
   });
 
   test("rejects all-digit operator id", () => {
-    expect(() => OperatorSchema.parse({ id: "123" })).toThrow(
+    expect(() => PrincipalConfigSchema.parse({ id: "123" })).toThrow(
       /starting with a letter/,
     );
   });
 
   test("rejects hyphen-prefix operator id (must start with a letter, not punctuation)", () => {
-    expect(() => OperatorSchema.parse({ id: "-andreas" })).toThrow(
+    expect(() => PrincipalConfigSchema.parse({ id: "-andreas" })).toThrow(
       /starting with a letter/,
     );
   });
 
   test("defaults dataResidency to NZ", () => {
-    const parsed = OperatorSchema.parse({ id: "andreas" });
+    const parsed = PrincipalConfigSchema.parse({ id: "andreas" });
     expect(parsed.dataResidency).toBe("NZ");
   });
 
   test("accepts optional discordId / mattermostId / displayName", () => {
-    const parsed = OperatorSchema.parse({
+    const parsed = PrincipalConfigSchema.parse({
       id: "andreas",
       displayName: "Andreas Astrom",
       discordId: "1134000000000000000",
@@ -175,16 +175,16 @@ describe("OperatorSchema", () => {
   });
 
   test("accepts explicit dataResidency override", () => {
-    const parsed = OperatorSchema.parse({ id: "andreas", dataResidency: "CH" });
+    const parsed = PrincipalConfigSchema.parse({ id: "andreas", dataResidency: "CH" });
     expect(parsed.dataResidency).toBe("CH");
   });
 
   test("rejects malformed dataResidency (Holly W2-4)", () => {
     // ISO-3166-1 alpha-2 is exactly 2 uppercase ASCII chars.
-    expect(() => OperatorSchema.parse({ id: "andreas", dataResidency: "CHE" })).toThrow();
-    expect(() => OperatorSchema.parse({ id: "andreas", dataResidency: "ch" })).toThrow();
-    expect(() => OperatorSchema.parse({ id: "andreas", dataResidency: "Switzerland" })).toThrow();
-    expect(() => OperatorSchema.parse({ id: "andreas", dataResidency: "C" })).toThrow();
+    expect(() => PrincipalConfigSchema.parse({ id: "andreas", dataResidency: "CHE" })).toThrow();
+    expect(() => PrincipalConfigSchema.parse({ id: "andreas", dataResidency: "ch" })).toThrow();
+    expect(() => PrincipalConfigSchema.parse({ id: "andreas", dataResidency: "Switzerland" })).toThrow();
+    expect(() => PrincipalConfigSchema.parse({ id: "andreas", dataResidency: "C" })).toThrow();
   });
 });
 
@@ -644,7 +644,7 @@ describe("Cross-cutting schemas — defaults populated by emptyDefault helper", 
 describe("CortexConfigSchema", () => {
   test("accepts minimal valid config", () => {
     const parsed = CortexConfigSchema.parse(minConfig());
-    expect(parsed.operator.id).toBe("andreas");
+    expect(parsed.principal.id).toBe("andreas");
     expect(parsed.agents).toHaveLength(1);
     expect(parsed.renderers).toEqual([]);
   });
@@ -665,7 +665,7 @@ describe("CortexConfigSchema", () => {
 
   test("accepts full multi-agent + renderers + nats config", () => {
     const parsed = CortexConfigSchema.parse({
-      operator: {
+      principal: {
         id: "andreas",
         displayName: "Andreas Astrom",
         discordId: "1134000000000000000",

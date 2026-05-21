@@ -60,7 +60,7 @@ function minAgent(overrides: Record<string, unknown> = {}) {
 
 function minConfig(overrides: Record<string, unknown> = {}) {
   return {
-    operator: minOperator(),
+    principal: minOperator(),
     agents: [minAgent()],
     claude: {},
     ...overrides,

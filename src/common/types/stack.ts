@@ -166,7 +166,12 @@ export interface DerivedStackId {
  * `CortexConfig`/`LoadedConfig` pass it through unchanged.
  */
 export interface DeriveStackIdInput {
-  operator?: { id?: string };
+  // v3.0.0 BREAKING (manifest PR-11) — renamed from `operator?` per the
+  // top-level CortexConfig `principal:` rename. The internal `operator`
+  // variable below is the stack-id-half of the `{operator}/{stack}` grammar
+  // and stays as-is (the grammar name is distinct from the
+  // operator-the-human concept).
+  principal?: { id?: string };
   stack?: { id: string };
 }
 
@@ -222,11 +227,11 @@ export function deriveStackId(config: DeriveStackIdInput): DerivedStackId {
     };
   }
 
-  // No stack block — default-derive from operator.id. `operator?.id` guards
-  // the test-only path where a caller passes a partial config object
-  // without a populated operator block; production callers always have
-  // operator.id present because `OperatorSchema.id` is regex-enforced.
-  const operator = config.operator?.id ?? "default";
+  // No stack block — default-derive from principal.id. `principal?.id`
+  // guards the test-only path where a caller passes a partial config object
+  // without a populated principal block; production callers always have
+  // principal.id present because `PrincipalConfigSchema.id` is regex-enforced.
+  const operator = config.principal?.id ?? "default";
   return {
     operator,
     stack: "default",

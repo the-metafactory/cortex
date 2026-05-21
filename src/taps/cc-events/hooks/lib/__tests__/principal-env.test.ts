@@ -21,16 +21,14 @@ describe("resolvePrincipalEnv — R9 (cortex#388 PR-3) compat shim", () => {
     expect(resolvePrincipalEnv("", env)).toBe("andreas");
   });
 
-  test("falls back to legacy CORTEX_OPERATOR and emits a deprecation warning", () => {
-    const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
+  test("v3.0.0 BREAKING — CORTEX_OPERATOR legacy fallback is REMOVED", () => {
+    // R9 (cortex#388 / manifest PR-11) — the v2.x transition-release
+    // compat shim that fell back from `CORTEX_OPERATOR*` → `CORTEX_PRINCIPAL*`
+    // with a deprecation warning was deleted at v3.0.0. Operators
+    // running `CORTEX_OPERATOR*` env vars rename them to
+    // `CORTEX_PRINCIPAL*` before installing v3.
     const env = { CORTEX_OPERATOR: "legacy-cortex" };
-
-    expect(resolvePrincipalEnv("", env)).toBe("legacy-cortex");
-
-    expect(stderr).toHaveBeenCalledTimes(1);
-    const msg = String(stderr.mock.calls[0]![0]);
-    expect(msg).toContain("CORTEX_OPERATOR is deprecated");
-    expect(msg).toContain("CORTEX_PRINCIPAL");
+    expect(resolvePrincipalEnv("", env)).toBeUndefined();
   });
 
   test("falls back to pre-cortex GROVE_OPERATOR without a warning", () => {
@@ -52,13 +50,11 @@ describe("resolvePrincipalEnv — R9 (cortex#388 PR-3) compat shim", () => {
     expect(resolvePrincipalEnv("_ID", env)).toBe("andreas");
   });
 
-  test("suffix fallback resolves the legacy CORTEX_OPERATOR_<suffix>", () => {
-    const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
+  test("v3.0.0 BREAKING — CORTEX_OPERATOR_<suffix> legacy fallback is REMOVED", () => {
+    // Same v3.0.0 BREAKING as the bare `CORTEX_OPERATOR` test above. The
+    // suffix variants are also dropped — operators rename
+    // `CORTEX_OPERATOR_*` → `CORTEX_PRINCIPAL_*` before installing v3.
     const env = { CORTEX_OPERATOR_ID: "legacy" };
-
-    expect(resolvePrincipalEnv("_ID", env)).toBe("legacy");
-    const msg = String(stderr.mock.calls[0]![0]);
-    expect(msg).toContain("CORTEX_OPERATOR_ID is deprecated");
-    expect(msg).toContain("CORTEX_PRINCIPAL_ID");
+    expect(resolvePrincipalEnv("_ID", env)).toBeUndefined();
   });
 });

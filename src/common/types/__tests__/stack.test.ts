@@ -19,7 +19,7 @@
 
 import { describe, test, expect } from "bun:test";
 
-import { CortexConfigSchema, OperatorSchema } from "../cortex-config";
+import { CortexConfigSchema, PrincipalConfigSchema } from "../cortex-config";
 import {
   StackConfigSchema,
   deriveStackId,
@@ -58,7 +58,7 @@ function minAgent(overrides: Record<string, unknown> = {}) {
 
 function minConfig(overrides: Record<string, unknown> = {}) {
   return {
-    operator: minOperator(),
+    principal: minOperator(),
     agents: [minAgent()],
     claude: {},
     ...overrides,
@@ -278,7 +278,7 @@ describe("deriveStackId", () => {
   });
 
   test("Test 5: missing operator.id default-derives to default/default (total-function contract)", () => {
-    // `operator.id` is structurally required by OperatorSchema, so this is a
+    // `operator.id` is structurally required by PrincipalConfigSchema, so this is a
     // test-only path: a partial config object passed directly to the helper
     // (e.g. simulating a degraded fixture). The helper must remain total —
     // it never throws — so the missing field falls through to the literal
@@ -289,7 +289,7 @@ describe("deriveStackId", () => {
     // exactly what production code can never do via the type system, which
     // is the whole point — the production path is provably-total without
     // this branch firing.
-    const degraded: DeriveStackIdInput = { operator: {} };
+    const degraded: DeriveStackIdInput = { principal: {} };
     const derived = deriveStackId(degraded);
     expect(derived.id).toBe("default/default");
     expect(derived.operator).toBe("default");
@@ -298,7 +298,7 @@ describe("deriveStackId", () => {
 
   test("hyphenated operator id propagates through default derivation", () => {
     const config = CortexConfigSchema.parse(
-      minConfig({ operator: { id: "andreas-dev-2026" } }),
+      minConfig({ principal: { id: "andreas-dev-2026" } }),
     );
     const derived = deriveStackId(config);
     expect(derived.id).toBe("andreas-dev-2026/default");
@@ -325,69 +325,69 @@ describe("deriveStackId", () => {
 // =============================================================================
 
 describe("deriveStackId × StackConfigSchema round-trip invariant", () => {
-  // cortex#141 closed the divergence: `OperatorSchema.id` was tightened to
+  // cortex#141 closed the divergence: `PrincipalConfigSchema.id` was tightened to
   // `/^[a-z][a-z0-9-]*$/` (letter-prefix mandatory, hyphen allowed, no
   // underscores), and `StackConfigSchema.id` segments remain
   // `/^[a-z][a-z0-9_-]*$/` (letter-prefix mandatory, underscores additionally
   // allowed in the stack-id half). The two grammars now agree on letter-prefix
-  // — every value `OperatorSchema.id` accepts default-derives to a stack id
+  // — every value `PrincipalConfigSchema.id` accepts default-derives to a stack id
   // `StackConfigSchema.id` accepts.
   //
   // This suite is the round-trip invariant test: anything that survives the
-  // upstream `OperatorSchema.id` gate must round-trip cleanly through
+  // upstream `PrincipalConfigSchema.id` gate must round-trip cleanly through
   // `deriveStackId → StackConfigSchema.id`. The digit-prefix path that used
   // to surface the divergence is now blocked at the upstream gate
-  // (`OperatorSchema.id.parse("2andreas")` throws), so the latent runtime
+  // (`PrincipalConfigSchema.id.parse("2andreas")` throws), so the latent runtime
   // failure A.5.5 was at risk of surfacing is structurally impossible.
 
   const stackIdSchema = StackConfigSchema.shape.id;
 
   test("derived id round-trips for letter-prefixed alphanumeric operator", () => {
-    const derived = deriveStackId({ operator: { id: "andreas" } });
+    const derived = deriveStackId({ principal: { id: "andreas" } });
     expect(() => stackIdSchema.parse(derived.id)).not.toThrow();
   });
 
   test("derived id round-trips for hyphenated operator", () => {
-    const derived = deriveStackId({ operator: { id: "andreas-dev-2026" } });
+    const derived = deriveStackId({ principal: { id: "andreas-dev-2026" } });
     expect(() => stackIdSchema.parse(derived.id)).not.toThrow();
   });
 
   test("derived id round-trips for all-alpha operator", () => {
-    const derived = deriveStackId({ operator: { id: "metafactory" } });
+    const derived = deriveStackId({ principal: { id: "metafactory" } });
     expect(() => stackIdSchema.parse(derived.id)).not.toThrow();
   });
 
   test("derived id round-trips for operator with internal digits", () => {
-    const derived = deriveStackId({ operator: { id: "team-42-research" } });
+    const derived = deriveStackId({ principal: { id: "team-42-research" } });
     expect(() => stackIdSchema.parse(derived.id)).not.toThrow();
   });
 
   test("explicit stack id round-trips (tautological, but pins the contract)", () => {
     const derived = deriveStackId({
-      operator: { id: "andreas" },
+      principal: { id: "andreas" },
       stack: { id: "andreas/research_2026" },
     });
     expect(() => stackIdSchema.parse(derived.id)).not.toThrow();
   });
 
-  test("cortex#141 closed: digit-prefix operator id is rejected at OperatorSchema gate", () => {
-    // Pre-cortex#141: `OperatorSchema.id` accepted `"2andreas"` (regex
+  test("cortex#141 closed: digit-prefix operator id is rejected at PrincipalConfigSchema gate", () => {
+    // Pre-cortex#141: `PrincipalConfigSchema.id` accepted `"2andreas"` (regex
     // `/^[a-z0-9-]+$/`), so `deriveStackId` produced `"2andreas/default"` —
     // a string `StackConfigSchema.id` rejected. The divergence was a latent
     // self-inconsistency that A.5.5's namespace cutover would surface as a
     // runtime error.
     //
-    // Post-cortex#141: `OperatorSchema.id` regex is `/^[a-z][a-z0-9-]*$/`
+    // Post-cortex#141: `PrincipalConfigSchema.id` regex is `/^[a-z][a-z0-9-]*$/`
     // (letter-prefix mandatory). Digit-prefix operator ids are rejected at
     // the upstream Zod gate, so `deriveStackId` never receives an invalid
     // input from a parsed `CortexConfig`. The latent divergence is
     // structurally closed — this test pins the invariant.
-    expect(() => OperatorSchema.parse({ id: "2andreas" })).toThrow(
+    expect(() => PrincipalConfigSchema.parse({ id: "2andreas" })).toThrow(
       /starting with a letter/,
     );
     // `deriveStackId` itself is a total function and still works on the
     // narrowed `DeriveStackIdInput` shape — but no production code path can
     // pass a digit-prefix `operator.id` through to it, because every config
-    // is parsed through `OperatorSchema` first.
+    // is parsed through `PrincipalConfigSchema` first.
   });
 });

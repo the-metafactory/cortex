@@ -59,7 +59,7 @@ function agentFixture(overrides: Partial<Agent> = {}): Agent {
 
 function cortexConfigFixture(agents: Agent[]): CortexConfig {
   return {
-    operator: {
+    principal: {
       id: "andreas",
       dataResidency: "NZ",
     },

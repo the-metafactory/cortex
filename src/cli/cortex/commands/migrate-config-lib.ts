@@ -230,7 +230,7 @@ export interface InstanceMapping {
  * loads cleanly.
  */
 export type MigratedCortexConfig = Omit<CortexConfig, "operator"> & {
-  principal: CortexConfig["operator"];
+  principal: CortexConfig["principal"];
 };
 
 export interface ConversionResult {
@@ -340,7 +340,7 @@ function deriveAgentId(legacyName: string): string {
 function buildOperator(
   legacy: LegacyBotYaml,
   warnings: ConversionWarning[],
-): CortexConfig["operator"] {
+): CortexConfig["principal"] {
   // Caller (convertBotYaml) guards `legacy.agent` is set on the grove-v2
   // path before reaching here. Re-assert for the type narrowing.
   if (!legacy.agent) {
@@ -385,7 +385,7 @@ function buildOperator(
   // The local is keyed `operator` because `CortexConfig` still uses that key
   // during the transition release; `convertBotYaml` re-keys the validated
   // block to `principal:` for emission (R3, cortex#388).
-  const operator: CortexConfig["operator"] = { id: principalId, dataResidency };
+  const operator: CortexConfig["principal"] = { id: principalId, dataResidency };
   if (a.operatorName) operator.displayName = a.operatorName;
   if (a.operatorDiscordId) operator.discordId = a.operatorDiscordId;
   if (a.operatorMattermostId) operator.mattermostId = a.operatorMattermostId;
@@ -883,7 +883,7 @@ export function convertBotYaml(
   const warnings: ConversionWarning[] = [];
   const mappings: InstanceMapping[] = [];
 
-  let operator: CortexConfig["operator"];
+  let operator: CortexConfig["principal"];
   let agents: CortexConfig["agents"];
   if (isCortexShape) {
     operator = buildOperatorFromCortexShape(legacy, warnings);
@@ -902,13 +902,13 @@ export function convertBotYaml(
     });
   }
 
-  // The conversion object is keyed `operator:` for the `CortexConfigSchema`
-  // parse below — the schema still uses that key during the transition
-  // release (the breaking flip to `principal:` is manifest PR-11 / v3.0.0).
-  // After the parse the validated block is re-keyed to `principal:` so the
-  // EMITTED cortex.yaml carries the new canonical key (R3, cortex#388).
+  // v3.0.0 BREAKING (manifest PR-11) — `CortexConfigSchema` now uses
+  // `principal:` as the canonical top-level key. The conversion object
+  // emits that key directly. The local `operator` variable still holds
+  // the converted block — see `buildOperator` /
+  // `buildOperatorFromCortexShape` above; only the wire key flips here.
   const cortex: Record<string, unknown> = {
-    operator,
+    principal: operator,
     agents,
     renderers,
   };
@@ -983,15 +983,12 @@ export function convertBotYaml(
 
   const parsed = CortexConfigSchema.parse(cortex);
 
-  // R3 vocabulary migration (cortex#388) — re-key the validated block from
-  // `operator:` to `principal:` for emission. The inner shape is unchanged;
-  // only the top-level key is renamed. The cortex loader's
-  // `resolvePrincipalBlock` accepts both keys, so the emitted file loads
-  // cleanly on the transition release. `operator` is non-optional on
-  // `CortexConfig` (required by the schema), so the destructured value is
-  // always defined.
-  const { operator: principal, ...restOfCortex } = parsed;
-  const migrated: MigratedCortexConfig = { principal, ...restOfCortex };
+  // v3.0.0 BREAKING (manifest PR-11) — `CortexConfig.principal` is the
+  // canonical key, so the parsed cortex config IS the MigratedCortexConfig
+  // (no key re-mapping needed). The migrate-config CLI still reads legacy
+  // `operator:`-shaped input (see buildOperator / buildOperatorFromCortexShape
+  // above) — it just emits the post-v3 `principal:`-shaped output.
+  const migrated: MigratedCortexConfig = parsed;
 
   // Compute parallel-mode pre-flight gaps against the FINAL policy block.
   const preflightGaps = policyPreflight({
@@ -1151,7 +1148,7 @@ function resolveHomeStack(legacy: LegacyBotYaml, operatorId: string): string {
 function buildOperatorFromCortexShape(
   legacy: LegacyBotYaml,
   warnings: ConversionWarning[],
-): CortexConfig["operator"] {
+): CortexConfig["principal"] {
   const op = legacy.principal ?? legacy.operator ?? {};
   if (typeof op.id !== "string" || op.id.length === 0) {
     throw new Error("cortex.yaml-shape input requires `principal.id`");
@@ -1181,7 +1178,7 @@ function buildOperatorFromCortexShape(
       dataResidency = "NZ";
     }
   }
-  const operator: CortexConfig["operator"] = { id: operatorId, dataResidency };
+  const operator: CortexConfig["principal"] = { id: operatorId, dataResidency };
   if (op.displayName) operator.displayName = op.displayName;
   if (op.discordId) operator.discordId = op.discordId;
   if (op.mattermostId) operator.mattermostId = op.mattermostId;

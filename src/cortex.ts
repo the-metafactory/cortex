@@ -322,7 +322,7 @@ export async function startCortex(
   // `default/default` and the helper never throws — that default matches
   // sage's bridge default (`SAGE_STACK=default`).
   const derivedStack = deriveStackId({
-    operator: { id: config.agent.operatorId ?? "default" },
+    principal: { id: config.agent.operatorId ?? "default" },
     ...(options.stack !== undefined && { stack: options.stack }),
   });
   console.log(
