@@ -58,7 +58,7 @@ import {
   provisionReviewConsumer,
 } from "./bus/jetstream/provision";
 import { verifySignedByChain } from "./bus/verify-signed-by-chain";
-import { CCSession } from "./runner/cc-session";
+import { CCSession, type CCSessionOpts } from "./runner/cc-session";
 import { makePiDevPipelineRunner } from "./runner/substrate/pi-dev-runner";
 
 import { DiscordAdapter } from "./adapters/discord";
@@ -131,6 +131,45 @@ export function pidFileFor(configPath: string | undefined): string {
   const base = basename(configPath).replace(/\.ya?ml$/i, "");
   if (base.length === 0) return PID_FILE;
   return join(STATE_DIR, `cortex-${base}.pid`);
+}
+
+/**
+ * cortex#400 — derive the per-agent CC session opts handed to the
+ * bus-side review-consumer. Mirrors the Discord path's wiring at
+ * `src/bus/dispatch-handler.ts:1014` so a `/review owner/repo#N`
+ * dispatch over the bus spawns CC with the same toolset (Bash/Read/gh
+ * + `bypassPermissions`) the Discord path uses. Without this, the
+ * spawned CC sees only globally-configured MCP tools and politely
+ * refuses with "I don't have access to GitHub CLI tools".
+ *
+ * `asyncTimeoutMs` matches the Discord path's choice (review work
+ * is async). `bashAllowlist` is propagated when present; the runtime
+ * gate at `src/runner/hooks/bash-guard.hook.ts:218` currently
+ * short-circuits to `allow()` whenever `GROVE_AGENT_ID` is set (a
+ * pre-existing scope of the agent-trust model that affects the
+ * Discord path too — tracked as a follow-up issue).
+ *
+ * Exported so `src/__tests__/cortex.review-session-opts.test.ts` can
+ * assert the projection without standing up the full `startCortex`
+ * integration harness.
+ */
+export function buildReviewSessionOpts(
+  config: BotConfig,
+  agent: Pick<Agent, "id" | "displayName">,
+): Partial<Omit<CCSessionOpts, "prompt">> {
+  return {
+    agentName: agent.displayName,
+    agentId: agent.id,
+    additionalArgs: config.claude.additionalArgs,
+    allowedTools: config.claude.allowedTools,
+    disallowedTools: config.claude.disallowedTools,
+    allowedDirs: config.claude.allowedDirs,
+    timeoutMs: config.claude.asyncTimeoutMs,
+    cwd: process.cwd(),
+    ...(config.claude.bashAllowlist !== undefined && {
+      bashAllowlist: config.claude.bashAllowlist,
+    }),
+  };
 }
 
 /** Lifecycle handle returned by `startCortex`. Capped at 15s — components
@@ -890,33 +929,7 @@ export async function startCortex(
       const pipelineRunner =
         substrate === "pi-dev" ? makePiDevPipelineRunner({}) : undefined;
 
-      // cortex#400 — propagate `config.claude` into the per-agent
-      // review-consumer's `sessionOpts` so the bus-side CC spawn
-      // mirrors the Discord path (`src/bus/dispatch-handler.ts`
-      // line ~1014). Without this, `runReviewPipeline → new
-      // CCSession({prompt})` boots CC with empty defaults — no
-      // `--permission-mode bypassPermissions`, no `allowedTools`,
-      // no `cwd`, no `additionalArgs` — and the spawned model sees
-      // only globally-configured MCP tools (no Bash/Read/gh), so a
-      // `/review owner/repo#N` slash command politely refuses with
-      // "I don't have access to GitHub CLI tools". `asyncTimeoutMs`
-      // matches the Discord path's choice (review work is async).
-      // `allowedDirs` collapses an empty array to `undefined` so the
-      // claude-invoker omits the flag entirely (passing `[]` would
-      // forbid every directory).
-      const reviewSessionOpts = {
-        agentName: agent.displayName,
-        agentId: agent.id,
-        additionalArgs: config.claude.additionalArgs,
-        allowedTools: config.claude.allowedTools,
-        disallowedTools: config.claude.disallowedTools,
-        allowedDirs:
-          config.claude.allowedDirs.length > 0
-            ? config.claude.allowedDirs
-            : undefined,
-        timeoutMs: config.claude.asyncTimeoutMs,
-        cwd: process.cwd(),
-      };
+      const reviewSessionOpts = buildReviewSessionOpts(config, agent);
 
       const consumer = new ReviewConsumer({
         agent: consumerAgent,
