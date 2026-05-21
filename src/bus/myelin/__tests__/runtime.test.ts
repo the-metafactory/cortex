@@ -244,6 +244,27 @@ describe("MyelinRuntime", () => {
     await runtime.stop();
   });
 
+  // R4 (vocabulary migration 2026-05) — back-compat regression test.
+  // Pre-migration cortex.yaml configs (and migrate-config output that
+  // round-trips legacy bot.yaml verbatim) carry the deprecated `{org}`
+  // placeholder. The runtime substituter MUST resolve both tokens to
+  // the same principal slug so operators don't have to re-author
+  // their nats.subjects list mid-migration.
+  test("subjects placeholder {org} is also substituted (R4 back-compat)", async () => {
+    const fake = makeFakeNatsConnection();
+    const config = makeConfig({
+      url: "nats://localhost:4222",
+      name: "grove-bot",
+      subjects: ["local.{org}.attention.>"],
+    });
+    const runtime = await startMyelinRuntime(config, {
+      connectImpl: async () => fake.nc,
+    });
+    expect(runtime.enabled).toBe(true);
+    expect(fake.subscribePatterns[0]).toBe("local.andreas.attention.>");
+    await runtime.stop();
+  });
+
   // cortex#269 — `{stack}.` token substitution. Operator-written narrow
   // subscribe patterns can now reference the operator's stack identity
   // alongside `{principal}` and have it expanded at boot. The `.` is part of
