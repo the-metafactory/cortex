@@ -290,4 +290,47 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
     expect(reason.detail).toContain("sage spawn failed");
     expect(reason.detail).toContain("ENOENT");
   });
+
+  // cortex#402 — `SAGE_SUBSTRATE` env override
+  // ---------------------------------------------------------------------
+  // Operators without a pi.dev model provider configured (e.g. no
+  // DeepSeek API key) need a way to route sage's lens execution through
+  // `claude` or `codex` instead. The runner reads `SAGE_SUBSTRATE`
+  // verbatim and threads it into argv; sage's own CLI validates the
+  // value. Unset → `pi` (preserves pre-#402 behaviour).
+
+  test("cortex#402 — SAGE_SUBSTRATE env overrides argv[4]", async () => {
+    const prior = process.env.SAGE_SUBSTRATE;
+    process.env.SAGE_SUBSTRATE = "claude";
+    try {
+      const spawn = makeRecordingSpawn(makeSpawnResult("## review\n", "", 0));
+      const runner = makePiDevPipelineRunner({
+        spawn: spawn.fn,
+        which: whichSuccess,
+      });
+      const result = await runner(makePipelineOpts());
+      expect(result.kind).toBe("verdict");
+      expect(spawn.calls.length).toBe(1);
+      expect(spawn.calls[0]!.slice(-2)).toEqual(["--substrate", "claude"]);
+    } finally {
+      if (prior === undefined) delete process.env.SAGE_SUBSTRATE;
+      else process.env.SAGE_SUBSTRATE = prior;
+    }
+  });
+
+  test("cortex#402 — unset SAGE_SUBSTRATE defaults to `pi` (pre-#402 behaviour)", async () => {
+    const prior = process.env.SAGE_SUBSTRATE;
+    delete process.env.SAGE_SUBSTRATE;
+    try {
+      const spawn = makeRecordingSpawn(makeSpawnResult("## review\n", "", 0));
+      const runner = makePiDevPipelineRunner({
+        spawn: spawn.fn,
+        which: whichSuccess,
+      });
+      await runner(makePipelineOpts());
+      expect(spawn.calls[0]!.slice(-2)).toEqual(["--substrate", "pi"]);
+    } finally {
+      if (prior !== undefined) process.env.SAGE_SUBSTRATE = prior;
+    }
+  });
 });

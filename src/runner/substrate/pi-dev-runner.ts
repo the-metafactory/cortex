@@ -218,7 +218,16 @@ export function makePiDevPipelineRunner(
     // src/bus/review-events.ts §4.1), so we concatenate with `#<pr>`
     // directly — no separate owner field on the cortex-side payload.
     const prRef = `${payload.repo}#${payload.pr}`;
-    const argv = [sageBin, "review", prRef, "--substrate", "pi"];
+    // cortex#402 — substrate is overridable via `SAGE_SUBSTRATE` env so
+    // operators without a pi.dev model provider configured (e.g. no
+    // DeepSeek API key) can route sage's lens execution through
+    // `claude` or `codex` instead. Defaults to `pi` to preserve the
+    // pre-#402 behaviour. Sage's CLI accepts `{pi|claude|codex}` per
+    // `sage review --help`; values outside that set surface as a sage-
+    // side `--substrate` parse error (which the failure-mapping table
+    // below maps to `cant_do`).
+    const substrate = process.env.SAGE_SUBSTRATE ?? "pi";
+    const argv = [sageBin, "review", prRef, "--substrate", substrate];
 
     let proc: PiDevSpawnResult;
     try {
