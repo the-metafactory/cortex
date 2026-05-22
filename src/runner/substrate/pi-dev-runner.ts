@@ -19,7 +19,8 @@
  *
  *   pilot publishes `tasks.code-review.<flavor>` envelope
  *     → cortex's `ReviewConsumer` for sage receives + verifies signature (cortex#330)
- *     → this runner spawns `sage review <pr-ref> --substrate pi` subprocess
+ *     → this runner spawns `sage review <pr-ref> --substrate <pi|claude|codex>` subprocess
+ *       (substrate value from `SAGE_SUBSTRATE` env, defaults to `pi`)
  *     → captures sage stdout, builds `review.verdict.commented` envelope
  *     → cortex publishes verdict back to bus
  *     → pilot's `--wait` catches it
@@ -74,7 +75,8 @@
  * splits this into the four-way nak taxonomy.
  *
  * **Subprocess shape.** We spawn `sage review <owner>/<repo>#<n>
- * --substrate pi`. Stdout is captured to a single string and used as
+ * --substrate <pi|claude|codex>` (substrate value resolved from the
+ * `SAGE_SUBSTRATE` env var, defaults to `pi` — cortex#402). Stdout is captured to a single string and used as
  * `payload.summary`. Stderr is captured separately and fed into the
  * failed envelope's `reason.detail` when sage exits non-zero. Both pipes
  * are drained via `new Response(stream).text()` in parallel with the
@@ -117,7 +119,8 @@ export interface PiDevSpawnResult {
  * deterministic fake (see `pi-dev-runner.test.ts`).
  *
  * `argv[0]` is the resolved sage binary path; subsequent entries are the
- * `review <pr-ref> --substrate pi` arguments.
+ * `review <pr-ref> --substrate <pi|claude|codex>` arguments (substrate
+ * value resolved from `SAGE_SUBSTRATE` env, defaults to `pi`).
  */
 export type PiDevSpawnFn = (
   argv: string[],
