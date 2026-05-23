@@ -1,14 +1,13 @@
 # Myelin OSI Layer Model — Dispatch Scenarios
 
-**Status:** Pressure-test of the Direction A Q2 proposal against myelin's seven-layer protocol stack. Surfaces two corrections to `docs/design-platform-adapter-dispatch-publishing.md`.
-**Date:** 2026-05-22
-**Driver:** Andreas (pushback in #myelin) + Jens-Christian
+**Status:** Pressure-test of the Direction A Q2 proposal against myelin's seven-layer protocol stack. Surfaces four corrections to `docs/design-platform-adapter-dispatch-publishing.md`, adds Scenario 4 (cross-principal via shared platform surface) and Scenario 5 (bot-to-bot direct chat — the bus-native baseline). §12 has the locked answers for all four original §10 questions (Andreas, 2026-05-23 review); §14 captures the multi-subscriber / multi-surface pub-sub model.
+**Date:** 2026-05-22 (Scenarios 1–3 + §1–§9); 2026-05-23 (Scenario 4, §11 locked answers)
+**Driver:** Andreas (pushback in #myelin → §10/§11 locked answers) + Jens-Christian (Direction A grilling)
 **Related:**
-- `~/work/mf/myelin/docs/architecture.md` — canonical seven-layer model
-- `~/work/mf/myelin/specs/namespace.md` — subject grammar (Tasks Domain §, Originator §)
-- `docs/design-platform-adapter-dispatch-publishing.md` — Direction A design (this doc supersedes Q2's grammar split)
+- `the-metafactory/myelin` — canonical seven-layer model + namespace spec (`docs/architecture.md`, `specs/namespace.md`); `src/types.ts` ships `DistributionMode` + `AttributionMode` enums; `schemas/envelope.schema.json` carries the `originator` field
+- `docs/design-platform-adapter-dispatch-publishing.md` — Direction A design (this doc supersedes Q2's grammar split; §11 supersedes Q1 signing model and §10 open questions)
 - `CONTEXT.md` — cortex vocabulary
-- myelin#160 — Originator field (policy attribution vs crypto provenance)
+- myelin#160 — Originator field (policy attribution vs crypto provenance; **closed** — shipped as envelope-level `originator: { principal, attribution }`)
 
 ---
 
@@ -64,9 +63,9 @@ Source: `~/work/mf/myelin/docs/architecture.md` §2.
 
 ---
 
-## 4. Two corrections to Direction A
+## 4. Framing corrections to Direction A
 
-Surfaced by this exercise. Both update `docs/design-platform-adapter-dispatch-publishing.md`.
+Surfaced by this exercise. All three update `docs/design-platform-adapter-dispatch-publishing.md`: (4.1) the canonical wire grammar for Direct; (4.2) the conceptual framing that dispatch sources are pluggable and surfaces are not the medium; (4.3) the signing model (stack signs; adapter populates originator).
 
 ### 4.1 Subject grammar — Direct mode uses `tasks.@{assistant}.{capability}` not `dispatch.task.received`
 
@@ -82,7 +81,25 @@ This is the canonical wire grammar. `dispatch.task.received` is NOT a myelin-spe
 
 `dispatch.task.{action}` survives as lifecycle observability (started/completed/failed/aborted) — that's still cortex-owned vocabulary at M7.
 
-### 4.2 Signing — stack signs; adapter populates `originator.identity`
+### 4.2 Dispatch source is pluggable — surfaces are not the medium
+
+The original Direction A doc reads as if "platform adapter" is the canonical dispatch source. That is a framing error. **The bus is the medium; the platform surface (Discord, Mattermost, Slack, dashboard, PagerDuty) is a sink, optionally also a source.** A dispatch source is anything that publishes onto a `tasks.@{assistant}.{capability}` subject with a properly-signed envelope. Five concrete source classes:
+
+| Source class | Originator field | Scope picker | Typical capability |
+|---|---|---|---|
+| Platform adapter (human→bot, e.g. Discord/Mattermost/Slack) | `principal = did:mf:<human-did>`, `attribution = "adapter-resolved"` | adapter chooses `local.` or `federated.` per channel topology | `chat`, plus typed workloads (`code-review`, …) |
+| Another assistant's runtime (bot→bot autonomous) | **omitted** — signer IS the actor (myelin spec: peer-to-peer envelopes omit `originator`) | runtime picks scope from target principal: same → `local.`; different → `federated.` | `chat`, `code-review.*`, `release`, … any |
+| Another assistant via delegation chain (bot→bot re-issued) | preserved from upstream envelope, `attribution = "delegated"` | follows target principal as above | any |
+| MC dashboard "send task" action | adapter-resolved (the principal at the console) | dashboard's adapter picks | any |
+| Tap / webhook (e.g. `gh-webhook` for GitHub events) | adapter-resolved (the platform identity bound to the tap) | tap's config | `code-review`, `release`, … |
+
+**The `chat` capability is bus-native, not surface-bound.** An assistant declaring `chat` is saying "I accept free-form conversational dispatches"; it doesn't care which class of source originated the envelope. The signer is always the stack (per §4.3); originator + scope vary by source class.
+
+`dispatch-handler.ts` (legacy) only addressed one path — adapter→handler in-process — and conflated medium with surface. Direction A makes the bus-native path canonical for ALL source classes.
+
+---
+
+### 4.3 Signing — stack signs; adapter populates `originator.identity`
 
 The Direction A grilling pinned Q1a as *"adapter signs envelopes as the hosted agent (uses agent's nkey)"*. Per myelin#160 and Andreas's 2026-05-22 channel post, this is **the wrong model**. The canonical chain is:
 
@@ -96,9 +113,9 @@ Cortex Q1a updates: **stack signs; adapter populates `originator`**. The adapter
 
 ---
 
-## 5. Scenario 1 — Discord user → Luna (intra-stack Direct)
+## 5. Scenario 1 — Human-originated Direct via platform adapter (Discord example)
 
-A Discord user mentions Luna in #cortex. Luna runs as an assistant on the same stack (`andreas/meta-factory`).
+**One source class of many** (see §4.3). A Discord user mentions Luna in #cortex; the Discord adapter is the dispatch source. Same shape applies to Mattermost/Slack/MC dashboard adapters when a human originates. Luna runs as an assistant on the same stack (`andreas/meta-factory`).
 
 ```mermaid
 sequenceDiagram
@@ -256,7 +273,184 @@ sequenceDiagram
 
 ---
 
-## 8. Restated Q2
+## 8. Scenario 4 — Cross-principal via shared platform surface (Discord example)
+
+**This scenario covers the legacy bridging pattern that Direction A retires.** Scenario 3 above covers _explicit_ cross-principal Direct dispatch (a bot on andreas explicitly addresses a bot on metafactory). What Direction A's original grilling missed was the pre-Direction-A reality: **shared platform channels (Discord) were the de-facto federation bridge for multi-principal collaboration**. Scenario 5 below covers the canonical post-Direction-A pattern (bot-to-bot direct on the bus, no surface in the middle).
+
+### 8.1 The problem
+
+Today (pre-Direction-A), Andreas and Jens-Christian collaborate in shared Discord channels. Each runs their own cortex stack (`andreas/meta-factory`, `jcfischer/meta-factory` — two principals, two stacks). Both of their adapter instances subscribe to the same Discord channel. Discord IS the federation bridge — the platform smuggles cross-principal traffic across as an application-layer side-channel.
+
+Direction A removes the smuggling: adapters become **dispatch sources** publishing onto the bus. But `local.{principal}.{stack}.…` by definition NEVER leaves the principal. So under Direction A, when JC posts `@luna hello` in a shared channel:
+
+- Andreas's adapter publishes `local.andreas.meta-factory.tasks.@did-mf-luna.chat` — invisible to JC's stack
+- JC's adapter publishes `local.jcfischer.meta-factory.tasks.@did-mf-luna.chat` — invisible to Andreas's stack
+
+If `@luna` is hosted on Andreas's stack only, JC's bot can't reach her. The bus is two separate islands. The OSI lens makes this obvious: `local.` is per-deployment, like a private subnet. Cross-principal traffic MUST be `federated.` to route at all — that's the L3-routing equivalent ("the MAC addresses aren't on the same network").
+
+### 8.2 Three candidate models
+
+| Model | Where federation lives | Trade-off |
+|-------|------------------------|-----------|
+| **A. Surface-as-federation (status quo carried forward)** | Discord stays the bridge. Each adapter publishes `local.…` for its own stack only. Cross-principal collaboration happens on Discord, never on the bus. | Zero new infra. Direction A's premise (bus owns dispatch routing) is partly negated — the bus doesn't replace Discord-as-bridge for the common case. |
+| **B. Federation by default for multi-principal channels (RECOMMENDED)** | Adapter knows channel topology. For any channel that includes peer-principal assistants, the adapter publishes on `federated.{principal}.{stack}.tasks.@{assistant}.{capability}` instead of `local.…`. Trust roots span. NATS leaf-nodes federate. | The bus genuinely owns dispatch routing. Requires (i) NATS leaf-node federation between participating principals (M1), (ii) cross-principal trust roots (M4), (iii) channel-topology config in the adapter (M7), (iv) per-channel scope decision logic in the adapter (M7). |
+| **C. Asymmetric host** | One principal "owns" the shared channel adapter; other principals' bots subscribe via `federated.…` to that adapter's published tasks. | Asymmetric, conflicts with peer-collaboration model. Wrong for the JC↔Andreas case where both contribute bots. |
+
+### 8.3 Recommended model B — federation by default
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as JC (Discord user, did:mf:jc)
+  participant DJC as Discord adapter — jcfischer stack (M7)
+  participant Eb as Envelope build (M3, jcfischer side)
+  participant Ib as Stack signer — jcfischer-stack (M4)
+  participant Nb as NATS leaf — jcfischer (M1)
+  participant FED as Federation bridge (M1)
+  participant Na as NATS leaf — andreas (M1)
+  participant SOV as Sovereignty enforcer (M3, andreas)
+  participant V as Chain verifier — andreas (M4)
+  participant La as dispatch-listener — andreas (M7)
+  participant H as Luna's harness (M6, andreas)
+  participant DA as Discord adapter — andreas stack (M7)
+
+  U->>DJC: @luna hello (Discord message in #shared)
+  DJC->>DJC: lookup channel topology<br/>#shared includes peer-principal assistants<br/>→ scope = federated
+  DJC->>Eb: build envelope<br/>type: tasks.chat<br/>target_assistant: did:mf:luna<br/>originator.identity: did:mf:jc<br/>originator.attribution: adapter-resolved<br/>classification: federated<br/>sovereignty: { data_residency, max_hop }
+  Eb->>Eb: derive subject:<br/>federated.jcfischer.meta-factory.tasks.@did-mf-luna.chat
+  Eb->>Ib: runtime.publish
+  Ib->>Ib: stack signs<br/>signed_by[0].identity: did:mf:jcfischer-stack<br/>signature covers originator
+  Ib->>Nb: NATS publish
+  Nb->>FED: federation export (federated.* prefix)
+  FED->>Na: federation import
+  Na->>SOV: sovereignty check<br/>(does andreas accept jcfischer's classification?)
+  SOV-->>Na: ok
+  Na->>V: deliver to subscribers matching<br/>federated.*.*.tasks.@did-mf-luna.>
+  V->>V: verify signed_by chain<br/>against andreas's trust roots<br/>(jcfischer-stack key trusted by andreas)
+  V->>La: deliver envelope
+  La->>La: policy gate<br/>originator = did:mf:jc<br/>capability check against jc's caps
+  La->>H: harness.dispatch(req)
+  H-->>La: yield dispatch.task.started, …, dispatch.task.completed
+  La->>Ib: publish lifecycle on federated.andreas.meta-factory.dispatch.task.*
+  Note over La,DA: BOTH adapters (jcfischer's + andreas's) subscribe to<br/>federated.*.*.dispatch.task.{started|completed|failed|aborted}<br/>filtered by response_routing.adapter_instance + correlation_id<br/>→ JC's adapter posts Luna's response back to #shared
+  DA->>DA: (silent — response_routing.adapter_instance doesn't match)
+  DJC->>U: postResponse(#shared, Luna's reply)
+```
+
+### 8.4 Layer summary for Scenario 4 (model B)
+
+| Step | Layer | Concern |
+|------|-------|---------|
+| 1 | M7 (platform) | User posts in shared Discord channel |
+| 2 | M7 (adapter) | **Channel-topology lookup is the key new step.** Adapter knows which channels span principals and chooses `federated.` accordingly. |
+| 3–4 | M3 | Envelope built with `federated.` classification; sovereignty populated |
+| 5–6 | M4 | jcfischer stack signs; `originator.identity = did:mf:jc, attribution = adapter-resolved` |
+| 7–9 | M1 | Federation bridge routes across principal boundary (the actual L3 hop) |
+| 10 | M3 | Receiving principal enforces sovereignty rules |
+| 11–12 | M4 | Cross-principal chain verify (different trust roots than intra-principal) |
+| 13 | M7 | Policy gate on receiving principal — does JC's identity have capabilities here? |
+| 14 | M6 | Luna's harness executes on andreas's stack |
+| 15–16 | M7 / M1 | Lifecycle envelopes federate back to originator's principal |
+| 17 | M7 (sink) | Each principal's dispatch sinks subscribe to `federated.*.*.dispatch.task.*` and filter by `response_routing.adapter_instance` to deliver back to the originating surface |
+
+### 8.5 Implications
+
+- **Federation is the norm, not the exception, for multi-principal collaboration.** Every chat involving a peer-principal assistant must publish `federated.` from the start. The current Direction A design defaults to `local.` — incomplete.
+- **Channel-topology config is a new M7 concern.** The adapter must know which channels include peer-principal assistants. Two viable shapes: (i) explicit `cortex.yaml` per-channel config; (ii) Discord guild/role lookup that resolves to a peer-principal mapping. Open seam — see §10 below.
+- **Trust roots must span.** Andreas's verify path must trust JC's stack key (and vice versa) — `TrustResolver` configuration that follows the network membership graph. The mechanism already exists for Scenario 3; Scenario 4 just exercises it as a hot path.
+- **NATS leaf-node federation is a prerequisite.** Pre-condition for model B: the leaf nodes for participating principals are actually federated (config-level NATS work, not cortex work). If federation isn't configured between two principals, Direction A Stage 4 falls back to model A for that pair (Discord stays the bridge for them).
+- **Stage 4 in Direction A migration sequence needs both modes.** Default model A (preserve today's behavior); enable model B per-channel once federation is configured for the relevant principal pair. Sub-issue #409 (Stage 4) is updated accordingly.
+
+### 8.6 Why model B over model A
+
+Model A (Discord-as-federation) is the safe v0 — zero new infrastructure. But it contradicts Direction A's stated premise: that the bus owns dispatch routing and platforms are reduced to UI surfaces. Under model A, the surface is still smuggling traffic the bus refuses to carry, which means cortex's federation guarantees (sovereignty, attestable trust chains, cross-principal policy enforcement) don't apply to the most common cross-principal flow.
+
+The OSI discipline makes this stark: **`local.` is L2 (one broadcast domain); `federated.` is L3 (cross-network routing).** Pretending peer-to-peer traffic is L2 because it shares an L7 channel (Discord) is exactly the layering violation the OSI exercise was meant to surface.
+
+Model B is the only model that delivers what Direction A claims. Model A is the fallback for principal pairs whose federation isn't configured yet — explicit "this is incomplete" not a permanent design.
+
+---
+
+## 9. Scenario 5 — Bot-to-bot direct chat (bus-native, no surface)
+
+**The canonical case for post-Direction-A multi-assistant collaboration.** No platform adapter. No Discord. One assistant decides to start a conversation with another assistant; its runtime publishes onto the bus directly; the target assistant's harness processes it; lifecycle envelopes flow back to whichever sinks happen to be subscribed (a dashboard, a logger, possibly the originating runtime, possibly nothing at all).
+
+This is what §4.3 calls "another assistant's runtime" as a dispatch source. The bus does not require a surface to be involved.
+
+### 9.1 The setup
+
+Luna runs on `andreas/meta-factory`. She's working on a PR and decides she wants Echo's read on the security boundary. Echo runs on `jcfischer/meta-factory` (different principal). Luna's runtime initiates a chat dispatch to Echo. No human in the loop; no Discord channel; the only surface that renders anything is the Mission Control dashboard on each principal, which subscribes broadly to lifecycle envelopes.
+
+### 9.2 The flow
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant LA as Luna's harness (M6, andreas)
+  participant LR as Luna's runtime (M7, andreas — initiator)
+  participant Eb as Envelope build (M3)
+  participant Ib as Stack signer — andreas-stack (M4)
+  participant Na as NATS leaf — andreas (M1)
+  participant FED as Federation bridge (M1)
+  participant Nb as NATS leaf — jcfischer (M1)
+  participant V as Chain verifier — jcfischer (M4)
+  participant Lb as dispatch-listener — jcfischer (M7)
+  participant EH as Echo's harness (M6, jcfischer)
+  participant DA as MC dashboard sink — andreas (M7, observer)
+  participant DB as MC dashboard sink — jcfischer (M7, observer)
+
+  LA->>LR: yield envelope:<br/>"want Echo's read on the security boundary"
+  LR->>Eb: build envelope<br/>type: tasks.chat<br/>target_principal: did:mf:echo<br/>distribution_mode: direct<br/>originator: omitted (signer = actor)<br/>classification: federated
+  Eb->>Eb: derive subject:<br/>federated.andreas.meta-factory.tasks.@did-mf-echo.chat
+  Eb->>Ib: runtime.publish
+  Ib->>Ib: stack signs<br/>signed_by[0].principal: did:mf:andreas-stack
+  Ib->>Na: NATS publish
+  Na->>FED: federation export (federated.* prefix)
+  FED->>Nb: federation import
+  Nb->>V: deliver to subscribers matching<br/>federated.*.*.tasks.@did-mf-echo.>
+  V->>V: verify chain against jcfischer trust roots<br/>(andreas-stack key trusted by jcfischer)
+  V->>Lb: deliver envelope
+  Lb->>Lb: policy gate<br/>signer = andreas-stack (originator omitted, signer IS actor)<br/>capability check against andreas-stack's caps
+  Lb->>EH: harness.dispatch(req)
+  EH-->>Lb: yield dispatch.task.started, …, dispatch.task.completed (with Echo's chat reply)
+  Lb->>Ib: publish lifecycle on federated.jcfischer.meta-factory.dispatch.task.*
+  Note over Lb,DA: Lifecycle envelopes fan out via NATS pub/sub<br/>to ALL subscribers matching the subject pattern
+  Lb->>DB: jcfischer dashboard renders the response
+  Lb->>DA: federation bridge → andreas dashboard renders the response
+  Lb->>LR: federation bridge → Luna's runtime consumes the reply<br/>(she subscribes to dispatch.task.completed filtered by correlation_id<br/>= the dispatch she initiated)
+  LR->>LA: feed reply back into Luna's session<br/>(she continues working with Echo's input)
+```
+
+### 9.3 Layer summary for Scenario 5
+
+| Step | Layer | Concern |
+|------|-------|---------|
+| 1 | M7 | Luna's harness decides to initiate — application-layer choice |
+| 2–3 | M3 | Envelope built with `federated.` classification; **`originator` omitted** because Luna's stack IS the policy actor (peer-to-peer rule per myelin spec) |
+| 4 | M2 | Publish onto NATS |
+| 5 | M4 | Stack signs |
+| 6–8 | M1 | Federation bridge — cross-principal routing |
+| 9–10 | M4 | Cross-principal chain verify |
+| 11 | M7 | Policy gate — recipient principal decides whether andreas-stack's caps apply here |
+| 12 | M6 | Echo's harness executes |
+| 13–14 | M7 / M1 | Lifecycle envelopes federate back; pub/sub fans out to N subscribers |
+| 15 | M7 (sink) | Originating runtime consumes the reply via `correlation_id` filter |
+
+### 9.4 What's NOT in this flow
+
+- **No platform adapter.** No Discord adapter publishes; no Discord adapter subscribes.
+- **No `originator` field.** Luna's stack is the actor; the spec omits originator when signer = actor.
+- **No special bot-to-bot wire form.** Same subject (`tasks.@{assistant}.chat`); same envelope schema; same chain verify. The runtime is just another dispatch source class (§4.3).
+
+### 9.5 Why this is the architectural baseline
+
+Direction A's original framing reads as "platform adapter → bus → listener → harness". That's a real path (Scenario 1) but it's the *humans entering the bus* path. **The bus's existence is justified by Scenario 5** — bots talking to bots, surfaces optional. If the only thing the bus ever did was forward Discord messages to harnesses, you wouldn't need a bus; you'd just call functions in-process (which is exactly what legacy `dispatch-handler.ts` does).
+
+The `chat` capability is the assistant's bus-native interface for free-form conversation. Adapters bridge humans onto it. Bots use it directly. Same wire grammar in both cases.
+
+---
+
+## 10. Restated Q2
 
 | Question | Old answer (incorrect) | New answer |
 |----------|-------------------------|------------|
@@ -265,7 +459,7 @@ sequenceDiagram
 
 ---
 
-## 9. Implications for Direction A
+## 11. Implications for Direction A
 
 The migration sequence in `docs/design-platform-adapter-dispatch-publishing.md` §7 needs updates:
 
@@ -288,9 +482,76 @@ Lifecycle subjects (`dispatch.task.{action}`) are unchanged — those are cortex
 
 ---
 
-## 10. Open questions for Andreas / Luna
+## 12. Locked answers to the four original §10 questions (Andreas, 2026-05-23)
 
-1. **Cortex's existing `dispatch.task.received` subscription** — is this legacy pre-spec, or is there a reason the listener subscribes there instead of `tasks.>`? Affects whether Stage 7 of Direction A also deletes the existing subscription.
-2. **Capability token for free-form chat** — myelin's seed taxonomy lists `code-review`, `security-scan`, `deploy`, `release`. For a Discord `@cortex hello` message, we need a `chat` capability or a `conversation` capability. Cortex-side extension; check naming.
-3. **`originator.attribution` enum** — myelin#160 mentions `"adapter-resolved"`. Are other values defined? (e.g. `"self"` for peer-to-peer, `"delegated"` for re-issued envelopes?)
-4. **`Delegate` vs `Direct` at the wire** — namespace.md says they share the same subject shape; mode difference is principal-facing. Where does the mode bit live — payload or sovereignty block? Affects whether the listener can route to AgentTeamHarness via subject filter or must inspect payload.
+The original §10 raised four open questions. Three were already settled in shipped myelin code; the fourth is a cortex-side decision. All four are locked here so Direction A can move past Stage 0.
+
+### Q1 — Cortex's existing `dispatch.task.received` subscription
+**Verdict: LEGACY.** Treated as pre-spec. The listener's `dispatch.task.received` subscription was canonical pre-namespace-finalisation; the canonical wire grammar (per `myelin/specs/namespace.md` §Tasks Domain) is `tasks.@{did-encoded-assistant}.{capability}` for Direct. Tests under `src/__tests__/iaw-phase-d-integration.test.ts` and `src/__tests__/cortex.test.ts` are load-bearing on the legacy subject and must be updated as part of Stage 7. **Path forward (Stage 7):** add `tasks.>` subscription alongside the legacy one for one release; flip adapter-side publishing to canonical subjects (Stages 4–6); remove the legacy subscription + update the IAW Phase D tests; release notes flag the wire-grammar change.
+
+### Q2 — Capability token for free-form chat
+**Verdict: ADD `chat`.** Free-form Discord/Mattermost/Slack `@assistant <message>` interactions publish on `tasks.@{did-encoded-assistant}.chat`. `chat` becomes a first-class capability in myelin's seed taxonomy (alongside `code-review`, `security-scan`, `deploy`, `release`). Cortex (the metafactory team _is_ the myelin team) lands the taxonomy extension as part of the next myelin release — not an external blocker.
+
+### Q3 — `originator.attribution` enum values
+**Verdict: ALREADY SHIPPED.** `myelin/src/types.ts:28` already declares:
+```ts
+export type AttributionMode = 'adapter-resolved' | 'federated' | 'delegated';
+```
+And `myelin/src/envelope.ts:50` enforces the closed set at validation:
+```ts
+const ATTRIBUTION_MODES = new Set(['adapter-resolved', 'federated', 'delegated']);
+```
+Direction A Stage 4 uses `adapter-resolved` for adapter-originated dispatches; Scenario 4 (federated-by-default) uses the same value (the originator is still resolved by an adapter — the federation is a transport concern, not an attribution concern). `federated` and `delegated` are the values that apply when re-issuing or forwarding envelopes; not in scope for Direction A v1.
+
+### Q4 — Direct vs Delegate at the wire
+**Verdict: ALREADY SHIPPED in `distribution_mode` field.** `myelin/src/types.ts:13`:
+```ts
+export type DistributionMode = 'broadcast' | 'direct' | 'delegate';
+```
+The mode bit lives in the envelope as a top-level `distribution_mode` field (NOT in the subject, NOT in the sovereignty block). The validator (`myelin/src/envelope.ts:210`) enforces `target_principal` required when `distribution_mode ∈ {direct, delegate}`. Direct and Delegate share subject shape (`tasks.@{assistant}.{capability}`); the listener routes to `AgentTeamHarness` for `delegate` after the subject + assistant-DID filter has already matched. One field read on the listener side; no payload introspection beyond what is already in place.
+
+**Terminology note (cross-repo):** `DistributionMode` enum still ships `'broadcast'` as its first value. cortex `CONTEXT.md` (Flagged Ambiguities) explicitly canonicalised this concept to `Offer` and says "never call the Offer mode 'broadcast'". This is a pending myelin-side rename, filed separately. cortex code that consumes `distribution_mode` should map `'broadcast'` → cortex's `Offer` at the boundary until myelin renames.
+
+---
+
+## 13. Open seams (post-§12 resolution)
+
+- **Channel-topology config for Scenario 4 model B.** Adapter needs to know which Discord/Mattermost/Slack channels span principals. Open seam — filed as a separate cortex issue. Until resolved, Stage 4 ships with model A default (preserve Discord-as-bridge for cross-principal channels) and a per-channel opt-in for model B.
+- **NATS leaf-node federation preconditions.** Model B (and Scenario 5 cross-principal) require federated leaf nodes between principal pairs. Out of cortex's scope — covered by network operations work.
+- **myelin `DistributionMode` rename (`'broadcast'` → `'offer'`).** Filed as a myelin-side issue (proposed in the C-405 corrections batch). cortex wraps the legacy spelling at the boundary until then.
+- **Originating-runtime self-subscription pattern for Scenario 5.** Luna initiates a chat to Echo and needs to consume Echo's reply (a `dispatch.task.completed` envelope with `correlation_id` matching her initial dispatch). The mechanism — subscribe-by-correlation_id vs subscribe-by-source-DID vs explicit `response_routing` populated with Luna's own address — is not yet codified. Filed as a follow-up.
+
+---
+
+## 14. Multi-subscriber / multi-surface delivery model
+
+The OSI scenarios all draw a single sink consuming each lifecycle envelope. **In NATS this is incidental** — subject delivery is pub/sub by default. Every subscriber whose subject filter matches receives every envelope independently. This has direct consequences for cortex's surface model.
+
+### 14.1 Routed vs observer subscribers
+
+Two classes of dispatch sink, by intent:
+
+| Class | Subject filter | Behaviour |
+|---|---|---|
+| **Routed sink** | `dispatch.task.{action}` filtered by `response_routing.adapter_instance` matching its own instance ID | Renders only the envelopes it originated. The Discord adapter that sourced a chat posts the reply back to the originating channel; other Discord adapter instances see the envelope but their filter doesn't match — they no-op. |
+| **Observer sink** | broad subscription (e.g. `dispatch.task.completed` for everything; or `tasks.>` for everything; or scoped to a principal/stack) — no `response_routing` filter | Always reacts. Mission Control dashboard renders every dispatch on its principal. A logging tap captures everything. A PagerDuty sink only reacts to `dispatch.task.failed`. |
+
+**The same lifecycle envelope can have N subscribers of both classes simultaneously.** A bot-originated chat (Scenario 5) reaches both the originating runtime (via routed-by-correlation_id subscription) AND both principals' dashboards (observer subscription) AND any tap that happens to be active. No fan-out is configured at the publisher — fan-out happens at NATS subject delivery.
+
+### 14.2 Multi-surface primary delivery (deferred design seam)
+
+A separate question — surfaced by Andreas during the C-405 review — is whether ONE dispatch should produce primary delivery to MULTIPLE surfaces. Example: a chat originates on Discord channel A, but the operator also wants the reply to render in Mattermost channel B (because the team uses Mattermost for archival and Discord for live chat). The bus already supports this via observer subscriptions, but observer mode is "always render"; what the operator wants is "for THIS dispatch, also primary-deliver to these other places".
+
+Three viable mechanisms:
+
+| Mechanism | How | Cost |
+|---|---|---|
+| **A. `response_routing` becomes a list of channel addresses** | Inbound envelope payload carries `response_routing: ChannelAddress[]`. Each routed sink subscribes to its instance-ID slot. | Schema change to `response_routing`. Adapter-side fan-out logic. |
+| **B. Per-dispatch `mirror_to` field** | Originating dispatch source declares `mirror_to: [addr1, addr2]`. Sinks subscribe by mirror declaration. | New envelope field. Requires every source to know about mirrors. |
+| **C. Observer sinks with subject-derived rendering rules** | Mirror configuration lives in the sink, not the envelope. Mattermost adapter is configured to render every `tasks.@luna.>` from `andreas/meta-factory` (regardless of source). | Configuration grows; cleaner separation of concerns. Risk of accidental over-rendering. |
+
+**Recommendation: C for v1.** Don't change the envelope schema; let sinks self-subscribe with rendering rules. Revisit A or B if sink-side configuration proves too distributed to manage. Not blocking Direction A — every adapter today does single-primary-delivery just fine.
+
+### 14.3 Implication for Stage 4 / Stage 5
+
+Stage 4 (adapter publishes inbound) and Stage 5 (adapter subscribes to lifecycle) don't need to change to support the multi-subscriber model — NATS already provides fan-out. What WOULD change for multi-surface primary delivery is a future Stage 8+ that lands rendering rules on the sinks. Not in scope for the v1 cutover.

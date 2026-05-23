@@ -18,6 +18,8 @@ _Avoid_: deployment, instance, node. Never use `stack` for the M1–M7 architect
 
 **Network**:
 A federation of **principals** whose **stacks** interconnect at the NATS leaf-node layer — `metafactory` is the network this ecosystem runs on. A network is **not a subject segment**: it is deployment topology. Cross-principal reach is the `federated.` **scope** prefix, never a network name on the wire. A principal may belong to more than one network.
+
+**Federation is the default for multi-principal collaboration**, not the exception. When two principals' bots interact (e.g. Andreas's assistant replies to a message JC's user posted), the dispatch envelope MUST publish on `federated.{principal}.{stack}.…` — `local.` never crosses the principal boundary. This is the OSI/L3 routing equivalent: `local.` is one broadcast domain, `federated.` is cross-network routing. A shared platform channel (Discord, Mattermost, Slack) does NOT make cross-principal traffic intra-principal — the surface is L7; the routing happens at L1–L3 on the bus.
 _Avoid_: federation (that is the relationship, not the thing), mesh, fabric, org, cluster
 
 ### Assistants & agents
@@ -57,19 +59,27 @@ The inner content body of an **envelope** — the domain data, distinct from the
 _Avoid_: message, body, data
 
 **Capability**:
-A declared, bus-routable ability — e.g. `code-review.typescript`. An **assistant** declares the capabilities it offers; the `tasks.{capability}.{subcapability}` **subject** routes on it; an **agent**'s JetStream consumer filters by it. A capability may be *fulfilled by* a soma skill, but the capability is the wire-facing ability, not the implementation.
+A declared, bus-routable ability — e.g. `code-review.typescript`, `chat`, `release`, `security-scan`. An **assistant** declares the capabilities it offers; the `tasks.{capability}.{subcapability}` **subject** routes on it (for Offer mode); for Direct/Delegate mode the capability appears as the trailing segment after `tasks.@{assistant}` (e.g. `tasks.@luna.chat`). An **agent**'s JetStream consumer filters by capability. A capability may be *fulfilled by* a soma skill, but the capability is the wire-facing ability, not the implementation.
+
+**`chat` is the canonical capability for free-form conversational dispatches — bus-native, not surface-bound.** An assistant declaring `chat` accepts conversational envelopes from ANY dispatch source: a platform adapter (human→bot via Discord/Mattermost/Slack), another assistant's runtime (bot→bot direct), a delegation re-issue, the MC dashboard, or a tap/webhook. The wire grammar is the same (`tasks.@{assistant}.chat`); only the `originator` field and the scope (`local.` / `federated.`) vary by source. Discord (and other platforms) are sources and/or sinks for chat envelopes — they are not the medium of communication. **The bus is the medium.**
 _Avoid_: skill (that is the SOMA implementation term), ability, function, command, tool
 
 **Dispatch**:
-The act of routing a unit of work to an **assistant** over the bus. Three modes, by how the recipient is chosen — **Offer**: published to a **capability**, any capable assistant *claims* it (competing consumers, exactly-one delivery); **Direct**: sent to one named assistant (`@{assistant}`), one-shot; **Delegate**: sent to one named assistant that orchestrates a multi-step outcome. Unclaimed work escalates to **dead-letter**.
+The act of routing a unit of work to an **assistant** over the bus. Three modes, by how the recipient is chosen — **Offer**: published to a **capability**, any capable assistant *claims* it (competing consumers, exactly-one delivery); **Direct**: sent to one named assistant (`@{assistant}`), one-shot; **Delegate**: sent to one named assistant that orchestrates a multi-step outcome via the **`agent-team` substrate harness**. Unclaimed work escalates to **dead-letter**.
 
-Inbound subjects per mode:
-- **Offer** → `tasks.{capability}.{subcapability}` (capability routing, competing consumers)
-- **Direct, intra-stack** → `dispatch.task.received` (local **dispatch source** publishes; the stack-local listener consumes)
-- **Direct, peer-to-peer** → `dispatch.task.dispatched` (peer stack publishes via a bus-peer bridge)
-- **Delegate** → currently undefined; under design as part of the AgentTeam **substrate harness** work
+The wire-level mode bit lives in the envelope's top-level `distribution_mode` field (myelin enum: `'broadcast' | 'direct' | 'delegate'`; cortex maps `'broadcast'` → Offer at the boundary). Direct and Delegate share the same subject shape (`tasks.@{assistant}.{capability}`); the listener distinguishes them by reading `distribution_mode`.
 
-Lifecycle envelopes for any mode flow on `dispatch.task.{started|completed|failed|aborted}`, joined by `correlation_id`.
+Inbound subjects per mode (myelin canonical, per `myelin/specs/namespace.md` §Tasks Domain):
+- **Offer** → `local.{principal}.{stack}.tasks.{capability}.{subcapability}` (capability routing; JetStream consumer group claims exactly-once)
+- **Direct, intra-principal** → `local.{principal}.{stack}.tasks.@{did-encoded-assistant}.{capability}`
+- **Direct, cross-principal** → `federated.{principal}.{stack}.tasks.@{did-encoded-assistant}.{capability}` (any cross-principal traffic, including bot-replies on shared platform channels — see Network entry)
+- **Delegate** → identical subject to Direct (`tasks.@{did-encoded-assistant}.{capability}`); mode encoded in `envelope.distribution_mode === 'delegate'` (top-level field)
+
+DID-segment encoding (`:` → `-`, `.` → `--`) via myelin's `encodeDidSegment` helper.
+
+Lifecycle envelopes for any mode flow on `dispatch.task.{started|completed|failed|aborted}`, joined by `correlation_id`. Lifecycle envelopes mirror the inbound scope (intra-principal → `local.…dispatch.task.*`; cross-principal → `federated.…dispatch.task.*`).
+
+**Legacy:** cortex code (`src/runner/dispatch-listener.ts` + IAW Phase D integration tests) subscribes to `dispatch.task.received` as a pre-namespace-finalisation convention. The Direction A migration (C-405 + #406–#412) flips publishers to canonical `tasks.@{assistant}.{capability}` subjects and removes the legacy subscription in Stage 7.
 _Avoid_: routing, assignment, hand-off. Never call the Offer mode "broadcast" — exactly one assistant claims an offered task, not all.
 
 ### Surfaces, substrates, dispatch routing
@@ -79,7 +89,7 @@ The M6 runtime layer that executes a single **dispatch** on one execution substr
 _Avoid_: backend, executor, engine, runtime (overloaded with `MyelinRuntime`)
 
 **Dispatch source**:
-Anything that creates and publishes an inbound dispatch **envelope** onto the bus. A platform adapter (Discord, Mattermost, Slack) is a dispatch source: it turns a platform message into a `dispatch.task.received` envelope signed by the hosted **agent**. The GitHub webhook tap is a dispatch source. The MC dashboard's "send task" action is a dispatch source. Future peer-stack agents publishing Offers cross-federation are dispatch sources. A dispatch source is the only thing that signs an envelope into existence; it carries the originating agent's signing key.
+Anything that creates and publishes an inbound dispatch **envelope** onto the bus. A platform adapter (Discord, Mattermost, Slack) is a dispatch source: it turns a platform message into a `tasks.@{did-encoded-assistant}.{capability}` envelope (canonical) — adapter populates `originator.identity` with the resolved human/agent DID and `originator.attribution = "adapter-resolved"`; the **stack** then signs the envelope via `runtime.publish` using the stack NKey. The GitHub webhook tap is a dispatch source. The MC dashboard's "send task" action is a dispatch source. Future peer-stack agents publishing Offers cross-federation are dispatch sources. The dispatch source is the locus of policy-actor attribution (via `originator`); the **stack** is the cryptographic signer.
 _Avoid_: producer, ingress, intake
 
 **Dispatch sink**:
@@ -127,7 +137,10 @@ _Avoid_: callback, return-address, reply-to
 - **`broadcast` → `Offer`.** A broadcast reaches everyone; that dispatch mode is claimed by exactly one assistant. The modes are **Offer / Direct / Delegate**.
 - **`tasks` and `dispatch` are distinct domains**, not aliases. `tasks` = work-request namespace (Offer-mode subject convention). `dispatch` = task-lifecycle namespace (events about an active task). Both will continue to exist.
 - **`renderer` vs `dispatch sink`.** The cortex-internal interface is `Renderer` (`src/renderers/types.ts`); the architectural role is **dispatch sink**. Same thing from different angles — code says `Renderer`; design discussion says `dispatch sink`.
-- **Adapter-originated Direct subject (`tasks.@{assistant}.chat`) is a future seam.** The example dialogue above shows the intended subject grammar; cortex code today publishes adapter-originated Direct dispatches to `dispatch.task.received` (the existing intra-stack inbound subject). Migration to subject-level mode encoding (Direct = `tasks.@{assistant}.…`) is deferred — payload-level mode field carries the information today.
+- **Adapter-originated Direct subject — resolved by Direction A (C-405).** Canonical wire grammar (per `myelin/specs/namespace.md` §Tasks Domain) is `tasks.@{did-encoded-assistant}.{capability}`. cortex code today still subscribes on the pre-spec `dispatch.task.received` subject in `src/runner/dispatch-listener.ts`; Direction A Stages 4–7 (cortex#409–#412) flip publishers to canonical subjects and retire the legacy subscription. The `chat` capability is the canonical capability for free-form `@assistant` interactions.
+- **Delegate dispatch — resolved by Direction A (C-405).** Subject is identical to Direct (`tasks.@{did-encoded-assistant}.{capability}`); mode encoded in the envelope's top-level `distribution_mode` field (myelin enum value `'delegate'`). Listener routes to the `agent-team` substrate harness when `envelope.distribution_mode === 'delegate'`.
+- **Adapter signs as agent → stack signs, adapter populates originator (C-405 correction).** Originally Direction A Q1a pinned "adapter holds agent NKey and signs as the hosted agent". Corrected per myelin#160 (CLOSED): the **stack** signs via `runtime.publish` using the stack NKey; the **adapter** populates `originator.identity` (resolved DID) + `originator.attribution = "adapter-resolved"`. Cryptographic signer (stack) and policy actor (originator) are cleanly separated — both attestable, both inside the signature.
+- **myelin `DistributionMode` enum still ships `'broadcast'`.** cortex CONTEXT.md canonicalised that mode to **Offer**. Pending myelin-side rename (filed as a separate myelin issue). cortex maps `'broadcast'` → Offer at the boundary until myelin renames.
 
 ## Boundary with adjacent contexts
 
