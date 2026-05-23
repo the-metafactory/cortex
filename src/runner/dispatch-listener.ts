@@ -101,6 +101,10 @@ import {
   ClaudeCodeHarness,
   type CCSessionFactory as ClaudeCodeFactory,
 } from "../substrates/claude-code/harness";
+import {
+  AgentTeamHarness,
+  type AgentTeamFactory,
+} from "./agent-team";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -207,6 +211,12 @@ export interface DispatchListenerOptions {
    * Tests pass a fake to drive lifecycles without spawning processes.
    */
   ccSessionFactory?: CCSessionFactory;
+  /**
+   * Optional AgentTeam factory for delegate-mode dispatches. Production
+   * omits this; tests inject a fake to prove routing without spawning
+   * moderator/participant CC sessions.
+   */
+  agentTeamFactory?: AgentTeamFactory;
   /**
    * Adapter ID for surface-router error reporting. Defaults to
    * `runner-dispatch-listener`. Configurable so multiple runner instances
@@ -338,6 +348,7 @@ export function createDispatchListener(
     router,
     source,
     ccSessionFactory,
+    agentTeamFactory,
     policyEngine,
     trustResolver,
     receivingAgentId,
@@ -370,6 +381,7 @@ export function createDispatchListener(
         runtime,
         source,
         ccSessionFactory,
+        agentTeamFactory,
         policyEngine,
         stack: opts.stack,
         trustResolver,
@@ -529,6 +541,7 @@ interface DispatchHandlerContext {
   runtime: MyelinRuntime;
   source: SystemEventSource;
   ccSessionFactory: CCSessionFactory | undefined;
+  agentTeamFactory: AgentTeamFactory | undefined;
   policyEngine: PolicyEngine | undefined;
   stack: string | undefined;
   /**
@@ -551,6 +564,7 @@ async function handleDispatchEnvelope(
     runtime,
     source,
     ccSessionFactory,
+    agentTeamFactory,
     policyEngine,
     stack,
     trustResolver,
@@ -836,12 +850,17 @@ async function handleDispatchEnvelope(
   // Per-dispatch harness — see fn-doc above for rationale. `source` is
   // structurally compatible between `SystemEventSource` and the harness's
   // `DispatchEventSource` (both alias the same shape in `dispatch-events.ts`).
-  const harness: SessionHarness = new ClaudeCodeHarness({
-    source,
-    ...(ccSessionFactory !== undefined && { ccSessionFactory }),
-  });
-
   const req = buildDispatchRequest(payload, gatedPrincipal);
+  const harness: SessionHarness =
+    envelope.distribution_mode === "delegate"
+      ? new AgentTeamHarness({
+          source,
+          ...(agentTeamFactory !== undefined && { agentTeamFactory }),
+        })
+      : new ClaudeCodeHarness({
+          source,
+          ...(ccSessionFactory !== undefined && { ccSessionFactory }),
+        });
 
   // Drain the harness's lifecycle stream onto the bus. The harness
   // guarantees at least one terminal envelope; we publish whatever it
@@ -1220,4 +1239,3 @@ async function emitReceivingAgentUnconfiguredDeny(
   });
   await runtime.publish(failed);
 }
-

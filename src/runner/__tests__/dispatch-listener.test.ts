@@ -30,6 +30,7 @@ import {
   type CCSessionFactory,
   type DispatchTaskReceivedPayload,
 } from "../dispatch-listener";
+import type { AgentTeamFactory, AgentTeamOpts } from "../agent-team";
 import type { CCSessionResult } from "../cc-session";
 import { PolicyEngine } from "../../common/policy/engine";
 import type { Intent } from "../../common/policy/types";
@@ -128,6 +129,34 @@ function fakeFactory(result: CCSessionResult): {
       async wait() { return result; },
     };
     return session;
+  };
+  return { factory, optsCaptured };
+}
+
+function fakeAgentTeamFactory(result: string): {
+  factory: AgentTeamFactory;
+  optsCaptured: AgentTeamOpts[];
+} {
+  const optsCaptured: AgentTeamOpts[] = [];
+  const factory: AgentTeamFactory = (opts) => {
+    optsCaptured.push(opts);
+    return {
+      start() {
+        return undefined;
+      },
+      async wait() {
+        return result;
+      },
+      on() {
+        return undefined;
+      },
+      getTraceContext() {
+        return {
+          traceId: "trace-dispatch-listener-test",
+          teamId: "team-dispatch-listener-test",
+        };
+      },
+    };
   };
   return { factory, optsCaptured };
 }
@@ -472,6 +501,43 @@ describe("dispatch-listener — success path", () => {
     expect(opts.project).toBeUndefined();
     expect(opts.allowedTools).toBeUndefined();
     expect(opts.disallowedTools).toBeUndefined();
+  });
+
+  test("delegate distribution mode routes to AgentTeamHarness", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const cc = fakeFactory(SUCCESS_RESULT);
+    const team = fakeAgentTeamFactory("Team answer");
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: cc.factory,
+      agentTeamFactory: team.factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(
+      {
+        ...makeReceivedEnvelope(),
+        distribution_mode: "delegate",
+        target_assistant: "did:mf:cortex",
+      },
+      "local.metafactory.dispatch.task.received",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(cc.optsCaptured).toHaveLength(0);
+    expect(team.optsCaptured).toHaveLength(1);
+    expect(team.optsCaptured[0]?.participants.length).toBeGreaterThanOrEqual(2);
+    expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.allowed",
+      "dispatch.task.started",
+      "dispatch.task.completed",
+    ]);
+    expect(r.published.at(-1)?.payload.result_summary).toBe("Team answer");
   });
 });
 

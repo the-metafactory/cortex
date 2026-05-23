@@ -14,10 +14,21 @@ import { randomUUID } from "crypto";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { TrustResolver } from "../common/agents/trust-resolver";
 import type { DispatchEventSource } from "../bus/dispatch-events";
+import {
+  createDispatchTaskCompletedEvent,
+  createDispatchTaskFailedEvent,
+  createDispatchTaskStartedEvent,
+} from "../bus/dispatch-events";
+import {
+  truncateDispatchErrorSummary,
+  truncateDispatchResultSummary,
+} from "../bus/dispatch-lifecycle-summary";
 import { BusPeerHarness } from "../substrates/bus-peer/harness";
 import type {
+  Capability,
   DispatchRequest,
   MyelinEnvelope,
+  SessionHarness,
 } from "../common/substrates/types";
 
 export interface TeamMember {
@@ -137,6 +148,169 @@ export interface AgentTeamOpts {
    * @internal — not part of the public API.
    */
   busPeerHandleFactory?: BusPeerHandleFactory;
+}
+
+export interface AgentTeamLike {
+  start(): unknown;
+  wait(): Promise<string>;
+  abort?(): void;
+  on(event: "progress", listener: (member: string, text: string) => void): unknown;
+  on(event: "error", listener: (err: Error) => void): unknown;
+  getTraceContext(): { traceId: string; teamId: string };
+}
+
+export type AgentTeamFactory = (opts: AgentTeamOpts) => AgentTeamLike;
+
+export interface AgentTeamHarnessOpts {
+  source: DispatchEventSource;
+  capabilities?: Capability[];
+  participants?: TeamParticipantConfig[];
+  agentTeamFactory?: AgentTeamFactory;
+}
+
+const DEFAULT_TEAM_PARTICIPANTS: TeamParticipantConfig[] = [
+  {
+    name: "analyst",
+    prompt: "Deep analytical perspective — examine evidence, data, and logical implications",
+  },
+  {
+    name: "creative",
+    prompt: "Creative and lateral thinking — explore unconventional angles and connections",
+  },
+  {
+    name: "critic",
+    prompt: "Critical evaluation — identify weaknesses, counterarguments, and risks",
+  },
+];
+
+const defaultAgentTeamFactory: AgentTeamFactory = (opts) => new AgentTeam(opts);
+
+/**
+ * Delegate-mode meta-harness. It wraps the existing moderator +
+ * participant AgentTeam orchestration behind the same SessionHarness
+ * lifecycle contract as single-substrate harnesses.
+ */
+export class AgentTeamHarness implements SessionHarness {
+  readonly id = "agent-team" as const;
+  readonly capabilities: Capability[];
+
+  private readonly source: DispatchEventSource;
+  private readonly participants: TeamParticipantConfig[];
+  private readonly factory: AgentTeamFactory;
+  private readonly activeTeams = new Set<AgentTeamLike>();
+  private shuttingDown = false;
+
+  constructor(opts: AgentTeamHarnessOpts) {
+    this.source = opts.source;
+    this.capabilities = opts.capabilities ?? [];
+    this.participants = opts.participants ?? DEFAULT_TEAM_PARTICIPANTS;
+    this.factory = opts.agentTeamFactory ?? defaultAgentTeamFactory;
+  }
+
+  async *dispatch(req: DispatchRequest): AsyncIterable<MyelinEnvelope> {
+    const startedAt = new Date();
+    const correlationId = req.requestId;
+
+    yield createDispatchTaskStartedEvent({
+      source: this.source,
+      taskId: req.requestId,
+      agentId: req.agent.id,
+      startedAt,
+      correlationId,
+    });
+
+    if (this.shuttingDown) {
+      yield createDispatchTaskFailedEvent({
+        source: this.source,
+        taskId: req.requestId,
+        agentId: req.agent.id,
+        startedAt,
+        failedAt: new Date(),
+        errorSummary: "agent-team harness shutting down",
+        correlationId,
+      });
+      return;
+    }
+
+    let team: AgentTeamLike | null = null;
+    try {
+      team = this.factory(this.buildTeamOpts(req));
+      this.activeTeams.add(team);
+      const waitForResult = team.wait();
+      team.start();
+      const result = await waitForResult;
+      yield createDispatchTaskCompletedEvent({
+        source: this.source,
+        taskId: req.requestId,
+        agentId: req.agent.id,
+        startedAt,
+        completedAt: new Date(),
+        resultSummary: truncateDispatchResultSummary(result),
+        correlationId,
+      });
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      yield createDispatchTaskFailedEvent({
+        source: this.source,
+        taskId: req.requestId,
+        agentId: req.agent.id,
+        startedAt,
+        failedAt: new Date(),
+        errorSummary: truncateDispatchErrorSummary(error.message),
+        correlationId,
+      });
+    } finally {
+      if (team !== null) {
+        this.activeTeams.delete(team);
+      }
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async shutdown(opts: { graceful: boolean }): Promise<void> {
+    this.shuttingDown = true;
+    if (opts.graceful) return;
+    for (const team of this.activeTeams) {
+      team.abort?.();
+    }
+  }
+
+  private buildTeamOpts(req: DispatchRequest): AgentTeamOpts {
+    const env = this.envContext(req);
+    return {
+      prompt: req.prompt,
+      participants: this.participants.map((p) => ({ ...p })),
+      ...(req.runtime?.groveChannel !== undefined && { groveChannel: req.runtime.groveChannel }),
+      ...(req.runtime?.groveNetwork !== undefined && { groveNetwork: req.runtime.groveNetwork }),
+      ...(req.runtime?.additionalArgs !== undefined && { additionalArgs: req.runtime.additionalArgs }),
+      ...(req.tools.allow.length > 0 && { allowedTools: [...req.tools.allow] }),
+      ...(req.tools.deny !== undefined && { disallowedTools: [...req.tools.deny] }),
+      ...(req.runtime?.allowedDirs !== undefined && { allowedDirs: req.runtime.allowedDirs }),
+      ...(req.timeoutMs !== undefined && { timeoutMs: req.timeoutMs }),
+      ...(env.project !== undefined && { project: env.project }),
+      ...(env.entity !== undefined && { entity: env.entity }),
+      ...(env.operator !== undefined && { operator: env.operator }),
+    };
+  }
+
+  private envContext(req: DispatchRequest): {
+    project?: string;
+    entity?: string;
+    operator?: string;
+  } {
+    for (const ctx of req.context) {
+      if (ctx.kind !== "env" || typeof ctx.data !== "object" || ctx.data === null) {
+        continue;
+      }
+      const env = ctx.data as Record<string, unknown>;
+      return {
+        ...(typeof env.project === "string" && { project: env.project }),
+        ...(typeof env.entity === "string" && { entity: env.entity }),
+        ...(typeof env.operator === "string" && { operator: env.operator }),
+      };
+    }
+    return {};
+  }
 }
 
 /**
@@ -345,6 +519,7 @@ function extractMentions(text: string, knownNames: string[]): string[] {
 export class AgentTeam extends EventEmitter {
   private members = new Map<string, TeamMember>();
   private moderator?: CCSession;
+  private synthesis?: CCSession;
   private traceId: string;
   private teamId: string;
   private pendingParticipants = new Set<string>();
@@ -432,6 +607,21 @@ export class AgentTeam extends EventEmitter {
   /** Get trace context for observability. */
   getTraceContext(): { traceId: string; teamId: string } {
     return { traceId: this.traceId, teamId: this.teamId };
+  }
+
+  abort(): void {
+    this.moderator?.kill();
+    this.synthesis?.kill();
+    for (const member of this.members.values()) {
+      if (member.session instanceof CCSession) {
+        member.session.kill();
+      } else {
+        member.session.abort();
+      }
+    }
+    if (this.listenerCount("error") > 0) {
+      this.emit("error", new Error("AgentTeam aborted"));
+    }
   }
 
   private handleModeratorResponse(text: string): void {
@@ -664,6 +854,7 @@ export class AgentTeam extends EventEmitter {
       entity: this.opts.entity,
       operator: this.opts.operator,
     });
+    this.synthesis = synthSession;
 
     synthSession.on("result", (text: string) => {
       this.emit("synthesis", text);

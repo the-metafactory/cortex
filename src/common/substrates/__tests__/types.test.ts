@@ -7,7 +7,7 @@
  * rather than at downstream import sites.
  *
  * **Coverage axes:**
- *   1. `HarnessId` enumerates all 7 known substrates (cortex#91 §F).
+ *   1. `HarnessId` enumerates all 8 known substrates (cortex#91 §F).
  *      Adding/removing a value is a typed change that fails this test
  *      until the test list is updated — forcing the author to think
  *      about which downstream switch statements need updating.
@@ -47,13 +47,14 @@ describe("HarnessId", () => {
     "gemini",
     "mistral",
     "pi-dev",
+    "agent-team",
   ];
 
-  test("includes all seven known substrates", () => {
-    expect(ALL_HARNESS_IDS).toHaveLength(7);
+  test("includes all eight known substrates", () => {
+    expect(ALL_HARNESS_IDS).toHaveLength(8);
   });
 
-  test("exhaustive switch compiles for all seven values", () => {
+  test("exhaustive switch compiles for all eight values", () => {
     // If a new HarnessId is added without updating this switch, tsc fails
     // (the `never` assignment becomes ill-typed). Compile-time proof that
     // every downstream switch must enumerate the union exhaustively.
@@ -66,6 +67,7 @@ describe("HarnessId", () => {
         case "gemini": return "gemini";
         case "mistral": return "mistral";
         case "pi-dev": return "pi";
+        case "agent-team": return "team";
         default: {
           const _exhaustive: never = id;
           return _exhaustive;

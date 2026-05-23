@@ -92,7 +92,7 @@ export type MyelinEnvelope = Envelope;
  * checking from `tsc`. Adding a new substrate is a typed change at every
  * dispatch decision point — the compiler enumerates the work for you.
  *
- * The seven known substrates (per cortex#91 §"Implementations" and
+ * The eight known substrates (per cortex#91 §"Implementations" and
  * §"Future harnesses"):
  *
  *   - `"claude-code"`   — in-process child via `claude --print
@@ -108,6 +108,8 @@ export type MyelinEnvelope = Envelope;
  *   - `"mistral"`       — Mistral CLI / API.
  *   - `"pi-dev"`        — direct pi.dev call without bus indirection;
  *                         used for cortex-co-located agents.
+ *   - `"agent-team"`    — meta-harness that coordinates a moderator plus
+ *                         multiple participant harnesses for delegate mode.
  *
  * **Why not `string`?** Because the runtime needs to refuse the unknown.
  * A new harness must be a typed registration, not a free-form string,
@@ -120,7 +122,8 @@ export type HarnessId =
   | "cursor"
   | "gemini"
   | "mistral"
-  | "pi-dev";
+  | "pi-dev"
+  | "agent-team";
 
 // ---------------------------------------------------------------------------
 // Capability

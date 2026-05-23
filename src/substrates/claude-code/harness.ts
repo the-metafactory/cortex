@@ -88,6 +88,10 @@ import {
   createDispatchTaskStartedEvent,
   type DispatchEventSource,
 } from "../../bus/dispatch-events";
+import {
+  truncateDispatchErrorSummary,
+  truncateDispatchResultSummary,
+} from "../../bus/dispatch-lifecycle-summary";
 
 // ---------------------------------------------------------------------------
 // Session factory — same shape as dispatch-listener uses
@@ -463,7 +467,7 @@ export class ClaudeCodeHarness implements SessionHarness {
       correlationId,
       startedAt,
       failedAt: new Date(),
-      errorSummary: truncateError(errorSummary),
+      errorSummary: truncateDispatchErrorSummary(errorSummary),
     });
   }
 
@@ -519,7 +523,7 @@ export class ClaudeCodeHarness implements SessionHarness {
         startedAt,
         correlationId,
         new Date(),
-        result.response ? truncateSummary(result.response) : undefined,
+        result.response ? truncateDispatchResultSummary(result.response) : undefined,
       );
     }
 
@@ -543,36 +547,4 @@ export class ClaudeCodeHarness implements SessionHarness {
       `claude exited ${result.exitCode}`,
     );
   }
-}
-
-// ---------------------------------------------------------------------------
-// Local helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Cheap UUID v4-ish validator. The envelope schema requires UUID-shaped
-// cortex#196 — loose UUID check (`isUuidLoose`) is shared in
-// `src/common/types/uuid.ts`. We match any 8-4-4-4-12 hex layout
-// without enforcing the version/variant nibbles (the JSON Schema
-// does the strict check downstream); v6/v7 session ids from CC
-// pass cleanly.
-
-/**
- * Trim error messages so a verbose stack doesn't blow the worklog limit
- * downstream. 500 chars matches the `system.inbound.failed` convention
- * (system-events §3.5.4). Copied from dispatch-listener.ts:419 — same
- * cap, same rationale.
- */
-function truncateError(msg: string): string {
-  return msg.length > 500 ? msg.slice(0, 497) + "..." : msg;
-}
-
-/**
- * Trim CC response summaries. Surfaces typically render the first line +
- * "(more)..." — cap at 1000 chars to leave room for a label prefix
- * without truncation surprises. Copied from dispatch-listener.ts:428.
- */
-function truncateSummary(text: string): string {
-  const first = text.split("\n", 1)[0] ?? text;
-  return first.length > 1000 ? first.slice(0, 997) + "..." : first;
 }
