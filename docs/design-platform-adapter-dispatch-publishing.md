@@ -9,6 +9,7 @@
 - `src/common/substrates/types.ts` — `SessionHarness` interface (already in place)
 - `docs/architecture.md` — M1–M7 stack model
 - `docs/plan-cortex-migration.md` — migration phase plan
+- `docs/design-internet-of-agentic-work.md` + `docs/plan-internet-of-agentic-work.md` — **federation baseline** (cortex#110 META; cortex#117 Phase E). Direction A's `federated.` publishing depends on the IoAW peer-registry + leaf-node primitives; channel-topology config (Stage 4 model B) is the cortex-side UX that decides when an adapter publishes federated vs local.
 
 ---
 

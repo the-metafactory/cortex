@@ -5,7 +5,8 @@
 **Driver:** Andreas (pushback in #myelin → §10/§11 locked answers) + Jens-Christian (Direction A grilling)
 **Related:**
 - `the-metafactory/myelin` — canonical seven-layer model + namespace spec (`docs/architecture.md`, `specs/namespace.md`); `src/types.ts` ships `DistributionMode` + `AttributionMode` enums; `schemas/envelope.schema.json` carries the `originator` field
-- `docs/design-platform-adapter-dispatch-publishing.md` — Direction A design (this doc supersedes Q2's grammar split; §11 supersedes Q1 signing model and §10 open questions)
+- `docs/design-platform-adapter-dispatch-publishing.md` — Direction A design (this doc supersedes Q2's grammar split; §12 supersedes Q1 signing model and the original §10 open questions)
+- `docs/design-internet-of-agentic-work.md` + `docs/plan-internet-of-agentic-work.md` — **the IoAW architectural baseline** for cortex federation (cortex#110 META; cortex#117 Phase E: multi-network bridges + delegation). The OSI scenarios in this doc assume the federation primitives from IoAW §3.3 (`stack → network → multi-network`, NATS leaf-node federation, peer registry, accept-rules) — see §13 below for the open seams that tie Scenarios 3/4/5 to IoAW phases.
 - `CONTEXT.md` — cortex vocabulary
 - myelin#160 — Originator field (policy attribution vs crypto provenance; **closed** — shipped as envelope-level `originator: { principal, attribution }`)
 
@@ -517,7 +518,8 @@ The mode bit lives in the envelope as a top-level `distribution_mode` field (NOT
 ## 13. Open seams (post-§12 resolution)
 
 - **Channel-topology config for Scenario 4 model B.** Adapter needs to know which Discord/Mattermost/Slack channels span principals. Open seam — filed as a separate cortex issue. Until resolved, Stage 4 ships with model A default (preserve Discord-as-bridge for cross-principal channels) and a per-channel opt-in for model B.
-- **NATS leaf-node federation preconditions.** Model B (and Scenario 5 cross-principal) require federated leaf nodes between principal pairs. Out of cortex's scope — covered by network operations work.
+- **NATS leaf-node federation preconditions — owned by IoAW Phase D/E (cortex#110, cortex#117).** Model B (and Scenario 5 cross-principal) require federated leaf nodes between principal pairs. This is NOT a design gap — `design-internet-of-agentic-work.md` §3.3 specifies the `stack → network → multi-network` composition; peer registry; accept-rules; the multi-`NatsLink` runtime extension. Direction A Stage 4 cutover for cross-principal traffic depends on IoAW Phase E being operationally available for the relevant principal pairs.
+- **Connection establishment + discovery is wider than a per-pair leaf-node link.** Per Andreas (2026-05-23): "principals + bots can be members of many deployments and networks". The IoAW design covers single-network and multi-network bridging; capability discovery (myelin#9 — L5) is acknowledged-open. Direction A doesn't introduce new requirements here — it consumes the IoAW federation primitives wherever they land.
 - **myelin `DistributionMode` rename (`'broadcast'` → `'offer'`).** Filed as a myelin-side issue (proposed in the C-405 corrections batch). cortex wraps the legacy spelling at the boundary until then.
 - **Originating-runtime self-subscription pattern for Scenario 5.** Luna initiates a chat to Echo and needs to consume Echo's reply (a `dispatch.task.completed` envelope with `correlation_id` matching her initial dispatch). The mechanism — subscribe-by-correlation_id vs subscribe-by-source-DID vs explicit `response_routing` populated with Luna's own address — is not yet codified. Filed as a follow-up.
 
