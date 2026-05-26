@@ -40,6 +40,20 @@ deployment-config + env-var + TS-type surface.
 - Internal documentation in the affected files reframed from
   "transition release" to "v3.0.0 BREAKING — removed at manifest PR-11"
   so the migration provenance stays self-documenting.
+- **Dashboard `operatorName` display now falls back to the resolved
+  principal id instead of the agent `displayName`** when neither
+  `agent.operatorName` nor a v3 `principal:` block declares a name.
+  The pre-PR fallback chain inside `src/cortex.ts` was
+  `operatorName ?? operatorId ?? displayName`; post-PR (cortex#427)
+  it is `operatorName ?? principalId`. The `displayName` branch is
+  unreachable in v3 because `resolvePrincipalId` throws when neither
+  `principal.id` nor `operatorId` is set, so the boot path can never
+  reach the dashboard wiring with both display fields missing. The
+  surfaced label only changes for the synthetic edge case of a legacy
+  bot.yaml that declared `displayName` but neither `operatorName` nor
+  `operatorId` — a configuration that no longer boots in v3 regardless.
+  Documenting here for migration completeness (cortex#430 review
+  Major-1, sweep-pass 1).
 
 ### Migration path for v2.x operators
 
