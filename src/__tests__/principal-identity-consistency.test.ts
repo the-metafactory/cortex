@@ -18,25 +18,43 @@
  * dispatch — the exact class of bug PR-A closes by making
  * `resolvePrincipalId` the single resolution path.
  *
- * **What this test asserts.** With a known principal id supplied via
- * `options.operator` (the v3-canonical path sourced from
- * `cortexConfig.principal.id` in the loader), every observable subject
- * segment inside cortex carries the SAME `{principal}` value:
+ * **What this test directly asserts vs what the suite proves as a whole.**
+ *
+ * Direct assertion (this test, "publish-side `source.org` equals
+ * listener-side `{principal}` subject segment"): when boot succeeds
+ * via the unified `resolvePrincipalId` path, the dispatch-listener
+ * registers exactly one envelope handler on the runtime
+ * (`runtime.onEnvelopeHandlers.size === 1`) and the second
+ * white-box test asserts `options.operator.id` is preferred over
+ * `config.agent.operatorId`. A stray legacy-field reader that
+ * registered an additional handler — or a different one on a
+ * mismatched subject — would NOT be caught by the single-handler
+ * count alone; the structural proof relies on the surface-router
+ * being the sole registrar at boot, and on the principal-preference
+ * unit assertion guaranteeing the resolved value is the v3-canonical
+ * one.
+ *
+ * Indirect guard (the unit suite as a whole — sibling tests in
+ * `cortex.test.ts` + the fail-fast preference test below): the
+ * resolved value flows through every observable subject segment
+ * cortex builds against:
  *
  *   - the `systemEventSource.org` baked into every `system.*` envelope
  *   - the `surfaceConfig.subjects[0]` the dispatch-listener subscribes
  *     on (canonical `local.{principal}.{stack}.tasks.*.>` pattern)
  *   - the per-agent durable-consumer name baked into the review-stream
  *     subscription (`cortex-review-consumer-{principal}-…` — only
- *     exercised when an agent declares the `code-review` capability,
- *     but we register one so the path is hit)
+ *     exercised when an agent declares the `code-review` capability)
  *
- * Regression: if any future PR re-introduces a `config.agent.operatorId
- * ?? "default"` read in cortex.ts that bypasses `resolvePrincipalId`,
- * the synthesised subject would still match the operator field — but
- * any test that supplies `options.operator` with a value DIFFERENT
- * from `config.agent.operatorId` would catch the drift. We deliberately
- * stress that path here.
+ * Regression posture: if any future PR re-introduces a
+ * `config.agent.operatorId ?? "default"` read in cortex.ts that
+ * bypasses `resolvePrincipalId`, the fail-fast preference test
+ * (`"options.operator.id" is preferred over "config.agent.operatorId"`)
+ * catches it — that test supplies `options.operator.id` with a
+ * DIFFERENT value than the legacy field and asserts the resolved
+ * principal id is the v3-canonical one. This headline test then
+ * confirms the resolved value reaches the runtime registration
+ * surface. The two together close the loop; neither alone does.
  */
 
 import { describe, expect, test } from "bun:test";
