@@ -55,72 +55,8 @@ import {
   type SystemEventSource,
   createSystemInboundAbortedEvent,
 } from "./system-events";
-import { buildBaseEnvelope as buildSharedEnvelope } from "./envelope-builder";
-import { directTaskSubject } from "@the-metafactory/myelin/subjects";
-import { DID_RE } from "@the-metafactory/myelin/identity";
-import type { Envelope } from "./myelin/envelope-validator";
+import { publishInboundChatDispatchEnvelope } from "./dispatch-source-publisher";
 import { join } from "path";
-
-/**
- * Direction A Stage 4-A (cortex#409) — feature flag for the inbound
- * envelope publish path. When `=== "1"`, chat/direct dispatches are
- * routed through the bus as `tasks.@{did-encoded-assistant}.chat`
- * envelopes (consumed by `dispatch-listener` via the canonical
- * `tasks.@*.>` subscription added at the listener layer). When unset
- * or any other value, the legacy in-process `handleSync` path runs
- * unchanged.
- *
- * Read per-message inside `handleMessage` so operator flips don't
- * require a restart — the lookup is a single `process.env` read, cheap
- * even on the hot inbound path.
- */
-function isAdapterEnvelopeModeEnabled(): boolean {
-  return process.env.CORTEX_ADAPTER_ENVELOPE_MODE === "1";
-}
-
-/**
- * Map a platform-side author identifier onto a DID-grammar-compliant
- * `did:mf:<name>` string suitable for `originator.identity`.
- *
- * Discord snowflakes (numeric, e.g. `1487204875912609844`) and
- * Mattermost uids (lowercase alphanumeric, e.g. `8wkrnxq…`) both fail
- * the `did:mf:[a-z]...` start-with-letter constraint when used as the
- * method-specific id directly. Prefix with the platform short-name so
- * the resulting DID is both (a) schema-valid and (b) round-trippable
- * back to "this came from Discord user 1487…" by the receive side.
- *
- * The originator block on inbound envelopes is the policy-attribution
- * claim — the cryptographic chain (`signed_by[]`) is signed by the
- * stack per cortex#414 §4.3, so this identifier is for policy lookup
- * (capability resolution, dashboard attribution), not authentication.
- * A coarse `discord-{id}` shape preserves the platform↔user mapping
- * without inventing a registry; a richer user→DID resolver (mapping
- * Discord IDs to canonical operator identities) is a Stage 5+
- * concern tracked separately.
- */
-function adapterOriginatorIdentity(
-  platform: string,
-  authorId: string,
-): string | null {
-  const prefix = platform.toLowerCase();
-  // Squash anything not matching the DID method-specific id grammar
-  // (`[a-z0-9._-]` with no `--`). Discord/Mattermost ids are already
-  // alphanumeric in practice; the replace is defensive in case a
-  // future adapter passes a more exotic id.
-  const safeId = authorId.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
-  const candidate = `did:mf:${prefix}-${safeId}`;
-  if (DID_RE.test(candidate)) return candidate;
-  // No DID-valid encoding available — refuse to publish on the
-  // canonical path. Returning a shared `did:mf:{prefix}-unknown`
-  // here would collapse every exotic-id user onto one policy
-  // identity (capability resolution, dashboard attribution all
-  // collide). The flag-on envelope path is opt-in; the caller
-  // sees `null`, returns `false` from `publishInboundDispatchEnvelope`,
-  // and the dispatch falls through to the legacy in-process path
-  // (which doesn't depend on the canonical originator DID).
-  // cortex#420 nit-5.
-  return null;
-}
 
 /** Read version from arc-manifest.yaml (cached after first read). */
 let _cachedVersion: string | null = null;
@@ -189,7 +125,7 @@ export interface DispatchHandlerOpts {
     maxTotalMs?: number;
   };
   /**
-   * Direction A Stage 4-A (cortex#409) — operator stack segment used
+   * Direction A Stage 4-B (cortex#409) — operator stack segment used
    * to build the canonical `local.{principal}.{stack}.tasks.@{did}.{capability}`
    * subject in the envelope-mode publish path. Same value the
    * `MyelinRuntime` and `DispatchListener` receive — production
@@ -272,7 +208,7 @@ export class DispatchHandler extends EventEmitter {
   private readonly retryMaxAttempts: number;
   private readonly retryMaxTotalMs: number;
   /**
-   * Direction A Stage 4-A (cortex#409) — operator stack segment for
+   * Direction A Stage 4-B (cortex#409) — operator stack segment for
    * canonical-subject composition in the envelope-mode publish path.
    * See `DispatchHandlerOpts.stack`.
    */
@@ -433,59 +369,14 @@ export class DispatchHandler extends EventEmitter {
   }
 
   /**
-   * Direction A Stage 4-A (cortex#409) — Publish an inbound chat dispatch
+   * Direction A Stage 4-B (cortex#409) — Publish an inbound chat dispatch
    * onto the canonical Tasks Domain subject so the bus-mediated path
    * (`dispatch-listener.handleDispatchEnvelope`) consumes it the same
    * way it consumes envelopes from any other source class (bot→bot,
-   * MC dashboard, taps). The legacy in-process `handleSync` path stays
-   * the fallback when this method returns `false`.
-   *
-   * **Subject shape** (`docs/design-myelin-osi-scenarios.md` §4.1):
-   *
-   *     local.{principal}.{stack}.tasks.@{did-encoded-assistant}.chat
-   *
-   * Composed via myelin's `directTaskSubject` helper (trailing `>`
-   * stripped — that helper builds a subscribe-side wildcard) plus
-   * the explicit `chat` capability suffix. The `@`-prefixed segment
-   * cannot live in `envelope.type` (the envelope schema rejects
-   * `@`), so the publish path uses `runtime.publishOnSubject` —
-   * the cortex#409 escape hatch added alongside this method that
-   * signs + publishes on an explicit subject.
-   *
-   * **Envelope shape:**
-   * - `type: "tasks.chat"` — minimum schema-valid type for the
-   *   Tasks Domain; the routing-relevant `@{assistant}.chat` lives
-   *   on the wire subject (per §4.1).
-   * - `distribution_mode: "direct"` — named recipient.
-   * - `target_assistant: did:mf:{this.config.agent.name}` — the
-   *   receiving assistant DID.
-   * - `originator: { identity, attribution: "adapter-resolved" }` —
-   *   policy actor mapped by the adapter from the inbound platform
-   *   id (per §4.3: adapter populates originator, stack signs).
-   * - `classification: "local"` — single-stack chat dispatches stay
-   *   local; federated cross-stack flows are a Stage 5+ concern.
-   * - `correlation_id: <task_id>` — the same UUID the legacy path
-   *   uses, so observability across lifecycle envelopes survives.
-   *
-   * **Payload shape** matches `DispatchTaskReceivedPayload` from
-   * `runner/dispatch-listener.ts` byte-for-byte so the listener's
-   * `parsePayload` accepts it without divergence — every field
-   * the legacy `dispatch.task.received` envelope carried, this
-   * carries too.
-   *
-   * **Return contract:**
-   *   - `true` — envelope was constructed and handed to `runtime.publishOnSubject`.
-   *     The caller MUST return from `handleMessage` immediately. The
-   *     dispatch-listener will run the harness; the surface-router will
-   *     route lifecycle envelopes back to the adapter's `render` sink.
-   *   - `false` — the envelope path is not viable (no runtime, no
-   *     `publishOnSubject` support, missing wiring, envelope construction
-   *     threw). Caller falls through to the legacy in-process path.
-   *
-   * **No exception escape.** Every failure mode logs to stderr and
-   * returns `false`; the legacy path always runs as the safety net.
-   * Migration-moves-preserve-behavior (per CLAUDE.md) — flag-off and
-   * publish-failure paths must remain byte-identical to pre-cortex#409.
+   * MC dashboard, taps). The reusable envelope construction lives in
+   * `dispatch-source-publisher.ts`; this handler supplies the prompt,
+   * access-derived runtime options, and platform message metadata until
+   * the remaining adapter/direct-call seam is removed in #412.
    */
   private async publishInboundDispatchEnvelope(opts: {
     taskId: string;
@@ -504,149 +395,20 @@ export class DispatchHandler extends EventEmitter {
     operator: string | undefined;
   }): Promise<boolean> {
     const wiring = this.canPublishSystemEvent();
-    if (!wiring) {
-      // No runtime or no source → no envelope path. Stay silent — same
-      // posture as `publishInboundAborted` for the "no bus configured"
-      // deployment.
-      return false;
-    }
-    const publishOnSubject = wiring.runtime.publishOnSubject;
-    if (typeof publishOnSubject !== "function") {
-      // Runtime predates the cortex#409 escape hatch (e.g. a test fake
-      // that only implements `publish`). Cannot compose canonical
-      // subject — fall through to legacy.
-      return false;
-    }
-
-    const agentName = this.config.agent.name;
-    const principal = wiring.source.org;
-    const targetDid = `did:mf:${agentName}`;
-
-    let subject: string;
-    try {
-      // `directTaskSubject` returns the SUBSCRIBE-side wildcard form
-      // (`…tasks.@{did}.>`). Strip the trailing `.>` and append the
-      // capability segment to get the publish-side terminal subject.
-      // Composing this way keeps the DID encoding rules
-      // (`encodeDidSegment`'s `:` → `-`, `.` → `--` + `DID_RE`
-      // validation) in one place rather than re-implementing them
-      // here. Myelin lacks a publish-side helper today (only the
-      // wildcard variant is exported); the deferred TODO is to
-      // upstream a `directTaskPublishSubject` and switch this caller.
-      const wildcard = directTaskSubject(principal, targetDid, this.stack);
-      if (!wildcard.endsWith(".>")) {
-        throw new Error(
-          `directTaskSubject returned unexpected shape: ${wildcard}`,
-        );
-      }
-      subject = `${wildcard.slice(0, -2)}.chat`;
-    } catch (err) {
-      console.error(
-        "dispatch-handler: failed to compose canonical tasks subject:",
-        err instanceof Error ? err.message : String(err),
+    const result = await publishInboundChatDispatchEnvelope({
+      runtime: wiring?.runtime,
+      source: wiring?.source,
+      stack: this.stack,
+      agentName: this.config.agent.name,
+      agentDisplayName: this.config.agent.displayName,
+      ...opts,
+    });
+    if (result.published) {
+      console.log(
+        `dispatch-handler: published inbound dispatch envelope task_id=${opts.taskId} subject=${result.subject}`,
       );
-      return false;
     }
-
-    // Envelope source mirrors what `dispatch-events.ts buildSource`
-    // would produce — `{org}.{agent}.{instance}` — so the
-    // `orgFromEnvelope` extractor that `MyelinRuntime` uses on the
-    // legacy `publish` path resolves the same `{principal}` segment
-    // here. `firstSegment(envelope.source)` === `wiring.source.org`.
-    const envelopeSource = `${wiring.source.org}.${wiring.source.agent}.${wiring.source.instance}`;
-
-    const originatorIdentity = adapterOriginatorIdentity(
-      opts.msg.platform,
-      opts.msg.authorId,
-    );
-    if (originatorIdentity === null) {
-      // No DID-valid encoding for this platform/authorId pair —
-      // refuse to publish on the canonical envelope path (would
-      // collide all such users onto a single shared policy
-      // identity). Fall through to the legacy in-process path.
-      // cortex#420 nit-5.
-      console.error(
-        `dispatch-handler: cannot derive DID-valid originator identity for platform=${opts.msg.platform} authorId=${opts.msg.authorId} — falling back to legacy path`,
-      );
-      return false;
-    }
-
-    const payload: Record<string, unknown> = {
-      task_id: opts.taskId,
-      agent_id: agentName,
-      prompt: opts.prompt,
-      ...(opts.groveChannel !== undefined && { grove_channel: opts.groveChannel }),
-      ...(opts.groveNetwork !== undefined && { grove_network: opts.groveNetwork }),
-      agent_name: this.config.agent.displayName,
-      ...(opts.resumeSessionId !== undefined && {
-        resume_session_id: opts.resumeSessionId,
-      }),
-      ...(opts.disallowedTools.length > 0 && {
-        disallowed_tools: opts.disallowedTools,
-      }),
-      ...(opts.allowedDirs.length > 0 && { allowed_dirs: opts.allowedDirs }),
-      ...(opts.timeoutMs !== undefined && { timeout_ms: opts.timeoutMs }),
-      ...(opts.cwd !== undefined && { cwd: opts.cwd }),
-      ...(opts.additionalArgs !== undefined &&
-        opts.additionalArgs.length > 0 && { additional_args: opts.additionalArgs }),
-      ...(opts.project !== undefined && { project: opts.project }),
-      ...(opts.entity !== undefined && { entity: opts.entity }),
-      ...(opts.operator !== undefined && { operator: opts.operator }),
-    };
-
-    let envelope: Envelope;
-    try {
-      const base = buildSharedEnvelope({
-        type: "tasks.chat",
-        source: envelopeSource,
-        correlationId: opts.taskId,
-        sovereignty: {
-          classification: "local",
-          data_residency: wiring.source.dataResidency ?? "NZ",
-          max_hop: 0,
-          frontier_ok: false,
-          model_class: "local-only",
-        },
-        payload,
-      });
-      envelope = {
-        ...base,
-        distribution_mode: "direct",
-        target_assistant: targetDid,
-        originator: {
-          identity: originatorIdentity,
-          attribution: "adapter-resolved",
-        },
-      };
-    } catch (err) {
-      console.error(
-        "dispatch-handler: failed to build inbound dispatch envelope:",
-        err instanceof Error ? err.message : String(err),
-      );
-      return false;
-    }
-
-    try {
-      await publishOnSubject.call(wiring.runtime, envelope, subject);
-    } catch (err) {
-      // `publishOnSubject` propagates errors from the signer and link
-      // layers — `signAndPublishOnSubject` awaits both and rethrows,
-      // and a future JetStream publisher will surface real Promise
-      // rejections too. This catch is the propagation-aware safety
-      // net: log the failure, return `false`, and let the caller
-      // (`handleMessage`) fall through to the legacy in-process path
-      // per the migration-moves-preserve-behavior contract.
-      console.error(
-        `dispatch-handler: publishOnSubject(${subject}) failed:`,
-        err instanceof Error ? err.message : String(err),
-      );
-      return false;
-    }
-
-    console.log(
-      `dispatch-handler: published inbound dispatch envelope task_id=${opts.taskId} subject=${subject}`,
-    );
-    return true;
+    return result.published;
   }
 
   /**
@@ -923,22 +685,11 @@ export class DispatchHandler extends EventEmitter {
       const groveOperator = msg.authorName;
 
 
-      // 11b. Direction A Stage 4-A (cortex#409) — when
-      // `CORTEX_ADAPTER_ENVELOPE_MODE=1`, intercept chat/direct (no
-      // mode prefix) dispatches and route them via the bus rather
-      // than the in-process `handleSync` path. Async + team + help
-      // continue on the legacy path until Stage 4-B/4-C land.
-      //
-      // The flag check is per-message (a single `process.env` read)
-      // so operator flips don't require a restart. When the publish
-      // succeeds, `handleMessage` returns here and the dispatch-
-      // listener picks up the envelope, runs the harness, and the
-      // surface-router routes lifecycle envelopes back to the
-      // adapter's `render` sink. When it fails (no runtime, no
-      // `publishOnSubject`, build/publish error), we fall through
-      // to the legacy `handleSync` below — migration-moves-preserve-
-      // behavior contract per CLAUDE.md Critical Rules.
-      if (parsed.mode === "sync" && isAdapterEnvelopeModeEnabled()) {
+      // 11b. Direction A Stage 4-B (cortex#409) — chat/direct dispatches
+      // take the canonical bus-mediated path by default. Async + team
+      // remain on their existing branches until their payload/runtime
+      // shapes are promoted into dispatch-source envelopes.
+      if (parsed.mode === "sync") {
         const dispatchTaskId = randomUUID();
         const published = await this.publishInboundDispatchEnvelope({
           taskId: dispatchTaskId,
@@ -957,6 +708,9 @@ export class DispatchHandler extends EventEmitter {
           operator: groveOperator,
         });
         if (published) return;
+        console.warn(
+          "dispatch-handler: canonical chat dispatch publish unavailable — using direct sync path for this message",
+        );
       }
 
       // 12. Route by mode

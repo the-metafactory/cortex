@@ -214,13 +214,11 @@ describe("createDispatchListener — surfaceConfig", () => {
       source: SOURCE,
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
-    // Direction A Stage 4 (cortex#409) — defaultSubjects returns BOTH
-    // the legacy `dispatch.task.received` subject and the canonical
-    // Tasks Domain pattern `tasks.@*.>`. Both route through the same
-    // `handleDispatchEnvelope` path during the migration window.
+    // Direction A Stage 4-B (cortex#409) — production defaults subscribe
+    // to the canonical Tasks Domain pattern. Legacy subjects remain
+    // available only through explicit test/operator overrides.
     expect(listener.surfaceConfig.subjects).toEqual([
-      "local.metafactory.dispatch.task.received",
-      "local.metafactory.tasks.@*.>",
+      "local.metafactory.tasks.*.>",
     ]);
   });
 
@@ -241,9 +239,8 @@ describe("createDispatchListener — surfaceConfig", () => {
 
   // cortex#267 — stack-aware default subjects. When the boot path
   // supplies `stack` (from `deriveStackId(loadedConfig).stack`), the
-  // listener subscribes on the 6-segment grammar matching sage's
-  // emit-side post-IAW A.5. Stack-less callers stay on the legacy
-  // 5-segment form.
+  // listener subscribes on the 6-segment canonical tasks grammar matching
+  // sage's emit-side post-IAW A.5.
   test("default subjects use 6-segment grammar when stack is supplied (cortex#267)", () => {
     const { runtime } = recordingRuntime();
     const router = createSurfaceRouter(runtime);
@@ -254,12 +251,10 @@ describe("createDispatchListener — surfaceConfig", () => {
       stack: "default",
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
-    // Direction A Stage 4 (cortex#409) — stack-aware default subjects
-    // include both the legacy dispatch.task.received subject and the
-    // canonical `tasks.@*.>` pattern, both 6-segment when stack supplied.
+    // Direction A Stage 4-B (cortex#409) — stack-aware default subjects
+    // use only the canonical `tasks.*.>` pattern.
     expect(listener.surfaceConfig.subjects).toEqual([
-      "local.metafactory.default.dispatch.task.received",
-      "local.metafactory.default.tasks.@*.>",
+      "local.metafactory.default.tasks.*.>",
     ]);
   });
 
@@ -274,8 +269,7 @@ describe("createDispatchListener — surfaceConfig", () => {
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
     expect(listener.surfaceConfig.subjects).toEqual([
-      "local.metafactory.research.dispatch.task.received",
-      "local.metafactory.research.tasks.@*.>",
+      "local.metafactory.research.tasks.*.>",
     ]);
   });
 
@@ -343,7 +337,7 @@ describe("dispatch-listener — success path", () => {
     await router.start();
 
     // Trigger an envelope through the runtime fan-out path
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
 
     // Wait briefly for async render to complete
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -382,7 +376,7 @@ describe("dispatch-listener — success path", () => {
     await listener.start();
     await router.start();
 
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const completed = r.published.find((e) => e.type === "dispatch.task.completed");
@@ -421,7 +415,7 @@ describe("dispatch-listener — success path", () => {
         operator: "andreas",
         resume_session_id: "prior-session",
       }),
-      "local.metafactory.dispatch.task.received",
+      "local.metafactory.tasks.@did-mf-cortex.chat",
     );
     await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -464,7 +458,7 @@ describe("dispatch-listener — success path", () => {
     await router.start();
 
     // No agent_name on the payload — only agent_id.
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(optsCaptured).toHaveLength(1);
@@ -492,7 +486,7 @@ describe("dispatch-listener — success path", () => {
     await listener.start();
     await router.start();
 
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(optsCaptured).toHaveLength(1);
@@ -535,7 +529,7 @@ describe("dispatch-listener — success path", () => {
         distribution_mode: "delegate",
         target_assistant: "did:mf:cortex",
       },
-      "local.metafactory.dispatch.task.received",
+      "local.metafactory.tasks.@did-mf-cortex.chat",
     );
     await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -569,7 +563,7 @@ describe("dispatch-listener — failure paths", () => {
     await listener.start();
     await router.start();
 
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published.map((e) => e.type)).toEqual([
@@ -595,7 +589,7 @@ describe("dispatch-listener — failure paths", () => {
     await listener.start();
     await router.start();
 
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published.map((e) => e.type)).toEqual([
@@ -622,7 +616,7 @@ describe("dispatch-listener — failure paths", () => {
     await listener.start();
     await router.start();
 
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published.map((e) => e.type)).toEqual([
@@ -649,7 +643,7 @@ describe("dispatch-listener — failure paths", () => {
     await listener.start();
     await router.start();
 
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published.map((e) => e.type)).toEqual([
@@ -692,7 +686,7 @@ describe("dispatch-listener — malformed payload", () => {
       },
       payload: { task_id: TASK_ID, agent_id: "cortex" }, // no prompt
     };
-    r.trigger(malformed, "local.metafactory.dispatch.task.received");
+    r.trigger(malformed, "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published).toHaveLength(0);
@@ -724,7 +718,7 @@ describe("dispatch-listener — malformed payload", () => {
       },
       payload: { agent_id: "cortex", prompt: "x" },
     };
-    r.trigger(malformed, "local.metafactory.dispatch.task.received");
+    r.trigger(malformed, "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published).toHaveLength(0);
@@ -762,7 +756,7 @@ describe("dispatch-listener — malformed payload", () => {
       // shape is wrong on multiple axes: bare string, no hyphens, wrong length
       payload: { task_id: "not-a-uuid", agent_id: "cortex", prompt: "x" },
     };
-    r.trigger(malformed, "local.metafactory.dispatch.task.received");
+    r.trigger(malformed, "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published).toHaveLength(0);
@@ -789,7 +783,7 @@ describe("dispatch-listener — start/stop", () => {
     await listener.start(); // should be a no-op
     await router.start();
 
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Single registration → exactly one started + one completed (not double)
@@ -814,7 +808,7 @@ describe("dispatch-listener — start/stop", () => {
     await router.start();
     await listener.stop();
 
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published).toHaveLength(0);
@@ -854,7 +848,7 @@ describe("dispatch-listener — subject filtering", () => {
     await router.start();
 
     // Same envelope, different subject — should not match
-    r.trigger(makeReceivedEnvelope(), "local.othermetafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.othermetafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published).toHaveLength(0);
@@ -905,7 +899,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     await listener.start();
     await router.start();
 
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published.map((e) => e.type)).toEqual(["dispatch.task.failed"]);
@@ -929,7 +923,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     await listener.start();
     await router.start();
 
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     // C.4.1 — system.access.allowed audit envelope precedes the
@@ -956,7 +950,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     await listener.start();
     await router.start();
 
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     // C.4.2 — deny path emits both system.access.denied (audit) +
@@ -1000,7 +994,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
 
     r.trigger(
       makeReceivedEnvelope({ agent_id: "ghost-agent" }),
-      "local.metafactory.dispatch.task.received",
+      "local.metafactory.tasks.@did-mf-cortex.chat",
     );
     await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -1068,7 +1062,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
       model_class: "frontier",
     };
 
-    r.trigger(env, "local.metafactory.dispatch.task.received");
+    r.trigger(env, "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(captured).toHaveLength(1);
@@ -1108,7 +1102,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
       },
     ];
 
-    r.trigger(env, "local.metafactory.dispatch.task.received");
+    r.trigger(env, "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published.map((e) => e.type)).toEqual([
@@ -1138,7 +1132,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     await listener.start();
     await router.start();
 
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const allowed = r.published.find((e) => e.type === "system.access.allowed");
@@ -1150,7 +1144,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     expect(allowed.payload.capabilities).toEqual(["dispatch.cortex", "extra.cap"]);
     expect(allowed.payload.envelope_id).toBe("00000000-0000-4000-8000-000000000000");
     expect(allowed.payload.envelope_subject).toBe(
-      "local.metafactory.dispatch.task.received",
+      "local.metafactory.tasks.@did-mf-cortex.chat",
     );
     expect(allowed.payload.intent_sovereignty).toEqual({
       classification: "local",
@@ -1202,7 +1196,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
         role: "accountability",
       },
     ];
-    r.trigger(env, "local.metafactory.dispatch.task.received");
+    r.trigger(env, "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const allowed = r.published.find((e) => e.type === "system.access.allowed");
@@ -1456,7 +1450,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     await listener.start();
     await router.start();
 
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published.map((e) => e.type)).toEqual([
@@ -1470,7 +1464,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     // traffic).
     const allowed = r.published[0]!;
     expect(allowed.payload.envelope_subject).toBe(
-      "local.metafactory.dispatch.task.received",
+      "local.metafactory.tasks.@did-mf-cortex.chat",
     );
   });
 
@@ -1530,7 +1524,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
         at: "2026-05-15T12:00:00Z",
       },
     ];
-    r.trigger(env, "local.metafactory.dispatch.task.received");
+    r.trigger(env, "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const denied = r.published.find((e) => e.type === "system.access.denied");
@@ -1655,7 +1649,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     const env = makeReceivedEnvelope();
     env.signed_by = [runnerEd25519Stamp("did:mf:cortex")];
 
-    r.trigger(env, "local.metafactory.dispatch.task.received");
+    r.trigger(env, "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Verifier accepts → policy gate sees verified principal → allow →
@@ -1693,7 +1687,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     await router.start();
 
     // No signed_by on the envelope — legitimate adapter shape.
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Verifier sees empty chain, returns `valid: true` (rejectEmpty=false).
@@ -1734,7 +1728,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     const env = makeReceivedEnvelope();
     env.signed_by = [runnerEd25519Stamp("did:mf:ghost")];
 
-    r.trigger(env, "local.metafactory.dispatch.task.received");
+    r.trigger(env, "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published.map((e) => e.type)).toEqual([
@@ -1792,7 +1786,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     await listener.start();
     await router.start();
 
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Empty chain accepted; lifecycle flows.
@@ -1834,7 +1828,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     const base = makeReceivedEnvelope() as Parameters<typeof signEnvelope>[0];
     const signed = await signEnvelope(base, privateKeyBase64, "did:mf:cortex");
 
-    r.trigger(signed, "local.metafactory.dispatch.task.received");
+    r.trigger(signed, "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published.map((e) => e.type)).toEqual([
@@ -1891,7 +1885,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
       signed_by: [{ ...firstStamp, signature: tamperedSig }],
     };
 
-    r.trigger(tampered, "local.metafactory.dispatch.task.received");
+    r.trigger(tampered, "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published.map((e) => e.type)).toEqual([
@@ -1934,7 +1928,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     await listener.start();
     await router.start();
 
-    r.trigger(makeReceivedEnvelope(), "local.metafactory.dispatch.task.received");
+    r.trigger(makeReceivedEnvelope(), "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Both audit (system.access.denied) and lifecycle (dispatch.task.failed)
@@ -2021,7 +2015,7 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
       attribution: "adapter-resolved",
     };
 
-    r.trigger(env, "local.metafactory.dispatch.task.received");
+    r.trigger(env, "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(captured).toHaveLength(1);
@@ -2075,7 +2069,7 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
     ];
     // No env.originator on purpose — legacy envelope.
 
-    r.trigger(env, "local.metafactory.dispatch.task.received");
+    r.trigger(env, "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(captured).toHaveLength(1);
@@ -2123,7 +2117,7 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
     // adds no signed_by / no originator.
     r.trigger(
       makeReceivedEnvelope(),
-      "local.metafactory.dispatch.task.received",
+      "local.metafactory.tasks.@did-mf-cortex.chat",
     );
     await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -2186,7 +2180,7 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
       },
     };
 
-    r.trigger(tampered, "local.metafactory.dispatch.task.received");
+    r.trigger(tampered, "local.metafactory.tasks.@did-mf-cortex.chat");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(r.published.map((e) => e.type)).toEqual([

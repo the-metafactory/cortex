@@ -890,15 +890,13 @@ describe("DispatchHandler — chat-path CC failure retry (cortex#360)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Direction A Stage 4-A (cortex#409) — publishInboundDispatchEnvelope
+// Direction A Stage 4-B (cortex#409) — publishInboundDispatchEnvelope
 //
-// Adapter envelope-mode path. When `CORTEX_ADAPTER_ENVELOPE_MODE=1`, the
-// handler intercepts chat/direct dispatches before the legacy mode switch
-// and publishes a `tasks.@{did-encoded-assistant}.chat` envelope via
-// `runtime.publishOnSubject` for the dispatch-listener to consume. Tests
-// here exercise the envelope construction in isolation (no full
-// handleMessage pipeline) plus the flag-gate, the absent-runtime path,
-// and the publishOnSubject-missing path.
+// Dispatch-source path. The handler publishes chat/direct dispatches as
+// `tasks.@{did-encoded-assistant}.chat` envelopes via
+// `runtime.publishOnSubject` for the dispatch-listener to consume. Tests here
+// exercise the envelope construction in isolation plus the handleMessage gate
+// that now makes canonical publishing the default chat path.
 // ---------------------------------------------------------------------------
 
 interface RecordingRuntimeWithSubject extends MyelinRuntime {
@@ -953,7 +951,7 @@ async function callPublishInboundDispatchEnvelope(
   ).publishInboundDispatchEnvelope(opts);
 }
 
-describe("DispatchHandler — Direction A Stage 4-A inbound envelope publish (cortex#409)", () => {
+describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (cortex#409)", () => {
   let originalWarn: typeof console.warn;
   let originalError: typeof console.error;
   let originalLog: typeof console.log;
@@ -1063,7 +1061,7 @@ describe("DispatchHandler — Direction A Stage 4-A inbound envelope publish (co
     await handler.shutdown();
   });
 
-  test("legacy 5-segment subject when stack is omitted", async () => {
+  test("stackless subject when stack is omitted", async () => {
     const runtime = makeRecordingRuntimeWithSubject();
     const handler = new DispatchHandler({
       config: makeConfig(),
@@ -1112,7 +1110,7 @@ describe("DispatchHandler — Direction A Stage 4-A inbound envelope publish (co
     await handler.shutdown();
   });
 
-  test("returns false when runtime is absent — caller falls through to legacy", async () => {
+  test("returns false when runtime is absent — caller can surface degraded dispatch", async () => {
     const handler = new DispatchHandler({
       config: makeConfig(),
       securityPreamble: "",
@@ -1126,7 +1124,7 @@ describe("DispatchHandler — Direction A Stage 4-A inbound envelope publish (co
     await handler.shutdown();
   });
 
-  test("returns false when runtime lacks publishOnSubject (back-compat fake)", async () => {
+  test("returns false when runtime lacks publishOnSubject", async () => {
     // Mimic an older runtime fake that only exposes `publish`.
     const runtime: MyelinRuntime = {
       enabled: true,
@@ -1153,7 +1151,7 @@ describe("DispatchHandler — Direction A Stage 4-A inbound envelope publish (co
     await handler.shutdown();
   });
 
-  test("publishOnSubject rejection → returns false (legacy fallback path)", async () => {
+  test("publishOnSubject rejection → returns false", async () => {
     const runtime = makeRecordingRuntimeWithSubject({
       publishOnSubjectImpl: async () => {
         throw new Error("bus is down");
@@ -1245,18 +1243,13 @@ describe("DispatchHandler — Direction A Stage 4-A inbound envelope publish (co
   });
 
   // ---------------------------------------------------------------------------
-  // Flag gate — handleMessage integration. Verifies that with the flag
-  // OFF, the envelope path is NEVER taken (legacy behaviour byte-for-byte
-  // preserved); with the flag ON and a runtime present, the envelope
-  // path runs and the legacy CC path does NOT spawn.
+  // handleMessage integration. The env flag from Stage 4-A is no longer part
+  // of the production gate; chat/direct messages try the canonical publish
+  // path by default.
   // ---------------------------------------------------------------------------
 
-  test("flag off: handleMessage uses legacy path — no envelope publish", async () => {
-    delete process.env.CORTEX_ADAPTER_ENVELOPE_MODE;
+  test("chat mode publishes canonical envelope by default — legacy CC does not spawn", async () => {
     const runtime = makeRecordingRuntimeWithSubject();
-    // Stub CC factory returns success → legacy path posts a response
-    // back through the adapter; the absence of subjectPublishes proves
-    // the envelope path was NOT taken.
     let spawnCount = 0;
     const ccFactory: CCSessionFactory = (_opts: CCSessionOpts) => {
       spawnCount++;
@@ -1291,15 +1284,22 @@ describe("DispatchHandler — Direction A Stage 4-A inbound envelope publish (co
     });
     await handler.handleMessage(
       adapter,
-      makeMsg({ content: "hello", platform: "discord" }),
+      makeMsg({
+        content: "hello",
+        platform: "discord",
+        authorId: "1487204875912609844",
+      }),
     );
-    expect(runtime.subjectPublishes.length).toBe(0);
-    expect(spawnCount).toBe(1);
+    expect(runtime.subjectPublishes.length).toBe(1);
+    expect(spawnCount).toBe(0);
+    expect(runtime.subjectPublishes[0]?.subject).toBe(
+      "local.andreas.meta-factory.tasks.@did-mf-test-agent.chat",
+    );
     await handler.shutdown();
   });
 
-  test("flag on + chat mode: envelope path runs, legacy CC does not spawn", async () => {
-    process.env.CORTEX_ADAPTER_ENVELOPE_MODE = "1";
+  test("chat mode no longer consults CORTEX_ADAPTER_ENVELOPE_MODE", async () => {
+    process.env.CORTEX_ADAPTER_ENVELOPE_MODE = "0";
     const runtime = makeRecordingRuntimeWithSubject();
     let spawnCount = 0;
     const ccFactory: CCSessionFactory = (_opts: CCSessionOpts) => {
@@ -1354,7 +1354,7 @@ describe("DispatchHandler — Direction A Stage 4-A inbound envelope publish (co
   });
 
   test("intercept gate excludes async/team — explicit boolean coverage", () => {
-    // The handleMessage intercept fires only for
+    // The handleMessage canonical path fires only for
     // `parsed.mode === "sync"` (post-Nit-4 in commit 8f000e8 — the
     // `mode === undefined` branch was removed as dead code, since
     // `parseMessageKeywords` always returns a concrete enum mode).

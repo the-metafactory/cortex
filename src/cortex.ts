@@ -1176,6 +1176,7 @@ export async function startCortex(
     configPath: expandedConfigPath,
     runtime,
     systemEventSource,
+    stack: derivedStack.stack,
   });
 
   // Cloud publisher (G-401 + G-500) — opt-in via cloud-capable network.
@@ -1777,6 +1778,7 @@ export async function startCortex(
     runtime,
     router,
     source: systemEventSource,
+    stack: derivedStack.stack,
     ...(policyEngine !== undefined && { policyEngine }),
     trustResolver,
     cryptoVerify: true,
