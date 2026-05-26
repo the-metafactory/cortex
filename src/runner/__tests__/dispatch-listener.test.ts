@@ -99,6 +99,8 @@ function makeReceivedEnvelope(
     id: "00000000-0000-4000-8000-000000000000",
     source: "metafactory.dispatch-handler.local",
     type: "dispatch.task.received",
+    distribution_mode: "direct",
+    target_assistant: `did:mf:${payload.agent_id}`,
     timestamp: "2026-05-09T12:00:00Z",
     correlation_id: payload.task_id,
     sovereignty: {
@@ -550,6 +552,37 @@ describe("dispatch-listener — success path", () => {
 // ---------------------------------------------------------------------------
 
 describe("dispatch-listener — failure paths", () => {
+  test("canonical direct subject whose assistant segment mismatches target emits failed and skips harness", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const cc = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: cc.factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(
+      {
+        ...makeReceivedEnvelope(),
+        target_assistant: "did:mf:other-agent",
+      },
+      "local.metafactory.tasks.@did-mf-cortex.chat",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(cc.optsCaptured).toHaveLength(0);
+    expect(r.published).toHaveLength(1);
+    expect(r.published[0]?.type).toBe("dispatch.task.failed");
+    expect((r.published[0]?.payload.reason as { kind?: string } | undefined)?.kind).toBe(
+      "cant_do",
+    );
+  });
+
   test("non-zero exit code → started → failed", async () => {
     const r = recordingRuntime();
     const router = createSurfaceRouter(r.runtime);
@@ -994,7 +1027,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
 
     r.trigger(
       makeReceivedEnvelope({ agent_id: "ghost-agent" }),
-      "local.metafactory.tasks.@did-mf-cortex.chat",
+      "local.metafactory.tasks.@did-mf-ghost-agent.chat",
     );
     await new Promise((resolve) => setTimeout(resolve, 10));
 

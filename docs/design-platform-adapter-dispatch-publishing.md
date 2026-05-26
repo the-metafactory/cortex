@@ -89,8 +89,8 @@ Adapter receives raw platform message and produces a signed envelope. Steps that
 3. Channel-context resolution (repo, entity, network)
 4. Conversation history fetch
 5. Attachment download (Q4a — adapter has auth context; payload carries base64)
-6. Envelope build + sign (Q1a — adapter signs as the hosted agent)
-7. Publish on `local.{principal}.{stack}.dispatch.task.received`
+6. Build a canonical Direct/Delegate task envelope with `target_assistant`, `originator.identity`, and a dispatch payload
+7. Publish on `local.{principal}.{stack}.tasks.@{did-encoded-assistant}.{capability}`; the stack/runtime owns signing and the listener emits `dispatch.task.*` lifecycle events after acceptance
 
 ### 3.2 Bus middle (dispatch-listener)
 

@@ -55,7 +55,10 @@ import {
   type SystemEventSource,
   createSystemInboundAbortedEvent,
 } from "./system-events";
-import { publishInboundChatDispatchEnvelope } from "./dispatch-source-publisher";
+import {
+  publishInboundChatDispatchEnvelope,
+  type DispatchSourcePublishResult,
+} from "./dispatch-source-publisher";
 import { join } from "path";
 
 /** Read version from arc-manifest.yaml (cached after first read). */
@@ -393,7 +396,7 @@ export class DispatchHandler extends EventEmitter {
     project: string | undefined;
     entity: string | undefined;
     operator: string | undefined;
-  }): Promise<boolean> {
+  }): Promise<DispatchSourcePublishResult> {
     const wiring = this.canPublishSystemEvent();
     const result = await publishInboundChatDispatchEnvelope({
       runtime: wiring?.runtime,
@@ -408,7 +411,7 @@ export class DispatchHandler extends EventEmitter {
         `dispatch-handler: published inbound dispatch envelope task_id=${opts.taskId} subject=${result.subject}`,
       );
     }
-    return result.published;
+    return result;
   }
 
   /**
@@ -691,7 +694,7 @@ export class DispatchHandler extends EventEmitter {
       // shapes are promoted into dispatch-source envelopes.
       if (parsed.mode === "sync") {
         const dispatchTaskId = randomUUID();
-        const published = await this.publishInboundDispatchEnvelope({
+        const publishResult = await this.publishInboundDispatchEnvelope({
           taskId: dispatchTaskId,
           msg,
           prompt,
@@ -707,9 +710,16 @@ export class DispatchHandler extends EventEmitter {
           entity: groveEntity,
           operator: groveOperator,
         });
-        if (published) return;
+        if (publishResult.published) return;
+        if (publishResult.reason === "invalid-originator") {
+          await adapter.postResponse(
+            { instanceId: msg.instanceId, channelId: msg.channelId, threadId: msg.threadId },
+            "I can't process that message because the sender identity could not be mapped to a valid principal.",
+          );
+          return;
+        }
         console.warn(
-          "dispatch-handler: canonical chat dispatch publish unavailable — using direct sync path for this message",
+          `dispatch-handler: canonical chat dispatch publish unavailable (${publishResult.reason ?? "unknown"}) — using direct sync path for this message`,
         );
       }
 

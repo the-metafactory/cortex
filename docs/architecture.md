@@ -417,7 +417,7 @@ An M7 app's public surface is **the set of envelopes it publishes + the set it c
 
 For cortex, concretely:
 
-- **Inbound contract:** cortex consumes `local.{org}.review.*` (from pilot), `local.{org}.dispatch.task.received` (from itself or external dispatchers), `local.{org}.attention.item.*` (from any source), `local.{org}.system.*` (operational events from any M7 app), and a few more. Each subject has a documented payload schema in cortex's domain catalogue.
+- **Inbound contract:** cortex consumes `local.{org}.{stack}.tasks.@{did-encoded-assistant}.{capability}` Direct/Delegate task envelopes (from adapters, taps, dashboards, or peer apps), `local.{org}.review.*` (from pilot), `local.{org}.attention.item.*` (from any source), `local.{org}.system.*` (operational events from any M7 app), and a few more. Each subject has a documented payload schema in cortex's domain catalogue.
 - **Outbound contract:** cortex publishes `local.{org}.dispatch.task.{started,progress,completed,failed,aborted}` (workflow runner emissions), `local.{org}.system.adapter.*` (per G-1111 §3.5), `local.{org}.review.*.decision` (operator decisions out of the surface).
 - The envelope schemas are versioned, append-only, and live in cortex's repo (`docs/api/` or `src/contracts/` — TBD; see open questions in the migration plan).
 - A consumer of cortex's contract can — in principle — replace cortex with a re-implementation that publishes/consumes the same envelopes, and the rest of the system doesn't notice. **That's the load-bearing property.**
@@ -490,7 +490,7 @@ Every routed task emits a JetStream-backed envelope sequence on the `events.>` c
 Canonical subjects:
 
 ```
-local.{org}.dispatch.task.received     ── tap or operator-input → bus; pre-dispatch
+local.{org}.{stack}.tasks.@{assistant}.{capability} ── source → bus; pre-dispatch Direct/Delegate task
 local.{org}.dispatch.task.assigned     ── routing decision (which agent claimed it)
 local.{org}.dispatch.task.started      ── agent began executing
 local.{org}.dispatch.task.progress     ── intermediate signal (Delegate sub-step, status update)

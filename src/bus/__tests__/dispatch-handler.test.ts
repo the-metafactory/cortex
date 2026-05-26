@@ -5,6 +5,7 @@ import type { InboundMessage } from "../../adapters/types";
 import type { BotConfig } from "../../common/types/config";
 import type { Envelope } from "../myelin/envelope-validator";
 import type { MyelinRuntime } from "../myelin/runtime";
+import type { DispatchSourcePublishResult } from "../dispatch-source-publisher";
 import { validateEnvelope } from "../myelin/envelope-validator";
 import type {
   CCSessionFactory,
@@ -946,9 +947,9 @@ async function callPublishInboundDispatchEnvelope(
 ): Promise<boolean> {
   return (
     handler as unknown as {
-      publishInboundDispatchEnvelope: (o: unknown) => Promise<boolean>;
+      publishInboundDispatchEnvelope: (o: unknown) => Promise<DispatchSourcePublishResult>;
     }
-  ).publishInboundDispatchEnvelope(opts);
+  ).publishInboundDispatchEnvelope(opts).then((result) => result.published);
 }
 
 describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (cortex#409)", () => {
@@ -1212,8 +1213,8 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
     // collapses to all-hyphens after the safe-id replace step, which
     // produces a candidate containing `--` — rejected by DID_RE's
     // `-(?!-)` clause. `publishInboundDispatchEnvelope` MUST return
-    // `false` so `handleMessage` falls through to the legacy
-    // in-process path, and no envelope is published on the bus.
+    // `false` so callers can distinguish a failed canonical publish, and
+    // no envelope is published on the bus.
     const runtime = makeRecordingRuntimeWithSubject();
     const handler = new DispatchHandler({
       config: makeConfig(),
@@ -1350,6 +1351,57 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
     } finally {
       delete process.env.CORTEX_ADAPTER_ENVELOPE_MODE;
     }
+    await handler.shutdown();
+  });
+
+  test("chat mode rejects invalid originator instead of spawning legacy CC", async () => {
+    const runtime = makeRecordingRuntimeWithSubject();
+    let spawnCount = 0;
+    const ccFactory: CCSessionFactory = (_opts: CCSessionOpts) => {
+      spawnCount++;
+      const fake: CCSessionLike = {
+        start() {
+          return fake;
+        },
+        wait() {
+          return Promise.resolve<CCSessionResult>({
+            success: true,
+            response: "legacy",
+            exitCode: 0,
+            durationMs: 0,
+            sessionId: "fake-session",
+          });
+        },
+      };
+      return fake;
+    };
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      runtime,
+      systemEventSource: {
+        org: "andreas",
+        agent: "cortex",
+        instance: "local",
+      },
+      stack: "meta-factory",
+      ccSessionFactory: ccFactory,
+    });
+
+    await handler.handleMessage(
+      adapter,
+      makeMsg({
+        content: "hello",
+        platform: "discord",
+        authorId: "!!!",
+      }),
+    );
+
+    expect(runtime.subjectPublishes.length).toBe(0);
+    expect(spawnCount).toBe(0);
+    expect(adapter.sentMessages).toHaveLength(1);
+    expect(adapter.sentMessages[0]?.text).toContain("sender identity");
     await handler.shutdown();
   });
 

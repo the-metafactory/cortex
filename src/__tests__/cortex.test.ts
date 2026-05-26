@@ -224,6 +224,8 @@ describe("startCortex — wire-up", () => {
       id: "11111111-1111-4111-8111-111111111111",
       source: "test-op.cortex.local",
       type: "dispatch.task.received",
+      distribution_mode: "direct",
+      target_assistant: "did:mf:cortex",
       timestamp: new Date().toISOString(),
       correlation_id: "22222222-2222-4222-8222-222222222222",
       sovereignty: {
@@ -246,7 +248,7 @@ describe("startCortex — wire-up", () => {
       },
     };
 
-    runtime.dispatchToHandlers(envelope, `local.test-op.dispatch.task.received`);
+    runtime.dispatchToHandlers(envelope, `local.test-op.default.tasks.@did-mf-cortex.chat`);
 
     // The listener's `render` is async; the router awaits it. Give the
     // microtask queue a beat so the `await runtime.publish(started)` lands.
@@ -268,7 +270,7 @@ describe("startCortex — wire-up", () => {
 
   test("dispatch-listener registers with the right org-derived subject", async () => {
     // Echo round-1 N1: the listener's `surfaceConfig.subjects` is
-    // `local.{principal}.dispatch.task.received` where `{principal}` comes from
+    // `local.{principal}.{stack}.tasks.*.>` where `{principal}` comes from
     // `agent.operatorId ?? "default"`. Verify the fallback path: with
     // operatorId absent, the runtime sees envelopes on `local.default.*`.
     const runtime = createRecordingRuntime();

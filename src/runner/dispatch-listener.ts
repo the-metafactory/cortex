@@ -61,7 +61,9 @@ import {
   getActorPrincipal,
   getSignedByChain,
   getFirstStampPrincipal,
+  getTargetAssistant,
 } from "../bus/myelin/envelope-validator";
+import { encodeDidSegment } from "@the-metafactory/myelin/subjects";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type {
   SurfaceAdapter,
@@ -609,6 +611,28 @@ async function handleDispatchEnvelope(
     return;
   }
 
+  const recipientMismatch = validateCanonicalTaskRecipient(
+    envelope,
+    payload,
+    subject,
+  );
+  if (recipientMismatch !== null) {
+    process.stderr.write(
+      `[runner/dispatch-listener] dropped envelope ${envelope.id} ` +
+        `(correlation_id=${envelope.correlation_id ?? "<none>"} ` +
+        `task_id=${payload.task_id} agent=${payload.agent_id}): ` +
+        `${recipientMismatch}\n`,
+    );
+    await emitCanonicalRecipientMismatch(
+      runtime,
+      source,
+      envelope,
+      payload,
+      recipientMismatch,
+    );
+    return;
+  }
+
   // IAW Phase B wiring (cortex#320, v2.0.2) — verify the envelope's
   // `signed_by[]` chain BEFORE resolving the principal. The runner used
   // to read `signed_by[0].principal` at face value (cortex#220 round 1's
@@ -1105,6 +1129,77 @@ function extractSourceNetwork(subject: string | undefined): string | undefined {
   if (networkId === undefined || networkId.length === 0) return undefined;
   if (!LETTER_PREFIX_ID_REGEX.test(networkId)) return undefined;
   return networkId;
+}
+
+/**
+ * Canonical Direct/Delegate subjects carry the target assistant in the
+ * `tasks.@{did}.{capability}` segment. Enforce that this wire recipient,
+ * the envelope target, and the payload's executing agent agree before
+ * policy or substrate dispatch sees the work.
+ */
+function validateCanonicalTaskRecipient(
+  envelope: Envelope,
+  payload: DispatchTaskReceivedPayload,
+  subject: string | undefined,
+): string | null {
+  if (subject === undefined) return null;
+  const parts = subject.split(".");
+  const tasksIndex = parts.indexOf("tasks");
+  if (tasksIndex === -1) return null;
+  const assistantSegment = parts[tasksIndex + 1];
+  if (assistantSegment === undefined || !assistantSegment.startsWith("@")) {
+    return null;
+  }
+
+  const targetDid = getTargetAssistant(envelope);
+  if (targetDid === undefined) {
+    return "canonical task subject has an assistant segment but envelope.target_assistant is missing";
+  }
+
+  let expectedSegment: string;
+  try {
+    expectedSegment = encodeDidSegment(targetDid);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return `envelope.target_assistant is not a valid DID: ${detail}`;
+  }
+
+  if (assistantSegment !== expectedSegment) {
+    return `subject assistant ${assistantSegment} does not match envelope target ${expectedSegment}`;
+  }
+
+  const targetAgentId = extractAgentIdFromDid(targetDid);
+  if (targetAgentId === undefined) {
+    return `envelope.target_assistant ${targetDid} is not a did:mf agent identity`;
+  }
+  if (payload.agent_id !== targetAgentId) {
+    return `payload.agent_id ${payload.agent_id} does not match envelope target agent ${targetAgentId}`;
+  }
+
+  return null;
+}
+
+async function emitCanonicalRecipientMismatch(
+  runtime: MyelinRuntime,
+  source: SystemEventSource,
+  envelope: Envelope,
+  payload: DispatchTaskReceivedPayload,
+  detail: string,
+): Promise<void> {
+  const now = new Date();
+  const failed = createDispatchTaskFailedEvent({
+    source,
+    taskId: payload.task_id,
+    agentId: payload.agent_id,
+    startedAt: now,
+    failedAt: now,
+    errorSummary: `canonical task recipient mismatch: ${detail}`,
+    reason: {
+      kind: "cant_do",
+      detail,
+    },
+  });
+  await runtime.publish(failed);
 }
 
 // ---------------------------------------------------------------------------
