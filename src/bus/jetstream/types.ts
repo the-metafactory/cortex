@@ -31,5 +31,10 @@ export interface ProvisionJsm {
   consumers: {
     info(stream: string, durable: string): Promise<ConsumerInfo>;
     add(stream: string, cfg: Partial<ConsumerConfig>): Promise<ConsumerInfo>;
+    update(
+      stream: string,
+      durable: string,
+      cfg: Partial<ConsumerConfig>,
+    ): Promise<ConsumerInfo>;
   };
 }

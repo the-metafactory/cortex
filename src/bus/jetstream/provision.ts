@@ -65,7 +65,7 @@ export type ProvisionStreamOutcome = "created" | "exists" | "config-drift-warnin
  * subtler-than-stream drift modes are best surfaced when an operator
  * hits one).
  */
-export type ProvisionConsumerOutcome = "created" | "exists";
+export type ProvisionConsumerOutcome = "created" | "exists" | "updated";
 
 /**
  * @deprecated Use `ProvisionStreamOutcome` or `ProvisionConsumerOutcome`
@@ -124,12 +124,29 @@ export interface ProvisionConsumerOpts {
    * Max delivery attempts before JetStream terms the message. Default 5.
    */
   maxDeliver?: number;
+  /**
+   * Per-message ack deadline in NANOSECONDS. JetStream redelivers a message
+   * that isn't acked within this window. Defaults to {@link DEFAULT_ACK_WAIT_NS}
+   * (20 min) — comfortably above a review's wall-time so a healthy in-flight
+   * review never triggers a redelivery (cortex#422). Left to the JetStream
+   * default of 30s, a ~100s review redelivers mid-run and the consumer
+   * re-runs the pipeline → duplicate review + duplicate forge post.
+   */
+  ackWaitNs?: number;
   log?: { info: (msg: string) => void; warn: (msg: string) => void };
 }
 
 const DEFAULT_MAX_AGE_NS = 24 * 3600 * 1_000_000_000;
 const DEFAULT_MAX_BYTES = 512 * 1024 * 1024;
 const DEFAULT_MAX_DELIVER = 5;
+/**
+ * Default per-message ack deadline: 20 minutes in nanoseconds. Sized well
+ * above a review's wall-time (sage's per-lens timeout is 600s; the pipeline
+ * self-terminates long before this) so a healthy in-flight review never
+ * redelivers. The JetStream default is 30s — far below a ~100s review — which
+ * caused the duplicate-review/duplicate-post bug (cortex#422).
+ */
+export const DEFAULT_ACK_WAIT_NS = 20 * 60 * 1_000_000_000;
 
 /**
  * Provision (or assert presence of) the JetStream stream that carries
@@ -205,12 +222,26 @@ export async function provisionReviewConsumer(
 ): Promise<ProvisionConsumerOutcome> {
   const log = opts.log ?? console;
   const maxDeliver = opts.maxDeliver ?? DEFAULT_MAX_DELIVER;
+  const ackWaitNs = opts.ackWaitNs ?? DEFAULT_ACK_WAIT_NS;
 
   try {
-    await opts.jsm.consumers.info(opts.stream, opts.durable);
-    // No drift check on consumers in v1 — the surface is small enough
-    // that operators rarely tune it, and pull-consumer drift is more
-    // subtle than stream drift. Add when an operator hits the gap.
+    const existing = await opts.jsm.consumers.info(opts.stream, opts.durable);
+    // cortex#422 — `ack_wait` is the one consumer field we DO reconcile on
+    // drift. The original durable was created without it (JetStream default
+    // 30s), so already-provisioned brokers carry the bug until the consumer
+    // is recreated. Update it in place when it doesn't match the desired
+    // deadline so a redeploy fixes live durables without a manual
+    // `nats consumer rm`. Other fields stay un-reconciled (v1 policy).
+    if (existing.config?.ack_wait !== ackWaitNs) {
+      await opts.jsm.consumers.update(opts.stream, opts.durable, {
+        ...existing.config,
+        ack_wait: ackWaitNs,
+      });
+      log.info(
+        `jetstream-provision: updated consumer "${opts.durable}" ack_wait ${Math.round((existing.config?.ack_wait ?? 0) / 1_000_000_000)}s → ${Math.round(ackWaitNs / 1_000_000_000)}s (cortex#422)`,
+      );
+      return "updated";
+    }
     return "exists";
   } catch (err) {
     if (!isNotFoundError(err)) {
@@ -223,13 +254,14 @@ export async function provisionReviewConsumer(
     ack_policy: AckPolicy.Explicit,
     deliver_policy: DeliverPolicy.All,
     max_deliver: maxDeliver,
+    ack_wait: ackWaitNs,
   };
   if (opts.filterSubject !== undefined) {
     cfg.filter_subject = opts.filterSubject;
   }
   await opts.jsm.consumers.add(opts.stream, cfg);
   log.info(
-    `jetstream-provision: created consumer "${opts.durable}" on stream "${opts.stream}" (ack=explicit, max_deliver=${maxDeliver}${opts.filterSubject ? `, filter=${opts.filterSubject}` : ""})`,
+    `jetstream-provision: created consumer "${opts.durable}" on stream "${opts.stream}" (ack=explicit, max_deliver=${maxDeliver}, ack_wait=${Math.round(ackWaitNs / 1_000_000_000)}s${opts.filterSubject ? `, filter=${opts.filterSubject}` : ""})`,
   );
   return "created";
 }

@@ -10,6 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  DEFAULT_ACK_WAIT_NS,
   describeStreamDrift,
   isNotFoundError,
   provisionReviewConsumer,
@@ -27,6 +28,7 @@ interface RecorderState {
   streamAddCalls: Partial<StreamInfo["config"]>[];
   consumerInfoCalls: { stream: string; durable: string }[];
   consumerAddCalls: { stream: string; cfg: Record<string, unknown> }[];
+  consumerUpdateCalls: { stream: string; durable: string; cfg: Record<string, unknown> }[];
 }
 
 function makeJsm(opts: {
@@ -38,6 +40,7 @@ function makeJsm(opts: {
     streamAddCalls: [],
     consumerInfoCalls: [],
     consumerAddCalls: [],
+    consumerUpdateCalls: [],
   };
   const jsm: ProvisionJsm = {
     streams: {
@@ -73,6 +76,10 @@ function makeJsm(opts: {
       add: async (stream, cfg) => {
         state.consumerAddCalls.push({ stream, cfg });
         return { name: cfg.durable_name } as unknown as ConsumerInfo;
+      },
+      update: async (stream, durable, cfg) => {
+        state.consumerUpdateCalls.push({ stream, durable, cfg });
+        return { name: durable, config: cfg } as unknown as ConsumerInfo;
       },
     },
   };
@@ -318,12 +325,18 @@ describe("provisionReviewConsumer", () => {
     expect(cfg.ack_policy).toBe("explicit");
     expect(cfg.deliver_policy).toBe("all");
     expect(cfg.max_deliver).toBe(5);
+    // cortex#422 — ack_wait must be set on create (else JetStream's 30s
+    // default redelivers mid-review → duplicate review + post).
+    expect(cfg.ack_wait).toBe(DEFAULT_ACK_WAIT_NS);
     // No filter subject when not requested.
     expect("filter_subject" in cfg).toBe(false);
   });
 
-  test("idempotent — exists path returns 'exists' without calling add", async () => {
-    const existing = { name: "cortex-review-consumer-jc-sage" } as unknown as ConsumerInfo;
+  test("idempotent — exists path with matching ack_wait returns 'exists' without add/update", async () => {
+    const existing = {
+      name: "cortex-review-consumer-jc-sage",
+      config: { ack_wait: DEFAULT_ACK_WAIT_NS },
+    } as unknown as ConsumerInfo;
     const { jsm, state } = makeJsm({ existingConsumer: existing });
     const outcome = await provisionReviewConsumer({
       jsm,
@@ -333,6 +346,44 @@ describe("provisionReviewConsumer", () => {
     });
     expect(outcome).toBe("exists");
     expect(state.consumerAddCalls.length).toBe(0);
+    expect(state.consumerUpdateCalls.length).toBe(0);
+  });
+
+  test("cortex#422 — exists with drifted ack_wait returns 'updated' and reconciles in place", async () => {
+    // Simulate the pre-fix durable: created without ack_wait → JetStream's
+    // 30s default (30_000_000_000 ns).
+    const existing = {
+      name: "cortex-review-consumer-jc-sage",
+      config: { ack_wait: 30_000_000_000, max_deliver: 5 },
+    } as unknown as ConsumerInfo;
+    const { jsm, state } = makeJsm({ existingConsumer: existing });
+    const outcome = await provisionReviewConsumer({
+      jsm,
+      stream: "CODE_REVIEW",
+      durable: "cortex-review-consumer-jc-sage",
+      log: silentLog(),
+    });
+    expect(outcome).toBe("updated");
+    expect(state.consumerAddCalls.length).toBe(0);
+    expect(state.consumerUpdateCalls.length).toBe(1);
+    const upd = state.consumerUpdateCalls[0]!;
+    expect(upd.stream).toBe("CODE_REVIEW");
+    expect(upd.durable).toBe("cortex-review-consumer-jc-sage");
+    expect(upd.cfg.ack_wait).toBe(DEFAULT_ACK_WAIT_NS);
+    // Existing config fields are preserved through the update spread.
+    expect(upd.cfg.max_deliver).toBe(5);
+  });
+
+  test("cortex#422 — custom ackWaitNs is honored on create", async () => {
+    const { jsm, state } = makeJsm({ existingConsumer: "not-found" });
+    await provisionReviewConsumer({
+      jsm,
+      stream: "CODE_REVIEW",
+      durable: "x",
+      ackWaitNs: 90_000_000_000,
+      log: silentLog(),
+    });
+    expect(state.consumerAddCalls[0]!.cfg.ack_wait).toBe(90_000_000_000);
   });
 
   test("filter_subject is set when supplied", async () => {

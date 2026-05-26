@@ -982,6 +982,10 @@ export async function startCortex(
             console.log(
               `cortex: provisioned JetStream durable "${durable}" on stream "${reviewStream}"`,
             );
+          } else if (outcome === "updated") {
+            console.log(
+              `cortex: reconciled JetStream durable "${durable}" ack_wait (cortex#422) on stream "${reviewStream}"`,
+            );
           }
         } catch (provisionErr) {
           // Don't abort — let consumer.start surface the bind failure
