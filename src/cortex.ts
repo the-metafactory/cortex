@@ -324,6 +324,47 @@ export interface StartCortexOptions {
 }
 
 /**
+ * cortex#427 — resolve the canonical `{principal}` segment for every
+ * NATS subject, dashboard column, and `signed_by` chain inside the
+ * cortex process. v3 vocabulary (cortex#388) made `principal.id` the
+ * single source of truth on cortex.yaml; the loader synthesises a
+ * legacy-compatible `BotConfig.agent.operatorId` for downstream code
+ * AND surfaces the same value as `LoadedConfig.operator.id`. This
+ * helper prefers the v3-canonical `LoadedConfig.operator` path so the
+ * post-MIG-8 schema deletion (PR-C of cortex#426) is a single-line
+ * change here — drop the `agent.operatorId` fallback.
+ *
+ * **No silent `"default"` fallback.** v3 PrincipalConfigSchema makes
+ * `principal.id` REQUIRED (`z.string().min(1)`); a missing identity
+ * means the config didn't load through the v3 path AND the legacy
+ * bot.yaml didn't declare `agent.operatorId` either. That's a startup
+ * error — not a silent collapse to `local.default.>` that hides
+ * misconfiguration until the first cross-principal envelope leaks.
+ *
+ * @throws if neither `options.operator.id` nor `config.agent.operatorId`
+ *   is set — fail-fast at boot rather than masking the gap.
+ */
+function resolvePrincipalId(
+  config: BotConfig,
+  operator: StartCortexOptions["operator"],
+): string {
+  const fromLoadedOperator = operator?.id;
+  if (fromLoadedOperator !== undefined && fromLoadedOperator !== "") {
+    return fromLoadedOperator;
+  }
+  const fromLegacyAgent = config.agent.operatorId;
+  if (fromLegacyAgent !== undefined && fromLegacyAgent !== "") {
+    return fromLegacyAgent;
+  }
+  throw new Error(
+    "cortex: cannot resolve principal id — cortex.yaml must declare `principal.id` " +
+      "(v3 canonical) OR legacy bot.yaml must declare `agent.operatorId`. " +
+      "The `{principal}` segment of every NATS subject and `signed_by` chain " +
+      "is required; refusing to silently collapse to `default`.",
+  );
+}
+
+/**
  * Construct the full cortex stack and start it. Returns a stop handle.
  *
  * Order: runtime → router → dispatch-handler → adapters → dispatch-listener
@@ -346,6 +387,14 @@ export async function startCortex(
   console.log(`  Config: ${options.configPath ?? "(in-memory)"}`);
   console.log(`  PID: ${process.pid}`);
 
+  // cortex#427 — resolve the canonical principal id ONCE at boot. Every
+  // subsequent `{principal}` segment (NATS subjects, `signed_by` chains,
+  // dashboard columns) reads from this variable so a cortex-shape config
+  // (v3 `principal.id`) and a legacy bot.yaml (`agent.operatorId`) can't
+  // diverge between publisher and consumer. PR-A of cortex#426 follow-up.
+  const principalId = resolvePrincipalId(config, options.operator);
+  console.log(`  Principal: ${principalId}`);
+
   // IAW Phase A.5 (refs cortex#113, closes cortex#262) — resolve the
   // deployment's stack identity at boot. `deriveStackId` returns
   // `{operator, stack, id}`; the `stack` segment flows into
@@ -353,15 +402,13 @@ export async function startCortex(
   // 6-segment `local.{principal}.{stack}.{type}` grammar that sage's bridge
   // and pilot's review-request subscriber both expect.
   //
-  // The helper accepts a narrow `DeriveStackIdInput` shape (operator?.id +
+  // The helper accepts a narrow `DeriveStackIdInput` shape (principal.id +
   // optional stack.id) — we synthesise it from the loader-passed
   // `options.stack` (the top-level cortex.yaml `stack:` block, when present)
-  // plus an `operator.id` derived from the BotConfig projection. The
-  // fallback path (no `options.stack`, no `agent.operatorId`) returns
-  // `default/default` and the helper never throws — that default matches
-  // sage's bridge default (`SAGE_STACK=default`).
+  // plus `principalId` resolved above. cortex#427 retired the
+  // `?? "default"` fallback — a missing principal is a boot-time error.
   const derivedStack = deriveStackId({
-    principal: { id: config.agent.operatorId ?? "default" },
+    principal: { id: principalId },
     ...(options.stack !== undefined && { stack: options.stack }),
   });
   console.log(
@@ -598,7 +645,11 @@ export async function startCortex(
   // Without this, the audit-trail emit silently degrades to console.info
   // in production — only unit tests passed the explicit source.
   const systemEventSource: SystemEventSource = {
-    org: config.agent.operatorId ?? "default",
+    // cortex#427 — `org` is the `{principal}` subject segment; same
+    // resolution path as the dispatch-listener below so publisher and
+    // consumer can't disagree on which principal a `system.*` envelope
+    // belongs to.
+    org: principalId,
     agent: "cortex",
     instance: "local",
     ...(config.agent.dataResidency !== undefined && {
@@ -777,15 +828,19 @@ export async function startCortex(
       (c) => c === "code-review" || c.startsWith("code-review."),
     );
   });
-  // Stable identity inputs for the per-agent durable consumer name. Org
-  // is taken from the canonical operatorId resolution (same fallback as
-  // the surface-router and capability-registry boot paths). Durable name
-  // convention per `docs/design-capability-dispatch-review-consumer.md`
-  // §2.3: `cortex-review-consumer-{operator}-{agent}` — unique per
+  // Stable identity inputs for the per-agent durable consumer name.
+  // cortex#427 — `reviewOperatorId` is the same `{principal}` segment the
+  // surface-router and capability-registry boot paths use; reading the
+  // shared `principalId` keeps publisher and consumer aligned across the
+  // ladder. Durable name convention per
+  // `docs/design-capability-dispatch-review-consumer.md` §2.3:
+  // `cortex-review-consumer-{operator}-{agent}` — unique per
   // (operator, agent) pair so dev + prod instances on the same operator
   // share competing-consumer semantics and a daemon restart resumes from
-  // the same JetStream offset.
-  const reviewOperatorId = config.agent.operatorId ?? "default";
+  // the same JetStream offset. Variable name preserved (`reviewOperatorId`)
+  // because it flows into `verifySignedByChain({ operatorId })` whose API
+  // parameter name is not renamed in this PR (cortex#427 — PR-A scope).
+  const reviewOperatorId = principalId;
   // cortex#318 — include the stack segment to match the 6-segment grammar
   // `deriveSubject` produces for stack-scoped publishes (cortex#262 / IAW
   // Phase A.5 + canonical helper at `@the-metafactory/myelin/subjects`).
@@ -1083,7 +1138,10 @@ export async function startCortex(
       runtime,
       resolver: trustResolver,
       receivingAgentId: firstAgent.id,
-      operatorId: config.agent.operatorId ?? "default",
+      // cortex#427 — same `{principal}` segment the surface-router
+      // and createDispatchListener below use. The `operatorId` parameter
+      // name on the constructor is unchanged in PR-A (PR-D scope).
+      operatorId: principalId,
       source: systemEventSource,
     });
     busDispatchListener.start();
@@ -1693,7 +1751,12 @@ export async function startCortex(
   // defined in production. Symmetric logic keeps future refactors
   // honest if the boot ever passes `undefined`.
   const subjectPlaceholderSubstituter = makeSubjectPlaceholderSubstituter({
-    org: config.agent.operatorId ?? "default",
+    // cortex#427 — renderer subscribe-pattern substitution reads the
+    // shared `principalId` so renderer subjects and runtime-side
+    // emit subjects can't drift; the post-MIG-8 helper still names
+    // the field `org` (renderer schema parameter name not renamed in
+    // PR-A scope).
+    org: principalId,
     stack: options.stack !== undefined ? derivedStack.stack : undefined,
   });
 
@@ -1775,9 +1838,13 @@ export async function startCortex(
   // v2.0.2 (cortex#320): also receives `trustResolver` + `receivingAgentId`
   // + `operatorId` so the listener can chain-verify every inbound
   // envelope. Mirrors the `BusDispatchListener` wiring above
-  // (`firstAgent.id` + `config.agent.operatorId`). `cryptoVerify`
-  // defaults to `true` in `createDispatchListener`; explicit here for
-  // operator clarity.
+  // (`firstAgent.id` + `principalId`). `cryptoVerify` defaults to `true`
+  // in `createDispatchListener`; explicit here for operator clarity.
+  //
+  // cortex#427 — `operatorId` flows from the shared `principalId` so
+  // the listener subscribes on the SAME `{principal}` segment the
+  // adapter publishes on (the bug PR-A closes). Constructor parameter
+  // name unchanged in PR-A scope.
   const dispatchListener: DispatchListener = createDispatchListener({
     runtime,
     router,
@@ -1786,7 +1853,7 @@ export async function startCortex(
     ...(policyEngine !== undefined && { policyEngine }),
     trustResolver,
     cryptoVerify: true,
-    operatorId: config.agent.operatorId ?? "default",
+    operatorId: principalId,
     ...(firstAgent !== undefined && { receivingAgentId: firstAgent.id }),
   });
   await dispatchListener.start();
@@ -1828,7 +1895,7 @@ export async function startCortex(
   let usageMonitor: UsageMonitor | null = null;
   if (config.api.enabled && !options.disableDashboard) {
     try {
-      ({ api: dashboardApi, usageMonitor } = await setupDashboard(config, dispatchHandler, cloudPublisher));
+      ({ api: dashboardApi, usageMonitor } = await setupDashboard(config, principalId, dispatchHandler, cloudPublisher));
     } catch (err) {
       console.error("cortex: dashboard API startup error (non-fatal):", err instanceof Error ? err.message : err);
     }
@@ -2062,6 +2129,7 @@ async function resolveReviewProvisioningJsm(
 
 async function setupDashboard(
   config: BotConfig,
+  principalId: string,
   dispatchHandler: DispatchHandler,
   cloudPublisher: CloudPublisher | null,
 ): Promise<{ api: { stop?: () => void }; usageMonitor: UsageMonitor }> {
@@ -2075,8 +2143,13 @@ async function setupDashboard(
     dbPath,
     github: { ...config.github, repos: getAllRepos(config) },
     apiMode: config.api.mode,
-    operatorId: config.agent.operatorId ?? config.agent.name,
-    operatorName: config.agent.operatorName ?? config.agent.operatorId ?? config.agent.displayName,
+    // cortex#427 — dashboard reads the shared `principalId` so the
+    // `operator` column matches the `{principal}` segment of incoming
+    // envelopes. `operatorName` falls back to `principalId` when the
+    // operator hasn't declared a separate display name on
+    // `agent.operatorName` (legacy BotConfig field — PR-C retires).
+    operatorId: principalId,
+    operatorName: config.agent.operatorName ?? principalId,
     dashboardDir,
   });
   console.log(`cortex: dashboard DB at ${dbPath}`);
