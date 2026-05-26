@@ -268,25 +268,64 @@ describe("startCortex — wire-up", () => {
     await handle.stop();
   });
 
-  test("dispatch-listener registers with the right org-derived subject", async () => {
+  test("dispatch-listener registers with the right principal-derived subject", async () => {
     // Echo round-1 N1: the listener's `surfaceConfig.subjects` is
     // `local.{principal}.{stack}.tasks.*.>` where `{principal}` comes from
-    // `agent.operatorId ?? "default"`. Verify the fallback path: with
-    // operatorId absent, the runtime sees envelopes on `local.default.*`.
+    // the resolved principal id (cortex#427).
+    //
+    // Verify: with `agent.operatorId` set on the legacy bot.yaml shape,
+    // the router still subscribes (single registered handler) — the
+    // legacy field is the v3 fallback resolution path inside
+    // `resolvePrincipalId`.
     const runtime = createRecordingRuntime();
-    const noOperator = minimalConfig({
-      agent: { name: "no-op-cortex", displayName: "NoOpCortex" },
+    const config = minimalConfig({
+      agent: {
+        name: "no-op-cortex",
+        displayName: "NoOpCortex",
+        operatorId: "legacy-bot-yaml-op",
+      },
     });
-    const handle = await startCortex(noOperator, {
+    const handle = await startCortex(config, {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
     });
     expect(handle).toBeDefined();
-    // Same observable-side-effect assertion: the router subscribed.
     expect(runtime.onEnvelopeHandlers.size).toBe(1);
     await handle.stop();
+    expect(runtime.onEnvelopeHandlers.size).toBe(0);
+  });
+
+  test("startCortex throws when no principal id is resolvable (cortex#427)", async () => {
+    // cortex#427 PR-A — `resolvePrincipalId` refuses to silently
+    // collapse to `"default"`. A config with neither
+    // `options.operator.id` (v3 canonical via cortex-shape config) nor
+    // `config.agent.operatorId` (legacy bot.yaml) must fail-fast at
+    // boot — the previous behaviour masked misconfiguration by
+    // emitting `local.default.>` envelopes that competed with real
+    // principals on shared brokers.
+    const runtime = createRecordingRuntime();
+    const noPrincipal = minimalConfig({
+      agent: { name: "no-op-cortex", displayName: "NoOpCortex" },
+    });
+    expect(noPrincipal.agent.operatorId).toBeUndefined();
+    let threw: unknown = null;
+    try {
+      await startCortex(noPrincipal, {
+        disableConfigWatcher: true,
+        disableDashboard: true,
+        disableOutboundPoller: true,
+        injectRuntime: runtime,
+      });
+    } catch (err) {
+      threw = err;
+    }
+    expect(threw).toBeInstanceOf(Error);
+    expect((threw as Error).message).toContain("principal id");
+    expect((threw as Error).message).toContain("principal.id");
+    expect((threw as Error).message).toContain("agent.operatorId");
+    // No subscriptions leaked from the aborted boot path.
     expect(runtime.onEnvelopeHandlers.size).toBe(0);
   });
 
