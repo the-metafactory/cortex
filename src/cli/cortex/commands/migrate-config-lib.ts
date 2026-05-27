@@ -1115,6 +1115,18 @@ function defaultCapabilityDescription(capId: string): string {
  * half of `{operator}/{stack}` — `default` when no `stack:` block
  * declared, matching cortex's boot resolver).
  *
+ * Platform coverage: only `discord` and `slack` — both schemas declare
+ * `surfaceSubjects` and round-trip the synthesised value through
+ * `CortexConfigSchema.parse`. `mattermost` is intentionally excluded
+ * pending cortex#205-followup: `MattermostPresenceSchema` does NOT
+ * declare `surfaceSubjects` (see TODO at cortex-config.ts:252), so Zod
+ * default-strips the field on parse — emitting a "synthesised" warning
+ * for a key that disappears would mislead operators inspecting the
+ * migrated YAML. The MattermostAdapter infra type accepts the field
+ * (adapters/mattermost/index.ts:57); plumbing it through the schema is
+ * tracked separately. Once that lands, add `"mattermost"` to the loop
+ * below.
+ *
  * Idempotent: an existing non-empty `surfaceSubjects[]` is preserved
  * verbatim. The migrator only fills in defaults when the operator left
  * the field unset (or empty), which is the v3.0.x default shape that
@@ -1148,7 +1160,11 @@ function synthesizeSurfaceSubjects(
     const agent = rawAgent as CortexAgentMutable;
     const presence = agent.presence;
     if (!presence || typeof presence !== "object") continue;
-    for (const platform of ["discord", "mattermost", "slack"] as const) {
+    // mattermost intentionally omitted — MattermostPresenceSchema does not
+    // declare surfaceSubjects yet (cortex#205-followup). Adding mattermost
+    // here without the schema field produces a misleading warning because
+    // Zod strips the synthesised value on parse. See doc-comment above.
+    for (const platform of ["discord", "slack"] as const) {
       const block = (presence as Record<string, unknown>)[platform];
       if (!block || typeof block !== "object") continue;
       const adapterBlock = block as Record<string, unknown>;
