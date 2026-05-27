@@ -9,7 +9,7 @@
  * Coupling rule (per docs/design-collaboration-surface.md §9):
  * Grove must stay installable without NATS configured. This module is
  * import-safe — instantiation is via the `NatsLink.connect()` factory and
- * only happens when grove-bot is started with a configured NATS URL
+ * only happens when cortex is started with a configured NATS URL
  * (G-1100.E wires that up).
  */
 
@@ -106,7 +106,7 @@ export class NatsLink {
     }
 
     const connectImpl = opts.connectImpl ?? natsConnect;
-    const name = opts.name ?? "grove-bot";
+    const name = opts.name ?? "cortex";
 
     // Build base connect options. We branch on auth mode separately so that
     // an operator-mode `.creds` connection never leaks a bearer token into

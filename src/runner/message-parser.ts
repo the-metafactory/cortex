@@ -2,7 +2,7 @@
  * F-007: Message keyword parser
  *
  * Extracts mode (sync/async/team/help) and context depth from message content.
- * Extracted from grove-bot.ts to be shared across all platform adapters.
+ * Extracted from the grove-v2 bot entrypoint to be shared across all platform adapters.
  */
 
 export interface ParsedMessage {

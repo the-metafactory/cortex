@@ -34,7 +34,7 @@ export const RawEventSchema = z.object({
 export type RawEvent = z.infer<typeof RawEventSchema>;
 
 // =============================================================================
-// Published Event (filtered, safe for consumers like grove-bot)
+// Published Event (filtered, safe for consumers like cortex)
 // =============================================================================
 
 export const PublishedEventSchema = z.object({

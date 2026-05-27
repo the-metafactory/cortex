@@ -159,13 +159,13 @@ describe("NatsLink", () => {
     await link.close();
   });
 
-  test("defaults name to grove-bot", async () => {
+  test("defaults name to cortex", async () => {
     const fake = makeFakeConnection();
     const link = await NatsLink.connect({
       url: "nats://localhost:4222",
       connectImpl: async () => fake.nc,
     });
-    expect(link.name).toBe("grove-bot");
+    expect(link.name).toBe("cortex");
     await link.close();
   });
 

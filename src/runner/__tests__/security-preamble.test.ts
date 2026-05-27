@@ -36,19 +36,19 @@ describe("buildSecurityPreamble", () => {
   test("always includes config immutability rule", () => {
     const preamble = buildSecurityPreamble(makeConfig());
     expect(preamble).toContain("CONFIG IMMUTABILITY");
-    expect(preamble).toContain("bot.yaml");
+    expect(preamble).toContain("cortex.yaml");
     expect(preamble).toContain("MUST NOT");
   });
 
   test("uses provided configPath directory in immutability rule", () => {
     const preamble = buildSecurityPreamble(
       makeConfig(),
-      "/home/user/.config/grove/bot.yaml",
+      "/home/user/.config/cortex/cortex.yaml",
     );
-    expect(preamble).toContain("/home/user/.config/grove");
+    expect(preamble).toContain("/home/user/.config/cortex");
   });
 
-  test("defaults to ~/.config/grove when no configPath", () => {
+  test("defaults to ~/.config/grove when no configPath (pre-MIG-8 cascade — GROVE_* → CORTEX_* namespace migration owns this)", () => {
     const preamble = buildSecurityPreamble(makeConfig());
     expect(preamble).toContain("~/.config/grove");
   });
@@ -60,6 +60,18 @@ describe("buildSecurityPreamble", () => {
     expect(preamble).toContain("FILESYSTEM RESTRICTION");
     expect(preamble).toContain("~/work/mf");
     expect(preamble).toContain("CONFIG IMMUTABILITY");
+  });
+
+  test("references cortex.yaml and 'agent' / 'principal', not bot.yaml / 'the bot'", () => {
+    const preamble = buildSecurityPreamble(
+      makeConfig(),
+      "/home/user/.config/cortex/cortex.yaml",
+    );
+    expect(preamble).toContain("cortex.yaml");
+    expect(preamble).not.toContain("bot.yaml");
+    expect(preamble).not.toMatch(/\bthe bot\b/);
+    expect(preamble).toContain("the principal");
+    expect(preamble).toContain("the agent");
   });
 
   test("includes security policy wrapper", () => {

@@ -36,7 +36,7 @@ export interface RemoteBackendConfig {
 
 /**
  * Backend registry — looks up backends by name.
- * Configured via bot.yaml `execution` section (future).
+ * Configured via cortex.yaml `execution` section (future).
  */
 export class BackendRegistry {
   private backends = new Map<string, ExecutionBackend>();

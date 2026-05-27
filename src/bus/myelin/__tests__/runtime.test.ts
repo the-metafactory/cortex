@@ -151,7 +151,7 @@ describe("MyelinRuntime", () => {
     const runtime = await startMyelinRuntime(
       makeConfig({
         url: "nats://localhost:4222",
-        name: "grove-bot",
+        name: "cortex",
         subjects: ["local.test.>"],
       }),
       { connectImpl: async () => fake.nc },
@@ -176,7 +176,7 @@ describe("MyelinRuntime", () => {
     const fake = makeFakeNatsConnection();
     const config = makeConfig({
       url: "nats://localhost:4222",
-      name: "grove-bot",
+      name: "cortex",
       subjects: [],
     });
     const runtime = await startMyelinRuntime(config, {
@@ -214,7 +214,7 @@ describe("MyelinRuntime", () => {
   test("returns disabled when NATS connect fails (logs error, doesn't throw)", async () => {
     const config = makeConfig({
       url: "nats://localhost:9999",
-      name: "grove-bot",
+      name: "cortex",
       subjects: ["local.test.>"],
     });
     const runtime = await startMyelinRuntime(config, {
@@ -233,7 +233,7 @@ describe("MyelinRuntime", () => {
     const fake = makeFakeNatsConnection();
     const config = makeConfig({
       url: "nats://localhost:4222",
-      name: "grove-bot",
+      name: "cortex",
       subjects: ["local.{principal}.attention.>"],
     });
     const runtime = await startMyelinRuntime(config, {
@@ -254,7 +254,7 @@ describe("MyelinRuntime", () => {
     const fake = makeFakeNatsConnection();
     const config = makeConfig({
       url: "nats://localhost:4222",
-      name: "grove-bot",
+      name: "cortex",
       subjects: ["local.{org}.attention.>"],
     });
     const runtime = await startMyelinRuntime(config, {
@@ -274,7 +274,7 @@ describe("MyelinRuntime", () => {
     const fake = makeFakeNatsConnection();
     const config = makeConfig({
       url: "nats://localhost:4222",
-      name: "grove-bot",
+      name: "cortex",
       subjects: ["local.{principal}.{stack}.attention.>"],
     });
     const runtime = await startMyelinRuntime(config, {
@@ -292,7 +292,7 @@ describe("MyelinRuntime", () => {
     const fake = makeFakeNatsConnection();
     const config = makeConfig({
       url: "nats://localhost:4222",
-      name: "grove-bot",
+      name: "cortex",
       subjects: ["local.{principal}.{stack}.attention.>"],
     });
     const runtime = await startMyelinRuntime(config, {
@@ -314,7 +314,7 @@ describe("MyelinRuntime", () => {
     const fake = makeFakeNatsConnection();
     const config = makeConfig({
       url: "nats://localhost:4222",
-      name: "grove-bot",
+      name: "cortex",
       subjects: ["local.{principal}.>"],
     });
     const runtime = await startMyelinRuntime(config, {
@@ -329,7 +329,7 @@ describe("MyelinRuntime", () => {
     const fake = makeFakeNatsConnection();
     const config = makeConfig({
       url: "nats://secret-token@localhost:4222",
-      name: "grove-bot",
+      name: "cortex",
       subjects: ["local.test.>"],
     });
     const runtime = await startMyelinRuntime(config, {
@@ -349,7 +349,7 @@ describe("MyelinRuntime", () => {
     const fake = makeFakeNatsConnection();
     const config = makeConfig({
       url: "nats://alice:hunter2@localhost:4222",
-      name: "grove-bot",
+      name: "cortex",
       subjects: ["local.test.>"],
     });
     const runtime = await startMyelinRuntime(config, {
@@ -371,7 +371,7 @@ describe("MyelinRuntime", () => {
     const fake = makeFakeNatsConnection();
     const config = makeConfig({
       url: "nats://localhost:4222",
-      name: "grove-bot",
+      name: "cortex",
       subjects: ["local.test.>"],
     });
     const runtime = await startMyelinRuntime(config, {
@@ -423,7 +423,7 @@ describe("MyelinRuntime", () => {
       const runtime = await startMyelinRuntime(
         makeConfig({
           url: "nats://localhost:4222",
-          name: "grove-bot",
+          name: "cortex",
           subjects: ["local.{principal}.system.>"],
         }),
         { connectImpl: async () => fake.nc },
@@ -459,7 +459,7 @@ describe("MyelinRuntime", () => {
       const runtime = await startMyelinRuntime(
         makeConfig({
           url: "nats://localhost:4222",
-          name: "grove-bot",
+          name: "cortex",
           subjects: ["local.{principal}.>"],
         }),
         { connectImpl: async () => fake.nc },
@@ -485,7 +485,7 @@ describe("MyelinRuntime", () => {
       const runtime = await startMyelinRuntime(
         makeConfig({
           url: "nats://localhost:4222",
-          name: "grove-bot",
+          name: "cortex",
           subjects: ["local.{principal}.>"],
         }),
         { connectImpl: async () => fake.nc },
@@ -513,7 +513,7 @@ describe("MyelinRuntime", () => {
       const runtime = await startMyelinRuntime(
         makeConfig({
           url: "nats://localhost:4222",
-          name: "grove-bot",
+          name: "cortex",
           subjects: ["local.{principal}.>"],
         }),
         { connectImpl: async () => fake.nc, stack: "default" },
@@ -534,7 +534,7 @@ describe("MyelinRuntime", () => {
       const runtime = await startMyelinRuntime(
         makeConfig({
           url: "nats://localhost:4222",
-          name: "grove-bot",
+          name: "cortex",
           subjects: ["local.{principal}.>"],
         }),
         { connectImpl: async () => fake.nc, stack: "research" },
@@ -556,7 +556,7 @@ describe("MyelinRuntime", () => {
       const runtime = await startMyelinRuntime(
         makeConfig({
           url: "nats://localhost:4222",
-          name: "grove-bot",
+          name: "cortex",
           subjects: ["local.{principal}.>"],
         }),
         { connectImpl: async () => fake.nc },
@@ -578,7 +578,7 @@ describe("MyelinRuntime", () => {
       const runtime = await startMyelinRuntime(
         makeConfig({
           url: "nats://localhost:4222",
-          name: "grove-bot",
+          name: "cortex",
           subjects: ["local.{principal}.system.>"],
         }),
         { connectImpl: async () => fake.nc },
@@ -609,7 +609,7 @@ describe("MyelinRuntime", () => {
       const runtime = await startMyelinRuntime(
         makeConfig({
           url: "nats://localhost:4222",
-          name: "grove-bot",
+          name: "cortex",
           subjects: ["local.{principal}.tasks.>"],
         }),
         { connectImpl: async () => fake.nc },
@@ -642,7 +642,7 @@ describe("MyelinRuntime", () => {
       const runtime = await startMyelinRuntime(
         makeConfig({
           url: "nats://localhost:4222",
-          name: "grove-bot",
+          name: "cortex",
           subjects: ["local.{principal}.system.>"],
         }),
         {
@@ -712,7 +712,7 @@ describe("MyelinRuntime", () => {
       const runtime = await startMyelinRuntime(
         makeConfig({
           url: "nats://localhost:4222",
-          name: "grove-bot",
+          name: "cortex",
           subjects: ["local.{principal}.system.>"],
         }),
         {
@@ -751,7 +751,7 @@ describe("MyelinRuntime", () => {
       const runtime = await startMyelinRuntime(
         makeConfig({
           url: "nats://localhost:4222",
-          name: "grove-bot",
+          name: "cortex",
           subjects: ["local.{principal}.system.>"],
         }),
         {
@@ -791,7 +791,7 @@ describe("MyelinRuntime", () => {
       const runtime = await startMyelinRuntime(
         makeConfig({
           url: "nats://localhost:4222",
-          name: "grove-bot",
+          name: "cortex",
           subjects: ["local.{principal}.system.>"],
         }),
         {
@@ -829,7 +829,7 @@ describe("MyelinRuntime", () => {
       const runtime = await startMyelinRuntime(
         makeConfig({
           url: "nats://localhost:4222",
-          name: "grove-bot",
+          name: "cortex",
           subjects: ["local.{principal}.system.>"],
         }),
         { connectImpl: async () => fake.nc },

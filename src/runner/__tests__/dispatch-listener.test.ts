@@ -2008,7 +2008,7 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
     // When both are present, the policy engine must see the originator's
     // principal id (the actor the signer is attesting on behalf of), NOT
     // the signer's principal id. This decouples policy attribution from
-    // signer identity — the cortex-bot-as-relay case.
+    // signer identity — the cortex-as-relay case.
     const captured: { principalId: string; intent: Intent }[] = [];
     const engine = new PolicyEngine({
       principals: [
@@ -2042,8 +2042,8 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
     await router.start();
 
     const env = makeReceivedEnvelope();
-    // Signer is cortex-bot; the originator is alice (the human the bot
-    // is acting on behalf of). Engine must resolve `alice`, not `cortex`.
+    // Signer is the cortex agent; the originator is alice (the human the
+    // agent is acting on behalf of). Engine must resolve `alice`, not `cortex`.
     env.signed_by = [
       {
         method: "ed25519",

@@ -39,7 +39,7 @@ export function isSubAgentEvent(event: PublishedEvent): boolean {
 
 /**
  * Extract a clean, human-readable task description from event payload.
- * Strips grove-bot wrapper text, system prompts, and truncates sensibly.
+ * Strips agent-prompt-wrapper text, system prompts, and truncates sensibly.
  */
 export function extractTaskDescription(event: PublishedEvent): string {
   const raw =
@@ -49,7 +49,7 @@ export function extractTaskDescription(event: PublishedEvent): string {
     asString(event.payload.active_task) ||
     "";
 
-  // Strip common grove-bot prompt wrappers
+  // Strip common agent-prompt wrappers
   let clean = raw
     .replace(/^Latest message from .+?:\n/s, "")
     .replace(/^The user who mentioned you is .+?\.\s*/s, "")

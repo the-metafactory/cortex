@@ -433,7 +433,7 @@ export class WorklogManager {
  * Build context links — what iteration/design spec does this task relate to?
  * Returns a markdown string with links, or null if no context detected.
  *
- * TODO: Move link URLs to bot.yaml config so they aren't hardcoded.
+ * TODO: Move link URLs to cortex.yaml config so they aren't hardcoded.
  * These point to specific branches/issues that will change over time.
  */
 function buildContextLinks(description: string, _project: string | null): string | null {

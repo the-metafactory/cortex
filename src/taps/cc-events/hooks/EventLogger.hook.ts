@@ -177,7 +177,7 @@ async function main() {
     if (hookInput.tool_output !== undefined) payload.tool_output = hookInput.tool_output;
     if (hookInput.prompt !== undefined) {
       let preview = hookInput.prompt;
-      // Strip grove-bot wrapper to show just the user's message
+      // Strip agent-prompt wrapper to show just the user's message
       const latestMatch = /Latest message from .+?:\n(.+)/s.exec(preview);
       const mentionMatch = /The user who mentioned you is .+?\.\s*$/.exec(preview);
       if (latestMatch?.[1] !== undefined) {

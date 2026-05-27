@@ -3,7 +3,7 @@
  *
  * Constructs prompts for Claude Code invocations, combining message content,
  * conversation context, attachment info, and security preamble.
- * Extracted from grove-bot.ts to be shared across all platform adapters.
+ * Extracted from the grove-v2 bot entrypoint to be shared across all platform adapters.
  */
 
 import type { InboundMessage } from "../adapters/types";

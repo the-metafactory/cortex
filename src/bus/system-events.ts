@@ -9,7 +9,7 @@
  * degraded state went unnoticed for 8.4 hours.
  *
  * These helpers exist so callers (the Discord adapter, MessageRouter, the
- * MyelinRuntime, grove-bot main) construct envelopes from a single audited
+ * MyelinRuntime, cortex main) construct envelopes from a single audited
  * source. Field names and enums match the §3.5.4 schemas verbatim — adding a
  * field requires updating both the spec and these helpers in the same PR.
  *

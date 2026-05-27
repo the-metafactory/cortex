@@ -1,15 +1,15 @@
 /**
- * G-1100.E: Myelin runtime — opt-in startup hook for grove-bot.
+ * G-1100.E: Myelin runtime — opt-in startup hook for cortex.
  *
- * Reads `bot.yaml.nats?` and, if present, opens a NatsLink and starts a
+ * Reads `cortex.yaml.nats?` and, if present, opens a NatsLink and starts a
  * MyelinSubscriber per configured subject pattern. Logs received
  * envelopes (subject + envelope.id + correlation_id + type) for
  * visibility — no fan-out to existing handlers in this slice; that's
  * G-1101+ work.
  *
  * Coupling rule (per docs/design-collaboration-surface.md §9):
- * If `bot.yaml.nats` is absent, this module is a no-op — grove starts
- * without NATS just as it always has. The bot stays installable
+ * If `cortex.yaml.nats` is absent, this module is a no-op — cortex starts
+ * without NATS just as it always has. The agent stays installable
  * without a NATS server present.
  */
 
@@ -330,7 +330,7 @@ export function makeSubjectPlaceholderSubstituter(opts: {
       // the transition window. Operators migrating cortex.yaml will see
       // both tokens in the wild — pre-migration configs carry `{org}`,
       // post-migration configs carry `{principal}`, and `migrate-config`
-      // converts bot.yaml → cortex.yaml passing nats config through
+      // converts the legacy bot.yaml → cortex.yaml passing nats config through
       // verbatim (so `{org}` flows through). Both must resolve to the
       // same principal slug at runtime.
       s
