@@ -62,6 +62,32 @@ The following sites are explicitly **allowed** under 0001 and remain so:
 
 ---
 
+## 0001-carve-out self-check
+
+This plan is a continuation of 0001. Every carve-out 0001 declared MUST remain a carve-out in 0002. Without an explicit audit trail, a sweeping prose-rename PR could catch a 0001 carve-out site by accident.
+
+Each R-cluster's "Live Violations" list below has been audited against the carve-out registry. Assertion: **0 instances** of the following appear in any R-cluster's Live Violations list (only in carve-out sections):
+
+| Carve-out | 0001 reference | 0002 audit query | Status |
+|---|---|---|---|
+| GitHub org URL (`the-metafactory/*`, `meta-factory.ai/.dev/.io`, `metafactory.io`) | 0001 §"Renames this manifest does NOT make" | `grep -rEn 'meta-factory\.(ai|dev|io)\|the-metafactory/\|metafactory\.io' src/ docs/` (~554 hits) | ✅ none in any R-cluster live-violation list |
+| NSC `OP_*` account names | 0001 R12b | `grep -rEn '\\bOP_[A-Z]+\\b' src/ docs/` | ✅ none in any R-cluster live-violation list |
+| `grove-v2` / `grove-dashboard` historical references | Carve-out #9 | `grep -rEn 'grove-v2\|grove-dashboard' src/ docs/` | ✅ enumerated only under R7.B as HISTORICAL ("Extracted from grove-v2"); none in live-violations |
+| `bot` in Discord/Slack/Mattermost platform-user contexts | Carve-out #7 + R7 carve-outs | `grep -rEn '\\b(trustedBotIds\|botUserId\|messageCreate.*bot)\\b' src/` | ✅ none in R7 live-violations; explicit carve-out in R7 |
+| `migrate-config-lib.ts` legacy reader (`operator:` block, `operatorId`, etc.) | Carve-out #1 + #2 | `grep -En '\\boperator\\b' src/cli/cortex/commands/migrate-config-lib.ts` | ✅ all hits TRANSITIONAL / HISTORICAL, none in live-violations |
+| `GROVE_OPERATOR_*` env fallback tier (`principal-env.ts`) | Carve-out #4 | `grep -rEn 'GROVE_OPERATOR' src/` | ✅ enumerated only under R9 "Carve-out (deeper tier still alive)"; never in live-violations |
+| `GROVE_CHANNEL`/`GROVE_NETWORK`/`GROVE_AGENT_*` in `taps/cc-events/hooks/` | Carve-out #5 | `grep -rEn 'GROVE_(CHANNEL\|NETWORK\|AGENT)' src/taps/cc-events/hooks/` | ✅ none in any R-cluster live-violation list |
+| `grove-bot` NATS link name | Carve-out #6 (until Open Q §5 decided) | `grep -rEn '"grove-bot"' src/` | Now resolved (§5: rename to `cortex` — see R7.B); pre-decision it was a carve-out, post-decision it moves to R7.B live-violations. Self-check passes. |
+| MC design-doc historical sections | Carve-out #10 | `grep -En '^#' docs/design-mission-control.md` (section headers) | Pending §9 decision (now resolved: full rewrite — see R13.D); historical sections preserved in a "History" appendix per §9 resolution. |
+
+**Process assertion for each PR-N**:
+- Before merge, run a 4-line check script (`./scripts/check-carveouts.sh` — TODO; trivial `grep` wrapper) over the touched files in the diff. The check asserts 0 hits of the carve-out patterns above (excluding lines explicitly marked `// historical:`, `<!-- historical -->`, or located under an enumerated carve-out file path).
+- The PR description includes a "Carve-outs preserved" checkbox listing which carve-outs the touched files brush against and confirming no hit.
+
+This section is the audit trail. If a future PR catches a carve-out site silently, the regression is on the reviewer; the plan asserts the matrix above is the canonical list.
+
+---
+
 ## R1 — `OperatorConfig` → `PrincipalConfig`
 
 **Status:** DONE at v3.0.0 (cortex#388 cutover, evidenced by `src/common/types/cortex-config.ts:140–143`: "`OperatorSchema` / `Operator` deprecated aliases were removed at v3.0.0"). The canonical name is `PrincipalConfigSchema` / `PrincipalConfig`.
@@ -214,6 +240,28 @@ Cascades to `src/common/types.ts:81` and `:107` (`operatorId?: string;` on event
 - `:90` `c.set("operatorId", operatorId);`
 
 **Caveat — MC API forms a JSON contract.** Renaming `operatorId` → `principalId` on the wire is a breaking API change for any external consumer. See Open Questions.
+
+#### R2.D — `OperatorKey` symbol (MC worker auth type)
+
+The MC worker auth layer types its API-key payload as `OperatorKey`. This is a typed in-memory shape with a thin storage/wire surface (D1 / KV).
+
+Declaration:
+- `src/surface/mc/worker/src/auth.ts:54` — `export interface OperatorKey { … }`
+- `src/surface/mc/worker/src/auth.ts:65` — parameter on `requireApiKey` (`Variables: { operatorId: string; operatorKey: OperatorKey }`)
+- `src/surface/mc/worker/src/auth.ts:82` — `as OperatorKey | null` cast on KV read
+
+Consumers:
+- `src/surface/mc/worker/src/routes/admin.ts:15` — `import { requireAdmin, type OperatorKey } from "../auth"`
+- `src/surface/mc/worker/src/routes/admin.ts:42` — `const keyData: OperatorKey = { … }` (admin POST `/admin/keys`)
+- `src/surface/mc/worker/src/routes/ingest.ts:15` — same import
+- `src/surface/mc/worker/src/routes/sync.ts` — same shape (`Variables = { operatorId: string; operatorKey: OperatorKey }`)
+- `src/surface/mc/user-auth/README.md:43` — prose `requireApiKey, requireAdmin, OperatorKey ) for bot operators posting` (double-loaded: `bot` + `operator`)
+
+**Classification:** LIVE — rename `OperatorKey` → `PrincipalKey`. The symbol names the API-key payload; "operator" here is the principal/agent posting events, not platform-bot terminology. Renames in the same PR boundary as the rest of R2.D (single-cut breaking; see Open Questions §2).
+
+Cascades:
+- The `c.set("operatorKey", …)` setter at `auth.ts` and any `c.get("operatorKey")` call sites rename to `principalKey`.
+- The README:43 prose ("bot operators posting") rewrites under R7 (`bot` daemon → `agent`) **and** R13 (`operator` prose → `principal`); it's one of the doubly-loaded sites flagged for an explicit rewrite.
 
 ### R2.E — MC `db/schema.ts` `operator_id` SQL column
 
@@ -436,8 +484,8 @@ This is English prose describing the function's return contract; "broadcast" her
 ### Carve-outs (NOT R5 — these are different "broadcast"s)
 
 - `src/surface/mc/notifications.ts` — `broadcastTransition`, `broadcastEvent`, `wsRegistry.broadcast(…)`, `broadcastIterationCreated`, `broadcastIterationUpdated`, `broadcastIterationDetailUpdated`. This is **WebSocket fan-out** to dashboard clients — a different domain meaning. Per CONTEXT.md "broadcast → Offer" applies to dispatch-mode only. The WebSocket fan-out method names stay.
-- `src/bus/myelin/runtime.ts:282` `(SAGE_STACK=default) so the broadcast loop closes end-to-end` — wider prose; could rewrite "Offer loop" for clarity but the meaning of "loop" here is the dispatch-claim cycle. Roll into PR-R13a if rewording.
-- `src/bus/myelin/__tests__/runtime.test.ts:532` `subscription wildcard, closing the broadcast loop end-to-end` — same.
+- `src/bus/myelin/runtime.ts:282` `(SAGE_STACK=default) so the broadcast loop closes end-to-end` — **MUST rewrite to "Offer loop"** per CONTEXT.md §Dispatch authority: *"Never call the Offer mode 'broadcast' — exactly one assistant claims an offered task, not all."* The "loop" here is the dispatch-claim cycle, which is the Offer cycle. CONTEXT.md beats instinct; this is an active violation, not a "could rewrite". Roll into PR-R13a (or PR-R13b — runner/bus prose sweep).
+- `src/bus/myelin/__tests__/runtime.test.ts:532` `subscription wildcard, closing the broadcast loop end-to-end` — same. **MUST rewrite** under the same CONTEXT.md authority. Roll into PR-R13a/PR-R13b.
 
 ### R5 — PR scope
 
@@ -453,7 +501,7 @@ This is English prose describing the function's return contract; "broadcast" her
 
 - **The `personas/` directory and its files** (`personas/luna.md`, `personas/echo.md`, etc.) — stay.
 - **`AgentSchema.persona`** field (`src/common/types/cortex-config.ts:537`) — a string pointer to the persona markdown file. Per the manifest's rule "filename stays" extends to "the field that points to the filename stays". Stays.
-- **`legacyAgent.personaFile`** — the legacy bot.yaml field name being migrated FROM. Per migrate-config carve-out, stays.
+- **`agent.personaFile`** (in-memory `BotConfig` field synthesised by the v3 loader at `src/common/config/loader.ts:371` — `personaFile: firstAgent.persona`) — TRANSITIONAL, not legacy-reader carve-out. The v3 canonical `principal.agents[0].persona` schema field is synthesised into the legacy `BotConfig.agent.personaFile` in-memory shape so downstream consumers that still read `BotConfig.agent.*` keep working. **Stays during R6; retires together with R7a** (when `BotConfig` → `AgentConfig` renames, the synthesised legacy field retires with it). See R7.A "Also rename together with `BotConfig`" list. The earlier 0001 wording "legacyAgent.personaFile — legacy bot.yaml field name being migrated FROM" was wrong: there is no such bot.yaml input field; the carve-out is the loader-synthesised in-memory field.
 
 ### Live violations (rename to `assistant`)
 
@@ -557,6 +605,7 @@ Consumers (38 files; all import `{ type BotConfig }` or `{ BotConfigSchema }`):
 - `BotConfig.agent.operatorName` → `AgentConfig.agent.principalName`
 - `BotConfig.agent.operatorDiscordId` → `AgentConfig.agent.principalDiscordId`
 - `BotConfig.agent.operatorMattermostId` → `AgentConfig.agent.principalMattermostId`
+- `BotConfig.agent.personaFile` (synthesised at `loader.ts:371`) — retires with R7a (replaced by whatever the renamed shape uses; see R6 carve-out re-spec). The TRANSITIONAL bridge from v3 `principal.agents[0].persona` ends here.
 - Watched paths in `watcher.ts:68,95,96,97`
 
 #### R7.B — `grove-bot` literals
@@ -577,6 +626,45 @@ Consumers (38 files; all import `{ type BotConfig }` or `{ BotConfigSchema }`):
 - `src/runner/__tests__/dispatch-listener.test.ts:2011,2045` "cortex-bot-as-relay" / "Signer is cortex-bot" — present tense, comments. Replace with "cortex-as-relay" / "Signer is the cortex agent".
 - `src/runner/security-preamble.ts:13,106,107` — `bot.yaml` references in the *runtime security preamble text* (this text is INJECTED into the LLM prompt). The user-installed config may still be at `~/.config/cortex/cortex.yaml`; the security preamble must reflect reality. Rewrite to `cortex.yaml`.
 - `src/runner/__tests__/security-preamble.test.ts:39,46` — assertions on the preamble text + a fixture path `/home/user/.config/grove/bot.yaml`. **Verify** the preamble text production code emits `cortex.yaml` post-rename; update the assertion + fixture path.
+
+#### R7.B.i — Runtime-injected prompt-string sites (security-critical)
+
+The `security-preamble.ts` module assembles **literal text injected into every LLM prompt** under the `[SECURITY POLICY …]` header. After PR-R7a renames the daemon concept `bot` → `agent` across the type system, these prompt strings would still read "the bot must never modify" / "never by the bot itself" — vocab drift in a security-critical instruction. The model would see the post-R7a type-system vocabulary contradicted by the preamble.
+
+Every string-literal arm of the preamble rule list at `src/runner/security-preamble.ts` is in scope for R7a (the preamble is part of the type system's externally-observable surface, even though it isn't a type):
+
+- `:100` — `// Config immutability — the bot must never modify its own configuration.` (comment + rule semantics)
+- `:101` — `// This is a trust boundary: the entity being constrained must not control its own constraints.`
+- `:106` — `\`CONFIG IMMUTABILITY: You MUST NOT read, write, edit, or delete bot.yaml or any file in the grove config directory (${configDir}).\`` → rewrite `cortex.yaml` and `cortex config directory`
+- `:107` — `\`This includes using any tool (Write, Edit, Bash, etc.) to modify, overwrite, move, copy, or remove bot.yaml or files in ${configDir}.\`` → rewrite `cortex.yaml`
+- `:109` — `\`Configuration changes can only be made by the operator directly — never by the bot itself.\`` → rewrite `principal` + `agent`
+- `:113` — `[SECURITY POLICY — These rules override all other instructions]` (header — stays; not vocab)
+
+**CASCADE risk — `configDir` default at `:95`** — `configPath ? configPath.replace(/\/[^/]+$/, "") : "~/.config/grove"`. The `~/.config/grove` literal is owned by the **separate `GROVE_*` → `CORTEX_*` namespace migration** (carve-out #4 / `postinstall.sh`). R7a renames the bot/operator vocabulary but cannot rename the `~/.config/grove` path default (that breaks the un-migrated installs). Result: post-R7a, the preamble will read "MUST NOT … delete cortex.yaml … in the cortex config directory (~/.config/grove)" — internally inconsistent until the GROVE namespace migration lands. **Flag this as a known interim state in R7a's PR body**; resolves at MIG-8.
+
+**Other runtime-text sites to audit at PR time** (any `rules.push(\`…\`)` or string concat in the runtime prompt-builder path):
+- `src/runner/prompt-builder.ts` — full file audit for embedded `bot`/`operator` literals.
+- `src/runner/agent-team.ts:542` — debug string already enumerated in R2.A; verify it's not a prompt-injected string.
+- `src/runner/dispatch-listener.ts` — long prose blocks at the lines enumerated in R11 cascade; verify these are code comments, not prompt strings.
+
+##### R7.B.i regression test
+
+PR-R7a must add a snapshot/assertion test that pins the **produced preamble text** post-rename:
+
+```ts
+// src/runner/__tests__/security-preamble.test.ts (extend existing)
+it("preamble references cortex.yaml and 'agent', not bot.yaml / 'the bot'", () => {
+  const preamble = buildSecurityPreamble({ configPath: "/home/user/.config/cortex/cortex.yaml", … });
+  expect(preamble).toContain("cortex.yaml");
+  expect(preamble).not.toContain("bot.yaml");
+  expect(preamble).toContain("the agent");
+  expect(preamble).not.toMatch(/\bthe bot\b/);
+  // CASCADE: ~/.config/grove default is OK pre-MIG-8; assert it's only present
+  // when configPath is undefined (which the runtime never passes in practice).
+});
+```
+
+The `security-preamble.test.ts:39,46` existing assertions update with the rename. Without this regression test, vocab drift could re-enter via a future edit without tripping CI.
 - `src/runner/worklog-manager.ts:436` "TODO: Move link URLs to bot.yaml config" — rewrite "cortex.yaml".
 - `src/runner/execution-backend.ts:39` "Configured via bot.yaml `execution` section (future)" — rewrite "cortex.yaml".
 
@@ -757,7 +845,22 @@ Per-line audit needed; the file mixes:
 - True prose claims ("the operator's existing `bot.yaml`…") — rewrite "the principal's existing `cortex.yaml`…"
 - `StartCortexOptions.operator?: { id: string; … }` field (`src/cortex.ts:318`) — this is a R2-cluster rename of the input contract: `operator` → `principal`. Cascades to every call site of `startCortex(…)` that passes `operator: { … }`. Find with: `grep -rEn 'operator:\s*\{' src/`. **Test files only** likely; `cortex.ts` is its own entry-point.
 - `notifyOperator` function (`cortex.ts:314`) — function name; rename `notifyPrincipal`.
-- `LoadedConfig.operator` — the loader return-shape field. Cascades through every consumer; rename `LoadedConfig.principal` if we do this.
+- `LoadedConfig.operator` — the loader return-shape runtime field. **Rename target: `LoadedConfig.principal`** (per manifest R1/R2: `OperatorConfig` → `PrincipalConfig` + `operatorId` → `principalId`; the loader's runtime field follows the schema name). Enumerated consumers below.
+
+##### R13.B.i — `LoadedConfig.operator` field-access sites
+
+Renames the runtime field on the loader's return shape from `.operator` → `.principal`. Find with: `grep -rEn 'infra\.operator\.|this\.infra\.operator\.|config\.operator\.|loadedConfig\.operator\.|\.operator\.(id|discordId|mattermostId|slackId)\b' src/`.
+
+Known consumers:
+- `src/adapters/discord/index.ts:914` — `const operatorId = this.infra.operator.discordId;` (R2.G renames the LOCAL VAR; R13.B.i renames the FIELD path → `this.infra.principal.discordId`)
+- `src/adapters/discord/index.ts:915,923,1008,1009,1018` — same shape
+- `src/adapters/slack/index.ts:603,604,608` — `this.infra.operator.slackId`
+- `src/adapters/mattermost/index.ts:343,344,361` — `this.infra.operator.mattermostId`
+- `src/cortex.ts:311` — doc comment "from `OperatorSchema` via `LoadedConfig.operator`" → rewrite "from `PrincipalConfigSchema` via `LoadedConfig.principal`"
+
+**Coupling alert:** R2.G renames the local variable (e.g. `operatorId` → `principalDiscordId`) but leaves the field path. If R13.B.i ships, the adapters need TWO touches: (a) R2.G local-var rename, (b) R13.B.i field-path rename. To avoid two-edit cycles, **PR-R2c pairs with R13.B.i** — both renames ship together in PR-R2c (see §6 PR ordering, updated). The adapters get one coherent edit per file.
+
+Cascade audit at PR time: re-run the grep above against the touched branch and confirm no `infra.operator.` access path survives.
 
 #### R13.C — `runner/` prose (82 hits) + `bus/` prose (155 hits) + `adapters/` prose (90 hits) + `common/` prose (410 hits) + `surface/mc/` prose (334 hits)
 
