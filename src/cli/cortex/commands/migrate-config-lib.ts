@@ -12,7 +12,7 @@
  * schema, so we accept input permissively and validate output strictly.
  */
 
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { isAbsolute, resolve } from "path";
 
 import {
@@ -25,6 +25,7 @@ import {
   type PolicyPrincipal,
   type PolicyRole,
   RendererSchema,
+  deriveStackId,
 } from "../../../common/types/cortex-config";
 import {
   buildPolicy,
@@ -823,6 +824,374 @@ function buildRenderers(legacy: LegacyBotYaml, warnings: ConversionWarning[]): C
   return renderers;
 }
 
+// =============================================================================
+// cortex#428 — v3-complete synthesis (Stage 4-A wiring)
+// =============================================================================
+//
+// Stage 4/5 of the v3 dispatch path needs three fields on the migrated
+// config that PR-A (cortex#427) did NOT add to its `principal:` rename:
+//
+//   1. `agent.runtime.capabilities[]` — at minimum `["chat"]` per myelin#181
+//      (canonical conversational capability). Without this, the dispatch
+//      consumer does not register the agent on any task subject and the
+//      adapter never receives the `dispatch.task.*` lifecycle envelopes
+//      it expects under v3.0.x.
+//   2. `presence.<platform>.surfaceSubjects[]` — `local.{principal}.{stack}.
+//      dispatch.task.*` derived from the parent config. Without this the
+//      surface-router never matches the adapter and dispatch envelopes drop
+//      silently on the floor.
+//   3. Transient `agent.operatorId: <principal.id>` — Andreas's deployments
+//      on v3.0.0–v3.0.3 (pre-PR-A) still read `agent.operatorId` from the
+//      cortex.yaml. PR-A's merge on main means the field is unread on
+//      tip-of-main, but the migrator's output must boot cleanly on the
+//      currently-deployed v3.0.x release too. PR-C (cortex#429) drops this
+//      synthesis once the v3.0.0–v3.0.3 window closes.
+//
+// Each synthesis function is idempotent: re-running the migrator on a
+// config that already declares these fields preserves them verbatim. The
+// catalog merge in `synthesizeRuntimeCapabilities` is the only non-trivial
+// case — see its docstring for the merge invariant.
+
+const CHAT_CAPABILITY_ID = "chat";
+const CODE_REVIEW_CAPABILITY_ID = "code-review.typescript";
+/**
+ * Heuristic: match agents whose persona file content suggests code-review
+ * work. Conservative — false negatives are safer than false positives, since
+ * a synthesised `code-review.typescript` capability that the agent doesn't
+ * actually fulfil would surface a dispatch.task.failed reason later.
+ *
+ * Threshold: ≥2 occurrences of the pattern in the persona body. Single
+ * mentions are common in non-reviewer personas that DEFLECT review work
+ * to a reviewer agent ("Code review — that's Echo's job, redirect there").
+ * The two-occurrence floor cleanly separates Echo (actual reviewer,
+ * mentions review multiple times) from Forge (deflector, mentions review
+ * once while pointing at Echo) on Andreas's production deployment. The
+ * pattern itself is intentionally loose — the count gate does the
+ * specificity work.
+ */
+const CODE_REVIEW_PERSONA_PATTERN = /code[- ]review|reviewer|reviewing/gi;
+const CODE_REVIEW_OCCURRENCE_FLOOR = 2;
+
+interface CortexAgentMutable {
+  id: string;
+  displayName: string;
+  persona: string;
+  trust: string[];
+  presence: Record<string, unknown>;
+  runtime?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+interface CortexCapabilityMutable {
+  id: string;
+  description?: string;
+  provided_by?: string[];
+  [key: string]: unknown;
+}
+
+/**
+ * Read a persona file (if it exists on disk) and return a hint set: which of
+ * the heuristic capability ids it suggests the agent provides. Off-disk or
+ * unreadable persona files yield an empty set — the migrator falls back to
+ * the safe default (`["chat"]`) without crashing on a missing persona path.
+ *
+ * The persona path on the migrated agent block is resolved relative to the
+ * config dir at `resolvePersona` time; we apply the same convention here so
+ * a relative `./personas/echo.md` reads off the same directory the operator
+ * pointed the migrator at via `--out`.
+ */
+function detectCapabilityHintsFromPersona(
+  personaPath: string,
+  configDir: string | undefined,
+): Set<string> {
+  const hints = new Set<string>();
+  // The persona path is required by `AgentSchema.persona` (`min(1)`), but a
+  // freshly-migrated config may carry a default-derived path
+  // (`./personas/{id}.md`) where the file has not yet been created. Treat
+  // missing files as "no hint" — the default `chat` capability still gets
+  // synthesised; we just don't speculatively add `code-review.typescript`.
+  if (!configDir) return hints;
+  const abs = isAbsolute(personaPath) ? personaPath : resolve(configDir, personaPath);
+  if (!existsSync(abs)) return hints;
+  let body: string;
+  try {
+    body = readFileSync(abs, "utf-8");
+  } catch {
+    // Persona file exists but is unreadable (permissions, …). The migrator
+    // already warns about file-existence elsewhere; treat the read failure
+    // as a soft skip rather than a fatal error.
+    return hints;
+  }
+  const matches = body.match(CODE_REVIEW_PERSONA_PATTERN);
+  if (matches && matches.length >= CODE_REVIEW_OCCURRENCE_FLOOR) {
+    hints.add(CODE_REVIEW_CAPABILITY_ID);
+  }
+  return hints;
+}
+
+/**
+ * Synthesize an `agent.runtime` block with sensible defaults for any agent
+ * missing one, AND ensure every claimed capability id (including pre-existing
+ * `runtime.capabilities[]` entries) appears in the top-level `capabilities[]`
+ * catalog. Both halves are required for the migrated config to parse cleanly
+ * against the cortex#314 cross-validator (runtime.capabilities ⊆ catalog ids).
+ *
+ * Defaults applied when synthesising a fresh `runtime` block:
+ *   - `substrate: claude-code` — matches the cortex inline-agent assumption
+ *     documented on `AgentRuntimeSchema` (the in-cortex default).
+ *   - `mode: in-process`       — same.
+ *   - `capabilities: ["chat"]` — myelin#181 canonical conversational
+ *     capability. Persona-driven heuristic may add `code-review.typescript`
+ *     when the persona body matches `CODE_REVIEW_PERSONA_PATTERN`.
+ *
+ * Catalog merge invariant: an existing `capabilities[]` entry with the same
+ * id is preserved verbatim (description, rate, cost — operators may have
+ * customised the catalog). The `provided_by` list is unioned with the
+ * synthesising agent's id so the cross-field provider-existence check (also
+ * a cortex#314 refine) passes. When the id has no pre-existing catalog entry,
+ * a minimal one is created with a default description that the operator can
+ * refine later.
+ *
+ * Idempotent: re-running on a config that already has `["chat"]` declared
+ * on every agent (and matching catalog entries) produces zero new synthesised
+ * caps and zero new catalog entries; the `provided_by` union is a no-op when
+ * the agent is already listed.
+ */
+function synthesizeRuntimeCapabilities(
+  cortex: Record<string, unknown>,
+  configDir: string | undefined,
+  warnings: ConversionWarning[],
+): void {
+  const agents = cortex.agents;
+  if (!Array.isArray(agents)) return;
+  const rawCatalog = Array.isArray(cortex.capabilities) ? cortex.capabilities : [];
+  const catalog: CortexCapabilityMutable[] = rawCatalog.map((c) =>
+    c && typeof c === "object" ? { ...(c as CortexCapabilityMutable) } : ({ id: "" } as CortexCapabilityMutable),
+  );
+  const catalogById = new Map<string, CortexCapabilityMutable>();
+  for (const entry of catalog) {
+    if (typeof entry.id === "string" && entry.id.length > 0) {
+      catalogById.set(entry.id, entry);
+    }
+  }
+
+  const ensureCatalogEntry = (capId: string, agentId: string): void => {
+    let entry = catalogById.get(capId);
+    if (entry === undefined) {
+      entry = {
+        id: capId,
+        description: defaultCapabilityDescription(capId),
+        provided_by: [agentId],
+      };
+      catalog.push(entry);
+      catalogById.set(capId, entry);
+      return;
+    }
+    const providers = Array.isArray(entry.provided_by) ? entry.provided_by : [];
+    if (!providers.includes(agentId)) {
+      entry.provided_by = [...providers, agentId];
+    }
+  };
+
+  for (const rawAgent of agents) {
+    if (!rawAgent || typeof rawAgent !== "object") continue;
+    const agent = rawAgent as CortexAgentMutable;
+    const existingRuntime =
+      agent.runtime && typeof agent.runtime === "object" ? agent.runtime : undefined;
+    const existingCaps = Array.isArray(existingRuntime?.capabilities)
+      ? (existingRuntime.capabilities as unknown[]).filter(
+          (c): c is string => typeof c === "string" && c.length > 0,
+        )
+      : [];
+
+    // Decide the synthesised capability set. When an agent already declares
+    // any capability, we ADD `chat` only if missing (so the dispatcher can
+    // route conversational envelopes alongside whatever specialised work
+    // the agent already advertises) — we never remove or rewrite the
+    // operator's existing claims.
+    const synthesised = new Set<string>(existingCaps);
+    const addedByMigrator: string[] = [];
+    if (!synthesised.has(CHAT_CAPABILITY_ID)) {
+      synthesised.add(CHAT_CAPABILITY_ID);
+      addedByMigrator.push(CHAT_CAPABILITY_ID);
+    }
+    if (existingCaps.length === 0) {
+      // Only run the persona heuristic when the agent had no caps declared.
+      // An operator that already declared `["chat"]` explicitly opted into
+      // a minimal capability surface — adding `code-review.typescript`
+      // behind their back would be presumptuous.
+      const hints = detectCapabilityHintsFromPersona(agent.persona, configDir);
+      for (const hint of hints) {
+        if (!synthesised.has(hint)) {
+          synthesised.add(hint);
+          addedByMigrator.push(hint);
+        }
+      }
+    }
+
+    // Build the runtime block. Preserve any pre-existing fields on
+    // `agent.runtime` (sovereignty, maxConcurrent, …) by spreading the
+    // existing block over the defaults.
+    const runtimeOut: Record<string, unknown> = {
+      substrate: "claude-code",
+      mode: "in-process",
+      ...(existingRuntime ?? {}),
+      capabilities: [...synthesised],
+    };
+    agent.runtime = runtimeOut;
+
+    // Mirror every claimed cap onto the catalog so the cortex#314
+    // cross-validator passes. This also pulls existing-but-uncataloged
+    // claims into the catalog — a real safety net beyond the v3-complete
+    // brief, since pre-PR-B migrate-config outputs could leave dangling
+    // claims when the legacy input had `capabilities[]` entries but the
+    // agent's existing runtime.capabilities[] claimed an id not in that
+    // catalog (a latent cortex#314 schema-rejection trap).
+    for (const capId of synthesised) {
+      ensureCatalogEntry(capId, agent.id);
+    }
+
+    if (addedByMigrator.length > 0) {
+      warnings.push({
+        field: `agents[${agent.id}].runtime.capabilities`,
+        message:
+          existingCaps.length === 0
+            ? `synthesised agent.runtime.capabilities = [${addedByMigrator.join(", ")}] ` +
+              `(default: chat per myelin#181; persona-heuristic adds code-review.typescript when ` +
+              `the persona body matches /code[- ]review|reviewer|reviewing/i 2+ times). ` +
+              `Edit cortex.yaml to refine.`
+            : `appended [${addedByMigrator.join(", ")}] to agent.runtime.capabilities ` +
+              `(pre-existing claims preserved). Edit cortex.yaml to refine.`,
+      });
+    }
+  }
+
+  // Re-attach the (possibly mutated) catalog. Always write the array back
+  // even when no caps were synthesised — keeps the YAML shape consistent
+  // across runs (operator sees the catalog block whether or not it was
+  // touched). Skip only when there's nothing to write AND nothing was there
+  // before, to avoid emitting `capabilities: []` on a bot.yaml input that
+  // declared nothing.
+  if (catalog.length > 0 || rawCatalog.length > 0) {
+    cortex.capabilities = catalog;
+  }
+}
+
+/**
+ * Default-description text for an auto-synthesised catalog entry. Kept
+ * minimal so the operator's hand-edit later isn't fighting against a wall
+ * of generated prose — the description is required to be non-empty by
+ * `CapabilitySchema.description`, but it's also the first thing an operator
+ * will rewrite. We keep it short and label it `[auto]` so a grep over a
+ * migrated cortex.yaml surfaces every machine-generated description.
+ */
+function defaultCapabilityDescription(capId: string): string {
+  if (capId === CHAT_CAPABILITY_ID) {
+    return "[auto] Canonical conversational capability (myelin#181).";
+  }
+  if (capId === CODE_REVIEW_CAPABILITY_ID) {
+    return "[auto] TypeScript code review (correctness, types, idioms).";
+  }
+  return `[auto] ${capId} — refine this description.`;
+}
+
+/**
+ * Synthesize `presence.<platform>.surfaceSubjects[]` for every adapter
+ * instance whose presence block carries an empty / missing subjects list.
+ *
+ * Default value: `local.{principal}.{stack-segment}.dispatch.task.*` —
+ * the canonical Stage-4 dispatch-sink subscription per
+ * `docs/design-platform-adapter-dispatch-publishing.md` §5. The
+ * `{stack-segment}` comes from `deriveStackId(cortex).stack` (the second
+ * half of `{operator}/{stack}` — `default` when no `stack:` block
+ * declared, matching cortex's boot resolver).
+ *
+ * Idempotent: an existing non-empty `surfaceSubjects[]` is preserved
+ * verbatim. The migrator only fills in defaults when the operator left
+ * the field unset (or empty), which is the v3.0.x default shape that
+ * leaves dispatch envelopes unmatched in the surface-router.
+ */
+function synthesizeSurfaceSubjects(
+  cortex: Record<string, unknown>,
+  warnings: ConversionWarning[],
+): void {
+  const agents = cortex.agents;
+  if (!Array.isArray(agents)) return;
+  const principal = cortex.principal as Record<string, unknown> | undefined;
+  const principalId = typeof principal?.id === "string" ? principal.id : undefined;
+  if (!principalId) return;
+
+  // Mirror cortex's own boot-time resolver. `deriveStackId` accepts either a
+  // `stack: { id: string }` block or falls back to `<principal.id>/default`.
+  const stackBlock =
+    cortex.stack && typeof cortex.stack === "object"
+      ? (cortex.stack as Record<string, unknown>)
+      : undefined;
+  const stackId = typeof stackBlock?.id === "string" ? stackBlock.id : undefined;
+  const derived = deriveStackId({
+    principal: { id: principalId },
+    stack: stackId ? { id: stackId } : undefined,
+  });
+  const defaultSubject = `local.${derived.operator}.${derived.stack}.dispatch.task.*`;
+
+  for (const rawAgent of agents) {
+    if (!rawAgent || typeof rawAgent !== "object") continue;
+    const agent = rawAgent as CortexAgentMutable;
+    const presence = agent.presence;
+    if (!presence || typeof presence !== "object") continue;
+    for (const platform of ["discord", "mattermost", "slack"] as const) {
+      const block = (presence as Record<string, unknown>)[platform];
+      if (!block || typeof block !== "object") continue;
+      const adapterBlock = block as Record<string, unknown>;
+      const existing = adapterBlock.surfaceSubjects;
+      const existingNonEmpty =
+        Array.isArray(existing) && existing.length > 0 && existing.every((v) => typeof v === "string");
+      if (existingNonEmpty) continue;
+      adapterBlock.surfaceSubjects = [defaultSubject];
+      warnings.push({
+        field: `agents[${agent.id}].presence.${platform}.surfaceSubjects`,
+        message:
+          `synthesised surfaceSubjects = ["${defaultSubject}"] (default ` +
+          `local.{principal}.{stack}.dispatch.task.* per docs/design-platform-adapter-dispatch-publishing.md §5). ` +
+          `Edit cortex.yaml to refine.`,
+      });
+    }
+  }
+}
+
+/**
+ * Synthesize `agent.operatorId: <principal.id>` on every agent as a
+ * deprecation aid for v3.0.0–v3.0.3 deployments that still read the field
+ * directly (pre-PR-A behaviour). The `CortexConfigSchema` strips unknown
+ * keys, so this synthesis MUST run AFTER the schema parse — we mutate the
+ * already-validated object before returning it to the caller.
+ *
+ * PR-C (cortex#429) drops this synthesis when the schema field itself is
+ * removed; the field is intentionally NOT added to `AgentSchema` here —
+ * it's a transient compatibility surface, not a v3 contract.
+ */
+function synthesizeOperatorIdBackCompat(
+  cortex: MigratedCortexConfig,
+  warnings: ConversionWarning[],
+): void {
+  const principalId = cortex.principal.id;
+  // The `MigratedCortexConfig.agents` type does NOT carry `operatorId` —
+  // attaching it is a deliberate type-laundering past the schema. The cast
+  // is narrow (`Record<string, unknown>`) so the migrator's emitted YAML
+  // round-trips on v3.0.0–v3.0.3 loaders. PR-C removes this branch.
+  for (const agent of cortex.agents) {
+    (agent as unknown as Record<string, unknown>).operatorId = principalId;
+  }
+  warnings.push({
+    field: "agents[].operatorId",
+    message:
+      `synthesised transient agent.operatorId="${principalId}" on every agent ` +
+      `for v3.0.0–v3.0.3 back-compat (cortex#427's principal.id read landed on ` +
+      `tip-of-main but is not in the v3.0.x deployed window). PR-C / cortex#429 ` +
+      `drops this synthesis once the v3.0.x window closes.`,
+  });
+}
+
 /**
  * Convert a legacy bot.yaml-shaped object to cortex.yaml-shape. Pure: no IO
  * apart from optional `existsSync` for persona-file validation.
@@ -983,6 +1352,21 @@ export function convertBotYaml(
     cortex.policy = policyBuild.policy;
   }
 
+  // cortex#428 (PR-B) — v3-complete synthesis: ensure the output runs
+  // Stage 4-A end-to-end without manual editing. Each function is
+  // idempotent (re-running on its own output is a no-op).
+  //
+  // Order matters: runtime/capabilities synthesis MUST run before the
+  // schema parse below — the cortex#314 cross-validator rejects any
+  // `runtime.capabilities[]` entry missing from the top-level
+  // `capabilities[]` catalog, so the catalog augmentation must precede
+  // the parse. surfaceSubjects synthesis mutates presence blocks under
+  // `agents[]`; running it pre-parse keeps everything in one validation
+  // pass and lets `DiscordPresenceSchema.surfaceSubjects` validate the
+  // defaulted values.
+  synthesizeRuntimeCapabilities(cortex, opts.configDir, warnings);
+  synthesizeSurfaceSubjects(cortex, warnings);
+
   const parsed = CortexConfigSchema.parse(cortex);
 
   // v3.0.0 BREAKING (manifest PR-11) — `CortexConfig.principal` is the
@@ -991,6 +1375,11 @@ export function convertBotYaml(
   // `operator:`-shaped input (see buildOperator / buildOperatorFromCortexShape
   // above) — it just emits the post-v3 `principal:`-shaped output.
   const migrated: MigratedCortexConfig = parsed;
+
+  // cortex#428 (PR-B) — transient `agent.operatorId` back-compat MUST run
+  // post-parse: the schema strips unknown keys, so any pre-parse mutation
+  // would be silently dropped. PR-C / cortex#429 retires this branch.
+  synthesizeOperatorIdBackCompat(migrated, warnings);
 
   // Compute parallel-mode pre-flight gaps against the FINAL policy block.
   const preflightGaps = policyPreflight({
@@ -1454,6 +1843,37 @@ export function formatCheckReport(result: ConversionResult): string {
       a.presence.mattermost ? "mattermost" : null,
     ].filter(Boolean).join(", ");
     lines.push(`  - ${a.id} (${platforms}) persona=${a.persona} trust=[${a.trust.join(", ")}]`);
+    // cortex#428 — surface the synthesised Stage-4 wiring on each agent so
+    // `--check` output documents the runtime + surfaceSubjects defaults the
+    // migrator applied. Agents missing a `runtime` block in the output (e.g.
+    // legacy paths that bypass synthesis) silently skip these lines rather
+    // than printing an empty marker.
+    if (a.runtime) {
+      lines.push(
+        `      runtime: substrate=${a.runtime.substrate} mode=${a.runtime.mode} ` +
+        `capabilities=[${a.runtime.capabilities.join(", ")}]`,
+      );
+    }
+    const ds = a.presence.discord?.surfaceSubjects;
+    if (ds && ds.length > 0) {
+      lines.push(`      discord.surfaceSubjects: [${ds.join(", ")}]`);
+    }
+    // Mattermost: `surfaceSubjects` is not currently in MattermostPresenceSchema
+    // (TODO at cortex-config.ts:252). Slack mirrors discord — print when set.
+    const ss = (a.presence as Record<string, unknown>).slack as
+      | { surfaceSubjects?: string[] }
+      | undefined;
+    if (ss?.surfaceSubjects && ss.surfaceSubjects.length > 0) {
+      lines.push(`      slack.surfaceSubjects:   [${ss.surfaceSubjects.join(", ")}]`);
+    }
+  }
+  // cortex#428 — show the (possibly synthesised) top-level capability catalog
+  // so operators reviewing `--check` output see the catalog augmentation.
+  if (result.cortex.capabilities && result.cortex.capabilities.length > 0) {
+    lines.push(`capabilities: ${result.cortex.capabilities.length}`);
+    for (const c of result.cortex.capabilities) {
+      lines.push(`  - ${c.id} provided_by=[${c.provided_by.join(", ")}]`);
+    }
   }
   lines.push(`renderers: ${result.cortex.renderers.length}`);
   for (const r of result.cortex.renderers) {
