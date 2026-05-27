@@ -5,8 +5,8 @@
  * shapes. Clients check `protocolVersion` on the `connected` handshake to
  * detect incompatibility.
  *
- * v2 (cortex#436): event kinds `principal.input` / `principal.curation` renamed
- * to `principal.input` / `principal.curation`; identity field `operatorId`
+ * v2 (cortex#436): event kinds `operator.input` / `operator.curation` were
+ * renamed to `principal.input` / `principal.curation`; identity field `operatorId`
  * renamed to `principalId`. Clients must read the principal.* kinds.
  */
 

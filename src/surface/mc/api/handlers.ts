@@ -221,7 +221,7 @@ export interface ApiDeps {
 
 const DEFAULT_AGENT_ID = "mc-default-agent";
 const DEFAULT_AGENT_NAME = "Mission Control default";
-const DEFAULT_OPERATOR_ID = "mc-default-principal";
+const DEFAULT_OPERATOR_ID = "mc-default-operator";
 /**
  * Default priority for `internal`-source tasks created via POST /api/sessions.
  * Used by the INSERT below AND `buildNotificationContextFromCreate` — a

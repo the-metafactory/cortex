@@ -444,7 +444,7 @@ export function importSubIssueFromMetadata(
   // came in via webhook, no human acted; we attribute it to the
   // mission-control default principal the same way internal-task
   // creates do.
-  const DEFAULT_OPERATOR_ID = "mc-default-principal";
+  const DEFAULT_OPERATOR_ID = "mc-default-operator";
   db.query(
     `INSERT INTO tasks
        (id, title, priority, principal_id,

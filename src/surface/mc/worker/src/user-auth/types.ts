@@ -3,11 +3,11 @@
  * Design: docs/design-auth-aaa.md v2
  */
 
-export type Role = "viewer" | "principal" | "admin";
+export type Role = "viewer" | "operator" | "admin";
 export type AgentClass = "pet" | "cattle";
 export type GrantScope = "read" | "review" | "control";
 
-export const ROLE_HIERARCHY: Record<Role, number> = { viewer: 0, principal: 1, admin: 2 };
+export const ROLE_HIERARCHY: Record<Role, number> = { viewer: 0, operator: 1, admin: 2 };
 export const SCOPE_HIERARCHY: Record<GrantScope, number> = { read: 0, review: 1, control: 2 };
 
 export interface UserRecord {
