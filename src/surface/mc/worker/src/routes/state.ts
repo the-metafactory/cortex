@@ -34,14 +34,14 @@ export async function buildSnapshot(
   project?: string | null,
   homePrincipal?: string | null,
 ) {
-  const [agents, completions, activity, dailyStats, projects, accountUsage, operatorUsage, homePrincipals] = await Promise.all([
+  const [agents, completions, activity, dailyStats, projects, accountUsage, principalUsage, homePrincipals] = await Promise.all([
     getActiveAgents(db, project, homePrincipal),
     getRecentCompletions(db, project, undefined, homePrincipal),
     getRecentActivity(db, project),
     getDailyStats(db),
     getProjects(db),
     getLatestAccountUsage(db),
-    getPerOperatorUsage(db),
+    getPerPrincipalUsage(db),
     getKnownHomePrincipals(db),
   ]);
 
@@ -55,7 +55,7 @@ export async function buildSnapshot(
     recentActivity: activity,
     stats: { today: dailyStats },
     accountUsage,
-    operatorUsage,
+    principalUsage,
     /**
      * IAW D.5.2 — distinct `home_principal` values observed in recent
      * sessions. The frontend uses this to populate the operator filter
@@ -628,7 +628,7 @@ async function getLatestAccountUsage(db: D1Database) {
   };
 }
 
-async function getPerOperatorUsage(db: D1Database): Promise<Record<string, ReturnType<typeof formatUsageRow>>> {
+async function getPerPrincipalUsage(db: D1Database): Promise<Record<string, ReturnType<typeof formatUsageRow>>> {
   const { results } = await db.prepare(`
     SELECT u.principal_id, u.source, u.five_hour_pct, u.five_hour_resets,
            u.seven_day_pct, u.seven_day_resets, u.seven_day_opus_pct,
@@ -644,8 +644,8 @@ async function getPerOperatorUsage(db: D1Database): Promise<Record<string, Retur
 
   const map: Record<string, ReturnType<typeof formatUsageRow>> = {};
   for (const row of results ?? []) {
-    const opId = row.principal_id as string;
-    map[opId] = formatUsageRow(row);
+    const principalId = row.principal_id as string;
+    map[principalId] = formatUsageRow(row);
   }
   return map;
 }

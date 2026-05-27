@@ -172,7 +172,7 @@ export function listEventsForSession(
 }
 
 /**
- * Insert an principal.input event.
+ * Insert a principal.input event.
  *
  * `text` and `images` are both optional at the type level — the caller
  * enforces "at least one of text or images must be present" for the
@@ -208,7 +208,7 @@ export function createPrincipalInputEvent(
 }
 
 /**
- * Insert an principal.curation event (F-12 Decision 9).
+ * Insert a principal.curation event (F-12 Decision 9).
  *
  * Sibling family of `principal.input` — see addendum Decision 9 for the
  * rationale on why curation verbs are NOT folded into principal.input.

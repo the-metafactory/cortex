@@ -100,7 +100,7 @@ describe("createPrincipalInputEvent", () => {
     db.close();
   });
 
-  it("creates an principal.input event with text payload", () => {
+  it("creates a principal.input event with text payload", () => {
     const event = createPrincipalInputEvent(db, "s-1", {
       text: "Please use the v2 API instead",
     });
@@ -109,7 +109,7 @@ describe("createPrincipalInputEvent", () => {
     expect(event.payload).toEqual({ text: "Please use the v2 API instead" });
   });
 
-  it("creates an principal.input event with attachments", () => {
+  it("creates a principal.input event with attachments", () => {
     const event = createPrincipalInputEvent(db, "s-1", {
       text: "See screenshot",
       attachments: ["/tmp/screenshot.png"],

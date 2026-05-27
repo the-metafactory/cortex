@@ -267,7 +267,7 @@ describe("POST /api/sessions", () => {
     expect(t.pm.size).toBe(1);
   });
 
-  it("writes the initial prompt as an principal.input event", async () => {
+  it("writes the initial prompt as a principal.input event", async () => {
     const res = await fetch(`${t.baseUrl}/api/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -304,7 +304,7 @@ describe("POST /api/sessions", () => {
   // the principal.curation event family with `kind: "dispatch"`; without an
   // emitter here the type union + dashboard renderer are dead code and
   // manual dispatches don't show up in the audit view.
-  it("emits an principal.curation event with kind=dispatch on successful create", async () => {
+  it("emits a principal.curation event with kind=dispatch on successful create", async () => {
     const res = await fetch(`${t.baseUrl}/api/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },

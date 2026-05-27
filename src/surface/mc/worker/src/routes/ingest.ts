@@ -51,7 +51,7 @@ ingestRoutes.post("/api/ingest", requireApiKey, async (c) => {
   }
 
   // Use the principal_id from the API key, not the request body (trust the key)
-  const effectiveOperatorId = principalId;
+  const effectivePrincipalId = principalId;
 
   let ingested = 0;
   let skipped = 0;
@@ -66,7 +66,7 @@ ingestRoutes.post("/api/ingest", requireApiKey, async (c) => {
     }
 
     try {
-      const processed = processSessionEvent(effectiveOperatorId, event);
+      const processed = processSessionEvent(effectivePrincipalId, event);
       await persistProcessedEvent(db, processed);
 
       // G-410: Extract and persist activity entry for this event
