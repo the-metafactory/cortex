@@ -1,5 +1,41 @@
 # Cortex — Changelog
 
+## Unreleased
+
+### Non-breaking
+
+- **`migrate-config` now produces Stage-4/5-complete output** (cortex#428,
+  PR-B of cortex#426 follow-up). The migrator's emitted `cortex.yaml`
+  runs Stage 4-A end-to-end on v3.0.x without manual editing. Three
+  syntheses land on every agent:
+  - `agent.runtime.capabilities[]` — defaults to `["chat"]` (the
+    canonical conversational capability per myelin#181). A persona
+    heuristic optionally adds `code-review.typescript` when the persona
+    body matches `/code[- ]review|reviewer|reviewing/i` ≥2 times — the
+    occurrence floor separates actual reviewers from agents that
+    deflect review work ("Code review — that's Echo's job, redirect").
+  - `presence.<platform>.surfaceSubjects[]` — defaults to
+    `local.{principal}.{stack}.dispatch.task.*` derived via
+    `deriveStackId` so the surface-router matches the adapter for the
+    canonical Stage-4 dispatch-sink subjects per
+    `docs/design-platform-adapter-dispatch-publishing.md` §5.
+  - Transient `agent.operatorId: <principal.id>` — back-compat for
+    v3.0.0–v3.0.3 deployments that still read `agent.operatorId`
+    directly (pre-cortex#427 behaviour). PR-C / cortex#429 drops this
+    synthesis when the v3.0.x deployed window closes.
+
+  The top-level `capabilities[]` catalog is automatically augmented
+  with every synthesised capability id so the cortex#314
+  cross-validator passes. Existing catalog entries are preserved
+  verbatim; only the `provided_by` list is unioned. The `--check`
+  report surfaces every synthesised field.
+
+  Fixed a pre-existing bug while in the file:
+  `buildAgentsFromCortexShape` did not carry the agent's `runtime`
+  block through on the cortex.yaml-shape input branch — operators
+  re-running migrate-config on a v3.0.x config would silently lose
+  their runtime declarations.
+
 ## 3.0.0 — 2026-05-21 — Vocabulary migration BREAKING
 
 Cortex v3.0.0 completes the metafactory vocabulary migration 2026-05
