@@ -26,13 +26,15 @@ function makeEvent(overrides: Partial<PublishedEvent> = {}): PublishedEvent {
 }
 
 /** G-501: Create a simple single-network resolver for tests */
-function createTestNetworkResolver(endpoint: string, apiKey: string, operatorId: string): NetworkResolver {
+function createTestNetworkResolver(endpoint: string, apiKey: string, principalId: string): NetworkResolver {
   return (networkId: string | undefined): NetworkConfig | null => {
     return {
       id: networkId ?? "default",
       endpoint,
       apiKey,
-      operatorId,
+      // `NetworkConfig.operatorId` is the TS field name pending R2.I;
+      // PR-R2d only renames the JSON wire field on the bus.
+      operatorId: principalId,
     };
   };
 }
@@ -117,7 +119,7 @@ describe("CloudPublisher", () => {
     expect(fetchCalls[0]!.url).toBe("https://grove-api.example.com/api/ingest");
 
     const body = JSON.parse(fetchCalls[0]!.init.body as string);
-    expect(body.operator_id).toBe("andreas");
+    expect(body.principal_id).toBe("andreas");
     expect(body.events).toHaveLength(2);
 
     pub.close();

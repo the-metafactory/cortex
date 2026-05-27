@@ -4,7 +4,7 @@
  *
  * Subcommands:
  *   cloud setup          — Full Cloudflare infrastructure provisioning
- *   cloud add-operator   — Create a new operator API key
+ *   cloud add-operator   — Create a new principal API key
  *   cloud status         — Check deployed Worker health and state
  *   cloud webhooks       — Check webhook delivery health for all tracked repos
  *
@@ -73,18 +73,23 @@ export function updateWranglerToml(
 }
 
 /**
- * Build a bot.yaml snippet for a cloud-mode operator.
+ * Build a bot.yaml snippet for a cloud-mode principal.
+ *
+ * The `operatorId:` YAML key matches `NetworkCloudSchema.operatorId`
+ * in src/common/types/config.ts (rename owned by R2.I — the config
+ * schema field). PR-R2d renames the CLI flag + JSON wire field; the
+ * config-schema rename is the next breaking cut.
  */
 export function buildBotYamlSnippet(opts: {
   endpoint: string;
   apiKey: string;
-  operatorId: string;
+  principalId: string;
 }): string {
   return `api:
   mode: cloud
   endpoint: ${opts.endpoint}
   apiKey: ${opts.apiKey}
-  operatorId: ${opts.operatorId}`;
+  operatorId: ${opts.principalId}`;
 }
 
 /**
@@ -93,13 +98,13 @@ export function buildBotYamlSnippet(opts: {
 export function buildCredentialsSummary(opts: {
   workerUrl: string;
   adminSecret: string;
-  operatorKey: string;
-  operatorId: string;
+  principalKey: string;
+  principalId: string;
   agentName: string;
   d1DatabaseId: string;
   kvNamespaceId: string;
 }): string {
-  return `# Grove Cloud Credentials
+  return `# Cortex Cloud Credentials
 # Generated: ${new Date().toISOString()}
 # KEEP THIS FILE SAFE — contains admin secrets
 
@@ -108,16 +113,16 @@ Admin Secret:     ${opts.adminSecret}
 D1 Database ID:   ${opts.d1DatabaseId}
 KV Namespace ID:  ${opts.kvNamespaceId}
 
-## First Operator
-Operator ID:      ${opts.operatorId}
+## First Principal
+Principal ID:     ${opts.principalId}
 Agent Name:       ${opts.agentName}
-API Key:          ${opts.operatorKey}
+API Key:          ${opts.principalKey}
 
 ## bot.yaml snippet
 ${buildBotYamlSnippet({
   endpoint: opts.workerUrl,
-  apiKey: opts.operatorKey,
-  operatorId: opts.operatorId,
+  apiKey: opts.principalKey,
+  principalId: opts.principalId,
 })}
 `;
 }
@@ -439,17 +444,17 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
     : "https://grove-api.<your-subdomain>.workers.dev";
   success(`Deployed to ${workerUrl}`);
 
-  // --- Step 10: Create first operator key ---
-  step(10, TOTAL_STEPS, "Creating first operator key...");
+  // --- Step 10: Create first principal key ---
+  step(10, TOTAL_STEPS, "Creating first principal key...");
 
-  // Default operator info
-  const operatorId = flags["operator-id"] ?? "admin";
+  // Default principal info
+  const principalId = flags["principal-id"] ?? "admin";
   const agentName = flags["agent-name"] ?? "Luna";
 
   // Wait a moment for the worker to be live
   await new Promise((r) => setTimeout(r, 2000));
 
-  let operatorKey = "";
+  let principalKey = "";
   try {
     const keyRes = await fetch(`${workerUrl}/admin/keys`, {
       method: "POST",
@@ -458,28 +463,28 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
         Authorization: `Bearer ${adminSecret}`,
       },
       body: JSON.stringify({
-        operator_id: operatorId,
+        principal_id: principalId,
         name: agentName,
       }),
     });
 
     if (keyRes.ok) {
       const keyData = (await keyRes.json()) as { key: string };
-      operatorKey = keyData.key;
-      success(`Operator key created: ${operatorKey.slice(0, 20)}...`);
+      principalKey = keyData.key;
+      success(`Principal key created: ${principalKey.slice(0, 20)}...`);
     } else {
       const errText = await keyRes.text();
       fail(`Key creation failed: HTTP ${keyRes.status} — ${errText}`);
       console.error("You can create a key manually:");
       console.error(
-        `  curl -X POST ${workerUrl}/admin/keys -H "Authorization: Bearer ${adminSecret}" -H "Content-Type: application/json" -d '{"operator_id":"${operatorId}","name":"${agentName}"}'`,
+        `  curl -X POST ${workerUrl}/admin/keys -H "Authorization: Bearer ${adminSecret}" -H "Content-Type: application/json" -d '{"principal_id":"${principalId}","name":"${agentName}"}'`,
       );
     }
   } catch (err) {
     fail(`Could not reach worker: ${err instanceof Error ? err.message : String(err)}`);
     console.error("The worker may still be propagating. Try creating a key manually:");
     console.error(
-      `  curl -X POST ${workerUrl}/admin/keys -H "Authorization: Bearer ${adminSecret}" -H "Content-Type: application/json" -d '{"operator_id":"${operatorId}","name":"${agentName}"}'`,
+      `  curl -X POST ${workerUrl}/admin/keys -H "Authorization: Bearer ${adminSecret}" -H "Content-Type: application/json" -d '{"principal_id":"${principalId}","name":"${agentName}"}'`,
     );
   }
 
@@ -493,8 +498,8 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
   const summary = buildCredentialsSummary({
     workerUrl,
     adminSecret,
-    operatorKey: operatorKey || "(create manually — see above)",
-    operatorId,
+    principalKey: principalKey || "(create manually — see above)",
+    principalId,
     agentName,
     d1DatabaseId: d1Id,
     kvNamespaceId: kvId,
@@ -509,19 +514,19 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
     `Admin Secret:     ${adminSecret.slice(0, 8)}...REDACTED (see ${credPath})`,
   );
   console.log("\n" + "=".repeat(60));
-  console.log("  GROVE CLOUD SETUP COMPLETE");
+  console.log("  CORTEX CLOUD SETUP COMPLETE");
   console.log("=".repeat(60));
   console.log(redactedSummary);
   console.log("=".repeat(60));
 
-  if (operatorKey) {
+  if (principalKey) {
     console.log("\nAdd this to your bot.yaml:");
     console.log("─".repeat(40));
     console.log(
       buildBotYamlSnippet({
         endpoint: workerUrl,
-        apiKey: operatorKey,
-        operatorId,
+        apiKey: principalKey,
+        principalId,
       }),
     );
     console.log("─".repeat(40));
@@ -529,8 +534,8 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
 
   console.log("\nNext steps:");
   console.log("  1. Add the bot.yaml snippet above to ~/.config/grove/bot.yaml");
-  console.log("  2. Restart grove-bot: grove-bot stop && grove-bot start");
-  console.log("  3. Add more operators: grove-bot cloud add-operator --name JC --agent-name Ivy --endpoint URL --admin-key SECRET");
+  console.log("  2. Restart cortex: cortex stop && cortex start");
+  console.log("  3. Add more principals: cortex cloud add-operator --name JC --agent-name Ivy --endpoint URL --admin-key SECRET");
 }
 
 // =============================================================================
@@ -545,13 +550,13 @@ async function cloudAddOperator(flags: Record<string, string>): Promise<void> {
 
   if (!name || !agentName || !endpoint || !adminKey) {
     throw new Error(
-      "Usage: grove-bot cloud add-operator --name <operator> --agent-name <agent> --endpoint <URL> --admin-key <SECRET>",
+      "Usage: cortex cloud add-operator --name <principal> --agent-name <agent> --endpoint <URL> --admin-key <SECRET>",
     );
   }
 
-  const operatorId = name.toLowerCase().replace(/[^a-z0-9-]/g, "");
+  const principalId = name.toLowerCase().replace(/[^a-z0-9-]/g, "");
 
-  console.log(`Creating operator key for ${name} (${agentName})...`);
+  console.log(`Creating principal key for ${name} (${agentName})...`);
 
   try {
     const res = await fetch(`${endpoint.replace(/\/+$/, "")}/admin/keys`, {
@@ -561,7 +566,7 @@ async function cloudAddOperator(flags: Record<string, string>): Promise<void> {
         Authorization: `Bearer ${adminKey}`,
       },
       body: JSON.stringify({
-        operator_id: operatorId,
+        principal_id: principalId,
         name: agentName,
       }),
     });
@@ -571,19 +576,19 @@ async function cloudAddOperator(flags: Record<string, string>): Promise<void> {
       throw new Error(`Failed: HTTP ${res.status} — ${errText}`);
     }
 
-    const data = (await res.json()) as { key: string; operator_id: string; name: string };
+    const data = (await res.json()) as { key: string; principal_id: string; name: string };
 
-    console.log("\nOperator key created successfully!");
-    console.log(`  Operator: ${name} (${operatorId})`);
-    console.log(`  Agent:    ${agentName}`);
-    console.log(`  Key:      ${data.key}`);
+    console.log("\nPrincipal key created successfully!");
+    console.log(`  Principal: ${name} (${principalId})`);
+    console.log(`  Agent:     ${agentName}`);
+    console.log(`  Key:       ${data.key}`);
     console.log("\nAdd this to their bot.yaml:");
     console.log("─".repeat(40));
     console.log(
       buildBotYamlSnippet({
         endpoint: endpoint.replace(/\/+$/, ""),
         apiKey: data.key,
-        operatorId,
+        principalId,
       }),
     );
     console.log("─".repeat(40));

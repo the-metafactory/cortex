@@ -169,15 +169,18 @@ CORS_ORIGIN = "*"
 // ---------------------------------------------------------------------------
 
 describe("buildBotYamlSnippet", () => {
-  test("generates correct yaml snippet for operator", () => {
+  test("generates correct yaml snippet for principal", () => {
     const snippet = buildBotYamlSnippet({
       endpoint: "https://grove-api.meta-factory.ai",
       apiKey: "grove_sk_abc123",
-      operatorId: "andreas",
+      principalId: "andreas",
     });
     expect(snippet).toContain("mode: cloud");
     expect(snippet).toContain("endpoint: https://grove-api.meta-factory.ai");
     expect(snippet).toContain("apiKey: grove_sk_abc123");
+    // bot.yaml's `operatorId:` YAML key is the NetworkCloudSchema field
+    // (R2.I — config-schema rename, separate PR). PR-R2d only renames
+    // the JSON wire field + CLI flag.
     expect(snippet).toContain("operatorId: andreas");
   });
 });
@@ -191,8 +194,8 @@ describe("buildCredentialsSummary", () => {
     const summary = buildCredentialsSummary({
       workerUrl: "https://grove-api.meta-factory.ai",
       adminSecret: "admin-secret-here",
-      operatorKey: "grove_sk_abc123",
-      operatorId: "andreas",
+      principalKey: "grove_sk_abc123",
+      principalId: "andreas",
       agentName: "Luna",
       d1DatabaseId: "d1-id",
       kvNamespaceId: "kv-id",

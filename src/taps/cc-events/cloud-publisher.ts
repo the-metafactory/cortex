@@ -4,7 +4,7 @@
  *
  * G-501 Network-aware routing:
  * - Each event may have a network_id field
- * - NetworkResolver function looks up endpoint/apiKey/operatorId per network
+ * - NetworkResolver function looks up endpoint/apiKey/principal-id per network
  * - Events without network_id use default network from resolver
  * - Events with unknown network_id are logged and skipped
  *
@@ -197,7 +197,10 @@ export class CloudPublisher {
 
     const url = `${networkConfig.endpoint.replace(/\/+$/, "")}/api/ingest`;
     const body = JSON.stringify({
-      operator_id: networkConfig.operatorId,
+      // Wire field is `principal_id` per PR-R2d. The TypeScript field
+      // `NetworkConfig.operatorId` still reads as `operatorId` pending
+      // PR-R2.I (config-schema rename).
+      principal_id: networkConfig.operatorId,
       events,
     });
 

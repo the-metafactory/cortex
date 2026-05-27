@@ -22,15 +22,19 @@ export const adminRoutes = new Hono<{ Bindings: Env }>();
 // ---------------------------------------------------------------------------
 
 adminRoutes.post("/admin/keys", requireAdmin, async (c) => {
-  let body: { operator_id: string; name: string };
+  // PR-R2d renames the request wire field to `principal_id`. The
+  // KV-stored `OperatorKey.operator_id` symbol stays pending PR-R2.D
+  // (MC API + auth-type rename — see plan §R2.D). The response wire
+  // mirrors the request shape.
+  let body: { principal_id: string; name: string };
   try {
-    body = await c.req.json<{ operator_id: string; name: string }>();
+    body = await c.req.json<{ principal_id: string; name: string }>();
   } catch {
     return c.json({ error: "invalid JSON body" }, 400);
   }
 
-  if (!body.operator_id || !body.name) {
-    return c.json({ error: "operator_id and name are required" }, 400);
+  if (!body.principal_id || !body.name) {
+    return c.json({ error: "principal_id and name are required" }, 400);
   }
 
   // Generate a key with grove_sk_ prefix + random hex
@@ -40,7 +44,7 @@ adminRoutes.post("/admin/keys", requireAdmin, async (c) => {
   const key = `grove_sk_${hex}`;
 
   const keyData: OperatorKey = {
-    operator_id: body.operator_id,
+    operator_id: body.principal_id,
     name: body.name,
     created_at: new Date().toISOString(),
   };
@@ -50,7 +54,7 @@ adminRoutes.post("/admin/keys", requireAdmin, async (c) => {
 
   return c.json({
     key,
-    operator_id: keyData.operator_id,
+    principal_id: keyData.operator_id,
     name: keyData.name,
     created_at: keyData.created_at,
   }, 201);
