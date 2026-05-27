@@ -1012,7 +1012,7 @@ function synthesizeRuntimeCapabilities(
   if (!Array.isArray(agents)) return;
   const rawCatalog = Array.isArray(cortex.capabilities) ? cortex.capabilities : [];
   const catalog: CortexCapabilityMutable[] = rawCatalog.map((c) =>
-    c && typeof c === "object" ? { ...(c as CortexCapabilityMutable) } : ({ id: "" } as CortexCapabilityMutable),
+    c && typeof c === "object" ? { ...(c as CortexCapabilityMutable) } : { id: "" },
   );
   const catalogById = new Map<string, CortexCapabilityMutable>();
   for (const entry of catalog) {
@@ -1196,13 +1196,12 @@ function synthesizeSurfaceSubjects(
     if (!rawAgent || typeof rawAgent !== "object") continue;
     const agent = rawAgent as CortexAgentMutable;
     const presence = agent.presence;
-    if (!presence || typeof presence !== "object") continue;
     // mattermost intentionally omitted — MattermostPresenceSchema does not
     // declare surfaceSubjects yet (cortex#205-followup). Adding mattermost
     // here without the schema field produces a misleading warning because
     // Zod strips the synthesised value on parse. See doc-comment above.
     for (const platform of ["discord", "slack"] as const) {
-      const block = (presence as Record<string, unknown>)[platform];
+      const block = presence[platform];
       if (!block || typeof block !== "object") continue;
       const adapterBlock = block as Record<string, unknown>;
       const existing = adapterBlock.surfaceSubjects;
@@ -1942,7 +1941,7 @@ export function formatCheckReport(result: ConversionResult): string {
   }
   // cortex#428 — show the (possibly synthesised) top-level capability catalog
   // so operators reviewing `--check` output see the catalog augmentation.
-  if (result.cortex.capabilities && result.cortex.capabilities.length > 0) {
+  if (result.cortex.capabilities.length > 0) {
     lines.push(`capabilities: ${result.cortex.capabilities.length}`);
     for (const c of result.cortex.capabilities) {
       lines.push(`  - ${c.id} provided_by=[${c.provided_by.join(", ")}]`);
