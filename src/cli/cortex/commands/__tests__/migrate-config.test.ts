@@ -435,16 +435,20 @@ describe("convertBotYaml — full fixture", () => {
     expect(result.warnings.some((w) => w.field === "grove")).toBe(true);
   });
 
-  test("passes nats config through unchanged", () => {
+  test("rewrites legacy {org} placeholder in nats.subjects to {principal} (R4)", () => {
     const legacy = loadFixture("full.bot.yaml");
     const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
     expect(result.cortex.nats?.url).toBe("nats://localhost:4222");
-    // Fixture carries the legacy `local.{org}.>` token verbatim — this
-    // test asserts the migrate-config converter passes nats config
-    // through UNCHANGED. The legacy bot.yaml fixture is intentionally
-    // NOT touched by the vocabulary migration (it's the source format
-    // migrate-config reads from).
-    expect(result.cortex.nats?.subjects).toEqual(["local.{org}.>"]);
+    // Fixture carries the legacy `local.{org}.>` token verbatim. The
+    // migrate-config converter rewrites `{org}` → `{principal}` so the
+    // emitted cortex.yaml is consumable by post-#185 myelin runtimes
+    // (which dropped the `{org}` token from the subject grammar). The
+    // legacy bot.yaml fixture is intentionally NOT touched on disk —
+    // the rewrite happens in-memory at conversion time.
+    expect(result.cortex.nats?.subjects).toEqual(["local.{principal}.>"]);
+    expect(
+      result.warnings.some((w) => w.field === "nats.subjects"),
+    ).toBe(true);
   });
 
   test("bot.yaml-shape discord[].roles[] lifts into policy block (PR #310 r1 B-1 fix)", () => {

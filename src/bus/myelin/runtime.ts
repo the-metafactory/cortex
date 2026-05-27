@@ -325,17 +325,15 @@ export function makeSubjectPlaceholderSubstituter(opts: {
   const stackToken = opts.stack !== undefined ? `${opts.stack}.` : "";
   return (subjects: readonly string[]) =>
     subjects.map((s) =>
-      // R4 (vocabulary migration 2026-05) — accept BOTH `{principal}` (the
-      // canonical post-R7 token) and `{org}` (the deprecated alias) during
-      // the transition window. Operators migrating cortex.yaml will see
-      // both tokens in the wild — pre-migration configs carry `{org}`,
-      // post-migration configs carry `{principal}`, and `migrate-config`
-      // converts the legacy bot.yaml → cortex.yaml passing nats config through
-      // verbatim (so `{org}` flows through). Both must resolve to the
-      // same principal slug at runtime.
+      // R4 (vocabulary migration 2026-05, myelin#185 breaking cut +
+      // cortex#453) — `{principal}` is the canonical token. The transition
+      // window accepting `{org}` retired with myelin#185; `migrate-config`
+      // rewrites legacy bot.yaml `{org}` tokens to `{principal}` before
+      // they reach runtime, and the envelope grammar `{principal}.{stack}.
+      // {assistant}` (per `specs/namespace.md`) is the only form the schema
+      // validator now accepts.
       s
         .replaceAll("{principal}", opts.org)
-        .replaceAll("{org}", opts.org)
         .replaceAll("{stack}.", stackToken),
     );
 }
