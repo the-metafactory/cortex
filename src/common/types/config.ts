@@ -482,7 +482,7 @@ export const BotConfigSchema = z.object({
     /** Bearer token for connect-time auth. Optional. */
     token: z.string().optional(),
     /** Connection name surfaced on the server's varz endpoint. */
-    name: z.string().default("grove-bot"),
+    name: z.string().default("cortex"),
     /**
      * Subject patterns to subscribe to. Default empty — caller must
      * provide at least one pattern when enabling NATS. The placeholder
