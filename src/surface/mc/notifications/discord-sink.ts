@@ -99,7 +99,7 @@ export interface NotificationContext {
   priority: number;
   /** `tasks.source_url`. May be null for `internal` tasks. */
   taskSourceUrl: string | null;
-  /** `tasks.operator_id`. Coalescing keys off this. */
+  /** `tasks.principal_id`. Coalescing keys off this. */
   principalId: string;
   /**
    * Cycle / dispatch count for this assignment. Optional — the renderer
@@ -240,7 +240,7 @@ interface CoalesceBuffer {
   scheduler: FlushScheduler;
 }
 
-/** Per-operator coalesce buffer: `operator_id → buffer`. */
+/** Per-operator coalesce buffer: `principal_id → buffer`. */
 const dmBuffers = new Map<string, CoalesceBuffer>();
 /** Per-channel coalesce buffer: `channel_id → buffer`. */
 const channelBuffers = new Map<string, CoalesceBuffer>();

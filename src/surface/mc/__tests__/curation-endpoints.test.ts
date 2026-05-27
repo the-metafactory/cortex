@@ -10,7 +10,7 @@
  *     assignment; terminal assignment → cancel task.
  *   - Decision 6 hand-off semantics: in-flight cancels-then-spawns; failed
  *     spawns only.
- *   - Decision 9 operator.curation events are inserted with the correct
+ *   - Decision 9 principal.curation events are inserted with the correct
  *     `kind` discriminator and broadcast via the WS surface.
  *   - Decision 11 observer side effects (process-kill on cancelled / requeue
  *     from blocked) are exercised with a fake `cat` spawn.
@@ -98,7 +98,7 @@ function seedAssignment(
     `INSERT OR IGNORE INTO agents (id, name, type) VALUES (?, ?, 'hands')`
   ).run(agentId, "Test agent");
   db.query(
-    `INSERT OR IGNORE INTO tasks (id, title, priority, operator_id, source_system)
+    `INSERT OR IGNORE INTO tasks (id, title, priority, principal_id, source_system)
      VALUES (?, ?, 1, 'op', 'internal')`
   ).run(taskId, "Test task");
   db.query(
@@ -133,7 +133,7 @@ describe("POST /api/assignments/:id/requeue", () => {
     await teardown(t);
   });
 
-  it("requeues from blocked → queued and inserts operator.curation kind=requeue", async () => {
+  it("requeues from blocked → queued and inserts principal.curation kind=requeue", async () => {
     const blockReason = JSON.stringify({
       kind: "permission.request",
       payload: { requested_action: "tool.edit" },
@@ -162,10 +162,10 @@ describe("POST /api/assignments/:id/requeue", () => {
     expect(row.state).toBe("queued");
     expect(row.block_reason).toBeNull();
 
-    // operator.curation event present with kind=requeue.
+    // principal.curation event present with kind=requeue.
     const events = t.db
       .query(
-        "SELECT type, payload FROM events WHERE session_id = ? AND type = 'operator.curation'"
+        "SELECT type, payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
       )
       .all(sessionId) as { type: string; payload: string }[];
     expect(events).toHaveLength(1);
@@ -198,7 +198,7 @@ describe("POST /api/assignments/:id/requeue", () => {
     expect(res.status).toBe(200);
     const events = t.db
       .query(
-        "SELECT payload FROM events WHERE session_id = ? AND type = 'operator.curation'"
+        "SELECT payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
       )
       .all(sessionId) as { payload: string }[];
     expect(events).toHaveLength(1);
@@ -306,7 +306,7 @@ describe("POST /api/assignments/:id/abandon", () => {
     // Curation event with kind=abandon, targetKind=assignment.
     const events = t.db
       .query(
-        "SELECT payload FROM events WHERE session_id = ? AND type = 'operator.curation'"
+        "SELECT payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
       )
       .all(sessionId) as { payload: string }[];
     expect(events).toHaveLength(1);
@@ -339,7 +339,7 @@ describe("POST /api/assignments/:id/abandon", () => {
     // Curation event landed on the latest (terminal) session.
     const events = t.db
       .query(
-        "SELECT payload FROM events WHERE session_id = ? AND type = 'operator.curation'"
+        "SELECT payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
       )
       .all(sessionId) as { payload: string }[];
     expect(events).toHaveLength(1);
@@ -504,7 +504,7 @@ describe("POST /api/assignments/:id/handoff", () => {
     // Curation event on the NEW session with kind=handoff.
     const events = t.db
       .query(
-        "SELECT payload FROM events WHERE session_id = ? AND type = 'operator.curation'"
+        "SELECT payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
       )
       .all(body.newSessionId) as { payload: string }[];
     expect(events).toHaveLength(1);

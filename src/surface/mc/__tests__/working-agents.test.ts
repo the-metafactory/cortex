@@ -32,7 +32,7 @@ function seedAgent(db: Database, id: string, name = `Agent ${id}`): void {
 
 function seedTask(db: Database, id: string, priority = 2): void {
   db.query(
-    `INSERT OR IGNORE INTO tasks (id, title, priority, operator_id, source_system)
+    `INSERT OR IGNORE INTO tasks (id, title, priority, principal_id, source_system)
      VALUES (?, ?, ?, 'op', 'internal')`
   ).run(id, `Task ${id}`, priority);
 }

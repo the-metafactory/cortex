@@ -31,7 +31,7 @@ describe("mission-control schema", () => {
 
   it("inserts and reads a task", () => {
     db.exec(`
-      INSERT INTO tasks (id, title, priority, operator_id, source_system, status)
+      INSERT INTO tasks (id, title, priority, principal_id, source_system, status)
       VALUES ('t-1', 'Fix webhook', 0, 'andreas', 'github', 'open')
     `);
     const row = db.query("SELECT * FROM tasks WHERE id = 't-1'").get() as any;
@@ -52,7 +52,7 @@ describe("mission-control schema", () => {
   });
 
   it("inserts and reads an assignment with FK to agent and task", () => {
-    db.exec(`INSERT INTO tasks (id, title, priority, operator_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
+    db.exec(`INSERT INTO tasks (id, title, priority, principal_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
     db.exec(`INSERT INTO agents (id, name, type) VALUES ('a-1', 'Agent', 'hands')`);
     db.exec(`
       INSERT INTO agent_task_assignment (id, agent_id, task_id, state)
@@ -65,7 +65,7 @@ describe("mission-control schema", () => {
   });
 
   it("inserts and reads a session with FK to assignment", () => {
-    db.exec(`INSERT INTO tasks (id, title, priority, operator_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
+    db.exec(`INSERT INTO tasks (id, title, priority, principal_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
     db.exec(`INSERT INTO agents (id, name, type) VALUES ('a-1', 'Agent', 'hands')`);
     db.exec(`INSERT INTO agent_task_assignment (id, agent_id, task_id) VALUES ('ata-1', 'a-1', 't-1')`);
     db.exec(`
@@ -78,7 +78,7 @@ describe("mission-control schema", () => {
   });
 
   it("inserts and reads an event with FK to session", () => {
-    db.exec(`INSERT INTO tasks (id, title, priority, operator_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
+    db.exec(`INSERT INTO tasks (id, title, priority, principal_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
     db.exec(`INSERT INTO agents (id, name, type) VALUES ('a-1', 'Agent', 'hands')`);
     db.exec(`INSERT INTO agent_task_assignment (id, agent_id, task_id) VALUES ('ata-1', 'a-1', 't-1')`);
     db.exec(`INSERT INTO sessions (id, assignment_id, endpoint_kind) VALUES ('s-1', 'ata-1', 'local.process.controlled')`);
@@ -92,7 +92,7 @@ describe("mission-control schema", () => {
   });
 
   it("enforces state CHECK constraint on assignments", () => {
-    db.exec(`INSERT INTO tasks (id, title, priority, operator_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
+    db.exec(`INSERT INTO tasks (id, title, priority, principal_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
     db.exec(`INSERT INTO agents (id, name, type) VALUES ('a-1', 'Agent', 'hands')`);
     expect(() => {
       db.exec(`
@@ -103,7 +103,7 @@ describe("mission-control schema", () => {
   });
 
   it("enforces endpoint_kind CHECK constraint on sessions", () => {
-    db.exec(`INSERT INTO tasks (id, title, priority, operator_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
+    db.exec(`INSERT INTO tasks (id, title, priority, principal_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
     db.exec(`INSERT INTO agents (id, name, type) VALUES ('a-1', 'Agent', 'hands')`);
     db.exec(`INSERT INTO agent_task_assignment (id, agent_id, task_id) VALUES ('ata-1', 'a-1', 't-1')`);
     expect(() => {
@@ -146,7 +146,7 @@ describe("mission-control schema", () => {
   });
 
   it("rejects assignment with nonexistent agent_id", () => {
-    db.exec(`INSERT INTO tasks (id, title, priority, operator_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
+    db.exec(`INSERT INTO tasks (id, title, priority, principal_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
     expect(() => {
       db.exec(`INSERT INTO agent_task_assignment (id, agent_id, task_id) VALUES ('ata-1', 'ghost', 't-1')`);
     }).toThrow();
@@ -177,7 +177,7 @@ describe("mission-control schema", () => {
   // any future writer that bypasses the state machine is caught.
 
   it("rejects state='blocked' with NULL block_reason", () => {
-    db.exec(`INSERT INTO tasks (id, title, priority, operator_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
+    db.exec(`INSERT INTO tasks (id, title, priority, principal_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
     db.exec(`INSERT INTO agents (id, name, type) VALUES ('a-1', 'Agent', 'hands')`);
     expect(() => {
       db.exec(`INSERT INTO agent_task_assignment (id, agent_id, task_id, state, block_reason) VALUES ('ata-1', 'a-1', 't-1', 'blocked', NULL)`);
@@ -185,7 +185,7 @@ describe("mission-control schema", () => {
   });
 
   it("rejects non-blocked state with non-NULL block_reason", () => {
-    db.exec(`INSERT INTO tasks (id, title, priority, operator_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
+    db.exec(`INSERT INTO tasks (id, title, priority, principal_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
     db.exec(`INSERT INTO agents (id, name, type) VALUES ('a-1', 'Agent', 'hands')`);
     const reason = JSON.stringify({ kind: "permission.request", payload: { requested_action: "tool.bash" } });
     expect(() => {
@@ -195,7 +195,7 @@ describe("mission-control schema", () => {
   });
 
   it("rejects malformed JSON in block_reason", () => {
-    db.exec(`INSERT INTO tasks (id, title, priority, operator_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
+    db.exec(`INSERT INTO tasks (id, title, priority, principal_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
     db.exec(`INSERT INTO agents (id, name, type) VALUES ('a-1', 'Agent', 'hands')`);
     expect(() => {
       db.exec(`INSERT INTO agent_task_assignment (id, agent_id, task_id, state, block_reason) VALUES ('ata-1', 'a-1', 't-1', 'blocked', 'not json')`);
@@ -203,7 +203,7 @@ describe("mission-control schema", () => {
   });
 
   it("accepts state='blocked' with valid JSON block_reason", () => {
-    db.exec(`INSERT INTO tasks (id, title, priority, operator_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
+    db.exec(`INSERT INTO tasks (id, title, priority, principal_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
     db.exec(`INSERT INTO agents (id, name, type) VALUES ('a-1', 'Agent', 'hands')`);
     const reason = JSON.stringify({ kind: "permission.request", payload: { requested_action: "tool.bash" } });
     db.query(`INSERT INTO agent_task_assignment (id, agent_id, task_id, state, block_reason) VALUES (?, ?, ?, ?, ?)`)
@@ -218,7 +218,7 @@ describe("mission-control schema", () => {
   // assignment->task: cannot drop a parent that still has live work.
 
   function seedFullChain() {
-    db.exec(`INSERT INTO tasks (id, title, priority, operator_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
+    db.exec(`INSERT INTO tasks (id, title, priority, principal_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
     db.exec(`INSERT INTO agents (id, name, type) VALUES ('a-1', 'Agent', 'hands')`);
     db.exec(`INSERT INTO agent_task_assignment (id, agent_id, task_id) VALUES ('ata-1', 'a-1', 't-1')`);
     db.exec(`INSERT INTO sessions (id, assignment_id, endpoint_kind) VALUES ('s-1', 'ata-1', 'local.process.controlled')`);

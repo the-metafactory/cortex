@@ -172,13 +172,13 @@ export function listEventsForSession(
 }
 
 /**
- * Insert an operator.input event.
+ * Insert an principal.input event.
  *
  * `text` and `images` are both optional at the type level — the caller
  * enforces "at least one of text or images must be present" for the
  * POST /input endpoint (see handlers.ts). Storing images inline here
  * matches the canonical-store rule from `docs/design-mc-image-input.md`
- * Decision 3: operator.input is the authoritative H-source, including
+ * Decision 3: principal.input is the authoritative H-source, including
  * for image content; stream-json.user is suppressed on the renderer.
  */
 export interface OperatorInputEventPayload {
@@ -202,16 +202,16 @@ export function createOperatorInputEvent(
   // insertEvent signature for all callers.
   return insertEvent(db, {
     sessionId,
-    type: "operator.input",
+    type: "principal.input",
     payload: payload as Record<string, unknown>,
   });
 }
 
 /**
- * Insert an operator.curation event (F-12 Decision 9).
+ * Insert an principal.curation event (F-12 Decision 9).
  *
- * Sibling family of `operator.input` — see addendum Decision 9 for the
- * rationale on why curation verbs are NOT folded into operator.input.
+ * Sibling family of `principal.input` — see addendum Decision 9 for the
+ * rationale on why curation verbs are NOT folded into principal.input.
  *
  * The payload follows a tagged-union shape discriminated by `kind`. Four
  * variants ship in F-12: dispatch, requeue, handoff, abandon. F-12b will
@@ -262,7 +262,7 @@ export function createOperatorCurationEvent(
   // widens to the generic event-payload shape.
   return insertEvent(db, {
     sessionId,
-    type: "operator.curation",
+    type: "principal.curation",
     payload,
   });
 }

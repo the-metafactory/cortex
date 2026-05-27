@@ -88,7 +88,7 @@ export interface CreateSessionRequest {
   principalId?: string;
   /**
    * Optional initial operator turn. If provided, it is written to the
-   * controlled session after spawn and recorded as an operator.input event.
+   * controlled session after spawn and recorded as an principal.input event.
    * Ignored for `kind: 'local.observed'` (no stdin to write to).
    */
   prompt?: string;
@@ -164,7 +164,7 @@ export interface SendInputResponse {
 // 409 with the state-machine's error string.
 
 export interface RequeueRequest {
-  /** Optional free-text reason captured in the operator.curation event. */
+  /** Optional free-text reason captured in the principal.curation event. */
   reason?: string;
 }
 

@@ -115,7 +115,7 @@ describe("WebSocket server", () => {
     expect(typeof msgs[0].clientId).toBe("string");
     expect(msgs[0].clientId.length).toBe(26);
     expect(msgs[0].serverVersion).toBe("0.1.0");
-    expect(msgs[0].protocolVersion).toBe(1);
+    expect(msgs[0].protocolVersion).toBe(2);
 
     await closeAndWait(client.ws);
     await waitUntil(() => wsRegistry.size === 0);

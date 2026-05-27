@@ -301,6 +301,6 @@ describe("shouldNotify — defensive fallbacks", () => {
 });
 
 // `shouldNotifyInputRequested` was removed alongside `maybeNotifyInputRequested`
-// (W2 in PR #23 review) — the `operator.input.requested` event is contemplated
+// (W2 in PR #23 review) — the `principal.input.requested` event is contemplated
 // by Decision 1's matrix but not yet emitted by Mission Control v2. When the
 // emitter lands in a follow-up F-1?, restore both functions and a matching test.

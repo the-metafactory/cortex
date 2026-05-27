@@ -11,7 +11,7 @@
  *   D5 — application-level dedup at preview, 409 + deeplink shape
  *   D6 — endpoint shapes (status codes + body keys)
  *   D8 — shadow assignment + session created in the same transaction
- *   D10 — operator.curation event with kind: "task.imported"
+ *   D10 — principal.curation event with kind: "task.imported"
  */
 
 import {
@@ -210,7 +210,7 @@ describe("POST /api/tasks/preview", () => {
   it("returns 409 conflict + deeplink shape when an existing task tracks the same ref", async () => {
     // Seed an existing GitHub-source task with the canonical ref.
     t.db.exec(`
-      INSERT INTO tasks (id, title, priority, operator_id, source_system,
+      INSERT INTO tasks (id, title, priority, principal_id, source_system,
                          source_url, source_external_id, status)
       VALUES ('T-existing', 'old title', 2, 'op-1', 'github',
               'https://github.com/the-metafactory/grove-v2/issues/42',
@@ -391,10 +391,10 @@ describe("POST /api/tasks", () => {
     expect(sess.endpoint_kind).toBe("local.observed");
     expect(sess.ended_at).not.toBeNull();
 
-    // operator.curation event with kind='task.imported' on the shadow session.
+    // principal.curation event with kind='task.imported' on the shadow session.
     const events = t.db
       .query(
-        "SELECT type, payload FROM events WHERE session_id = ? AND type = 'operator.curation'"
+        "SELECT type, payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
       )
       .all(body.shadowSessionId) as { type: string; payload: string }[];
     expect(events).toHaveLength(1);
@@ -427,7 +427,7 @@ describe("POST /api/tasks", () => {
   it("returns 409 conflict when racing the dedup window after preview", async () => {
     // Seed dedup target.
     t.db.exec(`
-      INSERT INTO tasks (id, title, priority, operator_id, source_system,
+      INSERT INTO tasks (id, title, priority, principal_id, source_system,
                          source_url, source_external_id, status)
       VALUES ('T-prev', 'prev', 2, 'op', 'github',
               'https://github.com/x/y/issues/3', 'x/y#3', 'open');
@@ -533,7 +533,7 @@ describe("POST /api/tasks/:taskId/abandon", () => {
     // Curation event lands on the shadow session.
     const events = t.db
       .query(
-        "SELECT payload FROM events WHERE session_id = ? AND type = 'operator.curation' ORDER BY id DESC"
+        "SELECT payload FROM events WHERE session_id = ? AND type = 'principal.curation' ORDER BY id DESC"
       )
       .all(shadowSessionId) as { payload: string }[];
     // First event was task.imported (from create); this is the abandon.
@@ -574,7 +574,7 @@ describe("POST /api/tasks/:taskId/abandon", () => {
 
     const events = t.db
       .query(
-        "SELECT payload FROM events WHERE session_id = ? AND type = 'operator.curation' ORDER BY id DESC"
+        "SELECT payload FROM events WHERE session_id = ? AND type = 'principal.curation' ORDER BY id DESC"
       )
       .all(shadowSessionId) as { payload: string }[];
     const last = JSON.parse(events[0]!.payload);
@@ -700,7 +700,7 @@ describe("GET /api/tasks projection", () => {
   it("shadow_assignment_id is null for internal-source tasks", async () => {
     // Insert a task with no shadow assignment.
     t.db.exec(`
-      INSERT INTO tasks (id, title, priority, operator_id, source_system, status)
+      INSERT INTO tasks (id, title, priority, principal_id, source_system, status)
       VALUES ('T-internal', 'plain', 2, 'op', 'internal', 'open');
     `);
     const res = await fetch(`${t.baseUrl}/api/tasks`);

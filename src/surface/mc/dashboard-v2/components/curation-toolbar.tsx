@@ -8,7 +8,7 @@
  * Dispatch and Requeue fire-and-forget.
  *
  * The toolbar does NOT trigger refetches — it relies on the WS
- * `state.transition` and `operator.curation` frames to flip the parent's
+ * `state.transition` and `principal.curation` frames to flip the parent's
  * `assignment.state`, which re-renders the buttons with the new
  * enablement set (no manual round-trip).
  *

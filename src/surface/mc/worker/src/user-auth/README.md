@@ -40,7 +40,7 @@ relationship — edit it like any other worker code.
 ## Relationship to the worker's existing `auth.ts`
 
 `src/auth.ts` in the worker is a different surface — operator API-key auth
-(`requireApiKey`, `requireAdmin`, `OperatorKey`) for bot operators posting
+(`requireApiKey`, `requireAdmin`, `PrincipalKey`) for bot operators posting
 to `/api/ingest`. It does not overlap with anything here. The two coexist:
 operator-key auth gates the ingest path; user-auth gates the dashboard
 read path.

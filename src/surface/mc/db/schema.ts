@@ -24,7 +24,7 @@ export const SCHEMA_SQL: string[] = [
     title TEXT NOT NULL,
     description TEXT,
     priority INTEGER NOT NULL DEFAULT 2,
-    operator_id TEXT NOT NULL,
+    principal_id TEXT NOT NULL,
     source_system TEXT NOT NULL CHECK(source_system IN ('github','internal')),
     source_url TEXT,
     source_external_id TEXT,

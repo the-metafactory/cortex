@@ -137,10 +137,10 @@ function RowBody({ row, isExpanded, onToggle, onOpenImage }: DrillRowProps) {
       );
     }
 
-    case "operator.input":
+    case "principal.input":
       return (
         <>
-          <div className="kind">operator.input</div>
+          <div className="kind">principal.input</div>
           {row.text && <div className="text">{renderMarkdown(row.text)}</div>}
           {row.images && row.images.length > 0 && (
             <div className="images-row">

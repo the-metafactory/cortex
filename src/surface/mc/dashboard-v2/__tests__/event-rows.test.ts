@@ -3,7 +3,7 @@
  *
  * Verifies the per-event-type row expansion, tool_use ↔ tool_result
  * pairing by `tool_use_id`, and the suppression of `stream-json.user`
- * text blocks (operator.input is the authoritative H-source).
+ * text blocks (principal.input is the authoritative H-source).
  */
 
 import { describe, it, expect } from "bun:test";
@@ -33,7 +33,7 @@ describe("lib/event-rows — eventToRows", () => {
     expect((rows[2] as { name: string }).name).toBe("Read");
   });
 
-  it("suppresses stream-json.user text blocks (operator.input is authoritative)", () => {
+  it("suppresses stream-json.user text blocks (principal.input is authoritative)", () => {
     const rows = eventToRows(ev("stream-json.user", {
       message: {
         content: [
@@ -77,12 +77,12 @@ describe("lib/event-rows — eventToRows", () => {
     expect(row.weight).toBe("tertiary");
   });
 
-  it("emits operator.input row preserving images", () => {
-    const row = eventToRows(ev("operator.input", {
+  it("emits principal.input row preserving images", () => {
+    const row = eventToRows(ev("principal.input", {
       text: "hi",
       images: [{ media_type: "image/png", data: "abc" }],
     }))[0] as { kind: string; text: string; images?: unknown[] };
-    expect(row.kind).toBe("operator.input");
+    expect(row.kind).toBe("principal.input");
     expect(row.text).toBe("hi");
     expect(row.images).toHaveLength(1);
   });

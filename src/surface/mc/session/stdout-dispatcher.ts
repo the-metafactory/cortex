@@ -233,7 +233,7 @@ function loadNotificationContext(
          t.id           AS task_id,
          t.title        AS task_title,
          t.priority     AS task_priority,
-         t.operator_id  AS operator_id,
+         t.principal_id  AS principal_id,
          t.source_url   AS source_url,
          t.source_external_id AS source_external_id,
          a.name         AS agent_name
@@ -247,7 +247,7 @@ function loadNotificationContext(
         task_id: string;
         task_title: string;
         task_priority: number;
-        operator_id: string;
+        principal_id: string;
         source_url: string | null;
         source_external_id: string | null;
         agent_name: string;
@@ -268,7 +268,7 @@ function loadNotificationContext(
     taskTitle: row.task_title,
     priority: row.task_priority,
     taskSourceUrl: row.source_url,
-    principalId: row.operator_id,
+    principalId: row.principal_id,
     observedAtMs: Date.now(),
   };
 }

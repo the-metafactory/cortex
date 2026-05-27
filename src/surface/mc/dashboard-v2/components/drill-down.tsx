@@ -118,7 +118,7 @@ export function DrillDown({
         {/*
           F-12 curation toolbar — Decision 2 places it between the log
           and the input. Verb enablement is a pure function of
-          `assignment.state`; WS state.transition + operator.curation
+          `assignment.state`; WS state.transition + principal.curation
           frames flip the button set without manual round-trips.
         */}
         <CurationToolbar assignment={assignment} />

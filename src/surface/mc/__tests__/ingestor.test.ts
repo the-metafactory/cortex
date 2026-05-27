@@ -11,7 +11,7 @@ function setupDb(): Database {
   for (const sql of SCHEMA_SQL) db.exec(sql);
 
   // Seed: task → agent → assignment → observed session with cc_session_id
-  db.exec(`INSERT INTO tasks (id, title, priority, operator_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
+  db.exec(`INSERT INTO tasks (id, title, priority, principal_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
   db.exec(`INSERT INTO agents (id, name, type) VALUES ('a-1', 'Luna', 'head')`);
   db.exec(`INSERT INTO agent_task_assignment (id, agent_id, task_id) VALUES ('ata-1', 'a-1', 't-1')`);
   db.exec(

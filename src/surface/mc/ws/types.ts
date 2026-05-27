@@ -1,9 +1,13 @@
 /**
  * Grove Mission Control v2 — WebSocket protocol types.
  *
- * Protocol version: 1. Bumped when breaking changes are made to message
+ * Protocol version: 2. Bumped when breaking changes are made to message
  * shapes. Clients check `protocolVersion` on the `connected` handshake to
  * detect incompatibility.
+ *
+ * v2 (cortex#436): event kinds `operator.input` / `operator.curation` renamed
+ * to `principal.input` / `principal.curation`; identity field `operatorId`
+ * renamed to `principalId`. Clients must read the principal.* kinds.
  */
 
 import type { AssignmentState, BlockReason, McEvent } from "../types";
@@ -14,7 +18,7 @@ import type {
 } from "../db/iterations";
 import type { TaskListItem } from "../db/tasks";
 
-export const WS_PROTOCOL_VERSION = 1;
+export const WS_PROTOCOL_VERSION = 2;
 
 // Data attached to each WebSocket connection
 export interface WsData {

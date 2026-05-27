@@ -5,14 +5,14 @@
  *
  * Request body:
  * {
- *   "operator_id": "andreas",
+ *   "principal_id": "andreas",
  *   "events": [{ event_id, event_type, timestamp, session_id, ... }]
  * }
  */
 
 import { Hono } from "hono";
 import type { Env } from "../index";
-import { requireApiKey, type OperatorKey } from "../auth";
+import { requireApiKey, type PrincipalKey } from "../auth";
 import { processSessionEvent, type ProcessedSessionEvent } from "../../../../../common/event-processor";
 import { extractActivityEntry } from "../../../../../common/event-utils";
 import type {
@@ -23,17 +23,17 @@ import type {
 } from "../../../../../common/types";
 import { invalidateCache } from "./state";
 
-type Variables = { operatorId: string; operatorKey: OperatorKey };
+type Variables = { principalId: string; operatorKey: PrincipalKey };
 
 export const ingestRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 interface IngestBody {
-  operator_id: string;
+  principal_id: string;
   events: IngestEvent[];
 }
 
 ingestRoutes.post("/api/ingest", requireApiKey, async (c) => {
-  const operatorId = c.get("operatorId");
+  const principalId = c.get("principalId");
 
   let body: IngestBody;
   try {
@@ -50,8 +50,8 @@ ingestRoutes.post("/api/ingest", requireApiKey, async (c) => {
     return c.json({ ok: true, ingested: 0, skipped: 0 });
   }
 
-  // Use the operator_id from the API key, not the request body (trust the key)
-  const effectiveOperatorId = operatorId;
+  // Use the principal_id from the API key, not the request body (trust the key)
+  const effectiveOperatorId = principalId;
 
   let ingested = 0;
   let skipped = 0;
@@ -136,13 +136,13 @@ async function upsertSession(db: D1Database, session: SessionUpsertData): Promis
   const sov = session.sovereignty;
   await db.prepare(`
     INSERT INTO sessions
-    (session_id, operator_id, agent_id, agent_name, project, description, github_issue,
+    (session_id, principal_id, agent_id, agent_name, project, description, github_issue,
      started_at, status, events_count, last_event, last_event_at,
-     classification, data_residency, home_operator)
+     classification, data_residency, home_principal)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 1, ?, ?, ?, ?, ?)
     ON CONFLICT(session_id) DO UPDATE SET
       status = 'active',
-      operator_id = COALESCE(excluded.operator_id, operator_id),
+      principal_id = COALESCE(excluded.principal_id, principal_id),
       agent_name = excluded.agent_name,
       project = COALESCE(excluded.project, project),
       description = COALESCE(excluded.description, description),
@@ -152,10 +152,10 @@ async function upsertSession(db: D1Database, session: SessionUpsertData): Promis
       events_count = events_count + 1,
       classification = COALESCE(excluded.classification, classification),
       data_residency = COALESCE(excluded.data_residency, data_residency),
-      home_operator = COALESCE(excluded.home_operator, home_operator)
+      home_principal = COALESCE(excluded.home_principal, home_principal)
   `).bind(
     session.sessionId,
-    session.operatorId ?? null,
+    session.principalId ?? null,
     session.agentId,
     session.agentName,
     session.project,
@@ -166,7 +166,7 @@ async function upsertSession(db: D1Database, session: SessionUpsertData): Promis
     session.lastEventAt,
     sov?.classification ?? null,
     sov?.dataResidency ?? null,
-    sov?.homeOperator ?? null,
+    sov?.homePrincipal ?? null,
   ).run();
 }
 
@@ -208,13 +208,13 @@ async function insertSessionDirect(
   const sov = session.sovereignty;
   await db.prepare(`
     INSERT OR IGNORE INTO sessions
-    (session_id, operator_id, agent_id, agent_name, project, description, github_issue,
+    (session_id, principal_id, agent_id, agent_name, project, description, github_issue,
      started_at, completed_at, duration_ms, pr_url, status, last_event, last_event_at,
-     classification, data_residency, home_operator)
+     classification, data_residency, home_principal)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     session.sessionId,
-    session.operatorId ?? null,
+    session.principalId ?? null,
     session.agentId,
     session.agentName,
     session.project,
@@ -229,7 +229,7 @@ async function insertSessionDirect(
     session.lastEventAt,
     sov?.classification ?? null,
     sov?.dataResidency ?? null,
-    sov?.homeOperator ?? null,
+    sov?.homePrincipal ?? null,
   ).run();
 }
 
@@ -294,11 +294,11 @@ async function trimActivity(db: D1Database, sessionId: string, keep: number): Pr
 async function insertUsageSnapshot(db: D1Database, snapshot: UsageSnapshotData): Promise<void> {
   await db.prepare(`
     INSERT INTO usage_snapshots
-    (operator_id, source, five_hour_pct, five_hour_resets, seven_day_pct, seven_day_resets,
+    (principal_id, source, five_hour_pct, five_hour_resets, seven_day_pct, seven_day_resets,
      seven_day_opus_pct, seven_day_sonnet_pct, extra_usage_enabled)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
-    snapshot.operatorId ?? null,
+    snapshot.principalId ?? null,
     snapshot.source,
     snapshot.fiveHourPct,
     snapshot.fiveHourResets,

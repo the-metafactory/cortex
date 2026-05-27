@@ -32,7 +32,7 @@ describe("processSessionEvent — sovereignty propagation (IAW D.5)", () => {
       sovereignty: {
         classification: "federated",
         data_residency: "nz",
-        home_operator: "jcfischer",
+        home_principal: "jcfischer",
       },
     });
     const out = processSessionEvent("andreas", event);
@@ -41,7 +41,7 @@ describe("processSessionEvent — sovereignty propagation (IAW D.5)", () => {
     expect(out.session.sovereignty).toEqual({
       classification: "federated",
       dataResidency: "nz",
-      homeOperator: "jcfischer",
+      homePrincipal: "jcfischer",
     });
   });
 
@@ -51,7 +51,7 @@ describe("processSessionEvent — sovereignty propagation (IAW D.5)", () => {
       payload: { duration_ms: 1000 },
       sovereignty: {
         classification: "public",
-        home_operator: "ops-mesh",
+        home_principal: "ops-mesh",
       },
     });
     const out = processSessionEvent("andreas", event);
@@ -60,7 +60,7 @@ describe("processSessionEvent — sovereignty propagation (IAW D.5)", () => {
     expect(out.fallbackSession?.sovereignty).toEqual({
       classification: "public",
       dataResidency: null,
-      homeOperator: "ops-mesh",
+      homePrincipal: "ops-mesh",
     });
   });
 
@@ -70,7 +70,7 @@ describe("processSessionEvent — sovereignty propagation (IAW D.5)", () => {
       sovereignty: {
         classification: "local",
         data_residency: "eu",
-        home_operator: "andreas",
+        home_principal: "andreas",
       },
     });
     const out = processSessionEvent("andreas", event);
@@ -79,7 +79,7 @@ describe("processSessionEvent — sovereignty propagation (IAW D.5)", () => {
     expect(out.fallbackSession?.sovereignty).toEqual({
       classification: "local",
       dataResidency: "eu",
-      homeOperator: "andreas",
+      homePrincipal: "andreas",
     });
   });
 
@@ -114,7 +114,7 @@ describe("processSessionEvent — sovereignty propagation (IAW D.5)", () => {
     expect(out.session.sovereignty).toEqual({
       classification: null,
       dataResidency: "us-east",
-      homeOperator: null,
+      homePrincipal: null,
     });
   });
 });

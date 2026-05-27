@@ -26,13 +26,13 @@ function extractSovereignty(event: IngestEvent): SessionSovereignty | undefined 
   const s = event.sovereignty;
   if (!s) return undefined;
   // At least one field must be present; otherwise treat as absent.
-  if (s.classification == null && s.data_residency == null && s.home_operator == null) {
+  if (s.classification == null && s.data_residency == null && s.home_principal == null) {
     return undefined;
   }
   return {
     classification: s.classification ?? null,
     dataResidency: s.data_residency ?? null,
-    homeOperator: s.home_operator ?? null,
+    homePrincipal: s.home_principal ?? null,
   };
 }
 

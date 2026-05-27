@@ -1,5 +1,5 @@
 -- Grove Cloud API — D1 Schema
--- Derived from dashboard-db.ts, with operator_id for multi-operator attribution.
+-- Derived from dashboard-db.ts, with principal_id for multi-operator attribution.
 
 CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY,
@@ -9,7 +9,7 @@ INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 
 CREATE TABLE IF NOT EXISTS sessions (
   session_id TEXT PRIMARY KEY,
-  operator_id TEXT,
+  principal_id TEXT,
   agent_id TEXT NOT NULL,
   agent_name TEXT NOT NULL,
   project TEXT,
@@ -33,13 +33,13 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- All three are NULL for pre-IAW publishers. See migrations/0003_sovereignty.sql.
   classification TEXT,        -- 'local' | 'federated' | 'public' | NULL
   data_residency TEXT,        -- e.g. 'nz', 'eu', NULL
-  home_operator TEXT          -- principal.home_operator (post-`did:mf:` strip)
+  home_principal TEXT          -- principal.home_principal (post-`did:mf:` strip)
 );
 
 CREATE TABLE IF NOT EXISTS github_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT UNIQUE,
-  operator_id TEXT,
+  principal_id TEXT,
   repo TEXT NOT NULL,
   event_type TEXT NOT NULL,
   title TEXT,
@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS pull_requests (
 
 CREATE TABLE IF NOT EXISTS usage_snapshots (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  operator_id TEXT,
+  principal_id TEXT,
   source TEXT NOT NULL,
   five_hour_pct REAL,
   five_hour_resets TEXT,
@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
   ip TEXT,
   endpoint TEXT,
   method TEXT,
-  identity TEXT,                   -- operator_id, email, or admin
+  identity TEXT,                   -- principal_id, email, or admin
   detail TEXT                      -- failure reason or extra context
 );
 
@@ -136,12 +136,12 @@ CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_log(event_type, timesta
 CREATE INDEX IF NOT EXISTS idx_session_activity_session ON session_activity(session_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_completed ON sessions(completed_at);
-CREATE INDEX IF NOT EXISTS idx_sessions_operator ON sessions(operator_id);
--- IAW D.5 — slicing the dashboard snapshot by home_operator on every poll
-CREATE INDEX IF NOT EXISTS idx_sessions_home_operator ON sessions(home_operator) WHERE home_operator IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_sessions_operator ON sessions(principal_id);
+-- IAW D.5 — slicing the dashboard snapshot by home_principal on every poll
+CREATE INDEX IF NOT EXISTS idx_sessions_home_principal ON sessions(home_principal) WHERE home_principal IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_github_repo ON github_events(repo, created_at);
 CREATE INDEX IF NOT EXISTS idx_github_agent ON github_events(agent_authored, created_at);
-CREATE INDEX IF NOT EXISTS idx_github_operator ON github_events(operator_id);
+CREATE INDEX IF NOT EXISTS idx_github_operator ON github_events(principal_id);
 CREATE INDEX IF NOT EXISTS idx_issues_repo_state ON issues(repo, state);
 CREATE INDEX IF NOT EXISTS idx_prs_repo_state ON pull_requests(repo, state);
 CREATE INDEX IF NOT EXISTS idx_usage_recorded ON usage_snapshots(recorded_at);

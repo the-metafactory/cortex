@@ -64,7 +64,7 @@ export interface ToolResultRow extends RowBase {
 }
 
 export interface OperatorInputRow extends RowBase {
-  kind: "operator.input";
+  kind: "principal.input";
   text: string;
   images?: Array<{ media_type: string; data: string }>;
 }
@@ -120,7 +120,7 @@ export function eventToRows(ev: McEvent): LogRow[] {
       return assistantToRows(ev);
     case "stream-json.user":
       return userToRows(ev);
-    case "operator.input":
+    case "principal.input":
       return [operatorInputRow(ev)];
     case "permission.request":
       return [permissionRow(ev)];
@@ -231,7 +231,7 @@ function userToRows(ev: McEvent): LogRow[] {
       out.push(row);
     }
     // text blocks on user messages are SUPPRESSED per Decision 11
-    // (operator.input is the authoritative H-source).
+    // (principal.input is the authoritative H-source).
   }
   return out;
 }
@@ -245,7 +245,7 @@ function operatorInputRow(ev: McEvent): OperatorInputRow {
     : undefined;
   const row: OperatorInputRow = {
     id: ev.id, ts: ev.timestamp, color: "h", weight: "primary",
-    kind: "operator.input", text,
+    kind: "principal.input", text,
   };
   if (images) row.images = images;
   return row;

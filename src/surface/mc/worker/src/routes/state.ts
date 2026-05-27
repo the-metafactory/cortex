@@ -23,7 +23,7 @@ const CACHE_TTL_MS = 5_000; // 5s TTL — prevents stale reads across isolates
 /**
  * Build a full (unfiltered) snapshot object from D1.
  *
- * IAW D.5 — `homeOperator` (when supplied) slices the snapshot's `agents`
+ * IAW D.5 — `homePrincipal` (when supplied) slices the snapshot's `agents`
  * and `recentCompletions` lists by the originating operator. The other
  * derived sections (stats, repos, heatmap) stay global because they reflect
  * the receiving operator's totals; per-operator stats are a future slice
@@ -32,17 +32,17 @@ const CACHE_TTL_MS = 5_000; // 5s TTL — prevents stale reads across isolates
 export async function buildSnapshot(
   db: D1Database,
   project?: string | null,
-  homeOperator?: string | null,
+  homePrincipal?: string | null,
 ) {
-  const [agents, completions, activity, dailyStats, projects, accountUsage, operatorUsage, homeOperators] = await Promise.all([
-    getActiveAgents(db, project, homeOperator),
-    getRecentCompletions(db, project, undefined, homeOperator),
+  const [agents, completions, activity, dailyStats, projects, accountUsage, operatorUsage, homePrincipals] = await Promise.all([
+    getActiveAgents(db, project, homePrincipal),
+    getRecentCompletions(db, project, undefined, homePrincipal),
     getRecentActivity(db, project),
     getDailyStats(db),
     getProjects(db),
     getLatestAccountUsage(db),
     getPerOperatorUsage(db),
-    getKnownHomeOperators(db),
+    getKnownHomePrincipals(db),
   ]);
 
   return {
@@ -57,11 +57,11 @@ export async function buildSnapshot(
     accountUsage,
     operatorUsage,
     /**
-     * IAW D.5.2 — distinct `home_operator` values observed in recent
+     * IAW D.5.2 — distinct `home_principal` values observed in recent
      * sessions. The frontend uses this to populate the operator filter
      * dropdown; "Local only" (the default) corresponds to `null` here.
      */
-    homeOperators,
+    homePrincipals,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -208,17 +208,17 @@ export const stateRoutes = new Hono<{ Bindings: Env }>();
 stateRoutes.get("/api/state", async (c) => {
   const db = c.env.GROVE_DB;
   const project = c.req.query("project");
-  // IAW D.5.2 — `?home_operator=<id>` slices the snapshot to a single
-  // originating operator. Sentinel `"local"` means "null home_operator
+  // IAW D.5.2 — `?home_principal=<id>` slices the snapshot to a single
+  // originating operator. Sentinel `"local"` means "null home_principal
   // only" (purely local traffic, no federated stamps) and matches the
   // dashboard's default filter chip.
-  const homeOperator = c.req.query("home_operator");
+  const homePrincipal = c.req.query("home_principal");
 
   // Project-filtered or operator-filtered requests bypass cache (rare).
-  // The cache key would need to grow per-(project, home_operator) tuple
+  // The cache key would need to grow per-(project, home_principal) tuple
   // otherwise; not worth the complexity for the slow path.
-  if (project || homeOperator) {
-    const snapshot = await buildSnapshot(db, project, homeOperator);
+  if (project || homePrincipal) {
+    const snapshot = await buildSnapshot(db, project, homePrincipal);
     return c.json(snapshot);
   }
 
@@ -237,14 +237,14 @@ stateRoutes.get("/api/state", async (c) => {
 async function getActiveAgents(
   db: D1Database,
   project?: string | null,
-  homeOperator?: string | null,
+  homePrincipal?: string | null,
 ) {
   let sql = `
-    SELECT session_id, operator_id, agent_id, agent_name, project, description,
+    SELECT session_id, principal_id, agent_id, agent_name, project, description,
            github_issue, started_at, completed_at, duration_ms, status, pr_url,
            events_count, last_event, last_event_at, progress_completed, progress_total,
            input_tokens, output_tokens, cache_read_tokens, cost_usd,
-           classification, data_residency, home_operator
+           classification, data_residency, home_principal
     FROM sessions
     WHERE (status = 'active' AND last_event_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-3 hours'))
       OR (status IN ('completed', 'failed') AND completed_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 minutes'))
@@ -256,7 +256,7 @@ async function getActiveAgents(
     params.push(project);
   }
 
-  const homeFilter = applyHomeOperatorFilter(homeOperator);
+  const homeFilter = applyHomePrincipalFilter(homePrincipal);
   sql += homeFilter.sql;
   params.push(...homeFilter.params);
 
@@ -271,12 +271,12 @@ async function getActiveAgents(
   return (results ?? []).map((r: Record<string, unknown>) => ({
     id: r.agent_id as string,
     name: r.agent_name as string,
-    operatorId: r.operator_id as string | null,
-    // IAW D.5.3 — surface sovereignty + homeOperator on each agent card.
-    // `homeOperator` defaults to null (purely local traffic); the frontend
+    principalId: r.principal_id as string | null,
+    // IAW D.5.3 — surface sovereignty + homePrincipal on each agent card.
+    // `homePrincipal` defaults to null (purely local traffic); the frontend
     // renders nothing rather than a "local" chip for the null case so the
     // 99% pre-IAW path stays visually unchanged.
-    homeOperator: (r.home_operator as string | null) ?? null,
+    homePrincipal: (r.home_principal as string | null) ?? null,
     sovereignty: buildSovereignty(r),
     status: r.status === "active" ? "active" as const : "completed" as const,
     currentTask: {
@@ -310,13 +310,13 @@ async function getActiveAgents(
 }
 
 /**
- * IAW D.5.2 — translate the `home_operator` query param into a parameterised
+ * IAW D.5.2 — translate the `home_principal` query param into a parameterised
  * SQL fragment for chaining onto a `sessions` WHERE clause.
  *
  *   - `undefined` / `null` / `""` → no slicing (snapshot covers all rows).
- *   - `"local"`                   → `home_operator IS NULL` (purely local
+ *   - `"local"`                   → `home_principal IS NULL` (purely local
  *                                   traffic, the dashboard default chip).
- *   - any other string            → `home_operator = ?` (specific operator).
+ *   - any other string            → `home_principal = ?` (specific operator).
  *
  * Returns `{ sql, params }` rather than mutating in place so the caller's
  * SELECT is constructible without hidden side-effects on a shared array.
@@ -326,15 +326,15 @@ async function getActiveAgents(
  * one place. Adding `"federated"` (all stamped traffic) or `"public"` (a
  * specific classification cut) becomes a one-file change.
  */
-function applyHomeOperatorFilter(homeOperator?: string | null): {
+function applyHomePrincipalFilter(homePrincipal?: string | null): {
   sql: string;
   params: unknown[];
 } {
-  if (homeOperator === "local") {
-    return { sql: ` AND home_operator IS NULL`, params: [] };
+  if (homePrincipal === "local") {
+    return { sql: ` AND home_principal IS NULL`, params: [] };
   }
-  if (homeOperator) {
-    return { sql: ` AND home_operator = ?`, params: [homeOperator] };
+  if (homePrincipal) {
+    return { sql: ` AND home_principal = ?`, params: [homePrincipal] };
   }
   return { sql: "", params: [] };
 }
@@ -348,18 +348,18 @@ function applyHomeOperatorFilter(homeOperator?: string | null): {
 function buildSovereignty(r: Record<string, unknown>): {
   classification: Classification | null;
   dataResidency: string | null;
-  homeOperator: string | null;
+  homePrincipal: string | null;
 } | null {
   const classification = r.classification as Classification | null | undefined;
   const dataResidency = r.data_residency as string | null | undefined;
-  const homeOperator = r.home_operator as string | null | undefined;
-  if (classification == null && dataResidency == null && homeOperator == null) {
+  const homePrincipal = r.home_principal as string | null | undefined;
+  if (classification == null && dataResidency == null && homePrincipal == null) {
     return null;
   }
   return {
     classification: classification ?? null,
     dataResidency: dataResidency ?? null,
-    homeOperator: homeOperator ?? null,
+    homePrincipal: homePrincipal ?? null,
   };
 }
 
@@ -400,12 +400,12 @@ async function getRecentCompletions(
   db: D1Database,
   project?: string | null,
   limit = 50,
-  homeOperator?: string | null,
+  homePrincipal?: string | null,
 ) {
   let sql = `
-    SELECT agent_id, agent_name, operator_id, project, description, duration_ms,
+    SELECT agent_id, agent_name, principal_id, project, description, duration_ms,
            completed_at, pr_url, github_issue, status,
-           classification, data_residency, home_operator
+           classification, data_residency, home_principal
     FROM sessions
     WHERE status IN ('completed', 'failed')
   `;
@@ -416,7 +416,7 @@ async function getRecentCompletions(
     params.push(project);
   }
 
-  const homeFilter = applyHomeOperatorFilter(homeOperator);
+  const homeFilter = applyHomePrincipalFilter(homePrincipal);
   sql += homeFilter.sql;
   params.push(...homeFilter.params);
 
@@ -428,7 +428,7 @@ async function getRecentCompletions(
   return (results ?? []).map((r: Record<string, unknown>) => ({
     agentId: r.agent_id as string,
     agentName: r.agent_name as string,
-    operatorId: r.operator_id as string | null,
+    principalId: r.principal_id as string | null,
     project: r.project as string | null,
     description: r.description as string,
     durationMs: r.duration_ms as number | null,
@@ -437,29 +437,29 @@ async function getRecentCompletions(
     githubIssue: r.github_issue as string | null,
     status: r.status as "completed" | "failed",
     // IAW D.5.3 — sovereignty surface on completions row.
-    homeOperator: (r.home_operator as string | null) ?? null,
+    homePrincipal: (r.home_principal as string | null) ?? null,
     sovereignty: buildSovereignty(r),
   }));
 }
 
 /**
- * IAW D.5.2 — return the distinct, non-null `home_operator` values seen in
+ * IAW D.5.2 — return the distinct, non-null `home_principal` values seen in
  * recent sessions. Powers the dashboard's operator filter dropdown — the
  * frontend prepends "Local only" (default) + "All operators" to this list.
  *
  * Window: same 7-day horizon the heatmap uses, so the dropdown doesn't grow
  * unboundedly with historical federated peers that have gone dark.
  */
-async function getKnownHomeOperators(db: D1Database): Promise<string[]> {
+async function getKnownHomePrincipals(db: D1Database): Promise<string[]> {
   const { results } = await db.prepare(`
-    SELECT DISTINCT home_operator
+    SELECT DISTINCT home_principal
     FROM sessions
-    WHERE home_operator IS NOT NULL
+    WHERE home_principal IS NOT NULL
       AND (last_event_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-7 days')
            OR completed_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-7 days'))
-    ORDER BY home_operator ASC
+    ORDER BY home_principal ASC
   `).all();
-  return (results ?? []).map((r) => r.home_operator as string);
+  return (results ?? []).map((r) => r.home_principal as string);
 }
 
 async function getRecentActivity(db: D1Database, project?: string | null, limit = 500) {
@@ -630,21 +630,21 @@ async function getLatestAccountUsage(db: D1Database) {
 
 async function getPerOperatorUsage(db: D1Database): Promise<Record<string, ReturnType<typeof formatUsageRow>>> {
   const { results } = await db.prepare(`
-    SELECT u.operator_id, u.source, u.five_hour_pct, u.five_hour_resets,
+    SELECT u.principal_id, u.source, u.five_hour_pct, u.five_hour_resets,
            u.seven_day_pct, u.seven_day_resets, u.seven_day_opus_pct,
            u.seven_day_sonnet_pct, u.extra_usage_enabled, u.recorded_at
     FROM usage_snapshots u
     INNER JOIN (
-      SELECT operator_id, MAX(recorded_at) as max_recorded
+      SELECT principal_id, MAX(recorded_at) as max_recorded
       FROM usage_snapshots
-      WHERE operator_id IS NOT NULL
-      GROUP BY operator_id
-    ) latest ON u.operator_id = latest.operator_id AND u.recorded_at = latest.max_recorded
+      WHERE principal_id IS NOT NULL
+      GROUP BY principal_id
+    ) latest ON u.principal_id = latest.principal_id AND u.recorded_at = latest.max_recorded
   `).all();
 
   const map: Record<string, ReturnType<typeof formatUsageRow>> = {};
   for (const row of results ?? []) {
-    const opId = row.operator_id as string;
+    const opId = row.principal_id as string;
     map[opId] = formatUsageRow(row);
   }
   return map;

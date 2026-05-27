@@ -163,7 +163,7 @@ export function listAssignments(db: Database): AssignmentListItem[] {
  *
  * F-6 v1: blocked-only. The three BlockReason kinds (permission.request,
  * tool.error, review.checkpoint) all land the assignment in `blocked`, so this
- * covers 100% of attention signals until F-10 adds `operator.input.requested`
+ * covers 100% of attention signals until F-10 adds `principal.input.requested`
  * events for the soft-prompt path.
  *
  * Ordering: task.priority ASC (P0 first), then updated_at ASC (oldest-waiting

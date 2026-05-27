@@ -19,7 +19,7 @@ function setupDb(): Database {
   db.exec("PRAGMA foreign_keys = ON");
   for (const sql of SCHEMA_SQL) db.exec(sql);
 
-  db.exec(`INSERT INTO tasks (id, title, priority, operator_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
+  db.exec(`INSERT INTO tasks (id, title, priority, principal_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`);
   db.exec(`INSERT INTO agents (id, name, type) VALUES ('a-1', 'Agent', 'hands')`);
   db.exec(`INSERT INTO agent_task_assignment (id, agent_id, task_id) VALUES ('ata-1', 'a-1', 't-1')`);
 
@@ -298,7 +298,7 @@ describe("spawnControlledSession", () => {
     const ep1 = spawnControlledSession(db, pm, "ata-1", { spawn: fakeCatSpawn });
 
     // Add a second assignment for coverage
-    db.exec(`INSERT INTO tasks (id, title, priority, operator_id, source_system) VALUES ('t-2', 'Task 2', 0, 'op', 'internal')`);
+    db.exec(`INSERT INTO tasks (id, title, priority, principal_id, source_system) VALUES ('t-2', 'Task 2', 0, 'op', 'internal')`);
     db.exec(`INSERT INTO agent_task_assignment (id, agent_id, task_id) VALUES ('ata-2', 'a-1', 't-2')`);
     const ep2 = spawnControlledSession(db, pm, "ata-2", { spawn: fakeCatSpawn });
 

@@ -82,7 +82,7 @@ function serialiseSearchableText(ev: McEvent): string {
     }
     return parts.join("\n");
   }
-  if (ev.type === "operator.input") {
+  if (ev.type === "principal.input") {
     const text = (ev.payload as { text?: string })?.text;
     return typeof text === "string" ? text : "";
   }

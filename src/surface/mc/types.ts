@@ -65,7 +65,7 @@ export interface Task {
   title: string;
   description: string | null;
   priority: number;
-  operator_id: string;
+  principal_id: string;
   source_system: TaskSourceSystem;
   source_url: string | null;
   source_external_id: string | null;

@@ -115,7 +115,7 @@ describe("F-6 focus-area WS→refetch integration", () => {
     // Seed an assignment in `running` state with a session so we have
     // something to block → unblock.
     db.exec(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system)
        VALUES ('t-1', 'F-6 WS test task', 0, 'op', 'internal')`
     );
     db.exec(

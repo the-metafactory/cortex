@@ -1,7 +1,7 @@
 /**
  * G-400/G-402: API Key Authentication Middleware
  * Validates Bearer tokens against Workers KV.
- * Keys are stored as: key => { operator_id, name, created_at }
+ * Keys are stored as: key => { principal_id, name, created_at }
  *
  * S-001: CF Access JWT validation for read endpoints.
  * Dashboard users authenticate via CF Access; the JWT is passed as CF_Authorization cookie.
@@ -51,18 +51,18 @@ function getClientIp(c: Context): string {
     ?? "unknown";
 }
 
-export interface OperatorKey {
-  operator_id: string;
+export interface PrincipalKey {
+  principal_id: string;
   name: string;
   created_at: string;
 }
 
 /**
  * Middleware that validates the Authorization: Bearer header against KV.
- * On success, sets c.set("operatorId", ...) and c.set("operatorKey", ...).
+ * On success, sets c.set("principalId", ...) and c.set("operatorKey", ...).
  * On failure, returns 401.
  */
-export async function requireApiKey(c: Context<{ Bindings: Env; Variables: { operatorId: string; operatorKey: OperatorKey } }>, next: Next) {
+export async function requireApiKey(c: Context<{ Bindings: Env; Variables: { principalId: string; operatorKey: PrincipalKey } }>, next: Next) {
   const ip = getClientIp(c);
   const endpoint = new URL(c.req.url).pathname;
   const method = c.req.method;
@@ -79,15 +79,15 @@ export async function requireApiKey(c: Context<{ Bindings: Env; Variables: { ope
     return c.json({ error: "empty bearer token" }, 401);
   }
 
-  const keyData = await c.env.GROVE_KEYS.get(token, "json") as OperatorKey | null;
+  const keyData = await c.env.GROVE_KEYS.get(token, "json") as PrincipalKey | null;
   if (!keyData) {
     logAuditEvent(c.env.GROVE_DB, { eventType: "api_key_auth", result: "failure", ip, endpoint, method, detail: "invalid or revoked key" });
     return c.json({ error: "invalid or revoked API key" }, 401);
   }
 
-  const operatorId = keyData.operator_id ?? (keyData as any).operatorId ?? "";
-  logAuditEvent(c.env.GROVE_DB, { eventType: "api_key_auth", result: "success", ip, endpoint, method, identity: operatorId });
-  c.set("operatorId", operatorId);
+  const principalId = keyData.principal_id ?? (keyData as any).principalId ?? "";
+  logAuditEvent(c.env.GROVE_DB, { eventType: "api_key_auth", result: "success", ip, endpoint, method, identity: principalId });
+  c.set("principalId", principalId);
   c.set("operatorKey", keyData);
   await next();
 }

@@ -72,7 +72,7 @@ describe("listTasks aggregate_state", () => {
 
   function seedTaskWithAssignmentStates(id: string, states: string[]): void {
     db.query(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system)
        VALUES (?, ?, 2, 'op', 'internal')`
     ).run(id, `Task ${id}`);
     for (let i = 0; i < states.length; i++) {
@@ -129,7 +129,7 @@ describe("listTasks aggregate_state", () => {
 
   it("returns null when the task has no assignments", () => {
     db.query(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system)
        VALUES ('t-empty', 'Empty task', 2, 'op', 'internal')`
     ).run();
     const [row] = listTasks(db);
@@ -166,7 +166,7 @@ describe("listTasks iteration denormalisation", () => {
   }
   function seedTask(id: string, iterationId: string | null): void {
     db.query(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system, iteration_id)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system, iteration_id)
        VALUES (?, ?, 2, 'op', 'internal', ?)`
     ).run(id, `Task ${id}`, iterationId);
   }
@@ -256,7 +256,7 @@ describe("getTaskById", () => {
   }
   function seedTask(id: string, iter: string | null = null): void {
     db.query(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system, iteration_id)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system, iteration_id)
        VALUES (?, ?, 2, 'op', 'github', ?)`
     ).run(id, `T ${id}`, iter);
   }

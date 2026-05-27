@@ -447,7 +447,7 @@ export function importSubIssueFromMetadata(
   const DEFAULT_OPERATOR_ID = "mc-default-operator";
   db.query(
     `INSERT INTO tasks
-       (id, title, priority, operator_id,
+       (id, title, priority, principal_id,
         source_system, source_url, source_external_id,
         status, iteration_id)
      VALUES (?, ?, 2, ?, 'github', ?, ?, ?, ?)`

@@ -1,9 +1,9 @@
 /**
- * Grove Mission Control v2 — F-12 operator.curation event helper.
+ * Grove Mission Control v2 — F-12 principal.curation event helper.
  *
  * Pins the four payload variants (Decision 9) round-trip through the events
- * table and that the helper writes the type column verbatim ("operator.curation",
- * sibling of "operator.input"). Pure DB-level test — no HTTP, no spawn.
+ * table and that the helper writes the type column verbatim ("principal.curation",
+ * sibling of "principal.input"). Pure DB-level test — no HTTP, no spawn.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
@@ -39,7 +39,7 @@ function teardown(t: TestContext): void {
 function seed(db: Database): { assignmentId: string; sessionId: string } {
   db.exec(`
     INSERT INTO agents (id, name, type) VALUES ('a-1', 'Test agent', 'hands');
-    INSERT INTO tasks (id, title, priority, operator_id, source_system)
+    INSERT INTO tasks (id, title, priority, principal_id, source_system)
       VALUES ('t-1', 'Test task', 1, 'op', 'internal');
     INSERT INTO agent_task_assignment (id, agent_id, task_id, state)
       VALUES ('ata-1', 'a-1', 't-1', 'queued');
@@ -60,7 +60,7 @@ describe("createOperatorCurationEvent", () => {
     teardown(t);
   });
 
-  it("writes type='operator.curation' with the dispatch payload", () => {
+  it("writes type='principal.curation' with the dispatch payload", () => {
     const { sessionId } = seed(t.db);
     const payload: OperatorCurationPayload = {
       kind: "dispatch",
@@ -69,13 +69,13 @@ describe("createOperatorCurationEvent", () => {
       newAssignmentId: "ata-2",
     };
     const ev = createOperatorCurationEvent(t.db, sessionId, payload);
-    expect(ev.type).toBe("operator.curation");
+    expect(ev.type).toBe("principal.curation");
     expect(ev.session_id).toBe(sessionId);
 
     const row = t.db
       .query("SELECT type, payload FROM events WHERE id = ?")
       .get(ev.id) as { type: string; payload: string };
-    expect(row.type).toBe("operator.curation");
+    expect(row.type).toBe("principal.curation");
     expect(JSON.parse(row.payload)).toEqual(
       payload as unknown as Record<string, unknown>
     );
@@ -166,7 +166,7 @@ describe("createOperatorCurationEvent", () => {
       type: "issue",
     };
     const ev = createOperatorCurationEvent(t.db, sessionId, payload);
-    expect(ev.type).toBe("operator.curation");
+    expect(ev.type).toBe("principal.curation");
     const row = t.db
       .query("SELECT payload FROM events WHERE id = ?")
       .get(ev.id) as { payload: string };

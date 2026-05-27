@@ -69,7 +69,7 @@ function seed(db: Database, assignments: SeedAssignment[]) {
   // Tasks (one per assignment for simplicity).
   for (const a of assignments) {
     db.exec(
-      `INSERT OR IGNORE INTO tasks (id, title, priority, operator_id, source_system) VALUES ('${a.taskId}', 'Task ${a.taskId}', 0, 'op', 'internal')`
+      `INSERT OR IGNORE INTO tasks (id, title, priority, principal_id, source_system) VALUES ('${a.taskId}', 'Task ${a.taskId}', 0, 'op', 'internal')`
     );
     db.exec(
       `INSERT OR IGNORE INTO agents (id, name, type, persistent) VALUES ('${a.agentId}', '${a.agentName}', 'head', 1)`

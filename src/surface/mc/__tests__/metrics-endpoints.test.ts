@@ -75,7 +75,7 @@ function seedAssignment(
   }
 ): void {
   db.exec(
-    `INSERT OR IGNORE INTO tasks (id, title, priority, operator_id, source_system) VALUES ('${opts.taskId}', 'Task', 0, 'op', 'internal')`
+    `INSERT OR IGNORE INTO tasks (id, title, priority, principal_id, source_system) VALUES ('${opts.taskId}', 'Task', 0, 'op', 'internal')`
   );
   db.exec(
     `INSERT OR IGNORE INTO agents (id, name, type, persistent) VALUES ('${opts.agentId}', '${opts.agentName}', 'head', 1)`

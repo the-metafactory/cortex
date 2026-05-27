@@ -226,9 +226,9 @@ export function shouldNotify(input: ShouldNotifyInput): NotificationIntent | nul
   }
 }
 
-// `operator.input.requested` is contemplated by Decision 1 (last row of
+// `principal.input.requested` is contemplated by Decision 1 (last row of
 // the matrix) but the event is not yet emitted by Mission Control v2 (no
-// caller writes the `operator.input.requested` event type). When the
+// caller writes the `principal.input.requested` event type). When the
 // emitter lands in a follow-up F-1?, restore `maybeNotifyInputRequested`
 // in `discord-sink.ts` and a matching `shouldNotifyInputRequested` here,
 // wired from the new emitter call site. Removed for now to keep this PR

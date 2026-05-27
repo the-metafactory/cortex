@@ -100,7 +100,7 @@ describe("GET /api/assignments", () => {
 
   it("lists assignments with joined task and most-recent session", async () => {
     t.db.exec(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system)
        VALUES ('t-1', 'Do a thing', 1, 'op', 'internal')`
     );
     t.db.exec(`INSERT INTO agents (id, name, type) VALUES ('a-1', 'Agent', 'hands')`);
@@ -152,7 +152,7 @@ describe("GET /api/focus-area", () => {
     ).run();
     t.db
       .query(
-        `INSERT INTO tasks (id, title, priority, operator_id, source_system)
+        `INSERT INTO tasks (id, title, priority, principal_id, source_system)
          VALUES (?, ?, ?, 'op', 'internal')`
       )
       .run(`task-${id}`, `Task ${id}`, priority);
@@ -267,7 +267,7 @@ describe("POST /api/sessions", () => {
     expect(t.pm.size).toBe(1);
   });
 
-  it("writes the initial prompt as an operator.input event", async () => {
+  it("writes the initial prompt as an principal.input event", async () => {
     const res = await fetch(`${t.baseUrl}/api/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -280,7 +280,7 @@ describe("POST /api/sessions", () => {
     const events = t.db
       .query("SELECT type, payload FROM events WHERE session_id = ? ORDER BY timestamp")
       .all(body.sessionId) as { type: string; payload: string }[];
-    const operatorInputs = events.filter((e) => e.type === "operator.input");
+    const operatorInputs = events.filter((e) => e.type === "principal.input");
     expect(operatorInputs).toHaveLength(1);
     const first = operatorInputs[0]!;
     expect(JSON.parse(first.payload).text).toBe("hello there");
@@ -301,10 +301,10 @@ describe("POST /api/sessions", () => {
   });
 
   // PR #30 W1 — the manual-dispatch audit trail. F-12 Decision 9 defines
-  // the operator.curation event family with `kind: "dispatch"`; without an
+  // the principal.curation event family with `kind: "dispatch"`; without an
   // emitter here the type union + dashboard renderer are dead code and
   // manual dispatches don't show up in the audit view.
-  it("emits an operator.curation event with kind=dispatch on successful create", async () => {
+  it("emits an principal.curation event with kind=dispatch on successful create", async () => {
     const res = await fetch(`${t.baseUrl}/api/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -315,7 +315,7 @@ describe("POST /api/sessions", () => {
 
     const events = t.db
       .query(
-        "SELECT payload FROM events WHERE session_id = ? AND type = 'operator.curation'"
+        "SELECT payload FROM events WHERE session_id = ? AND type = 'principal.curation'"
       )
       .all(body.sessionId) as { payload: string }[];
     expect(events).toHaveLength(1);
@@ -333,7 +333,7 @@ describe("POST /api/sessions", () => {
     // Create a task row up front so the second POST goes through the
     // debounce path (debounce only fires when body.taskId is provided).
     t.db.exec(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system)
        VALUES ('t-debounce', 'task', 1, 'op', 'internal')`
     );
 
@@ -385,7 +385,7 @@ describe("POST /api/sessions", () => {
   // both passed CHECK before either SET and both spawned.
   it("concurrent same-taskId dispatches: exactly one 201, the other 409", async () => {
     t.db.exec(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system)
        VALUES ('t-race', 'task', 1, 'op', 'internal')`
     );
     const [a, b] = await Promise.all([
@@ -680,7 +680,7 @@ describe("POST /api/assignments/:id/input", () => {
     expect(typeof body.eventId).toBe("string");
 
     const events = t.db
-      .query("SELECT type, payload FROM events WHERE session_id = ? AND type = 'operator.input'")
+      .query("SELECT type, payload FROM events WHERE session_id = ? AND type = 'principal.input'")
       .all(sessionId) as { payload: string }[];
     const texts = events.map((e) => JSON.parse(e.payload).text as string);
     expect(texts).toContain("second turn");
@@ -689,7 +689,7 @@ describe("POST /api/assignments/:id/input", () => {
   it("returns 404 when the assignment has no active session", async () => {
     // Set up assignment with no session.
     t.db.exec(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system)
        VALUES ('t-x', 'Orphan', 2, 'op', 'internal')`
     );
     t.db.exec(`INSERT INTO agents (id, name, type) VALUES ('a-x', 'X', 'hands')`);
@@ -708,7 +708,7 @@ describe("POST /api/assignments/:id/input", () => {
 
   it("returns 409 when the session is observed (not controllable)", async () => {
     t.db.exec(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system)
        VALUES ('t-obs', 'Observed', 2, 'op', 'internal')`
     );
     t.db.exec(`INSERT INTO agents (id, name, type) VALUES ('a-obs', 'Obs', 'hands')`);
@@ -862,7 +862,7 @@ describe("POST /api/assignments/:id/input", () => {
     expect(body.ok).toBe(true);
   });
 
-  it("accepts image-only body (text absent) and stores images on operator.input", async () => {
+  it("accepts image-only body (text absent) and stores images on principal.input", async () => {
     const id = await createAssignment();
     const res = await fetch(`${t.baseUrl}/api/assignments/${id}/input`, {
       method: "POST",
@@ -875,7 +875,7 @@ describe("POST /api/assignments/:id/input", () => {
     // Verify the stored event payload carries images but not text.
     const stored = t.db
       .query(
-        "SELECT payload FROM events WHERE type = 'operator.input' ORDER BY id DESC LIMIT 1"
+        "SELECT payload FROM events WHERE type = 'principal.input' ORDER BY id DESC LIMIT 1"
       )
       .get() as { payload: string };
     const parsed = JSON.parse(stored.payload) as {
@@ -1002,7 +1002,7 @@ describe("POST /api/assignments/:id/input", () => {
     // Seed an observed session explicitly — observed sessions never accept
     // writes regardless of payload shape (Decision 8 belt-and-braces).
     t.db.exec(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system)
        VALUES ('t-obs', 'Observed', 2, 'op', 'internal')`
     );
     t.db.exec(
@@ -1053,7 +1053,7 @@ describe("GET /api/assignments/:id/events", () => {
       `INSERT INTO agents (id, name, type, persistent) VALUES ('agent-evt', 'Evt', 'hands', 1)`
     );
     t.db.run(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system)
        VALUES ('task-evt', 'Events task', 2, 'op', 'internal')`
     );
     const assignmentId = "ata-evt";
@@ -1093,7 +1093,7 @@ describe("GET /api/assignments/:id/events", () => {
       `INSERT INTO agents (id, name, type, persistent) VALUES ('a-ns', 'Ns', 'hands', 1)`
     );
     t.db.run(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system)
        VALUES ('t-ns', 'No session', 2, 'op', 'internal')`
     );
     t.db.run(
@@ -1259,7 +1259,7 @@ describe("GET /api/tasks", () => {
     t.db
       .query(
         `INSERT INTO tasks
-           (id, title, priority, operator_id, source_system, source_url,
+           (id, title, priority, principal_id, source_system, source_url,
             source_external_id, status, created_at, updated_at)
          VALUES (?, ?, ?, 'op', ?, ?, ?, ?,
                  unixepoch() - ?, unixepoch() - ?)`
@@ -1434,7 +1434,7 @@ describe("GET /api/tasks", () => {
         t.db
           .query(
             `INSERT INTO tasks
-               (id, title, priority, operator_id, source_system, status,
+               (id, title, priority, principal_id, source_system, status,
                 created_at, updated_at)
              VALUES (?, ?, ?, 'op', 'internal', 'open',
                      unixepoch(), unixepoch() - ?)`
@@ -1496,7 +1496,7 @@ describe("GET /api/working-agents", () => {
   function seedTask(id: string, priority = 2): void {
     t.db
       .query(
-        `INSERT OR IGNORE INTO tasks (id, title, priority, operator_id, source_system)
+        `INSERT OR IGNORE INTO tasks (id, title, priority, principal_id, source_system)
          VALUES (?, ?, ?, 'op', 'internal')`
       )
       .run(id, `Task ${id}`, priority);
@@ -1631,7 +1631,7 @@ describe("GET /api/iterations", () => {
       `INSERT INTO iterations (id, title, state, priority) VALUES ('it-1', 'First', 'designing', 1)`
     );
     t.db.exec(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system, iteration_id)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system, iteration_id)
        VALUES ('t-1', 'A', 2, 'op', 'github', 'it-1')`
     );
     const res = await fetch(`${t.baseUrl}/api/iterations`);
@@ -1681,7 +1681,7 @@ describe("GET /api/inbox", () => {
 
   it("returns upstream-imported tasks not attached to any iteration", async () => {
     t.db.exec(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system, source_external_id, iteration_id)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system, source_external_id, iteration_id)
        VALUES ('t-gh', 'GH issue', 2, 'op', 'github', 'github:x/y#1', NULL),
               ('t-int', 'Internal', 2, 'op', 'internal', NULL, NULL)`
     );
@@ -1695,7 +1695,7 @@ describe("GET /api/inbox", () => {
 
   it("?source=github filters to a single source", async () => {
     t.db.exec(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system)
        VALUES ('t-gh', 'GH', 2, 'op', 'github')`
     );
     const res = await fetch(`${t.baseUrl}/api/inbox?source=github`);
@@ -1706,7 +1706,7 @@ describe("GET /api/inbox", () => {
   it("?limit=5 caps the result count", async () => {
     for (let i = 0; i < 12; i++) {
       t.db.exec(
-        `INSERT INTO tasks (id, title, priority, operator_id, source_system)
+        `INSERT INTO tasks (id, title, priority, principal_id, source_system)
          VALUES ('t-${i}', 'X', 2, 'op', 'github')`
       );
     }
@@ -1769,7 +1769,7 @@ describe("GET /api/iterations/:id", () => {
       `INSERT INTO iterations (id, title, body, state, priority) VALUES ('it-1', 'Iter one', 'design notes', 'designing', 1)`
     );
     t.db.exec(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system, iteration_id)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system, iteration_id)
        VALUES ('task-a', 'Task A', 0, 'op', 'github', 'it-1'),
               ('task-b', 'Task B', 2, 'op', 'github', 'it-1')`
     );
@@ -1983,7 +1983,7 @@ describe("POST /api/iterations/:id/tasks (attach existing OR create+attach)", ()
   }
   function seedTask(id: string, iterationId: string | null = null): void {
     t.db.query(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system, iteration_id)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system, iteration_id)
        VALUES (?, ?, 2, 'op', 'github', ?)`
     ).run(id, `T ${id}`, iterationId);
   }
@@ -2152,7 +2152,7 @@ describe("DELETE /api/iterations/:id/tasks/:taskId", () => {
   }
   function seedTask(id: string, iterationId: string | null = null): void {
     t.db.query(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system, iteration_id)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system, iteration_id)
        VALUES (?, ?, 2, 'op', 'github', ?)`
     ).run(id, `T ${id}`, iterationId);
   }
@@ -2248,7 +2248,7 @@ describe("F-16 — GET /api/tasks `iteration` denormalisation", () => {
   function seedTaskWithIter(id: string, iterationId: string | null): void {
     t.db
       .query(
-        `INSERT INTO tasks (id, title, priority, operator_id, source_system, iteration_id)
+        `INSERT INTO tasks (id, title, priority, principal_id, source_system, iteration_id)
          VALUES (?, ?, 2, 'op', 'internal', ?)`
       )
       .run(id, `Task ${id}`, iterationId);
@@ -2365,7 +2365,7 @@ describe("F-16 — GET /api/assignments `iteration` denormalisation", () => {
     }
     t.db
       .query(
-        `INSERT INTO tasks (id, title, priority, operator_id, source_system, iteration_id)
+        `INSERT INTO tasks (id, title, priority, principal_id, source_system, iteration_id)
          VALUES ('t-1', 'task', 1, 'op', 'internal', ?)`
       )
       .run(iterationId);
@@ -2425,7 +2425,7 @@ describe("F-16 — GET /api/focus-area `iteration` denormalisation", () => {
       `INSERT INTO iterations (id, title, state, priority) VALUES ('it-1', 'Block iter', 'in_flight', 1)`
     );
     t.db.exec(
-      `INSERT INTO tasks (id, title, priority, operator_id, source_system, iteration_id)
+      `INSERT INTO tasks (id, title, priority, principal_id, source_system, iteration_id)
        VALUES ('t-1', 'blocked task', 0, 'op', 'internal', 'it-1')`
     );
     t.db.exec(

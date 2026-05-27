@@ -2,7 +2,7 @@
  * Image lightbox modal.
  *
  * Click-outside or Esc dismisses. Used by F-7's drill-log (MIG-3) for
- * inline `operator.input` image previews and by MIG-3's drill-input chip
+ * inline `principal.input` image previews and by MIG-3's drill-input chip
  * row for staged-image expansion.
  *
  * CSS lives in styles/global.css under .lightbox / .lightbox-backdrop /

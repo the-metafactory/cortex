@@ -12,7 +12,7 @@
 
 import { Hono } from "hono";
 import type { Env } from "../index";
-import { requireAdmin, type OperatorKey } from "../auth";
+import { requireAdmin, type PrincipalKey } from "../auth";
 import { requireRole } from "../user-auth";
 
 export const adminRoutes = new Hono<{ Bindings: Env }>();
@@ -23,7 +23,7 @@ export const adminRoutes = new Hono<{ Bindings: Env }>();
 
 adminRoutes.post("/admin/keys", requireAdmin, async (c) => {
   // PR-R2d renames the request wire field to `principal_id`. The
-  // KV-stored `OperatorKey.operator_id` symbol stays pending PR-R2.D
+  // KV-stored `PrincipalKey.principal_id` symbol stays pending PR-R2.D
   // (MC API + auth-type rename — see plan §R2.D). The response wire
   // mirrors the request shape.
   let body: { principal_id: string; name: string };
@@ -43,8 +43,8 @@ adminRoutes.post("/admin/keys", requireAdmin, async (c) => {
   const hex = Array.from(random).map((b) => b.toString(16).padStart(2, "0")).join("");
   const key = `grove_sk_${hex}`;
 
-  const keyData: OperatorKey = {
-    operator_id: body.principal_id,
+  const keyData: PrincipalKey = {
+    principal_id: body.principal_id,
     name: body.name,
     created_at: new Date().toISOString(),
   };
@@ -54,7 +54,7 @@ adminRoutes.post("/admin/keys", requireAdmin, async (c) => {
 
   return c.json({
     key,
-    principal_id: keyData.operator_id,
+    principal_id: keyData.principal_id,
     name: keyData.name,
     created_at: keyData.created_at,
   }, 201);

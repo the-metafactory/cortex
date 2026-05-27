@@ -13,7 +13,7 @@ function setupDb(): Database {
   db.exec("PRAGMA foreign_keys = ON");
   for (const sql of SCHEMA_SQL) db.exec(sql);
   db.exec(
-    `INSERT INTO tasks (id, title, priority, operator_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`
+    `INSERT INTO tasks (id, title, priority, principal_id, source_system) VALUES ('t-1', 'Task', 0, 'op', 'internal')`
   );
   db.exec(`INSERT INTO agents (id, name, type) VALUES ('a-1', 'A', 'hands')`);
   db.exec(

@@ -21,7 +21,7 @@ describe("mission-control types", () => {
       title: "Fix webhook",
       description: null,
       priority: 0,
-      operator_id: "andreas",
+      principal_id: "andreas",
       source_system: "github",
       source_url: "https://github.com/the-metafactory/grove/issues/190",
       source_external_id: "grove#190",
