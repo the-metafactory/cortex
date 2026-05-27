@@ -9,7 +9,7 @@ import { Hono } from "hono";
 import type { Env } from "../index";
 import { requireApiKey, type PrincipalKey } from "../auth";
 
-type Variables = { principalId: string; operatorKey: PrincipalKey };
+type Variables = { principalId: string; principalKey: PrincipalKey };
 
 export const syncRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 

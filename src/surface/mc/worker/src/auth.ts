@@ -59,10 +59,10 @@ export interface PrincipalKey {
 
 /**
  * Middleware that validates the Authorization: Bearer header against KV.
- * On success, sets c.set("principalId", ...) and c.set("operatorKey", ...).
+ * On success, sets c.set("principalId", ...) and c.set("principalKey", ...).
  * On failure, returns 401.
  */
-export async function requireApiKey(c: Context<{ Bindings: Env; Variables: { principalId: string; operatorKey: PrincipalKey } }>, next: Next) {
+export async function requireApiKey(c: Context<{ Bindings: Env; Variables: { principalId: string; principalKey: PrincipalKey } }>, next: Next) {
   const ip = getClientIp(c);
   const endpoint = new URL(c.req.url).pathname;
   const method = c.req.method;
@@ -85,10 +85,17 @@ export async function requireApiKey(c: Context<{ Bindings: Env; Variables: { pri
     return c.json({ error: "invalid or revoked API key" }, 401);
   }
 
-  const principalId = keyData.principal_id ?? (keyData as any).principalId ?? "";
+  // Single-cut (cortex#436 §2): keys must carry `principal_id`. No empty/legacy
+  // fallback — a key missing it fails closed rather than authenticating with an
+  // empty principal that ingest would then trust as the attribution identity.
+  const principalId = keyData.principal_id;
+  if (!principalId) {
+    logAuditEvent(c.env.GROVE_DB, { eventType: "api_key_auth", result: "failure", ip, endpoint, method, detail: "key missing principal_id" });
+    return c.json({ error: "API key missing principal identity" }, 401);
+  }
   logAuditEvent(c.env.GROVE_DB, { eventType: "api_key_auth", result: "success", ip, endpoint, method, identity: principalId });
   c.set("principalId", principalId);
-  c.set("operatorKey", keyData);
+  c.set("principalKey", keyData);
   await next();
 }
 

@@ -61,8 +61,8 @@ import {
 } from "../db/iterations";
 import {
   generateId,
-  createOperatorCurationEvent,
-  createOperatorInputEvent,
+  createPrincipalCurationEvent,
+  createPrincipalInputEvent,
   listEventsForSession,
   EVENTS_LIST_MAX_LIMIT,
 } from "../db/events";
@@ -860,7 +860,7 @@ export async function handleCreateSession(
   // anchors to the newly-spawned session and captures the agent the operator
   // dispatched to; `newAssignmentId` is included for symmetry with the
   // handoff variant (the "assignment this spawn created").
-  const dispatchCurationEvent = createOperatorCurationEvent(
+  const dispatchCurationEvent = createPrincipalCurationEvent(
     db,
     endpoint.sessionId,
     {
@@ -882,7 +882,7 @@ export async function handleCreateSession(
   ) {
     try {
       endpoint.write(body.prompt);
-      const event = createOperatorInputEvent(db, endpoint.sessionId, {
+      const event = createPrincipalInputEvent(db, endpoint.sessionId, {
         text: body.prompt,
       });
       broadcastEvent(deps.wsRegistry, endpoint.sessionId, event);
@@ -1117,7 +1117,7 @@ export function handleSendInput(
     return error(`Write failed: ${(err as Error).message}`, 500);
   }
 
-  const event = createOperatorInputEvent(db, endpoint.sessionId, {
+  const event = createPrincipalInputEvent(db, endpoint.sessionId, {
     ...(textByteLength > 0 ? { text } : {}),
     ...(images.length > 0
       ? {
@@ -1338,7 +1338,7 @@ export function handleRequeueAssignment(
   );
 
   // Decision 9 — sibling principal.curation event with `kind: "requeue"`.
-  const curationEvent = createOperatorCurationEvent(db, sessionId, {
+  const curationEvent = createPrincipalCurationEvent(db, sessionId, {
     kind: "requeue",
     ...(reason ? { reason } : {}),
   });
@@ -1438,7 +1438,7 @@ export function handleAbandonAssignment(
       db
     );
 
-    const curationEvent = createOperatorCurationEvent(db, sessionId, {
+    const curationEvent = createPrincipalCurationEvent(db, sessionId, {
       kind: "abandon",
       targetKind: "assignment",
       ...(reason ? { reason } : {}),
@@ -1503,7 +1503,7 @@ export function handleAbandonAssignment(
     );
   }
 
-  const curationEvent = createOperatorCurationEvent(db, sessionId, {
+  const curationEvent = createPrincipalCurationEvent(db, sessionId, {
     kind: "abandon",
     targetKind: "task",
     ...(reason ? { reason } : {}),
@@ -1716,7 +1716,7 @@ export async function handleHandoffAssignment(
   // session. The cancel of the old assignment has its own `state.transition`
   // event on the OLD session; this curation event captures the operator
   // rationale for the hand-off as a whole.
-  const curationEvent = createOperatorCurationEvent(db, endpoint.sessionId, {
+  const curationEvent = createPrincipalCurationEvent(db, endpoint.sessionId, {
     kind: "handoff",
     fromAgentId: row.agent_id,
     toAgentId: newAgentId,
@@ -2001,7 +2001,7 @@ export async function handleCreateTask(
   // the caller can `broadcastEvent` after the transaction commits (the
   // event insert is inside the tx, but WS broadcast happens post-commit
   // so subscribers don't see a write-then-rollback ghost).
-  const holder: { event: ReturnType<typeof createOperatorCurationEvent> | null } =
+  const holder: { event: ReturnType<typeof createPrincipalCurationEvent> | null } =
     { event: null };
 
   const insertAll = db.transaction(() => {
@@ -2017,7 +2017,7 @@ export async function handleCreateTask(
       sessionId: shadowSessionId,
     });
 
-    holder.event = createOperatorCurationEvent(db, shadowSessionId, {
+    holder.event = createPrincipalCurationEvent(db, shadowSessionId, {
       kind: "task.imported",
       source: "github",
       ref: canonical,
@@ -2145,14 +2145,14 @@ export function handleAbandonTask(
   // transaction closure. See the create-task handler above for the same
   // pattern; duplicated here rather than extracted because the pair of
   // inserts is short enough that a helper would be more ceremony.
-  const holder: { event: ReturnType<typeof createOperatorCurationEvent> | null } =
+  const holder: { event: ReturnType<typeof createPrincipalCurationEvent> | null } =
     { event: null };
   const tx = db.transaction(() => {
     db.query(
       `UPDATE tasks SET status = 'cancelled', updated_at = unixepoch() WHERE id = ?`
     ).run(taskId);
 
-    holder.event = createOperatorCurationEvent(db, sessionRow.id, {
+    holder.event = createPrincipalCurationEvent(db, sessionRow.id, {
       kind: "abandon",
       targetKind: "task",
       ...(reason ? { reason } : {}),

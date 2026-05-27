@@ -20,7 +20,7 @@ export type LogRow =
   | ThinkingRow
   | ToolUseRow
   | ToolResultRow
-  | OperatorInputRow
+  | PrincipalInputRow
   | PermissionRow
   | StateTransitionRow
   | ResultRow
@@ -63,7 +63,7 @@ export interface ToolResultRow extends RowBase {
   byteSize: number;
 }
 
-export interface OperatorInputRow extends RowBase {
+export interface PrincipalInputRow extends RowBase {
   kind: "principal.input";
   text: string;
   images?: Array<{ media_type: string; data: string }>;
@@ -121,7 +121,7 @@ export function eventToRows(ev: McEvent): LogRow[] {
     case "stream-json.user":
       return userToRows(ev);
     case "principal.input":
-      return [operatorInputRow(ev)];
+      return [principalInputRow(ev)];
     case "permission.request":
       return [permissionRow(ev)];
     case "state.transition":
@@ -236,14 +236,14 @@ function userToRows(ev: McEvent): LogRow[] {
   return out;
 }
 
-function operatorInputRow(ev: McEvent): OperatorInputRow {
+function principalInputRow(ev: McEvent): PrincipalInputRow {
   const text = typeof (ev.payload as { text?: string })?.text === "string"
     ? (ev.payload as { text: string }).text : "";
   const imagesRaw = (ev.payload as { images?: unknown }).images;
   const images = Array.isArray(imagesRaw)
     ? (imagesRaw as Array<{ media_type: string; data: string }>)
     : undefined;
-  const row: OperatorInputRow = {
+  const row: PrincipalInputRow = {
     id: ev.id, ts: ev.timestamp, color: "h", weight: "primary",
     kind: "principal.input", text,
   };

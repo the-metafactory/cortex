@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { SCHEMA_SQL } from "../db/schema";
-import { insertEvent, createOperatorInputEvent, createPermissionRequestEvent, generateId } from "../db/events";
+import { insertEvent, createPrincipalInputEvent, createPermissionRequestEvent, generateId } from "../db/events";
 
 function setupDb(): Database {
   const db = new Database(":memory:");
@@ -89,7 +89,7 @@ describe("insertEvent", () => {
   });
 });
 
-describe("createOperatorInputEvent", () => {
+describe("createPrincipalInputEvent", () => {
   let db: Database;
 
   beforeEach(() => {
@@ -101,7 +101,7 @@ describe("createOperatorInputEvent", () => {
   });
 
   it("creates an principal.input event with text payload", () => {
-    const event = createOperatorInputEvent(db, "s-1", {
+    const event = createPrincipalInputEvent(db, "s-1", {
       text: "Please use the v2 API instead",
     });
 
@@ -110,7 +110,7 @@ describe("createOperatorInputEvent", () => {
   });
 
   it("creates an principal.input event with attachments", () => {
-    const event = createOperatorInputEvent(db, "s-1", {
+    const event = createPrincipalInputEvent(db, "s-1", {
       text: "See screenshot",
       attachments: ["/tmp/screenshot.png"],
     });

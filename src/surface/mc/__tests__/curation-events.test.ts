@@ -14,8 +14,8 @@ import { rmSync } from "fs";
 
 import { initDatabase } from "../db/init";
 import {
-  createOperatorCurationEvent,
-  type OperatorCurationPayload,
+  createPrincipalCurationEvent,
+  type PrincipalCurationPayload,
 } from "../db/events";
 import { createSession } from "../db/sessions";
 import { findLatestSessionForAssignment } from "../db/sessions";
@@ -51,7 +51,7 @@ function seed(db: Database): { assignmentId: string; sessionId: string } {
   return { assignmentId: "ata-1", sessionId: session.id };
 }
 
-describe("createOperatorCurationEvent", () => {
+describe("createPrincipalCurationEvent", () => {
   let t: TestContext;
   beforeEach(() => {
     t = setup();
@@ -62,13 +62,13 @@ describe("createOperatorCurationEvent", () => {
 
   it("writes type='principal.curation' with the dispatch payload", () => {
     const { sessionId } = seed(t.db);
-    const payload: OperatorCurationPayload = {
+    const payload: PrincipalCurationPayload = {
       kind: "dispatch",
       agentId: "a-2",
       reason: "fresh start",
       newAssignmentId: "ata-2",
     };
-    const ev = createOperatorCurationEvent(t.db, sessionId, payload);
+    const ev = createPrincipalCurationEvent(t.db, sessionId, payload);
     expect(ev.type).toBe("principal.curation");
     expect(ev.session_id).toBe(sessionId);
 
@@ -83,7 +83,7 @@ describe("createOperatorCurationEvent", () => {
 
   it("round-trips the requeue payload", () => {
     const { sessionId } = seed(t.db);
-    const ev = createOperatorCurationEvent(t.db, sessionId, {
+    const ev = createPrincipalCurationEvent(t.db, sessionId, {
       kind: "requeue",
       reason: "external dep recovered",
     });
@@ -97,14 +97,14 @@ describe("createOperatorCurationEvent", () => {
 
   it("round-trips the handoff payload with all fields", () => {
     const { sessionId } = seed(t.db);
-    const payload: OperatorCurationPayload = {
+    const payload: PrincipalCurationPayload = {
       kind: "handoff",
       fromAgentId: "a-1",
       toAgentId: "a-2",
       reason: "swap",
       newAssignmentId: "ata-3",
     };
-    const ev = createOperatorCurationEvent(t.db, sessionId, payload);
+    const ev = createPrincipalCurationEvent(t.db, sessionId, payload);
     const row = t.db
       .query("SELECT payload FROM events WHERE id = ?")
       .get(ev.id) as { payload: string };
@@ -115,11 +115,11 @@ describe("createOperatorCurationEvent", () => {
 
   it("round-trips the abandon payload (assignment / task target kinds)", () => {
     const { sessionId } = seed(t.db);
-    const ev1 = createOperatorCurationEvent(t.db, sessionId, {
+    const ev1 = createPrincipalCurationEvent(t.db, sessionId, {
       kind: "abandon",
       targetKind: "assignment",
     });
-    const ev2 = createOperatorCurationEvent(t.db, sessionId, {
+    const ev2 = createPrincipalCurationEvent(t.db, sessionId, {
       kind: "abandon",
       targetKind: "task",
       reason: "no longer relevant",
@@ -158,14 +158,14 @@ describe("createOperatorCurationEvent", () => {
   // every field (kind, source, ref, url, type).
   it("round-trips the task.imported payload (F-12b)", () => {
     const { sessionId } = seed(t.db);
-    const payload: OperatorCurationPayload = {
+    const payload: PrincipalCurationPayload = {
       kind: "task.imported",
       source: "github",
       ref: "the-metafactory/grove-v2#42",
       url: "https://github.com/the-metafactory/grove-v2/issues/42",
       type: "issue",
     };
-    const ev = createOperatorCurationEvent(t.db, sessionId, payload);
+    const ev = createPrincipalCurationEvent(t.db, sessionId, payload);
     expect(ev.type).toBe("principal.curation");
     const row = t.db
       .query("SELECT payload FROM events WHERE id = ?")

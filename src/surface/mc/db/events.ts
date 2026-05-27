@@ -181,7 +181,7 @@ export function listEventsForSession(
  * Decision 3: principal.input is the authoritative H-source, including
  * for image content; stream-json.user is suppressed on the renderer.
  */
-export interface OperatorInputEventPayload {
+export interface PrincipalInputEventPayload {
   text?: string;
   attachments?: string[];
   images?: {
@@ -191,10 +191,10 @@ export interface OperatorInputEventPayload {
   }[];
 }
 
-export function createOperatorInputEvent(
+export function createPrincipalInputEvent(
   db: Database,
   sessionId: string,
-  payload: OperatorInputEventPayload
+  payload: PrincipalInputEventPayload
 ): McEvent {
   // insertEvent takes Record<string, unknown>; the shape-typed payload is
   // widened at the call-site — the stored JSON is the authoritative truth,
@@ -217,7 +217,7 @@ export function createOperatorInputEvent(
  * variants ship in F-12: dispatch, requeue, handoff, abandon. F-12b will
  * add `kind: "import"` for the GitHub-issue-add-to-queue verb.
  */
-export type OperatorCurationPayload =
+export type PrincipalCurationPayload =
   | {
       kind: "dispatch";
       agentId: string;
@@ -253,10 +253,10 @@ export type OperatorCurationPayload =
       type: "issue" | "pr";
     };
 
-export function createOperatorCurationEvent(
+export function createPrincipalCurationEvent(
   db: Database,
   sessionId: string,
-  payload: OperatorCurationPayload
+  payload: PrincipalCurationPayload
 ): McEvent {
   // The tagged-union narrowing happens at the call site; the storage layer
   // widens to the generic event-payload shape.
