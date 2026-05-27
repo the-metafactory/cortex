@@ -120,7 +120,7 @@ export interface ReviewConsumerAgent {
 /**
  * Build the CC prompt for a single review request. Production callers
  * pass a function that assembles the security preamble + skill
- * invocation + persona prefix; tests pass a deterministic stub.
+ * invocation + assistant prefix; tests pass a deterministic stub.
  *
  * Returning a string (not a {@link CCSessionOpts}) keeps the consumer
  * free of skill-allowlist + cwd + timeout policy — those flow through

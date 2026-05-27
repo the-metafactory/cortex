@@ -76,7 +76,7 @@ function makeSub(over: Partial<SubIssueMetadata> = {}): SubIssueMetadata {
     owner: "the-metafactory",
     repo: "grove-v2",
     number: 100,
-    title: "Sub: define PM agent persona",
+    title: "Sub: define PM assistant",
     state: "open",
     htmlUrl: "https://github.com/the-metafactory/grove-v2/issues/100",
     ...over,
@@ -326,7 +326,7 @@ describe("importSubIssueFromMetadata", () => {
          FROM tasks WHERE id = ?`
       )
       .get(result.taskId) as Record<string, unknown>;
-    expect(task.title).toBe("Sub: define PM agent persona");
+    expect(task.title).toBe("Sub: define PM assistant");
     expect(task.status).toBe("open");
     expect(task.source_system).toBe("github");
     expect(task.source_external_id).toBe("the-metafactory/grove-v2#100");

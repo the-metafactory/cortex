@@ -27,8 +27,8 @@
  *
  * Coupling rules from architecture §9.3 enforced by this schema:
  *   - agents never reference other agents' platform user IDs (trust is by agent id)
- *   - presence blocks carry only credentials, not persona/roles overrides
- *   - personas are platform-neutral (just a markdown file path)
+ *   - presence blocks carry only credentials, not assistant-prompt or role overrides
+ *   - the assistant prompt is platform-neutral (just a markdown file path)
  *   - renderers never publish on the bus (kind enum constrains the choice set)
  */
 
@@ -150,8 +150,9 @@ export type PrincipalConfig = z.infer<typeof PrincipalConfigSchema>;
  * Discord presence — an agent's identity on a Discord guild. The full grove-v2
  * `DiscordInstanceSchema` carries channel ids, role config, DM rules, etc.;
  * we keep them here in the same shape so adapter code can move with minimal
- * field renames. The architecture §9.3 coupling rules forbid `persona` or
- * `roles` overrides in a presence block — those live on the parent agent.
+ * field renames. The architecture §9.3 coupling rules forbid overriding the
+ * parent agent's assistant or roles in a presence block — those live on the
+ * parent agent.
  */
 export const DiscordPresenceSchema = z.object({
   /** Whether this presence is active. Default: true. */
@@ -287,8 +288,9 @@ export type MattermostPresence = z.infer<typeof MattermostPresenceSchema>;
  * polling model and unlike Discord's gateway-with-public-bot path. HTTP /
  * Events API mode is deferred until a deployment actually needs it.
  *
- * Architecture §9.3 coupling rules: no `persona` or `roles` overrides at
- * this layer — those live on the parent agent. `roles` here is the
+ * Architecture §9.3 coupling rules: no overrides of the parent agent's
+ * assistant or roles at this layer — those live on the parent agent.
+ * `roles` here is the
  * platform-side allowlist that maps the agent's cortex-wide capability
  * set onto Slack user ids.
  */
@@ -412,7 +414,7 @@ export type Presence = z.infer<typeof PresenceSchema>;
 // =============================================================================
 
 /**
- * An agent bundles identity + persona + capability set + platform credentials.
+ * An agent bundles identity + assistant + capability set + platform credentials.
  * Architecture §9.1: agents are principals; platforms are servers; the agent's
  * credentials are how the agent shows up on a platform.
  *

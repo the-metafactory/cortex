@@ -496,11 +496,11 @@ function parsePayload(envelope: Envelope): DispatchTaskReceivedPayload | null {
  * see a clean separation: dispatch-contract on top, substrate-specific
  * knobs in the `runtime` block. CC reads what it needs; others ignore.
  *
- * **persona absence.** The legacy bus-driven path does NOT carry persona
- * file data on the payload (persona injection happens at the dispatch-
- * handler layer via the prompt-builder). We therefore omit `persona`
- * from the request — the harness handles `persona === undefined` per
- * the A.1b spec (optional field).
+ * **assistant prompt file absence.** The legacy bus-driven path does NOT
+ * carry assistant prompt-file data on the payload (prompt injection happens
+ * at the dispatch-handler layer via the prompt-builder). We therefore omit
+ * `persona` from the request — the harness handles `persona === undefined`
+ * per the A.1b spec (optional field).
  */
 function buildDispatchRequest(
   payload: DispatchTaskReceivedPayload,

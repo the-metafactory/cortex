@@ -347,16 +347,16 @@ describe("convertBotYaml — nats.identity shape divergence", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Conversion: persona-file validation
+// Conversion: assistant-prompt-file validation
 // ---------------------------------------------------------------------------
 
-describe("convertBotYaml — persona-file validation", () => {
+describe("convertBotYaml — assistant-prompt-file validation", () => {
   test("warns when personaFile path does not exist on disk", () => {
     const legacy = loadFixture("missing-persona.bot.yaml");
     const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
     const personaWarn = result.warnings.find((w) => w.field === "agents[ghost].persona");
     expect(personaWarn).toBeDefined();
-    expect(personaWarn!.message).toMatch(/persona file not found/);
+    expect(personaWarn!.message).toMatch(/assistant prompt file not found/);
   });
 
   test("skips file-existence check when configDir is omitted", () => {
@@ -1205,7 +1205,7 @@ describe("runMigrateConfig", () => {
   });
 
   test("--strict returns exit code 2 when warnings present", async () => {
-    // missing-persona fixture produces a persona-file-not-found warning
+    // missing-persona fixture produces an assistant-prompt-file-not-found warning
     const code = await runMigrateConfig([
       join(FIXTURE_DIR, "missing-persona.bot.yaml"),
       "--check",
@@ -1549,7 +1549,7 @@ describe("convertBotYaml — cortex#428 PR-B runtime.capabilities synthesis", ()
     expect(agent.runtime!.capabilities).toEqual(["chat"]);
   });
 
-  test("persona-heuristic adds code-review.typescript at exactly the 2-match floor", () => {
+  test("assistant-prompt heuristic adds code-review.typescript at exactly the 2-match floor", () => {
     // Boundary test: the regex `/code[- ]review|reviewer|reviewing/gi`
     // must match EXACTLY 2 times to land on the floor and trip the
     // heuristic. The fixture below contains "Code review" and
@@ -1584,7 +1584,7 @@ describe("convertBotYaml — cortex#428 PR-B runtime.capabilities synthesis", ()
     );
   });
 
-  test("persona-heuristic stays at [chat] with exactly 1 keyword match (below floor)", () => {
+  test("assistant-prompt heuristic stays at [chat] with exactly 1 keyword match (below floor)", () => {
     // The complement of the floor test above: matches=1 must NOT add
     // code-review.typescript. Together the two tests pin the floor at
     // the regex boundary instead of via the loose "Forge deflector"
@@ -1616,9 +1616,9 @@ describe("convertBotYaml — cortex#428 PR-B runtime.capabilities synthesis", ()
     expect(result.cortex.agents[0]!.runtime!.capabilities).toEqual(["chat"]);
   });
 
-  test("persona with only one review-keyword mention stays at [chat] (deflector test)", () => {
-    // Production-bug repro: Forge's persona on Andreas's deployment mentions
-    // "code review" once while DEFLECTING review work to Echo
+  test("assistant prompt with only one review-keyword mention stays at [chat] (deflector test)", () => {
+    // Production-bug repro: Forge's assistant prompt on Andreas's deployment
+    // mentions "code review" once while DEFLECTING review work to Echo
     // ("Code review. That's Echo. If anyone asks you for a review,
     // redirect"). A single mention must NOT trip the heuristic.
     const tmp = mkdtempSync(join(tmpdir(), "cortex-mig-428-deflect-"));
@@ -1647,11 +1647,11 @@ describe("convertBotYaml — cortex#428 PR-B runtime.capabilities synthesis", ()
     expect(result.cortex.agents[0]!.runtime!.capabilities).toEqual(["chat"]);
   });
 
-  test("persona-heuristic skips oversized files with a warning (defence-in-depth size cap)", () => {
+  test("assistant-prompt heuristic skips oversized files with a warning (defence-in-depth size cap)", () => {
     // Defence-in-depth regression for the cortex#432 nit-3 size cap. A
-    // hostile or accidental large persona (`persona: /dev/zero`, stray
-    // huge fixture) must NOT OOM the migrator. The 1 MiB cap is well
-    // above any realistic persona; we synthesise a file just over the
+    // hostile or accidental large assistant prompt file (`persona: /dev/zero`,
+    // stray huge fixture) must NOT OOM the migrator. The 1 MiB cap is well
+    // above any realistic assistant prompt; we synthesise a file just over the
     // cap and assert (a) the heuristic short-circuits to [chat] and
     // (b) a ConversionWarning surfaces so the operator sees the skip.
     const tmp = mkdtempSync(join(tmpdir(), "cortex-mig-428-cap-oversize-"));
@@ -1686,7 +1686,7 @@ describe("convertBotYaml — cortex#428 PR-B runtime.capabilities synthesis", ()
       (w) =>
         w.field === "agents[huge].persona" &&
         w.message.includes("byte cap") &&
-        w.message.includes("skipping persona-driven capability heuristic"),
+        w.message.includes("skipping assistant-prompt-driven capability heuristic"),
     );
     expect(sizeWarning).toBeDefined();
   });
@@ -1817,7 +1817,7 @@ describe("convertBotYaml — cortex#428 PR-B runtime.capabilities synthesis", ()
 
   test("catalog merge — pre-existing entry survives, provided_by unioned", () => {
     // Existing catalog has code-review.typescript with one provider (echo).
-    // Echo's runtime claims it; another agent's persona heuristic also
+    // Echo's runtime claims it; another agent's assistant-prompt heuristic also
     // would, BUT the heuristic only fires when no caps were declared. So
     // the test exercises the unconditional `chat` cap append + the
     // preserve-existing-catalog-entry path.

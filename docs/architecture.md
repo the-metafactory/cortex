@@ -23,8 +23,8 @@
 For months we've operated as heavy Discord-and-dashboard users. The lived pattern:
 
 - **Discord** as the primary surface, with a channel-per-repo routing convention (`#grove`, `#arc`, `#compass`, `#myelin`, `#blueprint`, etc. — one channel per repo, threads for individual issues / PRs / features).
-- **Multiple agent personas** collaborating in those channels — Luna, Echo, Holly, Ivy, Forge — each with their own Discord identity, persona file, capability gates, and trust relationships. Principals ping a persona; the persona does work.
-- **The pilot review loop** running on top of those personas: open PR → ping reviewer-persona → reviewer reads, posts findings → principal/agent triages → fix or defer → re-ping → merge. Driven by the `pilot` CLI; foundational and backend support coming from compass SOPs, blueprint dependency tracking, and a cloud of CLAUDE.md files.
+- **Multiple assistants** collaborating in those channels — Luna, Echo, Holly, Ivy, Forge — each with their own Discord identity, assistant prompt file, capability gates, and trust relationships. Principals ping an assistant; the assistant does work.
+- **The pilot review loop** running on top of those assistants: open PR → ping reviewer-assistant → reviewer reads, posts findings → principal/agent triages → fix or defer → re-ping → merge. Driven by the `pilot` CLI; foundational and backend support coming from compass SOPs, blueprint dependency tracking, and a cloud of CLAUDE.md files.
 - **The Grove dashboard** as the secondary surface — repository-organised activity feed, GitHub entities (releases / issues / PRs) visible inline, agent state per repo, F-7 attention view for "what needs me." The browser tab the principal left open all day.
 - **Mattermost** as a parallel surface for flows that didn't live in Discord — same adapter pattern, different platform.
 

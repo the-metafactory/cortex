@@ -277,8 +277,8 @@ export interface ConvertOptions {
   /**
    * Directory the input `bot.yaml` was loaded from. Used to resolve
    * `personaFile` paths for the file-exists validation. Optional — when
-   * omitted, persona files are not checked on disk (e.g. when tests parse
-   * fixtures via in-memory strings rather than file paths).
+   * omitted, assistant prompt files are not checked on disk (e.g. when
+   * tests parse fixtures via in-memory strings rather than file paths).
    */
   configDir?: string;
   /**
@@ -460,39 +460,39 @@ function convertMattermostPresence(inst: LegacyMattermostInstance): MattermostPr
 }
 
 /**
- * Resolve the persona file path for a converted agent. Returns the path the
- * cortex.yaml should carry plus an optional warning when the file doesn't
- * exist on disk (only checked when `configDir` is supplied).
+ * Resolve the assistant prompt file path for a converted agent. Returns the
+ * path the cortex.yaml should carry plus an optional warning when the file
+ * doesn't exist on disk (only checked when `configDir` is supplied).
  *
  * Fallback when `personaFile` is unset: `./personas/${agentId}.md`. The
  * cortex schema requires a non-empty string here; the warning surfaces the
  * fact that the file may need to be created.
  */
-function resolvePersona(
+function resolveAssistantPath(
   legacyPersonaFile: string | undefined,
   agentId: string,
   configDir: string | undefined,
   warnings: ConversionWarning[],
 ): string {
   // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-  const personaPath = legacyPersonaFile?.trim() || `./personas/${agentId}.md`;
+  const assistantPath = legacyPersonaFile?.trim() || `./personas/${agentId}.md`;
 
   if (configDir) {
-    const abs = isAbsolute(personaPath) ? personaPath : resolve(configDir, personaPath);
+    const abs = isAbsolute(assistantPath) ? assistantPath : resolve(configDir, assistantPath);
     if (!existsSync(abs)) {
       warnings.push({
         field: `agents[${agentId}].persona`,
-        message: `persona file not found at ${abs}${legacyPersonaFile ? "" : " (defaulted from agent name)"}`,
+        message: `assistant prompt file not found at ${abs}${legacyPersonaFile ? "" : " (defaulted from agent name)"}`,
       });
     }
   } else if (!legacyPersonaFile) {
     warnings.push({
       field: `agents[${agentId}].persona`,
-      message: `agent.personaFile not set; defaulted to ${personaPath}`,
+      message: `agent.personaFile not set; defaulted to ${assistantPath}`,
     });
   }
 
-  return personaPath;
+  return assistantPath;
 }
 
 /**
@@ -653,7 +653,7 @@ function detectSharedAgentChannelId(
  *   - LAST-RESORT fallback: numeric variant (`luna-2`, `luna-3`) when
  *     neither hint nor agent.name produces a distinct id and the operator
  *     has multiple adapters. Matches pre-#88 behaviour for parity.
- *   - Trust list and persona path propagate to every variant.
+ *   - Trust list and assistant prompt path propagate to every variant.
  */
 function buildAgents(
   legacy: LegacyBotYaml,
@@ -678,7 +678,7 @@ function buildAgents(
 
   const trust = buildTrustList(legacy.trustedAgentBots ?? [], warnings);
 
-  const persona = resolvePersona(legacyAgent.personaFile, baseId, configDir, warnings);
+  const persona = resolveAssistantPath(legacyAgent.personaFile, baseId, configDir, warnings);
   const displayName = legacyAgent.displayName || legacyAgent.name;
 
   const variantCount = Math.max(discordInstances.length, mattermostInstances.length, 1);
@@ -864,33 +864,35 @@ function buildRenderers(legacy: LegacyBotYaml, warnings: ConversionWarning[]): C
 const CHAT_CAPABILITY_ID = "chat";
 const CODE_REVIEW_CAPABILITY_ID = "code-review.typescript";
 /**
- * Heuristic: match agents whose persona file content suggests code-review
- * work. Conservative — false negatives are safer than false positives, since
- * a synthesised `code-review.typescript` capability that the agent doesn't
- * actually fulfil would surface a dispatch.task.failed reason later.
+ * Heuristic: match agents whose assistant prompt content suggests
+ * code-review work. Conservative — false negatives are safer than false
+ * positives, since a synthesised `code-review.typescript` capability that
+ * the agent doesn't actually fulfil would surface a dispatch.task.failed
+ * reason later.
  *
- * Threshold: ≥2 occurrences of the pattern in the persona body. Single
- * mentions are common in non-reviewer personas that DEFLECT review work
- * to a reviewer agent ("Code review — that's Echo's job, redirect there").
- * The two-occurrence floor cleanly separates Echo (actual reviewer,
- * mentions review multiple times) from Forge (deflector, mentions review
- * once while pointing at Echo) on Andreas's production deployment. The
- * pattern itself is intentionally loose — the count gate does the
+ * Threshold: ≥2 occurrences of the pattern in the assistant prompt body.
+ * Single mentions are common in non-reviewer assistants that DEFLECT review
+ * work to a reviewer agent ("Code review — that's Echo's job, redirect
+ * there"). The two-occurrence floor cleanly separates Echo (actual
+ * reviewer, mentions review multiple times) from Forge (deflector, mentions
+ * review once while pointing at Echo) on Andreas's production deployment.
+ * The pattern itself is intentionally loose — the count gate does the
  * specificity work.
  */
-const CODE_REVIEW_PERSONA_PATTERN = /code[- ]review|reviewer|reviewing/gi;
+const CODE_REVIEW_ASSISTANT_PATTERN = /code[- ]review|reviewer|reviewing/gi;
 const CODE_REVIEW_OCCURRENCE_FLOOR = 2;
 
 /**
- * Defence-in-depth size cap on persona file reads. Persona markdown files
- * are operator-authored under their own config dir (no untrusted input),
- * but a stray symlink to `/dev/zero` or a multi-GB markdown file in a bad
- * fixture dir would OOM the migrator. 1 MiB is two orders of magnitude
- * above any reasonable persona (real personas in andreas's deployment run
- * <10 KiB). Files above the cap skip the heuristic, default to ["chat"],
- * and emit a ConversionWarning so the operator notices.
+ * Defence-in-depth size cap on assistant prompt file reads. Assistant
+ * prompt markdown files are operator-authored under their own config dir
+ * (no untrusted input), but a stray symlink to `/dev/zero` or a multi-GB
+ * markdown file in a bad fixture dir would OOM the migrator. 1 MiB is two
+ * orders of magnitude above any reasonable assistant prompt (real prompts
+ * in andreas's deployment run <10 KiB). Files above the cap skip the
+ * heuristic, default to ["chat"], and emit a ConversionWarning so the
+ * operator notices.
  */
-const PERSONA_MAX_BYTES = 1 * 1024 * 1024;
+const ASSISTANT_PROMPT_MAX_BYTES = 1 * 1024 * 1024;
 
 interface CortexAgentMutable {
   id: string;
@@ -910,30 +912,31 @@ interface CortexCapabilityMutable {
 }
 
 /**
- * Read a persona file (if it exists on disk) and return a hint set: which of
- * the heuristic capability ids it suggests the agent provides. Off-disk or
- * unreadable persona files yield an empty set — the migrator falls back to
- * the safe default (`["chat"]`) without crashing on a missing persona path.
+ * Read an assistant prompt file (if it exists on disk) and return a hint
+ * set: which of the heuristic capability ids it suggests the agent
+ * provides. Off-disk or unreadable assistant prompt files yield an empty
+ * set — the migrator falls back to the safe default (`["chat"]`) without
+ * crashing on a missing assistant prompt path.
  *
- * The persona path on the migrated agent block is resolved relative to the
- * config dir at `resolvePersona` time; we apply the same convention here so
- * a relative `./personas/echo.md` reads off the same directory the operator
- * pointed the migrator at via `--out`.
+ * The assistant prompt path on the migrated agent block is resolved
+ * relative to the config dir at `resolveAssistantPath` time; we apply the
+ * same convention here so a relative `./personas/echo.md` reads off the
+ * same directory the operator pointed the migrator at via `--out`.
  */
-function detectCapabilityHintsFromPersona(
-  personaPath: string,
+function detectCapabilityHintsFromAssistantPrompt(
+  assistantPath: string,
   configDir: string | undefined,
   agentId: string,
   warnings: ConversionWarning[],
 ): Set<string> {
   const hints = new Set<string>();
-  // The persona path is required by `AgentSchema.persona` (`min(1)`), but a
-  // freshly-migrated config may carry a default-derived path
-  // (`./personas/{id}.md`) where the file has not yet been created. Treat
-  // missing files as "no hint" — the default `chat` capability still gets
-  // synthesised; we just don't speculatively add `code-review.typescript`.
+  // The assistant prompt path is required by `AgentSchema.persona`
+  // (`min(1)`), but a freshly-migrated config may carry a default-derived
+  // path (`./personas/{id}.md`) where the file has not yet been created.
+  // Treat missing files as "no hint" — the default `chat` capability still
+  // gets synthesised; we just don't speculatively add `code-review.typescript`.
   if (!configDir) return hints;
-  const abs = isAbsolute(personaPath) ? personaPath : resolve(configDir, personaPath);
+  const abs = isAbsolute(assistantPath) ? assistantPath : resolve(configDir, assistantPath);
   if (!existsSync(abs)) return hints;
   // Defence-in-depth size cap. statSync is cheap (one inode lookup); the
   // gate keeps a stray symlink (`persona: /dev/zero`) or an accidentally-
@@ -949,12 +952,12 @@ function detectCapabilityHintsFromPersona(
     // soft-skip just like the readFileSync catch below.
     return hints;
   }
-  if (size > PERSONA_MAX_BYTES) {
+  if (size > ASSISTANT_PROMPT_MAX_BYTES) {
     warnings.push({
       field: `agents[${agentId}].persona`,
       message:
-        `persona file at ${personaPath} is ${size} bytes (> ${PERSONA_MAX_BYTES} byte cap); ` +
-        `skipping persona-driven capability heuristic. If the file is legitimately this large, ` +
+        `assistant prompt file at ${assistantPath} is ${size} bytes (> ${ASSISTANT_PROMPT_MAX_BYTES} byte cap); ` +
+        `skipping assistant-prompt-driven capability heuristic. If the file is legitimately this large, ` +
         `declare runtime.capabilities explicitly on the agent in cortex.yaml.`,
     });
     return hints;
@@ -963,12 +966,12 @@ function detectCapabilityHintsFromPersona(
   try {
     body = readFileSync(abs, "utf-8");
   } catch {
-    // Persona file exists but is unreadable (permissions, …). The migrator
-    // already warns about file-existence elsewhere; treat the read failure
-    // as a soft skip rather than a fatal error.
+    // Assistant prompt file exists but is unreadable (permissions, …). The
+    // migrator already warns about file-existence elsewhere; treat the read
+    // failure as a soft skip rather than a fatal error.
     return hints;
   }
-  const matches = body.match(CODE_REVIEW_PERSONA_PATTERN);
+  const matches = body.match(CODE_REVIEW_ASSISTANT_PATTERN);
   if (matches && matches.length >= CODE_REVIEW_OCCURRENCE_FLOOR) {
     hints.add(CODE_REVIEW_CAPABILITY_ID);
   }
@@ -987,8 +990,8 @@ function detectCapabilityHintsFromPersona(
  *     documented on `AgentRuntimeSchema` (the in-cortex default).
  *   - `mode: in-process`       — same.
  *   - `capabilities: ["chat"]` — myelin#181 canonical conversational
- *     capability. Persona-driven heuristic may add `code-review.typescript`
- *     when the persona body matches `CODE_REVIEW_PERSONA_PATTERN`.
+ *     capability. Assistant-prompt-driven heuristic may add `code-review.typescript`
+ *     when the assistant prompt body matches `CODE_REVIEW_ASSISTANT_PATTERN`.
  *
  * Catalog merge invariant: an existing `capabilities[]` entry with the same
  * id is preserved verbatim (description, rate, cost — operators may have
@@ -1062,11 +1065,11 @@ function synthesizeRuntimeCapabilities(
       addedByMigrator.push(CHAT_CAPABILITY_ID);
     }
     if (existingCaps.length === 0) {
-      // Only run the persona heuristic when the agent had no caps declared.
-      // An operator that already declared `["chat"]` explicitly opted into
-      // a minimal capability surface — adding `code-review.typescript`
+      // Only run the assistant-prompt heuristic when the agent had no caps
+      // declared. An operator that already declared `["chat"]` explicitly
+      // opted into a minimal capability surface — adding `code-review.typescript`
       // behind their back would be presumptuous.
-      const hints = detectCapabilityHintsFromPersona(agent.persona, configDir, agent.id, warnings);
+      const hints = detectCapabilityHintsFromAssistantPrompt(agent.persona, configDir, agent.id, warnings);
       for (const hint of hints) {
         if (!synthesised.has(hint)) {
           synthesised.add(hint);
@@ -1103,8 +1106,8 @@ function synthesizeRuntimeCapabilities(
         message:
           existingCaps.length === 0
             ? `synthesised agent.runtime.capabilities = [${addedByMigrator.join(", ")}] ` +
-              `(default: chat per myelin#181; persona-heuristic adds code-review.typescript when ` +
-              `the persona body matches /code[- ]review|reviewer|reviewing/i 2+ times). ` +
+              `(default: chat per myelin#181; assistant-prompt heuristic adds code-review.typescript when ` +
+              `the assistant prompt body matches /code[- ]review|reviewer|reviewing/i 2+ times). ` +
               `Edit cortex.yaml to refine.`
             : `appended [${addedByMigrator.join(", ")}] to agent.runtime.capabilities ` +
               `(pre-existing claims preserved). Edit cortex.yaml to refine.`,
@@ -1255,7 +1258,7 @@ function synthesizeOperatorIdBackCompat(
 
 /**
  * Convert a legacy bot.yaml-shaped object to cortex.yaml-shape. Pure: no IO
- * apart from optional `existsSync` for persona-file validation.
+ * apart from optional `existsSync` for assistant-prompt-file validation.
  *
  * Throws on structurally invalid input (e.g. missing `agent.name`). Returns
  * the converted object plus warnings + mappings. The caller (CLI) decides
