@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://myelin.metafactory.ai/schemas/envelope/v2",
+  "$id": "https://myelin.metafactory.ai/schemas/envelope/v3",
   "title": "Myelin Envelope",
-  "description": "Universal message envelope for the agentic nervous system. One schema for all signals — sovereignty travels with the message. v2 (vocabulary migration 2026-05, transition release): wire fields renamed — signed_by[].principal→identity, originator.principal→identity, target_principal→target_assistant, distribution_mode broadcast→offer, source grammar org.agent.instance→{principal}.{stack}.{assistant}. This transition schema accepts BOTH the deprecated and the renamed form so pre-migration / JetStream-replayed envelopes still validate; the breaking major drops the deprecated forms. v1 stays published for consumers pinned to the old grammar.",
+  "description": "Universal message envelope for the agentic nervous system. One schema for all signals — sovereignty travels with the message. v3 (vocabulary migration 2026-05, breaking cuts myelin#182 + myelin#183): `signed_by[].principal` → `identity` (myelin#182 — old key dropped from the wire) and `{org}` → `{principal}` with the `source` grammar tightened to the fixed-3 form `{principal}.{stack}.{assistant}` (myelin#183 — legacy 3–5 segment `org.agent.instance` shape no longer accepted; that was the shape the pilot review-loop bug exploited, see CONTEXT.md line 99). The schema still accepts the deprecated form for the remaining transition fields (originator, target_principal, distribution_mode broadcast) so pre-migration / JetStream-replayed envelopes validate; subsequent breaking cuts drop those. v2 stays published for consumers pinned to the transition grammar; v1 stays published for consumers pinned to the pre-migration grammar.",
   "type": "object",
   "required": ["id", "source", "type", "timestamp", "sovereignty", "payload"],
   "properties": {
@@ -13,8 +13,8 @@
     },
     "source": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*){2,4}$",
-      "description": "Origin address. Canonical grammar (R6, vocabulary migration 2026-05) is the fixed-3 form {principal}.{stack}.{assistant}. This transition schema keeps the legacy {2,4} pattern (3-5 segments, org.agent.instance) so pre-migration / JetStream-replayed envelopes still validate — the fixed-3 form is a strict subset. The breaking major tightens the pattern to exactly 3 segments.",
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*){2}$",
+      "description": "Origin address. Canonical grammar (R6 + myelin#183) is the fixed-3 form {principal}.{stack}.{assistant} — exactly 3 segments. The legacy `org.agent.instance` 3–5 segment shape is no longer accepted (the breaking cut; CONTEXT.md line 99).",
       "examples": ["metafactory.security.luna", "metafactory.pilot.local", "acme.monitor.prod-01"]
     },
     "type": {
@@ -227,43 +227,31 @@
   "$defs": {
     "signedByStamp": {
       "type": "object",
-      "description": "A single identity attestation in the chain (myelin#31). Discriminated on method. R2 (vocabulary migration 2026-05): the stamp DID field renamed 'principal'→'identity'. This transition schema accepts EITHER key (each method branch requires exactly one of them) and rejects a stamp carrying BOTH via the dualKeyExclusion constraint.",
-      "allOf": [
+      "description": "A single identity attestation in the chain (myelin#31). Discriminated on method. R2 (vocabulary migration 2026-05, myelin#182 breaking cut): the stamp DID field is canonical 'identity'. The deprecated 'principal' key was removed from the wire in v0.3.0 — stamps carrying it are rejected by `additionalProperties: false`.",
+      "required": ["identity"],
+      "oneOf": [
         {
-          "oneOf": [
-            {
-              "required": ["method", "signature", "at"],
-              "properties": {
-                "method": { "const": "ed25519" },
-                "identity": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
-                "principal": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
-                "signature": { "type": "string", "minLength": 88, "pattern": "^[A-Za-z0-9+/]+=*$" },
-                "at": { "type": "string", "format": "date-time" },
-                "role": { "$ref": "#/$defs/stampRole" }
-              },
-              "additionalProperties": false
-            },
-            {
-              "required": ["method", "stamped_by", "signature", "at"],
-              "properties": {
-                "method": { "const": "hub-stamp" },
-                "identity": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
-                "principal": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
-                "stamped_by": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
-                "signature": { "type": "string", "minLength": 88, "pattern": "^[A-Za-z0-9+/]+=*$" },
-                "at": { "type": "string", "format": "date-time" },
-                "role": { "$ref": "#/$defs/stampRole" }
-              },
-              "additionalProperties": false
-            }
-          ]
+          "required": ["method", "signature", "at"],
+          "properties": {
+            "method": { "const": "ed25519" },
+            "identity": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
+            "signature": { "type": "string", "minLength": 88, "pattern": "^[A-Za-z0-9+/]+=*$" },
+            "at": { "type": "string", "format": "date-time" },
+            "role": { "$ref": "#/$defs/stampRole" }
+          },
+          "additionalProperties": false
         },
         {
-          "comment": "R2 — a stamp must carry exactly one DID key: 'identity' (canonical) or 'principal' (deprecated). Neither-present and both-present are both rejected.",
-          "oneOf": [
-            { "required": ["identity"], "not": { "required": ["principal"] } },
-            { "required": ["principal"], "not": { "required": ["identity"] } }
-          ]
+          "required": ["method", "stamped_by", "signature", "at"],
+          "properties": {
+            "method": { "const": "hub-stamp" },
+            "identity": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
+            "stamped_by": { "type": "string", "pattern": "^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$" },
+            "signature": { "type": "string", "minLength": 88, "pattern": "^[A-Za-z0-9+/]+=*$" },
+            "at": { "type": "string", "format": "date-time" },
+            "role": { "$ref": "#/$defs/stampRole" }
+          },
+          "additionalProperties": false
         }
       ]
     },

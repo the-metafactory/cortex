@@ -121,7 +121,7 @@ describe("envelope-validator", () => {
       ...(validEnvelope as object),
       signed_by: {
         method: "ed25519",
-        principal: "did:mf:luna",
+        identity: "did:mf:luna",
         signature: ED25519_SIG,
         at: "2026-05-08T09:00:00Z",
       },
@@ -143,7 +143,7 @@ describe("envelope-validator", () => {
       ...(validEnvelope as object),
       signed_by: {
         method: "hub-stamp",
-        principal: "did:mf:luna",
+        identity: "did:mf:luna",
         stamped_by: "did:mf:hub-eu-1",
         signature: ED25519_SIG,
         at: "2026-05-08T09:00:00Z",
@@ -166,7 +166,7 @@ describe("envelope-validator", () => {
       ...(validEnvelope as object),
       signed_by: {
         method: "ed25519",
-        principal: "did:mf:luna",
+        identity: "did:mf:luna",
         // signature: missing
         at: "2026-05-08T09:00:00Z",
       },
@@ -180,7 +180,7 @@ describe("envelope-validator", () => {
       ...(validEnvelope as object),
       signed_by: {
         method: "hub-stamp",
-        principal: "did:mf:luna",
+        identity: "did:mf:luna",
         // stamped_by: missing — required for hub-stamp shape
         signature: ED25519_SIG,
         at: "2026-05-08T09:00:00Z",
@@ -190,12 +190,12 @@ describe("envelope-validator", () => {
     expect(result.ok).toBe(false);
   });
 
-  test("rejects a signed_by with non-DID principal", () => {
+  test("rejects a signed_by with non-DID identity", () => {
     const env = {
       ...(validEnvelope as object),
       signed_by: {
         method: "ed25519",
-        principal: "not-a-did",
+        identity: "not-a-did",
         signature: ED25519_SIG,
         at: "2026-05-08T09:00:00Z",
       },
@@ -215,14 +215,14 @@ describe("envelope-validator", () => {
       signed_by: [
         {
           method: "ed25519",
-          principal: "did:mf:luna",
+          identity: "did:mf:luna",
           signature: ED25519_SIG,
           at: "2026-05-08T09:00:00Z",
           role: "origin",
         },
         {
           method: "hub-stamp",
-          principal: "did:mf:luna",
+          identity: "did:mf:luna",
           stamped_by: "did:mf:hub-eu-1",
           signature: ED25519_SIG,
           at: "2026-05-08T09:00:01Z",
@@ -250,13 +250,13 @@ describe("envelope-validator", () => {
       signed_by: [
         {
           method: "ed25519",
-          principal: "did:mf:luna",
+          identity: "did:mf:luna",
           signature: ED25519_SIG,
           at: "2026-05-08T09:00:00Z",
         },
         {
           method: "ed25519",
-          principal: "did:mf:luna",
+          identity: "did:mf:luna",
           // signature: missing — second stamp is malformed
           at: "2026-05-08T09:00:01Z",
         },
@@ -283,7 +283,7 @@ describe("envelope-validator", () => {
       signed_by: [
         {
           method: "ed25519",
-          principal: "did:mf:luna",
+          identity: "did:mf:luna",
           signature: ED25519_SIG,
           at: "2026-05-08T09:00:00Z",
           role: "notary",
@@ -441,7 +441,7 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
       ...(validEnvelope as unknown as Envelope),
       signed_by: {
         method: "ed25519",
-        principal: "did:mf:luna",
+        identity: "did:mf:luna",
         signature: ED25519_SIG,
         at: "2026-05-08T09:00:00Z",
       },
@@ -457,14 +457,14 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
       signed_by: [
         {
           method: "ed25519",
-          principal: "did:mf:luna",
+          identity: "did:mf:luna",
           signature: ED25519_SIG,
           at: "2026-05-08T09:00:00Z",
           role: "origin",
         },
         {
           method: "hub-stamp",
-          principal: "did:mf:luna",
+          identity: "did:mf:luna",
           stamped_by: "did:mf:hub-eu-1",
           signature: ED25519_SIG,
           at: "2026-05-08T09:00:01Z",
@@ -483,13 +483,13 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
       signed_by: [
         {
           method: "ed25519",
-          principal: "did:mf:luna",
+          identity: "did:mf:luna",
           signature: ED25519_SIG,
           at: "2026-05-08T09:00:00Z",
         },
         {
           method: "hub-stamp",
-          principal: "did:mf:luna",
+          identity: "did:mf:luna",
           stamped_by: "did:mf:hub-eu-1",
           signature: ED25519_SIG,
           at: "2026-05-08T09:00:01Z",
@@ -506,17 +506,19 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
   });
 
   // cortex#346 / myelin#161 — vendored getActorPrincipal mirror
-  test("getActorPrincipal prefers originator.principal over signed_by chain", () => {
+  test("getActorPrincipal prefers originator over signed_by chain", () => {
     const env: Envelope = {
       ...(validEnvelope as unknown as Envelope),
       signed_by: [
         {
           method: "ed25519",
-          principal: "did:mf:cortex",
+          identity: "did:mf:cortex",
           signature: ED25519_SIG,
           at: "2026-05-08T09:00:00Z",
         },
       ],
+      // R2 originator dual-read still active — `principal` key remains
+      // accepted alongside `identity` until the originator lockstep PR.
       originator: {
         principal: "did:mf:alice",
         attribution: "adapter-resolved",
@@ -525,13 +527,13 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
     expect(getActorPrincipal(env)).toBe("did:mf:alice");
   });
 
-  test("getActorPrincipal falls back to signed_by[0].principal when originator absent", () => {
+  test("getActorPrincipal falls back to signed_by[0].identity when originator absent", () => {
     const env: Envelope = {
       ...(validEnvelope as unknown as Envelope),
       signed_by: [
         {
           method: "ed25519",
-          principal: "did:mf:cortex",
+          identity: "did:mf:cortex",
           signature: ED25519_SIG,
           at: "2026-05-08T09:00:00Z",
         },
@@ -580,15 +582,16 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
     // The transition schema accepts BOTH the deprecated and the renamed
     // form so pre-migration / JetStream-replayed envelopes still validate.
     //
-    // cortex#409 — bumped e37b347 → 9fc8476 (latest myelin main) to align
-    // cortex and sage on a single myelin commit. The OLD sage pin (3ec0ace)
-    // predated the vocabulary migration and validated signed_by[].principal
-    // only, so it rejected cortex's renamed signed_by[].identity stamps over
-    // the bus. The envelope JSON Schema is byte-identical between e37b347 and
-    // 9fc8476 (the bump only adds myelin#181's 'chat' seed-taxonomy entry),
-    // so the vendored schema is unchanged — only this pin moves.
+    // cortex#452 / PR-R11 — bumped 9fc8476 → 4c54b8e (myelin main post-#184)
+    // to land the breaking cut on stamp DIDs: `signed_by[].principal` is no
+    // longer accepted on the wire (the deprecated key is now rejected as
+    // `additionalProperties`). The vendored schema picks up the v3 `$id`
+    // (`/schemas/envelope/v3`) and the source-grammar tightening to the
+    // fixed-3 form `{principal}.{stack}.{assistant}` (myelin#183). The
+    // matching cortex-side reader shim drop ships here per
+    // docs/migrations/0002-vocabulary-finish-2026-05.md §PR-R11.
     expect(SCHEMA_SOURCE_COMMIT).toBe(
-      "9fc8476e03f530561e7985bb6c0b1adf20a06bb5",
+      "4c54b8e6e2157524099f4f01f13c044bcc3b9291",
     );
   });
 

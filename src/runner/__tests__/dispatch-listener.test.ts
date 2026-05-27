@@ -1120,7 +1120,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     });
   });
 
-  test("engine + signed_by[0].principal as did:mf:NAME → prefix stripped, principal resolved", async () => {
+  test("engine + signed_by[0].identity as did:mf:NAME → prefix stripped, principal resolved", async () => {
     const r = recordingRuntime();
     const router = createSurfaceRouter(r.runtime);
     const { factory } = fakeFactory(SUCCESS_RESULT);
@@ -1138,7 +1138,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     env.signed_by = [
       {
         method: "ed25519",
-        principal: "did:mf:cortex",
+        identity: "did:mf:cortex",
         signature: "a".repeat(88),
         at: "2026-05-15T12:00:00Z",
       },
@@ -1155,9 +1155,9 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     // C.4.3 — system.access.allowed carries signed_by from the
     // originating envelope verbatim.
     const allowed = r.published[0]!;
-    const signedBy = allowed.payload.signed_by as { principal: string }[];
+    const signedBy = allowed.payload.signed_by as { identity: string }[];
     expect(signedBy).toHaveLength(1);
-    expect(signedBy[0]!.principal).toBe("did:mf:cortex");
+    expect(signedBy[0]!.identity).toBe("did:mf:cortex");
   });
 
   test("C.4.1 — system.access.allowed payload shape (capability, capabilities, sovereignty, signed_by)", async () => {
@@ -1224,14 +1224,14 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     env.signed_by = [
       {
         method: "ed25519",
-        principal: "did:mf:cortex",
+        identity: "did:mf:cortex",
         signature: "a".repeat(88),
         at: "2026-05-15T12:00:00Z",
         role: "origin",
       },
       {
         method: "hub-stamp",
-        principal: "did:mf:cortex",
+        identity: "did:mf:cortex",
         stamped_by: "did:mf:metafactory-hub",
         signature: "b".repeat(88),
         at: "2026-05-15T12:00:01Z",
@@ -1561,7 +1561,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     env.signed_by = [
       {
         method: "ed25519",
-        principal: "did:mf:cortex",
+        identity: "did:mf:cortex",
         signature: "a".repeat(88),
         at: "2026-05-15T12:00:00Z",
       },
@@ -1582,9 +1582,9 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     expect(reason.kind).toBe("insufficient_role");
     expect(reason.missing_capability).toBe("dispatch.cortex");
     // C.4.3 — signed_by chain carried verbatim from originating envelope.
-    const signedBy = denied.payload.signed_by as { principal: string }[];
+    const signedBy = denied.payload.signed_by as { identity: string }[];
     expect(signedBy).toHaveLength(1);
-    expect(signedBy[0]!.principal).toBe("did:mf:cortex");
+    expect(signedBy[0]!.identity).toBe("did:mf:cortex");
   });
 });
 
@@ -1641,7 +1641,8 @@ function runnerResolverWith(...agents: Agent[]): TrustResolver {
 function runnerEd25519Stamp(principal: string) {
   return {
     method: "ed25519" as const,
-    principal,
+    // R11 — stamp DID key is `identity` post-myelin#184.
+    identity: principal,
     signature: "A".repeat(88),
     at: "2026-05-15T12:00:00.000Z",
   };
@@ -1994,17 +1995,20 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
  * cortex#346 — runner consumes the new `Envelope.originator` field (myelin#161).
  *
  * Precedence rule we assert (delegates to myelin's `getActorPrincipal`):
- *   1. `envelope.originator?.principal`  ← policy-attribution claim
- *   2. `envelope.signed_by[0]?.principal` ← legacy compat for pre-#161 envelopes
+ *   1. `envelope.originator?.identity`  ← policy-attribution claim
+ *      (originator still dual-reads the deprecated `principal` key
+ *      during the R2 transition window)
+ *   2. `envelope.signed_by[0]?.identity` ← legacy compat for pre-#161 envelopes
+ *      (stamp-level `principal` was retired in myelin#184 / R11)
  *   3. `payload.agent_id`                 ← adapter-direct dispatches with no chain
  *
  * Tamper case is covered by the chain-verification suite above — `originator`
- * is in myelin's SIGNABLE_FIELDS, so mutating either `principal` or
- * `attribution` after signing invalidates the chain. We add one explicit
+ * is in myelin's SIGNABLE_FIELDS, so mutating either `identity`/`principal`
+ * or `attribution` after signing invalidates the chain. We add one explicit
  * tamper test here to pin the contract from cortex's side.
  */
 describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
-  test("originator.principal wins over signed_by[0].principal for engine lookup", async () => {
+  test("originator.principal wins over signed_by[0].identity for engine lookup", async () => {
     // When both are present, the policy engine must see the originator's
     // principal id (the actor the signer is attesting on behalf of), NOT
     // the signer's principal id. This decouples policy attribution from
@@ -2047,12 +2051,15 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
     env.signed_by = [
       {
         method: "ed25519",
-        principal: "did:mf:cortex",
+        identity: "did:mf:cortex",
         signature: "a".repeat(88),
         at: "2026-05-19T12:00:00Z",
       },
     ];
     env.originator = {
+      // R2 (originator dual-read still active): the `principal` key is
+      // accepted alongside `identity` until the originator R2 lockstep
+      // PR. Stamp-level `principal` was retired in myelin#184 / R11.
       principal: "did:mf:alice",
       attribution: "adapter-resolved",
     };
@@ -2064,7 +2071,7 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
     expect(captured[0]!.principalId).toBe("alice");
   });
 
-  test("originator absent + signed_by[0].principal present → falls back to signer (legacy compat)", async () => {
+  test("originator absent + signed_by[0].identity present → falls back to signer (legacy compat)", async () => {
     // Pre-myelin#161 envelopes have no `originator`. Behaviour must remain
     // identical to the pre-#346 path: principal id is taken from the
     // first stamp in the chain.
@@ -2104,7 +2111,7 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
     env.signed_by = [
       {
         method: "ed25519",
-        principal: "did:mf:cortex",
+        identity: "did:mf:cortex",
         signature: "a".repeat(88),
         at: "2026-05-19T12:00:00Z",
       },

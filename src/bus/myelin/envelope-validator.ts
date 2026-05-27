@@ -75,7 +75,7 @@ import schema from "./vendor/envelope.schema.json" with { type: "json" };
  * comments + tests use `myelin#161` to point at the merge that landed the
  * feature — they're the same change, different ticket facets.
  */
-export const SCHEMA_SOURCE_COMMIT = "9fc8476e03f530561e7985bb6c0b1adf20a06bb5";
+export const SCHEMA_SOURCE_COMMIT = "4c54b8e6e2157524099f4f01f13c044bcc3b9291";
 
 /**
  * Hand-typed Envelope shape matching the JSON Schema. We hand-write rather
@@ -192,7 +192,7 @@ export interface Envelope {
    *
    * Cortex callers should resolve the policy actor via the upstream
    * `getActorPrincipal(envelope)` helper rather than reading this field
-   * directly — that helper falls back to `signed_by[0].principal` for
+   * directly — that helper falls back to `signed_by[0].identity` for
    * legacy envelopes that pre-date myelin#161.
    */
   originator?: Originator;
@@ -449,13 +449,12 @@ export function getLastStampPrincipal(envelope: Envelope): string | undefined {
   if (chain.length === 0) return undefined;
   const last = chain[chain.length - 1];
   if (!last) return undefined;
-  // R2 (vocabulary migration 2026-05) — dual-read: canonical `identity`
-  // wins, fall back to the deprecated `principal` for pre-migration /
-  // JetStream-replayed stamps. The validator's conflict-rejection rule
-  // (both keys present) fires upstream at envelope validation, so by
-  // the time this helper runs at most one key is set.
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
-  return last.identity ?? last.principal;
+  // R11 (vocabulary migration 2026-05, post-myelin#184): stamps emit
+  // `identity` only — the `?? principal` fallback that handled pre-cut
+  // peers is retired per docs/migrations/0002-vocabulary-finish-2026-05.md
+  // §PR-R11. JetStream-replayed pre-migration stamps are rejected upstream
+  // by the envelope validator (the `principal` key is now `additionalProperties: false`).
+  return last.identity;
 }
 
 /**
@@ -466,13 +465,15 @@ export function getLastStampPrincipal(envelope: Envelope): string | undefined {
  * vendored here so cortex's `Envelope` type can be passed directly without
  * a cross-package cast):
  *
- *   1. `envelope.originator?.principal` — explicit policy-attribution
+ *   1. `envelope.originator?.identity` — explicit policy-attribution
  *      claim, covered by the envelope signature (`originator` is in
  *      myelin's SIGNABLE_FIELDS post-#161, so tampering invalidates the
- *      chain).
- *   2. `envelope.signed_by[0]?.principal` — first stamp in the chain.
+ *      chain). Still dual-reads the deprecated `principal` key during
+ *      the R2 transition window (myelin canonicalizes either form).
+ *   2. `envelope.signed_by[0]?.identity` — first stamp in the chain.
  *      Legacy-compat fallback for pre-#161 envelopes that never set an
- *      `originator`.
+ *      `originator`. The `principal` key was retired from stamps in
+ *      myelin#184 (R11), so this reads `identity` only.
  *   3. `undefined` — unsigned envelope with no originator block. Callers
  *      decide the fallback (e.g. `payload.agent_id` in the dispatch
  *      listener path).
@@ -495,11 +496,13 @@ export function getLastStampPrincipal(envelope: Envelope): string | undefined {
  * will catch them if they diverge until that follow-up lands.
  */
 export function getActorPrincipal(envelope: Envelope): string | undefined {
-  // R2 (vocabulary migration 2026-05) — dual-read at both surfaces: the
-  // originator's actor DID and the first stamp's DID. Canonical key is
-  // `identity`; falls back to the deprecated `principal` for
-  // pre-migration / JetStream-replayed envelopes. The validator's
-  // conflict-rejection rule (both keys present) fires upstream.
+  // R11 (vocabulary migration 2026-05, post-myelin#184): stamps emit
+  // `identity` only — the signed_by-side `?? principal` fallback has
+  // been dropped per docs/migrations/0002-vocabulary-finish-2026-05.md
+  // §PR-R11. The originator-side dual-read remains: myelin's R2
+  // transition is still active for the originator block, so we accept
+  // either `originator.identity` (canonical) or `originator.principal`
+  // (deprecated) until the originator R2 lockstep PR.
   if (envelope.originator) {
     // eslint-disable-next-line @typescript-eslint/no-deprecated
     const orig = envelope.originator.identity ?? envelope.originator.principal;
@@ -508,8 +511,7 @@ export function getActorPrincipal(envelope: Envelope): string | undefined {
   const chain = getSignedByChain(envelope);
   const first = chain[0];
   if (!first) return undefined;
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
-  return first.identity ?? first.principal;
+  return first.identity;
 }
 
 /**
@@ -545,8 +547,9 @@ export function getFirstStampPrincipal(
   const chain = getSignedByChain(envelope);
   const first = chain[0];
   if (!first) return fallback;
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
-  return first.identity ?? first.principal ?? fallback;
+  // R11 (vocabulary migration 2026-05, post-myelin#184): stamps emit
+  // `identity` only — the `?? principal` fallback has been dropped.
+  return first.identity ?? fallback;
 }
 
 /**

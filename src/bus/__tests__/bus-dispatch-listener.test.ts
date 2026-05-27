@@ -72,7 +72,8 @@ function resolverWith(...agents: Agent[]): TrustResolver {
 function ed25519Stamp(principal: string): SignedBy {
   return {
     method: "ed25519",
-    principal,
+    // R11 — stamp DID key is `identity` post-myelin#184.
+    identity: principal,
     signature: "A".repeat(88),
     at: "2026-05-15T11:00:00.000Z",
   };

@@ -1425,7 +1425,8 @@ function makeFederatedEnvelope(overrides: Partial<Envelope> = {}): Envelope {
 function makeSignedByChain(principals: string[]): SignedBy[] {
   return principals.map((principal, i) => ({
     method: "ed25519" as const,
-    principal,
+    // R11 — stamp DID key is `identity` post-myelin#184.
+    identity: principal,
     signature: `sig-${i}`,
     at: "2026-05-09T12:00:00Z",
   }));
@@ -1885,7 +1886,7 @@ describe("createSurfaceRouter — D.2 federation gating end-to-end", () => {
     const payload = denied.payload;
     expect(payload.principal_id).toBe("did:mf:alpha-stack");
     expect(payload.signed_by).toHaveLength(2);
-    expect((payload.signed_by as { principal: string }[])[0]?.principal).toBe(
+    expect((payload.signed_by as { identity: string }[])[0]?.identity).toBe(
       "did:mf:alpha-stack",
     );
   });

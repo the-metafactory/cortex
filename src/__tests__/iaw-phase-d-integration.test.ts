@@ -541,13 +541,12 @@ describe("IAW Phase D.6.1 — cross-operator federated dispatch + reply (refs co
           ? [replyChain]
           : [];
       expect(replyStamps.length).toBe(1);
-      // R2 (vocabulary migration 2026-05) — myelin's signEnvelope emits
-      // the canonical `identity` key on every new stamp (PR-6 #169);
-      // the deprecated `principal` key would only appear on
-      // pre-migration / JetStream-replayed stamps. Dual-read keeps the
-      // test robust across the breaking-major drop.
-      // eslint-disable-next-line @typescript-eslint/no-deprecated
-      expect(replyStamps[0]?.identity ?? replyStamps[0]?.principal).toBe(beta.signerPrincipalDid);
+      // R11 (vocabulary migration 2026-05, post-myelin#184) — myelin's
+      // signEnvelope emits the canonical `identity` key on every new
+      // stamp; the deprecated `principal` key has been retired from
+      // the wire schema (the validator now rejects it as
+      // `additionalProperties`).
+      expect(replyStamps[0]?.identity).toBe(beta.signerPrincipalDid);
 
       // The originating dispatch carried α's stamp — assert that too
       // so the test docs both halves of the cross-operator audit trail.
@@ -558,8 +557,7 @@ describe("IAW Phase D.6.1 — cross-operator federated dispatch + reply (refs co
           ? [dispatchChain]
           : [];
       expect(dispatchStamps.length).toBe(1);
-      // eslint-disable-next-line @typescript-eslint/no-deprecated
-      expect(dispatchStamps[0]?.identity ?? dispatchStamps[0]?.principal).toBe(alpha.signerPrincipalDid);
+      expect(dispatchStamps[0]?.identity).toBe(alpha.signerPrincipalDid);
     },
   );
 });

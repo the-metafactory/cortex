@@ -886,10 +886,10 @@ export interface SystemAccessFederationDeniedOpts {
 export function createSystemAccessFederationDeniedEvent(
   opts: SystemAccessFederationDeniedOpts,
 ): Envelope {
-  // R2 (vocabulary migration 2026-05) — dual-read stamp DID: canonical
-  // `identity` wins, fall back to deprecated `principal`.
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
-  const principalId = opts.signedBy[0]?.identity ?? opts.signedBy[0]?.principal ?? "unknown";
+  // R11 (vocabulary migration 2026-05, post-myelin#184): stamps emit
+  // `identity` only — the `?? principal` fallback has been dropped per
+  // docs/migrations/0002-vocabulary-finish-2026-05.md §PR-R11.
+  const principalId = opts.signedBy[0]?.identity ?? "unknown";
   return buildBaseEnvelope({
     type: "system.access.denied",
     source: buildSource(opts.source),

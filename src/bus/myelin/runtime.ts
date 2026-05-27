@@ -296,8 +296,8 @@ export interface MyelinRuntimeOptions {
  * generated keypair.
  *
  * `principal` is the DID-shaped string that lands on the new stamp's
- * `signed_by[].principal` field. Convention: `did:mf:<name>` per
- * myelin spec.
+ * `signed_by[].identity` field (R11 — renamed from `principal` per
+ * myelin#184). Convention: `did:mf:<name>` per myelin spec.
  */
 export interface BusEnvelopeSigner {
   rawSeedBytes: Uint8Array;

@@ -78,7 +78,10 @@ function agentFixture(overrides: Partial<Agent> = {}): Agent {
 function ed25519Stamp(principal: string): SignedBy {
   return {
     method: "ed25519",
-    principal,
+    // R11 — stamp DID key is `identity` (post-myelin#184); `principal`
+    // is no longer accepted on the wire. Parameter name kept as
+    // `principal` to keep test call-sites readable.
+    identity: principal,
     // 88-char base64 placeholder — the structural slice doesn't verify
     // signature bytes; B.1c will. Any string of the right rough shape.
     signature: "A".repeat(88),
@@ -89,7 +92,8 @@ function ed25519Stamp(principal: string): SignedBy {
 function hubStamp(principal: string, hub: string): SignedBy {
   return {
     method: "hub-stamp",
-    principal,
+    // R11 — stamp DID key is `identity` post-myelin#184.
+    identity: principal,
     stamped_by: hub,
     signature: "B".repeat(88),
     at: "2026-05-15T08:00:00.000Z",

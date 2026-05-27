@@ -334,12 +334,12 @@ function verifyOneStamp(
   }
   // Discriminated union — narrows to SignedByEd25519 once hub-stamp is out.
 
-  // R2 (vocabulary migration 2026-05) — dual-read the stamp DID:
-  // canonical `identity` wins, fall back to deprecated `principal`
-  // for pre-migration / JetStream-replayed stamps. The envelope-level
-  // dual_field_conflict check fires upstream at envelope validation.
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
-  const principal = stamp.identity ?? stamp.principal;
+  // R11 (vocabulary migration 2026-05, post-myelin#184): myelin no
+  // longer emits `signed_by[].principal` on the wire — read `identity`
+  // directly. The dual-read shim that handled JetStream-replayed
+  // pre-migration stamps has been retired per docs/migrations/
+  // 0002-vocabulary-finish-2026-05.md §PR-R11.
+  const principal = stamp.identity;
   if (principal === undefined) {
     return {
       kind: "reject",

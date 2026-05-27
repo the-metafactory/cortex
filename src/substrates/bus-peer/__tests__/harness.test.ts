@@ -146,7 +146,8 @@ function inboundEnvelope(opts: {
     ...(opts.signerPrincipal !== undefined && {
       signed_by: {
         method: "ed25519" as const,
-        principal: opts.signerPrincipal,
+        // R11 — stamp DID key is `identity` post-myelin#184.
+        identity: opts.signerPrincipal,
         signature: "A".repeat(88),
         at: "2026-05-15T08:30:00.000Z",
       },
@@ -283,7 +284,7 @@ describe("BusPeerHarness — round-trip + verification gate", () => {
         // The yielded envelope's signer must be echo, not holly.
         const signedBy = next.value.signed_by;
         const stamp = Array.isArray(signedBy) ? signedBy[0] : signedBy;
-        expect(stamp?.principal).toBe("did:mf:echo");
+        expect(stamp?.identity).toBe("did:mf:echo");
       }
 
       const done = await iterator.next();
@@ -392,7 +393,7 @@ describe("BusPeerHarness — round-trip + verification gate", () => {
       payload: { step: 1 },
       signed_by: {
         method: "ed25519",
-        principal: "did:mf:echo",
+        identity: "did:mf:echo",
         signature: "A".repeat(88),
         at: "2026-05-15T10:30:00.000Z",
       },
@@ -701,7 +702,7 @@ describe("BusPeerHarness — round-trip + verification gate", () => {
         // Must be the signed envelope, not the unsigned one.
         const signedBy = next.value.signed_by;
         const stamp = Array.isArray(signedBy) ? signedBy[0] : signedBy;
-        expect(stamp?.principal).toBe("did:mf:echo");
+        expect(stamp?.identity).toBe("did:mf:echo");
       }
 
       const closed = await iterator.next();

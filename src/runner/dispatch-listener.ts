@@ -635,8 +635,9 @@ async function handleDispatchEnvelope(
 
   // IAW Phase B wiring (cortex#320, v2.0.2) — verify the envelope's
   // `signed_by[]` chain BEFORE resolving the principal. The runner used
-  // to read `signed_by[0].principal` at face value (cortex#220 round 1's
-  // "authorization-without-authentication" gap). Now we structurally
+  // to read `signed_by[0].identity` at face value (cortex#220 round 1's
+  // "authorization-without-authentication" gap; the field was named
+  // `principal` pre-myelin#184). Now we structurally
   // trust-check every ed25519 stamp and, by default, also cryptographically
   // verify each stamp's signature over the JCS-canonical envelope bytes.
   //
@@ -967,12 +968,13 @@ type DispatchPolicyResult =
  * verify. This closes the cortex#220 round-1
  * "authorization-without-authentication" gap that lived here pre-Phase-B.
  *
- * **Principal resolution.** Read `envelope.signed_by[0].principal`
- * (originator stamp per myelin#31 chain semantics). Strip the
- * `did:mf:` prefix to match `Principal.id`. If no chain is present
- * (legitimate for adapter-originated dispatches), fall back to
- * `payload.agent_id` — the engine will reject with `unknown_principal`
- * unless the agent is also a declared principal in the policy block.
+ * **Principal resolution.** Read `envelope.signed_by[0].identity`
+ * (originator stamp per myelin#31 chain semantics; renamed from
+ * `principal` in myelin#184 / R11). Strip the `did:mf:` prefix to
+ * match `Principal.id`. If no chain is present (legitimate for
+ * adapter-originated dispatches), fall back to `payload.agent_id` —
+ * the engine will reject with `unknown_principal` unless the agent
+ * is also a declared principal in the policy block.
  *
  * **Capability claim.** `dispatch.<agent_id>` — the dispatch surface
  * is "may principal X invoke agent Y on this stack?". C.2b will let
@@ -1036,11 +1038,14 @@ function checkDispatchPolicy(
  * cortex#346 / myelin#161 — defers to myelin's `getActorPrincipal()` so
  * the precedence rule lives in ONE place (envelope schema owner):
  *
- *   1. `envelope.originator?.principal` ← policy-attribution claim,
+ *   1. `envelope.originator?.identity` ← policy-attribution claim,
  *      covered by the envelope signature (SIGNABLE_FIELDS post-#161).
- *      Tampering with `originator.principal` OR `originator.attribution`
+ *      Tampering with `originator.identity` OR `originator.attribution`
  *      invalidates the chain → caught by `verifySignedByChain` upstream.
- *   2. `envelope.signed_by[0]?.principal` ← legacy compat for pre-#161
+ *      (Originator block still dual-reads the deprecated `principal`
+ *      key during the R2 transition window; stamp-level `principal`
+ *      was retired in myelin#184 / R11.)
+ *   2. `envelope.signed_by[0]?.identity` ← legacy compat for pre-#161
  *      envelopes that never set an `originator`.
  *   3. `payload.agent_id` ← adapter-direct (non-bus) dispatches with no
  *      signed chain; belt-and-braces called out as out-of-scope-to-remove
@@ -1216,7 +1221,7 @@ async function emitCanonicalRecipientMismatch(
  * legitimate principal failing the policy gate.
  *
  * The `principalId` on the audit envelope is set to the raw
- * `signed_by[0].principal` (or `"<unverified>"` for empty chains)
+ * `signed_by[0].identity` (or `"<unverified>"` for empty chains)
  * deliberately — the chain didn't verify, so we don't claim a
  * resolved principal. Subscribers correlating on principal id
  * branch on `reason.kind === "chain_verification_failed"` first.
