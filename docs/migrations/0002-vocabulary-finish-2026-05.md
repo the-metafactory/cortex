@@ -904,104 +904,186 @@ Split heavily:
 
 ---
 
-## Open questions for Andreas
+## Open questions — Andreas's decisions (resolved 2026-05-27)
 
-These need a principal decision before the corresponding PR can land.
+All 9 questions are resolved. The decisions below are the **principal-level** answers integrated through every R-cluster section above and the §6 PR ordering below. Q8 is the only deferral; everything else lands in this iteration.
 
-### §1 — `src/services/network-registry/` rename
+| # | Decision | PR impact |
+|---|---|---|
+| §1 | `network-registry/` IN scope for 0002 | New PR-R7c-network-registry; cascades into R2.F / R7 / R13 enumerations |
+| §2 | MC API JSON + D1 column = **single-cut breaking change** (no transition shim) | PR-R2b ships single-cut with D1 migration; "transition window" language dropped from R2.D / R2.E |
+| §3 | `cloud-publisher` `operator_id` JSON wire = **single-cut breaking** (rename to `principal_id`) | PR-R2d single-cut; coupled with PR-R7c-network-registry |
+| §4 | `BotConfig` rename target = **`AgentConfig`** (final; with `Agent` schema-type disambiguation note) | PR-R7a applies `AgentConfig`; see disambiguation guidance below |
+| §5 | `grove-bot` NATS link name = **rename to `cortex`** | PR-R7b applies; flagged as wire/observability change in PR body |
+| §6 | MC eventKinds `operator.input`/`operator.curation` = **rename + ship in this iteration** (single-cut + one-shot D1 UPDATE) | New sub-cluster under PR-R2b / PR-R13d (event-kind producers + consumers + storage) |
+| §7 | `signed_by[].principal` fallback = **single-cut drop on myelin R2 cut** (no fallback period) | LOCKSTEP PR-R11 ships immediately after myelin R2 with `.principal` reads removed |
+| §8 | `home_operator` policy schema field = **deferred to iteration 3** | Out of 0002 scope; explicitly removed from in-scope list; flagged for next planning cycle |
+| §9 | `docs/design-mission-control.md` = **full rewrite** (not banner+selective) | PR-R13e includes full rewrite + "History" appendix marked explicitly historical |
 
-The network-registry sub-service uses `operator_id`/`operator_pubkey`/`OperatorRecord` as wire field names and REST path parameters. It is consumed by cortex's `cloud-publisher.ts`. The 0001 manifest did NOT enumerate it.
+### §1 — RESOLVED: IN scope (rename network-registry in lockstep)
 
-**Choices:**
-- (a) Treat as wire-shape; rename to `principal_id`/`principal_pubkey`/`PrincipalRecord` in lockstep with `cloud-publisher.ts` (an internal-to-cortex consumer at this stage). New PR sub-cluster.
-- (b) Defer to a separate `network-registry` rename PR once the broader cluster lands.
-- (c) Leave alone — the registry's vocabulary is independent (the registry isn't part of the M2–M6 myelin contract).
+**Decision:** Rename `network-registry/*` in this iteration. Treat as wire-shape.
 
-Recommendation: **(a)** if andreas wants vocab consistency; **(c)** if the registry is intended to evolve independently. Either way, `OperatorRecord` symbol can rename for consistency without affecting the wire.
+The network-registry sub-service uses `operator_id`/`operator_pubkey`/`OperatorRecord` as wire field names and REST path parameters. It is consumed by cortex's `cloud-publisher.ts`. The 0001 manifest did NOT enumerate it; 0002 brings it in scope.
 
-### §2 — MC API JSON shape `operatorId`
+**Cascaded enumeration** (already in R2.F at line 247-256 above; restated here as the authoritative scope under §1):
 
-The MC worker REST surface (`src/surface/mc/worker/src/routes/{ingest,state,sync}.ts`) and the SQLite/D1 `tasks.operator_id` column are wire/storage contracts. Renaming requires:
-- D1 schema migration (rename column or alias-via-view)
-- Worker route handlers accept both names during transition window
-- Dashboard frontend reads either shape during transition window
-- Coordinated cutover
+- `src/services/network-registry/src/types.ts` — `OperatorRecord` → `PrincipalRecord`; `operator_id` → `principal_id`; `operator_pubkey` → `principal_pubkey`. 22 occurrences.
+- `src/services/network-registry/src/store.ts` — `RegistryStore.putOperator(operatorId, …)` → `.putPrincipal(principalId, …)`; `getOperator` → `getPrincipal`; `listOperators` → `listPrincipals`. Interface + InMemoryStore.
+- `src/services/network-registry/src/routes/operators.ts` — endpoint `/operators/:operator_id` → `/principals/:principal_id`; `validateRegistrationClaim`, `getOperator` → `getPrincipal`. ~6 hits.
+- `src/services/network-registry/src/validate.ts:30` — comment + `OperatorSchema.id` → `PrincipalConfigSchema.id` (R1 cascade).
+- `src/services/network-registry/__tests__/helpers.ts:52,66` — `operatorId` → `principalId` test helper.
+- The file path `src/services/network-registry/src/routes/operators.ts` itself renames to `principals.ts`.
 
-**Decision needed:** is the MC API public/external (consumed by anything outside cortex)? If yes, transition shim is required. If no, single-cut rename + migration is cleaner.
+**R13 cascade:** the prose in network-registry files (`OperatorRecord` doc-comments, README references) sweeps in PR-R7c-network-registry, not PR-R13b.
 
-Recommendation: confirm scope, then either ship a transition-shim PR or a single-cut PR.
+**PR scope:** new PR-R7c-network-registry. Single-cut breaking (internal-to-cortex consumer is `cloud-publisher.ts`); lockstep with PR-R2d.
 
-### §3 — `cloud-publisher` wire field `operator_id`
+### §2 — RESOLVED: single-cut breaking change
 
-The CC-events cloud-publisher POSTs JSON containing `operator_id: networkConfig.operatorId` to the network-registry (or cloud-API) endpoint. Wire-field rename to `principal_id` is breaking for the receiver.
+**Decision:** Single-cut rename for MC API JSON + D1 column. **No transition shim. No transition window.**
 
-**Choices:**
-- (a) Rename in lockstep with §1 (network-registry).
-- (b) Leave as wire-field (it terminates at the same hop as §1).
+This applies to:
+- MC worker REST surface (`src/surface/mc/worker/src/routes/{ingest,state,sync}.ts`) — `operatorId` → `principalId` on every Variable, body, and response field.
+- The `OperatorKey` symbol + `operatorKey` Variable (per Major 1 finding above) — `OperatorKey` → `PrincipalKey`, `c.set("operatorKey", …)` → `c.set("principalKey", …)`.
+- D1 `tasks.operator_id` column → `tasks.principal_id` via a schema migration script (`migrations/0005_principal_rename.sql`: `ALTER TABLE tasks RENAME COLUMN operator_id TO principal_id;` plus the equivalent in `worker/schema.sql`).
+- Dashboard frontend reads the renamed field. No conditional `keyData.operator_id ?? keyData.principalId` ?? -shaped fallback — the auth.ts:88 read collapses to `keyData.principal_id`.
+- All `__tests__/*.test.ts` SQL inserts in R2.E rename simultaneously.
 
-### §4 — `BotConfig` rename target
+**Drop all "transition window" language from R2.D / R2.E.** The cluster ships as a coordinated single-cut.
 
-Candidates:
-- `AgentConfig` — natural; collides with `z.infer<AgentSchema>` which would need its own rename (`AgentBlock`?).
-- `RuntimeConfig` — descriptive of what it is (the synthesised in-memory shape).
-- `LegacyConfig` — accurate but signals "throw this away".
-- `AppConfig` — generic.
+**PR scope:** PR-R2b. Includes D1 migration script + the §6 MC eventKinds sub-cluster (below).
 
-Recommendation: **`RuntimeConfig`** — describes the in-memory runtime shape distinct from the persisted cortex.yaml schema. Avoids collision with `Agent`.
+### §3 — RESOLVED: single-cut breaking (rename to `principal_id`)
 
-### §5 — `grove-bot` NATS link name
+**Decision:** Rename `operator_id` JSON wire field to `principal_id` in `cloud-publisher`. Single-cut breaking; no shim.
 
-`src/bus/nats/connection.ts:109` defaults the NATS connection client name to `"grove-bot"`. Visible on `nats stream info`, NATS server logs, `nats sub`-side connection lists.
+Wire-field rename is breaking for the receiver — but the receiver is `network-registry` (internal-to-cortex per §1), so the lockstep covers both sides of the wire.
 
-**Choices:**
-- (a) Rename to `"cortex"` — matches the binary, brand, packaging.
-- (b) Rename to `"cortex-agent"` — matches the R7 "bot → agent" rename.
-- (c) Leave (the literal is wire-observable; renaming changes ops dashboards / alerts).
+Sites:
+- `src/taps/cc-events/cloud-publisher.ts:200` — `operator_id: networkConfig.operatorId` → `principal_id: networkConfig.principalId`.
+- `src/taps/cc-events/__tests__/cloud-publisher.test.ts:29,35` — test helper parameter.
+- `src/cli/cortex/commands/cloud.ts:446` — CLI flag `--operator-id` → `--principal-id` (single-cut; old flag rejected).
+- `src/cli/cortex/commands/cloud.ts:461,475,482,497,524,552,564,577,586` — curl examples + CLI output text.
 
-Recommendation: **(a)** — cleanest; the NATS link name is per-process identity, not per-role.
+**PR scope:** PR-R2d. Lockstep-merge with PR-R7c-network-registry so both sides of the wire ship together.
 
-### §6 — MC event kinds `operator.input` / `operator.curation`
+### §4 — RESOLVED: `AgentConfig` (with disambiguation note)
 
-Event-type strings stored in the events table and broadcast on WebSocket. Renaming (`operator.input` → `principal.input`) requires:
-- DB migration (UPDATE statements; or read-side compat alias)
-- WebSocket protocol version bump
-- Frontend handler rename
-- Backend producer rename
-- Coordinated cutover
+**Decision:** `BotConfig` → **`AgentConfig`**. Final.
 
-These were NOT in 0001. Recommendation: **defer to a separate "MC eventKinds R2" cluster**; flag in the next planning iteration.
+`AgentConfig` is the natural name for the in-memory runtime shape that wraps the canonical cortex.yaml. The previously-considered alternative `RuntimeConfig` is rejected: "runtime" is over-generic (the runner, the bus runtime, the loader all have "runtime"-shaped concepts) and `AgentConfig` better reflects the shape (one cortex process = one agent, with one cortex.yaml).
 
-### §7 — `signed_by[].principal` permanent fallback?
+**Disambiguation with `Agent` (`z.infer<typeof AgentSchema>` at `cortex-config.ts:626`):**
 
-Post-myelin-R2 cut, do we keep a permanent compat read for old envelopes (so cortex can interoperate with pre-cut peers indefinitely), or hard-mandate `identity`?
+Two distinct types share the `Agent*` prefix post-rename:
+- `Agent` — the Zod-inferred type of a single `agents[]` entry on the cortex.yaml schema. One *element* of `principal.agents[]`.
+- `AgentConfig` — the in-memory runtime shape (formerly `BotConfig`); wraps the WHOLE cortex.yaml + synthesised legacy fields. One *process*.
 
-Recommendation: defer to myelin's manifest. Whatever myelin's cortex's reader follows.
+**Guidance (added to PR-R7a's PR body and to `cortex-config.ts` doc-comments):**
+- Where `Agent` appears in code that mixes both types, prefer the explicit form `z.infer<typeof AgentSchema>` or rename the local symbol (e.g. `agent: AgentSchemaType`). The collision risk surfaces in 8 files; PR-R7a's diff annotates each one.
+- The `AgentSchema` Zod export itself stays unchanged.
+- The disambiguation note is added to `docs/architecture.md` §"Type vocabulary" so future contributors see the distinction.
 
-### §8 — `home_operator` policy field
+**PR scope:** PR-R7a applies `AgentConfig` throughout the 38 importer files enumerated in R7.A above.
 
-`src/common/policy/types.ts:42` declares `home_operator: string` on `PolicyPrincipal`. This is a typed schema field flowing through cortex.yaml `policy:` blocks AND through dispatch envelope policy decisions AND through the MC sessions D1 column (`migrations/0003_sovereignty.sql:22`).
+### §5 — RESOLVED: rename to `cortex`
 
-Rename `home_operator` → `home_principal` (or just `home`)?
+**Decision:** Rename `"grove-bot"` NATS link name to `"cortex"`. Per-process identity, not per-role.
 
-This is a R3-shaped change — typed schema field, persisted, flows through wire. NOT in 0001 enumeration.
+Sites:
+- `src/bus/nats/connection.ts:109` — `const name = opts.name ?? "grove-bot";` → `… ?? "cortex";`. Wire-visible on `nats stream info` / `nats sub` connection list.
+- `src/bus/nats/__tests__/connection.test.ts:162,168` — assertions on the default name.
+- `src/bus/myelin/__tests__/runtime.test.ts:154,179` — `name: "grove-bot"` fixture; updates to `"cortex"`.
 
-**Choices:**
-- (a) Rename to `home_principal` as a v4.0.0 BREAKING change (companion to a future myelin policy-field rename).
-- (b) Leave (`home_operator` is internal-only, never wire-cascading outside cortex's `policy:` block — but it IS in the D1 column).
-- (c) Treat as next-iteration scope.
+**Ops impact (flagged in PR-R7b body):** any NATS dashboards / alerts that match on the `grove-bot` link name update at deploy time. Not a code dependency; an ops-config dependency. Document in the PR body and the post-merge release notes.
 
-Recommendation: **(c)** — flag for iteration 3.
+**PR scope:** PR-R7b.
 
-### §9 — `docs/design-mission-control.md` rewrite scope
+### §6 — RESOLVED: rename + include in this iteration (single-cut + one-shot D1 UPDATE)
 
-The doc is 91 hits of "operator". A large fraction describes the grove-v2 system that became cortex.
+**Decision:** `operator.input` → `principal.input`, `operator.curation` → `principal.curation`. Single-cut. One-shot D1 UPDATE migration. Ship in this iteration alongside PR-R2b + PR-R13d.
 
-**Choices:**
-- (a) Add a banner + leave the doc; mark explicit historical sections.
-- (b) Rewrite to current-tense cortex; lose the grove-v2 provenance unless kept in a "History" appendix.
-- (c) Mark the entire doc as "historical reference for the design intent"; freeze.
+This was the source of the coherence problem flagged in Critical 3 (R8a UI prose calling it the "principal filter" while filtering `operator.input` events). The resolution: rename the eventKinds in the same boundary as the MC API + DB column + UI prose.
 
-Recommendation: **(a)** — banner + selective rewrite of clearly-current claims; preserves provenance.
+**Producer sites** (audit query: `grep -rEn '"operator\.(input|curation)"' src/`):
+- `src/runner/dispatch-handler.ts` — backend producer (verify at PR time)
+- `src/surface/mc/api/iteration-import.ts` — verify at PR time
+- Any `taps/cc-events/*` cloud-publisher emission of these eventKinds
+
+**Consumer sites** (verified at HEAD on `main`):
+- `src/surface/mc/dashboard-v2/components/drill-log.tsx:140`
+- `src/surface/mc/dashboard-v2/hooks/use-artefacts.ts:85`
+- `src/surface/mc/dashboard-v2/components/event-rows.ts:67,123,248`
+- `src/surface/mc/dashboard-v2/components/__tests__/event-rows.test.ts:81,85`
+- `src/surface/mc/dashboard-v2/components/drill-down.tsx:121`
+- `src/surface/mc/dashboard-v2/components/curation-toolbar.tsx:11`
+
+**One-shot D1 UPDATE migration** (added to PR-R2b):
+
+```sql
+-- migrations/0006_principal_eventkinds.sql
+UPDATE events SET kind = 'principal.input'    WHERE kind = 'operator.input';
+UPDATE events SET kind = 'principal.curation' WHERE kind = 'operator.curation';
+```
+
+Plus the equivalent for any WebSocket protocol-version bump (handled in PR-R13d frontend rebuild). The dashboard reads the renamed eventKinds exclusively; no `kind === "operator.input" || kind === "principal.input"` dual-read shape.
+
+**Acceptance criteria** (added to PR-R2b + PR-R13d):
+1. `grep -rEn '"operator\.(input|curation)"' src/` returns 0 hits in non-test, non-historical paths.
+2. The D1 migration runs cleanly (idempotent — re-running is a no-op).
+3. Dashboard receives the renamed eventKinds via WebSocket post-deploy; old eventKinds are not emitted by any producer.
+4. The contract test at `src/surface/mc/__tests__/events.test.ts` asserts the produced eventKind values match `principal.*` exclusively.
+
+**PR scope:** the eventKinds rename ships inside PR-R2b (backend producers + D1 migration) + PR-R13d (frontend consumers + UI prose). The two PRs lockstep-merge.
+
+### §7 — RESOLVED: single-cut drop on myelin R2 cut (no permanent fallback)
+
+**Decision:** No permanent fallback period for `signed_by[].principal`. The cortex R11 PR ships **immediately after** myelin R2 cuts, with `.principal` reads removed.
+
+The transition shim `stamp.identity ?? stamp.principal` exists today specifically because pre-cut peers might still emit `.principal`. Once myelin R2 lands, every peer in the network emits `.identity`; keeping the fallback indefinitely is dead code that hides drift bugs.
+
+**Acceptance criteria** (added to PR-R11):
+1. `grep -rEn '\.identity\s*\?\?\s*\.principal\|signedBy\[.*\]\.principal' src/` returns 0 hits in non-test, non-historical paths.
+2. `verify-signed-by-chain.ts:342` reads `stamp.identity` only.
+3. `envelope-validator.ts:195,458,469,473,505,512,549` collapse to `.identity`-only reads.
+4. `system-events.ts:892` reads `opts.signedBy[0]?.identity ?? "unknown"`.
+5. Tests in R11 cascade are updated to assert `.principal` reads are REJECTED on read (no silent fallback).
+
+**PR scope:** LOCKSTEP PR-R11 (gated on myelin R2 merge; ships within ~1 day of myelin R2 release per the lockstep playbook).
+
+### §8 — DEFERRED to iteration 3 (out of 0002 scope)
+
+**Decision:** `home_operator` policy schema field is **OUT of 0002 scope.** Deferred to iteration 3.
+
+`src/common/policy/types.ts:42` declares `home_operator: string` on `PolicyPrincipal`. This is a typed schema field flowing through:
+- cortex.yaml `policy:` blocks
+- dispatch envelope policy decisions
+- MC sessions D1 column (`migrations/0003_sovereignty.sql:22,24,27`)
+
+This is an R3-shaped change (typed schema field, persisted, flows through wire). It NEEDS the same treatment as the original `operator.id` → `principal.id` rename: schema cutover with a coordinated D1 migration + breaking-major bump. That deserves its own plan iteration.
+
+**Out-of-scope assertion:** `home_operator` does NOT appear in any R-cluster Live Violations list in this plan. The R13 cluster's "Hot files" list flagged `src/common/policy/` but explicitly notes `home_operator` is "a typed POLICY-SCHEMA field, not just prose" (R13.C, "~40 hits in tests"). Those 40 hits stay until iteration 3.
+
+**Flagged for iteration 3:** add a new tracking issue `cortex#TBD-vocab-3` referencing this section.
+
+### §9 — RESOLVED: full rewrite (not banner+selective)
+
+**Decision:** **Full rewrite** of `docs/design-mission-control.md`. Provenance preserved in a "History" appendix.
+
+The doc has 91 hits of "operator" and large fractions of grove-v2 historical prose. The earlier recommendation (banner + selective rewrite) preserves provenance but leaves the doc internally inconsistent — current-tense and historical-tense sections interleave, and a reader can't tell which is which without checking blame.
+
+**Rewrite plan:**
+1. **Main body** — full rewrite to current-tense cortex. Every `operator` → `principal` or `network` (per the prose-rewrite rules in R13). Every `grove-v2` reference moves to the History appendix or is rewritten as `cortex` if it's describing current behaviour.
+2. **History appendix** — new section at the end of the doc: "## History — Mission Control v2 (grove-v2) origins" with the historical prose lifted from the pre-rewrite version, explicitly marked as describing the system cortex migrated FROM. Includes the MIG-7.11 provenance note.
+3. **Diff size** — ~500 LOC (the full doc is ~700 lines; the rewrite touches ~70% of it, leaving the history appendix ~150 lines).
+
+**Acceptance criteria** (added to PR-R13e):
+1. `grep -En '\boperator\b' docs/design-mission-control.md` returns hits ONLY inside the "History" appendix (which is preceded by a `<!-- historical: do not modernise -->` banner).
+2. The MIG-7.11 provenance note is preserved in the appendix.
+3. Internal links from other docs to design-mission-control.md headings continue to work (anchor names preserved where possible; rewrites listed in PR body).
+
+**PR scope:** PR-R13e. Largest single PR in the iteration (~500 LOC); reviewed by Echo + Luna with extra care given the doc is design ground-truth.
 
 ---
 
@@ -1048,31 +1130,40 @@ Dependency graph:
 
 ### Recommended sequence
 
-1. **PR-R13a** — prose sweep over `src/common/types/` + `src/common/config/` + `src/cortex.ts` + R1/R3/R12 doc-comment cleanup. Unblocks readability; no wire change. (~300 LOC)
-2. **Decision §4 → PR-R7a** — `BotConfig` rename + `BotConfig.agent.operator*` field rename + watcher paths + loader-synthesis rename. (~400 LOC)
+1. **PR-R13a** — prose sweep over `src/common/types/` + `src/common/config/` + `src/cortex.ts` + R1/R3/R12/R5:522 (Critical 2) doc-comment cleanup. Unblocks readability; no wire change. (~300 LOC)
+2. **PR-R7a** — `BotConfig` → **`AgentConfig`** rename (Q4 resolved) + `BotConfig.agent.operator*` field rename + `personaFile` synthesised field retirement (Major 2) + watcher paths + loader-synthesis rename + R7.B.i runtime-injected preamble strings (Major 4) + R7.B.i regression test. (~450 LOC)
 3. **PR-R2a** — Bus + Runner downstream API parameter rename: `verifySignedByChain`, `BusDispatchListener`, `DispatchListener`, `AgentTeam`. (~250 LOC)
-4. **PR-R2c** — Registry client + Adapters local-var rename. (~80 LOC)
-5. **PR-R8a** — literal "operator cockpit" / "operator filter" substitutions (6 hits). (~6 LOC)
+4. **PR-R2c** — Registry client + Adapters local-var rename **+ R13.B.i `LoadedConfig.operator` → `.principal` field rename** (Major 3 coupling: adapters get one coherent edit). (~120 LOC)
+5. **PR-R8a-docs** — literal "operator cockpit" / "operator filter" substitutions in **pure docs only** (2 hits: `architecture.md:666`, `design-mission-control.md:21`). The other 4 dashboard-coupled hits roll into PR-R13d alongside the §6 MC eventKinds rename. (~2 LOC)
 6. **PR-R6** — `persona` domain term sweep + variable renames in non-carve-out locations. (~80 LOC)
-7. **PR-R13b** — `src/runner/` + `src/bus/` prose sweep (non-cascaded). (~250 LOC)
+7. **PR-R13b** — `src/runner/` + `src/bus/` prose sweep (non-cascaded) + R5:282 + R5:runtime.test.ts:532 "broadcast loop" → "Offer loop" per CONTEXT.md (Major 5). (~250 LOC)
 8. **PR-R13c** — `src/adapters/` prose sweep. (~50 LOC)
-9. **Decision §5 → PR-R7b** — `grove-bot` literal cleanups (NATS link name, security preamble `bot.yaml` text, doc comments). (~50 LOC)
-10. **Decisions §1+§2+§3 → PR-R2b** + **PR-R13d** — MC API + DB column rename + MC prose sweep. (~300 LOC backend, ~300 LOC frontend tests)
-11. **Decision §9 → PR-R13e** — `docs/` sweep, historical-section banner approach. (~400 LOC)
-12. **LOCKSTEP with myelin R2 → PR-R11** — drop `signed_by[].principal` reader fallback. (~50 LOC)
-13. **LOCKSTEP with myelin R7 → PR-R4a + PR-R4b** — drop `{org}` placeholder + rename `org` → `principal` in cortex local code. (~100 LOC)
-14. **LOCKSTEP with myelin R11 → PR-R5** — drop `"broadcast"` distribution_mode union arm. (~20 LOC)
-15. **LOCKSTEP with myelin R13 → PR-R10** — drop `target_principal` reader fallback. (~20 LOC)
+9. **PR-R7b** — `grove-bot` → **`cortex`** literal cleanups (Q5 resolved; NATS link name `connection.ts:109` + test `connection.test.ts:162,168` + `runtime.test.ts:154,179`), `bot.yaml` → `cortex.yaml` security preamble text, doc comments. (~60 LOC)
+10. **PR-R7c-network-registry** — `network-registry/*` symbol + wire-shape rename (Q1 resolved: IN scope). `OperatorRecord` → `PrincipalRecord`, `operator_id`/`operator_pubkey` → `principal_id`/`principal_pubkey`, `RegistryStore.putOperator` → `.putPrincipal`, route `/operators/:operator_id` → `/principals/:principal_id`. Touches `src/services/network-registry/{src,__tests__}/`. Single-cut breaking (internal-to-cortex consumer is `cloud-publisher.ts`). (~250 LOC)
+11. **PR-R2b** — MC API JSON shape + D1 column **single-cut rename** (Q2 resolved: no transition shim) + `OperatorKey` → `PrincipalKey` (Major 1) + D1 schema migration script (`tasks.operator_id` → `tasks.principal_id`) + the §6 MC eventKinds rename (`operator.input` → `principal.input`, `operator.curation` → `principal.curation`) with a one-shot D1 UPDATE migration + WebSocket protocol version bump. Pairs with PR-R13d. (~400 LOC backend, ~250 LOC test/migration)
+12. **PR-R2d** — cloud-publisher wire field `operator_id` → `principal_id` **single-cut breaking** (Q3 resolved) + CLI flag `--operator-id` → `--principal-id`. Lockstep with PR-R7c-network-registry (cloud-publisher is the network-registry consumer). (~80 LOC)
+13. **PR-R13d** — MC backend + frontend prose sweep (`src/surface/mc/`). Subsumes the 4 dashboard-coupled hits from the old R8a (`use-hash-state.ts:47`, `state.ts:61`, `state.ts:447`, `slack-adapter.test.ts:1403`) + the MC eventKinds-coupled prose. Pairs with PR-R2b. (~400 LOC backend, ~300 LOC frontend tests)
+14. **PR-R13e** — `docs/` sweep + **full rewrite of `docs/design-mission-control.md`** (Q9 resolved: full rewrite, not banner+selective). Provenance preserved in a "History" appendix marked explicitly historical. (~500 LOC)
+15. **LOCKSTEP with myelin R2 → PR-R11** — drop `signed_by[].principal` reader fallback **single-cut** (Q7 resolved: no permanent fallback period; ships immediately after myelin R2 cut, with `.principal` reads removed). (~50 LOC)
+16. **LOCKSTEP with myelin R7 → PR-R4a + PR-R4b** — drop `{org}` placeholder + rename `org` → `principal` in cortex local code. (~100 LOC)
+17. **LOCKSTEP with myelin R11 → PR-R5** — drop `"broadcast"` distribution_mode union arm. (~20 LOC)
+18. **LOCKSTEP with myelin R13 → PR-R10** — drop `target_principal` reader fallback. (~20 LOC)
 
 ### Estimated totals
 
-- **Total cortex-internal PRs:** 14 (the steps in the recommended sequence above; decision-gated PRs counted, LOCKSTEP-only PRs excluded).
-- **Total LOCKSTEP-with-myelin PRs:** 4 (PR-R4a/b, PR-R5, PR-R10, PR-R11 — gated on the corresponding myelin breaking cuts).
-- **Grand total:** **18 PRs** (14 cortex-internal + 4 LOCKSTEP). This is the number cited in the PR description; the prior plan-body wording "14 (excluding LOCKSTEP-only and decision-gated)" was ambiguous about whether decision-gated PRs were also excluded. Reconciled.
-- **Total LOC envelope:** ~2,500–3,000 (cumulative; mostly mechanical) — to be revised in the Open-Question integration commit once §1/§6/§9 scope additions are reflected.
-- **Breaking changes:** none on cortex.yaml schema (R3 already shipped); R2b carries a D1 migration; R7a renames an internal type (importers update); R10/R11 LOCKSTEP cuts are breaking on the bus (coordinated with myelin breaking major).
-
-**Nit 2 cross-reference:** PR-R8a no longer overlaps with PR-R13d. Per Critical 3 (commit `f6cbcae`), R8a is split into PR-R8a-docs (2 pure-doc hits) and the 4 dashboard-coupled hits roll into PR-R13d alongside the §6 MC eventKinds resolution. The §6 PR ordering section is rewritten in the Open-Question integration commit to reflect this.
+- **Total cortex-internal PRs:** 14 (steps 1–14 in the recommended sequence above).
+- **Total LOCKSTEP-with-myelin PRs:** 4 (steps 15–18 — PR-R4a/b, PR-R5, PR-R10, PR-R11; gated on the corresponding myelin breaking cuts).
+- **Grand total:** **18 PRs** (14 cortex-internal + 4 LOCKSTEP). Matches the figure cited in the PR description.
+- **Total LOC envelope:** ~3,200–3,800 (cumulative; mostly mechanical). Up from the pre-sweep ~2,500–3,000 estimate because Q1 (network-registry, +~250 LOC), Q6 (MC eventKinds, +~150 LOC), and Q9 (full design-mission-control rewrite, +~300 LOC) are now IN scope; Q8 (home_operator) is OUT of scope deferred to iteration 3. Net +~700 LOC.
+- **Breaking changes:**
+  - cortex.yaml schema — already shipped (R3 / v3.0.0).
+  - PR-R2b — D1 column rename + MC API JSON-shape rename + `OperatorKey` → `PrincipalKey` + eventKinds rename (Q2 + §6: single-cut, no transition shim).
+  - PR-R2d — `cloud-publisher` wire field `operator_id` → `principal_id` + CLI flag `--operator-id` → `--principal-id` (Q3: single-cut).
+  - PR-R7a — internal `BotConfig` → `AgentConfig` type rename (importers update; not wire).
+  - PR-R7c-network-registry — `OperatorRecord` symbol + REST path + JSON wire renames (Q1: single-cut; internal-to-cortex consumer at this stage).
+  - PR-R11 — myelin R2 LOCKSTEP single-cut (Q7: no permanent fallback).
+  - PR-R5, PR-R10, PR-R4a/b — myelin R7/R11/R13 LOCKSTEP cuts (breaking on the bus, coordinated with myelin's breaking major).
+- **Out of scope (deferred to iteration 3):** Q8 `home_operator` policy schema field — flagged for next planning cycle as a typed schema field with wire/D1 cascade.
 
 ---
 
@@ -1081,14 +1172,16 @@ Dependency graph:
 In addition to 0001's existing completion criteria:
 
 1. **`bun check:vocab` passes with the tightened allowlist** — the CI grep guard from 0001's completion criterion #2 now lists ONLY:
-   - `src/services/network-registry/` (if §1 decided "leave")
    - `src/cli/cortex/commands/migrate-config-lib.ts` (legacy reader carve-out)
    - `src/cli/cortex/commands/__tests__/migrate-config*.ts` (legacy fixtures)
    - `src/taps/cc-events/hooks/lib/principal-env.ts` (GROVE_OPERATOR fallback tier — separate migration)
    - `src/taps/cc-events/hooks/__tests__/` (GROVE_* test fixtures)
    - `src/taps/cc-events/wrangler.toml` `GROVE_API` binding
+   - `src/common/policy/` — `home_operator` policy schema field (Q8 deferred to iteration 3; carve-out until then)
    - Historical commentary marked with `// historical:` or `<!-- historical -->`
-   - The MC design-doc historical banner section
+   - The `docs/design-mission-control.md` "History" appendix (Q9: full rewrite preserves grove-v2 provenance in a clearly-marked appendix)
+
+   Note: `src/services/network-registry/` is NO LONGER on the allowlist — Q1 resolved IN scope, so the registry is fully renamed in PR-R7c-network-registry.
 2. **No active code emits `"broadcast"` distribution_mode** — verified by `grep -rEn 'distribution_mode\s*[:=]\s*["'\'']broadcast' src/`.
 3. **No active code reads `signed_by[N].principal` without first reading `.identity`** — or, post-myelin-R2 cut, no active code reads `.principal` at all.
 4. **No active code reads `target_principal` without first reading `target_assistant`** — or post-cut, no read at all.
