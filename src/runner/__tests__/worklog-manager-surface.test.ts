@@ -170,7 +170,7 @@ describe("WorklogManager.surfaceConfig — shape", () => {
     ]);
   });
 
-  test("subscribe pattern honours multi-stack operator config", () => {
+  test("subscribe pattern honours multi-stack principal config", () => {
     const { client } = makeFakeClient("worklog-channel-id");
     const wlm = new WorklogManager(client, "worklog-channel-id");
     const cfg = wlm.surfaceConfig({ org: "andreas", stack: "research" });

@@ -189,7 +189,7 @@ export interface DispatchListenerOptions {
   /** Source identity for the lifecycle envelopes the listener emits. */
   source: SystemEventSource;
   /**
-   * Operator stack segment (IAW Phase A.5, cortex#267) used to build the
+   * Principal stack segment (IAW Phase A.5, cortex#267) used to build the
    * subscription subject and the audit-envelope `dispatch.task.received`
    * synthesis path. When supplied, both subjects land on the 6-segment
    * stack-aware grammar `local.{principal}.{stack}.dispatch.task.received`
@@ -222,7 +222,7 @@ export interface DispatchListenerOptions {
   /**
    * Adapter ID for surface-router error reporting. Defaults to
    * `runner-dispatch-listener`. Configurable so multiple runner instances
-   * (a future operator-controlled fleet) can disambiguate.
+   * (a future principal-controlled fleet) can disambiguate.
    */
   adapterId?: string;
   /**
@@ -235,7 +235,7 @@ export interface DispatchListenerOptions {
    *
    * When the option is `undefined` the listener falls back to the
    * pre-C.3 path: every envelope reaches a harness. This preserves
-   * the legacy single-operator/dev-mode boot (no `policy:` block in
+   * the legacy single-principal/dev-mode boot (no `policy:` block in
    * cortex.yaml → `policyEngineFromConfig` returns `undefined` →
    * passed through verbatim here).
    */
@@ -256,7 +256,7 @@ export interface DispatchListenerOptions {
   /**
    * When `true` (default, v2.0.2), the chain verifier runs both the
    * structural trust check AND myelin's ed25519 verification over
-   * the JCS-canonical envelope bytes. Operators with `signed_by[]`
+   * the JCS-canonical envelope bytes. Principals with `signed_by[]`
    * peers on the bus need `nkey_pub` declared on those principals
    * for the crypto layer to admit them.
    *
@@ -359,11 +359,11 @@ function canonicalTasksDirectSubject(org: string, stack?: string): string {
 /**
  * Default subject(s) for the runner's bus subscription. The `{principal}`
  * segment is substituted at registration time using `source.org` so a
- * misconfigured runner with no operator id can still subscribe (it'll match
+ * misconfigured runner with no principal id can still subscribe (it'll match
  * nothing unless someone publishes under `local.default.…`).
  *
  * Direction A Stage 4-B — canonical Tasks Domain dispatch is now the
- * default subscription. Tests and explicit operator overrides can still
+ * default subscription. Tests and explicit principal overrides can still
  * pass `subjects` for legacy/federated fixtures, but production defaults
  * no longer subscribe to the pre-spec `dispatch.task.received` subject.
  */
@@ -647,7 +647,7 @@ async function handleDispatchEnvelope(
   //
   // **Fail-closed when `trustResolver` is wired but `receivingAgentId`
   // is not.** PR #322 round-1 caught this: `cortex.ts:mergedAgents` is
-  // empty when the operator's config declares no agents (or when an
+  // empty when the principal's config declares no agents (or when an
   // intermediate boot stage hasn't populated yet), `receivingAgentId`
   // becomes `undefined`, and the prior bypass-branch silently skipped
   // verification while the boot log claimed `signed_by chain verified`
@@ -746,7 +746,7 @@ async function handleDispatchEnvelope(
   // v2.0.0 (cortex#297) + v2.0.1 (cortex#311): the schema requires a
   // `policy:` block at boot, AND `cortex.ts` no longer re-binds the
   // engine to undefined via env-var ack. So `policyEngine` here is
-  // undefined ONLY when the operator declared `policy: { principals: [] }`
+  // undefined ONLY when the principal declared `policy: { principals: [] }`
   // — an explicit "no auth surface" deployment. We fail closed in that
   // case: deny every dispatch with a clear reason so audit consumers
   // see the misconfiguration immediately rather than every dispatch
@@ -760,7 +760,7 @@ async function handleDispatchEnvelope(
   let gatedPrincipal: Principal | undefined;
   if (policyEngine === undefined) {
     // v2.0.1 (cortex#311): fail-closed when policy engine is unavailable.
-    // In v2.0.0+ this only happens when operator declared empty
+    // In v2.0.0+ this only happens when principal declared empty
     // principals[]; cortex.ts has already emitted a boot warning, so we
     // just deny + emit a terminal failure for any dispatch that arrives.
     console.error(
@@ -778,7 +778,7 @@ async function handleDispatchEnvelope(
         kind: "policy_denied",
         deny: {
           kind: "policy_engine_uninitialised",
-          detail: "operator declared empty policy.principals[]; declare at least one principal to engage the authorisation gate",
+          detail: "principal declared empty policy.principals[]; declare at least one principal to engage the authorisation gate",
         },
       },
     });
@@ -830,7 +830,7 @@ async function handleDispatchEnvelope(
     // callers / unit tests that don't pass a subject).
     //
     // IAW Phase A.5 (cortex#267): the synthesised fallback honours the
-    // operator's stack via the shared `dispatchReceivedSubject` helper —
+    // principal's stack via the shared `dispatchReceivedSubject` helper —
     // single source of truth across the listener's subscribe-side
     // default AND this audit-envelope synthesis path (cortex#276
     // Maintainability finding cycle 2).
@@ -960,7 +960,7 @@ type DispatchPolicyResult =
  * chain-verified by `handleDispatchEnvelope` BEFORE this function is
  * called: `signed_by[]` is structurally trust-checked against the
  * receiving agent's `trust:` list, and (by default) cryptographically
- * verified against the operator's NKey roster via myelin's
+ * verified against the principal's NKey roster via myelin's
  * `verifyEnvelopeIdentity`. Empty chains — produced today by all
  * adapter-originated dispatches (Discord/Mattermost/Slack/cc-events) —
  * are accepted and fall through to this gate; signed chains must
@@ -1074,7 +1074,7 @@ function resolvePrincipalId(
  * `PolicyDenyReason` discriminated union — additive fields like
  * `source_network` can land on the wire without forcing every audit
  * consumer to update its types. Keeping the enrichment in one place
- * gives operators a single function to inspect when reasoning about
+ * gives principals a single function to inspect when reasoning about
  * "what shape does a deny envelope land with for federated traffic?"
  *
  * D.3 federation-specific reasons (`unknown_network`,
@@ -1293,10 +1293,10 @@ async function emitChainVerificationDeny(
  * Emit the deny pair when verification is wired but `receivingAgentId`
  * is unconfigured — a runner-level config error, not a chain-content
  * rejection. PR #322 round-1 M-1 fix: the prior bypass branch silently
- * skipped verification when the operator's config produced no local
+ * skipped verification when the principal's config produced no local
  * agents (mergedAgents empty), re-opening cortex#220 round-1's gap.
  * Fail-closed here so the contract is enforced regardless of upstream
- * wiring; operators see the deny on the audit surface and the
+ * wiring; principals see the deny on the audit surface and the
  * dispatch fails loudly rather than slipping through unverified.
  */
 async function emitReceivingAgentUnconfiguredDeny(

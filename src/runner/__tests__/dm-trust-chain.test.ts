@@ -47,7 +47,7 @@ describe("DM trust chain", () => {
       expect(preamble).toContain("CONFIG IMMUTABILITY");
     });
 
-    test("operator DM preamble skips filesystem and bash guidance", () => {
+    test("principal DM preamble skips filesystem and bash guidance", () => {
       const config = makeConfig();
       const preamble = buildSecurityPreamble(config, undefined, {
         skipBashGuard: true,
@@ -56,7 +56,7 @@ describe("DM trust chain", () => {
 
       expect(preamble).not.toContain("FILESYSTEM RESTRICTION");
       expect(preamble).not.toContain("BASH COMMANDS");
-      // These are always enforced, even for operator DM
+      // These are always enforced, even for principal DM
       expect(preamble).toContain("VERIFICATION RULE");
       expect(preamble).toContain("CONFIG IMMUTABILITY");
     });
@@ -132,7 +132,7 @@ describe("DM trust chain", () => {
       expect(isAllowed("rm -rf /tmp/test", defaultConfig)).toBe(false);
       expect(isAllowed("ls /tmp", defaultConfig)).toBe(true);
 
-      // Disabled guard (operator DM) allows rm
+      // Disabled guard (principal DM) allows rm
       const disabledConfig = loadConfig(JSON.stringify({ disabled: true }));
       expect(isAllowed("rm -rf /tmp/test", disabledConfig)).toBe(true);
       expect(isAllowed("curl https://example.com", disabledConfig)).toBe(true);

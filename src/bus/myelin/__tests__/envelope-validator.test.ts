@@ -815,7 +815,7 @@ describe("deriveNatsSubject (IAW A.3)", () => {
   });
 
   test("derives {principal} from envelope.source's first segment", () => {
-    // A different operator (`acme.*`) routes onto its own subject namespace
+    // A different principal (`acme.*`) routes onto its own subject namespace
     // without any runtime-side configuration.
     const env = envWithClassification("local", "acme.cortex.prod-01");
     expect(deriveNatsSubject(env)).toBe(
@@ -898,7 +898,7 @@ describe("validateSubjectEnvelopeAlignment (IAW A.3)", () => {
 
   test("misaligned subject is detected — federated envelope on local subject", () => {
     // The protocol violation IAW A.3 guards against: a federated envelope
-    // accidentally published on a `local.*` subject would leak operator-
+    // accidentally published on a `local.*` subject would leak principal-
     // private semantics onto the federated bus, or vice versa.
     const env = envWithClassification("federated");
     const result = validateSubjectEnvelopeAlignment(

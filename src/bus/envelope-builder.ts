@@ -5,7 +5,7 @@
  * `id / source / type / timestamp / correlation_id / sovereignty / payload`
  * skeleton:
  *
- *   - `bus/system-events.ts`     — `system.*`     (operator-only system signals)
+ *   - `bus/system-events.ts`     — `system.*`     (principal-only system signals)
  *   - `bus/dispatch-events.ts`   — `dispatch.task.*` (task lifecycle)
  *   - `taps/cc-events/cc-events.ts` — `cc.*` (relay-lifted CC hooks)
  *

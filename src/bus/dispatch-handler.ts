@@ -128,7 +128,7 @@ export interface DispatchHandlerOpts {
     maxTotalMs?: number;
   };
   /**
-   * Direction A Stage 4-B (cortex#409) — operator stack segment used
+   * Direction A Stage 4-B (cortex#409) — principal stack segment used
    * to build the canonical `local.{principal}.{stack}.tasks.@{did}.{capability}`
    * subject in the envelope-mode publish path. Same value the
    * `MyelinRuntime` and `DispatchListener` receive — production
@@ -211,7 +211,7 @@ export class DispatchHandler extends EventEmitter {
   private readonly retryMaxAttempts: number;
   private readonly retryMaxTotalMs: number;
   /**
-   * Direction A Stage 4-B (cortex#409) — operator stack segment for
+   * Direction A Stage 4-B (cortex#409) — principal stack segment for
    * canonical-subject composition in the envelope-mode publish path.
    * See `DispatchHandlerOpts.stack`.
    */
@@ -332,7 +332,7 @@ export class DispatchHandler extends EventEmitter {
    *
    * Fire-and-forget: errors from `runtime.publish` are swallowed + logged
    * so a bus outage can't break the apology-to-Discord response path.
-   * The operator still sees "Sorry, I couldn't process that" — the
+   * The principal still sees "Sorry, I couldn't process that" — the
    * envelope is the structured-observability sibling.
    */
   private publishDispatchTaskFailed(opts: {
@@ -777,7 +777,7 @@ export class DispatchHandler extends EventEmitter {
     // on the first CC inactivity timeout, surfacing a single apology
     // with no retry. We now retry transient (`not_now`) failures up to
     // `retryMaxAttempts` times within a `retryMaxTotalMs` wall-clock
-    // budget, posting "Still working…" between attempts so the operator
+    // budget, posting "Still working…" between attempts so the principal
     // sees the bot didn't ghost. Terminal failures (any non-`not_now`
     // reason, or the final retry) emit `dispatch.task.failed` for
     // failure-path observability parity with the review-consumer path.
@@ -789,7 +789,7 @@ export class DispatchHandler extends EventEmitter {
     const startedAt = new Date();
 
     // Typing indicator — shared across attempts; the bot is "still
-    // typing" for the whole retry window from the operator's POV.
+    // typing" for the whole retry window from the principal's POV.
     await adapter.sendTyping(target);
     const typingInterval = setInterval(() => {
       adapter.sendTyping(target).catch(() => {
@@ -964,7 +964,7 @@ export class DispatchHandler extends EventEmitter {
         // substrate failure detected" — e.g. `success && !response`
         // or `!success && response.trim() !== ""`. Treat as terminal
         // `cant_do` (skill exited without giving us output to forward
-        // or got partway and crashed); no retry — operator action
+        // or got partway and crashed); no retry — principal action
         // needed (re-prompt with different inputs).
         const classified = classifyCcFailure(result);
         if (classified === null) {
@@ -1054,7 +1054,7 @@ export class DispatchHandler extends EventEmitter {
 
   /**
    * cortex#360 — Post a "Still working… (attempt N/M)" status to the
-   * adapter before each retry so the operator sees the bot is still
+   * adapter before each retry so the principal sees the bot is still
    * alive. Uses the same `postResponse` surface as the final apology;
    * adapters render these as ordinary messages (Discord follow-ups,
    * Mattermost replies) so there's no special channel.

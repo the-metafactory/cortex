@@ -23,7 +23,7 @@ type FilterContentString = (
 let filterContentString: FilterContentString | null = null;
 
 // Load @metafactory/content-filter at module init. This is a required security
-// control — if the package fails to load we log loudly so operators notice.
+// control — if the package fails to load we log loudly so principals notice.
 // Previously this was silently fail-open (grove#173).
 try {
   const mod = await import("@metafactory/content-filter");
@@ -56,7 +56,7 @@ export interface PromptFilterResult {
  * Format note: we pass "mixed" (free-text) because chat prompts aren't
  * structured. "mixed" format returns HUMAN_REVIEW for clean content and
  * BLOCKED for content matching a block-severity pattern. We only reject on
- * BLOCKED — HUMAN_REVIEW is treated as allowed because there's no operator
+ * BLOCKED — HUMAN_REVIEW is treated as allowed because there's no principal
  * in the loop on every Discord/Mattermost message.
  */
 export function scanPrompt(prompt: string, source: string): PromptFilterResult {

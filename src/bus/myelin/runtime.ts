@@ -76,7 +76,7 @@ export interface MyelinRuntime {
    * **No-op when the runtime is disabled** (no NATS configured) so callers
    * can fire-and-forget without checking `enabled` first. This matters at
    * the adapter layer, where `runtime.publish(...)` may run on every shard
-   * disconnect / recover regardless of operator NATS configuration.
+   * disconnect / recover regardless of principal NATS configuration.
    *
    * Errors at publish time are logged and swallowed — emitting an
    * operational `system.*` event must not crash the bot, especially when
@@ -265,7 +265,7 @@ export interface MyelinRuntimeOptions {
    */
   signFailureMode?: "fallback" | "drop";
   /**
-   * IAW Phase A.5 (cortex#113 / closes cortex#262) — operator stack
+   * IAW Phase A.5 (cortex#113 / closes cortex#262) — principal stack
    * segment slotted into the published subject between `{principal}` and
    * `{type}`. When set, `publish()` derives subjects in the 6-segment
    * stack-aware shape `local.{principal}.{stack}.{type}` matching post-myelin#113
@@ -277,9 +277,9 @@ export interface MyelinRuntimeOptions {
    * The entrypoint (`src/cortex.ts` ~line 386) sources this from
    * `deriveStackId(loadedConfig)` so a multi-stack deployment routes
    * envelopes through the right wildcard. The `'default'` fallback that
-   * `deriveStackId` provides is what arrives here when the operator
+   * `deriveStackId` provides is what arrives here when the principal
    * omits the `stack:` block — that matches sage's bridge default
-   * (`SAGE_STACK=default`) so the broadcast loop closes end-to-end.
+   * (`SAGE_STACK=default`) so the Offer loop closes end-to-end.
    */
   stack?: string;
 }
@@ -305,7 +305,7 @@ export interface BusEnvelopeSigner {
 }
 
 /**
- * Build a `{principal}` + `{stack}.` placeholder substituter for operator-
+ * Build a `{principal}` + `{stack}.` placeholder substituter for principal-
  * configured subject patterns (cortex#269 / cortex#279 cycle 2).
  *
  * Used by `MyelinRuntime.publish`'s `nats.subjects` resolution and by
@@ -506,7 +506,7 @@ export async function startMyelinRuntime(
   // subscribe collapsed back to the disabled path. Preserve that
   // safety net: when push-mode subscribers were configured but none
   // came up, the link is closed and the runtime returns disabled —
-  // there is no operator intent for a pull-only path here, just a
+  // there is no principal intent for a pull-only path here, just a
   // broken subscribe. Pull-only mode (empty subjects → enabled link)
   // is the new path; failed push subscribers are still treated as a
   // boot failure for that configuration shape.
@@ -615,8 +615,8 @@ export async function startMyelinRuntime(
         // function constructs error strings from inputs (e.g.
         // "Invalid private key: expected 32-byte Ed25519 seed, got N
         // bytes") and we don't want even partial seed-shape facts
-        // landing in operator logs. The error class + envelope id
-        // gives operators enough to triage.
+        // landing in principal logs. The error class + envelope id
+        // gives principals enough to triage.
         const reason = err instanceof Error ? err.name : "unknown";
         if (signFailureMode === "drop") {
           console.error(
@@ -710,7 +710,7 @@ export async function startMyelinRuntime(
     if (stopped) {
       // Post-stop subscribe attempts are a contract violation — the
       // runtime is no longer servicing new subscriptions. Throw rather
-      // than silently return a dormant subscriber so the operator-
+      // than silently return a dormant subscriber so the principal-
       // facing call site (consumer.start) surfaces the misuse via its
       // own try/catch + stderr path.
       throw new Error(
@@ -776,7 +776,7 @@ export async function startMyelinRuntime(
 
 /**
  * Default envelope handler for G-1100.E — log enough context that an
- * operator triaging a missing-message complaint can find the envelope
+ * principal triaging a missing-message complaint can find the envelope
  * in the bus. Fan-out to specific event handlers (pilot errand
  * projection, signal alert ingestion, etc.) is the next iteration's
  * work and uses the same Envelope type from this layer.

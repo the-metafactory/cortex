@@ -2,7 +2,7 @@
  * MIG-4.6 — `dispatch.task.*` envelope constructors.
  *
  * Per G-1111 §3.4 the `dispatch.task` domain captures the lifecycle of a
- * task that an operator (or a sibling agent) dispatched to a runner-style
+ * task that a principal (or a sibling agent) dispatched to a runner-style
  * agent: `dispatched`, `accepted`, `rejected`, `started`, `completed`,
  * `failed`. This file ships the four lifecycle helpers cortex's runner
  * needs end-to-end (`started`, `completed`, `failed`, `aborted`).
@@ -10,7 +10,7 @@
  * Note on §3.4 vs §6: the spec's §3.4 summary table omits `aborted`
  * (only lists `failed`) but the natural runtime distinction between
  * "the task failed under its own power" and "the task was killed by an
- * outside force (timeout, operator cancel, shutdown)" is load-bearing
+ * outside force (timeout, principal cancel, shutdown)" is load-bearing
  * for surfaces — a worklog rendering "aborted: timeout" reads very
  * differently from "failed: assertion error". We therefore add
  * `aborted` as a non-breaking sibling to `failed` per §3.1's
@@ -57,10 +57,10 @@ function buildSource(src: SystemEventSource): string {
 
 /**
  * Default sovereignty for `dispatch.task.*` events. Same posture as
- * `system.*`: operator-only by default, local residency, no frontier.
+ * `system.*`: principal-only by default, local residency, no frontier.
  *
  * `data_residency` is sourced from `source.dataResidency` (defaulting to
- * `"NZ"` for the original cortex deployment) so a non-NZ operator gets
+ * `"NZ"` for the original cortex deployment) so a non-NZ principal gets
  * envelopes stamped with their actual residency. Mirrors the parameterisation
  * pattern in `system-events.ts` so both event domains read the same field
  * off the same source struct.
@@ -68,7 +68,7 @@ function buildSource(src: SystemEventSource): string {
  * **IAW Phase A.3:** `classification` is now an optional parameter
  * (defaulting to `"local"` for back-compat). Callers may opt into
  * `"federated"` or `"public"` when dispatch lifecycle events need to cross
- * operator boundaries (e.g. a federated multi-org dispatch). The default
+ * principal boundaries (e.g. a federated multi-org dispatch). The default
  * keeps every existing call site behaving identically.
  *
  * Returned as a fresh literal per call so a downstream mutation on one
@@ -126,8 +126,8 @@ export interface DispatchTaskCommonOpts {
   correlationId?: string;
   /**
    * IAW Phase A.3 — optional sovereignty classification. Defaults to
-   * `"local"` (operator-private). Set to `"federated"` when a dispatch
-   * lifecycle event needs to reach peer operators (e.g. a multi-org task
+   * `"local"` (principal-private). Set to `"federated"` when a dispatch
+   * lifecycle event needs to reach peer principals (e.g. a multi-org task
    * pipeline whose progress should surface on federated dashboards);
    * `"public"` for global visibility. Mismatch with the publish-time
    * subject is a protocol violation (see
@@ -284,7 +284,7 @@ export interface DispatchTaskFailedOpts extends DispatchTaskCommonOpts {
  *                           (capability mismatch; persistent until a
  *                           consumer registers).
  *   - `wont_do`           — sovereignty policy refused (agent could but
- *                           policy says no; persistent — operator action
+ *                           policy says no; persistent — principal action
  *                           needed).
  *   - `not_now`           — backpressure (capability is registered, just
  *                           busy; transient, retry safe). Optional
@@ -330,7 +330,7 @@ export type DispatchTaskFailedReason =
       detail: string;
       /**
        * Optional backpressure hint: producer may suggest a retry window
-       * in milliseconds. Operator-facing; pilot's CLI translates to its
+       * in milliseconds. Principal-facing; pilot's CLI translates to its
        * own retry semantics (exit 4 = transient, retry safe).
        */
       retry_after_ms?: number;

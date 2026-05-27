@@ -12,11 +12,11 @@
  * shape PR-5 expects (e.g. a property is renamed, a typo creeps into the
  * verdict enum, a required field disappears), the parser will refuse the
  * block and emit `dispatch.task.failed` with `cant_do` — pilot then
- * stalls and operators have to figure out what changed. This test is the
+ * stalls and principals have to figure out what changed. This test is the
  * tripwire: it embeds **canonical example outputs that the skill is
  * expected to emit** and round-trips them through the real
  * `runReviewPipeline` to prove the parser still accepts them. When the
- * skill is intentionally updated, the operator updates the fixtures here
+ * skill is intentionally updated, the principal updates the fixtures here
  * to match — that's the explicit synchronisation point between the two
  * repos.
  *
@@ -24,7 +24,7 @@
  *   - PR-5 parser regressions (a future refactor narrows the accepted
  *     shape; this test fails before pilot stalls in production).
  *   - Skill drift (the skill markdown is updated; these fixtures no
- *     longer reflect what the skill emits → operator must reconcile).
+ *     longer reflect what the skill emits → principal must reconcile).
  *
  * **What this does NOT catch:**
  *   - That the skill ACTUALLY emits these fixtures (the skill lives in
@@ -39,7 +39,7 @@
  * `~/.claude/skills/code-review/SKILL.md` (and the per-workflow files
  * under `Workflows/`) must be updated to emit a fenced ```json block as
  * the FINAL element of the CC response, matching the shape used in the
- * APPROVED_FIXTURE constant below. The operator owns that edit; this
+ * APPROVED_FIXTURE constant below. The principal owns that edit; this
  * test file is purely the cortex-side contract.
  *
  * The fixture style is deliberately CC-prose-shaped (a short summary
@@ -119,7 +119,7 @@ function stubFactory(result: CCSessionResult): CCSessionFactory {
 }
 
 // ---------------------------------------------------------------------------
-// Canonical fixtures — these are the skill-emission examples the operator
+// Canonical fixtures — these are the skill-emission examples the principal
 // must keep in sync with `~/.claude/skills/code-review/SKILL.md`. Each
 // fixture is a complete CC-style response: a short prose summary above a
 // fenced ```json block. The block is the LAST fenced block in the string
@@ -130,7 +130,7 @@ function stubFactory(result: CCSessionResult): CCSessionFactory {
  * Fixture 1 — `approved` verdict, zero findings across all severities.
  * Represents the "clean PR" path: skill ran every lens, found nothing
  * actionable, approves via `gh pr review --approve`. This is the SHAPE
- * the operator should paste into the skill markdown's "structured
+ * the principal should paste into the skill markdown's "structured
  * output" section as the worked example.
  */
 const APPROVED_FIXTURE = [

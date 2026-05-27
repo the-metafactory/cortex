@@ -37,10 +37,10 @@
  *   - `sovereignty` defaults to `local-only / max_hop=0 / frontier_ok=false /
  *     model_class=local-only`. Same rationale as `system.*` and `dispatch.*`:
  *     a webhook payload includes repo names, commit messages, PR titles,
- *     issue bodies — operator-relevant content that has no business being
+ *     issue bodies — principal-relevant content that has no business being
  *     federated outside the org or processed by frontier models without an
  *     explicit upgrade decision. `data_residency` is parameterised on the
- *     source struct so non-NZ operators get accurate residency stamps.
+ *     source struct so non-NZ principals get accurate residency stamps.
  *
  * **What this file is NOT:**
  *   - NOT a webhook receiver. The HTTP entry-point that calls this helper
@@ -77,13 +77,13 @@ function buildSource(src: SystemEventSource): string {
 }
 
 /**
- * Default sovereignty for `github.*` events. Operator-only by default / local
+ * Default sovereignty for `github.*` events. Principal-only by default / local
  * residency / no frontier — webhook payloads may carry PII (committer email,
  * issue bodies) and federating them outside the org is an explicit decision,
  * not a default.
  *
  * `data_residency` is sourced from `source.dataResidency` (defaulting to
- * `"NZ"`) so a non-NZ operator gets envelopes stamped with their actual
+ * `"NZ"`) so a non-NZ principal gets envelopes stamped with their actual
  * residency without per-call overrides.
  *
  * **IAW Phase A.3:** `classification` is now an optional parameter
@@ -91,7 +91,7 @@ function buildSource(src: SystemEventSource): string {
  * `"federated"` or `"public"` when a GitHub event has been explicitly
  * deemed shareable beyond the org boundary (e.g. a public-repo PR-merged
  * event that powers a cross-org community dashboard). Default preserves
- * the prior operator-private posture.
+ * the prior principal-private posture.
  */
 function defaultGithubSovereignty(
   source: SystemEventSource,
@@ -192,8 +192,8 @@ export interface CreateGithubEventEnvelopeOpts {
   /**
    * IAW Phase A.3 — optional sovereignty classification. Defaults to
    * `"local"`. GitHub webhook payloads can carry user-authored content
-   * (PR titles, issue bodies, committer emails); operator-private is the
-   * sensible default. Set `"federated"` only when an explicit operator
+   * (PR titles, issue bodies, committer emails); principal-private is the
+   * sensible default. Set `"federated"` only when an explicit principal
    * decision has scoped the event for cross-org consumption (e.g. an
    * open-source repo's release event powering a federated changelog
    * dashboard). Mismatch with the publish-time subject is a protocol

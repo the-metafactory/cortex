@@ -3,7 +3,7 @@
  *
  * The envelope constructors deliberately accept caller-provided strings:
  * each harness knows its substrate result shape. These helpers keep the
- * operator-facing lifecycle summaries consistent across harnesses.
+ * principal-facing lifecycle summaries consistent across harnesses.
  */
 
 /**

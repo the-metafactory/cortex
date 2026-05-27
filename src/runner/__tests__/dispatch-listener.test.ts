@@ -227,7 +227,7 @@ describe("createDispatchListener — surfaceConfig", () => {
     });
     // Direction A Stage 4-B (cortex#409) — production defaults subscribe
     // to the canonical Tasks Domain pattern. Legacy subjects remain
-    // available only through explicit test/operator overrides.
+    // available only through explicit test/principal overrides.
     expect(listener.surfaceConfig.subjects).toEqual([
       "local.metafactory.tasks.*.>",
     ]);
@@ -269,7 +269,7 @@ describe("createDispatchListener — surfaceConfig", () => {
     ]);
   });
 
-  test("default subjects honour multi-stack operator config", () => {
+  test("default subjects honour multi-stack principal config", () => {
     const { runtime } = recordingRuntime();
     const router = createSurfaceRouter(runtime);
     const listener = createDispatchListener({
@@ -1946,7 +1946,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
 
   test("PR #322 r1 M-1 — trustResolver wired but receivingAgentId undefined → fail-closed deny", async () => {
     // Echo PR #322 r1 caught: when cortex.ts builds the listener with
-    // `mergedAgents` empty (operator's config declares no agents), the
+    // `mergedAgents` empty (principal's config declares no agents), the
     // call site spreads `receivingAgentId` conditionally and the prior
     // bypass branch silently skipped verification while the boot log
     // claimed `signed_by chain verified` — re-opening cortex#220 r1's

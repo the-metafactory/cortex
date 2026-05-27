@@ -138,7 +138,7 @@ export type ReviewPromptBuilder = (input: {
  *
  * `reason` carries a human-readable summary destined for both the
  * structured stderr log line and the `dispatch.task.failed` `reason.detail`
- * field — short enough to scan, specific enough that an operator can
+ * field — short enough to scan, specific enough that a principal can
  * grep `pilot/cortex stderr` and identify the rejection class without
  * cross-referencing internal tables.
  */
@@ -635,7 +635,7 @@ export class ReviewConsumer {
   /**
    * Pipeline executor. Returns the `AckDecision` for the surrounding
    * envelope. Captures pipeline throws and maps to defensive `nak(0)`
-   * (transient — operator-recoverable per §7.6).
+   * (transient — principal-recoverable per §7.6).
    *
    * On success/failure result, this method publishes the terminal
    * envelope (verdict or failed) AND, on the verdict path, the

@@ -36,7 +36,7 @@
  *         explicitly (which the review-consumer does per §5.2).
  *   - `sovereignty` defaults to local-only / NZ / max_hop=0 / frontier_ok=false /
  *     model_class=local-only — same posture as `dispatch.task.*`. Verdicts
- *     reveal PR metadata + reviewer findings; default keeps them operator-local.
+ *     reveal PR metadata + reviewer findings; default keeps them principal-local.
  *     Federated reviews opt into `classification: "federated"` via the
  *     optional `classification` field (IAW Phase A.3 parameterisation pattern).
  *
@@ -90,7 +90,7 @@ function buildSource(src: SystemEventSource): string {
 
 /**
  * Default sovereignty for `tasks.code-review.*` and `review.verdict.*`
- * envelopes. Same posture as `dispatch.task.*`: operator-local by default,
+ * envelopes. Same posture as `dispatch.task.*`: principal-local by default,
  * local residency, no frontier, no hops.
  *
  * Returned as a fresh literal per call so a downstream mutation on one
@@ -153,7 +153,7 @@ export type ReviewFlavor =
  * without a round-trip through a shared type module.
  *
  * Required fields are the load-bearing routing keys (`repo`, `pr`,
- * `reviewer`). Optional fields are the operator-supplied context
+ * `reviewer`). Optional fields are the principal-supplied context
  * (`feature`, `title`, `cycle`, `note`) that surfaces render but do not
  * branch on.
  */
@@ -196,8 +196,8 @@ export interface CreateReviewRequestEventOpts {
    */
   flavor: ReviewFlavor;
   /**
-   * Optional sovereignty classification. Defaults to `"local"` (operator-
-   * private). Set to `"federated"` for cross-operator capability dispatch;
+   * Optional sovereignty classification. Defaults to `"local"` (principal-
+   * private). Set to `"federated"` for cross-principal capability dispatch;
    * `"public"` for global visibility. Mismatch with the publish-time
    * subject is a protocol violation caught by
    * `validateSubjectEnvelopeAlignment`.
@@ -338,7 +338,7 @@ export interface CreateReviewVerdictEventOpts {
  * protocol violation that would silently break pilot's filter (pilot
  * groups envelopes by the subject suffix; a `verdict.approved` envelope
  * with `payload.verdict: "commented"` would be filed under "approved"
- * but render as "commented" — operator-visible inconsistency). Fail
+ * but render as "commented" — principal-visible inconsistency). Fail
  * loud at the producer instead.
  *
  * **Correlation:** the verdict envelope's `correlation_id` is the

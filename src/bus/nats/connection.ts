@@ -58,7 +58,7 @@ export interface NatsLinkOptions {
  * `common/config/file-permissions.ts` (same policy as the operator
  * account signing-key loader — Echo cortex#87 round-1 extraction).
  *
- * Throws with an operator-readable message when:
+ * Throws with a principal-readable message when:
  *   - `expandTilde` rejects (no `$HOME` set).
  *   - The file is missing / unreadable (ENOENT / EACCES propagate).
  *   - The file mode is not exactly `0o600` on POSIX.
@@ -195,7 +195,7 @@ export class NatsLink {
     // Bounded by `statusTimeoutMs` so a hung `for await (... status())`
     // (cortex#317 — pilot#129 root cause: nats.js status iterator doesn't
     // end promptly under reconnect:true) can't pin downstream `await
-    // link.close()` callers. On budget miss, emit an operator-actionable
+    // link.close()` callers. On budget miss, emit a principal-actionable
     // stderr warning and let the loop drain in the background — process
     // exit cleans up the orphaned iterator regardless.
     let statusTimer: ReturnType<typeof setTimeout> | undefined;

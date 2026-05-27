@@ -28,7 +28,7 @@ export interface CCSessionOpts {
   additionalArgs?: string[];
   /** Bash allowlist config — passed to bash-guard.hook.ts via GROVE_BASH_GUARD env var. */
   bashAllowlist?: { rules: { pattern: string; repos?: string[] }[]; repos: string[] };
-  /** G-300: When true, disables bash guard entirely (operator DM). */
+  /** G-300: When true, disables bash guard entirely (principal DM). */
   bashGuardDisabled?: boolean;
   /** H-001: Explicit project context (e.g., "grove", "meta-factory") */
   project?: string;
@@ -60,7 +60,7 @@ export interface CCSessionResult {
   /**
    * Reason for the abort, when `aborted === true`. Currently the only
    * value emitted is `"timeout"` (inactivity timer fired); the field is
-   * left open-ended so future kill paths (operator cancel, runner
+   * left open-ended so future kill paths (principal cancel, runner
    * shutdown) can populate it without a breaking change.
    */
   abortReason?: "timeout";

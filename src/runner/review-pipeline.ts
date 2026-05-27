@@ -51,7 +51,7 @@
  *
  * | Outcome                                              | reason.kind | rationale                                                  |
  * |------------------------------------------------------|-------------|------------------------------------------------------------|
- * | CC factory throws synchronously (binary missing)     | `not_now`   | Transient substrate failure (§7.3); operator-recoverable.   |
+ * | CC factory throws synchronously (binary missing)     | `not_now`   | Transient substrate failure (§7.3); principal-recoverable. |
  * | CC session `kill()` / inactivity timeout / abort     | `not_now`   | Substrate-side crash (§7.6) — pilot maps to exit 4.        |
  * | CC session exits non-zero with no parseable block    | `not_now`   | Substrate-side crash (§7.6).                                |
  * | CC session exits clean (0) but no verdict block      | `cant_do`   | Skill didn't fulfil its contract (§4.5).                    |
@@ -326,7 +326,7 @@ export async function runReviewPipeline(
     }
   } catch (err) {
     // §7.3 not_now bucket — "transient infrastructure failure (CC binary
-    // not found; etc.). Operator-recoverable." Pilot maps to exit 4
+    // not found; etc.). Principal-recoverable." Pilot maps to exit 4
     // (transient, retry safe) per design-pilot-restructure.md §4.4.
     // `classifyCcSpawnError` always returns a `not_now` reason; the
     // union narrowing here exists to keep TypeScript happy when the
@@ -372,7 +372,7 @@ export async function runReviewPipeline(
 
   // §4.5 — extract the structured-verdict JSON block from the CC stream's
   // last assistant message. Absent block on a clean exit = skill didn't
-  // honour the contract (`cant_do`, permanent — operator must fix the
+  // honour the contract (`cant_do`, permanent — principal must fix the
   // skill, not retry the request).
   const block = extractVerdictBlock(result.response);
   if (block === null) {
@@ -533,7 +533,7 @@ type ParseResult<T> =
  * Parse + validate the verdict block JSON. Returns a structured error
  * detail for any failure mode (JSON parse, missing field, wrong type,
  * out-of-enum verdict). The detail flows into the `cant_do` envelope's
- * `reason.detail` so operators can see which field tripped on the
+ * `reason.detail` so principals can see which field tripped on the
  * dashboard.
  *
  * Validation is hand-rolled (no Zod) to keep PR-5 dependency-free and

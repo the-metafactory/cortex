@@ -73,7 +73,7 @@ function loadConfig(): GuardConfig | null {
   if (raw) {
     try {
       const parsed = JSON.parse(raw) as GuardConfigRaw;
-      // G-300: Operator DM disables bash guard entirely
+      // G-300: Principal DM disables bash guard entirely
       if (parsed.disabled) return null;
       return {
         rules: parsed.rules ?? DEFAULT_CONFIG.rules,
@@ -122,7 +122,7 @@ function allow(): void {
  * Emit Claude Code's structured PreToolUse *deny* decision. The
  * `permissionDecisionReason` surfaces back to the agent (and the
  * Cortex→Discord relay) — it replaces the old `process.exit(2)` +
- * stderr line, which got swallowed on the way to the operator.
+ * stderr line, which got swallowed on the way to the principal.
  */
 function deny(reason: string): void {
   console.log(
@@ -213,7 +213,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  // CLI operator session (cldyo-live sets GROVE_AGENT_ID) — full trust, bypass guard.
+  // CLI principal session (cldyo-live sets GROVE_AGENT_ID) — full trust, bypass guard.
   // Bot sessions also set GROVE_AGENT_ID but override via GROVE_BASH_GUARD config,
   // so they still get guarded by the loadConfig() path below.
   if (process.env.GROVE_AGENT_ID) {
@@ -272,7 +272,7 @@ async function main(): Promise<void> {
   const parts = command.split(/\s*(?:&&|\|\||;)\s*/);
   const config = loadConfig();
 
-  // G-300: Guard disabled (operator DM) — allow everything
+  // G-300: Guard disabled (principal DM) — allow everything
   if (config === null) {
     allow();
     return;

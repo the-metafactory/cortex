@@ -103,14 +103,14 @@ export type PublishFn = (envelope: Envelope) => Promise<void>;
  * registry).
  */
 export interface CapabilityRegistrySource {
-  /** Operator id — first dotted segment of `envelope.source`. */
+  /** Principal id — first dotted segment of `envelope.source`. */
   org: string;
   /** Logical agent label for the *publisher* (typically `"cortex"`). */
   agent: string;
   /** Stable instance label — usually `"local"` for in-process emission. */
   instance: string;
   /**
-   * Operator residency code for `envelope.sovereignty.data_residency`.
+   * Principal residency code for `envelope.sovereignty.data_residency`.
    * Defaults to `"NZ"` when omitted (matches the original cortex
    * deployment). Mirrors the same field on `SystemEventSource`.
    */
@@ -139,7 +139,7 @@ export interface CapabilityRegistryEntry {
 /**
  * Options for `publishCapabilityRegistry()`. The boot wiring (PR-7)
  * builds this from the parsed cortex.yaml's `agents[]` (mapped to
- * `entries[]` by lifting `runtime.capabilities`) plus the operator's
+ * `entries[]` by lifting `runtime.capabilities`) plus the principal's
  * source identity.
  *
  * `clock` + `instance` are injection seams so tests can assert exact
@@ -161,8 +161,8 @@ export interface PublishCapabilityRegistryOptions {
   publish: PublishFn;
   /**
    * Optional instance label baked into the payload (`instance` field
-   * per §3.2). Defaults to `source.instance` — operators running
-   * multiple cortex daemons in the same operator namespace override
+   * per §3.2). Defaults to `source.instance` — principals running
+   * multiple cortex daemons in the same principal namespace override
    * this to disambiguate.
    */
   instance?: string;
@@ -214,7 +214,7 @@ function buildSource(src: CapabilityRegistrySource): string {
 
 /**
  * Default sovereignty posture for capability-registration envelopes.
- * Matches §3.2 verbatim: `classification: local` (operator-private
+ * Matches §3.2 verbatim: `classification: local` (principal-private
  * unless overridden), residency from `source.dataResidency` (defaulting
  * to `"NZ"`), max_hop 0, no frontier, local-only model class.
  *

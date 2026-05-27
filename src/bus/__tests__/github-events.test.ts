@@ -167,7 +167,7 @@ describe("createGithubEventEnvelope", () => {
     expect(() => new Date(a.timestamp).toISOString()).not.toThrow();
   });
 
-  test("sovereignty defaults are operator-only / NZ when source has no override", () => {
+  test("sovereignty defaults are principal-only / NZ when source has no override", () => {
     const env = createGithubEventEnvelope({
       source: SRC,
       event: "push",
@@ -266,7 +266,7 @@ describe("github.* — classification parameterisation (IAW A.3)", () => {
     payload: { number: 42 },
   };
 
-  test("omitting classification defaults to local (operator-private)", () => {
+  test("omitting classification defaults to local (principal-private)", () => {
     const env = createGithubEventEnvelope(baseOpts);
     expect(env.sovereignty.classification).toBe("local");
     expect(validateEnvelope(env).ok).toBe(true);

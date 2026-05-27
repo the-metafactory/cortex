@@ -52,7 +52,7 @@ describe("createSystemAdapterDegradedEvent", () => {
     });
     // No correlation_id (see file header — known spec gap).
     expect(env.correlation_id).toBeUndefined();
-    // Sovereignty defaults match operator-only / no frontier.
+    // Sovereignty defaults match principal-only / no frontier.
     expect(env.sovereignty).toEqual({
       classification: "local",
       data_residency: "NZ",
@@ -438,7 +438,7 @@ describe("createSystemAccessFilteredEvent", () => {
     });
     // No correlation_id by default — access decisions are independent events.
     expect(env.correlation_id).toBeUndefined();
-    // Sovereignty defaults match the rest of system.* — operator-only, local.
+    // Sovereignty defaults match the rest of system.* — principal-only, local.
     expect(env.sovereignty).toEqual({
       classification: "local",
       data_residency: "NZ",
@@ -484,7 +484,7 @@ describe("createSystemAccessFilteredEvent", () => {
 
   test("explicit classification override propagates to sovereignty", () => {
     // Mirrors the Phase A.3 pattern on the other system.* helpers — an
-    // operator may opt the access-decision stream into federated reach so
+    // principal may opt the access-decision stream into federated reach so
     // peer dashboards can observe drops too.
     const env = createSystemAccessFilteredEvent({
       source: { org: "metafactory", agent: "cortex", instance: "local" },
@@ -546,7 +546,7 @@ describe("createAgentHeartbeatEvent", () => {
       last_activity_ms_ago: 1500,
       iteration: 7,
     });
-    // Sovereignty defaults match operator-only / no frontier.
+    // Sovereignty defaults match principal-only / no frontier.
     expect(env.sovereignty).toEqual({
       classification: "local",
       data_residency: "NZ",
@@ -579,7 +579,7 @@ describe("createAgentHeartbeatEvent", () => {
     expect(a.id).not.toBe(b.id);
   });
 
-  test("federated classification opt-in for future cross-operator heartbeats", () => {
+  test("federated classification opt-in for future cross-principal heartbeats", () => {
     const env = createAgentHeartbeatEvent({
       source: { org: "metafactory", agent: "cortex", instance: "local" },
       agentId: "echo",

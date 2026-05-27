@@ -1622,7 +1622,7 @@ describe("evaluateFederationGate — max_hop", () => {
 
   test("deny-list precedence: hop overage on a deny-listed subject reports peer_deny_list", () => {
     // Deny-list runs before hop counting; the deny reason is what
-    // the operator sees, not the hop fact.
+    // the principal sees, not the hop fact.
     const decision = evaluateFederationGate(
       "federated.research-collab.tasks.private.secret",
       makeFederatedEnvelope({
@@ -1773,7 +1773,7 @@ describe("createSurfaceRouter — D.2 federation gating end-to-end", () => {
     const { runtime, published } = fakeRuntimeWithPublishLog();
     const router = createSurfaceRouter(runtime, {
       systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
-      // No `federated:` block — operator hasn't declared any networks.
+      // No `federated:` block — principal hasn't declared any networks.
     });
     const a = recordingAdapter({
       id: "fed-adapter",
@@ -1991,7 +1991,7 @@ describe("emitAccessFiltered — defensive .catch on publish failure (cortex#137
       await new Promise((r) => setTimeout(r, 0));
       // Adapter was filtered (no render).
       expect(a.calls).toHaveLength(0);
-      // Stderr got the audit-failure alert — operator-visible signal
+      // Stderr got the audit-failure alert — principal-visible signal
       // instead of silent drop.
       const alert = captured.find((c) => c.includes("system.access.filtered"));
       expect(alert).toBeDefined();

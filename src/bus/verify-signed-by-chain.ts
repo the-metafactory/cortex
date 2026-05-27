@@ -22,7 +22,7 @@
  *
  * **Why two layers, both gated by trust:** the structural check alone is
  * not safe to wire into a production inbound path — a stamp can lie
- * about its principal, and a sloppy operator copying an unknown agent's
+ * about its principal, and a sloppy principal copying an unknown agent's
  * NKey into their own `trust:` list would accept the forgery. The crypto
  * check alone is not enough either — a verified signer the receiver
  * doesn't trust shouldn't be admitted. The two checks compose: structural

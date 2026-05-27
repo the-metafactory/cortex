@@ -8,7 +8,7 @@ import type { AgentConfig } from "../common/types/config";
 /**
  * Options to relax the security preamble for trusted contexts.
  *
- * Threat model: These skips are only used for operator DM sessions (G-300),
+ * Threat model: These skips are only used for principal DM sessions (G-300),
  * where identity is verified by Discord user ID matching operatorDiscordId in
  * cortex.yaml. The DM channel is 1:1 — no other users can inject messages or
  * read the conversation. Verification and config-immutability rules remain
@@ -17,11 +17,11 @@ import type { AgentConfig } from "../common/types/config";
  * See G-301 (issue #42) for planned additional authentication controls.
  */
 export interface SecurityPreambleOpts {
-  /** Skip bash guard guidance (operator DM mode) */
+  /** Skip bash guard guidance (principal DM mode) */
   skipBashGuard?: boolean;
-  /** Override allowed dirs (operator DM uses full dir list) */
+  /** Override allowed dirs (principal DM uses full dir list) */
   overrideDirs?: string[];
-  /** Skip filesystem restriction (operator DM with unrestricted dirs) */
+  /** Skip filesystem restriction (principal DM with unrestricted dirs) */
   skipFilesystemRestriction?: boolean;
 }
 
@@ -77,7 +77,7 @@ export function buildSecurityPreamble(config: AgentConfig, configPath?: string, 
   }
 
   // Bash allowlist guidance — tell the model what shell commands are available
-  // Skipped for operator DM (no bash guard)
+  // Skipped for principal DM (no bash guard)
   if (!opts?.skipBashGuard) {
     const bashAllowlist = config.claude.bashAllowlist;
     if (bashAllowlist && bashAllowlist.rules.length > 0) {

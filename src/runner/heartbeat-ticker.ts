@@ -16,7 +16,7 @@
  * `Date.now()` call.
  *
  * **Failure mode.** A failing `runtime.publish` (NATS hiccup, signer
- * fault) MUST NOT bubble back to the dispatch path. Operator pings that
+ * fault) MUST NOT bubble back to the dispatch path. Principal pings that
  * happen to coincide with a bus outage must still complete their CC
  * session and reply on Discord. The ticker logs publish failures to
  * `process.stderr` and continues ticking; the next tick may succeed.

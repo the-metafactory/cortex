@@ -130,7 +130,7 @@ export interface SurfaceRouterOptions {
    * paths where `SystemEventSource` isn't constructed yet. Production
    * callers (cortex.ts) SHOULD pass the same struct used by the rest of
    * the `system.*` emit sites so the access-decision stream stamps the
-   * correct operator/agent/instance segments.
+   * correct principal/agent/instance segments.
    */
   systemEventSource?: SystemEventSource;
   /**
@@ -257,7 +257,7 @@ export function createSurfaceRouter(
   const renderTimeoutMs = opts?.renderTimeoutMs ?? DEFAULT_RENDER_TIMEOUT_MS;
   // Captured as a plain function reference. unbound-method fires here
   // because the type tree sees this as a method that *might* read `this`;
-  // for cortex's use case (callbacks supplied by the operator config),
+  // for cortex's use case (callbacks supplied by the principal config),
   // unbound is the intended shape.
   // eslint-disable-next-line @typescript-eslint/unbound-method
   const onAdapterError = opts?.onAdapterError;
@@ -330,10 +330,10 @@ export function createSurfaceRouter(
       // individual adapters are a per-renderer concern that only
       // matters once the envelope has been admitted.
       //
-      // Gate engages only when the operator has declared a
+      // Gate engages only when the principal has declared a
       // `policy.federated.networks[]` block. Mirror of the C.3.1
       // policy-engine pattern: an unconfigured gate is a no-op (the
-      // operator opted out). This keeps cortex.yaml without a
+      // principal opted out). This keeps cortex.yaml without a
       // `federated:` block fully back-compat with pre-D.2 behaviour
       // — existing renderers continue to receive whatever traffic
       // happened to land on `federated.*` subjects via classification
@@ -364,7 +364,7 @@ export function createSurfaceRouter(
             decision,
           );
           // Hard drop — denied envelopes never reach adapters. The
-          // audit envelope above is the operator's only signal that
+          // audit envelope above is the principal's only signal that
           // this dispatch was attempted; without it the deny is
           // silent.
           return;
@@ -569,7 +569,7 @@ function emitAccessFiltered(
   reason: SystemAccessFilteredReason,
 ): void {
   if (!source) {
-    // No source struct configured — log so an operator triaging silence
+    // No source struct configured — log so a principal triaging silence
     // gets a hint, but don't try to construct a half-formed envelope.
     console.info(
       `surface-router: visibility drop renderer="${rendererId}" subject="${envelopeSubject}" reason=${reason} ` +
@@ -590,7 +590,7 @@ function emitAccessFiltered(
     //
     // cortex#137 — defensive .catch() so a regression of the
     // "never throws" contract (refactor, new pluggable transport,
-    // unhandled async path) surfaces an operator-visible signal
+    // unhandled async path) surfaces a principal-visible signal
     // instead of silently dropping the audit envelope. Goes to
     // stderr directly rather than another bus publish so a broken
     // runtime can't swallow the alert about itself.
@@ -661,7 +661,7 @@ type FederationGateDecision =
  *   2. The network id must be in `policy.federated.networks[]`.
  *      Missing → same deny kind with `unknown_network: true`.
  *   3. `deny_subjects[]` is checked BEFORE `accept_subjects[]` —
- *      operator intent on the deny list overrides any accept hit.
+ *      principal intent on the deny list overrides any accept hit.
  *      D.2 spec: "A match here overrides accept_subjects[]".
  *   4. `accept_subjects[]` must contain a matching pattern. Empty
  *      accept list means "accept nothing" (D.1 schema doc); the
@@ -845,7 +845,7 @@ function emitFederationDenied(
     });
     // cortex#137 — defensive .catch() so a regression of the
     // runtime.publish "never throws" contract surfaces an
-    // operator-visible signal instead of dropping the federation
+    // principal-visible signal instead of dropping the federation
     // audit envelope silently. Same pattern as
     // `emitAccessFiltered` above. Direct stderr — a broken
     // runtime can't swallow alerts about itself.

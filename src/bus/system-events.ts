@@ -27,7 +27,7 @@
  *     pattern; the dotted form is the schema-compatible carrier.)
  *   - `sovereignty` defaults to `local-only / NZ / max_hop=0 / frontier_ok=false / model_class=local-only`
  *     because `system.*` events expose internal failure modes (adapter IDs,
- *     buffer caps, error class names). They're operator-only — no federation,
+ *     buffer caps, error class names). They're principal-only — no federation,
  *     no frontier-model processing.
  *
  * **Known spec gap — correlation_id format:**
@@ -74,9 +74,9 @@ export interface SystemEventSource {
   /** Stable instance name — usually `local` for in-process emission. */
   instance: string;
   /**
-   * Operator residency code stamped into `envelope.sovereignty.data_residency`.
+   * Principal residency code stamped into `envelope.sovereignty.data_residency`.
    * Defaults to `"NZ"` when omitted — matches the original cortex deployment.
-   * Operators in other jurisdictions (AU, EU, US) pass their own ISO-3166-style
+   * Principals in other jurisdictions (AU, EU, US) pass their own ISO-3166-style
    * code so envelopes accurately reflect data residency for compliance audits.
    * The field is only used when constructing the default sovereignty object;
    * callers that override `sovereignty` directly bypass it entirely.
@@ -93,15 +93,15 @@ function buildSource(src: SystemEventSource): string {
  * callers receive a fresh object literal (no aliasing risk if a caller
  * mutates the returned envelope's `sovereignty`).
  *
- * `system.*` events expose internal grove state — operator-only by default,
+ * `system.*` events expose internal grove state — principal-only by default,
  * never sent to frontier models. The `data_residency` field is sourced from
- * `source.dataResidency` (defaulting to `"NZ"`) so a non-NZ operator gets
+ * `source.dataResidency` (defaulting to `"NZ"`) so a non-NZ principal gets
  * envelopes stamped with their actual residency without having to override
  * the entire sovereignty object at every call site.
  *
  * **IAW Phase A.3:** `classification` is now an optional parameter
  * (defaulting to `"local"` for back-compat). Callers may opt into
- * `"federated"` or `"public"` when an operator-side decision determines the
+ * `"federated"` or `"public"` when a principal-side decision determines the
  * envelope's reach. The default keeps every existing call site behaving
  * identically.
  */
@@ -163,9 +163,9 @@ export interface SystemAdapterDegradedOpts {
   shardId?: number;
   /**
    * IAW Phase A.3 — optional sovereignty classification. Defaults to
-   * `"local"` (operator-private). Set to `"federated"` to publish on
+   * `"local"` (principal-private). Set to `"federated"` to publish on
    * `federated.{principal}.system.adapter.degraded` so peer dashboards in the
-   * operator's federation policy can render the event; `"public"` for
+   * principal's federation policy can render the event; `"public"` for
    * global visibility. Mismatch with the publish-time subject is a
    * protocol violation (see {@link validateSubjectEnvelopeAlignment}).
    */
@@ -176,7 +176,7 @@ export interface SystemAdapterDegradedOpts {
  * Construct a `system.adapter.degraded` envelope per G-1111 §3.5.4.
  *
  * Emitted once when an adapter has been disconnected long enough to cross
- * the operator-configured threshold (default 60 s). Mandatory paging event
+ * the principal-configured threshold (default 60 s). Mandatory paging event
  * for any `system.*` subscriber that includes the `paging` platform class.
  */
 export function createSystemAdapterDegradedEvent(
@@ -365,12 +365,12 @@ export interface SystemInboundAbortedOpts {
  * Construct a `system.inbound.aborted` envelope per G-1111 §3.5.4.
  *
  * Replaces the bare `AbortError` log of the 2026-05-09 incident with a
- * structured envelope carrying the `timeout_source` enum, so an operator
+ * structured envelope carrying the `timeout_source` enum, so a principal
  * triaging an incident can see *which* timeout fired without parsing
  * launchd logs.
  *
  * Note: spec §3.5 renames this from the older `system.dispatch.aborted` —
- * "dispatch" is now reserved for the `dispatch` *domain* (operator-dispatching-
+ * "dispatch" is now reserved for the `dispatch` *domain* (principal-dispatching-
  * work-to-agents). The migration plan still references the old name; this
  * helper uses the spec name and the old name should be considered an alias
  * in any plan-doc updates.
@@ -425,7 +425,7 @@ export interface SystemAccessFilteredOpts {
   /**
    * Optional sovereignty classification of THIS event (the `filtered`
    * notification itself, not the envelope it describes). Defaults to
-   * `"local"` — access decisions are operator-internal. Mirror of the
+   * `"local"` — access decisions are principal-internal. Mirror of the
    * Phase A.3 `classification` parameter on the rest of the system.*
    * helpers.
    */
@@ -478,7 +478,7 @@ export interface SystemBusPeerDispatchReceivedOpts {
    */
   receivingAgentId: string;
   /**
-   * Source field from the peer's dispatch envelope (the `{operator}.
+   * Source field from the peer's dispatch envelope (the `{principal}.
    * {agent}.{instance}` triple that identifies which peer just
    * dispatched a task to us). Different from `opts.source.org` —
    * that's US, this is THEM.
@@ -770,7 +770,7 @@ export function createSystemAccessDeniedEvent(
  *     allowed" without re-parsing the envelope.
  *
  * Subjects (the actual `deny_subjects` / `accept_subjects` patterns
- * are operator data, not enum values — they ride on `reason.subject`
+ * are principal data, not enum values — they ride on `reason.subject`
  * as free-form strings).
  */
 export type SystemAccessFederationDeniedReasonKind =
@@ -958,8 +958,8 @@ export interface SystemAgentHeartbeatOpts {
   iteration: number;
   /**
    * IAW Phase A.3 — optional sovereignty classification. Defaults to
-   * `"local"` (operator-private), matching the rest of `system.*`.
-   * Cross-operator heartbeats over `federated.*` are out of scope for
+   * `"local"` (principal-private), matching the rest of `system.*`.
+   * Cross-principal heartbeats over `federated.*` are out of scope for
    * cortex#361 (see file: `agent-heartbeat.ts` "Out of scope"); when
    * that ships in a future iteration callers will opt into
    * `"federated"` here.
@@ -978,11 +978,11 @@ export interface SystemAgentHeartbeatOpts {
  * `runtime.publish` signing path).
  *
  * **Subject derivation.** The runtime's stack-aware `publish()` routes this
- * to `local.{principal}.{stack}.system.agent.heartbeat` — operator-managed
+ * to `local.{principal}.{stack}.system.agent.heartbeat` — principal-managed
  * namespace, no upstream myelin schema entry required for the cortex-local
  * deployment. A myelin canonicalisation follow-up (filed against
  * `the-metafactory/myelin`) will lift this onto `federated.*` for cross-
- * operator use.
+ * principal use.
  */
 export function createAgentHeartbeatEvent(
   opts: SystemAgentHeartbeatOpts,

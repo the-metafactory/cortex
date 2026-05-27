@@ -335,7 +335,7 @@ describe("DispatchHandler — system.inbound.aborted emission (MIG-3.8 / C-104)"
       phase: "pre_dispatch",
     });
     // Drift-detection: any change in the helper that violates the vendored
-    // myelin schema must fail here, not at runtime on a live operator alert.
+    // myelin schema must fail here, not at runtime on a live principal alert.
     expect(validateEnvelope(env).ok).toBe(true);
 
     await handler.shutdown();
@@ -670,7 +670,7 @@ describe("DispatchHandler — chat-path CC failure retry (cortex#360)", () => {
     // Two CC spawns: the failing first attempt and the recovering second.
     expect(spawnCount()).toBe(2);
 
-    // Operator-visible messages: one "Still working… (attempt 2/3)" then the
+    // Principal-visible messages: one "Still working… (attempt 2/3)" then the
     // final response. No apology message.
     const texts = adapter.sentMessages.map((m) => m.text);
     expect(texts.length).toBe(2);
@@ -783,7 +783,7 @@ describe("DispatchHandler — chat-path CC failure retry (cortex#360)", () => {
     // (retryable). To exercise the terminal-failure-immediate-exit path we
     // need a result whose classifier returns null — e.g. `success === true`
     // but `!response`. That's the "cc exited cleanly but skill misbehaved"
-    // case — the chat-path treats it as cant_do (operator action needed)
+    // case — the chat-path treats it as cant_do (principal action needed)
     // and surfaces the apology after attempt 1.
     const runtime = makeRecordingRuntime();
     const { factory, spawnCount } = makeStubFactory([

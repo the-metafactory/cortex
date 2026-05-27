@@ -265,8 +265,8 @@ describe("MyelinRuntime", () => {
     await runtime.stop();
   });
 
-  // cortex#269 — `{stack}.` token substitution. Operator-written narrow
-  // subscribe patterns can now reference the operator's stack identity
+  // cortex#269 — `{stack}.` token substitution. Principal-written narrow
+  // subscribe patterns can now reference the principal's stack identity
   // alongside `{principal}` and have it expanded at boot. The `.` is part of
   // the placeholder so stack-less deployments collapse cleanly to the
   // legacy 5-segment shape.
@@ -526,10 +526,10 @@ describe("MyelinRuntime", () => {
     });
 
     test("IAW Phase A.5 (cortex#262): publish derives 6-segment local.{principal}.{stack}.{type} when stack option is set", async () => {
-      // Stack-aware emit — operator config carries `stack: { id: andreas/research }`
+      // Stack-aware emit — principal config carries `stack: { id: andreas/research }`
       // and the entrypoint passes `stack: "research"` through to the runtime.
       // The resulting subject lands inside sage's `local.{principal}.{stack}.>`
-      // subscription wildcard, closing the broadcast loop end-to-end.
+      // subscription wildcard, closing the Offer loop end-to-end.
       const fake = makeFakeNatsConnection();
       const runtime = await startMyelinRuntime(
         makeConfig({

@@ -77,7 +77,7 @@ describe("bash-guard.hook — pass-through behaviour", () => {
     expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
   });
 
-  test("bypasses guard when GROVE_AGENT_ID is set (CLI operator session)", () => {
+  test("bypasses guard when GROVE_AGENT_ID is set (CLI principal session)", () => {
     const r = runHook("rm -rf /tmp/whatever", {
       GROVE_CHANNEL: "test-channel",
       GROVE_AGENT_ID: "cldyo-live",
@@ -86,7 +86,7 @@ describe("bash-guard.hook — pass-through behaviour", () => {
     expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
   });
 
-  test("disabled config (operator DM) allows everything", () => {
+  test("disabled config (principal DM) allows everything", () => {
     const r = runHook("rm -rf /tmp/x", {
       GROVE_CHANNEL: "test-channel",
       GROVE_AGENT_ID: undefined,

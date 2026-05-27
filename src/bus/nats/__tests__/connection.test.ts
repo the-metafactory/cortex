@@ -277,7 +277,7 @@ describe("NatsLink", () => {
   // does that at the server) — they verify that:
   //   - `credsPath` set → connectImpl receives `authenticator` (not token)
   //   - chmod gate refuses anything looser than 600
-  //   - operator-readable error on missing file
+  //   - principal-readable error on missing file
   //   - `token` + `credsPath` together: credsPath wins, warn logged
   //   - leading `~/` expands to $HOME (production cortex.yaml uses this)
   // ─────────────────────────────────────────────────────────────────────
@@ -314,7 +314,7 @@ describe("NatsLink", () => {
       await link.close();
     });
 
-    test("credsPath rejects chmod 644 with operator-readable error", async () => {
+    test("credsPath rejects chmod 644 with principal-readable error", async () => {
       // POSIX-only: NTFS chmod is meaningless and the loader skips the gate.
       if (process.platform === "win32") return;
       chmodSync(credsFile, 0o644);
@@ -413,7 +413,7 @@ describe("NatsLink", () => {
       } finally {
         process.stderr.write = originalStderrWrite;
       }
-      // Warning emitted on stderr with operator-actionable text.
+      // Warning emitted on stderr with principal-actionable text.
       const warning = stderrWrites.find((w) =>
         w.includes("status loop exceeded"),
       );

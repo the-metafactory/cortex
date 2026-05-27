@@ -573,7 +573,7 @@ describe("MyelinSubscriber — pull mode", () => {
     // path threads `retry_after_ms` through the AckDecision return
     // channel; if the delayMs is dropped on the floor here, JetStream
     // redelivers on its server-paced default and pilot's exit-code
-    // mapping silently desyncs from the operator-visible delay.
+    // mapping silently desyncs from the principal-visible delay.
     expect(m.nak).toHaveBeenCalledTimes(1);
     expect(m.nak.mock.calls[0]).toEqual([1500]);
     expect(m.ack).not.toHaveBeenCalled();

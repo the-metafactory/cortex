@@ -50,7 +50,7 @@ describe("MyelinRuntime — subscribe/publish {principal} symmetry (cortex#130 i
     expect(envelope.source).toBe("andreas.luna.work");
   });
 
-  test("symmetry holds when operator changes — second stack identity", () => {
+  test("symmetry holds when principal changes — second stack identity", () => {
     const operatorId = "the-metafactory";
     const envelope = createSystemAdapterDegradedEvent({
       source: { org: operatorId, agent: "echo", instance: "local" },

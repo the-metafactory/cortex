@@ -10,7 +10,7 @@
  *   2. Failure path: non-zero exit + stderr → `{ kind: "failed", envelope }`
  *      with `reason.kind: "cant_do"` carrying stderr verbatim.
  *   3. Binary not found: `which` returns undefined → `{ kind: "failed",
- *      envelope }` with a useful operator-facing detail string. Boot path
+ *      envelope }` with a useful principal-facing detail string. Boot path
  *      is structurally identical for all three — the runner never throws.
  *
  * The four-way nak taxonomy (`cant_do` / `wont_do` / `not_now` /
@@ -206,7 +206,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
     expect(envelope.correlation_id).toBe(opts.requestEnvelope.id);
 
     // Reason — Phase 1 collapses every non-happy outcome to `cant_do`
-    // (see module docblock). Detail must carry stderr so operators can
+    // (see module docblock). Detail must carry stderr so principals can
     // grep `nats consumer info` for the actual sage error.
     const reason = (envelope.payload as { reason: { kind: string; detail: string } })
       .reason;
@@ -215,7 +215,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
     expect(reason.detail).toContain(stderr);
   });
 
-  test("binary not found: which returns undefined → failed envelope with operator-actionable detail, NEVER throws", async () => {
+  test("binary not found: which returns undefined → failed envelope with principal-actionable detail, NEVER throws", async () => {
     // No spawn call should happen — the runner must short-circuit before
     // any subprocess work when the binary is missing. We still pass a
     // spawn that would throw if invoked to pin that no-call invariant.
@@ -246,7 +246,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
       const reason = (envelope.payload as { reason: { kind: string; detail: string } })
         .reason;
       expect(reason.kind).toBe("cant_do");
-      // Operator-actionable message — names the env var and PATH hint.
+      // Principal-actionable message — names the env var and PATH hint.
       expect(reason.detail).toContain("sage binary not found");
       expect(reason.detail).toContain("SAGE_BIN");
     } finally {

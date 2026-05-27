@@ -50,7 +50,7 @@
  * **Binary resolution.** Sage's CLI is looked up in this order:
  *
  *   1. `opts.sageBin` — explicit override, primarily a test seam.
- *   2. `process.env.SAGE_BIN` — operator override; lets the user pin
+ *   2. `process.env.SAGE_BIN` — principal override; lets the user pin
  *      a specific sage build without editing cortex.yaml.
  *   3. `Bun.which("sage")` — falls back to `$PATH`.
  *
@@ -147,7 +147,7 @@ export type PiDevWhichFn = (cmd: string) => string | undefined;
  *   - Resolve sage binary via `SAGE_BIN` env then `Bun.which("sage")`.
  *   - Use `Bun.spawn` for the subprocess.
  *   - Use the current process env (no scrubbing — sage piggybacks on the
- *     operator's `gh` auth and `GITHUB_TOKEN` via inherited env).
+ *     principal's `gh` auth and `GITHUB_TOKEN` via inherited env).
  */
 export interface MakePiDevRunnerOpts {
   /**
@@ -223,7 +223,7 @@ export function makePiDevPipelineRunner(
     // directly — no separate owner field on the cortex-side payload.
     const prRef = `${payload.repo}#${payload.pr}`;
     // cortex#402 — substrate is overridable via `SAGE_SUBSTRATE` env so
-    // operators without a pi.dev model provider configured (e.g. no
+    // principals without a pi.dev model provider configured (e.g. no
     // DeepSeek API key) can route sage's lens execution through
     // `claude` or `codex` instead. Defaults to `pi` to preserve the
     // pre-#402 behaviour. Sage's CLI accepts `{pi|claude|codex}` per
@@ -386,7 +386,7 @@ function verdict(
       // Placeholder fields Phase 1 doesn't have access to without a
       // structured verdict block. The verdict envelope schema requires
       // these fields; we surface zeros / empty strings so pilot's
-      // subscriber still sees a well-formed envelope and operators can
+      // subscriber still sees a well-formed envelope and principals can
       // grep the markdown summary for the actual values. Phase 2
       // populates these from sage's `--format json` block.
       github_review_id: 0,

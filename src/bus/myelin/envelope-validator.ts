@@ -223,9 +223,9 @@ export interface Originator {
    *     mapped a non-myelin identifier (platform id, OS user) to a myelin
    *     principal at sign time.
    *   - `federated` — the originator claim was relayed from another
-   *     operator; the chain proves the cross-operator hop.
+   *     principal; the chain proves the cross-principal hop.
    *   - `delegated` — the signer holds delegation credentials for the
-   *     originator (service principal acting on behalf of an operator).
+   *     originator (service principal acting on behalf of a principal).
    */
   attribution: AttributionMode;
 }
@@ -573,7 +573,7 @@ export type Classification = Envelope["sovereignty"]["classification"];
  *
  * `{principal}` is the first dotted segment of `envelope.source` (the same value
  * cortex's MyelinRuntime captures from `agent.operatorId` at startup, so
- * subject and source stay symmetrical). `{stack}` is the operator's stack
+ * subject and source stay symmetrical). `{stack}` is the principal's stack
  * identity — supplied by the caller when in stack-aware mode (IAW A.5),
  * omitted in the legacy migration window.
  *

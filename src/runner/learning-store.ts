@@ -1,6 +1,6 @@
 /**
  * Issue #49: Learning Store
- * Operator-submitted learnings that persist across sessions.
+ * Principal-submitted learnings that persist across sessions.
  * Uses bun:sqlite for storage and relevance scoring for context injection.
  */
 

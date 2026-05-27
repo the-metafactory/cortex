@@ -61,8 +61,8 @@ export type ProvisionStreamOutcome = "created" | "exists" | "config-drift-warnin
 /**
  * Outcome of `provisionReviewConsumer`. Narrower than the stream
  * outcome by design — v1 doesn't drift-check consumer configs (the
- * surface is small enough that operators rarely tune it; the
- * subtler-than-stream drift modes are best surfaced when an operator
+ * surface is small enough that principals rarely tune it; the
+ * subtler-than-stream drift modes are best surfaced when a principal
  * hits one).
  */
 export type ProvisionConsumerOutcome = "created" | "exists" | "updated";

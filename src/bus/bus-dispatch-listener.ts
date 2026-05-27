@@ -166,7 +166,7 @@ export class BusDispatchListener {
    *
    * The "own publish" check uses envelope source attribution rather
    * than envelope id — at this slice we don't track our own outbound
-   * ids, and `source` is the dotted `{operator}.{agent}.{instance}`
+   * ids, and `source` is the dotted `{principal}.{agent}.{instance}`
    * shape every cortex publish stamps.
    *
    * **Security note** (Echo cortex#203 round 1): the source filter is

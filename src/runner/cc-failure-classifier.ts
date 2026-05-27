@@ -10,7 +10,7 @@
  *   2. `dispatch-handler.ts` — the chat dispatch path that adapters
  *      (Discord, Mattermost) drive on inbound `@mention` / DM. This
  *      path now retries `not_now` failures up to 3 attempts before
- *      surfacing the apology to the operator (cortex#360 acceptance
+ *      surfacing the apology to the principal (cortex#360 acceptance
  *      criteria).
  *
  * **What this module IS:**
@@ -102,7 +102,7 @@ export function classifyCcFailure(
  * Classify a synchronous-throw or async-rejection from the CC session
  * factory (e.g. spawn failed, binary missing, immediate API rejection).
  * Always maps to `not_now` per §7.3 — these are transient infrastructure
- * failures, operator-recoverable.
+ * failures, principal-recoverable.
  *
  * Separate entry point because `classifyCcFailure` operates on a
  * `CCSessionResult` shape; this one operates on an unknown thrown value
@@ -127,7 +127,7 @@ export function classifyCcSpawnError(err: unknown): DispatchTaskFailedReason {
  * surface the apology immediately.
  *
  * `not_now` is the ONLY retryable kind — `cant_do`, `wont_do`,
- * `policy_denied`, and `compliance_block` are all terminal (operator
+ * `policy_denied`, and `compliance_block` are all terminal (principal
  * action needed; retry would just re-fail).
  */
 export function isTransientFailure(

@@ -262,11 +262,11 @@ export class WorklogManager {
    *
    * @param adapterId — defaults to `worklog-manager`. Configurable so a
    *   future multi-channel worklog (one channel per repo) can disambiguate.
-   * @param org — operator id segment. Worklog-manager doesn't store it (the
+   * @param org — principal id segment. Worklog-manager doesn't store it (the
    *   manager is constructed with a Discord client + channel ID, not a
    *   bot config). Passing it explicitly keeps the dependency direction
    *   clean (no config import here).
-   * @param stack — optional operator stack segment (IAW Phase A.5,
+   * @param stack — optional principal stack segment (IAW Phase A.5,
    *   cortex#268). When supplied, the manager subscribes on the 6-segment
    *   grammar `local.{principal}.{stack}.dispatch.task.>` matching sage's
    *   emit-side post-A.5. When omitted, falls through to the legacy
@@ -352,7 +352,7 @@ export class WorklogManager {
     // means new sub-types arrive over time; we tolerate them rather than
     // crashing. Warn rather than log because an unknown sub-type usually
     // means the worklog renderer is behind the producers and ought to be
-    // updated — the operator should see this in stderr filters.
+    // updated — the principal should see this in stderr filters.
     console.warn(`worklog: ignoring unknown dispatch envelope type ${envelope.type}`);
   }
 
@@ -364,7 +364,7 @@ export class WorklogManager {
     const payload = envelope.payload;
     const agentId = typeof payload.agent_id === "string" ? payload.agent_id : "agent";
     // Compact thread name — task_id prefix is enough to disambiguate for
-    // operators eyeballing the channel feed.
+    // principals eyeballing the channel feed.
     const threadName = `${agentId} — task ${taskId.slice(0, 8)}`;
 
     try {
