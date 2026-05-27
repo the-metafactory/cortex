@@ -1549,15 +1549,16 @@ describe("convertBotYaml — cortex#428 PR-B runtime.capabilities synthesis", ()
     expect(agent.runtime!.capabilities).toEqual(["chat"]);
   });
 
-  test("persona-heuristic adds code-review.typescript when the body matches 2+ times", () => {
-    // The cortex.yaml-shape branch lets us point at a fixture persona
-    // that contains the review-keyword pattern several times. echo.md
-    // mentions "code-review" twice in its YAML frontmatter + body, so
-    // it crosses the two-occurrence floor; luna.md mentions it zero
-    // times. Test both ends of the heuristic in one shot.
-    const tmp = mkdtempSync(join(tmpdir(), "cortex-mig-428-cap-"));
+  test("persona-heuristic adds code-review.typescript at exactly the 2-match floor", () => {
+    // Boundary test: the regex `/code[- ]review|reviewer|reviewing/gi`
+    // must match EXACTLY 2 times to land on the floor and trip the
+    // heuristic. The fixture below contains "Code review" and
+    // "code-review" (and nothing else that matches), so matches=2.
+    // Reducing this fixture by one match should make the next test
+    // case (which sits at matches=1) fail-closed instead.
+    const tmp = mkdtempSync(join(tmpdir(), "cortex-mig-428-cap-floor-"));
     const persona = join(tmp, "echo.md");
-    writeFileSync(persona, "# Echo\nCode review and code-review work.\nI am a reviewer.\n");
+    writeFileSync(persona, "# Echo\nCode review and code-review work.\n");
     const cortexShape = {
       principal: { id: "andreas" },
       agents: [
@@ -1581,6 +1582,38 @@ describe("convertBotYaml — cortex#428 PR-B runtime.capabilities synthesis", ()
     expect(result.cortex.agents[0]!.runtime!.capabilities).toEqual(
       expect.arrayContaining(["chat", "code-review.typescript"]),
     );
+  });
+
+  test("persona-heuristic stays at [chat] with exactly 1 keyword match (below floor)", () => {
+    // The complement of the floor test above: matches=1 must NOT add
+    // code-review.typescript. Together the two tests pin the floor at
+    // the regex boundary instead of via the loose "Forge deflector"
+    // fixture (which mixed deflection prose with a single hit and is
+    // kept as a real-world repro lower down).
+    const tmp = mkdtempSync(join(tmpdir(), "cortex-mig-428-cap-below-"));
+    const persona = join(tmp, "solo.md");
+    writeFileSync(persona, "# Solo\nThis agent does code-review only on Tuesdays.\n");
+    const cortexShape = {
+      principal: { id: "andreas" },
+      agents: [
+        {
+          id: "solo",
+          displayName: "Solo",
+          persona,
+          trust: [],
+          presence: {
+            discord: {
+              token: "t",
+              guildId: "1",
+              agentChannelId: "2",
+              logChannelId: "3",
+            },
+          },
+        },
+      ],
+    } as unknown as LegacyBotYaml;
+    const result = convertBotYaml(cortexShape, { configDir: tmp });
+    expect(result.cortex.agents[0]!.runtime!.capabilities).toEqual(["chat"]);
   });
 
   test("persona with only one review-keyword mention stays at [chat] (deflector test)", () => {
