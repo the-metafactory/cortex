@@ -19,14 +19,14 @@
  * Per `docs/design-mc-iteration-planning.md` Decision 1, the lifecycle
  * is Grove-owned. Source state is NEVER an input to the validator —
  * the only inputs are (current state, proposed state). Decision 5
- * specifies who triggers each transition (operator vs derived) but
+ * specifies who triggers each transition (principal vs derived) but
  * that's policy belonging to the API layer / kanban hook; the matrix
  * answers shape only.
  *
  * Decision 10 Q1 is intentionally NOT foreclosed here: `* → done` is
  * legal from any non-terminal state in the matrix below. v1 expects
  * those to fire via derivation (all tasks terminal AND source closed),
- * but Phase G's "operator-driven done with open tasks" override is
+ * but Phase G's "principal-driven done with open tasks" override is
  * possible without expanding this matrix.
  */
 
@@ -53,20 +53,20 @@ export type IterationState = (typeof ITERATION_STATES)[number];
  * Per-state legal-next-state set.
  *
  * Cells reflect Decision 5's movement rules:
- *   inbox      → designing                   (operator drag)
- *              → cancelled                   (operator)
- *   designing  → queued                      (operator promote)
- *              → cancelled                   (operator)
- *              → inbox                       (operator drag back — "send back to inbox")
+ *   inbox      → designing                   (principal drag)
+ *              → cancelled                   (principal)
+ *   designing  → queued                      (principal promote)
+ *              → cancelled                   (principal)
+ *              → inbox                       (principal drag back — "send back to inbox")
  *   queued     → in_flight                   (derived: any task assignment becomes active)
- *              → designing                   (operator demote — fix scope before any work starts)
- *              → cancelled                   (operator)
+ *              → designing                   (principal demote — fix scope before any work starts)
+ *              → cancelled                   (principal)
  *   in_flight  → blocked                     (derived: any assignment hits blocked)
  *              → done                        (derived: all tasks terminal AND source closed)
- *              → cancelled                   (operator)
+ *              → cancelled                   (principal)
  *   blocked    → in_flight                   (derived: assignment unblocked)
  *              → done                        (derived: same as above; blocked is a sub-shape of in_flight)
- *              → cancelled                   (operator)
+ *              → cancelled                   (principal)
  *   done       → (terminal — no transitions out)
  *   cancelled  → (terminal — no transitions out)
  *

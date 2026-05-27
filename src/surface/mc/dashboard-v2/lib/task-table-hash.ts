@@ -47,7 +47,7 @@ export function defaultHashState(): ParsedHash {
  * Parse a hash like `#tasks?p=0,1&age=5&closed=1&q=foo&sort=priority:desc`
  * into a `ParsedHash`. Unknown keys, malformed values, and out-of-range
  * priorities are silently ignored — never throws (legacy parity, the
- * hash is operator input and may be hand-edited).
+ * hash is principal input and may be hand-edited).
  *
  * Hashes that don't start with `#tasks` return defaults so other apps
  * (e.g. F-7's `#a/:id` slot) can coexist on the same page later.

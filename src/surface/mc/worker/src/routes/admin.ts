@@ -1,6 +1,6 @@
 /**
  * G-400/G-402: Admin endpoints.
- * POST /admin/keys — create an operator API key (ADMIN_SECRET — bootstrap path)
+ * POST /admin/keys — create a principal API key (ADMIN_SECRET — bootstrap path)
  * DELETE /admin/keys/:key — revoke an API key (ADMIN_SECRET — bootstrap path)
  * GET /admin/audit — query audit log (requireRole("admin") — dashboard path)
  * DELETE /admin/repos/:owner/:name — remove repo records (ADMIN_SECRET — infrastructure)
@@ -18,7 +18,7 @@ import { requireRole } from "../user-auth";
 export const adminRoutes = new Hono<{ Bindings: Env }>();
 
 // ---------------------------------------------------------------------------
-// POST /admin/keys — Create a new operator API key
+// POST /admin/keys — Create a new principal API key
 // ---------------------------------------------------------------------------
 
 adminRoutes.post("/admin/keys", requireAdmin, async (c) => {

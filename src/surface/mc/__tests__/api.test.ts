@@ -530,7 +530,7 @@ describe("POST /api/sessions", () => {
   });
 
   // F-20 — `ensureNamedAgent` uses ON CONFLICT(id) DO NOTHING, which is
-  // intentional: once an agent is registered, the operator owns its
+  // intentional: once an agent is registered, the principal owns its
   // display name. Pin that policy with a test so a future contributor
   // doesn't "fix" the no-op-on-update by switching to DO UPDATE SET
   // name = excluded.name. Per Echo's PR-#56 review.
@@ -787,7 +787,7 @@ describe("POST /api/assignments/:id/input", () => {
     );
     expect(res.status).toBe(413);
     const body = await res.json();
-    expect(body.error).toBe("Operator input exceeds the 50 KB limit.");
+    expect(body.error).toBe("Principal input exceeds the 50 KB limit.");
   });
 
   it("returns 413 for multi-byte text whose UTF-8 byte length exceeds the cap", async () => {
@@ -811,7 +811,7 @@ describe("POST /api/assignments/:id/input", () => {
     );
     expect(res.status).toBe(413);
     const body = await res.json();
-    expect(body.error).toBe("Operator input exceeds the 50 KB limit.");
+    expect(body.error).toBe("Principal input exceeds the 50 KB limit.");
   });
 
   it("returns 413 from the upstream body cap on raw bodies larger than the default JSON-body limit", async () => {
@@ -1924,7 +1924,7 @@ describe("PATCH /api/iterations/:id", () => {
     expect(String(body.error)).toMatch(/designing/);
   });
 
-  it("rejects designing → done with the operator-friendly D10 Q1 message", async () => {
+  it("rejects designing → done with the principal-friendly D10 Q1 message", async () => {
     seedIter("i-1", "designing");
     const res = await fetch(`${t.baseUrl}/api/iterations/i-1`, {
       method: "PATCH",

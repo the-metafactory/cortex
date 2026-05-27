@@ -44,7 +44,7 @@ function serializeHash(state: HashState): string {
 
 /**
  * `setHashState` semantics (matches `docs/design-mc-dashboard-react-migration.md`
- * Decision 3 — operator filters use replaceState so the back-button doesn't
+ * Decision 3 — principal filters use replaceState so the back-button doesn't
  * accumulate one history entry per keystroke):
  *
  *   - default (no `opts`)                → replaceState (no new history entry)

@@ -4,7 +4,7 @@
  * Fetches `GET /api/iterations/:id` and merges live
  * `iteration.detail_updated` / `iteration.state_changed` WS frames for
  * the same id. Race-guarded mirroring `use-drill-events.ts` (the
- * iteration id can change as the operator clicks between cards on the
+ * iteration id can change as the principal clicks between cards on the
  * kanban; in-flight responses for a stale id are dropped).
  *
  * Surfaces the same `loaded / error / refetch` triple as the other

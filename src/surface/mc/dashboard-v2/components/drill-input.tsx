@@ -1,7 +1,7 @@
 /**
- * F-10 drill-input — operator message + image attachments.
+ * F-10 drill-input — principal message + image attachments.
  *
- * Faithful port of the legacy monolith input (docs/design-mc-f10-operator-input.md
+ * Faithful port of the legacy monolith input (docs/design-mc-f10-principal-input.md
  * + docs/design-mc-image-input.md). Behavioural parity:
  *  - Active / observed / ended / shadow modes (resolveDrillInputMode)
  *  - 50 KB UTF-8 byte cap (paste-trim + Send disable)
@@ -43,7 +43,7 @@ export interface DrillInputProps {
    */
   ws: WsClient;
   /**
-   * Submit operator input. Must throw `ApiFailure` (from lib/api) on a
+   * Submit principal input. Must throw `ApiFailure` (from lib/api) on a
    * non-2xx response or network failure so the inline banner can render
    * status-coded copy.
    */
@@ -56,9 +56,9 @@ export interface DrillInputProps {
 
 /**
  * Canned-action prompts per migration addendum §"Rich reply surface"
- * (line 54) — fixed text the operator can drop into the textarea, edit,
+ * (line 54) — fixed text the principal can drop into the textarea, edit,
  * and send. Decoupled from any specific agent — the prompts are framed
- * as universal operator moves.
+ * as universal principal moves.
  */
 const CANNED_ACTIONS: ReadonlyArray<{ label: string; text: string }> = [
   { label: "ask for more", text: "Can you walk me through what you've tried so far and what's blocking?" },
@@ -110,7 +110,7 @@ export function DrillInput({ assignmentId, assignment, ws, onSend }: DrillInputP
   const busyRef = useRef(busy);
   const doSendRef = useRef<(text: string, images: Array<{ media_type: string; data: string }>) => void>(() => {});
 
-  // Reset per-assignment local state when the operator cycles (`]`/`[`)
+  // Reset per-assignment local state when the principal cycles (`]`/`[`)
   // to a different drill-down. Previous textarea / staged images / queue
   // are discarded — they belong to the previous assignment.
   useEffect(() => {
@@ -239,8 +239,8 @@ export function DrillInput({ assignmentId, assignment, ws, onSend }: DrillInputP
       // Stay busy until assignment.state changes — the queue-release
       // effect above will flip busy=false and drain the queue.
     } catch (e) {
-      // Restore the operator's text + images so they can Retry or edit.
-      // Only restore if the slot is still empty (operator may have started
+      // Restore the principal's text + images so they can Retry or edit.
+      // Only restore if the slot is still empty (principal may have started
       // typing a new message during the in-flight request).
       setText((t) => (t === "" ? rawText : t));
       setStaged((s) => {
@@ -263,7 +263,7 @@ export function DrillInput({ assignmentId, assignment, ws, onSend }: DrillInputP
   doSendRef.current = (rawText, images) => { void doSend(rawText, images); };
 
   // Insert a canned-action prompt into the textarea (replaces selection
-  // when present, else appends; focus is restored so the operator can
+  // when present, else appends; focus is restored so the principal can
   // immediately edit). Per migration addendum §"Rich reply surface".
   const insertCanned = useCallback((promptText: string) => {
     if (readonly) return;

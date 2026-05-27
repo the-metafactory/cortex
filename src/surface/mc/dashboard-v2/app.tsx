@@ -42,7 +42,7 @@ import type { Command } from "./components/command-palette";
  *
  * No router lib — `useState` + the existing tab buttons pattern. F-15
  * may upgrade to a hash route if deep-linking turns out to be
- * operator-requested; for now the in-memory view is sufficient.
+ * principal-requested; for now the in-memory view is sufficient.
  */
 type DashboardView = "default" | "metrics" | "iterations" | "kanban-detail";
 
@@ -379,7 +379,7 @@ export function App() {
                 setView("kanban-detail");
               } else {
                 // Inbox card click: there's no detail surface for an
-                // inbox row in v1 — the operator's path is to drag it
+                // inbox row in v1 — the principal's path is to drag it
                 // into Designing, then click into the resulting
                 // iteration. Mirror that with a toast hint.
                 showToast(
@@ -419,7 +419,7 @@ export function App() {
                   { task_id: inboxItem.id }
                 );
                 // Navigate to the new iteration's detail so the
-                // operator can immediately write the design notes.
+                // principal can immediately write the design notes.
                 setSelectedIterationId(created.iteration.id);
                 setView("kanban-detail");
                 iterations.refetch();
@@ -473,7 +473,7 @@ export function App() {
               setView("iterations");
               setSelectedIterationId(null);
               // Refresh the kanban so the row reflects whatever the
-              // operator just changed (the WS frames have already
+              // principal just changed (the WS frames have already
               // applied optimistic updates, but a refetch is cheap and
               // resyncs any inbox drift).
               iterations.refetch();
@@ -501,7 +501,7 @@ export function App() {
         // F-16 — chip click in the drill-header closes the drill-down
         // and routes to the iteration detail surface (the same
         // `kanban-detail` view F-15 ships from a kanban card click).
-        // We close the drill-down first so the operator returns to a
+        // We close the drill-down first so the principal returns to a
         // clean iteration surface; the existing F-7 history pattern
         // is "Esc closes, no breadcrumb back" so this matches.
         onOpenIteration={(iterationId) => {

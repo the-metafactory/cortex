@@ -45,7 +45,7 @@ describe("mission-control config", () => {
     const configPath = join(tmpDir, "mc.yaml");
     writeFileSync(configPath, "port: [\ninvalid yaml\n");
     // Spec NFR: "exit with clear error message including the parse error".
-    // The thrown message must contain both the filename (so the operator
+    // The thrown message must contain both the filename (so the principal
     // knows WHICH config blew up) and parse-error context (so they can fix it).
     expect(() => loadConfig(configPath)).toThrow(/Malformed YAML/);
     expect(() => loadConfig(configPath)).toThrow(/mc\.yaml/);

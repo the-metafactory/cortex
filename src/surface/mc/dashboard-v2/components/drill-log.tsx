@@ -4,7 +4,7 @@
  * Renders rows produced by `lib/event-rows.ts:eventsToRows()` per the
  * Decision 11 rendering rules. Lazy-expand for thinking blocks +
  * tool_use+tool_result pairs; markdown for assistant text and
- * operator input.
+ * principal input.
  */
 
 import { useMemo, useState } from "react";

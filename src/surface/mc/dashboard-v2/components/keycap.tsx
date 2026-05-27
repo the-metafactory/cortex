@@ -1,7 +1,7 @@
 /**
  * Linear-style keycap chip + sequence helper.
  *
- * Used in the command palette, inline help, and operator-shortcut hints.
+ * Used in the command palette, inline help, and principal-shortcut hints.
  * CSS lives in styles/global.css under .kc / .kc-seq.
  */
 

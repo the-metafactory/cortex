@@ -179,7 +179,7 @@ export function useIterations(ws: WsClient): IterationsHookState {
   // carries the full `IterationDetail` (the create handler still
   // broadcasts the full row so a freshly-created iteration with
   // attached tasks lands in the detail surface immediately if the
-  // operator opens it). The kanban only needs the `IterationListItem`
+  // principal opens it). The kanban only needs the `IterationListItem`
   // subset; the cast here is structurally safe (extends).
   useEffect(() => {
     function onCreated(msg: WsMessage) {
@@ -193,7 +193,7 @@ export function useIterations(ws: WsClient): IterationsHookState {
       if (it.state === "cancelled") return;
       setIterations((prev) => {
         // Defensive: don't double-insert if a refetch already raced
-        // this frame (the operator might have caused both).
+        // this frame (the principal might have caused both).
         if (prev.some((p) => p.id === it.id)) return prev;
         return [...prev, it];
       });

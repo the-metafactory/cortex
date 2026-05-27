@@ -53,7 +53,7 @@ describe("initDatabase", () => {
   // Spec NFR: "On database path unwritable: exit with clear error message".
   // Forcing a non-writable parent: place a regular file at the path that
   // would need to become a directory. mkdirSync(parent, recursive: true)
-  // then throws ENOTDIR — the error must carry the path so the operator
+  // then throws ENOTDIR — the error must carry the path so the principal
   // knows what's wrong.
   it("throws when the db path's parent is unwritable, with the path in the message", () => {
     mkdirSync(tmpDir, { recursive: true });
@@ -69,7 +69,7 @@ describe("initDatabase", () => {
     }
     expect(err).toBeDefined();
     // The underlying syscall error includes the offending path — verify it
-    // surfaces so the operator can act.
+    // surfaces so the principal can act.
     expect((err as Error).message).toContain(blocker);
   });
 });

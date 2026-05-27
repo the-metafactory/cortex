@@ -25,7 +25,7 @@ export interface DrillHeaderProps {
   focusMode: boolean;
   onToggleFocusMode: () => void;
   /**
-   * F-16 — invoked when the operator clicks the iteration chip. Routes
+   * F-16 — invoked when the principal clicks the iteration chip. Routes
    * the parent App to the kanban-detail view for the given iteration
    * id (same surface F-15 ships). Optional so this component is still
    * usable from contexts without iteration routing wired (tests; future
@@ -48,7 +48,7 @@ export function DrillHeader({
   // F-16 — surface the iteration chip only when the assignment's task
   // is grouped (the LEFT JOIN's null path → ungrouped). Per the design
   // spec we explicitly OMIT the chip for ungrouped tasks rather than
-  // rendering "—"; the operator's signal "this task is loose" is the
+  // rendering "—"; the principal's signal "this task is loose" is the
   // chip's absence, not a placeholder. (The F-8 column shows "—"
   // because the column header is always present and an empty cell
   // would misalign rows.)

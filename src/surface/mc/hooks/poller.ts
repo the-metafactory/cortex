@@ -70,7 +70,7 @@ export class HookStreamPoller {
       files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
     } catch (err) {
       // Directory vanished or became unreadable between existsSync and readdir
-      // (e.g. operator moved ~/.claude/events). Log and skip this tick rather
+      // (e.g. principal moved ~/.claude/events). Log and skip this tick rather
       // than crash — the next tick will recover once the dir returns.
       process.stderr.write(
         `[mission-control] hook-poller: readdir failed for ${dir}: ${(err as Error).message}\n`

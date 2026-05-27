@@ -19,7 +19,7 @@ import type { AssignmentState, BlockReason } from "../types";
 /**
  * Audience for a single notification.
  *
- * `dm`      — operator's Discord DM (1:1, action-required surface).
+ * `dm`      — principal's Discord DM (1:1, action-required surface).
  * `channel` — repo thread / log channel (broadcast surface).
  *
  * The matrix never schedules `both` for the *same* event content — when a
@@ -48,7 +48,7 @@ export interface NotificationIntent {
    * (Decision 2's "no direct-mention in DMs" rule).
    *
    * `silent` — render the notification without escalation markup. DMs
-   * still ping by default (operator inbox is the operator's choice); the
+   * still ping by default (principal inbox is the principal's choice); the
    * flag governs channel-side mention-ping behaviour only.
    */
   severity: NotificationSeverity;
@@ -81,7 +81,7 @@ export interface ShouldNotifyInput {
 export function shouldNotify(input: ShouldNotifyInput): NotificationIntent | null {
   const { to, priority, blockReason } = input;
 
-  // Mechanical / operator-driven / self-healed transitions — never notify.
+  // Mechanical / principal-driven / self-healed transitions — never notify.
   // Decision 1 matrix rows: queued→dispatched, dispatched→running,
   // *→cancelled, blocked→running, blocked→{completed,failed}.
   if (
@@ -109,7 +109,7 @@ export function shouldNotify(input: ShouldNotifyInput): NotificationIntent | nul
   if (to === "failed") {
     // P0 failures: channel post + role ping. P1: channel post, no ping.
     // P2/P3: channel post, no ping. Always channel-only — failures land in
-    // the repo thread for post-mortem context, not in the operator's DM.
+    // the repo thread for post-mortem context, not in the principal's DM.
     if (priority <= 0) {
       return {
         audiences: ["channel"],
@@ -216,7 +216,7 @@ export function shouldNotify(input: ShouldNotifyInput): NotificationIntent | nul
     // BlockReason has exactly three kinds; permission.request and
     // tool.error returned above, so review.checkpoint is the only kind
     // left. "agent asked for human sign-off" — DM, no ping even at P0
-    // (the operator opted in by configuring agents that emit
+    // (the principal opted in by configuring agents that emit
     // checkpoints).
     return {
       audiences: ["dm"],

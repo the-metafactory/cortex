@@ -164,7 +164,7 @@ describe("VERBS_REQUIRING_CONFIRM / DESTRUCTIVE_VERBS", () => {
   });
 });
 
-describe("labelForVerb — operator-facing copy", () => {
+describe("labelForVerb — principal-facing copy", () => {
   it("returns the canonical sentence-case label for every verb", () => {
     expect(labelForVerb("dispatch")).toBe("Dispatch");
     expect(labelForVerb("requeue")).toBe("Requeue");

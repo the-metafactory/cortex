@@ -2,7 +2,7 @@
  * Tests for the F-8 task-table hash (de)serializer.
  *
  * Pins the legacy `readHashFilters` / `writeHashFilters` round-trip
- * shape (`dashboard/index.html` lines ~2453-2503). The hash is operator
+ * shape (`dashboard/index.html` lines ~2453-2503). The hash is principal
  * input — a hand-edited URL must never crash the parser, and an empty
  * filter+sort state must round-trip to the empty string (don't pollute
  * the URL with `#tasks?` for the default view).

@@ -120,7 +120,7 @@ export const SCHEMA_SQL: string[] = [
   // then short-circuits without a sort pass. Negligible at the 1–2
   // sessions/assignment typical case; matters once the assignment
   // lifetime accrues compaction-driven sessions (§6.6 of the
-  // mission-control spec) or the operator dispatches the same task
+  // mission-control spec) or the principal dispatches the same task
   // multiple times. Per Echo's PR #57 review (N3).
   `CREATE INDEX IF NOT EXISTS idx_sessions_assignment_started
      ON sessions(assignment_id, started_at DESC, id DESC)`,
@@ -154,7 +154,7 @@ export const SCHEMA_SQL: string[] = [
   // Grove-owned lifecycle for the iteration planning surface. Per F-13
   // Decision 1, state lives here as a stored column (not derived from any
   // upstream source state). `imported_body` is an audit-only snapshot of the
-  // upstream body at import time; `body` is the operator-editable in-Grove
+  // upstream body at import time; `body` is the principal-editable in-Grove
   // copy. `source_*` columns are display/reference only after import — never
   // re-read for state. NULL `source_*` is the legitimate "internal-only"
   // iteration case (Decision 2).

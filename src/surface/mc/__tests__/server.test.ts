@@ -99,7 +99,7 @@ describe("mission-control server", () => {
   // Spec NFR: "On port already in use: exit with clear error message naming the port".
   // The first server is bound by beforeAll on testPort — a second startServer on
   // the same port must throw, and the error must mention the port number so the
-  // operator knows what to override.
+  // principal knows what to override.
   it("throws when starting on a port already in use, with the port in the message", () => {
     let err: unknown;
     try {

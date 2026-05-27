@@ -5,7 +5,7 @@
  * switches without re-mounting components.
  *
  * Persistence key: `mc.theme`. Values: `"dark" | "light"`. Anything else
- * falls back to OS preference. Across sessions, an explicit operator
+ * falls back to OS preference. Across sessions, an explicit principal
  * pick wins over OS preference; no preference recorded means "follow OS".
  */
 

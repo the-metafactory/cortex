@@ -60,7 +60,7 @@ export interface TaskAssignmentRow {
  *
  * Three fields only — `id`, `title`, `state`. The dashboard never
  * renders the iteration body / source / etc. from this denorm; for the
- * full row the operator clicks through to the iteration detail surface
+ * full row the principal clicks through to the iteration detail surface
  * (which uses its own narrow per-id fetch). Keeping the shape tight
  * also keeps the `iteration.updated` patch payload small (Echo
  * grove-v2#42 Major 3 — header-only frames).
@@ -125,7 +125,7 @@ export interface ListTasksOptions {
 export const TASKS_QUERY_LIMIT = 500;
 
 /**
- * Aggregate-state rank. Lower = more operator attention.
+ * Aggregate-state rank. Lower = more principal attention.
  * Locked in `docs/design-mc-f8-task-table.md` Decision 4; the two
  * counter-intuitive orderings (`dispatched > queued`, `failed > completed
  * > cancelled`) are deliberate and reused elsewhere (primary-active
@@ -231,7 +231,7 @@ export function listTasks(
   // tuple onto each task row so the dashboard can render the F-7
   // drill-down chip + F-8 task-table iteration column without an N+1
   // round-trip per task. The JOIN is LEFT because most tasks (legacy +
-  // pre-F-13 imports + ungrouped operator-typed) have `iteration_id IS
+  // pre-F-13 imports + ungrouped principal-typed) have `iteration_id IS
   // NULL`; matching that side as nullable is the explicit "ungrouped
   // tasks render with `—` in the column" path from the design spec
   // §"Surface 3" without needing a separate query branch.
@@ -329,7 +329,7 @@ export function listTasks(
  * is unknown.
  *
  * Always reads regardless of `status` — broadcasts must fire even
- * for tasks that have been closed since the operator opened them.
+ * for tasks that have been closed since the principal opened them.
  */
 export function getTaskById(db: Database, id: string): TaskListItem | null {
   const row = db

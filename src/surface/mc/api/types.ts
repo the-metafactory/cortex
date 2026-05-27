@@ -83,11 +83,11 @@ export interface CreateSessionRequest {
   taskId?: string;
   agentId?: string;
   /** Display name for the agent — used when `agentId` is supplied for a
-   *  not-yet-known agent (e.g. operator's `cldyo-live` invocation). */
+   *  not-yet-known agent (e.g. principal's `cldyo-live` invocation). */
   agentName?: string;
   principalId?: string;
   /**
-   * Optional initial operator turn. If provided, it is written to the
+   * Optional initial principal turn. If provided, it is written to the
    * controlled session after spawn and recorded as a principal.input event.
    * Ignored for `kind: 'local.observed'` (no stdin to write to).
    */
@@ -132,7 +132,7 @@ export interface ListEventsResponse {
 // --- POST /api/assignments/:id/input ---
 
 /**
- * Operator input to a running session. At least one of `text` or
+ * Principal input to a running session. At least one of `text` or
  * non-empty `images` must be present; empty body (or both absent /
  * images empty) returns 400.
  *
@@ -358,7 +358,7 @@ export interface GetIterationResponse {
  * Create body for `POST /api/iterations`. `title` is the only required
  * field; the rest default per the schema (`state='inbox'`, `priority=2`).
  *
- * `state` is settable on create so an operator-typed internal-only
+ * `state` is settable on create so a principal-typed internal-only
  * iteration can land directly in `designing` (skipping the inbox lane,
  * since there's no upstream issue to anchor it). Server validates the
  * value is in the canonical enum.
@@ -426,7 +426,7 @@ export interface DetachTaskResponse {
 
 // --- F-17 GitHub iteration auto-import ------------------------------------
 //
-// Operator-driven path. Lets the operator explicitly pull a GitHub issue
+// Principal-driven path. Lets the principal explicitly pull a GitHub issue
 // into Grove as an iteration (matching the auto-import logic the webhook
 // handler runs on `issues.labeled`), without waiting for the next webhook
 // event. Useful for backfilling pre-existing labelled issues.
@@ -435,7 +435,7 @@ export interface DetachTaskResponse {
 // import is a one-time event — once the row exists in Grove, subsequent
 // upstream edits do NOT clobber Grove-side edits. The handler refreshes
 // only the audit-only `imported_body` snapshot when the upstream body
-// changed; everything else is operator-sovereign.
+// changed; everything else is principal-sovereign.
 
 /**
  * Request body for `POST /api/iterations/from-github`.
@@ -458,7 +458,7 @@ export interface ImportIterationFromGithubRequest {
  * `bodyRefreshed` flags whether the call refreshed the audit-only
  * `imported_body` snapshot (true on re-import where the upstream body
  * changed since last import; false on a true no-op or fresh import).
- * Useful for the operator UI to show a "no changes since last import"
+ * Useful for the principal UI to show a "no changes since last import"
  * vs "snapshot updated" cue.
  */
 export interface ImportIterationFromGithubResponse {
@@ -470,7 +470,7 @@ export interface ImportIterationFromGithubResponse {
 /**
  * Conflict response — the issue exists but isn't carrying the
  * `iteration` label (so importing it would silently drop it). Returned
- * 409 by the operator-driven path; the webhook auto-path treats this
+ * 409 by the principal-driven path; the webhook auto-path treats this
  * as a no-op (a webhook fires for every issue label change; we filter
  * to the iteration label internally).
  */

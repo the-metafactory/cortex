@@ -32,10 +32,10 @@ export interface DrillDownProps {
   onCycle: (assignmentId: string) => void;
   focusMode: boolean;
   onToggleFocusMode: () => void;
-  /** Called when the operator submits text/images. Returns errors via the input. */
+  /** Called when the principal submits text/images. Returns errors via the input. */
   onSendInput: (assignmentId: string, text: string, images?: Array<{ media_type: string; data: string }>) => Promise<void>;
   /**
-   * F-16 — invoked when the operator clicks the iteration chip in
+   * F-16 — invoked when the principal clicks the iteration chip in
    * the drill-header. Threaded through to <DrillHeader/>; the App
    * owner navigates to the kanban-detail view for that iteration id.
    */

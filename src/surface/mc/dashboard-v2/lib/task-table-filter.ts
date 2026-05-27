@@ -16,7 +16,7 @@ import type { TaskListItem } from "../../db/tasks";
 import type { AssignmentState } from "../../types";
 import { STATE_RANK_BY_STATE } from "./state-ranks";
 
-/** Sort columns the operator can toggle from the table header. */
+/** Sort columns the principal can toggle from the table header. */
 export type TaskSortKey =
   | "default"   // server-default order (priority ASC, updated_at DESC)
   | "priority"
@@ -56,14 +56,14 @@ export interface TaskFilterState {
    * F-16 — pin the table to a single iteration. NULL = no filter (all
    * tasks visible). When set, only tasks whose denormalised
    * `iteration.id` matches survive. Driven by the `?iter=<id>` hash
-   * param so an operator can deep-link "tasks in iteration X" from
+   * param so a principal can deep-link "tasks in iteration X" from
    * the iteration detail surface or share a kanban-context URL.
    *
    * Per design spec §"Surface 3" — "extend the task-table hash-state
    * filter to include `?iter=<id>` so operators can pin to one
    * iteration. Optional but nice — defer if it adds significant
    * complexity." Implementation cost is one new field + four lines
-   * in the hash codec; the operator value is high (one-click
+   * in the hash codec; the principal value is high (one-click
    * "what tasks are in this iteration").
    */
   iterationId: string | null;
@@ -177,7 +177,7 @@ export function classifyEmpty(
     filters.ageMinMinutes > 0 ||
     filters.search.length > 0 ||
     // F-16 — iteration pin counts as an active filter so the empty
-    // state's "Clear filters" button surfaces (operator's path back
+    // state's "Clear filters" button surfaces (principal's path back
     // when an iteration filter excludes everything).
     filters.iterationId !== null;
   if (filterActive) return "filter-excludes-all";

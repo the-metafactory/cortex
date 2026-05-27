@@ -360,7 +360,7 @@ describe("classifyEmpty", () => {
   it("F-16 — iteration filter counts as an active filter (drives 'filter-excludes-all')", () => {
     // An iteration pin that excludes every row should land in
     // 'filter-excludes-all' so the empty-state component renders the
-    // "Clear filters" affordance — without this the operator's only
+    // "Clear filters" affordance — without this the principal's only
     // path back is to hand-edit the URL, which is the exact UX
     // failure the empty-state classifier exists to prevent.
     const all = [task({ status: "open" })];

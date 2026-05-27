@@ -234,7 +234,7 @@ describe("maybeNotifyDiscord — Decision 7 per-assignment dedup (5 s window)", 
   // assignmentId alone to (assignmentId, toState, blockReason.kind), so a
   // `blocked` followed by a real `failed` for the same assignment within
   // the 5 s window must NOT be silenced. We probe the DM surface (which
-  // has its own per-operator coalesce buffer) because the channel-side
+  // has its own per-principal coalesce buffer) because the channel-side
   // coalesce buffer would collapse the two events into one summary by
   // design — the dedup-key narrowing is what lets the *failed* event
   // reach the buffer at all.
@@ -309,10 +309,10 @@ describe("maybeNotifyDiscord — Decision 7 per-assignment dedup (5 s window)", 
   });
 });
 
-describe("maybeNotifyDiscord — Decision 7 per-operator coalescing (3 s window)", () => {
+describe("maybeNotifyDiscord — Decision 7 per-principal coalescing (3 s window)", () => {
   beforeEach(() => __resetDiscordSinkState());
 
-  it("two distinct assignments for the same operator collapse into one summary DM", async () => {
+  it("two distinct assignments for the same principal collapse into one summary DM", async () => {
     const notifier = new FakeNotifier();
     const scheduler = new FakeScheduler();
     const deps: MaybeNotifyDeps = { config: baseConfig, notifier, scheduler };

@@ -3,10 +3,10 @@
  *
  * Reuses Grove's existing `gh` CLI path (see `src/bot/lib/github-sync.ts`'s
  * `ghJsonArgs`) rather than introducing `@octokit/rest`. No new dependency,
- * operator's existing `gh auth login` is the trust root.
+ * principal's existing `gh auth login` is the trust root.
  *
  * Design addendum `docs/design-mc-f12b-add-to-queue.md`:
- *   - Decision 3 — `gh` CLI via `Bun.spawn`, operator-frequency only.
+ *   - Decision 3 — `gh` CLI via `Bun.spawn`, principal-frequency only.
  *   - Decision 6 — maps 401/403/404/5xx / timeout / parse errors into
  *     discriminated error kinds the handler translates to HTTP status.
  *   - Decision 9 — 30-second spawn timeout; spinner clears and the form
@@ -14,7 +14,7 @@
  *
  * SSRF posture: argv is statically constructed from a caller-validated
  * `{owner, repo, number}` triple — no shell interpolation, no
- * operator-controlled hostname. The `gh` CLI resolves `api.github.com`
+ * principal-controlled hostname. The `gh` CLI resolves `api.github.com`
  * from `gh auth` config.
  */
 

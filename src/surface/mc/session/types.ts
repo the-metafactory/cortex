@@ -14,7 +14,7 @@ export interface SessionEndpoint {
   kind: EndpointKind;
   sessionId: string;
   /**
-   * Write an operator message to the session.
+   * Write a principal message to the session.
    *
    * - String input — legacy text-only path; sent verbatim as
    *   `content: "..."` (F-10 drill-down input).

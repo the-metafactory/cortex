@@ -264,7 +264,7 @@ describe("shouldNotify — blocked, tool.error", () => {
 });
 
 describe("shouldNotify — blocked, review.checkpoint", () => {
-  it("P0 → DM only, no ping (operator opted in)", () => {
+  it("P0 → DM only, no ping (principal opted in)", () => {
     const intent = shouldNotify({
       from: "running",
       to: "blocked",

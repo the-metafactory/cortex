@@ -9,8 +9,8 @@
  * Decision references (see docs/design-mc-iteration-planning.md):
  *   D1  — Grove owns the lifecycle. Source is import-only.
  *   D2  — GitHub parent-issue + sub-issues IS the iteration.
- *   D5  — Operator-driven promotion only (auto-import lands in inbox).
- *   D9  — No write-back; subsequent operator edits never overwritten.
+ *   D5  — Principal-driven promotion only (auto-import lands in inbox).
+ *   D9  — No write-back; subsequent principal edits never overwritten.
  *   D10 Q6 — explicit `iteration` label (configurable per-network).
  */
 
@@ -102,7 +102,7 @@ describe("hasIterationLabel", () => {
   });
 
   it("is case-sensitive (Iteration ≠ iteration)", () => {
-    // Intentional — GitHub labels are case-preserving and the operator
+    // Intentional — GitHub labels are case-preserving and the principal
     // must apply the exact label string they configured.
     expect(hasIterationLabel(["Iteration"])).toBe(false);
   });
@@ -223,9 +223,9 @@ describe("importIterationFromMetadata", () => {
     const first = importIterationFromMetadata(h.db, makeMeta());
     if (first.kind !== "created") throw new Error("expected created");
 
-    // Operator edits the live body — Decision 9 says this MUST NOT be
+    // Principal edits the live body — Decision 9 says this MUST NOT be
     // clobbered by subsequent upstream changes.
-    updateIteration(h.db, first.iteration.id, { body: "operator's notes" });
+    updateIteration(h.db, first.iteration.id, { body: "principal's notes" });
 
     // Upstream issue body is rewritten on GitHub. Webhook fires → re-import.
     const second = importIterationFromMetadata(
@@ -237,11 +237,11 @@ describe("importIterationFromMetadata", () => {
     expect(second.bodyRefreshed).toBe(true);
 
     // Audit-only `imported_body` follows upstream; live `body` stays
-    // operator-sovereign.
+    // principal-sovereign.
     const detail = getIteration(h.db, first.iteration.id);
     expect(detail).not.toBeNull();
     expect(detail!.imported_body).toBe("totally rewritten upstream");
-    expect(detail!.body).toBe("operator's notes");
+    expect(detail!.body).toBe("principal's notes");
   });
 
   it("does NOT touch updated_at on a true no-op re-import", () => {
@@ -414,7 +414,7 @@ describe("importSubIssueFromMetadata", () => {
     if (a.kind !== "attached") throw new Error("expected attached");
     expect(a.iterationId).not.toBe(second.iteration.id);
 
-    // Re-import shifts the same task under parent #99 (operator
+    // Re-import shifts the same task under parent #99 (principal
     // re-parented on GitHub; we follow).
     const b = importSubIssueFromMetadata(
       h.db,

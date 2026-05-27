@@ -11,7 +11,7 @@ import { tmpdir } from "os";
  *
  * Library-level tests in config/server/db-init verify the throws + clarity.
  * These integration tests verify the entry point catches them and exits 1
- * with a `[mission-control] FATAL: ...` message — no raw stack to operator.
+ * with a `[mission-control] FATAL: ...` message — no raw stack to principal.
  */
 
 const ENTRY = new URL("../index.ts", import.meta.url).pathname;

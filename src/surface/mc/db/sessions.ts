@@ -138,10 +138,10 @@ const SHADOW_AGENT_NAME = "Mission Control shadow";
  * Lazily insert the well-known shadow agent row if missing. Idempotent.
  * Sibling of `ensureDefaultAgent` in `api/handlers.ts`.
  *
- * The shadow agent is `persistent=1` so operator-visible agent lists that
+ * The shadow agent is `persistent=1` so principal-visible agent lists that
  * filter on `persistent=1` don't accidentally drop the sentinel; the
  * projection-level filter (`ag.id != 'mc-shadow-agent'`) is the
- * operator-visibility control, not persistence.
+ * principal-visibility control, not persistence.
  */
 export function ensureShadowAgent(db: Database): string {
   db.query(

@@ -16,7 +16,7 @@
  * fields (`block_reason.context`, `tool.error.error_message`,
  * `recentAssistantMessage`) are passed through verbatim. Discord's DM/channel
  * surfaces render plain text; there is no injection attack surface to
- * defend against on the render side. The operator already trusts the
+ * defend against on the render side. The principal already trusts the
  * agent's output everywhere else (dashboard, CLI, events table).
  */
 import type { BlockReason } from "../types";

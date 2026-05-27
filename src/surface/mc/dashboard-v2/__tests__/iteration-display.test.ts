@@ -111,7 +111,7 @@ describe("chipPillKind", () => {
   it("never collides with the existing `state-<assignmentState>` family", () => {
     // The drill-down header renders BOTH pill families side-by-side
     // (assignment state + iteration tag); collision would visually
-    // confuse the operator. This test pins that the tokens are
+    // confuse the principal. This test pins that the tokens are
     // distinct namespaces.
     const tag = TAG({ state: "blocked" });
     expect(chipPillKind(tag)).not.toContain("state-");

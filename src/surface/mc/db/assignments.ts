@@ -125,7 +125,7 @@ const ASSIGNMENT_JOIN_SELECT = `SELECT
  * Safety cap for the focus-area query. The client only renders
  * `FOCUS_MAX_VISIBLE = 6` cards plus a "+N more" tail chip, so transmitting
  * the full blocked partition is wasteful. 100 is well above any plausible
- * operator working-set; anything larger means something else is wrong.
+ * principal working-set; anything larger means something else is wrong.
  *
  * Exported so tests (and any future pagination cursor) can reference the
  * same ceiling.

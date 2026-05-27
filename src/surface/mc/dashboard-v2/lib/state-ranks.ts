@@ -2,7 +2,7 @@
  * Assignment-state attention ranks.
  *
  * Mirrors `STATE_RANKS` in `src/mission-control/db/tasks.ts` (the F-8
- * Decision 4 source of truth). Lower = more operator attention.
+ * Decision 4 source of truth). Lower = more principal attention.
  *
  * Used by:
  *  - F-8 task table (MIG-4): aggregate-state computation client-side

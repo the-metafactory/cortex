@@ -1,8 +1,8 @@
 /**
- * URL-scheme allowlist for operator-imported links rendered in the UI.
+ * URL-scheme allowlist for principal-imported links rendered in the UI.
  *
  * Iteration source URLs come from upstream issues (GitHub today, Jira /
- * Linear later). Their bodies are operator-imported, so a malicious or
+ * Linear later). Their bodies are principal-imported, so a malicious or
  * compromised upstream could embed a `javascript:` or `data:` URL that
  * would execute on click. Render the anchor only when the URL parses to
  * an `http:` or `https:` scheme; otherwise return `null` and let the

@@ -10,7 +10,7 @@ relationship — edit it like any other worker code.
 
 ## What lives here
 
-- **`types.ts`** — Role hierarchy (`viewer < operator < admin`), scope hierarchy
+- **`types.ts`** — Role hierarchy (`viewer < principal < admin`), scope hierarchy
   (`read < write < admin`), user/agent/grant records, the `AuthBindings`
   env shape consumed by the worker.
 - **`authorize.ts`** — Pure decision functions: `checkRole`, `checkAgentAccess`.
@@ -39,10 +39,10 @@ relationship — edit it like any other worker code.
 
 ## Relationship to the worker's existing `auth.ts`
 
-`src/auth.ts` in the worker is a different surface — operator API-key auth
+`src/auth.ts` in the worker is a different surface — principal API-key auth
 (`requireApiKey`, `requireAdmin`, `PrincipalKey`) for bot operators posting
 to `/api/ingest`. It does not overlap with anything here. The two coexist:
-operator-key auth gates the ingest path; user-auth gates the dashboard
+principal-key auth gates the ingest path; user-auth gates the dashboard
 read path.
 
 ## Provenance

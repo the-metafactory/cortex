@@ -652,7 +652,7 @@ describe("F-15 — state-transition-via-updateIteration", () => {
 });
 
 describe("canTransitionServer / nextStatesServer (F-15)", () => {
-  it("rejects designing → done per Decision 10 Q1 (operator-driven done deferred to Phase G)", () => {
+  it("rejects designing → done per Decision 10 Q1 (principal-driven done deferred to Phase G)", () => {
     expect(canTransitionServer("designing", "done")).toBe(false);
     expect(canTransitionServer("queued", "done")).toBe(false);
     expect(canTransitionServer("inbox", "done")).toBe(false);
@@ -663,7 +663,7 @@ describe("canTransitionServer / nextStatesServer (F-15)", () => {
     expect(canTransitionServer("blocked", "done")).toBe(true);
   });
 
-  it("allows operator cancel from every non-terminal state", () => {
+  it("allows principal cancel from every non-terminal state", () => {
     for (const s of ITERATION_STATES) {
       if (s === "done" || s === "cancelled") continue;
       expect(canTransitionServer(s, "cancelled")).toBe(true);

@@ -146,7 +146,7 @@ function dispatchLine(line: string, deps: StdoutDispatcherDeps): void {
 
   // Terminal event: CC emits `{ type: "result", subtype: "success" | "error_..." }`
   // at the end of a turn. We drive the state machine running → completed/failed
-  // so the dashboard can release the operator input queue on a real end-of-turn
+  // so the dashboard can release the principal input queue on a real end-of-turn
   // signal rather than inferring from every event (see dashboard F-A4 TODO).
   if (rawType === "result") {
     applyTerminalTransition(payload, deps);

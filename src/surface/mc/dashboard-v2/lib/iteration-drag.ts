@@ -18,7 +18,7 @@
  *
  * Returns `{ allowed, reason? }` rather than a bare boolean so the
  * renderer can surface the rejection reason as a tooltip on the
- * disallowed column during the drag (operator gets feedback, not a
+ * disallowed column during the drag (principal gets feedback, not a
  * silent no-op cursor).
  */
 
@@ -58,7 +58,7 @@ export function canDrop(
     }
     if (targetState === "inbox") {
       // Self-drop on the same column — coalesce to no-op rather than
-      // surface a "no" message; the operator's intent is unambiguous.
+      // surface a "no" message; the principal's intent is unambiguous.
       // Wording matches the iteration-side self-drop branch below.
       return { allowed: false, reason: "Already in this column" };
     }
@@ -72,7 +72,7 @@ export function canDrop(
   if (sourceState === null) {
     // Iteration with no current state — treat as ineligible. Defensive:
     // the F-13 schema ALWAYS persists a state, so this branch indicates
-    // a programming error in the renderer rather than an operator action.
+    // a programming error in the renderer rather than a principal action.
     return { allowed: false, reason: "Iteration has no current state" };
   }
 

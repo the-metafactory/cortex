@@ -4,7 +4,7 @@
  *
  * Why FULL-PAGE rather than overlay (per spec "pick one and document
  * why"):
- *   - The detail surface is a planning artefact the operator wants to
+ *   - The detail surface is a planning artefact the principal wants to
  *     stay on while doing other work in another tab. Drill-down (F-7)
  *     is overlay-style because it's a transient attention surface — you
  *     come back to the focus row when done. Detail is the opposite:
@@ -61,7 +61,7 @@ const BODY_AUTOSAVE_DEBOUNCE_MS = 1000;
 export interface IterationDetailProps {
   iterationId: string;
   ws: WsClient;
-  /** Called when the operator wants to return to the kanban (X button or post-action). */
+  /** Called when the principal wants to return to the kanban (X button or post-action). */
   onClose: () => void;
 }
 
@@ -148,9 +148,9 @@ function IterationDetailLoaded({ iteration, onClose, onRefetch }: LoadedProps) {
       titleCommittedRef.current = iteration.title;
       setTitleDraft(iteration.title);
     } else {
-      // Operator is editing locally — don't clobber. The committed-ref
+      // Principal is editing locally — don't clobber. The committed-ref
       // still tracks what the server last told us so a subsequent blur
-      // saves the operator's draft correctly.
+      // saves the principal's draft correctly.
       titleCommittedRef.current = iteration.title;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

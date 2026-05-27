@@ -164,7 +164,7 @@
 /* F-17 — inbox auto-import badge (matches the iteration-side source-badge
  * shape so the visual rhythm is uniform across the kanban). The accent
  * colour cues "this row arrived from the upstream pipeline" without
- * shouting; the operator sees it as a quiet hint, not an alert. */
+ * shouting; the principal sees it as a quiet hint, not an alert. */
 .iteration-card-meta .source-badge.gh {
   color: var(--accent, #4f8cff);
   border-color: color-mix(in oklch, var(--accent, #4f8cff) 30%, var(--line));

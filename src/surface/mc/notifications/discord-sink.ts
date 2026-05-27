@@ -8,7 +8,7 @@
  *
  * Three buffers, all in-memory (Decision 7 is explicit about durability):
  *   1. Per-assignment 5 s dedup window.
- *   2. Per-operator 3 s coalesce window — N ≥ 2 collapses to one summary DM.
+ *   2. Per-principal 3 s coalesce window — N ≥ 2 collapses to one summary DM.
  *   3. Per-channel 10 s throttle — collapses bursts into one summary post.
  *
  * Hot path: `maybeNotifyDiscord(deps, ctx)` is called from both
@@ -226,7 +226,7 @@ interface CoalesceBuffer {
   notifier: DiscordNotifier;
   onSystemError?: MaybeNotifyDeps["onSystemError"];
   /**
-   * For `audience === "dm"` this is the operator's Discord user id; for
+   * For `audience === "dm"` this is the principal's Discord user id; for
    * `audience === "channel"` it's the channel/thread id. Empty string is
    * never valid (caller checks before enqueueing).
    */
@@ -240,7 +240,7 @@ interface CoalesceBuffer {
   scheduler: FlushScheduler;
 }
 
-/** Per-operator coalesce buffer: `principal_id → buffer`. */
+/** Per-principal coalesce buffer: `principal_id → buffer`. */
 const dmBuffers = new Map<string, CoalesceBuffer>();
 /** Per-channel coalesce buffer: `channel_id → buffer`. */
 const channelBuffers = new Map<string, CoalesceBuffer>();
@@ -345,9 +345,9 @@ async function dispatchIntent(
   // Resolve channel id (used by both single and coalesced paths).
   const channelId = resolveChannelId(deps.config, input.ctx);
 
-  // (2) DM path with per-operator coalescing — DM-class notifications
+  // (2) DM path with per-principal coalescing — DM-class notifications
   // accumulate within COALESCE_WINDOW_MS; the first event arms a timer,
-  // subsequent events on the same operator within the window collapse
+  // subsequent events on the same principal within the window collapse
   // into one summary.
   if (intent.audiences.includes("dm")) {
     const operatorDiscordId = deps.config.operatorDiscordId;
@@ -404,7 +404,7 @@ async function dispatchIntent(
 }
 
 // ---------------------------------------------------------------------
-// DM coalescing (per-operator, 3 s window)
+// DM coalescing (per-principal, 3 s window)
 // ---------------------------------------------------------------------
 
 function enqueueDM(
@@ -620,7 +620,7 @@ async function flushChannelBuffer(channelId: string): Promise<void> {
   // N ≥ 2 — render a coalesced summary channel post. Decision 7: same
   // shape as the DM summary. The summary itself is a single message; we
   // do NOT prepend a role-ping for the burst (the per-event mentions are
-  // intentionally swallowed by coalescing — the operator who wanted the
+  // intentionally swallowed by coalescing — the principal who wanted the
   // ping can find every individual block on the dashboard).
   const top = buffer.entries.reduce((best, cur) =>
     cur.priority < best.priority ? cur : best

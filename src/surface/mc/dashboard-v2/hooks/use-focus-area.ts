@@ -47,7 +47,7 @@ export interface FocusAreaState {
   loaded: boolean;
   /** Last error message, or null after a successful refetch. */
   error: string | null;
-  /** Manual refetch trigger — useful for an operator-driven refresh. */
+  /** Manual refetch trigger — useful for a principal-driven refresh. */
   refetch: () => void;
 }
 

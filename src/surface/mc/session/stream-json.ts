@@ -1,7 +1,7 @@
 /**
  * Grove Mission Control v2 — Stream-json message framing.
  *
- * Formats operator input as stream-json messages for CC stdin.
+ * Formats principal input as stream-json messages for CC stdin.
  * Based on Maestro's streamJsonBuilder.ts pattern.
  *
  * Two overloads:

@@ -2,15 +2,15 @@
  * Grove Mission Control v3 — F-17 GitHub iteration auto-import.
  *
  * Pure import functions that turn a normalised GitHub issue payload
- * (parent issue with the operator-configured `iteration` label, or a
+ * (parent issue with the principal-configured `iteration` label, or a
  * sub-issue of a tracked parent) into Grove iteration / task rows.
  *
  * Two callers:
  *   1. The webhook receiver in `api/handlers.ts` (POST /api/github/webhook)
  *      — wired to the existing `webhook-proxy` fan-out so issues +
  *      sub-issues stream in without a new GitHub subscription.
- *   2. The operator-driven path `POST /api/iterations/from-github` —
- *      lets the operator import an existing labelled issue without
+ *   2. The principal-driven path `POST /api/iterations/from-github` —
+ *      lets the principal import an existing labelled issue without
  *      waiting for the next webhook event (and to backfill labelled
  *      issues that pre-date the webhook subscription).
  *
@@ -24,7 +24,7 @@
  *   - HTTP framing — handlers wrap the result in Response objects.
  *   - WebSocket broadcast — handlers fire `broadcastIterationCreated`
  *     after the import succeeds; this file never touches `WsClientRegistry`.
- *   - GitHub I/O — the operator-driven path fetches via `gh` CLI in the
+ *   - GitHub I/O — the principal-driven path fetches via `gh` CLI in the
  *     handler and passes the parsed metadata to `importIterationFromMetadata`.
  *     The webhook path receives the metadata extracted from the payload.
  *
@@ -56,7 +56,7 @@ import { canonicalRef, type GitHubRef } from "./github-ref";
  * yaml; the absence of an override falls through to this default. The
  * label match is case-sensitive — GitHub itself preserves label case
  * exactly and treats `Iteration` as a different label from `iteration`,
- * so we follow suit rather than smuggling in a normaliser the operator
+ * so we follow suit rather than smuggling in a normaliser the principal
  * wouldn't predict from looking at GitHub directly.
  */
 export const DEFAULT_ITERATION_LABEL = "iteration";
@@ -65,14 +65,14 @@ export const DEFAULT_ITERATION_LABEL = "iteration";
  * Soft cap on imported body bytes. Mirrors `ITERATION_BODY_MAX_BYTES`
  * in `api/handlers.ts` (50 KB) — the dashboard's iteration body editor
  * caps writes at 50 KB and the schema accepts arbitrarily long values
- * but the import path defends the operator from a malicious 5 MB
+ * but the import path defends the principal from a malicious 5 MB
  * GitHub issue body landing in the kanban as an outlier row.
  *
  * Truncation is at the byte boundary (not the character boundary): we
  * slice the string conservatively and let the DB store fewer bytes
  * than the cap rather than risk emitting a malformed UTF-8 sequence.
  * The original body is in GitHub anyway — truncation is loss-less for
- * the operator who clicks through to the source URL.
+ * the principal who clicks through to the source URL.
  */
 export const IMPORTED_BODY_MAX_BYTES = 50 * 1024;
 
@@ -82,7 +82,7 @@ export const IMPORTED_BODY_MAX_BYTES = 50 * 1024;
 
 /**
  * Normalised parent-issue metadata. Both callers — webhook and
- * operator-driven path — collapse their respective raw inputs to this
+ * principal-driven path — collapse their respective raw inputs to this
  * shape before calling `importIterationFromMetadata`.
  *
  * Field meanings track the GitHub REST `/repos/:owner/:repo/issues/:n`
@@ -136,7 +136,7 @@ export interface ImportOptions {
 /**
  * Parent-issue import outcome. Discriminated union so the caller can
  * tell idempotent re-import (200) from fresh import (201) from
- * non-iteration-labelled (409 — operator-driven path) from
+ * non-iteration-labelled (409 — principal-driven path) from
  * upstream-changed-body (200 with a refresh tag).
  */
 export type ImportIterationResult =
@@ -231,10 +231,10 @@ export function truncateToBytes(input: string, maxBytes: number): string {
  * Behaviour:
  *   - If `meta` doesn't carry the configured iteration label, returns
  *     `{ kind: "not_iteration_labelled" }` and writes nothing. The
- *     webhook caller treats this as a no-op; the operator-driven
+ *     webhook caller treats this as a no-op; the principal-driven
  *     `POST /api/iterations/from-github` caller surfaces it as 400.
  *   - If a Grove iteration with this `source_parent_ref` already
- *     exists, the operator-editable `body` / `title` / `priority` /
+ *     exists, the principal-editable `body` / `title` / `priority` /
  *     `state` are LEFT UNCHANGED (Decision 9 — no write-back / no
  *     upstream-clobber). Only the audit-only `imported_body` snapshot
  *     is refreshed when the upstream body actually changed; otherwise
@@ -242,8 +242,8 @@ export function truncateToBytes(input: string, maxBytes: number): string {
  *   - On fresh import the row lands with `state = 'inbox'`,
  *     `priority = 2`, `body` initialised from the (truncated) upstream
  *     body, and `imported_body` snapshotted equal to the upstream body.
- *     The operator then drags it from inbox → designing in the kanban
- *     (Decision 5 — explicit operator action, no auto-promote).
+ *     The principal then drags it from inbox → designing in the kanban
+ *     (Decision 5 — explicit principal action, no auto-promote).
  *
  * Idempotent: calling repeatedly with the same upstream body is a
  * no-op after the first call.
@@ -253,7 +253,7 @@ export function importIterationFromMetadata(
   meta: ParentIssueMetadata,
   opts: ImportOptions = {}
 ): ImportIterationResult {
-  // Defensive validation — the operator-driven path passes parsed
+  // Defensive validation — the principal-driven path passes parsed
   // metadata that we mostly trust, but the webhook path is fed
   // attacker-controlled JSON. Keep the rejection path local so the
   // caller doesn't have to re-validate.
@@ -293,7 +293,7 @@ export function importIterationFromMetadata(
   const existing = findIterationBySourceParentRef(db, "github", canonical);
   if (existing) {
     // Refresh the audit snapshot when the upstream body changed;
-    // never touch the operator-editable `body` / `title` / `priority`
+    // never touch the principal-editable `body` / `title` / `priority`
     // / `state` (Decision 9 — no upstream-clobber).
     if (existing.imported_body !== importedBody) {
       updateIterationImportedBody(db, existing.id, importedBody);
@@ -311,11 +311,11 @@ export function importIterationFromMetadata(
     return { kind: "exists", iteration: existing, bodyRefreshed: false };
   }
 
-  // Fresh import. The new row lands in `inbox` (Decision 5 — operator
+  // Fresh import. The new row lands in `inbox` (Decision 5 — principal
   // promotes to `designing` explicitly). `body` is seeded from the
   // upstream body so the kanban card has something readable on day
   // one; `imported_body` keeps the same value as the audit snapshot
-  // (the two diverge as soon as the operator edits the live body).
+  // (the two diverge as soon as the principal edits the live body).
   const id = generateId();
   const row = createIteration(db, {
     id,
@@ -440,11 +440,11 @@ export function importSubIssueFromMetadata(
   // parents per Decision 7).
   const taskId = generateId();
   const status = child.state === "closed" ? "done" : "open";
-  // Operator id mirrors F-12b's DEFAULT_OPERATOR_ID — the sub-issue
+  // Principal id mirrors F-12b's DEFAULT_OPERATOR_ID — the sub-issue
   // came in via webhook, no human acted; we attribute it to the
-  // mission-control default operator the same way internal-task
+  // mission-control default principal the same way internal-task
   // creates do.
-  const DEFAULT_OPERATOR_ID = "mc-default-operator";
+  const DEFAULT_OPERATOR_ID = "mc-default-principal";
   db.query(
     `INSERT INTO tasks
        (id, title, priority, principal_id,

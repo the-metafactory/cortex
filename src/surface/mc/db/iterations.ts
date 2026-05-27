@@ -154,7 +154,7 @@ export function toIterationListItem(
  * NULL` AND `source_system <> 'internal'` AND a non-cancelled status.
  *
  * The internal-source filter is what the design spec means by "upstream
- * issues not yet linked to an iteration" — operator-typed internal tasks
+ * issues not yet linked to an iteration" — principal-typed internal tasks
  * are not part of the import-from-upstream funnel and don't render in
  * the inbox lane.
  */
@@ -267,7 +267,7 @@ export interface ListInboxOptions {
  *
  * Filtering rules (Decision 1):
  *   - `iteration_id IS NULL` (not yet promoted into a iteration)
- *   - `source_system != 'internal'` (operator-typed internal tasks aren't
+ *   - `source_system != 'internal'` (principal-typed internal tasks aren't
  *     in the upstream funnel; they live in the iteration body / direct add)
  *   - `status != 'cancelled'` (the inbox is alive-only; cancelled imports
  *     stay in the audit trail but disappear from the lane)
@@ -394,7 +394,7 @@ export function createIteration(
  *
  * Source columns are intentionally NOT patchable from this API path —
  * they're set at import time and frozen (Decision 1, Decision 9). Future
- * operator-driven re-import is a separate explicit action.
+ * principal-driven re-import is a separate explicit action.
  */
 export interface UpdateIterationPatch {
   title?: string;
@@ -480,7 +480,7 @@ export function updateIteration(
  *
  * Decision 1 + 9 (no write-back) imply the lookup is read-only and
  * never tries to reconcile mismatches between the upstream and the
- * stored row — the operator's edits are sovereign once import landed.
+ * stored row — the principal's edits are sovereign once import landed.
  */
 export function findIterationBySourceParentRef(
   db: Database,
@@ -503,18 +503,18 @@ export function findIterationBySourceParentRef(
 
 /**
  * F-17 — refresh the audit-only `imported_body` snapshot for an
- * existing iteration row WITHOUT touching the operator-editable
+ * existing iteration row WITHOUT touching the principal-editable
  * `body`, `title`, `priority`, or `state` columns.
  *
  * Per `docs/design-mc-iteration-planning.md` Decision 9 ("Source is
  * upstream-only. No write-back, ever.") the in-Grove `body` /
- * operator edits are sovereign — a subsequent `issues.edited` upstream
+ * principal edits are sovereign — a subsequent `issues.edited` upstream
  * webhook MUST NOT clobber them. This helper exists so the auto-import
  * path can keep the audit snapshot fresh while leaving the live row
- * the operator sees in the dashboard exactly as they last saved it.
+ * the principal sees in the dashboard exactly as they last saved it.
  *
  * Touches `updated_at` so the kanban re-sorts (the snapshot refresh is
- * still a real mutation; the operator can see "the upstream issue
+ * still a real mutation; the principal can see "the upstream issue
  * changed" implicitly via the row moving).
  *
  * Returns true when the row was found and the snapshot updated, false
@@ -564,7 +564,7 @@ export function touchIteration(db: Database, id: string): boolean {
  * has at most one iteration). This sets `tasks.iteration_id` directly;
  * a task can be re-attached by calling this again with a different
  * iteration id. Per Decision 3 a task contributing to two iterations is
- * "the operator's signal to clone, not to model nesting" — there's no
+ * "the principal's signal to clone, not to model nesting" — there's no
  * many-to-many join table to populate.
  *
  * Returns true when the task row was found and updated, false when the
@@ -588,7 +588,7 @@ export function attachTask(
  * F-15 — read the current `iteration_id` (or `null`) for a task, plus
  * a tiny existence flag. Used by the attach endpoint to enforce the
  * 1:N invariant before mutating: per Decision 3 a task that contributes
- * to two iterations is the operator's signal to clone, not to model
+ * to two iterations is the principal's signal to clone, not to model
  * nesting — so attaching a task that's already attached elsewhere is a
  * 409 with the existing iteration id, not a silent overwrite.
  *
@@ -640,11 +640,11 @@ export function detachTask(db: Database, taskId: string): boolean {
 // transition would mean a hand-rolled curl could bypass the lifecycle.
 // The handler calls `canTransitionServer` before invoking
 // `updateIteration` and returns 400 on a rejected move with the legal
-// next-states in the message — so the operator sees the friendlier
+// next-states in the message — so the principal sees the friendlier
 // "queued → designing isn't legal; allowed: in_flight, designing,
 // cancelled" instead of an opaque 500.
 //
-// Decision 10 Q1 — operator-driven `done` from non-`in_flight`/non-
+// Decision 10 Q1 — principal-driven `done` from non-`in_flight`/non-
 // `blocked` states is rejected here. F-15 keeps the matrix tight; the
 // override is a Phase G feature with its own threat model. The error
 // message names `cancel` as the alternative for operators who hit the

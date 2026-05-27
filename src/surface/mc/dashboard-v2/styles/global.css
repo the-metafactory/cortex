@@ -84,7 +84,7 @@ html, body {
  * State-specific tints layered on top — `inbox` and `designing` fade
  * to dim (the iteration is upstream of execution; lower visual
  * weight); `queued`/`in_flight` use the accent (active); `blocked`
- * borrows the state-blocked colour because the operator's mental
+ * borrows the state-blocked colour because the principal's mental
  * model is "blocked is blocked, regardless of layer"; `done` /
  * `cancelled` mute.
  */

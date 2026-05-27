@@ -24,9 +24,9 @@ const CACHE_TTL_MS = 5_000; // 5s TTL — prevents stale reads across isolates
  * Build a full (unfiltered) snapshot object from D1.
  *
  * IAW D.5 — `homePrincipal` (when supplied) slices the snapshot's `agents`
- * and `recentCompletions` lists by the originating operator. The other
+ * and `recentCompletions` lists by the originating principal. The other
  * derived sections (stats, repos, heatmap) stay global because they reflect
- * the receiving operator's totals; per-operator stats are a future slice
+ * the receiving principal's totals; per-principal stats are a future slice
  * (D.5 ships the activity-card path first per the plan §5).
  */
 export async function buildSnapshot(
@@ -58,7 +58,7 @@ export async function buildSnapshot(
     principalUsage,
     /**
      * IAW D.5.2 — distinct `home_principal` values observed in recent
-     * sessions. The frontend uses this to populate the operator filter
+     * sessions. The frontend uses this to populate the principal filter
      * dropdown; "Local only" (the default) corresponds to `null` here.
      */
     homePrincipals,
@@ -209,12 +209,12 @@ stateRoutes.get("/api/state", async (c) => {
   const db = c.env.GROVE_DB;
   const project = c.req.query("project");
   // IAW D.5.2 — `?home_principal=<id>` slices the snapshot to a single
-  // originating operator. Sentinel `"local"` means "null home_principal
+  // originating principal. Sentinel `"local"` means "null home_principal
   // only" (purely local traffic, no federated stamps) and matches the
   // dashboard's default filter chip.
   const homePrincipal = c.req.query("home_principal");
 
-  // Project-filtered or operator-filtered requests bypass cache (rare).
+  // Project-filtered or principal-filtered requests bypass cache (rare).
   // The cache key would need to grow per-(project, home_principal) tuple
   // otherwise; not worth the complexity for the slow path.
   if (project || homePrincipal) {
@@ -316,7 +316,7 @@ async function getActiveAgents(
  *   - `undefined` / `null` / `""` → no slicing (snapshot covers all rows).
  *   - `"local"`                   → `home_principal IS NULL` (purely local
  *                                   traffic, the dashboard default chip).
- *   - any other string            → `home_principal = ?` (specific operator).
+ *   - any other string            → `home_principal = ?` (specific principal).
  *
  * Returns `{ sql, params }` rather than mutating in place so the caller's
  * SELECT is constructible without hidden side-effects on a shared array.
@@ -444,7 +444,7 @@ async function getRecentCompletions(
 
 /**
  * IAW D.5.2 — return the distinct, non-null `home_principal` values seen in
- * recent sessions. Powers the dashboard's operator filter dropdown — the
+ * recent sessions. Powers the dashboard's principal filter dropdown — the
  * frontend prepends "Local only" (default) + "All operators" to this list.
  *
  * Window: same 7-day horizon the heatmap uses, so the dropdown doesn't grow

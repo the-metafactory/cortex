@@ -32,7 +32,7 @@ export const ITERATION_TITLE_MAX_CHARS = 20;
  * it already fits — no trailing ellipsis on exact-fit titles.
  *
  * Pure / total — every defined string maps to a defined string. The
- * empty string maps to itself (the operator never sees a blank
+ * empty string maps to itself (the principal never sees a blank
  * iteration title because `iterations.title NOT NULL`, but the
  * helper is total against future schema relaxation).
  */
@@ -44,10 +44,10 @@ export function truncateIterationTitle(title: string): string {
 /**
  * Render the F-7 drill-header chip text: "Iteration: <truncated> (state)".
  *
- * Why the format includes the state — the chip is the operator's
+ * Why the format includes the state — the chip is the principal's
  * one-glance signal that "this task is in iteration X, currently
  * <state>". Linking out to the iteration detail without surfacing the
- * state means the operator clicks through purely to confirm the
+ * state means the principal clicks through purely to confirm the
  * lifecycle column. The four-byte cost in the chip pays for itself
  * many-fold per design spec §"Surface 3".
  */
@@ -57,7 +57,7 @@ export function chipText(it: TaskIterationTag): string {
 
 /**
  * Tooltip text for the chip + cell — the full untrucated title plus the
- * state (cell case where the operator hovers a truncated title and
+ * state (cell case where the principal hovers a truncated title and
  * needs to know which iteration this actually is). Distinct from
  * `chipText` so the tooltip reveals the full string even when the
  * visible chip itself was truncated.

@@ -1,7 +1,7 @@
 /**
  * Minimal markdown renderer — text only, no library dependency.
  *
- * Per migration addendum Decision 11, assistant text and operator input
+ * Per migration addendum Decision 11, assistant text and principal input
  * render as markdown. We support a tight subset:
  *  - Triple-backtick fenced code blocks (with optional language tag)
  *  - Single-backtick inline code

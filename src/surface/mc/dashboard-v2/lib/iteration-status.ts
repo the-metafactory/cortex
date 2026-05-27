@@ -16,7 +16,7 @@
  * Per `docs/design-mc-iteration-planning.md` Decision 1, the lifecycle
  * is Grove-owned. Source state is NEVER an input to this validator —
  * the only inputs are (current state, proposed state). Decision 5
- * specifies who triggers each transition (operator vs derived) but
+ * specifies who triggers each transition (principal vs derived) but
  * that's policy belonging to the API layer / kanban hook; the validator
  * answers shape only.
  */
@@ -54,7 +54,7 @@ export function canTransition(
 /**
  * Enumerate the legal next states from `current`. Order is the
  * canonical insertion order from the matrix definition above (so the
- * UI can render the operator's options deterministically).
+ * UI can render the principal's options deterministically).
  *
  * Returns `[]` for terminal states and unknown states — callers can
  * detect "no moves possible" with `nextStates(s).length === 0`.

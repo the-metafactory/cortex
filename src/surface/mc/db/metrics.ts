@@ -16,7 +16,7 @@
  * Computation lives in TS rather than SQL because:
  *   - The same `BlockReason` tagged-union type used elsewhere can be reused
  *     without JSON-extract gymnastics in SQLite.
- *   - At Phase B operator scale (tens to hundreds of assignments per
+ *   - At Phase B principal scale (tens to hundreds of assignments per
  *     window), the total event row count is small enough that linear
  *     interval math in TS is comparable to a SQL window-function pass.
  *   - Future percentile / cost extensions are easier to express in TS

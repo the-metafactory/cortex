@@ -1,5 +1,5 @@
 /**
- * `safeSourceHref` — XSS guard for operator-imported source URLs.
+ * `safeSourceHref` — XSS guard for principal-imported source URLs.
  *
  * Iteration source URLs come from upstream issue bodies; a malicious
  * upstream could embed `javascript:` or `data:` URLs that would execute

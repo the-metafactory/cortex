@@ -16,7 +16,7 @@ import { logAuditEvent, getClientIp } from "./audit";
  * 1. Caller is agent owner → full access
  * 2. Caller has active grant with sufficient scope → granted access
  * 3. Caller is admin → bypass
- * 4. Agent is cattle class → any operator can access
+ * 4. Agent is cattle class → any principal can access
  * Otherwise → 403.
  *
  * Requires requireRole() to have run first (needs c.get("user")).

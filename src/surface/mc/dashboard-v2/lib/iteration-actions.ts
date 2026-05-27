@@ -9,7 +9,7 @@
  *
  * Per `docs/design-mc-iteration-planning.md`:
  *   - Decision 5: `designing → queued` is the "Promote" action; only
- *     visible when state is `designing`. (Promote is the operator-
+ *     visible when state is `designing`. (Promote is the principal-
  *     driven transition; the kanban can also drag-drop it, but the
  *     detail surface is the canonical click-button path.)
  *   - Decision 5: `* → cancelled` is the explicit destructive path.
@@ -103,7 +103,7 @@ export function disabledTooltip(
   if (!state) return "Loading iteration…";
   const matrix = iterationActionMatrix(state);
   if (matrix[verb]) return "";
-  // The user-visible reason for each disabled cell. Operator learns the
+  // The user-visible reason for each disabled cell. Principal learns the
   // model from the tooltip without reading the spec.
   switch (verb) {
     case "promote":
@@ -139,7 +139,7 @@ export function labelForAction(verb: IterationActionVerb): string {
   }
 }
 
-/** Verbs that the operator marks as destructive (red CSS treatment). */
+/** Verbs that the principal marks as destructive (red CSS treatment). */
 export const DESTRUCTIVE_ACTIONS: ReadonlySet<IterationActionVerb> = new Set([
   "cancel",
   "detachTask",

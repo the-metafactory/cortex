@@ -171,7 +171,7 @@ export function spawnControlledSession(
       // Wait for the dispatcher to drain before finalizing: the terminal
       // `result` event and its state.transition broadcast must land before
       // endSession sets ended_at, otherwise the dashboard sees a closed
-      // session with no final transition and the operator queue stays stuck.
+      // session with no final transition and the principal queue stays stuck.
       if (managed.dispatcherDone) await managed.dispatcherDone;
       processManager.remove(session.id);
       endSession(db, session.id);
@@ -222,14 +222,14 @@ export function createControlledEndpoint(
       // the shape depends on spawn options (we pass `stdin: "pipe"` which gives
       // FileSink). TS cannot narrow from runtime options, hence the explicit
       // check; the throw guards against a future spawn change that would cause
-      // a silent drop of operator input.
+      // a silent drop of principal input.
       const stdin = managed.proc.stdin;
       if (stdin === undefined || typeof stdin === "number") {
         throw new SessionClosed(sessionId, managed.proc.exitCode);
       }
       void stdin.write(framed);
       // NOTE: FileSink backpressure (Promise return from write) is a Phase B
-      // concern — Phase A dispatches small operator messages only. When the
+      // concern — Phase A dispatches small principal messages only. When the
       // dispatcher lands, switch to an async write path that awaits
       // stdin.flush() and applies per-session queueing.
     },

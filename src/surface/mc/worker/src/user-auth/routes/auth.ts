@@ -173,8 +173,8 @@ authRoutes.put("/api/auth/users/:id/role", async (c) => {
 
   const targetId = c.req.param("id");
   const body = await c.req.json<{ role: Role }>().catch(() => null);
-  if (!body?.role || !["viewer", "operator", "admin"].includes(body.role)) {
-    return c.json({ error: "invalid role", valid: ["viewer", "operator", "admin"] }, 400);
+  if (!body?.role || !["viewer", "principal", "admin"].includes(body.role)) {
+    return c.json({ error: "invalid role", valid: ["viewer", "principal", "admin"] }, 400);
   }
 
   const db = c.env.GROVE_DB;

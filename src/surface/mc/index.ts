@@ -8,7 +8,7 @@
  *
  * Boot is wrapped in try/catch to honor the spec NFR contract:
  *   - On any boot failure: write `[mission-control] FATAL: <msg>` to stderr
- *     and exit with code 1. No raw stack traces in the operator's terminal.
+ *     and exit with code 1. No raw stack traces in the principal's terminal.
  */
 
 import { loadConfig } from "./config";

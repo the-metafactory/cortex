@@ -73,7 +73,7 @@ export function DispatchButton({
   }, [open]);
 
   // Stop the row-click handler in task-table from firing when the
-  // operator clicks the button or the popover. The dispatch action
+  // principal clicks the button or the popover. The dispatch action
   // is its own intent, not a row-drill-down intent.
   const stop = (e: React.MouseEvent) => e.stopPropagation();
 

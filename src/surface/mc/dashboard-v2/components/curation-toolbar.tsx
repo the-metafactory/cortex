@@ -101,7 +101,7 @@ export function CurationToolbar({ assignment, onActionApplied }: CurationToolbar
       return list;
     } catch {
       // Best-effort — pickers will render an empty dropdown which the
-      // operator can recover from by using `+ Add task` or trying again.
+      // principal can recover from by using `+ Add task` or trying again.
       return [];
     }
   }, [agents]);

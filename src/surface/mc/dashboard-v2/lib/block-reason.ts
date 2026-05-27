@@ -1,5 +1,5 @@
 /**
- * Render a one-line operator-friendly summary of a `BlockReason`.
+ * Render a one-line principal-friendly summary of a `BlockReason`.
  *
  * Mirrors the legacy `blockReasonOneLiner` in
  * `src/mission-control/dashboard/index.html:1094`. Behavioural contract

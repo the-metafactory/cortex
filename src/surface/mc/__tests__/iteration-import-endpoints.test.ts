@@ -2,7 +2,7 @@
  * F-17 — endpoint tests for the GitHub iteration auto-import surface.
  *
  * Two routes:
- *   POST /api/iterations/from-github — operator-driven import via gh CLI
+ *   POST /api/iterations/from-github — principal-driven import via gh CLI
  *   POST /api/github/webhook         — HMAC-validated upstream stream
  *
  * The harness mirrors `task-create-endpoints.test.ts` (FakeGh + real
@@ -219,7 +219,7 @@ describe("POST /api/iterations/from-github", () => {
 
   it("returns 200 + kind='exists' on idempotent re-import (no body change)", async () => {
     // The handler always calls gh (see Echo's M2 — no pre-flight
-    // short-circuit, so backfill on operator demand can refresh stale
+    // short-circuit, so backfill on principal demand can refresh stale
     // imported_body snapshots after a missed webhook). Both calls
     // therefore need a canned response.
     t.gh.push({ exitCode: 0, stdout: ITERATION_ISSUE_BODY, stderr: "" });
@@ -246,8 +246,8 @@ describe("POST /api/iterations/from-github", () => {
   });
 
   it("refreshes imported_body on backfill when upstream body has changed (M2)", async () => {
-    // Headline use case for the operator-driven path — webhook delivery
-    // missed, upstream body has since drifted, operator manually
+    // Headline use case for the principal-driven path — webhook delivery
+    // missed, upstream body has since drifted, principal manually
     // re-imports to recover the audit snapshot. Pre-M2 this was a
     // silent no-op; post-M2 the snapshot refreshes and bodyRefreshed
     // flips to true so the dashboard can surface the divergence.
@@ -286,7 +286,7 @@ describe("POST /api/iterations/from-github", () => {
     const refreshed = await r2.json();
     expect(refreshed.kind).toBe("exists");
     expect(refreshed.bodyRefreshed).toBe(true);
-    // Decision 9 — `body` is operator-editable so it stays at v1 even
+    // Decision 9 — `body` is principal-editable so it stays at v1 even
     // though upstream is now v2; only `imported_body` (the audit-only
     // snapshot) tracks upstream.
     expect(refreshed.iteration.body).toBe("v1 — initial draft");
@@ -521,7 +521,7 @@ describe("POST /api/github/webhook — auth + dispatch", () => {
     expect(after).toBe(1); // intentionally not deleted
   });
 
-  it("issues.edited refreshes imported_body but not the operator's body (Decision 9)", async () => {
+  it("issues.edited refreshes imported_body but not the principal's body (Decision 9)", async () => {
     // Seed.
     await postWebhook(t, "issues", {
       action: "labeled",
@@ -536,7 +536,7 @@ describe("POST /api/github/webhook — auth + dispatch", () => {
       repository: { full_name: "x/y", name: "y", owner: { login: "x" } },
     });
 
-    // Operator edits the live body via PATCH.
+    // Principal edits the live body via PATCH.
     const row = t.db
       .query(`SELECT id FROM iterations LIMIT 1`)
       .get() as { id: string };
@@ -545,7 +545,7 @@ describe("POST /api/github/webhook — auth + dispatch", () => {
       {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ body: "operator's notes" }),
+        body: JSON.stringify({ body: "principal's notes" }),
       }
     );
     expect(patchRes.status).toBe(200);
@@ -566,7 +566,7 @@ describe("POST /api/github/webhook — auth + dispatch", () => {
     const after = t.db
       .query(`SELECT body, imported_body FROM iterations WHERE id = ?`)
       .get(row.id) as { body: string | null; imported_body: string | null };
-    expect(after.body).toBe("operator's notes");
+    expect(after.body).toBe("principal's notes");
     expect(after.imported_body).toBe("v2 upstream rewrite");
   });
 

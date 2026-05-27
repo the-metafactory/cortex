@@ -1400,7 +1400,7 @@ describe("SlackAdapter — dedup ring FIFO eviction (cortex#235 r1#11)", () => {
 });
 
 describe("SlackAdapter — surfaceConfig passes surfaceFilter through (cortex#235 r1#11)", () => {
-  test("surfaceFilter is plumbed onto surfaceConfig (operator filter visible to router)", () => {
+  test("surfaceFilter is plumbed onto surfaceConfig (principal filter visible to router)", () => {
     // PayloadFilter is a structured pattern (envelope/payload field
     // matchers), not a callback. The surface-router consumes
     // `surfaceConfig.filter` for the post-subject-match filter step.

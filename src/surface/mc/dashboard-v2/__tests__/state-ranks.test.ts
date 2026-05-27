@@ -10,7 +10,7 @@ import { describe, it, expect } from "bun:test";
 import { STATE_RANKS, STATE_RANK_BY_STATE, rankOf } from "../lib/state-ranks";
 
 describe("STATE_RANKS — dashboard mirror of db/tasks.ts", () => {
-  it("preserves the seven-state operator-attention order", () => {
+  it("preserves the seven-state principal-attention order", () => {
     expect(STATE_RANKS).toEqual([
       "blocked",
       "running",

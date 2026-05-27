@@ -7,12 +7,12 @@
  * F-20 — for `local.observed` sessions, drives state-machine transitions
  * the controlled path normally fires synchronously:
  *   - First event for a `dispatched` observed session →  `dispatched → running`
- *     (the operator's TTY just emitted the first hook event, so the
+ *     (the principal's TTY just emitted the first hook event, so the
  *     terminal session is genuinely doing work).
  *   - `Stop` / `SessionEnd` hook event for a `running` observed session →
  *     `running → completed`. Without this auto-transition, observed
  *     sessions silently inflate F-18 cycle-time / wait-time metrics
- *     until an operator manually closes them — Echo flagged this in
+ *     until a principal manually closes them — Echo flagged this in
  *     PR #54 cycle-1 review.
  *
  * Both auto-transitions only apply when the registered session has

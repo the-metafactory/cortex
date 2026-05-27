@@ -48,7 +48,7 @@ export interface FocusAreaProps {
   selectedIdx: number;
   onSelect: (idx: number) => void;
   /**
-   * Called when the operator presses Enter (or clicks) on a card.
+   * Called when the principal presses Enter (or clicks) on a card.
    * Receives the assignment; MIG-3 wires this to the drill-down.
    */
   onOpen: (item: AssignmentListItem) => void;

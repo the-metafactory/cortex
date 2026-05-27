@@ -69,7 +69,7 @@ const CURATION_MATRIX_BY_STATE: Record<AssignmentState, CurationMatrix> = {
     dispatch: true, // re-run on the same task
     requeue: "Rerun via Dispatch creates a fresh assignment",
     handoff: "Task already done — nothing to hand off",
-    abandon: true, // operator may close out the task even from completed
+    abandon: true, // principal may close out the task even from completed
   },
   cancelled: {
     dispatch: "Already cancelled — terminal",
@@ -140,7 +140,7 @@ export const VERBS_REQUIRING_CONFIRM: ReadonlySet<CurationVerb> = new Set([
   "abandon", "handoff",
 ]);
 
-/** Verbs that the operator marks as destructive (gets red CSS treatment). */
+/** Verbs that the principal marks as destructive (gets red CSS treatment). */
 export const DESTRUCTIVE_VERBS: ReadonlySet<CurationVerb> = new Set([
   "abandon", "handoff",
 ]);

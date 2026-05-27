@@ -77,7 +77,7 @@ export interface IterationBoardProps {
   /** Boot error only — surfaced as a red banner above the board. */
   error: string | null;
   /**
-   * Called when a card is clicked (operator wants the detail surface).
+   * Called when a card is clicked (principal wants the detail surface).
    * F-15 wires this to a real route; until then the parent shows a toast.
    * For inbox-kind clicks the `id` is the task id; for iteration-kind
    * clicks the `id` is the iteration id.
@@ -374,7 +374,7 @@ function IterationCard({ entry, dragging, onOpen, onDragStart, onDragEnd }: Iter
             href={safeSourceUrl}
             target="_blank"
             rel="noopener noreferrer"
-            // Don't open the detail surface when the operator clicks
+            // Don't open the detail surface when the principal clicks
             // through to GitHub — that would race the new tab.
             onClick={(e) => e.stopPropagation()}
           >
@@ -391,10 +391,10 @@ function IterationCard({ entry, dragging, onOpen, onDragStart, onDragEnd }: Iter
         )}
         {/*
           F-17 — inbox column visual hint. Tasks that arrived via the
-          GitHub auto-import (webhook or operator-driven path) carry
+          GitHub auto-import (webhook or principal-driven path) carry
           `source_system === 'github'` on the InboxItem. The denorm is
           identical to the iteration-side badge above; rendering here
-          gives the operator a one-glance signal that a row landed via
+          gives the principal a one-glance signal that a row landed via
           the upstream pipeline rather than being typed directly.
 
           Per design Decision 1 ("the source link gives us a clickable

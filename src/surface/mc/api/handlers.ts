@@ -8,7 +8,7 @@
  *   GET  /api/working-agents                 — agent-keyed feed (F-9 grid)
  *   GET  /api/assignments/:id/events         — paged event feed (F-7 drill-down)
  *   POST /api/sessions                       — spawn a new controlled session
- *   POST /api/assignments/:id/input          — write an operator turn
+ *   POST /api/assignments/:id/input          — write a principal turn
  *
  * Handlers are pure functions over `ApiDeps`. The server owns HTTP framing
  * (routing, method/status, JSON parsing) and defers business logic here.
@@ -177,7 +177,7 @@ export interface ApiDeps {
   /**
    * F-12b Decision 4 — optional default `owner/repo` used to resolve the
    * `#N` and `repo#N` shorthand forms in the URL parser. When absent, those
-   * shorthands fail parse with a clear message (operator has to use the
+   * shorthands fail parse with a clear message (principal has to use the
    * full `owner/repo#N` form).
    *
    * Format: the raw YAML value `"owner/repo"`. Split on the first `/` at
@@ -211,7 +211,7 @@ export interface ApiDeps {
    * `x-hub-signature-256` header against this secret using HMAC-SHA256.
    * When absent, the route 503s — there is no implicit bypass.
    *
-   * Source: same secret the existing `webhook-proxy` uses (operator's
+   * Source: same secret the existing `webhook-proxy` uses (principal's
    * `GITHUB_WEBHOOK_SECRET`). Kept separate from the bot's network
    * config so the mission-control surface can be rotated independently
    * if ever needed.
@@ -221,7 +221,7 @@ export interface ApiDeps {
 
 const DEFAULT_AGENT_ID = "mc-default-agent";
 const DEFAULT_AGENT_NAME = "Mission Control default";
-const DEFAULT_OPERATOR_ID = "mc-default-operator";
+const DEFAULT_OPERATOR_ID = "mc-default-principal";
 /**
  * Default priority for `internal`-source tasks created via POST /api/sessions.
  * Used by the INSERT below AND `buildNotificationContextFromCreate` — a
@@ -504,7 +504,7 @@ export function handleListEvents(
 
 /**
  * Ensure the well-known default agent row exists. Idempotent — safe to call
- * on every POST /api/sessions. Phase E will introduce operator-specified
+ * on every POST /api/sessions. Phase E will introduce principal-specified
  * agents; until then a single shared agent is sufficient to satisfy the
  * agent_task_assignment FK.
  */
@@ -519,11 +519,11 @@ function ensureDefaultAgent(db: Database): string {
 
 /**
  * F-20 — register an agent by id idempotently. Used by `local.observed`
- * sessions where the wrapper supplies the operator's identity (e.g.
+ * sessions where the wrapper supplies the principal's identity (e.g.
  * `agentId: 'andreas'`, `agentName: 'Andreas'`) which may not exist in
  * the agents table yet. The first observed call lands the row;
  * subsequent calls are no-ops. `name` is only applied on insert — once
- * an agent is registered, the operator owns its display name.
+ * an agent is registered, the principal owns its display name.
  */
 function ensureNamedAgent(
   db: Database,
@@ -541,13 +541,13 @@ function ensureNamedAgent(
 
 // F-19 Decision 5 — server-side dispatch debounce.
 //
-// Cross-tab two-click protection: when an operator opens MC v2 in two
+// Cross-tab two-click protection: when a principal opens MC v2 in two
 // browser tabs and clicks Dispatch on the same task in both, the
 // per-tab UI gate (button-disabled-while-busy) doesn't help — each
 // tab has independent state. Without server-side gating each POST
 // would call `spawnControlledSession` → `Bun.spawn` → a fresh CC
 // subprocess and pay the full boot-prompt token cost twice for what
-// the operator experienced as one click.
+// the principal experienced as one click.
 //
 // Implementation: a tiny per-process Map keyed by `taskId|agentId`
 // remembers the assignment id created by a recent successful POST.
@@ -555,7 +555,7 @@ function ensureNamedAgent(
 // assignment id — the dashboard hook treats this as success and
 // refetches. Memory-only (cleared on restart, lost on crash); 2 s is
 // well above any legitimate human double-click round-trip and well
-// below any "second operator dispatched the same task on purpose"
+// below any "second principal dispatched the same task on purpose"
 // interval.
 const DISPATCH_DEBOUNCE_MS = 2_000;
 interface DispatchDebounceEntry {
@@ -651,7 +651,7 @@ export async function handleCreateSession(
   // fresh task per call so debounce-by-task-id is a non-sequitur there).
   //
   // The lock is RELEASED on the spawn-failure rollback path below so the
-  // operator can retry without waiting 2s after a transient failure.
+  // principal can retry without waiting 2s after a transient failure.
   let debounceKey: string | null = null;
   if (body.taskId) {
     const key = dispatchDebounceKey(taskId, agentId);
@@ -694,7 +694,7 @@ export async function handleCreateSession(
   try {
     insertRows();
   } catch (err) {
-    // Release the soft-lock so the operator can retry without 2s wait.
+    // Release the soft-lock so the principal can retry without 2s wait.
     if (debounceKey !== null) dispatchDebounce.delete(debounceKey);
     return error(
       `Failed to create assignment: ${(err as Error).message}`,
@@ -792,7 +792,7 @@ export async function handleCreateSession(
           `[api] rollback after spawn-failure failed: ${(rollbackErr as Error).message}\n`
         );
       }
-      // Release the soft-lock so the operator can retry without 2s wait.
+      // Release the soft-lock so the principal can retry without 2s wait.
       if (debounceKey !== null) dispatchDebounce.delete(debounceKey);
       const status = err instanceof SessionConflict ? 409 : 500;
       return error(`Spawn failed: ${(err as Error).message}`, status);
@@ -857,7 +857,7 @@ export async function handleCreateSession(
   // F-12 Decision 9 + Scope Summary — emit an `principal.curation` event with
   // `kind: "dispatch"` so the manual-dispatch path (POST /api/sessions) lands
   // in the audit trail alongside requeue / handoff / abandon. The event
-  // anchors to the newly-spawned session and captures the agent the operator
+  // anchors to the newly-spawned session and captures the agent the principal
   // dispatched to; `newAssignmentId` is included for symmetry with the
   // handoff variant (the "assignment this spawn created").
   const dispatchCurationEvent = createPrincipalCurationEvent(
@@ -871,7 +871,7 @@ export async function handleCreateSession(
   );
   broadcastEvent(deps.wsRegistry, endpoint.sessionId, dispatchCurationEvent);
 
-  // Optional initial operator turn — controlled sessions only. Observed
+  // Optional initial principal turn — controlled sessions only. Observed
   // sessions don't have a writable stdin (the wrapper's TTY owns it);
   // a `prompt` field on an observed POST is silently ignored.
   if (
@@ -888,7 +888,7 @@ export async function handleCreateSession(
       broadcastEvent(deps.wsRegistry, endpoint.sessionId, event);
     } catch (err) {
       // Don't fail the whole create-session call — the session is spawned
-      // and the operator can retry via POST /api/assignments/:id/input.
+      // and the principal can retry via POST /api/assignments/:id/input.
       process.stderr.write(
         `[api] initial prompt write failed for ${assignmentId}: ${(err as Error).message}\n`
       );
@@ -951,7 +951,7 @@ function taskShortRef(taskId: string): string {
 // ---------- POST /api/assignments/:id/input ----------
 
 /**
- * Server-side cap on operator input payload size, measured in UTF-8 bytes.
+ * Server-side cap on principal input payload size, measured in UTF-8 bytes.
  *
  * Name mirrors the client-side `DRILL_INPUT_MAX_BYTES` in the drill-down input
  * (F-10 Decision 2) so the shared 50 KB bound is obvious from grep alone; the
@@ -1014,7 +1014,7 @@ export function handleSendInput(
   const text = hasText ? body.text ?? "" : "";
   const textByteLength = Buffer.byteLength(text, "utf8");
   if (textByteLength > DRILL_INPUT_MAX_BYTES) {
-    return error("Operator input exceeds the 50 KB limit.", 413);
+    return error("Principal input exceeds the 50 KB limit.", 413);
   }
 
   // --- image validation ---
@@ -1194,7 +1194,7 @@ function readReason(rawBody: unknown): {
   if (typeof reason !== "string") {
     return { err: error("'reason' must be a string", 400) };
   }
-  // Same 50 KB cap principal.input uses — operator-authored free-text.
+  // Same 50 KB cap principal.input uses — principal-authored free-text.
   if (Buffer.byteLength(reason, "utf8") > DRILL_INPUT_MAX_BYTES) {
     return { err: error("'reason' exceeds the 50 KB limit", 413) };
   }
@@ -1390,7 +1390,7 @@ export function handleAbandonAssignment(
   // Caller may force a scope explicitly. `scope: "task"` on a non-terminal
   // assignment is currently rejected (Decision 5 says abandon-the-task is
   // for "no active assignment"; F-12 keeps the assignment-keyed surface
-  // strict — the operator should cancel the assignment first or wait for
+  // strict — the principal should cancel the assignment first or wait for
   // it to settle). `scope: "assignment"` on a terminal assignment is
   // rejected by the state machine itself ("No transitions from terminal
   // state").
@@ -1460,7 +1460,7 @@ export function handleAbandonAssignment(
   // scope === "task"
   // Decision 5 — abandon-the-task: only legal when no active assignment is
   // in flight. F-12 keeps this strict to the assignment-keyed surface — if
-  // the assignment row is non-terminal, the operator should cancel the
+  // the assignment row is non-terminal, the principal should cancel the
   // assignment explicitly first (or use the inferred-scope default which
   // routes to scope=assignment).
   if (!assignmentTerminal) {
@@ -1620,7 +1620,7 @@ export async function handleHandoffAssignment(
     // `fireCancelObserver` would otherwise do post-spawn; running it up
     // front pins the invariant instead of racing it. Best-effort: errors
     // are logged to stderr but don't abort the hand-off (the DB cancel has
-    // already committed; the new spawn must still happen so the operator
+    // already committed; the new spawn must still happen so the principal
     // isn't left with neither side running).
     try {
       await createControlledEndpoint(
@@ -1714,7 +1714,7 @@ export async function handleHandoffAssignment(
 
   // Decision 9 — principal.curation event with `kind: "handoff"` on the NEW
   // session. The cancel of the old assignment has its own `state.transition`
-  // event on the OLD session; this curation event captures the operator
+  // event on the OLD session; this curation event captures the principal
   // rationale for the hand-off as a whole.
   const curationEvent = createPrincipalCurationEvent(db, endpoint.sessionId, {
     kind: "handoff",
@@ -1977,7 +1977,7 @@ export async function handleCreateTask(
   }
 
   // Full preview-flow re-run (parse + dedup + fetch). Decision 6 spells this
-  // out as "defense-in-depth: if the operator races the dedup window
+  // out as "defense-in-depth: if the principal races the dedup window
   // between preview and submit, they get the same error here".
   const flow = await runPreviewFlow(db, deps, body.ref);
   if (!flow.ok) return flow.response;
@@ -2094,7 +2094,7 @@ export function handleAbandonTask(
     return error(`Task '${taskId}' is already cancelled`, 409);
   }
 
-  // Reject if there's a non-shadow, non-terminal assignment — the operator
+  // Reject if there's a non-shadow, non-terminal assignment — the principal
   // should cancel that assignment first (via the assignment-keyed route) or
   // let it settle. Mirrors F-12's task-scope branch invariant.
   const blocker = db
@@ -2132,7 +2132,7 @@ export function handleAbandonTask(
   if (!sessionRow) {
     // Pre-F-12b tasks (internal-source) that never ran any assignment fall
     // here — no session exists to anchor the event FK. Refuse rather than
-    // fabricating one; the operator can still cancel the task row by other
+    // fabricating one; the principal can still cancel the task row by other
     // means (direct SQL or a future internal-source curation route).
     return error(
       `Task '${taskId}' has no session to anchor curation event`,
@@ -2199,7 +2199,7 @@ export function handleAbandonTask(
 //   D5  — designing → queued is "Promote"; cancellation is the explicit destructive path
 //   D8  — endpoint shapes (this file)
 //   D9  — no write-back to source
-//   D10 Q1 — operator-driven `done` from non-`in_flight`/non-`blocked`
+//   D10 Q1 — principal-driven `done` from non-`in_flight`/non-`blocked`
 //            states is REJECTED in v1 (Phase G feature). The matrix in
 //            `db/iterations.ts#canTransitionServer` enforces this; the
 //            handler wraps the rejection with a friendlier message
@@ -2369,7 +2369,7 @@ export function handleCreateIteration(
       source_system: (body.source_system) ?? null,
       source_url: (body.source_url) ?? null,
       source_parent_ref: (body.source_parent_ref) ?? null,
-      // `imported_at` is set by F-17 during real imports; for operator-
+      // `imported_at` is set by F-17 during real imports; for principal-
       // typed iterations it's null. Leaving it out of the create body
       // keeps the wire surface honest about what callers should provide.
       imported_at: null,
@@ -2398,7 +2398,7 @@ export function handleCreateIteration(
 
 /**
  * Iteration ids share the `generateId` ULID-ish shape with tasks /
- * sessions / events. Prefixing with `it-` would be operator-friendly
+ * sessions / events. Prefixing with `it-` would be principal-friendly
  * but breaks the existing `generateId` invariant ("opaque to callers");
  * keep parity with the rest of the schema.
  */
@@ -2484,7 +2484,7 @@ export function handlePatchIteration(
     const proposed = body.state;
     if (proposed !== current.state) {
       // canTransitionServer rejects the (current, proposed) move.
-      // Friendly message names the legal next states so the operator
+      // Friendly message names the legal next states so the principal
       // sees the right escape hatch (almost always `cancel`).
       if (!canTransitionServer(current.state, proposed)) {
         const allowed = nextStatesServer(current.state);
@@ -2494,11 +2494,11 @@ export function handlePatchIteration(
             : `allowed next states: ${allowed.join(", ")}`;
         // D10 Q1 — special-case `* → done` from non-{in_flight,blocked}
         // with a copy that names `cancel` as the v1 alternative. Avoids
-        // the operator interpreting "you can't ship this iteration"
+        // the principal interpreting "you can't ship this iteration"
         // as a bug and re-trying.
         const isDoneAttempt = proposed === "done";
         const detail = isDoneAttempt
-          ? "iteration must reach in_flight before it can complete; cancel it instead if the work is no longer needed (operator-driven done is a Phase G feature)"
+          ? "iteration must reach in_flight before it can complete; cancel it instead if the work is no longer needed (principal-driven done is a Phase G feature)"
           : `transition '${current.state}' → '${proposed}' is not legal`;
         return error(`${detail}; ${allowedClause}`, 400);
       }
@@ -2625,7 +2625,7 @@ export function handleAttachTaskToIteration(
     // this, two concurrent attaches racing through the gate both pass
     // (`attachTask` is permissive at the DB layer per
     // `iterations.test.ts:608` — it overwrites the FK silently); last
-    // write wins and the operator-visible 1:N invariant is violated.
+    // write wins and the principal-visible 1:N invariant is violated.
     // The transaction also keeps the post-attach `touchIteration`
     // atomic with the write, so a partial-success can't leave the
     // iteration with a fresh tasks row but stale `updated_at`.
@@ -2644,7 +2644,7 @@ export function handleAttachTaskToIteration(
         }
         if (link.iterationId !== null && link.iterationId !== iterationId) {
           // Decision 3 — task contributing to two iterations is the
-          // operator's signal to clone, not to model nesting. Refuse
+          // principal's signal to clone, not to model nesting. Refuse
           // with the existing iteration id so the dashboard can offer
           // a "detach and re-attach" affordance instead of silently
           // overwriting.
@@ -2721,7 +2721,7 @@ export function handleAttachTaskToIteration(
     const newTaskId = generateId();
     mutatedTaskId = newTaskId;
     try {
-      // Internal-only source — operator-typed-direct-into-iteration.
+      // Internal-only source — principal-typed-direct-into-iteration.
       // Mirrors the F-12b CreateSession internal-task INSERT shape.
       // Per Echo grove-v2#42 (Major 2) — the touch is now inside the
       // same transaction so create-and-touch land atomically.
@@ -2876,7 +2876,7 @@ export function handleDetachTaskFromIteration(
 //
 // Two surfaces:
 //   handleImportIterationFromGithub  — POST /api/iterations/from-github
-//                                       (operator-driven, gh CLI, 200/201/400/404/409)
+//                                       (principal-driven, gh CLI, 200/201/400/404/409)
 //   handleGithubWebhook              — POST /api/github/webhook
 //                                       (HMAC-validated upstream stream;
 //                                        delegates to iteration-import.ts)
@@ -2884,15 +2884,15 @@ export function handleDetachTaskFromIteration(
 // Decisions referenced inline (see docs/design-mc-iteration-planning.md):
 //   D1  — Grove owns the lifecycle. Source is import-only.
 //   D2  — GitHub parent-issue + sub-issues IS the iteration.
-//   D5  — Operator-driven promotion only (auto-import lands in `inbox`).
+//   D5  — Principal-driven promotion only (auto-import lands in `inbox`).
 //   D7  — GitHub-only in v1.
-//   D9  — No write-back; subsequent operator edits never overwritten.
+//   D9  — No write-back; subsequent principal edits never overwritten.
 //   D10 Q6 — explicit `iteration` label (configurable per-network).
 
 const IMPORT_FROM_GITHUB_KEYS = ["ref", "label"] as const;
 
 /**
- * F-17 — operator-driven import. Mirrors F-12b's `POST /api/tasks` shape:
+ * F-17 — principal-driven import. Mirrors F-12b's `POST /api/tasks` shape:
  * parse the ref → fetch via gh CLI → run the import logic → return the
  * canonical iteration detail.
  *
@@ -2904,7 +2904,7 @@ const IMPORT_FROM_GITHUB_KEYS = ["ref", "label"] as const;
  *     F-12b uses)
  *   - 409 the issue exists but isn't carrying the iteration label —
  *     returns the canonical ref + a friendly message naming the label
- *     so the operator can apply it via GitHub and retry.
+ *     so the principal can apply it via GitHub and retry.
  */
 export async function handleImportIterationFromGithub(
   db: Database,
@@ -2943,16 +2943,16 @@ export async function handleImportIterationFromGithub(
   }
   const canonical = canonicalRef(parsed);
 
-  // No pre-flight short-circuit on `existingByRef`. The operator-driven
+  // No pre-flight short-circuit on `existingByRef`. The principal-driven
   // path is a backfill surface — its headline use case is recovering when
   // a webhook delivery was missed (network blip, secret rotation gap,
   // restart) and the upstream body has since changed. Skipping the gh
   // fetch when a row already exists would lock out that recovery: every
   // re-import would return `bodyRefreshed: false` and silently keep the
-  // stale `imported_body` snapshot, with no operator-visible cue that
+  // stale `imported_body` snapshot, with no principal-visible cue that
   // the audit trail had diverged.
   //
-  // Cost is bounded — operator-initiated, never a webhook firehose — and
+  // Cost is bounded — principal-initiated, never a webhook firehose — and
   // `importIterationFromMetadata` already correctly returns
   // `{ kind: 'exists', bodyRefreshed: true }` when the snapshot needs
   // refreshing, so the truth lives there (single source for the dedup
@@ -2979,7 +2979,7 @@ export async function handleImportIterationFromGithub(
   const result = importIterationFromMetadata(db, meta, { iterationLabel });
 
   if (result.kind === "invalid_metadata") {
-    // Should not happen on the operator-driven path — `gh api` always
+    // Should not happen on the principal-driven path — `gh api` always
     // returns sane shapes — but guard against malformed responses.
     process.stderr.write(
       `[api] POST /api/iterations/from-github invalid metadata for ${canonical}: ${result.reason}\n`
@@ -3134,7 +3134,7 @@ async function verifyGithubSignature(
  * the existing `webhook-proxy` already validates the upstream HMAC and
  * fans out to grove-api. This route is a peer surface that runs the
  * Grove-iteration logic against the same payload (the proxy can be
- * configured to fan out to both endpoints; for v1 the operator wires
+ * configured to fan out to both endpoints; for v1 the principal wires
  * mission-control's `/api/github/webhook` URL alongside the cloud
  * worker's).
  *
@@ -3143,11 +3143,11 @@ async function verifyGithubSignature(
  *                           AND no Grove iteration exists yet, create one.
  *                           Idempotent (no-op when one already exists).
  *   - `issues.unlabeled` — log + no-op. Decision 9 — orphaning is the
- *                           operator's call; we never delete iterations
+ *                           principal's call; we never delete iterations
  *                           in response to upstream label changes.
  *   - `issues.edited`    — if the issue is a tracked iteration parent,
  *                           refresh the audit-only `imported_body`
- *                           snapshot. Operator-edited `body` left alone.
+ *                           snapshot. Principal-edited `body` left alone.
  *   - `issues.opened`    — if the issue is a sub-issue of a tracked
  *   /closed/edited         parent, create or update the child task row.
  *   - other events       — ignored (returns 200 OK so GitHub doesn't
@@ -3255,7 +3255,7 @@ export async function handleGithubWebhook(
   // ---- Parent-issue branch ----
   const meta = parentMetadataFromWebhook(payload);
   if (!meta) {
-    // Structurally malformed payload. Log + 400 so the operator sees it
+    // Structurally malformed payload. Log + 400 so the principal sees it
     // (GitHub will surface 400s in the webhook delivery UI).
     return error("payload missing required issue/repository fields", 400);
   }
@@ -3286,7 +3286,7 @@ export async function handleGithubWebhook(
   }
 
   if (action === "unlabeled") {
-    // Decision 9 — orphaning is the operator's call. Log + 200; never
+    // Decision 9 — orphaning is the principal's call. Log + 200; never
     // delete the iteration row in response to an upstream label
     // removal.
     const env = payload as { label?: { name?: string } };
@@ -3301,7 +3301,7 @@ export async function handleGithubWebhook(
 
   if (action === "edited") {
     // Decision 9 — refresh the audit-only `imported_body` snapshot;
-    // never overwrite the operator-edited `body`.
+    // never overwrite the principal-edited `body`.
     const result = importIterationFromMetadata(db, meta, { iterationLabel });
     if (result.kind === "exists" && result.bodyRefreshed) {
       const detail = getIteration(db, result.iteration.id);

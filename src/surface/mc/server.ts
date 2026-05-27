@@ -120,7 +120,7 @@ export interface StartServerOptions {
   notify?: MaybeNotifyDeps;
   /**
    * F-12b Decision 4 — optional `owner/repo` default for `#N` / `repo#N`
-   * shorthand parsing. Source: operator's `mission-control.yaml` or
+   * shorthand parsing. Source: principal's `mission-control.yaml` or
    * equivalent. When absent, shorthands fail with a clear message.
    */
   defaultGithubRepo?: string;
@@ -138,7 +138,7 @@ export interface StartServerOptions {
   /**
    * F-17 — GitHub webhook HMAC secret. When omitted, the
    * `POST /api/github/webhook` route 503s — no implicit bypass. The
-   * operator wires this from the same `GITHUB_WEBHOOK_SECRET` they
+   * principal wires this from the same `GITHUB_WEBHOOK_SECRET` they
    * configure on the upstream `webhook-proxy`.
    */
   githubWebhookSecret?: string;
@@ -203,7 +203,7 @@ export function startServer(
       // server binds loopback-only (config.hostname = "127.0.0.1" by default,
       // enforced by the SEV-2 fix above). If MC is ever fronted by a reverse
       // proxy or exposed beyond loopback, either strip wsClients from this
-      // response or gate /health behind auth. Operator-liveness probes should
+      // response or gate /health behind auth. Principal-liveness probes should
       // only see `status` + `version`.
       if (req.method === "GET" && url.pathname === "/health") {
         const body: HealthResponse = {
@@ -454,7 +454,7 @@ async function handleApi(
     return handleListWorkingAgents(db);
   }
 
-  // F-17 — operator-driven GitHub iteration import.
+  // F-17 — principal-driven GitHub iteration import.
   //   POST /api/iterations/from-github  — gh CLI fetch + import logic
   //
   // Matched BEFORE the broader `/api/iterations/:id` regex below so the

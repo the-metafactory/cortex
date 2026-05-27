@@ -89,7 +89,7 @@ export interface TaskTableProps {
   onClear: () => void;
 
   /**
-   * Called when the operator opens a task. Receives the assignment id of
+   * Called when the principal opens a task. Receives the assignment id of
    * the task's primary active assignment (Decision 5 tie-break). For
    * empty-assignment tasks the parent should fall back to the
    * `shadow_assignment_id` (F-12b Decision 7).
@@ -113,7 +113,7 @@ export interface TaskTableProps {
   onOpenIteration?: (iterationId: string) => void;
 
   /**
-   * F-19 — operator clicks Dispatch on a task row. Caller fires
+   * F-19 — principal clicks Dispatch on a task row. Caller fires
    * `POST /api/sessions { taskId }`. Optional so embedding tests
    * without dispatch wiring is a no-op (button stays hidden).
    */

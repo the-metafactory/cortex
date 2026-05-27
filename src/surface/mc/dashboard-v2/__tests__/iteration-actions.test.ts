@@ -2,7 +2,7 @@
  * F-15 — pure-helper tests for `lib/iteration-actions.ts`.
  *
  * Walks every (state × verb) cell so a future change in the matrix
- * (e.g. Phase G operator-driven done) cannot land silently. Mirrors
+ * (e.g. Phase G principal-driven done) cannot land silently. Mirrors
  * the matrix-coverage style from `iteration-status.test.ts`.
  */
 
@@ -103,7 +103,7 @@ describe("iterationActionMatrix — null / unknown state defensive shape", () =>
 
 describe("iterationActionMatrix — D10 Q1 invariant", () => {
   it("no `promote` cell EVER moves to done — Phase G feature", () => {
-    // Operator-driven done from non-{in_flight,blocked} is deferred to
+    // Principal-driven done from non-{in_flight,blocked} is deferred to
     // Phase G. This test pins the invariant: the detail surface offers
     // no path to mark an iteration done from the UI; the only `done`
     // path in v1 is the derivation from task termination + source
@@ -154,7 +154,7 @@ describe("labelForAction — exhaustive", () => {
     }
   });
 
-  it("Promote and Cancel have operator-friendly copy", () => {
+  it("Promote and Cancel have principal-friendly copy", () => {
     expect(labelForAction("promote")).toBe("Promote");
     expect(labelForAction("cancel")).toBe("Cancel iteration");
   });
@@ -183,7 +183,7 @@ describe("matrix coverage — every (state × verb) cell renders a defined boole
         const m = iterationActionMatrix(state);
         expect(typeof m[verb]).toBe("boolean");
         if (!m[verb]) {
-          // Disabled cell — tooltip must exist (operator needs to
+          // Disabled cell — tooltip must exist (principal needs to
           // learn why it's greyed out).
           expect(disabledTooltip(state as IterationState, verb).length)
             .toBeGreaterThan(0);

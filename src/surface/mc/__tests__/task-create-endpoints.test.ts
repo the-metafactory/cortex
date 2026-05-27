@@ -3,7 +3,7 @@
  *
  * Exercises the three new endpoints (preview / create / abandon-task)
  * against a real Bun.serve instance with a fake `gh` CLI. The fake spawn
- * returns a canned JSON response so tests don't depend on the operator's
+ * returns a canned JSON response so tests don't depend on the principal's
  * `gh auth` state or network.
  *
  * Decisions referenced inline:
@@ -416,12 +416,12 @@ describe("POST /api/tasks", () => {
       body: JSON.stringify({
         ref: "the-metafactory/grove-v2#42",
         priority: 2,
-        titleOverride: "operator override",
+        titleOverride: "principal override",
       }),
     });
     expect(res.status).toBe(201);
     const body = await res.json();
-    expect(body.title).toBe("operator override");
+    expect(body.title).toBe("principal override");
   });
 
   it("returns 409 conflict when racing the dedup window after preview", async () => {

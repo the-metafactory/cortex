@@ -1,5 +1,5 @@
 -- Grove Cloud API — D1 Schema
--- Derived from dashboard-db.ts, with principal_id for multi-operator attribution.
+-- Derived from dashboard-db.ts, with principal_id for multi-principal attribution.
 
 CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY,

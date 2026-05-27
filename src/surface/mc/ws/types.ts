@@ -5,7 +5,7 @@
  * shapes. Clients check `protocolVersion` on the `connected` handshake to
  * detect incompatibility.
  *
- * v2 (cortex#436): event kinds `operator.input` / `operator.curation` renamed
+ * v2 (cortex#436): event kinds `principal.input` / `principal.curation` renamed
  * to `principal.input` / `principal.curation`; identity field `operatorId`
  * renamed to `principalId`. Clients must read the principal.* kinds.
  */
@@ -50,9 +50,9 @@ export type WsServerMessage =
   // detail surface wants the full row.
   //
   //   - `iteration.created` — full `IterationDetail`. Fires once per
-  //     POST; new-iteration creates carry tasks (operator may have
+  //     POST; new-iteration creates carry tasks (principal may have
   //     created with attachments) so the detail surface can populate
-  //     immediately if the operator opens it post-create.
+  //     immediately if the principal opens it post-create.
   //   - `iteration.updated` — header-only `IterationListItem`. Fires
   //     on every successful PATCH / attach / detach. Drives the kanban.
   //   - `iteration.detail_updated` — full `IterationDetail`. Fires
