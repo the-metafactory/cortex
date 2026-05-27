@@ -1961,7 +1961,7 @@ export function formatCheckReport(result: ConversionResult): string {
         .map(([plat, ids]) => `${plat}=${ids.length}`)
         .join(", ");
       const dm = p.session_config?.dm ? " +dm" : "";
-      lines.push(`  - ${p.id} (home_operator=${p.home_operator}, home_stack=${p.home_stack}) roles=[${p.role.join(", ")}] platforms=[${platforms}]${dm}`);
+      lines.push(`  - ${p.id} (home_principal=${p.home_principal}, home_stack=${p.home_stack}) roles=[${p.role.join(", ")}] platforms=[${platforms}]${dm}`);
     }
     lines.push(`policy.roles: ${policy.roles.length}`);
     for (const r of policy.roles) {

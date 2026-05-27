@@ -37,7 +37,7 @@ import type {
 function principal(overrides: Partial<Principal> = {}): Principal {
   return {
     id: "luna",
-    home_operator: "andreas",
+    home_principal: "andreas",
     home_stack: "andreas/research",
     role: ["operator"],
     trust: [],

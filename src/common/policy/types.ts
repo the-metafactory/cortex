@@ -34,12 +34,11 @@ export interface Principal {
    */
   id: string;
   /**
-   * Operator that owns this principal. Same value across all
-   * principals in a single-operator deployment; varies across
-   * principals once Phase D federation lands and the registry
-   * spans multiple operators.
+   * The owning principal (the human running the stack). Same value
+   * across all entries in a single-principal deployment; varies once
+   * Phase D federation lands and the registry spans multiple principals.
    */
-  home_operator: string;
+  home_principal: string;
   /**
    * Stack identity in `{operator_id}/{stack_id}` form (Phase A.5
    * Q7 lock-in). The stack a principal calls "home" — bus

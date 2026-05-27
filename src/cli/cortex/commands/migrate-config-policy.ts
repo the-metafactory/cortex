@@ -27,7 +27,7 @@
  *      bundles → warn + take the conservative UNION (preserves access;
  *      operator must tighten manually if they want to).
  *   7. External-peer principals (an `agent-<X>` role where `<X>` isn't a
- *      declared agent in this config) emit with `home_operator: "unknown"`
+ *      declared agent in this config) emit with `home_principal: "unknown"`
  *      and `home_stack: "unknown/unknown"` + a warning so operators see
  *      the gap.
  *
@@ -295,7 +295,7 @@ function capsForRoleBundle(
 
 interface PrincipalAccumulator {
   id: string;
-  home_operator: string;
+  home_principal: string;
   home_stack: string;
   platform_ids: Record<string, Set<string>>;
   roles: Set<string>;
@@ -411,7 +411,7 @@ export function buildPolicy(input: PolicyBuilderInput): PolicyBuilderOutput {
     }
     const acc: PrincipalAccumulator = {
       id: p.id,
-      home_operator: p.home_operator,
+      home_principal: p.home_principal,
       home_stack: p.home_stack,
       platform_ids: platformIds,
       roles: new Set(p.role),
@@ -553,7 +553,7 @@ export function buildPolicy(input: PolicyBuilderInput): PolicyBuilderOutput {
         if (principal === undefined) {
           principal = {
             id: principalId,
-            home_operator: isExternal ? "unknown" : input.operatorId,
+            home_principal: isExternal ? "unknown" : input.operatorId,
             home_stack: isExternal ? "unknown/unknown" : input.homeStack,
             platform_ids: {},
             roles: new Set(),
@@ -568,7 +568,7 @@ export function buildPolicy(input: PolicyBuilderInput): PolicyBuilderOutput {
               field: `policy.principals[${principalId}]`,
               message:
                 `external peer "${principalId}" found in agents[${view.agentId}].presence.${view.platform}.roles[].agent-${principalId}; ` +
-                `please set home_operator + home_stack manually in policy.principals[${principalId}] (currently "unknown"/"unknown/unknown")`,
+                `please set home_principal + home_stack manually in policy.principals[${principalId}] (currently "unknown"/"unknown/unknown")`,
             });
           }
           principals.set(principalId, principal);
@@ -592,7 +592,7 @@ export function buildPolicy(input: PolicyBuilderInput): PolicyBuilderOutput {
       const anonId = `anonymous-${view.platform}-${view.agentId}`;
       const acc: PrincipalAccumulator = {
         id: anonId,
-        home_operator: input.operatorId,
+        home_principal: input.operatorId,
         home_stack: input.homeStack,
         platform_ids: {},
         roles: new Set(),
@@ -638,7 +638,7 @@ export function buildPolicy(input: PolicyBuilderInput): PolicyBuilderOutput {
       } else {
         principals.set(anonId, {
           id: anonId,
-          home_operator: input.operatorId,
+          home_principal: input.operatorId,
           home_stack: input.homeStack,
           platform_ids: {},
           roles: new Set([allowAllRoleId]),
@@ -660,7 +660,7 @@ export function buildPolicy(input: PolicyBuilderInput): PolicyBuilderOutput {
       if (opPrincipal === undefined) {
         opPrincipal = {
           id: operatorPrincipalId,
-          home_operator: input.operatorId,
+          home_principal: input.operatorId,
           home_stack: input.homeStack,
           platform_ids: {},
           roles: new Set(["operator"]),
@@ -732,7 +732,7 @@ export function buildPolicy(input: PolicyBuilderInput): PolicyBuilderOutput {
           // to land. Their channel-context session config stays empty.
           principal = {
             id: principalId,
-            home_operator: input.operatorId,
+            home_principal: input.operatorId,
             home_stack: input.homeStack,
             platform_ids: {},
             roles: new Set(),
@@ -916,7 +916,7 @@ function serialisePolicy(
     }
     const p: PolicyPrincipal = {
       id: acc.id,
-      home_operator: acc.home_operator,
+      home_principal: acc.home_principal,
       home_stack: acc.home_stack,
       role: [...acc.roles].sort(),
       trust: [...acc.trust].sort(),

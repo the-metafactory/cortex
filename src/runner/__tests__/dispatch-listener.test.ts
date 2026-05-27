@@ -1106,7 +1106,7 @@ function engineGranting(capabilities: readonly string[]): PolicyEngine {
     principals: [
       {
         id: "cortex",
-        home_operator: "andreas",
+        home_principal: "andreas",
         home_stack: "andreas/research",
         role: ["operator"],
         trust: [],
@@ -1256,7 +1256,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
       principals: [
         {
           id: "cortex",
-          home_operator: "andreas",
+          home_principal: "andreas",
           home_stack: "andreas/research",
           role: ["operator"],
           trust: [],
@@ -1469,7 +1469,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
       principals: [
         {
           id: "cortex",
-          home_operator: "andreas",
+          home_principal: "andreas",
           home_stack: homeStack,
           role: ["operator"],
           trust: [],
@@ -2250,7 +2250,7 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
       principals: [
         {
           id: "alice",
-          home_operator: "andreas",
+          home_principal: "andreas",
           home_stack: "andreas/research",
           role: ["operator"],
           trust: [],
@@ -2311,7 +2311,7 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
       principals: [
         {
           id: "cortex",
-          home_operator: "andreas",
+          home_principal: "andreas",
           home_stack: "andreas/research",
           role: ["operator"],
           trust: [],
@@ -2365,7 +2365,7 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
       principals: [
         {
           id: "cortex",
-          home_operator: "andreas",
+          home_principal: "andreas",
           home_stack: "andreas/research",
           role: ["operator"],
           trust: [],

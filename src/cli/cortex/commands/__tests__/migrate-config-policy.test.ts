@@ -16,7 +16,7 @@
  *   - DM userRoles[] → augments principal's session_config.dm
  *   - defaultRole: denied → synthetic anonymous principal with empty role[]
  *   - defaultRole: <named> → synthetic anonymous principal with that role
- *   - external peer (`agent-ivy` where ivy is not declared) → home_operator
+ *   - external peer (`agent-ivy` where ivy is not declared) → home_principal
  *     "unknown" + warning
  *   - idempotency: re-running emits byte-identical output
  *   - --labels override: principal id taken from labels file
@@ -147,7 +147,7 @@ agents:
     const operator = policy.principals.find((p) => p.id === "operator")!;
     expect(operator.platform_ids.discord).toContain("1134325176796987522");
     expect(operator.role).toContain("operator");
-    expect(operator.home_operator).toBe("andreas");
+    expect(operator.home_principal).toBe("andreas");
     expect(operator.home_stack).toBe("andreas/meta-factory");
 
     const user = policy.principals.find((p) => p.id === "user-d049472")!;
@@ -407,7 +407,7 @@ describe("defaultRole synthesis", () => {
 // ---------------------------------------------------------------------------
 
 describe("external peer principals", () => {
-  test("agent-ivy where ivy is not declared → home_operator: unknown + warning", () => {
+  test("agent-ivy where ivy is not declared → home_principal: unknown + warning", () => {
     const result = buildPolicy({
       operatorId: "andreas",
       homeStack: "andreas/meta-factory",
@@ -425,7 +425,7 @@ describe("external peer principals", () => {
     });
     const ivy = result.policy.principals.find((p) => p.id === "ivy")!;
     expect(ivy).toBeDefined();
-    expect(ivy.home_operator).toBe("unknown");
+    expect(ivy.home_principal).toBe("unknown");
     expect(ivy.home_stack).toBe("unknown/unknown");
     expect(ivy.platform_ids.discord).toContain("IVY_ID");
     const warn = result.warnings.find(
@@ -604,7 +604,7 @@ describe("bare-string capability rewriting", () => {
         principals: [
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/work",
             role: ["operator"],
             trust: [],
@@ -648,7 +648,7 @@ describe("nkey_pub round-trip (PR #306 r1 blocker fix)", () => {
         principals: [
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/work",
             role: ["operator"],
             trust: [],
@@ -680,7 +680,7 @@ describe("nkey_pub round-trip (PR #306 r1 blocker fix)", () => {
         principals: [
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/work",
             role: ["operator"],
             trust: [],

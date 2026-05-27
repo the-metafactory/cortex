@@ -411,7 +411,7 @@ export interface DispatchRequest {
    * Shape mirrors `src/common/policy/types.ts` Principal. We import
    * the type from there to keep the engine and the harness on one
    * definition of "who is acting" — the harness can read
-   * `principal.home_operator` / `home_stack` for sovereignty-aware
+   * `principal.home_principal` / `home_stack` for sovereignty-aware
    * substrate decisions without re-parsing the envelope.
    */
   principal?: Principal;

@@ -1203,15 +1203,14 @@ export const PolicyPrincipalSchema = z.object({
     "principal id must be lowercase alphanumeric + hyphen, starting with a letter (e.g. 'luna', 'echo')",
   ),
   /**
-   * Operator that owns this principal. Same letter-prefix
-   * grammar — `PrincipalConfigSchema.id` enforces it at the operator
-   * level and we mirror here so a parsed principal can't carry
-   * a malformed home_operator that downstream code would have
-   * to defend against.
+   * The owning principal id. Same letter-prefix grammar as a
+   * principal id (mirrors `PrincipalConfigSchema.id`), so a parsed
+   * entry can't carry a malformed home_principal that downstream
+   * code would have to defend against.
    */
-  home_operator: z.string().regex(
+  home_principal: z.string().regex(
     LETTER_PREFIX_ID_REGEX,
-    "principal.home_operator must match the operator id grammar (lowercase alphanumeric + hyphen, starting with a letter)",
+    "principal.home_principal must match the principal id grammar (lowercase alphanumeric + hyphen, starting with a letter)",
   ),
   /**
    * Stack identity in `{operator_id}/{stack_id}` form — same shape

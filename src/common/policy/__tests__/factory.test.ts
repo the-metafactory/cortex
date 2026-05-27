@@ -40,7 +40,7 @@ describe("policyEngineFromConfig", () => {
       principals: [
         {
           id: "luna",
-          home_operator: "andreas",
+          home_principal: "andreas",
           home_stack: "andreas/research",
           role: ["operator"],
           trust: [],
@@ -61,7 +61,7 @@ describe("policyEngineFromConfig", () => {
       principals: [
         {
           id: "luna",
-          home_operator: "andreas",
+          home_principal: "andreas",
           home_stack: "andreas/research",
           role: ["operator"],
           trust: [],
@@ -130,14 +130,14 @@ describe("policyEngineFromConfig", () => {
       principals: [
         {
           id: "luna",
-          home_operator: "andreas",
+          home_principal: "andreas",
           home_stack: "andreas/research",
           role: ["operator", "code-reviewer"],
           trust: ["echo"],
         },
         {
           id: "echo",
-          home_operator: "andreas",
+          home_principal: "andreas",
           home_stack: "andreas/research",
           role: ["code-reviewer"],
           trust: [],
@@ -187,7 +187,7 @@ describe("PolicySchema cross-validation", () => {
         principals: [
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: ["nonexistent-role"],
             trust: [],
@@ -204,7 +204,7 @@ describe("PolicySchema cross-validation", () => {
         principals: [
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: [],
             trust: ["nonexistent-peer"],
@@ -221,14 +221,14 @@ describe("PolicySchema cross-validation", () => {
         principals: [
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: [],
             trust: [],
           },
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: [],
             trust: [],
@@ -257,14 +257,14 @@ describe("PolicySchema cross-validation", () => {
         principals: [
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: ["ghost-role-1"],
             trust: [],
           },
           {
             id: "echo",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: ["ghost-role-2"],
             trust: [],
@@ -289,7 +289,7 @@ describe("PolicySchema cross-validation", () => {
         principals: [
           {
             id: "2bad-prefix",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: [],
             trust: [],
@@ -322,7 +322,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
         principals: [
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: [],
             trust: [],
@@ -351,7 +351,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
         principals: [
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: [],
             trust: [],
@@ -368,7 +368,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
           principals: [
             {
               id: "luna",
-              home_operator: "andreas",
+              home_principal: "andreas",
               home_stack: "andreas/research",
               role: [],
               trust: [],
@@ -386,7 +386,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
           principals: [
             {
               id: "luna",
-              home_operator: "andreas",
+              home_principal: "andreas",
               home_stack: "andreas/research",
               role: [],
               trust: [],
@@ -405,7 +405,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
         principals: [
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: [],
             trust: [],
@@ -431,7 +431,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
         principals: [
           {
             id: "operator-andreas",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: [],
             trust: [],
@@ -477,7 +477,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
         principals: [
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: [],
             trust: [],
@@ -494,7 +494,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
         principals: [
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: [],
             trust: [],
@@ -512,14 +512,14 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
         principals: [
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/meta-factory",
             role: [],
             trust: [],
           },
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/work",
             role: [],
             trust: [],
@@ -540,14 +540,14 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
           principals: [
             {
               id: "luna",
-              home_operator: "andreas",
+              home_principal: "andreas",
               home_stack: "andreas/research",
               role: [],
               trust: [],
             },
             {
               id: "luna",
-              home_operator: "andreas",
+              home_principal: "andreas",
               home_stack: "andreas/research",
               role: [],
               trust: [],
@@ -566,7 +566,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
           principals: [
             {
               id: "luna",
-              home_operator: "andreas",
+              home_principal: "andreas",
               home_stack: "andreas/research",
               role: [],
               trust: [],
@@ -574,7 +574,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
             },
             {
               id: "echo",
-              home_operator: "andreas",
+              home_principal: "andreas",
               home_stack: "andreas/research",
               role: [],
               trust: [],
@@ -591,7 +591,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
         principals: [
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: [],
             trust: [],
@@ -599,7 +599,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
           },
           {
             id: "echo",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: [],
             trust: [],
@@ -616,7 +616,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
         principals: [
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: [],
             trust: [],
@@ -624,7 +624,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
           },
           {
             id: "echo",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: [],
             trust: [],
@@ -644,7 +644,7 @@ describe("PolicyPrincipalSchema — cortex#243a schema extension", () => {
         principals: [
           {
             id: "luna",
-            home_operator: "andreas",
+            home_principal: "andreas",
             home_stack: "andreas/research",
             role: ["operator"],
             trust: [],
@@ -956,7 +956,7 @@ describe("PolicyFederatedSchema cross-validation", () => {
   test("federated block plus principals + roles parses cleanly together", () => {
     const policy = PolicySchema.parse({
       principals: [{
-        id: "luna", home_operator: "andreas", home_stack: "andreas/research",
+        id: "luna", home_principal: "andreas", home_stack: "andreas/research",
         role: ["operator"], trust: [],
       }],
       roles: [{ id: "operator", capabilities: ["deploy.staging"] }],

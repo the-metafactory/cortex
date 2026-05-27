@@ -298,7 +298,7 @@ function betaEngine(alpha: StackHandle): PolicyEngine {
     principals: [
       {
         id: alpha.principalId,
-        home_operator: "alpha",
+        home_principal: "alpha",
         home_stack: alpha.homeStack,
         role: ["peer"],
         trust: [],
@@ -324,7 +324,7 @@ function alphaEngine(beta: StackHandle): PolicyEngine {
     principals: [
       {
         id: beta.principalId,
-        home_operator: "beta",
+        home_principal: "beta",
         home_stack: beta.homeStack,
         role: ["peer"],
         trust: [],

@@ -21,7 +21,7 @@ import type { Policy, PolicyPrincipal } from "../../types/cortex-config";
 function principal(overrides: Partial<PolicyPrincipal> = {}): PolicyPrincipal {
   return {
     id: "luna",
-    home_operator: "andreas",
+    home_principal: "andreas",
     home_stack: "andreas/meta-factory",
     role: [],
     trust: [],

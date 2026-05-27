@@ -67,7 +67,7 @@ export function policyEngineFromConfig(
   return new PolicyEngine({
     principals: policy.principals.map((p) => ({
       id: p.id,
-      home_operator: p.home_operator,
+      home_principal: p.home_principal,
       home_stack: p.home_stack,
       role: p.role,
       trust: p.trust,

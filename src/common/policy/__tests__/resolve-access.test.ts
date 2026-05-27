@@ -46,7 +46,7 @@ const OPERATOR_POLICY: Policy = {
   principals: [
     {
       id: "operator",
-      home_operator: "andreas",
+      home_principal: "andreas",
       home_stack: "andreas/meta-factory",
       role: ["operator"],
       trust: [],
@@ -74,7 +74,7 @@ const USER_POLICY: Policy = {
   principals: [
     {
       id: "mike",
-      home_operator: "andreas",
+      home_principal: "andreas",
       home_stack: "andreas/meta-factory",
       role: ["user"],
       trust: [],
@@ -274,7 +274,7 @@ describe("resolvePolicyAccess — lockout path", () => {
       principals: [
         {
           id: "guest",
-          home_operator: "andreas",
+          home_principal: "andreas",
           home_stack: "andreas/meta-factory",
           role: ["guest"],
           trust: [],
