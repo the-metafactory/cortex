@@ -23,23 +23,23 @@
 For months we've operated as heavy Discord-and-dashboard users. The lived pattern:
 
 - **Discord** as the primary surface, with a channel-per-repo routing convention (`#grove`, `#arc`, `#compass`, `#myelin`, `#blueprint`, etc. — one channel per repo, threads for individual issues / PRs / features).
-- **Multiple agent personas** collaborating in those channels — Luna, Echo, Holly, Ivy, Forge — each with their own Discord identity, persona file, capability gates, and trust relationships. Operators ping a persona; the persona does work.
-- **The pilot review loop** running on top of those personas: open PR → ping reviewer-persona → reviewer reads, posts findings → operator/agent triages → fix or defer → re-ping → merge. Driven by the `pilot` CLI; foundational and backend support coming from compass SOPs, blueprint dependency tracking, and a cloud of CLAUDE.md files.
-- **The Grove dashboard** as the secondary surface — repository-organised activity feed, GitHub entities (releases / issues / PRs) visible inline, agent state per repo, F-7 attention view for "what needs me." The browser tab the operator left open all day.
+- **Multiple agent personas** collaborating in those channels — Luna, Echo, Holly, Ivy, Forge — each with their own Discord identity, persona file, capability gates, and trust relationships. Principals ping a persona; the persona does work.
+- **The pilot review loop** running on top of those personas: open PR → ping reviewer-persona → reviewer reads, posts findings → principal/agent triages → fix or defer → re-ping → merge. Driven by the `pilot` CLI; foundational and backend support coming from compass SOPs, blueprint dependency tracking, and a cloud of CLAUDE.md files.
+- **The Grove dashboard** as the secondary surface — repository-organised activity feed, GitHub entities (releases / issues / PRs) visible inline, agent state per repo, F-7 attention view for "what needs me." The browser tab the principal left open all day.
 - **Mattermost** as a parallel surface for flows that didn't live in Discord — same adapter pattern, different platform.
 
 The pattern worked. Send work in via chat; watch it progress on the dashboard; get pinged when human input is needed; merge.
 
 One specific consequence of this pattern shapes how cortex is designed: **today's Discord-only surface conflates three concerns onto one channel, producing two opposite visibility failures depending on what an agent is doing.**
 
-| Pattern | Symptom | Operator experience |
+| Pattern | Symptom | Principal experience |
 |---------|---------|---------------------|
-| **Tool-call flashing** — bots that emit per-tool worklog messages (e.g. cc-session-driven workflow runners) | The worklog thread scrolls with each `Read`, `Grep`, `Bash`, `Edit`, etc. | Operators skim, partly as work-tracking and partly as a "yes the bot is alive" signal. High noise, low intentionality. |
-| **Silent grinding** — agents that DON'T emit per-tool worklog messages (e.g. reviewer agents like Echo running a `/review-pr` skill) | No worklog. The agent just stops responding while CC processes internally. | Operators ping → wait. After ~9 minutes (the empirical pilot-loop cap of 540s), the loop concludes "agent stalled" and re-pings — even though the agent may still be working. **The opacity is the problem.** |
+| **Tool-call flashing** — bots that emit per-tool worklog messages (e.g. cc-session-driven workflow runners) | The worklog thread scrolls with each `Read`, `Grep`, `Bash`, `Edit`, etc. | Principals skim, partly as work-tracking and partly as a "yes the bot is alive" signal. High noise, low intentionality. |
+| **Silent grinding** — agents that DON'T emit per-tool worklog messages (e.g. reviewer agents like Echo running a `/review-pr` skill) | No worklog. The agent just stops responding while CC processes internally. | Principals ping → wait. After ~9 minutes (the empirical pilot-loop cap of 540s), the loop concludes "agent stalled" and re-pings — even though the agent may still be working. **The opacity is the problem.** |
 
-Both failures share one root cause: **a single Discord surface is the only place the bot's activity shows up**, so the choice is "flood the channel with detail" or "flood the channel with nothing." Neither answers the operator's actual questions ("is it alive?", "what's it working on?", "should I intervene?") well.
+Both failures share one root cause: **a single Discord surface is the only place the bot's activity shows up**, so the choice is "flood the channel with detail" or "flood the channel with nothing." Neither answers the principal's actual questions ("is it alive?", "what's it working on?", "should I intervene?") well.
 
-§3.6 below describes how cortex resolves this by splitting visibility into three tiers — Tier 1 (work management on the dashboard) answers "is it alive + what is it working on" without flooding chat; Tier 2 (cortex drill-down) answers "where is this specific agent in its lifecycle"; Tier 3 (signal observability) answers "what tools did it actually run" for the operator who wants to drill in. The pilot-loop's "ping → 540s silence → re-ping" cycle, encountered repeatedly during this design's authoring, is the empirical case study for why Tiers 1+2 are load-bearing.
+§3.6 below describes how cortex resolves this by splitting visibility into three tiers — Tier 1 (work management on the dashboard) answers "is it alive + what is it working on" without flooding chat; Tier 2 (cortex drill-down) answers "where is this specific agent in its lifecycle"; Tier 3 (signal observability) answers "what tools did it actually run" for the principal who wants to drill in. The pilot-loop's "ping → 540s silence → re-ping" cycle, encountered repeatedly during this design's authoring, is the empirical case study for why Tiers 1+2 are load-bearing.
 
 ### 1.2 What changed
 
@@ -49,7 +49,7 @@ The canonical layer model is **M1–M7 — the Myelin stack** (myelin#7, JC + An
 
 Once the bus appeared, the question "which layer owns which concern?" became operationally real. You can't have your transport client (M2), your envelope handling (M3), your dispatch handler, your workflow runner, *and* your Discord surface adapter all sharing the same `src/bot/` files anymore — M1–M6 are real now, with their own contracts owned by myelin, and the M7 application that consumes them needs its own home with a clean internal split.
 
-Cortex is that home. It is one M7 application — alongside pilot, signal-collector, and any future apps — that consumes the bus and presents the operator surface.
+Cortex is that home. It is one M7 application — alongside pilot, signal-collector, and any future apps — that consumes the bus and presents the principal surface.
 
 > **A note on naming.** Earlier drafts of the cortex framing referenced an "ecosystem seven-layer model" lifted from `design-collaboration-surface.md` §2 (transport / envelope / telemetry / coordination / process / knowledge-graph / surface). That artifact is a useful **concern map** — which sibling repo owns which architectural concern — but it is **not a layer model in the same sense as M1–M7**. Presenting both with `L1..L7` numbering was the source of confusion. M1–M7 is the canonical stack; the concern-map content survives as prose in §5 (M7 sibling apps and adjacent knowledge artefacts), without competing layer numbers.
 
@@ -62,7 +62,7 @@ The metafactory ecosystem uses a nervous-system family of names. Cortex slots in
 - **pilot** — rhythmic coordinator — an M7 app (the review loop)
 - **compass** — heading control — knowledge artefacts cortex consumes (SOPs)
 - **blueprint** — body plan / wiring diagram — knowledge artefacts cortex consumes (feature graph)
-- **cortex** — conscious processing surface where the operator perceives and acts — an M7 app (this design)
+- **cortex** — conscious processing surface where the principal perceives and acts — an M7 app (this design)
 
 ---
 
@@ -114,7 +114,7 @@ PRODUCERS                          NATS BUS                         CONSUMERS
 Agents (CC hooks)        ┌──→  mf.net-{op}.events.>                    Hot path
   emits agent.task.*     │       domain + process events            ┌─→ cortex subscriber
   + trace + metric + log │       (review, dispatch, attention,      │   → Kanban / Inbox / Cards
-                         │        gate, system)                     │   (operator-facing,
+                         │        gate, system)                     │   (principal-facing,
 Surfaces (cortex/pilot)  │       JetStream over events.>            │    latency-sensitive)
   emits review.*         │       fire-and-forget · sub-second
   dispatch.* attention.* │       no ack on hot path
@@ -136,7 +136,7 @@ webhooks, cron)         │     mf.net-{op}.log.>      structured logs │   (Ve
 
 | Class | Subject prefix | Carries | Audience | Retention |
 |-------|----------------|---------|----------|-----------|
-| **Events** | `mf.net-{op}.events.>` | Domain + process lifecycle: `review.*`, `dispatch.*`, `attention.*`, `gate.*`, `system.*` (G-1111 vocabulary) | Hot-path: cortex subscriber → operator surfaces | JetStream — durable, replayable, last_event_id checkpointable |
+| **Events** | `mf.net-{op}.events.>` | Domain + process lifecycle: `review.*`, `dispatch.*`, `attention.*`, `gate.*`, `system.*` (G-1111 vocabulary) | Hot-path: cortex subscriber → principal surfaces | JetStream — durable, replayable, last_event_id checkpointable |
 | **Trace** | `mf.net-{op}.trace.>` | OTLP spans (CC tool calls, skill invocations, subagent spawn, session lifecycle) | Cold-path: signal-collector → Tempo / Honeycomb / Datadog | Per OTLP backend; not on JetStream |
 | **Metric** | `mf.net-{op}.metric.>` | Counters / gauges | Cold-path: signal-collector → TSDB (VictoriaMetrics / Prometheus) | Per TSDB |
 | **Log** | `mf.net-{op}.log.>` | Structured logs | Cold-path: signal-collector → Loki | Per logger |
@@ -147,16 +147,16 @@ webhooks, cron)         │     mf.net-{op}.log.>      structured logs │   (Ve
 
 Two consumer classes live on the same transport but at different latency / durability tiers:
 
-**Hot path — operator-facing**
+**Hot path — principal-facing**
 - Cortex's surface-router subscribes to `mf.net-{op}.events.>` (filtered to relevant subjects per renderer/adapter).
 - JetStream gives durable replay, but the hot path renders fire-and-forget at sub-second latency. **No ack on the hot path.**
 - The dashboard projection ingests events into D1, checkpointing `last_event_id` per stream — **lost event ≠ lost state**: missed events on the hot path are recoverable from the JetStream stream up to the retention window.
 - Hot-path consumers (cortex, future M7 apps) MUST stay narrow on subject filters and avoid blocking on per-event work.
 
 **Cold path — observability**
-- signal-collector (Vector / otelcol) subscribes to `trace.>`, `metric.>`, `log.>` and forwards to operator-chosen OTLP/log/metric backends.
+- signal-collector (Vector / otelcol) subscribes to `trace.>`, `metric.>`, `log.>` and forwards to principal-chosen OTLP/log/metric backends.
 - High volume, high cardinality, longer retention horizons.
-- Cortex MUST NOT couple to the cold path. Operator-facing computations (cycle-time, PR-throughput, human-wait KPIs) are **PromQL queries on the TSDB, not computed in cortex.** The cold path owns aggregation; cortex just renders cards.
+- Cortex MUST NOT couple to the cold path. Principal-facing computations (cycle-time, PR-throughput, human-wait KPIs) are **PromQL queries on the TSDB, not computed in cortex.** The cold path owns aggregation; cortex just renders cards.
 
 ### 3.3 JetStream over events — durability for the things that matter
 
@@ -193,18 +193,18 @@ This is the M7 separation-of-concerns target from cortex#414 OSI corrections: pl
 
 ### 3.5 Namespace reconciliation — RESOLVED
 
-**Decision (2026-05-09):** The federated namespace `local.{org}.{domain}.{entity}.{action}` (per `myelin/specs/namespace.md`) is the canonical subject convention. The earlier `mf.net-{operator}.*` convention was a first iteration that appeared in documentation diagrams but was never adopted in implementation — cortex's runtime already publishes exclusively on `local.{org}.*` subjects.
+**Decision (2026-05-09):** The federated namespace `local.{org}.{domain}.{entity}.{action}` (per `myelin/specs/namespace.md`) is the canonical subject convention. The earlier `mf.net-{op}.*` convention was a first iteration that appeared in documentation diagrams but was never adopted in implementation — cortex's runtime already publishes exclusively on `local.{org}.*` subjects.
 
 The three-prefix model from myelin's namespace spec applies:
-- **`local.{org}.*`** — intra-operator semantic events (current scope)
-- **`federated.*`** — cross-operator task markets (requires sovereignty enforcement, [myelin#11](https://github.com/the-metafactory/myelin/issues/11))
+- **`local.{org}.*`** — intra-principal semantic events (current scope)
+- **`federated.*`** — cross-principal task markets (requires sovereignty enforcement, [myelin#11](https://github.com/the-metafactory/myelin/issues/11))
 - **`public.*`** — open discovery (future)
 
 **Migration:** Diagrams and tables in §3.1–§3.4 of this document still reference `mf.net-{op}.*` as a visual convention. These will be updated to `local.{org}.*` as part of [myelin#7](https://github.com/the-metafactory/myelin/issues/7) documentation convergence. The runtime requires no changes — it already uses the correct convention. See also: myelin task routing design doc, Decision #6.
 
-### 3.6 Operator visibility — three tiers
+### 3.6 Principal visibility — three tiers
 
-The hot/cold-path split in §3.2 plus signal's three-repo bundle (§5.2) gives the operator three distinct views of agent activity, each at a different level of detail and on a different surface. This is a deliberate design choice — collapsing them onto one surface is what made grove-v2's worklog thread scroll past as bots flashed every tool call (§1.1). Cortex separates the concerns.
+The hot/cold-path split in §3.2 plus signal's three-repo bundle (§5.2) gives the principal three distinct views of agent activity, each at a different level of detail and on a different surface. This is a deliberate design choice — collapsing them onto one surface is what made grove-v2's worklog thread scroll past as bots flashed every tool call (§1.1). Cortex separates the concerns.
 
 | Tier | Surface | Question it answers | Granularity | Source |
 |------|---------|---------------------|-------------|--------|
@@ -212,14 +212,14 @@ The hot/cold-path split in §3.2 plus signal's three-repo bundle (§5.2) gives t
 | **2. Agent activity** | Cortex drill-down (a card → an agent task) | "What is this specific agent doing right now? How far along? Did it get stuck?" | Medium — lifecycle envelopes (`dispatch.task.{started,progress,completed,failed,aborted}`) and high-level status updates | Same `events.>` class, narrower subject filter for one task's correlation_id |
 | **3. Tool-call detail** | Signal observability backend (Grafana / Honeycomb / Datadog / local-stack) | "Exactly what tool calls did the agent make? What were the arguments? Where did it spend time?" | Fine — every `Read`, `Bash`, `Edit`, subagent spawn, tool argument, span timing | `mf.net-{op}.trace.>` (OTLP spans) — cold path, signal-collector → backend |
 
-The dashboard renders Tier 1 by default. Drilling into a card opens Tier 2 (cortex's own surface, fed from the bus). A "view trace tree" link from Tier 2 deep-links into the operator's chosen signal backend for Tier 3. The operator chooses how deep to go; cortex doesn't force every tool call into the operator's eyeline.
+The dashboard renders Tier 1 by default. Drilling into a card opens Tier 2 (cortex's own surface, fed from the bus). A "view trace tree" link from Tier 2 deep-links into the principal's chosen signal backend for Tier 3. The principal chooses how deep to go; cortex doesn't force every tool call into the principal's eyeline.
 
 **Behavioural change from grove-v2 to cortex** (full migration coverage in `plan-cortex-migration.md`; sketched here because it shapes the design):
 
-- Today (grove-v2): every tool call flashes as a Discord message in the worklog thread. Tiers 1, 2, and 3 are all collapsed onto one surface — chat — and the operator skims for "is this alive" + "what's it doing" + "what tools did it run" all at once.
-- Tomorrow (cortex): chat carries collaboration (pings, decisions, results posted by agents); the dashboard carries work state at Tier 1; signal carries Tier 3 detail in whatever backend the operator chose. **Tool calls do not scroll past in chat by default.** If the operator wants the tool-call view they open the trace tree; otherwise the noise stays where it scales — in the observability backend.
+- Today (grove-v2): every tool call flashes as a Discord message in the worklog thread. Tiers 1, 2, and 3 are all collapsed onto one surface — chat — and the principal skims for "is this alive" + "what's it doing" + "what tools did it run" all at once.
+- Tomorrow (cortex): chat carries collaboration (pings, decisions, results posted by agents); the dashboard carries work state at Tier 1; signal carries Tier 3 detail in whatever backend the principal chose. **Tool calls do not scroll past in chat by default.** If the principal wants the tool-call view they open the trace tree; otherwise the noise stays where it scales — in the observability backend.
 
-This is the operator-facing payoff of the layered architecture: each tier of detail lives where it scales, on a surface that suits its grain. Chat scales poorly to high-frequency events; signal scales well. The dashboard scales well to coarse work-state; chat scales poorly to that too. Cortex makes the choice explicit instead of leaving it to scrollback.
+This is the principal-facing payoff of the layered architecture: each tier of detail lives where it scales, on a surface that suits its grain. Chat scales poorly to high-frequency events; signal scales well. The dashboard scales well to coarse work-state; chat scales poorly to that too. Cortex makes the choice explicit instead of leaving it to scrollback.
 
 ---
 
@@ -242,7 +242,7 @@ What cortex depends on, what cortex must not do, and what to read in each upstre
 | Spec home | `the-metafactory/myelin` — abstract bus interface; NATS is the v1 concrete implementation. |
 | Status | NATS pub/sub via `nats@2.x` JS client is operational; abstract transport interface (myelin-side spec) in flight. |
 | Cortex's dependency | `nats@2.x` JS client. Connection model: leaf node connecting to a hub. |
-| Cortex's contract | Cortex publishes on subjects under `local.{org}.>` (per myelin's M3 namespace spec) and `mf.net-{operator}.>` per the §3 event architecture. JetStream is **required** for `system.*` events per G-1111 §3.5.5; plain NATS Core suffices otherwise. |
+| Cortex's contract | Cortex publishes on subjects under `local.{org}.>` (per myelin's M3 namespace spec) and `mf.net-{op}.>` per the §3 event architecture. JetStream is **required** for `system.*` events per G-1111 §3.5.5; plain NATS Core suffices otherwise. |
 | Coupling discipline | Cortex MAY copy patterns from the bus client; cortex MUST NOT couple to NATS-specific surface area beyond what myelin's M2 abstraction exposes. |
 | Reading order | `~/Developer/myelin/specs/namespace.md` for subject grammar → upstream NATS client docs for the API. |
 
@@ -297,7 +297,7 @@ Multiple repos live at M7. Each consumes M2–M6 contracts; none impose on the o
 
 | App | Repo | Role |
 |-----|------|------|
-| **cortex** | `the-metafactory/cortex` | The operator's collaboration surface — Discord/Mattermost adapters, Mission Control dashboard, workflow runner spawning Claude Code, GitHub-webhook tap, CC-event tap. The M7 application this design is about. |
+| **cortex** | `the-metafactory/cortex` | The principal's collaboration surface — Discord/Mattermost adapters, Mission Control dashboard, workflow runner spawning Claude Code, GitHub-webhook tap, CC-event tap. The M7 application this design is about. |
 | **pilot** | `the-metafactory/pilot` | Review-loop coordinator. Manages errand state (ping → fetch → triage → apply); operates independently. Cortex projects pilot's errand events as cards in the surface. |
 | **signal bundle** | three repos — see §5.2 | Modular observability bundle: tap (host-agnostic) + collector (profile-driven) + optional self-hosted stack. Cortex hosts a signal tap; cortex eventually drills into traces by `correlation_id`. |
 | **future apps** | various | Anything else that connects to the bus — e.g. an inbox-only TUI, a Slack assistant, a metrics panel — counts as another M7 sibling. |
@@ -313,7 +313,7 @@ Multiple repos live at M7. Each consumes M2–M6 contracts; none impose on the o
 Reference: `~/Developer/signal/README.md` + signal's modular-bundle architecture diagram (in signal repo's `docs/`). Signal is **not one repo** — it's three, each independently installable, glued together by the bus and the OTLP contract.
 
 ```
-        AGENT HOST                         NATS bus              COLLECTOR (M7)         BACKENDS (operator's choice)
+        AGENT HOST                         NATS bus              COLLECTOR (M7)         BACKENDS (principal's choice)
         (cortex, PAI, CI, …)               (local leaf)                                  pick zero, one, or many
         ┌─────────────────────────┐                              ┌─────────────────┐    ┌──────────────────┐
         │ signal (tap) ─ metafac- │ publish OTLP envelopes       │ signal-         │    │ Grafana Cloud    │
@@ -345,13 +345,13 @@ Reference: `~/Developer/signal/README.md` + signal's modular-bundle architecture
 | Component | Repo | Bundle status | Role |
 |-----------|------|---------------|------|
 | **signal (tap)** | `the-metafactory/signal` | metafactory bundle — always installed | Host-agnostic CC instrumentation: 4 hooks (Pre / Post / Subagent / LoadContext), W3C trace context, OTLP envelope builder, NATS publisher |
-| **signal-collector** | `the-metafactory/signal-collector` *(planned, not yet a real repo)* | metafactory bundle — optional | Profile-driven Vector / otelcol wrapper. Subscribes to `mf.net-*.trace.>` etc., forwards via OTLP to operator-chosen backend(s) |
+| **signal-collector** | `the-metafactory/signal-collector` *(planned, not yet a real repo)* | metafactory bundle — optional | Profile-driven Vector / otelcol wrapper. Subscribes to `mf.net-*.trace.>` etc., forwards via OTLP to principal-chosen backend(s) |
 | **signal-stack** | `the-metafactory/signal-stack` *(planned, not yet a real repo)* | NOT a metafactory bundle — declared dependency of the `local-stack` collector profile | Self-hosted backend template. Docker Compose with VictoriaMetrics + Grafana. Optional. |
 
 **Cortex's relationship to the bundle:**
 
 - Cortex **hosts a signal tap**: the CC hooks (today's `src/hooks/EventLogger.hook.ts` etc., moving to `cortex/src/taps/cc-events/`) are an instance of signal's tap pattern. The tap publishes OTLP envelopes onto `mf.net-{op}.trace.>` whether or not signal-collector is installed.
-- Cortex does NOT bundle a collector or backend. Operators choose: SaaS-only (tap + collector → Grafana Cloud / Honeycomb / Datadog), local-first (tap + collector + signal-stack), or distributed (tap on laptop, collector on server, stack on a third box). The NATS bus + OTLP contract make all three topologies identical to the tap.
+- Cortex does NOT bundle a collector or backend. Principals choose: SaaS-only (tap + collector → Grafana Cloud / Honeycomb / Datadog), local-first (tap + collector + signal-stack), or distributed (tap on laptop, collector on server, stack on a third box). The NATS bus + OTLP contract make all three topologies identical to the tap.
 - Cortex MUST tolerate signal-collector being absent: the tap publishes; if no consumer is subscribing, NATS handles the no-op cleanly. Cortex's drill-down trace-tree feature degrades gracefully to "no telemetry available."
 - **Coupling rule (mirroring signal's own discipline):** Signal MUST NOT import from `cortex/src/`; cortex MUST NOT import from `signal/src/`. Both publish/subscribe on the shared transport.
 
@@ -371,13 +371,13 @@ These are real architectural concerns. They are NOT layers in M1–M7. The earli
 
 ### 5.4 arc — distribution and bundling
 
-Reference: `the-metafactory/arc` — the metafactory package manager. Like compass and blueprint, arc is **adjacent to the stack, not in it** — it's a distribution-layer concern that happens to install M7 apps + their dependencies onto operator hosts. Surfacing it explicitly because cortex's existence as a deployable thing depends on arc.
+Reference: `the-metafactory/arc` — the metafactory package manager. Like compass and blueprint, arc is **adjacent to the stack, not in it** — it's a distribution-layer concern that happens to install M7 apps + their dependencies onto principal hosts. Surfacing it explicitly because cortex's existence as a deployable thing depends on arc.
 
 **What arc does:**
 
 - **Bundles** metafactory things — myelin (the M2–M6 protocol bundle), signal (the observability tap), cortex (this M7 app), pilot, plus tools, skills, and CLIs. Each bundle declares itself in an `arc-manifest.yaml` with `name`, `version`, `description`, and a `provides:` list of files to install.
-- **Distributes** bundles across operator hosts via `arc upgrade <Name>`. The operator runs one command and gets the binary + hooks + skills + config templates installed at the right filesystem paths (`~/bin/`, `~/.claude/hooks/`, `~/.claude/skills/`, …).
-- **Configures** environment-specific things at install time — NATS identity keys (per myelin#8 / MY-400), CF Access secrets, per-host overrides. Templates live in the manifest; concrete values live in the operator's environment.
+- **Distributes** bundles across principal hosts via `arc upgrade <Name>`. The principal runs one command and gets the binary + hooks + skills + config templates installed at the right filesystem paths (`~/bin/`, `~/.claude/hooks/`, `~/.claude/skills/`, …).
+- **Configures** environment-specific things at install time — NATS identity keys (per myelin#8 / MY-400), CF Access secrets, per-host overrides. Templates live in the manifest; concrete values live in the principal's environment.
 - **Tracks** what's installed and at what version — `arc list` shows installed bundles, `arc upgrade` updates them.
 
 **Cortex's relationship to arc:**
@@ -385,15 +385,15 @@ Reference: `the-metafactory/arc` — the metafactory package manager. Like compa
 | Aspect | Detail |
 |--------|--------|
 | Cortex is a metafactory bundle | Installable via `arc upgrade Cortex` once MIG-7 lands. Pre-cutover the package name is `Grove`; the rename to `Cortex` happens at MIG-7.7. |
-| Cortex's `arc-manifest.yaml` | Declares `provides:` — `~/bin/cortex` (the bot binary), `~/bin/discord` (operator CLI), `~/bin/cldyo-live` (CC instrumentation wrapper), CC hooks, skills. The same shape grove-v2 has today. |
-| Cortex consumes other bundles indirectly | Operators install `myelin` (via arc) for the bus protocol; `signal` (via arc) for the observability tap; `cortex` (via arc) for the surface. Each is independently rolled out. |
+| Cortex's `arc-manifest.yaml` | Declares `provides:` — `~/bin/cortex` (the bot binary), `~/bin/discord` (principal CLI), `~/bin/cldyo-live` (CC instrumentation wrapper), CC hooks, skills. The same shape grove-v2 has today. |
+| Cortex consumes other bundles indirectly | Principals install `myelin` (via arc) for the bus protocol; `signal` (via arc) for the observability tap; `cortex` (via arc) for the surface. Each is independently rolled out. |
 | Cortex does NOT runtime-import arc | arc is a build/install-time tool. At runtime cortex doesn't know it was installed by arc — it just finds its config at the configured path and runs. |
-| Cross-bundle dependencies | Declared via the `arc-manifest.yaml` `dependsOn:` field. Cortex declares `myelin` (the schema is vendored, but operators need myelin's CLI for identity-key provisioning per MIG-7's `nats.identity` config). signal is *recommended* but not required (cortex tolerates absent collector). |
+| Cross-bundle dependencies | Declared via the `arc-manifest.yaml` `dependsOn:` field. Cortex declares `myelin` (the schema is vendored, but principals need myelin's CLI for identity-key provisioning per MIG-7's `nats.identity` config). signal is *recommended* but not required (cortex tolerates absent collector). |
 | Existing examples | `~/.config/metafactory/pkg/repos/` shows installed bundles today: `grove` (legacy bot), `compass` (SOPs + validators), `pilot`, etc. The same directory will hold `cortex` post-MIG-7. |
 
 **Why this matters for the design:**
 
-- Cortex's `provides:` list is the operator-facing API of the package, just as cortex's envelope set (§6.1) is the agent-facing API of the running app. Both are versioned, append-only, and form contracts cortex must honour across versions.
+- Cortex's `provides:` list is the principal-facing API of the package, just as cortex's envelope set (§6.1) is the agent-facing API of the running app. Both are versioned, append-only, and form contracts cortex must honour across versions.
 - arc's `dependsOn:` mechanism is the only place cross-bundle ordering shows up — at install time. At runtime, the bus mediates everything; arc has no runtime role.
 - The migration's MIG-6 (CLIs) and MIG-7 (top-level wiring) phases both spend significant time on arc-manifest changes. The plan tracks that explicitly.
 
@@ -403,7 +403,7 @@ Reference: `the-metafactory/arc` — the metafactory package manager. Like compa
 - Cortex's `arc-manifest.yaml` MUST be valid against arc's published manifest schema. Manifest validation runs in cortex's CI.
 - Cortex MAY shell out to `arc` for one-shot install-time steps (e.g. `arc identity provision` per JC's E2E NATS work) but never as a runtime dependency.
 
-**Reading order:** `~/Developer/arc/README.md` for the install model → `arc list` / `arc upgrade --help` for the operator-facing CLI → existing manifests in `~/.config/metafactory/pkg/repos/*/arc-manifest.yaml` as concrete examples.
+**Reading order:** `~/Developer/arc/README.md` for the install model → `arc list` / `arc upgrade --help` for the principal-facing CLI → existing manifests in `~/.config/metafactory/pkg/repos/*/arc-manifest.yaml` as concrete examples.
 
 ---
 
@@ -418,7 +418,7 @@ An M7 app's public surface is **the set of envelopes it publishes + the set it c
 For cortex, concretely:
 
 - **Inbound contract:** cortex consumes `local.{org}.{stack}.tasks.@{did-encoded-assistant}.{capability}` Direct/Delegate task envelopes (from adapters, taps, dashboards, or peer apps), `local.{org}.review.*` (from pilot), `local.{org}.attention.item.*` (from any source), `local.{org}.system.*` (operational events from any M7 app), and a few more. Each subject has a documented payload schema in cortex's domain catalogue.
-- **Outbound contract:** cortex publishes `local.{org}.dispatch.task.{started,progress,completed,failed,aborted}` (workflow runner emissions), `local.{org}.system.adapter.*` (per G-1111 §3.5), `local.{org}.review.*.decision` (operator decisions out of the surface).
+- **Outbound contract:** cortex publishes `local.{org}.dispatch.task.{started,progress,completed,failed,aborted}` (workflow runner emissions), `local.{org}.system.adapter.*` (per G-1111 §3.5), `local.{org}.review.*.decision` (principal decisions out of the surface).
 - The envelope schemas are versioned, append-only, and live in cortex's repo (`docs/api/` or `src/contracts/` — TBD; see open questions in the migration plan).
 - A consumer of cortex's contract can — in principle — replace cortex with a re-implementation that publishes/consumes the same envelopes, and the rest of the system doesn't notice. **That's the load-bearing property.**
 
@@ -428,7 +428,7 @@ The same applies for every M7 app: pilot has a contract, signal-collector has a 
 
 Each M7 app is a microservice in the architectural sense: independently deployable, owns its own data, communicates with peers async via the bus, fails independently.
 
-- **Independent deployment.** cortex and pilot ship via separate `arc` packages, separate version cadences. An operator can run pilot at a different version than cortex; if their envelope contracts are intersecting versions, they interoperate.
+- **Independent deployment.** cortex and pilot ship via separate `arc` packages, separate version cadences. An principal can run pilot at a different version than cortex; if their envelope contracts are intersecting versions, they interoperate.
 - **Data ownership.** Each M7 app owns its persistent state behind its own boundary. Cortex's Mission Control DB belongs to cortex; pilot's `errands.sqlite` belongs to pilot. No shared database, no foreign-key relationships across apps. State that needs to flow between apps flows as envelopes.
 - **Async-first communication.** Apps communicate via published envelopes (fire-and-forget), with M6 request/reply for synchronous needs. No app calls another app's HTTP endpoint as a primary integration mechanism. (CLI shell-outs for transitional integrations — e.g. `pilot fetch <PR>` — are tolerated short-term and tracked for removal.)
 - **Failure isolation.** An M7 app crashing degrades the system gracefully — its envelopes stop flowing, its surfaces go dark, but other apps keep running. The bus's `system.adapter.*` events make this visible per G-1111 §3.5 + §4.6.
@@ -443,7 +443,7 @@ Cortex's bounded context, roughly:
 
 | Concept | In cortex's bounded context? |
 |---------|------------------------------|
-| The operator's collaboration surface (Discord, Mattermost, Mission Control dashboard) | ✅ Yes — operator-collaboration is the core domain. |
+| The principal's collaboration surface (Discord, Mattermost, Mission Control dashboard) | ✅ Yes — principal-collaboration is the core domain. |
 | Workflow runner that spawns Claude Code on dispatch | ✅ Yes — dispatching work to Claude is part of the same bounded context. |
 | Worklog state per agent task | ✅ Yes — directly tied to dispatch lifecycle. |
 | GitHub webhook tap that publishes envelopes | ✅ Yes (probably) — thin shim that brings external events onto the bus where cortex's surface can render them. Could split out later. |
@@ -463,15 +463,15 @@ Reference: `~/Developer/myelin/docs/design-agent-task-routing.md` (myelin PR #36
 
 ### 7.1 Three distribution modes — what gets routed how
 
-The protocol carries three operator-facing modes, all on the same wire but with different operator contracts:
+The protocol carries three principal-facing modes, all on the same wire but with different principal contracts:
 
-| Mode | Operator says | Mechanism | Operator commits to |
+| Mode | Principal says | Mechanism | Principal commits to |
 |------|---------------|-----------|---------------------|
 | **Broadcast** | "someone do this" | competing consumers — any qualifying agent claims | a *task* (one unit of work) |
 | **Direct** | "Forge, cut a release" | named recipient — single agent, no competing | a *task* delivered to a known agent |
 | **Delegate** | "Pilot, drive PR #32 to merge" | same wire as Direct, but the receiving agent internally orchestrates a multi-step outcome | an *outcome* (not a task graph) |
 
-The cognitive-load argument for naming **Delegate** as a first-class mode: without it, the design implies all routing is open-market, and the operator-facing benefit (agents absorbing coordination overhead so the human commits to outcomes rather than task graphs) becomes invisible. Pilot's review loop is the canonical Delegate case — the operator says "drive this to merge," pilot internally decomposes that into ping/fetch/triage/apply/dispatch/sync.
+The cognitive-load argument for naming **Delegate** as a first-class mode: without it, the design implies all routing is open-market, and the principal-facing benefit (agents absorbing coordination overhead so the human commits to outcomes rather than task graphs) becomes invisible. Pilot's review loop is the canonical Delegate case — the principal says "drive this to merge," pilot internally decomposes that into ping/fetch/triage/apply/dispatch/sync.
 
 Delegate auditability rides on chain-of-stamps (myelin#31).
 
@@ -496,7 +496,7 @@ local.{org}.dispatch.task.started      ── agent began executing
 local.{org}.dispatch.task.progress     ── intermediate signal (Delegate sub-step, status update)
 local.{org}.dispatch.task.completed    ── ack outcome
 local.{org}.dispatch.task.failed       ── unrecoverable error; correlation_id for retry-thread join
-local.{org}.dispatch.task.aborted      ── operator-cancelled or system-aborted
+local.{org}.dispatch.task.aborted      ── principal-cancelled or system-aborted
 ```
 
 **Structured nak reasons** — when an agent rejects (naks) a Broadcast task, the reason MUST be one of:
@@ -524,12 +524,12 @@ myelin#36 draws an explicit boundary. Five concerns DO NOT live in the bus proto
 | Concern | Lives in | Cortex's home for it |
 |---------|----------|----------------------|
 | Agent capability declaration (tools, envs, creds, reach) | M7 deployment config | `cortex.yaml` `agents[].roles + .trust + .presence` per §9 |
-| Orchestrator translation of operator intent → task graph | M7 orchestrator agent | The Delegate-receiving agent's internal logic (e.g. pilot's review-loop logic — not in cortex; pilot is its own M7 app) |
+| Orchestrator translation of principal intent → task graph | M7 orchestrator agent | The Delegate-receiving agent's internal logic (e.g. pilot's review-loop logic — not in cortex; pilot is its own M7 app) |
 | Compliance attestation (e.g. Northpower STD-NPW-AI-001) | M7 deployment-time, signed at install | Cortex's `arc-manifest.yaml` + agent persona declarations; out of scope for v1 cortex but the slot exists |
 | Notification surface routing | M7 surface-router | `cortex/src/bus/surface-router.ts` (§8) — exactly this concern |
 | Sub-agent trust floor | M7 orchestrator policy + chain-of-stamps | Cortex's agent registry + chain-of-stamps verification (myelin#31) |
 
-The mistake to guard against: lifting any of the above into the bus. Each lift would couple the protocol to one operator's policy choices, break transport-independence, and create rot surface. Capability is too thin a primitive *if you put it in the bus*; rich enough *at M7*.
+The mistake to guard against: lifting any of the above into the bus. Each lift would couple the protocol to one principal's policy choices, break transport-independence, and create rot surface. Capability is too thin a primitive *if you put it in the bus*; rich enough *at M7*.
 
 ### 7.6 Cortex's responsibilities
 
@@ -538,7 +538,7 @@ Cortex's M7 dispatch handler — the runtime that takes inbound work (Discord pi
 1. **Publish** the lifecycle envelope sequence per §7.3 (`local.{org}.dispatch.task.{received,assigned,started,progress,completed,failed,aborted}`) on the `events.>` class. Every routed task is an event stream — the lifecycle is the protocol.
 2. **Tag mode** in envelope payload so consumers can distinguish Broadcast / Direct / Delegate. For Delegate, the receiving agent owns sub-step progress emission.
 3. **Consume** via JetStream pull consumers filtered to the agent's capabilities, **not** hardcoded by subject. Each cortex-hosted agent (Luna, Echo, Forge, …) subscribes through a pull consumer keyed on its declared capability set.
-4. **Respect nak semantics with structured reasons** (§7.3) — surface `cant_do` vs `wont_do` vs `not_now` vs `compliance_block` to operators rather than collapsing to a generic failure.
+4. **Respect nak semantics with structured reasons** (§7.3) — surface `cant_do` vs `wont_do` vs `not_now` vs `compliance_block` to principals rather than collapsing to a generic failure.
 5. **Register** each agent's capabilities into the KV bucket on startup with signed writes (myelin#31). The registry is the M5 Discovery seed; future myelin#9 spec consumes it.
 6. **Support sovereignty declaration** — each agent's config carries a `sovereignty:` field that determines its claim behaviour. Maps to the four modes in §7.4.
 7. **Honour stratification (§7.5)** — keep capability declaration, compliance attestation, surface routing, and orchestrator policy in cortex's M7 layer; never push them into bus envelopes.
@@ -570,7 +570,7 @@ cortex/
                           identity client (M4 when MY-400 lands), surface-router
                           (cortex-internal fan-out from bus to adapters/runner).
                           Loads ~/.config/cortex/cortex.yaml.
-    surface/          ── Operator surfaces — what humans see.
+    surface/          ── Principal surfaces — what humans see.
       mc/             ── Mission Control v3 (Hono + React, observed-session model).
       cli/            ── Future TUI / cli-tail surfaces. Empty in v1.
     adapters/         ── Platform-specific adapters (Discord, Mattermost, etc.).
@@ -587,7 +587,7 @@ cortex/
                           envelopes (so the surface-router and runner can act on them).
       gh-webhook/     ── GitHub webhook → NATS
       cc-events/      ── Claude Code hooks → NATS
-    cli/              ── Operator CLIs.
+    cli/              ── Principal CLIs.
       discord/        ── ~/bin/discord (subdir: discord.ts entry + lib/ + skill/)
       cldyo-live      ── CC instrumentation wrapper (single bash script, NOT a directory)
     common/           ── Shared types, utilities.
@@ -606,7 +606,7 @@ Internal module boundaries are TypeScript directory + import discipline, not pac
 
 ## 9. The agent + presence/renderer model
 
-A load-bearing concept from grove-v2 that cortex preserves and simplifies: each Discord-facing personality (Luna, Echo, Holly, Ivy, Forge) is a bundle of identity + persona + capabilities + platform credentials. Operators interact with these bundles by name — "ping Echo for review", "ask Luna to summarise", "Holly is JC's reviewer". That contract cannot break.
+A load-bearing concept from grove-v2 that cortex preserves and simplifies: each Discord-facing personality (Luna, Echo, Holly, Ivy, Forge) is a bundle of identity + persona + capabilities + platform credentials. Principals interact with these bundles by name — "ping Echo for review", "ask Luna to summarise", "Holly is JC's reviewer". That contract cannot break.
 
 ### 9.1 Agents own their presence (not the other way around)
 
@@ -622,7 +622,7 @@ Mental model: a human user connects to a server with their credentials; the serv
 Cortex config schema:
 
 ```yaml
-operator:                          # who is running this cortex instance
+principal:                          # who is running this cortex instance
   id: andreas
   discordId: "1134..."
 
@@ -705,9 +705,9 @@ Renderers organise around **events / work-items / cards**, not agents. A dashboa
 Two kinds of renderer config:
 
 1. **Static** (in YAML) — initial subscriptions, projection rules, paging rules, default columns. Deployment-time decisions.
-2. **Runtime / UX** (in the dashboard itself) — operator preferences: which columns to expand, which filters to pin, which agent's activity to highlight. Live in the renderer's own state (D1 / SQLite / browser localStorage), not in cortex.yaml.
+2. **Runtime / UX** (in the dashboard itself) — principal preferences: which columns to expand, which filters to pin, which agent's activity to highlight. Live in the renderer's own state (D1 / SQLite / browser localStorage), not in cortex.yaml.
 
-The split keeps cortex.yaml deterministic + reviewable while letting operators arrange their own view without a config edit + restart.
+The split keeps cortex.yaml deterministic + reviewable while letting principals arrange their own view without a config edit + restart.
 
 ### 9.3 Coupling discipline
 
@@ -717,7 +717,7 @@ The split keeps cortex.yaml deterministic + reviewable while letting operators a
 - Personas MUST be platform-neutral markdown — no Discord-specific formatting, no `<@id>` mentions baked in. The presence adapter translates logical mentions (`@echo`) into platform syntax at render time.
 - An agent's roles list defines its **maximum** capability set. A presence MAY further restrict (e.g., Luna's Slack presence in a public workspace may strip `team` mode). Presences never widen.
 - Cross-agent trust resolves at adapter startup: each presence adapter, on connect, learns its own platform user id (e.g. `discord.client.user.id`) and registers it in a process-wide `(platformId → agentId)` map. When an inbound message arrives from a known platform id, the receiving adapter looks up the source agent and consults its parent's `trust:` list.
-- **Renderers MUST NOT publish on the bus** as a side effect of rendering. Renderers are sinks: they subscribe and present. Operator-input emitted from a renderer (e.g., a dashboard "approve" click) goes through the bus as a logical envelope from the operator, not from any agent.
+- **Renderers MUST NOT publish on the bus** as a side effect of rendering. Renderers are sinks: they subscribe and present. Principal-input emitted from a renderer (e.g., a dashboard "approve" click) goes through the bus as a logical envelope from the principal, not from any agent.
 
 ---
 
