@@ -34,7 +34,7 @@
  *     the receiver must not blindly trust forwarded headers.
  *   - Secret resolution: the receiver uses the secret passed at construction
  *     time. Cortex pulls it from `config.github.webhookSecret` (already part
- *     of the BotConfig schema — G-203b). When the secret is empty, the
+ *     of the AgentConfig schema — G-203b). When the secret is empty, the
  *     receiver responds 503 "not configured" rather than starting unsecured.
  *
  * **Hostname posture:**

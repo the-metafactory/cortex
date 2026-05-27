@@ -13,7 +13,7 @@ import type {
   OutboundFile,
   ContextMessage,
 } from "../types";
-import type { BotConfig } from "../../common/types/config";
+import type { AgentConfig } from "../../common/types/config";
 import type { Agent, MattermostPresence } from "../../common/types/cortex-config";
 import type { MattermostInboundMessage } from "./server";
 import {
@@ -205,7 +205,7 @@ export class MattermostAdapter implements PlatformAdapter {
    * `apiUrl`/`apiToken`/`webhookUrl` are reconnect-only and intentionally
    * preserved across the immutable spread.
    */
-  updateConfig(config: BotConfig): void {
+  updateConfig(config: AgentConfig): void {
     const newInstance = config.mattermost.find((inst) => inst.apiUrl === this.apiUrl);
 
     if (!newInstance) {

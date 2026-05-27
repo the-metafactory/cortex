@@ -129,7 +129,7 @@ export const MattermostInstanceSchema = z.object({
 export type MattermostInstance = z.infer<typeof MattermostInstanceSchema>;
 
 /**
- * Slack instance (legacy BotConfig shape). Mirror of
+ * Slack instance (legacy AgentConfig shape). Mirror of
  * `SlackPresenceSchema` in `./cortex-config.ts` — `flattenSlackPresences`
  * in `src/common/config/loader.ts` threads cortex.yaml's
  * `agents[].presence.slack` blocks through to entries of this shape so
@@ -261,7 +261,7 @@ export type NetworkFile = z.infer<typeof NetworkFileSchema>;
 // Main config schema
 // =============================================================================
 
-export const BotConfigSchema = z.object({
+export const AgentConfigSchema = z.object({
   agent: z.object({
     name: z.string().min(1),
     displayName: z.string().min(1),
@@ -504,14 +504,14 @@ export const BotConfigSchema = z.object({
      * cortex#86 — path to a NATS user `.creds` file for operator-mode
      * connect auth. See `NatsConfigSchema.credsPath` in `./cortex-config.ts`
      * for the canonical docstring; this entry MIRRORS the field so that
-     * the migrate-config loader can synthesize a BotConfig from cortex.yaml
+     * the migrate-config loader can synthesize an AgentConfig from cortex.yaml
      * without stripping the creds path. Drop both on MIG-7.2e.
      */
     credsPath: z.string().optional(),
     /**
      * MIG-7.2e: NKey identity for envelope signing (MY-400). Optional.
      * Mirror of `NatsConfigSchema.identity` in `./cortex-config.ts` so the
-     * loader can synthesize a BotConfig from cortex.yaml without stripping
+     * loader can synthesize an AgentConfig from cortex.yaml without stripping
      * the identity block. Legacy bot.yaml deployments never set this;
      * cortex.yaml deployments always do.
      */
@@ -526,7 +526,7 @@ export const BotConfigSchema = z.object({
 
   /**
    * MIG-7.2d: optional `renderers[]` block for non-agent-bound surfaces
-   * (dashboard, pagerduty, …). Additive on the legacy `BotConfig` so an
+   * (dashboard, pagerduty, …). Additive on the legacy `AgentConfig` so an
    * existing `bot.yaml` keeps loading unchanged; cortex.yaml (post-7.2e
    * migrate-config) emits this field directly off the cortex-config
    * schema. The shape passes through Zod via `z.unknown()` and the
@@ -537,7 +537,7 @@ export const BotConfigSchema = z.object({
   renderers: z.array(z.unknown()).optional(),
 });
 
-export type BotConfig = z.infer<typeof BotConfigSchema>;
+export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 
 // =============================================================================
 // G-501: Network-aware routing types
@@ -573,20 +573,20 @@ export type NetworkResolver = (networkId: string | undefined) => NetworkConfig |
 // =============================================================================
 
 /**
- * Build a "scoped" BotConfig where `discord` contains a single instance's config.
+ * Build a "scoped" AgentConfig where `discord` contains a single instance's config.
  * v2.0.0 (cortex#297) — the legacy role-resolver retired; this scoping helper
  * survives for adapters / discord-client code that reads `config.discord[0].guildId`
  * etc. Authorisation flows through `policy:` block now.
  */
-export function scopeConfigToDiscordInstance(config: BotConfig, instance: DiscordInstance): BotConfig {
+export function scopeConfigToDiscordInstance(config: AgentConfig, instance: DiscordInstance): AgentConfig {
   return { ...config, discord: [instance] };
 }
 
-export function scopeConfigToMattermostInstance(config: BotConfig, instance: MattermostInstance): BotConfig {
+export function scopeConfigToMattermostInstance(config: AgentConfig, instance: MattermostInstance): AgentConfig {
   return { ...config, mattermost: [instance] };
 }
 
-export function scopeConfigToSlackInstance(config: BotConfig, instance: SlackInstance): BotConfig {
+export function scopeConfigToSlackInstance(config: AgentConfig, instance: SlackInstance): AgentConfig {
   return { ...config, slack: [instance] };
 }
 
@@ -594,15 +594,15 @@ export function scopeConfigToSlackInstance(config: BotConfig, instance: SlackIns
  * Get the first Discord instance config (for backward-compat code that
  * expects `config.discord.*` as a flat object). Returns undefined if no instances.
  */
-export function getFirstDiscordInstance(config: BotConfig): DiscordInstance | undefined {
+export function getFirstDiscordInstance(config: AgentConfig): DiscordInstance | undefined {
   return config.discord[0];
 }
 
-export function getFirstMattermostInstance(config: BotConfig): MattermostInstance | undefined {
+export function getFirstMattermostInstance(config: AgentConfig): MattermostInstance | undefined {
   return config.mattermost[0];
 }
 
-export function getFirstSlackInstance(config: BotConfig): SlackInstance | undefined {
+export function getFirstSlackInstance(config: AgentConfig): SlackInstance | undefined {
   return config.slack[0];
 }
 
@@ -610,7 +610,7 @@ export function getFirstSlackInstance(config: BotConfig): SlackInstance | undefi
  * Aggregate GitHub repos from top-level config AND all network configs.
  * Returns a deduplicated array of "owner/repo" strings.
  */
-export function getAllRepos(config: BotConfig): string[] {
+export function getAllRepos(config: AgentConfig): string[] {
   const repos = new Set<string>(config.github.repos);
   for (const network of config.networks) {
     for (const repo of network.github.repos) {

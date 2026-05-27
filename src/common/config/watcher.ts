@@ -5,7 +5,7 @@
 
 import { watch, type FSWatcher, existsSync } from "fs";
 import { loadConfig, loadAgentsDirectory, FragmentLoadError, expandTilde } from "./loader";
-import type { BotConfig } from "../types/config";
+import type { AgentConfig } from "../types/config";
 import type { Agent } from "../types/cortex-config";
 
 export interface ConfigChangeEvent {
@@ -14,7 +14,7 @@ export interface ConfigChangeEvent {
   /** Fields that changed but require restart */
   requiresRestart: string[];
   /** New config (already applied to the watcher's internal state) */
-  config: BotConfig;
+  config: AgentConfig;
 }
 
 export type ConfigChangeHandler = (event: ConfigChangeEvent) => void;
@@ -111,7 +111,7 @@ const RESTART_FIELDS = new Set([
  * - applied: fields safe to hot-reload
  * - requiresRestart: fields requiring restart
  */
-function compareConfigs(oldConfig: BotConfig, newConfig: BotConfig): {
+function compareConfigs(oldConfig: AgentConfig, newConfig: AgentConfig): {
   applied: string[];
   requiresRestart: string[];
 } {
@@ -256,12 +256,12 @@ function compareConfigs(oldConfig: BotConfig, newConfig: BotConfig): {
  */
 export class ConfigWatcher {
   private configPath: string;
-  private config: BotConfig;
+  private config: AgentConfig;
   private handler: ConfigChangeHandler;
   private watcher: FSWatcher | null = null;
   private reloadTimeout: NodeJS.Timeout | null = null;
 
-  constructor(configPath: string, initialConfig: BotConfig, handler: ConfigChangeHandler) {
+  constructor(configPath: string, initialConfig: AgentConfig, handler: ConfigChangeHandler) {
     this.configPath = configPath.replace(/^~/, process.env.HOME ?? "~");
     this.config = initialConfig;
     this.handler = handler;
@@ -340,7 +340,7 @@ export class ConfigWatcher {
   }
 
   /** Get current config (reflects last successful reload) */
-  getConfig(): BotConfig {
+  getConfig(): AgentConfig {
     return this.config;
   }
 }

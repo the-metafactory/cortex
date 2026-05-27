@@ -18,7 +18,7 @@
  *   - `src/common/types/cortex-config.ts` — PolicyPrincipalSchema,
  *     PolicyFederatedPeerSchema, PolicyFederatedNetworkSchema.peers.
  *   - `src/common/types/stack.ts` — StackConfigSchema.nkey_pub.
- *   - `src/common/types/config.ts` — legacy BotConfig nkey field.
+ *   - `src/common/types/config.ts` — legacy AgentConfig nkey field.
  *
  * Closes cortex#143.
  */

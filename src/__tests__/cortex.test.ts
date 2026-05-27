@@ -15,7 +15,7 @@
  *      observe the adapter's `render` is invoked, all without real I/O).
  *
  * No real Discord / Mattermost / NATS network is touched. Tests inject the
- * minimum BotConfig shape and rely on:
+ * minimum AgentConfig shape and rely on:
  *   - `nats?` absent → runtime starts in disabled mode (no socket).
  *   - `discord: []` and `mattermost: []` → no adapter `start()` calls.
  *   - `api.enabled: false` → no Hono server bound.
@@ -27,7 +27,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { BotConfigSchema, type BotConfig } from "../common/types/config";
+import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
 import type { Agent } from "../common/types/cortex-config";
 import { pidFileFor, runDryRun, startCortex } from "../cortex";
 import type { Envelope } from "../bus/myelin/envelope-validator";
@@ -38,14 +38,14 @@ import type { EnvelopeHandler, MyelinRuntime } from "../bus/myelin/runtime";
 // ---------------------------------------------------------------------------
 
 /**
- * Minimum BotConfig that passes Zod validation. Discord + Mattermost arrays
+ * Minimum AgentConfig that passes Zod validation. Discord + Mattermost arrays
  * are empty; networks is empty (so cloud publisher stays inactive); api is
  * disabled; nats is absent so the runtime stays in no-op mode.
  *
  * Tests that need extra fields layer them on with the spread argument.
  */
-function minimalConfig(overrides: Partial<Record<string, unknown>> = {}): BotConfig {
-  return BotConfigSchema.parse({
+function minimalConfig(overrides: Partial<Record<string, unknown>> = {}): AgentConfig {
+  return AgentConfigSchema.parse({
     agent: {
       name: "test-cortex",
       displayName: "TestCortex",
@@ -370,7 +370,7 @@ describe("startCortex — wire-up", () => {
     const runtime = createRecordingRuntime();
     const config = minimalConfig({
       mattermost: [
-        // Construct via cast: BotConfigSchema would reject a fully empty
+        // Construct via cast: AgentConfigSchema would reject a fully empty
         // instance, but loadConfig in the wild may receive partials from
         // legacy/typo'd YAML. We test the runtime guard rather than the
         // schema guard here.
@@ -529,7 +529,7 @@ describe("startCortex — error surface", () => {
 
 describe("startCortex — agent registry (cortex#67 prereq C)", () => {
   test("exposes an empty registry when no inline agents + agents.d/ is empty", async () => {
-    // Production callers today pass BotConfig (no inline agents) and may have
+    // Production callers today pass AgentConfig (no inline agents) and may have
     // no `agents.d/` directory yet. The registry must still construct cleanly
     // and the handle must surface it — the creds handler downstream will
     // simply gate itself off (`registry.size > 0` check).

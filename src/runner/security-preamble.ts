@@ -3,7 +3,7 @@
  * Injects filesystem and behavior constraints based on the cortex agent config.
  */
 
-import type { BotConfig } from "../common/types/config";
+import type { AgentConfig } from "../common/types/config";
 
 /**
  * Options to relax the security preamble for trusted contexts.
@@ -29,7 +29,7 @@ export interface SecurityPreambleOpts {
  * Build a security preamble that gets prepended to every chat-invoked prompt.
  * Returns empty string if no restrictions are configured.
  */
-export function buildSecurityPreamble(config: BotConfig, configPath?: string, opts?: SecurityPreambleOpts): string {
+export function buildSecurityPreamble(config: AgentConfig, configPath?: string, opts?: SecurityPreambleOpts): string {
   const rules: string[] = [];
 
   // Verification rule — prevents hallucination of codebase knowledge

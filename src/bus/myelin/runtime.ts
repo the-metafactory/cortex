@@ -14,7 +14,7 @@
  */
 
 import type { ConnectionOptions, NatsConnection } from "nats";
-import type { BotConfig } from "../../common/types/config";
+import type { AgentConfig } from "../../common/types/config";
 import { NatsLink } from "../nats/connection";
 import {
   MyelinSubscriber,
@@ -341,7 +341,7 @@ export function makeSubjectPlaceholderSubstituter(opts: {
 }
 
 export async function startMyelinRuntime(
-  config: BotConfig,
+  config: AgentConfig,
   options?: MyelinRuntimeOptions,
 ): Promise<MyelinRuntime> {
   // Fan-out registry — populated regardless of whether NATS itself

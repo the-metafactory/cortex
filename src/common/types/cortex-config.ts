@@ -1,7 +1,7 @@
 /**
  * MIG-7.2 base — CortexConfig schema (the flipped model from architecture §9.1).
  *
- * Replaces grove-v2's `BotConfig` shape (`agent:` + `discord:[]` + `mattermost:[]` +
+ * Replaces grove-v2's `AgentConfig` shape (`agent:` + `discord:[]` + `mattermost:[]` +
  * `trustedAgentBots:`) with a first-class agent model:
  *
  *   operator:                  who is running this cortex instance
@@ -20,7 +20,7 @@
  *   github:                    GitHub webhook surface (taps)
  *   claude / paths / etc.      cross-cutting infra (unchanged shape)
  *
- * This file is **additive** — `BotConfig` in `./config.ts` continues to be the
+ * This file is **additive** — `AgentConfig` in `./config.ts` continues to be the
  * load-bearing config until MIG-7.2 sub-PRs (7.2a registry, 7.2b trust-resolver,
  * 7.2c adapter refactor, 7.2d renderers, 7.2e migrate-config) move call-sites
  * across. See `docs/plan-cortex-migration.md` §4 MIG-7.2*.
@@ -862,7 +862,7 @@ export const NatsIdentitySchema = z.object({
 export type NatsIdentity = z.infer<typeof NatsIdentitySchema>;
 
 /**
- * NATS / myelin subscriber configuration. Mirrors `BotConfig.nats` shape from
+ * NATS / myelin subscriber configuration. Mirrors `AgentConfig.nats` shape from
  * grove-v2 plus the new `identity` block.
  */
 export const NatsConfigSchema = z.object({
@@ -888,7 +888,7 @@ export const NatsConfigSchema = z.object({
    * the `NatsLink` loader enforces chmod 600 on POSIX. Wins over `token`
    * when both are set (warn log explains precedence).
    *
-   * MIRROR: `BotConfigSchema.nats.credsPath` in `./config.ts`. Drop both
+   * MIRROR: `AgentConfigSchema.nats.credsPath` in `./config.ts`. Drop both
    * on MIG-7.2e alongside `identity` and `accountSigningKeyPath`.
    */
   credsPath: z.string().optional(),
@@ -903,7 +903,7 @@ export const NatsConfigSchema = z.object({
    * to any renderer. See `src/common/config/account-signing-key.ts` for the
    * loader that enforces chmod 600 and SA-prefix.
    *
-   * MIRROR: `BotConfigSchema.nats.accountSigningKeyPath` in `./config.ts`.
+   * MIRROR: `AgentConfigSchema.nats.accountSigningKeyPath` in `./config.ts`.
    * Drop both on MIG-7.2e.
    */
   accountSigningKeyPath: z.string().optional(),
@@ -966,13 +966,13 @@ export type BusConfig = z.infer<typeof BusConfigSchema>;
 export type BusReviewConfig = z.infer<typeof BusReviewConfigSchema>;
 
 // =============================================================================
-// Cross-cutting infra blocks — carried forward in same shape as BotConfig
+// Cross-cutting infra blocks — carried forward in same shape as AgentConfig
 // =============================================================================
 //
 // MIRROR NOTE: during the MIG-7.2 overlap window, these schemas live in two
-// places: here as standalone exports, and inline inside `BotConfigSchema`
+// places: here as standalone exports, and inline inside `AgentConfigSchema`
 // in `./config.ts`. Field additions/changes MUST be applied to BOTH until
-// MIG-7.2e retires BotConfig. Each block below carries a `MIRROR:` breadcrumb
+// MIG-7.2e retires AgentConfig. Each block below carries a `MIRROR:` breadcrumb
 // pointing at the corresponding section in config.ts so a grep for `MIRROR:`
 // surfaces every overlap site.
 //
@@ -980,10 +980,10 @@ export type BusReviewConfig = z.infer<typeof BusReviewConfigSchema>;
 
 /**
  * Claude runtime config — passed to spawned CC sessions. Identical shape to
- * grove-v2's `BotConfig.claude` block; not refactored at MIG-7.2 because the
+ * grove-v2's `AgentConfig.claude` block; not refactored at MIG-7.2 because the
  * shape is already correct (no agent-bound coupling to break).
  *
- * MIRROR: see `BotConfigSchema.claude` in `./config.ts`. Drop both on 7.2e.
+ * MIRROR: see `AgentConfigSchema.claude` in `./config.ts`. Drop both on 7.2e.
  */
 export const ClaudeConfigSchema = z.object({
   timeoutMs: z.number().int().positive().default(120_000),
@@ -1005,8 +1005,8 @@ export const ClaudeConfigSchema = z.object({
 export type ClaudeConfig = z.infer<typeof ClaudeConfigSchema>;
 
 /**
- * Attachments config — identical shape to BotConfig.attachments.
- * MIRROR: see `BotConfigSchema.attachments` in `./config.ts`. Drop both on 7.2e.
+ * Attachments config — identical shape to AgentConfig.attachments.
+ * MIRROR: see `AgentConfigSchema.attachments` in `./config.ts`. Drop both on 7.2e.
  */
 export const AttachmentsConfigSchema = z.object({
   enabled: z.boolean().default(true),
@@ -1018,8 +1018,8 @@ export const AttachmentsConfigSchema = z.object({
 export type AttachmentsConfig = z.infer<typeof AttachmentsConfigSchema>;
 
 /**
- * Execution backends — identical shape to BotConfig.execution.
- * MIRROR: see `BotConfigSchema.execution` in `./config.ts`. Drop both on 7.2e.
+ * Execution backends — identical shape to AgentConfig.execution.
+ * MIRROR: see `AgentConfigSchema.execution` in `./config.ts`. Drop both on 7.2e.
  */
 export const ExecutionConfigSchema = z.object({
   default: z.string().default("local"),
@@ -1036,7 +1036,7 @@ export type ExecutionConfig = z.infer<typeof ExecutionConfigSchema>;
  * GitHub agent-detection heuristics — extracted from `GithubConfigSchema` so
  * it can use `emptyDefault` cleanly when nested. Identical defaults to grove-v2.
  *
- * MIRROR: see `BotConfigSchema.github.agentDetection` (inline) in `./config.ts`.
+ * MIRROR: see `AgentConfigSchema.github.agentDetection` (inline) in `./config.ts`.
  * Drop both on 7.2e.
  */
 export const AgentDetectionSchema = z.object({
@@ -1050,10 +1050,10 @@ export type AgentDetection = z.infer<typeof AgentDetectionSchema>;
 /**
  * MIG-5.6 (C-106): local GitHub-webhook receiver — extracted so it can
  * nest cleanly under `GithubConfigSchema` and stay MIRRORed with the
- * inline shape in `BotConfigSchema.github.receiver`. Defaults are
+ * inline shape in `AgentConfigSchema.github.receiver`. Defaults are
  * opt-in: `enabled=false`, `127.0.0.1:8770`.
  *
- * MIRROR: see `BotConfigSchema.github.receiver` (inline) in `./config.ts`.
+ * MIRROR: see `AgentConfigSchema.github.receiver` (inline) in `./config.ts`.
  * Drop both on 7.2e.
  */
 export const GithubReceiverSchema = z.object({
@@ -1065,8 +1065,8 @@ export const GithubReceiverSchema = z.object({
 export type GithubReceiver = z.infer<typeof GithubReceiverSchema>;
 
 /**
- * GitHub webhook surface — identical shape to BotConfig.github.
- * MIRROR: see `BotConfigSchema.github` in `./config.ts`. Drop both on 7.2e.
+ * GitHub webhook surface — identical shape to AgentConfig.github.
+ * MIRROR: see `AgentConfigSchema.github` in `./config.ts`. Drop both on 7.2e.
  */
 export const GithubConfigSchema = z.object({
   webhookSecret: z.string().default(""),
@@ -1078,9 +1078,9 @@ export const GithubConfigSchema = z.object({
 export type GithubConfig = z.infer<typeof GithubConfigSchema>;
 
 /**
- * Filesystem paths — identical shape to BotConfig.paths but cortex-named
+ * Filesystem paths — identical shape to AgentConfig.paths but cortex-named
  * (default logDir `~/.config/cortex/logs` vs grove-v2's `~/.config/grove/logs`).
- * MIRROR: see `BotConfigSchema.paths` in `./config.ts`. Drop both on 7.2e.
+ * MIRROR: see `AgentConfigSchema.paths` in `./config.ts`. Drop both on 7.2e.
  */
 export const PathsConfigSchema = z.object({
   publishedEventsDir: z.string().default("~/.claude/events/published"),

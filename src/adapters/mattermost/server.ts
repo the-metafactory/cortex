@@ -3,7 +3,7 @@
  * Receives outgoing webhook POSTs from Mattermost, extracts messages.
  */
 
-import type { BotConfig } from "../../common/types/config";
+import type { AgentConfig } from "../../common/types/config";
 import type { Server } from "bun";
 
 /**
@@ -93,7 +93,7 @@ export function parseWebhookPayload(
  * Returns a Bun server and a cleanup function.
  */
 export function createMattermostServer(
-  config: BotConfig,
+  config: AgentConfig,
   onMessage: (msg: MattermostInboundMessage) => Promise<string>
 ): { server: Server<unknown>; stop: () => void } {
   const mm = config.mattermost[0]; // Instance-scoped config

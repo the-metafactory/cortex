@@ -288,7 +288,7 @@ describe("error reporting", () => {
 //
 // `loadConfigWithAgents` accepts both legacy bot.yaml and cortex.yaml. The
 // detection is structural (operator: object + agents: non-empty array). For
-// cortex shape, the loader synthesizes a legacy-compatible BotConfig and
+// cortex shape, the loader synthesizes a legacy-compatible AgentConfig and
 // returns the rich agents[] alongside via `inlineAgents` so `startCortex`
 // can route per-instance identity correctly.
 
@@ -338,19 +338,19 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     expect(loaded.inlineAgents[0]!.trust).toEqual(["luna"]);
   });
 
-  test("synthesizes BotConfig.agent from operator + first agent", () => {
+  test("synthesizes AgentConfig.agent from operator + first agent", () => {
     const path = writeCortexConfig(testDir, minimalCortex());
     const { config, operator } = loadConfigWithAgents(path);
     expect(config.agent.name).toBe("ivy");
     expect(config.agent.displayName).toBe("Ivy");
     expect(config.agent.operatorId).toBe("jc");
     expect(config.agent.operatorName).toBe("Jens-Christian");
-    // v2.0.0 (cortex#297) — operator*Id retired from BotConfig.agent;
+    // v2.0.0 (cortex#297) — operator*Id retired from AgentConfig.agent;
     // surfaced through LoadedConfig.operator instead.
     expect(operator?.discordId).toBe("285727653603049472");
   });
 
-  test("flattens agents[*].presence.discord into BotConfig.discord[]", () => {
+  test("flattens agents[*].presence.discord into AgentConfig.discord[]", () => {
     const cfg = minimalCortex();
     (cfg.agents as Record<string, unknown>[]).push({
       id: "holly",
@@ -423,11 +423,11 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     expect(loaded.config.agent.name).toBeDefined();
   });
 
-  test("loadConfig backward-compat wrapper still returns BotConfig only", () => {
+  test("loadConfig backward-compat wrapper still returns AgentConfig only", () => {
     const path = writeCortexConfig(testDir, minimalCortex());
     const cfg = loadConfig(path);
     expect(cfg.agent.name).toBe("ivy");
-    // Type sanity — no inlineAgents on the BotConfig
+    // Type sanity — no inlineAgents on the AgentConfig
     expect((cfg as Record<string, unknown>).inlineAgents).toBeUndefined();
   });
 
@@ -455,7 +455,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
   test("operator-only with no agents falls back to legacy parse (detection requires both)", () => {
     const partial = { operator: { id: "jc" } };
     const path = writeCortexConfig(testDir, partial);
-    // Falls into the legacy branch; BotConfigSchema rejects missing agent.name
+    // Falls into the legacy branch; AgentConfigSchema rejects missing agent.name
     expect(() => loadConfigWithAgents(path)).toThrow();
   });
 
@@ -466,7 +466,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
   });
 
   // cortex#98 (part A) — schema parity: `presence.discord.trustedBotIds`
-  // is preserved through the cortex-shape → legacy BotConfig synthesizer.
+  // is preserved through the cortex-shape → legacy AgentConfig synthesizer.
   // Before this fix, DiscordPresenceSchema lacked the field entirely and
   // zod's default unknown-key-strip behaviour silently dropped the
   // operator-set value during `CortexConfigSchema.parse`, leaving the
@@ -489,7 +489,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
   });
 
   // cortex#205 — schema parity: `presence.discord.surfaceSubjects` is
-  // preserved through the cortex-shape → legacy BotConfig synthesizer so
+  // preserved through the cortex-shape → legacy AgentConfig synthesizer so
   // operators can wire bus-envelope subjects into the Discord adapter's
   // surface-router match set. Before this fix, the field was absent from
   // both DiscordPresenceSchema and DiscordInstanceSchema, so zod's
@@ -620,7 +620,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
   });
 
   test("IAW A.5.3 — legacy bot.yaml input leaves LoadedConfig.stack undefined", () => {
-    // BotConfigSchema has no `stack:` field during the MIG-7.2 overlap
+    // AgentConfigSchema has no `stack:` field during the MIG-7.2 overlap
     // window. The legacy branch of `loadConfigWithAgents` must produce a
     // `LoadedConfig` with `stack: undefined` so the boot path's destructure
     // (`const { stack } = ...`) stays safe.

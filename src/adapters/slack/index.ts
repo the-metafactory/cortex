@@ -22,7 +22,7 @@ import type {
   ContextMessage,
 } from "../types";
 import type { Agent, SlackPresence } from "../../common/types/cortex-config";
-import type { BotConfig } from "../../common/types/config";
+import type { AgentConfig } from "../../common/types/config";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
 import type { SurfaceAdapter } from "../../bus/surface-router";
@@ -426,7 +426,7 @@ export class SlackAdapter implements PlatformAdapter {
    * 1).
    */
   // eslint-disable-next-line @typescript-eslint/require-await
-  updateConfig(config: BotConfig): void {
+  updateConfig(config: AgentConfig): void {
     const newInstance = config.slack.find((inst) => inst.workspaceId === this.presence.workspaceId);
     if (!newInstance) {
       console.warn(

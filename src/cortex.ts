@@ -19,7 +19,7 @@ import type { TextChannel } from "discord.js";
 
 import { loadConfigWithAgents, loadAgentsDirectory, expandTilde, FragmentLoadError } from "./common/config/loader";
 import { ConfigWatcher } from "./common/config/watcher";
-import { type BotConfig, getAllRepos } from "./common/types/config";
+import { type AgentConfig, getAllRepos } from "./common/types/config";
 import { fetchWithTimeout } from "./common/timeout";
 import { UsageMonitor } from "./common/usage/monitor";
 import { AgentRegistry } from "./common/agents/registry";
@@ -154,7 +154,7 @@ export function pidFileFor(configPath: string | undefined): string {
  * integration harness.
  */
 export function buildReviewSessionOpts(
-  config: BotConfig,
+  config: AgentConfig,
   agent: Pick<Agent, "id" | "displayName">,
 ): Partial<Omit<CCSessionOpts, "prompt">> {
   return {
@@ -256,7 +256,7 @@ export interface StartCortexOptions {
    * the registry. Mirrors the cortex.yaml `agents[]` block (design §6.1):
    * inline entries win on id conflict with fragments.
    *
-   * BotConfig (today's legacy shape) carries no inline `agents[]` field, so
+   * AgentConfig (today's legacy shape) carries no inline `agents[]` field, so
    * production callers pass nothing and the registry is built purely from
    * fragments. The seam exists today so tests can assemble a registry
    * without writing fragment files, and so the cortex.yaml migration
@@ -309,7 +309,7 @@ export interface StartCortexOptions {
   /**
    * v2.0.0 cutover (cortex#297) — principal's platform-side ids surfaced
    * from `PrincipalConfigSchema` via `LoadedConfig.operator`. Replaces the
-   * `BotConfig.agent.operatorDiscordId/Mattermost/Slack` fields retired
+   * `AgentConfig.agent.operatorDiscordId/Mattermost/Slack` fields retired
    * in cortex#297. `undefined` for legacy `bot.yaml` input — adapters
    * then have no principal-DM target and `notifyOperator` is a no-op.
    *
@@ -328,7 +328,7 @@ export interface StartCortexOptions {
  * NATS subject, dashboard column, and `signed_by` chain inside the
  * cortex process. v3 vocabulary (cortex#388) made `principal.id` the
  * single source of truth on cortex.yaml; the loader synthesises a
- * legacy-compatible `BotConfig.agent.operatorId` for downstream code
+ * legacy-compatible `AgentConfig.agent.operatorId` for downstream code
  * AND surfaces the same value as `LoadedConfig.operator.id`. This
  * helper prefers the v3-canonical `LoadedConfig.operator` path so the
  * post-MIG-8 schema deletion (PR-C of cortex#426) is a single-line
@@ -345,7 +345,7 @@ export interface StartCortexOptions {
  *   is set — fail-fast at boot rather than masking the gap.
  */
 function resolvePrincipalId(
-  config: BotConfig,
+  config: AgentConfig,
   operator: StartCortexOptions["operator"],
 ): string {
   const fromLoadedOperator = operator?.id;
@@ -374,7 +374,7 @@ function resolvePrincipalId(
  * propagate so the principal sees them at the CLI exit.
  */
 export async function startCortex(
-  config: BotConfig,
+  config: AgentConfig,
   options: StartCortexOptions = {},
 ): Promise<CortexHandle> {
   const expandedConfigPath = options.configPath
@@ -573,7 +573,7 @@ export async function startCortex(
   // we fall back to `~/.config/cortex/agents.d/`.
   //
   // Fragment-load errors are non-fatal at this stage of the migration: the
-  // agent must keep starting in BotConfig mode even when a principal's
+  // agent must keep starting in AgentConfig mode even when a principal's
   // experimental fragment is malformed. Once the cortex.yaml migration is
   // complete (MIG-7.2e), the rule flips to strict per spec §FR-4.
   const agentsDir = options.agentsDir
@@ -583,13 +583,13 @@ export async function startCortex(
     fragmentAgents = loadAgentsDirectory(agentsDir);
   } catch (err) {
     if (err instanceof FragmentLoadError) {
-      console.error(`cortex: agents.d fragment load failed (non-fatal during BotConfig migration): ${err.message}`);
+      console.error(`cortex: agents.d fragment load failed (non-fatal during AgentConfig migration): ${err.message}`);
     } else {
       throw err;
     }
   }
 
-  // Merge: inline wins on id conflict (design §6.1). BotConfig today carries
+  // Merge: inline wins on id conflict (design §6.1). AgentConfig today carries
   // no inline `agents[]`, so production callers pass `inlineAgents: undefined`
   // and the merged list is just the fragments. The seam exists so tests can
   // exercise the merge rule without writing fragment files, and so MIG-7.2e
@@ -690,11 +690,11 @@ export async function startCortex(
   // entries re-emits envelopes with fresh ids/timestamps; the bucket
   // consumer keys on the payload `agent_id` and overwrites — see the
   // publisher's idempotency doc. So this boot-time call is safe under
-  // restart-and-replay; we do NOT wire a re-publish into the BotConfig
+  // restart-and-replay; we do NOT wire a re-publish into the AgentConfig
   // hot-reload path because (a) capabilities live on `Agent`, not
-  // `BotConfig`, and (b) cortex.ts does not currently run an agents.d/
+  // `AgentConfig`, and (b) cortex.ts does not currently run an agents.d/
   // fragment watcher at the daemon level — when one is wired, the
-  // re-publish belongs in its callback, not the BotConfig one.
+  // re-publish belongs in its callback, not the AgentConfig one.
   //
   // **Scope (per §10.1 PR-7).** Publish-only. No subscriber wiring here —
   // the consumer is principal-dashboard side and lands in a future PR.
@@ -1298,7 +1298,7 @@ export async function startCortex(
   interface StartedDiscord {
     adapter: DiscordAdapter;
     agent: Agent;
-    instance: BotConfig["discord"][number];
+    instance: AgentConfig["discord"][number];
     instanceId: string;
     explicitTrustedBotIds: ReadonlySet<string>;
   }
@@ -1333,7 +1333,7 @@ export async function startCortex(
     // collapses to plain `${agent.id}-discord`.
     const instanceId = instance.instanceId ?? `${config.agent.name}-discord-${instance.guildId}`;
     // Build the `DiscordPresence` from the bot.yaml discord[i] entry.
-    // Schema defaults already applied by `BotConfigSchema` at load time —
+    // Schema defaults already applied by `AgentConfigSchema` at load time —
     // this is a structural mapping, not a parse.
     //
     // cortex#98 (part A): `trustedBotIds` carries the principal-explicit
@@ -1596,7 +1596,7 @@ export async function startCortex(
   interface StartedSlack {
     adapter: SlackAdapter;
     agent: Agent;
-    instance: BotConfig["slack"][number];
+    instance: AgentConfig["slack"][number];
     instanceId: string;
     explicitTrustedBotIds: ReadonlySet<string>;
   }
@@ -1612,7 +1612,7 @@ export async function startCortex(
       ? `${config.agent.name}-slack-${slackIndex}`
       : `${config.agent.name}-slack`);
     // Build the `SlackPresence` from the legacy `SlackInstance` shape.
-    // Schema defaults have already been applied by `BotConfigSchema` —
+    // Schema defaults have already been applied by `AgentConfigSchema` —
     // this is a structural map, not a parse.
     const presence: SlackPresence = {
       enabled: instance.enabled,
@@ -1763,7 +1763,7 @@ export async function startCortex(
 
   const renderers: Renderer[] = [];
   for (const raw of config.renderers ?? []) {
-    // BotConfig types renderers as z.unknown() so legacy bot.yaml loads
+    // AgentConfig types renderers as z.unknown() so legacy bot.yaml loads
     // without breakage (the canonical shape lives on cortex-config's
     // RendererSchema). Parse each entry strictly here — a typo fails fast
     // with a Zod error rather than surfacing as a runtime cast failure
@@ -1874,7 +1874,7 @@ export async function startCortex(
     configWatcher = new ConfigWatcher(expandedConfigPath, config, (event) => {
       // cortex#237: capability-registry re-publish lands here once
       // AgentsDirectoryWatcher is wired — see boot block ~line 540 for
-      // rationale (BotConfig hot-reload's SAFE_FIELDS doesn't include
+      // rationale (AgentConfig hot-reload's SAFE_FIELDS doesn't include
       // capabilities; mergedAgents isn't re-built).
       dispatchHandler.updateConfig(event.config, expandedConfigPath);
       for (const adapter of adapters) adapter.updateConfig?.(event.config);
@@ -2129,7 +2129,7 @@ async function resolveReviewProvisioningJsm(
 }
 
 async function setupDashboard(
-  config: BotConfig,
+  config: AgentConfig,
   principalId: string,
   dispatchHandler: DispatchHandler,
   cloudPublisher: CloudPublisher | null,
@@ -2148,7 +2148,7 @@ async function setupDashboard(
     // `operator` column matches the `{principal}` segment of incoming
     // envelopes. `operatorName` falls back to `principalId` when the
     // principal hasn't declared a separate display name on
-    // `agent.operatorName` (legacy BotConfig field — PR-C retires).
+    // `agent.operatorName` (legacy AgentConfig field — PR-C retires).
     operatorId: principalId,
     operatorName: config.agent.operatorName ?? principalId,
     dashboardDir,
@@ -2198,7 +2198,7 @@ async function setupDashboard(
 function setupOutboundLog(
   discordAdapter: DiscordAdapter,
   instance: import("./common/types/config").DiscordInstance,
-  config: BotConfig,
+  config: AgentConfig,
   router: SurfaceRouter,
   systemEventSource: SystemEventSource,
 ): (() => void) | null {
@@ -2291,7 +2291,7 @@ function setupOutboundLog(
 /** G-204a + G-500: Issue startup `/api/sync` POST against each cloud-capable
  *  network; fall back to a local sync for any network that errors. */
 async function runStartupCloudSync(
-  cloudNetworks: BotConfig["networks"],
+  cloudNetworks: AgentConfig["networks"],
   api: { runStartupSync: () => unknown },
 ): Promise<void> {
   let anyFailed = false;
@@ -2363,7 +2363,7 @@ function checkSingleton(pidFile: string): void {
 // `scripts/postinstall.sh` already advertises `cortex start --config <path>
 // --dry-run` to operators as a post-migration sanity check. This helper
 // implements that contract: parse the file through the normal load path
-// (`loadConfigWithAgents`, which validates against both `BotConfigSchema`
+// (`loadConfigWithAgents`, which validates against both `AgentConfigSchema`
 // and `CortexConfigSchema` depending on shape), print a one-line OK
 // summary, exit 0. Schema parse failures surface verbatim with exit 2 so
 // the postinstall path stays distinguishable from "file unreadable" (1).
@@ -2451,7 +2451,7 @@ if (import.meta.main) {
       });
 
       // MIG-7.2e: detect cortex shape vs legacy bot.yaml. `loadConfigWithAgents`
-      // returns both the BotConfig projection (for downstream legacy consumers)
+      // returns both the AgentConfig projection (for downstream legacy consumers)
       // and the rich cortex `agents[]` so `startCortex` can route per-instance
       // identity correctly.
       //

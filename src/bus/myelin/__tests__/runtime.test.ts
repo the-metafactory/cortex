@@ -9,10 +9,10 @@
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { NatsConnection, Subscription, Status } from "nats";
-import type { BotConfig } from "../../../common/types/config";
+import type { AgentConfig } from "../../../common/types/config";
 import { startMyelinRuntime } from "../runtime";
 
-function makeConfig(natsBlock: BotConfig["nats"]): BotConfig {
+function makeConfig(natsBlock: AgentConfig["nats"]): AgentConfig {
   return {
     agent: {
       name: "luna",
@@ -21,7 +21,7 @@ function makeConfig(natsBlock: BotConfig["nats"]): BotConfig {
       operatorName: "Andreas",
     },
     nats: natsBlock,
-  } as unknown as BotConfig;
+  } as unknown as AgentConfig;
 }
 
 function makeFakeNatsConnection() {

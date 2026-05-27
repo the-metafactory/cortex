@@ -10,7 +10,7 @@ import { EventEmitter } from "events";
 import { basename } from "path";
 import { randomUUID } from "crypto";
 import { readFileSync } from "fs";
-import { type BotConfig, getAllRepos } from "../common/types/config";
+import { type AgentConfig, getAllRepos } from "../common/types/config";
 import type {
   PlatformAdapter,
   InboundMessage,
@@ -82,7 +82,7 @@ function getGroveVersion(): string {
 }
 
 export interface DispatchHandlerOpts {
-  config: BotConfig;
+  config: AgentConfig;
   securityPreamble: string;
   /** G-300: Relaxed preamble for operator DM (no bash guard, no filesystem restriction) */
   operatorDMPreamble?: string;
@@ -180,7 +180,7 @@ function formatToolProgress(toolName: string, input: Record<string, unknown>): s
 export class DispatchHandler extends EventEmitter {
   private sessions: SessionManager;
   private taskTracker: TaskTracker;
-  private config: BotConfig;
+  private config: AgentConfig;
   private allRepos: string[];
   private securityPreamble: string;
   private operatorDMPreamble: string;
@@ -462,7 +462,7 @@ export class DispatchHandler extends EventEmitter {
    * Called by ConfigWatcher when safe fields change.
    * Active sessions continue with their original config until completion.
    */
-  updateConfig(newConfig: BotConfig, configPath?: string): void {
+  updateConfig(newConfig: AgentConfig, configPath?: string): void {
     this.config = newConfig;
     this.allRepos = getAllRepos(newConfig);
     this.securityPreamble = buildSecurityPreamble(newConfig, configPath);
@@ -474,7 +474,7 @@ export class DispatchHandler extends EventEmitter {
   }
 
   /** Get current config (for watcher initialization) */
-  getConfig(): BotConfig {
+  getConfig(): AgentConfig {
     return this.config;
   }
 

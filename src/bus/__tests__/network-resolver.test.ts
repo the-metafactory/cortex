@@ -10,7 +10,7 @@ import {
   getNetworkForChannel,
   buildNetworkLookups,
 } from "../network-resolver";
-import type { BotConfig } from "../../common/types/config";
+import type { AgentConfig } from "../../common/types/config";
 import type { NetworkFile } from "../../common/types/config";
 
 // ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ function makeNetwork(id: string, overrides: Partial<NetworkFile> = {}): NetworkF
   };
 }
 
-function makeConfig(networks: NetworkFile[]): BotConfig {
+function makeConfig(networks: NetworkFile[]): AgentConfig {
   return {
     agent: { name: "test", displayName: "Test" },
     discord: networks.flatMap(n => n.discord),

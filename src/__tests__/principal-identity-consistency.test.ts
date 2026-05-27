@@ -6,8 +6,8 @@
  * `{principal}` subject segment inside `src/cortex.ts` was sourced
  * independently from `config.agent.operatorId ?? "default"`. That
  * pattern survived the v3 vocabulary cutover (cortex#388 / v3.0.0
- * BREAKING) because the cortex.yaml → BotConfig loader synthesised
- * `agent.operatorId` from `principal.id` — so the BotConfig path "just
+ * BREAKING) because the cortex.yaml → AgentConfig loader synthesised
+ * `agent.operatorId` from `principal.id` — so the AgentConfig path "just
  * worked" while pretending the legacy field was still authoritative.
  *
  * The hidden failure mode: a single missed substitution (or a future
@@ -58,7 +58,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { BotConfigSchema, type BotConfig } from "../common/types/config";
+import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
 import { startCortex } from "../cortex";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type {
@@ -66,12 +66,12 @@ import type {
   MyelinRuntime,
 } from "../bus/myelin/runtime";
 
-// A minimal BotConfig — NATS absent so the runtime stays in no-op mode
+// A minimal AgentConfig — NATS absent so the runtime stays in no-op mode
 // and no real socket is opened. `agent.operatorId` is intentionally
 // DIFFERENT from the `options.operator.id` supplied below so the test
 // proves `resolvePrincipalId` prefers the v3 canonical path.
-function minimalConfig(overrides: Partial<Record<string, unknown>> = {}): BotConfig {
-  return BotConfigSchema.parse({
+function minimalConfig(overrides: Partial<Record<string, unknown>> = {}): AgentConfig {
+  return AgentConfigSchema.parse({
     agent: {
       name: "test-cortex",
       displayName: "TestCortex",
@@ -330,7 +330,7 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
   });
 
   test("empty-string `agent.operatorId` is treated as missing (no silent `\"\"` subject)", async () => {
-    // BotConfig allows `agent.operatorId` to be omitted; some legacy
+    // AgentConfig allows `agent.operatorId` to be omitted; some legacy
     // configs may have it set to an empty string after a botched
     // migration. The resolver must treat `""` the same as undefined
     // — otherwise the subject would render as `local..tasks.*.>`

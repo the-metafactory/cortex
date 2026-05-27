@@ -21,7 +21,7 @@
 
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { MattermostAdapter, type MattermostAdapterInfra } from "../index";
-import type { BotConfig } from "../../../common/types/config";
+import type { AgentConfig } from "../../../common/types/config";
 import type { Agent, MattermostPresence } from "../../../common/types/cortex-config";
 
 let originalLog: typeof console.log;
@@ -62,7 +62,7 @@ function makeAgent(presence: MattermostPresence): Agent {
   };
 }
 
-function makeBotConfig(overrides: Partial<{
+function makeAgentConfig(overrides: Partial<{
   name: string;
   displayName: string;
   apiUrl: string;
@@ -72,7 +72,7 @@ function makeBotConfig(overrides: Partial<{
   defaultRole: string;
   allowedUsers: string[];
   triggerWord: string;
-}> = {}): BotConfig {
+}> = {}): AgentConfig {
   return {
     agent: {
       name: overrides.name ?? "luna",
@@ -89,7 +89,7 @@ function makeBotConfig(overrides: Partial<{
         ...(overrides.triggerWord !== undefined && { triggerWord: overrides.triggerWord }),
       },
     ],
-  } as unknown as BotConfig;
+  } as unknown as AgentConfig;
 }
 
 function makeAdapter(overrides: { presence?: Partial<MattermostPresence> } = {}) {
@@ -112,21 +112,21 @@ function getAgent(adapter: MattermostAdapter): Agent {
 describe("MattermostAdapter.updateConfig", () => {
   test("matches the live presence by apiUrl (the immutable disambiguator)", () => {
     const adapter = makeAdapter();
-    adapter.updateConfig(makeBotConfig({ channels: ["c-new"] }));
+    adapter.updateConfig(makeAgentConfig({ channels: ["c-new"] }));
     expect(getPresence(adapter).channels).toEqual(["c-new"]);
   });
 
   test("skips update when no mattermost entry matches the live apiUrl", () => {
     const adapter = makeAdapter();
     const before = getPresence(adapter);
-    adapter.updateConfig(makeBotConfig({ apiUrl: "https://OTHER.example", channels: ["c-new"] }));
+    adapter.updateConfig(makeAgentConfig({ apiUrl: "https://OTHER.example", channels: ["c-new"] }));
     expect(getPresence(adapter)).toBe(before);
     expect(getPresence(adapter).channels).toEqual(["c-initial"]);
   });
 
   test("applies only hot-reload-safe fields to presence (apiToken reconnect-only stays)", () => {
     const adapter = makeAdapter();
-    adapter.updateConfig(makeBotConfig({ apiToken: "rotated-token", channels: ["c-new"] }));
+    adapter.updateConfig(makeAgentConfig({ apiToken: "rotated-token", channels: ["c-new"] }));
     expect(getPresence(adapter).channels).toEqual(["c-new"]);
     // apiToken is reconnect-only — the presence still holds the initial value.
     expect(getPresence(adapter).apiToken).toBe("initial-token");
@@ -135,7 +135,7 @@ describe("MattermostAdapter.updateConfig", () => {
   test("rebuilds presence via immutable spread (new object reference)", () => {
     const adapter = makeAdapter();
     const before = getPresence(adapter);
-    adapter.updateConfig(makeBotConfig({ pollIntervalMs: 5000 }));
+    adapter.updateConfig(makeAgentConfig({ pollIntervalMs: 5000 }));
     const after = getPresence(adapter);
     expect(after).not.toBe(before);
     expect(after.apiUrl).toBe(before.apiUrl);
@@ -144,7 +144,7 @@ describe("MattermostAdapter.updateConfig", () => {
 
   test("rebuilds agent with fresh presence reference (Holly #46 cycle 1 invariant)", () => {
     const adapter = makeAdapter();
-    adapter.updateConfig(makeBotConfig({ pollIntervalMs: 7000 }));
+    adapter.updateConfig(makeAgentConfig({ pollIntervalMs: 7000 }));
     const agentAfter = getAgent(adapter);
     const presenceAfter = getPresence(adapter);
     expect(agentAfter.presence.mattermost).toBe(presenceAfter);
@@ -153,7 +153,7 @@ describe("MattermostAdapter.updateConfig", () => {
 
   test("agent id + displayName reflect updated botConfig.agent", () => {
     const adapter = makeAdapter();
-    adapter.updateConfig(makeBotConfig({ name: "luna-rebranded", displayName: "Luna v2" }));
+    adapter.updateConfig(makeAgentConfig({ name: "luna-rebranded", displayName: "Luna v2" }));
     const agentAfter = getAgent(adapter);
     expect(agentAfter.id).toBe("luna-rebranded");
     expect(agentAfter.displayName).toBe("Luna v2");
@@ -161,7 +161,7 @@ describe("MattermostAdapter.updateConfig", () => {
 
   test("triggerWord update propagates when set", () => {
     const adapter = makeAdapter();
-    adapter.updateConfig(makeBotConfig({ triggerWord: "@luna" }));
+    adapter.updateConfig(makeAgentConfig({ triggerWord: "@luna" }));
     expect(getPresence(adapter).triggerWord).toBe("@luna");
   });
 });

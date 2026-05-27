@@ -20,7 +20,7 @@
  *      bucket dedup is the consumer's job per §3.3).
  *
  * Test infrastructure mirrors `cortex.test.ts`:
- *   - `minimalConfig` factory for a NATS-absent BotConfig.
+ *   - `minimalConfig` factory for a NATS-absent AgentConfig.
  *   - `createRecordingRuntime` factory — same `Set<EnvelopeHandler>`-based
  *     fake the surface-router tests already use; `published` array captures
  *     every envelope that landed on `runtime.publish`.
@@ -34,7 +34,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { BotConfigSchema, type BotConfig } from "../common/types/config";
+import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
 import type { Agent, AgentRuntime } from "../common/types/cortex-config";
 import { startCortex } from "../cortex";
 import { CAPABILITY_REGISTERED_EVENT_TYPE } from "../bus";
@@ -48,8 +48,8 @@ import type { EnvelopeHandler, MyelinRuntime } from "../bus/myelin/runtime";
 // independently editable).
 // ---------------------------------------------------------------------------
 
-function minimalConfig(overrides: Partial<Record<string, unknown>> = {}): BotConfig {
-  return BotConfigSchema.parse({
+function minimalConfig(overrides: Partial<Record<string, unknown>> = {}): AgentConfig {
+  return AgentConfigSchema.parse({
     agent: {
       name: "test-cortex",
       displayName: "TestCortex",

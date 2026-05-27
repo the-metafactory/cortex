@@ -14,7 +14,7 @@ import type {
   OutboundFile,
   ContextMessage,
 } from "../types";
-import type { BotConfig } from "../../common/types/config";
+import type { AgentConfig } from "../../common/types/config";
 import type { Agent, DiscordPresence } from "../../common/types/cortex-config";
 import { createDiscordClient, isMentionForBot, extractContent, type ConnectionHealth } from "./client";
 import { fetchContext } from "./context-fetcher";
@@ -62,7 +62,7 @@ import { parseReviewWireFormat, reviewThreadName } from "./wire-format";
  */
 export interface DiscordAdapterInfra {
   /** Surface-router + log-prefix key. Cortex derives `${agent.id}-discord-${guildId}` while
-   * BotConfig.discord[] still permits multiple entries per agent.name; collapses to
+   * AgentConfig.discord[] still permits multiple entries per agent.name; collapses to
    * `${agent.id}-discord` at MIG-7.2e when migrate-config emits a real agents[] array. */
   instanceId: string;
   /** Operator's platform identity. Architecture §9.1: the operator runs the cortex
@@ -638,14 +638,14 @@ export class DiscordAdapter implements PlatformAdapter {
    * F-092: Hot-reload safe config fields.
    * Only updates fields that don't require reconnection.
    *
-   * MIG-7.2c-discord-flip: still takes `BotConfig` since the bot.yaml watch
+   * MIG-7.2c-discord-flip: still takes `AgentConfig` since the bot.yaml watch
    * pipeline upstream of this method hasn't been migrated yet. The matching
    * key is the immutable `guildId` (token/agentChannelId/logChannelId are
    * reconnect-only and must not change in a hot-reload). Updates are applied
    * via immutable replacement so downstream readers can rely on
    * structural-identity changes signalling a config refresh.
    */
-  updateConfig(config: BotConfig): void {
+  updateConfig(config: AgentConfig): void {
     const newInstance = config.discord.find((inst) => inst.guildId === this.presence.guildId);
 
     if (!newInstance) {

@@ -1,8 +1,8 @@
 import { describe, test, expect } from "bun:test";
 import { buildSecurityPreamble } from "../security-preamble";
-import type { BotConfig } from "../../common/types/config";
+import type { AgentConfig } from "../../common/types/config";
 
-function makeConfig(overrides: Partial<BotConfig["claude"]> = {}): BotConfig {
+function makeConfig(overrides: Partial<AgentConfig["claude"]> = {}): AgentConfig {
   return {
     agent: { name: "test", displayName: "Test" },
     discord: {
@@ -29,7 +29,7 @@ function makeConfig(overrides: Partial<BotConfig["claude"]> = {}): BotConfig {
       publishedEventsDir: "~/.claude/events/published",
       claudeMdPath: "",
     },
-  } as unknown as BotConfig;
+  } as unknown as AgentConfig;
 }
 
 describe("buildSecurityPreamble", () => {

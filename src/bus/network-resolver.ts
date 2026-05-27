@@ -10,7 +10,7 @@
  * and rebuilt on config reload. Never rebuilt per-message.
  */
 
-import type { BotConfig, NetworkConfig, NetworkResolver, NetworkFile } from "../common/types/config";
+import type { AgentConfig, NetworkConfig, NetworkResolver, NetworkFile } from "../common/types/config";
 
 // =============================================================================
 // Lookup Tables
@@ -22,7 +22,7 @@ export interface NetworkLookupTables {
   networksById: Map<string, NetworkFile>;
 }
 
-export function buildNetworkLookups(config: BotConfig): NetworkLookupTables {
+export function buildNetworkLookups(config: AgentConfig): NetworkLookupTables {
   const guildToNetwork = new Map<string, string>();
   const channelToNetwork = new Map<string, string>();
   const networksById = new Map<string, NetworkFile>();
@@ -53,13 +53,13 @@ let cachedLookups: NetworkLookupTables = {
   channelToNetwork: new Map(),
   networksById: new Map(),
 };
-let cachedConfig: BotConfig | null = null;
+let cachedConfig: AgentConfig | null = null;
 
 /**
  * Initialize (or rebuild) the cached lookup tables.
  * Call at startup and on config reload.
  */
-export function initNetworkLookups(config: BotConfig): void {
+export function initNetworkLookups(config: AgentConfig): void {
   cachedLookups = buildNetworkLookups(config);
   cachedConfig = config;
 }
@@ -69,7 +69,7 @@ export function initNetworkLookups(config: BotConfig): void {
  * This ensures correctness even if initNetworkLookups wasn't called,
  * while avoiding per-message Map rebuilds in the hot path.
  */
-function getLookups(config: BotConfig): NetworkLookupTables {
+function getLookups(config: AgentConfig): NetworkLookupTables {
   if (config !== cachedConfig) {
     initNetworkLookups(config);
   }
@@ -80,15 +80,15 @@ function getLookups(config: BotConfig): NetworkLookupTables {
 // Resolution Functions
 // =============================================================================
 
-export function getNetworkForGuild(guildId: string, config: BotConfig): string | undefined {
+export function getNetworkForGuild(guildId: string, config: AgentConfig): string | undefined {
   return getLookups(config).guildToNetwork.get(guildId);
 }
 
-export function getNetworkForChannel(channelId: string, config: BotConfig): string | undefined {
+export function getNetworkForChannel(channelId: string, config: AgentConfig): string | undefined {
   return getLookups(config).channelToNetwork.get(channelId);
 }
 
-export function createNetworkResolver(config: BotConfig): NetworkResolver {
+export function createNetworkResolver(config: AgentConfig): NetworkResolver {
   const tables = getLookups(config);
 
   return (networkId: string | undefined): NetworkConfig | null => {

@@ -24,7 +24,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { createUser } from "nkeys.js";
 
-import { BotConfigSchema, type BotConfig } from "../common/types/config";
+import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
 import { startCortex } from "../cortex";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { EnvelopeHandler, MyelinRuntime } from "../bus/myelin/runtime";
@@ -33,8 +33,8 @@ import type { EnvelopeHandler, MyelinRuntime } from "../bus/myelin/runtime";
 // Helpers — kept local-to-this-file so the test stays self-contained.
 // ---------------------------------------------------------------------------
 
-function minimalConfig(): BotConfig {
-  return BotConfigSchema.parse({
+function minimalConfig(): AgentConfig {
+  return AgentConfigSchema.parse({
     agent: {
       name: "test-cortex",
       displayName: "TestCortex",

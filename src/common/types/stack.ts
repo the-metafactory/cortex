@@ -198,13 +198,13 @@ export interface DeriveStackIdInput {
  * Why this helper takes the narrowed `DeriveStackIdInput`, not `CortexConfig`:
  *   The `stack:` block lives on `CortexConfigSchema` only. The MIG-7.2
  *   loader (`loadCortexShape` in `src/common/config/loader.ts`) parses
- *   cortex-shape input via that schema, then projects to `BotConfig` for
+ *   cortex-shape input via that schema, then projects to `AgentConfig` for
  *   downstream legacy consumers — but the stack block isn't part of
- *   `BotConfig` (the MIG-7.2 anti-fields rule out adding it to the
+ *   `AgentConfig` (the MIG-7.2 anti-fields rule out adding it to the
  *   legacy shape). Callers wire `deriveStackId` in via the
  *   `LoadedConfig.stack` field the loader exposes (set when cortex shape
  *   was detected). The boot path constructs a small input object from the
- *   BotConfig projection's `agent.operatorId` (legacy field-name continuity)
+ *   AgentConfig projection's `agent.operatorId` (legacy field-name continuity)
  *   plus the optional `stack:` block — no second schema parse required.
  *
  * The return type is plain — no error path, no `null`. Boot code logs the

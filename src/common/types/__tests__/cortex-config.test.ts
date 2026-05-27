@@ -14,7 +14,7 @@
 
 import { describe, test, expect } from "bun:test";
 
-import { BotConfigSchema } from "../config";
+import { AgentConfigSchema } from "../config";
 import {
   AgentDetectionSchema,
   AgentSchema,
@@ -507,16 +507,16 @@ describe("NatsConfigSchema", () => {
 });
 
 // =============================================================================
-// BotConfigSchema.nats.accountSigningKeyPath — MIRROR of cortex-config field
+// AgentConfigSchema.nats.accountSigningKeyPath — MIRROR of cortex-config field
 // =============================================================================
 //
 // We MIRROR the field across both schemas during the MIG-7.2 overlap window.
 // Asserting the legacy schema accepts it (and round-trips it) protects against
 // drift — if someone edits one schema and forgets the other, this test fails.
 
-describe("BotConfigSchema.nats.accountSigningKeyPath (MIRROR)", () => {
-  /** Minimal BotConfig shell to exercise the optional `nats` block. */
-  function minBotConfig(natsExtras: Record<string, unknown> = {}) {
+describe("AgentConfigSchema.nats.accountSigningKeyPath (MIRROR)", () => {
+  /** Minimal AgentConfig shell to exercise the optional `nats` block. */
+  function minAgentConfig(natsExtras: Record<string, unknown> = {}) {
     return {
       agent: { name: "test", displayName: "Test", operatorId: "op" },
       discord: [],
@@ -530,34 +530,34 @@ describe("BotConfigSchema.nats.accountSigningKeyPath (MIRROR)", () => {
     };
   }
 
-  test("absent on legacy BotConfig.nats → undefined", () => {
-    const parsed = BotConfigSchema.parse(minBotConfig());
+  test("absent on legacy AgentConfig.nats → undefined", () => {
+    const parsed = AgentConfigSchema.parse(minAgentConfig());
     expect(parsed.nats?.accountSigningKeyPath).toBeUndefined();
   });
 
-  test("accepts a string path on legacy BotConfig.nats", () => {
-    const parsed = BotConfigSchema.parse(
-      minBotConfig({ accountSigningKeyPath: "/etc/cortex/account-signing.nk" }),
+  test("accepts a string path on legacy AgentConfig.nats", () => {
+    const parsed = AgentConfigSchema.parse(
+      minAgentConfig({ accountSigningKeyPath: "/etc/cortex/account-signing.nk" }),
     );
     expect(parsed.nats?.accountSigningKeyPath).toBe("/etc/cortex/account-signing.nk");
   });
 
-  test("credsPath (cortex#86) mirrors onto BotConfig.nats", () => {
-    const parsed = BotConfigSchema.parse(
-      minBotConfig({ credsPath: "~/.config/nats/cortex.creds" }),
+  test("credsPath (cortex#86) mirrors onto AgentConfig.nats", () => {
+    const parsed = AgentConfigSchema.parse(
+      minAgentConfig({ credsPath: "~/.config/nats/cortex.creds" }),
     );
     expect(parsed.nats?.credsPath).toBe("~/.config/nats/cortex.creds");
   });
 
-  test("credsPath rejects non-string on legacy BotConfig.nats", () => {
+  test("credsPath rejects non-string on legacy AgentConfig.nats", () => {
     expect(() =>
-      BotConfigSchema.parse(minBotConfig({ credsPath: 42 })),
+      AgentConfigSchema.parse(minAgentConfig({ credsPath: 42 })),
     ).toThrow();
   });
 
-  test("rejects non-string on legacy BotConfig.nats", () => {
-    expect(() => BotConfigSchema.parse(
-      minBotConfig({ accountSigningKeyPath: 42 }),
+  test("rejects non-string on legacy AgentConfig.nats", () => {
+    expect(() => AgentConfigSchema.parse(
+      minAgentConfig({ accountSigningKeyPath: 42 }),
     )).toThrow();
   });
 });
@@ -786,18 +786,18 @@ describe("CortexConfigSchema", () => {
 });
 
 // =============================================================================
-// MIRROR sync — cortex cross-cutting schemas vs BotConfigSchema
+// MIRROR sync — cortex cross-cutting schemas vs AgentConfigSchema
 // =============================================================================
 //
 // Six cortex schemas (Claude / Attachments / Execution / Github + AgentDetection
 // / Paths) carry MIRROR breadcrumbs in their JSDoc pointing at the corresponding
-// BotConfigSchema block. The breadcrumb is a manual guard during the MIG-7.2
+// AgentConfigSchema block. The breadcrumb is a manual guard during the MIG-7.2
 // overlap window — a field added on one side must be added on the other side
-// too, otherwise downstream code that reads BotConfig and writes CortexConfig
+// too, otherwise downstream code that reads AgentConfig and writes CortexConfig
 // (or vice versa) silently drops data. These tests are the structural check
 // that fires automatically if the breadcrumbs are missed.
 //
-// Method: parse `{}` on each cortex schema, parse the minimum BotConfig
+// Method: parse `{}` on each cortex schema, parse the minimum AgentConfig
 // (which applies inner defaults to optional cross-cutting blocks), and compare.
 // Default-value equality is the strictest test because it catches both field
 // additions/removals AND default drift. Known divergence — `paths.logDir`
@@ -854,16 +854,16 @@ describe("PolicyFederatedRegistrySchema — IAW D.4.3", () => {
   });
 });
 
-describe("MIRROR sync — cortex cross-cutting schemas vs BotConfigSchema", () => {
-  // Minimum BotConfig that exposes inner defaults on every cross-cutting block.
+describe("MIRROR sync — cortex cross-cutting schemas vs AgentConfigSchema", () => {
+  // Minimum AgentConfig that exposes inner defaults on every cross-cutting block.
   //
-  // BotConfig pre-dates the cortex-side `emptyDefault` helper, so its outer
+  // AgentConfig pre-dates the cortex-side `emptyDefault` helper, so its outer
   // `.default({} as any)` wrappers exhibit the Zod v4 quirk documented on
   // `emptyDefault`: omitting the field returns the literal `{}` rather than
   // the inner-default-applied shape. To compare populated shapes against the
   // cortex side, pass each cross-cutting block as an explicit `{}` so Zod
   // re-parses it through the inner schema and the inner defaults apply.
-  const bot = BotConfigSchema.parse({
+  const bot = AgentConfigSchema.parse({
     agent: { name: "x", displayName: "x" },
     discord: [],
     claude: {},
@@ -905,9 +905,9 @@ describe("MIRROR sync — cortex cross-cutting schemas vs BotConfigSchema", () =
     expect(cortexPaths.publishedEventsDir).toBe(bot.paths.publishedEventsDir);
     // Documented divergence: cortex moved the default log directory off the
     // grove namespace as part of the rename. If this assertion ever stops
-    // holding, the BotConfig side has been re-pointed at cortex/ too and the
+    // holding, the AgentConfig side has been re-pointed at cortex/ too and the
     // MIRROR window is collapsing — drop both this assertion and the
-    // BotConfig.paths block (per the MIRROR-removal note in cortex-config.ts).
+    // AgentConfig.paths block (per the MIRROR-removal note in cortex-config.ts).
     expect(cortexPaths.logDir).toBe("~/.config/cortex/logs");
     expect(bot.paths.logDir).toBe("~/.config/grove/logs");
   });

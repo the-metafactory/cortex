@@ -23,7 +23,7 @@
  * subscription-deferral gap flagged by Architect REQUEST-CHANGES on PR-6).
  *
  * Test infrastructure mirrors `cortex.capability-boot.test.ts`:
- *   - `minimalConfig` factory for a NATS-absent BotConfig.
+ *   - `minimalConfig` factory for a NATS-absent AgentConfig.
  *   - `createRecordingRuntime` factory — same shape as the capability-boot
  *     test's recorder so reviewers see one pattern.
  *   - `inlineAgents` injected via `StartCortexOptions.inlineAgents`.
@@ -35,7 +35,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { BotConfigSchema, type BotConfig } from "../common/types/config";
+import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
 import type { Agent, AgentRuntime } from "../common/types/cortex-config";
 import { startCortex } from "../cortex";
 import type { Envelope } from "../bus/myelin/envelope-validator";
@@ -52,8 +52,8 @@ import type { MyelinSubscriber } from "../bus/myelin/subscriber";
 // coupling per the same rationale documented in the capability-boot helper.
 // ---------------------------------------------------------------------------
 
-function minimalConfig(overrides: Partial<Record<string, unknown>> = {}): BotConfig {
-  return BotConfigSchema.parse({
+function minimalConfig(overrides: Partial<Record<string, unknown>> = {}): AgentConfig {
+  return AgentConfigSchema.parse({
     agent: {
       name: "test-cortex",
       displayName: "TestCortex",

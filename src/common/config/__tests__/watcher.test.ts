@@ -7,9 +7,9 @@ import { writeFileSync, unlinkSync, existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { ConfigWatcher } from "../watcher";
-import type { BotConfig } from "../../types/config";
+import type { AgentConfig } from "../../types/config";
 
-const TEST_CONFIG: BotConfig = {
+const TEST_CONFIG: AgentConfig = {
   agent: {
     name: "test",
     displayName: "Test Bot",
@@ -395,7 +395,7 @@ paths:
 
   test("removing a repo from github.repos also applies as a safe field", async () => {
     // Seed with one repo so removal is a real change.
-    const seededConfig: BotConfig = {
+    const seededConfig: AgentConfig = {
       ...TEST_CONFIG,
       github: {
         ...TEST_CONFIG.github,

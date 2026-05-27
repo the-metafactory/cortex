@@ -16,12 +16,12 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { BotConfigSchema, type BotConfig } from "../common/types/config";
+import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
 import type { Agent } from "../common/types/cortex-config";
 import { buildReviewSessionOpts } from "../cortex";
 
-function configWith(claudeOverrides: Partial<BotConfig["claude"]>): BotConfig {
-  return BotConfigSchema.parse({
+function configWith(claudeOverrides: Partial<AgentConfig["claude"]>): AgentConfig {
+  return AgentConfigSchema.parse({
     agent: {
       name: "test-cortex",
       displayName: "TestCortex",

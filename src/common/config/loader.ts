@@ -9,7 +9,7 @@
 import { readFileSync, readdirSync, existsSync, statSync } from "fs";
 import { join, dirname, resolve, isAbsolute, basename } from "path";
 import { parse as parseYaml } from "yaml";
-import { BotConfigSchema, NetworkFileSchema, type BotConfig, type NetworkFile } from "../types/config";
+import { AgentConfigSchema, NetworkFileSchema, type AgentConfig, type NetworkFile } from "../types/config";
 import {
   AgentSchema,
   CortexConfigSchema,
@@ -58,26 +58,26 @@ export function expandTilde(p: string): string {
  * Result of `loadConfigWithAgents`. `inlineAgents` is non-empty when the
  * loader detected cortex-shape config (architecture §9.1 — `principal:` +
  * `agents:[]` instead of legacy `agent:` + flat `discord:[]`). The `config`
- * field is always a BotConfig — for cortex-shape input it's a synthesized
+ * field is always an AgentConfig — for cortex-shape input it's a synthesized
  * legacy-compatible projection so downstream consumers stay unchanged
  * during MIG-7. Callers that need the rich cortex shape use `inlineAgents`.
  *
  * `stack` (IAW Phase A.5, cortex#113): the optional top-level `stack:` block
  * from cortex-shape input, surfaced raw so the boot path can call
  * `deriveStackId` without re-parsing the file. Undefined for legacy bot.yaml
- * input (the block lives on `CortexConfigSchema` only — `BotConfigSchema` has
+ * input (the block lives on `CortexConfigSchema` only — `AgentConfigSchema` has
  * no equivalent during the MIG-7.2 overlap window). When the principal
  * declares `stack: { id: andreas/research }`, this field carries the
  * validated object; when the block is omitted, the field stays undefined and
  * `deriveStackId` default-derives `${principal.id}/default`.
  */
 export interface LoadedConfig {
-  config: BotConfig;
+  config: AgentConfig;
   inlineAgents: Agent[];
   /**
    * v2.0.0 (cortex#297) — principal's platform-side ids surfaced through the
    * loader after `agent.operatorDiscordId/Mattermost/Slack` retired from
-   * BotConfig. Populated only for cortex-shape configs (legacy bot.yaml
+   * AgentConfig. Populated only for cortex-shape configs (legacy bot.yaml
    * input always yields `undefined`). The boot path reads these to wire
    * `DiscordAdapterInfra.operator.discordId` etc.
    */
@@ -119,7 +119,7 @@ export interface LoadedConfig {
  * The check is structural — must have a principal block (`principal:` or the
  * legacy `operator:`, object) AND `agents:` (non-empty array). Either field on
  * its own keeps the legacy path so a partially-migrated config surfaces the
- * relevant zod errors via BotConfigSchema (legacy) rather than
+ * relevant zod errors via AgentConfigSchema (legacy) rather than
  * CortexConfigSchema's anti-field rejections.
  */
 interface ZodLikeIssue {
@@ -221,10 +221,10 @@ function isCortexShape(raw: Record<string, unknown>): boolean {
 /**
  * Load bot.yaml + networks/*.yaml, validate, merge.
  *
- * Backwards-compatible wrapper that returns just the BotConfig — callers
+ * Backwards-compatible wrapper that returns just the AgentConfig — callers
  * that need cortex-shape `inlineAgents` should use `loadConfigWithAgents`.
  */
-export function loadConfig(path: string): BotConfig {
+export function loadConfig(path: string): AgentConfig {
   return loadConfigWithAgents(path).config;
 }
 
@@ -237,7 +237,7 @@ export function loadConfig(path: string): BotConfig {
  *     presence: blocks),
  *
  * and returns a `LoadedConfig` with:
- *   - `config`: a BotConfig (legacy shape, possibly synthesized from cortex
+ *   - `config`: an AgentConfig (legacy shape, possibly synthesized from cortex
  *      shape for downstream-consumer parity),
  *   - `inlineAgents`: the cortex-shape `agents[]` when present; empty for
  *      legacy input.
@@ -318,7 +318,7 @@ export function loadConfigWithAgents(path: string): LoadedConfig {
   };
 
   return {
-    config: BotConfigSchema.parse(merged),
+    config: AgentConfigSchema.parse(merged),
     inlineAgents: [],
   };
 }
@@ -331,11 +331,11 @@ export function loadConfigWithAgents(path: string): LoadedConfig {
  *      `agent:` / `discord:[]` / `mattermost:[]` / `trustedAgentBots:`
  *      blocks with principal-friendly migration errors.
  *   2. Flatten `agents[*].presence.{discord,mattermost}` into the legacy
- *      `BotConfig.{discord,mattermost}[]` arrays — each entry inherits
+ *      `AgentConfig.{discord,mattermost}[]` arrays — each entry inherits
  *      the parent agent's id as a synthesized `instanceId` matching the
  *      MIG-7.2c convention (`${agent.id}-{platform}`).
  *   3. Synthesize a singular `agent:` block from the principal block plus
- *      the first agent — this keeps the legacy BotConfig contract intact
+ *      the first agent — this keeps the legacy AgentConfig contract intact
  *      while the multi-agent identity routing flows via `inlineAgents`
  *      through `startCortex`.
  *   4. Pass renderers/claude/attachments/execution/github/paths/nats
@@ -424,7 +424,7 @@ function loadCortexShape(
     throw new Error("invariant: agents schema enforced .min(1) but [0] missing");
   }
 
-  // Synthesize the BotConfig `agent:` singular from principal + first agent.
+  // Synthesize the AgentConfig `agent:` singular from principal + first agent.
   // Downstream consumers that read `config.agent.name` get the first agent's
   // id; per-instance routing flows via `inlineAgents` so the multi-agent
   // case stays correct.
@@ -440,7 +440,7 @@ function loadCortexShape(
       operatorName: cortexConfig.principal.displayName,
     }),
     // v2.0.0 cutover (cortex#297) — `operator*Id` fields retired from
-    // BotConfig.agent. Principal's platform-side ids surface through
+    // AgentConfig.agent. Principal's platform-side ids surface through
     // `LoadedConfig.operator` (see return value below); the boot path in
     // cortex.ts reads them from there.
     dataResidency: cortexConfig.principal.dataResidency,
@@ -454,7 +454,7 @@ function loadCortexShape(
   const mattermost = flattenMattermostPresences(cortexConfig.agents);
   const slack = flattenSlackPresences(cortexConfig.agents);
 
-  // Build the merged BotConfig-shaped object. Networks behave the same
+  // Build the merged AgentConfig-shaped object. Networks behave the same
   // way they do in the legacy path; renderers + nats + the *Config blocks
   // are passthrough.
   const merged: Record<string, unknown> = {
@@ -474,7 +474,7 @@ function loadCortexShape(
   };
 
   return {
-    config: BotConfigSchema.parse(merged),
+    config: AgentConfigSchema.parse(merged),
     inlineAgents: [...cortexConfig.agents],
     // v2.0.0 (cortex#297) — surface principal platform ids for the boot path.
     operator: {
@@ -504,7 +504,7 @@ function loadCortexShape(
 }
 
 /**
- * Convert each agent's optional Discord presence into a flat BotConfig
+ * Convert each agent's optional Discord presence into a flat AgentConfig
  * discord entry. Empty when no agent has Discord presence.
  *
  * The synthesized `instanceId` matches the MIG-7.2c default convention —
@@ -534,7 +534,7 @@ function flattenMattermostPresences(agents: readonly Agent[]) {
 }
 
 /**
- * Convert each agent's optional Slack presence into a flat BotConfig
+ * Convert each agent's optional Slack presence into a flat AgentConfig
  * slack entry. Mirror of `flattenDiscordPresences` /
  * `flattenMattermostPresences` — empty when no agent declares a
  * `presence.slack` block.

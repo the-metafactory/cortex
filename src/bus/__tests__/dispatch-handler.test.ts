@@ -2,7 +2,7 @@ import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { MockAdapter } from "../../adapters/mock";
 import { DispatchHandler } from "../dispatch-handler";
 import type { InboundMessage } from "../../adapters/types";
-import type { BotConfig } from "../../common/types/config";
+import type { AgentConfig } from "../../common/types/config";
 import type { Envelope } from "../myelin/envelope-validator";
 import type { MyelinRuntime } from "../myelin/runtime";
 import type { DispatchSourcePublishResult } from "../dispatch-source-publisher";
@@ -13,8 +13,8 @@ import type {
 } from "../../substrates/claude-code/harness";
 import type { CCSessionResult, CCSessionOpts } from "../../runner/cc-session";
 
-// Minimal config that satisfies BotConfig shape for testing
-function makeConfig(overrides: Partial<BotConfig> = {}): BotConfig {
+// Minimal config that satisfies AgentConfig shape for testing
+function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     agent: {
       name: "test-agent",
@@ -57,7 +57,7 @@ function makeConfig(overrides: Partial<BotConfig> = {}): BotConfig {
       logDir: "/tmp/grove-test/logs",
     },
     // Test-fixture completion: the grove-v2 source test pre-dates the addition of
-    // `github` and `networks` to BotConfig and crashes at construction time
+    // `github` and `networks` to AgentConfig and crashes at construction time
     // (`getAllRepos(config.github.repos)` on undefined). Filling the minimum schema
     // here so the lift's tests run; the runtime code is byte-identical to source.
     github: {
@@ -71,7 +71,7 @@ function makeConfig(overrides: Partial<BotConfig> = {}): BotConfig {
     },
     networks: [],
     ...overrides,
-  } as BotConfig;
+  } as AgentConfig;
 }
 
 function makeMsg(overrides: Partial<InboundMessage> = {}): InboundMessage {

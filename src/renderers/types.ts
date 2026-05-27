@@ -43,7 +43,7 @@ import type { RendererKind } from "../common/types/cortex-config";
  *      from the operator, not from any agent (architecture §9.3).
  *
  * **Renderers are static across hot-reload.** Unlike platform adapters
- * (which carry an `updateConfig(BotConfig)` hook that the
+ * (which carry an `updateConfig(AgentConfig)` hook that the
  * `ConfigWatcher` invokes on bot.yaml changes), renderers have no
  * config-update surface. A change to `renderers[]` — adding a
  * pagerduty integration, rotating a routing key, expanding the

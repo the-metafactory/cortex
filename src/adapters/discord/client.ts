@@ -45,7 +45,7 @@ export interface DiscordClientResult {
 /**
  * Display-only metadata stamped into the connection-ready log lines.
  *
- * MIG-7.2c-discord-cleanup: replaces the previous `BotConfig` parameter so
+ * MIG-7.2c-discord-cleanup: replaces the previous `AgentConfig` parameter so
  * `createDiscordClient` no longer reaches across the whole config tree to
  * print a `Agent: …` / `Guild(s): …` line. The cortex-config agent /
  * presence model is one Discord presence per agent, so `guildId` is a

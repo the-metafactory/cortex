@@ -7,14 +7,14 @@
 
 import { test, expect, describe } from "bun:test";
 import { buildSecurityPreamble } from "../security-preamble";
-import type { BotConfig } from "../../common/types/config";
-import { BotConfigSchema } from "../../common/types/config";
+import type { AgentConfig } from "../../common/types/config";
+import { AgentConfigSchema } from "../../common/types/config";
 
 // Minimal valid config for tests
-function makeConfig(overrides: Record<string, unknown> = {}): BotConfig {
+function makeConfig(overrides: Record<string, unknown> = {}): AgentConfig {
   // v2.0.0 (cortex#297) — legacy `roles[]` / `dm` retired; the security
   // preamble + bash-guard tests below only need a minimal valid config.
-  return BotConfigSchema.parse({
+  return AgentConfigSchema.parse({
     agent: { name: "luna", displayName: "Luna" },
     discord: [{
       token: "test-token",

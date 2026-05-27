@@ -7,7 +7,7 @@
  *
  * Coupling boundary: this module imports the cortex-config Zod schema and
  * verifies its output round-trips through `.parse()`. It does NOT import the
- * legacy `BotConfigSchema` — the legacy file in the wild may carry fields
+ * legacy `AgentConfigSchema` — the legacy file in the wild may carry fields
  * (`personaFile`, `trustedAgentBots`) that were dropped from the in-repo
  * schema, so we accept input permissively and validate output strictly.
  */
@@ -44,7 +44,7 @@ import {
 /**
  * Legacy `bot.yaml` fields we accept. Not a Zod schema: real grove-v2
  * deployments may carry historical fields (`personaFile`, `trustedAgentBots`)
- * that no longer exist in `BotConfigSchema`. Accepting them as `unknown` lets
+ * that no longer exist in `AgentConfigSchema`. Accepting them as `unknown` lets
  * the converter translate them rather than fail at the input gate.
  */
 export interface LegacyAgent {
@@ -1737,7 +1737,7 @@ function buildAgentsFromCortexShape(
  * `paths:` block to their cortex equivalents (`~/.config/cortex/...`).
  *
  * cortex#88 item 1: legacy `bot.yaml` carries `paths.logDir:
- * ~/.config/grove/logs` (the BotConfigSchema default in production grove-v2).
+ * ~/.config/grove/logs` (the AgentConfigSchema default in production grove-v2).
  * Without rewriting, the emitted cortex.yaml ships a stale grove path that
  * any consumer of `config.paths.logDir` will then write to — even though
  * the launchd plist's `StandardOutPath` already points at

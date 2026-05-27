@@ -20,7 +20,7 @@ import {
   type NatsConnection,
   type Subscription,
 } from "nats";
-import type { BotConfig } from "../common/types/config";
+import type { AgentConfig } from "../common/types/config";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import {
   startMyelinRuntime,
@@ -70,7 +70,7 @@ const VALID_PAYLOAD: ReviewRequestPayload = {
   cycle: 1,
 };
 
-function makeConfig(url: string): BotConfig {
+function makeConfig(url: string): AgentConfig {
   return {
     agent: {
       name: "cortex",
@@ -84,7 +84,7 @@ function makeConfig(url: string): BotConfig {
       name: "cortex-review-roundtrip-test",
       subjects: [],
     },
-  } as unknown as BotConfig;
+  } as unknown as AgentConfig;
 }
 
 const stubCcFactory: CCSessionFactory = () => {

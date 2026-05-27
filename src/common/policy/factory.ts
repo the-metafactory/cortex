@@ -10,7 +10,7 @@
  * Phase C.3 wires this factory into the cortex.ts boot path. C.2b
  * (later) removes the per-adapter `roles[]` legacy shape and makes
  * `policy:` the authoritative source — at which point this factory
- * always returns an engine for cortex.yaml configs (BotConfig stays
+ * always returns an engine for cortex.yaml configs (AgentConfig stays
  * as legacy without a policy block, mapping to `undefined` here).
  * Phase D.3 threads the `policy.federated` slice into the engine so
  * federated dispatches (`intent.source_network` set) get the

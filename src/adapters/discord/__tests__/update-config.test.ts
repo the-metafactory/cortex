@@ -20,7 +20,7 @@
 
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { DiscordAdapter, type DiscordAdapterInfra } from "../index";
-import type { BotConfig } from "../../../common/types/config";
+import type { AgentConfig } from "../../../common/types/config";
 import type { Agent, DiscordPresence } from "../../../common/types/cortex-config";
 
 let originalLog: typeof console.log;
@@ -64,14 +64,14 @@ function makeAgent(presence: DiscordPresence, overrides: Partial<Agent> = {}): A
   };
 }
 
-function makeBotConfig(overrides: Partial<{
+function makeAgentConfig(overrides: Partial<{
   name: string;
   displayName: string;
   guildId: string;
   contextDepth: number;
   defaultRole: string;
   token: string;
-}> = {}): BotConfig {
+}> = {}): AgentConfig {
   return {
     agent: {
       name: overrides.name ?? "luna",
@@ -88,7 +88,7 @@ function makeBotConfig(overrides: Partial<{
         defaultRole: overrides.defaultRole ?? "allow-all",
       },
     ],
-  } as unknown as BotConfig;
+  } as unknown as AgentConfig;
 }
 
 function makeAdapter(overrides: { presence?: Partial<DiscordPresence> } = {}) {
@@ -111,11 +111,11 @@ function getAgent(adapter: DiscordAdapter): Agent {
 describe("DiscordAdapter.updateConfig", () => {
   test("matches the live presence by guildId (not instanceId)", () => {
     // The adapter was constructed with instanceId="luna-discord-guild-1".
-    // A BotConfig whose discord[].instanceId is something else (or omitted)
+    // A AgentConfig whose discord[].instanceId is something else (or omitted)
     // but whose guildId matches MUST still hot-reload — the match key is
     // guildId, not instanceId.
     const adapter = makeAdapter();
-    const newConfig = makeBotConfig({ contextDepth: 99 });
+    const newConfig = makeAgentConfig({ contextDepth: 99 });
     // intentionally do NOT carry an `instanceId` field on the new entry.
     adapter.updateConfig(newConfig);
     expect(getPresence(adapter).contextDepth).toBe(99);
@@ -125,7 +125,7 @@ describe("DiscordAdapter.updateConfig", () => {
     const adapter = makeAdapter();
     const before = getPresence(adapter);
     // Update arrives for a different guild — must be ignored, no mutation.
-    adapter.updateConfig(makeBotConfig({ guildId: "guild-NOT-MATCHING", contextDepth: 99 }));
+    adapter.updateConfig(makeAgentConfig({ guildId: "guild-NOT-MATCHING", contextDepth: 99 }));
     expect(getPresence(adapter)).toBe(before);
     expect(getPresence(adapter).contextDepth).toBe(5);
   });
@@ -135,7 +135,7 @@ describe("DiscordAdapter.updateConfig", () => {
     // New config carries a different token + a different contextDepth.
     // contextDepth is hot-reload safe and must update; token is reconnect-only
     // and must NOT be overwritten in-place.
-    adapter.updateConfig(makeBotConfig({ token: "rotated-token", contextDepth: 42 }));
+    adapter.updateConfig(makeAgentConfig({ token: "rotated-token", contextDepth: 42 }));
     expect(getPresence(adapter).contextDepth).toBe(42);
     expect(getPresence(adapter).token).toBe("initial-token");
   });
@@ -143,7 +143,7 @@ describe("DiscordAdapter.updateConfig", () => {
   test("rebuilds presence via immutable spread (new object reference)", () => {
     const adapter = makeAdapter();
     const before = getPresence(adapter);
-    adapter.updateConfig(makeBotConfig({ contextDepth: 7 }));
+    adapter.updateConfig(makeAgentConfig({ contextDepth: 7 }));
     const after = getPresence(adapter);
     expect(after).not.toBe(before);
     // Reconnect-only fields preserved across the spread.
@@ -155,7 +155,7 @@ describe("DiscordAdapter.updateConfig", () => {
 
   test("rebuilds agent with fresh presence reference (Holly cycle 1 invariant)", () => {
     const adapter = makeAdapter();
-    adapter.updateConfig(makeBotConfig({ contextDepth: 11 }));
+    adapter.updateConfig(makeAgentConfig({ contextDepth: 11 }));
     const agentAfter = getAgent(adapter);
     const presenceAfter = getPresence(adapter);
     // agent.presence.discord must be the SAME object as this.presence,
@@ -166,7 +166,7 @@ describe("DiscordAdapter.updateConfig", () => {
 
   test("agent id + displayName reflect updated botConfig.agent", () => {
     const adapter = makeAdapter();
-    adapter.updateConfig(makeBotConfig({ name: "luna-rebranded", displayName: "Luna v2" }));
+    adapter.updateConfig(makeAgentConfig({ name: "luna-rebranded", displayName: "Luna v2" }));
     const agentAfter = getAgent(adapter);
     expect(agentAfter.id).toBe("luna-rebranded");
     expect(agentAfter.displayName).toBe("Luna v2");

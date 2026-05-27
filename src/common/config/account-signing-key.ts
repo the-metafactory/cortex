@@ -13,7 +13,7 @@
  * laptop / server filesystem, the next-best mitigation is to refuse to load
  * it unless the file is chmod 600 (owner-only read/write). This loader
  * enforces that gate; the schema field (`nats.accountSigningKeyPath`) is
- * MIRRORed across `BotConfigSchema.nats` + `NatsConfigSchema` so both the
+ * MIRRORed across `AgentConfigSchema.nats` + `NatsConfigSchema` so both the
  * legacy bot.yaml shape and the post-MIG-7.2e cortex-config shape carry it.
  *
  * Behavior:
@@ -37,7 +37,7 @@
  *   - Hardware-backed signing (yubikey / TPM). Future work; the
  *     `loadAccountSigningKey` signature is the seam.
  *
- * MIRROR: schema field carried in both `BotConfigSchema.nats` + the
+ * MIRROR: schema field carried in both `AgentConfigSchema.nats` + the
  * canonical `NatsConfigSchema`. Drop legacy on MIG-7.2e.
  */
 

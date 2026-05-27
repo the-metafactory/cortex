@@ -1019,15 +1019,15 @@ describe("SlackAdapter — system.adapter.* envelopes (cortex#235 r1#4)", () => 
 // cortex#235 r1#5 — updateConfig hot-reload
 // ---------------------------------------------------------------------------
 
-import type { BotConfig } from "../../../common/types/config";
+import type { AgentConfig } from "../../../common/types/config";
 
 describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () => {
   /**
-   * Minimal BotConfig fixture with a single Slack instance. Mirrors the
+   * Minimal AgentConfig fixture with a single Slack instance. Mirrors the
    * Discord/Mattermost test pattern. Only the fields we care about for
    * hot-reload need realistic values; others get cheap defaults.
    */
-  function makeBotConfig(slackOverrides: Partial<BotConfig["slack"][number]> = {}): BotConfig {
+  function makeAgentConfig(slackOverrides: Partial<AgentConfig["slack"][number]> = {}): AgentConfig {
     return {
       agent: { name: "luna", displayName: "Luna" },
       discord: [],
@@ -1044,17 +1044,17 @@ describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () 
         surfaceSubjects: [],
         ...slackOverrides,
       }],
-      claude: {} as BotConfig["claude"],
+      claude: {} as AgentConfig["claude"],
     // Adapter's `updateConfig` only reads `config.slack[i]` and
-    // `config.agent`; the rest of the BotConfig surface
+    // `config.agent`; the rest of the AgentConfig surface
     // (attachments/execution/github/api/etc.) is unused here. Cast
     // through unknown for test ergonomics.
-    } as unknown as BotConfig;
+    } as unknown as AgentConfig;
   }
 
   test("matches the live presence by workspaceId and hot-reloads channels", () => {
     const { adapter } = makeAdapter();
-    const updated = makeBotConfig({
+    const updated = makeAgentConfig({
       channels: [
         { id: "C0CHANNEL1", name: "cortex" },
         { id: "C0CHANNEL2", name: "research" },
@@ -1074,7 +1074,7 @@ describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () 
 
   test("hot-reloads allowedUserIds", () => {
     const { adapter } = makeAdapter();
-    const updated = makeBotConfig({ allowedUserIds: ["U0NEW1", "U0NEW2"] });
+    const updated = makeAgentConfig({ allowedUserIds: ["U0NEW1", "U0NEW2"] });
     adapter.updateConfig(updated);
     expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.allowedUserIds).toEqual(["U0NEW1", "U0NEW2"]);
   });
@@ -1086,7 +1086,7 @@ describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () 
     adapter.attachInboundDispatch();
     // Update to add a trusted bot id; verify the bot-id message no
     // longer trips the self-loop guard.
-    adapter.updateConfig(makeBotConfig({ trustedBotIds: ["B0PEERBOT"] }));
+    adapter.updateConfig(makeAgentConfig({ trustedBotIds: ["B0PEERBOT"] }));
     expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.trustedBotIds).toEqual(["B0PEERBOT"]);
     // Smoke: send a message FROM the peer bot id; should be admitted
     // (no longer dropped as self-loop).
@@ -1101,7 +1101,7 @@ describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () 
     const originalWorkspaceId = (adapter as unknown as { agent: Agent }).agent.presence.slack?.workspaceId;
     // Pass an instance with rotated tokens — the match-by-workspaceId
     // still works, and the presence's tokens carry through unchanged.
-    adapter.updateConfig(makeBotConfig({
+    adapter.updateConfig(makeAgentConfig({
       botToken: "xoxb-ROTATED-IGNORED",
       appToken: "xapp-ROTATED-IGNORED",
       channels: [{ id: "C0CHANNEL1", name: "cortex" }],
@@ -1121,7 +1121,7 @@ describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () 
     console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
     try {
       // No slack[] instance with our workspaceId.
-      adapter.updateConfig(makeBotConfig({ workspaceId: "T0DIFFERENT" }));
+      adapter.updateConfig(makeAgentConfig({ workspaceId: "T0DIFFERENT" }));
       // Presence unchanged — update was ignored (channels is a proxy for
       // "the hot-reload didn't touch this presence").
       expect((adapter as unknown as { agent: Agent }).agent.presence.slack?.channels).toEqual(originalChannels);
@@ -1134,7 +1134,7 @@ describe("SlackAdapter.updateConfig — F-092 hot-reload (cortex#235 r1#5)", () 
 
   test("rebuilds agent.id + agent.displayName from new config", () => {
     const { adapter } = makeAdapter();
-    const updated = makeBotConfig();
+    const updated = makeAgentConfig();
     updated.agent.name = "luna-rebranded";
     updated.agent.displayName = "Luna v2";
     adapter.updateConfig(updated);
