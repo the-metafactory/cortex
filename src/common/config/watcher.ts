@@ -426,9 +426,9 @@ export class AgentsDirectoryWatcher {
 
   start(): void {
     if (!existsSync(this.agentsDir)) {
-      // Operator hasn't created agents.d/ yet. The watcher noops — when arc
+      // Principal hasn't created agents.d/ yet. The watcher noops — when arc
       // first drops a fragment, fs.watch on the parent dir would catch it
-      // but that widens scope. For v1: log + return. Operator restarts cortex
+      // but that widens scope. For v1: log + return. Principal restarts cortex
       // after creating the dir, or invokes `cortex agents reload` (F-3).
       console.warn(`agents-watcher: agents.d directory not found at ${this.agentsDir} — watcher idle`);
       this.readyPromise = Promise.resolve();
@@ -491,7 +491,7 @@ export class AgentsDirectoryWatcher {
    */
   triggerReload(source: "sighup" | "cli"): void {
     if (this.reloadTimeout) clearTimeout(this.reloadTimeout);
-    // Skip debounce for explicit triggers — operator wants the reload now.
+    // Skip debounce for explicit triggers — principal wants the reload now.
     this.reload(source);
   }
 

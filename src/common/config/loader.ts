@@ -27,7 +27,7 @@ import {
  * Hardening cap on a single fragment file's size. Echo M3 on cortex#62 —
  * unbounded readFileSync against an attacker- or accident-controlled file
  * in agents.d/ is a footgun. 1MB is ~4 orders of magnitude over a realistic
- * fragment (~1KB); the guard catches mistakes (operator drops the wrong
+ * fragment (~1KB); the guard catches mistakes (principal drops the wrong
  * file) and worst-case-malicious drops alike before they consume memory or
  * stall the loader.
  */
@@ -56,7 +56,7 @@ export function expandTilde(p: string): string {
 
 /**
  * Result of `loadConfigWithAgents`. `inlineAgents` is non-empty when the
- * loader detected cortex-shape config (architecture §9.1 — `operator:` +
+ * loader detected cortex-shape config (architecture §9.1 — `principal:` +
  * `agents:[]` instead of legacy `agent:` + flat `discord:[]`). The `config`
  * field is always a BotConfig — for cortex-shape input it's a synthesized
  * legacy-compatible projection so downstream consumers stay unchanged
@@ -66,16 +66,16 @@ export function expandTilde(p: string): string {
  * from cortex-shape input, surfaced raw so the boot path can call
  * `deriveStackId` without re-parsing the file. Undefined for legacy bot.yaml
  * input (the block lives on `CortexConfigSchema` only — `BotConfigSchema` has
- * no equivalent during the MIG-7.2 overlap window). When the operator
+ * no equivalent during the MIG-7.2 overlap window). When the principal
  * declares `stack: { id: andreas/research }`, this field carries the
  * validated object; when the block is omitted, the field stays undefined and
- * `deriveStackId` default-derives `${operator.id}/default`.
+ * `deriveStackId` default-derives `${principal.id}/default`.
  */
 export interface LoadedConfig {
   config: BotConfig;
   inlineAgents: Agent[];
   /**
-   * v2.0.0 (cortex#297) — operator's platform-side ids surfaced through the
+   * v2.0.0 (cortex#297) — principal's platform-side ids surfaced through the
    * loader after `agent.operatorDiscordId/Mattermost/Slack` retired from
    * BotConfig. Populated only for cortex-shape configs (legacy bot.yaml
    * input always yields `undefined`). The boot path reads these to wire
@@ -89,14 +89,14 @@ export interface LoadedConfig {
   };
   /**
    * Optional stack identity (IAW A.5.3, cortex#113). Populated only when the
-   * input was cortex-shape AND the operator declared a `stack:` block.
+   * input was cortex-shape AND the principal declared a `stack:` block.
    * Legacy bot.yaml input always yields `undefined`. See `deriveStackId` in
    * `src/common/types/stack.ts` for the boot-time resolver that consumes this.
    */
   stack?: StackConfig;
   /**
    * Optional policy block (IAW C.3.1, cortex#115). Populated only when
-   * the input was cortex-shape AND the operator declared a `policy:`
+   * the input was cortex-shape AND the principal declared a `policy:`
    * block. Legacy bot.yaml input always yields `undefined`. The boot
    * path passes this through to `policyEngineFromConfig` which returns
    * `undefined` when the block is absent OR has no principals — in
@@ -149,7 +149,7 @@ function isZodLikeError(err: unknown): err is ZodLikeError {
  * The trust-boundary contract from v2.x is preserved at v3: a config
  * declaring two principal blocks is ambiguous and MUST be rejected
  * before any membership / capability decision. v3 drops the
- * legacy-only acceptance path (operators upgrading from v2.x run
+ * legacy-only acceptance path (principals upgrading from v2.x run
  * `cortex migrate-config <config.yaml>` to delete the old block), but
  * the dual-block rejection stays — a hand-edited config that kept the
  * old block while adding the new one must surface the conflict
@@ -169,7 +169,7 @@ export class DualBlockConflictError extends Error {
  * R3 vocabulary migration (cortex#388) v3.0.0 BREAKING — resolve the
  * principal block from a cortex-shape config. cortex.yaml now requires
  * the canonical `principal:` key; the legacy `operator:`-only path was
- * removed at v3.0.0 (manifest PR-11). Operators upgrading from v2.x run
+ * removed at v3.0.0 (manifest PR-11). Principals upgrading from v2.x run
  * `cortex migrate-config <config.yaml>` to rewrite their config — the
  * migrate-config CLI continues to read legacy `operator:`-shaped input
  * (historical record per cortex#388 completion-signal allow-list).
@@ -209,7 +209,7 @@ function isCortexShape(raw: Record<string, unknown>): boolean {
   // v3.0.0 BREAKING — cortex.yaml requires the canonical `principal:`
   // key. A config still carrying the legacy `operator:` block falls
   // through to the bot.yaml-shape detection path, where it is loaded
-  // by the migrate-config-compatible legacy reader and the operator
+  // by the migrate-config-compatible legacy reader and the principal
   // is steered toward `cortex migrate-config`.
   return (
     resolvePrincipalBlock(raw) !== undefined &&
@@ -233,7 +233,7 @@ export function loadConfig(path: string): BotConfig {
  *
  * Loads either:
  *   - legacy grove-v2 `bot.yaml` (agent: + flat discord:[] + mattermost:[]),
- *   - or cortex-shape `cortex.yaml` (operator: + agents:[] with per-agent
+ *   - or cortex-shape `cortex.yaml` (principal: + agents:[] with per-agent
  *     presence: blocks),
  *
  * and returns a `LoadedConfig` with:
@@ -242,7 +242,7 @@ export function loadConfig(path: string): BotConfig {
  *   - `inlineAgents`: the cortex-shape `agents[]` when present; empty for
  *      legacy input.
  *
- * Detection is structural: presence of `operator:` (object) + `agents:`
+ * Detection is structural: presence of `principal:` (object) + `agents:`
  * (non-empty array) → cortex; anything else → legacy. The two anti-field
  * rejections in `CortexConfigSchema` (legacy `agent:` / `discord:` /
  * `mattermost:` / `trustedAgentBots:` at the top level) surface as zod
@@ -262,7 +262,7 @@ export function loadConfigWithAgents(path: string): LoadedConfig {
   // appeared anywhere in raw yaml — but migrate-config emits the schema
   // default (`./networks`) verbatim, so every startup tripped the
   // `does not exist` warn. Treat the literal default value as "not
-  // explicit" so the warning fires only when the operator pointed
+  // explicit" so the warning fires only when the principal pointed
   // networksDir at a non-default path that's actually missing.
   const explicitNetworksDir =
     typeof raw.networksDir === "string" && raw.networksDir !== "./networks";
@@ -329,12 +329,12 @@ export function loadConfigWithAgents(path: string): LoadedConfig {
  * Strategy (MIG-7.2e):
  *   1. Parse via `CortexConfigSchema` — strict, rejects legacy top-level
  *      `agent:` / `discord:[]` / `mattermost:[]` / `trustedAgentBots:`
- *      blocks with operator-friendly migration errors.
+ *      blocks with principal-friendly migration errors.
  *   2. Flatten `agents[*].presence.{discord,mattermost}` into the legacy
  *      `BotConfig.{discord,mattermost}[]` arrays — each entry inherits
  *      the parent agent's id as a synthesized `instanceId` matching the
  *      MIG-7.2c convention (`${agent.id}-{platform}`).
- *   3. Synthesize a singular `agent:` block from the operator block plus
+ *   3. Synthesize a singular `agent:` block from the principal block plus
  *      the first agent — this keeps the legacy BotConfig contract intact
  *      while the multi-agent identity routing flows via `inlineAgents`
  *      through `startCortex`.
@@ -345,12 +345,12 @@ export function loadConfigWithAgents(path: string): LoadedConfig {
  */
 /**
  * v2.0.0 cutover (cortex#297) — reject legacy `presence.<platform>.roles[]`,
- * `presence.discord.dm`, and `agents[].roles[]` fields with an operator-
+ * `presence.discord.dm`, and `agents[].roles[]` fields with a principal-
  * actionable error pointing at `migrate-config`. Zod's default-strip
- * behaviour would silently drop these fields post-cutover; legacy operators
+ * behaviour would silently drop these fields post-cutover; legacy principals
  * upgrading without running `migrate-config` first would see their auth
  * configuration vanish without warning. Detection happens BEFORE Zod parse
- * so the error message carries the exact field path operators see in their
+ * so the error message carries the exact field path principals see in their
  * own cortex.yaml.
  */
 function detectLegacyAuthorisationFields(raw: Record<string, unknown>): string[] {
@@ -396,7 +396,7 @@ function loadCortexShape(
   // `principal:` key. Pass the raw config straight to the schema; the
   // schema rejects a legacy `operator:`-shaped file with the
   // strip-by-default → "Invalid input: expected object" error at the
-  // `principal:` slot. Operators upgrading from v2.x run
+  // `principal:` slot. Principals upgrading from v2.x run
   // `cortex migrate-config <config.yaml>` to convert.
   const normalised: Record<string, unknown> = raw;
 
@@ -424,11 +424,11 @@ function loadCortexShape(
     throw new Error("invariant: agents schema enforced .min(1) but [0] missing");
   }
 
-  // Synthesize the BotConfig `agent:` singular from operator + first agent.
+  // Synthesize the BotConfig `agent:` singular from principal + first agent.
   // Downstream consumers that read `config.agent.name` get the first agent's
   // id; per-instance routing flows via `inlineAgents` so the multi-agent
   // case stays correct.
-  // `operator.id` and `operator.dataResidency` are non-optional after parse
+  // `principal.id` and `principal.dataResidency` are non-optional after parse
   // (required + default respectively), so the prior `!== undefined` guards
   // were dead conditions. `discordId` and `mattermostId` are genuinely
   // optional — keep the spread-on-truthy pattern there.
@@ -440,7 +440,7 @@ function loadCortexShape(
       operatorName: cortexConfig.principal.displayName,
     }),
     // v2.0.0 cutover (cortex#297) — `operator*Id` fields retired from
-    // BotConfig.agent. Operator's platform-side ids surface through
+    // BotConfig.agent. Principal's platform-side ids surface through
     // `LoadedConfig.operator` (see return value below); the boot path in
     // cortex.ts reads them from there.
     dataResidency: cortexConfig.principal.dataResidency,
@@ -476,7 +476,7 @@ function loadCortexShape(
   return {
     config: BotConfigSchema.parse(merged),
     inlineAgents: [...cortexConfig.agents],
-    // v2.0.0 (cortex#297) — surface operator platform ids for the boot path.
+    // v2.0.0 (cortex#297) — surface principal platform ids for the boot path.
     operator: {
       id: cortexConfig.principal.id,
       ...(cortexConfig.principal.discordId !== undefined && {
@@ -492,7 +492,7 @@ function loadCortexShape(
     // IAW A.5.3 — surface the validated `stack:` block to the boot path.
     // Always carry-through (even when undefined) keeps callers' destructuring
     // simple: `const { stack } = loadConfigWithAgents(path)` is safe whether
-    // or not the operator declared the block.
+    // or not the principal declared the block.
     ...(cortexConfig.stack !== undefined && { stack: cortexConfig.stack }),
     // IAW C.3.1 — same pattern for the `policy:` block. Surfaced raw so
     // the boot path passes it to `policyEngineFromConfig` once. The
@@ -555,7 +555,7 @@ function flattenSlackPresences(agents: readonly Agent[]) {
 
 /**
  * Error raised when a fragment in `agents.d/` fails to load. Carries the
- * file path so the caller can name it in operator-facing error messages.
+ * file path so the caller can name it in principal-facing error messages.
  *
  * Boot-time strict-failure rule (cortex#60 spec §FR-4): cortex must refuse
  * to start if any fragment fails. Mid-run rule (FR-5): caller catches and
@@ -583,7 +583,7 @@ export class FragmentLoadError extends Error {
  * as-is if absolute); `~` is expanded to `$HOME`. The function checks the
  * persona file exists on disk and surfaces a `FragmentLoadError` if not.
  *
- * Returns `[]` if `dir` does not exist (operator hasn't created it yet).
+ * Returns `[]` if `dir` does not exist (principal hasn't created it yet).
  * Skips non-yaml files and dotfiles silently. Duplicate `id` across fragments
  * triggers `FragmentLoadError` naming both filenames + the conflicting id.
  *
@@ -651,14 +651,14 @@ export function loadAgentFromFile(filePath: string, personaBaseDir: string): Age
     );
   }
 
-  // Echo N6 — operator-UX warn when id and filename stem disagree.
+  // Echo N6 — principal-UX warn when id and filename stem disagree.
   const filename = basename(filePath);
   const filenameStem = basename(filename, filename.endsWith(".yml") ? ".yml" : ".yaml");
   if (raw && typeof raw === "object" && "id" in raw) {
     const declaredId = (raw as { id?: unknown }).id;
     if (typeof declaredId === "string" && declaredId !== filenameStem) {
       console.warn(
-        `agents-loader: fragment ${filename} declares id "${declaredId}" which differs from its filename stem "${filenameStem}". Convention is to match — operator tooling (arc, cortex agents list) keys on the id, but mismatch obscures filesystem lookup.`,
+        `agents-loader: fragment ${filename} declares id "${declaredId}" which differs from its filename stem "${filenameStem}". Convention is to match — principal tooling (arc, cortex agents list) keys on the id, but mismatch obscures filesystem lookup.`,
       );
     }
   }
@@ -738,13 +738,13 @@ export function loadAgentsDirectory(dir: string): Agent[] {
 function loadNetworkFiles(networksDir: string, explicit: boolean): NetworkFile[] {
   if (!existsSync(networksDir)) {
     if (explicit) {
-      // Operator pointed networksDir at a non-default path that doesn't
+      // Principal pointed networksDir at a non-default path that doesn't
       // exist — surface loudly so they notice the typo / missing mount.
       console.warn(`config-loader: networksDir "${networksDir}" does not exist — no networks loaded`);
     } else {
       // cortex#88 item 7: the default path is absent. This is fine —
       // networks/ is optional today — but surface at info-level so
-      // an operator who actually expected fragments to load can spot
+      // a principal who actually expected fragments to load can spot
       // the path mismatch.
       console.info(`config-loader: default networksDir "${networksDir}" not present — no networks loaded (this is fine if you haven't created any network fragments)`);
     }

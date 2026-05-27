@@ -97,7 +97,7 @@ import {
 } from "./taps/gh-webhook-receiver/server";
 
 // MIG-7.9 (deferred) flips these to `~/.config/cortex/`. Keeping grove-shaped
-// paths for now so the operator's existing `bot.yaml` continues to work.
+// paths for now so the principal's existing `bot.yaml` continues to work.
 const STATE_DIR = join(process.env.HOME ?? "~", ".config", "grove", "state");
 const PID_FILE = join(STATE_DIR, "cortex.pid");
 const DEFAULT_CONFIG = join(process.env.HOME ?? "~", ".config", "grove", "bot.yaml");
@@ -246,7 +246,7 @@ export interface StartCortexOptions {
    * directory (`{configDir}/agents.d`) matching `cortex agents` CLI
    * behaviour, falling back to `~/.config/cortex/agents.d/` when no
    * `configPath` was supplied. Tests pass a tmp dir so the registry
-   * assembly path runs without touching the operator's real `agents.d/`.
+   * assembly path runs without touching the principal's real `agents.d/`.
    *
    * @internal — not part of the public API; semver does not apply.
    */
@@ -271,8 +271,8 @@ export interface StartCortexOptions {
    * `CortexConfig`, threaded through from the loader so the boot path can
    * call `deriveStackId` without re-parsing the file. Undefined for legacy
    * `bot.yaml` input (the block lives on `CortexConfigSchema` only) AND for
-   * cortex-shape input where the operator hasn't declared `stack:` —
-   * `deriveStackId` default-derives `${operator.id}/default` for both.
+   * cortex-shape input where the principal hasn't declared `stack:` —
+   * `deriveStackId` default-derives `${principal.id}/default` for both.
    *
    * The seam exists today so the boot path can log the derived stack id and
    * downstream emit code (A.5.5, blocked on myelin#113) can consume the
@@ -288,7 +288,7 @@ export interface StartCortexOptions {
    * can build the PolicyEngine once and pass it to the dispatch-
    * listener. Undefined for legacy `bot.yaml` input (the block lives
    * on `CortexConfigSchema` only) AND for cortex-shape input where
-   * the operator hasn't declared a `policy:` block — the engine
+   * the principal hasn't declared a `policy:` block — the engine
    * factory returns `undefined` for both, and the dispatch-listener
    * falls back to the legacy unauthenticated path.
    *
@@ -307,11 +307,11 @@ export interface StartCortexOptions {
    */
   bus?: BusConfig;
   /**
-   * v2.0.0 cutover (cortex#297) — operator's platform-side ids surfaced
-   * from `OperatorSchema` via `LoadedConfig.operator`. Replaces the
+   * v2.0.0 cutover (cortex#297) — principal's platform-side ids surfaced
+   * from `PrincipalConfigSchema` via `LoadedConfig.operator`. Replaces the
    * `BotConfig.agent.operatorDiscordId/Mattermost/Slack` fields retired
    * in cortex#297. `undefined` for legacy `bot.yaml` input — adapters
-   * then have no operator-DM target and `notifyOperator` is a no-op.
+   * then have no principal-DM target and `notifyOperator` is a no-op.
    *
    * @internal — not part of the public API; semver does not apply.
    */
@@ -371,7 +371,7 @@ function resolvePrincipalId(
  * → router.start(). Optional taps (cloud publisher, dashboard, JSONL
  * poller) run alongside. Errors during startup of OPTIONAL components are
  * logged and swallowed; REQUIRED components (runtime, router, listener)
- * propagate so the operator sees them at the CLI exit.
+ * propagate so the principal sees them at the CLI exit.
  */
 export async function startCortex(
   config: BotConfig,
@@ -416,25 +416,25 @@ export async function startCortex(
   );
 
   // IAW Phase B.3 (refs cortex#114) — load the stack signing keypair
-  // if the operator has declared `stack.nkey_seed_path`. The signer is
+  // if the principal has declared `stack.nkey_seed_path`. The signer is
   // optional; when absent, MyelinRuntime publishes envelopes unsigned
   // (same shape as today). When present, MyelinRuntime.publish signs
   // every outbound envelope via myelin's chain-aware signEnvelope.
   //
   // Principal derivation: `did:mf:${stack.id.replace("/", "-")}`. The
-  // `stack.id` shape is `{operator_id}/{stack_id}` (Phase A.5 lock-in);
+  // `stack.id` shape is `{principal_id}/{stack_id}` (Phase A.5 lock-in);
   // myelin's DID_RE rejects slashes but accepts hyphens, so we
-  // canonicalize the slash. Operators see `did:mf:andreas-research`
+  // canonicalize the slash. Principals see `did:mf:andreas-research`
   // on the wire for `stack.id = "andreas/research"`.
   //
   // Load failures are non-fatal — the daemon keeps starting and the
-  // runtime publishes unsigned. The error surfaces to operator logs
+  // runtime publishes unsigned. The error surfaces to principal logs
   // so they can fix the seed file and restart.
   let signer: BusEnvelopeSigner | undefined;
   if (options.stack?.nkey_seed_path) {
     try {
       // `expandTilde` matches `NatsLink.connect`'s treatment of
-      // `credsPath` + the agents.d/ fallback below — operators writing
+      // `credsPath` + the agents.d/ fallback below — principals writing
       // `~/.config/cortex/stack.nk` should not silently ENOENT into
       // the unsigned-publish fallback (Echo cortex#211 round 1).
       const seedPath = expandTilde(options.stack.nkey_seed_path);
@@ -442,7 +442,7 @@ export async function startCortex(
 
       // Consistency check: if `stack.nkey_pub` is also declared, the
       // loaded keypair's public key MUST match. A mismatch is the
-      // operator-rotation split-brain hazard — peers' `trust:`
+      // principal-rotation split-brain hazard — peers' `trust:`
       // lookups would reject every signature without explaining why.
       // Throw and let the existing catch surface the failure (Echo
       // cortex#211 round 1).
@@ -497,15 +497,15 @@ export async function startCortex(
     }
   } else {
     // cortex#324 (v2.0.3) — walk the talk: stack signing should be ON by
-    // default. When the operator hasn't declared `stack.nkey_seed_path`,
+    // default. When the principal hasn't declared `stack.nkey_seed_path`,
     // every outbound envelope is published UNSIGNED, which means peers
     // on the bus that run `verifySignedByChain` (cortex#320 / v2.0.2)
     // will reject the messages — silently for plain `dispatch.*`, loudly
-    // once federation is on. The opt-in default is a footgun: operators
+    // once federation is on. The opt-in default is a footgun: principals
     // upgrade from a working unsigned deployment, don't notice the
     // missing field, and traffic looks fine until a peer enforces.
     //
-    // For v2.0.3 we emit a LOUD stderr WARNING so operators tailing logs
+    // For v2.0.3 we emit a LOUD stderr WARNING so principals tailing logs
     // OR running interactively see the actionable fix-path. Boot stays
     // non-fatal — existing deployments degrade gracefully (same shape as
     // today's unsigned publish), and v2.0.4 promotes this to a refuse-to-
@@ -549,8 +549,8 @@ export async function startCortex(
       // IAW Phase A.5 (cortex#262) — surface the resolved stack identity
       // into the runtime so `publish()` emits 6-segment subjects matching
       // sage's `local.{principal}.{stack}.>` subscription. `derivedStack.stack`
-      // is the second segment of the canonical `{operator}/{stack}` id;
-      // when the operator omitted the `stack:` block, `deriveStackId`
+      // is the second segment of the canonical `{principal}/{stack}` id;
+      // when the principal omitted the `stack:` block, `deriveStackId`
       // default-derived it to `'default'` (cortex.ts:278-281). That value
       // is what sage's bridge listens for by default (`SAGE_STACK=default`).
       runtime = await startMyelinRuntime(config, {
@@ -567,13 +567,13 @@ export async function startCortex(
   // on id conflict with fragments.
   //
   // The fragment directory defaults to `{configDir}/agents.d` (matching the
-  // `cortex agents` CLI's resolver) so an operator who already manages
+  // `cortex agents` CLI's resolver) so a principal who already manages
   // fragments via that command sees them honoured at daemon startup too.
   // When `options.configPath` is absent (e.g. tests with in-memory config),
   // we fall back to `~/.config/cortex/agents.d/`.
   //
   // Fragment-load errors are non-fatal at this stage of the migration: the
-  // agent must keep starting in BotConfig mode even when an operator's
+  // agent must keep starting in BotConfig mode even when a principal's
   // experimental fragment is malformed. Once the cortex.yaml migration is
   // complete (MIG-7.2e), the rule flips to strict per spec §FR-4.
   const agentsDir = options.agentsDir
@@ -617,7 +617,7 @@ export async function startCortex(
   // loop below), and the merge step (Pass 2) walks each agent's `trust:[]`
   // list and asks the resolver for each peer's bot user id. Co-hosted
   // peers land in the merged set; cross-process peers (never registered
-  // here) silently fall through and stay covered by the operator-explicit
+  // here) silently fall through and stay covered by the principal-explicit
   // `presence.discord.trustedBotIds` field (cortex#98 part A).
   //
   // The resolver is constructed unconditionally — even legacy bot.yaml
@@ -633,9 +633,9 @@ export async function startCortex(
   // `src/common/agents/trust-resolver.ts`.
 
   // SystemEventSource for `system.*` envelopes (spec §3.6:
-  // `{operatorId}.cortex.{instance}`). `local` until federation lands.
+  // `{principalId}.cortex.{instance}`). `local` until federation lands.
   // `dataResidency` flows from `config.agent.dataResidency` so a non-NZ
-  // operator gets envelopes stamped with their actual residency without
+  // principal gets envelopes stamped with their actual residency without
   // touching the per-event constructors. Defaults to "NZ" when absent
   // (the original cortex deployment's residency).
   //
@@ -663,7 +663,7 @@ export async function startCortex(
   // agent in `mergedAgents` with at least one `runtime.capabilities[]` entry,
   // publish one `agents.capabilities.registered` envelope so the rest of the
   // network (today: pilot's deferred bucket reader per §13.1; tomorrow: the
-  // operator-side dashboard) can discover what each agent claims to do.
+  // principal-side dashboard) can discover what each agent claims to do.
   //
   // **Ordering rationale.** This block runs AFTER:
   //   - the runtime is constructed (line ~395) so `runtime.publish` is wired
@@ -697,7 +697,7 @@ export async function startCortex(
   // re-publish belongs in its callback, not the BotConfig one.
   //
   // **Scope (per §10.1 PR-7).** Publish-only. No subscriber wiring here —
-  // the consumer is operator-dashboard side and lands in a future PR.
+  // the consumer is principal-dashboard side and lands in a future PR.
   const capabilityEntries: CapabilityRegistryEntry[] = mergedAgents
     .filter((a): a is Agent & { runtime: { capabilities: readonly string[] } } =>
       (a.runtime?.capabilities.length ?? 0) > 0,
@@ -762,13 +762,13 @@ export async function startCortex(
     }
   } else {
     // cortex#314 — promote skipped notice to stderr WARNING with
-    // operator-actionable text. The capability-dispatch consumer rejects
+    // principal-actionable text. The capability-dispatch consumer rejects
     // every inbound request with `cant_do` until at least one agent
     // declares runtime.capabilities[], so the boot-time silence was a
     // first-install footgun (fresh `pilot request-review --wait` exits 0
     // with no review having happened). Keep the original info-level
     // `console.log` for normal observability AND emit a stderr WARNING
-    // so operators tailing logs OR running interactively see the
+    // so principals tailing logs OR running interactively see the
     // actionable fix-path.
     console.log(
       "cortex: capability-registry skipped — 0 agents declare runtime.capabilities[]",
@@ -793,8 +793,8 @@ export async function startCortex(
   // agent's claims only; multi-agent fan-out is the runtime's namespace
   // job, not the consumer's).
   //
-  // **Ordering.** Runs AFTER the capability-registry block above so an
-  // operator scanning boot logs sees registrations before consumers.
+  // **Ordering.** Runs AFTER the capability-registry block above so a
+  // principal scanning boot logs sees registrations before consumers.
   // Runs BEFORE the bus-dispatch-listener so the review path is in place
   // before the first `dispatch.task.received` envelope can arrive
   // (defensive — pilot publishes review requests on a different subject
@@ -834,8 +834,8 @@ export async function startCortex(
   // shared `principalId` keeps publisher and consumer aligned across the
   // ladder. Durable name convention per
   // `docs/design-capability-dispatch-review-consumer.md` §2.3:
-  // `cortex-review-consumer-{operator}-{agent}` — unique per
-  // (operator, agent) pair so dev + prod instances on the same operator
+  // `cortex-review-consumer-{principal}-{agent}` — unique per
+  // (principal, agent) pair so dev + prod instances on the same principal
   // share competing-consumer semantics and a daemon restart resumes from
   // the same JetStream offset. PR-R2a (cortex#439) renamed the downstream
   // API parameter to `principalId`; this local alias keeps the review-
@@ -1045,7 +1045,7 @@ export async function startCortex(
           }
         } catch (provisionErr) {
           // Don't abort — let consumer.start surface the bind failure
-          // through its own error path so the operator sees the same
+          // through its own error path so the principal sees the same
           // stderr shape they'd see if the consumer existed but bind
           // failed for another reason.
           process.stderr.write(
@@ -1157,11 +1157,11 @@ export async function startCortex(
 
   // Surface router (in-process fan-out).
   // Receives `systemEventSource` so visibility-config drops produce
-  // `system.access.filtered` envelopes operators can subscribe to — see
+  // `system.access.filtered` envelopes principals can subscribe to — see
   // `evaluateVisibility()` in surface-router.ts.
   //
   // IAW Phase D.2 (refs cortex#116) — also receives `policy.federated`
-  // so inbound `federated.*` envelopes get gated against the operator's
+  // so inbound `federated.*` envelopes get gated against the principal's
   // declared accept/deny/max_hop config before adapter fan-out. When
   // `policy.federated` is absent or `networks[]` is empty, the gate is
   // fully inert — `federated.*` envelopes pass through unchanged
@@ -1178,7 +1178,7 @@ export async function startCortex(
   // IAW Phase D.4.3 (refs cortex#116) — registry client. Opt-in:
   // instantiated only when `policy.federated.registry.url` is set
   // AND `policy.federated.networks[].peers[]` declares at least one
-  // peer. When dormant, callers asking for an operator simply get
+  // peer. When dormant, callers asking for a principal simply get
   // `undefined` — the rest of cortex never has to special-case
   // "no registry configured".
   //
@@ -1188,10 +1188,10 @@ export async function startCortex(
   // before mutating the cache; verification failures log to stderr
   // and leave the cache untouched (fail-safe).
   //
-  // Phase-B caveat: the registry trust anchor is operator-supplied
+  // Phase-B caveat: the registry trust anchor is principal-supplied
   // via `policy.federated.registry.pubkey` (pinned at config time) OR
   // TOFU at boot via `GET /registry/pubkey`. The TOFU window is
-  // exactly the first call against an unknown registry; operators
+  // exactly the first call against an unknown registry; principals
   // wanting zero-TOFU populate the pubkey field out-of-band. See
   // `src/common/registry/client.ts` JSDoc for the full failure-mode
   // table.
@@ -1282,7 +1282,7 @@ export async function startCortex(
   }
 
   // cortex#98 (part B) — two-pass adapter start so peer-bot ids can be
-  // resolved across adapters. Pass 1 starts each adapter with its operator-
+  // resolved across adapters. Pass 1 starts each adapter with its principal-
   // explicit `trustedBotIds` set (the cross-process bridge list from
   // cortex.yaml) and registers each agent's freshly-learned bot user id in
   // the TrustResolver. Pass 2 walks each adapter's `agent.trust[]` list,
@@ -1292,7 +1292,7 @@ export async function startCortex(
   // platform id is only known after B's `client.login()` resolves.
   //
   // Started Discord state carried between passes. We capture the adapter,
-  // its declaring agent, and the operator-explicit set as a baseline so
+  // its declaring agent, and the principal-explicit set as a baseline so
   // Pass 2 can produce the merged set in one place (explicit ∪ resolved
   // peers) without re-parsing the instance.
   interface StartedDiscord {
@@ -1336,7 +1336,7 @@ export async function startCortex(
     // Schema defaults already applied by `BotConfigSchema` at load time —
     // this is a structural mapping, not a parse.
     //
-    // cortex#98 (part A): `trustedBotIds` carries the operator-explicit
+    // cortex#98 (part A): `trustedBotIds` carries the principal-explicit
     // cross-process bridge list (architecture §9.3). It MUST be threaded
     // through verbatim — the auto-population step below merges in-process
     // peers from `agent.trust[]` on top via the TrustResolver (part B).
@@ -1390,10 +1390,10 @@ export async function startCortex(
           ...(adapterPolicyEngine !== undefined && { policyEngine: adapterPolicyEngine }),
           ...(adapterPolicyLookup !== undefined && { policyLookup: adapterPolicyLookup }),
           ...(adapterPolicyRegistry !== undefined && { policyRegistry: adapterPolicyRegistry }),
-          // cortex#205: plumb the operator's configured subject patterns
+          // cortex#205: plumb the principal's configured subject patterns
           // through to the surface-router. Pass the array verbatim — `[]`
           // included — so the adapter's one-shot empty-array warning at
-          // `discord/index.ts:178` actually fires for the "operator
+          // `discord/index.ts:178` actually fires for the "principal
           // forgot / typoed surfaceSubjects" case the schema docstrings
           // promise. A conditional short-circuit here would convert
           // `[]` → `undefined` on the infra side and silently disable
@@ -1457,10 +1457,10 @@ export async function startCortex(
   }
 
   // cortex#98 (part B) — Pass 2: merge resolver-derived in-process peer
-  // bot ids on top of each adapter's operator-explicit set, and log the
+  // bot ids on top of each adapter's principal-explicit set, and log the
   // final allowlist size per adapter. Peers absent from the resolver
   // (cross-process — they live in a different cortex deployment) are
-  // silently skipped; the operator-explicit field in
+  // silently skipped; the principal-explicit field in
   // `presence.discord.trustedBotIds` covers those.
   //
   // cortex#108 item 1 — closing the Pass-1→Pass-2 TOCTOU window: after
@@ -1586,7 +1586,7 @@ export async function startCortex(
   // per-instance so one bad workspace doesn't block the rest of the boot.
   //
   // cortex#235 r1#7 — two-pass boot, mirror of the Discord pattern above.
-  // Pass 1 starts each adapter with its operator-explicit trustedBotIds
+  // Pass 1 starts each adapter with its principal-explicit trustedBotIds
   // set + registers the adapter's bot user id in the TrustResolver.
   // Pass 2 walks each adapter's `agent.trust[]` list, resolves peer
   // agent ids to in-process Slack user ids via the resolver, merges
@@ -1695,7 +1695,7 @@ export async function startCortex(
   }
 
   // cortex#235 r1#7 — Pass 2: merge resolver-derived in-process peer
-  // bot ids on top of each adapter's operator-explicit set, log the
+  // bot ids on top of each adapter's principal-explicit set, log the
   // final allowlist size, then attachInboundDispatch() to drain
   // queued events through the merged allowlist. Order is
   // load-bearing: setTrustedBotIds MUST complete before
@@ -1734,12 +1734,12 @@ export async function startCortex(
   // to a slice of the bus and project envelopes into a UI / pager / log
   // stream. The G-1111 §4.6 fail-safe rule requires ≥2 distinct platform
   // classes covering `local.{principal}.system.>` so an operational alert
-  // reliably reaches the operator even if one sink is the thing that
+  // reliably reaches the principal even if one sink is the thing that
   // broke. Renderers never publish on the bus (architecture §9.3).
   // cortex#269 — substitute `{principal}` AND `{stack}` in renderer subscribe
   // patterns so they resolve against the same canonical shape that
   // `MyelinRuntime` already substitutes for `nats.subjects`. Without
-  // this, an operator-written `local.{principal}.{stack}.system.>` pattern
+  // this, a principal-written `local.{principal}.{stack}.system.>` pattern
   // never matches an actual envelope's wire subject. The `{stack}.`
   // placeholder includes the trailing dot so stack-less deployments
   // collapse cleanly to `local.{principal}.system.>`.
@@ -1820,7 +1820,7 @@ export async function startCortex(
   // over the JCS-canonical envelope bytes (`cryptoVerify: true` by
   // default). Empty chains (adapter-originated dispatches) are
   // accepted and fall through to the policy gate; signed chains must
-  // verify against the operator's NKey roster. The pre-Phase-B
+  // verify against the principal's NKey roster. The pre-Phase-B
   // authorization-without-authentication gap is closed.
   if (options.policy?.principals.length === 0) {
     console.warn(
@@ -1840,7 +1840,7 @@ export async function startCortex(
   // + `principalId` so the listener can chain-verify every inbound
   // envelope. Mirrors the `BusDispatchListener` wiring above
   // (`firstAgent.id` + `principalId`). `cryptoVerify` defaults to `true`
-  // in `createDispatchListener`; explicit here for operator clarity.
+  // in `createDispatchListener`; explicit here for principal clarity.
   //
   // cortex#427 — `principalId` is the shared `{principal}` segment so
   // the listener subscribes on the SAME segment the adapter publishes
@@ -2147,7 +2147,7 @@ async function setupDashboard(
     // cortex#427 — dashboard reads the shared `principalId` so the
     // `operator` column matches the `{principal}` segment of incoming
     // envelopes. `operatorName` falls back to `principalId` when the
-    // operator hasn't declared a separate display name on
+    // principal hasn't declared a separate display name on
     // `agent.operatorName` (legacy BotConfig field — PR-C retires).
     operatorId: principalId,
     operatorName: config.agent.operatorName ?? principalId,
@@ -2403,7 +2403,7 @@ export function runDryRun(configPath: string): DryRunResult {
     );
     return { exitCode: 0, stdout: stdout.join("\n") + "\n", stderr: stderr.join("\n") };
   } catch (err) {
-    // Operator-readable: surface the Zod-shaped message verbatim. The
+    // Principal-readable: surface the Zod-shaped message verbatim. The
     // schema's own error formatter is already field-pathed (`agent.name:
     // Required`, etc.) so we don't try to re-pretty-print here.
     stderr.push(
@@ -2456,7 +2456,7 @@ if (import.meta.main) {
       // identity correctly.
       //
       // IAW A.5.3 (cortex#113): also pass through the cortex-shape `stack:`
-      // block when the operator declared one — `startCortex` calls
+      // block when the principal declared one — `startCortex` calls
       // `deriveStackId` and logs the resolved stack id. Today this is
       // observational only; emit subjects are unchanged.
       const { config, inlineAgents, stack, policy, operator, bus } = loadConfigWithAgents(options.config);

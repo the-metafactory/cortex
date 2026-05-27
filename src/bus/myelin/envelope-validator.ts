@@ -519,7 +519,7 @@ export function getActorPrincipal(envelope: Envelope): string | undefined {
  * for pre-migration / JetStream-replayed envelopes.
  *
  * Returns `undefined` for envelopes that carry neither key (e.g. an
- * Offer / broadcast dispatch).
+ * Offer dispatch).
  */
 export function getTargetAssistant(envelope: Envelope): string | undefined {
   // eslint-disable-next-line @typescript-eslint/no-deprecated

@@ -2,29 +2,29 @@
  * IAW Phase A.5 — stack identity primitive (refs cortex#113).
  *
  * Background (docs/design-internet-of-agentic-work.md §3.2, Q7 lock-in):
- * one operator can run multiple cortex stacks side-by-side
+ * one principal can run multiple cortex stacks side-by-side
  * (`andreas/research`, `andreas/production`, `andreas/code`, …). The
- * subject-grammar extension that lets `local.{operator}.{stack}.…` envelopes
- * coexist with the legacy `local.{operator}.…` form lives in myelin
+ * subject-grammar extension that lets `local.{principal}.{stack}.…` envelopes
+ * coexist with the legacy `local.{principal}.…` form lives in myelin
  * (myelin#113 — closed by myelin PR #114, squash `91bf2b42`, 2026-05-13).
  *
  * What this file delivers (A.5.3 + A.5.4):
  *   - `StackConfigSchema` — Zod schema for the optional top-level `stack:`
- *     block on `cortex.yaml`. `id` matches `{operator_id}/{stack_id}`,
+ *     block on `cortex.yaml`. `id` matches `{principal_id}/{stack_id}`,
  *     `nkey_pub` is an optional NATS NKey public key.
  *   - `deriveStackId(config)` — reader called at boot to resolve the
- *     effective stack identity. When the operator declares `stack: { id:
+ *     effective stack identity. When the principal declares `stack: { id:
  *     andreas/research }`, the helper splits the literal. When the block is
- *     omitted, it default-derives `${operator.id}/default` so existing
+ *     omitted, it default-derives `${principal.id}/default` so existing
  *     deployments preserve their identity verbatim (no behaviour change).
  *
  * Cutover state (post-PR #151, A.5.5 shipped):
  *   - **Subject derivation flips on the wire.** `MyelinRuntime.publish()`
  *     now derives subjects via the stack-aware `deriveNatsSubject({ stack })`
  *     ported from myelin (`b69c877`). Emitted envelopes carry the stack
- *     segment in `local.{operator}.{stack}.>` form. Operators with no
+ *     segment in `local.{principal}.{stack}.>` form. Principals with no
  *     `stack:` block fall through to the namespace spec's default-derived
- *     `${operator.id}/default` for backward compatibility (myelin
+ *     `${principal.id}/default` for backward compatibility (myelin
  *     `specs/namespace.md` §Backward-compat).
  *   - **Vendored envelope past `96b14ea`.** PR #128 bumped to `4578ae1`;
  *     PR #151 refreshed to `b69c877` to pick up stack-aware subject
@@ -32,8 +32,8 @@
  *
  * Carry-over to Phase B / ops:
  *   - **JetStream `TASKS` stream filter.** cortex#138 — the
- *     `local.*.tasks.>` → `local.*.*.tasks.>` filter cutover — is an
- *     operator-side NATS-server config change, not cortex code. Cortex
+ *     `local.*.tasks.>` → `local.*.*.tasks.>` filter cutover — is a
+ *     principal-side NATS-server config change, not cortex code. Cortex
  *     publishes stack-aware subjects today but ships no TASKS-stream
  *     consumer of its own; the filter cutover lands when the first
  *     in-tree consumer arrives (Phase B / Phase C).
@@ -49,7 +49,7 @@ import { NKEY_PUBKEY_REGEX } from "./nkey";
 /**
  * Top-level `stack:` block on `cortex.yaml`. Both fields are optional in
  * spirit — the block as a whole is optional on `CortexConfigSchema`, so
- * omitting `stack:` entirely falls back to the `${operator.id}/default`
+ * omitting `stack:` entirely falls back to the `${principal.id}/default`
  * default-derivation. When the block IS present, `id` is required (you
  * cannot meaningfully name a stack without naming it); `nkey_pub` stays
  * optional for now — it will become required once Phase B (NKey-signed
@@ -63,9 +63,9 @@ import { NKEY_PUBKEY_REGEX } from "./nkey";
  *
  * The `id` regex enforces `{operator_id}/{stack_id}` where each segment is
  * lowercase alphanumeric + hyphens/underscores, starting with a letter. Both
- * `OperatorSchema.id` and `StackConfigSchema.id` segments share the letter-
+ * `PrincipalConfigSchema.id` and `StackConfigSchema.id` segments share the letter-
  * prefix rule (unified by cortex#141 before the IAW A.5.5 namespace cutover);
- * the stack-id half additionally permits underscores — operators tend to
+ * the stack-id half additionally permits underscores — principals tend to
  * spell stack names with `_` (e.g. `andreas/research_2026`) more naturally
  * than they spell their own identifier, so the asymmetry is retained on
  * purpose for underscores while being closed for the letter-prefix rule.
@@ -81,7 +81,7 @@ import { NKEY_PUBKEY_REGEX } from "./nkey";
  * (cortex#79 leaves the operator-account key in arc, with cortex receiving
  * only the per-stack pub key + creds). Schema-level format validation here
  * fails fast on a typo at config time rather than silently at signing
- * time. See `OperatorSchema.dataResidency` for the same fail-fast pattern.
+ * time. See `PrincipalConfigSchema.dataResidency` for the same fail-fast pattern.
  */
 export const StackConfigSchema = z.object({
   /**
@@ -113,7 +113,7 @@ export const StackConfigSchema = z.object({
    * POSIX; the loader (`src/common/config/stack-signing-key.ts`)
    * enforces that gate before reading.
    *
-   * Optional at config schema level so operators can stage `nkey_pub`
+   * Optional at config schema level so principals can stage `nkey_pub`
    * without immediately wiring the seed (e.g. on a dry run, or when
    * the bot is structurally configured but not yet expected to sign
    * outbound envelopes). When BOTH `nkey_pub` and `nkey_seed_path`
@@ -125,7 +125,7 @@ export const StackConfigSchema = z.object({
    * Threat model: the seed is the most sensitive key material the
    * stack holds — possessing it lets an attacker mint signed
    * envelopes claiming this stack's identity. The chmod 600 gate is
-   * the operator-laptop / server-filesystem mitigation; hardware-
+   * the principal-laptop / server-filesystem mitigation; hardware-
    * backed signing (yubikey / TPM) is future work tracked by the
    * `loadStackSigningKey` seam.
    */
@@ -157,10 +157,10 @@ export interface DerivedStackId {
 
 /**
  * Minimum-surface input shape consumed by `deriveStackId`. Carrying the
- * literal `Pick<CortexConfig, "operator" | "stack">` would force callers to
- * synthesise the full `OperatorSchema`-conformant object (`dataResidency`,
- * `displayName`, etc.) even though the resolver only reads `operator?.id`.
- * The narrower shape lets the boot path pass a one-field operator stub
+ * literal `Pick<CortexConfig, "principal" | "stack">` would force callers to
+ * synthesise the full `PrincipalConfigSchema`-conformant object (`dataResidency`,
+ * `displayName`, etc.) even though the resolver only reads `principal?.id`.
+ * The narrower shape lets the boot path pass a one-field principal stub
  * without re-running the schema parser. The shape is structurally compatible
  * with `CortexConfig` — call-sites that already have a parsed
  * `CortexConfig`/`LoadedConfig` pass it through unchanged.
@@ -182,18 +182,18 @@ export interface DeriveStackIdInput {
  *   1. **Explicit:** `config.stack?.id` set → split and return verbatim.
  *      The Zod schema enforces the `{operator}/{stack}` regex, so the
  *      split is guaranteed to yield two non-empty segments.
- *   2. **Default-derived:** no `stack:` block → `${operator.id}/default`.
+ *   2. **Default-derived:** no `stack:` block → `${principal.id}/default`.
  *      Preserves identity for existing deployments that haven't migrated
  *      to the new block yet. Once myelin#113 lands and A.5.5 wires the
  *      stack segment into subject derivation, today's
  *      `local.andreas.>` envelopes become `local.andreas.default.>`
  *      transparently.
- *   3. **Fallback-of-fallback:** `operator.id` is structurally required by
- *      `OperatorSchema` (regex-enforced, not optional), so the only way
+ *   3. **Fallback-of-fallback:** `principal.id` is structurally required by
+ *      `PrincipalConfigSchema` (regex-enforced, not optional), so the only way
  *      to reach the `default/default` branch is to pass a partially-
  *      constructed config object directly to this helper — e.g. a test
  *      fixture that simulates the pre-MIG-7.2 shape. The branch exists
- *      so the helper is total: it never throws on a missing operator id.
+ *      so the helper is total: it never throws on a missing principal id.
  *
  * Why this helper takes the narrowed `DeriveStackIdInput`, not `CortexConfig`:
  *   The `stack:` block lives on `CortexConfigSchema` only. The MIG-7.2

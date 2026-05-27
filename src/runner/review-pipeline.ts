@@ -167,7 +167,7 @@ export interface ReviewPipelineOpts {
   agentId: string;
   /**
    * Envelope source triple for the failure / verdict envelopes we build.
-   * Sourced from cortex.yaml's `operator.id` + `cortex` + `local` per
+   * Sourced from cortex.yaml's `principal.id` + `cortex` + `local` per
    * PR-6's bootstrap.
    */
   source: ReviewEventSource;

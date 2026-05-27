@@ -271,7 +271,7 @@ export const BotConfigSchema = z.object({
     operatorName: z.string().optional(),
     /**
      * v2.0.0 cutover (cortex#297) — `operatorDiscordId/Mattermost/Slack` retired.
-     * The operator's platform-side ids live on `OperatorSchema.discordId/mattermostId/slackId`
+     * The principal's platform-side ids live on `PrincipalConfigSchema.discordId/mattermostId/slackId`
      * in cortex-config.ts and are surfaced through `LoadedConfig.operator` for the
      * boot path. Runtime "is this principal an operator?" decisions consult the
      * PolicyEngine via the `operator` capability per the new model.

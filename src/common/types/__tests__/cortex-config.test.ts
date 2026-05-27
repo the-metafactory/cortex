@@ -2,7 +2,7 @@
  * MIG-7.2 base — CortexConfig schema tests.
  *
  * Covers the structural invariants from architecture §9.1 + §9.3:
- *   - operator: { id } is required, every other operator field optional
+ *   - principal: { id } is required, every other principal field optional
  *   - agents[] must contain ≥1 entry with unique ids
  *   - each agent needs ≥1 presence block
  *   - agent ids must be lowercase alphanumeric
@@ -77,7 +77,7 @@ function minConfig() {
 }
 
 // =============================================================================
-// Operator schema
+// Principal schema
 // =============================================================================
 
 describe("PrincipalConfigSchema", () => {
@@ -129,7 +129,7 @@ describe("PrincipalConfigSchema", () => {
   });
 
   test("rejects digit-prefix operator id (cortex#141 — letter-prefix rule)", () => {
-    // The unified grammar requires letter-prefix on both `OperatorSchema.id`
+    // The unified grammar requires letter-prefix on both `PrincipalConfigSchema.id`
     // and `StackConfigSchema.id` segments. A digit-prefix id like `"2andreas"`
     // would default-derive to `"2andreas/default"` — a string the stack
     // schema rejects. Fail fast at the upstream Zod gate with an actionable
@@ -247,7 +247,7 @@ describe("AgentSchema", () => {
 
   test("rejects digit-prefix agent id (cortex#145 — letter-prefix rule)", () => {
     // The unified grammar requires letter-prefix on all three of
-    // `OperatorSchema.id`, `StackConfigSchema.id` segments, and
+    // `PrincipalConfigSchema.id`, `StackConfigSchema.id` segments, and
     // `AgentSchema.id`. Agent ids end up embedded in NATS subjects
     // post-A.5.5 (`local.{op}.{stack}.dispatch.{agent}.>`); digit-prefix
     // segments interact poorly with downstream pattern-matchers.

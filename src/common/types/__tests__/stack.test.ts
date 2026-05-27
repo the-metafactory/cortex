@@ -6,8 +6,8 @@
  *      base32 NKey public keys; rejects uppercase, missing slash, garbage
  *      NKeys, and other shape violations the regexes guard against.
  *   2. `deriveStackId` — explicit `stack:` block wins; otherwise default-
- *      derives `${operator.id}/default`. The total-function contract holds
- *      even when `operator.id` is missing (test-only edge case): falls back
+ *      derives `${principal.id}/default`. The total-function contract holds
+ *      even when `principal.id` is missing (test-only edge case): falls back
  *      to `default/default` rather than throwing.
  *
  * The schema-side tests live next to the rest of the cortex-config schema
@@ -254,7 +254,7 @@ describe("deriveStackId", () => {
     expect(derived.stack).toBe("research");
   });
 
-  test("Test 2: no stack: block falls back to ${operator.id}/default", () => {
+  test("Test 2: no stack: block falls back to ${principal.id}/default", () => {
     const config = CortexConfigSchema.parse(minConfig());
     const derived = deriveStackId(config);
     expect(derived.id).toBe("andreas/default");
@@ -277,15 +277,15 @@ describe("deriveStackId", () => {
     ).toThrow(/stack\.nkey_pub must be a base32 NKey/);
   });
 
-  test("Test 5: missing operator.id default-derives to default/default (total-function contract)", () => {
-    // `operator.id` is structurally required by PrincipalConfigSchema, so this is a
+  test("Test 5: missing principal.id default-derives to default/default (total-function contract)", () => {
+    // `principal.id` is structurally required by PrincipalConfigSchema, so this is a
     // test-only path: a partial config object passed directly to the helper
     // (e.g. simulating a degraded fixture). The helper must remain total —
     // it never throws — so the missing field falls through to the literal
     // "default" segment on both sides.
     //
     // We cast through `Parameters<typeof deriveStackId>[0]` to bypass the
-    // structural-typing requirement that `operator.id` be present; this is
+    // structural-typing requirement that `principal.id` be present; this is
     // exactly what production code can never do via the type system, which
     // is the whole point — the production path is provably-total without
     // this branch firing.
@@ -387,7 +387,7 @@ describe("deriveStackId × StackConfigSchema round-trip invariant", () => {
     );
     // `deriveStackId` itself is a total function and still works on the
     // narrowed `DeriveStackIdInput` shape — but no production code path can
-    // pass a digit-prefix `operator.id` through to it, because every config
+    // pass a digit-prefix `principal.id` through to it, because every config
     // is parsed through `PrincipalConfigSchema` first.
   });
 });

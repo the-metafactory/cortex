@@ -511,14 +511,14 @@ export const AgentSchema = z.object({
    * Logical agent id — stable across deployments.
    *
    * Grammar: lowercase alphanumeric + hyphen, **first character must be a
-   * letter**. Mirrors `OperatorSchema.id` and `StackConfigSchema.id` segments
+   * letter**. Mirrors `PrincipalConfigSchema.id` and `StackConfigSchema.id` segments
    * (cortex#141, cortex#144): the same trilogy of identifiers that end up
-   * embedded verbatim in NATS subjects (`local.{op}.{stack}.dispatch.{agent}.>`
+   * embedded verbatim in NATS subjects (`local.{principal}.{stack}.dispatch.{agent}.>`
    * after A.5.5). NATS subject segments starting with a digit interact poorly
    * with downstream pattern-matchers that treat segments as numeric literals;
    * letter-prefix is the safe boundary.
    *
-   * Closing cortex#145 — the last permissive regex in the operator/stack/agent
+   * Closing cortex#145 — the last permissive regex in the principal/stack/agent
    * trilogy now tightens to the same letter-prefix rule. Migration hint for an
    * agent id hitting this rule: rename `2agent` → `team-2agent` or
    * `agent-2026` (prepend / wrap the digits with a letter-prefixed token).
@@ -549,7 +549,7 @@ export const AgentSchema = z.object({
    *
    * Coupling rule (§9.3): values MUST be agent ids — never platform user ids.
    * Schema-level format check applies the same `^[a-z][a-z0-9-]*$` regex as
-   * `AgentSchema.id` and `OperatorSchema.id` (cortex#141/#144/#145 trilogy) so
+   * `AgentSchema.id` and `PrincipalConfigSchema.id` (cortex#141/#144/#145 trilogy) so
    * a typo (e.g. accidentally pasting a Discord user id like `"1497..."`) is
    * caught at config load, not silently when the registry fails to resolve
    * the reference (Holly W2 review). The letter-prefix rule also catches the
@@ -874,7 +874,7 @@ export const NatsConfigSchema = z.object({
   name: z.string().default("cortex"),
   /**
    * Subject patterns to subscribe to. Default empty. `{principal}` is substituted
-   * with `operator.id` at runtime.
+   * with `principal.id` at runtime.
    */
   subjects: z.array(z.string().min(1)).default([]),
   /** Optional NKey identity for envelope signing (MY-400). */
@@ -1202,7 +1202,7 @@ export const PolicyPrincipalSchema = z.object({
   ),
   /**
    * Operator that owns this principal. Same letter-prefix
-   * grammar — `OperatorSchema.id` enforces it at the operator
+   * grammar — `PrincipalConfigSchema.id` enforces it at the operator
    * level and we mirror here so a parsed principal can't carry
    * a malformed home_operator that downstream code would have
    * to defend against.
@@ -1356,10 +1356,10 @@ export type PolicyRole = z.infer<typeof PolicyRoleSchema>;
  */
 export const PolicyFederatedPeerSchema = z.object({
   /**
-   * Peer operator id — same letter-prefix grammar as `OperatorSchema.id`.
-   * Distinct from the operator's local id; the local operator's id
+   * Peer principal id — same letter-prefix grammar as `PrincipalConfigSchema.id`.
+   * Distinct from the principal's local id; the local principal's id
    * doesn't appear in `federated.networks[].peers[]` (the local
-   * operator IS the consumer of the peer list).
+   * principal IS the consumer of the peer list).
    */
   operator_id: z.string().regex(
     LETTER_PREFIX_ID_REGEX,
@@ -1813,9 +1813,9 @@ export const CortexConfigSchema = z.object({
   principal: PrincipalConfigSchema,
   /**
    * IAW Phase A.5 (refs cortex#113) — optional stack identity. When set,
-   * declares `{operator_id}/{stack_id}` for the deployment and the
+   * declares `{principal_id}/{stack_id}` for the deployment and the
    * stack-level NKey public key. Unset → `deriveStackId` default-derives
-   * `${operator.id}/default` preserving today's identity. The schema
+   * `${principal.id}/default` preserving today's identity. The schema
    * lives in `./stack.ts` next to the `deriveStackId` resolver; importing
    * the schema here keeps the cortex.yaml top-level surface contained in
    * one file.

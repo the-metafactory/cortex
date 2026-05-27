@@ -154,9 +154,9 @@ export type CapabilityCost = z.infer<typeof CapabilityCostSchema>;
  * not the id itself.
  *
  * Letter-prefix rule mirrors the same NATS-pattern-matcher concern that
- * justifies the rule on `OperatorSchema.id` and `StackConfigSchema.id`:
+ * justifies the rule on `PrincipalConfigSchema.id` and `StackConfigSchema.id`:
  * capability ids can plausibly appear as subject segments in a future
- * federated capability namespace (`federated.{operator}.{stack}.tasks.
+ * federated capability namespace (`federated.{principal}.{stack}.tasks.
  * code-review.typescript.>`); even though A.6 doesn't wire that today,
  * the letter-prefix rule keeps the door open without a follow-up schema
  * tightening. Hyphens AND underscores are both permitted inside segments

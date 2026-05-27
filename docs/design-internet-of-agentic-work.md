@@ -63,7 +63,7 @@ Cortex consumption today:
 
 myelin's namespace spec (`myelin/specs/namespace.md`) defines the three subject prefixes and their reach:
 
-| Prefix | Reach | Sovereignty Rule |
+| Prefix | Scope | Sovereignty Rule |
 |---|---|---|
 | `local.{org}.{domain}.{entity}.{action}` | Org only | Never leaves org boundary (M1 leaf-node enforced) |
 | `federated.{org}.{domain}.{entity}.{action}` | Cross-org | Subject to envelope sovereignty rules |
