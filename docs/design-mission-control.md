@@ -18,7 +18,7 @@ This document is the single source of truth for Grove Mission Control. Every cla
 
 ### 1.1 Goal
 
-Grove Mission Control is **the operator's cockpit for running many agents against a curated backlog**. One operator, many agents, many tasks, one dashboard. The core job of the dashboard is: **surface the agent that needs the operator right now, and let the operator unblock it without leaving the UI.**
+Cortex Mission Control is **the principal's cockpit for running many agents against a curated backlog**. One operator, many agents, many tasks, one dashboard. The core job of the dashboard is: **surface the agent that needs the operator right now, and let the operator unblock it without leaving the UI.**
 
 Three properties follow from that job:
 

@@ -663,7 +663,7 @@ agents:                            # first-class agent bundles — the canonical
         guildId: "1487..."
 
 renderers:                          # multi-agent / non-agent-bound surfaces
-  - kind: dashboard                 # operator cockpit — Mission Control v3
+  - kind: dashboard                 # principal cockpit — Mission Control v3
     port: 8767
     publicUrl: https://cortex.meta-factory.ai
     subscribe: ["local.{org}.>"]
