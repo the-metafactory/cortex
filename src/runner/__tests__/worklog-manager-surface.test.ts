@@ -97,7 +97,7 @@ function makeFakeClient(channelId: string): { client: Client; calls: FakeCalls }
 // Helpers
 // ---------------------------------------------------------------------------
 
-const SOURCE = { org: "metafactory", agent: "cortex", instance: "local" };
+const SOURCE = { principal: "metafactory", agent: "cortex", instance: "local" };
 const TASK_ID = "11111111-1111-4111-8111-111111111111";
 const STARTED_AT = new Date("2026-05-09T12:00:00.000Z");
 const COMPLETED_AT = new Date("2026-05-09T12:00:30.000Z");
@@ -152,7 +152,7 @@ describe("WorklogManager.surfaceConfig — shape", () => {
   test("5-segment subject pattern when stack is omitted (legacy compat)", () => {
     const { client } = makeFakeClient("worklog-channel-id");
     const wlm = new WorklogManager(client, "worklog-channel-id");
-    const cfg = wlm.surfaceConfig({ org: "metafactory" });
+    const cfg = wlm.surfaceConfig({ principal: "metafactory" });
     expect(cfg.subjects).toEqual(["local.metafactory.dispatch.task.>"]);
     expect(cfg.id).toBe("worklog-manager");
   });
@@ -164,7 +164,7 @@ describe("WorklogManager.surfaceConfig — shape", () => {
   test("6-segment subject pattern when stack is supplied (cortex#268)", () => {
     const { client } = makeFakeClient("worklog-channel-id");
     const wlm = new WorklogManager(client, "worklog-channel-id");
-    const cfg = wlm.surfaceConfig({ org: "metafactory", stack: "default" });
+    const cfg = wlm.surfaceConfig({ principal: "metafactory", stack: "default" });
     expect(cfg.subjects).toEqual([
       "local.metafactory.default.dispatch.task.>",
     ]);
@@ -173,7 +173,7 @@ describe("WorklogManager.surfaceConfig — shape", () => {
   test("subscribe pattern honours multi-stack principal config", () => {
     const { client } = makeFakeClient("worklog-channel-id");
     const wlm = new WorklogManager(client, "worklog-channel-id");
-    const cfg = wlm.surfaceConfig({ org: "andreas", stack: "research" });
+    const cfg = wlm.surfaceConfig({ principal: "andreas", stack: "research" });
     expect(cfg.subjects).toEqual([
       "local.andreas.research.dispatch.task.>",
     ]);
@@ -182,14 +182,14 @@ describe("WorklogManager.surfaceConfig — shape", () => {
   test("custom adapter id honored", () => {
     const { client } = makeFakeClient("worklog-channel-id");
     const wlm = new WorklogManager(client, "worklog-channel-id");
-    const cfg = wlm.surfaceConfig({ org: "metafactory", adapterId: "worklog-test" });
+    const cfg = wlm.surfaceConfig({ principal: "metafactory", adapterId: "worklog-test" });
     expect(cfg.id).toBe("worklog-test");
   });
 
   test("render function exists and returns a Promise", () => {
     const { client } = makeFakeClient("worklog-channel-id");
     const wlm = new WorklogManager(client, "worklog-channel-id");
-    const cfg = wlm.surfaceConfig({ org: "metafactory" });
+    const cfg = wlm.surfaceConfig({ principal: "metafactory" });
     expect(typeof cfg.render).toBe("function");
     const result = cfg.render(makeStarted());
     expect(result).toBeInstanceOf(Promise);
@@ -205,7 +205,7 @@ describe("WorklogManager.surfaceConfig — started envelope", () => {
   test("creates a thread and posts opening line", async () => {
     const { client, calls } = makeFakeClient("worklog-channel-id");
     const wlm = new WorklogManager(client, "worklog-channel-id");
-    const cfg = wlm.surfaceConfig({ org: "metafactory" });
+    const cfg = wlm.surfaceConfig({ principal: "metafactory" });
 
     await cfg.render(makeStarted());
 
@@ -227,7 +227,7 @@ describe("WorklogManager.surfaceConfig — completed envelope", () => {
   test("after started, posts completion to thread + channel summary", async () => {
     const { client, calls } = makeFakeClient("worklog-channel-id");
     const wlm = new WorklogManager(client, "worklog-channel-id");
-    const cfg = wlm.surfaceConfig({ org: "metafactory" });
+    const cfg = wlm.surfaceConfig({ principal: "metafactory" });
 
     await cfg.render(makeStarted());
     const initialChannelLen = calls.channelSent.length;
@@ -253,7 +253,7 @@ describe("WorklogManager.surfaceConfig — failed envelope", () => {
   test("after started, posts failure with error_summary", async () => {
     const { client, calls } = makeFakeClient("worklog-channel-id");
     const wlm = new WorklogManager(client, "worklog-channel-id");
-    const cfg = wlm.surfaceConfig({ org: "metafactory" });
+    const cfg = wlm.surfaceConfig({ principal: "metafactory" });
 
     await cfg.render(makeStarted());
     await cfg.render(makeFailed());
@@ -269,7 +269,7 @@ describe("WorklogManager.surfaceConfig — aborted envelope", () => {
   test("after started, posts abort with reason", async () => {
     const { client, calls } = makeFakeClient("worklog-channel-id");
     const wlm = new WorklogManager(client, "worklog-channel-id");
-    const cfg = wlm.surfaceConfig({ org: "metafactory" });
+    const cfg = wlm.surfaceConfig({ principal: "metafactory" });
 
     await cfg.render(makeStarted());
     await cfg.render(makeAborted());
@@ -289,7 +289,7 @@ describe("WorklogManager.surfaceConfig — malformed envelope", () => {
   test("envelope with no payload.task_id → no Discord API calls", async () => {
     const { client, calls } = makeFakeClient("worklog-channel-id");
     const wlm = new WorklogManager(client, "worklog-channel-id");
-    const cfg = wlm.surfaceConfig({ org: "metafactory" });
+    const cfg = wlm.surfaceConfig({ principal: "metafactory" });
 
     const malformed: Envelope = {
       id: "00000000-0000-4000-8000-000000000000",
@@ -313,7 +313,7 @@ describe("WorklogManager.surfaceConfig — malformed envelope", () => {
   test("unknown dispatch sub-type → silent ignore (forward compatibility)", async () => {
     const { client, calls } = makeFakeClient("worklog-channel-id");
     const wlm = new WorklogManager(client, "worklog-channel-id");
-    const cfg = wlm.surfaceConfig({ org: "metafactory" });
+    const cfg = wlm.surfaceConfig({ principal: "metafactory" });
 
     const unknown: Envelope = {
       id: "00000000-0000-4000-8000-000000000000",
@@ -364,7 +364,7 @@ describe("WorklogManager — direct-call API still works after surfaceConfig", (
   test("direct-call path AND bus path coexist on one instance without thread collision", async () => {
     const { client, calls } = makeFakeClient("worklog-channel-id");
     const wlm = new WorklogManager(client, "worklog-channel-id");
-    const cfg = wlm.surfaceConfig({ org: "metafactory" });
+    const cfg = wlm.surfaceConfig({ principal: "metafactory" });
 
     // Drive the bus path: one task lifecycle (started → completed).
     await cfg.render(makeStarted());
@@ -412,7 +412,7 @@ describe("WorklogManager — direct-call API still works after surfaceConfig", (
     // pick up a direct-call thread keyed by some other UUID.
     const { client, calls } = makeFakeClient("worklog-channel-id");
     const wlm = new WorklogManager(client, "worklog-channel-id");
-    const cfg = wlm.surfaceConfig({ org: "metafactory" });
+    const cfg = wlm.surfaceConfig({ principal: "metafactory" });
 
     // Direct-call path opens a thread keyed by SESSION_ID
     const SESSION_ID = "33333333-3333-4333-8333-333333333333";
@@ -437,7 +437,7 @@ describe("WorklogManager — direct-call API still works after surfaceConfig", (
   test("cleanupStaleSessions still functional", () => {
     const { client } = makeFakeClient("worklog-channel-id");
     const wlm = new WorklogManager(client, "worklog-channel-id");
-    void wlm.surfaceConfig({ org: "metafactory" });
+    void wlm.surfaceConfig({ principal: "metafactory" });
     // No active sessions → returns 0
     expect(wlm.cleanupStaleSessions()).toBe(0);
   });

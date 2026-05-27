@@ -58,17 +58,19 @@ import { AGENT_HEARTBEAT_TYPE } from "../common/types/agent-heartbeat";
 
 /**
  * Source identifier used by every `system.*` event. Three dotted segments
- * matching the schema's `org.agent.instance` form. Kept as a struct in the
- * helper-options shape so callers don't string-concatenate by hand.
+ * matching the schema's `{principal}.{assistant}.{instance}` form (R4
+ * vocabulary migration; myelin#185 tightened this to exactly 3 segments).
+ * Kept as a struct in the helper-options shape so callers don't
+ * string-concatenate by hand.
  *
  * Examples (from spec §3.6):
  *   - `metafactory.pilot.local`
  *   - `metafactory.grove.dashboard`
- *   - For cortex-emitted system.* events: `{operatorId}.cortex.local`
+ *   - For cortex-emitted system.* events: `{principal}.cortex.local`
  */
 export interface SystemEventSource {
-  /** `agent.operatorId` — first segment. */
-  org: string;
+  /** `agent.operatorId` — first segment (principal slug). */
+  principal: string;
   /** Logical agent name — `cortex`, `grove`, `pilot`, etc. */
   agent: string;
   /** Stable instance name — usually `local` for in-process emission. */
@@ -85,7 +87,7 @@ export interface SystemEventSource {
 }
 
 function buildSource(src: SystemEventSource): string {
-  return `${src.org}.${src.agent}.${src.instance}`;
+  return `${src.principal}.${src.agent}.${src.instance}`;
 }
 
 /**

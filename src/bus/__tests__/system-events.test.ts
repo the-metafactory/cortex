@@ -36,7 +36,7 @@ describe("adapterCorrelationKey", () => {
 describe("createSystemAdapterDegradedEvent", () => {
   test("required fields populated; envelope passes schema validation", () => {
     const env = createSystemAdapterDegradedEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       adapterId: "discord-luna",
       platform: "discord",
       disconnectedSince: new Date("2026-05-09T12:00:00.000Z"),
@@ -66,7 +66,7 @@ describe("createSystemAdapterDegradedEvent", () => {
 
   test("optional fields land in payload when provided, omitted otherwise", () => {
     const withOpts = createSystemAdapterDegradedEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       adapterId: "discord-luna",
       platform: "discord",
       disconnectedSince: new Date("2026-05-09T12:00:00.000Z"),
@@ -82,7 +82,7 @@ describe("createSystemAdapterDegradedEvent", () => {
     });
 
     const withoutOpts = createSystemAdapterDegradedEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       adapterId: "discord-luna",
       platform: "discord",
       disconnectedSince: new Date("2026-05-09T12:00:00.000Z"),
@@ -95,14 +95,14 @@ describe("createSystemAdapterDegradedEvent", () => {
 
   test("each invocation returns a fresh UUID id", () => {
     const a = createSystemAdapterDegradedEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       adapterId: "x",
       platform: "discord",
       disconnectedSince: new Date(),
       thresholdMs: 60_000,
     });
     const b = createSystemAdapterDegradedEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       adapterId: "x",
       platform: "discord",
       disconnectedSince: new Date(),
@@ -117,7 +117,7 @@ describe("createSystemAdapterDegradedEvent", () => {
 describe("createSystemAdapterRecoveredEvent", () => {
   test("required fields populated; envelope passes schema validation", () => {
     const env = createSystemAdapterRecoveredEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       adapterId: "discord-luna",
       platform: "discord",
       degradedForMs: 14_200,
@@ -133,7 +133,7 @@ describe("createSystemAdapterRecoveredEvent", () => {
 
   test("disconnected_since lands in payload (used by surfaces to join the pair)", () => {
     const env = createSystemAdapterRecoveredEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       adapterId: "discord-luna",
       platform: "discord",
       degradedForMs: 14_200,
@@ -148,7 +148,7 @@ describe("createSystemAdapterRecoveredEvent", () => {
 describe("createSystemAdapterDisconnectedEvent", () => {
   test("required fields populated; envelope passes schema validation", () => {
     const env = createSystemAdapterDisconnectedEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       adapterId: "discord-luna",
       platform: "discord",
       disconnectedSince: new Date("2026-05-09T12:00:00.000Z"),
@@ -166,7 +166,7 @@ describe("createSystemAdapterDisconnectedEvent", () => {
 
   test("close metadata lands in payload when provided", () => {
     const env = createSystemAdapterDisconnectedEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       adapterId: "discord-luna",
       platform: "discord",
       disconnectedSince: new Date(),
@@ -186,7 +186,7 @@ describe("createSystemAdapterDisconnectedEvent", () => {
 describe("createSystemInboundAbortedEvent", () => {
   test("required fields populated; envelope passes schema validation", () => {
     const env = createSystemInboundAbortedEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       adapterId: "discord-luna",
       inboundMessageId: "1234567890123456789",
       timeoutSource: "attachment_fetch",
@@ -208,7 +208,7 @@ describe("createSystemInboundAbortedEvent", () => {
 
   test("correlation_id passed through when caller provides a UUID-format value", () => {
     const env = createSystemInboundAbortedEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       adapterId: "discord-luna",
       inboundMessageId: "1234567890123456789",
       correlationId: "11111111-1111-4111-8111-111111111111",
@@ -223,7 +223,7 @@ describe("createSystemInboundAbortedEvent", () => {
 
   test("correlation_id omitted when caller does not provide one", () => {
     const env = createSystemInboundAbortedEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       adapterId: "discord-luna",
       inboundMessageId: "1234567890123456789",
       timeoutSource: "unknown",
@@ -246,7 +246,7 @@ describe("createSystemInboundAbortedEvent", () => {
     ] as const;
     for (const source of sources) {
       const env = createSystemInboundAbortedEvent({
-        source: { org: "metafactory", agent: "cortex", instance: "local" },
+        source: { principal: "metafactory", agent: "cortex", instance: "local" },
         adapterId: "discord-luna",
         inboundMessageId: "id",
         timeoutSource: source,
@@ -261,7 +261,7 @@ describe("createSystemInboundAbortedEvent", () => {
 
 describe("data_residency parameterisation", () => {
   test("omitting source.dataResidency defaults to NZ across all helpers", () => {
-    const sourceNoRes = { org: "metafactory", agent: "cortex", instance: "local" };
+    const sourceNoRes = { principal: "metafactory", agent: "cortex", instance: "local" };
     const degraded = createSystemAdapterDegradedEvent({
       source: sourceNoRes,
       adapterId: "x", platform: "discord",
@@ -288,7 +288,7 @@ describe("data_residency parameterisation", () => {
   });
 
   test("source.dataResidency overrides the default in every helper", () => {
-    const sourceAU = { org: "metafactory", agent: "cortex", instance: "local", dataResidency: "AU" };
+    const sourceAU = { principal: "metafactory", agent: "cortex", instance: "local", dataResidency: "AU" };
     const degraded = createSystemAdapterDegradedEvent({
       source: sourceAU,
       adapterId: "x", platform: "discord",
@@ -324,7 +324,7 @@ describe("classification parameterisation (IAW A.3)", () => {
   // `"public"` lets cortex emit envelopes that match myelin's namespace
   // grammar (and pass `validateSubjectEnvelopeAlignment` when paired with
   // the runtime's subject derivation).
-  const source = { org: "metafactory", agent: "cortex", instance: "local" };
+  const source = { principal: "metafactory", agent: "cortex", instance: "local" };
 
   test("omitting classification defaults to local across all helpers", () => {
     const degraded = createSystemAdapterDegradedEvent({
@@ -424,7 +424,7 @@ describe("classification parameterisation (IAW A.3)", () => {
 describe("createSystemAccessFilteredEvent", () => {
   test("required fields populated; envelope passes schema validation", () => {
     const env = createSystemAccessFilteredEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       rendererId: "dashboard",
       envelopeSubject: "federated.metafactory.review.cycle.completed",
       reason: "residency_blocked",
@@ -457,7 +457,7 @@ describe("createSystemAccessFilteredEvent", () => {
     ] as const;
     for (const reason of reasons) {
       const env = createSystemAccessFilteredEvent({
-        source: { org: "metafactory", agent: "cortex", instance: "local" },
+        source: { principal: "metafactory", agent: "cortex", instance: "local" },
         rendererId: "dashboard",
         envelopeSubject: "local.metafactory.x.y.z",
         reason,
@@ -470,7 +470,7 @@ describe("createSystemAccessFilteredEvent", () => {
   test("source.dataResidency overrides the default residency stamp", () => {
     const env = createSystemAccessFilteredEvent({
       source: {
-        org: "metafactory",
+        principal: "metafactory",
         agent: "cortex",
         instance: "local",
         dataResidency: "DE",
@@ -487,7 +487,7 @@ describe("createSystemAccessFilteredEvent", () => {
     // principal may opt the access-decision stream into federated reach so
     // peer dashboards can observe drops too.
     const env = createSystemAccessFilteredEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       rendererId: "dashboard",
       envelopeSubject: "federated.metafactory.foo.bar.baz",
       reason: "model_class_blocked",
@@ -499,13 +499,13 @@ describe("createSystemAccessFilteredEvent", () => {
 
   test("each invocation returns a fresh UUID id", () => {
     const a = createSystemAccessFilteredEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       rendererId: "dashboard",
       envelopeSubject: "x.y.z",
       reason: "residency_blocked",
     });
     const b = createSystemAccessFilteredEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       rendererId: "dashboard",
       envelopeSubject: "x.y.z",
       reason: "residency_blocked",
@@ -527,7 +527,7 @@ describe("createAgentHeartbeatEvent", () => {
 
   test("required fields populated; envelope passes schema validation", () => {
     const env = createAgentHeartbeatEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       agentId: "echo",
       taskId: "task-abc",
       correlationId: CORRELATION_UUID,
@@ -559,7 +559,7 @@ describe("createAgentHeartbeatEvent", () => {
 
   test("each invocation returns a fresh UUID id", () => {
     const a = createAgentHeartbeatEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       agentId: "echo",
       taskId: "task-abc",
       correlationId: CORRELATION_UUID,
@@ -568,7 +568,7 @@ describe("createAgentHeartbeatEvent", () => {
       iteration: 1,
     });
     const b = createAgentHeartbeatEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       agentId: "echo",
       taskId: "task-abc",
       correlationId: CORRELATION_UUID,
@@ -581,7 +581,7 @@ describe("createAgentHeartbeatEvent", () => {
 
   test("federated classification opt-in for future cross-principal heartbeats", () => {
     const env = createAgentHeartbeatEvent({
-      source: { org: "metafactory", agent: "cortex", instance: "local" },
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
       agentId: "echo",
       taskId: "task-abc",
       correlationId: CORRELATION_UUID,
@@ -602,7 +602,7 @@ describe("createAgentHeartbeatEvent", () => {
     ] as const;
     for (const phase of phases) {
       const env = createAgentHeartbeatEvent({
-        source: { org: "metafactory", agent: "cortex", instance: "local" },
+        source: { principal: "metafactory", agent: "cortex", instance: "local" },
         agentId: "echo",
         taskId: "task-abc",
         correlationId: CORRELATION_UUID,

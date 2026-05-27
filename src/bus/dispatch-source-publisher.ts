@@ -92,7 +92,7 @@ export async function publishInboundChatDispatchEnvelope(
   let subject: string;
   try {
     subject = buildDirectTaskPublishSubject(
-      opts.source.org,
+      opts.source.principal,
       targetDid,
       opts.stack,
       "chat",
@@ -143,7 +143,7 @@ export async function publishInboundChatDispatchEnvelope(
   try {
     const base = buildBaseEnvelope({
       type: "tasks.chat",
-      source: `${opts.source.org}.${opts.source.agent}.${opts.source.instance}`,
+      source: `${opts.source.principal}.${opts.source.agent}.${opts.source.instance}`,
       correlationId: opts.taskId,
       sovereignty: {
         classification: "local",

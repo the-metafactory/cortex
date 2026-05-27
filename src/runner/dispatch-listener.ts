@@ -203,7 +203,7 @@ export interface DispatchListenerOptions {
   stack?: string;
   /**
    * Subject pattern(s) to subscribe to. When omitted, the listener
-   * derives the default from `source.org` + optional `stack` per
+   * derives the default from `source.principal` + optional `stack` per
    * the IAW A.5 grammar. Tests can override with broader patterns
    * (`local.test.dispatch.task.received`).
    */
@@ -325,11 +325,11 @@ export interface DispatchListener {
  * when `stack` is supplied; falls through to the legacy 5-segment form
  * for backward compatibility with pre-A.5 deployments.
  */
-function dispatchReceivedSubject(org: string, stack?: string): string {
+function dispatchReceivedSubject(principal: string, stack?: string): string {
   if (stack === undefined) {
-    return `local.${org}.dispatch.task.received`;
+    return `local.${principal}.dispatch.task.received`;
   }
-  return `local.${org}.${stack}.dispatch.task.received`;
+  return `local.${principal}.${stack}.dispatch.task.received`;
 }
 
 /**
@@ -349,16 +349,16 @@ function dispatchReceivedSubject(org: string, stack?: string): string {
  * subjects can still be supplied explicitly through `subjects` for old
  * tests/config, but production defaults are canonical-only.
  */
-function canonicalTasksDirectSubject(org: string, stack?: string): string {
+function canonicalTasksDirectSubject(principal: string, stack?: string): string {
   if (stack === undefined) {
-    return `local.${org}.tasks.*.>`;
+    return `local.${principal}.tasks.*.>`;
   }
-  return `local.${org}.${stack}.tasks.*.>`;
+  return `local.${principal}.${stack}.tasks.*.>`;
 }
 
 /**
  * Default subject(s) for the runner's bus subscription. The `{principal}`
- * segment is substituted at registration time using `source.org` so a
+ * segment is substituted at registration time using `source.principal` so a
  * misconfigured runner with no principal id can still subscribe (it'll match
  * nothing unless someone publishes under `local.default.…`).
  *
@@ -367,8 +367,8 @@ function canonicalTasksDirectSubject(org: string, stack?: string): string {
  * pass `subjects` for legacy/federated fixtures, but production defaults
  * no longer subscribe to the pre-spec `dispatch.task.received` subject.
  */
-function defaultSubjects(org: string, stack?: string): string[] {
-  return [canonicalTasksDirectSubject(org, stack)];
+function defaultSubjects(principal: string, stack?: string): string[] {
+  return [canonicalTasksDirectSubject(principal, stack)];
 }
 
 export function createDispatchListener(
@@ -390,7 +390,7 @@ export function createDispatchListener(
   // Adapter-originated dispatches arrive with empty `signed_by[]` and
   // fall through `rejectEmpty: false`; signed bus traffic MUST verify.
   const cryptoVerify = opts.cryptoVerify ?? true;
-  const subjects = opts.subjects ?? defaultSubjects(source.org, opts.stack);
+  const subjects = opts.subjects ?? defaultSubjects(source.principal, opts.stack);
 
   let registration: { unregister: () => void } | null = null;
 
@@ -835,7 +835,7 @@ async function handleDispatchEnvelope(
     // single source of truth across the listener's subscribe-side
     // default AND this audit-envelope synthesis path (cortex#276
     // Maintainability finding cycle 2).
-    const auditEnvelopeSubject = subject ?? dispatchReceivedSubject(source.org, stack);
+    const auditEnvelopeSubject = subject ?? dispatchReceivedSubject(source.principal, stack);
     const auditCommon = {
       source,
       principalId: decision.principalId,
@@ -1255,7 +1255,7 @@ async function emitChainVerificationDeny(
     model_class: envelope.sovereignty.model_class,
   };
   const auditEnvelopeSubject =
-    subject ?? dispatchReceivedSubject(source.org, stack);
+    subject ?? dispatchReceivedSubject(source.principal, stack);
 
   const reasonPayload: SystemAccessDeniedReason = {
     kind: "chain_verification_failed",
@@ -1327,7 +1327,7 @@ async function emitReceivingAgentUnconfiguredDeny(
     model_class: envelope.sovereignty.model_class,
   };
   const auditEnvelopeSubject =
-    subject ?? dispatchReceivedSubject(source.org, stack);
+    subject ?? dispatchReceivedSubject(source.principal, stack);
 
   const denied = createSystemAccessDeniedEvent({
     source,

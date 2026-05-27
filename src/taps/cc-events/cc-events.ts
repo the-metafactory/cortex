@@ -60,8 +60,9 @@ import type { PublishedEvent } from "./hooks/lib/event-types";
 /**
  * Source identifier struct for CC envelope construction. Mirrors the shape
  * in `bus/system-events.ts` — three dotted segments matching the schema's
- * `org.agent.instance` form. Kept structured so callers don't string-
- * concatenate by hand.
+ * `{principal}.{assistant}.{instance}` form (R4 vocabulary migration;
+ * myelin#185 tightened this to exactly 3 segments). Kept structured so
+ * callers don't string-concatenate by hand.
  *
  * Defaults applied at envelope-construction time:
  *   - `agent` defaults to `"cortex"` (the M7 application emitting these events)
@@ -69,8 +70,8 @@ import type { PublishedEvent } from "./hooks/lib/event-types";
  *     lifting hooks → bus)
  */
 export interface CcEventSource {
-  /** `agent.operatorId` — first segment. Defaults to `"default"` if absent. */
-  org?: string;
+  /** `agent.operatorId` — first segment (principal slug). Defaults to `"default"` if absent. */
+  principal?: string;
   /** Logical agent name. Defaults to `"cortex"`. */
   agent?: string;
   /** Stable instance name. Defaults to `"relay"`. */
@@ -86,7 +87,7 @@ export interface CcEventSource {
 }
 
 function buildSource(src: CcEventSource | undefined): string {
-  return `${src?.org ?? "default"}.${src?.agent ?? "cortex"}.${
+  return `${src?.principal ?? "default"}.${src?.agent ?? "cortex"}.${
     src?.instance ?? "relay"
   }`;
 }
@@ -135,7 +136,7 @@ export interface CreateCcEventEnvelopeOpts {
   event: PublishedEvent;
   /**
    * Envelope source — `{principal}.{agent}.{instance}` per schema. All fields
-   * have sensible defaults. Callers (the relay) typically override `org`
+   * have sensible defaults. Callers (the relay) typically override `principal`
    * to match the bot's `agent.operatorId`.
    */
   source?: CcEventSource;
@@ -235,12 +236,12 @@ export interface CreateCcEventPublisherOpts {
   /** Live NATS connection. Caller owns the lifecycle. */
   link: NatsLink;
   /**
-   * Operator/org segment used in the envelope `source` and (when
+   * Principal segment used in the envelope `source` and (when
    * classification is `local` or `federated`) the published NATS subject.
    * Defaults to `"default"` to mirror the MyelinRuntime convention when
    * `agent.operatorId` is absent.
    */
-  org?: string;
+  principal?: string;
   /**
    * Operator stack segment slotted between `{principal}` and `{type}` on the
    * derived NATS subject (myelin#113 — IAW Phase A.5; closes cortex#266).
@@ -256,7 +257,7 @@ export interface CreateCcEventPublisherOpts {
    * `MyelinRuntime.publish` receives, so the runtime path and the
    * cc-events relay agree on the wire grammar for one operator instance.
    * `public.` classification ignores `stack` (per myelin's
-   * `deriveNatsSubject` semantics — `public` subjects carry no org or
+   * `deriveNatsSubject` semantics — `public` subjects carry no principal or
    * stack segments).
    */
   stack?: string;
@@ -275,8 +276,8 @@ export interface CreateCcEventPublisherOpts {
   /**
    * IAW Phase A.3 — optional sovereignty classification. Defaults to
    * `"local"` for back-compat. Set `"federated"` or `"public"` to scope
-   * relay-lifted CC hooks beyond the org. Applied to every envelope this
-   * publisher produces.
+   * relay-lifted CC hooks beyond the principal. Applied to every envelope
+   * this publisher produces.
    */
   classification?: Classification;
   /**
@@ -341,10 +342,10 @@ export interface CreateCcEventPublisherOpts {
 export function createCcEventPublisher(
   opts: CreateCcEventPublisherOpts,
 ): (event: PublishedEvent) => void {
-  const org = opts.org ?? "default";
+  const principal = opts.principal ?? "default";
   const stack = opts.stack;
   const source: CcEventSource = {
-    org,
+    principal,
     agent: opts.agent ?? "cortex",
     instance: opts.instance ?? "relay",
     ...(opts.dataResidency !== undefined && { dataResidency: opts.dataResidency }),

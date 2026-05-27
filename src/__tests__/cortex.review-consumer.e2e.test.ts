@@ -315,7 +315,7 @@ function createBusRuntime(): BusRuntime {
 // =============================================================================
 
 const SOURCE: ReviewEventSource = {
-  org: "metafactory",
+  principal: "metafactory",
   agent: "cortex",
   instance: "local",
 };

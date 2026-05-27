@@ -645,11 +645,11 @@ export async function startCortex(
   // Without this, the audit-trail emit silently degrades to console.info
   // in production — only unit tests passed the explicit source.
   const systemEventSource: SystemEventSource = {
-    // cortex#427 — `org` is the `{principal}` subject segment; same
-    // resolution path as the dispatch-listener below so publisher and
-    // consumer can't disagree on which principal a `system.*` envelope
-    // belongs to.
-    org: principalId,
+    // cortex#427 — the `principal` segment is the `{principal}` subject
+    // segment; same resolution path as the dispatch-listener below so
+    // publisher and consumer can't disagree on which principal a
+    // `system.*` envelope belongs to.
+    principal: principalId,
     agent: "cortex",
     instance: "local",
     ...(config.agent.dataResidency !== undefined && {
@@ -1753,11 +1753,11 @@ export async function startCortex(
   // honest if the boot ever passes `undefined`.
   const subjectPlaceholderSubstituter = makeSubjectPlaceholderSubstituter({
     // cortex#427 — renderer subscribe-pattern substitution reads the
-    // shared `principalId` so renderer subjects and runtime-side
-    // emit subjects can't drift; the post-MIG-8 helper still names
-    // the field `org` (renderer schema parameter name not renamed in
-    // PR-A scope).
-    org: principalId,
+    // shared `principalId` so renderer subjects and runtime-side emit
+    // subjects can't drift. R4 (cortex#453) renamed the helper field
+    // from `org` to `principal` so the parameter name matches the
+    // subject grammar canonicalised in myelin#185.
+    principal: principalId,
     stack: options.stack !== undefined ? derivedStack.stack : undefined,
   });
 
@@ -2232,7 +2232,7 @@ function setupOutboundLog(
       // bus-driven path projects into the same threads as the JSONL path.
       router.register(
         worklog.surfaceConfig({
-          org: systemEventSource.org,
+          principal: systemEventSource.principal,
           adapterId: `worklog-${discordAdapter.instanceId}`,
         }),
       );

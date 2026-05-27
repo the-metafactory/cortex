@@ -61,7 +61,7 @@
  * **Subject derivation (load-bearing for PR-7 wiring + pilot Phase B):**
  *
  * The runtime derives subjects from `(envelope.type, envelope.sovereignty.
- * classification, envelope.source's org segment)`:
+ * classification, envelope.source's principal segment)`:
  *
  *   - classification `"local"` → subject `local.{principal}.{type}`
  *   - With stack segment (IAW A.5) → `local.{principal}.{stack}.{type}`
@@ -104,7 +104,7 @@ export type PublishFn = (envelope: Envelope) => Promise<void>;
  */
 export interface CapabilityRegistrySource {
   /** Principal id — first dotted segment of `envelope.source`. */
-  org: string;
+  principal: string;
   /** Logical agent label for the *publisher* (typically `"cortex"`). */
   agent: string;
   /** Stable instance label — usually `"local"` for in-process emission. */
@@ -209,7 +209,7 @@ export const CAPABILITY_REGISTERED_EVENT_TYPE = "agents.capabilities.registered"
 // ---------------------------------------------------------------------------
 
 function buildSource(src: CapabilityRegistrySource): string {
-  return `${src.org}.${src.agent}.${src.instance}`;
+  return `${src.principal}.${src.agent}.${src.instance}`;
 }
 
 /**

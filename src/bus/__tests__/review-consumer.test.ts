@@ -68,7 +68,7 @@ import type { CCSessionFactory } from "../../substrates/claude-code/harness";
 // ---------------------------------------------------------------------------
 
 const SOURCE: ReviewEventSource = {
-  org: "metafactory",
+  principal: "metafactory",
   agent: "cortex",
   instance: "local",
 };

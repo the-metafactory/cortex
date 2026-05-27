@@ -163,7 +163,7 @@ program
   )
   .option(
     "--org <org>",
-    "Operator/org segment for published subjects (local.{principal}.{type}). Falls back to env var CORTEX_PRINCIPAL (legacy: CORTEX_OPERATOR, GROVE_OPERATOR) or NATS_ORG.",
+    "Principal segment for published subjects (local.{principal}.{type}). Falls back to env var CORTEX_PRINCIPAL (legacy: CORTEX_OPERATOR, GROVE_OPERATOR) or NATS_ORG. (Flag name kept as `--org` for back-compat; the segment is the principal slug per R4 vocabulary migration.)",
   )
   .option(
     "--stack <stack>",
@@ -199,10 +199,12 @@ program
     const natsUrl: string | undefined = options.natsUrl ?? process.env.NATS_URL;
     const natsToken: string | undefined =
       options.natsToken ?? process.env.NATS_TOKEN;
-    // R9 (cortex#388 PR-3): the org/operator segment resolves through the
+    // R9 (cortex#388 PR-3): the principal segment resolves through the
     // principal env-var compat shim — CORTEX_PRINCIPAL with a fallback to
-    // the legacy CORTEX_OPERATOR / GROVE_OPERATOR names.
-    const org: string =
+    // the legacy CORTEX_OPERATOR / GROVE_OPERATOR names. The CLI flag
+    // `--org` is kept for back-compat (R4 cortex#453 — wire vocabulary
+    // renamed but CLI flag names are user-facing and stay one release).
+    const principal: string =
       options.org ?? resolvePrincipalEnv() ?? process.env.NATS_ORG ?? "default";
     // cortex#266 — IAW A.5 stack segment for 6-segment publishes.
     const stack: string | undefined =
@@ -244,7 +246,7 @@ program
         });
         onPublished = createCcEventPublisher({
           link: natsLink,
-          org,
+          principal,
           ...(stack !== undefined && { stack }),
           ...(originatorPrincipal !== undefined && { originatorPrincipal }),
         });
@@ -255,7 +257,7 @@ program
             ? ` originator="${originatorPrincipal}"`
             : "";
         console.log(
-          `cortex-relay: nats publishing enabled — ${safeUrl} (org="${org}"${stackSuffix}${originatorSuffix})`,
+          `cortex-relay: nats publishing enabled — ${safeUrl} (principal="${principal}"${stackSuffix}${originatorSuffix})`,
         );
       } catch (err) {
         // Per the design rule: failed NATS startup must NOT crash the

@@ -106,7 +106,7 @@ function agentFixture(overrides: Partial<Agent> = {}): Agent {
 }
 
 const PILOT_SOURCE: ReviewEventSource = {
-  org: "metafactory",
+  principal: "metafactory",
   agent: "pilot",
   instance: "local",
 };

@@ -121,6 +121,10 @@ describe("envelope-validator", () => {
       ...(validEnvelope as object),
       signed_by: {
         method: "ed25519",
+        // myelin#182 (R2 breaking cut) — stamps carry `identity`, not the
+        // deprecated `principal` key. Pre-#182 the dual reader accepted
+        // either; this test was updated at cortex#453 to assert the
+        // canonical-only schema.
         identity: "did:mf:luna",
         signature: ED25519_SIG,
         at: "2026-05-08T09:00:00Z",

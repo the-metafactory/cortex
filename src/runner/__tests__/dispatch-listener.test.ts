@@ -43,7 +43,7 @@ import type { Agent } from "../../common/types/cortex-config";
 // ---------------------------------------------------------------------------
 
 const SOURCE: SystemEventSource = {
-  org: "metafactory",
+  principal: "metafactory",
   agent: "cortex",
   instance: "local",
 };

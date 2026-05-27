@@ -8,7 +8,7 @@ import type { DispatchRequest } from "../../common/substrates/types";
 import type { DispatchEventSource } from "../../bus/dispatch-events";
 
 const SOURCE: DispatchEventSource = {
-  org: "metafactory",
+  principal: "metafactory",
   agent: "cortex",
   instance: "local",
 };

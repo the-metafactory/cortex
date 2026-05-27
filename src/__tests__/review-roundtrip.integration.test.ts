@@ -56,7 +56,7 @@ interface NatsServerHandle {
 }
 
 const SOURCE: ReviewEventSource = {
-  org: "test-op",
+  principal: "test-op",
   agent: "cortex",
   instance: "integration",
 };
@@ -305,7 +305,7 @@ maybeDescribe("cortex#339 — live JetStream review round-trip", () => {
       "cortex-review-consumer-test-op-echo",
     );
     const request = createReviewRequestEvent({
-      source: { org: "test-op", agent: "sage", instance: "dispatch" },
+      source: { principal: "test-op", agent: "sage", instance: "dispatch" },
       flavor: "typescript",
       payload: VALID_PAYLOAD,
     });

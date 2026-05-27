@@ -311,7 +311,7 @@ describe("DispatchHandler — system.inbound.aborted emission (MIG-3.8 / C-104)"
       config: makeConfig(),
       securityPreamble: "",
       runtime,
-      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
     });
 
     callPublishInboundAborted(handler, {
@@ -420,7 +420,7 @@ describe("DispatchHandler — system.inbound.aborted emission (MIG-3.8 / C-104)"
       config: makeConfig(),
       securityPreamble: "",
       runtime,
-      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
     });
 
     callPublishInboundAborted(handler, {
@@ -446,7 +446,7 @@ describe("DispatchHandler — system.inbound.aborted emission (MIG-3.8 / C-104)"
       config: makeConfig(),
       securityPreamble: "",
       runtime,
-      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local", dataResidency: "AU" },
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local", dataResidency: "AU" },
     });
 
     callPublishInboundAborted(handler, {
@@ -482,7 +482,7 @@ describe("DispatchHandler — system.inbound.aborted emission (MIG-3.8 / C-104)"
       config: makeConfig(),
       securityPreamble: "",
       runtime,
-      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
     });
 
     // Simulate the exact call shape handleMessage builds (cf. dispatch-handler.ts
@@ -530,7 +530,7 @@ describe("DispatchHandler — system.inbound.aborted emission (MIG-3.8 / C-104)"
       config: makeConfig(),
       securityPreamble: "",
       runtime,
-      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
     });
 
     const sources = [
@@ -661,7 +661,7 @@ describe("DispatchHandler — chat-path CC failure retry (cortex#360)", () => {
       config: makeConfig(),
       securityPreamble: "",
       runtime,
-      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
       ccSessionFactory: factory,
     });
 
@@ -700,7 +700,7 @@ describe("DispatchHandler — chat-path CC failure retry (cortex#360)", () => {
       config: makeConfig(),
       securityPreamble: "",
       runtime,
-      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
       ccSessionFactory: factory,
     });
 
@@ -755,7 +755,7 @@ describe("DispatchHandler — chat-path CC failure retry (cortex#360)", () => {
       config: makeConfig(),
       securityPreamble: "",
       runtime,
-      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
       ccSessionFactory: factory,
     });
 
@@ -795,7 +795,7 @@ describe("DispatchHandler — chat-path CC failure retry (cortex#360)", () => {
       config: makeConfig(),
       securityPreamble: "",
       runtime,
-      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
       ccSessionFactory: factory,
     });
 
@@ -834,7 +834,7 @@ describe("DispatchHandler — chat-path CC failure retry (cortex#360)", () => {
       config: makeConfig(),
       securityPreamble: "",
       runtime,
-      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
       ccSessionFactory: factory,
     });
 
@@ -874,7 +874,7 @@ describe("DispatchHandler — chat-path CC failure retry (cortex#360)", () => {
       config: makeConfig(),
       securityPreamble: "",
       runtime,
-      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
       ccSessionFactory: factory,
       retry: { maxAttempts: 1 },
     });
@@ -1001,7 +1001,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       securityPreamble: "",
       runtime,
       systemEventSource: {
-        org: "andreas",
+        principal: "andreas",
         agent: "cortex",
         instance: "local",
       },
@@ -1069,7 +1069,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       securityPreamble: "",
       runtime,
       systemEventSource: {
-        org: "andreas",
+        principal: "andreas",
         agent: "cortex",
         instance: "local",
       },
@@ -1096,7 +1096,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       securityPreamble: "",
       runtime,
       systemEventSource: {
-        org: "andreas",
+        principal: "andreas",
         agent: "cortex",
         instance: "local",
         dataResidency: "AU",
@@ -1138,7 +1138,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       securityPreamble: "",
       runtime,
       systemEventSource: {
-        org: "andreas",
+        principal: "andreas",
         agent: "cortex",
         instance: "local",
       },
@@ -1163,7 +1163,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       securityPreamble: "",
       runtime,
       systemEventSource: {
-        org: "andreas",
+        principal: "andreas",
         agent: "cortex",
         instance: "local",
       },
@@ -1184,7 +1184,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       securityPreamble: "",
       runtime,
       systemEventSource: {
-        org: "andreas",
+        principal: "andreas",
         agent: "cortex",
         instance: "local",
       },
@@ -1221,7 +1221,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       securityPreamble: "",
       runtime,
       systemEventSource: {
-        org: "andreas",
+        principal: "andreas",
         agent: "cortex",
         instance: "local",
       },
@@ -1276,7 +1276,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       securityPreamble: "",
       runtime,
       systemEventSource: {
-        org: "andreas",
+        principal: "andreas",
         agent: "cortex",
         instance: "local",
       },
@@ -1327,7 +1327,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       securityPreamble: "",
       runtime,
       systemEventSource: {
-        org: "andreas",
+        principal: "andreas",
         agent: "cortex",
         instance: "local",
       },
@@ -1381,7 +1381,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       securityPreamble: "",
       runtime,
       systemEventSource: {
-        org: "andreas",
+        principal: "andreas",
         agent: "cortex",
         instance: "local",
       },

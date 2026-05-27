@@ -46,7 +46,7 @@ import {
 } from "../capability-registry";
 
 const SOURCE: CapabilityRegistrySource = {
-  org: "metafactory",
+  principal: "metafactory",
   agent: "cortex",
   instance: "local",
 };

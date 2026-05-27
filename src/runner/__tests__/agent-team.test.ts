@@ -34,7 +34,7 @@ function fakeBusPeerDeps(): NonNullable<AgentTeamOpts["busPeer"]> {
   // narrowly so the cast is the only weak point.
   const resolver = {} as TrustResolver;
   const source: DispatchEventSource = {
-    org: "metafactory",
+    principal: "metafactory",
     agent: "cortex",
     instance: "local",
   };

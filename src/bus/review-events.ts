@@ -85,7 +85,7 @@ import type { SystemEventSource } from "./system-events";
 export type ReviewEventSource = SystemEventSource;
 
 function buildSource(src: SystemEventSource): string {
-  return `${src.org}.${src.agent}.${src.instance}`;
+  return `${src.principal}.${src.agent}.${src.instance}`;
 }
 
 /**

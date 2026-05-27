@@ -245,7 +245,7 @@ describe("IAW Phase B.4 — cross-stack inbound integration (refs cortex#114)", 
       resolver: new TrustResolver(alphaRegistry),
       receivingAgentId: "alpha-agent",
       principalId: "alpha",
-      source: { org: "alpha", agent: "cortex", instance: "local" },
+      source: { principal: "alpha", agent: "cortex", instance: "local" },
       cryptoVerify: true,
     });
     const betaListener = new BusDispatchListener({
@@ -253,7 +253,7 @@ describe("IAW Phase B.4 — cross-stack inbound integration (refs cortex#114)", 
       resolver: new TrustResolver(betaRegistry),
       receivingAgentId: "beta-agent",
       principalId: "beta",
-      source: { org: "beta", agent: "cortex", instance: "local" },
+      source: { principal: "beta", agent: "cortex", instance: "local" },
       cryptoVerify: true,
     });
 
@@ -324,7 +324,7 @@ describe("IAW Phase B.4 — cross-stack inbound integration (refs cortex#114)", 
       resolver: new TrustResolver(betaRegistry),
       receivingAgentId: "beta-agent",
       principalId: "beta",
-      source: { org: "beta", agent: "cortex", instance: "local" },
+      source: { principal: "beta", agent: "cortex", instance: "local" },
       cryptoVerify: true,
     });
     betaListener.start();
@@ -406,7 +406,7 @@ describe("IAW Phase B.4 — cross-stack inbound integration (refs cortex#114)", 
       resolver: new TrustResolver(betaRegistry),
       receivingAgentId: "beta-agent",
       principalId: "beta",
-      source: { org: "beta", agent: "cortex", instance: "local" },
+      source: { principal: "beta", agent: "cortex", instance: "local" },
       cryptoVerify: true,
     });
     betaListener.start();
@@ -467,7 +467,7 @@ describe("IAW Phase B.4 — cross-stack inbound integration (refs cortex#114)", 
       resolver: new TrustResolver(betaRegistry),
       receivingAgentId: "beta-agent",
       principalId: "beta",
-      source: { org: "beta", agent: "cortex", instance: "local" },
+      source: { principal: "beta", agent: "cortex", instance: "local" },
       cryptoVerify: true,
     });
     betaListener.start();

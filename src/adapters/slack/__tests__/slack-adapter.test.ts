@@ -874,7 +874,7 @@ describe("SlackAdapter — system.adapter.* envelopes (cortex#235 r1#4)", () => 
     };
   }
 
-  const SOURCE = { org: "metafactory", agent: "luna", instance: "local" };
+  const SOURCE = { principal: "metafactory", agent: "luna", instance: "local" };
 
   test("initial connect after start() is silent (no envelope emitted)", async () => {
     const runtime = makeRecordingRuntime();

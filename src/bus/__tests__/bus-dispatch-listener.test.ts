@@ -139,7 +139,7 @@ function fakeRuntime() {
   return { runtime, published, deliverInbound, drain, handlers };
 }
 
-const SOURCE = { org: "metafactory", agent: "cortex", instance: "local" };
+const SOURCE = { principal: "metafactory", agent: "cortex", instance: "local" };
 
 // =============================================================================
 // Cases
@@ -261,7 +261,7 @@ describe("BusDispatchListener — peer-dispatch filter", () => {
     // looping back via the local fan-out).
     deliverInbound(
       peerDispatchEnvelope({
-        source: `${SOURCE.org}.${SOURCE.agent}.${SOURCE.instance}`,
+        source: `${SOURCE.principal}.${SOURCE.agent}.${SOURCE.instance}`,
         signerPrincipal: "did:mf:luna",
       }),
     );

@@ -344,7 +344,7 @@ describe("messageCreate auto-thread (cortex#120)", () => {
     const { adapter, client } = makeAdapterWithInfra({
       runtime,
       systemEventSource: {
-        org: "metafactory",
+        principal: "metafactory",
         agent: "cortex",
         instance: "discord-cortex120",
       },

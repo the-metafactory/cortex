@@ -52,7 +52,7 @@ import type { SystemEventSource } from "./system-events";
 export type DispatchEventSource = SystemEventSource;
 
 function buildSource(src: SystemEventSource): string {
-  return `${src.org}.${src.agent}.${src.instance}`;
+  return `${src.principal}.${src.agent}.${src.instance}`;
 }
 
 /**
@@ -113,8 +113,8 @@ export interface DispatchTaskCommonOpts {
   /**
    * Agent identifier — the logical agent name that handled the task
    * (`cortex`, `pilot`, etc.). Distinct from `envelope.source` because
-   * `source` is `org.agent.instance` and we want a flat agent label
-   * for filters/projection.
+   * `source` is `{principal}.{assistant}.{instance}` and we want a flat
+   * agent label for filters/projection.
    */
   agentId: string;
   /**

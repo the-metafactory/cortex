@@ -24,7 +24,7 @@ import { validateEnvelope, type Envelope } from "../../../bus/myelin/envelope-va
 
 const TEST_SECRET = "test-secret-for-receiver-tests";
 const TEST_SOURCE = {
-  org: "metafactory",
+  principal: "metafactory",
   agent: "cortex",
   instance: "local",
 };

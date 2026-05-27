@@ -40,7 +40,7 @@ import {
 // ---------------------------------------------------------------------------
 
 const SOURCE: SystemEventSource = {
-  org: "metafactory",
+  principal: "metafactory",
   agent: "cortex",
   instance: "local",
 };

@@ -73,7 +73,7 @@ import { isUuid } from "../common/types/uuid";
 export type GithubEventSource = SystemEventSource;
 
 function buildSource(src: SystemEventSource): string {
-  return `${src.org}.${src.agent}.${src.instance}`;
+  return `${src.principal}.${src.agent}.${src.instance}`;
 }
 
 /**

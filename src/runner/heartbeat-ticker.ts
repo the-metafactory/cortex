@@ -50,7 +50,7 @@ export interface HeartbeatTickerStartOpts {
   intervalMs?: number;
   /** Myelin runtime — heartbeats publish via `runtime.publish`. */
   runtime: MyelinRuntime;
-  /** Source triple — same as the rest of `system.*` (org.agent.instance). */
+  /** Source triple — same as the rest of `system.*` (principal.agent.instance). */
   source: SystemEventSource;
   /** Logical agent name (`echo`, `luna`, ...). */
   agentId: string;

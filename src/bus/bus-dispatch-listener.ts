@@ -187,7 +187,7 @@ export class BusDispatchListener {
    */
   private isPeerDispatch(envelope: Envelope): boolean {
     if (envelope.type !== "dispatch.task.dispatched") return false;
-    const ourSource = `${this.source.org}.${this.source.agent}.${this.source.instance}`;
+    const ourSource = `${this.source.principal}.${this.source.agent}.${this.source.instance}`;
     return envelope.source !== ourSource;
   }
 

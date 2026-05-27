@@ -53,7 +53,7 @@ interface Fetcher {
 
 const TEST_SECRET = "integration-test-secret";
 const TEST_SOURCE = {
-  org: "metafactory",
+  principal: "metafactory",
   agent: "cortex",
   instance: "local",
 };

@@ -67,7 +67,7 @@ import { runReviewPipeline } from "../review-pipeline";
 // ---------------------------------------------------------------------------
 
 const SOURCE: ReviewEventSource = {
-  org: "metafactory",
+  principal: "metafactory",
   agent: "cortex",
   instance: "local",
 };

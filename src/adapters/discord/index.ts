@@ -1310,7 +1310,7 @@ export class DiscordAdapter implements PlatformAdapter {
       capability: "discord.inbound",
       sovereignty: {
         classification: "local",
-        data_residency: wiring.source.org,
+        data_residency: wiring.source.principal,
         max_hop: 0,
         frontier_ok: false,
         model_class: "local-only",

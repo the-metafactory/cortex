@@ -18,7 +18,7 @@ import {
   sanitizeTypeSegment,
 } from "../github-events";
 
-const SRC = { org: "metafactory", agent: "cortex", instance: "local" };
+const SRC = { principal: "metafactory", agent: "cortex", instance: "local" };
 
 describe("sanitizeTypeSegment", () => {
   test("lowercases input", () => {

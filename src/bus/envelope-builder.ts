@@ -41,7 +41,7 @@ import type { Envelope } from "./myelin/envelope-validator";
 export interface BaseEnvelopeOpts {
   /** Envelope `type` — `domain.entity.action` per G-1100.B. */
   type: string;
-  /** Pre-built source string — `org.agent.instance` (2-5 dotted segments). */
+  /** Pre-built source string — `{principal}.{assistant}.{instance}` (exactly 3 dotted segments, per myelin#185). */
   source: string;
   /** Payload — domain-specific contents. */
   payload: Record<string, unknown>;

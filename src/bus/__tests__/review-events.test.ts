@@ -28,13 +28,13 @@ import {
 } from "../review-events";
 
 const SOURCE: ReviewEventSource = {
-  org: "metafactory",
+  principal: "metafactory",
   agent: "echo",
   instance: "local",
 };
 
 const PILOT_SOURCE: ReviewEventSource = {
-  org: "metafactory",
+  principal: "metafactory",
   agent: "pilot",
   instance: "local",
 };

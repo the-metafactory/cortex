@@ -95,7 +95,7 @@ describe("createCcEventEnvelope", () => {
   test("source segments override defaults", () => {
     const env = createCcEventEnvelope({
       event: makeEvent(),
-      source: { org: "metafactory", agent: "cortex", instance: "tap-relay" },
+      source: { principal: "metafactory", agent: "cortex", instance: "tap-relay" },
     });
     expect(env.source).toBe("metafactory.cortex.tap-relay");
   });
@@ -136,7 +136,7 @@ describe("createCcEventEnvelope", () => {
   test("source.dataResidency overrides the NZ default", () => {
     const env = createCcEventEnvelope({
       event: makeEvent(),
-      source: { org: "metafactory", agent: "cortex", instance: "relay", dataResidency: "EU" },
+      source: { principal: "metafactory", agent: "cortex", instance: "relay", dataResidency: "EU" },
     });
     expect(env.sovereignty.data_residency).toBe("EU");
   });
@@ -183,7 +183,7 @@ describe("createCcEventEnvelope", () => {
   test("envelope passes Ajv validation against vendored myelin schema", () => {
     const env = createCcEventEnvelope({
       event: makeEvent(),
-      source: { org: "metafactory" },
+      source: { principal: "metafactory" },
     });
     const result = validateEnvelope(env);
     if (!result.ok) {
@@ -206,7 +206,7 @@ describe("createCcEventEnvelope", () => {
     // first-party in-process originators on cortex#346.
     const env = createCcEventEnvelope({
       event: makeEvent(),
-      source: { org: "metafactory" },
+      source: { principal: "metafactory" },
       originatorPrincipal: "did:mf:cortex",
     });
     expect(env.originator).toEqual({
@@ -220,7 +220,7 @@ describe("createCcEventEnvelope", () => {
     // the originator block as constructed here.
     const env = createCcEventEnvelope({
       event: makeEvent(),
-      source: { org: "metafactory" },
+      source: { principal: "metafactory" },
       originatorPrincipal: "did:mf:cortex",
     });
     const result = validateEnvelope(env);
@@ -259,7 +259,7 @@ describe("createCcEventPublisher", () => {
 
   test("publishes legacy 5-segment local.{principal}.{type} when stack is omitted", () => {
     const link = makeLink();
-    const pub = createCcEventPublisher({ link: link.stub, org: "metafactory" });
+    const pub = createCcEventPublisher({ link: link.stub, principal: "metafactory" });
     pub(makeEvent({ event_type: "tool.bash.executed" }));
     expect(link.calls).toHaveLength(1);
     expect(link.calls[0]!.subject).toBe("local.metafactory.tool.bash.executed");
@@ -273,7 +273,7 @@ describe("createCcEventPublisher", () => {
     const link = makeLink();
     const pub = createCcEventPublisher({
       link: link.stub,
-      org: "metafactory",
+      principal: "metafactory",
       stack: "default",
     });
     pub(makeEvent({ event_type: "tool.bash.executed" }));
@@ -290,7 +290,7 @@ describe("createCcEventPublisher", () => {
     const link = makeLink();
     const pub = createCcEventPublisher({
       link: link.stub,
-      org: "andreas",
+      principal: "andreas",
       stack: "research",
     });
     pub(makeEvent({ event_type: "session.started" }));
@@ -308,7 +308,7 @@ describe("createCcEventPublisher", () => {
 
   test("payload is JSON-serialised envelope", () => {
     const link = makeLink();
-    const pub = createCcEventPublisher({ link: link.stub, org: "andreas" });
+    const pub = createCcEventPublisher({ link: link.stub, principal: "andreas" });
     pub(makeEvent({ event_type: "session.started" }));
     const env = JSON.parse(link.calls[0]!.payload);
     expect(env.type).toBe("session.started");
@@ -320,7 +320,7 @@ describe("createCcEventPublisher", () => {
     const link = makeLink();
     const pub = createCcEventPublisher({
       link: link.stub,
-      org: "metafactory",
+      principal: "metafactory",
       agent: "cortex",
       instance: "tap-prod",
     });
@@ -332,7 +332,7 @@ describe("createCcEventPublisher", () => {
   test("publish errors are swallowed (do not throw out)", () => {
     const link = makeLink();
     link.throwOnPublish(new Error("nats closed"));
-    const pub = createCcEventPublisher({ link: link.stub, org: "default" });
+    const pub = createCcEventPublisher({ link: link.stub, principal: "default" });
     // Must not throw — the relay's primary path is JSONL append, not bus
     expect(() => pub(makeEvent())).not.toThrow();
   });
@@ -342,7 +342,7 @@ describe("createCcEventPublisher", () => {
     const link = makeLink();
     const pub = createCcEventPublisher({
       link: link.stub,
-      org: "metafactory",
+      principal: "metafactory",
       stack: "default",
       originatorPrincipal: "did:mf:cortex",
     });
@@ -360,7 +360,7 @@ describe("createCcEventPublisher", () => {
 
   test("originator omitted when originatorPrincipal not configured (default off)", () => {
     const link = makeLink();
-    const pub = createCcEventPublisher({ link: link.stub, org: "metafactory" });
+    const pub = createCcEventPublisher({ link: link.stub, principal: "metafactory" });
     pub(makeEvent({ event_type: "tool.bash.executed" }));
     const env = JSON.parse(link.calls[0]!.payload);
     expect(env.originator).toBeUndefined();
@@ -371,7 +371,7 @@ describe("createCcEventPublisher", () => {
     let callCount = 0;
     const pub = createCcEventPublisher({
       link: link.stub,
-      org: "default",
+      principal: "default",
       buildEnvelope: (event, _source) => {
         callCount++;
         return {
@@ -423,7 +423,7 @@ describe("cc-events classification parameterisation (IAW A.3)", () => {
   test("createCcEventEnvelope: omitting classification defaults to local", () => {
     const env = createCcEventEnvelope({
       event: makeEvent(),
-      source: { org: "metafactory" },
+      source: { principal: "metafactory" },
     });
     expect(env.sovereignty.classification).toBe("local");
     expect(validateEnvelope(env).ok).toBe(true);
@@ -432,7 +432,7 @@ describe("cc-events classification parameterisation (IAW A.3)", () => {
   test("createCcEventEnvelope: classification: 'federated' flows into sovereignty", () => {
     const env = createCcEventEnvelope({
       event: makeEvent(),
-      source: { org: "metafactory" },
+      source: { principal: "metafactory" },
       classification: "federated",
     });
     expect(env.sovereignty.classification).toBe("federated");
@@ -442,7 +442,7 @@ describe("cc-events classification parameterisation (IAW A.3)", () => {
   test("createCcEventEnvelope: classification: 'public' flows into sovereignty", () => {
     const env = createCcEventEnvelope({
       event: makeEvent(),
-      source: { org: "metafactory" },
+      source: { principal: "metafactory" },
       classification: "public",
     });
     expect(env.sovereignty.classification).toBe("public");
@@ -457,7 +457,7 @@ describe("cc-events classification parameterisation (IAW A.3)", () => {
     const link = makeLink();
     const pub = createCcEventPublisher({
       link: link.stub,
-      org: "metafactory",
+      principal: "metafactory",
       classification: "federated",
     });
     pub(makeEvent({ event_type: "tool.bash.executed" }));
@@ -473,7 +473,7 @@ describe("cc-events classification parameterisation (IAW A.3)", () => {
     const link = makeLink();
     const pub = createCcEventPublisher({
       link: link.stub,
-      org: "metafactory",
+      principal: "metafactory",
       classification: "public",
     });
     pub(makeEvent({ event_type: "tool.bash.executed" }));
@@ -491,7 +491,7 @@ describe("cc-events classification parameterisation (IAW A.3)", () => {
     const link = makeLink();
     const pub = createCcEventPublisher({
       link: link.stub,
-      org: "metafactory",
+      principal: "metafactory",
     });
     pub(makeEvent({ event_type: "tool.bash.executed" }));
     expect(link.calls[0]!.subject).toBe(

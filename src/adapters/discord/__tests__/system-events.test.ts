@@ -75,7 +75,7 @@ function makeRecordingRuntime(): RecordingRuntime {
  */
 async function buildStartedAdapter(opts: {
   runtime?: MyelinRuntime;
-  systemEventSource?: { org: string; agent: string; instance: string };
+  systemEventSource?: { principal: string; agent: string; instance: string };
   degradedThresholdMs?: number;
 } = {}) {
   // discord.js Client is constructed inside start(); the only way to skip
@@ -133,7 +133,7 @@ describe("DiscordAdapter system.adapter.* emission", () => {
     const runtime = makeRecordingRuntime();
     const adapter = await buildStartedAdapter({
       runtime,
-      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
     });
     const client = adapter.getClient()!;
     // Emit a non-clean disconnect (1006 = abnormal closure)
@@ -162,7 +162,7 @@ describe("DiscordAdapter system.adapter.* emission", () => {
     const runtime = makeRecordingRuntime();
     const adapter = await buildStartedAdapter({
       runtime,
-      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
     });
     const client = adapter.getClient()!;
     (client as unknown as { emit: (event: string, ...args: unknown[]) => boolean }).emit(
@@ -186,7 +186,7 @@ describe("DiscordAdapter system.adapter.* emission", () => {
     const runtime = makeRecordingRuntime();
     const adapter = await buildStartedAdapter({
       runtime,
-      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
     });
     // Exercise the wired callback. `publishAdapterDegraded` is private; the
     // bracket access is the standard escape hatch for adapter-internal tests.
@@ -220,7 +220,7 @@ describe("DiscordAdapter system.adapter.* emission", () => {
     const runtime = makeRecordingRuntime();
     const adapter = await buildStartedAdapter({
       runtime,
-      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
     });
     (
       adapter as unknown as {
@@ -287,7 +287,7 @@ describe("DiscordAdapter system.adapter.* emission", () => {
     const runtime = makeRecordingRuntime();
     const adapter = await buildStartedAdapter({
       runtime,
-      systemEventSource: { org: "metafactory", agent: "cortex", instance: "local" },
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
     });
     const client = adapter.getClient()!;
     (client as unknown as { emit: (event: string, ...args: unknown[]) => boolean }).emit(

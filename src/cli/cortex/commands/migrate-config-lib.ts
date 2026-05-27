@@ -1903,14 +1903,16 @@ function convertNats(legacyNats: unknown, warnings: ConversionWarning[]): unknow
   // legacy bot.yaml `{org}` placeholder retired. Rewrite any `{org}`
   // tokens in `nats.subjects` to the canonical `{principal}` so the
   // emitted cortex.yaml is consumable by post-#185 myelin runtimes.
-  if (Array.isArray(nats.subjects)) {
-    let rewrote = false;
-    nats.subjects = nats.subjects.map((s) => {
+  const subjects = nats.subjects;
+  if (Array.isArray(subjects)) {
+    const rewroteIdxs: number[] = [];
+    const rewritten: unknown[] = subjects.map((s: unknown, idx: number): unknown => {
       if (typeof s !== "string" || !s.includes("{org}")) return s;
-      rewrote = true;
+      rewroteIdxs.push(idx);
       return s.replaceAll("{org}", "{principal}");
     });
-    if (rewrote) {
+    nats.subjects = rewritten;
+    if (rewroteIdxs.length > 0) {
       warnings.push({
         field: "nats.subjects",
         message:

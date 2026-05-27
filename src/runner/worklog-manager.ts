@@ -262,10 +262,10 @@ export class WorklogManager {
    *
    * @param adapterId — defaults to `worklog-manager`. Configurable so a
    *   future multi-channel worklog (one channel per repo) can disambiguate.
-   * @param org — principal id segment. Worklog-manager doesn't store it (the
-   *   manager is constructed with a Discord client + channel ID, not a
-   *   bot config). Passing it explicitly keeps the dependency direction
-   *   clean (no config import here).
+   * @param principal — principal id segment. Worklog-manager doesn't store
+   *   it (the manager is constructed with a Discord client + channel ID,
+   *   not a bot config). Passing it explicitly keeps the dependency
+   *   direction clean (no config import here).
    * @param stack — optional principal stack segment (IAW Phase A.5,
    *   cortex#268). When supplied, the manager subscribes on the 6-segment
    *   grammar `local.{principal}.{stack}.dispatch.task.>` matching sage's
@@ -285,7 +285,7 @@ export class WorklogManager {
    * different window pass `maxAgeMs` explicitly.
    */
   surfaceConfig(opts: {
-    org: string;
+    principal: string;
     adapterId?: string;
     stack?: string;
   }): SurfaceAdapter {
@@ -296,8 +296,8 @@ export class WorklogManager {
     // haven't wired stack identity.
     const subject =
       opts.stack === undefined
-        ? `local.${opts.org}.dispatch.task.>`
-        : `local.${opts.org}.${opts.stack}.dispatch.task.>`;
+        ? `local.${opts.principal}.dispatch.task.>`
+        : `local.${opts.principal}.${opts.stack}.dispatch.task.>`;
     const subjects = [subject];
     return {
       id: opts.adapterId ?? "worklog-manager",

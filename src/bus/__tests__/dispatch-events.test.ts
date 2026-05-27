@@ -25,7 +25,7 @@ import {
 } from "../dispatch-events";
 
 const SOURCE: DispatchEventSource = {
-  org: "metafactory",
+  principal: "metafactory",
   agent: "cortex",
   instance: "local",
 };

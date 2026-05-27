@@ -74,7 +74,7 @@ function fakeRuntimeWithPublishLog(): {
 }
 
 const TEST_SYSTEM_EVENT_SOURCE: SystemEventSource = {
-  org: "metafactory",
+  principal: "metafactory",
   agent: "cortex",
   instance: "local",
 };

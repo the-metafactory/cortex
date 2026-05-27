@@ -187,7 +187,7 @@ export class BusPeerHarness implements SessionHarness {
     // ----------------------------------------------------------------
     const requestEnvelope: Envelope = {
       id: randomUUID(),
-      source: `${this.source.org}.${this.source.agent}.${this.source.instance}`,
+      source: `${this.source.principal}.${this.source.agent}.${this.source.instance}`,
       type: "dispatch.task.dispatched",
       timestamp: startedAt.toISOString(),
       correlation_id: correlationId,

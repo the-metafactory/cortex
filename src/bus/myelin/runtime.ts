@@ -23,7 +23,7 @@ import {
 } from "./subscriber";
 import {
   deriveNatsSubject,
-  orgFromConfig,
+  principalFromConfig,
   type Envelope,
 } from "./envelope-validator";
 // IAW Phase B.3 — sign outbound envelopes via myelin's chain-aware
@@ -314,12 +314,12 @@ export interface BusEnvelopeSigner {
  * collapse `{stack}.` to empty; stack-aware deployments emit
  * `${stack}.`).
  *
- * Returns a closure so the resolved `(org, stack)` pair is captured
+ * Returns a closure so the resolved `(principal, stack)` pair is captured
  * once and applied to N pattern strings without reallocating the
  * substitution rules per call.
  */
 export function makeSubjectPlaceholderSubstituter(opts: {
-  org: string;
+  principal: string;
   stack?: string;
 }): (subjects: readonly string[]) => string[] {
   const stackToken = opts.stack !== undefined ? `${opts.stack}.` : "";
@@ -333,7 +333,7 @@ export function makeSubjectPlaceholderSubstituter(opts: {
       // {assistant}` (per `specs/namespace.md`) is the only form the schema
       // validator now accepts.
       s
-        .replaceAll("{principal}", opts.org)
+        .replaceAll("{principal}", opts.principal)
         .replaceAll("{stack}.", stackToken),
     );
 }
@@ -396,13 +396,13 @@ export async function startMyelinRuntime(
 
   const nats = config.nats;
   // IAW Phase A.3 follow-up (cortex#130 item 1): subscribe-side `{principal}` is
-  // resolved via the shared `orgFromConfig` helper. The publish-side
-  // (`deriveNatsSubject` → `orgFromEnvelope`) extracts the same segment
+  // resolved via the shared `principalFromConfig` helper. The publish-side
+  // (`deriveNatsSubject` → `principalFromEnvelope`) extracts the same segment
   // from `envelope.source` at emit time. Both helpers live in
   // `envelope-validator.ts` and the invariant they jointly preserve
   // (subscribe `{principal}` === publish `{principal}` for envelopes this stack emits)
   // has a regression test at
-  // `src/bus/myelin/__tests__/runtime-org-symmetry.test.ts`.
+  // `src/bus/myelin/__tests__/runtime-principal-symmetry.test.ts`.
   //
   // cortex#269 — `{stack}.` substituted alongside `{principal}` via the shared
   // `makeSubjectPlaceholderSubstituter` helper (defined above; also used
@@ -414,7 +414,7 @@ export async function startMyelinRuntime(
   // `local.{principal}.{stack}.system.>` (stack-aware) or `local.{principal}.system.>`
   // (legacy) depending on whether the boot path supplied a stack.
   const substituter = makeSubjectPlaceholderSubstituter({
-    org: orgFromConfig(config.agent.operatorId),
+    principal: principalFromConfig(config.agent.operatorId),
     stack: options?.stack,
   });
   const subjects = substituter(nats.subjects);

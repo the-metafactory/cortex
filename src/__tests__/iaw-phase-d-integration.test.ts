@@ -158,7 +158,7 @@ function buildStack(opts: {
 
   const runtime = buildStackRuntime();
   const source: SystemEventSource = {
-    org: opts.operatorId,
+    principal: opts.operatorId,
     agent: "cortex",
     instance: "local",
   };

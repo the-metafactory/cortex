@@ -155,7 +155,7 @@ function inboundEnvelope(opts: {
   };
 }
 
-const SOURCE = { org: "metafactory", agent: "cortex", instance: "local" };
+const SOURCE = { principal: "metafactory", agent: "cortex", instance: "local" };
 
 // =============================================================================
 // Cases
