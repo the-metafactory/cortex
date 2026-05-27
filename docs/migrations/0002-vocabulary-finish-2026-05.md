@@ -369,6 +369,48 @@ These are local variables holding the **principal's** Discord/Slack/Mattermost i
 
 **Caveat:** loader synthesised legacy fields (`agent.operatorId`, `agent.operatorName`, `agent.operatorDiscordId`, `agent.operatorMattermostId`) are the TRANSITIONAL bridge from the v3 `principal:` block to legacy BotConfig consumers. They retire together with R7 (BotConfig → AgentConfig).
 
+### R2.J — `home_operator` policy schema field → `home_principal`
+
+**Cluster classification:** R2 (field-name cluster — `home_operator` is a struct field name on the `PolicyPrincipal` schema, not a type-symbol rename). Sibling to R2.A–R2.I.
+
+**Status:** IN scope for 0002 (Q8 reversed 2026-05-27). Single-cut breaking. **Cortex-internal — NOT LOCKSTEP-myelin** (zero `home_operator` hits in `myelin/` source; neither CONTEXT.md treats it as a boundary term).
+
+**Live sites (107 hits across 21 files):**
+
+Schema declarations + factory:
+- `src/common/policy/types.ts:42` — `home_operator: string;` on `PolicyPrincipal` (canonical declaration).
+- `src/common/policy/factory.ts:70` — field-pass-through.
+- `src/common/types/cortex-config.ts:1207` doc comment, `:1210` Zod schema `home_operator: z.string().regex(…)`, `:1212` error message (`"principal.home_operator must match…"`).
+- `src/common/types.ts:66` — shape doc comment referencing the field.
+
+Policy tests (~62 hits — all fixtures `home_operator: "andreas"`):
+- `src/common/policy/__tests__/engine.test.ts:40`.
+- `src/common/policy/__tests__/resolve-access.test.ts:49,77,277`.
+- `src/common/policy/__tests__/policy-gate.test.ts:24`.
+- `src/common/policy/__tests__/factory.test.ts` — 43 hits at `:43,64,133,140,190,207,224,231,260,267,292,325,354,371,389,408,434,480,497,515,522,543,550,569,577,594,602,619,627,647,…,959` (truncated; full list at PR time).
+
+Event-processor read-side (in-memory rename `homeOperator` → `homePrincipal` cascades):
+- `src/common/event-processor.ts:29,35`.
+
+migrate-config-policy converter (synthesised emit-side):
+- `src/cli/cortex/commands/migrate-config-policy.ts:30` doc, `:298` field declaration, `:414` pass-through, `:556` (external-peer fallback `home_operator: "unknown"`), `:571` warning message text, `:595,641,663,735` emit-side construction, `:919` accumulator.
+- `src/cli/cortex/commands/__tests__/migrate-config-policy.test.ts:19,150,410,428,607,651,683` — fixtures + assertions.
+- `src/cli/cortex/commands/migrate-config-lib.ts:1973` — diagnostic print line.
+
+Runner test fixtures:
+- `src/runner/__tests__/dispatch-listener.test.ts:914,1068,1285,2017,2076,2131`.
+
+MC worker storage + routes (D1 column + wire query-param):
+- `src/surface/mc/worker/schema.sql:36` column declaration, `:140,141` index.
+- `src/surface/mc/worker/migrations/0003_sovereignty.sql:8` doc comment, `:22` DDL (stays — historical migration; see carve-out below), `:24,27` index.
+- `src/surface/mc/worker/migrations/0007_principal_rename.sql` — new file (`ALTER TABLE sessions RENAME COLUMN home_operator TO home_principal;` + index recreate).
+- `src/surface/mc/worker/src/routes/state.ts:60,211,212,215,218,247,279,313,317,319,334,337,355,408,440,446,455,457,460,462` — query-param parsing, SQL fragment construction, response shape mapping.
+- `src/surface/mc/worker/src/routes/ingest.ts:141,155,213` — INSERT/UPDATE column references.
+
+**Historical-migration carve-out:** `src/surface/mc/worker/migrations/0003_sovereignty.sql` line 22 (`ALTER TABLE sessions ADD COLUMN home_operator TEXT`) — DDL stays. Past migrations re-run on fresh D1; 0003 must continue to add `home_operator`, which 0007 then renames. Same posture as the `migrate-config-lib.ts` legacy-reader carve-outs elsewhere in 0002.
+
+**See Open Question §8 (RESOLVED) for the full sub-PR PR-R2.H description, acceptance criteria, and D1 migration plan.**
+
 ### R2 — PR scope
 
 R2 splits naturally:
@@ -377,6 +419,7 @@ R2 splits naturally:
 - **PR-R2c** — Registry client + adapters local-var rename (R2.G). Small; can ship with R2a.
 - **PR-R2d** — CLI cloud command + cloud-publisher wire field (R2.C + R2.H). Hold until Open Questions §3 (wire-field rename) decided.
 - **PR-R2e** — config-loader + watcher field rename (R2.I). Together with R7 (this is the same surface).
+- **PR-R2.H** — `home_operator` → `home_principal` policy schema rename (R2.J) + D1 column rename + MC worker route query-param rename. **Single-cut breaking** (Q8 resolved). Cortex-internal (NOT LOCKSTEP-myelin). Ships alongside PR-R2b so the dashboard sees one coordinated cut on the MC worker surface. ~80 LOC (declarations + factory + event-processor) + ~80 LOC (MC worker routes + schema + D1 migration) + ~50 LOC (test-fixture sweep) — net ~210 LOC.
 
 Dependencies: R2.E (DB column) and R2.F (network-registry) gate on Open Questions.
 
@@ -867,7 +910,7 @@ Cascade audit at PR time: re-run the grep above against the touched branch and c
 Mostly comments. Each site is a 1-word substitution; net diff per file is small (1–10 lines). The mechanical sweep is what makes this big.
 
 **Hot files** (highest count first):
-- `src/common/policy/` — extensive `home_operator` references (~40 hits in tests). See **Open Question §8** — `home_operator` is a typed POLICY-SCHEMA field, not just prose.
+- `src/common/policy/` — extensive `home_operator` references (~62 hits in tests). **Now scoped to R2.J / PR-R2.H** (Q8 resolved 2026-05-27: IN scope, rename to `home_principal`). NOT a R13 prose-sweep target; the field rename ships as a typed schema change.
 - `src/common/types/cortex-config.ts` — schema doc comments
 - `src/common/config/loader.ts` — extensive prose around the synthesis path
 - `src/common/types/config.ts` — BotConfig declarations + comments
@@ -906,7 +949,7 @@ Split heavily:
 
 ## Open questions — Andreas's decisions (resolved 2026-05-27)
 
-All 9 questions are resolved. The decisions below are the **principal-level** answers integrated through every R-cluster section above and the §6 PR ordering below. Q8 is the only deferral; everything else lands in this iteration.
+All 9 questions are resolved and IN scope for iteration 0002. The decisions below are the **principal-level** answers integrated through every R-cluster section above and the §6 PR ordering below. Every question lands in this iteration; nothing is deferred.
 
 | # | Decision | PR impact |
 |---|---|---|
@@ -917,7 +960,7 @@ All 9 questions are resolved. The decisions below are the **principal-level** an
 | §5 | `grove-bot` NATS link name = **rename to `cortex`** | PR-R7b applies; flagged as wire/observability change in PR body |
 | §6 | MC eventKinds `operator.input`/`operator.curation` = **rename + ship in this iteration** (single-cut + one-shot D1 UPDATE) | New sub-cluster under PR-R2b / PR-R13d (event-kind producers + consumers + storage) |
 | §7 | `signed_by[].principal` fallback = **single-cut drop on myelin R2 cut** (no fallback period) | LOCKSTEP PR-R11 ships immediately after myelin R2 with `.principal` reads removed |
-| §8 | `home_operator` policy schema field = **deferred to iteration 3** | Out of 0002 scope; explicitly removed from in-scope list; flagged for next planning cycle |
+| §8 | `home_operator` policy schema field = **IN scope; rename to `home_principal`** (single-cut breaking, no transition shim) | New sub-PR PR-R2.H under R2 cluster (field-name cluster); cortex-internal (no LOCKSTEP-myelin) |
 | §9 | `docs/design-mission-control.md` = **full rewrite** (not banner+selective) | PR-R13e includes full rewrite + "History" appendix marked explicitly historical |
 
 ### §1 — RESOLVED: IN scope (rename network-registry in lockstep)
@@ -1052,20 +1095,56 @@ The transition shim `stamp.identity ?? stamp.principal` exists today specificall
 
 **PR scope:** LOCKSTEP PR-R11 (gated on myelin R2 merge; ships within ~1 day of myelin R2 release per the lockstep playbook).
 
-### §8 — DEFERRED to iteration 3 (out of 0002 scope)
+### §8 — RESOLVED: IN scope; rename to `home_principal` (single-cut breaking)
 
-**Decision:** `home_operator` policy schema field is **OUT of 0002 scope.** Deferred to iteration 3.
+**Question (preserved for audit trail):** Is the `home_operator` policy schema field in scope for iteration 0002, or should it be deferred?
 
-`src/common/policy/types.ts:42` declares `home_operator: string` on `PolicyPrincipal`. This is a typed schema field flowing through:
-- cortex.yaml `policy:` blocks
-- dispatch envelope policy decisions
-- MC sessions D1 column (`migrations/0003_sovereignty.sql:22,24,27`)
+**Decision (reversed 2026-05-27 — Andreas: "Yes it should be renamed"):** `home_operator` policy schema field is **IN scope for 0002**. Rename to **`home_principal`** (consistent with R1 `OperatorConfig → PrincipalConfig` and R2 `operatorId → principalId`). **Single-cut breaking change**, no transition shim — consistent with the §2/§3/§7 posture across this iteration. Operators with stored policy schemas re-emit on migration.
 
-This is an R3-shaped change (typed schema field, persisted, flows through wire). It NEEDS the same treatment as the original `operator.id` → `principal.id` rename: schema cutover with a coordinated D1 migration + breaking-major bump. That deserves its own plan iteration.
+`src/common/policy/types.ts:42` declares `home_operator: string` on `PolicyPrincipal`. The field flows through:
+- `src/common/policy/` — typed schema field (`types.ts`, `factory.ts`) + extensive test fixtures (~62 hits across `__tests__/`).
+- `src/cli/cortex/commands/migrate-config-policy.ts` — migrate-config converter that synthesises the field on policy emission (~10 hits including a `home_operator: string` declaration at `:298`).
+- `src/cli/cortex/commands/__tests__/migrate-config-policy.test.ts` — migrate-config tests (~6 hits).
+- MC sessions D1 column (`src/surface/mc/worker/migrations/0003_sovereignty.sql:8,22,24,27` + `worker/schema.sql:36,140,141`) — persisted column + index.
+- MC worker state route (`src/surface/mc/worker/src/routes/state.ts` ~14 hits — query parameter, SELECT/SQL fragments, response-shape mapping at `:215,247,279,313,317,334,337,355,408,440,446,455,457,460,462`) + ingest route (`src/surface/mc/worker/src/routes/ingest.ts:141,155,213`).
+- `src/common/event-processor.ts:29,35` — reads `s.home_operator` into in-memory `homeOperator` field.
+- `src/common/types/cortex-config.ts:1207,1210,1212` — Zod schema declaration (`home_operator: z.string().regex(…)`) + grammar comment.
+- `src/common/types.ts:66` — shape doc comment referencing the field.
+- `src/runner/__tests__/dispatch-listener.test.ts` — 6 fixtures (`:914,1068,1285,2017,2076,2131`).
+- `src/cli/cortex/commands/migrate-config-lib.ts:1973` — diagnostic print line `home_operator=${p.home_operator}`.
 
-**Out-of-scope assertion:** `home_operator` does NOT appear in any R-cluster Live Violations list in this plan. The R13 cluster's "Hot files" list flagged `src/common/policy/` but explicitly notes `home_operator` is "a typed POLICY-SCHEMA field, not just prose" (R13.C, "~40 hits in tests"). Those 40 hits stay until iteration 3.
+**Total live sites:** 107 hits across 21 files. Enumerated under R2.J above.
 
-**Flagged for iteration 3:** add a new tracking issue `cortex#TBD-vocab-3` referencing this section.
+**LOCKSTEP-myelin classification:** **N — standalone cortex-internal.** The field is declared and read entirely within cortex's own policy types + MC worker + migrate-config-policy converter + cortex tests. `grep -rEn '\bhome_operator\b' src/` against `myelin/main` returns zero hits; neither cortex `CONTEXT.md` nor myelin `CONTEXT.md` mentions it as a boundary term. Per the M1–M7 layering, policy is cortex-side application logic (M7). The rename ships as a single cortex PR with no myelin coordination required.
+
+**D1 migration:** schema migration script (`migrations/0007_principal_rename.sql`: `ALTER TABLE sessions RENAME COLUMN home_operator TO home_principal;` + `DROP INDEX idx_sessions_home_operator; CREATE INDEX idx_sessions_home_principal ON sessions(home_principal) WHERE home_principal IS NOT NULL;` + the equivalent edits to `worker/schema.sql`). One-shot, idempotent. Equivalent to the §6 / §2 D1 migration shape.
+
+**Sub-PR PR-R2.H scope:**
+- `src/common/policy/types.ts:42` declaration rename.
+- `src/common/policy/factory.ts:70` field-pass-through.
+- All `src/common/policy/__tests__/` fixtures updated to `home_principal:`.
+- `src/cli/cortex/commands/migrate-config-policy.ts` (and its tests) updated for the renamed emit-side field + diagnostic strings.
+- `src/cli/cortex/commands/migrate-config-lib.ts:1973` diagnostic.
+- `src/common/event-processor.ts:29,35` rename source-of-read + retain destination `homeOperator → homePrincipal` rename in the in-memory shape.
+- `src/common/types/cortex-config.ts:1207–1212` Zod schema declaration + error message.
+- `src/common/types.ts:66` doc comment.
+- `src/runner/__tests__/dispatch-listener.test.ts` 6 fixtures rename.
+- `src/surface/mc/worker/schema.sql:36,140,141` column + index.
+- `src/surface/mc/worker/migrations/0003_sovereignty.sql` doc-comments only (historical migration text is left as-is — see note below).
+- `src/surface/mc/worker/migrations/0007_principal_rename.sql` new file.
+- `src/surface/mc/worker/src/routes/state.ts` 14 sites (query param `?home_operator=` → `?home_principal=` is part of the wire-shape rename; single-cut breaking with the dashboard).
+- `src/surface/mc/worker/src/routes/ingest.ts` 3 sites.
+
+**Historical-migration carve-out:** `migrations/0003_sovereignty.sql` is a *past* migration file. The literal SQL text `ALTER TABLE sessions ADD COLUMN home_operator TEXT` stays — re-running 0003 in a fresh D1 must continue to add `home_operator`, which 0007 then renames. Doc-comments inside 0003 (e.g. line 8 explanatory comment) may be rewritten to reference the post-rename world if helpful, but the DDL itself stays. Same posture as the "legacy reader" carve-outs elsewhere in this plan.
+
+**Acceptance criteria** (added to PR-R2.H):
+1. `grep -rEn '\bhome_operator\b' src/` returns hits ONLY inside `migrations/0003_sovereignty.sql` (DDL preserved) and explicit `// historical:` lines.
+2. The D1 migration `0007_principal_rename.sql` is idempotent (re-running is a no-op).
+3. `bun test src/common/policy/` and `bun test src/cli/cortex/commands/__tests__/migrate-config-policy.test.ts` pass with the renamed field.
+4. Dashboard query-param `?home_principal=` returns the same results that `?home_operator=` did pre-cut (with the renamed underlying column).
+5. `bunx tsc --noEmit` clean.
+
+**PR scope:** PR-R2.H (sub-PR under R2 cluster — field-name renames). Single-cut breaking. Cortex-internal — **NOT LOCKSTEP-myelin**. Ships alongside PR-R2b (the MC API + D1 column boundary PR) so the dashboard sees one coordinated cut on the MC worker surface, but is technically independent of myelin's release cadence.
 
 ### §9 — RESOLVED: full rewrite (not banner+selective)
 
@@ -1112,6 +1191,9 @@ Dependency graph:
    Decision §1+§2+§3 ─▶ PR-R2b (MC API + DB column rename)
                      │      └─▶ PR-R13d (MC prose sweep + R8a literals)
                      │
+   Decision §8     ─▶ PR-R2.H (home_operator → home_principal policy schema)
+                     │      └─ pairs with PR-R2b for one MC-worker cut
+                     │
    ──────────────▶ PR-R6  (persona → assistant prose sweep)
                      │
    ──────────────▶ PR-R8a (literal "operator cockpit"/"operator filter" substitution)
@@ -1141,29 +1223,31 @@ Dependency graph:
 9. **PR-R7b** — `grove-bot` → **`cortex`** literal cleanups (Q5 resolved; NATS link name `connection.ts:109` + test `connection.test.ts:162,168` + `runtime.test.ts:154,179`), `bot.yaml` → `cortex.yaml` security preamble text, doc comments. (~60 LOC)
 10. **PR-R7c-network-registry** — `network-registry/*` symbol + wire-shape rename (Q1 resolved: IN scope). `OperatorRecord` → `PrincipalRecord`, `operator_id`/`operator_pubkey` → `principal_id`/`principal_pubkey`, `RegistryStore.putOperator` → `.putPrincipal`, route `/operators/:operator_id` → `/principals/:principal_id`. Touches `src/services/network-registry/{src,__tests__}/`. Single-cut breaking (internal-to-cortex consumer is `cloud-publisher.ts`). (~250 LOC)
 11. **PR-R2b** — MC API JSON shape + D1 column **single-cut rename** (Q2 resolved: no transition shim) + `OperatorKey` → `PrincipalKey` (Major 1) + D1 schema migration script (`tasks.operator_id` → `tasks.principal_id`) + the §6 MC eventKinds rename (`operator.input` → `principal.input`, `operator.curation` → `principal.curation`) with a one-shot D1 UPDATE migration + WebSocket protocol version bump. Pairs with PR-R13d. (~400 LOC backend, ~250 LOC test/migration)
-12. **PR-R2d** — cloud-publisher wire field `operator_id` → `principal_id` **single-cut breaking** (Q3 resolved) + CLI flag `--operator-id` → `--principal-id`. Lockstep with PR-R7c-network-registry (cloud-publisher is the network-registry consumer). (~80 LOC)
-13. **PR-R13d** — MC backend + frontend prose sweep (`src/surface/mc/`). Subsumes the 4 dashboard-coupled hits from the old R8a (`use-hash-state.ts:47`, `state.ts:61`, `state.ts:447`, `slack-adapter.test.ts:1403`) + the MC eventKinds-coupled prose. Pairs with PR-R2b. (~400 LOC backend, ~300 LOC frontend tests)
-14. **PR-R13e** — `docs/` sweep + **full rewrite of `docs/design-mission-control.md`** (Q9 resolved: full rewrite, not banner+selective). Provenance preserved in a "History" appendix marked explicitly historical. (~500 LOC)
-15. **LOCKSTEP with myelin R2 → PR-R11** — drop `signed_by[].principal` reader fallback **single-cut** (Q7 resolved: no permanent fallback period; ships immediately after myelin R2 cut, with `.principal` reads removed). (~50 LOC)
-16. **LOCKSTEP with myelin R7 → PR-R4a + PR-R4b** — drop `{org}` placeholder + rename `org` → `principal` in cortex local code. (~100 LOC)
-17. **LOCKSTEP with myelin R11 → PR-R5** — drop `"broadcast"` distribution_mode union arm. (~20 LOC)
-18. **LOCKSTEP with myelin R13 → PR-R10** — drop `target_principal` reader fallback. (~20 LOC)
+12. **PR-R2.H** — `home_operator` → `home_principal` policy schema rename (R2.J / Q8 resolved 2026-05-27: IN scope). **Single-cut breaking**, no transition shim. Cortex-internal — **NOT LOCKSTEP-myelin** (zero `home_operator` hits in myelin source; neither CONTEXT.md treats it as a boundary term). Touches `src/common/policy/{types,factory}.ts` + tests, `src/cli/cortex/commands/migrate-config-policy.ts` + tests, `src/common/event-processor.ts`, `src/common/types/cortex-config.ts:1207–1212`, `src/common/types.ts:66`, `src/runner/__tests__/dispatch-listener.test.ts` fixtures, `src/surface/mc/worker/{schema.sql,src/routes/{state,ingest}.ts}`, new `src/surface/mc/worker/migrations/0007_principal_rename.sql`. Ships alongside PR-R2b for one coordinated MC-worker cut. (~210 LOC)
+13. **PR-R2d** — cloud-publisher wire field `operator_id` → `principal_id` **single-cut breaking** (Q3 resolved) + CLI flag `--operator-id` → `--principal-id`. Lockstep with PR-R7c-network-registry (cloud-publisher is the network-registry consumer). (~80 LOC)
+14. **PR-R13d** — MC backend + frontend prose sweep (`src/surface/mc/`). Subsumes the 4 dashboard-coupled hits from the old R8a (`use-hash-state.ts:47`, `state.ts:61`, `state.ts:447`, `slack-adapter.test.ts:1403`) + the MC eventKinds-coupled prose. Pairs with PR-R2b. (~400 LOC backend, ~300 LOC frontend tests)
+15. **PR-R13e** — `docs/` sweep + **full rewrite of `docs/design-mission-control.md`** (Q9 resolved: full rewrite, not banner+selective). Provenance preserved in a "History" appendix marked explicitly historical. (~500 LOC)
+16. **LOCKSTEP with myelin R2 → PR-R11** — drop `signed_by[].principal` reader fallback **single-cut** (Q7 resolved: no permanent fallback period; ships immediately after myelin R2 cut, with `.principal` reads removed). (~50 LOC)
+17. **LOCKSTEP with myelin R7 → PR-R4a + PR-R4b** — drop `{org}` placeholder + rename `org` → `principal` in cortex local code. (~100 LOC)
+18. **LOCKSTEP with myelin R11 → PR-R5** — drop `"broadcast"` distribution_mode union arm. (~20 LOC)
+19. **LOCKSTEP with myelin R13 → PR-R10** — drop `target_principal` reader fallback. (~20 LOC)
 
 ### Estimated totals
 
-- **Total cortex-internal PRs:** 14 (steps 1–14 in the recommended sequence above).
-- **Total LOCKSTEP-with-myelin PRs:** 4 (steps 15–18 — PR-R4a/b, PR-R5, PR-R10, PR-R11; gated on the corresponding myelin breaking cuts).
-- **Grand total:** **18 PRs** (14 cortex-internal + 4 LOCKSTEP). Matches the figure cited in the PR description.
-- **Total LOC envelope:** ~3,200–3,800 (cumulative; mostly mechanical). Up from the pre-sweep ~2,500–3,000 estimate because Q1 (network-registry, +~250 LOC), Q6 (MC eventKinds, +~150 LOC), and Q9 (full design-mission-control rewrite, +~300 LOC) are now IN scope; Q8 (home_operator) is OUT of scope deferred to iteration 3. Net +~700 LOC.
+- **Total cortex-internal PRs:** 15 (steps 1–15 in the recommended sequence above).
+- **Total LOCKSTEP-with-myelin PRs:** 4 (steps 16–19 — PR-R4a/b, PR-R5, PR-R10, PR-R11; gated on the corresponding myelin breaking cuts).
+- **Grand total:** **19 PRs** (15 cortex-internal + 4 LOCKSTEP). Up from the previous 18 — Q8 reversal (2026-05-27) adds PR-R2.H as a new cortex-internal sub-PR (NOT LOCKSTEP-myelin).
+- **Total LOC envelope:** ~3,400–4,000 (cumulative; mostly mechanical). Up from the pre-Q8-reversal ~3,200–3,800 estimate by ~+210 LOC for PR-R2.H (policy schema declarations + factory + event-processor + MC worker routes + new D1 migration file + test-fixture sweep across ~21 files). Original baseline +~700 LOC over the pre-sweep ~2,500–3,000 envelope (Q1 network-registry + Q6 MC eventKinds + Q9 design-mission-control rewrite), now +~910 LOC including Q8.
 - **Breaking changes:**
   - cortex.yaml schema — already shipped (R3 / v3.0.0).
   - PR-R2b — D1 column rename + MC API JSON-shape rename + `OperatorKey` → `PrincipalKey` + eventKinds rename (Q2 + §6: single-cut, no transition shim).
+  - PR-R2.H — `home_operator` → `home_principal` policy schema rename + D1 column rename + MC worker route query-param rename (Q8 resolved 2026-05-27: single-cut breaking, cortex-internal — NOT LOCKSTEP-myelin).
   - PR-R2d — `cloud-publisher` wire field `operator_id` → `principal_id` + CLI flag `--operator-id` → `--principal-id` (Q3: single-cut).
   - PR-R7a — internal `BotConfig` → `AgentConfig` type rename (importers update; not wire).
   - PR-R7c-network-registry — `OperatorRecord` symbol + REST path + JSON wire renames (Q1: single-cut; internal-to-cortex consumer at this stage).
   - PR-R11 — myelin R2 LOCKSTEP single-cut (Q7: no permanent fallback).
   - PR-R5, PR-R10, PR-R4a/b — myelin R7/R11/R13 LOCKSTEP cuts (breaking on the bus, coordinated with myelin's breaking major).
-- **Out of scope (deferred to iteration 3):** Q8 `home_operator` policy schema field — flagged for next planning cycle as a typed schema field with wire/D1 cascade.
+- **Out of scope:** none. All 9 open questions resolved IN scope for iteration 0002 (Q8 reversed from deferred to in-scope on 2026-05-27).
 
 ---
 
@@ -1177,7 +1261,7 @@ In addition to 0001's existing completion criteria:
    - `src/taps/cc-events/hooks/lib/principal-env.ts` (GROVE_OPERATOR fallback tier — separate migration)
    - `src/taps/cc-events/hooks/__tests__/` (GROVE_* test fixtures)
    - `src/taps/cc-events/wrangler.toml` `GROVE_API` binding
-   - `src/common/policy/` — `home_operator` policy schema field (Q8 deferred to iteration 3; carve-out until then)
+   - `src/surface/mc/worker/migrations/0003_sovereignty.sql` — historical DDL adding `home_operator` column (renamed by 0007; 0003 stays unchanged so fresh-D1 re-runs of past migrations remain valid).
    - Historical commentary marked with `// historical:` or `<!-- historical -->`
    - The `docs/design-mission-control.md` "History" appendix (Q9: full rewrite preserves grove-v2 provenance in a clearly-marked appendix)
 
