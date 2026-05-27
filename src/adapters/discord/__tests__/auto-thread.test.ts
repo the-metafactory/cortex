@@ -494,7 +494,7 @@ describe("messageCreate auto-thread (cortex#120)", () => {
         channel,
         // Still passes the adapter's `isMentionForBot` filter because the
         // mocked `mentions.has` returns true for SELF_ID; in practice an
-        // operator could @-mention multiple bots in one message and only
+        // principal could @-mention multiple bots in one message and only
         // one of them should auto-thread.
       }),
     );

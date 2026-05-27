@@ -76,7 +76,7 @@ export interface SlackAdapterInfra {
   surfaceFilter?: PayloadFilter;
   /** MIG-3b: fallback Slack channel id for envelope rendering. */
   surfaceFallbackChannelId?: string;
-  /** Operator-set trusted peer bot user ids (`U...`). */
+  /** Principal-set trusted peer bot user ids (`U...`). */
   trustedBotIds?: ReadonlySet<string>;
   /**
    * Pluggable client implementation. Production callers omit this and
@@ -117,7 +117,7 @@ export class SlackAdapter implements PlatformAdapter {
    * (Echo cortex#233 round-2 N1).
    */
   private botIdentity: SlackBotIdentity | null = null;
-  /** Operator-explicit + adapter-side anti-self-loop set. */
+  /** Principal-explicit + adapter-side anti-self-loop set. */
   // cortex#235 r1#5 — mutable to support hot-reload of the trusted
   // bot ids set via `updateConfig`. The runtime is still read-only:
   // every consumer treats it as a `ReadonlySet<string>`. Only
@@ -224,7 +224,7 @@ export class SlackAdapter implements PlatformAdapter {
     // attach. This is the Slack equivalent of discord.js's
     // gateway-buffered events. Without this gate, cortex.ts's Pass-2
     // trust-resolver merge happens AFTER inbound events have already
-    // been delivered with the operator-only `trustedBotIds` set —
+    // been delivered with the principal-only `trustedBotIds` set —
     // bot-to-bot traffic at boot time would be silently rejected
     // until the merge lands (the [major/security] bug Echo flagged
     // on cortex#105 for Discord, ported here for Slack parity).
@@ -266,7 +266,7 @@ export class SlackAdapter implements PlatformAdapter {
    *
    * The caller MUST call this AFTER `setTrustedBotIds(merged)` has
    * populated the resolver-merged allowlist. Otherwise queued events
-   * would dispatch against the operator-only set and bot-to-bot
+   * would dispatch against the principal-only set and bot-to-bot
    * traffic that arrived during the start→attach window would be
    * silently dropped at `resolveAccess`. Mirrors the TOCTOU
    * invariant Echo round-1 on cortex#105 locked in for Discord.
@@ -313,7 +313,7 @@ export class SlackAdapter implements PlatformAdapter {
           // console.warn (matches the `ack failed:` and `onEvent
           // threw:` patterns in client.ts; the `system.error`
           // envelope path is reserved for state machine violations
-          // operators should page on).
+          // principals should page on).
           console.warn(
             `slack-adapter[${this.instanceId}]: drain of queued message threw:`,
             err instanceof Error ? err.message : String(err),
@@ -376,7 +376,7 @@ export class SlackAdapter implements PlatformAdapter {
     //   - `lastDisconnectedAt` could falsely pair with that
     //     synthetic recovered.
     //   - `warnedMissingSource` is process-lifetime in spirit but
-    //     resetting on stop()/start() boundaries is fine (operator
+    //     resetting on stop()/start() boundaries is fine (principal
     //     restarting an adapter probably wants the diagnostic again
     //     if they fixed nothing in between).
     this.connectedOnce = false;
@@ -405,7 +405,7 @@ export class SlackAdapter implements PlatformAdapter {
   /**
    * F-092 hot-reload (cortex#235 r1#5). Match the live presence by
    * the immutable `workspaceId` (Slack's analogue to Mattermost's
-   * `apiUrl` and Discord's `guildId` — the operator-paste-stable
+   * `apiUrl` and Discord's `guildId` — the principal-paste-stable
    * identifier within `config.slack[]`).
    *
    * Hot-reload-safe fields (no socket reconnect required):
@@ -452,7 +452,7 @@ export class SlackAdapter implements PlatformAdapter {
     // wins over `presence.trustedBotIds` at construction time per
     // cortex#108 item 1; on hot-reload we go back to the
     // presence-only set, which matches the Mattermost behaviour and
-    // is the operator-intent surface a config edit speaks to.
+    // is the principal-intent surface a config edit speaks to.
     // Two-pass trust resolver merge is a separate follow-up (r1#7).
     this.trustedBotIds = new Set(newInstance.trustedBotIds);
 
@@ -560,7 +560,7 @@ export class SlackAdapter implements PlatformAdapter {
     const key = target.threadId ?? target.channelId;
     // Like Mattermost, we can't edit posts easily without tracking ts +
     // calling chat.update. v1: send once, skip subsequent — matches the
-    // Mattermost adapter's shape so operators get consistent UX.
+    // Mattermost adapter's shape so principals get consistent UX.
     if (this.progressSent.has(key)) return;
     this.progressSent.add(key);
     await this.client.postMessage(target.channelId, `> ${text}`, target.threadId);

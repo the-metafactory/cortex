@@ -41,7 +41,7 @@ import {
 /**
  * Cortex-deployment-level wiring passed alongside the agent + presence pair.
  * Mirrors `DiscordAdapterInfra` (see cortex#48 / MIG-7.2c-discord-cleanup)
- * with Mattermost-specific bits: the operator's Mattermost user id lives
+ * with Mattermost-specific bits: the principal's Mattermost user id lives
  * here, not on the agent block.
  *
  * The surface-router fields park here transitionally — architecture §9.2

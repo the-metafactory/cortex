@@ -1267,7 +1267,7 @@ describe("SlackAdapter — two-pass dispatch gate (cortex#235 r1#7)", () => {
     const { adapter, emit } = makeAdapter();
     const cap = captureInbound();
     await adapter.start(cap.onMessage);
-    // Pre-merge: adapter has the operator-explicit set (empty).
+    // Pre-merge: adapter has the principal-explicit set (empty).
     // A peer-bot message would trip the self-loop guard / role check.
     adapter.setTrustedBotIds(new Set(["B0PEERMERGED"]));
     adapter.attachInboundDispatch();

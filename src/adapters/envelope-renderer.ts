@@ -25,7 +25,7 @@ import type { Envelope } from "../bus/myelin/envelope-validator";
  *   {payload}
  *   ```
  *
- * The correlation_id is included when present so an operator scanning
+ * The correlation_id is included when present so a principal scanning
  * the channel can correlate envelopes across a workflow without opening
  * the envelope details.
  */

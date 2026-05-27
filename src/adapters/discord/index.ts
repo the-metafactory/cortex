@@ -44,7 +44,7 @@ import { parseReviewWireFormat, reviewThreadName } from "./wire-format";
 /**
  * Cortex-deployment-level wiring passed alongside the agent + presence pair.
  * Bundles the deployment-scoped concerns the agent/presence model itself
- * doesn't carry: the routing/log-prefix `instanceId`, the operator's
+ * doesn't carry: the routing/log-prefix `instanceId`, the principal's
  * platform identity, bus wiring for `system.adapter.*` envelope emission,
  * and the MIG-3b surface-router fields.
  *
@@ -72,7 +72,7 @@ export interface DiscordAdapterInfra {
    * without NATS still track degradation/reconnect locally. */
   runtime?: MyelinRuntime;
   /** `{principal}.{agent}.{instance}` source triple stamped onto emitted `system.*` envelopes
-   * (spec §3.6 names the agent, not the operator). */
+   * (spec §3.6 names the agent, not the principal). */
   systemEventSource?: SystemEventSource;
   /** MIG-3b: NATS subject patterns this adapter renders to Discord. Empty/undefined → adapter
    * never matches in the surface-router (still subscribes for messages, just doesn't render
@@ -104,7 +104,7 @@ export interface DiscordAdapterInfra {
    * gate. Resolved by `cortex.ts` from the parsed `policy:` block via
    * `policyEngineFromConfig`. `undefined` only when the deployment has
    * not declared a `policy:` block — in that case every inbound message
-   * is denied with a pointer at `migrate-config`. Operators upgrading
+   * is denied with a pointer at `migrate-config`. Principals upgrading
    * from <v2.0.0 MUST run the CLI first.
    */
   policyEngine?: PolicyEngine;
@@ -359,8 +359,8 @@ export class DiscordAdapter implements PlatformAdapter {
         // Self-loop guard — never respond to our own DMs, regardless of
         // any trustedBotIds entry (the bot's own id is never allowed).
         if (message.author.id === this.client.user?.id) return;
-        // cortex#84: drop bot-authored DMs unless the author is an
-        // operator-blessed peer in `trustedBotIds`. The role-resolver
+        // cortex#84: drop bot-authored DMs unless the author is a
+        // principal-blessed peer in `trustedBotIds`. The role-resolver
         // (resolveDMAccess) then makes the final allow/deny call on
         // the message, so listing a bot here is necessary-but-not-
         // sufficient to elicit a response.
@@ -542,7 +542,7 @@ export class DiscordAdapter implements PlatformAdapter {
           } else {
             // Thread create failed — leave inboundMsg as channel-level
             // and let the agent reply at channel scope. The user sees
-            // a normal reply; the operator sees the warn log from
+            // a normal reply; the principal sees the warn log from
             // `findOrCreateThreadByName`. Graceful degradation rather
             // than silently dropping the message.
             console.warn(
@@ -595,7 +595,7 @@ export class DiscordAdapter implements PlatformAdapter {
    * cortex#98 (part B): replace the trusted-peer-bot allowlist after
    * construction. Cortex.ts uses this to merge in-process peer bot ids
    * (resolved via `TrustResolver.lookupPlatformIdByAgent`) on top of the
-   * operator-explicit `presence.discord.trustedBotIds` once all adapters
+   * principal-explicit `presence.discord.trustedBotIds` once all adapters
    * have logged in and registered their `client.user.id` in the resolver.
    *
    * Atomic reference swap — hot-path `messageCreate` readers see either
@@ -603,7 +603,7 @@ export class DiscordAdapter implements PlatformAdapter {
    * to call any time after construction; cortex.ts calls it once during
    * its second adapter-start pass.
    *
-   * The caller is responsible for including any prior operator-explicit
+   * The caller is responsible for including any prior principal-explicit
    * ids in `next`; this method does NOT merge with the existing set —
    * it replaces it. The intent is to surface "the allowlist as
    * cortex.ts computes it" as a single, well-defined value rather than
@@ -1204,7 +1204,7 @@ export class DiscordAdapter implements PlatformAdapter {
    * Common gate for `system.adapter.*` emission. Returns the bound runtime +
    * source pair when both are configured, or `null` otherwise. Splits the "no
    * runtime configured" case (silent — bot was started without NATS) from the
-   * "no source configured but runtime present" case (warn once — operator
+   * "no source configured but runtime present" case (warn once — the principal
    * wired NATS but forgot to pass `systemEventSource`, which is a config bug
    * worth surfacing).
    *
@@ -1219,7 +1219,7 @@ export class DiscordAdapter implements PlatformAdapter {
     if (!source) {
       if (!this.warnedMissingSource) {
         // Warn once per process — without the source, we'd emit envelopes
-        // that fail schema validation on the receiver side. The operator
+        // that fail schema validation on the receiver side. The principal
         // needs this signal at start time, not flooded across every shard
         // disconnect during a real outage.
         console.warn(

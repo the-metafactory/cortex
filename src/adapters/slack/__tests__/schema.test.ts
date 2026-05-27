@@ -1,7 +1,7 @@
 /**
  * F-slack: SlackPresenceSchema / SlackInstanceSchema parse tests.
  *
- * The schemas are the contract between cortex.yaml (operator-facing) and
+ * The schemas are the contract between cortex.yaml (principal-facing) and
  * the adapter. Lock in the field-level invariants so a schema regression
  * surfaces immediately at config-load rather than as a runtime stack trace
  * inside the adapter.

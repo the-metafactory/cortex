@@ -16,7 +16,7 @@
  *
  * The regex requires a leading `<@mention>` so we don't auto-thread on
  * casual messages like "what's the status on review cortex#118?". The
- * @-mention is the operator's explicit "this is for the bot" signal.
+ * @-mention is the principal's explicit "this is for the bot" signal.
  *
  * Repo-short charset: lower-case ASCII letter to start, then letters /
  * digits / underscore / hyphen. Matches the GitHub repo-name policy that

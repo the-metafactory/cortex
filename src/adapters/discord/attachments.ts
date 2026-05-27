@@ -111,7 +111,7 @@ function validateSize(
  * a `TimeoutSourceError` (the adapter-outbound abort case), the handler is
  * fired BEFORE this function returns its `{ ok: false }` error result. The
  * download still degrades gracefully — the user keeps seeing "Download
- * error: …" — but the operator gets a structured `system.inbound.aborted`
+ * error: …" — but the principal gets a structured `system.inbound.aborted`
  * publish on the bus. Non-timeout errors (network failures, HTTP errors)
  * are unchanged; we only intercept the named-timeout case.
  */
@@ -145,7 +145,7 @@ export async function processAttachment(
     // MIG-3.8: TimeoutSourceError from fetchWithTimeout — fire the structured
     // hook (system.inbound.aborted) BEFORE we degrade the result. The fetch
     // result still returns gracefully so the user gets "Download error: …";
-    // the operator-side observability is the additive change.
+    // the principal-side observability is the additive change.
     if (error instanceof TimeoutSourceError && onTimeoutAbort) {
       try {
         onTimeoutAbort({ err: error, attachment: info });

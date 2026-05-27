@@ -296,7 +296,7 @@ export class RealSlackClient implements SlackClient {
    * Error path intentionally omits `JSON.stringify(res)`: the
    * `auth.test` response shape includes workspace metadata (`team`,
    * `team_id`, `enterprise_id`, `url`) that, while not credentials,
-   * is operator-environment-identifying. Log only the missing-field
+   * is principal-environment-identifying. Log only the missing-field
    * diagnosis (Echo cortex#233 round-1 r1#10, deferred but worth
    * fixing the new error path while we're here).
    */
