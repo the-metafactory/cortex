@@ -86,7 +86,7 @@ export const SCHEMA_SOURCE_COMMIT = "4c54b8e6e2157524099f4f01f13c044bcc3b9291";
 export interface Envelope {
   /** UUID v4 — unique per envelope. */
   id: string;
-  /** `org.agent.instance` — 2-5 dotted segments. */
+  /** `{principal}.{stack}.{assistant}` — exactly 3 dotted segments (myelin#185 breaking cut). */
   source: string;
   /** `domain.entity.action` — what kind of signal this is. */
   type: string;
