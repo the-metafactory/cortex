@@ -96,7 +96,7 @@ function makeAdapter(opts: {
   };
   const infra: DiscordAdapterInfra = {
     instanceId: "discord-renderer",
-    operator: {},
+    principal: {},
     ...(opts.surfaceSubjects !== undefined && { surfaceSubjects: opts.surfaceSubjects }),
     ...(opts.surfaceFallbackChannelId !== undefined && { surfaceFallbackChannelId: opts.surfaceFallbackChannelId }),
     ...(opts.surfaceFilter !== undefined && { surfaceFilter: opts.surfaceFilter }),

@@ -205,7 +205,7 @@ function makeAdapterWithInfra(
   };
   const infra: DiscordAdapterInfra = {
     instanceId: "discord-cortex120",
-    operator: {},
+    principal: {},
     ...infraOverrides,
   };
   const adapter = new DiscordAdapter(agent, presence, infra);

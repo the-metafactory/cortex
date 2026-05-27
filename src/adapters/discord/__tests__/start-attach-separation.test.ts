@@ -103,7 +103,7 @@ function makeAdapter(instanceId = "discord-test"): {
   };
   const infra: DiscordAdapterInfra = {
     instanceId,
-    operator: {},
+    principal: {},
   };
   const adapter = new DiscordAdapter(agent, presence, infra);
 
@@ -194,7 +194,7 @@ describe("DiscordAdapter.attachInboundDispatch: pre-start guard (cortex#108)", (
     };
     const adapter = new DiscordAdapter(agent, presence, {
       instanceId: "discord-pre-start",
-      operator: {},
+      principal: {},
     });
     // No client injected, no onMessage stashed — should throw with a
     // clear message instructing the caller to await start() first.

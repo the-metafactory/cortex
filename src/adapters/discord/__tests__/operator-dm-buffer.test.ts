@@ -75,7 +75,7 @@ function makeAdapter(opts: {
   };
   const infra: DiscordAdapterInfra = {
     instanceId: "discord-test",
-    operator: { discordId: "operator-123" },
+    principal: { discordId: "operator-123" },
   };
   const adapter = new DiscordAdapter(agent, presence, infra);
 

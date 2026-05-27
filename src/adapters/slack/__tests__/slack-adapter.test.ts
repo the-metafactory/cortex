@@ -159,7 +159,7 @@ function makeAdapter(opts: {
   const fake = makeFakeClient(opts.clientState);
   const infra: SlackAdapterInfra = {
     instanceId: "slack-test",
-    operator: {},
+    principal: {},
     client: fake.client,
     ...opts.infra,
   };
@@ -766,7 +766,7 @@ describe("SlackAdapter — sendProgress + createThread + notifyOperator", () => 
 
   test("notifyOperator DMs the operator when slackId is configured", async () => {
     const { adapter, state } = makeAdapter({
-      infra: { operator: { slackId: "UOPERATOR" } },
+      infra: { principal: { slackId: "UOPERATOR" } },
     });
     await adapter.notifyOperator("ping");
     expect(state.postedMessages).toEqual([{ channel: "UOPERATOR", text: "ping" }]);
@@ -774,7 +774,7 @@ describe("SlackAdapter — sendProgress + createThread + notifyOperator", () => 
 
   test("notifyOperator swallows post errors (log + drop)", async () => {
     const { adapter } = makeAdapter({
-      infra: { operator: { slackId: "UOPERATOR" } },
+      infra: { principal: { slackId: "UOPERATOR" } },
       clientState: { postMessageError: new Error("403 not_in_channel") },
     });
     // Must not throw — the operator's notification path is best-effort.
@@ -1412,7 +1412,7 @@ describe("SlackAdapter — surfaceConfig passes surfaceFilter through (cortex#23
     const fake = makeFakeClient();
     const adapter = new SlackAdapter(agent, presence, {
       instanceId: "slack-test",
-      operator: {},
+      principal: {},
       client: fake.client,
       surfaceSubjects: presence.surfaceSubjects,
       surfaceFilter: filter,

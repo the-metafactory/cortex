@@ -340,14 +340,14 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
 
   test("synthesizes AgentConfig.agent from operator + first agent", () => {
     const path = writeCortexConfig(testDir, minimalCortex());
-    const { config, operator } = loadConfigWithAgents(path);
+    const { config, principal } = loadConfigWithAgents(path);
     expect(config.agent.name).toBe("ivy");
     expect(config.agent.displayName).toBe("Ivy");
     expect(config.agent.operatorId).toBe("jc");
     expect(config.agent.operatorName).toBe("Jens-Christian");
     // v2.0.0 (cortex#297) — operator*Id retired from AgentConfig.agent;
-    // surfaced through LoadedConfig.operator instead.
-    expect(operator?.discordId).toBe("285727653603049472");
+    // surfaced through LoadedConfig.principal instead.
+    expect(principal?.discordId).toBe("285727653603049472");
   });
 
   test("flattens agents[*].presence.discord into AgentConfig.discord[]", () => {
@@ -748,9 +748,9 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     const loaded = loadConfigWithAgents(path);
     expect(loaded.inlineAgents).toHaveLength(1);
     expect(loaded.inlineAgents[0]!.id).toBe("ivy");
-    // The principal block is normalised onto LoadedConfig.operator.
-    expect(loaded.operator?.id).toBe("jc");
-    expect(loaded.operator?.discordId).toBe("285727653603049472");
+    // The principal block is normalised onto LoadedConfig.principal.
+    expect(loaded.principal?.id).toBe("jc");
+    expect(loaded.principal?.discordId).toBe("285727653603049472");
     expect(loaded.config.agent.operatorId).toBe("jc");
   });
 

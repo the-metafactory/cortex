@@ -96,7 +96,7 @@ function makeAdapter(overrides: { presence?: Partial<DiscordPresence> } = {}) {
   const agent = makeAgent(presence);
   const infra: DiscordAdapterInfra = {
     instanceId: "luna-discord-guild-1",
-    operator: {},
+    principal: {},
   };
   return new DiscordAdapter(agent, presence, infra);
 }

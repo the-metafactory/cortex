@@ -85,7 +85,7 @@ async function buildStartedAdapter(opts: {
   const agent = makeAgent(presence);
   const infra: DiscordAdapterInfra = {
     instanceId: "discord-test",
-    operator: {},
+    principal: {},
     ...(opts.runtime !== undefined && { runtime: opts.runtime }),
     ...(opts.systemEventSource !== undefined && { systemEventSource: opts.systemEventSource }),
   };

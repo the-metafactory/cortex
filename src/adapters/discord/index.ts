@@ -65,9 +65,9 @@ export interface DiscordAdapterInfra {
    * AgentConfig.discord[] still permits multiple entries per agent.name; collapses to
    * `${agent.id}-discord` at MIG-7.2e when migrate-config emits a real agents[] array. */
   instanceId: string;
-  /** Operator's platform identity. Architecture §9.1: the operator runs the cortex
+  /** Principal's platform identity. Architecture §9.1: the principal runs the cortex
    * deployment, distinct from the agents they host. */
-  operator: { discordId?: string };
+  principal: { discordId?: string };
   /** Myelin runtime for `system.adapter.*` envelope emission. Optional — adapters started
    * without NATS still track degradation/reconnect locally. */
   runtime?: MyelinRuntime;
@@ -416,7 +416,7 @@ export class DiscordAdapter implements PlatformAdapter {
       // `operatorDiscordId` comparison is retired; the operator
       // classification now flows through the PolicyEngine `operator`
       // capability. A principal that holds `operator` short-circuits to
-      // full DM access in `resolvePolicyAccess`. The `infra.operator.discordId`
+      // full DM access in `resolvePolicyAccess`. The `infra.principal.discordId`
       // field is preserved for the `notifyOperator` / `bufferOperatorDM`
       // paths which still need a Discord-side mailbox.
       let dmType: "operator" | "user" | undefined;
@@ -911,8 +911,8 @@ export class DiscordAdapter implements PlatformAdapter {
   }
 
   async notifyOperator(text: string): Promise<void> {
-    const operatorId = this.infra.operator.discordId;
-    if (!operatorId || !this.client) return;
+    const principalDiscordId = this.infra.principal.discordId;
+    if (!principalDiscordId || !this.client) return;
 
     if (!this.connectionHealth?.currentlyConnected) {
       this.bufferOperatorDM(text);
@@ -920,8 +920,8 @@ export class DiscordAdapter implements PlatformAdapter {
     }
 
     try {
-      const operator = await this.client.users.fetch(operatorId);
-      await operator.send(text);
+      const principalUser = await this.client.users.fetch(principalDiscordId);
+      await principalUser.send(text);
     } catch (err) {
       // TOCTOU: connection may have flipped between the check above and here.
       // Classify the error so we don't buffer permanently-undeliverable DMs:
@@ -1005,8 +1005,8 @@ export class DiscordAdapter implements PlatformAdapter {
     // bufferOperatorDM. Anything still in the buffer afterwards is fresh.
     this.cleanExpiredOperatorDMs();
     if (this.pendingOperatorDMs.length === 0) return;
-    const operatorId = this.infra.operator.discordId;
-    if (!operatorId || !this.client) {
+    const principalDiscordId = this.infra.principal.discordId;
+    if (!principalDiscordId || !this.client) {
       this.pendingOperatorDMs = [];
       return;
     }
@@ -1015,10 +1015,10 @@ export class DiscordAdapter implements PlatformAdapter {
 
     console.log(`discord-${this.instanceId}: draining ${toDeliver.length} pending operator DM(s)`);
     try {
-      const operator = await this.client.users.fetch(operatorId);
+      const principalUser = await this.client.users.fetch(principalDiscordId);
       for (const pending of toDeliver) {
         try {
-          await operator.send(pending.text);
+          await principalUser.send(pending.text);
         } catch (err) {
           console.error(
             `discord-${this.instanceId}: failed to deliver buffered operator DM:`,

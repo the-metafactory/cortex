@@ -308,7 +308,7 @@ export interface StartCortexOptions {
   bus?: BusConfig;
   /**
    * v2.0.0 cutover (cortex#297) — principal's platform-side ids surfaced
-   * from `PrincipalConfigSchema` via `LoadedConfig.operator`. Replaces the
+   * from `PrincipalConfigSchema` via `LoadedConfig.principal`. Replaces the
    * `AgentConfig.agent.operatorDiscordId/Mattermost/Slack` fields retired
    * in cortex#297. `undefined` for legacy `bot.yaml` input — adapters
    * then have no principal-DM target and `notifyOperator` is a no-op.
@@ -329,8 +329,8 @@ export interface StartCortexOptions {
  * cortex process. v3 vocabulary (cortex#388) made `principal.id` the
  * single source of truth on cortex.yaml; the loader synthesises a
  * legacy-compatible `AgentConfig.agent.operatorId` for downstream code
- * AND surfaces the same value as `LoadedConfig.operator.id`. This
- * helper prefers the v3-canonical `LoadedConfig.operator` path so the
+ * AND surfaces the same value as `LoadedConfig.principal.id`. This
+ * helper prefers the v3-canonical `LoadedConfig.principal` path so the
  * post-MIG-8 schema deletion (PR-C of cortex#426) is a single-line
  * change here — drop the `agent.operatorId` fallback.
  *
@@ -1213,7 +1213,7 @@ export async function startCortex(
       registryClient = new RegistryClient({
         url: registryConfig.url,
         ...(registryConfig.pubkey !== undefined && { pubkey: registryConfig.pubkey }),
-        operatorIds: peerOperatorIds,
+        principalIds: peerOperatorIds,
       });
       // Boot the client asynchronously — TOFU + initial refresh must
       // not block the rest of cortex boot. Errors inside `start()`
@@ -1381,7 +1381,7 @@ export async function startCortex(
         presence,
         {
           instanceId,
-          operator: {
+          principal: {
             ...(options.operator?.discordId !== undefined && { discordId: options.operator.discordId }),
           },
           runtime,
@@ -1561,7 +1561,7 @@ export async function startCortex(
         presence,
         {
           instanceId,
-          operator: {
+          principal: {
             ...(options.operator?.mattermostId !== undefined && { mattermostId: options.operator.mattermostId }),
           },
           ...(adapterPolicyEngine !== undefined && { policyEngine: adapterPolicyEngine }),
@@ -1642,7 +1642,7 @@ export async function startCortex(
         presence,
         {
           instanceId,
-          operator: {
+          principal: {
             ...(options.operator?.slackId !== undefined && { slackId: options.operator.slackId }),
           },
           ...(adapterPolicyEngine !== undefined && { policyEngine: adapterPolicyEngine }),
@@ -2459,13 +2459,16 @@ if (import.meta.main) {
       // block when the principal declared one — `startCortex` calls
       // `deriveStackId` and logs the resolved stack id. Today this is
       // observational only; emit subjects are unchanged.
-      const { config, inlineAgents, stack, policy, operator, bus } = loadConfigWithAgents(options.config);
+      const { config, inlineAgents, stack, policy, principal, bus } = loadConfigWithAgents(options.config);
       const handle = await startCortex(config, {
         configPath: options.config,
         ...(inlineAgents.length > 0 && { inlineAgents }),
         ...(stack !== undefined && { stack }),
         ...(policy !== undefined && { policy }),
-        ...(operator !== undefined && { operator }),
+        // PR-R13.B.i: LoadedConfig field is `.principal`; the
+        // StartCortexOptions field is still `.operator` (renames in
+        // PR-R13.B). Map between them here until that PR lands.
+        ...(principal !== undefined && { operator: principal }),
         ...(bus !== undefined && { bus }),
       });
 

@@ -272,7 +272,7 @@ export const AgentConfigSchema = z.object({
     /**
      * v2.0.0 cutover (cortex#297) — `operatorDiscordId/Mattermost/Slack` retired.
      * The principal's platform-side ids live on `PrincipalConfigSchema.discordId/mattermostId/slackId`
-     * in cortex-config.ts and are surfaced through `LoadedConfig.operator` for the
+     * in cortex-config.ts and are surfaced through `LoadedConfig.principal` for the
      * boot path. Runtime "is this principal an operator?" decisions consult the
      * PolicyEngine via the `operator` capability per the new model.
      */

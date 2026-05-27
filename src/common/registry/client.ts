@@ -4,7 +4,7 @@
  * Consults the cortex-network-registry service
  * (`src/services/network-registry/`) at boot and on a background
  * refresh schedule to populate an in-memory cache of verified peer
- * pubkeys. Cortex consumers read via `getOperator(operatorId)` and
+ * pubkeys. Cortex consumers read via `getPrincipal(principalId)` and
  * receive `undefined` on every failure path — federation issues must
  * not crash the bot.
  *
@@ -32,7 +32,7 @@
  * The client refreshes every entry every `refreshIntervalMs` (default
  * 5 minutes). When the eventual `system.operator.published` bus event
  * lands (filed as a follow-up — the producer side isn't wired yet),
- * `invalidate(operatorId)` provides the seam to short-circuit the
+ * `invalidate(principalId)` provides the seam to short-circuit the
  * refresh. Until then, TTL is the only invalidation mechanism — the
  * worst-case staleness is one refresh interval.
  *
@@ -68,12 +68,12 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 
 /**
  * `RegistryClient` — single-process, in-memory cache of registry-
- * resolved peer operator records. Construct, `start()`, query via
- * `getOperator()`, `stop()` at shutdown.
+ * resolved peer principal records. Construct, `start()`, query via
+ * `getPrincipal()`, `stop()` at shutdown.
  */
 export class RegistryClient implements RegistryClientReader {
   private readonly url: string;
-  private readonly operatorIds: readonly string[];
+  private readonly principalIds: readonly string[];
   private readonly refreshIntervalMs: number;
   private readonly requestTimeoutMs: number;
   private readonly fetchImpl: typeof globalThis.fetch;
@@ -120,7 +120,7 @@ export class RegistryClient implements RegistryClientReader {
   constructor(options: RegistryClientOptions) {
     // Trailing slash normalisation so callers can pass either form.
     this.url = options.url.replace(/\/+$/, "");
-    this.operatorIds = [...options.operatorIds];
+    this.principalIds = [...options.principalIds];
     this.refreshIntervalMs =
       options.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS;
     this.requestTimeoutMs =
@@ -171,7 +171,7 @@ export class RegistryClient implements RegistryClientReader {
     }
 
     // One eager refresh so the cache is populated before any caller
-    // queries `getOperator()`. Errors are already logged inside the
+    // queries `getPrincipal()`. Errors are already logged inside the
     // cycle; we deliberately don't propagate — a refresh failure must
     // not block cortex boot.
     await this.refreshAll();
@@ -213,18 +213,18 @@ export class RegistryClient implements RegistryClientReader {
     }
   }
 
-  /** RegistryClientReader.getOperator — see interface JSDoc. */
-  getOperator(operatorId: string): OperatorRecord | undefined {
-    return this.cache.get(operatorId);
+  /** RegistryClientReader.getPrincipal — see interface JSDoc. */
+  getPrincipal(principalId: string): OperatorRecord | undefined {
+    return this.cache.get(principalId);
   }
 
   /**
    * Invalidate a single cache entry. The next `refreshAll()` (or an
-   * explicit `refreshOperator(operatorId)`) will repopulate it.
+   * explicit `refreshPrincipal(principalId)`) will repopulate it.
    * Exposed for the future `system.operator.published` event handler.
    */
-  invalidate(operatorId: string): void {
-    this.cache.delete(operatorId);
+  invalidate(principalId: string): void {
+    this.cache.delete(principalId);
   }
 
   /**
@@ -276,9 +276,9 @@ export class RegistryClient implements RegistryClientReader {
       // Serial rather than parallel: peer lists are short (single-digit
       // typical, dozens worst-case), the registry is shared, and serial
       // is more polite under load. Parallelise later if measured-needed.
-      for (const operatorId of this.operatorIds) {
+      for (const principalId of this.principalIds) {
         if (signal.aborted) break;
-        await this.refreshOperator(operatorId, signal);
+        await this.refreshPrincipal(principalId, signal);
       }
     } finally {
       this.refreshInFlight = false;
@@ -286,7 +286,7 @@ export class RegistryClient implements RegistryClientReader {
   }
 
   // =============================================================================
-  // Private — TOFU + per-operator refresh
+  // Private — TOFU + per-principal refresh
   // =============================================================================
 
   private async fetchAndPinRegistryPubkey(): Promise<void> {
@@ -320,17 +320,19 @@ export class RegistryClient implements RegistryClientReader {
     this.pinnedPubkey = publicKey;
   }
 
-  private async refreshOperator(
-    operatorId: string,
+  private async refreshPrincipal(
+    principalId: string,
     signal: AbortSignal,
   ): Promise<void> {
-    const url = `${this.url}/operators/${encodeURIComponent(operatorId)}`;
+    // Wire path stays `/operators/:operator_id` until PR-R7c-network-registry
+    // renames the registry service.
+    const url = `${this.url}/operators/${encodeURIComponent(principalId)}`;
     const raw = await this.fetchJson(url, signal);
     if (raw === undefined) return; // already logged inside fetchJson
 
-    const verified = await this.verifyAssertion(operatorId, raw);
+    const verified = await this.verifyAssertion(principalId, raw);
     if (verified === undefined) return; // already logged inside verifyAssertion
-    this.cache.set(operatorId, verified);
+    this.cache.set(principalId, verified);
   }
 
   /**
@@ -343,19 +345,19 @@ export class RegistryClient implements RegistryClientReader {
    * defeat the purpose of the check.
    */
   private async verifyAssertion(
-    operatorId: string,
+    principalId: string,
     raw: unknown,
   ): Promise<OperatorRecord | undefined> {
     const pinned = this.pinnedPubkey;
     if (pinned === undefined) {
       this.logError(
-        `refresh(${operatorId}): no pinned pubkey; refusing to trust assertion`,
+        `refresh(${principalId}): no pinned pubkey; refusing to trust assertion`,
       );
       return undefined;
     }
     // Shape check first — cheaper than crypto and gives a clearer log.
     if (raw === null || typeof raw !== "object") {
-      this.logError(`refresh(${operatorId}): assertion not an object; ignoring`);
+      this.logError(`refresh(${principalId}): assertion not an object; ignoring`);
       return undefined;
     }
     const assertion = raw as Record<string, unknown>;
@@ -367,20 +369,20 @@ export class RegistryClient implements RegistryClientReader {
       typeof assertion.payload !== "object"
     ) {
       this.logError(
-        `refresh(${operatorId}): malformed assertion envelope; ignoring`,
+        `refresh(${principalId}): malformed assertion envelope; ignoring`,
       );
       return undefined;
     }
     const registry = assertion.registry;
     if (registry === "unconfigured") {
       this.logError(
-        `refresh(${operatorId}): registry assertion says "unconfigured"; refusing`,
+        `refresh(${principalId}): registry assertion says "unconfigured"; refusing`,
       );
       return undefined;
     }
     if (registry !== pinned) {
       this.logError(
-        `refresh(${operatorId}): registry pubkey mismatch (got ${registry.slice(0, 8)}…, pinned ${pinned.slice(0, 8)}…); ignoring`,
+        `refresh(${principalId}): registry pubkey mismatch (got ${registry.slice(0, 8)}…, pinned ${pinned.slice(0, 8)}…); ignoring`,
       );
       return undefined;
     }
@@ -388,16 +390,18 @@ export class RegistryClient implements RegistryClientReader {
     // re-validate the deep structure here — the registry is the source
     // of truth for its own shape — but we do require the same
     // operator_id we requested, defending against a swapped payload.
+    // Wire-field reads (`payload.operator_id`, `payload.operator_pubkey`)
+    // stay until PR-R7c-network-registry renames the registry service.
     const payload = assertion.payload as Record<string, unknown>;
-    if (payload.operator_id !== operatorId) {
+    if (payload.operator_id !== principalId) {
       this.logError(
-        `refresh(${operatorId}): payload.operator_id mismatch (got "${String(payload.operator_id)}"); ignoring`,
+        `refresh(${principalId}): payload.operator_id mismatch (got "${String(payload.operator_id)}"); ignoring`,
       );
       return undefined;
     }
     if (typeof payload.operator_pubkey !== "string") {
       this.logError(
-        `refresh(${operatorId}): payload.operator_pubkey missing or non-string; ignoring`,
+        `refresh(${principalId}): payload.operator_pubkey missing or non-string; ignoring`,
       );
       return undefined;
     }
@@ -417,7 +421,7 @@ export class RegistryClient implements RegistryClientReader {
     // on the producer side (base64 of 32 raw bytes).
     if (!/^[A-Za-z0-9+/]{43}=$/.test(payload.operator_pubkey)) {
       this.logError(
-        `refresh(${operatorId}): payload.operator_pubkey is not base64-Ed25519 (got "${payload.operator_pubkey.slice(0, 12)}…"); ignoring`,
+        `refresh(${principalId}): payload.operator_pubkey is not base64-Ed25519 (got "${payload.operator_pubkey.slice(0, 12)}…"); ignoring`,
       );
       return undefined;
     }
@@ -434,13 +438,13 @@ export class RegistryClient implements RegistryClientReader {
       ok = await verifyEd25519(pinned, assertion.signature, message);
     } catch (err) {
       this.logError(
-        `refresh(${operatorId}): verify threw: ${err instanceof Error ? err.message : String(err)}`,
+        `refresh(${principalId}): verify threw: ${err instanceof Error ? err.message : String(err)}`,
       );
       return undefined;
     }
     if (!ok) {
       this.logError(
-        `refresh(${operatorId}): signature did not verify; ignoring`,
+        `refresh(${principalId}): signature did not verify; ignoring`,
       );
       return undefined;
     }
@@ -448,7 +452,7 @@ export class RegistryClient implements RegistryClientReader {
     // service to populate, but a corrupted payload could send the
     // wrong shape past the structural checks above. Normalise.
     return {
-      operator_id: operatorId,
+      operator_id: principalId,
       operator_pubkey: payload.operator_pubkey,
       stacks: Array.isArray(payload.stacks) ? (payload.stacks as OperatorRecord["stacks"]) : [],
       capabilities: Array.isArray(payload.capabilities) ? (payload.capabilities as OperatorRecord["capabilities"]) : [],

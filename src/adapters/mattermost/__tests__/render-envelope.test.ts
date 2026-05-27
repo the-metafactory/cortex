@@ -107,7 +107,7 @@ function makeAdapter(opts: {
   };
   const infra: MattermostAdapterInfra = {
     instanceId: "mm-renderer",
-    operator: {},
+    principal: {},
     ...(opts.surfaceSubjects !== undefined && { surfaceSubjects: opts.surfaceSubjects }),
     ...(opts.surfaceFallbackChannelId !== undefined && { surfaceFallbackChannelId: opts.surfaceFallbackChannelId }),
     ...(opts.surfaceFilter !== undefined && { surfaceFilter: opts.surfaceFilter }),

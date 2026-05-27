@@ -95,7 +95,7 @@ export interface RegistryPubkeyResponse {
 
 /**
  * Configuration for `RegistryClient`. The required fields are the
- * registry URL and the list of peer operator ids to track; everything
+ * registry URL and the list of peer principal ids to track; everything
  * else has a sensible default. Tests supply `fetch` + `setTimer` to
  * inject a fake transport + timer without real I/O.
  */
@@ -111,12 +111,14 @@ export interface RegistryClientOptions {
    */
   pubkey?: string;
   /**
-   * Operator ids the client should track. Populated at boot from
-   * `policy.federated.networks[].peers[].operator_id` (de-duplicated).
+   * Principal ids the client should track. Populated at boot from
+   * `policy.federated.networks[].peers[].operator_id` (de-duplicated;
+   * wire field stays `operator_id` until PR-R7c-network-registry
+   * renames the registry service).
    * Empty list means the client starts dormant — no refresh cycles,
-   * `getOperator()` always returns undefined.
+   * `getPrincipal()` always returns undefined.
    */
-  operatorIds: string[];
+  principalIds: string[];
   /**
    * Refresh interval in milliseconds. Default 5 minutes — long enough
    * to be polite to the registry, short enough that a publish becomes
@@ -152,13 +154,16 @@ export interface RegistryClientOptions {
  */
 export interface RegistryClientReader {
   /**
-   * Return the cached `OperatorRecord` for `operatorId`, or
-   * `undefined` if the operator is unknown, the cache is empty, the
+   * Return the cached `OperatorRecord` for `principalId`, or
+   * `undefined` if the principal is unknown, the cache is empty, the
    * last fetch failed, or the signature did not verify.
+   *
+   * The return type stays `OperatorRecord` until PR-R7c-network-registry
+   * renames the registry service's wire-shape symbol.
    *
    * Never throws — federation failures must not crash the rest of
    * cortex. All error paths log via `logError` and return
    * `undefined`.
    */
-  getOperator(operatorId: string): OperatorRecord | undefined;
+  getPrincipal(principalId: string): OperatorRecord | undefined;
 }

@@ -97,7 +97,7 @@ function makeAdapter(overrides: { presence?: Partial<MattermostPresence> } = {})
   const agent = makeAgent(presence);
   const infra: MattermostAdapterInfra = {
     instanceId: "luna-mattermost",
-    operator: {},
+    principal: {},
   };
   return new MattermostAdapter(agent, presence, infra);
 }

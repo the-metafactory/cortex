@@ -176,7 +176,7 @@ export function resolvePolicyAccess(input: ResolvePolicyAccessInput): AccessDeci
 /**
  * Test whether the `(platform, platformId)` tuple maps to a principal
  * whose effective capabilities include `operator`. Used by adapters to
- * classify `msg.dmType` post-cutover (legacy `infra.operator.discordId`
+ * classify `msg.dmType` post-cutover (legacy `infra.principal.discordId`
  * comparison retired in favour of the policy-driven check).
  */
 export function isOperatorPrincipal(

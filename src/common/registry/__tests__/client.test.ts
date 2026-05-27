@@ -5,9 +5,9 @@
  *
  *   1. TOFU pubkey fetch at boot
  *   2. Pinned pubkey from config bypasses TOFU
- *   3. `getOperator` returns verified data
- *   4. `getOperator` returns undefined on signature verification failure
- *   5. `getOperator` returns undefined on network failure (no throw)
+ *   3. `getPrincipal` returns verified data
+ *   4. `getPrincipal` returns undefined on signature verification failure
+ *   5. `getPrincipal` returns undefined on network failure (no throw)
  *   6. Periodic refresh updates cache
  *   7. Shutdown stops the refresh timer
  *
@@ -128,7 +128,7 @@ describe("RegistryClient — TOFU + pinned pubkey", () => {
 
     const client = new RegistryClient({
       url: "https://registry.example/",
-      operatorIds: ["andreas"],
+      principalIds: ["andreas"],
       refreshIntervalMs: 0, // disable background timer for tests
       fetch: fakeFetch as typeof fetch,
       logError: () => {},
@@ -136,7 +136,7 @@ describe("RegistryClient — TOFU + pinned pubkey", () => {
     await client.start();
     try {
       expect(pubkeyFetched).toBe(true);
-      const fetched = client.getOperator("andreas");
+      const fetched = client.getPrincipal("andreas");
       expect(fetched).toBeDefined();
       expect(fetched?.operator_id).toBe("andreas");
     } finally {
@@ -161,7 +161,7 @@ describe("RegistryClient — TOFU + pinned pubkey", () => {
     const client = new RegistryClient({
       url: "https://registry.example",
       pubkey: kp.publicKeyB64,
-      operatorIds: ["jcfischer"],
+      principalIds: ["jcfischer"],
       refreshIntervalMs: 0,
       fetch: fakeFetch as typeof fetch,
       logError: () => {},
@@ -169,14 +169,14 @@ describe("RegistryClient — TOFU + pinned pubkey", () => {
     await client.start();
     try {
       expect(pubkeyFetched).toBe(false);
-      expect(client.getOperator("jcfischer")).toBeDefined();
+      expect(client.getPrincipal("jcfischer")).toBeDefined();
     } finally {
       client.stop();
     }
   });
 });
 
-describe("RegistryClient — getOperator()", () => {
+describe("RegistryClient — getPrincipal()", () => {
   test("returns the verified record after a successful refresh", async () => {
     const kp = await generateKeypair();
     const op = makeOperator("andreas", FAKE_PEER_PUBKEY_V1);
@@ -189,14 +189,14 @@ describe("RegistryClient — getOperator()", () => {
     const client = new RegistryClient({
       url: "https://registry.example",
       pubkey: kp.publicKeyB64,
-      operatorIds: ["andreas"],
+      principalIds: ["andreas"],
       refreshIntervalMs: 0,
       fetch: fakeFetch as typeof fetch,
       logError: () => {},
     });
     await client.start();
     try {
-      const got = client.getOperator("andreas");
+      const got = client.getPrincipal("andreas");
       expect(got).toEqual(op);
     } finally {
       client.stop();
@@ -234,14 +234,14 @@ describe("RegistryClient — getOperator()", () => {
     const client = new RegistryClient({
       url: "https://registry.example",
       pubkey: pinnedKp.publicKeyB64,
-      operatorIds: ["attacker"],
+      principalIds: ["attacker"],
       refreshIntervalMs: 0,
       fetch: fakeFetch as typeof fetch,
       logError: (m) => errs.push(m),
     });
     await client.start();
     try {
-      expect(client.getOperator("attacker")).toBeUndefined();
+      expect(client.getPrincipal("attacker")).toBeUndefined();
       expect(errs.some((e) => e.includes("signature did not verify"))).toBe(true);
     } finally {
       client.stop();
@@ -257,7 +257,7 @@ describe("RegistryClient — getOperator()", () => {
     const client = new RegistryClient({
       url: "https://registry.example",
       pubkey: kp.publicKeyB64,
-      operatorIds: ["andreas"],
+      principalIds: ["andreas"],
       refreshIntervalMs: 0,
       fetch: fakeFetch as typeof fetch,
       logError: (m) => errs.push(m),
@@ -265,7 +265,7 @@ describe("RegistryClient — getOperator()", () => {
     // start() must not throw even when every fetch rejects.
     await client.start();
     try {
-      expect(client.getOperator("andreas")).toBeUndefined();
+      expect(client.getPrincipal("andreas")).toBeUndefined();
       expect(errs.some((e) => e.includes("connection refused"))).toBe(true);
     } finally {
       client.stop();
@@ -288,14 +288,14 @@ describe("RegistryClient — getOperator()", () => {
     const client = new RegistryClient({
       url: "https://registry.example",
       pubkey: kp.publicKeyB64,
-      operatorIds: ["andreas"],
+      principalIds: ["andreas"],
       refreshIntervalMs: 0,
       fetch: fakeFetch as typeof fetch,
       logError: (m) => errs.push(m),
     });
     await client.start();
     try {
-      expect(client.getOperator("andreas")).toBeUndefined();
+      expect(client.getPrincipal("andreas")).toBeUndefined();
       expect(errs.some((e) => e.includes("unconfigured"))).toBe(true);
     } finally {
       client.stop();
@@ -315,14 +315,14 @@ describe("RegistryClient — getOperator()", () => {
     const client = new RegistryClient({
       url: "https://registry.example",
       pubkey: otherKp.publicKeyB64,
-      operatorIds: ["victim"],
+      principalIds: ["victim"],
       refreshIntervalMs: 0,
       fetch: fakeFetch as typeof fetch,
       logError: (m) => errs.push(m),
     });
     await client.start();
     try {
-      expect(client.getOperator("victim")).toBeUndefined();
+      expect(client.getPrincipal("victim")).toBeUndefined();
       expect(errs.some((e) => e.includes("registry pubkey mismatch"))).toBe(true);
     } finally {
       client.stop();
@@ -344,14 +344,14 @@ describe("RegistryClient — getOperator()", () => {
     const client = new RegistryClient({
       url: "https://registry.example",
       pubkey: kp.publicKeyB64,
-      operatorIds: ["alice"],
+      principalIds: ["alice"],
       refreshIntervalMs: 0,
       fetch: fakeFetch as typeof fetch,
       logError: (m) => errs.push(m),
     });
     await client.start();
     try {
-      expect(client.getOperator("alice")).toBeUndefined();
+      expect(client.getPrincipal("alice")).toBeUndefined();
       expect(errs.some((e) => e.includes("operator_id mismatch"))).toBe(true);
     } finally {
       client.stop();
@@ -378,14 +378,14 @@ describe("RegistryClient — getOperator()", () => {
     const client = new RegistryClient({
       url: "https://registry.example",
       pubkey: kp.publicKeyB64,
-      operatorIds: ["andreas"],
+      principalIds: ["andreas"],
       refreshIntervalMs: 0,
       fetch: fakeFetch as typeof fetch,
       logError: (m) => errs.push(m),
     });
     await client.start();
     try {
-      expect(client.getOperator("andreas")).toBeUndefined();
+      expect(client.getPrincipal("andreas")).toBeUndefined();
       expect(errs.some((e) => e.includes("not base64-Ed25519"))).toBe(true);
     } finally {
       client.stop();
@@ -416,7 +416,7 @@ describe("RegistryClient — start()/stop() idempotency", () => {
     const client = new RegistryClient({
       url: "https://registry.example",
       // No pubkey → TOFU mode → /registry/pubkey is called on start.
-      operatorIds: ["andreas"],
+      principalIds: ["andreas"],
       refreshIntervalMs: 0,
       fetch: fakeFetch as typeof fetch,
       logError: () => {},
@@ -464,7 +464,7 @@ describe("RegistryClient — start()/stop() idempotency", () => {
     const client = new RegistryClient({
       url: "https://registry.example",
       // TOFU mode (no pubkey from config).
-      operatorIds: ["andreas"],
+      principalIds: ["andreas"],
       refreshIntervalMs: 0,
       fetch: fakeFetch as typeof fetch,
       logError: () => {},
@@ -474,12 +474,12 @@ describe("RegistryClient — start()/stop() idempotency", () => {
       // After start: 2 TOFU attempts (boot + eager-refresh retry), both
       // failed, cache still empty.
       expect(pubkeyAttempts).toBe(2);
-      expect(client.getOperator("andreas")).toBeUndefined();
+      expect(client.getPrincipal("andreas")).toBeUndefined();
       // Third cycle: TOFU retries and succeeds → cache populates. The
       // client recovered without external intervention.
       await client.refreshAll();
       expect(pubkeyAttempts).toBe(3);
-      expect(client.getOperator("andreas")).toBeDefined();
+      expect(client.getPrincipal("andreas")).toBeDefined();
     } finally {
       client.stop();
     }
@@ -502,7 +502,7 @@ describe("RegistryClient — periodic refresh + shutdown", () => {
     const client = new RegistryClient({
       url: "https://registry.example",
       pubkey: kp.publicKeyB64,
-      operatorIds: ["andreas"],
+      principalIds: ["andreas"],
       // Disable the timer; drive cycles manually via refreshAll().
       // The timer behaviour is exercised by the shutdown test below.
       refreshIntervalMs: 0,
@@ -511,11 +511,11 @@ describe("RegistryClient — periodic refresh + shutdown", () => {
     });
     await client.start();
     try {
-      expect(client.getOperator("andreas")?.operator_pubkey).toBe(FAKE_PEER_PUBKEY_V1);
+      expect(client.getPrincipal("andreas")?.operator_pubkey).toBe(FAKE_PEER_PUBKEY_V1);
       // Operator rotates their pubkey upstream.
       currentPubkey = FAKE_PEER_PUBKEY_V2;
       await client.refreshAll();
-      expect(client.getOperator("andreas")?.operator_pubkey).toBe(FAKE_PEER_PUBKEY_V2);
+      expect(client.getPrincipal("andreas")?.operator_pubkey).toBe(FAKE_PEER_PUBKEY_V2);
     } finally {
       client.stop();
     }
@@ -536,7 +536,7 @@ describe("RegistryClient — periodic refresh + shutdown", () => {
     const client = new RegistryClient({
       url: "https://registry.example",
       pubkey: kp.publicKeyB64,
-      operatorIds: ["andreas"],
+      principalIds: ["andreas"],
       refreshIntervalMs: 25, // very short — would fire if not stopped
       fetch: fakeFetch as typeof fetch,
       logError: () => {},
@@ -576,7 +576,7 @@ describe("RegistryClient — periodic refresh + shutdown", () => {
     const client = new RegistryClient({
       url: "https://registry.example",
       pubkey: kp.publicKeyB64,
-      operatorIds: ["andreas"],
+      principalIds: ["andreas"],
       refreshIntervalMs: 0,
       fetch: fakeFetch as typeof fetch,
       logError: (m) => errs.push(m),
@@ -596,7 +596,7 @@ describe("RegistryClient — periodic refresh + shutdown", () => {
       // Now release the first cycle and let it complete.
       release?.();
       await inFlight;
-      expect(client.getOperator("andreas")).toBeDefined();
+      expect(client.getPrincipal("andreas")).toBeDefined();
       // A subsequent refresh after the cycle drained must run normally.
       await client.refreshAll();
       expect(fetchCalls.length).toBe(2);
@@ -617,18 +617,18 @@ describe("RegistryClient — periodic refresh + shutdown", () => {
     const client = new RegistryClient({
       url: "https://registry.example",
       pubkey: kp.publicKeyB64,
-      operatorIds: ["andreas"],
+      principalIds: ["andreas"],
       refreshIntervalMs: 0,
       fetch: fakeFetch as typeof fetch,
       logError: () => {},
     });
     await client.start();
     try {
-      expect(client.getOperator("andreas")).toBeDefined();
+      expect(client.getPrincipal("andreas")).toBeDefined();
       client.invalidate("andreas");
-      expect(client.getOperator("andreas")).toBeUndefined();
+      expect(client.getPrincipal("andreas")).toBeUndefined();
       await client.refreshAll();
-      expect(client.getOperator("andreas")).toBeDefined();
+      expect(client.getPrincipal("andreas")).toBeDefined();
     } finally {
       client.stop();
     }
@@ -636,19 +636,19 @@ describe("RegistryClient — periodic refresh + shutdown", () => {
 });
 
 describe("RegistryClient — empty config", () => {
-  test("operatorIds=[] makes the client dormant — no fetches, getOperator returns undefined", async () => {
+  test("principalIds=[] makes the client dormant — no fetches, getPrincipal returns undefined", async () => {
     const fetchSpy = mock(async (_url: string) => new Response("nope", { status: 404 }));
     const client = new RegistryClient({
       url: "https://registry.example",
       pubkey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", // 43 chars + = = 44
-      operatorIds: [],
+      principalIds: [],
       refreshIntervalMs: 0,
       fetch: fetchSpy as unknown as typeof fetch,
       logError: () => {},
     });
     await client.start();
     try {
-      expect(client.getOperator("anyone")).toBeUndefined();
+      expect(client.getPrincipal("anyone")).toBeUndefined();
       expect(fetchSpy.mock.calls.length).toBe(0);
     } finally {
       client.stop();

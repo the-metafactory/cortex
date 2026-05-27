@@ -79,9 +79,9 @@ export interface LoadedConfig {
    * loader after `agent.operatorDiscordId/Mattermost/Slack` retired from
    * AgentConfig. Populated only for cortex-shape configs (legacy bot.yaml
    * input always yields `undefined`). The boot path reads these to wire
-   * `DiscordAdapterInfra.operator.discordId` etc.
+   * `DiscordAdapterInfra.principal.discordId` etc.
    */
-  operator?: {
+  principal?: {
     id: string;
     discordId?: string;
     mattermostId?: string;
@@ -441,7 +441,7 @@ function loadCortexShape(
     }),
     // v2.0.0 cutover (cortex#297) — `operator*Id` fields retired from
     // AgentConfig.agent. Principal's platform-side ids surface through
-    // `LoadedConfig.operator` (see return value below); the boot path in
+    // `LoadedConfig.principal` (see return value below); the boot path in
     // cortex.ts reads them from there.
     dataResidency: cortexConfig.principal.dataResidency,
     personaFile: firstAgent.persona,
@@ -477,7 +477,7 @@ function loadCortexShape(
     config: AgentConfigSchema.parse(merged),
     inlineAgents: [...cortexConfig.agents],
     // v2.0.0 (cortex#297) — surface principal platform ids for the boot path.
-    operator: {
+    principal: {
       id: cortexConfig.principal.id,
       ...(cortexConfig.principal.discordId !== undefined && {
         discordId: cortexConfig.principal.discordId,

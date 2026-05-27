@@ -46,7 +46,7 @@ import { RealSlackClient, type SlackClient, type SlackInboundEvent, type SlackBo
  * Cortex-deployment-level wiring passed alongside the agent + presence
  * pair. Mirror of `DiscordAdapterInfra` / `MattermostAdapterInfra`.
  *
- * `operator.slackId` is the operator's Slack user id (`U...`), used to
+ * `principal.slackId` is the principal's Slack user id (`U...`), used to
  * route `notifyOperator` DMs the same way the Discord/Mattermost
  * variants route theirs.
  *
@@ -56,8 +56,8 @@ import { RealSlackClient, type SlackClient, type SlackInboundEvent, type SlackBo
 export interface SlackAdapterInfra {
   /** Surface-router + log-prefix key. Cortex derives `${agent.id}-slack`. */
   instanceId: string;
-  /** Operator's platform identity. */
-  operator: { slackId?: string };
+  /** Principal's platform identity. */
+  principal: { slackId?: string };
   /**
    * MyelinRuntime for `system.adapter.*` envelope emission (cortex#235
    * r1#4). Optional — adapters started without NATS still track
@@ -525,7 +525,7 @@ export class SlackAdapter implements PlatformAdapter {
   /**
    * v2.0.0 (cortex#297) — operator detection via the policy `operator`
    * capability. Kept for adapter-internal use; the `notifyOperator`
-   * path still routes by `infra.operator.slackId`.
+   * path still routes by `infra.principal.slackId`.
    */
   protected isOperator(authorId: string): boolean {
     return isOperatorPrincipal(
@@ -600,12 +600,12 @@ export class SlackAdapter implements PlatformAdapter {
   }
 
   async notifyOperator(text: string): Promise<void> {
-    const operatorId = this.infra.operator.slackId;
-    if (!operatorId) return;
+    const principalSlackId = this.infra.principal.slackId;
+    if (!principalSlackId) return;
     try {
       // For DMs, Slack accepts the user id directly as `channel`. The
       // Web API opens (or reuses) the IM channel implicitly.
-      await this.client.postMessage(operatorId, text);
+      await this.client.postMessage(principalSlackId, text);
     } catch (err) {
       // Match the Mattermost/Discord notifyOperator pattern: log + drop.
       // A failed DM should never tear down the adapter; the operator can

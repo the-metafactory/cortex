@@ -56,9 +56,9 @@ export interface MattermostAdapterInfra {
    * `${agent.id}-mattermost` at MIG-7.2e when migrate-config emits a real
    * agents[] array. */
   instanceId: string;
-  /** Operator's platform identity. Architecture §9.1: the operator runs the
+  /** Principal's platform identity. Architecture §9.1: the principal runs the
    * cortex deployment, distinct from the agents they host. */
-  operator: { mattermostId?: string };
+  principal: { mattermostId?: string };
   /** MIG-3b: NATS subject patterns this adapter renders to Mattermost.
    * Empty/undefined → adapter never matches in the surface-router. Moves to
    * Renderer config at MIG-7.2d. */
@@ -340,8 +340,8 @@ export class MattermostAdapter implements PlatformAdapter {
   }
 
   async notifyOperator(text: string): Promise<void> {
-    const operatorId = this.infra.operator.mattermostId;
-    if (!operatorId) return;
+    const principalMattermostId = this.infra.principal.mattermostId;
+    if (!principalMattermostId) return;
 
     try {
       // MIG-7.2c-mattermost (Holly cycle 1 W1+S1): use the cached bot user
@@ -358,7 +358,7 @@ export class MattermostAdapter implements PlatformAdapter {
           Authorization: `Bearer ${this.apiToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify([botUserId, operatorId]),
+        body: JSON.stringify([botUserId, principalMattermostId]),
       });
 
       if (dmRes.ok) {
