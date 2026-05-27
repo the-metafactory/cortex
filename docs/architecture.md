@@ -428,7 +428,7 @@ The same applies for every M7 app: pilot has a contract, signal-collector has a 
 
 Each M7 app is a microservice in the architectural sense: independently deployable, owns its own data, communicates with peers async via the bus, fails independently.
 
-- **Independent deployment.** cortex and pilot ship via separate `arc` packages, separate version cadences. An principal can run pilot at a different version than cortex; if their envelope contracts are intersecting versions, they interoperate.
+- **Independent deployment.** cortex and pilot ship via separate `arc` packages, separate version cadences. A principal can run pilot at a different version than cortex; if their envelope contracts are intersecting versions, they interoperate.
 - **Data ownership.** Each M7 app owns its persistent state behind its own boundary. Cortex's Mission Control DB belongs to cortex; pilot's `errands.sqlite` belongs to pilot. No shared database, no foreign-key relationships across apps. State that needs to flow between apps flows as envelopes.
 - **Async-first communication.** Apps communicate via published envelopes (fire-and-forget), with M6 request/reply for synchronous needs. No app calls another app's HTTP endpoint as a primary integration mechanism. (CLI shell-outs for transitional integrations — e.g. `pilot fetch <PR>` — are tolerated short-term and tracked for removal.)
 - **Failure isolation.** An M7 app crashing degrades the system gracefully — its envelopes stop flowing, its surfaces go dark, but other apps keep running. The bus's `system.adapter.*` events make this visible per G-1111 §3.5 + §4.6.
