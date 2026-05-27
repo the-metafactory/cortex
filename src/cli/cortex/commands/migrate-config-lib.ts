@@ -12,7 +12,7 @@
  * schema, so we accept input permissively and validate output strictly.
  */
 
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, statSync } from "fs";
 import { isAbsolute, resolve } from "path";
 
 import {
@@ -881,6 +881,17 @@ const CODE_REVIEW_CAPABILITY_ID = "code-review.typescript";
 const CODE_REVIEW_PERSONA_PATTERN = /code[- ]review|reviewer|reviewing/gi;
 const CODE_REVIEW_OCCURRENCE_FLOOR = 2;
 
+/**
+ * Defence-in-depth size cap on persona file reads. Persona markdown files
+ * are operator-authored under their own config dir (no untrusted input),
+ * but a stray symlink to `/dev/zero` or a multi-GB markdown file in a bad
+ * fixture dir would OOM the migrator. 1 MiB is two orders of magnitude
+ * above any reasonable persona (real personas in andreas's deployment run
+ * <10 KiB). Files above the cap skip the heuristic, default to ["chat"],
+ * and emit a ConversionWarning so the operator notices.
+ */
+const PERSONA_MAX_BYTES = 1 * 1024 * 1024;
+
 interface CortexAgentMutable {
   id: string;
   displayName: string;
@@ -912,6 +923,8 @@ interface CortexCapabilityMutable {
 function detectCapabilityHintsFromPersona(
   personaPath: string,
   configDir: string | undefined,
+  agentId: string,
+  warnings: ConversionWarning[],
 ): Set<string> {
   const hints = new Set<string>();
   // The persona path is required by `AgentSchema.persona` (`min(1)`), but a
@@ -922,6 +935,30 @@ function detectCapabilityHintsFromPersona(
   if (!configDir) return hints;
   const abs = isAbsolute(personaPath) ? personaPath : resolve(configDir, personaPath);
   if (!existsSync(abs)) return hints;
+  // Defence-in-depth size cap. statSync is cheap (one inode lookup); the
+  // gate keeps a stray symlink (`persona: /dev/zero`) or an accidentally-
+  // checked-in giant markdown file from OOM'ing the migrator. Oversized
+  // files are treated as "no hint" — same fall-through behaviour as a
+  // missing or unreadable file — plus an explicit warning so the
+  // operator notices the skip rather than silently losing the heuristic.
+  let size: number;
+  try {
+    size = statSync(abs).size;
+  } catch {
+    // stat failed (race between existsSync and statSync, permissions, …) —
+    // soft-skip just like the readFileSync catch below.
+    return hints;
+  }
+  if (size > PERSONA_MAX_BYTES) {
+    warnings.push({
+      field: `agents[${agentId}].persona`,
+      message:
+        `persona file at ${personaPath} is ${size} bytes (> ${PERSONA_MAX_BYTES} byte cap); ` +
+        `skipping persona-driven capability heuristic. If the file is legitimately this large, ` +
+        `declare runtime.capabilities explicitly on the agent in cortex.yaml.`,
+    });
+    return hints;
+  }
   let body: string;
   try {
     body = readFileSync(abs, "utf-8");
@@ -1029,7 +1066,7 @@ function synthesizeRuntimeCapabilities(
       // An operator that already declared `["chat"]` explicitly opted into
       // a minimal capability surface — adding `code-review.typescript`
       // behind their back would be presumptuous.
-      const hints = detectCapabilityHintsFromPersona(agent.persona, configDir);
+      const hints = detectCapabilityHintsFromPersona(agent.persona, configDir, agent.id, warnings);
       for (const hint of hints) {
         if (!synthesised.has(hint)) {
           synthesised.add(hint);

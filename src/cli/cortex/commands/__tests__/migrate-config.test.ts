@@ -1647,6 +1647,50 @@ describe("convertBotYaml — cortex#428 PR-B runtime.capabilities synthesis", ()
     expect(result.cortex.agents[0]!.runtime!.capabilities).toEqual(["chat"]);
   });
 
+  test("persona-heuristic skips oversized files with a warning (defence-in-depth size cap)", () => {
+    // Defence-in-depth regression for the cortex#432 nit-3 size cap. A
+    // hostile or accidental large persona (`persona: /dev/zero`, stray
+    // huge fixture) must NOT OOM the migrator. The 1 MiB cap is well
+    // above any realistic persona; we synthesise a file just over the
+    // cap and assert (a) the heuristic short-circuits to [chat] and
+    // (b) a ConversionWarning surfaces so the operator sees the skip.
+    const tmp = mkdtempSync(join(tmpdir(), "cortex-mig-428-cap-oversize-"));
+    const persona = join(tmp, "huge.md");
+    // 1 MiB + 1 byte — sized via Buffer.alloc to avoid materialising a
+    // multi-MB string literal in test source. Content is irrelevant
+    // (the heuristic never runs); the size gate fires on statSync.
+    const oversize = 1 * 1024 * 1024 + 1;
+    writeFileSync(persona, Buffer.alloc(oversize, "x"));
+    const cortexShape = {
+      principal: { id: "andreas" },
+      agents: [
+        {
+          id: "huge",
+          displayName: "Huge",
+          persona,
+          trust: [],
+          presence: {
+            discord: {
+              token: "t",
+              guildId: "1",
+              agentChannelId: "2",
+              logChannelId: "3",
+            },
+          },
+        },
+      ],
+    } as unknown as LegacyBotYaml;
+    const result = convertBotYaml(cortexShape, { configDir: tmp });
+    expect(result.cortex.agents[0]!.runtime!.capabilities).toEqual(["chat"]);
+    const sizeWarning = result.warnings.find(
+      (w) =>
+        w.field === "agents[huge].persona" &&
+        w.message.includes("byte cap") &&
+        w.message.includes("skipping persona-driven capability heuristic"),
+    );
+    expect(sizeWarning).toBeDefined();
+  });
+
   test("idempotent — existing runtime.capabilities preserved + chat appended if missing", () => {
     // Cortex-shape input that already declares capabilities should keep
     // them and gain `chat` (so dispatch can still route conversational
