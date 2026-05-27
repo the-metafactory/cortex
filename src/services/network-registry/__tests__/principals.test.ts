@@ -1,5 +1,5 @@
 /**
- * IAW D.4 — Operator route tests (POST register + GET).
+ * IAW D.4 — Principal route tests (POST register + GET).
  *
  * Drives the Worker via `app.fetch(request, env)` so the full Hono
  * pipeline + middleware + signing path are exercised. Each test resets
@@ -10,22 +10,21 @@ import { describe, test, expect, beforeEach } from "bun:test";
 import app from "../src/index";
 import type { Env } from "../src/index";
 import {
-  makeOperatorKey,
+  makePrincipalKey,
   makeRegistryKey,
   makeSignedRegistration,
   randomNonce,
   resetStores,
-  type OperatorKey,
+  type PrincipalKey,
 } from "./helpers";
 import {
   canonicalJSON,
-  signEd25519,
   verifyEd25519,
 } from "../src/signing";
-import type { SignedAssertion, OperatorRecord } from "../src/types";
+import type { SignedAssertion, PrincipalRecord } from "../src/types";
 
 let env: Env;
-let opKey: OperatorKey;
+let pKey: PrincipalKey;
 
 beforeEach(async () => {
   resetStores();
@@ -35,7 +34,7 @@ beforeEach(async () => {
     REGISTRY_PUBLIC_KEY: reg.publicKey,
     ENVIRONMENT: "test",
   };
-  opKey = await makeOperatorKey();
+  pKey = await makePrincipalKey();
 });
 
 async function post(path: string, body: unknown): Promise<Response> {
@@ -53,19 +52,19 @@ async function get(path: string): Promise<Response> {
   return app.fetch(new Request(`http://localhost${path}`), env);
 }
 
-describe("POST /operators/:id/register — happy path", () => {
-  test("registers a new operator and returns signed assertion", async () => {
-    const body = await makeSignedRegistration("andreas", opKey, {
+describe("POST /principals/:id/register — happy path", () => {
+  test("registers a new principal and returns signed assertion", async () => {
+    const body = await makeSignedRegistration("andreas", pKey, {
       stacks: [{ stack_id: "andreas/laptop", display_name: "Laptop" }],
       capabilities: [
         { id: "tasks.code-review", description: "Reviews TS", networks: ["research-collab"] },
       ],
     });
-    const res = await post("/operators/andreas/register", body);
+    const res = await post("/principals/andreas/register", body);
     expect(res.status).toBe(201);
-    const json = (await res.json()) as SignedAssertion<OperatorRecord>;
-    expect(json.payload.operator_id).toBe("andreas");
-    expect(json.payload.operator_pubkey).toBe(opKey.publicKeyB64);
+    const json = (await res.json()) as SignedAssertion<PrincipalRecord>;
+    expect(json.payload.principal_id).toBe("andreas");
+    expect(json.payload.principal_pubkey).toBe(pKey.publicKeyB64);
     expect(json.payload.stacks).toHaveLength(1);
     expect(json.payload.capabilities).toHaveLength(1);
     expect(json.signature.length).toBeGreaterThan(0);
@@ -86,62 +85,62 @@ describe("POST /operators/:id/register — happy path", () => {
   });
 });
 
-describe("POST /operators/:id/register — validation failures", () => {
-  test("rejects invalid operator_id in path", async () => {
-    const body = await makeSignedRegistration("andreas", opKey);
-    const res = await post("/operators/INVALID_CAPS/register", body);
+describe("POST /principals/:id/register — validation failures", () => {
+  test("rejects invalid principal_id in path", async () => {
+    const body = await makeSignedRegistration("andreas", pKey);
+    const res = await post("/principals/INVALID_CAPS/register", body);
     expect(res.status).toBe(400);
   });
 
-  test("rejects body operator_id mismatch with path", async () => {
-    const body = await makeSignedRegistration("not-andreas", opKey);
-    const res = await post("/operators/andreas/register", body);
+  test("rejects body principal_id mismatch with path", async () => {
+    const body = await makeSignedRegistration("not-andreas", pKey);
+    const res = await post("/principals/andreas/register", body);
     expect(res.status).toBe(400);
     const json = (await res.json()) as { details: { field: string }[] };
-    expect(json.details.some((d) => d.field === "operator_id")).toBe(true);
+    expect(json.details.some((d) => d.field === "principal_id")).toBe(true);
   });
 
-  test("rejects stack_id whose operator prefix doesn't match", async () => {
-    const body = await makeSignedRegistration("andreas", opKey, {
+  test("rejects stack_id whose principal prefix doesn't match", async () => {
+    const body = await makeSignedRegistration("andreas", pKey, {
       stacks: [{ stack_id: "someoneelse/laptop" }],
     });
-    const res = await post("/operators/andreas/register", body);
+    const res = await post("/principals/andreas/register", body);
     expect(res.status).toBe(400);
   });
 
   test("rejects duplicate stack_id within same claim", async () => {
-    const body = await makeSignedRegistration("andreas", opKey, {
+    const body = await makeSignedRegistration("andreas", pKey, {
       stacks: [{ stack_id: "andreas/laptop" }, { stack_id: "andreas/laptop" }],
     });
-    const res = await post("/operators/andreas/register", body);
+    const res = await post("/principals/andreas/register", body);
     expect(res.status).toBe(400);
   });
 
   test("rejects malformed pubkey", async () => {
-    const body = await makeSignedRegistration("andreas", opKey, {
+    const body = await makeSignedRegistration("andreas", pKey, {
       pubkeyOverride: "short",
     });
-    const res = await post("/operators/andreas/register", body);
+    const res = await post("/principals/andreas/register", body);
     expect(res.status).toBe(400);
   });
 
   test("rejects capability id violating <domain>.<entity> grammar", async () => {
-    const body = await makeSignedRegistration("andreas", opKey, {
+    const body = await makeSignedRegistration("andreas", pKey, {
       capabilities: [{ id: "no-dot-here" }],
     });
-    const res = await post("/operators/andreas/register", body);
+    const res = await post("/principals/andreas/register", body);
     expect(res.status).toBe(400);
   });
 
   test("rejects missing nonce", async () => {
-    const body = await makeSignedRegistration("andreas", opKey, { nonce: "" });
-    const res = await post("/operators/andreas/register", body);
+    const body = await makeSignedRegistration("andreas", pKey, { nonce: "" });
+    const res = await post("/principals/andreas/register", body);
     expect(res.status).toBe(400);
   });
 
   test("rejects invalid JSON body", async () => {
     const res = await app.fetch(
-      new Request("http://localhost/operators/andreas/register", {
+      new Request("http://localhost/principals/andreas/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: "not json",
@@ -152,68 +151,68 @@ describe("POST /operators/:id/register — validation failures", () => {
   });
 });
 
-describe("POST /operators/:id/register — auth failures", () => {
+describe("POST /principals/:id/register — auth failures", () => {
   test("rejects signature signed by wrong key", async () => {
-    const otherKey = await makeOperatorKey();
+    const otherKey = await makePrincipalKey();
     const body = await makeSignedRegistration("andreas", otherKey, {
-      pubkeyOverride: opKey.publicKeyB64, // claim pubkey from someone else
+      pubkeyOverride: pKey.publicKeyB64, // claim pubkey from someone else
     });
-    const res = await post("/operators/andreas/register", body);
+    const res = await post("/principals/andreas/register", body);
     expect(res.status).toBe(401);
   });
 
   test("rejects tampered claim after signing", async () => {
-    const body = await makeSignedRegistration("andreas", opKey);
+    const body = await makeSignedRegistration("andreas", pKey);
     // Tamper: add an extra stack post-signature.
     body.claim.stacks.push({ stack_id: "andreas/sneaked-in" });
-    const res = await post("/operators/andreas/register", body);
+    const res = await post("/principals/andreas/register", body);
     expect(res.status).toBe(401);
   });
 
   test("rejects issued_at outside skew window", async () => {
     const old = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-    const body = await makeSignedRegistration("andreas", opKey, { issuedAt: old });
-    const res = await post("/operators/andreas/register", body);
+    const body = await makeSignedRegistration("andreas", pKey, { issuedAt: old });
+    const res = await post("/principals/andreas/register", body);
     expect(res.status).toBe(400);
   });
 
   test("rejects replayed nonce", async () => {
     const nonce = randomNonce();
-    const body1 = await makeSignedRegistration("andreas", opKey, { nonce });
-    const res1 = await post("/operators/andreas/register", body1);
+    const body1 = await makeSignedRegistration("andreas", pKey, { nonce });
+    const res1 = await post("/principals/andreas/register", body1);
     expect(res1.status).toBe(201);
 
     // Same nonce, different claim (different stacks list to bypass any other gates)
-    const body2 = await makeSignedRegistration("andreas", opKey, { nonce });
-    const res2 = await post("/operators/andreas/register", body2);
+    const body2 = await makeSignedRegistration("andreas", pKey, { nonce });
+    const res2 = await post("/principals/andreas/register", body2);
     expect(res2.status).toBe(409);
   });
 
   test("rejects silent pubkey rotation", async () => {
-    const body1 = await makeSignedRegistration("andreas", opKey);
-    const res1 = await post("/operators/andreas/register", body1);
+    const body1 = await makeSignedRegistration("andreas", pKey);
+    const res1 = await post("/principals/andreas/register", body1);
     expect(res1.status).toBe(201);
 
-    const newKey = await makeOperatorKey();
+    const newKey = await makePrincipalKey();
     const body2 = await makeSignedRegistration("andreas", newKey);
-    const res2 = await post("/operators/andreas/register", body2);
+    const res2 = await post("/principals/andreas/register", body2);
     expect(res2.status).toBe(409);
   });
 
   test("permits re-register with same pubkey (replaces stacks, no leftover)", async () => {
     // Echo cortex#225 nit: tighten the symmetric "old stacks gone" assertion.
-    const body1 = await makeSignedRegistration("andreas", opKey, {
+    const body1 = await makeSignedRegistration("andreas", pKey, {
       stacks: [{ stack_id: "andreas/laptop" }],
     });
-    const res1 = await post("/operators/andreas/register", body1);
+    const res1 = await post("/principals/andreas/register", body1);
     expect(res1.status).toBe(201);
 
-    const body2 = await makeSignedRegistration("andreas", opKey, {
+    const body2 = await makeSignedRegistration("andreas", pKey, {
       stacks: [{ stack_id: "andreas/server" }],
     });
-    const res2 = await post("/operators/andreas/register", body2);
+    const res2 = await post("/principals/andreas/register", body2);
     expect(res2.status).toBe(201);
-    const json = (await res2.json()) as SignedAssertion<OperatorRecord>;
+    const json = (await res2.json()) as SignedAssertion<PrincipalRecord>;
     expect(json.payload.stacks).toHaveLength(1);
     expect(json.payload.stacks[0]!.stack_id).toBe("andreas/server");
     // Confirm the old `andreas/laptop` is fully gone — not just that
@@ -223,14 +222,14 @@ describe("POST /operators/:id/register — auth failures", () => {
   });
 });
 
-describe("POST /operators/:id/register — unconfigured registry", () => {
+describe("POST /principals/:id/register — unconfigured registry", () => {
   // Echo cortex#225 issue #1: refuse to mutate state when the Worker
   // cannot produce a signed receipt.
   test("returns 503 and does not mutate state when REGISTRY_SIGNING_KEY is absent", async () => {
-    const body = await makeSignedRegistration("andreas", opKey);
+    const body = await makeSignedRegistration("andreas", pKey);
     const unconfigured: Env = { ENVIRONMENT: "test" };
     const res = await app.fetch(
-      new Request("http://localhost/operators/andreas/register", {
+      new Request("http://localhost/principals/andreas/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -242,31 +241,31 @@ describe("POST /operators/:id/register — unconfigured registry", () => {
     expect(json.error).toBe("registry_unconfigured");
 
     // Switch to a configured env on the same module-shared store and
-    // confirm the operator was NOT silently persisted by the 503 path.
+    // confirm the principal was NOT silently persisted by the 503 path.
     const getRes = await app.fetch(
-      new Request("http://localhost/operators/andreas"),
+      new Request("http://localhost/principals/andreas"),
       env,
     );
     expect(getRes.status).toBe(404);
   });
 });
 
-describe("GET /operators/:id", () => {
-  test("returns 404 for unknown operator", async () => {
-    const res = await get("/operators/nobody");
+describe("GET /principals/:id", () => {
+  test("returns 404 for unknown principal", async () => {
+    const res = await get("/principals/nobody");
     expect(res.status).toBe(404);
   });
 
-  test("returns signed assertion for registered operator", async () => {
-    const body = await makeSignedRegistration("andreas", opKey, {
+  test("returns signed assertion for registered principal", async () => {
+    const body = await makeSignedRegistration("andreas", pKey, {
       stacks: [{ stack_id: "andreas/laptop" }],
     });
-    await post("/operators/andreas/register", body);
+    await post("/principals/andreas/register", body);
 
-    const res = await get("/operators/andreas");
+    const res = await get("/principals/andreas");
     expect(res.status).toBe(200);
-    const json = (await res.json()) as SignedAssertion<OperatorRecord>;
-    expect(json.payload.operator_pubkey).toBe(opKey.publicKeyB64);
+    const json = (await res.json()) as SignedAssertion<PrincipalRecord>;
+    expect(json.payload.principal_pubkey).toBe(pKey.publicKeyB64);
     expect(json.signature.length).toBeGreaterThan(0);
 
     // Verify registry signature.
@@ -283,8 +282,8 @@ describe("GET /operators/:id", () => {
     expect(ok).toBe(true);
   });
 
-  test("invalid operator_id in path returns 400", async () => {
-    const res = await get("/operators/CAPS_INVALID");
+  test("invalid principal_id in path returns 400", async () => {
+    const res = await get("/principals/CAPS_INVALID");
     expect(res.status).toBe(400);
   });
 });

@@ -6,11 +6,11 @@ import { describe, test, expect, beforeEach } from "bun:test";
 import app from "../src/index";
 import type { Env } from "../src/index";
 import {
-  makeOperatorKey,
+  makePrincipalKey,
   makeRegistryKey,
   makeSignedRegistration,
   resetStores,
-  type OperatorKey,
+  type PrincipalKey,
 } from "./helpers";
 import type { NetworkRoster, SignedAssertion } from "../src/types";
 
@@ -47,7 +47,7 @@ describe("GET /networks/:id/roster", () => {
     expect(res.status).toBe(400);
   });
 
-  test("returns empty roster when no operators are in the network", async () => {
+  test("returns empty roster when no principals are in the network", async () => {
     const res = await get("/networks/research-collab/roster");
     expect(res.status).toBe(200);
     const json = (await res.json()) as SignedAssertion<NetworkRoster>;
@@ -55,14 +55,14 @@ describe("GET /networks/:id/roster", () => {
     expect(json.payload.members).toEqual([]);
   });
 
-  test("aggregates operators whose capabilities target the network", async () => {
-    const opA: OperatorKey = await makeOperatorKey();
-    const opB: OperatorKey = await makeOperatorKey();
-    const opC: OperatorKey = await makeOperatorKey();
+  test("aggregates principals whose capabilities target the network", async () => {
+    const pA: PrincipalKey = await makePrincipalKey();
+    const pB: PrincipalKey = await makePrincipalKey();
+    const pC: PrincipalKey = await makePrincipalKey();
 
     await post(
-      "/operators/alpha/register",
-      await makeSignedRegistration("alpha", opA, {
+      "/principals/alpha/register",
+      await makeSignedRegistration("alpha", pA, {
         capabilities: [
           { id: "tasks.code-review", networks: ["research-collab"] },
           { id: "tasks.docs-edit", networks: ["docs-net"] },
@@ -70,15 +70,15 @@ describe("GET /networks/:id/roster", () => {
       }),
     );
     await post(
-      "/operators/beta/register",
-      await makeSignedRegistration("beta", opB, {
+      "/principals/beta/register",
+      await makeSignedRegistration("beta", pB, {
         capabilities: [{ id: "tasks.code-review", networks: ["research-collab"] }],
       }),
     );
     // Gamma announces to a different network only — should be excluded.
     await post(
-      "/operators/gamma/register",
-      await makeSignedRegistration("gamma", opC, {
+      "/principals/gamma/register",
+      await makeSignedRegistration("gamma", pC, {
         capabilities: [{ id: "tasks.code-review", networks: ["other-net"] }],
       }),
     );
@@ -86,11 +86,11 @@ describe("GET /networks/:id/roster", () => {
     const res = await get("/networks/research-collab/roster");
     expect(res.status).toBe(200);
     const json = (await res.json()) as SignedAssertion<NetworkRoster>;
-    const ids = json.payload.members.map((m) => m.operator_id).sort();
+    const ids = json.payload.members.map((m) => m.principal_id).sort();
     expect(ids).toEqual(["alpha", "beta"]);
-    const alpha = json.payload.members.find((m) => m.operator_id === "alpha");
+    const alpha = json.payload.members.find((m) => m.principal_id === "alpha");
     expect(alpha?.capabilities).toEqual(["tasks.code-review"]);
-    expect(alpha?.operator_pubkey).toBe(opA.publicKeyB64);
+    expect(alpha?.principal_pubkey).toBe(pA.publicKeyB64);
   });
 
   test("returns signed assertion verifiable with registry pubkey", async () => {

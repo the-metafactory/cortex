@@ -324,9 +324,10 @@ export class RegistryClient implements RegistryClientReader {
     principalId: string,
     signal: AbortSignal,
   ): Promise<void> {
-    // Wire path stays `/operators/:operator_id` until PR-R7c-network-registry
-    // renames the registry service.
-    const url = `${this.url}/operators/${encodeURIComponent(principalId)}`;
+    // Wire path is `/principals/:principal_id` per PR-R7c-network-registry.
+    // The cortex-internal cache type (`OperatorRecord`) keeps its symbol
+    // pending PR-R2.G; only the wire path + field reads flip here.
+    const url = `${this.url}/principals/${encodeURIComponent(principalId)}`;
     const raw = await this.fetchJson(url, signal);
     if (raw === undefined) return; // already logged inside fetchJson
 
@@ -386,22 +387,22 @@ export class RegistryClient implements RegistryClientReader {
       );
       return undefined;
     }
-    // Sanity-check the payload looks like an OperatorRecord. We don't
+    // Sanity-check the payload looks like a PrincipalRecord. We don't
     // re-validate the deep structure here — the registry is the source
     // of truth for its own shape — but we do require the same
-    // operator_id we requested, defending against a swapped payload.
-    // Wire-field reads (`payload.operator_id`, `payload.operator_pubkey`)
-    // stay until PR-R7c-network-registry renames the registry service.
+    // principal_id we requested, defending against a swapped payload.
+    // Wire-field reads (`payload.principal_id`, `payload.principal_pubkey`)
+    // mirror PR-R7c-network-registry's wire-shape.
     const payload = assertion.payload as Record<string, unknown>;
-    if (payload.operator_id !== principalId) {
+    if (payload.principal_id !== principalId) {
       this.logError(
-        `refresh(${principalId}): payload.operator_id mismatch (got "${String(payload.operator_id)}"); ignoring`,
+        `refresh(${principalId}): payload.principal_id mismatch (got "${String(payload.principal_id)}"); ignoring`,
       );
       return undefined;
     }
-    if (typeof payload.operator_pubkey !== "string") {
+    if (typeof payload.principal_pubkey !== "string") {
       this.logError(
-        `refresh(${principalId}): payload.operator_pubkey missing or non-string; ignoring`,
+        `refresh(${principalId}): payload.principal_pubkey missing or non-string; ignoring`,
       );
       return undefined;
     }
@@ -417,11 +418,11 @@ export class RegistryClient implements RegistryClientReader {
     // cortex#230 rounds 1 + 3.
     //
     // Grammar: 43 chars of standard-base64 alphabet + one `=` of
-    // padding = 44 chars total, matching `OperatorRecord.operator_pubkey`
+    // padding = 44 chars total, matching `PrincipalRecord.principal_pubkey`
     // on the producer side (base64 of 32 raw bytes).
-    if (!/^[A-Za-z0-9+/]{43}=$/.test(payload.operator_pubkey)) {
+    if (!/^[A-Za-z0-9+/]{43}=$/.test(payload.principal_pubkey)) {
       this.logError(
-        `refresh(${principalId}): payload.operator_pubkey is not base64-Ed25519 (got "${payload.operator_pubkey.slice(0, 12)}…"); ignoring`,
+        `refresh(${principalId}): payload.principal_pubkey is not base64-Ed25519 (got "${payload.principal_pubkey.slice(0, 12)}…"); ignoring`,
       );
       return undefined;
     }
@@ -450,10 +451,12 @@ export class RegistryClient implements RegistryClientReader {
     }
     // Defensive: the producer types include arrays we trust the
     // service to populate, but a corrupted payload could send the
-    // wrong shape past the structural checks above. Normalise.
+    // wrong shape past the structural checks above. Normalise. The
+    // cortex-internal cache type (`OperatorRecord`) keeps its symbol
+    // pending PR-R2.G; wire fields read as `principal_*` per R7c.
     return {
       operator_id: principalId,
-      operator_pubkey: payload.operator_pubkey,
+      operator_pubkey: payload.principal_pubkey,
       stacks: Array.isArray(payload.stacks) ? (payload.stacks as OperatorRecord["stacks"]) : [],
       capabilities: Array.isArray(payload.capabilities) ? (payload.capabilities as OperatorRecord["capabilities"]) : [],
       updated_at: typeof payload.updated_at === "string" ? payload.updated_at : "",

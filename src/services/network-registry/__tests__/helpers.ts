@@ -1,5 +1,5 @@
 /**
- * Shared test helpers — operator-side signing rig + assertion helpers.
+ * Shared test helpers — principal-side signing rig + assertion helpers.
  *
  * The tests deliberately mint REAL Ed25519 keypairs via WebCrypto so the
  * full verify path is exercised. Generating a fresh keypair per test
@@ -12,16 +12,16 @@ import type { Capability, RegistrationClaim, StackIdentity } from "../src/types"
 import { _setNonceCacheForTest, _setStoreForTest } from "../src/store";
 import { _resetDerivedPublicKeyForTest } from "../src/index";
 
-export interface OperatorKey {
+export interface PrincipalKey {
   privateKeyB64: string;
   publicKeyB64: string;
 }
 
 /**
- * Generate a per-test operator keypair. Awaited once per test in
+ * Generate a per-test principal keypair. Awaited once per test in
  * beforeEach, then used to sign multiple claims as the test needs.
  */
-export async function makeOperatorKey(): Promise<OperatorKey> {
+export async function makePrincipalKey(): Promise<PrincipalKey> {
   return generateKeypair();
 }
 
@@ -45,12 +45,12 @@ export function resetStores(): void {
 }
 
 /**
- * Build a signed registration body for the given operator. Default
+ * Build a signed registration body for the given principal. Default
  * stacks/capabilities are empty; tests override via opts.
  */
 export async function makeSignedRegistration(
-  operatorId: string,
-  opKey: OperatorKey,
+  principalId: string,
+  pKey: PrincipalKey,
   opts: {
     stacks?: StackIdentity[];
     capabilities?: Capability[];
@@ -63,15 +63,15 @@ export async function makeSignedRegistration(
   } = {},
 ): Promise<{ claim: RegistrationClaim; signature: string }> {
   const claim: RegistrationClaim = {
-    operator_id: operatorId,
-    operator_pubkey: opts.pubkeyOverride ?? opKey.publicKeyB64,
+    principal_id: principalId,
+    principal_pubkey: opts.pubkeyOverride ?? pKey.publicKeyB64,
     stacks: opts.stacks ?? [],
     capabilities: opts.capabilities ?? [],
     issued_at: opts.issuedAt ?? new Date().toISOString(),
     nonce: opts.nonce ?? randomNonce(),
   };
   const message = new TextEncoder().encode(canonicalJSON(claim));
-  const signature = await signEd25519(opKey.privateKeyB64, message);
+  const signature = await signEd25519(pKey.privateKeyB64, message);
   return { claim, signature };
 }
 

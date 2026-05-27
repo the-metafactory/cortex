@@ -7,11 +7,11 @@ compatibility_flags = ["nodejs_compat"]
 # at network.meta-factory.ai (per the plan; the operational DNS choice
 # is finalised at deploy time). Auth model:
 #
-#   POST /operators/{operator_id}/register
+#   POST /principals/{principal_id}/register
 #     — open endpoint. Authenticity is enforced by the request BODY
-#     carrying a signed assertion: the operator signs their own
-#     registration with their operator NKey. The registry verifies the
-#     signature against the operator's CURRENT pubkey (or, on first
+#     carrying a signed assertion: the principal signs their own
+#     registration with their principal NKey. The registry verifies the
+#     signature against the principal's CURRENT pubkey (or, on first
 #     register, trust-on-first-use; rotation requires the previous key
 #     to sign the new one — out of scope for v1, follow-up).
 #
@@ -20,7 +20,7 @@ compatibility_flags = ["nodejs_compat"]
 #     registry's own Ed25519 key (REGISTRY_SIGNING_KEY) so that cortex
 #     peers verify the chain before trusting cached pubkeys.
 #
-# No CF Access bypass policies on this Worker. M2M traffic (operator
+# No CF Access bypass policies on this Worker. M2M traffic (principal
 # cortex publishing their pubkey, peer cortex querying) authenticates
 # at the application layer via Ed25519 signatures — same defense-in-
 # depth pattern as S-058 in grove-api.

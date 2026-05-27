@@ -23,7 +23,7 @@ import type {
   Capability,
   CapabilityHit,
   NetworkRoster,
-  OperatorRecord,
+  PrincipalRecord,
   StackIdentity,
 } from "./types";
 
@@ -33,27 +33,27 @@ import type {
 
 export interface RegistryStore {
   /**
-   * Upsert an operator record. Returns the post-write view. The
+   * Upsert a principal record. Returns the post-write view. The
    * `validate` step at the route layer has already enforced grammar
    * + signature; the store only worries about persistence.
    */
-  putOperator(
-    operatorId: string,
+  putPrincipal(
+    principalId: string,
     pubkey: string,
     stacks: StackIdentity[],
     capabilities: Capability[],
-  ): Promise<OperatorRecord>;
+  ): Promise<PrincipalRecord>;
 
-  getOperator(operatorId: string): Promise<OperatorRecord | undefined>;
+  getPrincipal(principalId: string): Promise<PrincipalRecord | undefined>;
 
   /**
-   * List all operators (used by `/networks/{id}/roster` to compute
+   * List all principals (used by `/networks/{id}/roster` to compute
    * implicit membership and by `/capabilities` for search). Bounded
    * by federation size — hundreds, not millions — so an O(n) scan
    * is fine for v1. A D1 implementation would push the filter into
    * SQL.
    */
-  listOperators(): Promise<OperatorRecord[]>;
+  listPrincipals(): Promise<PrincipalRecord[]>;
 
   /** Test/admin helper. Not exposed via HTTP. */
   reset(): Promise<void>;
@@ -64,7 +64,7 @@ export interface RegistryStore {
 // =============================================================================
 
 /**
- * Replay-protection cache. Operators include a `nonce` in every
+ * Replay-protection cache. Principals include a `nonce` in every
  * signed registration; the registry refuses any nonce it has seen
  * inside the configured window.
  *
@@ -78,9 +78,9 @@ export interface RegistryStore {
  * window CAN succeed against a different isolate / colo whose nonce
  * map is empty for that key. Defense-in-depth only holds for delayed
  * replays here, not in-window ones. The fix is to pull nonce storage
- * into the same durable layer as operators when D1 lands — see the
+ * into the same durable layer as principals when D1 lands — see the
  * README §Roadmap "Durable nonce cache" follow-up. v1 ships as-is
- * because (a) the operator's private key is still the gate and (b)
+ * because (a) the principal's private key is still the gate and (b)
  * a successful in-window replay only re-applies the same claim, with
  * no privilege escalation versus the original.
  */
@@ -100,7 +100,7 @@ class InMemoryNonceCache implements NonceCache {
 
   async recordIfFresh(nonce: string, now: number): Promise<boolean> {
     // Threshold-gated sweep (Echo cortex#225 issue #7). At federation
-    // scale (hundreds of operators), the per-call O(n) sweep was fine,
+    // scale (hundreds of principals), the per-call O(n) sweep was fine,
     // but gating on size keeps the steady-state cost flat regardless
     // of bursty traffic. We sweep only when the map grows past the
     // threshold; the 10-minute eviction window is unchanged.
@@ -124,35 +124,35 @@ class InMemoryNonceCache implements NonceCache {
 // =============================================================================
 
 export class InMemoryRegistryStore implements RegistryStore {
-  private readonly operators = new Map<string, OperatorRecord>();
+  private readonly principals = new Map<string, PrincipalRecord>();
 
-  async putOperator(
-    operatorId: string,
+  async putPrincipal(
+    principalId: string,
     pubkey: string,
     stacks: StackIdentity[],
     capabilities: Capability[],
-  ): Promise<OperatorRecord> {
-    const record: OperatorRecord = {
-      operator_id: operatorId,
-      operator_pubkey: pubkey,
+  ): Promise<PrincipalRecord> {
+    const record: PrincipalRecord = {
+      principal_id: principalId,
+      principal_pubkey: pubkey,
       stacks,
       capabilities,
       updated_at: new Date().toISOString(),
     };
-    this.operators.set(operatorId, record);
+    this.principals.set(principalId, record);
     return record;
   }
 
-  async getOperator(operatorId: string): Promise<OperatorRecord | undefined> {
-    return this.operators.get(operatorId);
+  async getPrincipal(principalId: string): Promise<PrincipalRecord | undefined> {
+    return this.principals.get(principalId);
   }
 
-  async listOperators(): Promise<OperatorRecord[]> {
-    return [...this.operators.values()];
+  async listPrincipals(): Promise<PrincipalRecord[]> {
+    return [...this.principals.values()];
   }
 
   async reset(): Promise<void> {
-    this.operators.clear();
+    this.principals.clear();
   }
 }
 
@@ -193,25 +193,25 @@ export function _setNonceCacheForTest(c: NonceCache | undefined): void {
 // =============================================================================
 
 /**
- * Compute a network's roster from the flat operator list. Membership
- * is implicit: an operator is "in" network X if any of their
+ * Compute a network's roster from the flat principal list. Membership
+ * is implicit: a principal is "in" network X if any of their
  * capabilities lists X in `capability.networks[]`. We collapse the
- * matching capabilities back to the per-operator level for the
+ * matching capabilities back to the per-principal level for the
  * response shape.
  */
-export function rosterFromOperators(
-  operators: OperatorRecord[],
+export function rosterFromPrincipals(
+  principals: PrincipalRecord[],
   networkId: string,
 ): NetworkRoster {
   const members: NetworkRoster["members"] = [];
-  for (const op of operators) {
-    const matched = op.capabilities
+  for (const p of principals) {
+    const matched = p.capabilities
       .filter((c) => (c.networks ?? []).includes(networkId))
       .map((c) => c.id);
     if (matched.length > 0) {
       members.push({
-        operator_id: op.operator_id,
-        operator_pubkey: op.operator_pubkey,
+        principal_id: p.principal_id,
+        principal_pubkey: p.principal_pubkey,
         capabilities: matched,
       });
     }
@@ -220,25 +220,25 @@ export function rosterFromOperators(
 }
 
 /**
- * Search capabilities across all operators. The query is a substring
+ * Search capabilities across all principals. The query is a substring
  * match against `capability.id` (lowercase, dotted) and against
  * `description`. v1 returns all hits unsorted — pagination is a
  * follow-up when the registry has enough capabilities to need it.
  */
 export function searchCapabilities(
-  operators: OperatorRecord[],
+  principals: PrincipalRecord[],
   query: string,
 ): CapabilityHit[] {
   const q = query.toLowerCase();
   const hits: CapabilityHit[] = [];
-  for (const op of operators) {
-    for (const cap of op.capabilities) {
+  for (const p of principals) {
+    for (const cap of p.capabilities) {
       const idMatch = cap.id.toLowerCase().includes(q);
       const descMatch = (cap.description ?? "").toLowerCase().includes(q);
       if (idMatch || descMatch) {
         hits.push({
           capability_id: cap.id,
-          operator_id: op.operator_id,
+          principal_id: p.principal_id,
           networks: cap.networks ?? [],
           description: cap.description,
         });

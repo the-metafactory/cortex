@@ -27,10 +27,10 @@ import type {
 // Grammar regexes
 // =============================================================================
 
-/** Same shape as `OperatorSchema.id` — letter-prefixed (cortex#141). */
-const OPERATOR_ID_RE = /^[a-z][a-z0-9-]*$/;
+/** Same shape as `PrincipalConfigSchema.id` — letter-prefixed (cortex#141). */
+const PRINCIPAL_ID_RE = /^[a-z][a-z0-9-]*$/;
 
-/** `{operator_id}/{stack_slug}` — both parts follow operator grammar. */
+/** `{principal_id}/{stack_slug}` — both parts follow principal grammar. */
 const STACK_ID_RE = /^[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*$/;
 
 /** Phase A.6 capability grammar — `<domain>.<entity>`. */
@@ -39,15 +39,15 @@ const CAPABILITY_ID_RE = /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/;
 /** Standard base64 alphabet + padding. We don't accept URL-safe here. */
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
-/** Network id — same grammar as operator id. */
+/** Network id — same grammar as principal id. */
 const NETWORK_ID_RE = /^[a-z][a-z0-9-]*$/;
 
 // =============================================================================
 // Public validators
 // =============================================================================
 
-export function isValidOperatorId(id: string): boolean {
-  return typeof id === "string" && id.length > 0 && id.length <= 64 && OPERATOR_ID_RE.test(id);
+export function isValidPrincipalId(id: string): boolean {
+  return typeof id === "string" && id.length > 0 && id.length <= 64 && PRINCIPAL_ID_RE.test(id);
 }
 
 export function isValidNetworkId(id: string): boolean {
@@ -91,10 +91,10 @@ export interface ValidationError {
  * structurally valid and ready for the crypto step.
  *
  * Cross-field rules enforced here (matching the schema in PR #223):
- *   - `claim.operator_id` MUST equal the URL path param (passed in
- *     `expectedOperatorId`). Mismatch is a forged-attribution attempt.
- *   - Every `stack_id` MUST be prefixed by `{operator_id}/`. Same
- *     reason — prevents operator A claiming a stack id under operator B.
+ *   - `claim.principal_id` MUST equal the URL path param (passed in
+ *     `expectedPrincipalId`). Mismatch is a forged-attribution attempt.
+ *   - Every `stack_id` MUST be prefixed by `{principal_id}/`. Same
+ *     reason — prevents principal A claiming a stack id under principal B.
  *   - Stack ids unique within the claim.
  *   - Capability ids unique within the claim.
  *   - All declared networks in `capabilities[].networks[]` follow the
@@ -102,7 +102,7 @@ export interface ValidationError {
  */
 export function validateRegistrationClaim(
   claim: unknown,
-  expectedOperatorId: string,
+  expectedPrincipalId: string,
 ): { ok: true; claim: RegistrationClaim } | { ok: false; errors: ValidationError[] } {
   const errors: ValidationError[] = [];
 
@@ -111,19 +111,19 @@ export function validateRegistrationClaim(
   }
   const c = claim as Record<string, unknown>;
 
-  // operator_id
-  if (typeof c.operator_id !== "string" || !isValidOperatorId(c.operator_id)) {
-    errors.push({ field: "operator_id", message: "must be lowercase alphanumeric + hyphen, letter-prefixed" });
-  } else if (c.operator_id !== expectedOperatorId) {
+  // principal_id
+  if (typeof c.principal_id !== "string" || !isValidPrincipalId(c.principal_id)) {
+    errors.push({ field: "principal_id", message: "must be lowercase alphanumeric + hyphen, letter-prefixed" });
+  } else if (c.principal_id !== expectedPrincipalId) {
     errors.push({
-      field: "operator_id",
-      message: `body operator_id "${c.operator_id}" does not match path "${expectedOperatorId}"`,
+      field: "principal_id",
+      message: `body principal_id "${c.principal_id}" does not match path "${expectedPrincipalId}"`,
     });
   }
 
-  // operator_pubkey
-  if (typeof c.operator_pubkey !== "string" || !isValidPubkey(c.operator_pubkey)) {
-    errors.push({ field: "operator_pubkey", message: "must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)" });
+  // principal_pubkey
+  if (typeof c.principal_pubkey !== "string" || !isValidPubkey(c.principal_pubkey)) {
+    errors.push({ field: "principal_pubkey", message: "must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)" });
   }
 
   // stacks
@@ -141,15 +141,15 @@ export function validateRegistrationClaim(
       if (typeof sObj.stack_id !== "string" || !isValidStackId(sObj.stack_id)) {
         errors.push({
           field: `stacks[${i.toString()}].stack_id`,
-          message: "must be {operator_id}/{stack_slug}, both letter-prefixed",
+          message: "must be {principal_id}/{stack_slug}, both letter-prefixed",
         });
         return;
       }
-      const opPrefix = sObj.stack_id.split("/")[0] ?? "";
-      if (typeof c.operator_id === "string" && opPrefix !== c.operator_id) {
+      const principalPrefix = sObj.stack_id.split("/")[0] ?? "";
+      if (typeof c.principal_id === "string" && principalPrefix !== c.principal_id) {
         errors.push({
           field: `stacks[${i.toString()}].stack_id`,
-          message: `stack_id prefix "${opPrefix}" must match operator_id "${c.operator_id.toString()}"`,
+          message: `stack_id prefix "${principalPrefix}" must match principal_id "${c.principal_id.toString()}"`,
         });
         return;
       }
@@ -288,8 +288,8 @@ export function validateRegistrationClaim(
   return {
     ok: true,
     claim: {
-      operator_id: c.operator_id as string,
-      operator_pubkey: c.operator_pubkey as string,
+      principal_id: c.principal_id as string,
+      principal_pubkey: c.principal_pubkey as string,
       stacks,
       capabilities,
       issued_at: c.issued_at as string,

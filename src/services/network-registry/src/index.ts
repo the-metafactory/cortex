@@ -6,8 +6,8 @@
  * registry at startup + on schedule to refresh peer pubkeys.
  *
  * Endpoints (D.4.2):
- *   POST /operators/{operator_id}/register
- *   GET  /operators/{operator_id}
+ *   POST /principals/{principal_id}/register
+ *   GET  /principals/{principal_id}
  *   GET  /networks/{network_id}/roster
  *   GET  /capabilities?query=<substring>
  *   GET  /registry/pubkey                 — pin this client-side
@@ -15,8 +15,8 @@
  *
  * Trust model
  * ───────────
- * - POST /operators/.../register is open at the HTTP layer; authenticity
- *   is enforced by the signed assertion in the body (operator Ed25519
+ * - POST /principals/.../register is open at the HTTP layer; authenticity
+ *   is enforced by the signed assertion in the body (principal Ed25519
  *   signature over canonical-JSON of the claim, verified against the
  *   declared pubkey). First-sight is TOFU; subsequent registers MUST
  *   sign with the on-record pubkey. Rotation (transition claim co-signed
@@ -33,7 +33,7 @@
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { operatorRoutes } from "./routes/operators";
+import { principalRoutes } from "./routes/principals";
 import { networkRoutes } from "./routes/networks";
 import { capabilityRoutes } from "./routes/capabilities";
 import { pubkeyFromPkcs8 } from "./signing";
@@ -165,7 +165,7 @@ app.get("/registry/pubkey", (c) => {
 // Mount route groups
 // ---------------------------------------------------------------------------
 
-app.route("/", operatorRoutes());
+app.route("/", principalRoutes());
 app.route("/", networkRoutes());
 app.route("/", capabilityRoutes());
 

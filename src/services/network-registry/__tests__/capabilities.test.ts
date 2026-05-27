@@ -6,7 +6,7 @@ import { describe, test, expect, beforeEach } from "bun:test";
 import app from "../src/index";
 import type { Env } from "../src/index";
 import {
-  makeOperatorKey,
+  makePrincipalKey,
   makeRegistryKey,
   makeSignedRegistration,
   resetStores,
@@ -53,11 +53,11 @@ describe("GET /capabilities", () => {
   });
 
   test("returns hits matching the id substring", async () => {
-    const opA = await makeOperatorKey();
-    const opB = await makeOperatorKey();
+    const pA = await makePrincipalKey();
+    const pB = await makePrincipalKey();
     await post(
-      "/operators/alpha/register",
-      await makeSignedRegistration("alpha", opA, {
+      "/principals/alpha/register",
+      await makeSignedRegistration("alpha", pA, {
         capabilities: [
           { id: "tasks.code-review", description: "TS + Rust", networks: ["n1"] },
           { id: "tasks.docs-edit", networks: ["n1"] },
@@ -65,8 +65,8 @@ describe("GET /capabilities", () => {
       }),
     );
     await post(
-      "/operators/beta/register",
-      await makeSignedRegistration("beta", opB, {
+      "/principals/beta/register",
+      await makeSignedRegistration("beta", pB, {
         capabilities: [{ id: "infra.deploy", networks: ["n2"] }],
       }),
     );
@@ -83,10 +83,10 @@ describe("GET /capabilities", () => {
   });
 
   test("matches description case-insensitively", async () => {
-    const op = await makeOperatorKey();
+    const p = await makePrincipalKey();
     await post(
-      "/operators/alpha/register",
-      await makeSignedRegistration("alpha", op, {
+      "/principals/alpha/register",
+      await makeSignedRegistration("alpha", p, {
         capabilities: [
           { id: "tasks.code-review", description: "TypeScript reviewer", networks: ["n1"] },
         ],

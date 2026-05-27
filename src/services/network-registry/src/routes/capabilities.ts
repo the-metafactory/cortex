@@ -10,7 +10,7 @@
 
 import { Hono } from "hono";
 import type { Env } from "../index";
-import { signAssertion } from "./operators";
+import { signAssertion } from "./principals";
 import { getStore, searchCapabilities } from "../store";
 
 /** Hard cap on result count so pathological queries don't blow up. */
@@ -28,8 +28,8 @@ export function capabilityRoutes(): Hono<{ Bindings: Env }> {
       return c.json({ error: "query parameter too long (max 128 chars)" }, 400);
     }
     const store = getStore();
-    const operators = await store.listOperators();
-    const allHits = searchCapabilities(operators, query);
+    const principals = await store.listPrincipals();
+    const allHits = searchCapabilities(principals, query);
     const hits = allHits.slice(0, MAX_HITS);
     const assertion = await signAssertion(c.env, { query, hits, truncated: allHits.length > MAX_HITS });
     return c.json(assertion);

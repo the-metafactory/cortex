@@ -2,7 +2,7 @@
  * IAW D.4.2 — Network endpoints.
  *
  *   GET /networks/{network_id}/roster
- *     Query who's in this network. Membership is implicit: an operator
+ *     Query who's in this network. Membership is implicit: a principal
  *     is "in" a network if any of their announced capabilities lists
  *     that network. Returns a registry-signed assertion so the caller
  *     can pin the registry pubkey and verify the chain before
@@ -11,8 +11,8 @@
 
 import { Hono } from "hono";
 import type { Env } from "../index";
-import { signAssertion } from "./operators";
-import { getStore, rosterFromOperators } from "../store";
+import { signAssertion } from "./principals";
+import { getStore, rosterFromPrincipals } from "../store";
 import { isValidNetworkId } from "../validate";
 
 export function networkRoutes(): Hono<{ Bindings: Env }> {
@@ -24,8 +24,8 @@ export function networkRoutes(): Hono<{ Bindings: Env }> {
       return c.json({ error: "invalid network_id in path" }, 400);
     }
     const store = getStore();
-    const operators = await store.listOperators();
-    const roster = rosterFromOperators(operators, networkId);
+    const principals = await store.listPrincipals();
+    const roster = rosterFromPrincipals(principals, networkId);
     const assertion = await signAssertion(c.env, roster);
     return c.json(assertion);
   });

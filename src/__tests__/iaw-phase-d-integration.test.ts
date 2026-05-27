@@ -23,7 +23,7 @@
  *      stamps.
  *
  *   2. **D.6.2 — registry register + query.** Alpha registers with the
- *      D.4 network-registry service; beta queries `GET /operators/alpha`
+ *      D.4 network-registry service; beta queries `GET /principals/alpha`
  *      and verifies the registry's signed assertion against the pinned
  *      registry pubkey. The cortex-side `RegistryClient` (D.4.3) is a
  *      separate parallel slice; this test scopes to the producer
@@ -76,7 +76,7 @@ import {
   canonicalJSON,
 } from "../services/network-registry/src/signing";
 import type {
-  OperatorRecord,
+  PrincipalRecord,
   RegistrationClaim,
   SignedAssertion,
 } from "../services/network-registry/src/types";
@@ -583,11 +583,11 @@ describe("IAW Phase D.6.2 — network-registry register + cross-operator query (
         ENVIRONMENT: "test",
       };
 
-      // α mints its operator key + signs a registration claim.
+      // α mints its principal key + signs a registration claim.
       const alphaOpKey = await generateKeypair();
       const claim: RegistrationClaim = {
-        operator_id: "alpha",
-        operator_pubkey: alphaOpKey.publicKeyB64,
+        principal_id: "alpha",
+        principal_pubkey: alphaOpKey.publicKeyB64,
         stacks: [
           { stack_id: "alpha/research", display_name: "Alpha research stack" },
         ],
@@ -605,7 +605,7 @@ describe("IAW Phase D.6.2 — network-registry register + cross-operator query (
       const signature = await signEd25519(alphaOpKey.privateKeyB64, message);
 
       const registerRes = await registryApp.fetch(
-        new Request("http://localhost/operators/alpha/register", {
+        new Request("http://localhost/principals/alpha/register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ claim, signature }),
@@ -614,19 +614,19 @@ describe("IAW Phase D.6.2 — network-registry register + cross-operator query (
       );
       expect(registerRes.status).toBe(201);
 
-      // β-side query: GET /operators/alpha. The response is a
-      // SignedAssertion<OperatorRecord> carrying the registry's own
+      // β-side query: GET /principals/alpha. The response is a
+      // SignedAssertion<PrincipalRecord> carrying the registry's own
       // signature over canonical-JSON({payload, issued_at, registry}).
       const queryRes = await registryApp.fetch(
-        new Request("http://localhost/operators/alpha"),
+        new Request("http://localhost/principals/alpha"),
         env,
       );
       expect(queryRes.status).toBe(200);
-      const assertion = (await queryRes.json()) as SignedAssertion<OperatorRecord>;
+      const assertion = (await queryRes.json()) as SignedAssertion<PrincipalRecord>;
 
       // Payload shape — β sees α's pubkey + capability declaration.
-      expect(assertion.payload.operator_id).toBe("alpha");
-      expect(assertion.payload.operator_pubkey).toBe(alphaOpKey.publicKeyB64);
+      expect(assertion.payload.principal_id).toBe("alpha");
+      expect(assertion.payload.principal_pubkey).toBe(alphaOpKey.publicKeyB64);
       expect(assertion.payload.stacks).toHaveLength(1);
       expect(assertion.payload.stacks[0]!.stack_id).toBe("alpha/research");
       expect(assertion.payload.capabilities).toHaveLength(1);
@@ -651,7 +651,7 @@ describe("IAW Phase D.6.2 — network-registry register + cross-operator query (
       const tamperedBound = canonicalJSON({
         payload: {
           ...assertion.payload,
-          operator_pubkey: "AAAA" + assertion.payload.operator_pubkey.slice(4),
+          principal_pubkey: "AAAA" + assertion.payload.principal_pubkey.slice(4),
         },
         issued_at: assertion.issued_at,
         registry: assertion.registry,
