@@ -9,13 +9,13 @@ capabilities: []
 policy:
   principals:
     - id: anonymous-discord-luna
-      home_operator: andreas
+      home_principal: andreas
       home_stack: andreas/example
       role: []
       trust: []
       platform_ids: {}
     - id: echo
-      home_operator: unknown
+      home_principal: unknown
       home_stack: unknown/unknown
       role:
         - agent-echo
@@ -24,7 +24,7 @@ policy:
         discord:
           - "999000111"
     - id: operator
-      home_operator: andreas
+      home_principal: andreas
       home_stack: andreas/example
       role:
         - operator
@@ -40,7 +40,7 @@ policy:
             - ~/Developer
           bash_guard: true
     - id: user-d049472
-      home_operator: andreas
+      home_principal: andreas
       home_stack: andreas/example
       role:
         - user

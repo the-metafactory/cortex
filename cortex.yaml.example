@@ -131,7 +131,7 @@ policy:
   principals:
     - id: principal-name  # <REPLACE_ME>
       # <REPLACE_ME>: keep both fields in sync with `principal.id` and `stack.id` above.
-      home_operator: principal-name
+      home_principal: principal-name
       home_stack: principal-name/meta-factory
       role:
         - principal
@@ -140,7 +140,7 @@ policy:
         discord:
           - "000000000000000000"  # <REPLACE_ME>: your principal Discord id
     - id: echo
-      home_operator: principal-name  # <REPLACE_ME>
+      home_principal: principal-name  # <REPLACE_ME>
       home_stack: principal-name/meta-factory  # <REPLACE_ME>
       role:
         - agent-echo
