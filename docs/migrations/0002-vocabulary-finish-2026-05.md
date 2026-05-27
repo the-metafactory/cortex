@@ -404,7 +404,7 @@ Transition shim in place: `src/bus/myelin/envelope-validator.ts:334` declares `t
 
 ### Live transitional sites (stay until myelin R11 lands)
 
-- `src/bus/myelin/envelope-validator.ts:152,159,165,330,331,334,522` — the union type + back-compat reader docs
+- `src/bus/myelin/envelope-validator.ts:159,165,330,331,334` — the union type + back-compat reader docs
 - `src/bus/myelin/__tests__/envelope-validator.test.ts:333,339,396` — back-compat regression test
 
 ### Live violations (post-myelin-R11 cleanup)
@@ -412,7 +412,26 @@ Transition shim in place: `src/bus/myelin/envelope-validator.ts:334` declares `t
 When myelin's R11 PR ships:
 - Drop `"broadcast"` from the `DistributionMode` union (`envelope-validator.ts:334`)
 - Drop the back-compat regression test (`envelope-validator.test.ts:333–396`)
-- Rewrite the explanatory comments at lines 152, 159, 165, 330, 331
+- Rewrite the explanatory comments at lines 159, 165, 330, 331
+
+### Reclassified — `envelope-validator.ts:152` is NOT an R5 site
+
+The line `| `bidding` | F-10 broadcast bid-request, collect signed responses, select winner |` describes the **`bidding` sovereignty mode** (F-10), not the `distribution_mode` enum. The word "broadcast" here is English prose for the bidding flow's fanout-then-collect pattern — a genuine many-to-many fanout, not the Offer-mode (claim-by-one) that CONTEXT.md renamed.
+
+Renaming this "broadcast" → "offer" would semantically break the description of bidding mode. **Carve-out:** stays as bidding-mode prose; not part of R5's wire-cluster. If "broadcast" as an English word is ever retired from `bidding` descriptions, that's a separate doc edit (likely "bid-request fanout").
+
+### Reclassified — `envelope-validator.ts:522` is NOT LOCKSTEP-gated
+
+The line is the doc-comment for `getTargetAssistant()`:
+
+```
+ * Returns `undefined` for envelopes that carry neither key (e.g. an
+ * Offer / broadcast dispatch).
+```
+
+This is English prose describing the function's return contract; "broadcast" here is a synonym-by-deprecation for Offer. It has **NO** dependency on myelin R11 — it can be reworded immediately. Per CONTEXT.md: "Never call the Offer mode 'broadcast' — exactly one assistant claims an offered task, not all."
+
+**Action:** drop "broadcast" from this comment ("e.g. an Offer dispatch"). Roll into PR-R13a (or PR-R6) prose sweep — NOT gated by myelin R11.
 
 ### Carve-outs (NOT R5 — these are different "broadcast"s)
 
@@ -598,7 +617,12 @@ The 0001 manifest scoped R8 to literal substitutions of two specific phrases. Th
 
 ### R8 — PR scope
 
-- **PR-R8a** — literal-phrase substitution PR. Tiny diff: 6 occurrences total.
+R8a is split to avoid an incoherent dashboard (UI calling it the "principal filter" while wire/storage still emit `operator.input` event-kinds — see Open Question §6 below, now resolved). The four dashboard-coupled hits are folded into **PR-R13d** (MC backend + frontend prose sweep), which lands together with the MC eventKinds rename (per §6 decision: rename + ship in this iteration).
+
+- **PR-R8a-docs** — literal-phrase substitution in pure docs (no dashboard coupling). 2 occurrences:
+  - `docs/architecture.md:666` — `# operator cockpit — Mission Control v3`
+  - `docs/design-mission-control.md:21` — `Grove Mission Control is the operator's cockpit for…`
+- **PR-R13d** subsumes the 4 dashboard-coupled hits originally under PR-R8a (`use-hash-state.ts:47`, `state.ts:61`, `state.ts:447`, `slack-adapter.test.ts:1403`). Ships together with the MC eventKinds rename + the §6 single-cut so UI prose and wire/storage stay coherent in one PR boundary.
 - **PR-R8b** — wider MC prose sweep (rolls into R13's MC slice). Larger; see R13.
 
 ---
