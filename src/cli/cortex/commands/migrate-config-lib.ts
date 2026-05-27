@@ -173,6 +173,15 @@ export interface LegacyBotYaml {
     persona?: string;
     roles?: unknown[];
     trust?: string[];
+    /**
+     * cortex#428 (PR-B) — pass-through for the agent's `runtime` block on
+     * cortex.yaml-shape input. The Zod schema validates the shape at the
+     * final `CortexConfigSchema.parse`; we accept it loosely on input so
+     * the migrator round-trips a v3.0.x cortex.yaml's runtime declarations
+     * (substrate, mode, capabilities, sovereignty, maxConcurrent) instead
+     * of silently stripping them on the cortex-shape conversion branch.
+     */
+    runtime?: Record<string, unknown>;
     presence?: {
       discord?: Record<string, unknown>;
       mattermost?: Record<string, unknown>;
@@ -1651,6 +1660,17 @@ function buildAgentsFromCortexShape(
       // Pass-through: let the top-level CortexConfigSchema.parse validate
       // it. Cast keeps the assignment shape.
       (agentOut.presence as Record<string, unknown>).slack = a.presence.slack;
+    }
+    // cortex#428 (PR-B) — pass the `runtime` block through verbatim so
+    // operators handing a v3.0.x cortex.yaml back to migrate-config keep
+    // their substrate / mode / capabilities / sovereignty / maxConcurrent
+    // declarations. `synthesizeRuntimeCapabilities` runs later and folds
+    // in any missing `chat` default on top of the operator's existing
+    // claims. Cast keeps the assignment shape — runtime is not in the
+    // narrow `CortexConfig["agents"][number]` slot at this layer (Agent
+    // schema has it but we're treating the build as additive).
+    if (a.runtime && typeof a.runtime === "object") {
+      (agentOut as Record<string, unknown>).runtime = a.runtime;
     }
     out.push(agentOut);
   }
