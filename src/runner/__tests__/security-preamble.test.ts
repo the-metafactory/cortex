@@ -72,6 +72,11 @@ describe("buildSecurityPreamble", () => {
     expect(preamble).not.toMatch(/\bthe bot\b/);
     expect(preamble).toContain("the principal");
     expect(preamble).toContain("the agent");
+    // Cascade-coverage: when an explicit cortex.yaml path is provided, the
+    // GROVE_* → CORTEX_* namespace cascade (handled elsewhere) must NOT leak a
+    // `~/.config/grove` hint through this preamble. Guards against regression
+    // where the runtime path falls back to the legacy directory string.
+    expect(preamble).not.toContain("~/.config/grove");
   });
 
   test("includes security policy wrapper", () => {
