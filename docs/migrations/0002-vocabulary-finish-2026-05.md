@@ -1066,9 +1066,13 @@ Dependency graph:
 
 ### Estimated totals
 
-- **Total PRs:** 14 (excluding LOCKSTEP-only and decision-gated)
-- **Total LOC envelope:** ~2,500–3,000 (cumulative; mostly mechanical)
+- **Total cortex-internal PRs:** 14 (the steps in the recommended sequence above; decision-gated PRs counted, LOCKSTEP-only PRs excluded).
+- **Total LOCKSTEP-with-myelin PRs:** 4 (PR-R4a/b, PR-R5, PR-R10, PR-R11 — gated on the corresponding myelin breaking cuts).
+- **Grand total:** **18 PRs** (14 cortex-internal + 4 LOCKSTEP). This is the number cited in the PR description; the prior plan-body wording "14 (excluding LOCKSTEP-only and decision-gated)" was ambiguous about whether decision-gated PRs were also excluded. Reconciled.
+- **Total LOC envelope:** ~2,500–3,000 (cumulative; mostly mechanical) — to be revised in the Open-Question integration commit once §1/§6/§9 scope additions are reflected.
 - **Breaking changes:** none on cortex.yaml schema (R3 already shipped); R2b carries a D1 migration; R7a renames an internal type (importers update); R10/R11 LOCKSTEP cuts are breaking on the bus (coordinated with myelin breaking major).
+
+**Nit 2 cross-reference:** PR-R8a no longer overlaps with PR-R13d. Per Critical 3 (commit `f6cbcae`), R8a is split into PR-R8a-docs (2 pure-doc hits) and the 4 dashboard-coupled hits roll into PR-R13d alongside the §6 MC eventKinds resolution. The §6 PR ordering section is rewritten in the Open-Question integration commit to reflect this.
 
 ---
 
