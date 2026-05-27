@@ -1716,6 +1716,52 @@ describe("convertBotYaml — cortex#428 PR-B runtime.capabilities synthesis", ()
     expect(result.cortex.agents[0]!.runtime!.capabilities).toEqual(["chat"]);
   });
 
+  test("buildAgentsFromCortexShape passes through agent.runtime fields (regression for incidental fix in cortex#428)", () => {
+    // Dedicated regression for the cortex#428 buildAgentsFromCortexShape
+    // runtime-passthrough fix (migrate-config-lib.ts:1672). Earlier coverage
+    // was only via the idempotency test, which also runs
+    // synthesizeRuntimeCapabilities — that path would re-attach a runtime
+    // block (with substrate/mode/capabilities defaults) even if the
+    // passthrough were absent, hiding a regression. This test asserts the
+    // fields that synthesis does NOT touch (sovereignty, maxConcurrent)
+    // survive the round-trip end-to-end on a v3-shape input.
+    const cortexShape = {
+      principal: { id: "andreas" },
+      agents: [
+        {
+          id: "echo",
+          displayName: "Echo",
+          persona: "./personas/echo.md",
+          trust: [],
+          runtime: {
+            substrate: "claude-code",
+            mode: "in-process",
+            capabilities: ["chat"],
+            sovereignty: "selective",
+            maxConcurrent: 7,
+          },
+          presence: {
+            discord: {
+              token: "t",
+              guildId: "1",
+              agentChannelId: "2",
+              logChannelId: "3",
+            },
+          },
+        },
+      ],
+    } as unknown as LegacyBotYaml;
+    const result = convertBotYaml(cortexShape, { configDir: FIXTURE_DIR });
+    const rt = result.cortex.agents[0]!.runtime!;
+    expect(rt.capabilities).toEqual(["chat"]);
+    // The two fields below are NOT touched by synthesizeRuntimeCapabilities;
+    // if buildAgentsFromCortexShape stops passing the runtime block through,
+    // these assertions fail immediately (whereas capabilities=[chat] would
+    // still hold from synthesis defaults).
+    expect(rt.sovereignty).toBe("selective");
+    expect(rt.maxConcurrent).toBe(7);
+  });
+
   test("catalog augmentation — synthesised cap ids appear in top-level capabilities[]", () => {
     const legacy = loadFixture("minimal.bot.yaml");
     const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
