@@ -42,7 +42,7 @@ function fakeBusPeerDeps(): NonNullable<AgentTeamOpts["busPeer"]> {
     runtime,
     resolver,
     receivingAgentId: "luna",
-    operatorId: "test-operator",
+    principalId: "test-operator",
     source,
   };
 }

@@ -82,7 +82,7 @@ export interface TeamParticipantConfig {
    * - `"bus-peer"` — dispatches the participant prompt to a remote
    *   cortex via `BusPeerHarness`. Requires
    *   `AgentTeamOpts.runtime` + `resolver` + `receivingAgentId` +
-   *   `operatorId` + `source` to be set. The terminal envelope's
+   *   `principalId` + `source` to be set. The terminal envelope's
    *   `payload.result_summary` (set by the peer) becomes the
    *   member's `result`; absence becomes an empty result string.
    *
@@ -136,7 +136,7 @@ export interface AgentTeamOpts {
     runtime: MyelinRuntime;
     resolver: TrustResolver;
     receivingAgentId: string;
-    operatorId: string;
+    principalId: string;
     source: DispatchEventSource;
   };
   /**
@@ -334,7 +334,7 @@ export interface BusPeerHandleConfig {
   runtime: MyelinRuntime;
   resolver: TrustResolver;
   receivingAgentId: string;
-  operatorId: string;
+  principalId: string;
   source: DispatchEventSource;
   /** Callback when the remote returns its terminal envelope. */
   onResult: (resultSummary: string) => void;
@@ -539,7 +539,7 @@ export class AgentTeam extends EventEmitter {
         throw new Error(
           `AgentTeam: ${busPeers.length} bus-peer participant(s) declared ` +
             `(${busPeers.map((p) => p.name).join(", ")}) but opts.busPeer is missing — ` +
-            "wire runtime + resolver + receivingAgentId + operatorId + source",
+            "wire runtime + resolver + receivingAgentId + principalId + source",
         );
       }
       const missingPeerAgentId = busPeers.find(
@@ -784,7 +784,7 @@ export class AgentTeam extends EventEmitter {
       runtime: busPeer.runtime,
       resolver: busPeer.resolver,
       receivingAgentId: busPeer.receivingAgentId,
-      operatorId: busPeer.operatorId,
+      principalId: busPeer.principalId,
       source: busPeer.source,
       timeoutMs: this.opts.timeoutMs ?? 900_000,
       onResult: (resultSummary) => {

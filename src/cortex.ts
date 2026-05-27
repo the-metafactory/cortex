@@ -829,7 +829,7 @@ export async function startCortex(
     );
   });
   // Stable identity inputs for the per-agent durable consumer name.
-  // cortex#427 — `reviewOperatorId` is the same `{principal}` segment the
+  // cortex#427 — `reviewPrincipalId` is the same `{principal}` segment the
   // surface-router and capability-registry boot paths use; reading the
   // shared `principalId` keeps publisher and consumer aligned across the
   // ladder. Durable name convention per
@@ -837,10 +837,11 @@ export async function startCortex(
   // `cortex-review-consumer-{operator}-{agent}` — unique per
   // (operator, agent) pair so dev + prod instances on the same operator
   // share competing-consumer semantics and a daemon restart resumes from
-  // the same JetStream offset. Variable name preserved (`reviewOperatorId`)
-  // because it flows into `verifySignedByChain({ operatorId })` whose API
-  // parameter name is not renamed in this PR (cortex#427 — PR-A scope).
-  const reviewOperatorId = principalId;
+  // the same JetStream offset. PR-R2a (cortex#439) renamed the downstream
+  // API parameter to `principalId`; this local alias keeps the review-
+  // consumer wiring readable alongside the dashboard's `operatorId`
+  // column name (still on the MC surface — PR-R2b).
+  const reviewPrincipalId = principalId;
   // cortex#318 — include the stack segment to match the 6-segment grammar
   // `deriveSubject` produces for stack-scoped publishes (cortex#262 / IAW
   // Phase A.5 + canonical helper at `@the-metafactory/myelin/subjects`).
@@ -849,7 +850,7 @@ export async function startCortex(
   // `>` never matches (NATS requires literal segments before the `>`).
   // Reuses `derivedStack.stack` resolved at boot (line 308) — same source
   // sage's bridge subscription already uses for `local.{principal}.{stack}.>`.
-  const reviewSubjectPattern = `local.${reviewOperatorId}.${derivedStack.stack}.tasks.code-review.>`;
+  const reviewSubjectPattern = `local.${reviewPrincipalId}.${derivedStack.stack}.tasks.code-review.>`;
   const reviewConfig = options.bus?.review;
   const reviewStream = reviewConfig?.stream.name ?? "CODE_REVIEW";
   const reviewStreamMaxAgeNs =
@@ -927,7 +928,7 @@ export async function startCortex(
       // automatically without any flag toggling.
       //
       // The closure captures `trustResolver`, `agent.id`, and the
-      // configured operatorId — same triple the bus-peer harness
+      // configured principalId — same triple the bus-peer harness
       // (`src/substrates/bus-peer/harness.ts`) supplies to
       // verifySignedByChain on its inbound path. `cryptoVerify: true`
       // engages B.1c canonical-bytes verification on top of B.1a
@@ -939,7 +940,7 @@ export async function startCortex(
       // landed in #329 carries the rejection class verbatim. The full
       // myelin-side detail is logged separately by the trust resolver.
       const agentTrustList = agent.trust;
-      const verifyOperatorId = reviewOperatorId;
+      const verifyPrincipalId = reviewPrincipalId;
       const signatureVerifier: SignatureVerifier | undefined =
         agentTrustList.length === 0
           ? undefined
@@ -948,7 +949,7 @@ export async function startCortex(
                 resolver: trustResolver,
                 receivingAgentId: agent.id,
                 cryptoVerify: true,
-                operatorId: verifyOperatorId,
+                principalId: verifyPrincipalId,
               });
               if (r.valid) return { valid: true } as const;
               return { valid: false, reason: r.reason.kind } as const;
@@ -1017,7 +1018,7 @@ export async function startCortex(
       // the consumer stays dormant — `started.subscribed` distinguishes
       // the two cases so the boot log can be honest (cortex#334)
       // instead of unconditionally claiming "ready".
-      const durable = `cortex-review-consumer-${reviewOperatorId}-${agent.id}`;
+      const durable = `cortex-review-consumer-${reviewPrincipalId}-${agent.id}`;
 
       // cortex#338 — provision the per-agent durable consumer up-front
       // so `consumer.start()` below binds successfully against a virgin
@@ -1139,9 +1140,9 @@ export async function startCortex(
       resolver: trustResolver,
       receivingAgentId: firstAgent.id,
       // cortex#427 — same `{principal}` segment the surface-router
-      // and createDispatchListener below use. The `operatorId` parameter
-      // name on the constructor is unchanged in PR-A (PR-D scope).
-      operatorId: principalId,
+      // and createDispatchListener below use. PR-R2a (cortex#439)
+      // renamed the constructor parameter to `principalId`.
+      principalId,
       source: systemEventSource,
     });
     busDispatchListener.start();
@@ -1836,15 +1837,15 @@ export async function startCortex(
   // Dispatch-listener — bus envelope → CC spawn.
   //
   // v2.0.2 (cortex#320): also receives `trustResolver` + `receivingAgentId`
-  // + `operatorId` so the listener can chain-verify every inbound
+  // + `principalId` so the listener can chain-verify every inbound
   // envelope. Mirrors the `BusDispatchListener` wiring above
   // (`firstAgent.id` + `principalId`). `cryptoVerify` defaults to `true`
   // in `createDispatchListener`; explicit here for operator clarity.
   //
-  // cortex#427 — `operatorId` flows from the shared `principalId` so
-  // the listener subscribes on the SAME `{principal}` segment the
-  // adapter publishes on (the bug PR-A closes). Constructor parameter
-  // name unchanged in PR-A scope.
+  // cortex#427 — `principalId` is the shared `{principal}` segment so
+  // the listener subscribes on the SAME segment the adapter publishes
+  // on. PR-R2a (cortex#439) renamed the constructor parameter to
+  // `principalId` to match the canonical vocabulary.
   const dispatchListener: DispatchListener = createDispatchListener({
     runtime,
     router,
@@ -1853,7 +1854,7 @@ export async function startCortex(
     ...(policyEngine !== undefined && { policyEngine }),
     trustResolver,
     cryptoVerify: true,
-    operatorId: principalId,
+    principalId,
     ...(firstAgent !== undefined && { receivingAgentId: firstAgent.id }),
   });
   await dispatchListener.start();

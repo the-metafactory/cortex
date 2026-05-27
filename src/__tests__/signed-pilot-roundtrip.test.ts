@@ -192,7 +192,7 @@ describe("Thread C — signed pilot-shape envelope round-trip (P-VERIFY)", () =>
       resolver,
       receivingAgentId: "cortex",
       cryptoVerify: true,
-      operatorId: "metafactory",
+      principalId: "metafactory",
     });
 
     expect(result.valid).toBe(true);
@@ -234,7 +234,7 @@ describe("Thread C — signed pilot-shape envelope round-trip (P-VERIFY)", () =>
       resolver,
       receivingAgentId: "cortex",
       cryptoVerify: true,
-      operatorId: "metafactory",
+      principalId: "metafactory",
     });
 
     expect(result.valid).toBe(false);
@@ -259,7 +259,7 @@ describe("Thread C — signed pilot-shape envelope round-trip (P-VERIFY)", () =>
       resolver,
       receivingAgentId: "cortex",
       cryptoVerify: true,
-      operatorId: "metafactory",
+      principalId: "metafactory",
     });
 
     expect(result.valid).toBe(false);

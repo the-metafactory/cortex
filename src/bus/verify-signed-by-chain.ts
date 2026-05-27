@@ -174,7 +174,7 @@ export interface VerifySignedByChainOptions {
    * structural check alone is the B.1a contract and existing B.1b
    * call sites keep their behaviour unchanged until they opt in.
    *
-   * When `cryptoVerify: true`, the caller must also pass `operatorId`
+   * When `cryptoVerify: true`, the caller must also pass `principalId`
    * so the helper can build a myelin `IdentityRegistry` from the
    * `TrustResolver`'s underlying `AgentRegistry`. Each agent with an
    * `nkey_pub` becomes a Principal whose `public_key` is the
@@ -182,12 +182,12 @@ export interface VerifySignedByChainOptions {
    */
   cryptoVerify?: boolean;
   /**
-   * Operator id (e.g. `andreas`). Required when `cryptoVerify: true` —
+   * Principal id (e.g. `andreas`). Required when `cryptoVerify: true` —
    * threaded into each constructed Principal so myelin's verification
-   * has the operator field populated. Ignored when `cryptoVerify` is
+   * has the network field populated. Ignored when `cryptoVerify` is
    * false / undefined.
    */
-  operatorId?: string;
+  principalId?: string;
   /**
    * Optional clock-skew tolerance for myelin's timestamp-freshness
    * check (passed through to `verifyEnvelopeIdentity`). Default per
@@ -260,15 +260,15 @@ export async function verifySignedByChain(
   // for every ed25519 stamp at this point; myelin's verifier runs the
   // canonical-bytes + signature + freshness check on top.
   if (opts.cryptoVerify === true) {
-    if (opts.operatorId === undefined) {
+    if (opts.principalId === undefined) {
       throw new Error(
-        "verifySignedByChain: cryptoVerify requires opts.operatorId — " +
-          "myelin's Principal shape needs the operator field populated.",
+        "verifySignedByChain: cryptoVerify requires opts.principalId — " +
+          "myelin's Principal shape needs the network field populated.",
       );
     }
     const registry = buildIdentityRegistry(
       opts.resolver.getRegistry(),
-      opts.operatorId,
+      opts.principalId,
     );
     // Myelin's verifier expects `signed_by` normalised to array form;
     // cortex's `Envelope` keeps the back-compat shim of single-stamp
@@ -418,7 +418,7 @@ function verifyOneStamp(
  */
 export function buildIdentityRegistry(
   agentRegistry: AgentRegistry,
-  operatorId: string,
+  principalId: string,
 ): IdentityRegistry {
   const registry = createInMemoryRegistry();
   const createdAt = new Date(0).toISOString();
@@ -435,9 +435,9 @@ export function buildIdentityRegistry(
       display_name: agent.displayName,
       // R4 (vocabulary migration 2026-05) — myelin's `Identity` interface
       // renamed `operator` → `network` (Luna's PR-5/PR-8 in #168/#171).
-      // `operatorId` is still cortex's variable name — it stores the
-      // network slug per the bus-addressing model.
-      network: operatorId,
+      // `principalId` here stores the network slug per the
+      // bus-addressing model — cortex's canonical principal/network id.
+      network: principalId,
       public_key: publicKey,
       type: "agent",
       created_at: createdAt,

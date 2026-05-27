@@ -441,7 +441,7 @@ describe("verifySignedByChain — cryptoVerify (B.1c)", () => {
         resolver,
         receivingAgentId: "luna",
         cryptoVerify: true,
-        operatorId: "test-operator",
+        principalId: "test-operator",
       },
     );
 
@@ -492,7 +492,7 @@ describe("verifySignedByChain — cryptoVerify (B.1c)", () => {
       resolver,
       receivingAgentId: "luna",
       cryptoVerify: true,
-      operatorId: "test-operator",
+      principalId: "test-operator",
     });
 
     expect(result.valid).toBe(false);
@@ -508,10 +508,10 @@ describe("verifySignedByChain — cryptoVerify (B.1c)", () => {
     }
   });
 
-  test("cryptoVerify throws when operatorId is missing", async () => {
+  test("cryptoVerify throws when principalId is missing", async () => {
     // Agent must have an nkey_pub + be self-trusted so the structural
-    // check passes and the cryptoVerify-without-operatorId branch is
-    // reached. (A structural rejection would mask the operatorId guard.)
+    // check passes and the cryptoVerify-without-principalId branch is
+    // reached. (A structural rejection would mask the principalId guard.)
     const { nkeyPub: lunaNKey } = generateEd25519KeyPair();
     const luna = agentFixture({
       id: "luna",
@@ -530,8 +530,8 @@ describe("verifySignedByChain — cryptoVerify (B.1c)", () => {
         resolver,
         receivingAgentId: "luna",
         cryptoVerify: true,
-        // operatorId omitted — must throw.
+        // principalId omitted — must throw.
       }),
-    ).rejects.toThrow(/operatorId/);
+    ).rejects.toThrow(/principalId/);
   });
 });

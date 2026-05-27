@@ -184,7 +184,7 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
       // consistency. The structural proof is: ONE handler was
       // registered, AND the only place that registration could come
       // from is the `createDispatchListener({ source: { org:
-      // principalId }, operatorId: principalId, ... })` call in
+      // principalId }, principalId, ... })` call in
       // cortex.ts. If that call had used the legacy operatorId,
       // the registration would still exist — but its subject would
       // include LEGACY_OP. The full subject is internal to the

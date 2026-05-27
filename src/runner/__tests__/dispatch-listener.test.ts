@@ -1682,7 +1682,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
       policyEngine: engineGranting(["dispatch.cortex"]),
       trustResolver: resolver,
       receivingAgentId: "cortex",
-      operatorId: "andreas",
+      principalId: "andreas",
       cryptoVerify: false,
     });
     await listener.start();
@@ -1722,7 +1722,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
       policyEngine: engineGranting(["dispatch.cortex"]),
       trustResolver: resolver,
       receivingAgentId: "cortex",
-      operatorId: "andreas",
+      principalId: "andreas",
       cryptoVerify: true,
     });
     await listener.start();
@@ -1760,7 +1760,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
       policyEngine: engineGranting(["dispatch.cortex"]),
       trustResolver: resolver,
       receivingAgentId: "cortex",
-      operatorId: "andreas",
+      principalId: "andreas",
       // cryptoVerify omitted → defaults true; the structural check
       // rejects before crypto runs, so the test doesn't need real bytes.
     });
@@ -1822,7 +1822,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
       policyEngine: engineGranting(["dispatch.cortex"]),
       trustResolver: resolver,
       receivingAgentId: "cortex",
-      operatorId: "andreas",
+      principalId: "andreas",
       cryptoVerify: true,
     });
     await listener.start();
@@ -1859,7 +1859,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
       policyEngine: engineGranting(["dispatch.cortex"]),
       trustResolver: resolver,
       receivingAgentId: "cortex",
-      operatorId: "andreas",
+      principalId: "andreas",
       cryptoVerify: true,
     });
     await listener.start();
@@ -1900,7 +1900,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
       policyEngine: engineGranting(["dispatch.cortex"]),
       trustResolver: resolver,
       receivingAgentId: "cortex",
-      operatorId: "andreas",
+      principalId: "andreas",
       cryptoVerify: true,
     });
     await listener.start();
@@ -2191,7 +2191,7 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
       policyEngine: engineGranting(["dispatch.cortex"]),
       trustResolver: resolver,
       receivingAgentId: "cortex",
-      operatorId: "andreas",
+      principalId: "andreas",
       cryptoVerify: true,
     });
     await listener.start();

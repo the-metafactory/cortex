@@ -279,8 +279,8 @@ export class BusPeerHarness implements SessionHarness {
       //      from the consumer's view).
       // The chain swallows rejections (try/catch + stderr log) so an
       // unexpected throw from verifySignedByChain (e.g. the
-      // operatorId-missing guard once a follow-up flips cryptoVerify
-      // on without threading operatorId — Echo finding #3) doesn't
+      // principalId-missing guard once a follow-up flips cryptoVerify
+      // on without threading principalId — Echo finding #3) doesn't
       // surface as an unhandled rejection on the process.
       inFlight = inFlight.then(async () => {
         try {

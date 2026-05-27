@@ -70,12 +70,12 @@ export interface BusDispatchListenerOpts {
    */
   receivingAgentId: string;
   /**
-   * Operator id (e.g. `andreas`). Threaded into the myelin
+   * Principal id (e.g. `andreas`). Threaded into the myelin
    * `PrincipalRegistry` constructed by `verifySignedByChain`'s crypto
    * path. Required even when `cryptoVerify: false` so the listener can
    * flip the flag on later without re-threading.
    */
-  operatorId: string;
+  principalId: string;
   /**
    * Source attribution for emitted visibility events. Same shape the
    * runner already builds for `dispatch.task.*` and `system.*` event
@@ -100,7 +100,7 @@ export class BusDispatchListener {
   private readonly runtime: MyelinRuntime;
   private readonly resolver: TrustResolver;
   private readonly receivingAgentId: string;
-  private readonly operatorId: string;
+  private readonly principalId: string;
   private readonly source: SystemEventSource;
   private readonly cryptoVerify: boolean;
 
@@ -118,7 +118,7 @@ export class BusDispatchListener {
     this.runtime = opts.runtime;
     this.resolver = opts.resolver;
     this.receivingAgentId = opts.receivingAgentId;
-    this.operatorId = opts.operatorId;
+    this.principalId = opts.principalId;
     this.source = opts.source;
     this.cryptoVerify = opts.cryptoVerify ?? false;
   }
@@ -227,7 +227,7 @@ export class BusDispatchListener {
       // arriving on the bus is a misconfig we want surfaced.
       rejectEmpty: true,
       cryptoVerify: this.cryptoVerify,
-      operatorId: this.operatorId,
+      principalId: this.principalId,
     });
 
     if (!verification.valid) {

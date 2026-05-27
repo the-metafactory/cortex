@@ -271,14 +271,14 @@ export interface DispatchListenerOptions {
    */
   cryptoVerify?: boolean;
   /**
-   * Operator id (e.g. `andreas`). Required by `verifySignedByChain`'s
+   * Principal id (e.g. `andreas`). Required by `verifySignedByChain`'s
    * crypto layer (when `cryptoVerify: true`) to thread into each
    * constructed myelin Principal. When the verifier is enabled in
    * the default `cryptoVerify: true` mode AND any envelope arrives
-   * with a non-empty chain, `operatorId` must be supplied or
+   * with a non-empty chain, `principalId` must be supplied or
    * verification throws.
    */
-  operatorId?: string;
+  principalId?: string;
   /**
    * Agent id of the receiving side — whose `trust:` list governs
    * which peer signers we admit on inbound dispatches. Mirrors
@@ -383,7 +383,7 @@ export function createDispatchListener(
     policyEngine,
     trustResolver,
     receivingAgentId,
-    operatorId,
+    principalId,
     adapterId = "runner-dispatch-listener",
   } = opts;
   // v2.0.2 default: structural trust + ed25519 crypto verification.
@@ -417,7 +417,7 @@ export function createDispatchListener(
         stack: opts.stack,
         trustResolver,
         cryptoVerify,
-        operatorId,
+        principalId,
         receivingAgentId,
       }),
   };
@@ -582,7 +582,7 @@ interface DispatchHandlerContext {
    */
   trustResolver: TrustResolver | undefined;
   cryptoVerify: boolean;
-  operatorId: string | undefined;
+  principalId: string | undefined;
   receivingAgentId: string | undefined;
 }
 
@@ -600,7 +600,7 @@ async function handleDispatchEnvelope(
     stack,
     trustResolver,
     cryptoVerify,
-    operatorId,
+    principalId,
     receivingAgentId,
   } = ctx;
   const payload = parsePayload(envelope);
@@ -687,11 +687,11 @@ async function handleDispatchEnvelope(
         receivingAgentId,
         rejectEmpty: false,
         cryptoVerify,
-        ...(cryptoVerify && operatorId !== undefined && { operatorId }),
+        ...(cryptoVerify && principalId !== undefined && { principalId }),
       });
     } catch (err) {
       // `verifySignedByChain` throws when `cryptoVerify: true` and
-      // `operatorId` is missing on a non-empty chain. Treat as a
+      // `principalId` is missing on a non-empty chain. Treat as a
       // verification failure (deny + log) so the runner doesn't crash.
       const detail = err instanceof Error ? err.message : String(err);
       process.stderr.write(

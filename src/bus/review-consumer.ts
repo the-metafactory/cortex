@@ -160,7 +160,7 @@ export type SignatureVerifierResult =
  * cortex's trust internals — same pattern as {@link ReviewConsumerOpts.pipelineRunner}
  * which decouples from CC-session internals. Production callers in
  * `src/cortex.ts` close over `verifySignedByChain` with the runtime's
- * resolver + receiving agent + operatorId; tests inject stubs that
+ * resolver + receiving agent + principalId; tests inject stubs that
  * return a literal verdict without standing up a registry.
  *
  * **Why not extend `DispatchTaskFailedReason` with a new `chain_verification_failed`
