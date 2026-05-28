@@ -2,6 +2,7 @@ import { directTaskSubject } from "@the-metafactory/myelin/subjects";
 import { DID_RE } from "@the-metafactory/myelin/identity";
 import type { InboundMessage } from "../adapters/types";
 import type { PolicyEngine } from "../common/policy/engine";
+import type { ResponseRouting } from "./dispatch-events";
 import { buildBaseEnvelope } from "./envelope-builder";
 import type { Envelope } from "./myelin/envelope-validator";
 import type { MyelinRuntime } from "./myelin/runtime";
@@ -100,6 +101,26 @@ export function adapterOriginatorIdentity(
   return null;
 }
 
+/**
+ * cortex#491 — derive **response routing** from the inbound platform
+ * message (CONTEXT.md §Response-routing). The originating surface address
+ * `{ adapter_instance, channel_id, thread_id? }` is stamped onto the
+ * inbound payload so the runner can echo it onto the lifecycle envelopes
+ * and the originating **dispatch sink** can deliver the reply to the right
+ * channel/thread without keeping inbound state.
+ *
+ * `thread_id` is omitted (not present on the wire) when the message did
+ * not arrive in a thread/DM — the sink falls back to channel-scope
+ * delivery, matching `ResponseTarget`'s `threadId ?? channelId` convention.
+ */
+function responseRoutingFromMessage(msg: InboundMessage): ResponseRouting {
+  return {
+    adapter_instance: msg.instanceId,
+    channel_id: msg.channelId,
+    ...(msg.threadId !== undefined && { thread_id: msg.threadId }),
+  };
+}
+
 function buildDirectTaskPublishSubject(
   principal: string,
   targetDid: string,
@@ -159,6 +180,9 @@ export async function publishInboundChatDispatchEnvelope(
     task_id: opts.taskId,
     agent_id: opts.agentName,
     prompt: opts.prompt,
+    // cortex#491 — originating surface address; the runner echoes this onto
+    // every lifecycle envelope so the dispatch sink can post the reply back.
+    response_routing: responseRoutingFromMessage(opts.msg),
     ...(opts.groveChannel !== undefined && { grove_channel: opts.groveChannel }),
     ...(opts.groveNetwork !== undefined && { grove_network: opts.groveNetwork }),
     agent_name: opts.agentDisplayName,

@@ -105,7 +105,10 @@ import type {
   PolicyDenyReason,
   Principal,
 } from "../common/policy/types";
-import { createDispatchTaskFailedEvent } from "../bus/dispatch-events";
+import {
+  createDispatchTaskFailedEvent,
+  type ResponseRouting,
+} from "../bus/dispatch-events";
 import type { TrustResolver } from "../common/agents/trust-resolver";
 import {
   verifySignedByChain,
@@ -192,6 +195,16 @@ export interface DispatchTaskReceivedPayload {
   project?: string;
   entity?: string;
   operator?: string;
+  /**
+   * cortex#491 — **Response routing** (CONTEXT.md §Response-routing): the
+   * originating surface address `{ adapter_instance, channel_id,
+   * thread_id? }`. Populated by a platform-adapter dispatch source so the
+   * runner can ECHO it onto every `dispatch.task.{action}` lifecycle
+   * envelope; the originating **dispatch sink** then delivers the reply to
+   * the right channel/thread without keeping inbound state. Omitted for
+   * dispatch sources with no platform reply surface (bus-peer, Offer).
+   */
+  response_routing?: ResponseRouting;
 }
 
 export interface DispatchListenerOptions {
@@ -1485,6 +1498,14 @@ async function handleDispatchEnvelope(
   // strict happens-before ordering the original implementation relied
   // on (`started` is observable before any terminal envelope, even when
   // the runtime is the bus's actual NATS transport).
+  //
+  // cortex#491 — ECHO response routing onto every lifecycle envelope so
+  // the originating dispatch sink can target the reply without state. The
+  // harness is substrate-agnostic and never sees the inbound payload; the
+  // runner — which parsed it — does the echo here. `undefined` when the
+  // dispatch source carried no `response_routing` (bus-peer / Offer): the
+  // envelope passes through verbatim, exactly as before this change.
+  const responseRouting = payload.response_routing;
   let firstYield = true;
   for await (const env of harness.dispatch(req)) {
     if (firstYield) {
@@ -1494,8 +1515,29 @@ async function handleDispatchEnvelope(
       // `started` got all the way through to a live CC session.
       trace(traceDispatch, runtime, source, "started", "info", traceCtx);
     }
-    await runtime.publish(env);
+    await runtime.publish(echoResponseRouting(env, responseRouting));
   }
+}
+
+/**
+ * cortex#491 — return a lifecycle envelope with `payload.response_routing`
+ * echoed from the inbound dispatch. Returns the envelope unchanged when
+ * there is no routing to echo, or when the harness already stamped one
+ * (defensive — the runner is the single echo authority, but we never
+ * clobber an existing value). Builds a fresh payload object so the
+ * harness's own envelope reference is not mutated in place.
+ */
+function echoResponseRouting(
+  env: Envelope,
+  responseRouting: ResponseRouting | undefined,
+): Envelope {
+  if (responseRouting === undefined) return env;
+  const payload = (env.payload ?? {}) as Record<string, unknown>;
+  if (payload.response_routing !== undefined) return env;
+  return {
+    ...env,
+    payload: { ...payload, response_routing: responseRouting },
+  };
 }
 
 // ---------------------------------------------------------------------------

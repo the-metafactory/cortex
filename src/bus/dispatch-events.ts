@@ -51,6 +51,34 @@ import type { SystemEventSource } from "./system-events";
 // the underlying shape is identical.
 export type DispatchEventSource = SystemEventSource;
 
+/**
+ * cortex#491 — **Response routing** (CONTEXT.md §Response-routing).
+ *
+ * The originating-surface address carried on an inbound dispatch envelope's
+ * payload (`response_routing`) and ECHOED by the runner onto every
+ * `dispatch.task.{action}` lifecycle envelope. A **dispatch sink** (the
+ * platform adapter's outbound side) reads it off the lifecycle envelope to
+ * deliver the reply to the right channel/thread WITHOUT keeping any inbound
+ * state — the routing is wire-level, not in-memory.
+ *
+ * For a Discord/Mattermost/Slack-sourced dispatch the address is
+ * `{ adapter_instance, channel_id, thread_id? }` — structurally the same
+ * triple a `ResponseTarget` carries (`{ instanceId, channelId, threadId? }`),
+ * but in the snake_case wire idiom the rest of the envelope payload uses.
+ *
+ * Future dispatch sources (MC dashboard "send task", taps) populate the
+ * same shape; sinks that don't recognise the `adapter_instance` ignore the
+ * envelope (see the dispatch-sink consumer in `src/adapters/dispatch-sink.ts`).
+ */
+export interface ResponseRouting {
+  /** Adapter instance id that sourced the dispatch (e.g. `discord-pai-collab`). */
+  adapter_instance: string;
+  /** Platform-native channel id to deliver the reply to. */
+  channel_id: string;
+  /** Thread id when the dispatch arrived in a thread/DM; omitted at channel scope. */
+  thread_id?: string;
+}
+
 function buildSource(src: SystemEventSource): string {
   return `${src.principal}.${src.agent}.${src.instance}`;
 }
@@ -134,6 +162,16 @@ export interface DispatchTaskCommonOpts {
    * {@link validateSubjectEnvelopeAlignment}).
    */
   classification?: Classification;
+  /**
+   * cortex#491 — **Response routing** echoed from the inbound dispatch
+   * envelope onto this lifecycle envelope. When supplied, surfaces as
+   * `payload.response_routing` so the originating **dispatch sink** can
+   * target the reply without keeping inbound state. Omitted (no field on
+   * the wire) for lifecycle events that have no originating surface
+   * address — e.g. a bus-peer or Offer dispatch whose source did not
+   * carry response routing.
+   */
+  responseRouting?: ResponseRouting;
 }
 
 /**
@@ -161,6 +199,11 @@ function buildBaseEnvelope(
     payload: {
       task_id: common.taskId,
       agent_id: common.agentId,
+      // cortex#491 — echo response routing when the inbound dispatch
+      // carried it, so the originating dispatch sink can find its target.
+      ...(common.responseRouting !== undefined && {
+        response_routing: common.responseRouting,
+      }),
       ...payloadExtras,
     },
   });
@@ -208,6 +251,17 @@ export interface DispatchTaskCompletedOpts extends DispatchTaskCommonOpts {
    * reasonable length — surfaces typically render the first line).
    */
   resultSummary?: string;
+  /**
+   * cortex#491 — the FULL, untruncated assistant reply for chat-style
+   * dispatches. `result_summary` is the first line capped at 1000 chars
+   * (a dashboard label); `chat_response` is the complete text a
+   * **dispatch sink** posts back to the originating channel via
+   * `adapter.postResponse`. Omitted for non-chat dispatches (the sink
+   * falls back to `result_summary`). Carries the same sovereignty as the
+   * envelope — `local` for local chat — so the full reply on the wire
+   * respects the dispatch's classification.
+   */
+  chatResponse?: string;
 }
 
 /**
@@ -226,6 +280,10 @@ export function createDispatchTaskCompletedEvent(
     completed_at: opts.completedAt.toISOString(),
     ...(opts.resultSummary !== undefined && {
       result_summary: opts.resultSummary,
+    }),
+    // cortex#491 — full reply for the chat round-trip (dispatch sink → postResponse).
+    ...(opts.chatResponse !== undefined && {
+      chat_response: opts.chatResponse,
     }),
   });
 }

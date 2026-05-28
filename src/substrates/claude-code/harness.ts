@@ -442,6 +442,7 @@ export class ClaudeCodeHarness implements SessionHarness {
     correlationId: string,
     completedAt: Date,
     resultSummary?: string,
+    chatResponse?: string,
   ): Envelope {
     return createDispatchTaskCompletedEvent({
       source: this.source,
@@ -451,6 +452,10 @@ export class ClaudeCodeHarness implements SessionHarness {
       startedAt,
       completedAt,
       ...(resultSummary !== undefined && { resultSummary }),
+      // cortex#491 — carry the FULL CC reply (untruncated) so the dispatch
+      // sink can post the complete chat round-trip back to the channel.
+      // `resultSummary` stays the first-line/1000-char dashboard label.
+      ...(chatResponse !== undefined && { chatResponse }),
     });
   }
 
@@ -524,6 +529,8 @@ export class ClaudeCodeHarness implements SessionHarness {
         correlationId,
         new Date(),
         result.response ? truncateDispatchResultSummary(result.response) : undefined,
+        // cortex#491 — full reply, untruncated, for the chat round-trip.
+        result.response ? result.response : undefined,
       );
     }
 
