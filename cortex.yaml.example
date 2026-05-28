@@ -320,11 +320,22 @@ bus:
 # nats:
 #   url: nats://127.0.0.1:4222
 #   name: cortex
-#   # Push-mode broad-pattern subscribers for legacy fan-out. Leave this
-#   # empty for pull-only / capability-dispatch deployments; ReviewConsumer
-#   # binds via JetStream durables configured by `bus.review` above.
-#   subjects:
-#     []
+#   # Push-mode broad-pattern subscribers. CANONICAL DEFAULT: [] (empty).
+#   #
+#   # Leave this empty. The runner's dispatch-listener self-subscribes its
+#   # canonical `local.{principal}.{stack}.tasks.*.>` interest at start() via
+#   # runtime.subscribe (cortex#477/#479) and is the SOLE binder for inbound
+#   # tasks; ReviewConsumer binds via the JetStream durables configured by
+#   # `bus.review` above. Do NOT add `...tasks.*.>` here to "make chat work" —
+#   # listing the same pattern the self-subscribe already binds re-creates the
+#   # boot-time subscriber, double-binds the shared handlers set, and delivers
+#   # + dispatches every chat/Direct/Delegate envelope twice. That double
+#   # delivery stalled a long-lived daemon's inbound executor (cortex#491).
+#   # The surface-router / dashboard / code-review renderers are fed by the
+#   # same handlers fan-out the self-subscribe feeds, so [] does not starve
+#   # them. Only set a non-empty value for a bespoke push-mode consumer that
+#   # has NO self-subscribing owner.
+#   subjects: []
 #   identity:
 #     seedPath: ~/.config/nats/cortex.nk
 #     publicKey: <REPLACE_ME>
