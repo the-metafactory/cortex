@@ -58,6 +58,7 @@ import {
   provisionReviewConsumer,
 } from "./bus/jetstream/provision";
 import { verifySignedByChain } from "./bus/verify-signed-by-chain";
+import { runVerifierSelfCheck } from "./bus/verifier-self-check";
 import { CCSession, type CCSessionOpts } from "./runner/cc-session";
 import { makePiDevPipelineRunner } from "./runner/substrate/pi-dev-runner";
 
@@ -1896,6 +1897,36 @@ export async function startCortex(
     }),
   });
   await dispatchListener.start();
+
+  // cortex#480 — boot-time self-signed envelope sanity check. After the
+  // listeners are wired with `stackIdentity` + `stackNKeyPub`, build a
+  // tiny envelope signed by the stack's own NKey and round-trip it
+  // through `verifySignedByChain` to confirm the verifier admits it.
+  // The check exists because the cortex#480 root-cause (verifier
+  // rejecting `did:mf:<stack>` as unknown_agent) shipped to prod
+  // unnoticed — no boot-side observability exercised the identity the
+  // wire would actually carry. A future regression in the stack-trust
+  // short-circuit / NKey bridge / Principal-registry shape now fails
+  // loudly at boot with a grep-friendly stderr WARNING instead of at
+  // first Discord chat. Skipped when no signing identity is wired
+  // (deployments running unsigned by design).
+  if (
+    signer !== undefined
+    && stackNKeyPubForVerifier !== undefined
+    && firstAgent !== undefined
+  ) {
+    // Fire-and-forget by design — boot does not wait for the result.
+    // The check is informational; production deployment health is
+    // ultimately validated by the dashboard / first round-trip chat.
+    void runVerifierSelfCheck({
+      stackIdentity: signer.principal,
+      stackNKeyPub: stackNKeyPubForVerifier,
+      stackSeedBytes: signer.rawSeedBytes,
+      resolver: trustResolver,
+      receivingAgentId: firstAgent.id,
+      principalId,
+    });
+  }
 
   // Start router AFTER all surfaces register so the first envelope
   // (which may arrive synchronously after `runtime.onEnvelope`) fans
