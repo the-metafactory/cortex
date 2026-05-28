@@ -1967,33 +1967,31 @@ describe("convertBotYaml — cortex#428 PR-B presence.surfaceSubjects synthesis"
   });
 });
 
-describe("convertBotYaml — cortex#428 PR-B agent.operatorId back-compat", () => {
-  test("attaches transient operatorId = principal.id on every agent", () => {
+describe("convertBotYaml — cortex#429 PR-C: agent.operatorId synthesis retired", () => {
+  test("does NOT attach a transient operatorId to any agent (PR-B aid graduated)", () => {
     const legacy = loadFixture("minimal.bot.yaml");
     const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
     for (const agent of result.cortex.agents) {
-      // Type-laundering required — operatorId is not in the schema. The
-      // synthesis attaches it post-parse so the migrator's YAML output
-      // boots on v3.0.0–v3.0.3 (pre-PR-A) where the field IS read.
+      // Negative assertion: the PR-B post-parse synthesis has been
+      // removed together with the schema field. No `operatorId`
+      // should appear on any migrated agent.
       const raw = agent as unknown as Record<string, unknown>;
-      expect(raw.operatorId).toBe(result.cortex.principal.id);
+      expect(raw.operatorId).toBeUndefined();
     }
   });
 
-  test("survives YAML round-trip — operatorId appears in serialised output", () => {
+  test("serialised YAML carries NO `operatorId:` field on agents", () => {
     const legacy = loadFixture("minimal.bot.yaml");
     const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
     const yamlOut = YAML.stringify(result.cortex);
-    expect(yamlOut).toContain("operatorId: jc");
+    expect(yamlOut).not.toContain("operatorId: jc");
   });
 
-  test("emits a warning explaining the deprecation timeline", () => {
+  test("emits NO `agents[].operatorId` warning (synthesis retired in PR-C)", () => {
     const legacy = loadFixture("minimal.bot.yaml");
     const result = convertBotYaml(legacy, { configDir: FIXTURE_DIR });
     const opIdWarn = result.warnings.find((w) => w.field === "agents[].operatorId");
-    expect(opIdWarn).toBeDefined();
-    expect(opIdWarn!.message).toMatch(/v3\.0\.0–v3\.0\.3.*back-compat/);
-    expect(opIdWarn!.message).toMatch(/cortex#429/);
+    expect(opIdWarn).toBeUndefined();
   });
 });
 

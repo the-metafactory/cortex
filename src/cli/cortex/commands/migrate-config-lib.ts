@@ -837,7 +837,7 @@ function buildRenderers(legacy: LegacyBotYaml, warnings: ConversionWarning[]): C
 // cortex#428 — v3-complete synthesis (Stage 4-A wiring)
 // =============================================================================
 //
-// Stage 4/5 of the v3 dispatch path needs three fields on the migrated
+// Stage 4/5 of the v3 dispatch path needs two fields on the migrated
 // config that PR-A (cortex#427) did NOT add to its `principal:` rename:
 //
 //   1. `agent.runtime.capabilities[]` — at minimum `["chat"]` per myelin#181
@@ -849,12 +849,11 @@ function buildRenderers(legacy: LegacyBotYaml, warnings: ConversionWarning[]): C
 //      dispatch.task.*` derived from the parent config. Without this the
 //      surface-router never matches the adapter and dispatch envelopes drop
 //      silently on the floor.
-//   3. Transient `agent.operatorId: <principal.id>` — Andreas's deployments
-//      on v3.0.0–v3.0.3 (pre-PR-A) still read `agent.operatorId` from the
-//      cortex.yaml. PR-A's merge on main means the field is unread on
-//      tip-of-main, but the migrator's output must boot cleanly on the
-//      currently-deployed v3.0.x release too. PR-C (cortex#429) drops this
-//      synthesis once the v3.0.0–v3.0.3 window closes.
+//
+// cortex#429 PR-C — a third transient synthesis (`agent.operatorId:
+// <principal.id>` per agent, added in PR-B / cortex#428) has been
+// retired together with the schema field. The v3.0.0–v3.0.3 deprecation
+// window has graduated.
 //
 // Each synthesis function is idempotent: re-running the migrator on a
 // config that already declares these fields preserves them verbatim. The
@@ -1224,39 +1223,6 @@ function synthesizeSurfaceSubjects(
 }
 
 /**
- * Synthesize `agent.operatorId: <principal.id>` on every agent as a
- * deprecation aid for v3.0.0–v3.0.3 deployments that still read the field
- * directly (pre-PR-A behaviour). The `CortexConfigSchema` strips unknown
- * keys, so this synthesis MUST run AFTER the schema parse — we mutate the
- * already-validated object before returning it to the caller.
- *
- * PR-C (cortex#429) drops this synthesis when the schema field itself is
- * removed; the field is intentionally NOT added to `AgentSchema` here —
- * it's a transient compatibility surface, not a v3 contract.
- */
-function synthesizeOperatorIdBackCompat(
-  cortex: MigratedCortexConfig,
-  warnings: ConversionWarning[],
-): void {
-  const principalId = cortex.principal.id;
-  // The `MigratedCortexConfig.agents` type does NOT carry `operatorId` —
-  // attaching it is a deliberate type-laundering past the schema. The cast
-  // is narrow (`Record<string, unknown>`) so the migrator's emitted YAML
-  // round-trips on v3.0.0–v3.0.3 loaders. PR-C removes this branch.
-  for (const agent of cortex.agents) {
-    (agent as unknown as Record<string, unknown>).operatorId = principalId;
-  }
-  warnings.push({
-    field: "agents[].operatorId",
-    message:
-      `synthesised transient agent.operatorId="${principalId}" on every agent ` +
-      `for v3.0.0–v3.0.3 back-compat (cortex#427's principal.id read landed on ` +
-      `tip-of-main but is not in the v3.0.x deployed window). PR-C / cortex#429 ` +
-      `drops this synthesis once the v3.0.x window closes.`,
-  });
-}
-
-/**
  * Convert a legacy bot.yaml-shaped object to cortex.yaml-shape. Pure: no IO
  * apart from optional `existsSync` for assistant-prompt-file validation.
  *
@@ -1440,10 +1406,10 @@ export function convertBotYaml(
   // above) — it just emits the post-v3 `principal:`-shaped output.
   const migrated: MigratedCortexConfig = parsed;
 
-  // cortex#428 (PR-B) — transient `agent.operatorId` back-compat MUST run
-  // post-parse: the schema strips unknown keys, so any pre-parse mutation
-  // would be silently dropped. PR-C / cortex#429 retires this branch.
-  synthesizeOperatorIdBackCompat(migrated, warnings);
+  // cortex#429 PR-C — the transient `agent.operatorId` back-compat
+  // synthesis added in PR-B (#428) has been retired together with the
+  // schema field. Configs flowing through the migrator land on the
+  // v3-canonical `principal.id` only.
 
   // Compute parallel-mode pre-flight gaps against the FINAL policy block.
   const preflightGaps = policyPreflight({
