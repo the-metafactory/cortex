@@ -253,14 +253,13 @@ describe("createDispatchListener — surfaceConfig", () => {
     const router = createSurfaceRouter(runtime);
     const listener = createDispatchListener({
       runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
     // Direction A Stage 4-B (cortex#409) — production defaults subscribe
     // to the canonical Tasks Domain pattern. Legacy subjects remain
     // available only through explicit test/principal overrides.
-    expect(listener.surfaceConfig.subjects).toEqual([
+    expect(listener.subjects).toEqual([
       "local.metafactory.tasks.*.>",
     ]);
   });
@@ -270,12 +269,11 @@ describe("createDispatchListener — surfaceConfig", () => {
     const router = createSurfaceRouter(runtime);
     const listener = createDispatchListener({
       runtime,
-      router,
       source: SOURCE,
       subjects: ["local.test.dispatch.task.received"],
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
-    expect(listener.surfaceConfig.subjects).toEqual([
+    expect(listener.subjects).toEqual([
       "local.test.dispatch.task.received",
     ]);
   });
@@ -289,14 +287,13 @@ describe("createDispatchListener — surfaceConfig", () => {
     const router = createSurfaceRouter(runtime);
     const listener = createDispatchListener({
       runtime,
-      router,
       source: SOURCE,
       stack: "default",
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
     // Direction A Stage 4-B (cortex#409) — stack-aware default subjects
     // use only the canonical `tasks.*.>` pattern.
-    expect(listener.surfaceConfig.subjects).toEqual([
+    expect(listener.subjects).toEqual([
       "local.metafactory.default.tasks.*.>",
     ]);
   });
@@ -306,12 +303,11 @@ describe("createDispatchListener — surfaceConfig", () => {
     const router = createSurfaceRouter(runtime);
     const listener = createDispatchListener({
       runtime,
-      router,
       source: SOURCE,
       stack: "research",
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
-    expect(listener.surfaceConfig.subjects).toEqual([
+    expect(listener.subjects).toEqual([
       "local.metafactory.research.tasks.*.>",
     ]);
   });
@@ -323,13 +319,12 @@ describe("createDispatchListener — surfaceConfig", () => {
     const router = createSurfaceRouter(runtime);
     const listener = createDispatchListener({
       runtime,
-      router,
       source: SOURCE,
       stack: "default",
       subjects: ["federated.{net}.dispatch.task.received"],
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
-    expect(listener.surfaceConfig.subjects).toEqual([
+    expect(listener.subjects).toEqual([
       "federated.{net}.dispatch.task.received",
     ]);
   });
@@ -339,11 +334,10 @@ describe("createDispatchListener — surfaceConfig", () => {
     const router = createSurfaceRouter(runtime);
     const listener = createDispatchListener({
       runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
-    expect(listener.surfaceConfig.id).toBe("runner-dispatch-listener");
+    expect(listener.id).toBe("runner-dispatch-listener");
   });
 
   test("custom adapter id honored", () => {
@@ -351,12 +345,11 @@ describe("createDispatchListener — surfaceConfig", () => {
     const router = createSurfaceRouter(runtime);
     const listener = createDispatchListener({
       runtime,
-      router,
       source: SOURCE,
       adapterId: "runner-dispatch-listener-test",
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
-    expect(listener.surfaceConfig.id).toBe("runner-dispatch-listener-test");
+    expect(listener.id).toBe("runner-dispatch-listener-test");
   });
 });
 
@@ -376,7 +369,6 @@ describe("createDispatchListener — runtime self-subscribe (cortex#477)", () =>
     const router = createSurfaceRouter(r.runtime);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       stack: "meta-factory",
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
@@ -394,7 +386,6 @@ describe("createDispatchListener — runtime self-subscribe (cortex#477)", () =>
     const router = createSurfaceRouter(r.runtime);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
@@ -407,7 +398,6 @@ describe("createDispatchListener — runtime self-subscribe (cortex#477)", () =>
     const router = createSurfaceRouter(r.runtime);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       subjects: ["local.test.a.>", "local.test.b.>"],
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
@@ -421,7 +411,6 @@ describe("createDispatchListener — runtime self-subscribe (cortex#477)", () =>
     const router = createSurfaceRouter(r.runtime);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       stack: "meta-factory",
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
@@ -450,7 +439,6 @@ describe("createDispatchListener — runtime self-subscribe (cortex#477)", () =>
     const router = createSurfaceRouter(minimalRuntime);
     const listener = createDispatchListener({
       runtime: minimalRuntime,
-      router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
@@ -479,7 +467,6 @@ describe("createDispatchListener — runtime self-subscribe (cortex#477)", () =>
     const router = createSurfaceRouter(dormantRuntime);
     const listener = createDispatchListener({
       runtime: dormantRuntime,
-      router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
@@ -500,7 +487,6 @@ describe("dispatch-listener — success path", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -540,7 +526,6 @@ describe("dispatch-listener — success path", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -562,7 +547,6 @@ describe("dispatch-listener — success path", () => {
     const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -621,7 +605,6 @@ describe("dispatch-listener — success path", () => {
     const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -650,7 +633,6 @@ describe("dispatch-listener — success path", () => {
     const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -686,7 +668,6 @@ describe("dispatch-listener — success path", () => {
     const team = fakeAgentTeamFactory("Team answer");
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: cc.factory,
       agentTeamFactory: team.factory,
@@ -728,7 +709,6 @@ describe("dispatch-listener — failure paths", () => {
     const cc = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: cc.factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -758,7 +738,6 @@ describe("dispatch-listener — failure paths", () => {
     const router = createSurfaceRouter(r.runtime);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(FAIL_RESULT).factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -784,7 +763,6 @@ describe("dispatch-listener — failure paths", () => {
     const router = createSurfaceRouter(r.runtime);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(TIMEOUT_RESULT).factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -811,7 +789,6 @@ describe("dispatch-listener — failure paths", () => {
     const router = createSurfaceRouter(r.runtime);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(ABORTED_BY_FLAG_RESULT).factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -838,7 +815,6 @@ describe("dispatch-listener — failure paths", () => {
     };
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: throwingFactory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -868,7 +844,6 @@ describe("dispatch-listener — malformed payload", () => {
     const router = createSurfaceRouter(r.runtime);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
@@ -900,7 +875,6 @@ describe("dispatch-listener — malformed payload", () => {
     const router = createSurfaceRouter(r.runtime);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
@@ -937,7 +911,6 @@ describe("dispatch-listener — malformed payload", () => {
     const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
     });
@@ -977,7 +950,6 @@ describe("dispatch-listener — start/stop", () => {
     const router = createSurfaceRouter(r.runtime);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -1002,7 +974,6 @@ describe("dispatch-listener — start/stop", () => {
     const router = createSurfaceRouter(r.runtime);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -1022,7 +993,6 @@ describe("dispatch-listener — start/stop", () => {
     const router = createSurfaceRouter(r.runtime);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -1043,7 +1013,6 @@ describe("dispatch-listener — subject filtering", () => {
     const router = createSurfaceRouter(r.runtime);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
@@ -1094,7 +1063,6 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       // no policyEngine → fail-closed deny
@@ -1118,7 +1086,6 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -1144,7 +1111,6 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       // Grant a *different* capability so dispatch.cortex misses.
@@ -1187,7 +1153,6 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     // is not declared as a principal.
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.ghost-agent"]),
@@ -1246,7 +1211,6 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engine,
@@ -1287,7 +1251,6 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -1327,7 +1290,6 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex", "extra.cap"]),
@@ -1373,7 +1335,6 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -1467,7 +1428,6 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       // Subscribe to the federated subject so the router fans the
       // envelope to this listener.
@@ -1503,7 +1463,6 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       subjects: ["federated.partner-only.dispatch.task.received"],
       ccSessionFactory: factory,
@@ -1549,7 +1508,6 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       // Subscribe to the catch-all federated dispatch pattern so the
       // listener receives envelopes from networks it doesn't know.
@@ -1597,7 +1555,6 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       subjects: ["federated.research-collab.dispatch.task.received"],
       ccSessionFactory: factory,
@@ -1640,7 +1597,6 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineWithFederation({
@@ -1685,7 +1641,6 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       subjects: ["federated.research-collab.dispatch.task.received"],
       ccSessionFactory: factory,
@@ -1710,7 +1665,6 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["other.thing"]),
@@ -1838,7 +1792,6 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -1878,7 +1831,6 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -1916,7 +1868,6 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -1978,7 +1929,6 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -2015,7 +1965,6 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -2064,7 +2013,6 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -2116,7 +2064,6 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -2180,7 +2127,6 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -2258,7 +2204,6 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engine,
@@ -2320,7 +2265,6 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engine,
@@ -2375,7 +2319,6 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engine,
@@ -2413,7 +2356,6 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
     const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engineGranting(["dispatch.cortex"]),
@@ -2520,7 +2462,6 @@ describe("dispatch-listener — originator DID resolution (cortex#486)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engine,
@@ -2579,7 +2520,6 @@ describe("dispatch-listener — originator DID resolution (cortex#486)", () => {
     const { factory } = fakeFactory(SUCCESS_RESULT);
     const listener = createDispatchListener({
       runtime: r.runtime,
-      router,
       source: SOURCE,
       ccSessionFactory: factory,
       policyEngine: engine,

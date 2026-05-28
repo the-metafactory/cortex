@@ -1,59 +1,67 @@
 /**
- * MIG-4.5 — Runner subscribes to `dispatch.task.received` via the surface-router.
+ * Runner dispatch listener — consumes inbound dispatchable task envelopes
+ * directly from the `MyelinRuntime` and spawns a substrate harness per
+ * dispatch.
  *
- * Architectural pattern (G-1111 §5):
- *   The surface-router fans envelopes to N adapters. Adapters declare
- *   interest with subjects + filter and a `render(envelope)` method.
- *   Adapters typically render to platforms (Discord, Mattermost, ...);
- *   the runner reuses the SAME adapter shape but `render()` *dispatches
- *   to a substrate harness* instead. The router doesn't care — it just
- *   fans envelopes. This keeps the runner symmetric with platform
- *   adapters and means a future test harness can register a no-op
- *   runner adapter to drain the bus during integration tests.
+ * **cortex#484 Option D — executor, not renderer.** Pre-#484 the
+ * listener registered itself as a `SurfaceAdapter` on the
+ * surface-router and ran `handleDispatchEnvelope` under the router's
+ * `DEFAULT_RENDER_TIMEOUT_MS = 5000ms` envelope. That was a category
+ * error per `CONTEXT.md` (§Dispatch-listener vs §Renderer): a CC
+ * session takes minutes, not seconds; "rendering" is the sub-second
+ * presentation concern (post a Discord message, push a dashboard
+ * update). Wrapping a long-running executor in a 5s render timeout
+ * surfaced as `render timeout after 5000ms` errors on every
+ * Discord-originated chat dispatch (cortex#484 repro).
  *
- * Lifecycle (per plan-cortex-migration.md §4.5–4.6, IAW Phase A.1b):
- *   1. Envelope arrives on `local.{principal}.dispatch.task.received`.
- *   2. Listener parses payload → builds a `DispatchRequest`.
- *   3. Listener instantiates a per-dispatch `ClaudeCodeHarness` and
- *      iterates `harness.dispatch(req)`.
- *   4. For each yielded `MyelinEnvelope` (started / completed / failed
- *      / aborted), the listener calls `runtime.publish(envelope)` to
- *      re-emit it on the bus.
- *   5. The harness's contract guarantees: at least one terminal envelope
- *      (`completed` | `failed` | `aborted`) per dispatch, in order, on
- *      the same `correlation_id`.
+ * Option D drops the SurfaceAdapter registration entirely. The
+ * listener now subscribes via `runtime.onEnvelope()` + an inline
+ * `subjectMatches` filter — symmetric with `BusDispatchListener`
+ * (`src/bus/bus-dispatch-listener.ts`). The surface-router still
+ * fans the same envelope to its real renderers (Discord channel
+ * post, dashboard update) under the timeout that's appropriate for
+ * THEM; the runner runs in its own microtask chain with no timeout
+ * and tracks in-flight CC sessions on an `inFlight` Set so `stop()`
+ * can drain cleanly on shutdown.
  *
- * **A.1b refactor history (cortex#113 / IAW Phase A).** Before A.1b the
- * listener spawned `CCSession` directly and built lifecycle envelopes
- * inline. Now the listener owns *just* the envelope-to-request
- * translation and the publish loop; everything CC-specific lives in
- * `ClaudeCodeHarness`. The behavioural surface is unchanged — the same
- * four envelope types fire in the same order on the same subjects with
- * the same payloads — but the runner is now substrate-agnostic at the
- * code level. A future `BusPeerHarness` slots in by switching which
- * harness the listener constructs per dispatch.
+ * Lifecycle:
+ *   1. Envelope arrives on the runtime via NATS subscription (the
+ *      listener also calls `runtime.subscribe(pattern)` at `start()`
+ *      time per cortex#477 so its declared interest no longer relies
+ *      on `nats.subjects[]` in `cortex.yaml` being a superset).
+ *   2. `runtime.onEnvelope` fans to the registered handler, which
+ *      filters by subject (`subjectMatches(pattern, subject)` against
+ *      the listener's canonical Tasks-Domain pattern).
+ *   3. Handler tracks the dispatch in `inFlight`, then invokes
+ *      `handleDispatchEnvelope` (chain verify → policy gate →
+ *      per-dispatch harness → publish lifecycle envelopes).
+ *   4. The harness's contract guarantees: at least one terminal
+ *      envelope (`completed` | `failed` | `aborted`) per dispatch,
+ *      in order, on the same `correlation_id`.
+ *   5. `stop()` unregisters the `onEnvelope` subscription, drains
+ *      `runtime.subscribe` subscribers, and awaits in-flight
+ *      dispatches via `Promise.allSettled`.
  *
- * **Boundaries (per task contract):**
- *   - This file does NOT modify `dispatch-handler.ts`. The bus-driven path
- *     and the legacy direct-call path coexist until MIG-7.1 picks the
- *     entrypoint wiring.
+ * **A.1b refactor history (cortex#113).** Before A.1b the listener
+ * spawned `CCSession` directly and built lifecycle envelopes inline.
+ * Now the listener owns *just* the envelope-to-request translation
+ * and the publish loop; everything CC-specific lives in
+ * `ClaudeCodeHarness`. The behavioural surface is unchanged — the
+ * same four envelope types fire in the same order on the same
+ * subjects with the same payloads — but the runner is now
+ * substrate-agnostic at the code level. A future `BusPeerHarness`
+ * slots in by switching which harness the listener constructs
+ * per dispatch.
+ *
+ * **Boundaries:**
+ *   - This file does NOT modify `dispatch-handler.ts`. The bus-driven
+ *     path and the legacy direct-call path coexist.
  *   - This file does NOT modify `cc-session.ts` or `session-manager.ts`.
  *     The harness still wraps `CCSession` underneath; this file no
  *     longer imports it.
- *   - This file does NOT post to Discord. Surfaces (worklog-manager via
- *     §4.7, dashboard via the bus) consume the lifecycle envelopes the
+ *   - This file does NOT post to Discord. Surfaces (worklog-manager,
+ *     dashboard via the bus) consume the lifecycle envelopes the
  *     runner emits and render their own way.
- *
- * **Why the listener is a SurfaceAdapter and not a separate "runner
- * subscriber" type:**
- *   The G-1111 design is explicit (§5.1): the surface-router is the single
- *   fan-out point, and adapters declare a `render(envelope)` shape. The
- *   runner is logically *also* a surface — it "renders" envelopes by
- *   dispatching to a substrate. Re-using the same shape keeps the router
- *   code path uniform (subject match → filter → render) and avoids
- *   inventing a parallel "consumer" registry. The semantic difference
- *   (render vs dispatch) lives in the adapter implementation, not the
- *   registry.
  */
 
 import type { Envelope } from "../bus/myelin/envelope-validator";
@@ -65,10 +73,12 @@ import {
 } from "../bus/myelin/envelope-validator";
 import { encodeDidSegment } from "@the-metafactory/myelin/subjects";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
-import type {
-  SurfaceAdapter,
-  SurfaceRouter,
+import {
+  emitFederationDenied,
+  evaluateFederationGate,
+  subjectMatches,
 } from "../bus/surface-router";
+import type { PolicyFederated, PolicyFederatedNetwork } from "../common/types/cortex-config";
 import type {
   SystemAccessDeniedReason,
   SystemAccessSignedBy,
@@ -182,10 +192,16 @@ export interface DispatchTaskReceivedPayload {
 }
 
 export interface DispatchListenerOptions {
-  /** MyelinRuntime — used to publish lifecycle events back onto the bus. */
+  /**
+   * MyelinRuntime — used to subscribe (via `onEnvelope` + `subscribe`)
+   * and to publish lifecycle events back onto the bus.
+   *
+   * cortex#484 Option D: the listener no longer takes a `SurfaceRouter`
+   * — it consumes envelopes directly from the runtime rather than
+   * registering as a SurfaceAdapter. See file-header docblock for the
+   * executor-vs-renderer rationale.
+   */
   runtime: MyelinRuntime;
-  /** Surface-router — the listener registers itself as a surface adapter. */
-  router: SurfaceRouter;
   /** Source identity for the lifecycle envelopes the listener emits. */
   source: SystemEventSource;
   /**
@@ -220,11 +236,40 @@ export interface DispatchListenerOptions {
    */
   agentTeamFactory?: AgentTeamFactory;
   /**
-   * Adapter ID for surface-router error reporting. Defaults to
+   * Listener id for log prefixes (stderr lines, future audit envelopes
+   * tagged with which listener emitted them). Defaults to
    * `runner-dispatch-listener`. Configurable so multiple runner instances
    * (a future principal-controlled fleet) can disambiguate.
+   *
+   * Pre-cortex#484 this was the `SurfaceAdapter.id` used by the
+   * surface-router; the listener no longer registers as a SurfaceAdapter
+   * (Option D), but the field is preserved for log-line continuity and
+   * future audit-envelope source-tagging.
    */
   adapterId?: string;
+  /**
+   * cortex#484 — optional federation gate config. When supplied AND the
+   * listener subscribes to a `federated.*` subject, every inbound
+   * `federated.{network_id}.>` envelope is gated against the declared
+   * network's `accept_subjects` / `deny_subjects` lists + `max_hop`
+   * budget BEFORE chain verification, policy gating, or harness
+   * dispatch — mirror of the surface-router's D.2 gate.
+   *
+   * Why the runner needs its own gate post-Option D: pre-#484 the
+   * runner registered as a SurfaceAdapter and the surface-router's
+   * federation gate covered it. Option D drops that registration —
+   * the runner now consumes envelopes directly off the runtime, so any
+   * federation policy that should apply to the runner's subscription
+   * path must be enforced here. Production wiring subscribes the runner
+   * to `local.*` only (federation never applies); tests and operators
+   * who explicitly subscribe the runner to `federated.*` MUST pass
+   * `federated` so the deny / accept lists still gate.
+   *
+   * When omitted, no federation gating runs on the runner's path. The
+   * surface-router's gate (configured in `cortex.ts`) continues to
+   * enforce policy for other adapters (Discord, dashboard renderers).
+   */
+  federated?: PolicyFederated;
   /**
    * IAW Phase C.3.1 — optional PolicyEngine gate. When present, every
    * inbound `dispatch.task.received` envelope passes through
@@ -310,16 +355,33 @@ export interface DispatchListenerOptions {
 
 export interface DispatchListener {
   /**
-   * The surface-adapter face of the listener. Exposed primarily for
-   * testing — callers don't usually register this directly because
-   * `start()` does the registration. Returning it lets tests inspect
-   * the SurfaceAdapter contract (subjects, render, etc.) without
-   * standing up a router.
+   * Resolved subject patterns this listener subscribes to. Exposed
+   * primarily for testing — production callers don't read this because
+   * `start()` wires everything via the runtime. Tests assert on the
+   * canonical Tasks-Domain pattern that `start()` will hand to
+   * `runtime.subscribe()` + the inline `onEnvelope` filter.
+   *
+   * Pre-cortex#484 this lived on `surfaceConfig.subjects`; Option D
+   * drops the `SurfaceAdapter` surface but preserves the testable
+   * accessor under a direct property so existing test shape stays
+   * largely intact (sub-property rename only).
    */
-  readonly surfaceConfig: SurfaceAdapter;
-  /** Register with the router. Idempotent. */
+  readonly subjects: readonly string[];
+  /**
+   * Listener id (matches `adapterId` opt). Carried on stderr log
+   * prefixes so multi-runner deployments can disambiguate. Mirrors
+   * the pre-#484 `surfaceConfig.id` field.
+   */
+  readonly id: string;
+  /** Wire up `onEnvelope` + `subscribe`. Idempotent. */
   start(): Promise<void>;
-  /** Unregister and stop accepting new envelopes. Idempotent. */
+  /**
+   * Unregister and drain in-flight dispatches. Idempotent. Awaits
+   * `Promise.allSettled` over every in-flight CC session so callers
+   * that need a clean cutoff (test teardown, shutdown sequences) can
+   * trust no late publish side effects land afterwards. Mirrors
+   * `BusDispatchListener.stop()`.
+   */
   stop(): Promise<void>;
 }
 
@@ -358,11 +420,13 @@ function dispatchReceivedSubject(principal: string, stack?: string): string {
  * segment and `>` matches any capability subtree (`chat`, `code-review`,
  * `release`, etc.).
  *
- * The listener subscribes to this PATTERN once per stack; the surface-router
- * routes every matching envelope through the same `handleDispatchEnvelope`
- * path that handled the legacy `dispatch.task.received` subject. Legacy
- * subjects can still be supplied explicitly through `subjects` for old
- * tests/config, but production defaults are canonical-only.
+ * The listener subscribes to this PATTERN once per stack (via
+ * `runtime.subscribe`) and filters incoming `onEnvelope` fan-outs via
+ * `subjectMatches`; matching envelopes flow into `handleDispatchEnvelope`
+ * for chain verification, policy gating, and per-dispatch harness
+ * spawn. Legacy subjects can still be supplied explicitly through
+ * `subjects` for old tests/config, but production defaults are
+ * canonical-only.
  */
 function canonicalTasksDirectSubject(principal: string, stack?: string): string {
   if (stack === undefined) {
@@ -391,7 +455,6 @@ export function createDispatchListener(
 ): DispatchListener {
   const {
     runtime,
-    router,
     source,
     ccSessionFactory,
     agentTeamFactory,
@@ -409,35 +472,52 @@ export function createDispatchListener(
   const cryptoVerify = opts.cryptoVerify ?? true;
   const subjects = opts.subjects ?? defaultSubjects(source.principal, opts.stack);
 
-  let registration: { unregister: () => void } | null = null;
+  // cortex#484 — federation gate config (Option D). Index networks by id
+  // for O(1) prefix lookup on each inbound envelope. Empty map (or
+  // undefined `federated` opt) means "no federation gating on this
+  // listener" — matches the surface-router's pre-#484 inert-gate
+  // semantics. The map is built once at construction time; reloads
+  // require reconstructing the listener (same contract the
+  // surface-router has for federation reloads).
+  const federatedNetworksById = new Map<string, PolicyFederatedNetwork>();
+  for (const network of opts.federated?.networks ?? []) {
+    federatedNetworksById.set(network.id, network);
+  }
+
+  // cortex#484 Option D — `onEnvelope` registration handle. The
+  // runner consumes envelopes directly from the runtime rather than
+  // registering as a SurfaceAdapter (which would put it under the
+  // surface-router's 5s render-timeout — see file-header docblock).
+  let envelopeRegistration: { unregister: () => void } | null = null;
   // cortex#477 — push-mode NATS subscriptions owned by this listener.
-  // Pre-#477 the runner relied on `nats.subjects[]` in `cortex.yaml`
-  // being a superset of its declared `subjects` — an unenforced
-  // cross-config invariant that silently broke deployments whose
-  // config wasn't kept in lockstep with the listener's canonical
-  // pattern (see cortex#477 root cause analysis). The listener now
-  // self-subscribes via `runtime.subscribe(pattern)` at `start()`
-  // time, symmetric with `ReviewConsumer`'s `subscribePull` model.
-  // Stored so `stop()` can drain the subscribers cleanly on teardown
-  // even when the runtime stays running.
+  // The listener self-subscribes via `runtime.subscribe(pattern)` at
+  // `start()` time so its declared interest no longer depends on
+  // `nats.subjects[]` in `cortex.yaml` being a superset of the
+  // canonical Tasks-Domain pattern. Stored so `stop()` can drain the
+  // subscribers cleanly on teardown even when the runtime stays
+  // running.
   interface RuntimeSubscriber { stop(): Promise<void>; }
   let runtimeSubscribers: RuntimeSubscriber[] = [];
+  // cortex#484 — in-flight dispatches tracked here so `stop()` can
+  // drain via `Promise.allSettled`. Mirrors
+  // `BusDispatchListener.inFlight` — each inbound runs in its own
+  // microtask chain (no serial queue), and `stop()` awaits drain
+  // before returning so test teardown / shutdown sequences see a
+  // clean cutoff.
+  const inFlight = new Set<Promise<void>>();
 
-  const surfaceConfig: SurfaceAdapter = {
-    id: adapterId,
-    subjects,
-    // No payload filter on the listener side — every received envelope
-    // is meant for the runner. If we add multi-runner routing (filter on
-    // `payload.agent_id`), it goes here as a `PayloadFilter`.
-    //
-    // `signal` is accepted for contract symmetry but not currently forwarded
-    // into the substrate dispatch — the lifecycle is governed by the
-    // harness's own timeout/inactivity timers (per Q6 lock-in). A follow-on
-    // iteration can wire `signal.aborted` to `harness.shutdown({ graceful:
-    // false })` so surface-router timeouts end the CC process eagerly
-    // rather than waiting for cc-session's internal timer to fire.
-    render: (envelope, _signal, subject) =>
-      handleDispatchEnvelope(envelope, subject, {
+  /**
+   * Run one dispatch in its own microtask, catching its own errors
+   * so the runtime's `onEnvelope` fan-out doesn't see a throw from
+   * a slow / failing CC session. Returns the promise so the caller
+   * can track it on `inFlight` for drain.
+   */
+  const runOneDispatch = async (
+    envelope: Envelope,
+    subject: string | undefined,
+  ): Promise<void> => {
+    try {
+      await handleDispatchEnvelope(envelope, subject, {
         runtime,
         source,
         ccSessionFactory,
@@ -450,17 +530,86 @@ export function createDispatchListener(
         receivingAgentId,
         stackIdentity,
         stackNKeyPub,
-      }),
+      });
+    } catch (err) {
+      process.stderr.write(
+        `[${adapterId}] handleDispatchEnvelope threw on envelope ` +
+          `${envelope.id} (correlation_id=` +
+          `${envelope.correlation_id ?? "<none>"}): ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+  };
+
+  /**
+   * Track an in-flight dispatch promise and remove it on settle.
+   * Sibling helper that owns the bookkeeping — mirrors
+   * `BusDispatchListener.trackInFlight`.
+   */
+  const trackInFlight = (dispatchPromise: Promise<void>): void => {
+    inFlight.add(dispatchPromise);
+    void dispatchPromise.finally(() => inFlight.delete(dispatchPromise));
+  };
+
+  /**
+   * Subject filter — only envelopes whose wire subject matches one of
+   * the listener's declared patterns are dispatched. NATS' wildcard
+   * grammar (`*` whole-token, `>` multi-segment) is implemented by
+   * the shared `subjectMatches` helper exported from `surface-router`,
+   * so the runner sees exactly the same match semantics it had as a
+   * SurfaceAdapter pre-#484.
+   *
+   * When `subject` is undefined (some test fakes don't carry one)
+   * the filter falls through to "match" — preserves the pre-#484
+   * behaviour where the SurfaceAdapter's subject array was only
+   * consulted on subject-bearing envelopes. Defensive: a malformed
+   * fake without a subject still reaches `handleDispatchEnvelope`
+   * which has its own validation.
+   */
+  const matchesAnyDeclaredSubject = (subject: string | undefined): boolean => {
+    if (subject === undefined) return true;
+    for (const pattern of subjects) {
+      if (subjectMatches(pattern, subject)) return true;
+    }
+    return false;
   };
 
   return {
-    surfaceConfig,
-    // start/stop are part of the surface-listener contract — return
-    // Promise<void> even when the body is sync, so callers can await
-    // alongside other lifecycle hooks (cc-session, bus, taps).
+    subjects,
+    id: adapterId,
     async start() {
-      if (registration) return;
-      registration = router.register(surfaceConfig);
+      if (envelopeRegistration) return;
+      // cortex#484 Option D — register as an `onEnvelope` handler
+      // directly on the runtime, symmetric with `BusDispatchListener`.
+      // The handler filters by subject + dispatches in a tracked
+      // microtask; no render-timeout wraps the CC session.
+      envelopeRegistration = runtime.onEnvelope((envelope, subject) => {
+        if (!matchesAnyDeclaredSubject(subject)) return;
+        // cortex#484 — federation gate runs BEFORE chain verification
+        // and policy gating, mirroring the surface-router's D.2 order:
+        // an envelope that fails the network's accept/deny rules never
+        // reaches the harness path (no `dispatch.task.*` lifecycle is
+        // emitted). Gate engages only when the listener was given a
+        // `federated.networks[]` block AND the inbound subject is in
+        // the `federated.*` domain; subjects in the `local.*` /
+        // `public.*` domains pass through untouched (the gate is
+        // scoped to the federation domain by design, per D.2.1).
+        if (
+          federatedNetworksById.size > 0
+          && subject.startsWith("federated.")
+        ) {
+          const decision = evaluateFederationGate(
+            subject,
+            envelope,
+            federatedNetworksById,
+          );
+          if (decision !== "allow") {
+            emitFederationDenied(runtime, source, envelope, subject, decision);
+            return;
+          }
+        }
+        trackInFlight(runOneDispatch(envelope, subject));
+      });
       // cortex#477 — self-subscribe via `runtime.subscribe()` so the
       // runner's declared interest no longer depends on
       // `nats.subjects[]` in `cortex.yaml`. `subscribe` is OPTIONAL
@@ -481,16 +630,20 @@ export function createDispatchListener(
       }
     },
     async stop() {
-      if (!registration) return;
-      registration.unregister();
-      registration = null;
-      // Drain listener-owned runtime subscribers. The runtime tracks
-      // them on its internal subscribers[] too, so `runtime.stop()`
-      // would also drain them — but listener-scoped teardown should
-      // not require runtime shutdown to release NATS resources.
+      if (!envelopeRegistration) return;
+      envelopeRegistration.unregister();
+      envelopeRegistration = null;
+      // Drain listener-owned runtime subscribers FIRST so no new
+      // envelopes arrive while we wait for in-flight dispatches.
       const drained = runtimeSubscribers;
       runtimeSubscribers = [];
       await Promise.allSettled(drained.map((s) => s.stop()));
+      // Then drain in-flight CC sessions. `allSettled` because each
+      // dispatch already catches its own errors via `runOneDispatch`;
+      // we just need the microtask chain to flush before returning so
+      // callers awaiting `stop()` trust no late publish side effects
+      // land afterwards. Mirrors `BusDispatchListener.stop()`.
+      await Promise.allSettled(Array.from(inFlight));
     },
   };
 }
@@ -504,8 +657,8 @@ export function createDispatchListener(
  *
  * Returns `null` (not throws) on malformed payload — surfaces should
  * tolerate bad envelopes per the §3.3.4 ordering/dedupe guarantees. The
- * adapter logs and returns; the surface-router's isolation hook captures
- * the case via the missing `dispatch.task.started` event downstream
+ * listener logs and returns; downstream consumers detect the malformed
+ * envelope via the missing `dispatch.task.started` event
  * (a producer that emits `received` and never sees `started` knows
  * something went wrong).
  */
@@ -604,10 +757,16 @@ function buildDispatchRequest(
 }
 
 /**
- * The render() implementation: parse → instantiate harness → iterate
- * `harness.dispatch(req)` → publish each yielded envelope. Returns
- * `Promise<void>` so the surface-router can await with its render-timeout
- * isolation.
+ * Core dispatch path: parse → chain-verify → policy-gate → instantiate
+ * harness → iterate `harness.dispatch(req)` → publish each yielded
+ * envelope. Returns `Promise<void>` and is tracked on the listener's
+ * `inFlight` Set; `stop()` drains via `Promise.allSettled`.
+ *
+ * cortex#484 Option D — pre-#484 this was the SurfaceAdapter's
+ * `render()` callback and ran under a 5s timeout. The listener now
+ * wires it directly off `runtime.onEnvelope`, so the CC session's
+ * own timers (harness-side `timeoutMs` / inactivity) govern lifetime
+ * rather than the surface-router's renderer-oriented timeout.
  *
  * **Per-dispatch harness construction (Q7 lock-in).** Every received
  * envelope spawns a fresh `ClaudeCodeHarness` instance. The harness is
@@ -885,7 +1044,7 @@ async function handleDispatchEnvelope(
       model_class: envelope.sovereignty.model_class,
     };
     // IAW Phase D.3 — when the inbound envelope's subject was a real
-    // wire subject (the surface-router forwards it on `render`), use
+    // wire subject (the runtime forwards it on `onEnvelope`), use
     // it verbatim on the audit envelope. The pre-D.3 path always
     // synthesised `local.{principal}.dispatch.task.received` regardless of
     // whether the envelope arrived locally or on `federated.{net}.*`.

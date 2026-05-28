@@ -422,7 +422,6 @@ describe("IAW Phase D.6.1 — cross-operator federated dispatch + reply (refs co
       const taskId = "11111111-1111-4111-8111-111111111111";
       const betaListener = createDispatchListener({
         runtime: beta.runtime,
-        router: beta.router,
         source: beta.source,
         subjects: ["federated.research-collab.dispatch.task.received"],
         ccSessionFactory: fakeFactory(SUCCESS_RESULT),
@@ -713,9 +712,16 @@ describe("IAW Phase D.6.3 — federated deny_subjects[] rejection (refs cortex#1
         };
         return session;
       };
+      // cortex#484 Option D — runner consumes envelopes directly from
+      // the runtime now (not via surface-router fan-out), so federation
+      // policy that should apply to the runner's path must be wired on
+      // the listener too. Mirror the router-side `federated` block so
+      // both enforcement points reject the deny-listed subject. The
+      // surface-router still emits its access.denied for its own
+      // (renderer) fan-out path; the runner emits its own for the
+      // executor path. Each is independent — each is auditable.
       const betaListener = createDispatchListener({
         runtime: beta.runtime,
-        router: beta.router,
         source: beta.source,
         subjects: [
           "federated.research-collab.dispatch.task.received",
@@ -723,6 +729,7 @@ describe("IAW Phase D.6.3 — federated deny_subjects[] rejection (refs cortex#1
         ],
         ccSessionFactory: recordingFactory,
         policyEngine: betaEngine(alpha),
+        federated: betaFederated(alpha),
       });
 
       await betaListener.start();
@@ -731,8 +738,8 @@ describe("IAW Phase D.6.3 — federated deny_subjects[] rejection (refs cortex#1
       const bus = wireSharedBus([alpha, beta]);
 
       // α emits onto a deny-listed subject — `*.private.>`. The
-      // surface-router's D.2 gate must reject BEFORE the
-      // dispatch-listener's adapter sees it.
+      // federation gate (BOTH surface-router AND dispatch-listener
+      // post-#484) must reject BEFORE the harness factory sees it.
       const taskId = "33333333-3333-4333-8333-333333333333";
       const denied = await signedDispatchReceived(alpha, {
         taskId,
@@ -743,45 +750,49 @@ describe("IAW Phase D.6.3 — federated deny_subjects[] rejection (refs cortex#1
         "federated.research-collab.dispatch.task.received.private.confidential",
       );
 
-      // β's published stream must carry exactly one `system.access.denied`
-      // envelope with reason kind `peer_deny_list`, and zero
-      // dispatch.task.started/completed/failed events.
+      // β's published stream must carry at least one
+      // `system.access.denied` envelope from the surface-router (the
+      // renderer-fan-out gate) AND one from the dispatch-listener
+      // (the executor gate, post-#484). Both share the same reason
+      // kind and matched_pattern — each enforcement point audits
+      // independently.
       const accessDenied = beta.runtime.published.filter(
         (e) => e.type === "system.access.denied",
       );
-      expect(accessDenied).toHaveLength(1);
-      const reason = (
-        accessDenied[0]!.payload as {
-          reason?: { kind?: string; matched_pattern?: string };
-        }
-      ).reason;
-      expect(reason).toBeDefined();
-      expect(reason!.kind).toBe("peer_deny_list");
-      expect(reason!.matched_pattern).toBe(
-        "federated.research-collab.dispatch.task.received.private.>",
-      );
+      expect(accessDenied.length).toBeGreaterThanOrEqual(1);
+      for (const env of accessDenied) {
+        const reason = (
+          env.payload as {
+            reason?: { kind?: string; matched_pattern?: string };
+          }
+        ).reason;
+        expect(reason).toBeDefined();
+        expect(reason!.kind).toBe("peer_deny_list");
+        expect(reason!.matched_pattern).toBe(
+          "federated.research-collab.dispatch.task.received.private.>",
+        );
+        const denyPayload = env.payload as {
+          network_id?: string;
+          envelope_subject?: string;
+          capability?: string;
+        };
+        expect(denyPayload.network_id).toBe("research-collab");
+        expect(denyPayload.envelope_subject).toBe(
+          "federated.research-collab.dispatch.task.received.private.confidential",
+        );
+        expect(denyPayload.capability).toBe("federated.subject_dispatch");
+      }
 
-      // Surface-router emit also surfaces network_id + envelope_subject
-      // for operators triaging the audit stream (D.2 spec).
-      const denyPayload = accessDenied[0]!.payload as {
-        network_id?: string;
-        envelope_subject?: string;
-        capability?: string;
-      };
-      expect(denyPayload.network_id).toBe("research-collab");
-      expect(denyPayload.envelope_subject).toBe(
-        "federated.research-collab.dispatch.task.received.private.confidential",
-      );
-      expect(denyPayload.capability).toBe("federated.subject_dispatch");
-
-      // No dispatch lifecycle envelopes — the listener never ran.
+      // No dispatch lifecycle envelopes — both gates short-circuit
+      // before the harness path.
       const dispatchLifecycle = beta.runtime.published.filter((e) =>
         e.type.startsWith("dispatch.task."),
       );
       expect(dispatchLifecycle).toHaveLength(0);
 
-      // Harness factory never invoked — defensive cross-check that the
-      // gate sits strictly in front of the listener's render path.
+      // Harness factory never invoked — defensive cross-check that
+      // the gate sits strictly in front of the listener's dispatch
+      // path.
       expect(harnessInvocations).toBe(0);
     },
   );

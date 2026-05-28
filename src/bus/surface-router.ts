@@ -629,7 +629,7 @@ function emitAccessFiltered(
  * surface "peer claimed network 'x'" without `dispatch()` re-parsing
  * the subject.
  */
-type FederationGateDecision =
+export type FederationGateDecision =
   | "allow"
   | {
       kind: "peer_not_in_accept_list";
@@ -775,7 +775,16 @@ export function evaluateFederationGate(
  * errors swallowed internally, no-op when `systemEventSource` is
  * undefined (the test-only path).
  */
-function emitFederationDenied(
+/**
+ * cortex#484 — exported so the runner dispatch-listener can reuse the
+ * same audit-emit path when it gates federated.* subscriptions
+ * inline (Option D — runner subscribes directly via the runtime
+ * rather than as a SurfaceAdapter, so the surface-router's
+ * federation gate no longer covers the runner's subscription path).
+ * Same contract as the in-router caller: best-effort publish,
+ * stderr-log on failure, no-op when `source` is undefined.
+ */
+export function emitFederationDenied(
   runtime: MyelinRuntime,
   source: SystemEventSource | undefined,
   envelope: Envelope,

@@ -1895,9 +1895,14 @@ export async function startCortex(
   // the listener subscribes on the SAME segment the adapter publishes
   // on. PR-R2a (cortex#439) renamed the constructor parameter to
   // `principalId` to match the canonical vocabulary.
+  // cortex#484 Option D — the listener no longer takes a `router`
+  // parameter. It consumes envelopes directly from `runtime.onEnvelope`
+  // (with a subject filter) rather than registering as a SurfaceAdapter
+  // under the surface-router's 5s render-timeout. See
+  // `src/runner/dispatch-listener.ts` file-header docblock for the
+  // executor-vs-renderer rationale.
   const dispatchListener: DispatchListener = createDispatchListener({
     runtime,
-    router,
     source: systemEventSource,
     stack: derivedStack.stack,
     ...(policyEngine !== undefined && { policyEngine }),

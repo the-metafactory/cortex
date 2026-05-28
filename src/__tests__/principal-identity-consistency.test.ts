@@ -151,15 +151,14 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
       // `{principal}` segment the publisher would use. We assert
       // that directly from the recorded registration.
 
-      // CONSUME SIDE: the dispatch-listener registered a handler on
-      // the runtime with a subjects pattern derived from the
-      // resolved principal id. The recording runtime captures the
-      // handler (via `onEnvelope`) but not the subject — we rely on
-      // the fact that exactly one handler is registered (the
-      // surface-router fans out by pattern match itself) and that
-      // the router's internal subscription includes the correct
-      // `{principal}.tasks.*.>` shape.
-      expect(runtime.onEnvelopeHandlers.size).toBe(1);
+      // CONSUME SIDE: post cortex#484 Option D, both the
+      // surface-router AND the dispatch-listener register handlers
+      // on the runtime — the listener now subscribes directly
+      // (executor-vs-renderer split, see
+      // `src/runner/dispatch-listener.ts` file-header docblock). Two
+      // handlers in total; both carry the resolved principal id in
+      // their derived subjects.
+      expect(runtime.onEnvelopeHandlers.size).toBe(2);
 
       // Stronger structural assertion: simulate an inbound envelope
       // on the V3-canonical subject. The router should accept it
@@ -253,7 +252,10 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
     // present proves the v3 path was at least one valid
     // candidate.) The positive "v3 wins" assertion is covered by
     // the unit test on `resolvePrincipalId` below.
-    expect(runtime.onEnvelopeHandlers.size).toBe(1);
+    //
+    // Post cortex#484 Option D: 2 handlers (surface-router +
+    // dispatch-listener).
+    expect(runtime.onEnvelopeHandlers.size).toBe(2);
     await handle.stop();
   });
 
@@ -277,7 +279,9 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
       operator: { id: "v3-canonical-op" },
     });
 
-    expect(runtime.onEnvelopeHandlers.size).toBe(1);
+    // Post cortex#484 Option D: 2 handlers (surface-router +
+    // dispatch-listener).
+    expect(runtime.onEnvelopeHandlers.size).toBe(2);
     await handle.stop();
   });
 

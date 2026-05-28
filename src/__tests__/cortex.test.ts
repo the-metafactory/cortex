@@ -193,14 +193,17 @@ describe("startCortex — wire-up", () => {
       operator: { id: "test-op" },
     });
     expect(handle).toBeDefined();
-    // The surface-router's `start()` registers exactly one envelope handler
-    // (its dispatch fan-out). The dispatch-listener registers as a
-    // SurfaceAdapter on the router — NOT as a runtime handler — so the
-    // count stays at 1 even with the listener wired.
-    expect(runtime.onEnvelopeHandlers.size).toBe(1);
+    // The surface-router's `start()` registers one envelope handler (its
+    // dispatch fan-out). Post cortex#484 Option D, the runner's
+    // dispatch-listener no longer registers as a SurfaceAdapter; instead
+    // it calls `runtime.onEnvelope(...)` directly so it can sit outside
+    // the router's render-timeout (CC sessions take minutes, renderers
+    // are sub-second). That's two handlers in total post-#484.
+    expect(runtime.onEnvelopeHandlers.size).toBe(2);
 
     await handle.stop();
-    // `router.stop()` unregisters from the runtime — the set drains.
+    // Both `router.stop()` and `dispatchListener.stop()` unregister from
+    // the runtime — the set drains.
     expect(runtime.onEnvelopeHandlers.size).toBe(0);
   });
 
@@ -297,7 +300,9 @@ describe("startCortex — wire-up", () => {
       operator: { id: "v3-canonical-op" },
     });
     expect(handle).toBeDefined();
-    expect(runtime.onEnvelopeHandlers.size).toBe(1);
+    // 2 handlers: surface-router fan-out + dispatch-listener (cortex#484
+    // Option D — listener subscribes directly via runtime.onEnvelope).
+    expect(runtime.onEnvelopeHandlers.size).toBe(2);
     await handle.stop();
     expect(runtime.onEnvelopeHandlers.size).toBe(0);
   });
@@ -361,7 +366,9 @@ describe("startCortex — wire-up", () => {
       operator: { id: "test-op" },
     });
     expect(handle).toBeDefined();
-    expect(runtime.onEnvelopeHandlers.size).toBe(1);
+    // 2 handlers: surface-router fan-out + dispatch-listener (cortex#484
+    // Option D). Discord adapter would add a 3rd; disabled → still 2.
+    expect(runtime.onEnvelopeHandlers.size).toBe(2);
     // No adapter started → no `system.adapter.*` envelope leaked.
     expect(runtime.published).toEqual([]);
     await handle.stop();
@@ -395,7 +402,9 @@ describe("startCortex — wire-up", () => {
       operator: { id: "test-op" },
     });
     expect(handle).toBeDefined();
-    expect(runtime.onEnvelopeHandlers.size).toBe(1);
+    // 2 handlers: surface-router fan-out + dispatch-listener (cortex#484
+    // Option D). Mattermost adapter would add a 3rd; skipped → still 2.
+    expect(runtime.onEnvelopeHandlers.size).toBe(2);
     expect(runtime.published).toEqual([]);
     await handle.stop();
   });
