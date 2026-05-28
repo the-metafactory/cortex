@@ -393,6 +393,18 @@ export function createDispatchListener(
   const subjects = opts.subjects ?? defaultSubjects(source.principal, opts.stack);
 
   let registration: { unregister: () => void } | null = null;
+  // cortex#477 — push-mode NATS subscriptions owned by this listener.
+  // Pre-#477 the runner relied on `nats.subjects[]` in `cortex.yaml`
+  // being a superset of its declared `subjects` — an unenforced
+  // cross-config invariant that silently broke deployments whose
+  // config wasn't kept in lockstep with the listener's canonical
+  // pattern (see cortex#477 root cause analysis). The listener now
+  // self-subscribes via `runtime.subscribe(pattern)` at `start()`
+  // time, symmetric with `ReviewConsumer`'s `subscribePull` model.
+  // Stored so `stop()` can drain the subscribers cleanly on teardown
+  // even when the runtime stays running.
+  interface RuntimeSubscriber { stop(): Promise<void>; }
+  let runtimeSubscribers: RuntimeSubscriber[] = [];
 
   const surfaceConfig: SurfaceAdapter = {
     id: adapterId,
@@ -427,16 +439,39 @@ export function createDispatchListener(
     // start/stop are part of the surface-listener contract — return
     // Promise<void> even when the body is sync, so callers can await
     // alongside other lifecycle hooks (cc-session, bus, taps).
-    // eslint-disable-next-line @typescript-eslint/require-await
     async start() {
       if (registration) return;
       registration = router.register(surfaceConfig);
+      // cortex#477 — self-subscribe via `runtime.subscribe()` so the
+      // runner's declared interest no longer depends on
+      // `nats.subjects[]` in `cortex.yaml`. `subscribe` is OPTIONAL
+      // on the `MyelinRuntime` interface (additivity constraint per
+      // Architect cortex#290) — undefined means the runtime stub
+      // doesn't model push subscriptions, and we stay dormant (same
+      // contract as `subscribePull`). The returned subscriber may
+      // also be `null` if the runtime is disabled (no NATS configured
+      // / connect failed); that's a legitimate dormant state, not an
+      // error.
+      if (runtime.subscribe) {
+        for (const pattern of subjects) {
+          const sub = await runtime.subscribe(pattern);
+          if (sub) {
+            runtimeSubscribers.push(sub);
+          }
+        }
+      }
     },
-    // eslint-disable-next-line @typescript-eslint/require-await
     async stop() {
       if (!registration) return;
       registration.unregister();
       registration = null;
+      // Drain listener-owned runtime subscribers. The runtime tracks
+      // them on its internal subscribers[] too, so `runtime.stop()`
+      // would also drain them — but listener-scoped teardown should
+      // not require runtime shutdown to release NATS resources.
+      const drained = runtimeSubscribers;
+      runtimeSubscribers = [];
+      await Promise.allSettled(drained.map((s) => s.stop()));
     },
   };
 }

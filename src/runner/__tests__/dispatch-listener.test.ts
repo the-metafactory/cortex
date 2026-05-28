@@ -69,9 +69,20 @@ function recordingRuntime(): {
   published: Envelope[];
   /** Trigger a manual onEnvelope call for the surface-router to process. */
   trigger: (env: Envelope, subject: string) => void;
+  /**
+   * cortex#477 — patterns the listener has self-subscribed to via
+   * `runtime.subscribe(...)`. Asserts the dispatch-listener's
+   * `start()` no longer relies on `nats.subjects[]` covering its
+   * canonical pattern.
+   */
+  subscribedPatterns: string[];
+  /** Subscribers handed out by `subscribe()` — for stop()-side assertions. */
+  subscribers: { pattern: string; stopped: boolean }[];
 } {
   const handlers = new Set<Parameters<MyelinRuntime["onEnvelope"]>[0]>();
   const published: Envelope[] = [];
+  const subscribedPatterns: string[] = [];
+  const subscribers: { pattern: string; stopped: boolean }[] = [];
   return {
     runtime: {
       enabled: true,
@@ -82,12 +93,33 @@ function recordingRuntime(): {
       publish: async (env) => {
         published.push(env);
       },
+      // cortex#477 — surface the push-mode subscribe path so the
+      // listener's `start()` can self-subscribe via the runtime
+      // rather than relying on `nats.subjects[]`. The stub records
+      // every pattern + returns a minimal subscriber so the
+      // listener's `stop()` drain path is exercised end-to-end.
+      subscribe: async (pattern) => {
+        subscribedPatterns.push(pattern);
+        const entry = { pattern, stopped: false };
+        subscribers.push(entry);
+        return {
+          pattern,
+          ready: Promise.resolve(),
+          stop: async () => {
+            entry.stopped = true;
+          },
+        } as unknown as Awaited<
+          ReturnType<NonNullable<MyelinRuntime["subscribe"]>>
+        >;
+      },
       stop: async () => {},
     },
     published,
     trigger: (env, subject) => {
       for (const h of handlers) h(env, subject);
     },
+    subscribedPatterns,
+    subscribers,
   };
 }
 
@@ -325,6 +357,135 @@ describe("createDispatchListener — surfaceConfig", () => {
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
     expect(listener.surfaceConfig.id).toBe("runner-dispatch-listener-test");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#477 — self-subscribe via runtime.subscribe()
+// ---------------------------------------------------------------------------
+
+describe("createDispatchListener — runtime self-subscribe (cortex#477)", () => {
+  test("start() self-subscribes to canonical pattern via runtime.subscribe()", async () => {
+    // Pre-#477 the listener relied on `nats.subjects[]` in cortex.yaml
+    // being a superset of its canonical pattern — an unenforced
+    // cross-config invariant that silently broke deployments whose
+    // config wasn't kept in lockstep. Now the listener self-subscribes
+    // at start() time via the runtime, symmetric with ReviewConsumer's
+    // subscribePull model.
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      stack: "meta-factory",
+      ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
+    });
+
+    expect(r.subscribedPatterns).toEqual([]);
+    await listener.start();
+    expect(r.subscribedPatterns).toEqual([
+      "local.metafactory.meta-factory.tasks.*.>",
+    ]);
+  });
+
+  test("start() with stack omitted falls back to 5-segment canonical", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
+    });
+    await listener.start();
+    expect(r.subscribedPatterns).toEqual(["local.metafactory.tasks.*.>"]);
+  });
+
+  test("start() with explicit subjects passes them all to runtime.subscribe()", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      subjects: ["local.test.a.>", "local.test.b.>"],
+      ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
+    });
+    await listener.start();
+    expect(r.subscribedPatterns).toEqual(["local.test.a.>", "local.test.b.>"]);
+  });
+
+  test("stop() drains the runtime subscribers the listener owns", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      stack: "meta-factory",
+      ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
+    });
+    await listener.start();
+    expect(r.subscribers.every((s) => !s.stopped)).toBe(true);
+    await listener.stop();
+    expect(r.subscribers.every((s) => s.stopped)).toBe(true);
+  });
+
+  test("start() tolerates a runtime stub that lacks subscribe() (additivity contract)", async () => {
+    // Mirrors the ReviewConsumer subscribePull contract — older fake
+    // runtime stubs may not expose `subscribe`. The listener treats an
+    // undefined property as "no push-mode subscriptions wired" and
+    // stays dormant on that path (router registration still happens).
+    const handlers = new Set<Parameters<MyelinRuntime["onEnvelope"]>[0]>();
+    const minimalRuntime: MyelinRuntime = {
+      enabled: true,
+      onEnvelope: (handler) => {
+        handlers.add(handler);
+        return { unregister: () => { handlers.delete(handler); } };
+      },
+      publish: async () => {},
+      stop: async () => {},
+    };
+    const router = createSurfaceRouter(minimalRuntime);
+    const listener = createDispatchListener({
+      runtime: minimalRuntime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
+    });
+    await listener.start();
+    await listener.stop();
+    // No assertion beyond "doesn't throw" — the listener registered
+    // with the router and skipped self-subscribe without error.
+    expect(true).toBe(true);
+  });
+
+  test("start() tolerates runtime.subscribe() returning null (bus dormant)", async () => {
+    // When the runtime is disabled (no NATS configured / connect
+    // failed), `subscribe()` returns null. The listener treats that
+    // as a legitimate dormant state, not an error.
+    const handlers = new Set<Parameters<MyelinRuntime["onEnvelope"]>[0]>();
+    const dormantRuntime: MyelinRuntime = {
+      enabled: false,
+      onEnvelope: (handler) => {
+        handlers.add(handler);
+        return { unregister: () => { handlers.delete(handler); } };
+      },
+      publish: async () => {},
+      subscribe: async () => null,
+      stop: async () => {},
+    };
+    const router = createSurfaceRouter(dormantRuntime);
+    const listener = createDispatchListener({
+      runtime: dormantRuntime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
+    });
+    await listener.start();
+    await listener.stop();
+    expect(true).toBe(true);
   });
 });
 

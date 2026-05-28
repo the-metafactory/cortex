@@ -147,6 +147,45 @@ export interface MyelinRuntime {
    */
   subscribePull?(opts: MyelinSubscribePullOpts): MyelinSubscriber | null;
   /**
+   * cortex#477 — bind an ADDITIONAL push-mode subscription to the
+   * underlying NATS link, beyond whatever `nats.subjects[]` already
+   * configured at boot. The returned subscriber's `onEnvelope` fans
+   * out through the same per-runtime handler set as the static
+   * `nats.subjects` subscribers, so any `runtime.onEnvelope` handler
+   * (incl. the `SurfaceRouter`'s) receives matching envelopes
+   * automatically — callers do NOT pass their own handler.
+   *
+   * **Why this exists.** Listeners (today: `createDispatchListener`)
+   * derive their canonical subject pattern programmatically from the
+   * running principal + stack (e.g.
+   * `local.{principal}.{stack}.tasks.*.>`). Pre-#477 they relied on
+   * `nats.subjects[]` in `cortex.yaml` being a superset of that
+   * pattern — an unenforced cross-config invariant that silently
+   * broke on deployments whose config wasn't kept in lockstep with
+   * the listener's declared interest. `subscribe()` lets the listener
+   * self-subscribe at `start()` time, symmetric with
+   * `ReviewConsumer`'s `subscribePull` model, and drops the
+   * cross-config invariant entirely.
+   *
+   * **Returns `null` when the runtime is disabled** (no NATS configured,
+   * connect failed). Callers MUST tolerate the null return — same
+   * defensive contract as `subscribePull` — so push-mode listeners
+   * stay dormant when the bus is absent without aborting boot.
+   *
+   * The runtime tracks the returned subscriber on its internal
+   * `subscribers[]` list, so `runtime.stop()` drains it alongside the
+   * boot-time push subscribers — callers don't have to call
+   * `subscriber.stop()` themselves on runtime shutdown (though they
+   * MAY do so on listener-scoped teardown, which is the dispatch-
+   * listener's pattern).
+   *
+   * **Optional on the interface** so existing fake-runtime test stubs
+   * keep their byte-identical shapes — additivity constraint same as
+   * `subscribePull`. Callers MUST treat an undefined property as
+   * equivalent to a `null` return.
+   */
+  subscribe?(pattern: string): Promise<MyelinSubscriber | null>;
+  /**
    * Resolve a narrow provisioning capability against the underlying
    * link, or `null` when the runtime is disabled (no NATS configured
    * or connect failed).
@@ -384,6 +423,13 @@ export async function startMyelinRuntime(
   // `MyelinRuntime.subscribePull` docblock.
   const subscribePullDisabled = (_opts: MyelinSubscribePullOpts): null => null;
 
+  // cortex#477 — push-mode subscribe no-op for disabled paths. Mirrors
+  // `subscribePullDisabled` (returns null on the same "bus dormant"
+  // contract). Listeners (e.g. dispatch-listener) tolerate the null and
+  // stay dormant rather than aborting boot.
+  // eslint-disable-next-line @typescript-eslint/require-await
+  const subscribePushDisabled = async (_pattern: string): Promise<null> => null;
+
   // eslint-disable-next-line @typescript-eslint/no-empty-function, @typescript-eslint/require-await
   const stopDisabled = async () => {};
 
@@ -400,6 +446,7 @@ export async function startMyelinRuntime(
       onEnvelope,
       publish: publishDisabled,
       subscribePull: subscribePullDisabled,
+      subscribe: subscribePushDisabled,
       jetstreamManager: jetstreamManagerDisabled,
       stop: stopDisabled,
     };
@@ -479,6 +526,7 @@ export async function startMyelinRuntime(
       onEnvelope,
       publish: publishDisabled,
       subscribePull: subscribePullDisabled,
+      subscribe: subscribePushDisabled,
       jetstreamManager: jetstreamManagerDisabled,
       stop: stopDisabled,
     };
@@ -534,6 +582,7 @@ export async function startMyelinRuntime(
       onEnvelope,
       publish: publishDisabled,
       subscribePull: subscribePullDisabled,
+      subscribe: subscribePushDisabled,
       jetstreamManager: jetstreamManagerDisabled,
       stop: stopDisabled,
     };
@@ -757,6 +806,59 @@ export async function startMyelinRuntime(
     return sub;
   };
 
+  // cortex#477 — push-mode subscribe helper for the enabled path. Lets
+  // listeners (today: `createDispatchListener`) self-subscribe to their
+  // declared interest at `start()` time rather than relying on
+  // `nats.subjects[]` in `cortex.yaml` being a superset (an unenforced
+  // cross-config invariant that silently broke deployments whose config
+  // wasn't kept in lockstep with the listener's canonical pattern). The
+  // returned subscriber fans out through the same `handlers` set used by
+  // the boot-time push subscribers — any `runtime.onEnvelope` handler
+  // (e.g. the `SurfaceRouter`'s) receives matching envelopes without
+  // any extra wiring on the caller's side. Tracked on the same
+  // `subscribers[]` array so `runtime.stop()` drains it alongside the
+  // boot-time subs.
+  //
+  // Returns `null` if `MyelinSubscriber.start` throws — same
+  // log-and-continue contract as the boot-time loop above. Throwing on
+  // post-stop is symmetric with `subscribePullEnabled` (deliberate
+  // contract violation; caller should surface via its own try/catch).
+  const subscribePushEnabled = async (
+    pattern: string,
+  ): Promise<MyelinSubscriber | null> => {
+    if (stopped) {
+      throw new Error("myelin-runtime: subscribe called after stop()");
+    }
+    try {
+      const sub = MyelinSubscriber.start(link, {
+        pattern,
+        onEnvelope: (env, subject) => {
+          logEnvelope(env, subject);
+          for (const handler of handlers) {
+            try {
+              handler(env, subject);
+            } catch (err) {
+              console.error(
+                "myelin-runtime: onEnvelope handler threw:",
+                err instanceof Error ? err.message : String(err),
+              );
+            }
+          }
+        },
+      });
+      subscribers.push(sub);
+      await sub.ready;
+      console.log(`myelin-runtime: subscribed to "${pattern}"`);
+      return sub;
+    } catch (err) {
+      console.error(
+        `myelin-runtime: failed to subscribe to "${pattern}":`,
+        err instanceof Error ? err.message : String(err),
+      );
+      return null;
+    }
+  };
+
   // cortex#338 — expose the live JetStreamManager so the boot path can
   // provision streams + per-agent durables before `ReviewConsumer.start`
   // binds to them. Cached on first call so the boot path doesn't pay a
@@ -773,6 +875,7 @@ export async function startMyelinRuntime(
     publish: publishEnabled,
     publishOnSubject: publishOnSubjectEnabled,
     subscribePull: subscribePullEnabled,
+    subscribe: subscribePushEnabled,
     jetstreamManager: jetstreamManagerEnabled,
     stop: async () => {
       if (stopped) return;
