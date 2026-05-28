@@ -429,6 +429,45 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
     }
   });
 
+  test("passes payload.forge through to sage review", async () => {
+    const prior = process.env.SAGE_SUBSTRATE;
+    process.env.SAGE_SUBSTRATE = "codex";
+    try {
+      const spawn = makeRecordingSpawn(makeSpawnResult("## review\n", "", 0));
+      const runner = makePiDevPipelineRunner({
+        spawn: spawn.fn,
+        which: whichSuccess,
+      });
+      const base = makePipelineOpts();
+      const opts: ReviewPipelineOpts = {
+        ...base,
+        payload: {
+          ...base.payload,
+          repo: "saca/secacademy",
+          pr: 62,
+          post: true,
+          forge: "gitlab",
+        },
+      };
+
+      await runner(opts);
+
+      expect(spawn.calls[0]).toEqual([
+        FAKE_SAGE_BIN,
+        "review",
+        "saca/secacademy#62",
+        "--substrate",
+        "codex",
+        "--post",
+        "--forge",
+        "gitlab",
+      ]);
+    } finally {
+      if (prior === undefined) delete process.env.SAGE_SUBSTRATE;
+      else process.env.SAGE_SUBSTRATE = prior;
+    }
+  });
+
   test("cortex#409 — absent post → argv omits --post", async () => {
     const prior = process.env.SAGE_SUBSTRATE;
     delete process.env.SAGE_SUBSTRATE;

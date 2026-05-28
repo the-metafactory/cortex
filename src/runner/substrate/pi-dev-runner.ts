@@ -239,6 +239,10 @@ export function makePiDevPipelineRunner(
     if (pipeline.payload.post === true) {
       argv.push("--post");
     }
+    const forge = pipeline.payload.forge;
+    if (forge === "github" || forge === "gitlab") {
+      argv.push("--forge", forge);
+    }
 
     let proc: PiDevSpawnResult;
     try {

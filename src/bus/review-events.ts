@@ -184,6 +184,11 @@ export interface ReviewRequestPayload {
    * runner passes `--post` to the sage subprocess.
    */
   post?: boolean;
+  /**
+   * Forge backend the task target belongs to. Omitted means GitHub for
+   * backwards compatibility with pre-sage#43 publishers.
+   */
+  forge?: "github" | "gitlab";
 }
 
 /** Options for {@link createReviewRequestEvent}. */
