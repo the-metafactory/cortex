@@ -71,6 +71,11 @@ export function policyEngineFromConfig(
       home_stack: p.home_stack,
       role: p.role,
       trust: p.trust,
+      // IAW cortex#482 — thread platform_ids onto the engine so it
+      // can back-resolve adapter-originated `did:mf:<platform>-<authorId>`
+      // DIDs to a principal id. The Zod schema defaults the map to `{}`
+      // (per `PolicyPrincipalSchema.platform_ids`); forward as-is.
+      platform_ids: p.platform_ids,
     })),
     roles: policy.roles.map((r) => ({
       id: r.id,

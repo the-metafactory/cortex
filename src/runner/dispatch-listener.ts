@@ -1052,7 +1052,7 @@ function checkDispatchPolicy(
   payload: DispatchTaskReceivedPayload,
   sourceNetwork: string | undefined,
 ): DispatchPolicyResult {
-  const principalId = resolvePrincipalId(envelope, payload);
+  const principalId = resolvePrincipalId(envelope, payload, engine);
 
   // IAW Phase D.3 — surface `source_network` onto the intent when the
   // inbound wire subject was `federated.{network_id}.>`. The engine
@@ -1121,14 +1121,87 @@ function checkDispatchPolicy(
  * method, empty tail, multi-segment colon) we surface the raw string so
  * the engine receives a deterministic `unknown_principal` rather than
  * silent coercion (Echo cortex#220 round 2 S-1).
+ *
+ * **cortex#482 — adapter-originated platform-prefixed DIDs.** When the
+ * adapter publishes an envelope it sets
+ * `originator.identity = adapterOriginatorIdentity(platform, authorId) =
+ * did:mf:<platform>-<authorId>` (see
+ * `src/bus/dispatch-source-publisher.ts`). Stripping `did:mf:` yields
+ * a tail like `discord-1134325176796987522` — which is NOT a registered
+ * `Principal.id` (Andreas is declared as `andreas` with
+ * `platform_ids.discord = ["1134325176796987522"]`). To close the gap,
+ * once the bare segment matches `<platform>-<authorId>` and the engine
+ * is in hand, we consult `engine.lookupPrincipalIdByPlatformId(...)`
+ * for a reverse-lookup. A hit returns the registered principal id; a
+ * miss falls through to the raw platform-prefixed tail, which the
+ * engine then denies with `unknown_principal` — the existing security
+ * boundary is preserved.
+ *
+ * The engine arg is optional so legacy callers (and the no-engine
+ * fail-closed boot path) keep working without churn.
  */
 function resolvePrincipalId(
   envelope: Envelope,
   payload: DispatchTaskReceivedPayload,
+  engine?: PolicyEngine,
 ): string {
   const actorDid = getActorPrincipal(envelope);
   if (actorDid === undefined) return payload.agent_id;
-  return extractAgentIdFromDid(actorDid) ?? actorDid;
+  const agentId = extractAgentIdFromDid(actorDid);
+  if (agentId === undefined) return actorDid;
+  // IAW cortex#482 — adapter-originated DIDs of the shape
+  // `did:mf:<platform>-<authorId>` decode here to a `<platform>-<authorId>`
+  // tail. When the engine is supplied AND the tail matches that shape,
+  // attempt a `platform_ids[]` reverse-lookup. A direct `did:mf:<id>` (no
+  // platform-style hyphen prefix) skips the lookup and falls through to
+  // the existing behaviour; an unmapped platform identity also falls
+  // through to the raw tail (engine denies `unknown_principal`).
+  if (engine !== undefined) {
+    const platformMatch = parsePlatformPrefixedAgentId(agentId);
+    if (platformMatch !== undefined) {
+      const resolved = engine.lookupPrincipalIdByPlatformId(
+        platformMatch.platform,
+        platformMatch.authorId,
+      );
+      if (resolved !== undefined) return resolved;
+    }
+  }
+  return agentId;
+}
+
+/**
+ * IAW cortex#482 — split a `<platform>-<authorId>` bare agent-id segment
+ * (the tail of `did:mf:<platform>-<authorId>` after the `did:mf:` strip)
+ * into its `platform` + `authorId` parts.
+ *
+ * The grammar mirrors `adapterOriginatorIdentity` (publisher side):
+ *   - `platform` is the lowercase platform tag (`discord`, `mattermost`,
+ *     `slack`, …) — letters/digits, the same alphabet the publisher's
+ *     `prefix = platform.toLowerCase()` produces.
+ *   - `authorId` is everything after the first hyphen. May itself contain
+ *     hyphens (the publisher uses `[^a-z0-9._-]` → `-` for unsafe chars
+ *     in the platform-side id), so we split on the FIRST hyphen only.
+ *
+ * Returns `undefined` for shapes that don't carry an embedded platform
+ * (e.g. `andreas`, `luna`) — those flow through the legacy path
+ * untouched.
+ *
+ * Note: a hyphen by itself is ambiguous (a principal id like `my-agent`
+ * would parse as platform=`my`, authorId=`agent`). The engine's reverse
+ * index disambiguates: an unknown `(platform, authorId)` tuple simply
+ * misses and the original agent-id is returned. So this helper is
+ * permissive about parsing — the index is the authority on whether the
+ * mapping is real.
+ */
+function parsePlatformPrefixedAgentId(
+  agentId: string,
+): { platform: string; authorId: string } | undefined {
+  const hyphen = agentId.indexOf("-");
+  if (hyphen <= 0 || hyphen === agentId.length - 1) return undefined;
+  return {
+    platform: agentId.slice(0, hyphen),
+    authorId: agentId.slice(hyphen + 1),
+  };
 }
 
 /**

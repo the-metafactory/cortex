@@ -66,6 +66,25 @@ export interface Principal {
    * snapshot discipline as `role`.
    */
   readonly trust: readonly string[];
+  /**
+   * IAW cortex#482 — platform-author-id → principal mapping.
+   *
+   * Open record of `<platform_name> → <author_id>[]`, mirroring
+   * `PolicyPrincipalSchema.platform_ids` on cortex.yaml. The engine
+   * consumes this to back-resolve adapter-originated DIDs of the
+   * shape `did:mf:<platform>-<authorId>` (emitted by
+   * `adapterOriginatorIdentity` in `src/bus/dispatch-source-publisher.ts`)
+   * to a principal id via
+   * `PolicyEngine.lookupPrincipalIdByPlatformId(platform, authorId)`.
+   *
+   * Optional + defaults to `{}` so existing callers (engine tests,
+   * federation peer principals — which by convention SHOULD NOT
+   * carry platform_ids per `PolicyPrincipalSchema` JSDoc) keep
+   * working unchanged. The engine treats the map as read-only after
+   * construction — mutating it post-construction does not refresh
+   * the reverse index.
+   */
+  readonly platform_ids?: Readonly<Record<string, readonly string[]>>;
 }
 
 /**

@@ -226,6 +226,90 @@ describe("PolicyEngine — sovereignty (C.1 smoke)", () => {
   });
 });
 
+describe("PolicyEngine — platform-id reverse lookup (cortex#482)", () => {
+  // cortex#482 — adapter-originated envelopes set
+  // `originator.identity = did:mf:<platform>-<authorId>` (e.g.
+  // `did:mf:discord-1134325176796987522`). The dispatch resolver
+  // back-resolves this to a registered `Principal.id` by consulting
+  // `Principal.platform_ids[platform][]` via the engine's reverse index.
+
+  test("registered (platform, author_id) tuple → principal id", () => {
+    const engine = new PolicyEngine({
+      principals: [
+        principal({
+          id: "andreas",
+          platform_ids: { discord: ["1134325176796987522"] },
+        }),
+      ],
+      roles: [role("operator", ["dispatch.cortex"])],
+    });
+
+    expect(
+      engine.lookupPrincipalIdByPlatformId("discord", "1134325176796987522"),
+    ).toBe("andreas");
+  });
+
+  test("unmapped (platform, author_id) tuple → undefined (engine then denies upstream)", () => {
+    const engine = new PolicyEngine({
+      principals: [
+        principal({
+          id: "andreas",
+          platform_ids: { discord: ["1134325176796987522"] },
+        }),
+      ],
+      roles: [role("operator", [])],
+    });
+
+    // Different snowflake.
+    expect(
+      engine.lookupPrincipalIdByPlatformId("discord", "999999999999999999"),
+    ).toBeUndefined();
+    // Known author_id but on a platform this principal doesn't claim.
+    expect(
+      engine.lookupPrincipalIdByPlatformId("slack", "1134325176796987522"),
+    ).toBeUndefined();
+    // Platform with no declared principals at all.
+    expect(
+      engine.lookupPrincipalIdByPlatformId("mattermost", "anything"),
+    ).toBeUndefined();
+  });
+
+  test("principal without platform_ids → no entries in reverse index", () => {
+    // Federation peer principals (and the default `principal()` fixture)
+    // omit `platform_ids` — the reverse index just stays empty for them.
+    const engine = new PolicyEngine({
+      principals: [principal({ id: "luna" })],
+      roles: [role("operator", [])],
+    });
+
+    expect(
+      engine.lookupPrincipalIdByPlatformId("discord", "anything"),
+    ).toBeUndefined();
+  });
+
+  test("multi-platform principal → resolves on each declared platform", () => {
+    const engine = new PolicyEngine({
+      principals: [
+        principal({
+          id: "andreas",
+          platform_ids: {
+            discord: ["1134325176796987522"],
+            mattermost: ["mm-andreas-id"],
+          },
+        }),
+      ],
+      roles: [role("operator", [])],
+    });
+
+    expect(
+      engine.lookupPrincipalIdByPlatformId("discord", "1134325176796987522"),
+    ).toBe("andreas");
+    expect(
+      engine.lookupPrincipalIdByPlatformId("mattermost", "mm-andreas-id"),
+    ).toBe("andreas");
+  });
+});
+
 describe("PolicyEngine — boot accessors", () => {
   test("principalCount + roleCount reflect constructor opts", () => {
     const engine = new PolicyEngine({

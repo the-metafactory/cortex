@@ -2467,3 +2467,186 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
     expect(optsCaptured).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cortex#482 — platform-prefixed originator DIDs back-resolve to a principal
+// id via `Principal.platform_ids[platform][]`. Adapter-originated dispatches
+// set `originator.identity = did:mf:<platform>-<authorId>` (see
+// `adapterOriginatorIdentity` in `src/bus/dispatch-source-publisher.ts`).
+// Before this fix the runner stripped `did:mf:` and looked up the literal
+// `<platform>-<authorId>` as `Principal.id` → `unknown_principal`.
+// ---------------------------------------------------------------------------
+
+describe("dispatch-listener — platform-id originator resolution (cortex#482)", () => {
+  test("platform-prefixed originator DID with a mapped principal → resolves to principal id", async () => {
+    // Andreas declared as principal `andreas` with `platform_ids.discord =
+    // ["1134325176796987522"]`. Discord adapter publishes an envelope with
+    // `originator.identity = did:mf:discord-1134325176796987522`. The
+    // resolver should hand the engine `andreas`, not `discord-1134...`.
+    const captured: { principalId: string; intent: Intent }[] = [];
+    const engine = new PolicyEngine({
+      principals: [
+        {
+          id: "andreas",
+          home_operator: "andreas",
+          home_stack: "andreas/research",
+          role: ["operator"],
+          trust: [],
+          platform_ids: { discord: ["1134325176796987522"] },
+        },
+      ],
+      roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
+    });
+    const origCheck = engine.check.bind(engine);
+    engine.check = (principalId, intent) => {
+      captured.push({ principalId, intent });
+      return origCheck(principalId, intent);
+    };
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engine,
+    });
+    await listener.start();
+    await router.start();
+
+    const env = makeReceivedEnvelope();
+    env.originator = {
+      identity: "did:mf:discord-1134325176796987522",
+      attribution: "adapter-resolved",
+    };
+
+    r.trigger(env, CANONICAL_CORTEX_CHAT_SUBJECT);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.principalId).toBe("andreas");
+    // Allow path: engine grants dispatch.cortex → success lifecycle fires.
+    expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.allowed",
+      "dispatch.task.started",
+      "dispatch.task.completed",
+    ]);
+  });
+
+  test("platform-prefixed originator DID without a mapped principal → falls through to raw tail (engine denies unknown_principal)", async () => {
+    // Defence-in-depth: a Discord snowflake that no principal claims
+    // MUST NOT be implicitly authorised. The resolver falls through to
+    // the raw `<platform>-<authorId>` tail; engine denies; the existing
+    // security boundary is preserved.
+    const captured: { principalId: string; intent: Intent }[] = [];
+    const engine = new PolicyEngine({
+      principals: [
+        {
+          id: "andreas",
+          home_operator: "andreas",
+          home_stack: "andreas/research",
+          role: ["operator"],
+          trust: [],
+          platform_ids: { discord: ["1134325176796987522"] },
+        },
+      ],
+      roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
+    });
+    const origCheck = engine.check.bind(engine);
+    engine.check = (principalId, intent) => {
+      captured.push({ principalId, intent });
+      return origCheck(principalId, intent);
+    };
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engine,
+    });
+    await listener.start();
+    await router.start();
+
+    const env = makeReceivedEnvelope();
+    env.originator = {
+      // Unmapped snowflake.
+      identity: "did:mf:discord-999999999999999999",
+      attribution: "adapter-resolved",
+    };
+
+    r.trigger(env, CANONICAL_CORTEX_CHAT_SUBJECT);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(captured).toHaveLength(1);
+    // Falls through to the raw tail — the engine resolves it as the
+    // (literal) principal id and denies with `unknown_principal`.
+    expect(captured[0]!.principalId).toBe("discord-999999999999999999");
+    const types = r.published.map((e) => e.type);
+    expect(types).toContain("system.access.denied");
+    expect(types).toContain("dispatch.task.failed");
+  });
+
+  test("direct did:mf:<principal-id> (no platform prefix) → existing behaviour preserved", async () => {
+    // Non-platform originators (e.g. `did:mf:alice` from cortex-as-relay
+    // flows) must continue to round-trip through the existing path: the
+    // bare segment is the principal id, no reverse lookup is attempted.
+    const captured: { principalId: string; intent: Intent }[] = [];
+    const engine = new PolicyEngine({
+      principals: [
+        {
+          id: "alice",
+          home_operator: "andreas",
+          home_stack: "andreas/research",
+          role: ["operator"],
+          trust: [],
+          // Note: alice ALSO has a discord platform_id, to prove the
+          // resolver doesn't accidentally reverse-lookup non-platform
+          // DIDs against the index.
+          platform_ids: { discord: ["alice-discord-id"] },
+        },
+      ],
+      roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
+    });
+    const origCheck = engine.check.bind(engine);
+    engine.check = (principalId, intent) => {
+      captured.push({ principalId, intent });
+      return origCheck(principalId, intent);
+    };
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engine,
+    });
+    await listener.start();
+    await router.start();
+
+    const env = makeReceivedEnvelope();
+    env.originator = {
+      identity: "did:mf:alice",
+      attribution: "adapter-resolved",
+    };
+
+    r.trigger(env, CANONICAL_CORTEX_CHAT_SUBJECT);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.principalId).toBe("alice");
+    expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.allowed",
+      "dispatch.task.started",
+      "dispatch.task.completed",
+    ]);
+  });
+});
