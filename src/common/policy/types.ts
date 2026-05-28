@@ -67,15 +67,21 @@ export interface Principal {
    */
   readonly trust: readonly string[];
   /**
-   * IAW cortex#482 — platform-author-id → principal mapping.
+   * IAW cortex#482 + cortex#486 — platform-author-id → principal
+   * mapping.
    *
    * Open record of `<platform_name> → <author_id>[]`, mirroring
-   * `PolicyPrincipalSchema.platform_ids` on cortex.yaml. The engine
-   * consumes this to back-resolve adapter-originated DIDs of the
-   * shape `did:mf:<platform>-<authorId>` (emitted by
-   * `adapterOriginatorIdentity` in `src/bus/dispatch-source-publisher.ts`)
-   * to a principal id via
-   * `PolicyEngine.lookupPrincipalIdByPlatformId(platform, authorId)`.
+   * `PolicyPrincipalSchema.platform_ids` on cortex.yaml. Consumed
+   * at envelope-publish time by the dispatch-source publisher
+   * (`adapterOriginatorIdentity` in
+   * `src/bus/dispatch-source-publisher.ts`) via
+   * `PolicyEngine.lookupPrincipalIdByPlatformId(platform, authorId)`
+   * to resolve the inbound `(platform, authorId)` tuple to a
+   * registered principal. The envelope then carries
+   * `originator.identity = did:mf:<principal-id>` — the RESOLVED
+   * principal DID, per CONTEXT.md §Dispatch-source. Platform-prefixed
+   * DID shapes (`did:mf:<platform>-<authorId>`) no longer appear on
+   * the wire (the pre-#486 cortex#482 / PR #483 behaviour).
    *
    * Optional + defaults to `{}` so existing callers (engine tests,
    * federation peer principals — which by convention SHOULD NOT

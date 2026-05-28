@@ -132,24 +132,26 @@ export class PolicyEngine {
    * later principal in the constructor list wins (last-write semantics,
    * consistent with `principalsById`'s `new Map(...)` collision rule).
    *
-   * **Duplication note (PR #483 — keep in sync with
-   * `PlatformPrincipalIndex` in `src/common/policy/policy-gate.ts`).**
-   * `PlatformPrincipalIndex` builds the same `(platform, platform_id)
-   * → principal_id` lookup from the same `policy.principals[]` shape,
-   * for adapter-side `resolvePolicyAccess`. Both indexes are kept
-   * because they serve different boundaries:
+   * **Duplication note (keep in sync with `PlatformPrincipalIndex` in
+   * `src/common/policy/policy-gate.ts`).** `PlatformPrincipalIndex`
+   * builds the same `(platform, platform_id) → principal_id` lookup
+   * from the same `policy.principals[]` shape, for adapter-side
+   * `resolvePolicyAccess`.
    *
-   *   - `PlatformPrincipalIndex` runs adapter-side, BEFORE the
-   *     envelope hits the bus. The adapter has the platform + raw
-   *     platform-id in hand (e.g. Discord snowflake) and just needs
-   *     `resolve(platform, id)` to construct the originator DID.
-   *   - This engine-side index runs bus-side, AFTER the envelope is
-   *     verified. The runner has only a flat `did:mf:<platform>-<id>`
-   *     string and needs both (a) the platform set, for
-   *     longest-prefix disambiguation (see {@link knownPlatforms}),
-   *     and (b) the reverse lookup. Holding the registry here lets
-   *     `dispatch-listener.ts` consume policy decisions without
-   *     pulling in `policy-gate.ts` (adapter-layer module).
+   * Pre-#486: both indexes were kept because they served different
+   * boundaries — `PlatformPrincipalIndex` adapter-side BEFORE publish,
+   * this index runner-side AFTER verify (PR #483 used it to back-
+   * resolve platform-prefixed originator DIDs to a principal id).
+   *
+   * Post-#486: the runner no longer consumes this index — the dispatch
+   * source resolves `(platform, authorId)` to a principal at publish
+   * time so `originator.identity` lands on the wire as the resolved
+   * principal DID. This index remains because (a) it's the engine's
+   * native surface (`lookupPrincipalIdByPlatformId`) and the
+   * dispatch-source now consumes it from there rather than depending
+   * on `policy-gate.ts`, and (b) keeping a single registry inside the
+   * engine avoids drift between dispatch-source and federation
+   * surfaces that may also want the reverse lookup in future.
    *
    * Schema-side changes (case-folding, platform-name canonicalisation,
    * deprecation) must land in BOTH places or the boundaries drift.
@@ -193,18 +195,24 @@ export class PolicyEngine {
    * claims that platform identity.
    *
    * Consumes the reverse index built from
-   * `Principal.platform_ids[platform][]` at construction. The
-   * dispatch-listener's `resolvePrincipalId` calls this when an
-   * adapter-originated envelope's `originator.identity` decodes to a
-   * platform-prefixed shape (`did:mf:<platform>-<authorId>` per
-   * `adapterOriginatorIdentity` in
-   * `src/bus/dispatch-source-publisher.ts`).
+   * `Principal.platform_ids[platform][]` at construction. Post-#486
+   * the canonical caller is the dispatch-source publisher
+   * (`adapterOriginatorIdentity` in
+   * `src/bus/dispatch-source-publisher.ts`), which performs the
+   * `(platform, authorId) → principal-id` resolution at envelope
+   * publish time so `originator.identity` carries the RESOLVED
+   * principal DID (`did:mf:<principal-id>`). PR #483 briefly used
+   * this surface from the dispatch-listener's `resolvePrincipalId`
+   * for a back-resolve when the publisher emitted a platform-
+   * prefixed DID; cortex#486 reverted that and moved the lookup
+   * adapter-side, restoring the CONTEXT.md §Dispatch-source
+   * "adapter populates `originator.identity` with the **resolved**
+   * human/agent DID" contract.
    *
    * Returning `undefined` for unknown tuples is the security
-   * default: the caller forwards the raw platform-prefixed id to
-   * `check()`, which then denies with `unknown_principal`. No
-   * platform identity gets implicitly authorised by failure to
-   * resolve.
+   * default: the adapter refuses the publish with
+   * `invalid-originator`. No platform identity gets implicitly
+   * authorised by failure to resolve.
    */
   lookupPrincipalIdByPlatformId(
     platform: string,
@@ -217,25 +225,18 @@ export class PolicyEngine {
    * IAW cortex#483 — registered platform names (the keys of the
    * `platform → author_id → principal_id` reverse index).
    *
-   * Exposed so callers can disambiguate platform-prefixed agent ids
-   * by longest-prefix match against the registered set. Required
-   * because `adapterOriginatorIdentity` joins `<platform>-<authorId>`
-   * with a single hyphen separator AND the schema's
-   * `LETTER_PREFIX_ID_REGEX = /^[a-z][a-z0-9-]*$/` permits hyphenated
-   * platform names (e.g. `mcp-cli`, `discord-bot`, `email-imap`).
-   * A naive first-hyphen split of `did:mf:mcp-cli-myUser123` yields
-   * `(platform=mcp, authorId=cli-myUser123)` which misses the real
-   * key `(mcp-cli, myUser123)` — silent denial-of-service for
-   * hyphenated-platform principals.
+   * Originally introduced (PR #483) so the dispatch-listener could
+   * disambiguate platform-prefixed agent ids by longest-prefix match
+   * against the registered set. cortex#486 retired that consumer:
+   * platform-id resolution now happens at the dispatch source, which
+   * has the `(platform, authorId)` tuple directly and doesn't need to
+   * disambiguate after-the-fact from a flattened DID tail.
    *
-   * The dispatch-listener's `parsePlatformPrefixedAgentId` iterates
-   * this set and picks the longest registered platform that prefixes
-   * the agent id, breaking the ambiguity symmetrically with the
-   * publisher.
-   *
-   * Returns an `Iterable` (not an array snapshot) to avoid
-   * materialising a copy on every dispatch; callers that need
-   * stable iteration should spread it.
+   * The surface stays — it's still useful for ad-hoc diagnostics
+   * (e.g. enumerating which platforms are policy-registered in boot
+   * logs, or unit tests that exercise the reverse index). Returns an
+   * `Iterable` (not an array snapshot) to avoid materialising a copy
+   * on every call; callers that need stable iteration should spread.
    */
   get knownPlatforms(): Iterable<string> {
     return this.principalIdByPlatformId.keys();

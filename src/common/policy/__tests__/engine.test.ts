@@ -226,12 +226,20 @@ describe("PolicyEngine — sovereignty (C.1 smoke)", () => {
   });
 });
 
-describe("PolicyEngine — platform-id reverse lookup (cortex#482)", () => {
-  // cortex#482 — adapter-originated envelopes set
-  // `originator.identity = did:mf:<platform>-<authorId>` (e.g.
-  // `did:mf:discord-1134325176796987522`). The dispatch resolver
-  // back-resolves this to a registered `Principal.id` by consulting
-  // `Principal.platform_ids[platform][]` via the engine's reverse index.
+describe("PolicyEngine — platform-id reverse lookup (cortex#482 / cortex#486)", () => {
+  // cortex#482 introduced the engine-side reverse index from
+  // `Principal.platform_ids[platform][]` to a principal id. The
+  // resolver-side use of it shipped in PR #483 and was reverted in
+  // cortex#486, which moved the lookup to the dispatch-source publisher
+  // (`adapterOriginatorIdentity` in `src/bus/dispatch-source-publisher.ts`).
+  //
+  // The engine surface (`lookupPrincipalIdByPlatformId` + `knownPlatforms`)
+  // remains — it is now consumed at envelope-publish time by the adapter
+  // layer so `originator.identity` carries the RESOLVED principal DID
+  // (`did:mf:<principal-id>`), per CONTEXT.md §Dispatch-source. The
+  // post-#486 dispatch-listener no longer calls this surface; an
+  // illustrative example like `did:mf:discord-1134325176796987522` is
+  // therefore no longer produced anywhere in cortex.
 
   test("registered (platform, author_id) tuple → principal id", () => {
     const engine = new PolicyEngine({

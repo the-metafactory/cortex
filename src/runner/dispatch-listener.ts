@@ -1052,7 +1052,7 @@ function checkDispatchPolicy(
   payload: DispatchTaskReceivedPayload,
   sourceNetwork: string | undefined,
 ): DispatchPolicyResult {
-  const principalId = resolvePrincipalId(envelope, payload, engine);
+  const principalId = resolvePrincipalId(envelope, payload);
 
   // IAW Phase D.3 — surface `source_network` onto the intent when the
   // inbound wire subject was `federated.{network_id}.>`. The engine
@@ -1122,141 +1122,28 @@ function checkDispatchPolicy(
  * the engine receives a deterministic `unknown_principal` rather than
  * silent coercion (Echo cortex#220 round 2 S-1).
  *
- * **cortex#482 — adapter-originated platform-prefixed DIDs.** When the
- * adapter publishes an envelope it sets
- * `originator.identity = adapterOriginatorIdentity(platform, authorId) =
- * did:mf:<platform>-<authorId>` (see
- * `src/bus/dispatch-source-publisher.ts`). Stripping `did:mf:` yields
- * a tail like `discord-1134325176796987522` — which is NOT a registered
- * `Principal.id` (Andreas is declared as `andreas` with
- * `platform_ids.discord = ["1134325176796987522"]`). To close the gap,
- * once the bare segment matches `<platform>-<authorId>` and the engine
- * is in hand, we consult `engine.lookupPrincipalIdByPlatformId(...)`
- * for a reverse-lookup. A hit returns the registered principal id; a
- * miss falls through to the raw platform-prefixed tail, which the
- * engine then denies with `unknown_principal` — the existing security
- * boundary is preserved.
- *
- * **PR #483 (Echo R1 major) — hyphenated-platform disambiguation.**
- * The schema's `LETTER_PREFIX_ID_REGEX` permits hyphenated platform
- * names (`mcp-cli`, `discord-bot`), and `adapterOriginatorIdentity`
- * joins `<platform>-<authorId>` with a single hyphen — so a naive
- * first-hyphen split would mis-resolve. `parsePlatformPrefixedAgentId`
- * now consults `engine.knownPlatforms` and picks the longest
- * registered platform that prefixes the bare segment, making the
- * parser symmetric with the publisher.
- *
- * The engine arg is optional so legacy callers (and the no-engine
- * fail-closed boot path) keep working without churn.
+ * **cortex#486 — resolver-side platform-id lookup removed.** PR #483
+ * (cortex#482) briefly performed a reverse-lookup here when the bare
+ * agent id matched a `<platform>-<authorId>` shape. That cleared the
+ * chat round-trip, but at the wrong layer: per CONTEXT.md §Dispatch-
+ * source the adapter is required to populate `originator.identity`
+ * with the **resolved** human/agent DID. cortex#486 moved the
+ * `(platform, authorId) → principal_id` resolution into
+ * `adapterOriginatorIdentity` (`src/bus/dispatch-source-publisher.ts`),
+ * so by the time the envelope lands here `originator.identity` is
+ * already `did:mf:<principal-id>` and a simple `did:mf:` strip is
+ * enough. Unresolvable platform identities now fail closed at publish
+ * time (`invalid-originator`) — they never reach this function.
  */
 function resolvePrincipalId(
   envelope: Envelope,
   payload: DispatchTaskReceivedPayload,
-  engine?: PolicyEngine,
 ): string {
   const actorDid = getActorPrincipal(envelope);
   if (actorDid === undefined) return payload.agent_id;
   const agentId = extractAgentIdFromDid(actorDid);
   if (agentId === undefined) return actorDid;
-  // IAW cortex#482 — adapter-originated DIDs of the shape
-  // `did:mf:<platform>-<authorId>` decode here to a `<platform>-<authorId>`
-  // tail. When the engine is supplied AND the tail matches that shape,
-  // attempt a `platform_ids[]` reverse-lookup. A direct `did:mf:<id>` (no
-  // platform-style hyphen prefix) skips the lookup and falls through to
-  // the existing behaviour; an unmapped platform identity also falls
-  // through to the raw tail (engine denies `unknown_principal`).
-  if (engine !== undefined) {
-    const platformMatch = parsePlatformPrefixedAgentId(
-      agentId,
-      engine.knownPlatforms,
-    );
-    if (platformMatch !== undefined) {
-      const resolved = engine.lookupPrincipalIdByPlatformId(
-        platformMatch.platform,
-        platformMatch.authorId,
-      );
-      if (resolved !== undefined) return resolved;
-    }
-  }
   return agentId;
-}
-
-/**
- * IAW cortex#482 + PR #483 (Echo R1 major) — split a
- * `<platform>-<authorId>` bare agent-id segment (the tail of
- * `did:mf:<platform>-<authorId>` after the `did:mf:` strip) into its
- * `platform` + `authorId` parts, disambiguating against the set of
- * platforms registered with the engine.
- *
- * The grammar mirrors `adapterOriginatorIdentity` (publisher side):
- *   - `platform` is the lowercase platform tag — letters/digits AND
- *     HYPHENS. The schema's `LETTER_PREFIX_ID_REGEX =
- *     /^[a-z][a-z0-9-]*$/` permits hyphenated names (`mcp-cli`,
- *     `discord-bot`, `email-imap`).
- *   - `authorId` is the remainder. Also may contain hyphens (the
- *     publisher's `[^a-z0-9._-]` → `-` mapping for unsafe chars).
- *
- * A naive first-hyphen split is therefore asymmetric with the
- * publisher: `did:mf:mcp-cli-myUser123` (real tuple
- * `(mcp-cli, myUser123)`) would split to `(mcp, cli-myUser123)` and
- * miss the reverse lookup → silent denial-of-service for any
- * principal whose platform name contains a hyphen. PR #483 closes
- * that gap by consulting the engine's `knownPlatforms` set and
- * picking the **longest** registered platform that prefixes the
- * agent id (with the required `-` separator immediately after).
- *
- * Disambiguation strategy:
- *
- *   1. **Longest-prefix match against `knownPlatforms`.** For each
- *      registered platform `P`, the agent id matches when it starts
- *      with `P + "-"` AND has a non-empty tail. Among all matches,
- *      the longest `P` wins (so `mcp-cli` beats `mcp` when both are
- *      registered). This is symmetric with the publisher: the
- *      adapter that emitted the DID is the one that registered the
- *      platform name with the engine, so the longest-matching
- *      registered platform IS the publisher's platform.
- *   2. **No match → return `undefined`.** Falling back to the
- *      first-hyphen split would re-introduce the asymmetry (and
- *      could mask config-drift bugs by silently parsing a tail
- *      from an unregistered platform). Returning `undefined` makes
- *      the caller fall through to the raw tail, the engine denies
- *      `unknown_principal`, and the deny audit surfaces the issue.
- *
- * Returns `undefined` for shapes that don't carry a registered
- * platform prefix (e.g. `andreas`, `luna`, or any platform-shape id
- * whose platform isn't in `knownPlatforms`). Those flow through the
- * legacy path untouched.
- *
- * **Note on principal-id ambiguity with hyphens.** A principal id
- * like `my-agent` parsed against `knownPlatforms = ["my"]` would
- * match as `(my, agent)`. This is by design: if an operator
- * registered `my` as a platform AND named a principal `my-agent`,
- * the reverse index is the authority — an `(my, agent)` miss
- * returns `undefined` from `lookupPrincipalIdByPlatformId` and the
- * caller falls through to the raw tail. The schema's tuple-
- * uniqueness check prevents the genuine ambiguity (same id
- * registered as both a principal and a platform identity).
- */
-function parsePlatformPrefixedAgentId(
-  agentId: string,
-  knownPlatforms: Iterable<string>,
-): { platform: string; authorId: string } | undefined {
-  let bestPlatform: string | undefined;
-  for (const platform of knownPlatforms) {
-    // Must be `<platform>-<non-empty-tail>`. `startsWith(platform +
-    // "-")` plus a bounds check that there's at least one char after
-    // the separator.
-    if (agentId.length <= platform.length + 1) continue;
-    if (!agentId.startsWith(`${platform}-`)) continue;
-    if (bestPlatform === undefined || platform.length > bestPlatform.length) {
-      bestPlatform = platform;
-    }
-  }
-  if (bestPlatform === undefined) return undefined;
-  return {
-    platform: bestPlatform,
-    authorId: agentId.slice(bestPlatform.length + 1),
-  };
 }
 
 /**
