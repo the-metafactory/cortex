@@ -895,7 +895,9 @@ const OWNER_REPO_RE = /^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/;
  *
  * Returns `null` on any unparseable URL or out-of-range PR number.
  */
-function parsePrUrl(url: string): { repo: string; pr: number } | null {
+function parsePrUrl(
+  url: string,
+): { repo: string; pr: number; forge: "github" | "gitlab" } | null {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -912,7 +914,9 @@ function parsePrUrl(url: string): { repo: string; pr: number } | null {
     if (owner === undefined || repo === undefined || n === undefined) return null;
     if (!SEGMENT_RE.test(owner) || !SEGMENT_RE.test(repo)) return null;
     const pr = Number(n);
-    return Number.isInteger(pr) && pr > 0 ? { repo: `${owner}/${repo}`, pr } : null;
+    return Number.isInteger(pr) && pr > 0
+      ? { repo: `${owner}/${repo}`, pr, forge: "github" }
+      : null;
   }
 
   const gl = /^\/(.+)\/-\/merge_requests\/(\d+)\/?$/.exec(parsed.pathname);
@@ -921,7 +925,9 @@ function parsePrUrl(url: string): { repo: string; pr: number } | null {
     const n = gl[2];
     if (projectPath === undefined || n === undefined) return null;
     const pr = Number(n);
-    return Number.isInteger(pr) && pr > 0 ? { repo: projectPath, pr } : null;
+    return Number.isInteger(pr) && pr > 0
+      ? { repo: projectPath, pr, forge: "gitlab" }
+      : null;
   }
 
   return null;
@@ -959,6 +965,11 @@ export function parseReviewRequestPayload(
 
   let repo: string;
   let pr: number;
+  let forge: "github" | "gitlab" | undefined;
+  if (p.forge !== undefined) {
+    if (p.forge !== "github" && p.forge !== "gitlab") return null;
+    forge = p.forge;
+  }
 
   if (typeof p.owner === "string" && typeof p.number === "number") {
     // Pilot/Sage shape — fold `owner` + `repo` into the legacy
@@ -982,6 +993,7 @@ export function parseReviewRequestPayload(
     if (fromUrl === null) return null;
     repo = fromUrl.repo;
     pr = fromUrl.pr;
+    forge ??= fromUrl.forge;
   } else {
     return null;
   }
@@ -1011,6 +1023,7 @@ export function parseReviewRequestPayload(
   // never false). Carry it through so the substrate runner can pass
   // `--post` to the sage subprocess.
   if (p.post === true) out.post = true;
+  if (forge !== undefined) out.forge = forge;
   return out;
 }
 

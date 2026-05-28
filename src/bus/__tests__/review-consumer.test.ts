@@ -976,6 +976,7 @@ describe("parseReviewRequestPayload — cortex#384 dual-shape acceptance", () =>
       repo: "the-metafactory/cortex",
       pr: 421,
       reviewer: OFFER_DISPATCH_REVIEWER,
+      forge: "github",
     });
   });
 
@@ -996,7 +997,36 @@ describe("parseReviewRequestPayload — cortex#384 dual-shape acceptance", () =>
     expect(parseReviewRequestPayload(env)).toMatchObject({
       repo: "acme/widgets",
       pr: 12,
+      forge: "gitlab",
     });
+  });
+
+  test("preserves explicit forge hint from sage dispatch payload", () => {
+    const env = makeRequestEnvelope({
+      repo: "saca/secacademy",
+      pr: 62,
+      reviewer: "capability-dispatch",
+      pr_url: "https://gitlab.com/saca/secacademy/-/merge_requests/62",
+      post: true,
+      forge: "gitlab",
+    });
+    expect(parseReviewRequestPayload(env)).toMatchObject({
+      repo: "saca/secacademy",
+      pr: 62,
+      reviewer: "capability-dispatch",
+      post: true,
+      forge: "gitlab",
+    });
+  });
+
+  test("invalid: forge hint outside supported set → null", () => {
+    const env = makeRequestEnvelope({
+      repo: "saca/secacademy",
+      pr: 62,
+      reviewer: "capability-dispatch",
+      forge: "bitbucket",
+    });
+    expect(parseReviewRequestPayload(env)).toBeNull();
   });
 
   test("owner/number triple takes precedence over a present pr_url", () => {
