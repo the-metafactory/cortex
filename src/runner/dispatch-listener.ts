@@ -1137,6 +1137,15 @@ function checkDispatchPolicy(
  * engine then denies with `unknown_principal` — the existing security
  * boundary is preserved.
  *
+ * **PR #483 (Echo R1 major) — hyphenated-platform disambiguation.**
+ * The schema's `LETTER_PREFIX_ID_REGEX` permits hyphenated platform
+ * names (`mcp-cli`, `discord-bot`), and `adapterOriginatorIdentity`
+ * joins `<platform>-<authorId>` with a single hyphen — so a naive
+ * first-hyphen split would mis-resolve. `parsePlatformPrefixedAgentId`
+ * now consults `engine.knownPlatforms` and picks the longest
+ * registered platform that prefixes the bare segment, making the
+ * parser symmetric with the publisher.
+ *
  * The engine arg is optional so legacy callers (and the no-engine
  * fail-closed boot path) keep working without churn.
  */
@@ -1157,7 +1166,10 @@ function resolvePrincipalId(
   // the existing behaviour; an unmapped platform identity also falls
   // through to the raw tail (engine denies `unknown_principal`).
   if (engine !== undefined) {
-    const platformMatch = parsePlatformPrefixedAgentId(agentId);
+    const platformMatch = parsePlatformPrefixedAgentId(
+      agentId,
+      engine.knownPlatforms,
+    );
     if (platformMatch !== undefined) {
       const resolved = engine.lookupPrincipalIdByPlatformId(
         platformMatch.platform,
@@ -1170,37 +1182,80 @@ function resolvePrincipalId(
 }
 
 /**
- * IAW cortex#482 — split a `<platform>-<authorId>` bare agent-id segment
- * (the tail of `did:mf:<platform>-<authorId>` after the `did:mf:` strip)
- * into its `platform` + `authorId` parts.
+ * IAW cortex#482 + PR #483 (Echo R1 major) — split a
+ * `<platform>-<authorId>` bare agent-id segment (the tail of
+ * `did:mf:<platform>-<authorId>` after the `did:mf:` strip) into its
+ * `platform` + `authorId` parts, disambiguating against the set of
+ * platforms registered with the engine.
  *
  * The grammar mirrors `adapterOriginatorIdentity` (publisher side):
- *   - `platform` is the lowercase platform tag (`discord`, `mattermost`,
- *     `slack`, …) — letters/digits, the same alphabet the publisher's
- *     `prefix = platform.toLowerCase()` produces.
- *   - `authorId` is everything after the first hyphen. May itself contain
- *     hyphens (the publisher uses `[^a-z0-9._-]` → `-` for unsafe chars
- *     in the platform-side id), so we split on the FIRST hyphen only.
+ *   - `platform` is the lowercase platform tag — letters/digits AND
+ *     HYPHENS. The schema's `LETTER_PREFIX_ID_REGEX =
+ *     /^[a-z][a-z0-9-]*$/` permits hyphenated names (`mcp-cli`,
+ *     `discord-bot`, `email-imap`).
+ *   - `authorId` is the remainder. Also may contain hyphens (the
+ *     publisher's `[^a-z0-9._-]` → `-` mapping for unsafe chars).
  *
- * Returns `undefined` for shapes that don't carry an embedded platform
- * (e.g. `andreas`, `luna`) — those flow through the legacy path
- * untouched.
+ * A naive first-hyphen split is therefore asymmetric with the
+ * publisher: `did:mf:mcp-cli-myUser123` (real tuple
+ * `(mcp-cli, myUser123)`) would split to `(mcp, cli-myUser123)` and
+ * miss the reverse lookup → silent denial-of-service for any
+ * principal whose platform name contains a hyphen. PR #483 closes
+ * that gap by consulting the engine's `knownPlatforms` set and
+ * picking the **longest** registered platform that prefixes the
+ * agent id (with the required `-` separator immediately after).
  *
- * Note: a hyphen by itself is ambiguous (a principal id like `my-agent`
- * would parse as platform=`my`, authorId=`agent`). The engine's reverse
- * index disambiguates: an unknown `(platform, authorId)` tuple simply
- * misses and the original agent-id is returned. So this helper is
- * permissive about parsing — the index is the authority on whether the
- * mapping is real.
+ * Disambiguation strategy:
+ *
+ *   1. **Longest-prefix match against `knownPlatforms`.** For each
+ *      registered platform `P`, the agent id matches when it starts
+ *      with `P + "-"` AND has a non-empty tail. Among all matches,
+ *      the longest `P` wins (so `mcp-cli` beats `mcp` when both are
+ *      registered). This is symmetric with the publisher: the
+ *      adapter that emitted the DID is the one that registered the
+ *      platform name with the engine, so the longest-matching
+ *      registered platform IS the publisher's platform.
+ *   2. **No match → return `undefined`.** Falling back to the
+ *      first-hyphen split would re-introduce the asymmetry (and
+ *      could mask config-drift bugs by silently parsing a tail
+ *      from an unregistered platform). Returning `undefined` makes
+ *      the caller fall through to the raw tail, the engine denies
+ *      `unknown_principal`, and the deny audit surfaces the issue.
+ *
+ * Returns `undefined` for shapes that don't carry a registered
+ * platform prefix (e.g. `andreas`, `luna`, or any platform-shape id
+ * whose platform isn't in `knownPlatforms`). Those flow through the
+ * legacy path untouched.
+ *
+ * **Note on principal-id ambiguity with hyphens.** A principal id
+ * like `my-agent` parsed against `knownPlatforms = ["my"]` would
+ * match as `(my, agent)`. This is by design: if an operator
+ * registered `my` as a platform AND named a principal `my-agent`,
+ * the reverse index is the authority — an `(my, agent)` miss
+ * returns `undefined` from `lookupPrincipalIdByPlatformId` and the
+ * caller falls through to the raw tail. The schema's tuple-
+ * uniqueness check prevents the genuine ambiguity (same id
+ * registered as both a principal and a platform identity).
  */
 function parsePlatformPrefixedAgentId(
   agentId: string,
+  knownPlatforms: Iterable<string>,
 ): { platform: string; authorId: string } | undefined {
-  const hyphen = agentId.indexOf("-");
-  if (hyphen <= 0 || hyphen === agentId.length - 1) return undefined;
+  let bestPlatform: string | undefined;
+  for (const platform of knownPlatforms) {
+    // Must be `<platform>-<non-empty-tail>`. `startsWith(platform +
+    // "-")` plus a bounds check that there's at least one char after
+    // the separator.
+    if (agentId.length <= platform.length + 1) continue;
+    if (!agentId.startsWith(`${platform}-`)) continue;
+    if (bestPlatform === undefined || platform.length > bestPlatform.length) {
+      bestPlatform = platform;
+    }
+  }
+  if (bestPlatform === undefined) return undefined;
   return {
-    platform: agentId.slice(0, hyphen),
-    authorId: agentId.slice(hyphen + 1),
+    platform: bestPlatform,
+    authorId: agentId.slice(bestPlatform.length + 1),
   };
 }
 

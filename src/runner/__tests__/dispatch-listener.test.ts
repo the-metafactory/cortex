@@ -2649,4 +2649,193 @@ describe("dispatch-listener — platform-id originator resolution (cortex#482)",
       "dispatch.task.completed",
     ]);
   });
+
+  // -------------------------------------------------------------------------
+  // PR #483 — Echo R1 major. Hyphenated platform names (`mcp-cli`,
+  // `discord-bot`, `email-imap`) round-trip through the publisher's single-
+  // hyphen separator. The parser must consult the engine's known-platform
+  // set and pick the longest registered prefix, otherwise
+  // `did:mf:mcp-cli-myUser123` mis-splits to `(mcp, cli-myUser123)` and
+  // silently denies the principal.
+  // -------------------------------------------------------------------------
+
+  test("hyphenated platform name (mcp-cli) → longest-prefix match resolves correctly", async () => {
+    // Register `mcp-cli` as a platform on principal `alice`. The
+    // publisher would emit `did:mf:mcp-cli-myUser123`. The parser must
+    // recognise `mcp-cli` (not `mcp`) as the platform.
+    const captured: { principalId: string; intent: Intent }[] = [];
+    const engine = new PolicyEngine({
+      principals: [
+        {
+          id: "alice",
+          home_operator: "andreas",
+          home_stack: "andreas/research",
+          role: ["operator"],
+          trust: [],
+          // Author id is lowercase to match `adapterOriginatorIdentity`
+          // (publisher) which lowercases the author id before joining.
+          platform_ids: { "mcp-cli": ["myuser123"] },
+        },
+      ],
+      roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
+    });
+    const origCheck = engine.check.bind(engine);
+    engine.check = (principalId, intent) => {
+      captured.push({ principalId, intent });
+      return origCheck(principalId, intent);
+    };
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engine,
+    });
+    await listener.start();
+    await router.start();
+
+    const env = makeReceivedEnvelope();
+    env.originator = {
+      identity: "did:mf:mcp-cli-myuser123",
+      attribution: "adapter-resolved",
+    };
+
+    r.trigger(env, CANONICAL_CORTEX_CHAT_SUBJECT);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(captured).toHaveLength(1);
+    // Critical: must resolve to `alice`, not `discord-999...`-style raw
+    // tail. With a naive first-hyphen split, this would have
+    // mis-resolved to (mcp, cli-myuser123) and denied.
+    expect(captured[0]!.principalId).toBe("alice");
+    expect(r.published.map((e) => e.type)).toEqual([
+      "system.access.allowed",
+      "dispatch.task.started",
+      "dispatch.task.completed",
+    ]);
+  });
+
+  test("hyphenated-platform-shape DID with NO matching registered platform → falls through to raw tail (engine denies)", async () => {
+    // Same shape (`did:mf:mcp-cli-...`) but no principal registers a
+    // platform named `mcp-cli` (only `discord`). The parser must NOT
+    // greedy-match against `mcp` (it isn't registered either) and must
+    // NOT fall back to the legacy first-hyphen split. It returns
+    // `undefined`; caller forwards the raw tail; engine denies.
+    const captured: { principalId: string; intent: Intent }[] = [];
+    const engine = new PolicyEngine({
+      principals: [
+        {
+          id: "andreas",
+          home_operator: "andreas",
+          home_stack: "andreas/research",
+          role: ["operator"],
+          trust: [],
+          platform_ids: { discord: ["1134325176796987522"] },
+        },
+      ],
+      roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
+    });
+    const origCheck = engine.check.bind(engine);
+    engine.check = (principalId, intent) => {
+      captured.push({ principalId, intent });
+      return origCheck(principalId, intent);
+    };
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engine,
+    });
+    await listener.start();
+    await router.start();
+
+    const env = makeReceivedEnvelope();
+    env.originator = {
+      identity: "did:mf:mcp-cli-myuser123",
+      attribution: "adapter-resolved",
+    };
+
+    r.trigger(env, CANONICAL_CORTEX_CHAT_SUBJECT);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(captured).toHaveLength(1);
+    // No registered platform matches `mcp-cli-...`, so the parser
+    // returns undefined and the caller forwards the raw tail.
+    expect(captured[0]!.principalId).toBe("mcp-cli-myuser123");
+    const types = r.published.map((e) => e.type);
+    expect(types).toContain("system.access.denied");
+    expect(types).toContain("dispatch.task.failed");
+  });
+
+  test("both `mcp` and `mcp-cli` registered → longest prefix wins", async () => {
+    // Adversarial case: two platforms registered where one is a
+    // prefix of the other. `did:mf:mcp-cli-myuser123` MUST resolve as
+    // (`mcp-cli`, `myuser123`) — the longest registered prefix — not
+    // (`mcp`, `cli-myuser123`).
+    const captured: { principalId: string; intent: Intent }[] = [];
+    const engine = new PolicyEngine({
+      principals: [
+        {
+          id: "alice",
+          home_operator: "andreas",
+          home_stack: "andreas/research",
+          role: ["operator"],
+          trust: [],
+          platform_ids: { "mcp-cli": ["myuser123"] },
+        },
+        {
+          id: "bob",
+          home_operator: "andreas",
+          home_stack: "andreas/research",
+          role: ["operator"],
+          trust: [],
+          // bob owns the (`mcp`, `cli-myuser123`) tuple — proving the
+          // parser does NOT pick `mcp` even though it would also match
+          // and resolve to a valid principal.
+          platform_ids: { mcp: ["cli-myuser123"] },
+        },
+      ],
+      roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
+    });
+    const origCheck = engine.check.bind(engine);
+    engine.check = (principalId, intent) => {
+      captured.push({ principalId, intent });
+      return origCheck(principalId, intent);
+    };
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engine,
+    });
+    await listener.start();
+    await router.start();
+
+    const env = makeReceivedEnvelope();
+    env.originator = {
+      identity: "did:mf:mcp-cli-myuser123",
+      attribution: "adapter-resolved",
+    };
+
+    r.trigger(env, CANONICAL_CORTEX_CHAT_SUBJECT);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(captured).toHaveLength(1);
+    // Longest-prefix wins: `mcp-cli` (7 chars) beats `mcp` (3 chars).
+    expect(captured[0]!.principalId).toBe("alice");
+  });
 });

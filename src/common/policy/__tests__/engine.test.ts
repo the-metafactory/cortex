@@ -308,6 +308,40 @@ describe("PolicyEngine — platform-id reverse lookup (cortex#482)", () => {
       engine.lookupPrincipalIdByPlatformId("mattermost", "mm-andreas-id"),
     ).toBe("andreas");
   });
+
+  // PR #483 — `knownPlatforms` exposes the reverse-index keys so callers
+  // (dispatch-listener.parsePlatformPrefixedAgentId) can disambiguate
+  // hyphenated platform names by longest-prefix match.
+  test("knownPlatforms exposes the set of registered platform names", () => {
+    const engine = new PolicyEngine({
+      principals: [
+        principal({
+          id: "andreas",
+          platform_ids: {
+            discord: ["1"],
+            "mcp-cli": ["2"],
+          },
+        }),
+        principal({
+          id: "alice",
+          platform_ids: { mattermost: ["mm-1"] },
+        }),
+      ],
+      roles: [role("operator", [])],
+    });
+
+    const platforms = [...engine.knownPlatforms].sort();
+    expect(platforms).toEqual(["discord", "mattermost", "mcp-cli"]);
+  });
+
+  test("knownPlatforms is empty when no principals declare platform_ids", () => {
+    const engine = new PolicyEngine({
+      principals: [principal({ id: "luna" })],
+      roles: [role("operator", [])],
+    });
+
+    expect([...engine.knownPlatforms]).toEqual([]);
+  });
 });
 
 describe("PolicyEngine — boot accessors", () => {

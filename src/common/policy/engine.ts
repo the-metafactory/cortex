@@ -191,6 +191,34 @@ export class PolicyEngine {
   }
 
   /**
+   * IAW cortex#483 — registered platform names (the keys of the
+   * `platform → author_id → principal_id` reverse index).
+   *
+   * Exposed so callers can disambiguate platform-prefixed agent ids
+   * by longest-prefix match against the registered set. Required
+   * because `adapterOriginatorIdentity` joins `<platform>-<authorId>`
+   * with a single hyphen separator AND the schema's
+   * `LETTER_PREFIX_ID_REGEX = /^[a-z][a-z0-9-]*$/` permits hyphenated
+   * platform names (e.g. `mcp-cli`, `discord-bot`, `email-imap`).
+   * A naive first-hyphen split of `did:mf:mcp-cli-myUser123` yields
+   * `(platform=mcp, authorId=cli-myUser123)` which misses the real
+   * key `(mcp-cli, myUser123)` — silent denial-of-service for
+   * hyphenated-platform principals.
+   *
+   * The dispatch-listener's `parsePlatformPrefixedAgentId` iterates
+   * this set and picks the longest registered platform that prefixes
+   * the agent id, breaking the ambiguity symmetrically with the
+   * publisher.
+   *
+   * Returns an `Iterable` (not an array snapshot) to avoid
+   * materialising a copy on every dispatch; callers that need
+   * stable iteration should spread it.
+   */
+  get knownPlatforms(): Iterable<string> {
+    return this.principalIdByPlatformId.keys();
+  }
+
+  /**
    * Authorise a principal id to exercise an intent. Returns a
    * `PolicyDecision` discriminated on `allow`.
    *
