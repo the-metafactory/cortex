@@ -88,6 +88,9 @@ import type {
 import {
   createSystemAccessAllowedEvent,
   createSystemAccessDeniedEvent,
+  createSystemDispatchStageEvent,
+  type SystemDispatchStage,
+  type SystemDispatchStageOutcome,
 } from "../bus/system-events";
 import type {
   DispatchRequest,
@@ -351,6 +354,22 @@ export interface DispatchListenerOptions {
    * Principal to verify against.
    */
   stackNKeyPub?: string;
+  /**
+   * cortex#492 — dispatch-stage tracing toggle. When `true`, the
+   * inbound path emits a `system.dispatch.stage` envelope (via
+   * `runtime.publish`) AND a structured stderr line at each pipeline
+   * stage, so a stall / silent-return between `received` and
+   * `dispatch.task.started` is observable (the cortex#491 gap).
+   *
+   * When `undefined` (the default), the flag is read from the
+   * `CORTEX_TRACE_DISPATCH` env var (`"1"` / `"true"` → on). Off by
+   * default → zero overhead, no new log lines, no extra envelopes.
+   *
+   * Tests pass `true` explicitly to exercise the trace path without
+   * touching `process.env`; a future `tracing:` config block in
+   * cortex.yaml can set it from parsed config.
+   */
+  traceDispatch?: boolean;
 }
 
 export interface DispatchListener {
@@ -450,6 +469,145 @@ function defaultSubjects(principal: string, stack?: string): string[] {
   return [canonicalTasksDirectSubject(principal, stack)];
 }
 
+/**
+ * cortex#492 — read the dispatch-trace toggle from the environment.
+ * `CORTEX_TRACE_DISPATCH=1` (or `true`, case-insensitive) turns tracing
+ * on; anything else (including unset) leaves it off. Centralised so the
+ * env-var contract lives in one place and the listener / handler read
+ * the same parse.
+ */
+function traceDispatchEnabledFromEnv(): boolean {
+  const raw = process.env.CORTEX_TRACE_DISPATCH;
+  if (raw === undefined) return false;
+  const v = raw.trim().toLowerCase();
+  return v === "1" || v === "true";
+}
+
+/**
+ * cortex#492 — the per-dispatch trace context. Mutates nothing; carries
+ * the stable correlation/task keys + the latest known subject/agent so
+ * each `trace()` call doesn't have to re-thread them.
+ */
+interface DispatchTraceContext {
+  correlationId: string;
+  taskId: string;
+  subject?: string;
+  agentId?: string;
+}
+
+/**
+ * cortex#492 — derive a best-effort trace context from a raw inbound
+ * envelope BEFORE the payload is validated. Used by the `onEnvelope`
+ * pre-parse stages (`received`, `subject-matched`, `subject-rejected`,
+ * `federation-gated`) where the trusted `DispatchTaskReceivedPayload`
+ * isn't available yet.
+ *
+ * `correlationId` / `taskId` fall back to `envelope.correlation_id` then
+ * `envelope.id` so the trace always carries a non-empty join key.
+ * `agentId` is an untrusted peek at `payload.agent_id` — purely for the
+ * trace's human-facing detail; the authoritative agent id is resolved by
+ * the verified parse downstream.
+ */
+function rawEnvelopeTraceContext(
+  envelope: Envelope,
+  subject: string | undefined,
+): DispatchTraceContext {
+  const join = envelope.correlation_id ?? envelope.id;
+  const payload = envelope.payload as
+    | Partial<DispatchTaskReceivedPayload>
+    | undefined;
+  const taskId =
+    typeof payload?.task_id === "string" ? payload.task_id : join;
+  const agentId =
+    typeof payload?.agent_id === "string" ? payload.agent_id : undefined;
+  return {
+    correlationId: join,
+    taskId,
+    ...(subject !== undefined && { subject }),
+    ...(agentId !== undefined && { agentId }),
+  };
+}
+
+/**
+ * cortex#492 — emit a single dispatch-stage trace.
+ *
+ * **The stderr leg is primary and load-bearing.** It is written
+ * SYNCHRONOUSLY, and every call site places it BEFORE the `await` it
+ * brackets. This is the whole point: the motivating bug (cortex#491) was
+ * a SILENT executor stall where an `await` (chain verification or a bus
+ * publish) never resolved — so the trace must already be in the log
+ * before that await is entered. If the next await hangs, the operator
+ * still sees exactly how far the dispatch got.
+ *
+ * **The envelope leg is the nice-to-have.** When the runtime can publish,
+ * a `system.dispatch.stage` envelope is emitted fire-and-forget so signal
+ * + the MC dashboard can join the trace on `correlation_id` (signal's
+ * ingestion join key ≡ the envelope `correlation_id` ≡ W3C trace_id).
+ * The publish is NEVER awaited (publish may be the thing that hangs) and
+ * a rejection is swallowed-and-logged to stderr — it must never block or
+ * throw into the dispatch.
+ *
+ * **Gated:** when `enabled` is `false` this is a hard no-op — no line, no
+ * envelope, no allocation beyond the call. The default configuration
+ * (`CORTEX_TRACE_DISPATCH` unset) leaves it off → zero overhead.
+ */
+function trace(
+  enabled: boolean,
+  runtime: MyelinRuntime,
+  source: SystemEventSource,
+  stage: SystemDispatchStage,
+  outcome: SystemDispatchStageOutcome,
+  ctx: DispatchTraceContext,
+  detail?: string,
+): void {
+  if (!enabled) return;
+  // ---- PRIMARY LEG: synchronous, hang-proof stderr line. ----
+  // Anchored on correlation_id (signal/VictoriaLogs join key). Written
+  // first and unconditionally so a hang in the NEXT await still leaves
+  // this stage in the log.
+  process.stderr.write(
+    `cortex-trace: stage=${stage} outcome=${outcome} ` +
+      `correlation_id=${ctx.correlationId} task_id=${ctx.taskId}` +
+      ` agent_id=${ctx.agentId ?? "<unknown>"}` +
+      ` subject=${ctx.subject ?? "<none>"}` +
+      (detail !== undefined ? ` detail=${detail}` : "") +
+      "\n",
+  );
+  // ---- SECONDARY LEG: fire-and-forget envelope. Must never block or ----
+  // ---- throw into the dispatch (swallow-and-stderr per no-empty-catch). ----
+  try {
+    const env = createSystemDispatchStageEvent({
+      source,
+      correlationId: ctx.correlationId,
+      taskId: ctx.taskId,
+      stage,
+      outcome,
+      ...(ctx.subject !== undefined && { subject: ctx.subject }),
+      ...(ctx.agentId !== undefined && { agentId: ctx.agentId }),
+      ...(detail !== undefined && { detail }),
+    });
+    // Do NOT await — publish may be the stall. A rejected promise is
+    // logged (not swallowed) so a broken envelope leg surfaces without
+    // blocking or crashing the dispatch.
+    void runtime.publish(env).catch((err: unknown) => {
+      process.stderr.write(
+        `cortex-trace: envelope publish failed for stage=${stage} ` +
+          `correlation_id=${ctx.correlationId}: ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    });
+  } catch (err) {
+    // Synchronous failure (envelope build, etc.). Log per no-empty-catch;
+    // never re-throw into the dispatch. The primary stderr leg above has
+    // already landed, so the trace is not lost.
+    process.stderr.write(
+      `cortex-trace: envelope emit threw for stage=${stage} ` +
+        `correlation_id=${ctx.correlationId}: ` +
+        `${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  }
+}
+
 export function createDispatchListener(
   opts: DispatchListenerOptions,
 ): DispatchListener {
@@ -470,6 +628,10 @@ export function createDispatchListener(
   // Adapter-originated dispatches arrive with empty `signed_by[]` and
   // fall through `rejectEmpty: false`; signed bus traffic MUST verify.
   const cryptoVerify = opts.cryptoVerify ?? true;
+  // cortex#492 — resolve the trace toggle once at construction: explicit
+  // option wins, else fall back to the `CORTEX_TRACE_DISPATCH` env var.
+  // Off by default → the trace helper short-circuits to a no-op.
+  const traceDispatch = opts.traceDispatch ?? traceDispatchEnabledFromEnv();
   const subjects = opts.subjects ?? defaultSubjects(source.principal, opts.stack);
 
   // cortex#484 — federation gate config (Option D). Index networks by id
@@ -530,6 +692,7 @@ export function createDispatchListener(
         receivingAgentId,
         stackIdentity,
         stackNKeyPub,
+        traceDispatch,
       });
     } catch (err) {
       process.stderr.write(
@@ -584,7 +747,33 @@ export function createDispatchListener(
       // The handler filters by subject + dispatches in a tracked
       // microtask; no render-timeout wraps the CC session.
       envelopeRegistration = runtime.onEnvelope((envelope, subject) => {
-        if (!matchesAnyDeclaredSubject(subject)) return;
+        // cortex#492 — best-effort trace context from the raw envelope
+        // before the payload is parsed. `task_id` falls back to the
+        // correlation_id / envelope id; `agent_id` is a peek at the
+        // payload (the trusted parse happens later in the handler).
+        const traceCtx = rawEnvelopeTraceContext(envelope, subject);
+        // `received` — the runtime fan-out reached this listener. This is
+        // the FIRST observable point after `myelin-runtime: received
+        // envelope`; pre-#492 nothing was emitted here.
+        trace(traceDispatch, runtime, source, "received", "info", traceCtx);
+        if (!matchesAnyDeclaredSubject(subject)) {
+          // cortex#491's hidden gap — the silent `return` when the wire
+          // subject matched NO declared pattern. Pre-#492 a dispatch that
+          // landed here vanished with zero output between
+          // `myelin-runtime: received envelope` and nothing. Now it's a
+          // visible `subject-rejected` trace.
+          trace(
+            traceDispatch,
+            runtime,
+            source,
+            "subject-rejected",
+            "fail",
+            traceCtx,
+            `subject matched none of [${subjects.join(", ")}]`,
+          );
+          return;
+        }
+        trace(traceDispatch, runtime, source, "subject-matched", "pass", traceCtx);
         // cortex#484 — federation gate runs BEFORE chain verification
         // and policy gating, mirroring the surface-router's D.2 order:
         // an envelope that fails the network's accept/deny rules never
@@ -604,9 +793,26 @@ export function createDispatchListener(
             federatedNetworksById,
           );
           if (decision !== "allow") {
+            trace(
+              traceDispatch,
+              runtime,
+              source,
+              "federation-gated",
+              "fail",
+              traceCtx,
+              decision.kind,
+            );
             emitFederationDenied(runtime, source, envelope, subject, decision);
             return;
           }
+          trace(
+            traceDispatch,
+            runtime,
+            source,
+            "federation-gated",
+            "pass",
+            traceCtx,
+          );
         }
         trackInFlight(runOneDispatch(envelope, subject));
       });
@@ -801,6 +1007,13 @@ interface DispatchHandlerContext {
   stackIdentity: string | undefined;
   /** cortex#480 — receiving stack's NKey pubkey for crypto-verify pass. */
   stackNKeyPub: string | undefined;
+  /**
+   * cortex#492 — when `true`, emit a `system.dispatch.stage` trace at
+   * each gate inside the handler. Resolved by `createDispatchListener`
+   * from the explicit option or `CORTEX_TRACE_DISPATCH`; the handler
+   * just reads it and passes it to `trace()`.
+   */
+  traceDispatch: boolean;
 }
 
 async function handleDispatchEnvelope(
@@ -821,14 +1034,35 @@ async function handleDispatchEnvelope(
     receivingAgentId,
     stackIdentity,
     stackNKeyPub,
+    traceDispatch,
   } = ctx;
+  // cortex#492 — pre-parse trace context. Refined to the trusted payload
+  // fields (`task_id`, `agent_id`) once the parse succeeds.
+  let traceCtx = rawEnvelopeTraceContext(envelope, subject);
   const payload = parsePayload(envelope);
   if (!payload) {
+    trace(
+      traceDispatch,
+      runtime,
+      source,
+      "malformed",
+      "fail",
+      traceCtx,
+      "required fields missing or task_id not UUID-shaped",
+    );
     console.error(
       `cortex-runner: dispatch-listener: malformed dispatch.task.received envelope id=${envelope.id} — required fields missing`,
     );
     return;
   }
+  // Refine the trace context with the trusted parsed fields.
+  traceCtx = {
+    correlationId: envelope.correlation_id ?? payload.task_id,
+    taskId: payload.task_id,
+    agentId: payload.agent_id,
+    ...(subject !== undefined && { subject }),
+  };
+  trace(traceDispatch, runtime, source, "parsed", "pass", traceCtx);
 
   const recipientMismatch = validateCanonicalTaskRecipient(
     envelope,
@@ -836,6 +1070,15 @@ async function handleDispatchEnvelope(
     subject,
   );
   if (recipientMismatch !== null) {
+    trace(
+      traceDispatch,
+      runtime,
+      source,
+      "recipient-mismatch",
+      "fail",
+      traceCtx,
+      recipientMismatch,
+    );
     process.stderr.write(
       `[runner/dispatch-listener] dropped envelope ${envelope.id} ` +
         `(correlation_id=${envelope.correlation_id ?? "<none>"} ` +
@@ -851,6 +1094,14 @@ async function handleDispatchEnvelope(
     );
     return;
   }
+  trace(
+    traceDispatch,
+    runtime,
+    source,
+    "recipient-validated",
+    "pass",
+    traceCtx,
+  );
 
   // IAW Phase B wiring (cortex#320, v2.0.2) — verify the envelope's
   // `signed_by[]` chain BEFORE resolving the principal. The runner used
@@ -878,6 +1129,15 @@ async function handleDispatchEnvelope(
   // deny inside the handler so the contract is enforced regardless
   // of caller wiring.
   if (trustResolver !== undefined && receivingAgentId === undefined) {
+    trace(
+      traceDispatch,
+      runtime,
+      source,
+      "chain-rejected",
+      "fail",
+      traceCtx,
+      "receiving_agent_unconfigured",
+    );
     process.stderr.write(
       `[runner/dispatch-listener] receivingAgentId not configured — denying ` +
         `envelope ${envelope.id} (correlation_id=` +
@@ -901,6 +1161,18 @@ async function handleDispatchEnvelope(
   // always supplies `trustResolver`.
   if (trustResolver !== undefined && receivingAgentId !== undefined) {
     let verification: ChainVerificationResult;
+    // cortex#492 — emitted SYNCHRONOUSLY before the verify await. This is
+    // a prime stall suspect: a hang inside `verifySignedByChain` (crypto,
+    // resolver I/O) leaves `chain-verify-start` in the log with no matching
+    // `chain-verified` / `chain-rejected` — pinpointing the stall.
+    trace(
+      traceDispatch,
+      runtime,
+      source,
+      "chain-verify-start",
+      "info",
+      traceCtx,
+    );
     try {
       verification = await verifySignedByChain(envelope, {
         resolver: trustResolver,
@@ -918,6 +1190,15 @@ async function handleDispatchEnvelope(
       // `principalId` is missing on a non-empty chain. Treat as a
       // verification failure (deny + log) so the runner doesn't crash.
       const detail = err instanceof Error ? err.message : String(err);
+      trace(
+        traceDispatch,
+        runtime,
+        source,
+        "chain-rejected",
+        "fail",
+        traceCtx,
+        `crypto_verify_failed: ${detail}`,
+      );
       process.stderr.write(
         `[runner/dispatch-listener] chain verification threw on ` +
           `envelope ${envelope.id} (correlation_id=` +
@@ -936,6 +1217,15 @@ async function handleDispatchEnvelope(
     }
 
     if (!verification.valid) {
+      trace(
+        traceDispatch,
+        runtime,
+        source,
+        "chain-rejected",
+        "fail",
+        traceCtx,
+        `${verification.reason.kind} at chain index ${verification.rejectedAt}`,
+      );
       process.stderr.write(
         `[runner/dispatch-listener] dropped envelope ${envelope.id} ` +
           `(correlation_id=${envelope.correlation_id ?? "<none>"} ` +
@@ -954,6 +1244,14 @@ async function handleDispatchEnvelope(
       );
       return;
     }
+    trace(
+      traceDispatch,
+      runtime,
+      source,
+      "chain-verified",
+      "pass",
+      traceCtx,
+    );
   }
 
   // IAW Phase C.3.1 — policy gate. The engine resolves the originating
@@ -987,6 +1285,15 @@ async function handleDispatchEnvelope(
     // In v2.0.0+ this only happens when principal declared empty
     // principals[]; cortex.ts has already emitted a boot warning, so we
     // just deny + emit a terminal failure for any dispatch that arrives.
+    trace(
+      traceDispatch,
+      runtime,
+      source,
+      "policy-decision",
+      "fail",
+      traceCtx,
+      "policy_engine_uninitialised",
+    );
     console.error(
       `cortex-runner: dispatch-listener: policy engine uninitialised (empty principals[]?) — denying envelope id=${envelope.id} task_id=${payload.task_id} agent=${payload.agent_id}`,
     );
@@ -1071,6 +1378,15 @@ async function handleDispatchEnvelope(
     };
 
     if (!decision.allow) {
+      trace(
+        traceDispatch,
+        runtime,
+        source,
+        "policy-decision",
+        "fail",
+        traceCtx,
+        decision.reason.kind,
+      );
       console.error(
         `cortex-runner: dispatch-listener: denied envelope id=${envelope.id} task_id=${payload.task_id} agent=${payload.agent_id} — reason=${decision.reason.kind}${
           sourceNetwork !== undefined ? ` source_network=${sourceNetwork}` : ""
@@ -1121,6 +1437,15 @@ async function handleDispatchEnvelope(
       capabilities: decision.capabilities,
     });
     await runtime.publish(allowed);
+    trace(
+      traceDispatch,
+      runtime,
+      source,
+      "policy-decision",
+      "pass",
+      traceCtx,
+      decision.capability,
+    );
     gatedPrincipal = decision.principal;
   }
 
@@ -1139,13 +1464,36 @@ async function handleDispatchEnvelope(
           ...(ccSessionFactory !== undefined && { ccSessionFactory }),
         });
 
+  // cortex#492 — emitted SYNCHRONOUSLY immediately before draining the
+  // harness (the CC spawn). `harness.dispatch(req)` is the long-running
+  // executor: a hang here (a CC process that never yields its first
+  // envelope) leaves `session-spawning` in the log with no matching
+  // `started` — the cortex#491 stall class made visible.
+  trace(
+    traceDispatch,
+    runtime,
+    source,
+    "session-spawning",
+    "info",
+    traceCtx,
+    envelope.distribution_mode === "delegate" ? "agent-team" : "claude-code",
+  );
+
   // Drain the harness's lifecycle stream onto the bus. The harness
   // guarantees at least one terminal envelope; we publish whatever it
   // yields, in order. Each `runtime.publish` awaits — keeping the
   // strict happens-before ordering the original implementation relied
   // on (`started` is observable before any terminal envelope, even when
   // the runtime is the bus's actual NATS transport).
+  let firstYield = true;
   for await (const env of harness.dispatch(req)) {
+    if (firstYield) {
+      firstYield = false;
+      // The harness produced its first lifecycle envelope — the session
+      // is actually running. Closes the trace: a dispatch that reaches
+      // `started` got all the way through to a live CC session.
+      trace(traceDispatch, runtime, source, "started", "info", traceCtx);
+    }
     await runtime.publish(env);
   }
 }

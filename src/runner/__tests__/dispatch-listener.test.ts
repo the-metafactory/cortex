@@ -2547,3 +2547,305 @@ describe("dispatch-listener — originator DID resolution (cortex#486)", () => {
     expect(types).toContain("dispatch.task.failed");
   });
 });
+
+// ---------------------------------------------------------------------------
+// cortex#492 — dispatch-stage tracing
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the ordered `stage` values from every `system.dispatch.stage`
+ * envelope in publish order. The join key (`correlation_id` / `task_id`)
+ * and `outcome` ride the payload — tests assert on the sequence + the
+ * payload shape.
+ */
+function traceStages(published: Envelope[]): string[] {
+  return published
+    .filter((e) => e.type === "system.dispatch.stage")
+    .map((e) => e.payload.stage as string);
+}
+
+function traceEnvelopes(published: Envelope[]): Envelope[] {
+  return published.filter((e) => e.type === "system.dispatch.stage");
+}
+
+describe("dispatch-listener — stage tracing (cortex#492)", () => {
+  test("OFF by default → no system.dispatch.stage envelopes emitted", async () => {
+    // Guard against an ambient env var leaking into the default path.
+    const prior = process.env.CORTEX_TRACE_DISPATCH;
+    delete process.env.CORTEX_TRACE_DISPATCH;
+    try {
+      const r = recordingRuntime();
+      const { factory } = fakeFactory(SUCCESS_RESULT);
+      const listener = createDispatchListener({
+        runtime: r.runtime,
+        source: SOURCE,
+        ccSessionFactory: factory,
+        policyEngine: engineGranting(["dispatch.cortex"]),
+        // traceDispatch omitted → reads env (unset) → off
+      });
+      await listener.start();
+
+      r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // Lifecycle + audit envelopes still flow; ZERO trace envelopes.
+      expect(traceEnvelopes(r.published)).toHaveLength(0);
+      expect(r.published.map((e) => e.type)).toEqual([
+        "system.access.allowed",
+        "dispatch.task.started",
+        "dispatch.task.completed",
+      ]);
+    } finally {
+      if (prior === undefined) delete process.env.CORTEX_TRACE_DISPATCH;
+      else process.env.CORTEX_TRACE_DISPATCH = prior;
+    }
+  });
+
+  test("CORTEX_TRACE_DISPATCH=1 env var enables tracing", async () => {
+    const prior = process.env.CORTEX_TRACE_DISPATCH;
+    process.env.CORTEX_TRACE_DISPATCH = "1";
+    try {
+      const r = recordingRuntime();
+      const { factory } = fakeFactory(SUCCESS_RESULT);
+      const listener = createDispatchListener({
+        runtime: r.runtime,
+        source: SOURCE,
+        ccSessionFactory: factory,
+        policyEngine: engineGranting(["dispatch.cortex"]),
+      });
+      await listener.start();
+
+      r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(traceEnvelopes(r.published).length).toBeGreaterThan(0);
+    } finally {
+      if (prior === undefined) delete process.env.CORTEX_TRACE_DISPATCH;
+      else process.env.CORTEX_TRACE_DISPATCH = prior;
+    }
+  });
+
+  test("allow path emits the full ordered stage trace through harness-dispatched", async () => {
+    const r = recordingRuntime();
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      traceDispatch: true,
+    });
+    await listener.start();
+
+    r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // No trustResolver wired → chain-verify-start / chain-verified stages
+    // are skipped (the verifier is the only legitimate skip path). Every
+    // other gate the allow path passes through emits a trace, in order,
+    // ending with session-spawning → started.
+    expect(traceStages(r.published)).toEqual([
+      "received",
+      "subject-matched",
+      "parsed",
+      "recipient-validated",
+      "policy-decision",
+      "session-spawning",
+      "started",
+    ]);
+    // Each trace carries the dispatch's correlation/task join key.
+    for (const env of traceEnvelopes(r.published)) {
+      expect(env.payload.correlation_id).toBe(TASK_ID);
+      expect(env.payload.task_id).toBe(TASK_ID);
+    }
+    // session-spawning records the substrate that was spawned.
+    const spawning = traceEnvelopes(r.published).find(
+      (e) => e.payload.stage === "session-spawning",
+    );
+    expect(spawning?.payload.outcome).toBe("info");
+    expect(spawning?.payload.detail).toBe("claude-code");
+  });
+
+  test("subject-rejected: the cortex#491 silent gap is now a visible trace", async () => {
+    // An envelope whose wire subject matches NO declared pattern used to
+    // vanish silently (the `return` at the top of the onEnvelope handler).
+    // With tracing on, a `received` → `subject-rejected` pair is emitted
+    // and the dispatch goes no further.
+    const r = recordingRuntime();
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      traceDispatch: true,
+    });
+    await listener.start();
+
+    // A subject for a DIFFERENT principal — won't match the listener's
+    // `local.metafactory.tasks.*.>` pattern.
+    r.trigger(
+      makeReceivedEnvelope(),
+      "local.someoneelse.tasks.@did-mf-other.chat",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(traceStages(r.published)).toEqual(["received", "subject-rejected"]);
+    const rejected = traceEnvelopes(r.published).find(
+      (e) => e.payload.stage === "subject-rejected",
+    );
+    expect(rejected?.payload.outcome).toBe("fail");
+    expect(rejected?.payload.detail).toContain("matched none of");
+    // No lifecycle / harness envelopes — the dispatch stopped at the gate.
+    expect(
+      r.published.filter((e) => e.type.startsWith("dispatch.task.")),
+    ).toHaveLength(0);
+  });
+
+  test("policy-deny path emits a policy-decided fail trace before short-circuit", async () => {
+    const r = recordingRuntime();
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      // Grant a different capability so `dispatch.cortex` misses.
+      policyEngine: engineGranting(["other.thing"]),
+      traceDispatch: true,
+    });
+    await listener.start();
+
+    r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const stages = traceStages(r.published);
+    expect(stages).toEqual([
+      "received",
+      "subject-matched",
+      "parsed",
+      "recipient-validated",
+      "policy-decision",
+    ]);
+    const policy = traceEnvelopes(r.published).find(
+      (e) => e.payload.stage === "policy-decision",
+    );
+    expect(policy?.payload.outcome).toBe("fail");
+    // detail carries the engine deny reason kind.
+    expect(typeof policy?.payload.detail).toBe("string");
+  });
+
+  test("policy-engine-uninitialised path emits a policy-decided fail trace", async () => {
+    const r = recordingRuntime();
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      // no policyEngine → fail-closed
+      traceDispatch: true,
+    });
+    await listener.start();
+
+    r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(traceStages(r.published)).toEqual([
+      "received",
+      "subject-matched",
+      "parsed",
+      "recipient-validated",
+      "policy-decision",
+    ]);
+    const policy = traceEnvelopes(r.published).find(
+      (e) => e.payload.stage === "policy-decision",
+    );
+    expect(policy?.payload.detail).toBe("policy_engine_uninitialised");
+  });
+
+  test("chain-verify-start brackets the verify await (hang-proof) then chain-verified on pass", async () => {
+    // With a trustResolver wired, the verify await runs — and the
+    // `chain-verify-start` trace is emitted SYNCHRONOUSLY before it, so a
+    // hang inside verifySignedByChain would leave chain-verify-start in
+    // the log with no chain-verified. An adapter-originated dispatch has
+    // an empty signed_by[] (rejectEmpty: false) → verification passes.
+    const cortex = agentFixtureForRunner({
+      id: "cortex",
+      trust: ["cortex"],
+      nkey_pub: "U" + "B".repeat(55),
+    });
+    const resolver = runnerResolverWith(cortex);
+    const r = recordingRuntime();
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      trustResolver: resolver,
+      receivingAgentId: "cortex",
+      principalId: "andreas",
+      cryptoVerify: false,
+      traceDispatch: true,
+    });
+    await listener.start();
+
+    // Empty signed_by[] (adapter-originated) → verification passes.
+    r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const stages = traceStages(r.published);
+    // chain-verify-start lands immediately before chain-verified, between
+    // recipient-validated and policy-decision.
+    expect(stages).toEqual([
+      "received",
+      "subject-matched",
+      "parsed",
+      "recipient-validated",
+      "chain-verify-start",
+      "chain-verified",
+      "policy-decision",
+      "session-spawning",
+      "started",
+    ]);
+    const start = stages.indexOf("chain-verify-start");
+    const verified = stages.indexOf("chain-verified");
+    expect(start).toBeGreaterThanOrEqual(0);
+    // start strictly precedes verified — the bracket is correctly ordered.
+    expect(start).toBeLessThan(verified);
+  });
+
+  test("recipient-mismatch path emits a recipient-validated fail trace", async () => {
+    const r = recordingRuntime();
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      traceDispatch: true,
+    });
+    await listener.start();
+
+    // Canonical subject targets cortex, but the envelope's target_assistant
+    // / payload agent disagree → recipient mismatch.
+    const env = makeReceivedEnvelope({ agent_id: "cortex" });
+    // Subject's assistant segment (@did-mf-other) won't match the
+    // envelope target (did:mf:cortex) → mismatch.
+    r.trigger(env, "local.metafactory.tasks.@did-mf-other.chat");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const stages = traceStages(r.published);
+    // received → subject-matched (tasks.*.> matches) → parsed →
+    // recipient-mismatch FAIL (stops here).
+    expect(stages).toEqual([
+      "received",
+      "subject-matched",
+      "parsed",
+      "recipient-mismatch",
+    ]);
+    const recipient = traceEnvelopes(r.published).find(
+      (e) => e.payload.stage === "recipient-mismatch",
+    );
+    expect(recipient?.payload.outcome).toBe("fail");
+  });
+});

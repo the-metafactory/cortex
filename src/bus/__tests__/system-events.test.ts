@@ -20,6 +20,7 @@ import {
   createSystemAdapterDegradedEvent,
   createSystemAdapterDisconnectedEvent,
   createSystemAdapterRecoveredEvent,
+  createSystemDispatchStageEvent,
   createSystemInboundAbortedEvent,
 } from "../system-events";
 
@@ -613,5 +614,152 @@ describe("createAgentHeartbeatEvent", () => {
       expect(env.payload.phase).toBe(phase);
       expect(validateEnvelope(env).ok).toBe(true);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#492 — `system.dispatch.stage`
+// ---------------------------------------------------------------------------
+
+describe("createSystemDispatchStageEvent", () => {
+  const CORRELATION_UUID = "33333333-3333-4333-8333-333333333333";
+  const TASK_UUID = "44444444-4444-4444-8444-444444444444";
+
+  test("required fields populated; envelope passes schema validation", () => {
+    const env = createSystemDispatchStageEvent({
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
+      correlationId: CORRELATION_UUID,
+      taskId: TASK_UUID,
+      stage: "received",
+      outcome: "info",
+    });
+    expect(env.type).toBe("system.dispatch.stage");
+    expect(env.source).toBe("metafactory.cortex.local");
+    // UUID correlation mirrors onto the envelope field AND the payload.
+    expect(env.correlation_id).toBe(CORRELATION_UUID);
+    expect(env.payload).toEqual({
+      correlation_id: CORRELATION_UUID,
+      task_id: TASK_UUID,
+      stage: "received",
+      outcome: "info",
+    });
+    expect(env.sovereignty).toEqual({
+      classification: "local",
+      data_residency: "NZ",
+      max_hop: 0,
+      frontier_ok: false,
+      model_class: "local-only",
+    });
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("optional subject / agent_id / detail land in payload when supplied", () => {
+    const env = createSystemDispatchStageEvent({
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
+      correlationId: CORRELATION_UUID,
+      taskId: TASK_UUID,
+      stage: "policy-decision",
+      outcome: "fail",
+      subject: "local.metafactory.tasks.@did-mf-cortex.chat",
+      agentId: "cortex",
+      detail: "unknown_principal",
+    });
+    expect(env.payload).toEqual({
+      correlation_id: CORRELATION_UUID,
+      task_id: TASK_UUID,
+      stage: "policy-decision",
+      outcome: "fail",
+      subject: "local.metafactory.tasks.@did-mf-cortex.chat",
+      agent_id: "cortex",
+      detail: "unknown_principal",
+    });
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("non-UUID correlationId rides payload only (not the envelope field)", () => {
+    // The envelope schema constrains correlation_id to UUID; a feature-id
+    // style key (e.g. a task label) still has to join, so it lives on the
+    // payload and is omitted from the envelope field rather than failing
+    // validation.
+    const env = createSystemDispatchStageEvent({
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
+      correlationId: "task-not-a-uuid",
+      taskId: "task-not-a-uuid",
+      stage: "subject-rejected",
+      outcome: "fail",
+      subject: "local.someoneelse.tasks.@did-mf-other.chat",
+    });
+    expect(env.correlation_id).toBeUndefined();
+    expect(env.payload.correlation_id).toBe("task-not-a-uuid");
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("every stage + outcome combination produces a schema-valid envelope", () => {
+    const stages = [
+      "received",
+      "subject-matched",
+      "subject-rejected",
+      "federation-gated",
+      "parsed",
+      "malformed",
+      "recipient-validated",
+      "recipient-mismatch",
+      "chain-verify-start",
+      "chain-verified",
+      "chain-rejected",
+      "policy-decision",
+      "session-spawning",
+      "started",
+    ] as const;
+    const outcomes = ["pass", "fail", "info"] as const;
+    for (const stage of stages) {
+      for (const outcome of outcomes) {
+        const env = createSystemDispatchStageEvent({
+          source: {
+            principal: "metafactory",
+            agent: "cortex",
+            instance: "local",
+          },
+          correlationId: CORRELATION_UUID,
+          taskId: TASK_UUID,
+          stage,
+          outcome,
+        });
+        expect(env.payload.stage).toBe(stage);
+        expect(env.payload.outcome).toBe(outcome);
+        expect(validateEnvelope(env).ok).toBe(true);
+      }
+    }
+  });
+
+  test("explicit classification override propagates to sovereignty", () => {
+    const env = createSystemDispatchStageEvent({
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
+      correlationId: CORRELATION_UUID,
+      taskId: TASK_UUID,
+      stage: "received",
+      outcome: "info",
+      classification: "federated",
+    });
+    expect(env.sovereignty?.classification).toBe("federated");
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("each invocation returns a fresh UUID id", () => {
+    const a = createSystemDispatchStageEvent({
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
+      correlationId: CORRELATION_UUID,
+      taskId: TASK_UUID,
+      stage: "received",
+      outcome: "info",
+    });
+    const b = createSystemDispatchStageEvent({
+      source: { principal: "metafactory", agent: "cortex", instance: "local" },
+      correlationId: CORRELATION_UUID,
+      taskId: TASK_UUID,
+      stage: "received",
+      outcome: "info",
+    });
+    expect(a.id).not.toBe(b.id);
   });
 });

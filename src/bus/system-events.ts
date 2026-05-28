@@ -55,6 +55,7 @@ import type { Classification, Envelope } from "./myelin/envelope-validator";
 import { buildBaseEnvelope } from "./envelope-builder";
 import type { AgentHeartbeatPayload } from "../common/types/agent-heartbeat";
 import { AGENT_HEARTBEAT_TYPE } from "../common/types/agent-heartbeat";
+import { isUuid } from "../common/types/uuid";
 
 /**
  * Source identifier used by every `system.*` event. Three dotted segments
@@ -1003,5 +1004,146 @@ export function createAgentHeartbeatEvent(
     sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
     correlationId: opts.correlationId,
     payload: payload as unknown as Record<string, unknown>,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// system.dispatch.stage — cortex#492 dispatch-pipeline trace events
+// ---------------------------------------------------------------------------
+
+/**
+ * The pipeline stages a dispatch passes through inside the runner's
+ * `handleDispatchEnvelope` (plus the `onEnvelope` fan-out entry). Each
+ * value names a single gate or transition; the `outcome` discriminates
+ * pass vs. fail at that gate. Surfaces (signal, the MC dashboard) can
+ * project the trace stream and see EXACTLY how far a dispatch got before
+ * it stalled / returned — the cortex#491 silent-drop would have been a
+ * 2-minute diagnosis with this.
+ *
+ * Stages mirror the gate order in `dispatch-listener.ts`. The `*-start`
+ * stages bracket a long await (chain verification) so a hang INSIDE that
+ * await is still visible — the `-start` line lands synchronously before
+ * the await; the absence of the matching terminal stage pinpoints the
+ * stall.
+ *
+ *   - `received`            — runtime fan-out reached the listener handler
+ *                              (handler ENTRY, before subject filtering).
+ *   - `subject-matched`     — wire subject matched a declared pattern.
+ *   - `subject-rejected`    — wire subject matched NO declared pattern
+ *                              (the silent `return` at the top of the
+ *                              `onEnvelope` handler — cortex#491's hidden gap).
+ *   - `federation-gated`    — federation accept/deny gate ran (`outcome`
+ *                              carries allow vs deny).
+ *   - `parsed` / `malformed`— `dispatch.task.received` payload validated
+ *                              (pass) or rejected (fail).
+ *   - `recipient-validated` / `recipient-mismatch` — canonical-task
+ *                              recipient agreed with the envelope target.
+ *   - `chain-verify-start`  — IMMEDIATELY before the `verifySignedByChain`
+ *                              await (a prime stall suspect — emitted
+ *                              synchronously so a hang in verify is visible).
+ *   - `chain-verified` / `chain-rejected` — verification settled (pass/fail).
+ *   - `policy-decision`     — PolicyEngine allow/deny gate ran (`outcome`).
+ *   - `session-spawning`    — IMMEDIATELY before `harness.dispatch(req)`
+ *                              (the CC spawn — emitted before draining).
+ *   - `started`             — the first harness lifecycle envelope drained.
+ */
+export type SystemDispatchStage =
+  | "received"
+  | "subject-matched"
+  | "subject-rejected"
+  | "federation-gated"
+  | "parsed"
+  | "malformed"
+  | "recipient-validated"
+  | "recipient-mismatch"
+  | "chain-verify-start"
+  | "chain-verified"
+  | "chain-rejected"
+  | "policy-decision"
+  | "session-spawning"
+  | "started";
+
+/**
+ * Outcome of a stage. `pass` = the gate admitted the dispatch and it
+ * proceeded; `fail` = the gate rejected / short-circuited (a deny, a
+ * mismatch, a malformed payload). `info` = a non-gating transition
+ * (e.g. `received`, `harness-dispatched`) where there is no pass/fail
+ * branch — the stage simply happened.
+ */
+export type SystemDispatchStageOutcome = "pass" | "fail" | "info";
+
+export interface SystemDispatchStageOpts {
+  source: SystemEventSource;
+  /**
+   * Workflow correlation key — the originating envelope's `correlation_id`
+   * (or `payload.task_id` fallback). Carried on `payload.correlation_id`
+   * always; mirrored onto `envelope.correlation_id` ONLY when it is a
+   * valid UUID (the envelope schema constrains `correlation_id` to UUID
+   * format — see the file-level "Known spec gap" note). A non-UUID value
+   * still rides the payload so surfaces can join on it regardless.
+   */
+  correlationId: string;
+  /** Dispatch task id — `payload.task_id` for the dispatch being traced. */
+  taskId: string;
+  /** The stage being reported. See {@link SystemDispatchStage}. */
+  stage: SystemDispatchStage;
+  /** Pass / fail / info at this stage. See {@link SystemDispatchStageOutcome}. */
+  outcome: SystemDispatchStageOutcome;
+  /** Wire subject the dispatch arrived on (if known). */
+  subject?: string;
+  /** Executing agent id (`payload.agent_id`) when parsed. */
+  agentId?: string;
+  /**
+   * Optional free-form detail — a deny reason kind, a mismatch message,
+   * the verification rejection. Lets a triaging principal read the
+   * "why" of a `fail` without joining to the matching
+   * `system.access.denied` / `dispatch.task.failed` envelope.
+   */
+  detail?: string;
+  /**
+   * Optional sovereignty classification override. Defaults to `"local"`
+   * — dispatch-stage traces are principal-internal operational telemetry,
+   * matching the rest of `system.*`.
+   */
+  classification?: Classification;
+}
+
+/**
+ * Construct a `system.dispatch.stage` trace envelope (cortex#492).
+ *
+ * Emitted at each stage of the runner's inbound dispatch path WHEN
+ * tracing is enabled (`CORTEX_TRACE_DISPATCH=1` or `tracing.dispatch:
+ * true`). Off by default — no caller emits these unless the operator
+ * opts in, so there is zero overhead in the default configuration.
+ *
+ * The envelope is principal-local (`system.*` convention) and joins to
+ * the dispatch's lifecycle envelopes via `correlation_id`. `task_id`,
+ * `stage`, and `outcome` are always present; `subject` / `agent_id` /
+ * `detail` ride when the emit site knows them.
+ *
+ * Subject convention: `local.{principal}.system.dispatch.stage` — surfaces
+ * subscribe to `system.dispatch.>` (or the broader `system.>`) for the
+ * trace stream.
+ */
+export function createSystemDispatchStageEvent(
+  opts: SystemDispatchStageOpts,
+): Envelope {
+  return buildBaseEnvelope({
+    type: "system.dispatch.stage",
+    source: buildSource(opts.source),
+    sovereignty: defaultSystemSovereignty(opts.source, opts.classification),
+    // The envelope schema constrains `correlation_id` to UUID format; only
+    // mirror onto the envelope field when the value qualifies. The payload
+    // always carries it so the join key is never lost.
+    ...(isUuid(opts.correlationId) && { correlationId: opts.correlationId }),
+    payload: {
+      correlation_id: opts.correlationId,
+      task_id: opts.taskId,
+      stage: opts.stage,
+      outcome: opts.outcome,
+      ...(opts.subject !== undefined && { subject: opts.subject }),
+      ...(opts.agentId !== undefined && { agent_id: opts.agentId }),
+      ...(opts.detail !== undefined && { detail: opts.detail }),
+    },
   });
 }
