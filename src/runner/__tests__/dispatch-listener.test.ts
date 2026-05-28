@@ -2042,6 +2042,66 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     ]);
   });
 
+  test("[cortex#480] cryptoVerify:true + envelope self-signed by stack identity → allow (own-stack short-circuit)", async () => {
+    // Pre-fix repro: adapter-originated dispatches (Discord chat) reach
+    // the runner stamped by the stack identity `did:mf:<principal>-
+    // <stack>`. The stack is NOT in the agent registry, so the verifier
+    // rejected as `unknown_agent` and the CC session never spawned.
+    // cortex#480 wires `stackIdentity` + `stackNKeyPub` through so the
+    // verifier short-circuits the registry lookup AND the crypto pass
+    // has the stack pubkey registered as a Principal for bytes-check.
+    const { nkeyPub: stackNKey, privateKeyBase64: stackSeed } =
+      generateEd25519KeyPairForRunner();
+    const stackIdentity = "did:mf:andreas-meta-factory";
+    // Agent registry holds ONLY cortex/luna. The stack DID is not in
+    // it. Pre-fix would reject this as `unknown_agent` agentId=
+    // `andreas-meta-factory`.
+    const cortex = agentFixtureForRunner({ id: "cortex", trust: [] });
+    const resolver = runnerResolverWith(cortex);
+
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      router,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      trustResolver: resolver,
+      receivingAgentId: "cortex",
+      principalId: "andreas",
+      cryptoVerify: true,
+      stackIdentity,
+      stackNKeyPub: stackNKey,
+    });
+    await listener.start();
+    await router.start();
+
+    const base = makeReceivedEnvelope() as Parameters<typeof signEnvelope>[0];
+    const signed = await signEnvelope(base, stackSeed, stackIdentity);
+
+    r.trigger(signed, CANONICAL_CORTEX_CHAT_SUBJECT);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Verifier short-circuits on stackIdentity match (no registry hit
+    // needed); crypto pass finds the stack registered in the bridged
+    // IdentityRegistry and verifies bytes. The policy engine in this
+    // test's fixture doesn't list the stack DID as a principal, so
+    // the dispatch is denied DOWNSTREAM of the verifier with
+    // `unknown_principal` — NOT with `chain_verification_failed`.
+    // That distinction is the entire point of this test: pre-fix the
+    // verifier rejected as `unknown_agent` and no policy gate ran.
+    const denied = r.published.find((e) => e.type === "system.access.denied");
+    expect(denied).toBeDefined();
+    const reason = denied!.payload.reason as { kind: string };
+    expect(reason.kind).not.toBe("chain_verification_failed");
+    // unknown_principal is the expected post-verifier policy decision
+    // for a stack DID that isn't enumerated in the test's
+    // PolicyEngine principals[].
+    expect(reason.kind).toBe("unknown_principal");
+  });
+
   test("[6] cryptoVerify:true + tampered signature → chain_verification_failed deny", async () => {
     const { nkeyPub, privateKeyBase64 } = generateEd25519KeyPairForRunner();
     const cortex = agentFixtureForRunner({

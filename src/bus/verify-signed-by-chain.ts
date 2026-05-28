@@ -194,6 +194,39 @@ export interface VerifySignedByChainOptions {
    * myelin: 5 minutes.
    */
   clockSkewMs?: number;
+  /**
+   * The receiving stack's own signing DID (e.g.
+   * `did:mf:andreas-meta-factory`). When supplied, any stamp whose
+   * `identity` matches this DID short-circuits the structural
+   * agent-registry + trust-list lookup and is treated as accepted
+   * — every cortex stack implicitly trusts its own signing identity.
+   *
+   * Rationale (cortex#480): adapter-originated dispatches are signed
+   * with the STACK identity (`did:mf:<principal>-<stack>`), not an
+   * agent identity. The agent registry holds agents (luna/echo/forge)
+   * — looking up the stack DID in it is structurally wrong and yields
+   * `unknown_agent`. The stack is the receiver; it always has
+   * private-key authority for its own DID.
+   *
+   * When `cryptoVerify: true` AND a stamp matches `stackIdentity`,
+   * the crypto-verify pass still runs against `stackNKeyPub` — being
+   * the stack short-circuits the *trust* check, not the *bytes*
+   * check. Forged bytes claiming the stack identity still fail.
+   */
+  stackIdentity?: string;
+  /**
+   * The receiving stack's signing NKey public key (`U` + 55 base32
+   * chars). Required when `stackIdentity` is set AND `cryptoVerify: true`
+   * so the bridge into myelin's `IdentityRegistry` can register the
+   * stack as a Principal whose `public_key` is the base64-encoded raw
+   * ed25519 pubkey. Without this the crypto layer would reject the
+   * self-signed stamp as `principal_not_registered` even though the
+   * structural check accepted it.
+   *
+   * Ignored when `cryptoVerify: false` — structural-only verification
+   * uses `stackIdentity` alone (the short-circuit is the whole point).
+   */
+  stackNKeyPub?: string;
 }
 
 // =============================================================================
@@ -269,6 +302,16 @@ export async function verifySignedByChain(
     const registry = buildIdentityRegistry(
       opts.resolver.getRegistry(),
       opts.principalId,
+      // cortex#480 — register the receiving stack as a Principal so the
+      // self-signed adapter-originated dispatches verify against the
+      // stack's own NKey pubkey. Only registered when both fields are
+      // set; missing either is a no-op (structural short-circuit above
+      // still handles the trust side, and crypto will reject as
+      // principal_not_registered which is the correct signal that the
+      // stack identity wasn't fully wired through).
+      opts.stackIdentity !== undefined && opts.stackNKeyPub !== undefined
+        ? { identity: opts.stackIdentity, nkeyPub: opts.stackNKeyPub }
+        : undefined,
     );
     // Myelin's verifier expects `signed_by` normalised to array form;
     // cortex's `Envelope` keeps the back-compat shim of single-stamp
@@ -354,6 +397,19 @@ function verifyOneStamp(
     };
   }
 
+  // cortex#480 — implicit own-stack trust. When the stamp's identity
+  // matches the receiving stack's signing DID (e.g. adapter-originated
+  // dispatches signed by `did:mf:<principal>-<stack>` via the
+  // MyelinRuntime publish path), short-circuit the agent-registry /
+  // trust-list lookup: the stack is NOT an agent, looking it up in the
+  // agent registry yields `unknown_agent`, but the receiving stack
+  // ALWAYS has private-key authority for its own DID. The crypto-verify
+  // pass below still runs against `stackNKeyPub` — short-circuit the
+  // *trust* check, not the *bytes* check.
+  if (opts.stackIdentity !== undefined && principal === opts.stackIdentity) {
+    return { kind: "accept" };
+  }
+
   const registry = opts.resolver.getRegistry();
   const agent = registry.tryGetById(agentId);
   if (!agent) {
@@ -419,6 +475,20 @@ function verifyOneStamp(
 export function buildIdentityRegistry(
   agentRegistry: AgentRegistry,
   principalId: string,
+  /**
+   * cortex#480 — optionally register the receiving stack's own signing
+   * identity as a Principal so self-signed envelopes (adapter-originated
+   * dispatches stamped by the stack DID via MyelinRuntime.publish)
+   * verify their bytes in the crypto-verify pass. The structural short-
+   * circuit in `verifyOneStamp` admits the stamp on trust; this entry
+   * makes the bytes-check find a registered Principal to verify against.
+   *
+   * `type: "stack"` (vs. "agent") differentiates the registry entry —
+   * myelin's verifier doesn't currently key off type, but tagging
+   * preserves the soma vocabulary distinction (principal/stack/agent
+   * are not the same thing).
+   */
+  stack?: { identity: string; nkeyPub: string },
 ): IdentityRegistry {
   const registry = createInMemoryRegistry();
   const createdAt = new Date(0).toISOString();
@@ -442,6 +512,22 @@ export function buildIdentityRegistry(
       type: "agent",
       created_at: createdAt,
     });
+  }
+  if (stack !== undefined) {
+    const stackPublicKey = nkeyToBase64Pubkey(stack.nkeyPub);
+    if (stackPublicKey !== undefined) {
+      registry.add({
+        id: stack.identity,
+        display_name: stack.identity,
+        network: principalId,
+        public_key: stackPublicKey,
+        // myelin's `Identity.type` union accepts "agent" — there isn't
+        // a distinct "stack" enum value at this slice. Tagging as agent
+        // for now; semantic distinction lives in cortex's own vocab.
+        type: "agent",
+        created_at: createdAt,
+      });
+    }
   }
   return registry;
 }

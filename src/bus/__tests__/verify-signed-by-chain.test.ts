@@ -512,6 +512,123 @@ describe("verifySignedByChain — cryptoVerify (B.1c)", () => {
     }
   });
 
+  test("[cortex#480] cryptoVerify accepts a self-signed envelope from the receiving stack", async () => {
+    // The stack has private-key authority for its own DID. Adapter-
+    // originated dispatches arrive signed by the stack identity
+    // (`did:mf:<principal>-<stack>`), NOT by an agent in the registry.
+    // The verifier must short-circuit + bytes-check against the stack's
+    // own NKey.
+    const stackIdentity = "did:mf:andreas-meta-factory";
+    const { nkeyPub: stackNKeyPub, privateKeyBase64: stackSeed } =
+      generateEd25519KeyPair();
+    // Only luna is registered as an agent. The stack identity is NOT.
+    const luna = agentFixture({ id: "luna", trust: [] });
+    const resolver = resolverWith(luna);
+
+    const base = envelopeWithChain(undefined) as Parameters<
+      typeof signEnvelope
+    >[0];
+    const signed = await signEnvelope(base, stackSeed, stackIdentity);
+
+    const result = await verifySignedByChain(signed, {
+      resolver,
+      receivingAgentId: "luna",
+      cryptoVerify: true,
+      principalId: "andreas",
+      stackIdentity,
+      stackNKeyPub,
+    });
+
+    expect(result.valid).toBe(true);
+  });
+
+  test("[cortex#480] structural-only own-stack short-circuit (no agent registry hit needed)", async () => {
+    const stackIdentity = "did:mf:andreas-meta-factory";
+    const luna = agentFixture({ id: "luna", trust: [] });
+    const resolver = resolverWith(luna);
+
+    // Stamp claims the stack identity. The stack is NOT in the agent
+    // registry — pre-fix this would reject as `unknown_agent`.
+    const env = envelopeWithChain([ed25519Stamp(stackIdentity)]);
+    const result = await verifySignedByChain(env, {
+      resolver,
+      receivingAgentId: "luna",
+      stackIdentity,
+      // cryptoVerify deliberately omitted — structural-only path
+      // exercises the short-circuit in isolation.
+    });
+
+    expect(result.valid).toBe(true);
+  });
+
+  test("[cortex#480] rejects when stack DID does NOT match opts.stackIdentity", async () => {
+    // Defence in depth: a stamp claiming a *different* stack DID does
+    // NOT get the short-circuit; it falls back to the registry lookup
+    // and is rejected as `unknown_agent`.
+    const luna = agentFixture({ id: "luna", trust: [] });
+    const resolver = resolverWith(luna);
+
+    const env = envelopeWithChain([
+      ed25519Stamp("did:mf:other-stack"),
+    ]);
+    const result = await verifySignedByChain(env, {
+      resolver,
+      receivingAgentId: "luna",
+      stackIdentity: "did:mf:andreas-meta-factory",
+    });
+
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.reason.kind).toBe("unknown_agent");
+    }
+  });
+
+  test("[cortex#480] cryptoVerify rejects tampered self-signed stack envelope", async () => {
+    // Short-circuit handles TRUST; bytes-check still runs and catches
+    // forgery claiming the stack identity.
+    const stackIdentity = "did:mf:andreas-meta-factory";
+    const { nkeyPub: stackNKeyPub, privateKeyBase64: stackSeed } =
+      generateEd25519KeyPair();
+    const luna = agentFixture({ id: "luna", trust: [] });
+    const resolver = resolverWith(luna);
+
+    const base = envelopeWithChain(undefined) as Parameters<
+      typeof signEnvelope
+    >[0];
+    const signed = await signEnvelope(base, stackSeed, stackIdentity);
+
+    const chain = Array.isArray(signed.signed_by)
+      ? signed.signed_by
+      : signed.signed_by
+        ? [signed.signed_by]
+        : [];
+    const firstStamp = chain[0];
+    if (firstStamp?.method !== "ed25519") {
+      throw new Error("test fixture: expected ed25519 stamp at index 0");
+    }
+    const tamperedSig = firstStamp.signature.startsWith("A")
+      ? "B" + firstStamp.signature.slice(1)
+      : "A" + firstStamp.signature.slice(1);
+    const tamperedEnvelope: Envelope = {
+      ...signed,
+      signed_by: [{ ...firstStamp, signature: tamperedSig }],
+    };
+
+    const result = await verifySignedByChain(tamperedEnvelope, {
+      resolver,
+      receivingAgentId: "luna",
+      cryptoVerify: true,
+      principalId: "andreas",
+      stackIdentity,
+      stackNKeyPub,
+    });
+
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.reason.kind).toBe("crypto_verify_failed");
+    }
+  });
+
   test("cryptoVerify throws when principalId is missing", async () => {
     // Agent must have an nkey_pub + be self-trusted so the structural
     // check passes and the cryptoVerify-without-principalId branch is

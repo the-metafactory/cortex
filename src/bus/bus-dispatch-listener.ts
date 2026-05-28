@@ -90,6 +90,20 @@ export interface BusDispatchListenerOpts {
    * the missing piece is config-side opt-in).
    */
   cryptoVerify?: boolean;
+  /**
+   * cortex#480 — the receiving stack's signing DID
+   * (e.g. `did:mf:andreas-meta-factory`). When supplied, stamps whose
+   * `identity` matches short-circuit the agent-registry / trust-list
+   * lookup — every cortex stack implicitly trusts its own signing
+   * identity. See `verify-signed-by-chain.ts` JSDoc for rationale.
+   */
+  stackIdentity?: string;
+  /**
+   * cortex#480 — the receiving stack's NKey public key. Required
+   * alongside `stackIdentity` when `cryptoVerify: true` so the bytes
+   * check has a registered Principal to verify against.
+   */
+  stackNKeyPub?: string;
 }
 
 // =============================================================================
@@ -103,6 +117,8 @@ export class BusDispatchListener {
   private readonly principalId: string;
   private readonly source: SystemEventSource;
   private readonly cryptoVerify: boolean;
+  private readonly stackIdentity: string | undefined;
+  private readonly stackNKeyPub: string | undefined;
 
   private registration: { unregister: () => void } | undefined;
   /**
@@ -121,6 +137,8 @@ export class BusDispatchListener {
     this.principalId = opts.principalId;
     this.source = opts.source;
     this.cryptoVerify = opts.cryptoVerify ?? false;
+    this.stackIdentity = opts.stackIdentity;
+    this.stackNKeyPub = opts.stackNKeyPub;
   }
 
   /**
@@ -228,6 +246,12 @@ export class BusDispatchListener {
       rejectEmpty: true,
       cryptoVerify: this.cryptoVerify,
       principalId: this.principalId,
+      ...(this.stackIdentity !== undefined && {
+        stackIdentity: this.stackIdentity,
+      }),
+      ...(this.stackNKeyPub !== undefined && {
+        stackNKeyPub: this.stackNKeyPub,
+      }),
     });
 
     if (!verification.valid) {

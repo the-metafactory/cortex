@@ -291,6 +291,21 @@ export interface DispatchListenerOptions {
    * that supply only one configure deliberately incomplete state).
    */
   receivingAgentId?: string;
+  /**
+   * cortex#480 — the receiving stack's signing DID (e.g.
+   * `did:mf:andreas-meta-factory`). Threaded through to
+   * `verifySignedByChain` so adapter-originated dispatches signed by
+   * the stack identity short-circuit the agent-registry membership
+   * check (the stack is the receiver, not an agent in the registry).
+   */
+  stackIdentity?: string;
+  /**
+   * cortex#480 — the receiving stack's NKey public key. Required
+   * alongside `stackIdentity` when `cryptoVerify: true` (the
+   * production default) so the bytes-check has a registered
+   * Principal to verify against.
+   */
+  stackNKeyPub?: string;
 }
 
 export interface DispatchListener {
@@ -384,6 +399,8 @@ export function createDispatchListener(
     trustResolver,
     receivingAgentId,
     principalId,
+    stackIdentity,
+    stackNKeyPub,
     adapterId = "runner-dispatch-listener",
   } = opts;
   // v2.0.2 default: structural trust + ed25519 crypto verification.
@@ -431,6 +448,8 @@ export function createDispatchListener(
         cryptoVerify,
         principalId,
         receivingAgentId,
+        stackIdentity,
+        stackNKeyPub,
       }),
   };
 
@@ -619,6 +638,10 @@ interface DispatchHandlerContext {
   cryptoVerify: boolean;
   principalId: string | undefined;
   receivingAgentId: string | undefined;
+  /** cortex#480 — receiving stack's signing DID for own-stack trust. */
+  stackIdentity: string | undefined;
+  /** cortex#480 — receiving stack's NKey pubkey for crypto-verify pass. */
+  stackNKeyPub: string | undefined;
 }
 
 async function handleDispatchEnvelope(
@@ -637,6 +660,8 @@ async function handleDispatchEnvelope(
     cryptoVerify,
     principalId,
     receivingAgentId,
+    stackIdentity,
+    stackNKeyPub,
   } = ctx;
   const payload = parsePayload(envelope);
   if (!payload) {
@@ -724,6 +749,10 @@ async function handleDispatchEnvelope(
         rejectEmpty: false,
         cryptoVerify,
         ...(cryptoVerify && principalId !== undefined && { principalId }),
+        // cortex#480 — own-stack trust short-circuit + crypto registry
+        // entry for self-signed adapter-originated dispatches.
+        ...(stackIdentity !== undefined && { stackIdentity }),
+        ...(stackNKeyPub !== undefined && { stackNKeyPub }),
       });
     } catch (err) {
       // `verifySignedByChain` throws when `cryptoVerify: true` and

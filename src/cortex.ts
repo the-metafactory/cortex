@@ -434,6 +434,13 @@ export async function startCortex(
   // runtime publishes unsigned. The error surfaces to principal logs
   // so they can fix the seed file and restart.
   let signer: BusEnvelopeSigner | undefined;
+  // cortex#480 — receiving stack's NKey public key for the chain
+  // verifier's own-stack short-circuit (structural) + crypto-registry
+  // entry (bytes-check). Captured from the loaded keypair below so the
+  // signer-side and verifier-side use the SAME key — eliminates a
+  // split-brain hazard where signer.publish stamps with key A but the
+  // verifier short-circuits on declared-but-stale key B.
+  let stackNKeyPubForVerifier: string | undefined;
   if (options.stack?.nkey_seed_path) {
     try {
       // `expandTilde` matches `NatsLink.connect`'s treatment of
@@ -485,6 +492,11 @@ export async function startCortex(
       }
 
       signer = { rawSeedBytes, principal };
+      // cortex#480 — capture the stack's NKey public key so the chain
+      // verifier can short-circuit + bytes-check self-signed envelopes.
+      // `kp.getPublicKey()` is the U-prefixed base32 NATS NKey, the
+      // same shape the verifier's `nkeyToBase64Pubkey` consumes.
+      stackNKeyPubForVerifier = kp.getPublicKey();
       // Soften wording: the runtime may still fail to start; the
       // signer is only "active" once `startMyelinRuntime` returns an
       // enabled runtime. Boot-log clarity matters more than terseness
@@ -1152,6 +1164,15 @@ export async function startCortex(
       // renamed the constructor parameter to `principalId`.
       principalId,
       source: systemEventSource,
+      // cortex#480 — implicit own-stack trust. When the stack has a
+      // signing key staged (signer !== undefined), pass the DID and
+      // NKey pubkey so peer-dispatch envelopes signed by THIS stack
+      // (e.g. loopback / future federated self-relays) verify cleanly
+      // instead of being rejected as unknown_agent.
+      ...(signer !== undefined && { stackIdentity: signer.principal }),
+      ...(stackNKeyPubForVerifier !== undefined && {
+        stackNKeyPub: stackNKeyPubForVerifier,
+      }),
     });
     busDispatchListener.start();
     console.log(
@@ -1864,6 +1885,15 @@ export async function startCortex(
     cryptoVerify: true,
     principalId,
     ...(firstAgent !== undefined && { receivingAgentId: firstAgent.id }),
+    // cortex#480 — implicit own-stack trust. Adapter-originated
+    // dispatches are signed by the stack identity (`did:mf:<principal>-
+    // <stack>`) via MyelinRuntime.publish; without this the verifier
+    // rejects them as `unknown_agent` because the stack is not in the
+    // agent registry. The stack is the RECEIVER; trust is implicit.
+    ...(signer !== undefined && { stackIdentity: signer.principal }),
+    ...(stackNKeyPubForVerifier !== undefined && {
+      stackNKeyPub: stackNKeyPubForVerifier,
+    }),
   });
   await dispatchListener.start();
 

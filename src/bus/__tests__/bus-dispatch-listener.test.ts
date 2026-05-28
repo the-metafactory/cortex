@@ -365,4 +365,48 @@ describe("BusDispatchListener — verification gate", () => {
     expect(stderrOutput).toContain("bus-dispatch-listener:luna");
     expect(stderrOutput).toContain("signer_not_trusted");
   });
+
+  test("[cortex#480] accepts an envelope self-signed by the receiving stack identity", async () => {
+    // Pre-fix repro: an adapter-originated dispatch reaching the
+    // dispatch-listener gets stamped by the stack identity
+    // (`did:mf:<principal>-<stack>`). The stack is NOT in the agent
+    // registry, so the pre-fix verifier rejected as `unknown_agent`.
+    // With cortex#480 wiring the stack-identity option, the listener
+    // short-circuits the registry lookup and emits the visibility
+    // event.
+    const stackIdentity = "did:mf:andreas-meta-factory";
+    const stackNKeyPub = "U" + "D".repeat(55);
+    const luna = agentFixture({ id: "luna", trust: [] });
+    const resolver = resolverWith(luna);
+    const { runtime, published, deliverInbound, drain } = fakeRuntime();
+
+    const listener = new BusDispatchListener({
+      runtime,
+      resolver,
+      receivingAgentId: "luna",
+      principalId: "andreas",
+      source: SOURCE,
+      // cryptoVerify default `false` here so we exercise structural-
+      // only own-stack short-circuit (the prod default for this
+      // listener until B.1c flag flip; the runner-side listener
+      // tested in cortex.ts wiring runs cryptoVerify: true).
+      stackIdentity,
+      stackNKeyPub,
+    });
+    listener.start();
+
+    deliverInbound(
+      peerDispatchEnvelope({
+        signerPrincipal: stackIdentity,
+        source: "andreas.meta-factory.local",
+        id: "00000000-0000-4000-8000-000000000def",
+      }),
+    );
+    await drain();
+
+    expect(published).toHaveLength(1);
+    expect(published[0]?.type).toBe("system.bus.peer_dispatch_received");
+
+    await listener.stop();
+  });
 });
