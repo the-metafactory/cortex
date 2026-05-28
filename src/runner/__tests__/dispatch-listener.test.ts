@@ -539,6 +539,71 @@ describe("dispatch-listener — success path", () => {
     const completed = r.published.find((e) => e.type === "dispatch.task.completed");
     expect(completed).toBeDefined();
     expect(completed?.payload.result_summary).toBe("Hello!");
+    // cortex#491 — the completed envelope ALSO carries the full,
+    // untruncated reply (`chat_response`) for the dispatch sink to post
+    // back as the chat round-trip; `result_summary` stays the first-line
+    // dashboard label.
+    expect(completed?.payload.chat_response).toBe("Hello!\nMore details follow.");
+  });
+
+  test("cortex#491 — echoes response_routing onto every lifecycle envelope", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+    });
+    await listener.start();
+    await router.start();
+
+    const routing = {
+      adapter_instance: "discord-pai-collab",
+      channel_id: "C123",
+      thread_id: "T456",
+    };
+    r.trigger(
+      makeReceivedEnvelope({
+        response_routing: routing,
+      }),
+      CANONICAL_CORTEX_CHAT_SUBJECT,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Every LIFECYCLE envelope (started/completed) carries the echoed
+    // routing so the dispatch sink can target the reply. The audit
+    // envelope (system.access.allowed) is not a lifecycle envelope.
+    const lifecycle = r.published.filter((e) => e.type.startsWith("dispatch.task."));
+    expect(lifecycle.length).toBeGreaterThan(0);
+    for (const env of lifecycle) {
+      expect(env.payload.response_routing).toEqual(routing);
+    }
+  });
+
+  test("cortex#491 — no response_routing on lifecycle when the inbound carried none", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+    });
+    await listener.start();
+    await router.start();
+
+    // bus-peer / Offer style inbound — no response_routing on the payload.
+    r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const lifecycle = r.published.filter((e) => e.type.startsWith("dispatch.task."));
+    expect(lifecycle.length).toBeGreaterThan(0);
+    for (const env of lifecycle) {
+      expect(env.payload.response_routing).toBeUndefined();
+    }
   });
 
   test("CC opts plumbed from payload to factory (snake_case → camelCase)", async () => {

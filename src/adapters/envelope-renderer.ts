@@ -42,7 +42,22 @@ export function formatEnvelopeAsMarkdown(envelope: Envelope): string {
   ].join("\n");
 }
 
-function formatDispatchLifecycle(envelope: Envelope): string | null {
+/**
+ * Render a `dispatch.task.{started|completed|failed|aborted}` lifecycle
+ * envelope to concise reply text, or `null` for any other envelope type.
+ *
+ * Exported (cortex#491) so the **dispatch sink** (`src/adapters/dispatch-sink.ts`)
+ * reuses the SAME text it already produces for the surface-router render
+ * path — one formatter, no drift, no reinvented copy. The sink is the
+ * delivery half (`postResponse`/`sendProgress`); this stays the pure
+ * text half.
+ *
+ * For `dispatch.task.completed` it prefers the FULL untruncated
+ * `chat_response` (cortex#491 — the complete chat round-trip) and falls
+ * back to `result_summary` (the first-line/1000-char dashboard label)
+ * when no full reply was carried — so non-chat dispatches still render.
+ */
+export function formatDispatchLifecycle(envelope: Envelope): string | null {
   const payload = envelope.payload;
   const agent = typeof payload.agent_id === "string" ? payload.agent_id : "agent";
   const label = agent.charAt(0).toUpperCase() + agent.slice(1);
@@ -52,6 +67,10 @@ function formatDispatchLifecycle(envelope: Envelope): string | null {
   }
 
   if (envelope.type === "dispatch.task.completed") {
+    // cortex#491 — full reply when present (chat round-trip), else the
+    // dashboard summary label, else a terse default.
+    const full = typeof payload.chat_response === "string" ? payload.chat_response.trim() : "";
+    if (full) return full;
     const summary = typeof payload.result_summary === "string" ? payload.result_summary.trim() : "Done.";
     return summary || "Done.";
   }

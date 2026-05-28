@@ -1094,10 +1094,59 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
     expect(payload.entity).toBe("issue/409");
     expect(payload.operator).toBe("andreas");
 
+    // cortex#491 — response routing stamped from the inbound message so
+    // the runner can echo it onto lifecycle envelopes and the dispatch
+    // sink can deliver the reply (CONTEXT.md §Response-routing). The
+    // default `makeMsg` has no threadId, so `thread_id` is omitted.
+    expect(payload.response_routing).toEqual({
+      adapter_instance: "mock-instance",
+      channel_id: "ch1",
+    });
+
     // Envelope must validate against the vendored myelin schema —
     // catches any regression where the new envelope shape drifts
     // from the wire contract the dispatch-listener consumes.
     expect(validateEnvelope(envelope).ok).toBe(true);
+
+    await handler.shutdown();
+  });
+
+  test("cortex#491 — response_routing carries thread_id for a threaded message", async () => {
+    const runtime = makeRecordingRuntimeWithSubject();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      runtime,
+      systemEventSource: {
+        principal: "andreas",
+        agent: "cortex",
+        instance: "local",
+      },
+      stack: "meta-factory",
+      policyEngine: makePublishPolicyEngine(),
+    });
+
+    const published = await callPublishInboundDispatchEnvelope(
+      handler,
+      dispatchOpts({
+        msg: makeMsg({
+          platform: "discord",
+          authorId: "1487204875912609844",
+          instanceId: "discord-pai-collab",
+          channelId: "C100",
+          threadId: "T200",
+          content: "hello in a thread",
+        }),
+      }),
+    );
+
+    expect(published).toBe(true);
+    const { envelope } = runtime.subjectPublishes[0]!;
+    expect(envelope.payload.response_routing).toEqual({
+      adapter_instance: "discord-pai-collab",
+      channel_id: "C100",
+      thread_id: "T200",
+    });
 
     await handler.shutdown();
   });

@@ -198,8 +198,10 @@ describe("startCortex — wire-up", () => {
     // dispatch-listener no longer registers as a SurfaceAdapter; instead
     // it calls `runtime.onEnvelope(...)` directly so it can sit outside
     // the router's render-timeout (CC sessions take minutes, renderers
-    // are sub-second). That's two handlers in total post-#484.
-    expect(runtime.onEnvelopeHandlers.size).toBe(2);
+    // are sub-second). cortex#491 adds a THIRD handler: the dispatch sink
+    // (OUTBOUND) self-subscribes to the lifecycle stream via
+    // `runtime.onEnvelope` to deliver replies. Three handlers post-#491.
+    expect(runtime.onEnvelopeHandlers.size).toBe(3);
 
     await handle.stop();
     // Both `router.stop()` and `dispatchListener.stop()` unregister from
@@ -300,9 +302,10 @@ describe("startCortex — wire-up", () => {
       operator: { id: "v3-canonical-op" },
     });
     expect(handle).toBeDefined();
-    // 2 handlers: surface-router fan-out + dispatch-listener (cortex#484
-    // Option D — listener subscribes directly via runtime.onEnvelope).
-    expect(runtime.onEnvelopeHandlers.size).toBe(2);
+    // 3 handlers: surface-router fan-out + dispatch-listener (cortex#484
+    // Option D — listener subscribes directly via runtime.onEnvelope) +
+    // dispatch sink (cortex#491 — OUTBOUND lifecycle delivery).
+    expect(runtime.onEnvelopeHandlers.size).toBe(3);
     await handle.stop();
     expect(runtime.onEnvelopeHandlers.size).toBe(0);
   });
@@ -366,9 +369,12 @@ describe("startCortex — wire-up", () => {
       operator: { id: "test-op" },
     });
     expect(handle).toBeDefined();
-    // 2 handlers: surface-router fan-out + dispatch-listener (cortex#484
-    // Option D). Discord adapter would add a 3rd; disabled → still 2.
-    expect(runtime.onEnvelopeHandlers.size).toBe(2);
+    // 3 handlers: surface-router fan-out + dispatch-listener (cortex#484
+    // Option D) + dispatch sink (cortex#491). The disabled Discord
+    // instance registers NO adapter handler (adapters register with the
+    // surface-router via router.register, not runtime.onEnvelope) — the
+    // count stays at the three core subscribers.
+    expect(runtime.onEnvelopeHandlers.size).toBe(3);
     // No adapter started → no `system.adapter.*` envelope leaked.
     expect(runtime.published).toEqual([]);
     await handle.stop();
@@ -402,9 +408,12 @@ describe("startCortex — wire-up", () => {
       operator: { id: "test-op" },
     });
     expect(handle).toBeDefined();
-    // 2 handlers: surface-router fan-out + dispatch-listener (cortex#484
-    // Option D). Mattermost adapter would add a 3rd; skipped → still 2.
-    expect(runtime.onEnvelopeHandlers.size).toBe(2);
+    // 3 handlers: surface-router fan-out + dispatch-listener (cortex#484
+    // Option D) + dispatch sink (cortex#491). The skipped Mattermost
+    // instance registers NO adapter handler (adapters register with the
+    // surface-router via router.register, not runtime.onEnvelope) — the
+    // count stays at the three core subscribers.
+    expect(runtime.onEnvelopeHandlers.size).toBe(3);
     expect(runtime.published).toEqual([]);
     await handle.stop();
   });

@@ -82,6 +82,7 @@ import {
 import { MattermostAdapter } from "./adapters/mattermost";
 import { SlackAdapter } from "./adapters/slack";
 import type { PlatformAdapter } from "./adapters/types";
+import { createDispatchSink, type DispatchSink } from "./adapters/dispatch-sink";
 
 import { createDispatchListener, type DispatchListener } from "./runner/dispatch-listener";
 import { WorklogManager } from "./runner/worklog-manager";
@@ -1937,6 +1938,34 @@ export async function startCortex(
   });
   await dispatchListener.start();
 
+  // cortex#491 — dispatch sink (OUTBOUND). The single delivery path for
+  // dispatch lifecycle replies (CONTEXT.md §Dispatch-sink). Subscribes to
+  // `local.{principal}[.{stack}].dispatch.task.>` via the runtime
+  // (symmetric with the runner's self-subscribe — NOT via
+  // `surfaceSubjects`, which would be a second, double-replying path),
+  // filters each lifecycle envelope to the adapter instance named by its
+  // echoed `response_routing` (cortex#491 plumbing), renders the text via
+  // `formatDispatchLifecycle` (cortex#497), and posts back to the exact
+  // originating channel/thread via `adapter.postResponse` /
+  // `adapter.sendProgress`. Dormant when the runtime is disabled (no
+  // NATS) or no adapters started.
+  const dispatchSink: DispatchSink = createDispatchSink({
+    runtime,
+    adapters,
+    principal: principalId,
+    // `derivedStack.stack` is always defined in production (boot derives a
+    // stack id); pass it so the sink's subscribe pattern lands on the same
+    // 6-segment grammar the runtime publishes lifecycle envelopes on. The
+    // dispatch-listener wiring above passes `derivedStack.stack` the same
+    // way.
+    stack: derivedStack.stack,
+  });
+  await dispatchSink.start();
+  console.log(
+    `cortex: dispatch-sink started — subjects=[${dispatchSink.subjects.join(", ")}], ` +
+      `adapters=${adapters.length}`,
+  );
+
   // cortex#480 — boot-time self-signed envelope sanity check. After the
   // listeners are wired with `stackIdentity` + `stackNKeyPub`, build a
   // tiny envelope signed by the stack's own NKey and round-trip it
@@ -2074,6 +2103,7 @@ export async function startCortex(
       ...adapterCleanup.map((_, i) => `outbound poller stop[${i}]`),
       ...reviewConsumers.map((c, i) => `review-consumer stop[${i}] (agent=${c.agent.id})`),
       "dispatch-listener stop",
+      "dispatch-sink stop",
       "surface-router stop",
       "dispatch-handler shutdown",
       ...adapterStopNames,
@@ -2123,6 +2153,11 @@ export async function startCortex(
         }
       }
       await completeAsync("dispatch-listener stop", dispatchListener.stop());
+      // cortex#491 — drain the dispatch sink after the runner stops
+      // publishing lifecycle envelopes but before the surface-router /
+      // adapters stop, so no late `postResponse` lands after the
+      // platform connections close. `stop()` is idempotent.
+      await completeAsync("dispatch-sink stop", dispatchSink.stop());
       // IAW B.2a — bus-dispatch-listener drain runs after the dispatch
       // listener (which feeds dispatch-handler) but before the
       // surface-router stop. The listener's `stop()` awaits its

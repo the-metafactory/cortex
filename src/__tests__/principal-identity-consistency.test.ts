@@ -155,10 +155,12 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
       // surface-router AND the dispatch-listener register handlers
       // on the runtime — the listener now subscribes directly
       // (executor-vs-renderer split, see
-      // `src/runner/dispatch-listener.ts` file-header docblock). Two
-      // handlers in total; both carry the resolved principal id in
-      // their derived subjects.
-      expect(runtime.onEnvelopeHandlers.size).toBe(2);
+      // `src/runner/dispatch-listener.ts` file-header docblock).
+      // cortex#491 adds a third: the dispatch sink (OUTBOUND) that
+      // self-subscribes to the lifecycle stream to deliver replies.
+      // Three handlers in total; all carry the resolved principal id
+      // in their derived subjects.
+      expect(runtime.onEnvelopeHandlers.size).toBe(3);
 
       // Stronger structural assertion: simulate an inbound envelope
       // on the V3-canonical subject. The router should accept it
@@ -253,9 +255,9 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
     // candidate.) The positive "v3 wins" assertion is covered by
     // the unit test on `resolvePrincipalId` below.
     //
-    // Post cortex#484 Option D: 2 handlers (surface-router +
-    // dispatch-listener).
-    expect(runtime.onEnvelopeHandlers.size).toBe(2);
+    // Post cortex#484 Option D + cortex#491: 3 handlers (surface-router
+    // + dispatch-listener + dispatch sink).
+    expect(runtime.onEnvelopeHandlers.size).toBe(3);
     await handle.stop();
   });
 
@@ -279,9 +281,9 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
       operator: { id: "v3-canonical-op" },
     });
 
-    // Post cortex#484 Option D: 2 handlers (surface-router +
-    // dispatch-listener).
-    expect(runtime.onEnvelopeHandlers.size).toBe(2);
+    // Post cortex#484 Option D + cortex#491: 3 handlers (surface-router
+    // + dispatch-listener + dispatch sink).
+    expect(runtime.onEnvelopeHandlers.size).toBe(3);
     await handle.stop();
   });
 

@@ -1532,7 +1532,7 @@ function echoResponseRouting(
   responseRouting: ResponseRouting | undefined,
 ): Envelope {
   if (responseRouting === undefined) return env;
-  const payload = (env.payload ?? {}) as Record<string, unknown>;
+  const payload = env.payload;
   if (payload.response_routing !== undefined) return env;
   return {
     ...env,
