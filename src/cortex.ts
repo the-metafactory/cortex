@@ -1255,6 +1255,28 @@ export async function startCortex(
     }
   }
 
+  // v2.0.0 (cortex#297) — build engine + lookup index + principal registry
+  // ONCE so the dispatch handler and the three adapter loops below share
+  // the same instances. The policy block is parsed at config-load time;
+  // the factory + index builders are idempotent over the same input.
+  //
+  // v2.0.1 (cortex#311): retired the `CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK`
+  // env-var gate. PolicyEngine activates whenever a `policy:` block is
+  // declared (which v2.0.0's schema already enforces for boot). The
+  // pre-Phase-B unverified-principal-claim trade-off is now an
+  // informational boot-log notice from the dispatch-listener builder
+  // below — gating it behind an env var created an M-3 split-brain where
+  // adapters denied every inbound while bus dispatches bypassed auth
+  // entirely (Echo PR #310 r1 finding, cortex#311).
+  //
+  // cortex#486 — moved earlier (was constructed just before the discord
+  // adapter loop) so the DispatchHandler can consume the engine for
+  // adapter-side platform-id → principal resolution at envelope-publish
+  // time. See `dispatch-source-publisher` / CONTEXT.md §Dispatch-source.
+  const adapterPolicyEngine = policyEngineFromConfig(options.policy);
+  const adapterPolicyLookup = buildPlatformPrincipalIndex(options.policy);
+  const adapterPolicyRegistry = buildPrincipalRegistry(options.policy);
+
   // Dispatch-handler — synchronous platform-message → CC pipeline.
   //
   // MIG-3.8 / C-104: hand the runtime + systemEventSource down so the handler
@@ -1263,6 +1285,13 @@ export async function startCortex(
   // fields are passed unconditionally — when the runtime is the no-op stub
   // (NATS absent), `MyelinRuntime.publish` is a no-op and emission falls
   // through silently. See `DispatchHandler.canPublishSystemEvent`.
+  //
+  // cortex#486 — `policyEngine` is required for the canonical
+  // dispatch-source envelope publish path. When no `policy:` block is
+  // declared `adapterPolicyEngine` is undefined and the publish fails
+  // closed with `invalid-originator` (deliberate — pre-Phase-B silently
+  // accepted unmapped originators; the v2.0.x policy-gated stack does
+  // not).
   const dispatchHandler = new DispatchHandler({
     config,
     securityPreamble,
@@ -1270,6 +1299,7 @@ export async function startCortex(
     runtime,
     systemEventSource,
     stack: derivedStack.stack,
+    ...(adapterPolicyEngine !== undefined && { policyEngine: adapterPolicyEngine }),
   });
 
   // Cloud publisher (G-401 + G-500) — opt-in via cloud-capable network.
@@ -1334,22 +1364,11 @@ export async function startCortex(
   }
   const startedDiscord: StartedDiscord[] = [];
 
-  // v2.0.0 (cortex#297) — build engine + lookup index + principal registry
-  // ONCE so the three adapter loops below share the same instances. The
-  // policy block is parsed at config-load time; the factory + index
-  // builders are idempotent over the same input.
-  //
-  // v2.0.1 (cortex#311): retired the `CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK`
-  // env-var gate. PolicyEngine activates whenever a `policy:` block is
-  // declared (which v2.0.0's schema already enforces for boot). The
-  // pre-Phase-B unverified-principal-claim trade-off is now an
-  // informational boot-log notice from the dispatch-listener builder
-  // below — gating it behind an env var created an M-3 split-brain where
-  // adapters denied every inbound while bus dispatches bypassed auth
-  // entirely (Echo PR #310 r1 finding, cortex#311).
-  const adapterPolicyEngine = policyEngineFromConfig(options.policy);
-  const adapterPolicyLookup = buildPlatformPrincipalIndex(options.policy);
-  const adapterPolicyRegistry = buildPrincipalRegistry(options.policy);
+  // cortex#486 — `adapterPolicyEngine` / `adapterPolicyLookup` /
+  // `adapterPolicyRegistry` are constructed above (before the
+  // DispatchHandler) so the dispatch-source publish path can consume the
+  // engine for `(platform, authorId) → principal_id` resolution. The
+  // three values are shared with the adapter loops below verbatim.
 
   for (const instance of config.discord) {
     if (!instance.enabled) {

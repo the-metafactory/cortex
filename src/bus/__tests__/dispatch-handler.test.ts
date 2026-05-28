@@ -7,11 +7,45 @@ import type { Envelope } from "../myelin/envelope-validator";
 import type { MyelinRuntime } from "../myelin/runtime";
 import type { DispatchSourcePublishResult } from "../dispatch-source-publisher";
 import { validateEnvelope } from "../myelin/envelope-validator";
+import { PolicyEngine } from "../../common/policy/engine";
 import type {
   CCSessionFactory,
   CCSessionLike,
 } from "../../substrates/claude-code/harness";
 import type { CCSessionResult, CCSessionOpts } from "../../runner/cc-session";
+
+/**
+ * cortex#486 — adapter-side platform-id → principal resolution at
+ * envelope-publish time requires a wired PolicyEngine. This helper
+ * builds an engine that resolves the two `(platform, authorId)` tuples
+ * the publish-path tests use:
+ *
+ *   - `(discord, 1487204875912609844)` → `andreas`
+ *   - `(mattermost, 8wkrnxq3abcdef)` → `andreas`
+ *
+ * Tests that exercise unresolvable inputs (the cortex#420 nit-5
+ * DID-grammar collision case) pass `policyEngine: undefined` so the
+ * publish refuses with `invalid-originator` — same surface, different
+ * root cause from the pre-#486 fallback.
+ */
+function makePublishPolicyEngine(): PolicyEngine {
+  return new PolicyEngine({
+    principals: [
+      {
+        id: "andreas",
+        home_operator: "andreas",
+        home_stack: "andreas/research",
+        role: ["operator"],
+        trust: [],
+        platform_ids: {
+          discord: ["1487204875912609844"],
+          mattermost: ["8wkrnxq3abcdef"],
+        },
+      },
+    ],
+    roles: [{ id: "operator", capabilities: ["dispatch.test-agent"] }],
+  });
+}
 
 // Minimal config that satisfies AgentConfig shape for testing
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
@@ -1006,6 +1040,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
         instance: "local",
       },
       stack: "meta-factory",
+      policyEngine: makePublishPolicyEngine(),
     });
 
     const published = await callPublishInboundDispatchEnvelope(
@@ -1027,9 +1062,11 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
     expect(envelope.type).toBe("tasks.chat");
     expect(envelope.distribution_mode).toBe("direct");
     expect(envelope.target_assistant).toBe("did:mf:test-agent");
-    expect(envelope.originator?.identity).toBe(
-      "did:mf:discord-1487204875912609844",
-    );
+    // cortex#486 — `originator.identity` is the RESOLVED principal DID
+    // (`did:mf:andreas`), not a platform-prefixed snowflake. The
+    // dispatch source did the `(discord, 1487...) → andreas` lookup at
+    // publish time via the wired PolicyEngine.
+    expect(envelope.originator?.identity).toBe("did:mf:andreas");
     expect(envelope.originator?.attribution).toBe("adapter-resolved");
     expect(envelope.sovereignty.classification).toBe("local");
     expect(envelope.sovereignty.data_residency).toBe("NZ");
@@ -1074,6 +1111,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
         instance: "local",
       },
       // no stack
+      policyEngine: makePublishPolicyEngine(),
     });
 
     const published = await callPublishInboundDispatchEnvelope(
@@ -1102,6 +1140,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
         dataResidency: "AU",
       },
       stack: "meta-factory",
+      policyEngine: makePublishPolicyEngine(),
     });
 
     await callPublishInboundDispatchEnvelope(handler, dispatchOpts());
@@ -1177,7 +1216,11 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
     await handler.shutdown();
   });
 
-  test("mattermost authorId encodes onto did:mf:mattermost- prefix", async () => {
+  test("mattermost authorId resolves to principal DID — `did:mf:andreas` (cortex#486)", async () => {
+    // cortex#486: the publish-time resolution is platform-agnostic. The
+    // engine maps `(mattermost, 8wkrnxq3abcdef) → andreas`; the envelope
+    // carries the resolved principal DID — no platform-prefixed shape
+    // ever lands on the wire.
     const runtime = makeRecordingRuntimeWithSubject();
     const handler = new DispatchHandler({
       config: makeConfig(),
@@ -1189,6 +1232,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
         instance: "local",
       },
       stack: "meta-factory",
+      policyEngine: makePublishPolicyEngine(),
     });
     await callPublishInboundDispatchEnvelope(
       handler,
@@ -1201,20 +1245,20 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
     );
     expect(
       runtime.subjectPublishes[0]?.envelope.originator?.identity,
-    ).toBe("did:mf:mattermost-8wkrnxq3abcdef");
+    ).toBe("did:mf:andreas");
     await handler.shutdown();
   });
 
-  test("exotic authorId with no DID-valid encoding → returns false, no publish (cortex#420 nit-5)", async () => {
-    // After the cortex#420 nit-5 fix, `adapterOriginatorIdentity`
-    // returns `null` (rather than a collision-prone `{prefix}-unknown`
-    // fallback) when the resulting candidate fails myelin's `DID_RE`.
-    // An authorId composed entirely of characters outside `[a-z0-9._-]`
-    // collapses to all-hyphens after the safe-id replace step, which
-    // produces a candidate containing `--` — rejected by DID_RE's
-    // `-(?!-)` clause. `publishInboundDispatchEnvelope` MUST return
-    // `false` so callers can distinguish a failed canonical publish, and
-    // no envelope is published on the bus.
+  test("unresolvable platform identity → returns false, no publish (cortex#486)", async () => {
+    // cortex#486 — the dispatch source resolves `(platform, authorId)`
+    // through the wired PolicyEngine; an unmapped tuple yields a null
+    // originator identity and `publishInboundDispatchEnvelope` returns
+    // `false`. Pre-#486 this test exercised the DID_RE rejection of
+    // platform-prefixed shapes (cortex#420 nit-5); post-#486 that
+    // grammar concern is moot because the publish never emits a
+    // platform-prefixed DID in the first place. The publish-time
+    // refusal IS the security boundary — the engine doesn't authorise
+    // an unknown Discord user just because they typed in chat.
     const runtime = makeRecordingRuntimeWithSubject();
     const handler = new DispatchHandler({
       config: makeConfig(),
@@ -1226,17 +1270,46 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
         instance: "local",
       },
       stack: "meta-factory",
+      policyEngine: makePublishPolicyEngine(),
     });
     const published = await callPublishInboundDispatchEnvelope(
       handler,
       dispatchOpts({
         msg: makeMsg({
           platform: "discord",
-          // `!!!` → safe-id `---` → candidate `did:mf:discord----`
-          // contains `--`, fails DID_RE.
-          authorId: "!!!",
+          // Discord snowflake that no principal claims — engine returns
+          // undefined; publish refuses with `invalid-originator`.
+          authorId: "999999999999999999",
         }),
       }),
+    );
+    expect(published).toBe(false);
+    expect(runtime.subjectPublishes.length).toBe(0);
+    await handler.shutdown();
+  });
+
+  test("missing policyEngine → returns false, no publish (cortex#486 fail-closed)", async () => {
+    // cortex#486 — without a wired PolicyEngine the dispatch source
+    // cannot resolve `(platform, authorId)` to a principal. The publish
+    // fails closed with `invalid-originator` rather than emitting a
+    // platform-prefixed DID. Production boots without an engine only
+    // when no `policy:` block is declared (deliberately rare).
+    const runtime = makeRecordingRuntimeWithSubject();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      runtime,
+      systemEventSource: {
+        principal: "andreas",
+        agent: "cortex",
+        instance: "local",
+      },
+      stack: "meta-factory",
+      // no policyEngine
+    });
+    const published = await callPublishInboundDispatchEnvelope(
+      handler,
+      dispatchOpts(),
     );
     expect(published).toBe(false);
     expect(runtime.subjectPublishes.length).toBe(0);
@@ -1282,6 +1355,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       },
       stack: "meta-factory",
       ccSessionFactory: ccFactory,
+      policyEngine: makePublishPolicyEngine(),
     });
     await handler.handleMessage(
       adapter,
@@ -1333,6 +1407,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       },
       stack: "meta-factory",
       ccSessionFactory: ccFactory,
+      policyEngine: makePublishPolicyEngine(),
     });
     try {
       await handler.handleMessage(
@@ -1387,6 +1462,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       },
       stack: "meta-factory",
       ccSessionFactory: ccFactory,
+      policyEngine: makePublishPolicyEngine(),
     });
 
     await handler.handleMessage(
@@ -1394,7 +1470,11 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       makeMsg({
         content: "hello",
         platform: "discord",
-        authorId: "!!!",
+        // cortex#486 — unresolvable Discord snowflake (no principal
+        // claims it). Engine returns undefined → publish refuses with
+        // `invalid-originator`; the apology surface fires the same
+        // user-facing message it did pre-#486 for grammar-invalid ids.
+        authorId: "999999999999999999",
       }),
     );
 

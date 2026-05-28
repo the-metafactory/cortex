@@ -59,6 +59,7 @@ import {
   publishInboundChatDispatchEnvelope,
   type DispatchSourcePublishResult,
 } from "./dispatch-source-publisher";
+import type { PolicyEngine } from "../common/policy/engine";
 import { join } from "path";
 
 /** Read version from arc-manifest.yaml (cached after first read). */
@@ -139,6 +140,17 @@ export interface DispatchHandlerOpts {
    * matching the listener's stack-less subscription path.
    */
   stack?: string;
+  /**
+   * cortex#486 — PolicyEngine consulted at envelope-publish time to
+   * resolve the inbound `(platform, authorId)` tuple to a registered
+   * principal id. Required for the dispatch-source publish path: per
+   * CONTEXT.md §Dispatch-source the adapter populates
+   * `originator.identity` with the **resolved** principal DID. Boot
+   * paths without a `policy:` block leave this undefined; the
+   * dispatch-source publish then refuses with `invalid-originator`
+   * (deliberate fail-closed posture).
+   */
+  policyEngine?: PolicyEngine;
 }
 
 /**
@@ -216,6 +228,11 @@ export class DispatchHandler extends EventEmitter {
    * See `DispatchHandlerOpts.stack`.
    */
   private readonly stack: string | undefined;
+  /**
+   * cortex#486 — PolicyEngine for adapter-side platform-id resolution
+   * at envelope-publish time. See `DispatchHandlerOpts.policyEngine`.
+   */
+  private readonly policyEngine: PolicyEngine | undefined;
 
   constructor(opts: DispatchHandlerOpts) {
     super();
@@ -233,6 +250,7 @@ export class DispatchHandler extends EventEmitter {
     this.retryMaxAttempts = opts.retry?.maxAttempts ?? DEFAULT_RETRY_MAX_ATTEMPTS;
     this.retryMaxTotalMs = opts.retry?.maxTotalMs ?? DEFAULT_RETRY_MAX_TOTAL_MS;
     this.stack = opts.stack;
+    this.policyEngine = opts.policyEngine;
     this.sessions = new SessionManager({ idleTimeoutMs: 10 * 60 * 1000 });
     this.taskTracker = new TaskTracker();
 
@@ -404,6 +422,7 @@ export class DispatchHandler extends EventEmitter {
       stack: this.stack,
       agentName: this.config.agent.name,
       agentDisplayName: this.config.agent.displayName,
+      policyEngine: this.policyEngine,
       ...opts,
     });
     if (result.published) {

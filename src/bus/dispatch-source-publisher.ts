@@ -1,6 +1,7 @@
 import { directTaskSubject } from "@the-metafactory/myelin/subjects";
 import { DID_RE } from "@the-metafactory/myelin/identity";
 import type { InboundMessage } from "../adapters/types";
+import type { PolicyEngine } from "../common/policy/engine";
 import { buildBaseEnvelope } from "./envelope-builder";
 import type { Envelope } from "./myelin/envelope-validator";
 import type { MyelinRuntime } from "./myelin/runtime";
@@ -36,6 +37,17 @@ export interface InboundChatDispatchPublishOpts {
   project: string | undefined;
   entity: string | undefined;
   operator: string | undefined;
+  /**
+   * cortex#486 — PolicyEngine consulted at publish time to resolve the
+   * inbound `(platform, authorId)` tuple to a registered principal id.
+   * The adapter is the right layer for this lookup per
+   * CONTEXT.md §Dispatch-source — `originator.identity` MUST carry the
+   * **resolved** principal DID (`did:mf:<principal-id>`), never a
+   * platform-prefixed snowflake. When the engine is absent OR cannot
+   * resolve the tuple, the publish is refused with reason
+   * `invalid-originator`; the caller surfaces a degraded dispatch.
+   */
+  policyEngine: PolicyEngine | undefined;
 }
 
 export interface DispatchSourcePublishResult {
@@ -51,16 +63,39 @@ export interface DispatchSourcePublishResult {
 }
 
 /**
- * Map a platform-side author identifier onto a DID-grammar-compliant
- * `did:mf:<name>` string suitable for `originator.identity`.
+ * Resolve a platform-side author identifier to a registered principal DID
+ * (`did:mf:<principal-id>`), suitable for `originator.identity` on an
+ * inbound dispatch envelope.
+ *
+ * cortex#486 — resolution belongs at the dispatch source (this layer),
+ * not at the consume-side resolver. Per CONTEXT.md §Dispatch-source the
+ * adapter populates `originator.identity` with the **resolved** human/
+ * agent DID. Pre-#486 this function emitted a platform-prefixed DID
+ * (`did:mf:<platform>-<authorId>`) which forced the runner's
+ * `resolvePrincipalId` to do a reverse-lookup. That snowflake DID shape
+ * is no longer produced anywhere in the codebase.
+ *
+ * Returns:
+ *   - `did:mf:<principal-id>` when the engine maps `(platform, authorId)`
+ *     to a registered principal AND the result passes myelin's `DID_RE`.
+ *   - `null` when the engine is absent (boot-without-policy), the tuple
+ *     isn't registered (unknown platform identity), OR the resolved id
+ *     can't be encoded as a DID-grammar-compliant tail. The caller
+ *     refuses the publish with a clear `invalid-originator` reason — no
+ *     anonymous-principal fallback, no platform-prefixed leakage.
  */
 export function adapterOriginatorIdentity(
+  engine: PolicyEngine | undefined,
   platform: string,
   authorId: string,
 ): string | null {
-  const prefix = platform.toLowerCase();
-  const safeId = authorId.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
-  const candidate = `did:mf:${prefix}-${safeId}`;
+  if (engine === undefined) return null;
+  const principalId = engine.lookupPrincipalIdByPlatformId(
+    platform.toLowerCase(),
+    authorId,
+  );
+  if (principalId === undefined) return null;
+  const candidate = `did:mf:${principalId}`;
   if (DID_RE.test(candidate)) return candidate;
   return null;
 }
@@ -106,12 +141,16 @@ export async function publishInboundChatDispatchEnvelope(
   }
 
   const originatorIdentity = adapterOriginatorIdentity(
+    opts.policyEngine,
     opts.msg.platform,
     opts.msg.authorId,
   );
   if (originatorIdentity === null) {
     console.error(
-      `dispatch-source: cannot derive DID-valid originator identity for platform=${opts.msg.platform} authorId=${opts.msg.authorId}`,
+      `dispatch-source: cannot resolve platform identity to a registered principal — platform=${opts.msg.platform} authorId=${opts.msg.authorId}` +
+        (opts.policyEngine === undefined
+          ? " (no policy engine wired — boot without policy:)"
+          : " (engine: unknown platform tuple)"),
     );
     return { published: false, subject, reason: "invalid-originator" };
   }
