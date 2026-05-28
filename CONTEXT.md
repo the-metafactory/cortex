@@ -100,6 +100,15 @@ _Avoid_: consumer, egress, renderer (renderer is the cortex-internal interface n
 The payload field on an inbound dispatch envelope that tells the dispatch sink where to deliver lifecycle events. Carries the originating surface address — for a Discord-sourced dispatch: `{adapter_instance, channel_id, thread_id?}`. Echoed by the runner onto every `dispatch.task.{action}` lifecycle envelope so the originating dispatch sink can correlate completion → platform target without keeping state. Response routing is wire-level, not in-memory.
 _Avoid_: callback, return-address, reply-to
 
+### Identity & trust
+
+**Stack signing identity**:
+The **stack**'s own DID — `did:mf:{principal}-{stack-leaf}` — used to sign every envelope the stack publishes via `runtime.publish`. Distinct from agent DIDs (`did:mf:luna`, `did:mf:echo`): the stack is the cryptographic signer of the wire; the agent is the policy actor named in `originator`. A stack has exactly one signing identity, sourced from `stack.nkey_seed_path` in `cortex.yaml`.
+
+**Own-stack implicit trust**:
+Every cortex stack implicitly trusts its own signing identity — the chain verifier (`src/bus/verify-signed-by-chain.ts`) short-circuits when `chain[0].identity` matches the receiving stack's signing DID. The stack is the receiver; the receiver always has private-key authority for its own DID, so looking up the stack DID in the **agent** registry is structurally wrong. Without this short-circuit, adapter-originated dispatches (Discord/Mattermost/Slack chat → signed by the stack via `runtime.publish`) get rejected as `unknown_agent` and the runner silently drops every chat envelope. The crypto-verify pass still runs against the stack's NKey pubkey on these envelopes — short-circuit the *trust* check, not the *bytes* check (cortex#480).
+_Avoid_: self-trust (too generic), loopback-trust (overloads NATS loopback semantics)
+
 ## Relationships
 
 - A **principal** runs one or more **stacks**, and belongs to one or more **networks**.
