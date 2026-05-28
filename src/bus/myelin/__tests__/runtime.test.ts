@@ -13,12 +13,14 @@ import type { AgentConfig } from "../../../common/types/config";
 import { startMyelinRuntime } from "../runtime";
 
 function makeConfig(natsBlock: AgentConfig["nats"]): AgentConfig {
+  // cortex#429 PR-C — `agent.operatorId/operatorName` retired from
+  // schema. The principal id flows in via `MyelinRuntimeOptions.principal`
+  // at the call sites below (defaulted to `"andreas"` to preserve the
+  // pre-PR-C subject-substitution behaviour exercised by these tests).
   return {
     agent: {
       name: "luna",
       displayName: "Luna",
-      operatorId: "andreas",
-      operatorName: "Andreas",
     },
     nats: natsBlock,
   } as unknown as AgentConfig;
@@ -229,7 +231,7 @@ describe("MyelinRuntime", () => {
     expect(errored).toBe(true);
   });
 
-  test("subjects placeholder {principal} is substituted from agent.operatorId", async () => {
+  test("subjects placeholder {principal} is substituted from options.principal (cortex#429)", async () => {
     const fake = makeFakeNatsConnection();
     const config = makeConfig({
       url: "nats://localhost:4222",
@@ -238,6 +240,7 @@ describe("MyelinRuntime", () => {
     });
     const runtime = await startMyelinRuntime(config, {
       connectImpl: async () => fake.nc,
+      principal: "andreas",
     });
     expect(runtime.enabled).toBe(true);
     expect(fake.subscribePatterns[0]).toBe("local.andreas.attention.>");
@@ -265,6 +268,7 @@ describe("MyelinRuntime", () => {
     const runtime = await startMyelinRuntime(config, {
       connectImpl: async () => fake.nc,
       stack: "research",
+      principal: "andreas",
     });
     expect(runtime.enabled).toBe(true);
     expect(fake.subscribePatterns[0]).toBe(
@@ -282,6 +286,7 @@ describe("MyelinRuntime", () => {
     });
     const runtime = await startMyelinRuntime(config, {
       connectImpl: async () => fake.nc,
+      principal: "andreas",
       // no stack supplied
     });
     expect(runtime.enabled).toBe(true);
@@ -305,6 +310,7 @@ describe("MyelinRuntime", () => {
     const runtime = await startMyelinRuntime(config, {
       connectImpl: async () => fake.nc,
       stack: "research",
+      principal: "andreas",
     });
     expect(fake.subscribePatterns[0]).toBe("local.andreas.>");
     await runtime.stop();
@@ -418,11 +424,11 @@ describe("MyelinRuntime", () => {
       await runtime.publish(env);
       expect(fake.publish).toHaveBeenCalledTimes(1);
       // IAW Phase A.3: subject `{principal}` comes from `envelope.source`'s first
-      // segment ("metafactory" here), NOT from `agent.operatorId`. Subject
-      // prefix mirrors `envelope.sovereignty.classification` ("local" here),
-      // satisfying `validateSubjectEnvelopeAlignment`. Emit-site helpers
-      // populate `envelope.source` with the operator-side `agent.operatorId`,
-      // so the two values agree at runtime — the test fixture exercises the
+      // segment ("metafactory" here), NOT from the boot-resolved principal id.
+      // Subject prefix mirrors `envelope.sovereignty.classification` ("local"
+      // here), satisfying `validateSubjectEnvelopeAlignment`. Emit-site helpers
+      // populate `envelope.source` with the operator-side `principal.id` so
+      // the two values agree at runtime — the test fixture exercises the
       // derive-from-envelope path directly.
       expect(fake.publishes[0]?.subject).toBe(
         "local.metafactory.system.adapter.degraded",

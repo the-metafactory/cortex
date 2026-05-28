@@ -3,7 +3,8 @@
  * `{principal}` symmetry invariant.
  *
  * Subscribe-side substitutes `{principal}` in NATS subject patterns from
- * `config.agent.operatorId` at startup via `principalFromConfig`.
+ * the boot-resolved `principal.id` at startup via `principalFromConfig`
+ * (cortex#429 PR-C — flows in via `MyelinRuntimeOptions.principal`).
  * Publish-side extracts `{principal}` from `envelope.source`'s first
  * segment via `principalFromEnvelope`. For any envelope this stack emits
  * via the system-event helpers (which build `source` as

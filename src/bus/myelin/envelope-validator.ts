@@ -575,10 +575,10 @@ export type Classification = Envelope["sovereignty"]["classification"];
  *   - `classification === "public"`    → `public.{type}` (no org, no stack — public is global)
  *
  * `{principal}` is the first dotted segment of `envelope.source` (the same value
- * cortex's MyelinRuntime captures from `agent.operatorId` at startup, so
- * subject and source stay symmetrical). `{stack}` is the principal's stack
- * identity — supplied by the caller when in stack-aware mode (IAW A.5),
- * omitted in the legacy migration window.
+ * cortex's MyelinRuntime captures from the boot-resolved `principal.id` at
+ * startup, so subject and source stay symmetrical). `{stack}` is the
+ * principal's stack identity — supplied by the caller when in stack-aware
+ * mode (IAW A.5), omitted in the legacy migration window.
  *
  * Pure function; safe to call from any context.
  */
@@ -607,7 +607,8 @@ function firstSegment(s: string): string {
  * IAW Phase A.3 follow-up (cortex#130 item 1) — symmetric `{principal}` extractor
  * for the publish-side. Publish derives `{principal}` from `envelope.source`'s
  * leading segment; subscribe substitutes `{principal}` in subject patterns from
- * `agent.operatorId` at startup. These two values MUST agree for any
+ * the boot-resolved `principal.id` at startup (sourced via
+ * `MyelinRuntimeOptions.principal`). These two values MUST agree for any
  * envelope this stack emits, or subjects diverge between publish/subscribe.
  *
  * Use {@link principalFromConfig} on the subscribe-side and

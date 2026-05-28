@@ -69,7 +69,7 @@ import { AGENT_HEARTBEAT_TYPE } from "../common/types/agent-heartbeat";
  *   - For cortex-emitted system.* events: `{principal}.cortex.local`
  */
 export interface SystemEventSource {
-  /** `agent.operatorId` — first segment (principal slug). */
+  /** Boot-resolved `principal.id` — first segment (principal slug). */
   principal: string;
   /** Logical agent name — `cortex`, `grove`, `pilot`, etc. */
   agent: string;

@@ -343,10 +343,11 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     const { config, principal } = loadConfigWithAgents(path);
     expect(config.agent.name).toBe("ivy");
     expect(config.agent.displayName).toBe("Ivy");
-    expect(config.agent.operatorId).toBe("jc");
-    expect(config.agent.operatorName).toBe("Jens-Christian");
-    // v2.0.0 (cortex#297) — operator*Id retired from AgentConfig.agent;
-    // surfaced through LoadedConfig.principal instead.
+    // cortex#429 PR-C — `agent.operatorId/operatorName` retired from
+    // AgentConfig.agent. Principal identity + display name now live on
+    // `LoadedConfig.principal`.
+    expect(principal?.id).toBe("jc");
+    expect(principal?.displayName).toBe("Jens-Christian");
     expect(principal?.discordId).toBe("285727653603049472");
   });
 
@@ -749,9 +750,10 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     expect(loaded.inlineAgents).toHaveLength(1);
     expect(loaded.inlineAgents[0]!.id).toBe("ivy");
     // The principal block is normalised onto LoadedConfig.principal.
+    // cortex#429 PR-C — `config.agent.operatorId` retired; principal id
+    // is sole-sourced from `LoadedConfig.principal.id` now.
     expect(loaded.principal?.id).toBe("jc");
     expect(loaded.principal?.discordId).toBe("285727653603049472");
-    expect(loaded.config.agent.operatorId).toBe("jc");
   });
 
   // v3.0.0 BREAKING (manifest PR-11) — cortex.yaml requires the

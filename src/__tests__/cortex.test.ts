@@ -120,6 +120,7 @@ describe("startCortex — construction", () => {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
+      operator: { id: "test-op" },
     });
     expect(handle).toBeDefined();
     expect(typeof handle.stop).toBe("function");
@@ -141,6 +142,7 @@ describe("startCortex — construction", () => {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
+      operator: { id: "test-op" },
     });
     expect(handle).toBeDefined();
     await handle.stop();
@@ -161,6 +163,7 @@ describe("startCortex — construction", () => {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
+      operator: { id: "test-op" },
     });
     expect(handle).toBeDefined();
     await handle.stop();
@@ -187,6 +190,7 @@ describe("startCortex — wire-up", () => {
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
+      operator: { id: "test-op" },
     });
     expect(handle).toBeDefined();
     // The surface-router's `start()` registers exactly one envelope handler
@@ -214,6 +218,7 @@ describe("startCortex — wire-up", () => {
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
+      operator: { id: "test-op" },
     });
 
     // Hand-craft a `dispatch.task.received` envelope. The listener parses
@@ -273,16 +278,15 @@ describe("startCortex — wire-up", () => {
     // `local.{principal}.{stack}.tasks.*.>` where `{principal}` comes from
     // the resolved principal id (cortex#427).
     //
-    // Verify: with `agent.operatorId` set on the legacy bot.yaml shape,
-    // the router still subscribes (single registered handler) — the
-    // legacy field is the v3 fallback resolution path inside
-    // `resolvePrincipalId`.
+    // cortex#429 PR-C — the legacy `agent.operatorId` fallback is gone;
+    // the v3-canonical resolution path is `options.operator.id`. Verify
+    // the router subscribes (single registered handler) when only the
+    // canonical path is wired.
     const runtime = createRecordingRuntime();
     const config = minimalConfig({
       agent: {
         name: "no-op-cortex",
         displayName: "NoOpCortex",
-        operatorId: "legacy-bot-yaml-op",
       },
     });
     const handle = await startCortex(config, {
@@ -290,6 +294,7 @@ describe("startCortex — wire-up", () => {
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
+      operator: { id: "v3-canonical-op" },
     });
     expect(handle).toBeDefined();
     expect(runtime.onEnvelopeHandlers.size).toBe(1);
@@ -299,17 +304,16 @@ describe("startCortex — wire-up", () => {
 
   test("startCortex throws when no principal id is resolvable (cortex#427)", async () => {
     // cortex#427 PR-A — `resolvePrincipalId` refuses to silently
-    // collapse to `"default"`. A config with neither
-    // `options.operator.id` (v3 canonical via cortex-shape config) nor
-    // `config.agent.operatorId` (legacy bot.yaml) must fail-fast at
-    // boot — the previous behaviour masked misconfiguration by
-    // emitting `local.default.>` envelopes that competed with real
-    // principals on shared brokers.
+    // collapse to `"default"`. cortex#429 PR-C — the legacy
+    // `config.agent.operatorId` fallback has been retired together with
+    // the schema field; `options.operator.id` is the only resolution
+    // path. A config without it must fail-fast at boot — the previous
+    // behaviour masked misconfiguration by emitting `local.default.>`
+    // envelopes that competed with real principals on shared brokers.
     const runtime = createRecordingRuntime();
     const noPrincipal = minimalConfig({
       agent: { name: "no-op-cortex", displayName: "NoOpCortex" },
     });
-    expect(noPrincipal.agent.operatorId).toBeUndefined();
     let threw: unknown = null;
     try {
       await startCortex(noPrincipal, {
@@ -324,7 +328,6 @@ describe("startCortex — wire-up", () => {
     expect(threw).toBeInstanceOf(Error);
     expect((threw as Error).message).toContain("principal id");
     expect((threw as Error).message).toContain("principal.id");
-    expect((threw as Error).message).toContain("agent.operatorId");
     // No subscriptions leaked from the aborted boot path.
     expect(runtime.onEnvelopeHandlers.size).toBe(0);
   });
@@ -355,6 +358,7 @@ describe("startCortex — wire-up", () => {
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
+      operator: { id: "test-op" },
     });
     expect(handle).toBeDefined();
     expect(runtime.onEnvelopeHandlers.size).toBe(1);
@@ -388,6 +392,7 @@ describe("startCortex — wire-up", () => {
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
+      operator: { id: "test-op" },
     });
     expect(handle).toBeDefined();
     expect(runtime.onEnvelopeHandlers.size).toBe(1);
@@ -407,6 +412,7 @@ describe("startCortex — shutdown", () => {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
+      operator: { id: "test-op" },
     });
 
     await handle.stop();
@@ -421,6 +427,7 @@ describe("startCortex — shutdown", () => {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
+      operator: { id: "test-op" },
     });
 
     const start = Date.now();
@@ -460,6 +467,7 @@ describe("startCortex — shutdown", () => {
         disableDashboard: true,
         disableOutboundPoller: true,
         injectRuntime: runtime,
+        operator: { id: "test-op" },
         // Tight timeout — keeps the test fast. Production default is
         // 15_000ms; the same code path runs at both budgets.
         shutdownTimeoutMs: 100,
@@ -502,6 +510,7 @@ describe("startCortex — error surface", () => {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
+      operator: { id: "test-op" },
     });
     expect(handle).toBeDefined();
     await handle.stop();
@@ -517,6 +526,7 @@ describe("startCortex — error surface", () => {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
+      operator: { id: "test-op" },
     });
     expect(handle).toBeDefined();
     await handle.stop();
@@ -540,6 +550,7 @@ describe("startCortex — agent registry (cortex#67 prereq C)", () => {
       disableDashboard: true,
       disableOutboundPoller: true,
       agentsDir: tmpAgentsDir,
+      operator: { id: "test-op" },
     });
     expect(handle.agentRegistry).toBeDefined();
     expect(handle.agentRegistry.size).toBe(0);
@@ -640,6 +651,7 @@ presence:
       disableOutboundPoller: true,
       agentsDir: tmpAgentsDir,
       inlineAgents,
+      operator: { id: "test-op" },
     });
 
     // Three agents total: luna (inline-only), echo (inline wins), holly (fragment-only).

@@ -62,7 +62,8 @@ export interface MyelinRuntime {
    *   - `classification === "public"`    → `public.{type}` (no `{principal}` segment)
    *
    * `{principal}` is the first dotted segment of `envelope.source` (which
-   * cortex's `system-events.ts` etc. populate from `agent.operatorId`).
+   * cortex's `system-events.ts` etc. populate from the boot-resolved
+   * `principal.id`).
    * The 1:1 alignment between subject prefix and `sovereignty.classification`
    * is myelin's protocol-level invariant — see
    * {@link validateSubjectEnvelopeAlignment}.
@@ -282,6 +283,16 @@ export interface MyelinRuntimeOptions {
    * (`SAGE_STACK=default`) so the Offer loop closes end-to-end.
    */
   stack?: string;
+  /**
+   * cortex#429 PR-C — boot-resolved principal id used to substitute
+   * `{principal}` in subscribe-side subject patterns. Replaces the
+   * prior read from `config.agent.operatorId` (removed together with
+   * the schema field). The entrypoint passes the value resolved by
+   * `resolvePrincipalId(options.operator)`; when undefined, the
+   * substituter falls back to `"default"` to preserve legacy NATS-less
+   * runtime no-op semantics.
+   */
+  principal?: string;
 }
 
 /**
@@ -413,8 +424,14 @@ export async function startMyelinRuntime(
   // A pattern like `local.{principal}.{stack}.system.>` resolves to either
   // `local.{principal}.{stack}.system.>` (stack-aware) or `local.{principal}.system.>`
   // (legacy) depending on whether the boot path supplied a stack.
+  // cortex#429 PR-C — `principal` flows in via options (sourced from
+  // the entrypoint's `resolvePrincipalId`) since the legacy
+  // `config.agent.operatorId` schema field has been retired.
+  // `principalFromConfig` retains the `?? "default"` fallback semantics
+  // for compatibility with no-op runtimes (NATS absent) and tests that
+  // exercise the substituter without a boot-resolved principal.
   const substituter = makeSubjectPlaceholderSubstituter({
-    principal: principalFromConfig(config.agent.operatorId),
+    principal: principalFromConfig(options?.principal),
     stack: options?.stack,
   });
   const subjects = substituter(nats.subjects);
@@ -643,14 +660,16 @@ export async function startMyelinRuntime(
     // IAW Phase A.3: subject derivation now mirrors
     // `envelope.sovereignty.classification`. Prior code hardcoded
     // `local.{principal}.{type}` here, making federated/public emission
-    // structurally impossible — `{principal}` came from `config.agent.operatorId`
-    // and the classification prefix was always "local". `deriveNatsSubject`
-    // reads classification + extracts `{principal}` from `envelope.source` so the
-    // 1:1 subject↔classification invariant
+    // structurally impossible — `{principal}` came from the boot-resolved
+    // principal id and the classification prefix was always "local".
+    // `deriveNatsSubject` reads classification + extracts `{principal}`
+    // from `envelope.source` so the 1:1 subject↔classification invariant
     // (`validateSubjectEnvelopeAlignment`) holds for every emit site
     // without further changes. `envelope.source`'s first segment is the
-    // same value `agent.operatorId` produces when emit-site helpers
-    // assemble it, so subscribe-side `{principal}` substitution stays symmetric.
+    // same value the boot-resolved `principal.id` produces when emit-site
+    // helpers assemble it (cortex#429 PR-C — flows in via
+    // `MyelinRuntimeOptions.principal`), so subscribe-side `{principal}`
+    // substitution stays symmetric.
     //
     // IAW Phase A.5 (cortex#262 closes): pass `stack` so subjects land in
     // the 6-segment `local.{principal}.{stack}.{type}` grammar that sage's

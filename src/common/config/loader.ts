@@ -83,6 +83,14 @@ export interface LoadedConfig {
    */
   principal?: {
     id: string;
+    /**
+     * cortex#429 PR-C — surface the principal's display name onto the
+     * loaded boot-time view so dashboard wiring no longer has to dip
+     * back into the removed `AgentConfig.agent.operatorName` legacy
+     * field. Optional — operators can omit `principal.displayName` on
+     * cortex.yaml and the boot path falls back to `principal.id`.
+     */
+    displayName?: string;
     discordId?: string;
     mattermostId?: string;
     slackId?: string;
@@ -428,17 +436,19 @@ function loadCortexShape(
   // Downstream consumers that read `config.agent.name` get the first agent's
   // id; per-instance routing flows via `inlineAgents` so the multi-agent
   // case stays correct.
+  //
+  // cortex#429 PR-C — `operatorId` and `operatorName` synthesis retired
+  // alongside the schema fields. Downstream consumers (cortex.ts,
+  // myelin runtime) now read the principal identity directly from
+  // `LoadedConfig.principal.id` (returned below) and the helpers that
+  // accept it as a parameter.
+  //
   // `principal.id` and `principal.dataResidency` are non-optional after parse
-  // (required + default respectively), so the prior `!== undefined` guards
-  // were dead conditions. `discordId` and `mattermostId` are genuinely
-  // optional — keep the spread-on-truthy pattern there.
+  // (required + default respectively), so prior `!== undefined` guards
+  // were dead conditions.
   const synthesizedAgent = {
     name: firstAgent.id,
     displayName: firstAgent.displayName,
-    operatorId: cortexConfig.principal.id,
-    ...(cortexConfig.principal.displayName !== undefined && {
-      operatorName: cortexConfig.principal.displayName,
-    }),
     // v2.0.0 cutover (cortex#297) — `operator*Id` fields retired from
     // AgentConfig.agent. Principal's platform-side ids surface through
     // `LoadedConfig.principal` (see return value below); the boot path in
@@ -479,6 +489,9 @@ function loadCortexShape(
     // v2.0.0 (cortex#297) — surface principal platform ids for the boot path.
     principal: {
       id: cortexConfig.principal.id,
+      ...(cortexConfig.principal.displayName !== undefined && {
+        displayName: cortexConfig.principal.displayName,
+      }),
       ...(cortexConfig.principal.discordId !== undefined && {
         discordId: cortexConfig.principal.discordId,
       }),

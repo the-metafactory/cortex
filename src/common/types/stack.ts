@@ -204,8 +204,9 @@ export interface DeriveStackIdInput {
  *   legacy shape). Callers wire `deriveStackId` in via the
  *   `LoadedConfig.stack` field the loader exposes (set when cortex shape
  *   was detected). The boot path constructs a small input object from the
- *   AgentConfig projection's `agent.operatorId` (legacy field-name continuity)
- *   plus the optional `stack:` block — no second schema parse required.
+ *   boot-resolved `principal.id` (cortex#429 — sourced via
+ *   `LoadedConfig.principal.id`) plus the optional `stack:` block — no
+ *   second schema parse required.
  *
  * The return type is plain — no error path, no `null`. Boot code logs the
  * derived id and proceeds; the caller never has to branch on a degenerate

@@ -317,6 +317,12 @@ export interface StartCortexOptions {
    */
   operator?: {
     id: string;
+    /**
+     * cortex#429 PR-C — replaces the removed `AgentConfig.agent.operatorName`.
+     * Surfaced on the dashboard's `operator` column when present; defaults
+     * to `id` otherwise.
+     */
+    displayName?: string;
     discordId?: string;
     mattermostId?: string;
     slackId?: string;
@@ -327,40 +333,36 @@ export interface StartCortexOptions {
  * cortex#427 — resolve the canonical `{principal}` segment for every
  * NATS subject, dashboard column, and `signed_by` chain inside the
  * cortex process. v3 vocabulary (cortex#388) made `principal.id` the
- * single source of truth on cortex.yaml; the loader synthesises a
- * legacy-compatible `AgentConfig.agent.operatorId` for downstream code
- * AND surfaces the same value as `LoadedConfig.principal.id`. This
- * helper prefers the v3-canonical `LoadedConfig.principal` path so the
- * post-MIG-8 schema deletion (PR-C of cortex#426) is a single-line
- * change here — drop the `agent.operatorId` fallback.
+ * single source of truth on cortex.yaml; the loader surfaces it as
+ * `LoadedConfig.principal.id`, which the entrypoint hands in here via
+ * `options.operator.id`.
+ *
+ * cortex#429 PR-C — the legacy `config.agent.operatorId` fallback has
+ * been retired together with the schema field. Operators on un-migrated
+ * configs see a fail-fast startup error pointing at `principal.id`; this
+ * IS the upgrade prompt.
  *
  * **No silent `"default"` fallback.** v3 PrincipalConfigSchema makes
  * `principal.id` REQUIRED (`z.string().min(1)`); a missing identity
- * means the config didn't load through the v3 path AND the legacy
- * bot.yaml didn't declare `agent.operatorId` either. That's a startup
+ * means the config didn't load through the v3 path. That's a startup
  * error — not a silent collapse to `local.default.>` that hides
  * misconfiguration until the first cross-principal envelope leaks.
  *
- * @throws if neither `options.operator.id` nor `config.agent.operatorId`
- *   is set — fail-fast at boot rather than masking the gap.
+ * @throws if `options.operator.id` is unset or empty — fail-fast at
+ *   boot rather than masking the gap.
  */
 function resolvePrincipalId(
-  config: AgentConfig,
   operator: StartCortexOptions["operator"],
 ): string {
   const fromLoadedOperator = operator?.id;
   if (fromLoadedOperator !== undefined && fromLoadedOperator !== "") {
     return fromLoadedOperator;
   }
-  const fromLegacyAgent = config.agent.operatorId;
-  if (fromLegacyAgent !== undefined && fromLegacyAgent !== "") {
-    return fromLegacyAgent;
-  }
   throw new Error(
     "cortex: cannot resolve principal id — cortex.yaml must declare `principal.id` " +
-      "(v3 canonical) OR legacy bot.yaml must declare `agent.operatorId`. " +
-      "The `{principal}` segment of every NATS subject and `signed_by` chain " +
-      "is required; refusing to silently collapse to `default`.",
+      "(v3 canonical). The `{principal}` segment of every NATS subject and " +
+      "`signed_by` chain is required; refusing to silently collapse to `default`. " +
+      "If upgrading from v2, run `cortex migrate-config` to rewrite your config.",
   );
 }
 
@@ -389,10 +391,11 @@ export async function startCortex(
 
   // cortex#427 — resolve the canonical principal id ONCE at boot. Every
   // subsequent `{principal}` segment (NATS subjects, `signed_by` chains,
-  // dashboard columns) reads from this variable so a cortex-shape config
-  // (v3 `principal.id`) and a legacy bot.yaml (`agent.operatorId`) can't
-  // diverge between publisher and consumer. PR-A of cortex#426 follow-up.
-  const principalId = resolvePrincipalId(config, options.operator);
+  // dashboard columns) reads from this variable. cortex#429 PR-C retired
+  // the legacy `config.agent.operatorId` fallback together with the
+  // schema field — `options.operator.id` (sourced from `principal.id` by
+  // the loader) is the single resolution path.
+  const principalId = resolvePrincipalId(options.operator);
   console.log(`  Principal: ${principalId}`);
 
   // IAW Phase A.5 (refs cortex#113, closes cortex#262) — resolve the
@@ -556,6 +559,11 @@ export async function startCortex(
       runtime = await startMyelinRuntime(config, {
         ...(signer !== undefined && { signer }),
         stack: derivedStack.stack,
+        // cortex#429 PR-C — runtime no longer reads
+        // `config.agent.operatorId`; the boot-resolved principal flows
+        // in explicitly so subscribe-side `{principal}` substitution
+        // stays symmetric with publish-side `envelope.source`.
+        principal: principalId,
       });
     } catch (err) {
       console.error("cortex: myelin runtime startup error (non-fatal):", err instanceof Error ? err.message : err);
@@ -1896,7 +1904,7 @@ export async function startCortex(
   let usageMonitor: UsageMonitor | null = null;
   if (config.api.enabled && !options.disableDashboard) {
     try {
-      ({ api: dashboardApi, usageMonitor } = await setupDashboard(config, principalId, dispatchHandler, cloudPublisher));
+      ({ api: dashboardApi, usageMonitor } = await setupDashboard(config, principalId, options.operator?.displayName, dispatchHandler, cloudPublisher));
     } catch (err) {
       console.error("cortex: dashboard API startup error (non-fatal):", err instanceof Error ? err.message : err);
     }
@@ -2131,6 +2139,7 @@ async function resolveReviewProvisioningJsm(
 async function setupDashboard(
   config: AgentConfig,
   principalId: string,
+  principalDisplayName: string | undefined,
   dispatchHandler: DispatchHandler,
   cloudPublisher: CloudPublisher | null,
 ): Promise<{ api: { stop?: () => void }; usageMonitor: UsageMonitor }> {
@@ -2146,11 +2155,15 @@ async function setupDashboard(
     apiMode: config.api.mode,
     // cortex#427 — dashboard reads the shared `principalId` so the
     // `operator` column matches the `{principal}` segment of incoming
-    // envelopes. `operatorName` falls back to `principalId` when the
-    // principal hasn't declared a separate display name on
-    // `agent.operatorName` (legacy AgentConfig field — PR-C retires).
+    // envelopes. cortex#429 PR-C retired the legacy `agent.operatorName`
+    // field; the dashboard display name now flows in via
+    // `principalDisplayName` (sourced from
+    // `LoadedConfig.principal.displayName`) and falls back to
+    // `principalId` when the principal omitted the display name on
+    // cortex.yaml. The MC API column is still named `operatorId`
+    // (R2.D cascade — tracked separately in docs/migrations/0002).
     operatorId: principalId,
-    operatorName: config.agent.operatorName ?? principalId,
+    operatorName: principalDisplayName ?? principalId,
     dashboardDir,
   });
   console.log(`cortex: dashboard DB at ${dbPath}`);

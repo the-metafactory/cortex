@@ -67,19 +67,14 @@ import type {
 } from "../bus/myelin/runtime";
 
 // A minimal AgentConfig — NATS absent so the runtime stays in no-op mode
-// and no real socket is opened. `agent.operatorId` is intentionally
-// DIFFERENT from the `options.operator.id` supplied below so the test
-// proves `resolvePrincipalId` prefers the v3 canonical path.
+// and no real socket is opened. cortex#429 PR-C — `agent.operatorId` was
+// removed from the schema; callers exercise the v3-canonical resolution
+// path via `options.operator.id` below.
 function minimalConfig(overrides: Partial<Record<string, unknown>> = {}): AgentConfig {
   return AgentConfigSchema.parse({
     agent: {
       name: "test-cortex",
       displayName: "TestCortex",
-      // Different from the `options.operator.id` below — if a stray
-      // call site still reads `config.agent.operatorId`, the subject
-      // will carry "legacy-bot-yaml-op" instead of the v3 principal
-      // and the assertions below will fail.
-      operatorId: "legacy-bot-yaml-op",
     },
     discord: [],
     mattermost: [],
@@ -120,18 +115,17 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
   test("publish-side `source.principal` equals listener-side `{principal}` subject segment", async () => {
     // Setup: the v3 canonical path supplies the principal id via
     // `options.operator.id` (sourced from `cortexConfig.principal.id`
-    // by the loader). The legacy `config.agent.operatorId` carries a
-    // DELIBERATELY DIFFERENT value so any stray read of the legacy
-    // field surfaces as a mismatched subject.
+    // by the loader). cortex#429 PR-C removed the legacy
+    // `agent.operatorId` schema field — any stray attempt to set it on
+    // input is now silently stripped by Zod, so this test only needs
+    // to exercise the v3-canonical wiring.
     const PRINCIPAL_ID = "v3-canonical-principal";
-    const LEGACY_OP = "legacy-bot-yaml-op";
 
     const runtime = createRecordingRuntime();
     const config = minimalConfig({
       agent: {
         name: "consistency-cortex",
         displayName: "ConsistencyCortex",
-        operatorId: LEGACY_OP,
       },
     });
 
@@ -220,17 +214,16 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
     expect(runtime.onEnvelopeHandlers.size).toBe(0);
   });
 
-  test("`options.operator.id` is preferred over `config.agent.operatorId`", async () => {
-    // Direct white-box proof: when both fields are present but
-    // different, the v3 canonical (`options.operator.id`) wins.
-    // The legacy bot.yaml fallback path is only consulted when
-    // `options.operator` is undefined.
+  test("`options.operator.id` is the sole resolution path (legacy field stripped)", async () => {
+    // cortex#429 PR-C — the legacy `agent.operatorId` schema field has
+    // been retired. Any input attempting to set it is silently stripped
+    // by Zod (default strip-unknown mode). Boot succeeds when the
+    // v3-canonical `options.operator.id` is provided.
     const runtime = createRecordingRuntime();
     const config = minimalConfig({
       agent: {
         name: "consistency-cortex",
         displayName: "ConsistencyCortex",
-        operatorId: "this-must-not-win",
       },
     });
 
@@ -239,7 +232,7 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
-      operator: { id: "this-must-win" },
+      operator: { id: "v3-canonical-op" },
     });
 
     // Boot succeeded → resolution path found a valid principal.
@@ -264,18 +257,15 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
     await handle.stop();
   });
 
-  test("legacy bot.yaml fallback: `config.agent.operatorId` resolves when `options.operator` is absent", async () => {
-    // Pure legacy path: a bot.yaml config (no cortex-shape loader,
-    // no `options.operator`) must still boot. `resolvePrincipalId`
-    // falls back to `config.agent.operatorId`. PR-C of cortex#426
-    // retires this fallback after the deprecation window — PR-A
-    // (this PR) keeps it alive.
+  test("`options.operator.id` is the sole resolution path (PR-C — legacy fallback retired)", async () => {
+    // cortex#429 PR-C — the legacy `config.agent.operatorId` fallback
+    // has been retired together with the schema field. Boot succeeds
+    // only when `options.operator.id` is present.
     const runtime = createRecordingRuntime();
     const config = minimalConfig({
       agent: {
-        name: "legacy-cortex",
-        displayName: "LegacyCortex",
-        operatorId: "legacy-op-id",
+        name: "v3-cortex",
+        displayName: "V3Cortex",
       },
     });
 
@@ -284,27 +274,28 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
-      // No `operator:` field — legacy bot.yaml path.
+      operator: { id: "v3-canonical-op" },
     });
 
     expect(runtime.onEnvelopeHandlers.size).toBe(1);
     await handle.stop();
   });
 
-  test("missing both sources is a startup error, not a silent default", async () => {
+  test("missing `options.operator.id` is a startup error, not a silent default", async () => {
     // Anti-fallback regression guard: the pre-cortex#427 code
     // collapsed to `local.default.>` when neither source resolved.
-    // PR-A makes that a fail-fast — a missing principal is a
-    // misconfiguration, not a default.
+    // PR-A made that a fail-fast — a missing principal is a
+    // misconfiguration, not a default. cortex#429 PR-C narrowed the
+    // resolution path to `options.operator.id` only (the legacy
+    // `config.agent.operatorId` fallback retired together with the
+    // schema field).
     const runtime = createRecordingRuntime();
     const config = minimalConfig({
       agent: {
         name: "no-principal-cortex",
         displayName: "NoPrincipalCortex",
-        // operatorId intentionally omitted.
       },
     });
-    expect(config.agent.operatorId).toBeUndefined();
 
     let threw: unknown = null;
     try {
@@ -313,35 +304,29 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
         disableDashboard: true,
         disableOutboundPoller: true,
         injectRuntime: runtime,
-        // No `operator:` field either.
+        // No `operator:` field — the v3-canonical path is unwired.
       });
     } catch (err) {
       threw = err;
     }
     expect(threw).toBeInstanceOf(Error);
-    // The error message names BOTH config keys so the operator
-    // knows where to look (cortex-shape vs legacy bot.yaml).
     expect((threw as Error).message).toContain("principal.id");
-    expect((threw as Error).message).toContain("agent.operatorId");
     // The error message explicitly rejects the `"default"` collapse.
     expect((threw as Error).message).toContain("default");
     // No subscriptions leaked from the aborted boot path.
     expect(runtime.onEnvelopeHandlers.size).toBe(0);
   });
 
-  test("empty-string `agent.operatorId` is treated as missing (no silent `\"\"` subject)", async () => {
-    // AgentConfig allows `agent.operatorId` to be omitted; some legacy
-    // configs may have it set to an empty string after a botched
-    // migration. The resolver must treat `""` the same as undefined
-    // — otherwise the subject would render as `local..tasks.*.>`
-    // (two consecutive dots) which is an invalid NATS subject and a
-    // VERY hard bug to diagnose from operator logs.
+  test("empty-string `options.operator.id` is treated as missing (no silent `\"\"` subject)", async () => {
+    // cortex#429 PR-C — the resolver must treat `""` the same as
+    // undefined — otherwise the subject would render as
+    // `local..tasks.*.>` (two consecutive dots) which is an invalid
+    // NATS subject and a VERY hard bug to diagnose from operator logs.
     const runtime = createRecordingRuntime();
     const config = minimalConfig({
       agent: {
         name: "empty-op-cortex",
         displayName: "EmptyOpCortex",
-        operatorId: "",
       },
     });
 
@@ -352,6 +337,7 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
         disableDashboard: true,
         disableOutboundPoller: true,
         injectRuntime: runtime,
+        operator: { id: "" },
       });
     } catch (err) {
       threw = err;

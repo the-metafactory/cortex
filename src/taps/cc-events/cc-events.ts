@@ -70,7 +70,7 @@ import type { PublishedEvent } from "./hooks/lib/event-types";
  *     lifting hooks → bus)
  */
 export interface CcEventSource {
-  /** `agent.operatorId` — first segment (principal slug). Defaults to `"default"` if absent. */
+  /** Boot-resolved `principal.id` — first segment (principal slug). Defaults to `"default"` if absent. */
   principal?: string;
   /** Logical agent name. Defaults to `"cortex"`. */
   agent?: string;
@@ -137,7 +137,7 @@ export interface CreateCcEventEnvelopeOpts {
   /**
    * Envelope source — `{principal}.{agent}.{instance}` per schema. All fields
    * have sensible defaults. Callers (the relay) typically override `principal`
-   * to match the bot's `agent.operatorId`.
+   * to match the bot's boot-resolved `principal.id`.
    */
   source?: CcEventSource;
   /**
@@ -239,7 +239,7 @@ export interface CreateCcEventPublisherOpts {
    * Principal segment used in the envelope `source` and (when
    * classification is `local` or `federated`) the published NATS subject.
    * Defaults to `"default"` to mirror the MyelinRuntime convention when
-   * `agent.operatorId` is absent.
+   * the boot-resolved `principal.id` is absent.
    */
   principal?: string;
   /**

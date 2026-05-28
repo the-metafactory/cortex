@@ -91,10 +91,11 @@ const RESTART_FIELDS = new Set([
   "api.apiKey",
 
   // Agent core identity
+  // cortex#429 PR-C — `agent.operatorId/Discord/Mattermost` retired from
+  // schema. Principal identity lives on `principal.*` (handled by the
+  // cortex-config watcher path) and platform ids on
+  // `principal.discordId/mattermostId/slackId`.
   "agent.name",
-  "agent.operatorId",
-  "agent.operatorDiscordId",
-  "agent.operatorMattermostId",
 
   // Execution backend
   "execution.default",

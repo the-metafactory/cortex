@@ -214,6 +214,7 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
         agentsDir: tmpAgentsDir,
         injectRuntime: runtime,
         inlineAgents,
+        operator: { id: "test-op" },
       }),
     );
 
@@ -291,6 +292,7 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
         agentsDir: tmpAgentsDir,
         injectRuntime: runtime,
         inlineAgents,
+        operator: { id: "test-op" },
       }),
     );
 
@@ -348,6 +350,7 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
           agentsDir: tmpAgentsDir,
           injectRuntime: runtime,
           inlineAgents,
+          operator: { id: "test-op" },
         }),
       ),
     );
@@ -404,6 +407,7 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
           agentsDir: tmpAgentsDir,
           injectRuntime: runtime,
           inlineAgents: [echoAgent, lunaAgent],
+          operator: { id: "test-op" },
         }),
       ),
     );
@@ -502,6 +506,7 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
         agentsDir: tmpAgentsDir,
         injectRuntime: dormantRuntime,
         inlineAgents,
+        operator: { id: "test-op" },
       }),
     );
 
@@ -595,6 +600,7 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
           agentsDir: tmpAgentsDir,
           injectRuntime: throwingRuntime,
           inlineAgents,
+          operator: { id: "test-op" },
         });
         booted = true;
         return h;

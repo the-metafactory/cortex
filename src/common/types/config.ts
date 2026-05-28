@@ -265,11 +265,15 @@ export const AgentConfigSchema = z.object({
   agent: z.object({
     name: z.string().min(1),
     displayName: z.string().min(1),
-    /** Operator identity — groups agents sharing a subscription. Used in both local and cloud mode. */
-    operatorId: z.string().optional(),
-    /** Display name for the operator (shown on dashboard). Defaults to operatorId. */
-    operatorName: z.string().optional(),
     /**
+     * cortex#429 PR-C (deprecation graduation) — `agent.operatorId` and
+     * `agent.operatorName` were the legacy v2 fields carrying the principal
+     * identity. cortex#427 PR-A migrated every read site to the v3-canonical
+     * `principal.id` (surfaced via `LoadedConfig.principal`). cortex#429 PR-C
+     * drops the fields entirely; configs that still declare them will see
+     * Zod strip them silently (no schema error — Zod default mode) and any
+     * downstream consumer that still expects them needs to be re-migrated.
+     *
      * v2.0.0 cutover (cortex#297) — `operatorDiscordId/Mattermost/Slack` retired.
      * The principal's platform-side ids live on `PrincipalConfigSchema.discordId/mattermostId/slackId`
      * in cortex-config.ts and are surfaced through `LoadedConfig.principal` for the
@@ -486,8 +490,8 @@ export const AgentConfigSchema = z.object({
     /**
      * Subject patterns to subscribe to. Default empty — caller must
      * provide at least one pattern when enabling NATS. The placeholder
-     * `{principal}` is substituted with `agent.operatorId` at runtime so a
-     * single template works across operators.
+     * `{principal}` is substituted with the boot-resolved `principal.id`
+     * at runtime so a single template works across principals.
      */
     subjects: z.array(z.string().min(1)).default([]),
     /**
