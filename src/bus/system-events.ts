@@ -482,7 +482,7 @@ export interface SystemBusPeerDispatchReceivedOpts {
   /**
    * Source field from the peer's dispatch envelope (the `{principal}.
    * {agent}.{instance}` triple that identifies which peer just
-   * dispatched a task to us). Different from `opts.source.org` —
+   * dispatched a task to us). Different from `opts.source.principal` —
    * that's US, this is THEM.
    */
   peerSource: string;

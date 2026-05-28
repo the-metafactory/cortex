@@ -1905,14 +1905,15 @@ function convertNats(legacyNats: unknown, warnings: ConversionWarning[]): unknow
   // emitted cortex.yaml is consumable by post-#185 myelin runtimes.
   const subjects = nats.subjects;
   if (Array.isArray(subjects)) {
-    const rewroteIdxs: number[] = [];
-    const rewritten: unknown[] = subjects.map((s: unknown, idx: number): unknown => {
+    const didRewrite = subjects.some(
+      (s: unknown) => typeof s === "string" && s.includes("{org}"),
+    );
+    const rewritten: unknown[] = subjects.map((s: unknown): unknown => {
       if (typeof s !== "string" || !s.includes("{org}")) return s;
-      rewroteIdxs.push(idx);
       return s.replaceAll("{org}", "{principal}");
     });
     nats.subjects = rewritten;
-    if (rewroteIdxs.length > 0) {
+    if (didRewrite) {
       warnings.push({
         field: "nats.subjects",
         message:

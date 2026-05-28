@@ -213,12 +213,12 @@ interface BusRuntime extends MyelinRuntime {
  * the legacy 5-segment shape Echo + cortex publish on today.
  *
  * `envelope.source` is the dotted triple `"{principal}.{agent}.{instance}"`;
- * pull the first segment as the org for the subject prefix.
+ * pull the first segment as the principal for the subject prefix.
  */
 function subjectFor(envelope: Envelope): string {
   const sov = envelope.sovereignty.classification;
-  const org = envelope.source.split(".")[0] ?? "metafactory";
-  return `${sov}.${org}.${envelope.type}`;
+  const principal = envelope.source.split(".")[0] ?? "metafactory";
+  return `${sov}.${principal}.${envelope.type}`;
 }
 
 function createBusRuntime(): BusRuntime {

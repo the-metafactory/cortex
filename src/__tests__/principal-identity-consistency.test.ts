@@ -20,7 +20,7 @@
  *
  * **What this test directly asserts vs what the suite proves as a whole.**
  *
- * Direct assertion (this test, "publish-side `source.org` equals
+ * Direct assertion (this test, "publish-side `source.principal` equals
  * listener-side `{principal}` subject segment"): when boot succeeds
  * via the unified `resolvePrincipalId` path, the dispatch-listener
  * registers exactly one envelope handler on the runtime
@@ -39,7 +39,7 @@
  * resolved value flows through every observable subject segment
  * cortex builds against:
  *
- *   - the `systemEventSource.org` baked into every `system.*` envelope
+ *   - the `systemEventSource.principal` baked into every `system.*` envelope
  *   - the `surfaceConfig.subjects[0]` the dispatch-listener subscribes
  *     on (canonical `local.{principal}.{stack}.tasks.*.>` pattern)
  *   - the per-agent durable-consumer name baked into the review-stream
@@ -117,7 +117,7 @@ function createRecordingRuntime(): RecordingRuntime {
 }
 
 describe("principal-identity consistency (cortex#427 PR-A)", () => {
-  test("publish-side `source.org` equals listener-side `{principal}` subject segment", async () => {
+  test("publish-side `source.principal` equals listener-side `{principal}` subject segment", async () => {
     // Setup: the v3 canonical path supplies the principal id via
     // `options.operator.id` (sourced from `cortexConfig.principal.id`
     // by the loader). The legacy `config.agent.operatorId` carries a
@@ -145,8 +145,8 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
 
     try {
       // PUBLISH SIDE: every `system.*` envelope emitted at boot
-      // (`system.adapter.connected`, etc.) carries the source-org
-      // baked from `systemEventSource.org` in cortex.ts. With
+      // (`system.adapter.connected`, etc.) carries the source-principal
+      // baked from `systemEventSource.principal` in cortex.ts. With
       // adapters disabled in this minimal config, the listener
       // doesn't emit anything at boot — so we synthesise a publish
       // through the runtime to capture the canonical envelope shape
@@ -194,9 +194,9 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
       // ----------------------------------------------------------------
       // Cross-check via `system.*` emission path.
       //
-      // `systemEventSource.org` is what every `system.*` envelope
+      // `systemEventSource.principal` is what every `system.*` envelope
       // built inside cortex.ts uses for its `source` field
-      // (`{org}.{agent}.{instance}`). We can't easily force a
+      // (`{principal}.{agent}.{instance}`). We can't easily force a
       // boot-time system event without standing up an adapter, so
       // we make the assertion via a controlled emission: build a
       // `dispatch.task.received` shape and dispatch it through the

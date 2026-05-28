@@ -3,7 +3,7 @@
  *
  * Coverage axes:
  *   1. Registration shape — surfaceConfig matches G-1111 §4 SurfaceAdapter
- *      contract; default subjects derive from source.org.
+ *      contract; default subjects derive from source.principal.
  *   2. Lifecycle — on success: started → completed; on non-zero exit:
  *      started → failed; on factory throw: started → failed; on exit 143:
  *      started → aborted.
@@ -216,7 +216,7 @@ const ABORTED_BY_FLAG_RESULT: CCSessionResult = {
 // ---------------------------------------------------------------------------
 
 describe("createDispatchListener — surfaceConfig", () => {
-  test("default subjects derive from source.org", () => {
+  test("default subjects derive from source.principal", () => {
     const { runtime } = recordingRuntime();
     const router = createSurfaceRouter(runtime);
     const listener = createDispatchListener({
