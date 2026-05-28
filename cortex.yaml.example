@@ -41,11 +41,11 @@ principal:
   # subjects (`local.{principal}.>`) and as the stack-id default. Must match
   # `^[a-z][a-z0-9-]*$` — replace the placeholder below with your own
   # short slug (e.g. `andreas`, `team-research`).
-  id: operator-name  # <REPLACE_ME>
+  id: principal-name  # <REPLACE_ME>
   # Human-readable display name shown on the dashboard.
-  displayName: Operator Name  # <REPLACE_ME>
+  displayName: Principal Name  # <REPLACE_ME>
   # Your Discord snowflake (numeric string). Used by the policy block's
-  # `operator` principal so the bot recognises you as the operator on
+  # `principal` so the bot recognises you as the principal on
   # Discord. Remove the line if you are not using Discord.
   discordId: "000000000000000000"  # <REPLACE_ME>: paste your numeric Discord id
   # ISO-3166 country code stamped into `sovereignty.data_residency` on
@@ -53,7 +53,7 @@ principal:
   dataResidency: NZ
 
 # -----------------------------------------------------------------------------
-# stack — identity of this cortex deployment within the operator
+# stack — identity of this cortex deployment within the principal
 # -----------------------------------------------------------------------------
 # v2.0.3 (cortex#324) — stack signing is ON by default. `arc upgrade Cortex`
 # auto-provisions `nkey_seed_path` + `nkey_pub` if you don't declare them;
@@ -63,20 +63,20 @@ principal:
 # reject those messages. See docs/sop-stack-identity.md for rotation +
 # threat-model background.
 #
-# When omitted, `deriveStackId` defaults to `${operator.id}/default`. Declare
-# `stack:` explicitly once you run more than one stack per operator.
+# When omitted, `deriveStackId` defaults to `${principal.id}/default`. Declare
+# `stack:` explicitly once you run more than one stack per principal.
 stack:
-  # Must match `{operator_id}/{stack_id}` grammar — both segments lowercase
+  # Must match `{principal_id}/{stack_id}` grammar — both segments lowercase
   # alphanumeric + hyphen/underscore, each starting with a letter. Keep the
-  # operator-id half in sync with `operator.id` above.
-  id: operator-name/meta-factory  # <REPLACE_ME>: keep operator-name half in sync with operator.id
+  # principal-id half in sync with `principal.id` above.
+  id: principal-name/meta-factory  # <REPLACE_ME>: keep principal-name half in sync with principal.id
   # NKey seed file (NATS user-class, `SU…`-prefixed). Must be chmod 600.
   # `arc upgrade Cortex` provisions one at this path if missing. Rotate
   # by regenerating the seed + updating `nkey_pub` below; see SOP.
   nkey_seed_path: ~/.config/nats/cortex.nk  # <REPLACE_ME or rely on arc upgrade auto-provision>
   # 56-char base32 NKey public key (`U…`-prefixed). Optional but
   # recommended — cortex pins the loaded seed against this value at
-  # boot to catch operator-rotation split-brain (seed file rotated but
+  # boot to catch principal-rotation split-brain (seed file rotated but
   # peers' trust: list still references the old pubkey). Omit on first
   # install; copy from the cortex log line (`stack signing key staged —
   # principal=…`) into the field after first boot for the consistency
@@ -93,7 +93,7 @@ stack:
 # The 8 code-review.* flavors below match the arc-skill-code-review skill
 # pack shipped with Echo. Pilot's `pilot request-review --capability X`
 # requests resolve against this catalog, so every `--capability X` value
-# an operator might invoke must have a matching entry here.
+# a principal might invoke must have a matching entry here.
 capabilities:
   - id: code-review.typescript
     description: TypeScript code review (correctness, types, idioms)
@@ -123,31 +123,31 @@ capabilities:
 # -----------------------------------------------------------------------------
 # policy — principal + role registry consumed by the PolicyEngine
 # -----------------------------------------------------------------------------
-# Minimal single-principal example: declare yourself as the operator so
+# Minimal single-principal example: declare yourself as the principal so
 # the bot recognises your Discord identity. Extend with per-agent
 # principals (one entry per `agents[]` member) once you wire agent-side
 # trust + capability gating.
 policy:
   principals:
-    - id: operator
-      # <REPLACE_ME>: keep both fields in sync with `operator.id` and `stack.id` above.
-      home_operator: operator-name
-      home_stack: operator-name/meta-factory
+    - id: principal-name  # <REPLACE_ME>
+      # <REPLACE_ME>: keep both fields in sync with `principal.id` and `stack.id` above.
+      home_operator: principal-name
+      home_stack: principal-name/meta-factory
       role:
-        - operator
+        - principal
       trust: []
       platform_ids:
         discord:
-          - "000000000000000000"  # <REPLACE_ME>: your operator Discord id
+          - "000000000000000000"  # <REPLACE_ME>: your principal Discord id
     - id: echo
-      home_operator: operator-name  # <REPLACE_ME>
-      home_stack: operator-name/meta-factory  # <REPLACE_ME>
+      home_operator: principal-name  # <REPLACE_ME>
+      home_stack: principal-name/meta-factory  # <REPLACE_ME>
       role:
         - agent-echo
       trust: []
       platform_ids: {}
   roles:
-    - id: operator
+    - id: principal
       capabilities:
         - keyword.chat
         - keyword.async
@@ -211,9 +211,9 @@ agents:
         # Bus-side subjects this agent subscribes to via the
         # surface-router. The pattern below routes inbound code-review
         # tasks at the stack level — the segment after `local.` is your
-        # operator id and the next segment is your stack id.
+        # principal id and the next segment is your stack id.
         surfaceSubjects:
-          - local.operator-name.meta-factory.tasks.code-review.>  # <REPLACE_ME>: keep in sync with stack.id
+          - local.principal-name.meta-factory.tasks.code-review.>  # <REPLACE_ME>: keep in sync with stack.id
 
 # -----------------------------------------------------------------------------
 # renderers — non-agent-bound surfaces (dashboards, pagerduty, etc.)
