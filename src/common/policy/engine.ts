@@ -131,6 +131,29 @@ export class PolicyEngine {
    * `PolicySchema.superRefine`; if a duplicate slips through here the
    * later principal in the constructor list wins (last-write semantics,
    * consistent with `principalsById`'s `new Map(...)` collision rule).
+   *
+   * **Duplication note (PR #483 — keep in sync with
+   * `PlatformPrincipalIndex` in `src/common/policy/policy-gate.ts`).**
+   * `PlatformPrincipalIndex` builds the same `(platform, platform_id)
+   * → principal_id` lookup from the same `policy.principals[]` shape,
+   * for adapter-side `resolvePolicyAccess`. Both indexes are kept
+   * because they serve different boundaries:
+   *
+   *   - `PlatformPrincipalIndex` runs adapter-side, BEFORE the
+   *     envelope hits the bus. The adapter has the platform + raw
+   *     platform-id in hand (e.g. Discord snowflake) and just needs
+   *     `resolve(platform, id)` to construct the originator DID.
+   *   - This engine-side index runs bus-side, AFTER the envelope is
+   *     verified. The runner has only a flat `did:mf:<platform>-<id>`
+   *     string and needs both (a) the platform set, for
+   *     longest-prefix disambiguation (see {@link knownPlatforms}),
+   *     and (b) the reverse lookup. Holding the registry here lets
+   *     `dispatch-listener.ts` consume policy decisions without
+   *     pulling in `policy-gate.ts` (adapter-layer module).
+   *
+   * Schema-side changes (case-folding, platform-name canonicalisation,
+   * deprecation) must land in BOTH places or the boundaries drift.
+   * Cross-referenced from `PlatformPrincipalIndex` JSDoc.
    */
   private readonly principalIdByPlatformId: ReadonlyMap<string, ReadonlyMap<string, string>>;
 

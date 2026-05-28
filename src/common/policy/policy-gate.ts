@@ -36,6 +36,16 @@ import type { Policy, PolicyPrincipal } from "../types/cortex-config";
  *
  * Built once at adapter construction time. Read-only at runtime; backed
  * by an internal `Map`.
+ *
+ * **Duplication note (PR #483 — keep in sync with the engine-side
+ * reverse index `principalIdByPlatformId` in
+ * `src/common/policy/engine.ts`).** Both indexes are built from
+ * the same `policy.principals[].platform_ids` shape but serve
+ * different boundaries (adapter-side pre-publish vs runner-side
+ * post-verify). Schema changes (case-folding, platform-name
+ * canonicalisation, deprecation) must land in BOTH places or the
+ * boundaries drift. See `PolicyEngine.principalIdByPlatformId`
+ * JSDoc for the full justification.
  */
 export class PlatformPrincipalIndex {
   private readonly map: ReadonlyMap<string, string>;
