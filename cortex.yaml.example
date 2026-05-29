@@ -179,6 +179,12 @@ policy:
 agents:
   - id: echo
     displayName: Echo
+    # OPTIONAL but REQUIRED for NKey-verified bot↔bot dispatch: the agent's
+    # Ed25519 public key (U-prefixed) from its NATS creds. Without it a peer
+    # signing a request as did:mf:echo is rejected `principal_has_no_nkey_pub`
+    # (the agent then falls back to platform-id trust only). Paste the
+    # U-prefixed pubkey from ~/.config/nats/echo.creds.
+    nkey_pub: UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA  # <REPLACE_ME>
     persona: ./personas/echo.md
     trust: []
     runtime:
