@@ -208,12 +208,12 @@ agents:
         contextDepth: 10
         enableAgentLog: false
         trustedBotIds: []
-        # Bus-side subjects this agent subscribes to via the
-        # surface-router. The pattern below routes inbound code-review
-        # tasks at the stack level — the segment after `local.` is your
-        # principal id and the next segment is your stack id.
-        surfaceSubjects:
-          - local.principal-name.meta-factory.tasks.code-review.>  # <REPLACE_ME>: keep in sync with stack.id
+        # Inbound task envelopes must NOT be surfaced here — the adapter would
+        # render the raw envelope JSON to Discord (the cortex#477/#479 leak).
+        # Review OUTPUT is rendered by the review-sink (cortex#502/#503), which
+        # emits a deterministic `presentation` markdown, never raw JSON. Leave
+        # this empty unless an agent must surface a non-task subject.
+        surfaceSubjects: []
 
 # -----------------------------------------------------------------------------
 # renderers — non-agent-bound surfaces (dashboards, pagerduty, etc.)
