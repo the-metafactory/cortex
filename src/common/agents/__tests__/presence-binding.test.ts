@@ -94,6 +94,13 @@ class FakeAdapter implements PlatformAdapter {
   async createThread(msg: InboundMessage, _name: string): Promise<ResponseTarget> {
     return { instanceId: this.instanceId, channelId: msg.channelId };
   }
+  async resolveLogicalTarget(_addr: {
+    surface: string;
+    channel: string;
+    thread?: string;
+  }): Promise<ResponseTarget | null> {
+    return null;
+  }
   async notifyOperator(_text: string) {}
 }
 

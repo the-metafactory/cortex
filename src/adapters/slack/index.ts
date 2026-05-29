@@ -599,6 +599,24 @@ export class SlackAdapter implements PlatformAdapter {
     };
   }
 
+  /**
+   * cortex#502 — logical→native resolution seam. Not yet implemented for
+   * Slack: returns `null` so the review sink skips this adapter (no
+   * cross-surface posting). A future Slack implementation maps
+   * `addr.channel` (repo short name) → channel id via `conversations.list`
+   * and `addr.thread` → a `thread_ts` of a per-entity root message; the
+   * wire stays platform-neutral. The surface guard also returns `null` for
+   * non-`slack` surfaces.
+   */
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async resolveLogicalTarget(_addr: {
+    surface: string;
+    channel: string;
+    thread?: string;
+  }): Promise<ResponseTarget | null> {
+    return null;
+  }
+
   async notifyOperator(text: string): Promise<void> {
     const principalSlackId = this.infra.principal.slackId;
     if (!principalSlackId) return;

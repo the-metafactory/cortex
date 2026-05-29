@@ -637,3 +637,62 @@ describe("runReviewPipeline — onSessionSpawned hook", () => {
     expect(stopCalled).toBeGreaterThanOrEqual(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cortex#502 — responseRouting threaded onto both terminal envelopes
+// ---------------------------------------------------------------------------
+
+describe("runReviewPipeline — responseRouting (cortex#502)", () => {
+  const ROUTING = { surface: "discord", channel: "cortex", thread: "cortex/pr/57" };
+
+  test("verdict terminal carries payload.response_routing", async () => {
+    const { factory } = fakeFactory(successResult(buildVerdictBlock("approved")));
+    const result = await runReviewPipeline({
+      ...baseOpts(factory),
+      responseRouting: ROUTING,
+    });
+    expect(result.kind).toBe("verdict");
+    if (result.kind !== "verdict") return;
+    expect(
+      (result.envelope.payload as { response_routing?: unknown }).response_routing,
+    ).toEqual(ROUTING);
+    expect(validateEnvelope(result.envelope).ok).toBe(true);
+  });
+
+  test("failed terminal carries payload.response_routing", async () => {
+    const result = await runReviewPipeline({
+      ...baseOpts(throwingFactory("claude binary not found")),
+      responseRouting: ROUTING,
+    });
+    expect(result.kind).toBe("failed");
+    if (result.kind !== "failed") return;
+    expect(
+      (result.envelope.payload as { response_routing?: unknown }).response_routing,
+    ).toEqual(ROUTING);
+  });
+
+  test("omitted → no response_routing key on either terminal", async () => {
+    const { factory } = fakeFactory(successResult(buildVerdictBlock("approved")));
+    const verdict = await runReviewPipeline(baseOpts(factory));
+    expect(verdict.kind).toBe("verdict");
+    if (verdict.kind === "verdict") {
+      expect("response_routing" in (verdict.envelope.payload as object)).toBe(false);
+    }
+    const failed = await runReviewPipeline(
+      baseOpts(throwingFactory("nope")),
+    );
+    expect(failed.kind).toBe("failed");
+    if (failed.kind === "failed") {
+      expect("response_routing" in (failed.envelope.payload as object)).toBe(false);
+    }
+  });
+
+  test("pipeline stays non-throwing and never references a runtime", async () => {
+    // The opts type has no runtime field — this is a structural guarantee.
+    // Assert the happy + failure paths both return (never throw) with routing.
+    const { factory } = fakeFactory(successResult(buildVerdictBlock("approved")));
+    await expect(
+      runReviewPipeline({ ...baseOpts(factory), responseRouting: ROUTING }),
+    ).resolves.toBeDefined();
+  });
+});

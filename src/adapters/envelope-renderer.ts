@@ -87,3 +87,59 @@ export function formatDispatchLifecycle(envelope: Envelope): string | null {
 
   return null;
 }
+
+/**
+ * cortex#502 — render a `review.verdict.{approved|changes-requested|commented}`
+ * envelope to a concise one-liner reply, or `null` for any other envelope
+ * type. The verdict is the PRIMARY review reply; the **review sink**
+ * (`src/adapters/review-sink.ts`) reuses this formatter (one formatter, no
+ * reinvented copy — same discipline as the dispatch sink reusing
+ * `formatDispatchLifecycle`). The sink owns delivery + the requester ping;
+ * this stays the pure text half.
+ *
+ * Shape:
+ *   `{emoji} {reviewer} {verdict-label} {repo}#{pr} — {b}B/{m}M/{n}N · {url}`
+ *
+ * e.g. `🔴 echo requested changes the-metafactory/cortex#57 — 1B/2M/3N · https://github.com/...`
+ *
+ * Emoji + verdict-label by `payload.verdict`:
+ *   - `approved`          → ✅ "approved"
+ *   - `changes-requested` → 🔴 "requested changes"
+ *   - `commented`         → 💬 "commented on"
+ *
+ * Returns `null` (rather than a JSON fallback) for non-verdict envelopes so
+ * the sink can decide whether to fall through to `formatDispatchLifecycle`.
+ */
+export function formatReviewVerdict(envelope: Envelope): string | null {
+  if (!envelope.type.startsWith("review.verdict.")) return null;
+  const payload = envelope.payload;
+
+  const reviewer = typeof payload.reviewer === "string" ? payload.reviewer : "reviewer";
+  const repo = typeof payload.repo === "string" ? payload.repo : "?";
+  const pr = typeof payload.pr === "number" ? payload.pr : "?";
+  const url =
+    typeof payload.github_review_url === "string" ? payload.github_review_url : "";
+
+  const verdict = typeof payload.verdict === "string" ? payload.verdict : "";
+  let emoji: string;
+  let verdictLabel: string;
+  if (verdict === "approved") {
+    emoji = "✅";
+    verdictLabel = "approved";
+  } else if (verdict === "changes-requested") {
+    emoji = "🔴";
+    verdictLabel = "requested changes";
+  } else {
+    // "commented" or any unknown verdict — render neutrally.
+    emoji = "💬";
+    verdictLabel = "commented on";
+  }
+
+  const findings = (payload.findings ?? {}) as Record<string, unknown>;
+  const b = typeof findings.blockers === "number" ? findings.blockers : 0;
+  const m = typeof findings.majors === "number" ? findings.majors : 0;
+  const n = typeof findings.nits === "number" ? findings.nits : 0;
+
+  const head = `${emoji} ${reviewer} ${verdictLabel} ${repo}#${pr} — ${b}B/${m}M/${n}N`;
+  return url ? `${head} · ${url}` : head;
+}

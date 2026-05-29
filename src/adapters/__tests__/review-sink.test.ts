@@ -1,0 +1,412 @@
+/**
+ * cortex#502 — review sink (OUTBOUND) tests. Mirrors dispatch-sink.test.ts.
+ *
+ * Pins the consumer's contract:
+ *   - subscribes to BOTH `local.{principal}[.{stack}].dispatch.task.>` AND
+ *     `…review.verdict.>`
+ *   - reads `payload.response_routing` (LOGICAL shape — `{ surface, channel,
+ *     thread? }`)
+ *   - filters by `surface` matching an adapter it drives (no cross-surface)
+ *   - resolves logical→native via `adapter.resolveLogicalTarget`
+ *   - `dispatch.task.started` → `sendProgress`
+ *   - `review.verdict.*` / `completed`/`failed`/`aborted` → `postResponse`
+ *   - verdict renders the one-liner + GitHub link + requester ping
+ *   - ignores envelopes with no response_routing (pilot-only / Offer)
+ *   - single post per terminal envelope; never throws when postResponse rejects
+ */
+
+import { describe, expect, test } from "bun:test";
+import { createReviewSink } from "../review-sink";
+import { MockAdapter } from "../mock";
+import type { Envelope } from "../../bus/myelin/envelope-validator";
+import type { MyelinRuntime } from "../../bus/myelin/runtime";
+import type { MyelinSubscriber } from "../../bus/myelin/subscriber";
+
+function fakeRuntime(): {
+  runtime: MyelinRuntime;
+  trigger: (env: Envelope) => void;
+  subscribedPatterns: string[];
+  subscribers: { pattern: string; stopped: boolean }[];
+} {
+  const handlers = new Set<Parameters<MyelinRuntime["onEnvelope"]>[0]>();
+  const subscribedPatterns: string[] = [];
+  const subscribers: { pattern: string; stopped: boolean }[] = [];
+  const runtime: MyelinRuntime = {
+    enabled: true,
+    onEnvelope: (handler: Parameters<MyelinRuntime["onEnvelope"]>[0]) => {
+      handlers.add(handler);
+      return { unregister: () => { handlers.delete(handler); } };
+    },
+    publish: async () => {},
+    subscribe: async (pattern: string) => {
+      subscribedPatterns.push(pattern);
+      const entry = { pattern, stopped: false };
+      subscribers.push(entry);
+      return {
+        stop: async () => { entry.stopped = true; },
+      } as unknown as MyelinSubscriber;
+    },
+    stop: async () => {},
+  };
+  return {
+    runtime,
+    trigger: (env) => {
+      for (const h of handlers) h(env, "local.metafactory.review.verdict.approved");
+    },
+    subscribedPatterns,
+    subscribers,
+  };
+}
+
+function envelope(type: string, payload: Record<string, unknown>): Envelope {
+  return {
+    id: "00000000-0000-4000-8000-000000000099",
+    source: "metafactory.echo.local",
+    type,
+    timestamp: "2026-05-29T12:00:00Z",
+    correlation_id: "req-1",
+    sovereignty: {
+      classification: "local",
+      data_residency: "NZ",
+      max_hop: 0,
+      frontier_ok: false,
+      model_class: "local-only",
+    },
+    payload,
+  };
+}
+
+const logicalRouting = (surface: string, channel: string, thread?: string) => ({
+  surface,
+  channel,
+  ...(thread !== undefined && { thread }),
+});
+
+function verdictPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    repo: "the-metafactory/cortex",
+    pr: 57,
+    reviewer: "luna",
+    verdict: "changes-requested",
+    summary: "verdict: blockers=1 majors=2 nits=3 — request-changes",
+    github_review_id: 123,
+    github_review_url:
+      "https://github.com/the-metafactory/cortex/pull/57#pullrequestreview-123",
+    submitted_at: "2026-05-29T12:01:00Z",
+    commit_id: "abc123",
+    findings: { blockers: 1, majors: 2, nits: 3 },
+    inline_comments: 5,
+    ...overrides,
+  };
+}
+
+// A mock adapter whose `platform`/`logicalSurface` is "discord" so it
+// matches a `surface: "discord"` envelope.
+function discordMock(instanceId = "discord-cortex"): MockAdapter {
+  const a = new MockAdapter(instanceId);
+  // Override the readonly `platform` for the surface filter. The sink
+  // pre-filters on `adapter.platform === routing.surface`.
+  Object.defineProperty(a, "platform", { value: "discord", writable: false });
+  a.logicalSurface = "discord";
+  return a;
+}
+
+describe("review-sink — subscription", () => {
+  test("subscribes to BOTH dispatch.task.> and review.verdict.> (stack-less)", async () => {
+    const { runtime, subscribedPatterns } = fakeRuntime();
+    const sink = createReviewSink({ runtime, adapters: [], principal: "metafactory" });
+    await sink.start();
+    expect(sink.subjects).toEqual([
+      "local.metafactory.dispatch.task.>",
+      "local.metafactory.review.verdict.>",
+    ]);
+    expect(subscribedPatterns).toEqual([
+      "local.metafactory.dispatch.task.>",
+      "local.metafactory.review.verdict.>",
+    ]);
+  });
+
+  test("subscribes to the stack-aware patterns when a stack is given", async () => {
+    const { runtime, subscribedPatterns } = fakeRuntime();
+    const sink = createReviewSink({
+      runtime,
+      adapters: [],
+      principal: "andreas",
+      stack: "meta-factory",
+    });
+    await sink.start();
+    expect(subscribedPatterns).toEqual([
+      "local.andreas.meta-factory.dispatch.task.>",
+      "local.andreas.meta-factory.review.verdict.>",
+    ]);
+  });
+
+  test("start() is idempotent; stop() drains and is idempotent", async () => {
+    const { runtime, subscribedPatterns, subscribers } = fakeRuntime();
+    const sink = createReviewSink({ runtime, adapters: [], principal: "metafactory" });
+    await sink.start();
+    await sink.start();
+    expect(subscribedPatterns).toHaveLength(2);
+    await sink.stop();
+    await sink.stop();
+    expect(subscribers.every((s) => s.stopped)).toBe(true);
+  });
+});
+
+describe("review-sink — verdict delivery", () => {
+  test("posts the verdict one-liner + GitHub link + requester ping to the resolved thread", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      envelope("review.verdict.changes-requested", {
+        ...verdictPayload(),
+        response_routing: logicalRouting("discord", "cortex", "cortex/pr/57"),
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // resolveLogicalTarget was called with the logical triple.
+    expect(adapter.logicalTargetsResolved).toEqual([
+      { surface: "discord", channel: "cortex", thread: "cortex/pr/57" },
+    ]);
+    // Exactly one post, to the resolved native target.
+    expect(adapter.sentMessages).toHaveLength(1);
+    const sent = adapter.sentMessages[0]!;
+    expect(sent.target).toEqual({
+      instanceId: "discord-cortex",
+      channelId: "chan:cortex",
+      threadId: "thread:cortex/pr/57",
+    });
+    // Text carries the ping + emoji + verdict label + findings + url.
+    expect(sent.text).toContain("@luna");
+    expect(sent.text).toContain("🔴");
+    expect(sent.text).toContain("requested changes");
+    expect(sent.text).toContain("the-metafactory/cortex#57");
+    expect(sent.text).toContain("1B/2M/3N");
+    expect(sent.text).toContain(
+      "https://github.com/the-metafactory/cortex/pull/57#pullrequestreview-123",
+    );
+  });
+
+  test("approved verdict renders the ✅ label", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      envelope("review.verdict.approved", {
+        ...verdictPayload({
+          verdict: "approved",
+          findings: { blockers: 0, majors: 0, nits: 0 },
+        }),
+        response_routing: logicalRouting("discord", "cortex", "cortex/pr/57"),
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(adapter.sentMessages[0]!.text).toContain("✅");
+    expect(adapter.sentMessages[0]!.text).toContain("approved");
+  });
+});
+
+describe("review-sink — lifecycle delivery", () => {
+  test("dispatch.task.started → sendProgress (not postResponse)", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      envelope("dispatch.task.started", {
+        agent_id: "luna",
+        response_routing: logicalRouting("discord", "cortex", "cortex/pr/57"),
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(adapter.sentMessages).toHaveLength(0);
+    expect(adapter.progressSent).toHaveLength(1);
+    expect(adapter.progressSent[0]!.text).toContain("Luna is working");
+  });
+
+  test("dispatch.task.failed → postResponse error reply", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      envelope("dispatch.task.failed", {
+        agent_id: "echo",
+        error_summary: "claude exited 1",
+        response_routing: logicalRouting("discord", "cortex", "cortex/pr/57"),
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(adapter.sentMessages).toHaveLength(1);
+    expect(adapter.sentMessages[0]!.text).toBe("Echo failed: claude exited 1");
+  });
+
+  test("dispatch.task.aborted → postResponse", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      envelope("dispatch.task.aborted", {
+        agent_id: "echo",
+        reason: "timeout",
+        response_routing: logicalRouting("discord", "cortex"),
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(adapter.sentMessages).toHaveLength(1);
+    expect(adapter.sentMessages[0]!.text).toContain("stopped");
+  });
+});
+
+describe("review-sink — surface filter", () => {
+  test("ignores an envelope for a surface this sink doesn't drive", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock(); // drives "discord"
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      envelope("review.verdict.approved", {
+        ...verdictPayload({ verdict: "approved" }),
+        response_routing: logicalRouting("slack", "cortex", "cortex/pr/57"),
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The pre-filter (`adapter.platform !== surface`) skips the adapter
+    // entirely — resolveLogicalTarget is not even called.
+    expect(adapter.logicalTargetsResolved).toHaveLength(0);
+    expect(adapter.sentMessages).toHaveLength(0);
+  });
+
+  test("routes to the matching surface among many adapters", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const disc = discordMock("discord-cortex");
+    const other = new MockAdapter("mock-other"); // platform "mock"
+    const sink = createReviewSink({
+      runtime,
+      adapters: [other, disc],
+      principal: "metafactory",
+    });
+    await sink.start();
+
+    trigger(
+      envelope("review.verdict.approved", {
+        ...verdictPayload({ verdict: "approved" }),
+        response_routing: logicalRouting("discord", "cortex", "cortex/pr/57"),
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(other.sentMessages).toHaveLength(0);
+    expect(disc.sentMessages).toHaveLength(1);
+  });
+});
+
+describe("review-sink — no-routing and resilience", () => {
+  test("ignores an envelope with NO response_routing (pilot-only / Offer)", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      envelope("review.verdict.approved", verdictPayload({ verdict: "approved" })),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(adapter.logicalTargetsResolved).toHaveLength(0);
+    expect(adapter.sentMessages).toHaveLength(0);
+  });
+
+  test("ignores non-review/non-lifecycle envelope types entirely", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      envelope("review.cycle.completed", {
+        agent_id: "luna",
+        response_routing: logicalRouting("discord", "cortex"),
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(adapter.sentMessages).toHaveLength(0);
+    expect(adapter.progressSent).toHaveLength(0);
+  });
+
+  test("single post per terminal envelope (no double-reply)", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      envelope("review.verdict.approved", {
+        ...verdictPayload({ verdict: "approved" }),
+        response_routing: logicalRouting("discord", "cortex", "cortex/pr/57"),
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(adapter.sentMessages).toHaveLength(1);
+  });
+
+  test("never throws when postResponse rejects", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    adapter.postResponse = async () => {
+      throw new Error("rate limited");
+    };
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    expect(() =>
+      trigger(
+        envelope("review.verdict.approved", {
+          ...verdictPayload({ verdict: "approved" }),
+          response_routing: logicalRouting("discord", "cortex", "cortex/pr/57"),
+        }),
+      ),
+    ).not.toThrow();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+});

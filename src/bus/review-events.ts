@@ -74,6 +74,7 @@ import type { Classification, Envelope } from "./myelin/envelope-validator";
 import { buildBaseEnvelope as buildSharedEnvelope } from "./envelope-builder";
 import {
   createDispatchTaskFailedEvent,
+  type AnyResponseRouting,
   type DispatchTaskFailedOpts,
   type DispatchTaskFailedReason,
 } from "./dispatch-events";
@@ -330,6 +331,20 @@ export interface CreateReviewVerdictEventOpts {
    * `tasks.code-review.*` parameterisation.
    */
   classification?: Classification;
+  /**
+   * cortex#502 — **Response routing** echoed from the inbound review
+   * request envelope onto the verdict. The verdict is the PRIMARY reply
+   * the review sink renders, so it MUST carry routing (the shared
+   * `dispatch.task.*` builders carry it on the lifecycle envelopes; this
+   * is the only NEW emit surface). When supplied, surfaces as
+   * `payload.response_routing` (the logical
+   * {@link import("./dispatch-events").LogicalResponseRouting} shape for
+   * review). Omitted (no field on the wire) for bus-peer / direct-pilot-
+   * only / Offer dispatches whose request carried no routing — the review
+   * sink then ignores the verdict envelope (the authoritative verdict
+   * still reaches pilot via `correlation_id`, unchanged).
+   */
+  responseRouting?: AnyResponseRouting;
   /** Payload per §4.2. */
   payload: ReviewVerdictPayload;
 }
@@ -384,6 +399,13 @@ export function createReviewVerdictEvent(
         nits: opts.payload.findings.nits,
       },
       inline_comments: opts.payload.inline_comments,
+      // cortex#502 — echo response routing when the inbound review request
+      // carried it, so the review sink can render the verdict to the
+      // originating thread. Omitted (no key on the wire) for pilot-only /
+      // bus-peer / Offer dispatches.
+      ...(opts.responseRouting !== undefined && {
+        response_routing: opts.responseRouting,
+      }),
     },
   });
 }

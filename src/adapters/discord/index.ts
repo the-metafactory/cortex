@@ -910,6 +910,89 @@ export class DiscordAdapter implements PlatformAdapter {
     }
   }
 
+  /**
+   * cortex#502 — resolve a LOGICAL surface address (the review-path
+   * `response_routing` shape) to a native Discord {@link ResponseTarget}.
+   *
+   * The review wire stays platform-neutral: `channel` is a repo short name
+   * (the channel-routing SOP's "repos get channels") and `thread`, when
+   * present, is the `{repo}/{entity-type}/{number}` logical key ("GitHub
+   * entities get threads"). This method maps logical→native:
+   *
+   *   1. If `addr.surface !== "discord"`, return `null` — this is not our
+   *      surface, the review sink skips us (no cross-surface posting).
+   *   2. Resolve `addr.channel` (the repo short name) to a guild text
+   *      channel by NAME. The SOP guarantees one logical channel per repo,
+   *      so a name match is unambiguous.
+   *   3. If `addr.thread` is present, reuse the existing
+   *      {@link findOrCreateThreadByName} (the same primitive the inbound
+   *      channel-routing path uses) to get/create the `{repo}/...` thread
+   *      snowflake.
+   *   4. Return `null` on any unresolved channel/thread so the sink ignores
+   *      the envelope rather than mis-posting.
+   */
+  async resolveLogicalTarget(addr: {
+    surface: string;
+    channel: string;
+    thread?: string;
+  }): Promise<ResponseTarget | null> {
+    // Surface guard — only resolve addresses targeting Discord.
+    if (addr.surface !== this.platform) return null;
+    if (!this.client) return null;
+
+    // Resolve the repo-short-name channel to a guild text-channel snowflake
+    // by name. Scope the lookup to this adapter's guild so a name that
+    // exists in multiple guilds the bot is in can't cross-resolve.
+    const channelSnowflake = this.resolveChannelByName(addr.channel);
+    if (channelSnowflake === null) {
+      console.warn(
+        `discord-${this.instanceId}: resolveLogicalTarget: no channel named "${addr.channel}" in guild ${this.presence.guildId}`,
+      );
+      return null;
+    }
+
+    // Channel-scope target when no thread is requested.
+    if (addr.thread === undefined) {
+      return { instanceId: this.instanceId, channelId: channelSnowflake };
+    }
+
+    // Entity→thread: reuse the SOP machinery. `findOrCreateThreadByName`
+    // is idempotent — repeated review pings for the same PR collapse to a
+    // single `{repo}/pr/N` thread.
+    const thread = await this.findOrCreateThreadByName(
+      channelSnowflake,
+      addr.thread,
+    );
+    if (thread === null) {
+      // Thread couldn't be created/found (non-text parent, perms, etc.).
+      // Fall back to channel-scope rather than dropping the reply.
+      return { instanceId: this.instanceId, channelId: channelSnowflake };
+    }
+    return {
+      instanceId: this.instanceId,
+      channelId: channelSnowflake,
+      threadId: thread.threadId,
+      _native: thread.channel,
+    };
+  }
+
+  /**
+   * cortex#502 — resolve a channel NAME (repo short name) to its Discord
+   * snowflake within this adapter's guild. Returns `null` when no guild
+   * text channel of that name is found. Uses the discord.js channel cache
+   * (populated on connect via the `Guilds` intent); a cache miss for a
+   * channel that exists is rare for a long-lived connection.
+   */
+  private resolveChannelByName(name: string): string | null {
+    if (!this.client) return null;
+    const guild = this.client.guilds.cache.get(this.presence.guildId);
+    if (!guild) return null;
+    const match = guild.channels.cache.find(
+      (c) => c.type === ChannelType.GuildText && c.name === name,
+    );
+    return match ? match.id : null;
+  }
+
   async notifyOperator(text: string): Promise<void> {
     const principalDiscordId = this.infra.principal.discordId;
     if (!principalDiscordId || !this.client) return;

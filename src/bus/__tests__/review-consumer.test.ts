@@ -42,6 +42,7 @@ import {
   OFFER_DISPATCH_REVIEWER,
   failedReasonToAckDecision,
   parseReviewRequestPayload,
+  readLogicalResponseRouting,
   type ReviewConsumerAgent,
   type ReviewConsumerOpts,
 } from "../review-consumer";
@@ -1052,5 +1053,269 @@ describe("parseReviewRequestPayload — cortex#384 dual-shape acceptance", () =>
       pr_url: "https://github.com/the-metafactory/cortex/issues/5",
     });
     expect(parseReviewRequestPayload(env)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#502 — response_routing echo
+// ---------------------------------------------------------------------------
+
+const LOGICAL_ROUTING = {
+  surface: "discord",
+  channel: "cortex",
+  thread: "cortex/pr/57",
+};
+
+/** A request envelope carrying the logical `response_routing` field. */
+function makeRequestWithRouting(
+  routing: unknown = LOGICAL_ROUTING,
+): Envelope {
+  const base = createReviewRequestEvent({
+    source: SOURCE,
+    flavor: "typescript",
+    payload: PAYLOAD,
+  });
+  return {
+    ...base,
+    payload: { ...base.payload, response_routing: routing },
+  };
+}
+
+/** Read `payload.response_routing` off an emitted envelope. */
+function routingOf(env: Envelope): unknown {
+  return (env.payload as { response_routing?: unknown }).response_routing;
+}
+
+describe("readLogicalResponseRouting (helper)", () => {
+  test("reads the logical triple with thread", () => {
+    expect(readLogicalResponseRouting(makeRequestWithRouting())).toEqual(LOGICAL_ROUTING);
+  });
+
+  test("reads channel-scope (no thread)", () => {
+    const env = makeRequestWithRouting({ surface: "discord", channel: "cortex" });
+    expect(readLogicalResponseRouting(env)).toEqual({
+      surface: "discord",
+      channel: "cortex",
+    });
+  });
+
+  test("returns null on missing field", () => {
+    expect(readLogicalResponseRouting(makeRequest("typescript"))).toBeNull();
+  });
+
+  test("returns null on malformed field (missing surface/channel)", () => {
+    expect(readLogicalResponseRouting(makeRequestWithRouting({ surface: "discord" }))).toBeNull();
+    expect(readLogicalResponseRouting(makeRequestWithRouting({ channel: "cortex" }))).toBeNull();
+    expect(readLogicalResponseRouting(makeRequestWithRouting("not-an-object"))).toBeNull();
+  });
+});
+
+describe("ReviewConsumer — response_routing echo (cortex#502)", () => {
+  test("verdict path: started + verdict + completed all carry identical response_routing + correlation_id", async () => {
+    const runtime = createRecordingRuntime();
+    const request = makeRequestWithRouting();
+    const consumer = new ReviewConsumer(
+      baseOpts({
+        runtime,
+        // The real pipeline threads opts.responseRouting onto the verdict;
+        // emulate that here so the verdict carries it like production.
+        pipelineRunner: fixedPipeline((opts) => ({
+          kind: "verdict",
+          envelope: createReviewVerdictEvent({
+            source: SOURCE,
+            kind: "approved",
+            correlationId: opts.requestEnvelope.id,
+            ...(opts.responseRouting !== undefined && {
+              responseRouting: opts.responseRouting,
+            }),
+            payload: {
+              repo: PAYLOAD.repo,
+              pr: PAYLOAD.pr,
+              reviewer: "echo",
+              verdict: "approved",
+              summary: "verdict: blockers=0 majors=0 nits=0 — approved",
+              github_review_id: 1,
+              github_review_url: "https://github.com/x/y/pull/1#r1",
+              submitted_at: "2026-05-29T12:00:00Z",
+              commit_id: "abc",
+              findings: { blockers: 0, majors: 0, nits: 0 },
+              inline_comments: 0,
+            },
+          }),
+        })),
+      }),
+    );
+
+    await consumer.processEnvelope(
+      request,
+      "local.metafactory.tasks.code-review.typescript",
+      null,
+    );
+
+    expect(runtime.published.map((e) => e.type)).toEqual([
+      "dispatch.task.started",
+      "review.verdict.approved",
+      "dispatch.task.completed",
+    ]);
+    for (const env of runtime.published) {
+      expect(routingOf(env)).toEqual(LOGICAL_ROUTING);
+      expect(env.correlation_id).toBe(request.id);
+    }
+  });
+
+  test("failed path: started + failed carry response_routing", async () => {
+    const runtime = createRecordingRuntime();
+    const request = makeRequestWithRouting();
+    const consumer = new ReviewConsumer(
+      baseOpts({
+        runtime,
+        pipelineRunner: fixedPipeline((opts) => ({
+          kind: "failed",
+          envelope: createReviewTaskFailedEvent({
+            source: SOURCE,
+            taskId: crypto.randomUUID(),
+            agentId: "echo",
+            correlationId: opts.requestEnvelope.id,
+            startedAt: new Date(),
+            failedAt: new Date(),
+            errorSummary: "boom",
+            reason: { kind: "cant_do", detail: "boom" },
+            ...(opts.responseRouting !== undefined && {
+              responseRouting: opts.responseRouting,
+            }),
+          }),
+        })),
+      }),
+    );
+
+    await consumer.processEnvelope(
+      request,
+      "local.metafactory.tasks.code-review.typescript",
+      null,
+    );
+
+    expect(runtime.published.map((e) => e.type)).toEqual([
+      "dispatch.task.started",
+      "dispatch.task.failed",
+    ]);
+    for (const env of runtime.published) {
+      expect(routingOf(env)).toEqual(LOGICAL_ROUTING);
+    }
+  });
+
+  test("pre-pipeline failure (no capability) echoes response_routing onto the failed envelope", async () => {
+    const runtime = createRecordingRuntime();
+    // Request a flavor this agent (typescript-only) does NOT claim.
+    const request = {
+      ...makeRequestWithRouting(),
+    };
+    // Override the type to a non-claimed flavor.
+    const pythonRequest: Envelope = {
+      ...request,
+      type: "tasks.code-review.python",
+    };
+    const consumer = new ReviewConsumer(baseOpts({ runtime }));
+
+    const decision = await consumer.processEnvelope(
+      pythonRequest,
+      "local.metafactory.tasks.code-review.python",
+      null,
+    );
+
+    expect(decision.kind).toBe("term");
+    expect(runtime.published.length).toBe(1);
+    expect(runtime.published[0]!.type).toBe("dispatch.task.failed");
+    expect(routingOf(runtime.published[0]!)).toEqual(LOGICAL_ROUTING);
+  });
+
+  test("aborted path (redelivery>1) echoes response_routing", async () => {
+    const runtime = createRecordingRuntime();
+    const request = makeRequestWithRouting();
+    const consumer = new ReviewConsumer(
+      baseOpts({
+        runtime,
+        pipelineRunner: fixedPipeline((opts) => ({
+          kind: "verdict",
+          envelope: createReviewVerdictEvent({
+            source: SOURCE,
+            kind: "approved",
+            correlationId: opts.requestEnvelope.id,
+            ...(opts.responseRouting !== undefined && {
+              responseRouting: opts.responseRouting,
+            }),
+            payload: {
+              repo: PAYLOAD.repo,
+              pr: PAYLOAD.pr,
+              reviewer: "echo",
+              verdict: "approved",
+              summary: "ok",
+              github_review_id: 1,
+              github_review_url: "https://github.com/x/y/pull/1#r1",
+              submitted_at: "2026-05-29T12:00:00Z",
+              commit_id: "abc",
+              findings: { blockers: 0, majors: 0, nits: 0 },
+              inline_comments: 0,
+            },
+          }),
+        })),
+      }),
+    );
+
+    await consumer.processEnvelope(
+      request,
+      "local.metafactory.tasks.code-review.typescript",
+      { info: { redeliveryCount: 2 }, redelivered: true } as unknown as JsMsg,
+    );
+
+    const aborted = runtime.published.find((e) => e.type === "dispatch.task.aborted");
+    expect(aborted).toBeDefined();
+    expect(routingOf(aborted!)).toEqual(LOGICAL_ROUTING);
+  });
+
+  test("request WITHOUT response_routing → no key on ANY emitted envelope (pilot-only path)", async () => {
+    const runtime = createRecordingRuntime();
+    const request = makeRequest("typescript"); // no response_routing
+    const consumer = new ReviewConsumer(
+      baseOpts({
+        runtime,
+        pipelineRunner: fixedPipeline((opts) => ({
+          kind: "verdict",
+          envelope: createReviewVerdictEvent({
+            source: SOURCE,
+            kind: "approved",
+            correlationId: opts.requestEnvelope.id,
+            ...(opts.responseRouting !== undefined && {
+              responseRouting: opts.responseRouting,
+            }),
+            payload: {
+              repo: PAYLOAD.repo,
+              pr: PAYLOAD.pr,
+              reviewer: "echo",
+              verdict: "approved",
+              summary: "ok",
+              github_review_id: 1,
+              github_review_url: "https://github.com/x/y/pull/1#r1",
+              submitted_at: "2026-05-29T12:00:00Z",
+              commit_id: "abc",
+              findings: { blockers: 0, majors: 0, nits: 0 },
+              inline_comments: 0,
+            },
+          }),
+        })),
+      }),
+    );
+
+    await consumer.processEnvelope(
+      request,
+      "local.metafactory.tasks.code-review.typescript",
+      null,
+    );
+
+    // correlation_id still intact on every envelope...
+    for (const env of runtime.published) {
+      expect(env.correlation_id).toBe(request.id);
+      // ...but no response_routing key anywhere.
+      expect("response_routing" in (env.payload as object)).toBe(false);
+    }
   });
 });

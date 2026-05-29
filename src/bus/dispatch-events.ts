@@ -69,6 +69,18 @@ export type DispatchEventSource = SystemEventSource;
  * Future dispatch sources (MC dashboard "send task", taps) populate the
  * same shape; sinks that don't recognise the `adapter_instance` ignore the
  * envelope (see the dispatch-sink consumer in `src/adapters/dispatch-sink.ts`).
+ *
+ * This is the **chat-path / snowflake** shape (cortex#498). The review path
+ * (cortex#502) uses the sibling {@link LogicalResponseRouting} shape — a
+ * platform-NEUTRAL logical address (`{ surface, channel, thread? }`) where
+ * `channel` is a repo short name and `thread` is the
+ * `{repo-short}/{entity-type}/{number}` logical entity key per the
+ * channel-routing SOP. Both shapes ride `payload.response_routing`; both are
+ * passed verbatim by the dispatch builders (no builder-body change — the
+ * field just widens to the union {@link AnyResponseRouting}). The review sink
+ * resolves the logical address to a native target via
+ * `PlatformAdapter.resolveLogicalTarget`; the chat dispatch sink reads the
+ * snowflake triple directly.
  */
 export interface ResponseRouting {
   /** Adapter instance id that sourced the dispatch (e.g. `discord-pai-collab`). */
@@ -78,6 +90,45 @@ export interface ResponseRouting {
   /** Thread id when the dispatch arrived in a thread/DM; omitted at channel scope. */
   thread_id?: string;
 }
+
+/**
+ * cortex#502 — **Logical response routing** (the review-path shape).
+ *
+ * A platform-NEUTRAL surface address echoed onto the review lifecycle
+ * (`dispatch.task.*`) AND verdict (`review.verdict.*`) envelopes. Unlike the
+ * chat-path {@link ResponseRouting} (Discord snowflakes), this carries
+ * LOGICAL names so the same envelope routes on Discord/Mattermost/Slack
+ * unchanged — each adapter maps logical→native at the sink via
+ * `PlatformAdapter.resolveLogicalTarget`.
+ *
+ * - `surface` — platform identity (`"discord"` | `"mattermost"` | `"slack"`).
+ *   The review sink filters to envelopes whose surface matches an adapter it
+ *   drives; a surface it doesn't drive is ignored (no cross-surface posting),
+ *   mirroring the chat sink's `adapter_instance` filter. There is deliberately
+ *   NO `adapter_instance` on the review wire — the sink resolves by surface +
+ *   channel name (the SOP guarantees one logical channel per repo).
+ * - `channel` — LOGICAL channel slug = repo short name (e.g. `"cortex"`).
+ *   Repo→channel per the channel-routing SOP.
+ * - `thread` — LOGICAL entity address `{repo-short}/{entity-type}/{number}`
+ *   (e.g. `"cortex/pr/57"`). Entity→thread per the SOP. Omitted = channel-scope.
+ */
+export interface LogicalResponseRouting {
+  /** Platform identity, e.g. `"discord"` | `"mattermost"` | `"slack"`. */
+  surface: string;
+  /** Logical channel slug — repo short name (e.g. `"cortex"`). */
+  channel: string;
+  /** Logical entity address `{repo-short}/{entity-type}/{number}`; omitted = channel-scope. */
+  thread?: string;
+}
+
+/**
+ * The union the dispatch builders accept for `responseRouting` and stamp
+ * verbatim onto `payload.response_routing`. Chat (cortex#498) uses the
+ * snowflake {@link ResponseRouting}; review (cortex#502) uses the logical
+ * {@link LogicalResponseRouting}. The builders never inspect or transform the
+ * value — the type widening alone admits both producers.
+ */
+export type AnyResponseRouting = ResponseRouting | LogicalResponseRouting;
 
 function buildSource(src: SystemEventSource): string {
   return `${src.principal}.${src.agent}.${src.instance}`;
@@ -170,8 +221,13 @@ export interface DispatchTaskCommonOpts {
    * the wire) for lifecycle events that have no originating surface
    * address — e.g. a bus-peer or Offer dispatch whose source did not
    * carry response routing.
+   *
+   * cortex#502 — the type is the union {@link AnyResponseRouting}: the
+   * chat path stamps the snowflake {@link ResponseRouting} shape, the
+   * review path stamps the logical {@link LogicalResponseRouting} shape.
+   * The builder passes whatever it receives through verbatim.
    */
-  responseRouting?: ResponseRouting;
+  responseRouting?: AnyResponseRouting;
 }
 
 /**

@@ -339,6 +339,24 @@ export class MattermostAdapter implements PlatformAdapter {
     };
   }
 
+  /**
+   * cortex#502 — logical→native resolution seam. Not yet implemented for
+   * Mattermost: returns `null` so the review sink skips this adapter (no
+   * cross-surface posting). When Mattermost gains review-sink delivery it
+   * maps `addr.channel` (repo short name) → channel id and `addr.thread`
+   * → root post id with its own name→primitive lookup; the wire is
+   * unchanged. The surface guard also returns `null` for non-`mattermost`
+   * surfaces.
+   */
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async resolveLogicalTarget(_addr: {
+    surface: string;
+    channel: string;
+    thread?: string;
+  }): Promise<ResponseTarget | null> {
+    return null;
+  }
+
   async notifyOperator(text: string): Promise<void> {
     const principalMattermostId = this.infra.principal.mattermostId;
     if (!principalMattermostId) return;

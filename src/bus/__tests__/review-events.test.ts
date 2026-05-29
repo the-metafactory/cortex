@@ -331,6 +331,63 @@ describe("createReviewVerdictEvent", () => {
     findings.blockers = 99;
     expect((env.payload as { findings: { blockers: number } }).findings.blockers).toBe(1);
   });
+
+  // cortex#502 — response_routing (logical shape) on the verdict.
+  test("stamps payload.response_routing (logical shape) when supplied", () => {
+    const env = createReviewVerdictEvent({
+      source: SOURCE,
+      kind: "approved",
+      correlationId: REQUEST_ENVELOPE_ID,
+      responseRouting: {
+        surface: "discord",
+        channel: "cortex",
+        thread: "cortex/pr/57",
+      },
+      payload: makeVerdictPayload({ verdict: "approved" }),
+    });
+    expect((env.payload as { response_routing?: unknown }).response_routing).toEqual({
+      surface: "discord",
+      channel: "cortex",
+      thread: "cortex/pr/57",
+    });
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("stamps response_routing without thread (channel-scope)", () => {
+    const env = createReviewVerdictEvent({
+      source: SOURCE,
+      kind: "commented",
+      correlationId: REQUEST_ENVELOPE_ID,
+      responseRouting: { surface: "discord", channel: "cortex" },
+      payload: makeVerdictPayload({ verdict: "commented" }),
+    });
+    expect((env.payload as { response_routing?: unknown }).response_routing).toEqual({
+      surface: "discord",
+      channel: "cortex",
+    });
+  });
+
+  test("omits the response_routing key entirely when not supplied", () => {
+    const env = createReviewVerdictEvent({
+      source: SOURCE,
+      kind: "approved",
+      correlationId: REQUEST_ENVELOPE_ID,
+      payload: makeVerdictPayload({ verdict: "approved" }),
+    });
+    expect("response_routing" in (env.payload as object)).toBe(false);
+  });
+
+  test("response_routing coexists with the discriminator guard (still throws on mismatch)", () => {
+    expect(() =>
+      createReviewVerdictEvent({
+        source: SOURCE,
+        kind: "approved",
+        correlationId: REQUEST_ENVELOPE_ID,
+        responseRouting: { surface: "discord", channel: "cortex" },
+        payload: makeVerdictPayload({ verdict: "commented" }),
+      }),
+    ).toThrow(/verdict-kind\/payload mismatch/);
+  });
 });
 
 // ---------------------------------------------------------------------------

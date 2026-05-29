@@ -33,6 +33,15 @@ export class MockAdapter implements PlatformAdapter {
   progressSent: { target: ResponseTarget; text: string }[] = [];
   /** Recorded createThread calls */
   threadsCreated: { msg: InboundMessage; name: string }[] = [];
+  /** cortex#502 — recorded resolveLogicalTarget calls */
+  logicalTargetsResolved: { surface: string; channel: string; thread?: string }[] = [];
+  /**
+   * cortex#502 — the `surface` this mock claims to drive for
+   * `resolveLogicalTarget`. Defaults to `"mock"` (matching `platform`).
+   * A `resolveLogicalTarget({ surface })` whose surface !== this value
+   * returns `null` (the review sink then skips this adapter).
+   */
+  logicalSurface = "mock";
   /** Recorded notifyOperator calls */
   operatorNotifications: string[] = [];
   /** MIG-3b: Recorded envelopes received via surfaceConfig.render() */
@@ -135,6 +144,31 @@ export class MockAdapter implements PlatformAdapter {
   async notifyOperator(text: string): Promise<void> {
     this.operatorNotifications.push(text);
   }
+
+  /**
+   * cortex#502 — resolve a logical surface address to a native target.
+   * Records the call. Returns `null` when `addr.surface` !== `logicalSurface`
+   * (mirrors the Discord adapter's surface guard); otherwise maps the
+   * logical channel/thread to deterministic mock snowflakes so the review
+   * sink's posting path is exercised end-to-end.
+   */
+  async resolveLogicalTarget(addr: {
+    surface: string;
+    channel: string;
+    thread?: string;
+  }): Promise<ResponseTarget | null> {
+    this.logicalTargetsResolved.push({
+      surface: addr.surface,
+      channel: addr.channel,
+      ...(addr.thread !== undefined && { thread: addr.thread }),
+    });
+    if (addr.surface !== this.logicalSurface) return null;
+    return {
+      instanceId: this.instanceId,
+      channelId: `chan:${addr.channel}`,
+      ...(addr.thread !== undefined && { threadId: `thread:${addr.thread}` }),
+    };
+  }
   /* eslint-enable @typescript-eslint/require-await */
 
   /** Simulate an inbound message (for testing) */
@@ -154,6 +188,7 @@ export class MockAdapter implements PlatformAdapter {
     this.typingSent = [];
     this.progressSent = [];
     this.threadsCreated = [];
+    this.logicalTargetsResolved = [];
     this.operatorNotifications = [];
     this.envelopesRendered = [];
     this.threadCounter = 0;

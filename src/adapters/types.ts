@@ -137,6 +137,33 @@ export interface PlatformAdapter {
   clearProgress(target: ResponseTarget): Promise<void>;
   /** Create a thread from a message */
   createThread(msg: InboundMessage, name: string): Promise<ResponseTarget>;
+
+  /**
+   * cortex#502 — resolve a LOGICAL surface address (the review-path
+   * `response_routing` shape) to a native {@link ResponseTarget}.
+   *
+   * The review wire stays platform-NEUTRAL (`{ surface, channel, thread? }`
+   * — repo short name + `{repo}/{entity-type}/{number}` logical key per the
+   * channel-routing SOP) so the same `review.verdict.*` / `dispatch.task.*`
+   * envelope routes on Discord/Mattermost/Slack unchanged. Each adapter
+   * implements this seam to map logical→native:
+   *
+   *   - Returns `null` when `addr.surface` is NOT this adapter's platform
+   *     (the review sink then skips this adapter — no cross-surface posting).
+   *   - Otherwise resolves `addr.channel` (repo short name) to the platform
+   *     channel and, when `addr.thread` is present, the platform thread
+   *     primitive (Discord reuses `findOrCreateThreadByName`).
+   *   - Returns `null` when the channel/thread can't be resolved (caller
+   *     falls back to ignoring the envelope rather than mis-posting).
+   *
+   * Mattermost/Slack implement the same method later with their own
+   * name→primitive mapping; the wire never changes.
+   */
+  resolveLogicalTarget(addr: {
+    surface: string;
+    channel: string;
+    thread?: string;
+  }): Promise<ResponseTarget | null>;
   /** Send a notification to the operator */
   notifyOperator(text: string): Promise<void>;
   /** F-092: Hot-reload adapter config (optional, for adapters that support it) */

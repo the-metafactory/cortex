@@ -79,6 +79,7 @@ import {
   createDispatchTaskStartedEvent,
   createDispatchTaskCompletedEvent,
   createDispatchTaskAbortedEvent,
+  type LogicalResponseRouting,
 } from "./dispatch-events";
 import {
   runReviewPipeline,
@@ -433,6 +434,13 @@ export class ReviewConsumer {
     // than letting the worst-case dead-letter window run out. The abort
     // is a courtesy emission — the per-attempt pipeline still runs and
     // emits its own terminal envelope.
+    // cortex#502 — read the LOGICAL response routing off the inbound
+    // request once and echo it onto every emitted lifecycle + the verdict.
+    // Absent (bus-peer / direct-pilot-only / Offer) → undefined → no
+    // `response_routing` key on the wire → the review sink ignores the
+    // envelopes (the verdict still reaches pilot via correlation_id).
+    const responseRouting = readLogicalResponseRouting(envelope) ?? undefined;
+
     const deliveryCount = redeliveryCountFrom(msg);
     if (deliveryCount > 1) {
       await this.safePublish(
@@ -444,6 +452,7 @@ export class ReviewConsumer {
           startedAt: this.clock(),
           abortedAt: this.clock(),
           reason: `redelivery (attempt ${deliveryCount})`,
+          ...(responseRouting !== undefined && { responseRouting }),
         }),
         "dispatch.task.aborted",
       );
@@ -462,6 +471,7 @@ export class ReviewConsumer {
           detail: `envelope type "${envelope.type}" is not a tasks.code-review.<flavor> request`,
         },
         `unrecognised review subject: ${subject}`,
+        responseRouting,
       );
       return { kind: "term", reason: "non-review subject" };
     }
@@ -476,6 +486,7 @@ export class ReviewConsumer {
           detail: "payload validation failed (missing/invalid repo or pr)",
         },
         `bad payload for ${subject}`,
+        responseRouting,
       );
       return { kind: "term", reason: "payload validation failed" };
     }
@@ -513,6 +524,7 @@ export class ReviewConsumer {
           envelope,
           { kind: "cant_do", detail: failureDetail },
           `chain verification failed for ${subject}`,
+          responseRouting,
         );
         return { kind: "term", reason: failureDetail };
       }
@@ -529,6 +541,7 @@ export class ReviewConsumer {
           detail: `agent "${this.agent.id}" does not claim code-review.${flavor}`,
         },
         `no capability match for code-review.${flavor}`,
+        responseRouting,
       );
       return { kind: "term", reason: "no capability match" };
     }
@@ -550,6 +563,7 @@ export class ReviewConsumer {
           retry_after_ms: retryAfterMs,
         },
         "review consumer at maxConcurrent",
+        responseRouting,
       );
       return { kind: "nak", delayMs: retryAfterMs };
     }
@@ -564,12 +578,18 @@ export class ReviewConsumer {
         agentId: this.agent.id,
         correlationId: envelope.id,
         startedAt,
+        ...(responseRouting !== undefined && { responseRouting }),
       }),
       "dispatch.task.started",
     );
 
     // 6. Run the pipeline. Track the promise for `stop()` drain.
-    const pipelinePromise = this.runPipeline(envelope, payload, startedAt);
+    const pipelinePromise = this.runPipeline(
+      envelope,
+      payload,
+      startedAt,
+      responseRouting,
+    );
     const tracked: Promise<{ decision: AckDecision }> = pipelinePromise.then(
       (decision) => ({ decision }),
     );
@@ -646,6 +666,7 @@ export class ReviewConsumer {
     envelope: Envelope,
     payload: ReviewRequestPayload,
     startedAt: Date,
+    responseRouting?: LogicalResponseRouting,
   ): Promise<AckDecision> {
     if (this.stopped) {
       // Mid-shutdown: don't start new pipeline runs. Nak with a 0 hint
@@ -659,6 +680,7 @@ export class ReviewConsumer {
           retry_after_ms: 0,
         },
         "consumer shutting down before pipeline start",
+        responseRouting,
       );
       return { kind: "nak", delayMs: 0 };
     }
@@ -677,6 +699,9 @@ export class ReviewConsumer {
         }),
         ...(this.sessionOpts !== undefined && { sessionOpts: this.sessionOpts }),
         ...(this.policyCheck !== undefined && { policyCheck: this.policyCheck }),
+        // cortex#502 — pass the logical routing into the pipeline so the
+        // verdict + failed terminal envelopes it builds carry it.
+        ...(responseRouting !== undefined && { responseRouting }),
         // cortex#361 — attach a bus-side heartbeat ticker to the CC
         // session so `system.agent.heartbeat` envelopes flow while the
         // review is in flight. The hook keeps `runtime.publish` calls
@@ -720,6 +745,7 @@ export class ReviewConsumer {
           startedAt,
           completedAt: this.clock(),
           resultSummary: extractSummary(result.envelope),
+          ...(responseRouting !== undefined && { responseRouting }),
         }),
         "dispatch.task.completed",
       );
@@ -745,6 +771,7 @@ export class ReviewConsumer {
     request: Envelope,
     reason: DispatchTaskFailedReason,
     errorSummary: string,
+    responseRouting?: LogicalResponseRouting,
   ): Promise<void> {
     const now = this.clock();
     const failed = createReviewTaskFailedEvent({
@@ -756,6 +783,10 @@ export class ReviewConsumer {
       failedAt: now,
       errorSummary,
       reason,
+      // cortex#502 — echo routing so the consumer's own pre-pipeline
+      // failures (bad subject/payload, no capability, backpressure) still
+      // render to the originating thread.
+      ...(responseRouting !== undefined && { responseRouting }),
     });
     await this.safePublish(failed, "dispatch.task.failed");
   }
@@ -1025,6 +1056,37 @@ export function parseReviewRequestPayload(
   if (p.post === true) out.post = true;
   if (forge !== undefined) out.forge = forge;
   return out;
+}
+
+/**
+ * cortex#502 — read the LOGICAL response routing off an inbound review
+ * request envelope's `payload.response_routing`, or `null` when absent /
+ * malformed. The review path uses the platform-neutral logical shape
+ * (`{ surface, channel, thread? }`) — distinct from the chat path's
+ * snowflake triple. A missing/invalid field is a normal, non-error case
+ * (pilot-only / bus-peer / Offer dispatch): the consumer simply omits
+ * `response_routing` from every emitted envelope, and the review sink
+ * ignores them. The authoritative verdict still reaches pilot via
+ * `correlation_id`.
+ *
+ * `surface` + `channel` are required; `thread` is optional (channel-scope
+ * when omitted). Exported for the review-consumer tests.
+ */
+export function readLogicalResponseRouting(
+  envelope: Envelope,
+): LogicalResponseRouting | null {
+  const raw = (envelope.payload as Record<string, unknown> | undefined)
+    ?.response_routing;
+  if (raw === null || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.surface !== "string" || typeof r.channel !== "string") {
+    return null;
+  }
+  return {
+    surface: r.surface,
+    channel: r.channel,
+    ...(typeof r.thread === "string" && { thread: r.thread }),
+  };
 }
 
 /**

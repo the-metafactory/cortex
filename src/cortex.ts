@@ -89,6 +89,7 @@ import { MattermostAdapter } from "./adapters/mattermost";
 import { SlackAdapter } from "./adapters/slack";
 import type { PlatformAdapter } from "./adapters/types";
 import { createDispatchSink, type DispatchSink } from "./adapters/dispatch-sink";
+import { createReviewSink, type ReviewSink } from "./adapters/review-sink";
 
 import { createDispatchListener, type DispatchListener } from "./runner/dispatch-listener";
 import { WorklogManager } from "./runner/worklog-manager";
@@ -1972,6 +1973,31 @@ export async function startCortex(
       `adapters=${adapters.length}`,
   );
 
+  // cortex#502 — review sink (OUTBOUND). The SOLE deliverer of review
+  // replies (verdict + lifecycle) back to the originating surface. An
+  // ADDITIONAL `onEnvelope` subscriber alongside the chat dispatch sink:
+  // subscribes to `local.{principal}[.{stack}].dispatch.task.>` AND
+  // `…review.verdict.>`, reads each envelope's echoed LOGICAL routing
+  // (`response_routing` = `{ surface, channel, thread? }` — repo→channel,
+  // entity→thread per the channel-routing SOP), filters to the surface a
+  // driven adapter matches, resolves logical→native via
+  // `adapter.resolveLogicalTarget`, renders the verdict one-liner via
+  // `formatReviewVerdict` (+ a requester ping) / the lifecycle via
+  // `formatDispatchLifecycle`, and posts back. NOT wired via
+  // `surfaceSubjects` (that would double-reply). Dormant when the runtime
+  // is disabled (no NATS) or no adapters started.
+  const reviewSink: ReviewSink = createReviewSink({
+    runtime,
+    adapters,
+    principal: principalId,
+    stack: derivedStack.stack,
+  });
+  await reviewSink.start();
+  console.log(
+    `cortex: review-sink started — subjects=[${reviewSink.subjects.join(", ")}], ` +
+      `adapters=${adapters.length}`,
+  );
+
   // cortex#480 — boot-time self-signed envelope sanity check. After the
   // listeners are wired with `stackIdentity` + `stackNKeyPub`, build a
   // tiny envelope signed by the stack's own NKey and round-trip it
@@ -2110,6 +2136,7 @@ export async function startCortex(
       ...reviewConsumers.map((c, i) => `review-consumer stop[${i}] (agent=${c.agent.id})`),
       "dispatch-listener stop",
       "dispatch-sink stop",
+      "review-sink stop",
       "surface-router stop",
       "dispatch-handler shutdown",
       ...adapterStopNames,
@@ -2164,6 +2191,12 @@ export async function startCortex(
       // adapters stop, so no late `postResponse` lands after the
       // platform connections close. `stop()` is idempotent.
       await completeAsync("dispatch-sink stop", dispatchSink.stop());
+      // cortex#502 — drain the review sink on the same boundary as the
+      // chat dispatch sink: after the runner/consumers stop publishing
+      // review lifecycle + verdict envelopes but before the
+      // surface-router / adapters close, so no late `postResponse` lands
+      // after the platform connections close. `stop()` is idempotent.
+      await completeAsync("review-sink stop", reviewSink.stop());
       // IAW B.2a — bus-dispatch-listener drain runs after the dispatch
       // listener (which feeds dispatch-handler) but before the
       // surface-router stop. The listener's `stop()` awaits its

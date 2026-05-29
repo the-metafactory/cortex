@@ -84,6 +84,7 @@ import {
   type ReviewVerdictKind,
   type ReviewVerdictPayload,
 } from "../bus/review-events";
+import type { AnyResponseRouting } from "../bus/dispatch-events";
 import type {
   CCSessionFactory,
   CCSessionLike,
@@ -204,6 +205,16 @@ export interface ReviewPipelineOpts {
    * omitted, no policy gate runs and the pipeline goes straight to CC.
    */
   policyCheck?: ReviewPolicyCheck;
+  /**
+   * cortex#502 — the logical response routing echoed from the inbound
+   * review request envelope. Threaded onto BOTH terminal envelopes the
+   * pipeline builds — the `review.verdict.<kind>` (primary reply) and the
+   * `dispatch.task.failed` — so the review sink can render either outcome
+   * to the originating thread. Passed through verbatim; the pipeline never
+   * inspects or transforms it. Omitted → no `response_routing` on the wire
+   * (pilot-only / bus-peer / Offer path unchanged).
+   */
+  responseRouting?: AnyResponseRouting;
   /**
    * cortex#361 — optional lifecycle hook fired after the CC session is
    * constructed + `start()` is called, before `wait()` resolves. The
@@ -432,6 +443,10 @@ export async function runReviewPipeline(
       source: opts.source,
       kind: parsed.value.verdict,
       correlationId,
+      // cortex#502 — echo logical routing onto the verdict (primary reply).
+      ...(opts.responseRouting !== undefined && {
+        responseRouting: opts.responseRouting,
+      }),
       payload,
     });
   } catch (err) {
@@ -482,6 +497,11 @@ function failed(
     failedAt: new Date(),
     errorSummary,
     reason,
+    // cortex#502 — echo logical routing onto the failed terminal too so the
+    // review sink can render the error to the originating thread.
+    ...(opts.responseRouting !== undefined && {
+      responseRouting: opts.responseRouting,
+    }),
   });
   return { kind: "failed", envelope };
 }
