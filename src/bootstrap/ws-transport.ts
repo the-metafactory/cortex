@@ -35,9 +35,7 @@ import { WebSocket as WsWebSocket } from "ws";
 /** True when running under Bun (where the native-WebSocket opt-in bites). */
 function runningUnderBun(): boolean {
   if (typeof (globalThis as { Bun?: unknown }).Bun !== "undefined") return true;
-  const versions = (typeof process !== "undefined" ? process.versions : undefined) as
-    | (NodeJS.ProcessVersions & { bun?: string })
-    | undefined;
+  const versions = (typeof process !== "undefined" ? process.versions : undefined);
   return typeof versions?.bun === "string";
 }
 
@@ -48,7 +46,7 @@ function runningUnderBun(): boolean {
  * side effect below calls it against `globalThis`.
  */
 export function installWsTransport(
-  target: Record<string, unknown> = globalThis as unknown as Record<string, unknown>,
+  target: Record<string, unknown> = globalThis,
   opts: { isBun?: boolean; nativeOptOut?: boolean; log?: (msg: string) => void } = {},
 ): { applied: boolean; reason: string } {
   const isBun = opts.isBun ?? runningUnderBun();
@@ -63,7 +61,7 @@ export function installWsTransport(
     return { applied: false, reason: "already-applied" };
   }
   target.__cortexNativeWebSocket = target.WebSocket;
-  target.WebSocket = WsWebSocket as unknown;
+  target.WebSocket = WsWebSocket;
   const log = opts.log ?? ((m: string) => process.stderr.write(m));
   log(
     "cortex/ws-transport: Bun detected — forcing @discordjs/ws onto the `ws` package " +
