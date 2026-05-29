@@ -2,7 +2,7 @@
 # See: https://github.com/the-metafactory/arc
 
 name: "Cortex"
-version: "3.0.3"
+version: "3.1.0"
 type: component
 tier: community
 description: "Layer-7 collaboration surface for the metafactory ecosystem — the M7 application that consumes the Myelin stack"
