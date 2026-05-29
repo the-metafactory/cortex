@@ -273,6 +273,50 @@ describe("ReviewConsumer.processEnvelope — cortex#237 PR-6", () => {
     ).toBe(`verdict: blockers=0 majors=2 nits=3 — approved`);
   });
 
+  test("cortex#503 — prose-fallback `completed` result → dispatch.task.completed (NO verdict) + ack", async () => {
+    const runtime = createRecordingRuntime();
+    const request = makeRequest("typescript");
+    const prose = "I reviewed the PR.\n\nLooks fine, no blockers found.";
+
+    const consumer = new ReviewConsumer(
+      baseOpts({
+        runtime,
+        pipelineRunner: fixedPipeline(() => ({
+          kind: "completed",
+          presentation: prose,
+        })),
+      }),
+    );
+
+    const decision = await consumer.processEnvelope(
+      request,
+      "local.metafactory.tasks.code-review.typescript",
+      null,
+    );
+
+    // Prose-fallback is a SUCCESS — ack the JetStream message.
+    expect(decision).toEqual({ kind: "ack" });
+
+    // Exactly TWO envelopes: started, then completed. NO review.verdict.*
+    // (we never fabricate a verdict from prose).
+    expect(runtime.published.length).toBe(2);
+    expect(runtime.published[0]!.type).toBe("dispatch.task.started");
+    expect(runtime.published[1]!.type).toBe("dispatch.task.completed");
+    expect(
+      runtime.published.some((e) => e.type.startsWith("review.verdict.")),
+    ).toBe(false);
+
+    // The completed envelope carries the prose verbatim as chat_response
+    // (the surface render) + a first-line result_summary label.
+    const completed = runtime.published[1]!.payload as {
+      chat_response?: string;
+      result_summary?: string;
+    };
+    expect(completed.chat_response).toBe(prose);
+    expect(completed.result_summary).toBe("I reviewed the PR.");
+    expect(runtime.published[1]!.correlation_id).toBe(request.id);
+  });
+
   test("2. unknown flavor → `cant_do` failed envelope + AckDecision is `term`", async () => {
     const runtime = createRecordingRuntime();
     // Agent claims only `typescript`; request asks for `python`.

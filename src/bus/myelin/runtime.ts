@@ -533,7 +533,44 @@ export async function startMyelinRuntime(
   }
 
   const subscribers: MyelinSubscriber[] = [];
-  for (const pattern of subjects) {
+  // cortex#491 — idempotent push-subscribe per RESOLVED pattern. Core-NATS
+  // push subscriptions are independent: if two subscribers bind to patterns
+  // that both match a subject, the broker delivers the envelope to BOTH, and
+  // each runs the full `for (const handler of handlers)` fan-out — so every
+  // registered sink (surface-router, worklog-manager, review-sink) fires
+  // TWICE for one publish. This is exactly the double-bind documented around
+  // `nats.subjects: []` in cortex.yaml: listing a pattern that a self-
+  // subscribe path (runtime.subscribe per cortex#477/#479) also binds
+  // re-creates the subscriber and double-delivers.
+  //
+  // The minimal, semantics-preserving fix is exact-pattern dedupe keyed by
+  // the resolved (post-substituter) pattern string: never create a second
+  // MyelinSubscriber for a pattern already bound. We deliberately do NOT do
+  // subsumption-merge (collapsing `a.b.>` into `a.>`) — that would CHANGE
+  // which subjects a subscriber receives and is harder to prove safe. Exact
+  // dedupe kills the double-bind without altering match semantics. The
+  // shared `handlers` Set, the surface-router's single registration, and
+  // `adapterMatches` are untouched (chat sink unaffected).
+  //
+  // The map spans BOTH the boot-time `nats.subjects` loop below AND the
+  // later `runtime.subscribe` self-subscribe path (`subscribePushEnabled`),
+  // so a config pattern that collides with a self-subscribe binds exactly
+  // once: whichever path runs first creates the subscriber; the second
+  // returns the SAME handle instead of double-binding.
+  const boundByPattern = new Map<string, MyelinSubscriber>();
+  /**
+   * Bind one resolved push pattern idempotently. Returns the already-bound
+   * subscriber on a duplicate, or `null` if `MyelinSubscriber.start` threw.
+   * Shared by the boot loop and `subscribePushEnabled`.
+   */
+  const bindPushPattern = (pattern: string): MyelinSubscriber | null => {
+    const existing = boundByPattern.get(pattern);
+    if (existing !== undefined) {
+      console.log(
+        `myelin-runtime: skipping duplicate subscribe to "${pattern}" (already bound)`,
+      );
+      return existing;
+    }
     try {
       const sub = MyelinSubscriber.start(link, {
         pattern,
@@ -556,13 +593,19 @@ export async function startMyelinRuntime(
         },
       });
       subscribers.push(sub);
+      boundByPattern.set(pattern, sub);
       console.log(`myelin-runtime: subscribed to "${pattern}"`);
+      return sub;
     } catch (err) {
       console.error(
         `myelin-runtime: failed to subscribe to "${pattern}":`,
         err instanceof Error ? err.message : String(err),
       );
+      return null;
     }
+  };
+  for (const pattern of subjects) {
+    bindPushPattern(pattern);
   }
 
   // cortex#337 — pre-#337 a non-empty `subjects[]` that ALL failed to
@@ -829,34 +872,19 @@ export async function startMyelinRuntime(
     if (stopped) {
       throw new Error("myelin-runtime: subscribe called after stop()");
     }
-    try {
-      const sub = MyelinSubscriber.start(link, {
-        pattern,
-        onEnvelope: (env, subject) => {
-          logEnvelope(env, subject);
-          for (const handler of handlers) {
-            try {
-              handler(env, subject);
-            } catch (err) {
-              console.error(
-                "myelin-runtime: onEnvelope handler threw:",
-                err instanceof Error ? err.message : String(err),
-              );
-            }
-          }
-        },
-      });
-      subscribers.push(sub);
-      await sub.ready;
-      console.log(`myelin-runtime: subscribed to "${pattern}"`);
-      return sub;
-    } catch (err) {
-      console.error(
-        `myelin-runtime: failed to subscribe to "${pattern}":`,
-        err instanceof Error ? err.message : String(err),
-      );
-      return null;
-    }
+    // cortex#491 — route through the shared idempotent binder so a self-
+    // subscribe that collides with a boot-time `nats.subjects` pattern (or
+    // an earlier self-subscribe of the same pattern) returns the EXISTING
+    // subscriber instead of double-binding the shared `handlers` Set. The
+    // binder owns its own try/catch + logging; `null` means start() threw.
+    const sub = bindPushPattern(pattern);
+    if (sub === null) return null;
+    // Await readiness on every call (including the deduped return): the
+    // already-bound subscriber's `ready` promise resolves immediately when
+    // it has already settled, so the caller's "subscription is live" contract
+    // holds whether this call created the subscriber or reused it.
+    await sub.ready;
+    return sub;
   };
 
   // cortex#338 — expose the live JetStreamManager so the boot path can

@@ -752,6 +752,35 @@ export class ReviewConsumer {
       return { kind: "ack" };
     }
 
+    if (result.kind === "completed") {
+      // cortex#503 — PROSE-FALLBACK success. The agent answered in prose
+      // (no parseable structured verdict block), so there is NO
+      // `review.verdict.<kind>` co-emission — fabricating one would
+      // manufacture a verdict cortex cannot stand behind. We publish ONLY a
+      // `dispatch.task.completed` carrying the agent's prose so pilot's
+      // `--wait` observes a completion (and downgrades to commented/exit-0
+      // rather than gating on a phantom timeout), and the review sink renders
+      // the prose as markdown to the originating thread.
+      //
+      // `chatResponse` carries the FULL prose (the surface render); the first
+      // line (capped) is the dashboard `result_summary` label.
+      await this.safePublish(
+        createDispatchTaskCompletedEvent({
+          source: this.source,
+          taskId: crypto.randomUUID(),
+          agentId: this.agent.id,
+          correlationId: envelope.id,
+          startedAt,
+          completedAt: this.clock(),
+          resultSummary: firstLine(result.presentation),
+          chatResponse: result.presentation,
+          ...(responseRouting !== undefined && { responseRouting }),
+        }),
+        "dispatch.task.completed",
+      );
+      return { kind: "ack" };
+    }
+
     // result.kind === "failed" — publish the failed envelope and pick
     // the JetStream control per the four-way nak taxonomy (§7).
     await this.safePublish(result.envelope, "dispatch.task.failed");
@@ -1087,6 +1116,22 @@ export function readLogicalResponseRouting(
     channel: r.channel,
     ...(typeof r.thread === "string" && { thread: r.thread }),
   };
+}
+
+/**
+ * cortex#503 — first non-empty line of the prose-fallback presentation,
+ * capped at 1000 chars, for the `dispatch.task.completed` `result_summary`
+ * dashboard label. The FULL prose rides `chat_response`; this is only the
+ * scannable one-line label. Returns `undefined` for empty/whitespace prose
+ * so the completed builder omits `result_summary` rather than emitting an
+ * empty string.
+ */
+function firstLine(text: string): string | undefined {
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (line.length > 0) return line.slice(0, 1000);
+  }
+  return undefined;
 }
 
 /**

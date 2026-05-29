@@ -444,3 +444,140 @@ describe("review-sink — no-routing and resilience", () => {
     await Promise.resolve();
   });
 });
+
+// ---------------------------------------------------------------------------
+// cortex#503 — presentation rendering + prose-fallback + never-JSON + idempotency
+// ---------------------------------------------------------------------------
+
+const flushMicrotasks = async () => {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+};
+
+/** envelope() variant with an explicit id (for the idempotency test). */
+function envelopeWithId(
+  id: string,
+  type: string,
+  payload: Record<string, unknown>,
+): Envelope {
+  return { ...envelope(type, payload), id };
+}
+
+describe("review-sink — cortex#503 presentation rendering", () => {
+  test("renders ONLY payload.presentation verbatim when present (not the one-liner)", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    const presentation =
+      "### 🔴 Changes requested\n\nBlocking: SQL injection.\n\n" +
+      "**Findings:** 1 blockers · 0 majors · 2 nits · 4 inline comments\n\n" +
+      "[Review on GitHub](https://github.com/the-metafactory/cortex/pull/57#r1) (`deadbee`)";
+
+    trigger(
+      envelope("review.verdict.changes-requested", {
+        ...verdictPayload({ presentation }),
+        response_routing: logicalRouting("discord", "cortex", "cortex/pr/57"),
+      }),
+    );
+    await flushMicrotasks();
+
+    expect(adapter.sentMessages).toHaveLength(1);
+    const text = adapter.sentMessages[0]!.text;
+    // The verbatim presentation markdown is present, with the reviewer ping.
+    expect(text).toContain("@luna");
+    expect(text).toContain(presentation);
+    // It did NOT fall back to the one-liner format (which uses "1B/2M/3N").
+    expect(text).not.toContain("1B/2M/3N");
+  });
+
+  test("falls back to the one-liner (never JSON) when presentation is absent", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    // verdictPayload() has NO presentation field.
+    trigger(
+      envelope("review.verdict.changes-requested", {
+        ...verdictPayload(),
+        response_routing: logicalRouting("discord", "cortex", "cortex/pr/57"),
+      }),
+    );
+    await flushMicrotasks();
+
+    expect(adapter.sentMessages).toHaveLength(1);
+    const text = adapter.sentMessages[0]!.text;
+    expect(text).toContain("1B/2M/3N"); // the one-liner fallback
+    // Never a raw JSON dump.
+    expect(text).not.toContain('"verdict"');
+    expect(text).not.toContain('"findings"');
+    expect(text).not.toContain("```json");
+  });
+
+  test("prose-fallback dispatch.task.completed (chat_response) → posted as markdown reply", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    const prose = "I reviewed the PR.\n\nLGTM, no blockers.";
+    trigger(
+      envelope("dispatch.task.completed", {
+        agent_id: "luna",
+        result_summary: "I reviewed the PR.",
+        chat_response: prose,
+        response_routing: logicalRouting("discord", "cortex", "cortex/pr/57"),
+      }),
+    );
+    await flushMicrotasks();
+
+    expect(adapter.sentMessages).toHaveLength(1);
+    expect(adapter.sentMessages[0]!.text).toBe(prose);
+  });
+
+  test("verdict-path completed (no chat_response) is still suppressed", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      envelope("dispatch.task.completed", {
+        agent_id: "luna",
+        result_summary: "verdict: blockers=0 — approved",
+        response_routing: logicalRouting("discord", "cortex", "cortex/pr/57"),
+      }),
+    );
+    await flushMicrotasks();
+
+    // No chat_response → this is the co-emitted completed; suppress it.
+    expect(adapter.sentMessages).toHaveLength(0);
+  });
+
+  test("idempotent render — second delivery of same envelope.id is a no-op", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    const env = envelopeWithId(
+      "11111111-1111-4111-8111-111111111111",
+      "review.verdict.approved",
+      {
+        ...verdictPayload({ verdict: "approved" }),
+        response_routing: logicalRouting("discord", "cortex", "cortex/pr/57"),
+      },
+    );
+
+    trigger(env);
+    await flushMicrotasks();
+    trigger(env); // accidental double-delivery (same id)
+    await flushMicrotasks();
+
+    // Exactly ONE post despite two deliveries.
+    expect(adapter.sentMessages).toHaveLength(1);
+  });
+});

@@ -307,6 +307,23 @@ export interface ReviewVerdictPayload {
   };
   /** Total inline comments posted with the review. */
   inline_comments: number;
+  /**
+   * cortex#503 — **Presentation markdown.** Deterministic markdown computed
+   * by cortex (NOT the reviewing agent) from the structured verdict fields
+   * above — verdict kind + `summary` + findings counts + the GitHub review
+   * link. Surfaces render this string VERBATIM as markdown; they never
+   * JSON-dump the payload. Authored by `buildPresentationMarkdown` in
+   * `runner/review-pipeline.ts` (idempotent: same payload in → identical
+   * string out), so the heading/emoji/counts/link are code-stamped while the
+   * agent's prose lives only in `summary`.
+   *
+   * OPTIONAL for wire forward-compat: older subscribers (pilot's verdict
+   * matcher keys on the envelope `type` suffix + `correlation_id` only, NOT
+   * on `presentation`) keep parsing unchanged, and a surface seeing no
+   * `presentation` falls back to a markdown prose/structured render — never
+   * a JSON dump.
+   */
+  presentation?: string;
 }
 
 /** Options for {@link createReviewVerdictEvent}. */
@@ -399,6 +416,14 @@ export function createReviewVerdictEvent(
         nits: opts.payload.findings.nits,
       },
       inline_comments: opts.payload.inline_comments,
+      // cortex#503 — code-stamped presentation markdown (deterministic; the
+      // reviewing agent never authored it). Surfaces render this verbatim.
+      // Optional on the wire: omitted when the producer didn't compute one
+      // (older callers / sage Phase-1), in which case surfaces fall back to
+      // the `formatReviewVerdict` one-liner — never a JSON dump.
+      ...(opts.payload.presentation !== undefined && {
+        presentation: opts.payload.presentation,
+      }),
       // cortex#502 — echo response routing when the inbound review request
       // carried it, so the review sink can render the verdict to the
       // originating thread. Omitted (no key on the wire) for pilot-only /

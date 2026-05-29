@@ -12,7 +12,8 @@
  *        - wait() rejects → `not_now`
  *        - session aborted (timeout) → `not_now`
  *        - non-zero exit with no output → `not_now`
- *        - clean exit with no JSON block → `cant_do`
+ *        - clean exit with no JSON block → cortex#503 prose-fallback
+ *          `{ kind: "completed" }` (NOT `cant_do`; no fabricated verdict)
  *        - JSON block present but malformed → `cant_do`
  *        - JSON block parseable but missing/wrong-typed field → `cant_do`
  *        - JSON block has out-of-enum verdict → `cant_do`
@@ -46,6 +47,7 @@ import type {
 } from "../../substrates/claude-code/harness";
 import type { CCSessionResult } from "../cc-session";
 import {
+  buildPresentationMarkdown,
   runReviewPipeline,
   type ReviewPipelineOpts,
 } from "../review-pipeline";
@@ -350,17 +352,17 @@ describe("runReviewPipeline — failure taxonomy", () => {
     expect(reason.detail).toContain("137");
   });
 
-  test("clean exit with no JSON block → cant_do (skill broke contract)", async () => {
-    const { factory } = fakeFactory(
-      successResult("I reviewed the PR but forgot to emit a verdict block."),
-    );
+  test("cortex#503 — clean exit with no JSON block → completed prose-fallback (NOT cant_do)", async () => {
+    const prose = "I reviewed the PR but answered in prose.\n\nLGTM overall.";
+    const { factory } = fakeFactory(successResult(`  ${prose}  \n`));
     const result = await runReviewPipeline(baseOpts(factory));
-    expect(result.kind).toBe("failed");
-    if (result.kind !== "failed") return;
-    const payload = result.envelope.payload;
-    const reason = payload.reason as { kind: string; detail: string };
-    expect(reason.kind).toBe("cant_do");
-    expect(reason.detail).toContain("did not return parseable verdict block");
+    // The old hard-fail (cant_do) is gone — the agent completed, in prose.
+    expect(result.kind).toBe("completed");
+    if (result.kind !== "completed") return;
+    // presentation IS the trimmed prose (passthrough, still markdown).
+    expect(result.presentation).toBe(prose);
+    // No verdict envelope is fabricated; no failed envelope.
+    expect(result).not.toHaveProperty("envelope");
   });
 
   test("malformed JSON inside block → cant_do", async () => {
@@ -475,9 +477,10 @@ describe("runReviewPipeline — correlation_id contract", () => {
 
   test("failed envelope (cant_do path) carries correlation_id = requestEnvelope.id", async () => {
     const req = makeRequestEnvelope();
-    const { factory } = fakeFactory(
-      successResult("no block at all"),
-    );
+    // cortex#503 — the no-block path is now a `completed` prose-fallback, so
+    // exercise a genuine `cant_do` failure: a present-but-malformed JSON block.
+    const malformed = ["```json", "{ not: valid json }", "```"].join("\n");
+    const { factory } = fakeFactory(successResult(malformed));
     const result = await runReviewPipeline({
       ...baseOpts(factory),
       requestEnvelope: req,
@@ -694,5 +697,114 @@ describe("runReviewPipeline — responseRouting (cortex#502)", () => {
     await expect(
       runReviewPipeline({ ...baseOpts(factory), responseRouting: ROUTING }),
     ).resolves.toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#503 — buildPresentationMarkdown (deterministic, idempotent, no JSON)
+// ---------------------------------------------------------------------------
+
+/** Internal VerdictBlock shape, mirrored for the unit tests. */
+const SAMPLE_BLOCK = {
+  verdict: "changes-requested" as ReviewVerdictKind,
+  summary: "Two majors in the auth path; three nits in tests.",
+  github_review_id: 2459183744,
+  github_review_url:
+    "https://github.com/the-metafactory/cortex/pull/229#pullrequestreview-2459183744",
+  submitted_at: "2026-05-16T09:51:30Z",
+  commit_id: "a1b2c3d4e5f6789012345678901234567890abcd",
+  findings: { blockers: 1, majors: 2, nits: 3 },
+  inline_comments: 5,
+};
+
+describe("buildPresentationMarkdown — deterministic markdown, zero LLM tokens", () => {
+  test("contains findings counts, 7-char commit, and the github_review_url", () => {
+    const md = buildPresentationMarkdown(SAMPLE_BLOCK);
+    expect(md).toContain("1 blockers");
+    expect(md).toContain("2 majors");
+    expect(md).toContain("3 nits");
+    expect(md).toContain("5 inline comments");
+    expect(md).toContain(SAMPLE_BLOCK.github_review_url);
+    // 7-char short commit, NOT the full 40-char SHA.
+    expect(md).toContain("a1b2c3d");
+    expect(md).not.toContain(SAMPLE_BLOCK.commit_id);
+    // The agent's own prose summary is preserved verbatim.
+    expect(md).toContain(SAMPLE_BLOCK.summary);
+  });
+
+  test("emoji + label by verdict kind", () => {
+    expect(buildPresentationMarkdown({ ...SAMPLE_BLOCK, verdict: "approved" })).toContain(
+      "✅ Approved",
+    );
+    expect(
+      buildPresentationMarkdown({ ...SAMPLE_BLOCK, verdict: "changes-requested" }),
+    ).toContain("🔴 Changes requested");
+    expect(
+      buildPresentationMarkdown({ ...SAMPLE_BLOCK, verdict: "commented" }),
+    ).toContain("💬 Commented");
+  });
+
+  test("idempotent — same block in → byte-identical string out", () => {
+    const a = buildPresentationMarkdown(SAMPLE_BLOCK);
+    const b = buildPresentationMarkdown({
+      ...SAMPLE_BLOCK,
+      findings: { ...SAMPLE_BLOCK.findings },
+    });
+    expect(a).toBe(b);
+  });
+
+  test("never leaks raw JSON — no payload braces / quoted-key pattern", () => {
+    const md = buildPresentationMarkdown(SAMPLE_BLOCK);
+    // No JSON object dump (the failure mode the field exists to prevent).
+    expect(md).not.toContain('"verdict"');
+    expect(md).not.toContain('"findings"');
+    expect(md).not.toContain('"github_review_url"');
+  });
+
+  test("empty github_review_url → no link line, no dangling commit", () => {
+    const md = buildPresentationMarkdown({
+      ...SAMPLE_BLOCK,
+      github_review_url: "",
+    });
+    expect(md).not.toContain("Review on GitHub");
+    expect(md).not.toContain("a1b2c3d");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#503 — presentation stamped on the verdict payload
+// ---------------------------------------------------------------------------
+
+describe("runReviewPipeline — presentation on the verdict payload", () => {
+  test("verdict payload carries deterministic presentation matching the helper", async () => {
+    const block = buildVerdictBlock("changes-requested", {
+      summary: "Blocking: SQL injection in the search route.",
+      commit_id: "deadbeef0000111122223333444455556666aaaa",
+      github_review_url: "https://github.com/the-metafactory/cortex/pull/229#r1",
+      findings: { blockers: 1, majors: 0, nits: 2 },
+      inline_comments: 4,
+    });
+    const { factory } = fakeFactory(successResult(block));
+    const result = await runReviewPipeline(baseOpts(factory));
+    expect(result.kind).toBe("verdict");
+    if (result.kind !== "verdict") return;
+    const presentation = result.envelope.payload.presentation;
+    expect(typeof presentation).toBe("string");
+    expect(presentation as string).toContain("🔴 Changes requested");
+    expect(presentation as string).toContain("1 blockers");
+    expect(presentation as string).toContain("deadbee"); // 7-char commit
+    // verbatim deterministic — recompute and compare.
+    expect(presentation).toBe(
+      buildPresentationMarkdown({
+        verdict: "changes-requested",
+        summary: "Blocking: SQL injection in the search route.",
+        github_review_id: 2459183744,
+        github_review_url: "https://github.com/the-metafactory/cortex/pull/229#r1",
+        submitted_at: "2026-05-16T09:51:30Z",
+        commit_id: "deadbeef0000111122223333444455556666aaaa",
+        findings: { blockers: 1, majors: 0, nits: 2 },
+        inline_comments: 4,
+      }),
+    );
   });
 });

@@ -54,7 +54,8 @@
  * | CC factory throws synchronously (binary missing)     | `not_now`   | Transient substrate failure (§7.3); principal-recoverable. |
  * | CC session `kill()` / inactivity timeout / abort     | `not_now`   | Substrate-side crash (§7.6) — pilot maps to exit 4.        |
  * | CC session exits non-zero with no parseable block    | `not_now`   | Substrate-side crash (§7.6).                                |
- * | CC session exits clean (0) but no verdict block      | `cant_do`   | Skill didn't fulfil its contract (§4.5).                    |
+ * | CC session exits clean (0) but no verdict block      | (none)      | cortex#503 — agent answered in prose; SUCCESS completion   |
+ * |                                                      |             | `{ kind: "completed", presentation }` (NOT a fail/verdict).|
  * | Verdict block present but JSON parse fails           | `cant_do`   | Skill emitted malformed output (§4.5).                      |
  * | Verdict block parses but required field missing/bad  | `cant_do`   | Schema mismatch (§4.5).                                     |
  * | Caller-injected policy refusal (e.g. scope-out)      | `wont_do`   | Reviewer policy refused (§7.2); explicit opt-in via opt.    |
@@ -111,9 +112,21 @@ import {
  * PR-6's consumer pattern-matches on `result.kind` to decide whether to
  * also publish a `dispatch.task.completed` (verdict path) or to skip
  * straight to acking the JetStream message (failed path).
+ *
+ * cortex#503 — a THIRD variant `kind: "completed"` carries the
+ * **prose-fallback** success: the CC session exited clean but emitted no
+ * parseable structured verdict block, so the agent answered in prose. The
+ * pipeline does NOT fabricate a structured verdict from that prose (that
+ * would violate "no agent/LLM tokens author the verdict" + the
+ * discriminator-alignment guard). Instead it returns the agent's own prose
+ * (markdown) as `presentation` and the consumer publishes a plain
+ * `dispatch.task.completed` (NOT a `review.verdict.<kind>`). JSON never
+ * reaches a surface: the verdict path computes deterministic presentation
+ * markdown, the prose path passes the prose through as markdown.
  */
 export type ReviewPipelineResult =
   | { kind: "verdict"; envelope: Envelope }
+  | { kind: "completed"; presentation: string }
   | { kind: "failed"; envelope: Envelope };
 
 /**
@@ -382,21 +395,27 @@ export async function runReviewPipeline(
   }
 
   // §4.5 — extract the structured-verdict JSON block from the CC stream's
-  // last assistant message. Absent block on a clean exit = skill didn't
-  // honour the contract (`cant_do`, permanent — principal must fix the
-  // skill, not retry the request).
+  // last assistant message.
+  //
+  // cortex#503 — absent block on a CLEAN exit is NO LONGER a hard-fail.
+  // Previously this returned `{ kind: "failed", reason: cant_do }`, which
+  // gated pilot's `--wait` (exit non-zero) on a review the agent actually
+  // completed — it just answered in prose rather than the structured block.
+  // We DO NOT fabricate a structured verdict from the prose (that would
+  // manufacture an approved/changes-requested/commented kind cortex cannot
+  // stand behind, violating "no agent/LLM tokens author the verdict"). The
+  // `inferVerdictFromProse` heuristic is deliberately NOT implemented.
+  //
+  // Instead this is a SUCCESS completion: `presentation` carries the raw
+  // prose (trimmed, still markdown), and the consumer publishes a plain
+  // `dispatch.task.completed` — NOT a `review.verdict.<kind>`. The remaining
+  // failure paths (malformed JSON when a block WAS present; substrate
+  // crash/timeout; field-validation) stay `cant_do`/`not_now` — those are
+  // genuine substrate/contract failures, distinct from "agent answered in
+  // prose".
   const block = extractVerdictBlock(result.response);
   if (block === null) {
-    return failed(
-      opts,
-      correlationId,
-      startedAt,
-      {
-        kind: "cant_do",
-        detail: "skill did not return parseable verdict block",
-      },
-      "skill did not return parseable verdict block",
-    );
+    return { kind: "completed", presentation: result.response.trim() };
   }
 
   const parsed = parseVerdictBlock(block);
@@ -435,6 +454,12 @@ export async function runReviewPipeline(
       nits: parsed.value.findings.nits,
     },
     inline_comments: parsed.value.inline_comments,
+    // cortex#503 — stamp the deterministic presentation markdown computed
+    // by cortex from the structured fields. Zero LLM tokens: the reviewing
+    // agent only authored `summary`; the heading/emoji/counts/link line are
+    // code-stamped here so it rides the `review.verdict.<kind>` payload onto
+    // the wire for surfaces to render verbatim.
+    presentation: buildPresentationMarkdown(parsed.value),
   };
 
   let envelope: Envelope;
@@ -640,4 +665,78 @@ function parseVerdictBlock(raw: string): ParseResult<VerdictBlock> {
       inline_comments: obj.inline_comments,
     },
   };
+}
+
+/**
+ * cortex#503 — build the deterministic **presentation markdown** for a
+ * parsed structured verdict.
+ *
+ * Pure, deterministic string-templating over the already-parsed structured
+ * fields (verdict kind, summary, findings counts, inline_comments, the
+ * GitHub review link + 7-char commit). ZERO agent/LLM tokens: the reviewing
+ * agent authored only `block.summary`; this code stamps the heading, emoji,
+ * findings line, and link. Idempotent — the same {@link VerdictBlock} in
+ * produces a byte-identical string out (no clocks, no randomness, no
+ * environment reads).
+ *
+ * Surfaces render this string VERBATIM as markdown (the review sink + any
+ * `review.verdict.*` adapter), so it must never embed raw JSON. Per the
+ * control-plane/data-plane rule, the FULL review body lives on GitHub (the
+ * `github_review_url`); this markdown is the cortex-side render the surfaces
+ * post — a Discord entity thread typically derives a one-liner from it.
+ *
+ * Shape:
+ *
+ *   ### {emoji} {Verdict-Label} — {repo}#{pr}
+ *
+ *   {summary}
+ *
+ *   **Findings:** {b} blockers · {m} majors · {n} nits · {i} inline comments
+ *
+ *   [Review on GitHub]({github_review_url}) ({commit7})
+ *
+ * Emoji + label by verdict:
+ *   - `approved`          → ✅ "Approved"
+ *   - `changes-requested` → 🔴 "Changes requested"
+ *   - `commented`         → 💬 "Commented"
+ */
+export function buildPresentationMarkdown(block: VerdictBlock): string {
+  let emoji: string;
+  let label: string;
+  if (block.verdict === "approved") {
+    emoji = "✅";
+    label = "Approved";
+  } else if (block.verdict === "changes-requested") {
+    emoji = "🔴";
+    label = "Changes requested";
+  } else {
+    emoji = "💬";
+    label = "Commented";
+  }
+
+  const { blockers, majors, nits } = block.findings;
+  const findingsLine =
+    `**Findings:** ${blockers} blockers · ${majors} majors · ${nits} nits ` +
+    `· ${block.inline_comments} inline comments`;
+
+  const lines: string[] = [`### ${emoji} ${label}`];
+
+  const summary = block.summary.trim();
+  if (summary.length > 0) {
+    lines.push("", summary);
+  }
+
+  lines.push("", findingsLine);
+
+  // GitHub link line — only when a URL is present (sage Phase-1 verdicts can
+  // carry an empty url). The commit suffix is the first 7 chars of the SHA
+  // (the conventional short form); omitted when commit_id is empty.
+  const url = block.github_review_url.trim();
+  if (url.length > 0) {
+    const commit7 = block.commit_id.trim().slice(0, 7);
+    const commitSuffix = commit7.length > 0 ? ` (\`${commit7}\`)` : "";
+    lines.push("", `[Review on GitHub](${url})${commitSuffix}`);
+  }
+
+  return lines.join("\n");
 }

@@ -158,25 +158,45 @@ function reviewSubjects(principal: string, stack?: string): string[] {
  */
 function renderText(envelope: Envelope): string | null {
   if (envelope.type.startsWith(VERDICT_TYPE_PREFIX)) {
-    const verdictLine = formatReviewVerdict(envelope);
-    if (verdictLine === null || verdictLine.length === 0) return null;
-    // Ping the deliverable agent back so the requester is notified. The
-    // verdict's `reviewer` is the agent that produced it (e.g. `luna`);
+    // cortex#503 — surfaces render ONLY the deterministic `presentation`
+    // markdown when cortex stamped it (verbatim, never a JSON dump). The
+    // `formatReviewVerdict` one-liner is the fallback for older verdicts
+    // (wire forward-compat) that predate `presentation`. Either way a ping
+    // mentions the reviewer so the requester is notified.
+    const presentation =
+      typeof envelope.payload.presentation === "string"
+        ? envelope.payload.presentation.trim()
+        : "";
+    const body = presentation.length > 0 ? presentation : formatReviewVerdict(envelope);
+    if (body === null || body.length === 0) return null;
+    // The verdict's `reviewer` is the agent that produced it (e.g. `luna`);
     // a leading `@{reviewer}` is the conventional Discord-style mention.
     const reviewer =
       typeof envelope.payload.reviewer === "string"
         ? envelope.payload.reviewer
         : "";
-    return reviewer ? `@${reviewer} ${verdictLine}` : verdictLine;
+    return reviewer ? `@${reviewer} ${body}` : body;
   }
-  // Double-reply guard (#502 review): on the review path a successful review
-  // co-emits BOTH `review.verdict.*` (the human-facing terminal reply, handled
-  // above) AND `dispatch.task.completed` (whose `result_summary` is just the
-  // verdict summary — redundant on a human surface, though load-bearing for the
-  // dashboard sink). Suppress `completed` here so the originating thread gets
-  // exactly ONE terminal message. `failed`/`aborted` have no co-emitted verdict,
-  // so they remain the terminal reply and still render.
-  if (envelope.type === "dispatch.task.completed") return null;
+  // cortex#503 — the PROSE-FALLBACK completion (agent answered in prose, no
+  // structured verdict) emits ONLY a `dispatch.task.completed` carrying the
+  // prose in `chat_response`, with NO co-emitted verdict. Render that prose
+  // as the terminal reply (markdown, never JSON). `formatDispatchLifecycle`
+  // already prefers `chat_response` over `result_summary`, so it returns the
+  // full prose here.
+  //
+  // Double-reply guard (#502 review): a STRUCTURED review co-emits BOTH a
+  // `review.verdict.*` (the human-facing terminal reply, handled above) AND a
+  // `dispatch.task.completed` whose `result_summary` is just the verdict
+  // summary — redundant on a human surface. That completed carries NO
+  // `chat_response`, so suppress it; the originating thread gets exactly ONE
+  // terminal message. `failed`/`aborted` have no co-emitted verdict, so they
+  // remain the terminal reply and still render.
+  if (envelope.type === "dispatch.task.completed") {
+    const hasProse =
+      typeof envelope.payload.chat_response === "string" &&
+      envelope.payload.chat_response.trim().length > 0;
+    if (!hasProse) return null;
+  }
   return formatDispatchLifecycle(envelope);
 }
 
@@ -189,6 +209,27 @@ export function createReviewSink(opts: ReviewSinkOptions): ReviewSink {
 
   let registration: { unregister: () => void } | null = null;
   let subscribers: MyelinSubscriber[] = [];
+
+  // cortex#491 belt-and-braces — render idempotency keyed by `envelope.id`.
+  // The runtime-level subscribe dedupe (cortex#491 in `runtime.ts`) is the
+  // primary defence against double-delivery; this second layer guarantees
+  // that even an accidental double-delivery from a misconfig (or a future
+  // overlapping-pattern path) cannot produce TWO GitHub/Discord renders for
+  // one envelope. Bounded so a long-lived sink can't leak: oldest ids evict
+  // once the window fills (envelopes arrive in roughly-temporal order, so a
+  // genuine duplicate lands well within the window).
+  const seenIds = new Set<string>();
+  const SEEN_WINDOW = 4096;
+  function alreadyRendered(id: string): boolean {
+    if (seenIds.has(id)) return true;
+    seenIds.add(id);
+    if (seenIds.size > SEEN_WINDOW) {
+      // Evict the oldest entry (insertion order — Set preserves it).
+      const oldest = seenIds.values().next().value;
+      if (oldest !== undefined) seenIds.delete(oldest);
+    }
+    return false;
+  }
 
   /**
    * Resolve the first adapter that drives `surface` to a native target for
@@ -228,6 +269,12 @@ export function createReviewSink(opts: ReviewSinkOptions): ReviewSink {
 
     const text = renderText(envelope);
     if (text === null || text.length === 0) return;
+
+    // cortex#491 belt-and-braces — at-most-once render per envelope.id. We
+    // mark seen only once we know this envelope WOULD post (routing present,
+    // text non-empty) so a non-actionable envelope doesn't consume a window
+    // slot. A second delivery of the same id is a silent no-op.
+    if (alreadyRendered(envelope.id)) return;
 
     let target: ResponseTarget | null;
     try {

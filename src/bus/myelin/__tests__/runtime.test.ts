@@ -831,4 +831,101 @@ describe("MyelinRuntime", () => {
       expect(fake.publish).not.toHaveBeenCalled();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // cortex#491 — idempotent push-subscribe per resolved pattern (double-bind fix)
+  // -------------------------------------------------------------------------
+  describe("cortex#491 idempotent push-subscribe", () => {
+    test("duplicate config nats.subjects pattern binds exactly ONE NATS subscription", async () => {
+      const fake = makeFakeNatsConnection();
+      const runtime = await startMyelinRuntime(
+        makeConfig({
+          url: "nats://localhost:4222",
+          name: "cortex",
+          // Same resolved pattern listed twice — pre-fix this double-bound
+          // the shared handlers Set and double-delivered every envelope.
+          subjects: ["local.test.>", "local.test.>"],
+        }),
+        { connectImpl: async () => fake.nc },
+      );
+      expect(runtime.enabled).toBe(true);
+      // Exactly ONE NATS subscription for the deduped pattern.
+      expect(fake.subscribePatterns).toEqual(["local.test.>"]);
+      // The skip is logged so operators can see the dedupe fired.
+      expect(
+        logs.some((l) => l.msg.includes("skipping duplicate subscribe")),
+      ).toBe(true);
+      await runtime.stop();
+    });
+
+    test("two DISTINCT patterns create two subscriptions (no over-dedup)", async () => {
+      const fake = makeFakeNatsConnection();
+      const runtime = await startMyelinRuntime(
+        makeConfig({
+          url: "nats://localhost:4222",
+          name: "cortex",
+          subjects: ["local.test.a.>", "local.test.b.>"],
+        }),
+        { connectImpl: async () => fake.nc },
+      );
+      expect(runtime.enabled).toBe(true);
+      expect(fake.subscribePatterns.sort()).toEqual([
+        "local.test.a.>",
+        "local.test.b.>",
+      ]);
+      await runtime.stop();
+    });
+
+    test("runtime.subscribe for a pattern already bound by config reuses it (no second bind)", async () => {
+      const fake = makeFakeNatsConnection();
+      const runtime = await startMyelinRuntime(
+        makeConfig({
+          url: "nats://localhost:4222",
+          name: "cortex",
+          subjects: ["local.test.>"],
+        }),
+        { connectImpl: async () => fake.nc },
+      );
+      expect(runtime.enabled).toBe(true);
+      expect(fake.subscribePatterns).toEqual(["local.test.>"]);
+
+      // A self-subscribe (e.g. review-sink / runner) for the SAME resolved
+      // pattern must NOT create a second NATS subscription — that is the
+      // double-bind the cortex#491 fix kills.
+      expect(runtime.subscribe).toBeDefined();
+      const sub = await runtime.subscribe!("local.test.>");
+      expect(sub).not.toBeNull();
+      // Still exactly one NATS subscription.
+      expect(fake.subscribePatterns).toEqual(["local.test.>"]);
+
+      await runtime.stop();
+    });
+
+    test("subscription cardinality is 1 for a doubly-listed pattern (fan-out runs once)", async () => {
+      // The double-delivery root cause is SUBSCRIBER cardinality, not handler
+      // cardinality: two push subscribers bound to a matching pattern each
+      // iterate the shared `handlers` Set, so every registered sink fires
+      // TWICE per publish. With the cortex#491 dedupe there is exactly ONE
+      // MyelinSubscriber → the shared handlers Set is iterated once per
+      // delivered envelope. The NATS subscription count is the observable
+      // proxy for "fan-out runs once".
+      const fake = makeFakeNatsConnection();
+      const runtime = await startMyelinRuntime(
+        makeConfig({
+          url: "nats://localhost:4222",
+          name: "cortex",
+          subjects: ["local.test.>", "local.test.>"],
+        }),
+        { connectImpl: async () => fake.nc },
+      );
+      expect(runtime.enabled).toBe(true);
+      expect(fake.subscribePatterns).toEqual(["local.test.>"]);
+      // The shared handlers Set dedupes by function reference, so a single
+      // onEnvelope registration is in the Set once; combined with one
+      // subscriber, a delivered envelope drives each handler exactly once.
+      const reg = runtime.onEnvelope(() => {});
+      reg.unregister();
+      await runtime.stop();
+    });
+  });
 });
