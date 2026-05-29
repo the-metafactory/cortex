@@ -169,6 +169,14 @@ function renderText(envelope: Envelope): string | null {
         : "";
     return reviewer ? `@${reviewer} ${verdictLine}` : verdictLine;
   }
+  // Double-reply guard (#502 review): on the review path a successful review
+  // co-emits BOTH `review.verdict.*` (the human-facing terminal reply, handled
+  // above) AND `dispatch.task.completed` (whose `result_summary` is just the
+  // verdict summary — redundant on a human surface, though load-bearing for the
+  // dashboard sink). Suppress `completed` here so the originating thread gets
+  // exactly ONE terminal message. `failed`/`aborted` have no co-emitted verdict,
+  // so they remain the terminal reply and still render.
+  if (envelope.type === "dispatch.task.completed") return null;
   return formatDispatchLifecycle(envelope);
 }
 

@@ -388,6 +388,40 @@ describe("review-sink — no-routing and resilience", () => {
     expect(adapter.sentMessages).toHaveLength(1);
   });
 
+  test("verdict + co-emitted dispatch.task.completed → exactly ONE terminal post", async () => {
+    // A successful review co-emits BOTH review.verdict.* (the human-facing
+    // reply) AND dispatch.task.completed (whose result_summary duplicates the
+    // verdict) on the same correlation_id + routing. The sink must post only
+    // the verdict — completed is suppressed — so the thread isn't double-replied.
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    const routing = logicalRouting("discord", "cortex", "cortex/pr/57");
+    trigger(
+      envelope("review.verdict.approved", {
+        ...verdictPayload({ verdict: "approved" }),
+        response_routing: routing,
+      }),
+    );
+    trigger(
+      envelope("dispatch.task.completed", {
+        result_summary: "verdict: blockers=0 majors=0 nits=0 — recommend: merge",
+        response_routing: routing,
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Exactly one terminal message, and it's the VERDICT (carries the `@luna`
+    // requester ping, which only the verdict path adds) — not the completed
+    // envelope's result_summary.
+    expect(adapter.sentMessages).toHaveLength(1);
+    expect(adapter.sentMessages[0]?.text).toContain("@luna");
+  });
+
   test("never throws when postResponse rejects", async () => {
     const { runtime, trigger } = fakeRuntime();
     const adapter = discordMock();
