@@ -201,6 +201,20 @@ function renderText(envelope: Envelope): string | null {
 }
 
 /**
+ * The reviewing agent's id, used to author the reply as the reviewer (e.g.
+ * `echo`) rather than the first surface-matching adapter. `dispatch.task.*`
+ * lifecycle envelopes carry `agent_id` (the executing agent); `review.verdict.*`
+ * carries `reviewer` (the agent that produced the verdict). Null when neither
+ * is present (the sink then falls back to any surface-matching adapter).
+ */
+function reviewingAgentId(envelope: Envelope): string | null {
+  const p = envelope.payload;
+  if (typeof p.agent_id === "string" && p.agent_id.length > 0) return p.agent_id;
+  if (typeof p.reviewer === "string" && p.reviewer.length > 0) return p.reviewer;
+  return null;
+}
+
+/**
  * Create a review sink. Wires nothing until `start()` is called.
  */
 export function createReviewSink(opts: ReviewSinkOptions): ReviewSink {
@@ -232,20 +246,31 @@ export function createReviewSink(opts: ReviewSinkOptions): ReviewSink {
   }
 
   /**
-   * Resolve the first adapter that drives `surface` to a native target for
-   * the logical address, or `null` when no adapter drives the surface / the
-   * address can't be resolved. The first adapter whose `resolveLogicalTarget`
-   * returns non-null wins; an adapter returns `null` for a surface it
-   * doesn't drive, so iterating is the surface filter.
+   * Resolve a native target for the logical address, PREFERRING the reviewing
+   * agent's own adapter so the reply is authored by the reviewer (e.g. Echo)
+   * rather than whichever surface-matching adapter is first. All of luna/echo/
+   * forge share one Discord guild+channel, so a bare `platform === surface`
+   * filter would post Echo's review under Luna's identity. The instanceId
+   * convention is `{agent}-{platform}` (MIG-7.2c), so the reviewer's adapter is
+   * `{agentId}-{surface}`. Falls back to any surface-matching adapter when the
+   * reviewer's adapter isn't present or can't resolve.
    */
   async function resolveTarget(
     routing: WireLogicalRouting,
+    agentId: string | null,
   ): Promise<ResponseTarget | null> {
-    for (const adapter of adapters) {
-      // Cheap pre-filter: only ask adapters whose platform matches the
-      // surface. (resolveLogicalTarget also guards internally, but this
-      // avoids a wasted async call per non-matching adapter.)
-      if (adapter.platform !== routing.surface) continue;
+    const onSurface = adapters.filter((a) => a.platform === routing.surface);
+    const isReviewerAdapter = (a: (typeof onSurface)[number]): boolean =>
+      agentId !== null &&
+      (a.instanceId === `${agentId}-${routing.surface}` ||
+        a.instanceId.startsWith(`${agentId}-`) ||
+        a.instanceId === agentId);
+    // Reviewer's adapter(s) first, then the remaining surface-matching ones.
+    const ordered = [
+      ...onSurface.filter(isReviewerAdapter),
+      ...onSurface.filter((a) => !isReviewerAdapter(a)),
+    ];
+    for (const adapter of ordered) {
       const target = await adapter.resolveLogicalTarget({
         surface: routing.surface,
         channel: routing.channel,
@@ -278,7 +303,7 @@ export function createReviewSink(opts: ReviewSinkOptions): ReviewSink {
 
     let target: ResponseTarget | null;
     try {
-      target = await resolveTarget(routing);
+      target = await resolveTarget(routing, reviewingAgentId(envelope));
     } catch (err) {
       // A resolve failure (e.g. a thread-create API error) must not crash
       // the fan-out. Log and drop this delivery.

@@ -282,6 +282,54 @@ describe("review-sink — lifecycle delivery", () => {
   });
 });
 
+describe("review-sink — reviewer authorship", () => {
+  test("posts as the REVIEWING agent (echo), not the first surface-matching adapter (luna)", async () => {
+    // All three bots share one Discord guild/channel; the review must be
+    // authored by the reviewer (echo), not whichever adapter is listed first.
+    const { runtime, trigger } = fakeRuntime();
+    const luna = discordMock("luna-discord"); // listed FIRST — the old bug posted here
+    const echo = discordMock("echo-discord");
+    const sink = createReviewSink({ runtime, adapters: [luna, echo], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      envelope("dispatch.task.completed", {
+        agent_id: "echo",
+        chat_response: "Code Review — cortex#464: approve. Clean mechanical rename.",
+        response_routing: logicalRouting("discord", "cortex", "cortex/pr/464"),
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(echo.sentMessages).toHaveLength(1);
+    expect(echo.sentMessages[0]!.text).toContain("Code Review");
+    expect(luna.sentMessages).toHaveLength(0); // NOT posted under Luna
+  });
+
+  test("verdict authored by reviewer field (echo) when adapters list luna first", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const luna = discordMock("luna-discord");
+    const echo = discordMock("echo-discord");
+    const sink = createReviewSink({ runtime, adapters: [luna, echo], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      envelope("review.verdict.approved", {
+        ...verdictPayload({ verdict: "approved", reviewer: "echo" }),
+        response_routing: logicalRouting("discord", "cortex", "cortex/pr/464"),
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(echo.sentMessages).toHaveLength(1);
+    expect(luna.sentMessages).toHaveLength(0);
+  });
+});
+
 describe("review-sink — surface filter", () => {
   test("ignores an envelope for a surface this sink doesn't drive", async () => {
     const { runtime, trigger } = fakeRuntime();
