@@ -11,6 +11,12 @@
  * tests construct pieces directly; the CLI bottom wires SIGINT/SIGTERM.
  */
 
+// MUST be first: forces @discordjs/ws onto the `ws` package on Bun (overrides
+// globalThis.WebSocket) BEFORE any transitive discord.js import evaluates its
+// module-level WebSocket constructor. Fixes the recurring gateway flapping
+// (cortex#546/#581/#590/#591/#593). See src/bootstrap/ws-transport.ts.
+import "./bootstrap/ws-transport";
+
 import { Command } from "commander";
 import { existsSync, writeFileSync, readFileSync, unlinkSync, mkdirSync, readdirSync } from "fs";
 import { basename, join, dirname, isAbsolute } from "path";
