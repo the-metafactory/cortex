@@ -1049,9 +1049,16 @@ export async function startCortex(
         // PR-6 has no policy hook — that's a future PR (sovereignty /
         // compliance gate). Until then the pipeline goes straight to CC.
         promptBuilder: ({ payload }) =>
-          // Minimal prompt — the real skill-aware builder lands in PR-8.
-          // Echo's skill consumes `/review <owner/repo>#<pr>` style today.
-          `/review ${payload.repo}#${payload.pr}`,
+          // Dispatch INTENT, not method. cortex pings the reviewer with the
+          // PR to review; the reviewing agent (e.g. Echo) owns HOW — its
+          // persona routes to its canonical review entry (`/review-pr` →
+          // CodeReview skill → `gh pr review` + the cortex#237 verdict block).
+          // Do NOT send a `/review` slash command here: that hijacks the
+          // session into the generic built-in reviewer (which produces prose
+          // and *asks* before posting — never posting in a non-interactive
+          // dispatch). Capability routing already happened on the subject
+          // (`tasks.code-review.*`); the prompt only carries the intent.
+          `Review PR ${payload.repo}#${payload.pr}`,
         sessionOpts: reviewSessionOpts,
         ...(pipelineRunner !== undefined && { pipelineRunner }),
         ...(signatureVerifier !== undefined && { signatureVerifier }),
