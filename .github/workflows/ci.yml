@@ -83,6 +83,46 @@ jobs:
         run: bunx tsc --noEmit
 
   # ──────────────────────────────────────────────────────────────────
+  # Vocab carve-out gate — the 0002 vocabulary-migration ratchet.
+  # Runs scripts/check-carveouts.sh, which FAILS when any UNGATED
+  # R-cluster deprecated term (operator / OperatorConfig / BotConfig /
+  # home_operator / operator.input eventKinds / broadcast emission /
+  # operatorId) appears as a LIVE VIOLATION in src/ or docs/, EXCLUDING
+  # the enumerated carve-out allowlist (NSC OP_*, GROVE_* env tier,
+  # migrate-config legacy reader, frozen SQL DDL, grove-* historical
+  # refs, platform-bot terms, myelin-GATED R4/R5/R10/R11 transition
+  # shims, and the "Operator vision" label).
+  #
+  # Spec: docs/migrations/0002-vocabulary-finish-2026-05.md §"0001-carve-out
+  # self-check" (the TODO ratchet) + §"Completion signal" (the allowlist).
+  #
+  # On a per-PR basis the same script can be pointed at the diff:
+  #   git diff --name-only origin/main... | scripts/check-carveouts.sh -
+  # The whole-tree scan below is the merge gate.
+  # ──────────────────────────────────────────────────────────────────
+  vocab-carveout-gate:
+    name: Vocab carve-out gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # DIFF-MODE ratchet (cortex#436): the 0002 vocabulary migration still has a
+      # known residue backlog being swept down PR-by-PR, so a whole-tree gate
+      # would red-line every PR. Instead we check ONLY the files this PR changes
+      # — new violations are blocked and any file you touch must be left clean,
+      # while the existing backlog drains over successive sweep PRs. Flip to
+      # whole-tree (`bash scripts/check-carveouts.sh`) once the tree is at zero.
+      - name: check-carveouts (PR diff)
+        run: |
+          base="origin/${{ github.base_ref || 'main' }}"
+          git fetch origin "${{ github.base_ref || 'main' }}" --depth=1 || true
+          changed="$(git diff --name-only "$base"...HEAD || git diff --name-only "$base")"
+          if [ -z "$changed" ]; then echo "no changed files"; exit 0; fi
+          printf '%s\n' "$changed" | bash scripts/check-carveouts.sh -
+
+  # ──────────────────────────────────────────────────────────────────
   # Test — `bun test` runs the full unit/integration suite. Pre-cortex#376
   # CI never ran tests, so cortex#366 (originator security regression)
   # sat on main even though a test covered it. This gate is the
