@@ -1,29 +1,31 @@
 # Plan — Internet of Agentic Work implementation
 
-**Status:** Working document. Single source of truth for the cortex#110 (META) work — the implementation of the Internet of Agentic Work composition model. Every PR cites a phase + checklist item from this doc. **For "what we're building and why" (architecture, OSI layering, composition model, operator vision), see the static design doc `docs/design-internet-of-agentic-work.md`.** This plan covers only the implementation sequencing: what ships in what phase, in what order, with what entry/exit criteria. When this doc and reality disagree, this doc wins (or is updated, never silently). When this doc and the design doc disagree on architecture, the design doc wins.
+> **Terminology aligned to CONTEXT.md** (the architectural source of truth, post operator→principal refactor). The human who owns and runs stacks is the **principal** (was "operator"); dispatch modes are **Offer / Direct / Delegate** (Offer was "broadcast"); a subject's travel limit is its **scope** (was "reach"); the dotted NATS routing string is a **subject** (was "topic"); the named being is an **assistant**, its stack-local runtime an **agent**, a spawned CC task a **sub-agent** (was overloaded "agent"). Preserved distinct concepts: the NSC/NATS **operator account** (operator NKey / operator JWT), the "Operator vision" reference label, and code identifiers / field names like `home_operator` / `operatorId` (tracked separately as cortex#448 — pending rename, left as-is here).
+
+**Status:** Working document. Single source of truth for the cortex#110 (META) work — the implementation of the Internet of Agentic Work composition model. Every PR cites a phase + checklist item from this doc. **For "what we're building and why" (architecture, OSI layering, composition model, Operator vision), see the static design doc `docs/design-internet-of-agentic-work.md`.** This plan covers only the implementation sequencing: what ships in what phase, in what order, with what entry/exit criteria. When this doc and reality disagree, this doc wins (or is updated, never silently). When this doc and the design doc disagree on architecture, the design doc wins.
 **Date opened:** 2026-05-13
 **Driver:** Andreas
-**Retires when:** Phase E closes (multi-network bridges + delegation patterns operable in production).
+**Retires when:** Phase E closes (multi-network bridges + delegation patterns operable in production), plus the two new epics under §13 (config split + shared surface gateway) land.
 
 **Related docs (load-bearing):**
 - **`docs/design-internet-of-agentic-work.md`** — the static architecture spec. What IAW IS. Reference this for any "how should this be structured" question; only reference *this* doc for implementation mechanics.
 - `docs/plan-cortex-migration.md` — the cortex spawn / migration plan from grove-v2. MIG-7 cutover is the moment cortex.yaml's schema flips for the first time; this plan's Phase C is the second (and last) schema flip.
-- `cortex#110` (META) — the operator-vision umbrella ("Internet of Agentic Work").
+- `cortex#110` (META) — the Operator-vision umbrella ("Internet of Agentic Work"). *("Operator vision" is the preserved North-Star reference label, not the human-actor sense.)*
 - `cortex#112` (this PR) — the synthesis design doc.
 - `cortex#91` — substrate harness (M6). Pre-existing sibling issue; consumed by Phase A.
 - `cortex#102` — bot↔bot via bus envelopes / NKey identity (L3/L4). Pre-existing sibling issue; Phase B.
-- `cortex#107` — principal-based AAA at dispatch-handler (M6). Pre-existing sibling issue; Phase C — includes Step H multi-operator cloud dashboard, consumed in Phase D.
+- `cortex#107` — principal-based AAA at dispatch-handler (M6). Pre-existing sibling issue; Phase C — includes Step H multi-principal cloud dashboard, consumed in Phase D.
 - `cortex#109` — envelope-visibility composition + subject-namespace routing (L3/L4). Pre-existing sibling issue; consumed in Phases A and D.
 - `~/Developer/myelin/specs/namespace.md` — myelin canonical namespace; Phase A extends to add a `{stack}` segment per Q7 lock-in.
 - `~/Developer/myelin/docs/envelope.md` — chain-of-stamps + sovereignty fields. Phase A consumes the post-`96b14ea` envelope; Phase B consumes `signed_by[]`.
-- `cortex/docs/architecture.md` §9 — agent + presence/renderer model (post-MIG-7 cortex.yaml shape; this plan extends it).
+- `cortex/docs/architecture.md` §9 — assistant + presence/renderer model (post-MIG-7 cortex.yaml shape; this plan extends it).
 - `~/Developer/compass/sops/dev-pipeline.md` + `worktree-discipline.md` + `pr-review.md` — standard dev SOPs.
 
 ---
 
 ## 1. Overview
 
-The Internet of Agentic Work is the composition model where stacks (`{operator_id}/{stack_id}`) join networks via NATS leaf-node federation; networks compose into the operator's federated graph; agents delegate across stacks and networks via the orchestrator pattern. Five phases sequenced A→E deliver this incrementally.
+The Internet of Agentic Work is the composition model where stacks (`{operator_id}/{stack_id}` — the slash-form id literal is tracked for rename under cortex#448; semantically the first segment is the **principal**) join networks via NATS leaf-node federation; networks compose into the principal's federated graph; assistants delegate across stacks and networks via the orchestrator pattern. Five phases sequenced A→E deliver this incrementally.
 
 ### 1.1 Phase ladder
 
@@ -33,14 +35,18 @@ The Internet of Agentic Work is the composition model where stacks (`{operator_i
 | **B** Identity | NKey-signed envelopes for bot↔bot (chain-of-stamps consumption) | 1–2 weeks | cortex#102 | No |
 | **C** Policy + schema flip | PolicyEngine at M6 + cortex.yaml flips ONCE (stack block, principal table, role table) | 2–3 weeks | cortex#107 | **Yes — the only one** |
 | **D** Federation | Peer registry + accept rules + network membership declaration + cloud-side network registry service | 3–4 weeks | cortex#107 (Step H) + cortex#109 (§E) | No (additive) |
+| **CFG** Config split (FOUNDATION) | Multi-file config composer + system.yaml extraction + surface bindings out of per-stack presence | 1–2 weeks | new sibling issue (§13) | No (additive; transitional single-file fallback) |
+| **GW** Shared surface gateway | One assistant, many deployments — gateway process + per-platform resolvers + per-stack adapter retirement | 3–4 weeks | new sibling issue (§13); depends on CFG | No (additive; `response_routing.instance` bump) |
 | **E** Multi-network bridges + delegation | A stack participating in N networks; cross-network delegation patterns | 4–6 weeks | new sibling issue (Phase E sub-issue, this plan) | No (additive) |
 
-Total: 12–18 weeks if strictly sequenced. Phases A and B are sequenceable; Phase C is the schema flip; Phase D depends on C; Phase E depends on D.
+Total: 12–18 weeks if strictly sequenced. Phases A and B are sequenceable; Phase C is the schema flip; Phase D depends on C; Phase E depends on D. The two new epics (§13) sit outside the A→E federation ladder: **CFG** (config split) is a low-risk foundation that should land before/with **GW** (shared surface gateway); GW builds on CFG's `surfaces.yaml`.
 
 ### 1.2 Locked-in design decisions (verbatim from §5 of the design doc, Andreas 2026-05-13)
 
+> These Q1–Q7 lock-ins are quoted verbatim and unchanged. Where they say "operator", note the vocabulary mapping: the human is the **principal** (subject segment `{principal}`); the cryptographic root named "operator-account-NKey" / "operator JWT" is the genuine **NSC/NATS operator account** and is preserved as-is. The `{operator_id}` id literal is tracked for rename under cortex#448.
+
 - **Q1 — Stack identity:** `{operator_id}/{stack_id}` slash-separated. NATS form `local.{operator}.{stack}.>` / `federated.{operator}.{stack}.>`. Cryptographic chain operator-account-NKey → stack-NKey → agent-NKeys. Operator-id is the network authority root.
-- **Q2 — Capabilities:** Two-part — network capabilities aggregated across all member stacks + operator-declared stack-level capabilities in cortex.yaml using a constrained schema (id, description, tags, provided_by, optional rate/cost).
+- **Q2 — Capabilities:** Two-part — network capabilities aggregated across all member stacks + principal-declared stack-level capabilities in cortex.yaml using a constrained schema (id, description, tags, provided_by, optional rate/cost).
 - **Q3 — Network registry:** Centralised; cortex.yaml + cloud-side network registry service alongside cortex#107 Step H dashboard. NOT NATS-gossiped.
 - **Q4 — Bridge-stack scoping:** Separate networks, not per-peer scoping. Bridge stack = multiple network memberships.
 - **Q5 — Competing-consumers:** NATS queue groups (claim-first-wins at bus layer); no reservation; no auction.
@@ -50,7 +56,7 @@ Total: 12–18 weeks if strictly sequenced. Phases A and B are sequenceable; Pha
 ### 1.3 Non-goals of this implementation plan
 
 - **Not a re-architecture.** Every Phase reuses existing M2–M6 cortex code (substrate harness, surface-router, trust resolver). New code is targeted.
-- **Not the operator-vision video script.** The video (cortex#110 body) is the "why"; this plan is the "how".
+- **Not the Operator-vision video script.** The video (cortex#110 body) is the "why"; this plan is the "how".
 - **Not myelin changes.** Phase A.5 (stack namespace extension) is filed AS a myelin issue but lands separately; cortex's vendored envelope rides along.
 - **Not the cloud dashboard refactor.** cortex#107 Step H is consumed in Phase D; this plan doesn't re-design it.
 - **Not the public mesh / capability marketplace.** Out of scope across all five phases; future evolution after Phase E if demand surfaces.
@@ -151,10 +157,10 @@ The `{operator_id}` and `{stack_id}` segments are embedded in NATS subjects afte
 - [x] cortex.yaml `capabilities:` block validates and is queryable from the substrate harness. — PR #146
 - [x] Vendored envelope past `96b14ea`; `signed_by[]` array surfaces structurally (no verification yet). — PR #128 (→ `4578ae1`), refreshed at PR #151 (→ `b69c877`)
 
-**Phase A does NOT require Phase B or later.** It unblocks single-stack federation; multi-operator waits for Phase D.
+**Phase A does NOT require Phase B or later.** It unblocks single-stack federation; multi-principal waits for Phase D.
 
 **Carry-over to Phase B (or future ops cycle):**
-- **cortex#138** — JetStream `TASKS` stream filter shape (`local.*.tasks.>` → `local.*.*.tasks.>`). Cortex publishes stack-aware subjects today (PR #151), but cortex has no in-tree TASKS-stream consumer to break; the filter cutover is an operator-side NATS-server action (cortex.yaml ships no stream config). Reframed as a forward gate that lands when cortex grows a TASKS-stream consumer in Phase B/C.
+- **cortex#138** — JetStream `TASKS` stream filter shape (`local.*.tasks.>` → `local.*.*.tasks.>`). Cortex publishes stack-aware subjects today (PR #151), but cortex has no in-tree TASKS-stream consumer to break; the filter cutover is a principal-side NATS-server action (cortex.yaml ships no stream config). Reframed as a forward gate that lands when cortex grows a TASKS-stream consumer in Phase B/C.
 - **cortex#139** — parallel-checkpoint proposal closed as moot. The myelin-lead-time risk it hedged against did not materialise: myelin#113 (the upstream namespace PR) merged 2026-05-13 at 16:01, three hours after cortex#139 was filed.
 
 ---
@@ -210,7 +216,7 @@ Carries over from A.1.3 — the class that should have shipped in Phase A.
 
 ### B.4 Tests
 
-- [ ] **B.4.1** Round-trip test: agent A (operator alpha) emits a dispatch; agent B (operator beta) verifies the signature; B's reply chain stamps both stacks.
+- [ ] **B.4.1** Round-trip test: agent A (principal alpha) emits a dispatch; agent B (principal beta) verifies the signature; B's reply chain stamps both stacks.
 - [ ] **B.4.2** Forged-signature test: a tampered envelope is rejected by BusPeerHarness.
 - [ ] **B.4.3** Cross-trust test: a stack not in the local trust registry is rejected.
 
@@ -254,13 +260,13 @@ Most of Phase C is paper until B.4 ships, but the paper can be drafted now:
 | Phase A tail follow-ups (#142, #143, #147, #148, #137, #136, #135, #150) | scattered small PRs | Yes |
 | cortex#97 observability envelopes | independent feature | Yes — feeds Phase C.4 |
 
-**Practical implication for a solo/small-team operator:** keep one Phase B PR in flight at a time (review cycle dominates), and use the wait windows to land Phase A tail PRs + draft Phase C design docs. Don't start Phase C implementation until B.4 is green — the principal model materially changes once `signed_by[].principal` is verifiable.
+**Practical implication for a solo/small-team principal:** keep one Phase B PR in flight at a time (review cycle dominates), and use the wait windows to land Phase A tail PRs + draft Phase C design docs. Don't start Phase C implementation until B.4 is green — the principal model materially changes once `signed_by[].principal` is verifiable.
 
 ---
 
 ## 4. Phase C — Policy + schema flip (PolicyEngine at M6)
 
-**Goal:** PolicyEngine is the single decision point for "what is this principal allowed to do?" — replacing per-surface duplication. cortex.yaml flips ONCE from per-adapter `roles[]` to top-level `policy:{ principals[], roles[] }`. The `stack:` block (Phase A) and the `capabilities:` block (Phase A) live alongside the new `policy:` block. **This is the only phase that flips the operator-facing config schema.**
+**Goal:** PolicyEngine is the single decision point for "what is this principal allowed to do?" — replacing per-surface duplication. cortex.yaml flips ONCE from per-adapter `roles[]` to top-level `policy:{ principals[], roles[] }`. The `stack:` block (Phase A) and the `capabilities:` block (Phase A) live alongside the new `policy:` block. **This is the only phase that flips the principal-facing config schema.**
 
 **Issue:** `cortex#? — IAW Phase C: Policy + schema flip`.
 
@@ -283,13 +289,13 @@ Most of Phase C is paper until B.4 ships, but the paper can be drafted now:
 
 ### C.2 cortex.yaml schema flip — C.2a DONE (cortex#219); C.2b/C.2c ratified, execution NEXT
 
-**Status as of 2026-05-16:** Design ratified in [PR #291](https://github.com/the-metafactory/cortex/pull/291). See [`docs/design-policy-cutover.md`](./design-policy-cutover.md) for the locked schema + 5-PR sequence and [`docs/iteration-policy-cutover.md`](./iteration-policy-cutover.md) for the operator-facing iteration checklist.
+**Status as of 2026-05-16:** Design ratified in [PR #291](https://github.com/the-metafactory/cortex/pull/291). See [`docs/design-policy-cutover.md`](./design-policy-cutover.md) for the locked schema + 5-PR sequence and [`docs/iteration-policy-cutover.md`](./iteration-policy-cutover.md) for the principal-facing iteration checklist.
 
 - [x] **C.2.1 (additive — C.2a)** Top-level `policy: { principals[], roles[] }` added; schema cross-refines uniqueness + role/trust referential integrity. Legacy per-adapter `roles[]` retained for backward compatibility. — cortex#219
 - [ ] **C.2.1.b (breaking — C.2b)** Per-adapter `roles[]` removed from `DiscordPresenceSchema` + `MattermostPresenceSchema` + `SlackPresenceSchema`; adapter role-resolver retired; v2.0.0 bump. — cortex#242 umbrella (split into 242a parallel-mode + 242b breaking removal per design §9).
 - [ ] **C.2.2** `policy.principals[]` schema extended — adds `platform_ids` (open record), `session_config: {default, dm?}`, multi-stack `(id, home_stack)` uniqueness scoping. Capability namespace adopted: `keyword.{chat,async,team}`, `tool.<name>`, `dispatch.<agent>`, `operator`, `<domain>.<entity>`. — cortex#243a (schema extension)
 - [ ] **C.2.3** Discord/Mattermost/Slack adapters call `PolicyEngine.check()` directly; role-resolver retired. Wired in parallel mode first (most-restrictive intersection), then exclusive at v2.0.0. — cortex#242a → cortex#242b
-- [ ] **C.2.4 (C.2c)** `migrate-config` CLI extension: lift legacy per-adapter `roles[]` into top-level `policy:`. Idempotent, with `--check` mode for the 242a operator pre-flight. Canonical tool inventory via cortex#243b. SOP + migration examples. — cortex#243c
+- [ ] **C.2.4 (C.2c)** `migrate-config` CLI extension: lift legacy per-adapter `roles[]` into top-level `policy:`. Idempotent, with `--check` mode for the 242a principal pre-flight. Canonical tool inventory via cortex#243b. SOP + migration examples. — cortex#243c
 
 ### C.3 Integration with substrate harness — DONE (cortex#220)
 
@@ -327,13 +333,13 @@ Phase C primary objective — *PolicyEngine as the single AAA decision point wit
 
 Pre-Phase-B caveat (Echo cortex#220 round 1): the dispatch-listener policy gate authorises on an unverified `signed_by[0].principal` claim until cortex#114 (Phase B verification) wires the verifier into the envelope-validator. The gate is `CORTEX_POLICY_REQUIRE_UNVERIFIED_ACK=1` opt-in until that closes.
 
-**Critical insight (from design doc §6):** This is the ONLY phase where the operator-facing config schema changes. Sequencing Phases A and B before Phase C means the flip happens once. Q7 lock-in is absorbed here — the stack-aware namespace already lands at Phase A as a structurally additive `stack:` block; Phase C's `policy.principals[]` carries `home_operator` + `home_stack` so the principal table is stack-aware from the moment the flip happens.
+**Critical insight (from design doc §6):** This is the ONLY phase where the principal-facing config schema changes. Sequencing Phases A and B before Phase C means the flip happens once. Q7 lock-in is absorbed here — the stack-aware namespace already lands at Phase A as a structurally additive `stack:` block; Phase C's `policy.principals[]` carries `home_operator` + `home_stack` (field names tracked for rename under cortex#448) so the principal table is stack-aware from the moment the flip happens.
 
 ---
 
-## 5. Phase D — Federation (multi-operator + cloud-side registry)
+## 5. Phase D — Federation (multi-principal + cloud-side registry)
 
-**Goal:** Multi-operator federation operable. `policy.federated.peers[]` (within `policy.federated.networks[]` per Q4 lock-in) declares peer operators + their pubkeys. Surface-router gates inbound `federated.*` envelopes by per-peer policy. Cloud-side network registry service hosts the canonical pubkey directory (per Q3 lock-in). cortex#107 Step H multi-operator dashboard consumes it.
+**Goal:** Multi-principal federation operable. `policy.federated.peers[]` (within `policy.federated.networks[]` per Q4 lock-in) declares peer principals + their pubkeys. Surface-router gates inbound `federated.*` envelopes by per-peer policy. Cloud-side network registry service hosts the canonical pubkey directory (per Q3 lock-in). cortex#107 Step H multi-principal dashboard consumes it.
 
 **Issue:** `cortex#? — IAW Phase D: Federation`.
 
@@ -341,7 +347,7 @@ Pre-Phase-B caveat (Echo cortex#220 round 1): the dispatch-listener policy gate 
 
 **Entry criteria:**
 
-- Phase C complete (PolicyEngine exists; principals carry `home_operator` + `home_stack`).
+- Phase C complete (PolicyEngine exists; principals carry `home_operator` + `home_stack` — field names tracked for rename under cortex#448).
 - Q3 lock-in confirmed (centralised registry, NOT gossip) — DONE 2026-05-13.
 
 ### D.1 `policy.federated.networks[]` schema
@@ -379,24 +385,24 @@ Pre-Phase-B caveat (Echo cortex#220 round 1): the dispatch-listener policy gate 
 ### D.4 Cloud-side network registry service
 
 - [x] **D.4.1** New service alongside `grove-api` (renamed to `cortex-api` post-MIG-7); hosted at `network.meta-factory.ai` or similar. Hono REST API. — `src/services/network-registry/` (this PR).
-- [x] **D.4.2** Endpoints:
-  - `POST /operators/{operator_id}/register` — operator publishes their operator NKey + stack identities + capability declaration (signed assertion).
-  - `GET /operators/{operator_id}` — peers query operator's current pubkey + stack list.
+- [x] **D.4.2** Endpoints (route literals `/operators/{operator_id}` carry the API path; tracked for rename under cortex#448):
+  - `POST /operators/{operator_id}/register` — the principal publishes their operator-account NKey + stack identities + capability declaration (signed assertion).
+  - `GET /operators/{operator_id}` — peers query the principal's current pubkey + stack list.
   - `GET /networks/{network_id}/roster` — query who's in this network.
   - `GET /capabilities?query=...` — capability search across networks.
-- [ ] **D.4.3** Cortex consults the registry at startup + on schedule to refresh peer pubkeys; in-memory cache invalidated on operator-publish events. — consumer side (cortex-side `RegistryClient`) is a separate follow-up; this PR ships the producer surface.
+- [ ] **D.4.3** Cortex consults the registry at startup + on schedule to refresh peer pubkeys; in-memory cache invalidated on principal-publish events. — consumer side (cortex-side `RegistryClient`) is a separate follow-up; this PR ships the producer surface.
 - [x] **D.4.4** Registry signs assertions; cortex verifies before trusting. — registry-side signing landed; cortex-side verification lands with D.4.3 consumer.
 
-### D.5 Cloud dashboard multi-operator slicing (cortex#107 Step H)
+### D.5 Cloud dashboard multi-principal slicing (cortex#107 Step H)
 
-- [ ] **D.5.1** The existing dashboard subscribes to `local.{operator}.{stack}.>`; the cloud variant subscribes to `federated.>` cross-operator (within accept-listed networks).
-- [ ] **D.5.2** Per-operator slicing keyed off `principal.home_operator` for filtering dashboard cards.
+- [ ] **D.5.1** The existing dashboard subscribes to `local.{operator}.{stack}.>` (subject literal); the cloud variant subscribes to `federated.>` cross-principal (within accept-listed networks).
+- [ ] **D.5.2** Per-principal slicing keyed off `principal.home_operator` (field name tracked for rename under cortex#448) for filtering dashboard cards.
 - [ ] **D.5.3** UI surfaces sovereignty + classification on every card (G-1110 work).
 
-### D.6 Tests + cross-operator integration
+### D.6 Tests + cross-principal integration
 
-- [ ] **D.6.1** Two-operator integration test: operator alpha emits `federated.research-collab.tasks.code-review.typescript`; operator beta picks it up via queue-group; beta's stack signs the reply; alpha verifies the chain. Both operators' audits show their respective stamps.
-- [ ] **D.6.2** Registry test: operator alpha registers; operator beta queries; beta's cortex refreshes its peer pubkey cache.
+- [ ] **D.6.1** Two-principal integration test: principal alpha emits `federated.research-collab.tasks.code-review.typescript`; principal beta picks it up via queue-group; beta's stack signs the reply; alpha verifies the chain. Both principals' audits show their respective stamps.
+- [ ] **D.6.2** Registry test: principal alpha registers; principal beta queries; beta's cortex refreshes its peer pubkey cache.
 - [ ] **D.6.3** Deny-list test: an attempted inbound envelope on a `deny_subjects` pattern is rejected with the correct reason.
 
 ### Phase D acceptance criteria
@@ -404,8 +410,8 @@ Pre-Phase-B caveat (Echo cortex#220 round 1): the dispatch-listener policy gate 
 - `policy.federated.networks[]` schema landed.
 - Surface-router gates inbound `federated.*` envelopes by per-peer accept rules.
 - PolicyEngine supports per-network slicing.
-- A second operator (jcfischer or test rig) successfully federates a task; envelope chain verifiable on both sides.
-- Cloud dashboard slices per operator using `home_operator`.
+- A second principal (jcfischer or test rig) successfully federates a task; envelope chain verifiable on both sides.
+- Cloud dashboard slices per principal using `home_operator` (field name tracked for rename under cortex#448).
 - Cloud-side network registry service deployed and integrated.
 
 ---
@@ -439,10 +445,10 @@ Pre-Phase-B caveat (Echo cortex#220 round 1): the dispatch-listener policy gate 
 
 ### E.3 Delegation pattern primitives (§3.6)
 
-- [ ] **E.3.1** Orchestrator agent reference implementation: a persona/runtime that reads the network capability registry, picks a target network/stack for an inbound task, emits a `federated.{network}.tasks.{capability}` envelope.
+- [ ] **E.3.1** Orchestrator agent reference implementation: an assistant + its hosting agent runtime that reads the network capability registry, picks a target network/stack for an inbound task, emits a `federated.{network}.tasks.{capability}` envelope.
 - [ ] **E.3.2** Reply correlation: the orchestrator waits for the chain-of-stamps reply via the per-link queue group; binds reply to the original inbound request via envelope ID.
 - [ ] **E.3.3** Failure handling: if no peer in the target network claims within timeout, fall back to a sibling network or emit `dispatch.task.failed`.
-- [ ] **E.3.4** Test rig: orchestrator agent on operator alpha delegates a TypeScript code-review task to operator beta's `code-review.typescript` capability; receives reply; threads through to original sender.
+- [ ] **E.3.4** Test rig: orchestrator agent on principal alpha delegates a TypeScript code-review task to principal beta's `code-review.typescript` capability; receives reply; threads through to original sender.
 
 ### E.4 Mesh variety scaffolding (private / isolated / public)
 
@@ -461,7 +467,7 @@ Pre-Phase-B caveat (Echo cortex#220 round 1): the dispatch-listener policy gate 
 - `MyelinRuntime` supports multiple NATS links concurrently (one per leaf-node).
 - `policy.federated.networks[].leaf_node` references a named NatsLink.
 - A test rig demonstrates a single cortex process participating in 2 distinct networks (separate leaf-nodes), publishing different capabilities to each.
-- Operator-vision script's "bridge stack" pattern operable.
+- Operator-vision script's "bridge stack" pattern operable. *(Operator vision = the reference label for the cortex#110 North-Star narrative; preserved, not the human-actor sense.)*
 - Orchestrator agent reference implementation delegates across networks via chain-of-stamps.
 - Mesh varieties documented; private + isolated-private operable; public deferred.
 
@@ -476,8 +482,10 @@ Each phase has one tracking issue in `the-metafactory/cortex`, child of cortex#1
 - `cortex#? — IAW Phase A: Foundation — substrate harness + visibility consumption`
 - `cortex#? — IAW Phase B: Identity — NKey-signed bot↔bot`
 - `cortex#? — IAW Phase C: Policy + schema flip — PolicyEngine at M6`
-- `cortex#? — IAW Phase D: Federation — multi-operator peer registry + cloud registry service`
+- `cortex#? — IAW Phase D: Federation — multi-principal peer registry + cloud registry service`
 - `cortex#? — IAW Phase E: Multi-network bridges + delegation`
+- `cortex#? — IAW Config split (CFG) — multi-file config composer + system.yaml + surfaces.yaml` *(new, §13; under cortex#110)*
+- `cortex#? — IAW Shared surface gateway (GW) — one assistant, many deployments` *(new, §13; under cortex#110)*
 
 Issue numbers filed and tracked in §8 cross-references below.
 
@@ -498,7 +506,7 @@ Each PR runs through the standard pilot-review-loop skill with Echo as primary r
 - Every new file has at least one test.
 - Type-check (`bunx tsc --noEmit`) is green before PR open.
 - New protocol semantics (envelope shape, subject grammar, signature flow) have integration tests at the bus boundary.
-- Cross-operator scenarios (Phase D+) have at minimum a two-stack integration test in a local test rig.
+- Cross-principal scenarios (Phase D+) have at minimum a two-stack integration test in a local test rig.
 
 ---
 
@@ -506,17 +514,19 @@ Each PR runs through the standard pilot-review-loop skill with Echo as primary r
 
 ### 8.1 Issues + PRs
 
-- **cortex#110** — META (operator-facing Internet of Agentic Work umbrella).
+- **cortex#110** — META (principal-facing Internet of Agentic Work umbrella).
 - **cortex#112** — design synthesis doc PR (this PR's sibling).
 - **cortex#91** — substrate harness (consumed in Phase A; SessionHarness interface).
 - **cortex#102** — bot↔bot via bus envelopes (consumed in Phase B; chain-of-stamps verification).
-- **cortex#107** — principal-based AAA (consumed in Phase C; PolicyEngine + cortex.yaml flip + Step H multi-operator dashboard in Phase D).
+- **cortex#107** — principal-based AAA (consumed in Phase C; PolicyEngine + cortex.yaml flip + Step H multi-principal dashboard in Phase D).
 - **cortex#109** — envelope-visibility composition (consumed in Phase A §A.2/§A.3/§A.4 + Phase D §D.1/§D.2).
 - **cortex#113** — IAW Phase A: Foundation (I-101).
 - **cortex#114** — IAW Phase B: Identity (I-102).
 - **cortex#115** — IAW Phase C: Policy + schema flip (I-103).
 - **cortex#116** — IAW Phase D: Federation (I-104).
 - **cortex#117** — IAW Phase E: Multi-network bridges + delegation (I-105).
+- **cortex#? — IAW CFG: Config split (I-106)** — new epic, §13.1; child of cortex#110. FOUNDATION; lands before/with GW.
+- **cortex#? — IAW GW: Shared surface gateway (I-107)** — new epic, §13.2; child of cortex#110. Depends on CFG.c (`surfaces.yaml`).
 
 ### 8.2 Blueprint
 
@@ -526,6 +536,8 @@ Each PR runs through the standard pilot-review-loop skill with Echo as primary r
 - **I-103** — IAW Phase C: Policy + schema flip.
 - **I-104** — IAW Phase D: Federation.
 - **I-105** — IAW Phase E: Multi-network bridges + delegation.
+- **I-106** — IAW CFG: Config split (FOUNDATION; §13.1).
+- **I-107** — IAW GW: Shared surface gateway (depends on I-106 CFG.c; §13.2).
 
 See `blueprint.yaml` for the dependency graph; `blueprint ready` indicates which phase is unblocked at any given time.
 
@@ -545,7 +557,7 @@ This section is the daily-driver scratchpad as Phase A implementation proceeds �
 ### 9.1 Phase A entry-criteria open items
 
 - **Myelin namespace extension lead time.** Phase A.5 needs a myelin issue + PR to land before cortex can fully consume the stack-aware namespace. If myelin is in flight on something else, cortex may need to ship A.1–A.4 first and circle back to A.5. Acceptable but flagged.
-- **Backward compatibility for existing deployments.** Default `{operator_id}/default` works in theory; need to verify the default-derivation produces identical subjects to today (currently `local.andreas.>` → should become `local.andreas.default.>` after Phase A.5 lands, with rewrite invisible to operators). Test rig.
+- **Backward compatibility for existing deployments.** Default `{operator_id}/default` works in theory; need to verify the default-derivation produces identical subjects to today (currently `local.andreas.>` → should become `local.andreas.default.>` after Phase A.5 lands, with rewrite invisible to principals). Test rig.
 
 ### 9.2 Phase B reconcile with cortex#92
 
@@ -553,22 +565,22 @@ This section is the daily-driver scratchpad as Phase A implementation proceeds �
 
 ### 9.3 Phase C schema-flip surface area
 
-- **`migrate-config` CLI changes.** cortex.yaml grew a `stack:` block in Phase A and a `capabilities:` block in Phase A; Phase C flips `roles[]` to `policy:`. The CLI needs to handle a multi-stage migration: an operator might be at Phase A schema (stack + capabilities, no policy) or Phase C schema (full flipped). Lean: idempotent re-runs — running migrate-config on already-flipped config is a no-op.
+- **`migrate-config` CLI changes.** cortex.yaml grew a `stack:` block in Phase A and a `capabilities:` block in Phase A; Phase C flips `roles[]` to `policy:`. The CLI needs to handle a multi-stage migration: a principal might be at Phase A schema (stack + capabilities, no policy) or Phase C schema (full flipped). Lean: idempotent re-runs — running migrate-config on already-flipped config is a no-op.
 - **Audit-envelope subject form.** Phase C emits `system.access.{allowed,denied}` on the stack-aware subject (`local.{operator}.{stack}.system.access.*`). Verify renderer subscriptions still match (renderer's `subjects:` pattern needs to include the new stack segment).
 
 ### 9.4 Phase D registry service ownership
 
-- **Cloud-side network registry — single service or per-network?** Recommendation: single global service (similar to DNS root + zone delegation) — operators register globally; networks are membership lists computed by the registry. Per-network instances could federate but adds complexity. Lean: single global registry alongside the cloud dashboard service; revisit if multi-region or compliance demands surface.
-- **Signed assertion format.** Registry assertions need to be verifiable independently of the registry's availability (operator A queries registry, registry returns operator B's pubkey signed by operator B's NKey + countersigned by registry). Use JCS canonicalisation for signature input; reuse the chain-of-stamps signing infrastructure from Phase B where possible.
+- **Cloud-side network registry — single service or per-network?** Recommendation: single global service (similar to DNS root + zone delegation) — principals register globally; networks are membership lists computed by the registry. Per-network instances could federate but adds complexity. Lean: single global registry alongside the cloud dashboard service; revisit if multi-region or compliance demands surface.
+- **Signed assertion format.** Registry assertions need to be verifiable independently of the registry's availability (principal A queries registry, registry returns principal B's pubkey signed by principal B's operator-account NKey + countersigned by registry). Use JCS canonicalisation for signature input; reuse the chain-of-stamps signing infrastructure from Phase B where possible.
 
 ### 9.5 Phase E multi-network MyelinRuntime refactor
 
-- **Single daemon vs. per-stack daemon.** Q7's "Phase E design decision" — does one cortex daemon host multiple stacks, or does each stack get its own daemon? Tradeoff: single daemon has lower process count + cross-stack visibility but more complex isolation; per-stack daemon has cleaner blast-radius but more process overhead + cross-stack IPC. Lean: single-daemon for v1 (operator typically has one or two stacks), per-stack daemon as a future option if isolation guarantees become load-bearing.
+- **Single daemon vs. per-stack daemon.** Q7's "Phase E design decision" — does one cortex daemon host multiple stacks, or does each stack get its own daemon? Tradeoff: single daemon has lower process count + cross-stack visibility but more complex isolation; per-stack daemon has cleaner blast-radius but more process overhead + cross-stack IPC. Lean: single-daemon for v1 (a principal typically has one or two stacks), per-stack daemon as a future option if isolation guarantees become load-bearing.
 - **Subject namespace within a multi-stack daemon.** If one daemon hosts `andreas/research` + `andreas/production`, do their subjects share a process-wide NatsLink (publish-side namespaced by stack segment) or separate links? Lean: shared link with subject-segment isolation (saves NATS connections); rejected if test rig finds cross-stack subject leakage.
 
 ### 9.6 Orchestrator agent pattern (§3.6) design follow-ons
 
-- **Capability matching algorithm.** Orchestrator reads network capability registry; how does it pick between two networks that both offer `code-review.typescript`? Options: (a) operator-declared preference list; (b) cost-aware (Q2 optional `cost` field); (c) load-aware (queue depth as proxy). Lean: (a) for v1 (deterministic), (b)/(c) future.
+- **Capability matching algorithm.** Orchestrator reads network capability registry; how does it pick between two networks that both offer `code-review.typescript`? Options: (a) principal-declared preference list; (b) cost-aware (Q2 optional `cost` field); (c) load-aware (queue depth as proxy). Lean: (a) for v1 (deterministic), (b)/(c) future.
 - **Reply correlation latency.** Chain-of-stamps reply over federation has more latency than in-process. Orchestrator needs configurable timeout per delegation; default ~30s? Open.
 
 ### 9.7 Inconsistencies surfaced during this plan write-up
@@ -592,14 +604,14 @@ The IAW implementation is complete when all of:
 - [ ] Phases A through E all closed (sub-issues + blueprint entries marked `done`).
 - [ ] At least one bridge stack operable in production — single cortex daemon participating in 2 networks concurrently, with cross-network traffic verified via chain-of-stamps audits on both sides.
 - [ ] Orchestrator agent reference implementation operable — delegates a task across networks, receives reply, threads results to original requester with full audit trail.
-- [ ] cortex.yaml schema has flipped exactly ONCE (at Phase C). Operator-edit history shows one schema migration, not multiple.
-- [ ] Cloud-side network registry service deployed at `network.meta-factory.ai` (or equivalent) — operators register their stacks, peers query the registry, signature chain verified.
-- [ ] Mesh varieties documented and at least one example of each operable: private (single stack, no federation), federated (≥2 operators), isolated-private (JV, multi-peer single-network), bridge (one stack in N networks).
+- [ ] cortex.yaml schema has flipped exactly ONCE (at Phase C). Principal-edit history shows one schema migration, not multiple.
+- [ ] Cloud-side network registry service deployed at `network.meta-factory.ai` (or equivalent) — principals register their stacks, peers query the registry, signature chain verified.
+- [ ] Mesh varieties documented and at least one example of each operable: private (single stack, no federation), federated (≥2 principals), isolated-private (JV, multi-peer single-network), bridge (one stack in N networks).
 - [ ] Substrate harness landed — at least 2 distinct harness implementations (`ClaudeCodeHarness` + `BusPeerHarness`) operate behind the same interface.
 - [ ] Chain-of-stamps `signed_by[]` verified on every inbound federated dispatch; forged/tampered envelopes provably rejected.
 - [ ] PolicyEngine at M6 is the single AAA decision point; Discord + Mattermost adapters at ~30 LOC each (translate event → Principal; no role-resolver in adapter).
-- [ ] All audit traffic remains operator-partitioned per Q6 lock-in; no central audit service exists; chain-of-stamps provides cross-operator correlation.
-- [ ] cortex#110 META closes; the operator-facing video story is operable in production.
+- [ ] All audit traffic remains principal-partitioned per Q6 lock-in; no central audit service exists; chain-of-stamps provides cross-principal correlation.
+- [ ] cortex#110 META closes; the Operator-vision video story is operable in production.
 
 ---
 
@@ -634,11 +646,11 @@ Per `compass/sops/versioning.md`:
 
 - Phase A bump: `v1.X.0` (minor — additive features: substrate harness, visibility, stack identity).
 - Phase B bump: `v1.X+1.0` (minor — additive: chain-of-stamps verification).
-- Phase C bump: `v2.0.0` (MAJOR — cortex.yaml schema flip is a breaking change for operators).
+- Phase C bump: `v2.0.0` (MAJOR — cortex.yaml schema flip is a breaking change for principals).
 - Phase D bump: `v2.X.0` (minor — additive: federation primitives).
 - Phase E bump: `v2.X+1.0` (minor — additive: multi-network + delegation).
 
-Phase C is the one major version bump in the IAW work. Operators get a one-shot `migrate-config` CLI to flip from `v1.X` to `v2.0`.
+Phase C is the one major version bump in the IAW work. Principals get a one-shot `migrate-config` CLI to flip from `v1.X` to `v2.0`.
 
 ### 11.4 Retrospective
 
@@ -682,8 +694,8 @@ Per `compass/sops/retrospective-and-process-mining.md`, after each phase merges:
 - `cortex/src/bus/github-events.ts:89` — `classification: "local"` hardcoded (Phase A.3).
 - `cortex/src/taps/cc-events/cc-events.ts:99` — `classification: "local"` hardcoded (Phase A.3).
 - `cortex/src/bus/surface-router.ts:259-270` — `adapterMatches` (Phase A.4 adds visibility filter; Phase D adds peer accept gating).
-- `cortex/src/common/agents/trust-resolver.ts:268-491` — operator-signature verification (Phase B extends with `trustsByNKey`).
-- `cortex/src/common/types/cortex-config.ts:85-111` — `OperatorSchema` (Phase A.5 adds `stack:` block).
+- `cortex/src/common/agents/trust-resolver.ts:268-491` — principal-signature verification (Phase B extends with `trustsByNKey`). *(Code symbol still named for "operator"; rename tracked under cortex#448.)*
+- `cortex/src/common/types/cortex-config.ts:85-111` — `OperatorSchema` (code type name; rename tracked under cortex#448; Phase A.5 adds `stack:` block).
 - `cortex/src/common/types/cortex-config.ts:447-491` — `NatsConfigSchema` (Phase A.5 ties stack NKey to existing credsAuthenticator).
 
 ### 12.5 Compass SOPs
@@ -696,8 +708,115 @@ Per `compass/sops/retrospective-and-process-mining.md`, after each phase merges:
 
 ### 12.6 Operator vision
 
-- "Internet of Agentic Work" video script (2026-05-13, in cortex#110 body) — the operator-facing mental model. Used as North Star; not replicated here.
+*("Operator vision" is the preserved North-Star reference label for the cortex#110 narrative — not the human-actor sense; the human is the **principal**.)*
+
+- "Internet of Agentic Work" video script (2026-05-13, in cortex#110 body) — the principal-facing mental model. Used as North Star; not replicated here.
 
 ---
 
-*Originating discussion: Andreas's 2026-05-13 verbatim lock-ins on Q1–Q7 + the "delegation pattern" framing (§3.6 new addition). This plan converts those decisions into a five-phase implementation roadmap with checkbox-driven task lists, mirroring the shape of `plan-cortex-migration.md`. Sequenced to flip the operator-facing schema exactly once (Phase C), with the stack-aware namespace landing structurally additively in Phase A and absorbed into the principal model at Phase C.*
+## 13. New epics — config split + shared surface gateway
+
+Two epics added under the cortex#110 META umbrella, alongside the A→E federation ladder. They are **not** federation phases; they are surface/config foundations the federation work and day-to-day multi-deployment operation both lean on. They follow the same §7 sub-issue + PR conventions (one sub-issue = one PR-sized slice; PR title `feat(cortex): I-NNN.X — {scope} (IAW {CFG|GW}.Y)`; pilot-loop with Echo as primary reviewer; test discipline per §7.4).
+
+**Sequencing:** **CFG (config split) is the foundation and lands first** — it is the lowest-risk slice and directly de-risks the double-message problem by isolating the `nats.subjects` landmine and pulling per-platform surface bindings out of per-stack config. **GW (shared surface gateway) builds on CFG** — specifically on the `surfaces.yaml` file CFG introduces. CFG should land before or alongside the gateway; GW.a depends on CFG.c.
+
+Neither epic flips the principal-facing schema in a breaking way: CFG ships a transitional single-file fallback so existing single-file `cortex.yaml` deployments keep loading unchanged, and `LoadedConfig` (the in-memory shape the rest of cortex consumes) is unchanged across CFG. GW is additive plus one envelope field bump (`response_routing.instance`).
+
+### 13.1 EPIC CFG — Config split (FOUNDATION)
+
+**Goal:** Decompose the monolithic single-file `cortex.yaml` into a composed multi-file layout (`system/`, `network/`, `surfaces/`, `stacks/*`) without changing `LoadedConfig` or any consumer. Isolating `system.yaml` (and the `nats.subjects` block in particular) removes the largest footgun behind the double-message problem, and moving surface bindings into `surfaces.yaml` is the precondition for the shared surface gateway.
+
+**Issue:** `cortex#? — IAW CFG: Config split (multi-file composer + system.yaml + surfaces.yaml)` (child of cortex#110).
+
+**Estimated effort:** 1–2 weeks.
+
+**Entry criteria:**
+- No federation-phase dependency: CFG can land in parallel with Phase A/B.
+- Current single-file `cortex.yaml` schema is the baseline; CFG preserves it as the transitional fallback.
+
+#### CFG.a Multi-file config composer + transitional single-file fallback
+
+- [ ] **CFG.a.1** Config loader composes a `LoadedConfig` from a directory layout (`system/`, `network/`, `surfaces/`, `stacks/*`) — deep-merge with documented precedence; `LoadedConfig` shape is **unchanged** (consumers untouched).
+- [ ] **CFG.a.2** Transitional single-file fallback: if the directory layout is absent, load the existing single-file `cortex.yaml` and produce the identical `LoadedConfig`. No principal-facing break.
+- [ ] **CFG.a.3** Composition is deterministic and idempotent; a documented file-not-found / both-present resolution order (directory layout wins; single-file fallback only when no layout present).
+- [ ] **CFG.a.4** Tests: directory layout composes to the same `LoadedConfig` as the equivalent single file (round-trip identity); single-file fallback path produces an identical `LoadedConfig`; precedence/merge-order tests.
+
+#### CFG.b Extract `system.yaml` (isolate the `nats.subjects` landmine)
+
+- [ ] **CFG.b.1** Move the cross-cutting machine config — `claude`, `execution`, `attachments`, `paths`, `nats`, `bus` — into `system/system.yaml`. The composer folds it into the same `LoadedConfig` slots.
+- [ ] **CFG.b.2** `nats.subjects` is isolated in `system.yaml` as its own clearly-commented block — the single place subject overrides live, removing the per-stack duplication that drives the double-message problem.
+- [ ] **CFG.b.3** Tests: a config with `system.yaml` present resolves `nats`/`bus`/`paths` identically to the pre-split single file; a malformed `nats.subjects` block fails loudly at load (not silently double-publishing).
+
+#### CFG.c Move surface bindings out of per-stack `agents.presence` into `surfaces.yaml`
+
+- [ ] **CFG.c.1** Surface bindings (Discord/Mattermost/Slack `token`, `guild`, channel/instance bindings) move from each stack's `agents.presence` block into a top-level `surfaces.yaml`.
+- [ ] **CFG.c.2** `LoadedConfig` still exposes the same effective presence/binding view to today's consumers (per-stack adapters keep working); the move is a source-layout change, not a runtime-shape change.
+- [ ] **CFG.c.3** `surfaces.yaml` is the file the shared surface gateway (GW) consumes — this slice is the GW precondition.
+- [ ] **CFG.c.4** Tests: per-stack adapter behaviour unchanged after the move (same tokens/guilds resolved); `surfaces.yaml` schema validates required binding fields.
+
+#### EPIC CFG acceptance criteria
+
+- [ ] Multi-file directory layout composes to a `LoadedConfig` identical to the equivalent single file.
+- [ ] Single-file `cortex.yaml` still loads via the transitional fallback (no principal-facing break).
+- [ ] `system.yaml` exists with `claude`/`execution`/`attachments`/`paths`/`nats`/`bus`; `nats.subjects` isolated in one place.
+- [ ] Surface bindings live in `surfaces.yaml`, out of per-stack `agents.presence`; per-stack adapters unchanged at runtime.
+- [ ] `LoadedConfig` shape unchanged across the whole epic; no consumer edits required.
+
+### 13.2 EPIC GW — Shared surface gateway (one assistant, many deployments)
+
+**Goal:** One platform connection per bot, shared across many stack deployments. A gateway process holds the single Discord/Slack/Mattermost connection, routes inbound platform messages to the right stack (`{instance → stack}`), and renders each stack's outbound lifecycle envelopes back to the right platform instance. Stacks stop owning per-platform adapters and become **surface-bus-only**: they publish/consume dispatch + lifecycle envelopes on the bus, and the gateway is the sole dispatch source/sink at the platform edge.
+
+**Issue:** `cortex#? — IAW GW: Shared surface gateway (one assistant, many deployments)` (child of cortex#110).
+
+**Estimated effort:** 3–4 weeks.
+
+**Entry criteria:**
+- **CFG.c complete** — `surfaces.yaml` is the binding source the gateway reads. GW.a depends on it.
+- Phase A complete (sovereignty-typed envelopes; surface-router visibility filter) — the gateway is a dispatch source/sink and signs/consumes per the same envelope contract.
+
+#### GW.a Gateway process: one connection per bot + `{instance → stack}` routing + inbound publish per stack
+
+- [ ] **GW.a.1** Gateway process holds exactly **one** platform connection per bot identity (reads bindings from `surfaces.yaml`), replacing N per-stack connections.
+- [ ] **GW.a.2** `{instance → stack}` routing table: an inbound platform message on a bound instance resolves to its target stack; the gateway publishes a canonical inbound dispatch envelope **on that stack's subject namespace** (per the stack's `{principal}.{stack}` segment), as a dispatch source.
+- [ ] **GW.a.3** Inbound attribution: gateway populates `originator.identity` (resolved DID) + `originator.attribution = "adapter-resolved"`; the target stack signs via `runtime.publish` (stack is the cryptographic signer — per CONTEXT.md own-stack trust model).
+- [ ] **GW.a.4** Tests: two stacks bound to one bot; a message on instance A publishes on stack A's subject only (no cross-stack leak); inbound envelope carries the right `originator` + scope.
+
+#### GW.b Outbound render to the right instance + `response_routing.instance` schema bump
+
+- [ ] **GW.b.1** Gateway is a dispatch sink: subscribes to `dispatch.task.{started|completed|failed|aborted}` across bound stacks and renders each to the correct platform instance.
+- [ ] **GW.b.2** `response_routing` payload field gains an `instance` member so a stack's outbound lifecycle envelope tells the gateway which platform instance to deliver to (echoed by the runner onto every lifecycle envelope per CONTEXT.md response-routing model). Additive schema bump; backward-compatible default for un-bumped envelopes.
+- [ ] **GW.b.3** Tests: a `completed` envelope with `response_routing.instance = A` renders to instance A only; missing `instance` falls back to the legacy single-instance behaviour.
+
+#### GW.c Discord resolver
+
+- [ ] **GW.c.1** Discord resolver: maps the gateway's single Discord connection ↔ `{instance → stack}` bindings from `surfaces.yaml`; resolves channel/thread/guild to a stack and back.
+- [ ] **GW.c.2** Tests: inbound Discord message resolves to the right stack; outbound renders to the right channel/thread.
+
+#### GW.d Slack resolver
+
+- [ ] **GW.d.1** Slack resolver: same contract as the Discord resolver against Slack's connection model (workspace/channel ↔ stack).
+- [ ] **GW.d.2** Tests: inbound/outbound round-trip for two stacks bound to one Slack app.
+
+#### GW.e Mattermost resolver
+
+- [ ] **GW.e.1** Mattermost resolver: same contract against Mattermost's connection model (team/channel ↔ stack).
+- [ ] **GW.e.2** Tests: inbound/outbound round-trip for two stacks bound to one Mattermost bot.
+
+#### GW.f Retire per-stack Discord adapters (stacks go surface-bus-only)
+
+- [ ] **GW.f.1** Remove the per-stack Discord adapter wiring; stacks no longer open platform connections — they publish/consume dispatch + lifecycle envelopes on the bus only.
+- [ ] **GW.f.2** The gateway is the sole platform-edge dispatch source/sink; surface-router visibility filtering (Phase A.4) still applies at the gateway.
+- [ ] **GW.f.3** Tests: a stack with no per-platform adapter still completes an end-to-end chat dispatch through the gateway; regression test that no stack opens a direct platform connection.
+
+#### EPIC GW acceptance criteria
+
+- [ ] One platform connection per bot, shared across ≥2 stacks (Discord proven; Slack + Mattermost resolvers landed).
+- [ ] Inbound platform messages route to the correct stack via `{instance → stack}`; no cross-stack leakage.
+- [ ] Outbound lifecycle envelopes render to the correct instance via `response_routing.instance`.
+- [ ] Per-stack Discord adapters retired; stacks are surface-bus-only.
+- [ ] Gateway honours Phase A.4 visibility filtering and the CONTEXT.md dispatch-source/sink + own-stack-trust model.
+- [ ] Built on CFG `surfaces.yaml`; no regression to single-file fallback deployments.
+
+---
+
+*Originating discussion: Andreas's 2026-05-13 verbatim lock-ins on Q1–Q7 + the "delegation pattern" framing (§3.6 new addition). This plan converts those decisions into a five-phase implementation roadmap with checkbox-driven task lists, mirroring the shape of `plan-cortex-migration.md`. Sequenced to flip the principal-facing schema exactly once (Phase C), with the stack-aware namespace landing structurally additively in Phase A and absorbed into the principal model at Phase C.*
