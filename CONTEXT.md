@@ -109,6 +109,10 @@ The **stack**'s own DID — `did:mf:{principal}-{stack-leaf}` — used to sign e
 Every cortex stack implicitly trusts its own signing identity — the chain verifier (`src/bus/verify-signed-by-chain.ts`) short-circuits when `chain[0].identity` matches the receiving stack's signing DID. The stack is the receiver; the receiver always has private-key authority for its own DID, so looking up the stack DID in the **agent** registry is structurally wrong. Without this short-circuit, adapter-originated dispatches (Discord/Mattermost/Slack chat → signed by the stack via `runtime.publish`) get rejected as `unknown_agent` and the runner silently drops every chat envelope. The crypto-verify pass still runs against the stack's NKey pubkey on these envelopes — short-circuit the *trust* check, not the *bytes* check (cortex#480).
 _Avoid_: self-trust (too generic), loopback-trust (overloads NATS loopback semantics)
 
+**NSC operator**:
+The NATS account-tree root (`nsc` operator, e.g. `OP_ANDREAS`) that issues and signs the NATS accounts/users a deployment authenticates the bus connection with — a NATS-infrastructure identity (operator-account NKey + operator JWT), arc-managed via `nsc`. It is **not** the **principal**: the principal is the human trust/policy root that scopes subjects and policy (M3–M6); the NSC operator is the NATS auth-tree root that gates connection auth (M1). They often share a name (`OP_ANDREAS` ↔ principal `andreas`) but are different layers. This is the one place the word "operator" legitimately survives the operator→principal migration — and only ever qualified.
+_Avoid_: bare/unqualified "operator" (that means **principal**) — say "NSC operator" or "NATS account operator" when you mean the NATS root.
+
 ## Relationships
 
 - A **principal** runs one or more **stacks**, and belongs to one or more **networks**.
@@ -135,7 +139,7 @@ _Avoid_: self-trust (too generic), loopback-trust (overloads NATS loopback seman
 
 ## Flagged ambiguities
 
-- **`operator` → `principal`.** cortex historically said `operator` (`operator.id`, "operator cockpit", the `{org}` segment). Resolved: **`principal`** ecosystem-wide, matching `soma:principal`. Carries into `cortex.yaml` schema, subject derivation, Mission Control copy.
+- **`operator` → `principal`.** cortex historically said `operator` (`operator.id`, "operator cockpit", the `{org}` segment). Resolved: **`principal`** ecosystem-wide, matching `soma:principal`. Carries into `cortex.yaml` schema, subject derivation, Mission Control copy. **Carve-out:** the NATS **NSC operator** (account-tree root, `OP_ANDREAS`) keeps the word — it is a distinct NATS-infra concept (see §Identity & trust → NSC operator), always qualified ("NSC operator"), never bare.
 - **`agent` was overloaded** — the named being, the runtime identity, *and* a Claude Code spawned task. Resolved into **assistant** / **agent** / **sub-agent**.
 - **`persona` → `assistant`.** `persona` is not a domain entity. `personas/luna.md` stays a valid filename ("the assistant's persona file").
 - **The `@`-segment names an `assistant`** — `@{assistant}`. myelin's `namespace.md` calls it a "principal address"; its examples ("Forge", "Pilot") are assistants. The hosting **agent** is resolved from `(stack, assistant)`; it carries no wire name.
