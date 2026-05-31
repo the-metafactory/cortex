@@ -36,7 +36,7 @@ function makePublishPolicyEngine(): PolicyEngine {
     principals: [
       {
         id: "andreas",
-        home_operator: "andreas",
+        home_principal: "andreas",
         home_stack: "andreas/research",
         role: ["operator"],
         trust: [],

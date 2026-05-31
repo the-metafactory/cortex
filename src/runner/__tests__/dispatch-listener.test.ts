@@ -2504,7 +2504,7 @@ describe("dispatch-listener — originator DID resolution (cortex#486)", () => {
       principals: [
         {
           id: "andreas",
-          home_operator: "andreas",
+          home_principal: "andreas",
           home_stack: "andreas/research",
           role: ["operator"],
           trust: [],
@@ -2565,7 +2565,7 @@ describe("dispatch-listener — originator DID resolution (cortex#486)", () => {
       principals: [
         {
           id: "andreas",
-          home_operator: "andreas",
+          home_principal: "andreas",
           home_stack: "andreas/research",
           role: ["operator"],
           trust: [],
