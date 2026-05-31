@@ -329,7 +329,7 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
     // cortex#429 PR-C — the resolver must treat `""` the same as
     // undefined — otherwise the subject would render as
     // `local..tasks.*.>` (two consecutive dots) which is an invalid
-    // NATS subject and a VERY hard bug to diagnose from operator logs.
+    // NATS subject and a VERY hard bug to diagnose from principal logs.
     const runtime = createRecordingRuntime();
     const config = minimalConfig({
       agent: {

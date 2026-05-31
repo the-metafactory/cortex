@@ -116,7 +116,7 @@ const SAMPLE_PAYLOAD = {
   pr: 133,
   reviewer: "sage",
   feature: "thread-a",
-  title: "Thread A — derive envelope source from operator-id",
+  title: "Thread A — derive envelope source from principal-id",
   cycle: 1,
 };
 
