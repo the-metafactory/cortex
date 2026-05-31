@@ -317,12 +317,15 @@ export async function verifySignedByChain(
     // cortex's `Envelope` keeps the back-compat shim of single-stamp
     // OR array. Normalise here before handing off.
     //
-    // R2 (vocabulary migration 2026-05) — the cortex vendored SignedBy
-    // declares `identity?` AND `principal?` as optional so the transition
-    // window can carry either; upstream myelin's discriminated union
-    // requires exactly one. The runtime guarantee is identical (the
-    // envelope validator's `dual_field_conflict` check fires before this
-    // helper runs), so cast through `unknown` at the type boundary.
+    // R11 (vocabulary migration 2026-05, breaking cut myelin#182) — the
+    // cortex vendored SignedBy now declares `identity?` only (the
+    // deprecated `principal` stamp key was dropped from the wire). The
+    // residual cast through `unknown` bridges the remaining structural
+    // gap: cortex's `Envelope` keeps the single-stamp-OR-array shim on
+    // `signed_by` while upstream myelin's `signed_by` is array-only, and
+    // cortex's `SignedBy` marks `identity` optional (it is required at the
+    // schema layer, validated before this helper runs) where upstream's
+    // discriminated union requires it structurally.
     const myelinEnvelope = {
       ...envelope,
       signed_by: chain,

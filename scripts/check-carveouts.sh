@@ -400,21 +400,26 @@ path_is_allowlisted() {
   return 1
 }
 
-# ── myelin-GATED transition-test files (R5/R10/R11 back-compat regression
-#    suites). The bare fixture line `distribution_mode: "broadcast"` (R5) and
-#    `target_principal` / `signed_by[].principal` (R10/R11) fixture values in
-#    these files exercise the read-tolerance shim and carry no per-line marker,
-#    so they're suppressed here rather than by the line-pattern filter. These
-#    suites delete when the corresponding myelin breaking cut lands.
-#    Ref 0002 §R5 (envelope-validator.test.ts:333,339,396), §R10, §R11. ──
+# ── myelin-GATED transition-test files (R5 back-compat regression suite).
+#    The bare fixture line `distribution_mode: "broadcast"` (R5) in
+#    envelope-validator.test.ts exercises the read-tolerance shim and carries
+#    no per-line marker, so it's suppressed here rather than by the line-pattern
+#    filter. This entry deletes when the myelin R5/R11 `broadcast`→`offer`
+#    breaking cut lands (f5ec865 still ACCEPTS `broadcast` on read).
+#    Ref 0002 §R5 (envelope-validator.test.ts).
+#
+#    Removed at the #81 / cortex#436 myelin re-pin (4c54b8e → f5ec865, R10/R13
+#    breaking cut on `target_principal`):
+#      - runtime.test.ts — its R4 `{org}` substitution test retired with
+#        myelin#185 and it carries no broadcast-emit / target_principal /
+#        signed_by-principal fixture; the only deprecated-term hit is the
+#        historical `agent.operatorId/operatorName` comment, which the
+#        standalone `agent.operator(Id|Name)` line carve-out already covers.
+#      - runtime-principal-symmetry.test.ts — carries zero deprecated-term
+#        hits (all `principal:` refs are the canonical `source.principal`
+#        field), so it no longer needs file-level suppression. ──
 GATED_TEST_PATHS=(
   'src/bus/myelin/__tests__/envelope-validator.test.ts'
-  'src/bus/myelin/__tests__/runtime.test.ts'
-  # R4/R10/R11 transition-shim symmetry suite — asserts principalFromConfig and
-  # principalFromEnvelope agree across the shim era. Uses `operatorId` as the
-  # subscribe-side config-id local var (the held legacy name the shim resolves).
-  # RETIRE: with the #81 myelin re-pin (R4/R10/R11 breaking cut).
-  'src/bus/myelin/__tests__/runtime-principal-symmetry.test.ts'
 )
 path_is_gated_test() {
   local path="$1" entry

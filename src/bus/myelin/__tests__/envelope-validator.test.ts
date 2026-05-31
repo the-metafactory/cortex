@@ -311,7 +311,7 @@ describe("envelope-validator — F-021 task envelope fields (IAW Phase A.2)", ()
       sovereignty_required: "strict",
       deadline: "2026-06-01T00:00:00Z",
       distribution_mode: "direct",
-      target_principal: "did:mf:echo",
+      target_assistant: "did:mf:echo",
     };
     const result = validateEnvelope(env);
     expect(result.ok).toBe(true);
@@ -319,7 +319,7 @@ describe("envelope-validator — F-021 task envelope fields (IAW Phase A.2)", ()
       expect(result.envelope.requirements).toEqual(["code-review", "typescript"]);
       expect(result.envelope.sovereignty_required).toBe("strict");
       expect(result.envelope.distribution_mode).toBe("direct");
-      expect(result.envelope.target_principal).toBe("did:mf:echo");
+      expect(result.envelope.target_assistant).toBe("did:mf:echo");
       expect(result.envelope.deadline).toBe("2026-06-01T00:00:00Z");
     }
   });
@@ -347,20 +347,35 @@ describe("envelope-validator — F-021 task envelope fields (IAW Phase A.2)", ()
     expect(result.ok).toBe(true);
   });
 
-  test("rejects a direct envelope missing target_principal", () => {
+  test("rejects a direct envelope missing target_assistant", () => {
     const env = {
       ...(validEnvelope as object),
       distribution_mode: "direct",
-      // target_principal: missing — schema cross-field rule rejects
+      // target_assistant: missing — schema cross-field rule rejects
     };
     const result = validateEnvelope(env);
     expect(result.ok).toBe(false);
   });
 
-  test("rejects a delegate envelope missing target_principal", () => {
+  test("rejects a delegate envelope missing target_assistant", () => {
     const env = {
       ...(validEnvelope as object),
       distribution_mode: "delegate",
+    };
+    const result = validateEnvelope(env);
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects a direct envelope that carries the dropped target_principal key (R13 breaking cut)", () => {
+    // Vocabulary migration 2026-05 R13 / myelin#184 — `target_principal`
+    // was removed from the wire. The schema's `additionalProperties: false`
+    // now rejects any envelope that still carries it, even when a valid
+    // `target_assistant` is also present.
+    const env = {
+      ...(validEnvelope as object),
+      distribution_mode: "direct",
+      target_assistant: "did:mf:echo",
+      target_principal: "did:mf:echo",
     };
     const result = validateEnvelope(env);
     expect(result.ok).toBe(false);
@@ -379,17 +394,17 @@ describe("envelope-validator — F-021 task envelope fields (IAW Phase A.2)", ()
     const env = {
       ...(validEnvelope as object),
       distribution_mode: "multicast",
-      target_principal: "did:mf:echo",
+      target_assistant: "did:mf:echo",
     };
     const result = validateEnvelope(env);
     expect(result.ok).toBe(false);
   });
 
-  test("rejects a target_principal that is not a DID", () => {
+  test("rejects a target_assistant that is not a DID", () => {
     const env = {
       ...(validEnvelope as object),
       distribution_mode: "direct",
-      target_principal: "echo@example.com",
+      target_assistant: "echo@example.com",
     };
     const result = validateEnvelope(env);
     expect(result.ok).toBe(false);
@@ -417,7 +432,7 @@ describe("envelope-validator — F-021 task envelope fields (IAW Phase A.2)", ()
     if (result.ok) {
       expect(result.envelope.requirements).toBeUndefined();
       expect(result.envelope.distribution_mode).toBeUndefined();
-      expect(result.envelope.target_principal).toBeUndefined();
+      expect(result.envelope.target_assistant).toBeUndefined();
     }
   });
 
@@ -586,16 +601,18 @@ describe("envelope-validator — chain helpers (IAW Phase A.2)", () => {
     // The transition schema accepts BOTH the deprecated and the renamed
     // form so pre-migration / JetStream-replayed envelopes still validate.
     //
-    // cortex#452 / PR-R11 — bumped 9fc8476 → 4c54b8e (myelin main post-#184)
-    // to land the breaking cut on stamp DIDs: `signed_by[].principal` is no
-    // longer accepted on the wire (the deprecated key is now rejected as
-    // `additionalProperties`). The vendored schema picks up the v3 `$id`
-    // (`/schemas/envelope/v3`) and the source-grammar tightening to the
-    // fixed-3 form `{principal}.{stack}.{assistant}` (myelin#183). The
-    // matching cortex-side reader shim drop ships here per
-    // docs/migrations/0002-vocabulary-finish-2026-05.md §PR-R11.
+    // cortex#436 / cortex#81 / PR-R10 — bumped 4c54b8e → f5ec865 (myelin
+    // main post-#184) to land the breaking cut on the routing target field:
+    // `target_principal` is no longer accepted on the wire (the deprecated
+    // key is now rejected as `additionalProperties`); direct/delegate
+    // envelopes must carry `target_assistant`. This is a lockstep companion
+    // to the earlier signed_by[].principal cut (R11). The vendored schema
+    // tracks f5ec865 structurally (verified identical to the npm dep's
+    // schema). The matching cortex-side reader shim drop (getTargetAssistant
+    // no longer dual-reads) ships here per
+    // docs/migrations/0002-vocabulary-finish-2026-05.md §R10.
     expect(SCHEMA_SOURCE_COMMIT).toBe(
-      "4c54b8e6e2157524099f4f01f13c044bcc3b9291",
+      "f5ec8658030e2fc185f123b06d8bf94d9f74cd84",
     );
   });
 

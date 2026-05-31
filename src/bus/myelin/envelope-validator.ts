@@ -47,7 +47,8 @@
  *   - `signed_by` accepts a single stamp OR a chain (`SignedBy[]`) per
  *     myelin#31. `getSignedByChain()` normalises both shapes into an array.
  *   - `requirements`, `sovereignty_required`, `deadline`,
- *     `distribution_mode`, `target_principal` per F-021.
+ *     `distribution_mode`, `target_assistant` per F-021 (the field was
+ *     `target_principal` at the A.2 baseline; renamed R13 / myelin#184).
  *   - `economics` upgraded to F-15 typed shape (`budget` / `actual` /
  *     `wallet` / `billing_ref` / `currency`), still optional and not
  *     security-bearing per myelin architecture.md §5.2.
@@ -75,7 +76,7 @@ import schema from "./vendor/envelope.schema.json" with { type: "json" };
  * comments + tests use `myelin#161` to point at the merge that landed the
  * feature — they're the same change, different ticket facets.
  */
-export const SCHEMA_SOURCE_COMMIT = "4c54b8e6e2157524099f4f01f13c044bcc3b9291";
+export const SCHEMA_SOURCE_COMMIT = "f5ec8658030e2fc185f123b06d8bf94d9f74cd84";
 
 /**
  * Hand-typed Envelope shape matching the JSON Schema. We hand-write rather
@@ -170,17 +171,11 @@ export interface Envelope {
   /**
    * F-021 — required when `distribution_mode` is `direct` or `delegate`.
    * DID of the receiving assistant (`did:mf:<name>`). Vocabulary migration
-   * 2026-05 R13 renamed from `target_principal`; the transition schema
-   * accepts both names — readers should prefer `target_assistant` and
-   * fall back to `target_principal` via {@link getTargetAssistant}.
+   * 2026-05 R13 (breaking cut myelin#184) renamed from `target_principal`;
+   * the deprecated key was dropped from the wire — envelopes carrying it
+   * are rejected by the schema. Resolve via {@link getTargetAssistant}.
    */
   target_assistant?: string;
-  /**
-   * @deprecated Renamed to `target_assistant` (vocabulary migration
-   * 2026-05, R13). Pre-migration envelopes carry this key; accepted on
-   * read through the transition window. Removed in the breaking major.
-   */
-  target_principal?: string;
   /**
    * myelin#161 — policy-level actor identity, separate from the
    * cryptographic `signed_by[]` chain. The chain proves WHO signed; the
@@ -255,18 +250,11 @@ export interface SignedByEd25519 {
   method: "ed25519";
   /**
    * Stamp DID — `did:mf:<name>` per myelin convention. Vocabulary
-   * migration 2026-05 R2 — canonical key is `identity`; the transition
-   * schema accepts `principal` too. Readers should use
-   * {@link getLastStampPrincipal} or {@link stampIdentityDid} which
-   * dual-read.
+   * migration 2026-05 R2 (breaking cut myelin#182): canonical key is
+   * `identity`; the deprecated `principal` key was dropped from the wire
+   * — stamps carrying it are rejected by the schema.
    */
   identity?: string;
-  /**
-   * @deprecated Renamed to `identity` (vocabulary migration 2026-05, R2).
-   * Pre-migration / JetStream-replayed stamps carry this key; accepted
-   * on read through the transition window. Removed in the breaking major.
-   */
-  principal?: string;
   /** Base64-encoded ed25519 signature (88+ chars). */
   signature: string;
   /** ISO-8601 timestamp the signature was produced. */
@@ -284,15 +272,11 @@ export interface SignedByHubStamp {
   method: "hub-stamp";
   /**
    * Originating identity — `did:mf:<name>`. Vocabulary migration 2026-05
-   * R2 — canonical key is `identity`; transition schema accepts both.
+   * R2 (breaking cut myelin#182): canonical key is `identity`; the
+   * deprecated `principal` key was dropped from the wire — stamps
+   * carrying it are rejected by the schema.
    */
   identity?: string;
-  /**
-   * @deprecated Renamed to `identity` (vocabulary migration 2026-05, R2).
-   * Pre-migration / JetStream-replayed stamps carry this key; accepted
-   * on read through the transition window. Removed in the breaking major.
-   */
-  principal?: string;
   /** Hub identity that re-signed — `did:mf:<hub-name>`. */
   stamped_by: string;
   /** Base64-encoded ed25519 signature from the hub. */
@@ -515,17 +499,19 @@ export function getActorPrincipal(envelope: Envelope): string | undefined {
 }
 
 /**
- * Resolve the `target_assistant` of a Direct/Delegate envelope across the
- * R13 transition window (vocabulary migration 2026-05). Canonical key is
- * `target_assistant`; falls back to the deprecated `target_principal`
- * for pre-migration / JetStream-replayed envelopes.
+ * Resolve the `target_assistant` of a Direct/Delegate envelope.
  *
- * Returns `undefined` for envelopes that carry neither key (e.g. an
+ * Vocabulary migration 2026-05 R13 (breaking cut myelin#184): the
+ * deprecated `target_principal` key was dropped from the wire — the
+ * dual-read fallback has been retired per docs/migrations/
+ * 0002-vocabulary-finish-2026-05.md §R10. The schema now rejects any
+ * envelope that still carries `target_principal`.
+ *
+ * Returns `undefined` for envelopes that carry no target (e.g. an
  * Offer dispatch).
  */
 export function getTargetAssistant(envelope: Envelope): string | undefined {
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
-  return envelope.target_assistant ?? envelope.target_principal;
+  return envelope.target_assistant;
 }
 
 /**

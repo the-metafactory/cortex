@@ -470,15 +470,15 @@ describe("IAW Phase D.6.1 — cross-operator federated dispatch + reply (refs co
 
       // β's audit also preserves α's signed_by[] chain verbatim
       // (C.4.3 invariant). One stamp originally from α; α's DID on it.
-      // R2 (vocabulary migration 2026-05) — dual-read stamp DID:
-      // canonical `identity` wins; fall back to deprecated `principal`
-      // for pre-migration / JetStream-replayed stamps.
+      // R11 (vocabulary migration 2026-05, breaking cut myelin#182) — the
+      // stamp DID is `identity` only; the deprecated `principal` key was
+      // dropped from the wire and is rejected by the envelope schema.
       const auditSignedBy = (
-        betaAllowed!.payload as { signed_by?: { identity?: string; principal?: string }[] }
+        betaAllowed!.payload as { signed_by?: { identity?: string }[] }
       ).signed_by;
       expect(auditSignedBy).toBeDefined();
       expect(auditSignedBy!.length).toBeGreaterThanOrEqual(1);
-      expect(auditSignedBy![0]?.identity ?? auditSignedBy![0]?.principal).toBe(alpha.signerPrincipalDid);
+      expect(auditSignedBy![0]?.identity).toBe(alpha.signerPrincipalDid);
 
       // ─── β's reply is re-signed with β's stack key + replayed ────
       // The dispatch-listener publishes the harness's terminal envelope
