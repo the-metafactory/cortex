@@ -106,7 +106,7 @@ import {
  * the warning every dispatch and the "once per harness instance" guarantee
  * was effectively never honoured under the production wiring. Module scope
  * keeps the latch durable across every harness construction in the
- * process, which matches what operators expect from a noise-suppression
+ * process, which matches what principals expect from a noise-suppression
  * warning. Reset is exposed for tests via `__resetWarnedNonUuidRequestId`.
  */
 let warnedNonUuidRequestId = false;

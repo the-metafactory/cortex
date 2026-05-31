@@ -35,7 +35,7 @@
  *     Codex harness would see `["exec"]`. Cortex stays out of the
  *     translation business. See `ToolCapability` doc.
  *   - **Q1 (stack identity).** `agent.id` accepts a string today; the
- *     `{operator_id}/{stack_id}` shape is enforced by cortex.yaml's
+ *     `{principal_id}/{stack_id}` shape is enforced by cortex.yaml's
  *     `stack:` block in Phase A.5 — not at this protocol layer. A.1 only
  *     needs the type to *carry* the identity.
  *   - **Q5 (streaming subject convention).** `DispatchRequest.requestId`

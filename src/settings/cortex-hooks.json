@@ -1,5 +1,5 @@
 {
-  "_comment": "Reference / operator-facing fallback for ~/.claude/settings.json. arc auto-registers these hooks from arc-manifest.yaml's provides.hooks during `arc install/upgrade Cortex` — do NOT manually merge this file into settings.json or hooks will double-fire. Paths here point at the INSTALLED symlinks (created by arc under ~/.claude/hooks/), matching what arc itself writes. Holly cortex#52 round 1 architecture findings #4 + #5.",
+  "_comment": "Reference / principal-facing fallback for ~/.claude/settings.json. arc auto-registers these hooks from arc-manifest.yaml's provides.hooks during `arc install/upgrade Cortex` — do NOT manually merge this file into settings.json or hooks will double-fire. Paths here point at the INSTALLED symlinks (created by arc under ~/.claude/hooks/), matching what arc itself writes. Holly cortex#52 round 1 architecture findings #4 + #5.",
   "hooks": {
     "SessionStart": [
       {

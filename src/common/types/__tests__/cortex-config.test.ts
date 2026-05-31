@@ -45,7 +45,7 @@ import {
  */
 const VALID_NKEY = "U" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVZ"; // 1 + 55 = 56
 
-function minOperator() {
+function minPrincipal() {
   return { id: "andreas" };
 }
 
@@ -70,7 +70,7 @@ function minAgent(overrides: Record<string, unknown> = {}) {
 
 function minConfig() {
   return {
-    principal: minOperator(),
+    principal: minPrincipal(),
     agents: [minAgent()],
     claude: {},
   };

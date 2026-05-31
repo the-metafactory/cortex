@@ -35,7 +35,7 @@ import { CortexConfigSchema } from "../cortex-config";
 // Fixture helpers (mirror the patterns in stack.test.ts + cortex-config.test.ts)
 // =============================================================================
 
-function minOperator() {
+function minPrincipal() {
   return { id: "andreas" };
 }
 
@@ -60,7 +60,7 @@ function minAgent(overrides: Record<string, unknown> = {}) {
 
 function minConfig(overrides: Record<string, unknown> = {}) {
   return {
-    principal: minOperator(),
+    principal: minPrincipal(),
     agents: [minAgent()],
     claude: {},
     ...overrides,

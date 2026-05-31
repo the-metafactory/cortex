@@ -61,7 +61,7 @@ import { NKEY_PUBKEY_REGEX } from "./nkey";
  *     id: andreas/research
  *     nkey_pub: UA…
  *
- * The `id` regex enforces `{operator_id}/{stack_id}` where each segment is
+ * The `id` regex enforces `{principal_id}/{stack_id}` where each segment is
  * lowercase alphanumeric + hyphens/underscores, starting with a letter. Both
  * `PrincipalConfigSchema.id` and `StackConfigSchema.id` segments share the letter-
  * prefix rule (unified by cortex#141 before the IAW A.5.5 namespace cutover);
@@ -85,14 +85,14 @@ import { NKEY_PUBKEY_REGEX } from "./nkey";
  */
 export const StackConfigSchema = z.object({
   /**
-   * `{operator_id}/{stack_id}` — both segments lowercase, starting with a
+   * `{principal_id}/{stack_id}` — both segments lowercase, starting with a
    * letter, alphanumeric + hyphen/underscore. Embedded verbatim in NATS
    * subject segments once the myelin namespace extension (myelin#113)
    * lands, so the regex matches what a NATS subject can carry.
    */
   id: z.string().regex(
     /^[a-z][a-z0-9_-]*\/[a-z][a-z0-9_-]*$/,
-    "stack.id must match {operator_id}/{stack_id} format (lowercase alphanumeric + hyphens/underscores, each segment starts with letter)",
+    "stack.id must match {principal_id}/{stack_id} format (lowercase alphanumeric + hyphens/underscores, each segment starts with letter)",
   ),
   /**
    * Stack-level NKey public key (`U` + 55 base32 chars). Optional in

@@ -200,7 +200,7 @@ describe("DispatchHandler", () => {
 
   describe("principal notification", () => {
     test("non-principal triggers notification", async () => {
-      // user1 is not operator1, so notification should fire
+      // user1 is not principal1, so notification should fire
       await router.handleMessage(adapter, makeMsg({
         platform: "discord",
         authorId: "user999",
@@ -220,7 +220,7 @@ describe("DispatchHandler", () => {
       // on `msg.dmType === "principal"`.
       await router.handleMessage(adapter, makeMsg({
         platform: "discord",
-        authorId: "operator1",
+        authorId: "principal1",
         content: "/help",
         isDM: true,
         dmType: "principal",

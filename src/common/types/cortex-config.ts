@@ -1213,12 +1213,12 @@ export const PolicyPrincipalSchema = z.object({
     "principal.home_principal must match the principal id grammar (lowercase alphanumeric + hyphen, starting with a letter)",
   ),
   /**
-   * Stack identity in `{operator_id}/{stack_id}` form — same shape
+   * Stack identity in `{principal_id}/{stack_id}` form — same shape
    * as `StackConfigSchema.id` (Phase A.5).
    */
   home_stack: z.string().regex(
     /^[a-z][a-z0-9_-]*\/[a-z][a-z0-9_-]*$/,
-    "principal.home_stack must match {operator_id}/{stack_id} format",
+    "principal.home_stack must match {principal_id}/{stack_id} format",
   ),
   /**
    * Stack signing NKey public key. **Declared at C.2a for forward

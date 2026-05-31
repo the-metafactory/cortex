@@ -544,7 +544,7 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
 // cloud add-principal
 // =============================================================================
 
-async function cloudAddOperator(flags: Record<string, string>): Promise<void> {
+async function cloudAddPrincipal(flags: Record<string, string>): Promise<void> {
   const name = flags.name;
   const agentName = flags["agent-name"];
   const endpoint = flags.endpoint;
@@ -1035,7 +1035,7 @@ export async function runCloudCommand(argv: string[]): Promise<void> {
       await cloudSetup(flags);
       break;
     case "add-principal":
-      await cloudAddOperator(flags);
+      await cloudAddPrincipal(flags);
       break;
     case "status":
       await cloudStatus(flags);

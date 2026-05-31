@@ -48,7 +48,7 @@ export function canonicalJSON(value: unknown): string {
 }
 
 // =============================================================================
-// Base64 (URL-safe NOT used — operators paste standard base64)
+// Base64 (URL-safe NOT used — principals paste standard base64)
 // =============================================================================
 
 export function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {

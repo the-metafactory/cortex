@@ -110,7 +110,7 @@ export interface BusPeerHarnessOpts {
    * peers. The capability registry (Phase A.6) aggregates across all
    * harnesses; this list is what cortex sees from this harness.
    * Empty array is legal during scaffold work — the harness is
-   * structurally valid but operators won't actually dispatch tasks
+   * structurally valid but principals won't actually dispatch tasks
    * to it.
    */
   capabilities?: Capability[];
@@ -166,7 +166,7 @@ export class BusPeerHarness implements SessionHarness {
    *     sees the outbound request"; no synthetic terminal is emitted
    *     locally before the started yield. A future B.1c+ refinement
    *     could opt into the `await + synthetic failed-terminal`
-   *     pattern (Echo's option B on cortex#195) if operators want
+   *     pattern (Echo's option B on cortex#195) if principals want
    *     a louder failure surface, but at this slice we mirror the
    *     existing runtime contract.
    */

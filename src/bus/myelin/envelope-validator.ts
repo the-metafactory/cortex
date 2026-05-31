@@ -626,11 +626,11 @@ export function principalFromEnvelope(envelope: Envelope): string {
  * for the symmetric publish-side helper and the invariant they jointly
  * preserve.
  *
- * Falls back to `"default"` when `operatorId` is unset — matches the
+ * Falls back to `"default"` when `principalId` is unset — matches the
  * legacy inline expression at runtime.ts subscribe-site.
  */
-export function principalFromConfig(operatorId: string | undefined): string {
-  return operatorId ?? "default";
+export function principalFromConfig(principalId: string | undefined): string {
+  return principalId ?? "default";
 }
 
 export function deriveNatsSubject(envelope: Envelope, stack?: string): string {

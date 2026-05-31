@@ -77,7 +77,14 @@ CHECK_PERSONA=0
 # the reader-side union/shim is myelin-gated and excluded by construction
 # (we only match `distribution_mode ... = / : "broadcast"`, i.e. a write).
 # ──────────────────────────────────────────────────────────────────────────
-PAT_OPERATOR='\b[Oo]perator\b'
+# Widened from `\b[Oo]perator\b` to bare `[Oo]perator` so the recall catches
+# camelCase/snake_case compounds the word-boundary form was BLIND to — operatorId,
+# operator_id, home_operator, OperatorConfig, operatorRole, isOperator (the R2
+# identifier cluster, ~190 live sites). The carve-out filter below removes the
+# legitimate non-principal senses (NSC operatorAccount, policy authz-role literal,
+# R7-gated operatorDiscordId, EventBridge comparison operator). Verified no
+# `cooperat*` false-friends in the tree.
+PAT_OPERATOR='[Oo]perator'
 PAT_BOTCONFIG='\bBotConfig(Schema)?\b'
 PAT_BROADCAST_EMIT='distribution_mode[[:space:]]*[:=][[:space:]]*["'"'"']broadcast'
 PAT_PERSONA='\bpersona\b'
@@ -116,6 +123,72 @@ ALLOWLIST_PATHS=(
   # so these never appear there; this matters for the `-` per-PR-diff path.)
   'scripts/check-carveouts.sh'
   '.github/workflows/'
+  # Policy authorization-role cluster — `operator` here is the reserved
+  # authz ROLE / capability literal (CONTEXT.md → Mission Control authorization
+  # role; #513), NOT the principal. The policy engine + its fixtures + the
+  # cutover design doc carry it as a kept role-id string.
+  'src/common/policy/'
+  'docs/design-policy-cutover.md'
+  # User-auth RBAC tier `viewer|operator|admin` — the MC authorization role
+  # (CONTEXT.md, #513). A persisted privilege level, never the principal.
+  'src/surface/mc/worker/src/user-auth/'
+  # EventBridge comparison OPERATOR (equals / anything-but) — a programming
+  # term, not the vocab. Single-purpose filter-grammar file.
+  'src/bus/payload-filter.ts'
+  'src/bus/__tests__/payload-filter.test.ts'
+  # R3 dual-block-guard: this test NAMES the legacy `operator:` config key on
+  # purpose to verify the transition guard (retires with the breaking cut).
+  # Sibling to the migrate-config legacy-reader tests already allowlisted.
+  'src/common/config/__tests__/loader.test.ts'
+  # NSC trust/signing infrastructure — `operator` = the NATS account operator
+  # (cortex#76 trust anchor): OperatorVerifier, verifyOperator, operator pubkey,
+  # SA/SO/SU seed hierarchy. Platform term throughout these files.
+  'src/common/agents/trust-resolver.ts'
+  'src/common/agents/__tests__/trust-resolver-operator-verify.test.ts'
+  'src/common/config/account-signing-key.ts'
+  'src/common/config/stack-signing-key.ts'
+  # NATS connection wrapper — `operator` throughout = NSC operator-mode `.creds`
+  # auth + the operator-account signing-key loader it mirrors (cortex#86/#87).
+  # A NATS-infrastructure file, never the principal. Class: NSC.
+  # RETIRE: never (NSC operator is the permanent qualified survivor).
+  'src/bus/nats/connection.ts'
+  # NSC operator-account signing TEST fixtures — siblings of the two source files
+  # above (already allowlisted). They import nkeys.js `createOperator`, mint
+  # SO-prefixed operator seeds, and assert the loader REJECTS them. `operator`
+  # throughout = the NATS account-tree root, never the principal. Class: NSC.
+  # RETIRE: never (NSC operator is the permanent qualified survivor, CONTEXT.md).
+  'src/common/config/__tests__/account-signing-key.test.ts'
+  'src/common/config/__tests__/stack-signing-key.test.ts'
+  # HISTORICAL removed-field regression test — describes and guards the
+  # v3-REMOVED `config.agent.operatorId` legacy field (cortex#429 PR-C). Its
+  # whole purpose is to assert a stray reader of the removed field never creeps
+  # back; renaming the token would misdescribe WHAT was removed. Class: HISTORICAL.
+  # RETIRE: when the legacy-field-reader guard is no longer worth keeping (post
+  # v3.0.0 stabilisation).
+  'src/__tests__/principal-identity-consistency.test.ts'
+  # Legacy-migration cortex.yaml example configs — `before-*.yaml` is the
+  # pre-cutover shape (legacy `operator:` block + `operator` synthetic-principal
+  # role), `after-*.yaml` shows the migrated output; README documents the path.
+  # They EXIST to demonstrate the migrate-config legacy reader; same class as the
+  # migrate-config fixtures. RETIRE: when migrate-config is removed (v3.0.0 cut).
+  'docs/migration-examples/'
+  # Legacy v2 `.bot.yaml` migrate-config TEST fixtures — carry the deprecated
+  # `operatorId:` / `operatorName:` v2 keys (cortex#429 PR-C drop) as INPUT to
+  # the migrate-config path. Same class as migrate-config*.test.ts (allowlisted).
+  # RETIRE: with the migrate-config CLI removal (v3.0.0 cut).
+  'src/cli/cortex/commands/__tests__/fixtures/'
+  # Archived v1→v2 cutover note — frozen historical doc describing the legacy
+  # `sessions.operator_id` schema drift that the v2 cutover resolved. Class:
+  # HISTORICAL (archive). RETIRE: never (archive is immutable).
+  'docs/archive/'
+  # Policy converter — emits + reads the legacy `operator:` block and the
+  # reserved `operator` role/capability literal. Sibling to migrate-config-lib.
+  'src/cli/cortex/commands/migrate-config-policy.ts'
+  # IAW design/plan docs — #510-owned (refreshed); residual hits are
+  # code-identifier mentions discussed as prose, tracked on the IAW epic.
+  'docs/design-internet-of-agentic-work.md'
+  'docs/plan-internet-of-agentic-work.md'
+  'src/__tests__/iaw-phase-d-integration.test.ts'
 )
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -134,6 +207,106 @@ CARVEOUT_LINE_PATTERNS=(
   'operator-account'
   'operator[[:space:]]+(NKey|JWT|account)'
   '(NKey|JWT|account)[[:space:]]+operator'
+  # NSC camelCase/snake forms newly visible under the widened recall.
+  '[Oo]peratorAccount'
+  '[Oo]peratorVerifier'
+  'verify[Oo]perator'
+  '[Oo]peratorSign'
+  'operator_pubkey'
+  'operator-mode'
+  '[Oo]peratorRecord'
+  # NSC operator-account signing seed/nkey file paths (`operator.nk`, `operator.nkey`,
+  # `operator.creds`). The NATS account-tree root seed (CONTEXT.md → NSC operator);
+  # a filesystem path to the operator-account key, never the principal. Class: NSC.
+  'operator\.(nk|nkey|creds|seed)'
+  # R7-gated network.operator block (operatorDiscordId/Mattermost/Slack) — the
+  # held R7 wire fields; rename waits for the myelin {org}→{principal} cut.
+  'operator(DiscordId|MattermostId|SlackId|PlatformIds|Role|RoleId)'
+  # ── LEGACY config-key tokens (R2.D/R2.I/R2.G + cortex#429 PR-C) ────────────
+  # The R2 identifier rename (operatorId/operator_id/operator_pubkey/operatorName
+  # → principalId/principal_id/principal_pubkey) is COMPLETE on main: there is no
+  # live canonical declaration of these tokens anywhere (verified — every surviving
+  # site is either a back-compat reader that still ACCEPTS the legacy key, a
+  # removed-field reference, or a legacy-migration test fixture). These tokens are
+  # therefore, by construction, the deprecated-alias class — same family as the
+  # already-allowlisted migrate-config-lib reader. Matching the token here carves
+  # the transitional readers (config.ts `acceptLegacyCloudPrincipalId`, loader.ts
+  # `buildLegacyNetwork`, cortex-config.ts legacy-peer reader, watcher.ts
+  # removed-field list, cortex.ts/runtime.ts PR-C comments) + the `.bot.yaml` /
+  # boot-test fixtures that feed them.
+  # RETIRE: when the breaking v3.0.0 cut deletes the legacy readers (manifest
+  # PR-11) — at which point these tokens vanish from the tree and the pattern is
+  # dead. A NEW genuine `operatorId` cannot appear because the canonical key is
+  # `principalId`; if one ever does it is a regression caught at code review, not
+  # by this gate (the gate's job here is the transitional window only).
+  'operator(Id|Name)\b'
+  '\boperator_id\b'
+  # Frozen D1 index identifier — `idx_sessions_operator` is KEPT as the index
+  # name in migration 0004 even though its column was renamed to `principal_id`
+  # (renaming a live index name is churn with no benefit). A frozen DDL
+  # identifier, same class as the allowlisted SQL migrations. RETIRE: never.
+  'idx_sessions_operator'
+  # GROVE_* event-payload wire key (separate GROVE migration, retires MIG-8):
+  # `payload.operator_id` / `p.operator_id` reads in event-processor.ts.
+  'payload\.operator_id'
+  '\bp\.operator_id'
+  # Policy authz-role predicate `isOperatorPrincipal` — exported from
+  # src/common/policy/resolve-access.ts (already path-allowlisted); the adapter
+  # call sites (discord/mattermost/slack) import it. "is this principal the
+  # operator (MC authorization role)?" per CONTEXT.md MC-role. Class: AUTHZ-ROLE.
+  'isOperatorPrincipal'
+  '\bisOperator\b'
+  # R4 rename-map PROSE — design/code lines that DOCUMENT the myelin-gated
+  # `operator.id` → `principal.id` / `Identity.operator` → `.network` rename by
+  # NAMING the pre-rename field. Renaming the token here would destroy the
+  # description of WHAT is being renamed (same logic as the HISTORICAL class).
+  # RETIRE with the myelin R4 breaking cut (#168/#171). Scoped to lines that
+  # carry an explicit rename arrow so it cannot mask a bare live `operator`.
+  'operator(\.id|`)?[[:space:]]*(→|->|renamed|is being renamed)'
+  '(renamed|rename)[[:space:]]*`?operator'
+  # Legacy `operator:` CONFIG-BLOCK reader (R3 transition + buildLegacyNetwork).
+  # The top-level `operator:` cortex.yaml block is the v2 key the loader still
+  # ACCEPTS (and migrate-config rewrites to `principal:`); same class as the
+  # already-allowlisted loader.test.ts R3 dual-block-guard. Matches the backtick-
+  # quoted prose key, the `raw.operator` / `hasOperator` reader symbols, and the
+  # `network.operator` held-block assignment. RETIRE: v3.0.0 breaking cut deletes
+  # the legacy reader (manifest PR-11).
+  '`operator:`'
+  # `operator.id` legacy-block field accessor — the dotted field on the legacy
+  # `operator:` cortex.yaml block. The only live code reads are in the
+  # already-allowlisted migrate-config-lib reader; every other occurrence is R4
+  # rename-map prose in design docs documenting `operator.id` → `principal.id`
+  # (myelin-gated R4 cut, design-bus-addressing.md §201). Class: LEGACY-BLOCK / R4.
+  # RETIRE: v3.0.0 legacy-reader deletion + myelin R4 cut.
+  '\boperator\.id\b'
+  '\braw\.operator\b'
+  '\bhasOperator\b'
+  '\bnetwork\.operator\b'
+  'operator:[[:space:]]*z\.object'              # R7 held network.operator block schema
+  'operator:.*→.*principal:|`operator:`→`principal:`'  # R3 transition prose
+  # `operator` POLICY CAPABILITY / authz-role literal in prose — "is this
+  # principal an operator?" decisions consult the PolicyEngine `operator`
+  # capability (CONTEXT.md MC authorization role). Class: AUTHZ-ROLE (kept).
+  'an operator\?|`operator`[[:space:]]*(capability|role)'
+  "'operator',?[[:space:]]*'code-reviewer'"     # role-id example string (cortex-config.ts)
+  # Legacy federated-peer `operator_*` keys (R2.G reader) — the cortex-config.ts
+  # acceptLegacyPeer reader prose/code naming the deprecated `operator_*` peer
+  # keys it rewrites to `principal_*`. Same class as the cloud `operatorId`
+  # reader. RETIRE: v3.0.0 cut. (`operator_pubkey`/`operator_id` tokens already
+  # covered; this catches the `operator_*` glob prose.)
+  'operator_\*'
+  'operator\*Id'                                # removed-field glob prose (loader.ts:452)
+  # Config-shape detection prose naming the legacy `operator:` block alongside
+  # the canonical `principal:` key (loader.ts detectConfigShape). LEGACY-BLOCK.
+  'principal/operator'
+  # Policy authz-role literal appearing in NON-policy test fixtures (bus/runner
+  # dispatch tests): `role: ["operator"]`, `id: "operator"`, `role("operator"`.
+  '(role|roles|id|capability|allow)[^A-Za-z]{1,4}["(]operator'
+  # Authz-role literal in YAML config EXAMPLES (cortex-config.ts header doc,
+  # design-soma-integration.md policy block): `role: [operator]` / `roles: [operator]`
+  # — the MC/policy authorization role (CONTEXT.md #513), kept. Bracket-list form
+  # the quoted pattern above misses. Class: AUTHZ-ROLE.
+  '\broles?:[[:space:]]*\[operator'
   # (2/4) GROVE_* env tier (separate migration).
   'GROVE_OPERATOR'
   'GROVE_[A-Z]'
@@ -191,6 +364,11 @@ path_is_allowlisted() {
 GATED_TEST_PATHS=(
   'src/bus/myelin/__tests__/envelope-validator.test.ts'
   'src/bus/myelin/__tests__/runtime.test.ts'
+  # R4/R10/R11 transition-shim symmetry suite — asserts principalFromConfig and
+  # principalFromEnvelope agree across the shim era. Uses `operatorId` as the
+  # subscribe-side config-id local var (the held legacy name the shim resolves).
+  # RETIRE: with the #81 myelin re-pin (R4/R10/R11 breaking cut).
+  'src/bus/myelin/__tests__/runtime-principal-symmetry.test.ts'
 )
 path_is_gated_test() {
   local path="$1" entry
