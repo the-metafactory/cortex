@@ -214,15 +214,32 @@ const NetworkCloudObjectSchema = z.object({
  *                                                 `principalId.min(1)` surfaces the
  *                                                 missing-key error with the canonical name
  */
+/**
+ * Thrown when a network cloud block declares BOTH `principalId` and the legacy
+ * `operatorId` alias. Carries a stable `code` discriminator (parity with the
+ * top-level R3 `DualBlockConflictError` — kept as a separate class here because
+ * `loader.ts` imports this module, so importing its error back would be circular).
+ */
+export class CloudPrincipalIdConflictError extends Error {
+  readonly code = "dual_field_conflict";
+  constructor(message: string) {
+    super(message);
+    this.name = "CloudPrincipalIdConflictError";
+  }
+}
+
 let warnedLegacyCloudPrincipalId = false;
 export function acceptLegacyCloudPrincipalId(raw: unknown): unknown {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return raw;
   const obj = raw as Record<string, unknown>;
-  const hasCanonical = obj.principalId !== undefined;
-  const hasLegacy = obj.operatorId !== undefined;
+  // `!= null` (not `!== undefined`) so a valueless YAML `operatorId:` / `principalId:`
+  // line (which parses to null) is NOT treated as a live key — avoids a spurious
+  // dual-key rejection or rewrite for an empty alias line.
+  const hasCanonical = obj.principalId != null;
+  const hasLegacy = obj.operatorId != null;
 
   if (hasCanonical && hasLegacy) {
-    throw new Error(
+    throw new CloudPrincipalIdConflictError(
       "network cloud block declares BOTH `principalId` (canonical) and the " +
         "legacy `operatorId` key. R2.I (cortex#436) BREAKING-CONFIG — the " +
         "`operatorId` cloud key is deprecated but still accepted as an alias; " +
