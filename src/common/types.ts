@@ -78,7 +78,7 @@ export interface SessionSovereignty {
 /** Data shape for upserting a session */
 export interface SessionUpsertData {
   sessionId: string;
-  operatorId?: string;
+  principalId?: string;
   agentId: string;
   agentName: string;
   project: string | null;
@@ -104,7 +104,7 @@ export interface SessionCompleteData {
 
 /** Data for inserting a usage snapshot */
 export interface UsageSnapshotData {
-  operatorId?: string;
+  principalId?: string;
   source: string;
   fiveHourPct: number | null;
   fiveHourResets: string | null;

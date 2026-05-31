@@ -120,7 +120,7 @@ export type Action =
   | { type: "complete" }
   | { type: "fail"; error?: string }
   | { type: "resume" }
-  | { type: "operator_requeue" }
+  | { type: "principal_requeue" }
   | { type: "cancel" };
 
 export type ActionType = Action["type"];

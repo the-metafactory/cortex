@@ -2341,10 +2341,10 @@ async function setupDashboard(
     // `principalDisplayName` (sourced from
     // `LoadedConfig.principal.displayName`) and falls back to
     // `principalId` when the principal omitted the display name on
-    // cortex.yaml. The MC API column is still named `operatorId`
-    // (R2.D cascade — tracked separately in docs/migrations/0002).
-    operatorId: principalId,
-    operatorName: principalDisplayName ?? principalId,
+    // cortex.yaml. R2.D renamed the options-bag keys to `principalId` /
+    // `principalName`; the underlying D1 column is already `principal_id`.
+    principalId: principalId,
+    principalName: principalDisplayName ?? principalId,
     dashboardDir,
   });
   console.log(`cortex: dashboard DB at ${dbPath}`);

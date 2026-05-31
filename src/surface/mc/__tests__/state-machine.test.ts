@@ -58,13 +58,13 @@ describe("state machine — valid transitions", () => {
     expect(result).toEqual({ ok: true, state: "running", blockReason: null });
   });
 
-  it("blocked → operator_requeue → queued (clears block_reason)", () => {
-    const result = transition("blocked", { type: "operator_requeue" });
+  it("blocked → principal_requeue → queued (clears block_reason)", () => {
+    const result = transition("blocked", { type: "principal_requeue" });
     expect(result).toEqual({ ok: true, state: "queued", blockReason: null });
   });
 
-  it("failed → operator_requeue → queued", () => {
-    const result = transition("failed", { type: "operator_requeue" });
+  it("failed → principal_requeue → queued", () => {
+    const result = transition("failed", { type: "principal_requeue" });
     expect(result).toEqual({ ok: true, state: "queued", blockReason: null });
   });
 
@@ -97,7 +97,7 @@ describe("state machine — invalid transitions", () => {
       { type: "complete" },
       { type: "fail" },
       { type: "resume" },
-      { type: "operator_requeue" },
+      { type: "principal_requeue" },
       { type: "cancel" },
     ] as Action[]) {
       const result = transition("completed", action);
@@ -118,7 +118,7 @@ describe("state machine — invalid transitions", () => {
       { type: "complete" },
       { type: "fail" },
       { type: "resume" },
-      { type: "operator_requeue" },
+      { type: "principal_requeue" },
       { type: "cancel" },
     ] as Action[]) {
       const result = transition("cancelled", action);
@@ -181,7 +181,7 @@ describe("state machine — exhaustive matrix", () => {
     | "complete"
     | "fail"
     | "resume"
-    | "operator_requeue"
+    | "principal_requeue"
     | "cancel";
 
   const STATES: State[] = [
@@ -200,7 +200,7 @@ describe("state machine — exhaustive matrix", () => {
     "complete",
     "fail",
     "resume",
-    "operator_requeue",
+    "principal_requeue",
     "cancel",
   ];
 
@@ -216,11 +216,11 @@ describe("state machine — exhaustive matrix", () => {
     },
     blocked: {
       resume: "running",
-      operator_requeue: "queued",
+      principal_requeue: "queued",
       cancel: "cancelled",
     },
     completed: {},
-    failed: { operator_requeue: "queued" },
+    failed: { principal_requeue: "queued" },
     cancelled: {},
   };
 
@@ -258,19 +258,19 @@ describe("state machine — exhaustive matrix", () => {
 // The toolbar maps four verbs (Dispatch / Requeue / Hand off / Abandon) onto
 // state-machine actions. Three of those four are state-machine-native:
 //   - Dispatch        → `dispatch` action (covered upstream)
-//   - Requeue         → `operator_requeue` action
+//   - Requeue         → `principal_requeue` action
 //   - Abandon (asgmt) → `cancel` action
 //   - Hand off        → composite (cancel + new assignment + dispatch); the
 //                       cancel half is `cancel` action.
 //
-// These tests pin the legality of `operator_requeue` and `cancel` from every
+// These tests pin the legality of `principal_requeue` and `cancel` from every
 // state in the matrix, so a future regression to the TRANSITIONS table is
 // caught at the state-machine layer (the wire-side tests in
 // curation-endpoints.test.ts depend on this lower-level invariant).
 
-describe("F-12 — operator_requeue legality (Decision 7)", () => {
-  it("blocked → operator_requeue → queued", () => {
-    const result = transition("blocked", { type: "operator_requeue" });
+describe("F-12 — principal_requeue legality (Decision 7)", () => {
+  it("blocked → principal_requeue → queued", () => {
+    const result = transition("blocked", { type: "principal_requeue" });
     expect(result).toEqual({
       ok: true,
       state: "queued",
@@ -278,8 +278,8 @@ describe("F-12 — operator_requeue legality (Decision 7)", () => {
     });
   });
 
-  it("failed → operator_requeue → queued", () => {
-    const result = transition("failed", { type: "operator_requeue" });
+  it("failed → principal_requeue → queued", () => {
+    const result = transition("failed", { type: "principal_requeue" });
     expect(result).toEqual({ ok: true, state: "queued", blockReason: null });
   });
 
@@ -290,8 +290,8 @@ describe("F-12 — operator_requeue legality (Decision 7)", () => {
     "completed",
     "cancelled",
   ] as const) {
-    it(`${from} → operator_requeue → REJECTED`, () => {
-      const result = transition(from, { type: "operator_requeue" });
+    it(`${from} → principal_requeue → REJECTED`, () => {
+      const result = transition(from, { type: "principal_requeue" });
       expect(result.ok).toBe(false);
     });
   }

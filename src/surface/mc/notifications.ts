@@ -194,7 +194,7 @@ export function broadcastTaskUpdated(
  * Decisions 5/6/7 all assume a side effect that the existing process-manager
  * plumbing does NOT provide on its own: closing the live CC subprocess when
  * an assignment moves into `cancelled` (Abandon, in-flight Hand-off) or out
- * of `blocked` via `operator_requeue` (Requeue from blocked).
+ * of `blocked` via `principal_requeue` (Requeue from blocked).
  *
  * Without this hook, the F-12 verbs misbehave:
  *   - Abandon on `running` flips state to `cancelled` while the CC subprocess
@@ -240,11 +240,11 @@ export function shouldCloseSessionOnTransition(
 ): boolean {
   // Any transition into `cancelled` (Abandon, in-flight Hand-off step 1).
   if (to === "cancelled") return true;
-  // operator_requeue from `blocked` — the only requeue path with a live
+  // principal_requeue from `blocked` — the only requeue path with a live
   // managed process. `failed → queued` requeue has no live session by
   // definition (failed is reached via stdout-dispatcher's `proc.exited`
   // cleanup, which has already endSession'd).
-  if (action === "operator_requeue" && from === "blocked") return true;
+  if (action === "principal_requeue" && from === "blocked") return true;
   return false;
 }
 

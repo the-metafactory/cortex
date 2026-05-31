@@ -133,7 +133,7 @@ describe("mission-control types", () => {
       { type: "complete" },
       { type: "fail", error: "something broke" },
       { type: "resume" },
-      { type: "operator_requeue" },
+      { type: "principal_requeue" },
       { type: "cancel" },
     ];
     expect(actions).toHaveLength(8);

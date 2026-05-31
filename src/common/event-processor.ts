@@ -71,24 +71,24 @@ export type ProcessedSessionEvent =
 
 /** Classify an event and extract the data needed for persistence */
 export function processSessionEvent(
-  operatorId: string,
+  principalId: string,
   event: IngestEvent,
 ): ProcessedSessionEvent {
   switch (event.event_type) {
     case "agent.task.started":
-      return processTaskStarted(operatorId, event);
+      return processTaskStarted(principalId, event);
     case "agent.task.completed":
     case "agent.task.failed":
-      return processTaskCompleted(operatorId, event);
+      return processTaskCompleted(principalId, event);
     case "agent.usage.update":
-      return processUsageUpdate(operatorId, event);
+      return processUsageUpdate(principalId, event);
     default:
-      return processProgressEvent(operatorId, event);
+      return processProgressEvent(principalId, event);
   }
 }
 
 function processTaskStarted(
-  operatorId: string,
+  principalId: string,
   event: IngestEvent,
 ): ProcessedSessionEvent {
   const description = sanitizeDescription(
@@ -98,13 +98,13 @@ function processTaskStarted(
   );
   const project = detectProjectFromIngestEvent(event);
   const githubIssue = extractGitHubIssue(description);
-  const eventOperator = typeof event.payload.operator_id === "string" ? event.payload.operator_id : null;
+  const eventPrincipal = typeof event.payload.operator_id === "string" ? event.payload.operator_id : null;
 
   return {
     type: "task_started",
     session: {
       sessionId: event.session_id,
-      operatorId: eventOperator ?? operatorId,
+      principalId: eventPrincipal ?? principalId,
       agentId: event.agent_id ?? "unknown",
       agentName: event.agent_name ?? event.agent_id ?? "agent",
       project,
@@ -122,7 +122,7 @@ function processTaskStarted(
 }
 
 function processTaskCompleted(
-  operatorId: string,
+  principalId: string,
   event: IngestEvent,
 ): ProcessedSessionEvent {
   const status =
@@ -138,7 +138,7 @@ function processTaskCompleted(
   const description = asString(event.payload.summary) || "Task";
   const project = detectProjectFromIngestEvent(event);
   const githubIssue = extractGitHubIssue(description);
-  const eventOperator = typeof event.payload.operator_id === "string" ? event.payload.operator_id : null;
+  const eventPrincipal = typeof event.payload.operator_id === "string" ? event.payload.operator_id : null;
 
   return {
     type: "task_completed",
@@ -151,7 +151,7 @@ function processTaskCompleted(
     },
     fallbackSession: {
       sessionId: event.session_id,
-      operatorId: eventOperator ?? operatorId,
+      principalId: eventPrincipal ?? principalId,
       agentId: event.agent_id ?? "unknown",
       agentName: event.agent_name ?? event.agent_id ?? "agent",
       project,
@@ -169,7 +169,7 @@ function processTaskCompleted(
 }
 
 function processUsageUpdate(
-  operatorId: string,
+  principalId: string,
   event: IngestEvent,
 ): ProcessedSessionEvent {
   const p = event.payload;
@@ -190,12 +190,12 @@ function processUsageUpdate(
     | undefined;
 
   // Prefer per-event operator_id (from GROVE_OPERATOR_ID env var) over API key owner.
-  const eventOperator = typeof p.operator_id === "string" ? p.operator_id : null;
+  const eventPrincipal = typeof p.operator_id === "string" ? p.operator_id : null;
 
   return {
     type: "usage_update",
     snapshot: {
-      operatorId: eventOperator ?? operatorId,
+      principalId: eventPrincipal ?? principalId,
       source: "event",
       fiveHourPct: fiveHour?.utilization ?? null,
       fiveHourResets: fiveHour?.resets_at ?? null,
@@ -209,7 +209,7 @@ function processUsageUpdate(
 }
 
 function processProgressEvent(
-  operatorId: string,
+  principalId: string,
   event: IngestEvent,
 ): ProcessedSessionEvent {
   const progress = extractProgress(event);
@@ -221,7 +221,7 @@ function processProgressEvent(
   const description = sanitizeDescription(rawDesc);
   const project = detectProjectFromIngestEvent(event);
   const githubIssue = extractGitHubIssue(description);
-  const eventOperator = typeof event.payload.operator_id === "string" ? event.payload.operator_id : null;
+  const eventPrincipal = typeof event.payload.operator_id === "string" ? event.payload.operator_id : null;
 
   return {
     type: "progress",
@@ -232,7 +232,7 @@ function processProgressEvent(
     project,
     fallbackSession: {
       sessionId: event.session_id,
-      operatorId: eventOperator ?? operatorId,
+      principalId: eventPrincipal ?? principalId,
       agentId: event.agent_id ?? "unknown",
       agentName: event.agent_name ?? event.agent_id ?? "agent",
       project,

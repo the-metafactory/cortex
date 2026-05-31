@@ -654,7 +654,7 @@ async function handleApi(
   }
 
   // F-12 — POST /api/assignments/:id/requeue
-  // F-12 Decision 7 — operator_requeue (blocked → queued | failed → queued).
+  // F-12 Decision 7 — principal_requeue (blocked → queued | failed → queued).
   const requeueMatch =
     /^\/api\/assignments\/([^/]+)\/requeue$/.exec(pathname);
   if (requeueMatch) {

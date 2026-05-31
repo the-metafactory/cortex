@@ -3,7 +3,7 @@
  *
  * design-mc-f6-focus-area.md §4 acceptance criterion:
  *   "the WS re-fetch trigger has one integration test that drives `block`
- *    then `operator_requeue` and asserts two re-renders."
+ *    then `principal_requeue` and asserts two re-renders."
  *
  * Strategy: we can't observe dashboard rendering from the server side, but
  * we can verify the signal the dashboard uses to trigger a re-render —
@@ -15,7 +15,7 @@
  *
  * In addition we assert the DB state after each transition so the two
  * re-renders would observe the correct focus-area contents (card appears
- * after `block`, disappears after `operator_requeue`).
+ * after `block`, disappears after `principal_requeue`).
  *
  * Added for PR #8 review finding W2.
  */
@@ -137,7 +137,7 @@ describe("F-6 focus-area WS→refetch integration", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("broadcasts two state.transition messages across block + operator_requeue, and focus-area membership flips accordingly", async () => {
+  it("broadcasts two state.transition messages across block + principal_requeue, and focus-area membership flips accordingly", async () => {
     // --- Connect a dashboard-like WS client before any transitions fire ---
     const client = await createClient(port);
     await client.waitFor(1); // initial `connected` envelope
@@ -179,9 +179,9 @@ describe("F-6 focus-area WS→refetch integration", () => {
     // would observe the new card.
     expect(listFocusArea(db)).toHaveLength(1);
 
-    // --- Transition 2: operator_requeue the blocked assignment ---
+    // --- Transition 2: principal_requeue the blocked assignment ---
     const requeueResult = applyTransition(db, "ata-1", sessionRow.id, {
-      type: "operator_requeue",
+      type: "principal_requeue",
     });
     expect(requeueResult.ok).toBe(true);
     if (!requeueResult.ok) return;

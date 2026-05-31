@@ -1143,10 +1143,10 @@ export function handleSendInput(
 //   D3  — per-state enablement matrix
 //   D5  — abandon branches on context (assignment vs task)
 //   D6  — handoff: cancel-and-respawn (in-flight) / new-only (failed)
-//   D7  — requeue: 1-to-1 mirror of state-machine's operator_requeue
+//   D7  — requeue: 1-to-1 mirror of state-machine's principal_requeue
 //   D9  — principal.curation event family with `kind` discriminator
 //   D11 — state.transition observer that calls endpoint.close() for the
-//         {→ cancelled, operator_requeue from blocked} transitions
+//         {→ cancelled, principal_requeue from blocked} transitions
 
 interface AssignmentCurationRow {
   id: string;
@@ -1308,7 +1308,7 @@ export function handleRequeueAssignment(
   }
 
   const result = applyTransition(db, assignmentId, sessionId, {
-    type: "operator_requeue",
+    type: "principal_requeue",
   });
   if (!result.ok) {
     // State-machine refused — most common shape is "Invalid transition".
@@ -1326,14 +1326,14 @@ export function handleRequeueAssignment(
   );
   broadcastEvent(deps.wsRegistry, sessionId, result.event);
 
-  // Decision 11 — kill the live process if `operator_requeue` came from `blocked`.
+  // Decision 11 — kill the live process if `principal_requeue` came from `blocked`.
   // Fire-and-forget; the response doesn't await the kill.
   void fireCancelObserver(
     deps,
     sessionId,
     result.from,
     result.assignment.state,
-    "operator_requeue",
+    "principal_requeue",
     db
   );
 

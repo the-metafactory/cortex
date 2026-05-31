@@ -106,11 +106,11 @@ describe("applyTransition", () => {
     expect(row.block_reason).toBeNull();
   });
 
-  it("operator_requeue from blocked clears block_reason and returns to queued", () => {
+  it("principal_requeue from blocked clears block_reason and returns to queued", () => {
     applyTransition(db, "ata-1", "s-1", { type: "dispatch" });
     applyTransition(db, "ata-1", "s-1", { type: "start" });
     applyTransition(db, "ata-1", "s-1", { type: "block", reason: permissionBlock });
-    const result = applyTransition(db, "ata-1", "s-1", { type: "operator_requeue" });
+    const result = applyTransition(db, "ata-1", "s-1", { type: "principal_requeue" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -119,11 +119,11 @@ describe("applyTransition", () => {
     expect(result.assignment.block_reason).toBeNull();
   });
 
-  it("operator_requeue from failed returns to queued", () => {
+  it("principal_requeue from failed returns to queued", () => {
     applyTransition(db, "ata-1", "s-1", { type: "dispatch" });
     applyTransition(db, "ata-1", "s-1", { type: "start" });
     applyTransition(db, "ata-1", "s-1", { type: "fail" });
-    const result = applyTransition(db, "ata-1", "s-1", { type: "operator_requeue" });
+    const result = applyTransition(db, "ata-1", "s-1", { type: "principal_requeue" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;

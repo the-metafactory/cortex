@@ -136,15 +136,15 @@ describe("shouldCloseSessionOnTransition (Decision 11 policy)", () => {
     );
   });
 
-  it("returns true on operator_requeue from blocked (live process exists)", () => {
+  it("returns true on principal_requeue from blocked (live process exists)", () => {
     expect(
-      shouldCloseSessionOnTransition("blocked", "queued", "operator_requeue")
+      shouldCloseSessionOnTransition("blocked", "queued", "principal_requeue")
     ).toBe(true);
   });
 
-  it("returns false on operator_requeue from failed (no live process)", () => {
+  it("returns false on principal_requeue from failed (no live process)", () => {
     expect(
-      shouldCloseSessionOnTransition("failed", "queued", "operator_requeue")
+      shouldCloseSessionOnTransition("failed", "queued", "principal_requeue")
     ).toBe(false);
   });
 

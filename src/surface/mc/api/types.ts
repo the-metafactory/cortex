@@ -159,7 +159,7 @@ export interface SendInputResponse {
 
 // --- POST /api/assignments/:id/requeue ---
 //
-// F-12 Decision 7: 1-to-1 mirror of the state machine's `operator_requeue`
+// F-12 Decision 7: 1-to-1 mirror of the state machine's `principal_requeue`
 // action. Legal from `blocked` and `failed` only; any other state returns
 // 409 with the state-machine's error string.
 

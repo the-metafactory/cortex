@@ -49,14 +49,14 @@ const TRANSITIONS: ReadonlyMap<
     "blocked",
     new Map<ActionType, AssignmentState>([
       ["resume", "running"],
-      ["operator_requeue", "queued"],
+      ["principal_requeue", "queued"],
       ["cancel", "cancelled"],
     ]),
   ],
   [
     "failed",
     new Map<ActionType, AssignmentState>([
-      ["operator_requeue", "queued"],
+      ["principal_requeue", "queued"],
     ]),
   ],
   // completed — terminal, no outgoing transitions
@@ -85,7 +85,7 @@ export function transition(
     };
   }
 
-  // block action carries a reason; resume and operator_requeue clear it
+  // block action carries a reason; resume and principal_requeue clear it
   if (action.type === "block") {
     return { ok: true, state: nextState, blockReason: action.reason };
   }
