@@ -108,19 +108,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      # DIFF-MODE ratchet (cortex#436): the 0002 vocabulary migration still has a
-      # known residue backlog being swept down PR-by-PR, so a whole-tree gate
-      # would red-line every PR. Instead we check ONLY the files this PR changes
-      # — new violations are blocked and any file you touch must be left clean,
-      # while the existing backlog drains over successive sweep PRs. Flip to
-      # whole-tree (`bash scripts/check-carveouts.sh`) once the tree is at zero.
-      - name: check-carveouts (PR diff)
-        run: |
-          base="origin/${{ github.base_ref || 'main' }}"
-          git fetch origin "${{ github.base_ref || 'main' }}" --depth=1 || true
-          changed="$(git diff --name-only "$base"...HEAD || git diff --name-only "$base")"
-          if [ -z "$changed" ]; then echo "no changed files"; exit 0; fi
-          printf '%s\n' "$changed" | bash scripts/check-carveouts.sh -
+      # WHOLE-TREE ratchet (cortex#436): the 0002 vocabulary migration is COMPLETE
+      # — the v4.0.0 breaking cut (#520) removed the legacy operator readers and the
+      # tree is at ZERO ungated violations. The gate now scans the whole tree (its
+      # design target), so a PR fails only if IT introduces a violation — and there
+      # are no diff-mode false-positives on pre-existing carve-out lines in files a
+      # PR happens to touch (the reason the old diff-mode forced --admin merges).
+      - name: check-carveouts (whole-tree)
+        run: bash scripts/check-carveouts.sh
 
   # ──────────────────────────────────────────────────────────────────
   # Test — `bun test` runs the full unit/integration suite. Pre-cortex#376
