@@ -10,7 +10,7 @@
 **Scope:** Cross-cutting — touches mc-v3 (`docs/design-mission-control.md`, `docs/iteration-mc-dispatch-observe.md`), the agent-visibility roadmap (`docs/design-agent-visibility.md`), and the relationship between Grove and four sibling repos: `myelin/`, `signal/`, `blueprint/`, `compass/`, `pilot/`.
 **Related:**
 - `docs/design-mission-control.md` — the principal's cockpit (still the load-bearing UX spec)
-- `docs/design-mc-f10-operator-input.md` — principal approval flow (the pattern this doc generalises)
+- `docs/design-mc-f10-principal-input.md` — principal approval flow (the pattern this doc generalises)
 - `docs/design-agent-visibility.md` — worklog channel + dashboard (the v1 surface)
 - External: `~/Developer/myelin/ISA.md`, `~/Developer/signal/docs/design-signal-bundle-migration.md`, `~/Developer/blueprint/docs/design-event-sync.md`, `~/Developer/metafactory-f102-design/VISION.md`
 
@@ -41,7 +41,7 @@ The metaphor for the principal's view is a **flybridge command centre**: a singl
 - See **principal-input requirements** without hunting for them — "what needs me?" is a first-class column, not a side effect of reading logs.
 - Get **review-orientation support** when input is required: what was the work, what's the background, what's been done, what specifically is needed to unblock — without having to reconstruct context from raw event history. This is the load-bearing UX rule for §5.4 below.
 
-Three existing reference dashboards in `~/Developer/` ground the implementation patterns. They are already cited extensively in `docs/design-mission-control.md` and `docs/design-mc-f10-operator-input.md`; this design doesn't add new reference systems, only reads them through the layered-model lens:
+Three existing reference dashboards in `~/Developer/` ground the implementation patterns. They are already cited extensively in `docs/design-mission-control.md` and `docs/design-mc-f10-principal-input.md`; this design doesn't add new reference systems, only reads them through the layered-model lens:
 
 | Reference | What we borrow | Where in `~/Developer/` |
 |-----------|----------------|-------------------------|
@@ -128,7 +128,7 @@ Grove v2 already implements a substantial fraction of the layer-7 surface. The r
 | **CC session wrapper** | `claude --print --output-format stream-json` parser, per-thread session resume | `src/bot/lib/cc-session.ts`, `session-manager.ts`, `stream-parser.ts` |
 | **Event pipeline** | EventLogger hook → JSONL → relay (policy filter) → published events → bot → API | `src/relay/`, `src/hooks/`, `src/bot/lib/event-taxonomy.ts` |
 | **GitHub webhook ingestion** | HMAC-validated events (`pr_merged`, `issue_closed`, `push`, `release`) into a unified activity timeline | `src/webhook-proxy/` (CF Worker at `hooks.meta-factory.ai`) → `src/worker/` |
-| **Principal-input affordance** | Per-task drill-down with text + screenshot return path that resumes the agent | `docs/design-mc-f10-operator-input.md`, dashboard drilldown |
+| **Principal-input affordance** | Per-task drill-down with text + screenshot return path that resumes the agent | `docs/design-mc-f10-principal-input.md`, dashboard drilldown |
 | **Discord CLI** | `discord post --thread …` from any terminal session | `src/cli/discord.ts` (`~/bin/discord`) |
 | **Dispatch button (F-19)** | One-click dispatch of a curated task to an agent, with 2 s server-side debounce on `(taskId, agentId)` | `src/dashboard/components/dispatch-button.tsx`, `handleCreateSession` |
 | **Observed session registration (F-20.A–F)** | `cldyo-live` wrapper registers a UUID with the API before exec; ingestor auto-transitions `dispatched → running → completed` from hook events; `endpoint_kind` surfaced on `/api/tasks` | `src/cli/cldyo-live`, `POST /api/sessions`, ingestor |
@@ -202,7 +202,7 @@ The contract is: anything that wants the principal's attention publishes a myeli
 
 ### 5.4 Principal-input return path — symmetric to triggers
 
-Today's F-10 principal-input flow is the *return* half of the loop: principal types, attaches a screenshot, hits send, agent resumes (`docs/design-mc-f10-operator-input.md`). The rethink keeps this exact mechanism for controlled CC sessions and generalises the rest:
+Today's F-10 principal-input flow is the *return* half of the loop: principal types, attaches a screenshot, hits send, agent resumes (`docs/design-mc-f10-principal-input.md`). The rethink keeps this exact mechanism for controlled CC sessions and generalises the rest:
 
 - For pilot errands: principal-input is decision metadata (`apply` / `defer` / `dismiss` + optional note). Posted as an envelope on `local.{org}.pilot.errand.decision`. Pilot's CLI already supports these state transitions; we just give them a UI affordance.
 - For observed sessions: principal-input is *out of band* — there is no live process to send to. The "input" is a Discord ping-back to the human running `cldyo-live` plus a written note attached to the task. Honest framing: we can't unblock an observed session, only annotate it.
@@ -387,6 +387,6 @@ The metafactory `VISION.md` ("Every way agents do work can be captured, shared, 
 - **Layer 4** — `~/Developer/grove-v2/src/hooks/lib/event-taxonomy.ts` (Grove side), `~/Developer/pilot/README.md` (pilot side)
 - **Layer 5** — `~/Developer/compass/sops/*.md`, `~/Developer/compass/docs/design-governance-skill.md`
 - **Layer 6** — `~/Developer/blueprint/README.md`, `~/Developer/blueprint/docs/design-event-sync.md`, `~/Developer/blueprint/docs/dashboard-integration-schema.md`
-- **Layer 7 (this repo)** — `docs/design-mission-control.md`, `docs/design-agent-visibility.md`, `docs/design-mc-f10-operator-input.md`, `docs/iteration-mc-dispatch-observe.md`
+- **Layer 7 (this repo)** — `docs/design-mission-control.md`, `docs/design-agent-visibility.md`, `docs/design-mc-f10-principal-input.md`, `docs/iteration-mc-dispatch-observe.md`
 - **Research foundations** — `~/Developer/agent-packaging-research.md`, `~/Developer/ai-agent-security-zones-research.md`, `~/Developer/research-stripe-blueprints-and-ea-frameworks.md`
 - **In-flight mc-v3 work** — PRs #55 (F-19), #56 (F-20), #57 (F-20.F) on `main`; F-19.G, F-20.G, F-20.H pending

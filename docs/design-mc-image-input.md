@@ -5,7 +5,7 @@
 <!-- Lifted: 2026-05-11 — historical references to grove/grove-v2 retained for provenance. -->
 
 **Addendum to:** `docs/design-mission-control.md` §6.2 (Image and screenshot support).
-**Relationship to prior work:** F-10 (`docs/design-mc-f10-operator-input.md`) explicitly deferred images per its Decision 1. This addendum picks that up.
+**Relationship to prior work:** F-10 (`docs/design-mc-f10-principal-input.md`) explicitly deferred images per its Decision 1. This addendum picks that up.
 **Date:** 2026-04-25.
 **Status:** Decided. Resolves the open questions enumerated below before image-input implementation begins.
 

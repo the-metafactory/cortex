@@ -1,7 +1,7 @@
 # F-10 — Principal input affordance (pre-implementation addendum)
 
 <!-- lifted-from-grove-v2-at-MIG-7.11 -->
-<!-- Original location: github.com/the-metafactory/grove-v2 docs/design-mc-f10-operator-input.md -->
+<!-- Original location: github.com/the-metafactory/grove-v2 docs/design-mc-f10-principal-input.md -->
 <!-- Lifted: 2026-05-11 — historical references to grove/grove-v2 retained for provenance. -->
 
 **Addendum to:** `docs/design-mission-control.md` §5.1 (attention view section ③), §6 (principal input channel), and §6.3 (input queue).
