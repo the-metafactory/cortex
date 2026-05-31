@@ -59,7 +59,7 @@ on review.verdict.<kind> (correlation = C):
   approved          → merge PR (CI-gated) → file follow-ups → close errand C
   changes-requested → fetch findings → triage → apply small / defer big
                       → re-push → re-request review → errand C stays open (next cycle)
-  commented         → no autonomous gate: render to surface, await operator
+  commented         → no autonomous gate: render to surface, await the principal
 on dispatch.task.failed (correlation = C):
   surface the typed reason (cant_do / not_now / policy_denied …) → escalate or retry per kind
 on dispatch.task.started:
@@ -86,6 +86,23 @@ The reactor decides on `verdict.kind`. Today the dispatched reviewer (Echo) post
 
 Fallback (degraded, non-autonomous): if no block is present, the reactor MAY read the GitHub review state via `pilot fetch` (reviewDecision) to recover the decision — but that is the fallback, not the path.
 
+### 4.5 State ownership — who holds the loop state (decision)
+
+**State ownership follows the driver, and the durable state-of-record is always pilot's errand store — never the M7 surface (cortex) and never the bus.**
+
+- **The bus is stateless.** Events are joined only by `correlation_id`; `subscribe-completed.ts` is explicit — *"No persistence."* The bus carries the decision, it does not remember it.
+- **cortex (M7) is stateless w.r.t. the loop.** The review-sink renders lifecycle/verdict events to the originating thread and forgets them. `response_routing` rides the envelope (wire-level, per CONTEXT.md §Response routing), so the surface holds no in-memory cycle state.
+- **pilot owns the durable errand.** pilot already has the persistence layer this design needs: `src/persistence/db.ts` (`errandId`, `findErrandsByPr`, `getErrand`) + `AgentStateStore` (`src/persistence/agent-state.ts`) persist a per-PR **errand** — cycle count, findings, status (`paused`/`blocked`), last-ping — across runs, resolvable from a verdict event by `correlation_id`/PR. `resume <FEATURE_ID>` + `replay` give crash-recovery. **No new store is required.**
+
+This yields two driver modes, and the *driver* determines who is responsible:
+
+| Driver | State-of-record | Lifetime | Use |
+|---|---|---|---|
+| **In-session (free-flowy)** — a CC session running the loop verbs ad-hoc | the **session's context** holds the working/orchestration state; pilot's errand DB is a durable *side-record* | ephemeral — when the session ends the loop stops (errand frozen, resumable) | one-shot / interactive ("review this PR now") |
+| **pilot agent (persistent reactor)** — `pilot watch` per §4.3(A) | the **errand store** (`AgentStateStore`) is authoritative, keyed by `correlation_id`; the agent reacts to events and updates it | durable — survives long tasks, restarts, replay (`resume`/`replay`) | the autonomous event-driven loop |
+
+The event-driven loop **requires the persistent-agent mode**: because there is no blocking wait, state must persist *between* events — a verdict arriving hours later means the pilot agent loads the errand by `correlation_id` and reacts. A transient session cannot hold state across a process exit, so it is the lighter alternative for one-shots, not the autonomous path. This is *dispatch-not-dictate* applied to **state**: the responsible agent holds its own state at its own layer; the surface above and the bus below stay stateless.
+
 ## 5. End-to-end flow
 
 ```
@@ -96,13 +113,13 @@ Luna (CC dev session) → publish tasks.code-review.<flavor> {response_routing} 
         └──────────────→ pilot reactor wakes on review.verdict.<kind> (correlation C)
                           ├─ approved → merge (CI-gated) → next feature
                           ├─ changes-requested → fetch → triage → fix → re-push → re-request (cycle)
-                          └─ commented → surface, await operator
+                          └─ commented → surface, await the principal
 ```
 No step blocks. Each arrow is an event. The surface (review-sink) renders at every lifecycle transition.
 
 ## 6. Open questions / decisions
 
-1. **Errand-state store for the reactor** — where pilot persists per-`correlation_id` cycle state across events (it already has AgentState/SQLite; confirm it fits the event-driven shape).
+1. ~~**Errand-state store for the reactor**~~ — **RESOLVED (§4.5).** The reactor uses pilot's existing errand store (`persistence/db.ts` + `AgentStateStore`), keyed by `correlation_id`/PR, with `resume`/`replay` for crash-recovery — no new store. State ownership follows the driver: session-transient (context-held) vs agent-persistent (errand-store-held); the autonomous loop is the persistent-agent mode.
 2. **Trigger for the *next* PR** — when a feature merges, what enqueues the next? (blueprint-driven `pilot tick` already exists; wire it to the reactor.)
 3. **Cross-stack / federation** — the reactor subscribes per stack; multi-stack (work/halden) each run their own reactor or one reactor filters by stack segment.
 4. **Backpressure / `not_now`** — honor the typed `dispatch.task.failed` retry hints.
