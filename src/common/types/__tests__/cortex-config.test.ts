@@ -518,7 +518,7 @@ describe("AgentConfigSchema.nats.accountSigningKeyPath (MIRROR)", () => {
   /** Minimal AgentConfig shell to exercise the optional `nats` block. */
   function minAgentConfig(natsExtras: Record<string, unknown> = {}) {
     return {
-      agent: { name: "test", displayName: "Test", operatorId: "op" },
+      agent: { name: "test", displayName: "Test" },
       discord: [],
       mattermost: [],
       claude: { timeoutMs: 1000 },

@@ -22,19 +22,19 @@ import { createSystemAdapterDegradedEvent } from "../../system-events";
 
 describe("MyelinRuntime — subscribe/publish {principal} symmetry (cortex#130 item 1)", () => {
   test("principalFromConfig and principalFromEnvelope agree for stack-emitted envelopes", () => {
-    const operatorId = "metafactory";
+    const principalId = "metafactory";
     const envelope = createSystemAdapterDegradedEvent({
-      source: { principal: operatorId, agent: "cortex", instance: "local" },
+      source: { principal: principalId, agent: "cortex", instance: "local" },
       adapterId: "discord-1",
       platform: "discord",
       disconnectedSince: new Date("2026-05-16T10:00:00.000Z"),
       thresholdMs: 60_000,
     });
 
-    expect(principalFromConfig(operatorId)).toBe(principalFromEnvelope(envelope));
+    expect(principalFromConfig(principalId)).toBe(principalFromEnvelope(envelope));
   });
 
-  test("principalFromConfig falls back to 'default' when operatorId is undefined", () => {
+  test("principalFromConfig falls back to 'default' when principalId is undefined", () => {
     expect(principalFromConfig(undefined)).toBe("default");
   });
 
@@ -53,16 +53,16 @@ describe("MyelinRuntime — subscribe/publish {principal} symmetry (cortex#130 i
   });
 
   test("symmetry holds when principal changes — second stack identity", () => {
-    const operatorId = "the-metafactory";
+    const principalId = "the-metafactory";
     const envelope = createSystemAdapterDegradedEvent({
-      source: { principal: operatorId, agent: "echo", instance: "local" },
+      source: { principal: principalId, agent: "echo", instance: "local" },
       adapterId: "discord-1",
       platform: "discord",
       disconnectedSince: new Date("2026-05-16T10:00:00.000Z"),
       thresholdMs: 60_000,
     });
 
-    expect(principalFromConfig(operatorId)).toBe(principalFromEnvelope(envelope));
+    expect(principalFromConfig(principalId)).toBe(principalFromEnvelope(envelope));
     expect(principalFromEnvelope(envelope)).toBe("the-metafactory");
   });
 });

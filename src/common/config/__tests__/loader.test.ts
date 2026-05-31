@@ -185,14 +185,14 @@ describe("legacy fallback", () => {
 });
 
 // ---------------------------------------------------------------------------
-// R2.I (cortex#436) — cloud `operatorId` → `principalId` BREAKING-CONFIG
-// transition. The canonical key is `principalId`; the legacy `operatorId`
-// cloud key is still accepted on load (rewritten + deprecation-warned),
-// so existing user network files / cortex.yaml don't break. Mirrors the R3
-// top-level operator:→principal: accept-both pattern.
+// R2.I (cortex#436) — cloud `operatorId` → `principalId` v4.0.0 BREAKING CUT.
+// The canonical (and only) key is `principalId`. The legacy `operatorId` cloud
+// alias accepted during the transition release is GONE: a cloud block carrying
+// `operatorId` is now rejected as an unknown key (strict object). Principals
+// run `cortex migrate-config` to rewrite a legacy `operatorId:`-shaped config.
 // ---------------------------------------------------------------------------
 
-describe("R2.I cloud principalId transition", () => {
+describe("R2.I cloud principalId — v4.0.0 breaking cut", () => {
   test("canonical cloud `principalId` loads", () => {
     const configPath = writeCentralConfig(testDir, minimalCentral());
     writeNetworkFile(testDir, "alpha.yaml", {
@@ -209,9 +209,9 @@ describe("R2.I cloud principalId transition", () => {
     expect(alpha?.cloud?.principalId).toBe("andreas");
   });
 
-  test("LEGACY cloud `operatorId` still loads and is rewritten to `principalId`", () => {
-    // A pre-R2.I network file written by an existing user — the deprecated
-    // `operatorId:` cloud key MUST keep loading.
+  test("LEGACY cloud `operatorId` is now REJECTED (unknown key)", () => {
+    // A pre-v4 network file carrying the deprecated `operatorId:` cloud key
+    // no longer loads — the strict schema rejects the unknown key.
     const configPath = writeCentralConfig(testDir, minimalCentral());
     writeNetworkFile(testDir, "legacy.yaml", {
       id: "legacy",
@@ -222,15 +222,12 @@ describe("R2.I cloud principalId transition", () => {
       },
     });
 
-    const config = loadConfig(configPath);
-    const legacy = config.networks.find((n) => n.id === "legacy");
-    // Legacy key is accepted and surfaced under the canonical field.
-    expect(legacy?.cloud?.principalId).toBe("andreas-legacy");
-    // The deprecated key is NOT carried through on the validated type.
-    expect((legacy?.cloud as Record<string, unknown> | undefined)?.operatorId).toBeUndefined();
+    expect(() => loadConfig(configPath)).toThrow();
   });
 
-  test("declaring BOTH `principalId` and legacy `operatorId` in a cloud block is rejected", () => {
+  test("a cloud block carrying BOTH `principalId` and legacy `operatorId` is rejected (unknown key)", () => {
+    // Previously a dual-key conflict; under the strict canonical-only schema
+    // the legacy alias is simply an unknown key.
     const configPath = writeCentralConfig(testDir, minimalCentral());
     writeNetworkFile(testDir, "conflict.yaml", {
       id: "conflict",
@@ -242,7 +239,7 @@ describe("R2.I cloud principalId transition", () => {
       },
     });
 
-    expect(() => loadConfig(configPath)).toThrow(/BOTH `principalId`.*`operatorId`/s);
+    expect(() => loadConfig(configPath)).toThrow();
   });
 });
 
@@ -357,7 +354,7 @@ describe("error reporting", () => {
 // returns the rich agents[] alongside via `inlineAgents` so `startCortex`
 // can route per-instance identity correctly.
 
-import { loadConfigWithAgents, DualBlockConflictError } from "../loader";
+import { loadConfigWithAgents } from "../loader";
 
 describe("MIG-7.2e — cortex-shape detection + transform", () => {
   function writeCortexConfig(dir: string, config: Record<string, unknown>): string {
@@ -821,49 +818,41 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     expect(loaded.principal?.discordId).toBe("285727653603049472");
   });
 
-  // v3.0.0 BREAKING (manifest PR-11) — cortex.yaml requires the
-  // canonical `principal:` key. The dual-block trust-boundary guard
-  // (`DualBlockConflictError`) is RETAINED: a config carrying BOTH
-  // `principal:` and `operator:` is still rejected with
-  // `dual_field_conflict` before any membership / capability decision.
-  // Legacy `operator:`-only configs no longer load via this path;
-  // operators rewrite via `cortex migrate-config <config.yaml>`.
+  // v4.0.0 BREAKING CUT — cortex.yaml requires the canonical `principal:`
+  // key. The legacy top-level `operator:` block reader is GONE, and with it
+  // the transition-era dual-block guard (`DualBlockConflictError`): there is
+  // no longer an `operator:` reader for a `principal:` block to be ambiguous
+  // against. A stray `operator:` key is now just an unrecognised top-level
+  // key — ignored when the config is otherwise cortex-shape, and a steer
+  // toward `cortex migrate-config` when an `operator:`-only config falls
+  // through to the legacy bot.yaml path.
 
-  test("v3 BREAKING — rejects a cortex.yaml carrying BOTH `principal:` and `operator:` with dual_field_conflict", () => {
-    // Trust-boundary regression: a hand-edited config mid-migration that
-    // kept the old block while adding the new one MUST be rejected, not
-    // silently resolved to one block.
+  test("v4 BREAKING — a `principal:`-shaped config with a stray `operator:` key still loads (operator block ignored)", () => {
+    // No dual-block conflict at v4: the `operator:` reader was removed, so
+    // the leftover key is inert. The principal id is sole-sourced from the
+    // canonical `principal:` block.
     const cfg = minimalCortexPrincipalShape();
     cfg.operator = { id: "someone-else", discordId: "999" };
     const path = writeCortexConfig(testDir, cfg);
 
-    expect(() => loadConfigWithAgents(path)).toThrow(DualBlockConflictError);
-    expect(() => loadConfigWithAgents(path)).toThrow(/dual|BOTH/i);
+    const loaded = loadConfigWithAgents(path);
+    expect(loaded.inlineAgents).toHaveLength(1);
+    // The canonical principal wins; the legacy `operator:` block does not
+    // override or shadow it.
+    expect(loaded.principal?.id).toBe("jc");
   });
 
-  test("v3 BREAKING — the dual-block error carries the `dual_field_conflict` code", () => {
-    const cfg = minimalCortexPrincipalShape();
-    cfg.operator = { id: "someone-else" };
-    const path = writeCortexConfig(testDir, cfg);
-    try {
-      loadConfigWithAgents(path);
-      throw new Error("expected loadConfigWithAgents to throw");
-    } catch (e) {
-      expect(e).toBeInstanceOf(DualBlockConflictError);
-      expect((e as DualBlockConflictError).code).toBe("dual_field_conflict");
-    }
-  });
-
-  test("v3 BREAKING — dual-block conflict fires even when `agents:` is absent (trust boundary, not shape-gated)", () => {
-    // The conflict is a deployment-config trust boundary — it must surface
-    // regardless of whether the rest of the config is structurally
-    // cortex-shape. A config with both blocks and no agents must not
-    // fall through to the legacy bot.yaml path.
+  test("v4 BREAKING — a legacy `operator:`-only cortex.yaml no longer loads as cortex-shape", () => {
+    // Pre-v4 this might have resolved via the `operator:` reader. With the
+    // reader gone, an `operator:`-block-only config is NOT cortex-shape
+    // (no canonical `principal:` block), so it falls through to the legacy
+    // bot.yaml path — where, lacking any valid bot.yaml fields, it is
+    // rejected. The principal must run `cortex migrate-config`.
     const cfg: Record<string, unknown> = {
-      principal: { id: "jc" },
       operator: { id: "jc" },
+      agents: minimalCortex().agents,
     };
     const path = writeCortexConfig(testDir, cfg);
-    expect(() => loadConfigWithAgents(path)).toThrow(DualBlockConflictError);
+    expect(() => loadConfigWithAgents(path)).toThrow();
   });
 });

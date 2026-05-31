@@ -75,8 +75,6 @@ function makeConfig(url: string): AgentConfig {
     agent: {
       name: "cortex",
       displayName: "Cortex",
-      operatorId: "test-op",
-      operatorName: "Test Operator",
       dataResidency: "NZ",
     },
     nats: {

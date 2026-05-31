@@ -18,7 +18,6 @@ import { policyEngineFromConfig } from "../factory";
 import { PolicyEngine } from "../engine";
 import {
   PolicySchema,
-  FederatedPeerPrincipalConflictError,
   type Policy,
 } from "../../types/cortex-config";
 
@@ -980,13 +979,11 @@ describe("PolicyFederatedSchema cross-validation", () => {
   });
 });
 
-describe("PolicyFederatedPeerSchema — R2.G operator→principal accept-both transition (cortex#436)", () => {
-  // Legacy peer keys (`operator_id` / `operator_pubkey`) are still
-  // accepted on load and rewritten to the canonical
-  // `principal_id` / `principal_pubkey` by
-  // `acceptLegacyFederatedPeerPrincipal`. Federation is pre-launch, so
-  // this transition is cheap insurance + parity with the R2.I cloud
-  // block. Removed in the breaking release.
+describe("PolicyFederatedPeerSchema — R2.G operator→principal v4.0.0 BREAKING CUT (cortex#436)", () => {
+  // The legacy peer keys (`operator_id` / `operator_pubkey`) accepted
+  // during the transition release are GONE. The schema is now a strict
+  // canonical-only object: a peer declaring an `operator_*` key is
+  // rejected as an unknown key. Parity with the R2.I cloud-block cut.
   function parsePeer(peer: Record<string, unknown>) {
     return PolicySchema.parse({
       federated: {
@@ -1011,32 +1008,23 @@ describe("PolicyFederatedPeerSchema — R2.G operator→principal accept-both tr
     expect(peer?.principal_pubkey).toBe(PEER_PUBKEY_A);
   });
 
-  test("legacy operator_id / operator_pubkey are rewritten to canonical", () => {
-    const policy = parsePeer({
-      operator_id: "alpha",
-      stack_id: "alpha/main",
-      operator_pubkey: PEER_PUBKEY_A,
-    });
-    const peer = policy.federated?.networks[0]?.peers[0];
-    // The parsed (canonical) shape carries no `operator_*` keys.
-    expect(peer?.principal_id).toBe("alpha");
-    expect(peer?.principal_pubkey).toBe(PEER_PUBKEY_A);
-    expect((peer as Record<string, unknown>).operator_id).toBeUndefined();
-    expect((peer as Record<string, unknown>).operator_pubkey).toBeUndefined();
+  test("legacy operator_id key is now REJECTED (unknown key, breaking cut)", () => {
+    // A pre-v4 peer block carrying the deprecated `operator_id` /
+    // `operator_pubkey` keys no longer loads — the strict schema rejects
+    // the unknown keys. (No `principal_id` is supplied, so the canonical
+    // field is also absent; either way the parse fails.)
+    expect(() =>
+      parsePeer({
+        operator_id: "alpha",
+        stack_id: "alpha/main",
+        operator_pubkey: PEER_PUBKEY_A,
+      }),
+    ).toThrow();
   });
 
-  test("mixed legacy id + canonical pubkey both rewrite/pass cleanly", () => {
-    const policy = parsePeer({
-      operator_id: "alpha",
-      stack_id: "alpha/main",
-      principal_pubkey: PEER_PUBKEY_A,
-    });
-    const peer = policy.federated?.networks[0]?.peers[0];
-    expect(peer?.principal_id).toBe("alpha");
-    expect(peer?.principal_pubkey).toBe(PEER_PUBKEY_A);
-  });
-
-  test("BOTH principal_id and operator_id present → dual-key conflict throws", () => {
+  test("a stray operator_id ALONGSIDE the canonical keys is REJECTED (unknown key)", () => {
+    // Previously this was a dual-key conflict; under the strict
+    // canonical-only schema the legacy alias is simply an unknown key.
     expect(() =>
       parsePeer({
         principal_id: "alpha",
@@ -1044,10 +1032,10 @@ describe("PolicyFederatedPeerSchema — R2.G operator→principal accept-both tr
         stack_id: "alpha/main",
         principal_pubkey: PEER_PUBKEY_A,
       }),
-    ).toThrow(FederatedPeerPrincipalConflictError);
+    ).toThrow();
   });
 
-  test("BOTH principal_pubkey and operator_pubkey present → dual-key conflict throws", () => {
+  test("a stray operator_pubkey ALONGSIDE the canonical keys is REJECTED (unknown key)", () => {
     expect(() =>
       parsePeer({
         principal_id: "alpha",
@@ -1055,18 +1043,17 @@ describe("PolicyFederatedPeerSchema — R2.G operator→principal accept-both tr
         principal_pubkey: PEER_PUBKEY_A,
         operator_pubkey: PEER_PUBKEY_A,
       }),
-    ).toThrow(FederatedPeerPrincipalConflictError);
+    ).toThrow();
   });
 
-  test("legacy keys still cross-validate (stack_id prefix vs rewritten principal_id)", () => {
-    // The rewrite happens before cross-validation, so a drifted
-    // legacy `operator_id` is caught by the same prefix check that
-    // guards the canonical field.
+  test("canonical keys still cross-validate (stack_id prefix vs principal_id)", () => {
+    // A drifted `principal_id` (whose prefix doesn't match `stack_id`)
+    // is caught by the document-level prefix check.
     expect(() =>
       parsePeer({
-        operator_id: "jcfischer",
+        principal_id: "jcfischer",
         stack_id: "evil-actor/sage-host",
-        operator_pubkey: PEER_PUBKEY_A,
+        principal_pubkey: PEER_PUBKEY_A,
       }),
     ).toThrow(/must start with peer\.principal_id/);
   });

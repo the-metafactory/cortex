@@ -25,7 +25,6 @@ function configWith(claudeOverrides: Partial<AgentConfig["claude"]>): AgentConfi
     agent: {
       name: "test-cortex",
       displayName: "TestCortex",
-      operatorId: "test-op",
     },
     discord: [],
     mattermost: [],

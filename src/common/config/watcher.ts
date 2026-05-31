@@ -65,7 +65,6 @@ const SAFE_FIELDS = new Set([
 
   // Agent identity
   "agent.displayName",
-  "agent.operatorName",
 ]);
 
 /**

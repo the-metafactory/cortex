@@ -136,10 +136,13 @@ ALLOWLIST_PATHS=(
   # term, not the vocab. Single-purpose filter-grammar file.
   'src/bus/payload-filter.ts'
   'src/bus/__tests__/payload-filter.test.ts'
-  # R3 dual-block-guard: this test NAMES the legacy `operator:` config key on
-  # purpose to verify the transition guard (retires with the breaking cut).
-  # Sibling to the migrate-config legacy-reader tests already allowlisted.
+  # R2.I/R3 transition tests: loader.test.ts NAMES the legacy cloud `operatorId`
+  # and the flat `api.operatorId` reader on purpose (now flipped to rejection
+  # assertions); watcher.test.ts fixtures carry the flat `api.operatorId` slot
+  # (carve-out #3 legacy `api` block). Siblings to the migrate-config legacy-reader
+  # tests already allowlisted. Class: LEGACY-READER fixtures.
   'src/common/config/__tests__/loader.test.ts'
+  'src/common/config/__tests__/watcher.test.ts'
   # NSC trust/signing infrastructure — `operator` = the NATS account operator
   # (cortex#76 trust anchor): OperatorVerifier, verifyOperator, operator pubkey,
   # SA/SO/SU seed hierarchy. Platform term throughout these files.
@@ -223,24 +226,61 @@ CARVEOUT_LINE_PATTERNS=(
   # held R7 wire fields; rename waits for the myelin {org}→{principal} cut.
   'operator(DiscordId|MattermostId|SlackId|PlatformIds|Role|RoleId)'
   # ── LEGACY config-key tokens (R2.D/R2.I/R2.G + cortex#429 PR-C) ────────────
-  # The R2 identifier rename (operatorId/operator_id/operator_pubkey/operatorName
-  # → principalId/principal_id/principal_pubkey) is COMPLETE on main: there is no
-  # live canonical declaration of these tokens anywhere (verified — every surviving
-  # site is either a back-compat reader that still ACCEPTS the legacy key, a
-  # removed-field reference, or a legacy-migration test fixture). These tokens are
-  # therefore, by construction, the deprecated-alias class — same family as the
-  # already-allowlisted migrate-config-lib reader. Matching the token here carves
-  # the transitional readers (config.ts `acceptLegacyCloudPrincipalId`, loader.ts
-  # `buildLegacyNetwork`, cortex-config.ts legacy-peer reader, watcher.ts
-  # removed-field list, cortex.ts/runtime.ts PR-C comments) + the `.bot.yaml` /
-  # boot-test fixtures that feed them.
-  # RETIRE: when the breaking v3.0.0 cut deletes the legacy readers (manifest
-  # PR-11) — at which point these tokens vanish from the tree and the pattern is
-  # dead. A NEW genuine `operatorId` cannot appear because the canonical key is
-  # `principalId`; if one ever does it is a regression caught at code review, not
-  # by this gate (the gate's job here is the transitional window only).
-  'operator(Id|Name)\b'
-  '\boperator_id\b'
+  # v4.0.0 BREAKING CUT (#536) — the transition-era legacy config-key READERS are
+  # GONE: cloud `operatorId` (config.ts `acceptLegacyCloudPrincipalId`), federated
+  # `operator_id`/`operator_pubkey` (cortex-config.ts `acceptLegacyFederatedPeerPrincipal`),
+  # and the top-level `operator:` block (loader.ts `DualBlockConflictError`) are all
+  # deleted, and the cloud/peer schemas are `.strict()` canonical-only. `operatorId`
+  # is therefore FULLY RATCHETED: the bare token-global carve (`operator(Id|Name)\b`,
+  # `\boperator_id\b`) has been REMOVED so a fresh `operatorId` in a NEW src/ file
+  # FAILS the gate. The narrow patterns below carve only the genuine SURVIVORS, each
+  # anchored to its distinctive non-principal context:
+  #
+  #   (a) the flat `api.operatorId` bot.yaml LEGACY READER (carve-out #3) — the
+  #       in-loader sibling of migrate-config-lib: reads an old bot.yaml's flat
+  #       `api.operatorId` and rewrites it to the canonical cloud `principalId`.
+  #       Its source file (loader.ts) + the watcher fixtures that feed the `api`
+  #       block are path-allowlisted below; the single schema-slot declaration in
+  #       config.ts is line-carved here.
+  #   (b) HISTORICAL prose describing the v3-REMOVED PR-C fields — always the
+  #       dotted `agent.operatorId` / `config.agent.operatorId` / `agent.operatorName`
+  #       (and slash-compounds) accessor form. A new genuine field declaration is
+  #       never written as a dotted `agent.`-prefixed accessor in a comment.
+  #   (c) the `operatorId → principalId` / `operator_id → principal_id` RENAME-MAP
+  #       prose (cloud.ts emitter doc, cloud-publisher comment, migration DDL prose)
+  #       — documents WHAT was renamed; carries an explicit rename arrow.
+  #
+  # GROVE `payload.operator_id` (event-processor) keeps its own pattern below; NSC
+  # `operator_pubkey` / `operator-mode` keep theirs; the frozen `idx_sessions_operator`
+  # DDL keeps its own.
+  # (a) flat `api.operatorId` legacy-reader schema slot (config.ts:447 declaration +
+  #     reader/fixture lines). The bare `api.operatorId` accessor + the lone
+  #     `operatorId: z.string().default("")` slot.
+  '\bapi\.operatorId\b'
+  'operatorId:[[:space:]]*z\.string\(\)\.default\(""\)'
+  'agent\.operatorId'                                       # (b) bot.yaml legacy accessor + PR-C prose
+  # (b) HISTORICAL prose describing the removed PR-C `agent.operator*` fields —
+  # the dotted accessor form (incl. `config.agent.operatorId`, `agent.operatorName`,
+  # `agent.operatorId/operatorName`, `agent.operatorId/Discord`).
+  'agent\.operator(Id|Name)'
+  'operatorId/(operatorName|Discord)'
+  # (c) RENAME-MAP prose carrying an explicit arrow: `operatorId → principalId`,
+  # `operator_id → principal_id`, `operator_id` → `principal_id` (DDL prose).
+  'operator(Id|_id)[^A-Za-z]{0,4}(→|->)[^A-Za-z]{0,4}principal'
+  # (c) misc kept rename-map / emitter doc prose that names the legacy cloud
+  # `operatorId:` key it no longer writes, + the dashboard `operatorId` wiring note,
+  # + the `expect(...).not.toContain("operatorId:")` assertion guarding the emitter.
+  'legacy `operatorId:`'
+  'operatorId:"'
+  'dashboard.{0,3}`?operatorId'
+  # Backtick-QUOTED config-key reference in prose/JSDoc — `operatorId` /
+  # `operatorId:` naming the v4-REMOVED cloud key (config.ts cut docstring,
+  # NetworkConfig doc, api-reader comment). A fresh genuine field declaration is
+  # never backtick-quoted; this only carves prose that NAMES the removed key.
+  '`operatorId:?`'
+  # frozen-DDL prose: `sessions.operator_id` / `tasks.operator_id` (migration 0004
+  # rename note in types.ts + the DDL file itself, already path-allowlisted).
+  '(sessions|tasks|github_events|usage_snapshots)\.operator_id'
   # Frozen D1 index identifier — `idx_sessions_operator` is KEPT as the index
   # name in migration 0004 even though its column was renamed to `principal_id`
   # (renaming a live index name is churn with no benefit). A frozen DDL
@@ -254,8 +294,14 @@ CARVEOUT_LINE_PATTERNS=(
   # src/common/policy/resolve-access.ts (already path-allowlisted); the adapter
   # call sites (discord/mattermost/slack) import it. "is this principal the
   # operator (MC authorization role)?" per CONTEXT.md MC-role. Class: AUTHZ-ROLE.
+  # Stays a GLOBAL carve — it's the policy authz predicate, not a principal id.
   'isOperatorPrincipal'
-  '\bisOperator\b'
+  # Adapter-local `isOperator(authorId)` method (mattermost/slack adapters) — the
+  # per-adapter "is this author the MC-authorization-role operator?" check. Class:
+  # AUTHZ-ROLE, path-scoped to the method-call form so a bare `isOperator`
+  # IDENTIFIER outside the adapter method can't free-ride. The bare token-global
+  # `\bisOperator\b` carve was REMOVED with the v4.0.0 cut.
+  'isOperator\('
   # R4 rename-map PROSE — design/code lines that DOCUMENT the myelin-gated
   # `operator.id` → `principal.id` / `Identity.operator` → `.network` rename by
   # NAMING the pre-rename field. Renaming the token here would destroy the

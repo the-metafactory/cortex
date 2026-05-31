@@ -53,7 +53,6 @@ function minimalConfig(overrides: Partial<Record<string, unknown>> = {}): AgentC
     agent: {
       name: "test-cortex",
       displayName: "TestCortex",
-      operatorId: "test-op",
     },
     discord: [],
     mattermost: [],

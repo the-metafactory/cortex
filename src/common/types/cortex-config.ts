@@ -1355,17 +1355,15 @@ export type PolicyRole = z.infer<typeof PolicyRoleSchema>;
  * lands in D.2/D.3; the schema lands first so principals can declare
  * their federation topology before the verification path is live.
  *
- * R2.G vocabulary migration (cortex#436) — the canonical peer-identity
- * keys are `principal_id` / `principal_pubkey`. The legacy
- * `operator_id` / `operator_pubkey` keys are still accepted on load
- * (rewritten by `acceptLegacyFederatedPeerPrincipal` with a one-time
- * deprecation warning) so any hand-written federation block keeps
- * working through the transition. Federation is pre-launch so the risk
- * is low; accept-both is cheap insurance and keeps the peer block
- * consistent with the R2.I cloud-block transition
- * (`acceptLegacyCloudPrincipalId` in `config.ts`).
+ * R2.G vocabulary migration (cortex#436) — v4.0.0 BREAKING CUT. The
+ * canonical (and only) peer-identity keys are `principal_id` /
+ * `principal_pubkey`. The legacy `operator_id` / `operator_pubkey`
+ * aliases that were accepted during the transition release are gone: a
+ * peer block declaring either is now rejected as an unknown key (strict
+ * object), the same as any other typo. Consistent with the R2.I
+ * cloud-block breaking cut in `config.ts`.
  */
-const PolicyFederatedPeerObjectSchema = z.object({
+export const PolicyFederatedPeerSchema = z.object({
   /**
    * Peer principal id — same letter-prefix grammar as `PrincipalConfigSchema.id`.
    * Distinct from the principal's local id; the local principal's id
@@ -1399,89 +1397,7 @@ const PolicyFederatedPeerObjectSchema = z.object({
     NKEY_PUBKEY_REGEX,
     "peer.principal_pubkey must be a base32 NKey public key (U-prefixed, 56 chars total)",
   ),
-});
-
-/**
- * Thrown when a federated peer block declares BOTH a canonical key
- * (`principal_id` / `principal_pubkey`) and its legacy alias
- * (`operator_id` / `operator_pubkey`). Carries a stable `code`
- * discriminator (parity with `CloudPrincipalIdConflictError` from the
- * R2.I cloud-block transition).
- */
-export class FederatedPeerPrincipalConflictError extends Error {
-  readonly code = "dual_field_conflict";
-  constructor(message: string) {
-    super(message);
-    this.name = "FederatedPeerPrincipalConflictError";
-  }
-}
-
-let warnedLegacyFederatedPeerPrincipal = false;
-/**
- * Pre-parse rewriter: accept the legacy peer keys `operator_id` /
- * `operator_pubkey` as aliases of the canonical `principal_id` /
- * `principal_pubkey`. Runs as a `z.preprocess` BEFORE
- * `PolicyFederatedPeerObjectSchema` validates, so the legacy keys
- * never reach the (deliberately `operator_*`-free) object schema.
- * Mirrors `acceptLegacyCloudPrincipalId` (R2.I) but covers two fields.
- *
- * Per field:
- *   - canonical only            → pass through verbatim
- *   - legacy only               → rewrite to the canonical key, warn once
- *   - BOTH present              → throw (dual-key conflict, R3/R2.I parity)
- *   - neither                   → pass through; the object schema's
- *                                 `.regex(...)` surfaces the missing-key
- *                                 error under the canonical name
- */
-export function acceptLegacyFederatedPeerPrincipal(raw: unknown): unknown {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return raw;
-  const obj = raw as Record<string, unknown>;
-
-  // `!= null` (not `!== undefined`) so a valueless YAML key line
-  // (parses to null) is NOT treated as a live key — avoids a spurious
-  // dual-key rejection or rewrite for an empty alias line.
-  const hasCanonicalId = obj.principal_id != null;
-  const hasLegacyId = obj.operator_id != null;
-  const hasCanonicalPubkey = obj.principal_pubkey != null;
-  const hasLegacyPubkey = obj.operator_pubkey != null;
-
-  if ((hasCanonicalId && hasLegacyId) || (hasCanonicalPubkey && hasLegacyPubkey)) {
-    const which = hasCanonicalId && hasLegacyId ? "principal_id`/`operator_id" : "principal_pubkey`/`operator_pubkey";
-    throw new FederatedPeerPrincipalConflictError(
-      "federated peer declares BOTH the canonical and legacy form of " +
-        "`" + which + "`. R2.G (cortex#436) — the `operator_*` peer keys " +
-        "are deprecated but still accepted as aliases; a peer declaring " +
-        "both forms of a field is ambiguous and is rejected before any " +
-        "federation-attribution decision. Delete the legacy `operator_*` " +
-        "line(s) and keep the `principal_*` form.",
-    );
-  }
-
-  if (hasLegacyId || hasLegacyPubkey) {
-    if (!warnedLegacyFederatedPeerPrincipal) {
-      warnedLegacyFederatedPeerPrincipal = true;
-      console.warn(
-        "config: federated peer `operator_id:` / `operator_pubkey:` are " +
-          "deprecated (R2.G, cortex#436) — rename them to `principal_id:` / " +
-          "`principal_pubkey:`. The legacy keys are still accepted for now " +
-          "and rewritten on load. This warning prints once per process.",
-      );
-    }
-    const { operator_id, operator_pubkey, ...rest } = obj;
-    return {
-      ...rest,
-      ...(hasLegacyId && { principal_id: operator_id }),
-      ...(hasLegacyPubkey && { principal_pubkey: operator_pubkey }),
-    };
-  }
-
-  return raw;
-}
-
-export const PolicyFederatedPeerSchema = z.preprocess(
-  acceptLegacyFederatedPeerPrincipal,
-  PolicyFederatedPeerObjectSchema,
-);
+}).strict();
 
 export type PolicyFederatedPeer = z.infer<typeof PolicyFederatedPeerSchema>;
 

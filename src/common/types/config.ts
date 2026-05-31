@@ -179,98 +179,20 @@ function normalizeToArray(val: unknown): unknown {
 /**
  * Cloud endpoint configuration for a network.
  *
- * R2.I vocabulary migration (cortex#436) — BREAKING-CONFIG with a
- * backward-compatible transition. The canonical principal-identity key is
- * `principalId`. The legacy `operatorId` key is still accepted on load so
- * existing `cortex.yaml` / `networks/*.yaml` files keep working; it is
- * rewritten to `principalId` by `acceptLegacyCloudPrincipalId` and emits a
- * one-time deprecation warning. This mirrors the R3 top-level
- * `operator:`→`principal:` transition (accept-both + deprecate; see
- * `src/common/config/loader.ts` `resolvePrincipalBlock`).
- *
- * Trust-boundary rule (R3 parity): a single cloud block declaring BOTH
- * `principalId` and `operatorId` is ambiguous and is rejected, rather than
- * silently resolving to one — a hand-edited config mid-migration must
- * surface the conflict loudly.
+ * R2.I vocabulary migration (cortex#436) — v4.0.0 BREAKING CUT. The canonical
+ * (and only) principal-identity key is `principalId`. The legacy `operatorId`
+ * cloud alias that was accepted during the transition release is gone: a block
+ * declaring `operatorId` is now rejected as an unknown key (strict object), the
+ * same as any other typo. Run `cortex migrate-config <your-config.yaml>` to
+ * rewrite a legacy `operatorId:`-shaped config to `principalId:`.
  */
-const NetworkCloudObjectSchema = z.object({
+export const NetworkCloudSchema = z.object({
   endpoint: z.string().min(1),
   apiKey: z.string().min(1),
   principalId: z.string().min(1),
   cfAccessClientId: z.string().optional(),
   cfAccessClientSecret: z.string().optional(),
-});
-
-/**
- * Pre-parse rewriter: accept the legacy cloud `operatorId` key as an alias of
- * the canonical `principalId`. Runs as a `z.preprocess` BEFORE
- * `NetworkCloudObjectSchema` validates, so the legacy key never reaches the
- * (deliberately `operatorId`-free) object schema.
- *
- * - canonical only (`principalId`)              → pass through verbatim
- * - legacy only (`operatorId`)                  → rewrite to `principalId`, warn once
- * - BOTH present                                → throw (dual-key conflict, R3 parity)
- * - neither                                     → pass through; object schema's
- *                                                 `principalId.min(1)` surfaces the
- *                                                 missing-key error with the canonical name
- */
-/**
- * Thrown when a network cloud block declares BOTH `principalId` and the legacy
- * `operatorId` alias. Carries a stable `code` discriminator (parity with the
- * top-level R3 `DualBlockConflictError` — kept as a separate class here because
- * `loader.ts` imports this module, so importing its error back would be circular).
- */
-export class CloudPrincipalIdConflictError extends Error {
-  readonly code = "dual_field_conflict";
-  constructor(message: string) {
-    super(message);
-    this.name = "CloudPrincipalIdConflictError";
-  }
-}
-
-let warnedLegacyCloudPrincipalId = false;
-export function acceptLegacyCloudPrincipalId(raw: unknown): unknown {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return raw;
-  const obj = raw as Record<string, unknown>;
-  // `!= null` (not `!== undefined`) so a valueless YAML `operatorId:` / `principalId:`
-  // line (which parses to null) is NOT treated as a live key — avoids a spurious
-  // dual-key rejection or rewrite for an empty alias line.
-  const hasCanonical = obj.principalId != null;
-  const hasLegacy = obj.operatorId != null;
-
-  if (hasCanonical && hasLegacy) {
-    throw new CloudPrincipalIdConflictError(
-      "network cloud block declares BOTH `principalId` (canonical) and the " +
-        "legacy `operatorId` key. R2.I (cortex#436) BREAKING-CONFIG — the " +
-        "`operatorId` cloud key is deprecated but still accepted as an alias; " +
-        "a block declaring both is ambiguous and is rejected before any " +
-        "event-attribution decision. Delete the legacy `operatorId` line " +
-        "(run `cortex migrate-config <your-config.yaml>` to regenerate a " +
-        "clean `principalId:`-shaped config).",
-    );
-  }
-
-  if (hasLegacy) {
-    if (!warnedLegacyCloudPrincipalId) {
-      warnedLegacyCloudPrincipalId = true;
-      console.warn(
-        "config: network cloud `operatorId:` is deprecated (R2.I, cortex#436) — " +
-          "rename it to `principalId:`. The legacy key is still accepted for now " +
-          "and rewritten on load; run `cortex migrate-config <your-config.yaml>` " +
-          "to update your config. This warning prints once per process.",
-      );
-    }
-    const { operatorId, ...rest } = obj;
-    return { ...rest, principalId: operatorId };
-  }
-
-  return raw;
-}
-
-export const NetworkCloudSchema = z.preprocess(
-  acceptLegacyCloudPrincipalId,
-  NetworkCloudObjectSchema,
-);
+}).strict();
 
 /** Per-network Claude security overrides */
 export const NetworkClaudeSchema = z.object({
