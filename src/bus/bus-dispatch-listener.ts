@@ -15,7 +15,7 @@
  *   - Verifies the chain (structural always; cryptographic when the
  *     receiving agent has an `nkey_pub`).
  *   - Emits a structured `system.bus.peer_dispatch_received` envelope
- *     on every valid arrival — operators see "peer X dispatched a task
+ *     on every valid arrival — principals see "peer X dispatched a task
  *     to us at <time>" on the dashboard / audit trail.
  *   - Drops invalid envelopes with a stderr log carrying the structured
  *     `ChainRejectionReason` discriminator.
@@ -33,7 +33,7 @@
  *     — the LLM-driven publish side.
  *   - **No Discord trustedBotIds retirement.** The legacy bot-to-bot
  *     Discord @-mention path stays operational until B.2a + B.2b both
- *     land in production and operators flip the deprecation flag.
+ *     land in production and principals flip the deprecation flag.
  *
  * **Cross-references:**
  *   - cortex#114 — IAW Phase B umbrella
@@ -85,7 +85,7 @@ export interface BusDispatchListenerOpts {
   /**
    * When true, runs the cryptographic verification step in addition to
    * the structural trust check. Default `false` — structural-only at
-   * this slice. Operators flip this on once every trusted peer has an
+   * this slice. Principals flip this on once every trusted peer has an
    * `nkey_pub` declared on the agent (B.1c primitives are in place;
    * the missing piece is config-side opt-in).
    */
@@ -265,7 +265,7 @@ export class BusDispatchListener {
     }
 
     // Emit visibility — Phase C audit envelopes will consume this on
-    // the wire. Today operators see it via the dashboard renderer +
+    // the wire. Today principals see it via the dashboard renderer +
     // any other surface subscribed to `system.bus.*`.
     const visibilityEvent = createSystemBusPeerDispatchReceivedEvent({
       source: this.source,

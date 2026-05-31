@@ -74,7 +74,7 @@ export interface SurfaceAdapter {
    * IAW Phase A.4 — optional visibility constraints. When set, the router
    * evaluates the envelope's `sovereignty` against each active rule
    * (residency / model_class / max_classification) BEFORE invoking
-   * `render()`. Drops emit a `system.access.filtered` envelope so operators
+   * `render()`. Drops emit a `system.access.filtered` envelope so principals
    * can observe access decisions.
    *
    * Unset (the v1 default) means "no visibility filter" — the adapter
@@ -146,7 +146,7 @@ export interface SurfaceRouterOptions {
    * `federated.*` envelopes pass through to adapter matching unchanged.
    * This mirrors the C.3.1 policy-engine contract (no `policy:` block
    * → no dispatch gating) and keeps cortex.yaml without `federated:`
-   * fully back-compat with pre-D.2 behaviour. Operators opt into
+   * fully back-compat with pre-D.2 behaviour. Principals opt into
    * federation enforcement by declaring at least one network.
    *
    * Subject-pattern gating only applies to envelopes whose subject
@@ -557,7 +557,7 @@ export function evaluateVisibility(
  *
  * When `systemEventSource` is undefined (the test-only path), the function
  * is a no-op — we cannot construct a schema-valid envelope without the
- * `source` segments. Operators wiring the router in production (cortex.ts)
+ * `source` segments. Principals wiring the router in production (cortex.ts)
  * MUST pass the source struct; tests that don't care about the side-effect
  * leave it unset.
  */
@@ -695,7 +695,7 @@ export function evaluateFederationGate(
   // the malformed shape to fail closed.
   //
   // Echo cortex#226 round 1: report a sentinel `"<malformed>"` rather
-  // than the literal empty string for the network id — operators
+  // than the literal empty string for the network id — principals
   // filtering the access stream by `payload.network_id` get a
   // searchable token instead of an empty cell. `unknown_network: true`
   // still flags this branch separately from "id present but not
@@ -793,7 +793,7 @@ export function emitFederationDenied(
 ): void {
   if (!source) {
     // Test-only path: log + return without emitting a half-formed
-    // envelope. Same contract as `emitAccessFiltered` — operators
+    // envelope. Same contract as `emitAccessFiltered` — principals
     // wiring the router in production must pass `systemEventSource`.
     console.info(
       `surface-router: federation deny subject="${envelopeSubject}" network="${decision.networkId}" reason=${decision.kind} ` +

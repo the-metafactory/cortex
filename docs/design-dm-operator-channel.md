@@ -149,7 +149,7 @@ const session = new CCSession({
   groveChannel: config.agent.name,
   timeoutMs: config.claude.asyncTimeoutMs,  // Longer timeout for principal
   disallowedTools: [],                       // Nothing blocked
-  allowedDirs: operatorDirs,
+  allowedDirs: principalDirs,
   bashAllowlist: dmRole.bashAllowlist,       // Broader allowlist from DM config
 });
 ```

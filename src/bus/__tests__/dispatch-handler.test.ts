@@ -279,7 +279,7 @@ describe("DispatchHandler", () => {
 // ---------------------------------------------------------------------------
 // MIG-3.8 / C-104: system.inbound.aborted emission on adapter-outbound
 // attachment_fetch TimeoutSourceError. The handler publishes BEFORE the
-// existing graceful-failure return so operators get the structured envelope
+// existing graceful-failure return so principals get the structured envelope
 // even though the attachment pipeline degrades transparently.
 // ---------------------------------------------------------------------------
 

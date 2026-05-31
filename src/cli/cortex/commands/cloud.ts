@@ -1060,7 +1060,7 @@ export async function runCloudCommand(argv: string[]): Promise<void> {
       console.log("Commands:");
       console.log("  setup           Provision D1, KV, deploy Worker, create first key");
       console.log("  add-principal    Create a new principal API key on the deployed Worker");
-      console.log("  status          Check Worker health and connected operators");
+      console.log("  status          Check Worker health and connected principals");
       console.log("  repos           Manage tracked repositories (list, add, remove)");
       console.log("  webhooks        Check webhook delivery health for all tracked repos\n");
       console.log("Examples:");

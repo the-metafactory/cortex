@@ -162,7 +162,7 @@ These are not in conflict — they're complementary along **different axes**:
 The join key is the principal record. Post-cortex#243a the actual `PolicyPrincipalSchema` shape (`src/common/types/cortex-config.ts:1124`) is:
 
 ```
-{ id, home_operator, home_stack, nkey_pub?, role[], trust[], platform_ids, session_config? }
+{ id, home_principal, home_stack, nkey_pub?, role[], trust[], platform_ids, session_config? }
 ```
 
 `nkey_pub?` is already on the principal — it's *exactly* where the bus-level NKey identity lives. Soma integration adds **one field**: `body: soma://<assistant-id>`. Critically, this is additive next to `nkey_pub?`, not in competition with it. The two fields **co-live on the same record**, which is what makes the join clean — one principal carries both its bus-side cryptographic identity and its body-side Soma reference. Now the principal table is the cross-layer pivot:
@@ -172,7 +172,7 @@ chain-of-stamps signed_by[].principal
                     │
                     ▼
 cortex.yaml policy.principals[<id>]
-   ├── home_operator     (bus identity)
+   ├── home_principal     (bus identity)
    ├── home_stack        (bus identity)
    ├── nkey_pub?         (bus identity — already shipped)
    ├── platform_ids      (cortex adapter binding)
@@ -308,7 +308,7 @@ agents:
 policy:
   principals:
     - id: andreas
-      home_operator: andreas
+      home_principal: andreas
       home_stack: andreas/main
       role: [operator]
   roles:
@@ -356,12 +356,12 @@ agents:
 policy:
   principals:
     - id: luna
-      home_operator: andreas
+      home_principal: andreas
       home_stack: andreas/main
       body: soma://andreas/luna         # ← join key into Soma body (thick)
       role: [agent]
     - id: echo
-      home_operator: andreas
+      home_principal: andreas
       home_stack: andreas/main
       body: soma://andreas/echo         # ← join key into Soma body (thin)
       role: [agent-restricted]          # narrower role for thin reviewer agent

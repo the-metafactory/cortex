@@ -50,7 +50,7 @@ export interface PromptFilterResult {
  * Returns allowed: true if the prompt is safe, or allowed: false with a reason.
  *
  * If @metafactory/content-filter failed to load at startup, allows the prompt
- * (fail-open). Operators are warned loudly at startup in that case — see the
+ * (fail-open). Principals are warned loudly at startup in that case — see the
  * import block above.
  *
  * Format note: we pass "mixed" (free-text) because chat prompts aren't

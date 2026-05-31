@@ -732,7 +732,7 @@ describe("CortexConfigSchema", () => {
   test("rejects legacy `agent:` (singular) field with a migration error (Holly W2-1)", () => {
     // The new schema has no `agent:` block (that's grove-v2's shape). Round-1
     // relied on Zod's silent unknown-key strip; round-2 flags this as a real
-    // migration safety gap — operators who hand-edit a partial cortex.yaml
+    // migration safety gap — principals who hand-edit a partial cortex.yaml
     // get no feedback that the legacy field is being ignored.
     //
     // Fix: the `agent` slot is now `z.never()` with an explicit error pointing

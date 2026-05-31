@@ -10,7 +10,7 @@ Retire the legacy per-adapter `roles[]` blocks from `DiscordPresenceSchema` / `M
 
 ## Why this iteration exists
 
-Phase C.2a (PR #219) shipped the additive `policy:` block. The legacy per-adapter `roles[]` schema has remained in place since — both shapes coexist. v2.0.0 is the cleanup: drop the legacy, commit to PolicyEngine-only, give operators a `migrate-config` path to lift their existing configs.
+Phase C.2a (PR #219) shipped the additive `policy:` block. The legacy per-adapter `roles[]` schema has remained in place since — both shapes coexist. v2.0.0 is the cleanup: drop the legacy, commit to PolicyEngine-only, give principals a `migrate-config` path to lift their existing configs.
 
 Naive framing of cortex#242/#243 is "lift roles[] into policy:". The design spec (PR #291, ratified through 3 review rounds) surfaces why this understates the work and locks in the schema + 5-PR sequence below.
 
@@ -27,7 +27,7 @@ Naive framing of cortex#242/#243 is "lift roles[] into policy:". The design spec
 - **243a + 243b** are parallelisable (no dependency between them)
 - **243c** depends on both (CLI uses schema + tool inventory)
 - **242a** depends only on 243a (parallel mode runs against legacy configs)
-- **242b** depends on 243c (operators have migration path) AND 242a (parallel validated)
+- **242b** depends on 243c (principals have migration path) AND 242a (parallel validated)
 
 ## Slices
 
@@ -64,7 +64,7 @@ In `src/cli/cortex/commands/migrate-config.ts` + `migrate-config-lib.ts`:
 - [ ] Emit top-level `policy.roles[]` with namespaced capabilities (`keyword.{chat,async,team}`, `tool.<name>` via 243b's `invertDisallowedTools`, `operator`, `dispatch.<agent_id>`) <!-- historical: `operator` here is the reserved policy-capability literal (migrate-config-policy.ts §5.5/§12.1); code identifier, not human-operator prose; not renamed by vocab-migration 0002 -->
 - [ ] Synthesise anonymous-per-instance principals for `defaultRole` semantic (§5.4)
 - [ ] Synthesise principal from `agent.operatorDiscordId/Mattermost/Slack` + DM `operatorRole` → `session_config.dm`
-- [ ] Emit external-peer principals with `home_operator: "unknown"` + warning per §12.3
+- [ ] Emit external-peer principals with `home_principal: "unknown"` + warning per §12.3
 - [ ] Cross-adapter role-conflict handling — warn + conservative union (§13 Q4)
 - [ ] **New `--check` mode** for the 242a principal pre-flight: fail when legacy role-resolver's principal set is not a subset of the new `policy.principals[]` lookup space (§9.1)
 - [ ] Idempotent: running twice produces identical output

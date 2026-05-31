@@ -114,7 +114,7 @@ const DEFAULT_CONFIG = join(process.env.HOME ?? "~", ".config", "grove", "bot.ya
 /**
  * Resolve the PID file path for a given `--config` value.
  *
- * Operators running multiple cortex instances on a single machine (per
+ * Principals running multiple cortex instances on a single machine (per
  * Phase A.5's stack-aware namespace — e.g. `andreas/research` and
  * `andreas/work` side-by-side) need distinct PID files so the
  * singleton check in {@link checkSingleton} only blocks duplicates of
@@ -122,7 +122,7 @@ const DEFAULT_CONFIG = join(process.env.HOME ?? "~", ".config", "grove", "bot.ya
  *
  * Resolution:
  *   - Default config (or unspecified) → legacy `cortex.pid` (preserves
- *     single-instance backward compat — operators on the default path
+ *     single-instance backward compat — principals on the default path
  *     see no behaviour change).
  *   - Custom config → `cortex-<config-basename>.pid` (derived from the
  *     config filename without the `.yaml`/`.yml` extension). Two stacks
@@ -188,7 +188,7 @@ export interface CortexHandle {
   /**
    * Subsystems that did not finish their `stop()` within
    * `SHUTDOWN_TIMEOUT_MS` on the most recent `stop()` invocation. Empty
-   * after a clean shutdown; non-empty signals operators (or launchd) that
+   * after a clean shutdown; non-empty signals principals (or launchd) that
    * the process exited dirty — typically wiring this to a non-zero exit
    * code.
    *
@@ -941,7 +941,7 @@ export async function startCortex(
       // A provisioning failure does NOT abort boot — siblings still
       // wire, and the per-agent `consumer.start()` below will surface
       // the binding failure via its existing try/catch + stderr line.
-      // We log here so operators see provisioning was even attempted.
+      // We log here so principals see provisioning was even attempted.
       process.stderr.write(
         `cortex: provisionReviewStream failed for "${reviewStream}": ` +
           `${err instanceof Error ? err.message : String(err)}\n`,
@@ -967,7 +967,7 @@ export async function startCortex(
       // delivered") get NO verifier — the gate in `ReviewConsumer.processEnvelope`
       // is a no-op, matching the pre-#329 behaviour. Agents with at least
       // one trusted peer get the verifier wired and the gate enforces.
-      // This is the one-way ratchet: as operators add `trust:` entries
+      // This is the one-way ratchet: as principals add `trust:` entries
       // to their cortex.yaml, signature enforcement strengthens
       // automatically without any flag toggling.
       //
@@ -1114,11 +1114,11 @@ export async function startCortex(
       const flavorSummary =
         consumer.flavors.length > 0 ? consumer.flavors.join(",") : "(none)";
       // D1 visibility: surface whether signature verification is enforced
-      // on this consumer so operators can grep `signed=on/off` to confirm
+      // on this consumer so principals can grep `signed=on/off` to confirm
       // their trust:[] config landed where they expected.
       const signedTag = signatureVerifier !== undefined ? "on" : "off";
       // cortex#331 Phase 1 — surface the dispatching substrate so
-      // operators can grep `substrate=pi-dev` / `substrate=claude-code`
+      // principals can grep `substrate=pi-dev` / `substrate=claude-code`
       // to confirm sage agents (or any future substrate) actually
       // received the substrate-aware factory. Unset substrate defaults
       // to `claude-code` in the log (matches the runtime fallthrough).
@@ -1126,7 +1126,7 @@ export async function startCortex(
       // cortex#334 — distinguish "ready" (subscription open) from
       // "DORMANT" (subscribePull returned null; G-1111 pending or
       // nats.subjects empty). The previous unconditional "ready" line
-      // misled operators into chasing phantom misconfigs.
+      // misled principals into chasing phantom misconfigs.
       if (started.subscribed) {
         console.log(
           `cortex: review consumer ready for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} substrate=${substrate}`,
@@ -1179,7 +1179,7 @@ export async function startCortex(
   // `trust: []`), the listener is skipped entirely.
   //
   // `cryptoVerify` is hard-coded off at this slice — the structural
-  // check alone is the B.1a contract and operators flip to crypto
+  // check alone is the B.1a contract and principals flip to crypto
   // verify once every trusted peer has an `nkey_pub` declared. The
   // flag is a small follow-up plumbing (cortex.yaml flag → option) once
   // the rollout window closes.
@@ -2118,7 +2118,7 @@ export async function startCortex(
   //   - every subsequent step that never got its turn (drain is sequential
   //     by design — a hung step also blocks its siblings).
   // The handle exposes `lastShutdownAbandoned` so the CLI can exit 1
-  // (visible to launchd / operators) when shutdown was unclean.
+  // (visible to launchd / principals) when shutdown was unclean.
   let shuttingDown = false;
   let lastShutdownAbandoned: string[] = [];
   const SHUTDOWN_TIMEOUT_MS = options.shutdownTimeoutMs ?? 15_000;
@@ -2555,7 +2555,7 @@ function checkSingleton(pidFile: string): void {
 // cortex#88 item 2 — `cortex start --dry-run` config validator.
 //
 // `scripts/postinstall.sh` already advertises `cortex start --config <path>
-// --dry-run` to operators as a post-migration sanity check. This helper
+// --dry-run` to principals as a post-migration sanity check. This helper
 // implements that contract: parse the file through the normal load path
 // (`loadConfigWithAgents`, which validates against both `AgentConfigSchema`
 // and `CortexConfigSchema` depending on shape), print a one-line OK
@@ -2668,7 +2668,7 @@ if (import.meta.main) {
       const shutdown = async () => {
         await handle.stop();
         if (existsSync(pidFile)) unlinkSync(pidFile);
-        // Echo round-1 N2: surface dirty shutdown to launchd / operators
+        // Echo round-1 N2: surface dirty shutdown to launchd / principals
         // via a non-zero exit code. `lastShutdownAbandoned` is non-empty
         // only when the 15s drain timeout fired with subsystems still in
         // flight (logged by `stop()` already).

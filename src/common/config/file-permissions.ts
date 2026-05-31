@@ -31,7 +31,7 @@ const REQUIRED_MODE = 0o600;
  * we'd prefer the loud failure to a silent partial enforcement.
  *
  * On Windows the gate is skipped with a stderr note. NTFS uses ACLs,
- * not POSIX mode bits, so `stat.mode` there is meaningless. Operators
+ * not POSIX mode bits, so `stat.mode` there is meaningless. Principals
  * on Windows are responsible for managing ACLs out of band.
  *
  * Propagates `ENOENT` / `EACCES` from `statSync` — callers can let

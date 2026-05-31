@@ -5,9 +5,9 @@
  * shapes. Clients check `protocolVersion` on the `connected` handshake to
  * detect incompatibility.
  *
- * v2 (cortex#436): historical: the input/curation event kinds were
- * renamed to `principal.input` / `principal.curation`; identity field `operatorId`
- * renamed to `principalId`. Clients must read the principal.* kinds.
+ * v2 (cortex#436): the input/curation event kinds were renamed to
+ * `principal.input` / `principal.curation`; the identity field was renamed
+ * to `principalId`. Clients must read the principal.* kinds.
  */
 
 import type { AssignmentState, BlockReason, McEvent } from "../types";

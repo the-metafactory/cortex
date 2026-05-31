@@ -126,7 +126,7 @@ CC emits `stream-json.user` for both principal input turns (what the principal t
 **Deferred to a later iteration (F-7 renders state-only, no extracted intent):**
 - Running-state intent extraction ("last assistant message, first sentence, 8–16 words"). §5.2 describes the heuristic; we can ship it, but F-7's minimum viable summary is "State: running" without the extracted intent. Adding the extraction is a later pass; keeping it out of F-7 reduces scope and avoids subjective-quality debates in review.
 
-**Expanded header (§5.2 second paragraph):** shows the full `block_reason` payload (all fields), the task `sourceRef` if set, and assignment metadata (ID, operator_id, timestamps). Ships in F-7 — it is a flat render of existing fields, no new computation.
+**Expanded header (§5.2 second paragraph):** shows the full `block_reason` payload (all fields), the task `sourceRef` if set, and assignment metadata (ID, principal_id, timestamps). Ships in F-7 — it is a flat render of existing fields, no new computation.
 
 ## Decision 8 — Virtualisation is hand-rolled, no new dependencies
 

@@ -364,7 +364,7 @@ describe("edge cases", () => {
   test("--flag=value syntax is currently NOT supported (documented gap)", () => {
     // The parser splits on whitespace, not `=`. `--creds-dir=/tmp` would be
     // treated as a single unknown flag. This test documents the gap; if
-    // operators ever ask for the syntax, lift the gap in a follow-up.
+    // principals ever ask for the syntax, lift the gap in a follow-up.
     expect(() => parseSubcommandArgs(spec, ["list", "--creds-dir=/tmp"])).toThrow(
       UnknownFlagError,
     );

@@ -160,7 +160,7 @@ describe("WorklogManager.surfaceConfig — shape", () => {
   // cortex#268 — stack-aware subscription. When boot path supplies
   // `stack` (from `deriveStackId(loadedConfig).stack`), the manager
   // subscribes on 6-segment grammar matching sage's emit-side. Multi-
-  // stack operators (`andreas/research`) get correct work isolation.
+  // stack principals (`andreas/research`) get correct work isolation.
   test("6-segment subject pattern when stack is supplied (cortex#268)", () => {
     const { client } = makeFakeClient("worklog-channel-id");
     const wlm = new WorklogManager(client, "worklog-channel-id");

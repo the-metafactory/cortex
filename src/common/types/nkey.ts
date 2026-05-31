@@ -33,7 +33,7 @@ export const NKEY_PUBKEY_REGEX = /^U[A-Z2-7]{55}$/;
 /**
  * Human-friendly error message Zod (or any other validator)
  * surfaces when a value fails {@link NKEY_PUBKEY_REGEX}. Includes
- * the full grammar + length so operators editing cortex.yaml get
+ * the full grammar + length so principals editing cortex.yaml get
  * the exact contract from the error.
  */
 export const NKEY_PUBKEY_ERROR_MESSAGE =

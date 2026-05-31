@@ -118,7 +118,7 @@ F-6 ships when all of the below are true:
 - [ ] Moving a `blocked` assignment out of that state (complete/fail/principal-requeue) removes the card without a reload.
 - [ ] Empty state renders "All clear" + most-active-agent line when no assignments are `blocked`.
 - [ ] `1`–`9` select by position; `←`/`→` move selection; selected card has a visual highlight.
-- [ ] Happy path and empty state have unit tests; the WS re-fetch trigger has one integration test that drives `block` then `operator_requeue` and asserts two re-renders.
+- [ ] Happy path and empty state have unit tests; the WS re-fetch trigger has one integration test that drives `block` then `principal_requeue` and asserts two re-renders.
 - [ ] When the focus-area query returns more than 6 items, the dashboard renders the first 6 cards plus a "+N more" tail chip. Until F-8 ships, the chip is visually present but inert (no navigation); once F-8 lands, it links to the table view.
 
 ---

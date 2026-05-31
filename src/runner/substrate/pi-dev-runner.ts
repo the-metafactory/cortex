@@ -181,7 +181,7 @@ export interface MakePiDevRunnerOpts {
  *
  *   - Boot never fails on a missing sage binary — the consumer comes up
  *     fine and individual review requests surface the failure as a
- *     `dispatch.task.failed` envelope. Operators can install sage after
+ *     `dispatch.task.failed` envelope. Principals can install sage after
  *     boot without restarting cortex.
  *   - A sage install/upgrade is picked up on the next review request
  *     (no stale binary path cached).

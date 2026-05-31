@@ -87,7 +87,7 @@ export interface LoadedConfig {
      * cortex#429 PR-C — surface the principal's display name onto the
      * loaded boot-time view so dashboard wiring no longer has to dip
      * back into the removed `AgentConfig.agent.operatorName` legacy
-     * field. Optional — operators can omit `principal.displayName` on
+     * field. Optional — principals can omit `principal.displayName` on
      * cortex.yaml and the boot path falls back to `principal.id`.
      */
     displayName?: string;
@@ -523,7 +523,7 @@ function loadCortexShape(
  * The synthesized `instanceId` matches the MIG-7.2c default convention —
  * `${agent.id}-discord` with no guild suffix (one presence per agent in
  * cortex shape). This keeps `system.adapter.*` envelope ids stable across
- * the schema flip; operators who grep for the old `{agentName}-discord-{guildId}`
+ * the schema flip; principals who grep for the old `{agentName}-discord-{guildId}`
  * pattern will see the collapsed form once cortex.yaml is in effect.
  */
 function flattenDiscordPresences(agents: readonly Agent[]) {

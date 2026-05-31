@@ -136,12 +136,12 @@ CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_log(event_type, timesta
 CREATE INDEX IF NOT EXISTS idx_session_activity_session ON session_activity(session_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_completed ON sessions(completed_at);
-CREATE INDEX IF NOT EXISTS idx_sessions_operator ON sessions(principal_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_principal ON sessions(principal_id);
 -- IAW D.5 — slicing the dashboard snapshot by home_principal on every poll
 CREATE INDEX IF NOT EXISTS idx_sessions_home_principal ON sessions(home_principal) WHERE home_principal IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_github_repo ON github_events(repo, created_at);
 CREATE INDEX IF NOT EXISTS idx_github_agent ON github_events(agent_authored, created_at);
-CREATE INDEX IF NOT EXISTS idx_github_operator ON github_events(principal_id);
+CREATE INDEX IF NOT EXISTS idx_github_principal ON github_events(principal_id);
 CREATE INDEX IF NOT EXISTS idx_issues_repo_state ON issues(repo, state);
 CREATE INDEX IF NOT EXISTS idx_prs_repo_state ON pull_requests(repo, state);
 CREATE INDEX IF NOT EXISTS idx_usage_recorded ON usage_snapshots(recorded_at);

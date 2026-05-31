@@ -69,7 +69,7 @@ Generated principals follow §6 of `design-policy-cutover.md`:
   `roles[]`.
 - **One principal per external-peer reference** — every `agent-<X>` role
   in the legacy `roles[]` where `X` is NOT a declared local agent gets
-  surfaced as a principal with `home_operator: "unknown"` and
+  surfaced as a principal with `home_principal: "unknown"` and
   `home_stack: "unknown/unknown"`. **You must hand-edit these** with the
   correct peer-stack identity before the cortex#296 parallel-mode
   activation — they emit warnings on every run, by design.

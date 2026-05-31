@@ -495,7 +495,7 @@ describe("CortexConfigSchema — provided_by → agents[] reference resolution",
   });
 
   test("multiple dangling provider references are all reported", () => {
-    // Operators with many broken references see the full batch, not just
+    // Principals with many broken references see the full batch, not just
     // the first — the superRefine accumulates issues across the walk.
     try {
       CortexConfigSchema.parse(

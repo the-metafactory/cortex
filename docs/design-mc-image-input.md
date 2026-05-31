@@ -244,7 +244,7 @@ Three failure points:
 - `src/mission-control/session/stream-json.ts` — extended to accept string or content-block array (Decision 2).
 - `src/mission-control/api/handlers.ts` — request body accepts `images[]`; enforces media-type allowlist, per-image cap, per-message image count, per-body 25 MB cap (Decisions 4, 5).
 - `src/mission-control/api/types.ts` — `SendInputRequest` shape extended.
-- `src/mission-control/db/events.ts` — `createOperatorInputEvent` payload extended with `images`.
+- `src/mission-control/db/events.ts` — `createPrincipalInputEvent` payload extended with `images`.
 - Dashboard: `.drill-input` grows chip row + paste/drop handlers; staged-images state in `state.drillInput`; F-7 `eventToRows` grows the `image` content-block case + lightbox modal (Decisions 6, 7).
 - Tests: framing unit, endpoint coverage (Decision 10).
 - Forward-link from `docs/design-mission-control.md` §6.2 to this addendum.

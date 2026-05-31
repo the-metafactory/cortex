@@ -26,7 +26,7 @@ import {
  * spawn. Today the timeout is caught and the attachment is reported as a
  * graceful failure (so the user gets a sensible "Download error" message);
  * this hook lets the caller emit a `system.inbound.aborted` envelope
- * alongside that graceful return, giving operators the structured event
+ * alongside that graceful return, giving principals the structured event
  * the 2026-05-09 outage post-mortem demanded.
  *
  * The callback is invoked synchronously before the catch block constructs

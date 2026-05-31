@@ -88,7 +88,7 @@ Tables:
 - `usage_snapshots` — account usage tracking (5H/7D rate limits)
 
 Key fields:
-- `operator_id` on sessions/github_events — which bot principal sent this data
+- `principal_id` on sessions/github_events — which bot principal sent this data
 - `event_id` — dedup key (events are idempotent)
 - `session_id` — links agent sessions to events
 
@@ -123,7 +123,7 @@ api:
   mode: cloud                                      # "local" | "cloud"
   endpoint: "https://grove-api.andreas-aastroem.workers.dev"
   apiKey: "grove_sk_..."                           # principal API key
-  operatorId: "andreas"                            # principal identifier
+  principalId: "andreas"                            # principal identifier
 ```
 
 **Behavior:**
@@ -136,7 +136,7 @@ api:
 **Request format:**
 ```json
 {
-  "operator_id": "andreas",
+  "principal_id": "andreas",
   "events": [
     {
       "event_id": "abc123",
@@ -169,7 +169,7 @@ api:
 
 **Acceptance Criteria:**
 - Bot with `api.mode: cloud` POSTs batched events to Worker
-- Events arrive in D1 with correct `operator_id`
+- Events arrive in D1 with correct `principal_id`
 - Duplicate events (same `event_id`) are ignored (INSERT OR IGNORE)
 - Failed POST retries with exponential backoff
 - After 3 retries, batch is dropped (logged, not fatal)
@@ -186,7 +186,7 @@ Principal API keys stored in Workers KV. Admin endpoints for create/revoke.
 **KV schema:**
 ```json
 {
-  "operator_id": "andreas",
+  "principal_id": "andreas",
   "name": "Luna bot",
   "created_at": "2026-03-29T10:00:00Z"
 }
@@ -199,14 +199,14 @@ Principal API keys stored in Workers KV. Admin endpoints for create/revoke.
 curl -X POST https://grove-api.{domain}.workers.dev/admin/keys \
   -H "Authorization: Bearer $ADMIN_SECRET" \
   -H "Content-Type: application/json" \
-  -d '{"operator_id": "andreas", "name": "Luna bot"}'
+  -d '{"principal_id": "andreas", "name": "Luna bot"}'
 ```
 
 Response:
 ```json
 {
   "key": "grove_sk_abc123...",
-  "operator_id": "andreas",
+  "principal_id": "andreas",
   "name": "Luna bot",
   "created_at": "2026-03-29T10:00:00Z"
 }
@@ -227,7 +227,7 @@ Response:
 ```
 
 **Middleware:**
-- `requireApiKey(c, next)` — validates Bearer token against KV, sets `c.set("operatorId", ...)`
+- `requireApiKey(c, next)` — validates Bearer token against KV, sets `c.set("principalId", ...)`
 - `requireAdmin(c, next)` — validates Bearer token against `ADMIN_SECRET` env var
 
 **Acceptance Criteria:**
@@ -236,7 +236,7 @@ Response:
 - POST /api/ingest with invalid key returns 401
 - Admin endpoints without ADMIN_SECRET return 403
 - Generated keys are 24 bytes (48 hex chars) + `grove_sk_` prefix
-- Key validation extracts `operator_id` from KV and uses it for event attribution
+- Key validation extracts `principal_id` from KV and uses it for event attribution
 
 ---
 
@@ -361,7 +361,7 @@ Next steps:
 - Principal keys stored in Workers KV
 - Keys are Bearer tokens: `Authorization: Bearer grove_sk_...`
 - Key format: `grove_sk_{48-char-hex}` (24 random bytes)
-- Each key tied to one `operator_id`
+- Each key tied to one `principal_id`
 - Events ingested with a key are attributed to that principal
 - Keys can be revoked via admin endpoint
 
@@ -397,7 +397,7 @@ Next steps:
 ```sql
 CREATE TABLE sessions (
   session_id TEXT PRIMARY KEY,
-  operator_id TEXT,
+  principal_id TEXT,
   agent_id TEXT NOT NULL,
   agent_name TEXT NOT NULL,
   project TEXT,
@@ -425,7 +425,7 @@ CREATE TABLE sessions (
 CREATE TABLE github_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT UNIQUE,
-  operator_id TEXT,
+  principal_id TEXT,
   repo TEXT NOT NULL,
   event_type TEXT NOT NULL,
   title TEXT,

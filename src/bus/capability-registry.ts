@@ -174,7 +174,7 @@ export interface PublishCapabilityRegistryOptions {
   clock?: () => Date;
   /**
    * Optional classification override. Defaults to `"local"` per
-   * §3.2 ("sovereignty.classification: local"). Operators on a
+   * §3.2 ("sovereignty.classification: local"). Principals on a
    * federation policy may opt into `"federated"` to publish the
    * capability registry on `federated.{network}.agents.capabilities.
    * registered` so peer dashboards can render it; today the default is

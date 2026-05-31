@@ -222,7 +222,7 @@ describe("CortexConfigSchema with stack: block", () => {
 
   test("invalid stack.id is rejected at top-level CortexConfig parse", () => {
     // The schema embeds StackConfigSchema directly, so the same regex
-    // error surfaces at the top level — operators fixing config see the
+    // error surfaces at the top level — principals fixing config see the
     // same message regardless of whether they parse the block alone or
     // the full cortex.yaml.
     expect(() =>

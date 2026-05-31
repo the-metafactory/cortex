@@ -69,7 +69,7 @@ const REVIEW_PATTERN =
  *
  * Whitespace handling: leading whitespace is tolerated (the regex
  * anchors with `^\s*`). Trailing content after `<repo>#<N>` is allowed
- * and not captured — operators frequently follow the verb-target pair
+ * and not captured — principals frequently follow the verb-target pair
  * with a comment ("review cortex#118 -- focus on the dispatch path"),
  * so we accept arbitrary tail content.
  */

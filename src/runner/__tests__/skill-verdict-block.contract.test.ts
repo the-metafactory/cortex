@@ -353,7 +353,7 @@ describe("skill verdict-block contract — negative fixture proves enum enforcem
     const payload = result.envelope.payload;
     const reason = payload.reason as { kind: string; detail: string };
     expect(reason.kind).toBe("cant_do");
-    // Detail must name the offending field so operators can spot skill drift
+    // Detail must name the offending field so principals can spot skill drift
     // immediately on the dashboard — not just "schema mismatch".
     expect(reason.detail).toContain("verdict");
   });

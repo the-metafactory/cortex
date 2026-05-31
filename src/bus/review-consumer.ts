@@ -35,7 +35,7 @@
  * **Why ack/term for "permanent" failures look identical on the broker.**
  * JetStream removes the message from the stream in both cases — the
  * difference is observability: `term(reason)` ships a structured reason
- * onto the dead-letter side that operators see in `nats consumer info`
+ * onto the dead-letter side that principals see in `nats consumer info`
  * + `system.dispatch.dead_letter` envelopes a future tap may project.
  * `nak(delay)` re-queues with an optional backoff hint. We pick term
  * for permanent so dead-letter observability stays meaningful, and nak
@@ -219,7 +219,7 @@ export interface ReviewConsumerOpts {
    * gate. A `valid: false` result terminates the envelope as `cant_do`
    * permanent failure (term ack) so a forged or untrusted publisher
    * can't reach the CC subprocess. Omit to disable verification — the
-   * pre-#327 behaviour — for operators still rolling out signing.
+   * pre-#327 behaviour — for principals still rolling out signing.
    *
    * See {@link SignatureVerifier} for the function signature + the
    * design note on why this stays a pluggable closure rather than a
@@ -399,7 +399,7 @@ export class ReviewConsumer {
       // no-op for capability-side features — the consumer stays
       // dormant and shutdown drain works against the empty `inFlight`
       // set. The boot path branches its log line on `subscribed: false`
-      // so operators see "DORMANT" instead of a misleading "ready"
+      // so principals see "DORMANT" instead of a misleading "ready"
       // (cortex#334).
       return { agentId: this.agent.id, flavors: this.flavors, subscribed: false };
     }
@@ -502,7 +502,7 @@ export class ReviewConsumer {
     //      Failure shape: `cant_do` + `term` ack. Chain rejection is
     //      operationally permanent — resigning the envelope on a retry
     //      doesn't change cortex's trust list or fix tampered bytes.
-    //      Detail prefix `chain verification failed:` lets operators grep
+    //      Detail prefix `chain verification failed:` lets principals grep
     //      stderr / dead-letter for this specific rejection class without
     //      a new wire-level reason kind (see `SignatureVerifier` design
     //      note for the schema-stability rationale).
@@ -512,7 +512,7 @@ export class ReviewConsumer {
         // Build the failure detail once and thread it through both the
         // emitted envelope's `reason.detail` and the JsMsg term reason
         // so the two stay in lockstep — Sage cycle-1 Maintainability
-        // suggestion. Operators reading either the dispatch.task.failed
+        // suggestion. Principals reading either the dispatch.task.failed
         // envelope or `nats consumer info`'s dead-letter view see the
         // same string.
         const failureDetail = `chain verification failed: ${verifyResult.reason}`;
@@ -1183,7 +1183,7 @@ export function failedReasonToAckDecision(
     case "policy_denied": {
       // The engine's structured deny payload (`reason.deny`) is a
       // free-form record. Summarise its keys for the term reason so
-      // operators see WHICH deny path fired (`unknown_principal`,
+      // principals see WHICH deny path fired (`unknown_principal`,
       // `insufficient_role`, …) without serialising the entire blob into
       // a JetStream control header.
       const denyKeys = Object.keys(reason.deny);

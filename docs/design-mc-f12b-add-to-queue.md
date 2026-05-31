@@ -452,7 +452,7 @@ F-12 Decision 9 introduced the `principal.curation` event family with a `kind` d
 **Payload shape:**
 
 ```ts
-type OperatorCurationPayload =
+type PrincipalCurationPayload =
   | { kind: "dispatch"; agentId: string; reason?: string; newAssignmentId?: string }   // F-12
   | { kind: "requeue"; reason?: string }                                                 // F-12
   | { kind: "handoff"; fromAgentId: string; toAgentId: string; reason?: string;
@@ -467,7 +467,7 @@ type OperatorCurationPayload =
 
 A future `kind: "task.created"` would distinguish principal-typed-from-scratch tasks (no upstream) from imported ones — useful when someone adds a manual-task affordance in a follow-up PR. F-12b doesn't ship that flow, so reserving `task.imported` for the import case keeps the discriminator semantically clean. If a third source (Linear/Jira) lands, it becomes a new `source` value within `task.imported`, not a new kind. The kind axis is for **action**; the source axis is for **provenance**.
 
-**Where it's inserted.** Inside the `POST /api/tasks` transaction, after the task row, shadow assignment, and shadow session are inserted. Uses the same `createOperatorCurationEvent` helper F-12 introduced in `src/mission-control/db/events.ts`. The event's `session_id` is the shadow session's id.
+**Where it's inserted.** Inside the `POST /api/tasks` transaction, after the task row, shadow assignment, and shadow session are inserted. Uses the same `createPrincipalCurationEvent` helper F-12 introduced in `src/mission-control/db/events.ts`. The event's `session_id` is the shadow session's id.
 
 **WS broadcast.** Same as F-12 — the event flows through `broadcastEvent` (`src/mission-control/notifications.ts:65`). The dashboard's F-7 event log adds one new render block keyed on `payload.kind === "task.imported"`:
 
@@ -478,7 +478,7 @@ A future `kind: "task.created"` would distinguish principal-typed-from-scratch t
 
 **Why one event and not two (e.g. `task.created` + `task.imported`).** Two events for one principal action would be redundant and would force every consumer (replay tooling, audit export, dashboard render) to dedup. One event with sufficient payload to reconstruct the action is the right shape.
 
-**Principal id on the event.** Same posture as F-12 Decision 9 — `events` table doesn't carry `operator_id`; F-12b inherits the principal implicitly from the shadow assignment's task's `operator_id`. Tier 2 multi-principal wiring for `principal.curation` lands F-12 + F-12b in lock-step.
+**Principal id on the event.** Same posture as F-12 Decision 9 — `events` table doesn't carry `principal_id`; F-12b inherits the principal implicitly from the shadow assignment's task's `principal_id`. Tier 2 multi-principal wiring for `principal.curation` lands F-12 + F-12b in lock-step.
 
 ## Decision 11 — Scope OUT: explicit deferrals so the PR review stays tight
 
@@ -534,7 +534,7 @@ Things F-12b tempts the implementer to add but that ship in separate PRs (or nev
   | `/api/tasks` | POST | `{ ref: string, titleOverride?: string, priority: 0..3 }` | 201 `CreateTaskResponse` | 400 / 401 / 403 / 404 / 409 / 5xx (Decision 6) |
   | `/api/tasks/:taskId/abandon` | POST | `{ reason?: string }` | 200 `AbandonResponse` | 404 / 409 / 4xx / 5xx (Decision 6) |
 - Type additions in `src/mission-control/api/types.ts` — `PreviewTaskRequest/Response/Conflict`, `CreateTaskRequest/Response`, `AbandonTaskRequest/Response`.
-- New `task.imported` payload variant in the `OperatorCurationPayload` union (sibling of F-12's four variants).
+- New `task.imported` payload variant in the `PrincipalCurationPayload` union (sibling of F-12's four variants).
 - Projection update in `src/mission-control/db/tasks.ts`:
   - `listTasks` SQL adds the `shadow_assignment_id` correlated subquery (`AND a.agent_id = 'mc-shadow-agent'`).
   - The assignments roll-up batch query gains `WHERE a.agent_id != 'mc-shadow-agent'` so shadow rows don't appear in the table's agents column.

@@ -23,7 +23,7 @@
  *     first response is pinned for the lifetime of the process.
  *     This is the Phase-B caveat: an attacker controlling the
  *     network path between cortex and the registry on first boot
- *     could substitute their own pubkey. Operators wanting
+ *     could substitute their own pubkey. Principals wanting
  *     zero-TOFU should populate `policy.federated.registry.pubkey`
  *     in cortex.yaml.
  *
@@ -294,7 +294,7 @@ export class RegistryClient implements RegistryClientReader {
     const raw = await this.fetchJson(url, undefined);
     if (raw === undefined) {
       this.logError(
-        `TOFU failed: could not fetch ${url}; client will start with no pinned key and reject all operators`,
+        `TOFU failed: could not fetch ${url}; client will start with no pinned key and reject all principals`,
       );
       return;
     }

@@ -40,7 +40,7 @@
  * **Hostname posture:**
  *   - Default `127.0.0.1` — never `0.0.0.0`. The receiver carries no auth
  *     beyond HMAC; binding to all interfaces would expose it to LAN
- *     attackers who guess the secret. Operators who *want* to expose the
+ *     attackers who guess the secret. Principals who *want* to expose the
  *     receiver to a private subnet override `hostname` explicitly, opting
  *     in to the wider attack surface.
  *
@@ -117,12 +117,12 @@ export interface GithubWebhookReceiverOptions {
    *   - Dashboard API: `config.api.port` (default 8766)
    *
    * The default 8770 is far enough above mattermost's default that
-   * accidental collision is unlikely; operators with another tenant on
+   * accidental collision is unlikely; principals with another tenant on
    * 8770 set the port explicitly.
    */
   port?: number;
   /**
-   * Hostname to bind. Default `127.0.0.1` — local-only. Operators who
+   * Hostname to bind. Default `127.0.0.1` — local-only. Principals who
    * expose the receiver to a wider scope (private subnet) set this
    * explicitly. Never default to `0.0.0.0`; HMAC is the only auth and
    * widening the bind surface multiplies guess-the-secret attack

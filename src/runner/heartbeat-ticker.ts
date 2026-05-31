@@ -165,7 +165,7 @@ export class HeartbeatTicker {
     // Echo cortex#363 minor — bound the in-flight publish count to 1.
     // If the previous tick's publish hasn't settled by the time this
     // tick fires, the bus is slower than `intervalMs`; skip and log
-    // once per backpressure event so operators can see it forming
+    // once per backpressure event so principals can see it forming
     // without the log being chatty under steady-state operation.
     if (this.inFlight > 0) {
       console.warn(

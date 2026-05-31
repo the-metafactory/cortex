@@ -280,9 +280,9 @@ describe("POST /api/sessions", () => {
     const events = t.db
       .query("SELECT type, payload FROM events WHERE session_id = ? ORDER BY timestamp")
       .all(body.sessionId) as { type: string; payload: string }[];
-    const operatorInputs = events.filter((e) => e.type === "principal.input");
-    expect(operatorInputs).toHaveLength(1);
-    const first = operatorInputs[0]!;
+    const principalInputs = events.filter((e) => e.type === "principal.input");
+    expect(principalInputs).toHaveLength(1);
+    const first = principalInputs[0]!;
     expect(JSON.parse(first.payload).text).toBe("hello there");
   });
 

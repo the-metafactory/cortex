@@ -30,7 +30,7 @@ function emptyDefault<T>(): T {
 // v2.0.0 cutover (cortex#297) — legacy per-adapter role / DM / role-resolver
 // schemas removed. Authorisation now flows exclusively through the top-level
 // `policy:` block on cortex.yaml (`PolicyPrincipalSchema` / `PolicyRoleSchema`
-// in `./cortex-config.ts`). Operators upgrading from <v2.0.0 MUST run
+// in `./cortex-config.ts`). Principals upgrading from <v2.0.0 MUST run
 // `bun src/cli/cortex/commands/migrate-config.ts <your-config.yaml>` first to
 // synthesise the new `policy:` block from their legacy `presence.<platform>.roles[]`
 // + `dm.*` blocks. See `docs/design-policy-cutover.md` §16 for the full schema
@@ -282,7 +282,7 @@ export const AgentConfigSchema = z.object({
      */
     /** Principal data residency stamped into `sovereignty.data_residency` on emitted
      *  envelopes (system.*, dispatch.task.*, cc.*). ISO-3166 country code; defaults
-     *  to "NZ" when omitted. Operators in AU/EU/US/etc. set this to match their
+     *  to "NZ" when omitted. Principals in AU/EU/US/etc. set this to match their
      *  jurisdiction so envelopes accurately reflect residency for compliance audits. */
     dataResidency: z.string().optional(),
   }),
@@ -448,7 +448,7 @@ export const AgentConfigSchema = z.object({
    *
    * - `notifications.discord` — master toggle for the F-11 Discord push
    *   surface. Default `false`; explicit off-by-default avoids
-   *   surprising operators with a DM torrent after a fresh install.
+   *   surprising principals with a DM torrent after a fresh install.
    * - `baseUrl` — used to build dashboard deep links in notification
    *   bodies. Tier 1 default `http://localhost:8766`; Tier 2 should set
    *   `https://grove.meta-factory.ai`. When unset on Tier 2, F-11

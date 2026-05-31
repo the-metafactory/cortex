@@ -79,7 +79,7 @@ export interface CcEventSource {
   /**
    * Principal residency code stamped into `envelope.sovereignty.data_residency`.
    * Defaults to `"NZ"` when omitted — matches the original cortex deployment.
-   * Operators in other jurisdictions pass their own ISO-3166-style code so
+   * Principals in other jurisdictions pass their own ISO-3166-style code so
    * envelopes accurately reflect data residency. Mirrors the parameterisation
    * pattern in `bus/system-events.ts` and `bus/dispatch-events.ts`.
    */

@@ -272,7 +272,7 @@ export interface MyelinRuntimeOptions {
    * the prior chain is preserved.
    *
    * When undefined, `publish()` emits envelopes verbatim — same shape
-   * as today, unchanged for callers that haven't opted in. Operators
+   * as today, unchanged for callers that haven't opted in. Principals
    * stage the keypair via `cortex.yaml.stack.nkey_seed_path` + the
    * `loadStackSigningKey` loader (chmod 600 gated; `SU` prefix
    * required); the entrypoint wires the loaded keypair + the stack's

@@ -238,7 +238,7 @@ export class DiscordAdapter implements PlatformAdapter {
       {
         instanceId: this.instanceId,
         // MIG-3b-ii: emit `system.adapter.{degraded,recovered}` envelopes so
-        // operators get out-of-band visibility (see G-1111 §3.5.3 + §4.6).
+        // principals get out-of-band visibility (see G-1111 §3.5.3 + §4.6).
         // The callbacks are also wired to console.error for log retention;
         // the bus emission is additive, not a replacement.
         onDegraded: ({ instanceId, thresholdMs, since }) => {
@@ -629,7 +629,7 @@ export class DiscordAdapter implements PlatformAdapter {
   /**
    * cortex#98 (part B) — current size of the trusted-bot allowlist. Used
    * by cortex.ts for the per-adapter "trustedBotIds: N" startup log so
-   * operators can confirm the resolver actually populated the set.
+   * principals can confirm the resolver actually populated the set.
    */
   get trustedBotIdCount(): number {
     return this.trustedBotIds.size;
@@ -888,7 +888,7 @@ export class DiscordAdapter implements PlatformAdapter {
 
     // Not found in the active set → create. Use `auto_archive_duration:
     // 1440` (24h) per the existing `worklog-manager` convention so the
-    // archive window matches what operators already expect for per-task
+    // archive window matches what principals already expect for per-task
     // threads. `type: PublicThread` because review threads are
     // discoverable to everyone in the channel — the alternative
     // (PrivateThread) restricts visibility to the @-mentioned users
@@ -1262,7 +1262,7 @@ export class DiscordAdapter implements PlatformAdapter {
     // state") to redeliver after reconnect. Future refinement at MIG-3b-ii.
     //
     // We split null-client (adapter never started) from not-ready-client
-    // (started but shard reconnecting) so operators can tell a config bug
+    // (started but shard reconnecting) so principals can tell a config bug
     // from a transient gateway blip in the logs.
     if (this.client === null) {
       console.warn(

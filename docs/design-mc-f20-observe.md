@@ -34,8 +34,8 @@ BODY=$(jq -n \
   --arg ccSessionId "$SESSION_UUID" \
   --arg agentId "$LIVE_ID" \
   --arg agentName "$LIVE_NAME" \
-  --arg operatorId "$OPERATOR_ID" \
-  '{title:$title, kind:"local.observed", ccSessionId:$ccSessionId, agentId:$agentId, agentName:$agentName, operatorId:$operatorId}')
+  --arg principalId "$PRINCIPAL_ID" \
+  '{title:$title, kind:"local.observed", ccSessionId:$ccSessionId, agentId:$agentId, agentName:$agentName, principalId:$principalId}')
 # Gate `--session-id` on registration success. If MC v2 is unreachable,
 # fall back to letting CC mint its own UUID — events go under that UUID
 # in raw/ and would match nothing once MC comes back up. Per Echo's

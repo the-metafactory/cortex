@@ -86,7 +86,7 @@ function emptyDefault<T extends z.ZodObject<z.ZodRawShape>>(schema: T) {
  *
  * R1 vocabulary migration (cortex#388) — `principal:` is the canonical
  * key in `cortex.yaml`. The transition-release legacy-block alias
- * was removed at v3.0.0 (manifest PR-11); operators upgrading from
+ * was removed at v3.0.0 (manifest PR-11); principals upgrading from
  * cortex v2.x run `cortex migrate-config` to rewrite their cortex.yaml
  * before installing v3.
  */
@@ -169,7 +169,7 @@ export const DiscordPresenceSchema = z.object({
   /**
    * v2.0.0 cutover (cortex#297) — `roles[]`, `defaultRole`, and `dm` retired.
    * Per-adapter authorisation now flows through the top-level `policy:` block
-   * (`PolicyPrincipalSchema` / `PolicyRoleSchema`). Operators upgrading from
+   * (`PolicyPrincipalSchema` / `PolicyRoleSchema`). Principals upgrading from
    * <v2.0.0 MUST run `bun src/cli/cortex/commands/migrate-config.ts` first.
    * See `docs/design-policy-cutover.md` §16.
    */
@@ -195,7 +195,7 @@ export const DiscordPresenceSchema = z.object({
    * sources merge in `src/cortex.ts` before the adapter starts.
    *
    * Empty array (default) is fine when every trusted peer is in-process.
-   * `z.coerce.string()` matches the surrounding fields' shape — operators
+   * `z.coerce.string()` matches the surrounding fields' shape — principals
    * who paste Discord snowflakes as numbers get them coerced rather than
    * a schema error. Each entry is a Discord snowflake; the bot's own
    * user id is never allowed regardless of this list (anti-self-loop
@@ -234,7 +234,7 @@ export const DiscordPresenceSchema = z.object({
    * configs that subscribe-without-render (e.g. observability-only
    * deployments that log envelope receipts but don't post to chat).
    *
-   * Operators typically set this to `agentChannelId` so review-requests
+   * Principals typically set this to `agentChannelId` so review-requests
    * and similar bus events land in the agent's primary channel.
    * Future per-event-type routing (MIG-7.2d Renderer model) will
    * override on a per-envelope basis; this remains the fallback when
@@ -357,7 +357,7 @@ export const SlackPresenceSchema = z.object({
    * Echo cortex#233 round-2 N2: this field used to say "user ids (`U…`)"
    * but Slack delivers peer-bot messages as the `bot_message` subtype
    * with author identified by `event.bot_id` (`B…`), NOT `event.user`.
-   * Operators populating `U…` values would silently never see their
+   * Principals populating `U…` values would silently never see their
    * trust take effect. Always use the `B…` value Slack reports for
    * the peer bot — visible in the peer bot's `auth.test.bot_id`, or
    * on the peer's app manifest under "Bot User".
@@ -687,7 +687,7 @@ export type RendererKind = z.infer<typeof RendererKindSchema>;
  *
  * Drop side-effect: the surface-router emits a `system.access.filtered`
  * envelope per drop (carrying `renderer_id`, `envelope_subject`, `reason`)
- * so operators can subscribe to access-decision events for audit/debug.
+ * so principals can subscribe to access-decision events for audit/debug.
  *
  * Cortex#109 §B references this as the consumer of myelin's existing
  * sovereignty taxonomy — the schema lifts the values directly, no new enum.
@@ -1181,7 +1181,7 @@ const SessionConfigShape = z.object({
  * federation peer) is authenticated by the `signed_by[]` chain's
  * stack NKey, not by any platform-side identity. Setting
  * `platform_ids` on such a principal is meaningless at best and
- * misleading at worst; the schema does not refuse it (operators
+ * misleading at worst; the schema does not refuse it (principals
  * may carry both during transition) but the migration CLI
  * (cortex#243) emits peer principals with empty `platform_ids`
  * and the dispatch path never consults the field for federated
@@ -1276,7 +1276,7 @@ export const PolicyPrincipalSchema = z.object({
    * **Convention — federation peer principals SHOULD NOT carry
    * `platform_ids`.** Their identity is asserted via the
    * `signed_by[]` chain's stack NKey, not via platform ids. The
-   * schema does not enforce this (operators may carry transition
+   * schema does not enforce this (principals may carry transition
    * state); the migration CLI and dispatch path simply do not
    * populate or consult it for peers.
    */
@@ -1352,7 +1352,7 @@ export type PolicyRole = z.infer<typeof PolicyRoleSchema>;
  * attribution slot: incoming federated envelopes carry
  * `signed_by[].principal = did:mf:<stack_id>` + a signature that
  * verifies against `operator_pubkey`. Phase D verification wiring
- * lands in D.2/D.3; the schema lands first so operators can declare
+ * lands in D.2/D.3; the schema lands first so principals can declare
  * their federation topology before the verification path is live.
  */
 export const PolicyFederatedPeerSchema = z.object({
@@ -1370,7 +1370,7 @@ export const PolicyFederatedPeerSchema = z.object({
    * Peer stack id in `{operator_id}/{stack_id}` form — same shape as
    * `PolicyPrincipalSchema.home_stack`. The `operator_id` prefix MUST
    * match the sibling `operator_id` field (cross-validated below);
-   * the redundancy is deliberate so operators can read the file and
+   * the redundancy is deliberate so principals can read the file and
    * see "yes, this is jcfischer's sage-host stack" without splitting
    * the identity across fields.
    */
@@ -1382,7 +1382,7 @@ export const PolicyFederatedPeerSchema = z.object({
    * Peer principal's NKey public key — same 56-char U-prefixed base32
    * grammar as every other NKey on the schema (StackConfigSchema,
    * PolicyPrincipalSchema). Phase D.4 swaps this static declaration
-   * for a registry-resolved lookup; until then, operators paste the
+   * for a registry-resolved lookup; until then, principals paste the
    * peer's pubkey directly into cortex.yaml.
    */
   operator_pubkey: z.string().regex(
@@ -1402,7 +1402,7 @@ export type PolicyFederatedPeer = z.infer<typeof PolicyFederatedPeerSchema>;
  *
  * Conservative grammar — matches what cortex actually produces +
  * what the surface-router's `adapterMatches()` will gate against
- * in D.2. Operators can always relax via additional patterns
+ * in D.2. Principals can always relax via additional patterns
  * rather than building a regex string.
  *
  * **Bare `>` is intentionally rejected** (Echo cortex#223 round 1).
@@ -1448,7 +1448,7 @@ export const PolicyFederatedNetworkSchema = z.object({
     "network.leaf_node must match the connection id grammar (lowercase alphanumeric + hyphen, starting with a letter)",
   ),
   /**
-   * Peer operators reachable on this network. Each entry declares
+   * Peer principals reachable on this network. Each entry declares
    * one peer stack's NKey identity. The list is the trust closure
    * for the network: a `signed_by[].principal` not in this list
    * fails verification on the inbound side.
@@ -1458,7 +1458,7 @@ export const PolicyFederatedNetworkSchema = z.object({
    * Accept-list of NATS subject patterns. An inbound `federated.*`
    * envelope is dispatched only if its subject matches at least one
    * entry here (and no entry in `deny_subjects[]`). Empty means
-   * "accept nothing" — operators must explicitly enumerate accepted
+   * "accept nothing" — principals must explicitly enumerate accepted
    * subject patterns. D.2 wires the surface-router gate.
    */
   accept_subjects: z.array(
@@ -1505,7 +1505,7 @@ export const PolicyFederatedNetworkSchema = z.object({
    * not defaulted: a hop budget MUST be a conscious principal
    * choice. A silent `.default(0)` would let a typoed `max_hop:`
    * line pass parse with the most-restrictive setting and confuse
-   * operators wondering why federated traffic stopped arriving;
+   * principals wondering why federated traffic stopped arriving;
    * a missing line should fail loudly at config-load instead.
    * Echo cortex#223 round 2.
    */
@@ -1531,7 +1531,7 @@ export type PolicyFederatedNetwork = z.infer<typeof PolicyFederatedNetworkSchema
  *     (TOFU) at boot via `GET /registry/pubkey` and pins whatever
  *     comes back. This is the documented Phase-B caveat: the TOFU
  *     window is exactly the first boot against an unknown registry,
- *     and operators preferring zero-TOFU should populate `pubkey`
+ *     and principals preferring zero-TOFU should populate `pubkey`
  *     out-of-band before first run.
  *
  * Absence of the block is the default — cortex runs without a
@@ -1552,7 +1552,7 @@ export const PolicyFederatedRegistrySchema = z.object({
    * bytes before encoding). When set, the client refuses any
    * assertion whose `registry` field does not match this value. When
    * absent, TOFU at boot — the first `/registry/pubkey` response is
-   * pinned for the lifetime of the process. Operators wanting a
+   * pinned for the lifetime of the process. Principals wanting a
    * persistent pin across restarts must paste it here.
    *
    * Grammar matches the registry service's `OperatorRecord.operator_pubkey`
@@ -1627,7 +1627,7 @@ export const PolicySchema = z.object({
   // be claimed by two principals; that would let the dispatch path
   // resolve an inbound platform message to either of them
   // non-deterministically. Caught at parse time with a per-offender
-  // path so operators see the second declaration as the offender.
+  // path so principals see the second declaration as the offender.
   // Federation peer principals SHOULD NOT carry platform_ids (see
   // PolicyPrincipalSchema JSDoc); when they do, this rule still
   // applies — the convention is principal-side, the uniqueness
@@ -1824,7 +1824,7 @@ export const CortexConfigSchema = z.object({
    * Behaviour today: the block parses, the resolver reads it, the boot
    * path logs the derived id. Emit subjects do NOT yet consume the stack
    * segment — that's A.5.5, blocked on myelin#113's namespace extension.
-   * Wiring the schema in ahead of the namespace cutover lets operators
+   * Wiring the schema in ahead of the namespace cutover lets principals
    * declare `stack:` in cortex.yaml without breaking their deployment
    * before A.5.5 lands.
    */
@@ -1851,7 +1851,7 @@ export const CortexConfigSchema = z.object({
    *
    * Behaviour today: schema-only. No runtime dispatcher consumes the
    * catalog yet — that's a future phase (orchestrator pattern, design §3.6).
-   * Wiring the schema in now means operators can declare capabilities
+   * Wiring the schema in now means principals can declare capabilities
    * before the dispatch path consumes them, and the network registry
    * (Q3) has the deterministic shape it needs when Phase D ships.
    */
@@ -1861,7 +1861,7 @@ export const CortexConfigSchema = z.object({
    * present in a cortex.yaml. Caught here with an explicit Zod refusal so
    * the principal sees a clear migration error rather than the field being
    * silently stripped by Zod's default unknown-key-strip behaviour. Holly
-   * W2 flagged the strip path as a real migration safety gap — operators
+   * W2 flagged the strip path as a real migration safety gap — principals
    * who hand-edit a partially-translated config get no feedback otherwise.
    *
    * The schema-level error here complements `migrate-config` (MIG-7.2e):
@@ -1891,7 +1891,7 @@ export const CortexConfigSchema = z.object({
    * single principal + role registry that the PolicyEngine consumes.
    * Optional at C.2a (additive); C.2b removes the per-adapter
    * `roles[]` legacy shape and makes `policy:` the authoritative
-   * source. Until C.2b lands, both shapes coexist and operators
+   * source. Until C.2b lands, both shapes coexist and principals
    * MAY declare `policy:` ahead of the cutover to validate their
    * principal model without waiting on the full schema flip.
    *

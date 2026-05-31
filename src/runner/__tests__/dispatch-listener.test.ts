@@ -313,7 +313,7 @@ describe("createDispatchListener — surfaceConfig", () => {
   });
 
   test("custom subjects bypass stack-aware default", () => {
-    // Operators supplying explicit `subjects` keep full control; the
+    // Principals supplying explicit `subjects` keep full control; the
     // listener does not re-write their patterns.
     const { runtime } = recordingRuntime();
     const router = createSurfaceRouter(runtime);
@@ -1614,7 +1614,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     // federated dispatch whose principal lacks the capability denies
     // with `insufficient_role` (the C.3 reason kind). D.3.2 still
     // requires the audit envelope to carry `source_network` so
-    // operators can see which network the deny came from.
+    // principals can see which network the deny came from.
     const r = recordingRuntime();
     const router = createSurfaceRouter(r.runtime);
     const { factory } = fakeFactory(SUCCESS_RESULT);
@@ -1983,7 +1983,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     // dispatches always pass. This test documents the contract: a
     // listener constructed with the default options cannot be made
     // to reject empty chains. The "opt-in rejectEmpty" path is not
-    // exposed (operators wanting that flip a yet-to-ship config knob
+    // exposed (principals wanting that flip a yet-to-ship config knob
     // — see cortex#320 follow-up). We assert here that even with
     // `cryptoVerify: true`, an empty-chain envelope is accepted.
     const cortex = agentFixtureForRunner({ id: "cortex" });

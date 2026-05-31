@@ -8,7 +8,7 @@
  * `js.consumers.get(stream, durable)` — which throws if the stream OR
  * the durable doesn't exist server-side.
  *
- * Before #338 nothing in cortex provisioned either. Operators ran
+ * Before #338 nothing in cortex provisioned either. Principals ran
  * `nats stream add` / `nats consumer add` by hand or deployed an
  * ops tool. Both are reproducible failure points.
  *
@@ -95,7 +95,7 @@ export interface ProvisionStreamOpts {
    * "insufficient storage resources available" even when raw disk is
    * abundant. The 512 MiB default matches sibling stream sizing on
    * JC's laptop (GROVE_EVENTS) and is large enough to absorb ~100k
-   * typical review-task envelopes; operators can override via
+   * typical review-task envelopes; principals can override via
    * `cortex.yaml` `bus.review.maxBytes` once that surface lands
    * (G-1111e / #341).
    */
@@ -295,7 +295,7 @@ export function isNotFoundError(err: unknown): boolean {
  *
  * Drift detection is deliberately narrow — only the fields that
  * meaningfully affect routing (`subjects`) and retention (`max_age`).
- * Operators tuning `max_bytes` / `num_replicas` for their own reasons
+ * Principals tuning `max_bytes` / `num_replicas` for their own reasons
  * should NOT see a drift warning every boot.
  */
 export function describeStreamDrift(

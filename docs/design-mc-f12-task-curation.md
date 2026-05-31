@@ -20,7 +20,7 @@ Five capabilities sounds like five PRs, but the actual surface area is small: ev
 
 The iteration tracker bullet names five capabilities — "add to queue from GitHub issue, manual dispatch, manual requeue, abandon, hand-off". F-12 ships **four**: manual dispatch, requeue, abandon, hand-off. **Add-to-queue from a GitHub issue is split into a sibling PR (F-12b)**, landing immediately after F-12 against the same Phase E iteration bullet.
 
-The split is not arbitrary: the four shipped verbs are all assignment-state mutations on tasks that **already exist** in the `tasks` table — they reuse `applyTransition` (`src/mission-control/db/transitions.ts:42`) plus a single new `applyOperatorAction` wrapper, plus three new endpoints with near-identical shapes. A reviewer can audit them as a class. Add-to-queue is qualitatively different: it spans `tasks.source_url` parsing, an external-source fetch (calling out to `gh` or the GitHub API to extract title/body for prefill), URL-validation and SSRF posture, an "is this issue already a task?" duplicate-check against `tasks.source_external_id`, and a UI that doesn't yet exist anywhere on the dashboard (no current screen has a "create task" affordance). Folding it into the same PR halves the reviewer's ability to audit the assignment-state-mutation class against the funnel and the state machine.
+The split is not arbitrary: the four shipped verbs are all assignment-state mutations on tasks that **already exist** in the `tasks` table — they reuse `applyTransition` (`src/mission-control/db/transitions.ts:42`) plus a single new `applyPrincipalAction` wrapper, plus three new endpoints with near-identical shapes. A reviewer can audit them as a class. Add-to-queue is qualitatively different: it spans `tasks.source_url` parsing, an external-source fetch (calling out to `gh` or the GitHub API to extract title/body for prefill), URL-validation and SSRF posture, an "is this issue already a task?" duplicate-check against `tasks.source_external_id`, and a UI that doesn't yet exist anywhere on the dashboard (no current screen has a "create task" affordance). Folding it into the same PR halves the reviewer's ability to audit the assignment-state-mutation class against the funnel and the state machine.
 
 **F-12b is a separate addendum, separate PR, separate review.** Iteration-tracker-bullet-wise the two collectively close the Phase E checkbox. F-12 gets shipped first because it makes the existing dashboard's task table (built from tasks created by `POST /api/sessions`) actually curatable; F-12b makes the table fillable from outside the dashboard. Useful to ship F-12 first because principals today have no way to abandon a stuck task without manual SQL — that's the larger pain. Add-to-queue is additive convenience; abandon/requeue/hand-off are pain relief.
 
@@ -75,7 +75,7 @@ The toolbar is a pure function of `assignment.state`. The implementer must not d
 
 **`Dispatch` enablement.** Enabled in two cases: (a) the task has zero assignments (empty-assignment), or (b) the task's primary active assignment is in a terminal state (`completed`/`failed`/`cancelled`) and the principal wants a fresh re-run on the same task. For terminal-state Dispatch, the new row is a fresh `agent_task_assignment` — the existing terminal row is preserved as historical record (matches F-8 Decision 4's handling of terminal-state assignments rendering with strike-through-on-hover).
 
-**`Requeue` enablement.** Strict mirror of the state machine's `operator_requeue` action — legal from `blocked` and `failed` only. The state machine already enforces this; the toolbar reflects it.
+**`Requeue` enablement.** Strict mirror of the state machine's `principal_requeue` action — legal from `blocked` and `failed` only. The state machine already enforces this; the toolbar reflects it.
 
 **`Hand off` enablement.** Legal from any non-terminal state on the assignment row, including `failed` (the principal says *"that agent gave up; let a different one try the same task"*). Disabled on `completed` and `cancelled` because there's no in-flight work to hand off. From terminal-but-rerunnable states (`failed`), Hand off is semantically equivalent to "Dispatch with a new agent" — Decision 6 pins the implementation: hand-off from a terminal state creates a new assignment row to the new agent (same as Dispatch), hand-off from a non-terminal state cancels the current assignment and creates a new one (true mid-flight reassignment).
 
@@ -143,17 +143,17 @@ In both cases, the original assignment row is preserved — no rows are deleted,
 
 **Why not a "swap agent" SQL update on the assignment row.** Because the existing assignment is already attached to a session (or has been); changing `agent_id` mid-flight would silently invalidate the session's correlation to the agent. Cleaner: cancel and respawn — the audit log is honest, the state machine stays simple, the session lifecycle stays clean.
 
-## Decision 7 — Requeue: 1-to-1 mirror of the state machine's `operator_requeue` action
+## Decision 7 — Requeue: 1-to-1 mirror of the state machine's `principal_requeue` action
 
-§3.3 describes two `operator_requeue` transitions: `blocked → queued` and `failed → queued`. The state machine implements both (`src/mission-control/state-machine.ts:52,59`). F-12's Requeue button is the principal's UI handle on these.
+§3.3 describes two `principal_requeue` transitions: `blocked → queued` and `failed → queued`. The state machine implements both (`src/mission-control/state-machine.ts:52,59`). F-12's Requeue button is the principal's UI handle on these.
 
 **Endpoint:** `POST /api/assignments/:id/requeue`. Body empty (no parameters). Returns the standard transition shape `{ assignmentId, from, to, blockReason: null }` for the WS broadcast pattern.
 
-**Implementation:** `applyTransition(db, assignmentId, sessionId, { type: 'operator_requeue' })`, then `broadcastTransition` per the existing pattern at `handlers.ts:354`. The session associated with the previous run is **closed** by the new state-transition observer (Decision 11) — the observer calls `endpoint.close()` on the matching session whenever an assignment moves out of `running`/`blocked`/`dispatched` into a non-terminal-or-`queued` state. Without that observer, a Requeue from `blocked` would leave the live process untouched, and the next Dispatch would either hit `findActiveSession` and silently reuse the stale session (`endpoint-resolver.ts:96-105`) or throw `SessionConflict`. Requeue does **not** spawn a new session immediately; the assignment lands back in `queued` and a subsequent Dispatch (or auto-pickup, if F-13 dispatcher is wired in) starts a fresh run.
+**Implementation:** `applyTransition(db, assignmentId, sessionId, { type: 'principal_requeue' })`, then `broadcastTransition` per the existing pattern at `handlers.ts:354`. The session associated with the previous run is **closed** by the new state-transition observer (Decision 11) — the observer calls `endpoint.close()` on the matching session whenever an assignment moves out of `running`/`blocked`/`dispatched` into a non-terminal-or-`queued` state. Without that observer, a Requeue from `blocked` would leave the live process untouched, and the next Dispatch would either hit `findActiveSession` and silently reuse the stale session (`endpoint-resolver.ts:96-105`) or throw `SessionConflict`. Requeue does **not** spawn a new session immediately; the assignment lands back in `queued` and a subsequent Dispatch (or auto-pickup, if F-13 dispatcher is wired in) starts a fresh run.
 
 **Wait, doesn't that strand the assignment in `queued`?** Yes, until Dispatch fires. F-12's UX surfaces this clearly — after Requeue, the toolbar refreshes (Decision 3 matrix) and the principal sees `[Dispatch]` enabled while the other buttons return to their `queued`-state enabled state. An principal who Requeues a `failed` assignment and walks away gets a `queued` assignment that sits forever until either the F-13 dispatcher picks it up or another principal hits Dispatch. This is desirable: Requeue is *"this assignment was wrongly terminated; put it back on the runway"* — it's not *"and start it again right now"*. The latter is exactly what Dispatch on a terminal-state assignment does (Decision 4); principals who want both effects in one click should be told to use Dispatch directly.
 
-**What about the `events` row?** The existing `applyTransition` already inserts a `state.transition` event with `payload.action = 'operator_requeue'`. F-12 adds a sibling `principal.curation` event (Decision 9) for the audit-trail-with-rationale shape. Two events for one principal action — the `state.transition` is the state-machine truth, the `principal.curation` is the principal-rationale truth. Both flow through the same `broadcastEvent` plumbing (`notifications.ts:43`).
+**What about the `events` row?** The existing `applyTransition` already inserts a `state.transition` event with `payload.action = 'principal_requeue'`. F-12 adds a sibling `principal.curation` event (Decision 9) for the audit-trail-with-rationale shape. Two events for one principal action — the `state.transition` is the state-machine truth, the `principal.curation` is the principal-rationale truth. Both flow through the same `broadcastEvent` plumbing (`notifications.ts:43`).
 
 ## Decision 8 — Confirmation gates: Abandon and Hand-off prompt; Dispatch and Requeue do not
 
@@ -193,7 +193,7 @@ Each curation action writes one event in the `events` table for the F-7 drill-do
 **Payload shape (tagged union):**
 
 ```ts
-type OperatorCurationPayload =
+type PrincipalCurationPayload =
   | { kind: "dispatch"; agentId: string; reason?: string; newAssignmentId?: string }
   | { kind: "requeue"; reason?: string }
   | { kind: "handoff"; fromAgentId: string; toAgentId: string; reason?: string;
@@ -207,7 +207,7 @@ type OperatorCurationPayload =
 
 - **Semantic conflation.** `principal.input` is a principal **utterance** — text the principal typed that the agent will read. Decision 3 of `events.ts` calls this out explicitly: *"principal.input is the authoritative H-source"*, meaning it's the human-channel input the agent acts on. Curation verbs are principal **actions on state** — they don't feed the agent, they reshape the funnel around it. Folding them into one type forces every `principal.input` consumer (dashboard renderer, future replay tooling, audit export) to branch on `payload.action` to decide *"is this text-the-agent-saw or a button-the-principal-clicked"*. That branch is wider than the curation-only `kind` branch because it also forks rendering (utterances render as chat bubbles; verbs render as state-change rows), attribution (utterances belong in the input-affordance lineage; verbs belong in the curation-toolbar lineage), and replay semantics (utterances would re-trigger agent behaviour on replay; verbs would not).
 - **F-7 renderer branching cost.** F-7's drill-down renders `principal.input` as a chat bubble in the event log timeline. Reusing the type for curation verbs would either render four new payload variants as chat bubbles (semantically wrong — the principal did not "say" anything) or fork the renderer on `payload.action` to choose bubble vs state-change. That fork is the same one Decision 9's `principal.curation` block does, except the chat-bubble code path remains pristine and the curation block is its own self-contained renderer.
-- **Multi-principal attribution at Tier 2.** §10's Tier 2 work introduces per-event `operator_id` columns. When that lands, `principal.input` and `principal.curation` will get the column wired in independently: utterances are attributed to whoever typed them, verbs are attributed to whoever clicked them. A unified type would have to negotiate the same column twice (once for each semantic), and any future per-family policy (e.g. *"only senior principals can fire `kind: handoff`"*) would have to gate inside `principal.input`'s authorization path — coupling utterance permissions to verb permissions.
+- **Multi-principal attribution at Tier 2.** §10's Tier 2 work introduces per-event `principal_id` columns. When that lands, `principal.input` and `principal.curation` will get the column wired in independently: utterances are attributed to whoever typed them, verbs are attributed to whoever clicked them. A unified type would have to negotiate the same column twice (once for each semantic), and any future per-family policy (e.g. *"only senior principals can fire `kind: handoff`"*) would have to gate inside `principal.input`'s authorization path — coupling utterance permissions to verb permissions.
 
 The deviation from the bar is therefore deliberate: `principal.curation` is a sibling family, not a subset, and the `kind` discriminator scopes to the curation surface only. If a fifth verb lands (e.g. F-12b's `kind: "import"`), it joins the curation family; if a fifth utterance lands (e.g. an annotation surface), it joins `principal.input`. Two clean families beat one overloaded one.
 
@@ -224,7 +224,7 @@ The deviation from the bar is therefore deliberate: `principal.curation` is a si
 - `handoff` → `"Handed off from {fromAgentName} to {toAgentName} — {reason || '(no reason)'}"`
 - `abandon` → `"Abandoned ({targetKind}) — {reason || '(no reason)'}"`
 
-**Principal id on the event.** Schema-wise `events` doesn't carry `operator_id` — it inherits the principal via the assignment → task chain. F-12 doesn't introduce per-event principal id (deferred to Tier 2 multi-principal runtime per §10). The `principal.curation` event is implicitly attributable to the single principal on Tier 1.
+**Principal id on the event.** Schema-wise `events` doesn't carry `principal_id` — it inherits the principal via the assignment → task chain. F-12 doesn't introduce per-event principal id (deferred to Tier 2 multi-principal runtime per §10). The `principal.curation` event is implicitly attributable to the single principal on Tier 1.
 
 **Why not four separate event types.** Four event types implies four render branches and four migration paths if the shape ever changes. One type with a kind discriminator scales to a fifth verb (e.g. F-12b's "create task from GitHub issue" → `kind: "import"`) by adding a payload variant, not a new type.
 
@@ -255,17 +255,17 @@ Without an explicit kill, the F-12 verbs misbehave in the obvious ways:
 - **In-flight Hand-off** commits the cancel of the source assignment, spawns the new one, and leaves two concurrent CC processes on the same `task_id` racing each other for state.
 - **Requeue from `blocked`** moves the assignment back to `queued`, but `findActiveSession(db, assignmentId)` (`endpoint-resolver.ts:96`) still returns the live blocked session. The next Dispatch on that assignment either hits the idempotency path and silently reuses the stale session, or — if the managed process has been removed from the map but the DB row hasn't been ended — throws `SessionConflict` (`endpoint-resolver.ts:109`) on the principal's "fresh run" intent.
 
-**Resolution: introduce a `state.transition` observer.** F-12 wires a single observer in `src/mission-control/notifications.ts` (or a sibling `session/transition-observer.ts` if `notifications.ts` is kept narrow) that runs **after** `broadcastTransition` for any `state.transition` event whose `payload.to` is `cancelled`, **or** whose `payload.action` is `operator_requeue` and `payload.from` is `blocked` (the only requeue path with a live process — `failed → queued` requeue has no live session by definition; `failed` is a terminal state the dispatcher reached via `result` ingestion, which already runs the `proc.exited` cleanup). On those transitions, the observer:
+**Resolution: introduce a `state.transition` observer.** F-12 wires a single observer in `src/mission-control/notifications.ts` (or a sibling `session/transition-observer.ts` if `notifications.ts` is kept narrow) that runs **after** `broadcastTransition` for any `state.transition` event whose `payload.to` is `cancelled`, **or** whose `payload.action` is `principal_requeue` and `payload.from` is `blocked` (the only requeue path with a live process — `failed → queued` requeue has no live session by definition; `failed` is a terminal state the dispatcher reached via `result` ingestion, which already runs the `proc.exited` cleanup). On those transitions, the observer:
 
 1. Looks up the live endpoint via `processManager.get(sessionId)`.
 2. If a managed process exists and is alive (`exitCode === null` and not `closing`), calls `endpoint.close()` on it via the same `createControlledEndpoint` shape `closeAll` uses.
 3. If no managed process exists (already exited), does nothing — `proc.exited.then(...)` already handled DB cleanup.
 
-The observer is wired alongside the existing `broadcastTransition` call inside `applyTransition`'s plumbing, so every state transition that crosses into `cancelled` (or out of `blocked` via `operator_requeue`) gets the kill. **F-12 introduces this as new code** — one new file or one new function plus the wiring point. The earlier draft's claim that *"F-12 does not introduce new session-cleanup code"* was wrong; this addendum supersedes it.
+The observer is wired alongside the existing `broadcastTransition` call inside `applyTransition`'s plumbing, so every state transition that crosses into `cancelled` (or out of `blocked` via `principal_requeue`) gets the kill. **F-12 introduces this as new code** — one new file or one new function plus the wiring point. The earlier draft's claim that *"F-12 does not introduce new session-cleanup code"* was wrong; this addendum supersedes it.
 
 **Atomicity.** The kill is necessarily out-of-transaction (it forks a SIGTERM/SIGKILL plus an `await proc.exited`). The DB transition has already committed by the time the observer fires. If the kill itself fails (e.g. the child has already crashed and the race between "is alive" and "send SIGTERM" goes the wrong way), the existing `process.stderr.write` paths in `endpoint.close()` (`endpoint-resolver.ts:250,267`) and the `proc.exited.then` cleanup catch the rejection. The DB state is the source of truth; the kill is a best-effort enforcement on top.
 
-**Why an observer and not inline `endpoint.close()` calls in each handler.** Three handlers (`handleAbandonAssignment`, `handleHandoffAssignment`, `handleRequeueAssignment`) each issue a state-machine `cancel` (or `operator_requeue`); inline-closing in each would triplicate the same pattern, and any future verb that produces a `→ cancelled` transition (e.g. F-13's auto-cancel-on-budget-exhausted) would have to remember to add the same call. An observer on the existing `state.transition` plumbing centralises the policy — same justification §3.3 used for keeping the state machine single-sourced.
+**Why an observer and not inline `endpoint.close()` calls in each handler.** Three handlers (`handleAbandonAssignment`, `handleHandoffAssignment`, `handleRequeueAssignment`) each issue a state-machine `cancel` (or `principal_requeue`); inline-closing in each would triplicate the same pattern, and any future verb that produces a `→ cancelled` transition (e.g. F-13's auto-cancel-on-budget-exhausted) would have to remember to add the same call. An observer on the existing `state.transition` plumbing centralises the policy — same justification §3.3 used for keeping the state machine single-sourced.
 
 **Why not gate Decisions 5/6/7 to "session already dead" states (Option B from the review).** That option scopes Requeue to `failed → queued` only, drops Abandon/Hand-off on `running`/`blocked`, and ships a markedly weaker UX — exactly the principal pain (cancel-while-running, hand-off-while-blocked) F-12 set out to fix. The added cost of Option A (this decision) is one observer file plus its test. The capability uplift is the entire point of the verb set. Option A wins.
 
@@ -274,12 +274,12 @@ The observer is wired alongside the existing `broadcastTransition` call inside `
 ## Scope summary — what F-12 SHIPS
 
 - Three new endpoints in `src/mission-control/api/handlers.ts`:
-  - `POST /api/assignments/:id/requeue` — calls `applyTransition(... operator_requeue)` + emits `principal.curation` event with `kind: "requeue"`.
+  - `POST /api/assignments/:id/requeue` — calls `applyTransition(... principal_requeue)` + emits `principal.curation` event with `kind: "requeue"`.
   - `POST /api/assignments/:id/abandon` — body `{ scope?: "assignment" | "task"; reason?: string }`. When `scope === "assignment"` (default if assignment is non-terminal), calls `applyTransition(... cancel)`. When `scope === "task"` (default if assignment is terminal or absent), updates `tasks.status = 'cancelled'`. Emits `principal.curation` event with `kind: "abandon"`.
   - `POST /api/assignments/:id/handoff` — body `{ newAgentId: string; reason?: string }`. Cancels the current assignment (if non-terminal) via `applyTransition`, creates a new `agent_task_assignment` row, spawns a controlled session via existing `spawnControlledSession`. Emits `principal.curation` event with `kind: "handoff"`.
 - Existing endpoint `POST /api/sessions` is the Dispatch backing — no changes to its surface; the dashboard wires the existing endpoint into the new `[Dispatch]` button. One new `principal.curation` event with `kind: "dispatch"` is inserted alongside the existing `state.transition` events the spawn already produces.
-- New helper `createOperatorCurationEvent(db, sessionId, payload)` in `src/mission-control/db/events.ts` — sibling of `createOperatorInputEvent` and `createPermissionRequestEvent`.
-- New `state.transition` observer (Decision 11) that calls `endpoint.close()` on transitions into `cancelled` and on `operator_requeue` from `blocked`. Wired alongside the existing `broadcastTransition` call so every curation verb gets the kill side effect for free.
+- New helper `createPrincipalCurationEvent(db, sessionId, payload)` in `src/mission-control/db/events.ts` — sibling of `createPrincipalInputEvent` and `createPermissionRequestEvent`.
+- New `state.transition` observer (Decision 11) that calls `endpoint.close()` on transitions into `cancelled` and on `principal_requeue` from `blocked`. Wired alongside the existing `broadcastTransition` call so every curation verb gets the kill side effect for free.
 - Dashboard changes in `src/mission-control/dashboard/index.html`:
   - New `.curation-toolbar` block inside `#drill`, immediately above `.drill-input`.
   - Four buttons (Dispatch split, Requeue, Hand off split, Abandon) wired per Decision 3's enablement matrix.
@@ -287,7 +287,7 @@ The observer is wired alongside the existing `broadcastTransition` call inside `
   - New render branch for `principal.curation` events in the F-7 event log (Decision 9's four one-line summaries).
 - Tests in `src/mission-control/__tests__/`:
   - `curation-endpoints.test.ts` — covers the three new endpoints' happy paths and the per-state enablement matrix's wire-side equivalents (e.g., `POST /requeue` on a `running` assignment returns 409 with the state-machine's error string, not 500).
-  - `curation-events.test.ts` — covers `createOperatorCurationEvent` insertion and `findLatestSessionForAssignment` resolution against an existing terminal session.
+  - `curation-events.test.ts` — covers `createPrincipalCurationEvent` insertion and `findLatestSessionForAssignment` resolution against an existing terminal session.
   - `curation-process-kill.test.ts` — Decision 11's observer; covers Abandon/Hand-off/Requeue process-kill side effects per the test list in that decision.
   - `dashboard-curation-toolbar.test.ts` (browser-side, against the existing dashboard test harness if present, else a `happy-dom` setup) — covers the Decision 3 enablement matrix as a pure DOM-state function.
 - Forward-link from `docs/design-mission-control.md` §3.4 (and the §9 Phase E bullet) to this addendum.
@@ -309,7 +309,7 @@ The observer is wired alongside the existing `broadcastTransition` call inside `
 
 ## Acceptance criteria
 
-- [ ] `POST /api/assignments/:id/requeue` issues `operator_requeue` and returns 200 from `blocked` and `failed`; returns 409 with the state-machine error from any other state.
+- [ ] `POST /api/assignments/:id/requeue` issues `principal_requeue` and returns 200 from `blocked` and `failed`; returns 409 with the state-machine error from any other state.
 - [ ] `POST /api/assignments/:id/abandon` with `scope: "assignment"` cancels the assignment via `applyTransition(... cancel)` and clears `block_reason`. With `scope: "task"`, updates `tasks.status = 'cancelled'`. Defaults the scope per Decision 5's rule (active assignment present → assignment, else task).
 - [ ] `POST /api/assignments/:id/handoff` cancels the current assignment (when non-terminal), creates a new `agent_task_assignment` row to `newAgentId`, and spawns a controlled session. Returns `{ newAssignmentId, newSessionId }`. Returns 400 if `newAgentId` is missing or unknown.
 - [ ] Each curation endpoint inserts an `principal.curation` event with the Decision 9 payload shape and broadcasts it via `broadcastEvent`.
@@ -317,7 +317,7 @@ The observer is wired alongside the existing `broadcastTransition` call inside `
 - [ ] Disabled buttons render with tooltips explaining the blocked verb.
 - [ ] Abandon and Hand-off open an inline confirm panel with optional reason; Dispatch and Requeue do not.
 - [ ] The F-7 drill-down event log renders one of four one-line summaries for `principal.curation` events per Decision 9.
-- [ ] A `state.transition` observer (Decision 11) closes the live CC subprocess via `endpoint.close()` whenever an assignment transitions into `cancelled`, or when `operator_requeue` fires from `blocked`. Verified by `curation-process-kill.test.ts`.
+- [ ] A `state.transition` observer (Decision 11) closes the live CC subprocess via `endpoint.close()` whenever an assignment transitions into `cancelled`, or when `principal_requeue` fires from `blocked`. Verified by `curation-process-kill.test.ts`.
 - [ ] All existing mission-control tests still pass; new tests for endpoints, events, the process-kill observer, and toolbar enablement ship green.
 - [ ] No new schema migrations. No changes to `state-machine.ts`. No changes to `transitions.ts`. No changes to `tasks.status` enum.
 
@@ -329,7 +329,7 @@ The observer is wired alongside the existing `broadcastTransition` call inside `
   - `handleHandoffAssignment(db, deps, assignmentId, rawBody)` — backs `POST /api/assignments/:id/handoff`.
 - Route wiring in `src/mission-control/server.ts` — three new route entries alongside the existing `POST /api/sessions` and `POST /api/assignments/:id/input`.
 - Type additions in `src/mission-control/api/types.ts` — `RequeueRequest/Response`, `AbandonRequest/Response`, `HandoffRequest/Response`.
-- New helper `createOperatorCurationEvent` in `src/mission-control/db/events.ts`.
+- New helper `createPrincipalCurationEvent` in `src/mission-control/db/events.ts`.
 - New `state.transition` observer (Decision 11) — either as a new function in `src/mission-control/notifications.ts` (alongside `broadcastTransition`) or as a sibling `src/mission-control/session/transition-observer.ts` if `notifications.ts` is kept narrow. Wired into the `applyTransition` plumbing point.
 - Dashboard edits in `src/mission-control/dashboard/index.html`:
   - New `.curation-toolbar` block + CSS.

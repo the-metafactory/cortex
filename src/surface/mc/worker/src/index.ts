@@ -1,7 +1,7 @@
 /**
  * G-400: Grove Cloud API — Cloudflare Worker
  * Hono-based REST API backed by D1, serving the same contract as the local dashboard-api.ts.
- * Multiple bot operators push events via POST /api/ingest; the dashboard reads from GET endpoints.
+ * Multiple principals' bots push events via POST /api/ingest; the dashboard reads from GET endpoints.
  */
 
 import { Hono } from "hono";

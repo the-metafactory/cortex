@@ -66,7 +66,7 @@ import { LETTER_PREFIX_ID_REGEX } from "./id";
  * Why `positive int`: requests-per-window is a count; zero is not a valid
  * rate (zero would be "the capability does not exist", which is a different
  * concept than "rate-limited") and fractional rates are not meaningful at
- * the window granularity we offer. Operators wanting fractional ceilings
+ * the window granularity we offer. Principals wanting fractional ceilings
  * pick a larger window (1/min → 60/hour).
  *
  * At least one field must be set — an empty rate envelope (`rate: {}`) is
@@ -95,7 +95,7 @@ export type CapabilityRate = z.infer<typeof CapabilityRateSchema>;
  * two unit forms: per-request flat fees and per-token rates.
  *
  * No currency field. The first deployment is single-currency (cents = USD
- * cents); operators with a different currency convert at config time. Adding
+ * cents); principals with a different currency convert at config time. Adding
  * a currency field at this stage would over-engineer the schema (Q2 calls
  * "keep it simple") and create a second migration when we add it for real.
  *
@@ -256,7 +256,7 @@ export const CapabilitySchema = z.object({
    * silently propagate into the registry / dashboard. `.trim().min(1)` rejects
    * whitespace-only strings (`" "`, `"\t"`, etc.) which would otherwise pass
    * `.min(1)` despite being functionally blank in the UI surfaces consuming
-   * the field. Operators wanting a very brief label can write
+   * the field. Principals wanting a very brief label can write
    * `description: "."` to satisfy the rule; the design doesn't require a
    * minimum prose length beyond "non-empty after trim".
    */

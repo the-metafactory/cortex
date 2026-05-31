@@ -1,5 +1,5 @@
 /**
- * G-400: POST /api/ingest — Batched event ingestion from bot operators.
+ * G-400: POST /api/ingest — Batched event ingestion from principals' bots.
  * Accepts events from bots, validates API key, writes to D1 with dedup.
  * Business logic delegated to shared event-processor; this file handles D1 persistence only.
  *

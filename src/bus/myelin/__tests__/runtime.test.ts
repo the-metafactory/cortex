@@ -193,7 +193,7 @@ describe("MyelinRuntime", () => {
     expect(fake.subscribePatterns).toEqual([]);
     // The info log shape is preserved for log shippers that already
     // grep on the "no push subscribers" signal, but the wording is
-    // updated to say "pull-only mode" so operators no longer read it
+    // updated to say "pull-only mode" so principals no longer read it
     // as "everything is disabled".
     const informed = logs.some(
       (l) => l.kind === "info" && l.msg.includes("pull-only mode"),
@@ -427,7 +427,7 @@ describe("MyelinRuntime", () => {
       // segment ("metafactory" here), NOT from the boot-resolved principal id.
       // Subject prefix mirrors `envelope.sovereignty.classification` ("local"
       // here), satisfying `validateSubjectEnvelopeAlignment`. Emit-site helpers
-      // populate `envelope.source` with the operator-side `principal.id` so
+      // populate `envelope.source` with the principal-side `principal.id` so
       // the two values agree at runtime — the test fixture exercises the
       // derive-from-envelope path directly.
       expect(fake.publishes[0]?.subject).toBe(
@@ -851,7 +851,7 @@ describe("MyelinRuntime", () => {
       expect(runtime.enabled).toBe(true);
       // Exactly ONE NATS subscription for the deduped pattern.
       expect(fake.subscribePatterns).toEqual(["local.test.>"]);
-      // The skip is logged so operators can see the dedupe fired.
+      // The skip is logged so principals can see the dedupe fired.
       expect(
         logs.some((l) => l.msg.includes("skipping duplicate subscribe")),
       ).toBe(true);

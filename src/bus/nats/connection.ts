@@ -36,7 +36,7 @@ export interface NatsLinkOptions {
    * an NKey seed + signed JWT), reads the bytes, and passes them to
    * `credsAuthenticator(...)` as `ConnectionOptions.authenticator`.
    * When both `token` and `credsPath` are set, `credsPath` wins and a
-   * warn log explains the precedence so operators notice a duplicated
+   * warn log explains the precedence so principals notice a duplicated
    * config rather than silently picking one.
    */
   credsPath?: string;

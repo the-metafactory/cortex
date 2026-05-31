@@ -306,7 +306,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
 
   // cortex#402 — `SAGE_SUBSTRATE` env override
   // ---------------------------------------------------------------------
-  // Operators without a pi.dev model provider configured (e.g. no
+  // Principals without a pi.dev model provider configured (e.g. no
   // DeepSeek API key) need a way to route sage's lens execution through
   // `claude` or `codex` instead. The runner reads `SAGE_SUBSTRATE`
   // verbatim and threads it into argv; sage's own CLI validates the

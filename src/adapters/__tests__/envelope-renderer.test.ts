@@ -46,7 +46,7 @@ describe("formatEnvelopeAsMarkdown — type header", () => {
 
   test("preserves dotted subject syntax in the header", () => {
     // No escaping or substitution — the type is rendered verbatim. This
-    // is load-bearing for operators grepping logs by event type.
+    // is load-bearing for principals grepping logs by event type.
     const out = formatEnvelopeAsMarkdown(makeEnvelope({ type: "review.cycle.completed" }));
     expect(out).toContain("**review.cycle.completed**");
   });

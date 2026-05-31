@@ -47,16 +47,16 @@ This plan captures the work for cloud API features. Iterations are logical vehic
 
 ### Authentication Middleware
 
-- [x] Create `src/worker/src/auth.ts` with OperatorKey interface
+- [x] Create `src/worker/src/auth.ts` with PrincipalKey interface
 - [x] Implement `requireApiKey(c, next)` middleware (validates Bearer token against KV)
 - [x] Implement `requireAdmin(c, next)` middleware (validates against ADMIN_SECRET)
-- [x] Middleware sets `c.set("operatorId", ...)` on success
+- [x] Middleware sets `c.set("principalId", ...)` on success
 
 ### Event Ingestion (POST /api/ingest)
 
 - [x] Create `src/worker/src/routes/ingest.ts`
 - [x] `POST /api/ingest` endpoint with `requireApiKey` middleware
-- [x] Parse batched event payload: `{ operator_id, events: [...] }`
+- [x] Parse batched event payload: `{ principal_id, events: [...] }`
 - [x] Route events by type: agent.task.started, agent.task.completed, tool.*, etc.
 - [x] `handleTaskStarted` — INSERT OR REPLACE into sessions table
 - [x] `handleTaskCompleted` — UPDATE sessions with completion data
@@ -139,16 +139,16 @@ This plan captures the work for cloud API features. Iterations are logical vehic
 - [x] Create `src/worker/src/routes/admin.ts`
 - [x] `POST /admin/keys` with `requireAdmin` middleware
 - [x] Generate key: `grove_sk_{48-char-hex}` (24 random bytes via crypto.getRandomValues)
-- [x] Store in KV: key → `{ operator_id, name, created_at }`
-- [x] Return `{ key, operator_id, name, created_at }`
+- [x] Store in KV: key → `{ principal_id, name, created_at }`
+- [x] Return `{ key, principal_id, name, created_at }`
 - [x] `DELETE /admin/keys/:key` with `requireAdmin` middleware
 - [x] Delete from KV, return `{ ok: true, revoked: key }`
 
 ### Key Validation
 
 - [x] `requireApiKey` middleware reads key from KV
-- [x] Extract operator_id from key metadata
-- [x] Use operator_id for event attribution in ingest route
+- [x] Extract principal_id from key metadata
+- [x] Use principal_id for event attribution in ingest route
 - [x] Return 401 if key not found or missing Authorization header
 
 ### Testing
@@ -173,7 +173,7 @@ This plan captures the work for cloud API features. Iterations are logical vehic
 ### CloudPublisher Class
 
 - [x] Create `src/bot/lib/cloud-publisher.ts`
-- [x] CloudPublisherConfig interface (endpoint, apiKey, operatorId, batchIntervalMs, batchSizeLimit, maxRetries, retryBaseMs)
+- [x] CloudPublisherConfig interface (endpoint, apiKey, principalId, batchIntervalMs, batchSizeLimit, maxRetries, retryBaseMs)
 - [x] `publish(event)` — add to buffer
 - [x] `flush()` — send pending events immediately
 - [x] `close()` — flush + stop interval timer
@@ -185,7 +185,7 @@ This plan captures the work for cloud API features. Iterations are logical vehic
 
 ### Bot Integration
 
-- [x] Update `src/bot/types/config.ts` with api.mode, api.endpoint, api.apiKey, api.operatorId
+- [x] Update `src/bot/types/config.ts` with api.mode, api.endpoint, api.apiKey, api.principalId
 - [x] Instantiate CloudPublisher in `grove-bot.ts` if `api.mode === "cloud"`
 - [x] Wire into event pipeline: call `cloudPublisher.publish(event)` after local processing
 - [x] On shutdown: call `cloudPublisher.close()` to flush pending events
@@ -204,7 +204,7 @@ This plan captures the work for cloud API features. Iterations are logical vehic
 ### Acceptance
 
 - [x] Bot with `api.mode: cloud` POSTs batched events to Worker
-- [x] Events arrive in D1 with correct operator_id
+- [x] Events arrive in D1 with correct principal_id
 - [x] Duplicate events (same event_id) ignored via INSERT OR IGNORE
 - [x] Failed POST retries with exponential backoff
 - [x] After 3 retries, batch is dropped (logged, not fatal)
@@ -305,7 +305,7 @@ This plan captures the work for cloud API features. Iterations are logical vehic
 
 ### API Key Creation
 
-- [ ] Call `POST /admin/keys` with provided operator_id, name, admin secret
+- [ ] Call `POST /admin/keys` with provided principal_id, name, admin secret
 - [ ] Parse response to extract generated key
 - [ ] Handle errors (invalid admin secret, network failure)
 
@@ -315,7 +315,7 @@ This plan captures the work for cloud API features. Iterations are logical vehic
 - [ ] Update `api.mode: cloud`
 - [ ] Update `api.endpoint: {provided URL}`
 - [ ] Update `api.apiKey: {generated key}`
-- [ ] Update `api.operatorId: {provided ID}`
+- [ ] Update `api.principalId: {provided ID}`
 - [ ] Write back to `~/.config/grove/bot.yaml`
 - [ ] Preserve existing config (discord, security, relay, etc.)
 
@@ -371,7 +371,7 @@ G-405 (Cloud Setup CLI)
 2. POST /api/ingest with valid API key stores events in D1
 3. GET /api/state returns DashboardSnapshot matching local API
 4. Bot with `api.mode: cloud` sends events to Worker
-5. Dashboard connects to cloud API and shows all operators
+5. Dashboard connects to cloud API and shows all principals
 6. GitHub webhooks point to Worker, events stored in D1
 7. `grove-bot cloud setup` creates key and configures bot.yaml
 8. Local mode still works (zero-config default)

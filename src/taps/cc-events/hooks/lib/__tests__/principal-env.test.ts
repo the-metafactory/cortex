@@ -24,7 +24,7 @@ describe("resolvePrincipalEnv — R9 (cortex#388 PR-3) compat shim", () => {
   test("v3.0.0 BREAKING — CORTEX_OPERATOR legacy fallback is REMOVED", () => {
     // R9 (cortex#388 / manifest PR-11) — the v2.x transition-release
     // compat shim that fell back from `CORTEX_OPERATOR*` → `CORTEX_PRINCIPAL*`
-    // with a deprecation warning was deleted at v3.0.0. Operators
+    // with a deprecation warning was deleted at v3.0.0. Principals
     // running `CORTEX_OPERATOR*` env vars rename them to
     // `CORTEX_PRINCIPAL*` before installing v3.
     const env = { CORTEX_OPERATOR: "legacy-cortex" };
@@ -52,7 +52,7 @@ describe("resolvePrincipalEnv — R9 (cortex#388 PR-3) compat shim", () => {
 
   test("v3.0.0 BREAKING — CORTEX_OPERATOR_<suffix> legacy fallback is REMOVED", () => {
     // Same v3.0.0 BREAKING as the bare `CORTEX_OPERATOR` test above. The
-    // suffix variants are also dropped — operators rename
+    // suffix variants are also dropped — principals rename
     // `CORTEX_OPERATOR_*` → `CORTEX_PRINCIPAL_*` before installing v3.
     const env = { CORTEX_OPERATOR_ID: "legacy" };
     expect(resolvePrincipalEnv("_ID", env)).toBeUndefined();
