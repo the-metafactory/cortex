@@ -1,7 +1,7 @@
 /**
  * F-10 drill-input — principal message + image attachments.
  *
- * Faithful port of the legacy monolith input (docs/design-mc-f10-operator-input.md
+ * Faithful port of the legacy monolith input (docs/design-mc-f10-principal-input.md
  * + docs/design-mc-image-input.md). Behavioural parity:
  *  - Active / observed / ended / shadow modes (resolveDrillInputMode)
  *  - 50 KB UTF-8 byte cap (paste-trim + Send disable)

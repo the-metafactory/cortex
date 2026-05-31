@@ -14,7 +14,7 @@
  *   > adapter looks up the source agent and consults its parent's `trust:` list.
  *
  * This module owns that map. It replaces grove-v2's hand-maintained
- * `trustedAgentBots` list (an array of platform user ids that the operator
+ * `trustedAgentBots` list (an array of platform user ids that the principal
  * manually kept in sync). The resolver builds the equivalent state from
  * adapter-connect-time registrations — no manual sync, no drift.
  *
