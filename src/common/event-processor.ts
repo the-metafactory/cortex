@@ -18,7 +18,7 @@ import {
  * leave the D1 columns as NULL rather than inserting empty strings.
  *
  * The relay is responsible for hoisting `envelope.sovereignty.*` and
- * `signed_by[0].principal` (after `did:mf:` strip → operator segment) onto
+ * `signed_by[0].principal` (after `did:mf:` strip → principal segment) onto
  * the ingest event before publishing. This processor is purely defensive —
  * it never invents sovereignty data, only reflects what arrived.
  */

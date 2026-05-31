@@ -167,7 +167,7 @@ program
   )
   .option(
     "--stack <stack>",
-    "Operator stack segment for stack-aware subjects (local.{principal}.{stack}.{type}). Matches the cortex.yaml stack: block. Falls back to env var CORTEX_STACK. When omitted, relay publishes on the legacy 5-segment form.",
+    "Principal stack segment for stack-aware subjects (local.{principal}.{stack}.{type}). Matches the cortex.yaml stack: block. Falls back to env var CORTEX_STACK. When omitted, relay publishes on the legacy 5-segment form.",
   )
   .option(
     "--originator-principal <did>",
@@ -219,7 +219,7 @@ program
       process.env.CORTEX_ORIGINATOR_PRINCIPAL ??
       undefined;
     // cortex#275 (Sage cycle 1) — fail-fast stack validation. If the
-    // operator supplied a malformed stack value (`*`, `>`, empty,
+    // principal supplied a malformed stack value (`*`, `>`, empty,
     // uppercase, etc.), reject at startup with a clear error rather
     // than letting the bad value reach `deriveNatsSubject` per-event
     // and producing a stream of stderr lines. Mirrors the same regex

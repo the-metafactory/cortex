@@ -120,7 +120,7 @@ describe("startCortex — stack-signing boot warning (cortex#324)", () => {
           disableDashboard: true,
           disableOutboundPoller: true,
           injectRuntime: runtime,
-          operator: { id: "test-op" },
+          principal: { id: "test-op" },
         }),
       ),
     );
@@ -161,7 +161,7 @@ describe("startCortex — stack-signing boot warning (cortex#324)", () => {
           disableDashboard: true,
           disableOutboundPoller: true,
           injectRuntime: runtime,
-          operator: { id: "test-op" },
+          principal: { id: "test-op" },
         }),
       ),
     );
@@ -193,7 +193,7 @@ describe("startCortex — stack-signing boot warning (cortex#324)", () => {
             disableDashboard: true,
             disableOutboundPoller: true,
             injectRuntime: runtime,
-            operator: { id: "test-op" },
+            principal: { id: "test-op" },
           }),
         ),
       );

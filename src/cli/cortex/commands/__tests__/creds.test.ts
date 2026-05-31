@@ -282,7 +282,7 @@ describe("runCredsList", () => {
 });
 
 // =============================================================================
-// Operator-input validation — applies before any subprocess call
+// Principal-input validation — applies before any subprocess call
 // =============================================================================
 
 function args(subcommand: "issue" | "revoke" | "rotate", overrides: Partial<ParsedCredsArgs> = {}): ParsedCredsArgs {
@@ -298,7 +298,7 @@ function args(subcommand: "issue" | "revoke" | "rotate", overrides: Partial<Pars
   };
 }
 
-describe("operator-input validation", () => {
+describe("principal-input validation", () => {
   test("issue rejects invalid agent id (uppercase)", async () => {
     const r = await runCredsIssue(args("issue", { agentId: "BadName" }));
     expect(r.exitCode).toBe(2);

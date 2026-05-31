@@ -117,7 +117,7 @@ Below: every file, one-line responsibility, line count, primary concern.
 | `nats-review-io.ts` | 187 | B | NATS-backed `ReviewCycleIO` — subscribes `mf.{network}.review.completed`. **Legacy subject namespace** — the `mf.*` prefix is pre-namespace-reconciliation (architecture §3.5); pre-IoAW. Retires when `wait-for-verdict` ships against the canonical `local.{org}.*`. |
 | `next-pick.ts` | 253 | W | Cross-ecosystem work-item scanner — operational triage, not feature claiming. |
 | `open-pr.ts` | 367 | W+F | `gh pr create` orchestration + body/title formatting; comments on linked issue. Pure formatting → W; shell calls → F. |
-| `operator.ts` | 410 | W | `decideResume` + `decideRelease` + `executeReleaseVetoedTransition` — operator-unblock decision layer. |
+| `principal.ts` | 410 | W | `decideResume` + `decideRelease` + `executeReleaseVetoedTransition` — principal-unblock decision layer. |
 | `parse-review.ts` | 268 | W | Review-body parsing: lens + severity extraction; `GhReviewComment` → `PrFinding`. |
 | `path-utils.ts` | 56 | S | `normalizeRelativeUp` + `shellEscape` — pure path helpers. |
 | `paths.ts` | 14 | P | `AGENT_HOME` / `DB_PATH` / `DASHBOARD_PATH` / `triagePath`. |
@@ -180,13 +180,13 @@ These bear special attention during the move (decide retire-vs-keep):
 | `nats-publish.ts` | Publishes to `local.{org}.tasks.code-review.<specialization>` — **canonical subject**. | Promote to `bus/publish-review-request.ts` (renamed for clarity; legacy name preserved as re-export). |
 | `gh.ts` | Re-export shim of `github-backend.ts`. Comment says "back-compat." | Keep across MIG-1; delete after MIG-3 once all importers consume `forge/github-backend.ts` directly. |
 | `forge-ping.ts` | Hybrid file: GitLab path posts via `glab` (forge), GitHub path delegates to `pingCommand` which posts to Discord. The "ping" verb is overloaded. | Split: GitLab logic into `forge/gitlab-ping.ts`; GitHub delegation into `workflow/review/ping.ts`. |
-| `watch.ts` | Generic poll loop. Used by `pilot watch` for labeled-issue scanning. | Stays — move to `workflow/watch/` or `forge/watch/`. Decision: `workflow/` (it's an operator-facing review-loop primitive). |
+| `watch.ts` | Generic poll loop. Used by `pilot watch` for labeled-issue scanning. | Stays — move to `workflow/watch/` or `forge/watch/`. Decision: `workflow/` (it's an principal-facing review-loop primitive). |
 | `gitlab-monitor.ts` | "Stopgap until cue system exists." | Stays — move to `forge/gitlab-monitor.ts`. |
 | `next-pick.ts` | Cross-ecosystem triage; separate from claim-loop. | Stays — move to `workflow/next-pick.ts`. |
 
 ### §2.6 Test files (`tests/`)
 
-47 test files, 1:1 with src files for the most part. The pattern is consistent — `src/X.ts` ↔ `tests/X.test.ts`. Some files split (`agent-state.test.ts` + `agent-state-operator-cols.test.ts` + `agent-state-transition.test.ts` + `agent-state-work-items.test.ts`).
+47 test files, 1:1 with src files for the most part. The pattern is consistent — `src/X.ts` ↔ `tests/X.test.ts`. Some files split (`agent-state.test.ts` + `agent-state-principal-cols.test.ts` + `agent-state-transition.test.ts` + `agent-state-work-items.test.ts`).
 
 **`tests/discord.test.ts:53-54`** is the test that pins `REVIEWERS.luna.discordId === "1487180524542890144"`. This test moves with `reviewers.ts` into `bus/legacy/` and survives unchanged across the restructure; it retires alongside the legacy registry post-cutover.
 
@@ -214,7 +214,7 @@ cli.ts ──► (everything below — 50 modules)
    ├─► discord.ts + discord-veto.ts ◄── ping, dispatch, cli
    │       (the Discord transport)
    │
-   └─► agent-state.ts ◄── tick, replay, operator, interrupt, cli, cleanup-sequence
+   └─► agent-state.ts ◄── tick, replay, principal, interrupt, cli, cleanup-sequence
            (the Phase 2/3 work-item store)
 ```
 
@@ -265,7 +265,7 @@ src/
 │   │   ├── next-pick.ts              # (was src/next-pick.ts)
 │   │   ├── config.ts                 # (was src/config.ts)
 │   │   ├── replay.ts                 # (was src/replay.ts)
-│   │   ├── operator.ts               # (was src/operator.ts)
+│   │   ├── principal.ts               # (was src/principal.ts)
 │   │   ├── interrupt.ts              # (was src/interrupt.ts)
 │   │   └── blueprint.ts              # (was src/blueprint.ts; pure helpers stay here, gh-api calls into forge/)
 │   ├── implement/
@@ -566,8 +566,8 @@ When Echo (or any code-review-capable agent) naks a task, pilot's `subscribe-ver
 | Reason | Pilot interpretation | CLI exit |
 |---|---|---|
 | `cant_do` | No agent matches the capability. Likely the `<flavor>` doesn't have a registered consumer. | exit 3, JSON `{ ok: false, reason: "no-capability-match" }` |
-| `wont_do` | Sovereignty policy refused. Persistent — operator action needed. | exit 3, JSON `{ ok: false, reason: "sovereignty-refused" }` |
-| `not_now` | Backpressure. Try again later — capability is registered, just busy. | exit 4, JSON `{ ok: false, reason: "backpressure" }` (operator-facing retry semantics) |
+| `wont_do` | Sovereignty policy refused. Persistent — principal action needed. | exit 3, JSON `{ ok: false, reason: "sovereignty-refused" }` |
+| `not_now` | Backpressure. Try again later — capability is registered, just busy. | exit 4, JSON `{ ok: false, reason: "backpressure" }` (principal-facing retry semantics) |
 | `compliance_block` | Agent's compliance attestation forbids it. | exit 3, JSON `{ ok: false, reason: "compliance-block" }` |
 
 Exit 3 = "permanent failure, retrying won't help"; exit 4 = "transient, retry safe."
@@ -584,7 +584,7 @@ Exit 3 = "permanent failure, retrying won't help"; exit 4 = "transient, retry sa
 
 ### §4.6 What pilot's verdict subscriber does NOT do
 
-- **No retry.** A single `dispatch.task.completed` or `review.verdict.*` envelope matching the correlation_id terminates the subscription. If the operator wants retry-with-backoff, they wrap `pilot request-review --wait` in a shell loop.
+- **No retry.** A single `dispatch.task.completed` or `review.verdict.*` envelope matching the correlation_id terminates the subscription. If the principal wants retry-with-backoff, they wrap `pilot request-review --wait` in a shell loop.
 - **No multi-agent quorum.** First matching verdict wins. If the capability-dispatch routing accidentally fans out to multiple consumers (a capability-registry misconfiguration), pilot returns the first verdict and ignores the rest. Surfaces a warning to stderr.
 - **No persistence of verdicts.** The verdict envelope is rendered to stdout (JSON or text) and pilot exits. State-coupling (e.g. "remember this verdict in errands.sqlite") is workflow-layer business and lives in `workflow/review/` consumers — not in `bus/`.
 
@@ -623,7 +623,7 @@ pilot request-review --pr <owner/repo#N> --capability code-review.<flavor>
    d. On match: render verdict JSON, exit 0.
    e. On timeout: exit 124.
    f. On `dispatch.task.failed`: render nak reason, exit 3 or 4 per §4.4.
-5. If NOT `--wait`: print correlation_id and exit 0 immediately (operator can use `pilot wait-for-verdict --correlation-id ...` later, or another workflow).
+5. If NOT `--wait`: print correlation_id and exit 0 immediately (principal can use `pilot wait-for-verdict --correlation-id ...` later, or another workflow).
 
 **Args:**
 
@@ -696,7 +696,7 @@ pilot request-review --pr <owner/repo#N> --capability code-review.<flavor>
 | Wait timeout: no envelope on the wire → exit 124 | Integration with stub subscriber |
 | Nak path: `dispatch.task.failed` with each of the four reasons → exits 3 or 4 | Integration with stub subscriber |
 | Multiple matching verdicts: first wins, second logged-and-dropped | Integration with stub feeding two envelopes |
-| Config load failure: clean exit 1 with operator-readable error | Unit |
+| Config load failure: clean exit 1 with principal-readable error | Unit |
 | `--json` mode renders the documented shape | Unit, fixture compared |
 
 ### §5.2 `pilot wait-for-verdict`
@@ -735,7 +735,7 @@ pilot wait-for-verdict --correlation-id <uuid> [--timeout 30m]
 
 - No publish step. The CLI assumes the request envelope was already published.
 - Correlation-ID is required and explicit; not derived from a fresh publish.
-- Useful in batch / async workflows where the operator wants to request many reviews up front and gather verdicts later.
+- Useful in batch / async workflows where the principal wants to request many reviews up front and gather verdicts later.
 
 **Test coverage requirements:** subset of `request-review --wait` tests, with correlation-id passed explicitly instead of derived from publish.
 
@@ -859,7 +859,7 @@ The plan is **phase-by-phase**, each phase shipping a discrete PR (or PR cluster
 - `pilot request-review --pr foo/bar#1 --capability code-review.typescript` publishes a valid envelope to NATS (observable via `nats sub local.metafactory.tasks.code-review.>`).
 - `pilot wait-for-verdict --correlation-id <id>` subscribes and waits; times out cleanly at the specified timeout.
 - `pilot wait-for-review --pr foo/bar#1 --reviewer echo` matches github.* envelopes from cortex's gh-webhook-receiver (real bus, real webhook, real GitHub).
-- The skill's documented fallback chain works in operator hands.
+- The skill's documented fallback chain works in principal hands.
 
 **Tests that must pass:**
 
@@ -890,7 +890,7 @@ The plan is **phase-by-phase**, each phase shipping a discrete PR (or PR cluster
 **Acceptance criteria for Phase C** (tightened to gate-able bars per Echo cortex#238 round 1 warning — "≥1 review cycle" was observational, not measurable):
 
 - A `pilot request-review --pr the-metafactory/cortex#X --capability code-review.typescript --wait` invocation receives an Echo-published `review.verdict.*` envelope and exits 0 with the documented JSON payload, end-to-end against the live cortex bus.
-- The pilot-review-loop skill drives a full PR through review using the new path: open PR → `pilot request-review --wait` → Echo reviews → `review.verdict.changes-requested` → operator/agent fixes → `pilot request-review --wait` (cycle 2) → `review.verdict.approved` → merge.
+- The pilot-review-loop skill drives a full PR through review using the new path: open PR → `pilot request-review --wait` → Echo reviews → `review.verdict.changes-requested` → principal/agent fixes → `pilot request-review --wait` (cycle 2) → `review.verdict.approved` → merge.
 - The bot-mention path remains as a **secondary signal** but no longer gates the loop.
 - **Quantitative cutover gate (replaces "≥1 review cycle"):** ≥5 consecutive real review cycles across ≥2 PRs over ≥48 hours of wall-clock time, with all five satisfying:
   - exit 0 from `pilot request-review --wait` (no timeouts).
@@ -935,7 +935,7 @@ The plan is **phase-by-phase**, each phase shipping a discrete PR (or PR cluster
 
 **What stays compatible vs what breaks:**
 
-- **Compatible:** the new path is byte-for-byte the same as Phase C; no operator-visible changes from C to D except the legacy fallback no longer exists.
+- **Compatible:** the new path is byte-for-byte the same as Phase C; no principal-visible changes from C to D except the legacy fallback no longer exists.
 - **Breaks:** if any external consumer of pilot's API still expects `REVIEWERS` to be importable from pilot, that breaks. None known.
 
 ### §6.6 Cross-cutting concerns
@@ -944,7 +944,7 @@ The plan is **phase-by-phase**, each phase shipping a discrete PR (or PR cluster
 |---|---|
 | **Schema versioning** | The envelope shape is myelin-defined; pilot pins to `@the-metafactory/cortex@<sha>` (see §7) which transitively pins myelin. Any schema-flip is a coordinated update across cortex + pilot. |
 | **OTLP spans** | Phase C.4 adds them. Pre-Phase C, pilot emits no traces — only stderr logs. |
-| **Operator config** | `pilot request-review` reads cortex.yaml. The skill's `--config` defaults to `~/.config/cortex/cortex.yaml`. No new operator-visible config file in pilot. |
+| **Principal config** | `pilot request-review` reads cortex.yaml. The skill's `--config` defaults to `~/.config/cortex/cortex.yaml`. No new principal-visible config file in pilot. |
 | **Rollback** | Each phase is reversible: Phase B can be reverted to A by removing the new verbs; Phase C can be reverted to B by reinstating the env-var gate; Phase D is a deletion phase — reverting it requires recovering the legacy files from git history. By Phase D the new path is proven, so rollback is not anticipated. |
 
 ---
@@ -973,7 +973,7 @@ Pilot's `bus/` subtree imports `NatsLink`, `MyelinSubscriber`, `Envelope`, `vali
 
 - Assumes cortex repo is at `../cortex` relative to pilot checkout. **False for the standard `~/Developer/cortex` + `~/.config/metafactory/pkg/repos/pilot` layout.** Operators would have to manually symlink.
 - CI configuration would need to clone cortex before `bun install`.
-- arc-manifest distribution (the `arc upgrade Pilot` story): `arc` does NOT install path-relative deps. The pilot binary at `~/bin/pilot` would silently break on operator machines that don't have cortex checked out alongside.
+- arc-manifest distribution (the `arc upgrade Pilot` story): `arc` does NOT install path-relative deps. The pilot binary at `~/bin/pilot` would silently break on principal machines that don't have cortex checked out alongside.
 
 ### §7.2 Option B — Git-URL with pinned ref
 
@@ -990,13 +990,13 @@ Pilot's `bus/` subtree imports `NatsLink`, `MyelinSubscriber`, `Envelope`, `vali
 - Same pattern pilot already uses for myelin: `"@the-metafactory/myelin": "https://github.com/the-metafactory/myelin.git#2a58668"`.
 - `bun install` works from any checkout location.
 - Explicit version pinning via sha or tag.
-- `arc upgrade Pilot` works unchanged — the dependency is fetched at install time on the operator's machine.
+- `arc upgrade Pilot` works unchanged — the dependency is fetched at install time on the principal's machine.
 - CI compatible.
 
 **Cons:**
 
 - Each cortex-side change to bus internals requires a coordinated pilot bump: update sha in pilot's `package.json`, push, `arc upgrade Pilot`. During heavy co-development, this adds friction.
-- The cortex repo is private. Bun needs auth. Already handled for myelin (which is also private) via the operator's git credentials.
+- The cortex repo is private. Bun needs auth. Already handled for myelin (which is also private) via the principal's git credentials.
 
 ### §7.3 Decision — Option B (gated on PR-A.0b)
 
@@ -1005,9 +1005,9 @@ Pilot's `bus/` subtree imports `NatsLink`, `MyelinSubscriber`, `Envelope`, `vali
 Justification:
 
 1. **Matches the existing pattern.** Myelin already lives in `package.json` as `"https://github.com/the-metafactory/myelin.git#2a58668"`. Cortex slots in identically once A.0b's exports map ships. Operators know how to update sha-pinned deps.
-2. **arc-upgrade-friendly.** The `arc upgrade Pilot` distribution story is load-bearing — pilot ships to operator machines via arc, not via a co-checkout assumption. Option A breaks this.
+2. **arc-upgrade-friendly.** The `arc upgrade Pilot` distribution story is load-bearing — pilot ships to principal machines via arc, not via a co-checkout assumption. Option A breaks this.
 3. **Pinning matters during the cortex#237 lockstep.** Phase C explicitly requires cortex#237 to have shipped. Pinning pilot's cortex dep to a sha AT OR AFTER cortex#237's merge commit is the natural way to encode that dependency. Operators updating cortex+pilot together get a coordinated upgrade.
-4. **The cost (sha-bump friction during co-dev) is bounded.** During active development, an operator can:
+4. **The cost (sha-bump friction during co-dev) is bounded.** During active development, an principal can:
    - Temporarily switch to Option A with a `bun install file:../cortex --no-save` flag, OR
    - Use bun's `link` feature for local development without modifying `package.json`.
    The default `package.json` ships Option B for everyone else.
@@ -1074,7 +1074,7 @@ Per architecture §7.2 the capability registry lives at `local.{org}.agents.capa
 
 Should `pilot request-review` query the capability registry pre-publish and refuse if no consumer is registered for the capability? The cleaner behaviour is yes (fail-fast). The simpler behaviour is no (publish-and-wait-for-timeout). cortex#237's consumer side will at minimum register the capabilities Echo claims; until then, pre-publish registry checks have nothing to check against.
 
-Recommendation: in Phase B, `pilot request-review` warns to stderr if the capability registry has zero consumers for `<flavor>`. Does not refuse. In Phase C (post-cortex#237 cutover), upgrade the warning to a usage error (exit 2) by default, with a `--no-registry-check` override for operator flexibility.
+Recommendation: in Phase B, `pilot request-review` warns to stderr if the capability registry has zero consumers for `<flavor>`. Does not refuse. In Phase C (post-cortex#237 cutover), upgrade the warning to a usage error (exit 2) by default, with a `--no-registry-check` override for principal flexibility.
 
 ### §8.3 — Multi-network handling
 
@@ -1082,14 +1082,14 @@ The IoAW Phase D federation work introduces `federated.*` namespaces and potenti
 
 Two options for multi-network handling:
 
-- **CLI accepts `--network <id>` flag.** Defaults to `local`. When set, swaps the subject prefix to `federated.{network}.*`. The operator picks the destination network.
+- **CLI accepts `--network <id>` flag.** Defaults to `local`. When set, swaps the subject prefix to `federated.{network}.*`. The principal picks the destination network.
 - **Pilot federates the request automatically** based on the PR's repo → network mapping (a config table somewhere). More magic, less explicit.
 
 Recommendation: defer to Phase D's federation lift. Phase A/B/C of this restructure ship with implicit `local` only. The `--network` flag arrives in a follow-up PR after Phase D in IoAW lands.
 
 ### §8.4 — The Sage / multi-agent claim race
 
-If multiple consumers register for `tasks.code-review.generic` (e.g. Echo and a future Sage), and pilot publishes one envelope, both agents may claim it. NATS pull consumer groups guarantee competing-consumer fairness — only one of them gets the message. But what if the operator wants **both** to review? (Unlikely in v1, but the bus contract permits it.)
+If multiple consumers register for `tasks.code-review.generic` (e.g. Echo and a future Sage), and pilot publishes one envelope, both agents may claim it. NATS pull consumer groups guarantee competing-consumer fairness — only one of them gets the message. But what if the principal wants **both** to review? (Unlikely in v1, but the bus contract permits it.)
 
 Open: should `pilot request-review` support `--multi-claim N` to publish N copies, one per intended reviewer? Out of scope for this restructure; raise as a follow-up.
 

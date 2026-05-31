@@ -27,7 +27,7 @@ the `review` band annotates without blocking.
 
 cortex#367 F-1 (the EN-001 regex fix) and F-2 (cortex-side URL/SHA
 pre-filter normalization) are resolved by this dependency bump. F-3
-(distinguished filter-block message) and F-4 (operator bypass) remain a
+(distinguished filter-block message) and F-4 (principal bypass) remain a
 separate small cortex-side patch.
 
 Refs cortex#370, cortex#367, content-filter#17.
@@ -72,6 +72,6 @@ mirroring the `not_now` / `cant_do` / `wont_do` / `policy_denied` nak
 taxonomy that the review-consumer path already enforced. Failure
 classification is lifted out of `review-pipeline.ts` into a shared
 `cc-failure-classifier.ts` helper; review-consumer behaviour is preserved
-byte-for-byte. Operator sees `Still working… (attempt N/3)` between retries
+byte-for-byte. The principal sees `Still working… (attempt N/3)` between retries
 and a `dispatch.task.failed` envelope is emitted on terminal failure for
 cross-path observability parity. Closes cortex#360.

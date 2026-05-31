@@ -413,13 +413,14 @@ export class DiscordAdapter implements PlatformAdapter {
       }
 
       // G-300 + v2.0.0 (cortex#297): Classify DM type. The legacy
-      // `operatorDiscordId` comparison is retired; the operator
-      // classification now flows through the PolicyEngine `operator`
-      // capability. A principal that holds `operator` short-circuits to
-      // full DM access in `resolvePolicyAccess`. The `infra.principal.discordId`
-      // field is preserved for the `notifyOperator` / `bufferOperatorDM`
-      // paths which still need a Discord-side mailbox.
-      let dmType: "operator" | "user" | undefined;
+      // `operatorDiscordId` comparison is retired; the principal
+      // classification now flows through the PolicyEngine capability that
+      // grants principal-level access. A principal who holds it
+      // short-circuits to full DM access in `resolvePolicyAccess`. The
+      // `infra.principal.discordId` field is preserved for the
+      // `notifyPrincipal` / `bufferPrincipalDM` paths which still need a
+      // Discord-side mailbox.
+      let dmType: "principal" | "user" | undefined;
       if (isDM) {
         dmType = isOperatorPrincipal(
           "discord",
@@ -427,7 +428,7 @@ export class DiscordAdapter implements PlatformAdapter {
           this.infra.policyEngine,
           this.infra.policyLookup,
         )
-          ? "operator"
+          ? "principal"
           : "user";
       }
 
@@ -744,14 +745,14 @@ export class DiscordAdapter implements PlatformAdapter {
   //   - `pendingResults` is keyed by channel/thread, so a later result for the
   //     same target last-write-wins coalesces — which is correct, because the
   //     caller only ever wants the *final* result delivered to that target.
-  //   - `pendingOperatorDMs` is an array of independent payloads ("task X
+  //   - `pendingPrincipalDMs` is an array of independent payloads ("task X
   //     completed", "task Y failed", "warning Z"). Coalescing by key would
-  //     drop messages that the operator needs to see. Order and completeness
+  //     drop messages that the principal needs to see. Order and completeness
   //     matter more than dedup, so we use a FIFO array.
-  private pendingOperatorDMs: { text: string; createdAt: number }[] = [];
+  private pendingPrincipalDMs: { text: string; createdAt: number }[] = [];
   private static readonly PENDING_TTL_MS = 10 * 60 * 1000; // 10 minutes
   private static readonly PENDING_MAX_SIZE = 100;
-  private static readonly PENDING_OPERATOR_MAX = 50;
+  private static readonly PENDING_PRINCIPAL_MAX = 50;
 
   async sendProgress(target: ResponseTarget, text: string): Promise<void> {
     const key = target.threadId ?? target.channelId;
@@ -993,12 +994,12 @@ export class DiscordAdapter implements PlatformAdapter {
     return match ? match.id : null;
   }
 
-  async notifyOperator(text: string): Promise<void> {
+  async notifyPrincipal(text: string): Promise<void> {
     const principalDiscordId = this.infra.principal.discordId;
     if (!principalDiscordId || !this.client) return;
 
     if (!this.connectionHealth?.currentlyConnected) {
-      this.bufferOperatorDM(text);
+      this.bufferPrincipalDM(text);
       return;
     }
 
@@ -1015,21 +1016,21 @@ export class DiscordAdapter implements PlatformAdapter {
       //     the same failure forever and crowd out genuinely transient DMs.
       if (DiscordAdapter.isPermanentlyUndeliverableDMError(err)) {
         console.warn(
-          `discord-${this.instanceId}: dropping operator DM, permanently undeliverable:`,
+          `discord-${this.instanceId}: dropping principal DM, permanently undeliverable:`,
           err instanceof Error ? err.message : err,
         );
         return;
       }
       // TOCTOU re-check: TS narrowed `currentlyConnected` to true via the
-      // earlier-return guard at the top of `notifyOperator`, but the
+      // earlier-return guard at the top of `notifyPrincipal`, but the
       // connection can flip between that check and this catch. The
       // re-read is load-bearing per the comment block above; suppress
       // the rule that flags it as dead.
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
       if (!this.connectionHealth.currentlyConnected && isRetryableError(err)) {
-        this.bufferOperatorDM(text);
+        this.bufferPrincipalDM(text);
       } else {
-        console.warn(`discord-${this.instanceId}: failed to notify operator:`, err instanceof Error ? err.message : err);
+        console.warn(`discord-${this.instanceId}: failed to notify principal:`, err instanceof Error ? err.message : err);
       }
     }
   }
@@ -1054,49 +1055,49 @@ export class DiscordAdapter implements PlatformAdapter {
     return false;
   }
 
-  private bufferOperatorDM(text: string): void {
+  private bufferPrincipalDM(text: string): void {
     // TTL enforcement at write time — mirrors `cleanExpiredPending` for
     // pendingResults. Without this, a long disconnect window would cap the
-    // buffer at PENDING_OPERATOR_MAX of stale entries which then get dropped
+    // buffer at PENDING_PRINCIPAL_MAX of stale entries which then get dropped
     // wholesale at drain time; better to evict expired entries proactively
-    // so newer operator events have room.
+    // so newer principal events have room.
     this.cleanExpiredOperatorDMs();
-    if (this.pendingOperatorDMs.length >= DiscordAdapter.PENDING_OPERATOR_MAX) {
-      this.pendingOperatorDMs.shift();
+    if (this.pendingPrincipalDMs.length >= DiscordAdapter.PENDING_PRINCIPAL_MAX) {
+      this.pendingPrincipalDMs.shift();
     }
-    this.pendingOperatorDMs.push({ text, createdAt: Date.now() });
+    this.pendingPrincipalDMs.push({ text, createdAt: Date.now() });
     console.warn(
-      `discord-${this.instanceId}: buffered operator DM (Discord disconnected, ${this.pendingOperatorDMs.length} pending)`
+      `discord-${this.instanceId}: buffered principal DM (Discord disconnected, ${this.pendingPrincipalDMs.length} pending)`
     );
   }
 
   private cleanExpiredOperatorDMs(): void {
-    if (this.pendingOperatorDMs.length === 0) return;
+    if (this.pendingPrincipalDMs.length === 0) return;
     const now = Date.now();
-    const before = this.pendingOperatorDMs.length;
-    this.pendingOperatorDMs = this.pendingOperatorDMs.filter(
+    const before = this.pendingPrincipalDMs.length;
+    this.pendingPrincipalDMs = this.pendingPrincipalDMs.filter(
       (p) => now - p.createdAt <= DiscordAdapter.PENDING_TTL_MS,
     );
-    const expired = before - this.pendingOperatorDMs.length;
+    const expired = before - this.pendingPrincipalDMs.length;
     if (expired > 0) {
-      console.warn(`discord-${this.instanceId}: expired ${expired} pending operator DM(s)`);
+      console.warn(`discord-${this.instanceId}: expired ${expired} pending principal DM(s)`);
     }
   }
 
   private async drainPendingOperatorDMs(): Promise<void> {
     // Re-use the write-time cleaner so drain-time TTL is consistent with
-    // bufferOperatorDM. Anything still in the buffer afterwards is fresh.
+    // bufferPrincipalDM. Anything still in the buffer afterwards is fresh.
     this.cleanExpiredOperatorDMs();
-    if (this.pendingOperatorDMs.length === 0) return;
+    if (this.pendingPrincipalDMs.length === 0) return;
     const principalDiscordId = this.infra.principal.discordId;
     if (!principalDiscordId || !this.client) {
-      this.pendingOperatorDMs = [];
+      this.pendingPrincipalDMs = [];
       return;
     }
-    const toDeliver = this.pendingOperatorDMs;
-    this.pendingOperatorDMs = [];
+    const toDeliver = this.pendingPrincipalDMs;
+    this.pendingPrincipalDMs = [];
 
-    console.log(`discord-${this.instanceId}: draining ${toDeliver.length} pending operator DM(s)`);
+    console.log(`discord-${this.instanceId}: draining ${toDeliver.length} pending principal DM(s)`);
     try {
       const principalUser = await this.client.users.fetch(principalDiscordId);
       for (const pending of toDeliver) {
@@ -1104,14 +1105,14 @@ export class DiscordAdapter implements PlatformAdapter {
           await principalUser.send(pending.text);
         } catch (err) {
           console.error(
-            `discord-${this.instanceId}: failed to deliver buffered operator DM:`,
+            `discord-${this.instanceId}: failed to deliver buffered principal DM:`,
             err instanceof Error ? err.message : err,
           );
         }
       }
     } catch (err) {
       console.error(
-        `discord-${this.instanceId}: could not fetch operator user to drain DMs:`,
+        `discord-${this.instanceId}: could not fetch principal user to drain DMs:`,
         err instanceof Error ? err.message : err,
       );
     }

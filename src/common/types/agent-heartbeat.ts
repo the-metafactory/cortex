@@ -12,8 +12,8 @@
  * **Out of scope for this iteration** (filed as follow-ups on cortex / myelin):
  *   - Dashboard rendering of "Echo last seen 12s ago" — separate cortex issue.
  *   - Canonical myelin schema entry for `system.agent.heartbeat` — Path B per
- *     cortex#361 ships on the operator-managed `local.{principal}.{stack}.*`
- *     namespace; cross-operator (`federated.*`) propagation needs a myelin
+ *     cortex#361 ships on the principal-managed `local.{principal}.{stack}.*`
+ *     namespace; cross-principal (`federated.*`) propagation needs a myelin
  *     spec round. Tracked as a follow-up issue on `the-metafactory/myelin`.
  *   - cc-session inactivity-timer "respect heartbeat" — separate cortex issue
  *     (touches cc-session's kill path, larger blast radius).

@@ -21,7 +21,7 @@
  */
 
 /**
- * A single stack identity belonging to an operator. Mirrors
+ * A single stack identity belonging to a principal. Mirrors
  * `StackIdentity` on the producer side.
  */
 export interface StackIdentity {
@@ -32,7 +32,7 @@ export interface StackIdentity {
 }
 
 /**
- * A capability the operator advertises across the federation. Mirrors
+ * A capability the principal advertises across the federation. Mirrors
  * `Capability` on the producer side.
  */
 export interface Capability {
@@ -42,7 +42,7 @@ export interface Capability {
 }
 
 /**
- * The view of an operator returned by `GET /operators/{operator_id}`.
+ * The view of a principal returned by `GET /operators/{operator_id}`.
  * Mirrors `OperatorRecord` on the producer side.
  *
  * `operator_pubkey` is base64-encoded Ed25519 (32 raw bytes → 44 chars

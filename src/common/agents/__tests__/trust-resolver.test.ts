@@ -358,7 +358,7 @@ describe("TrustResolver — platform key encoding", () => {
 //
 // These tests assert the algorithm cortex.ts runs in Pass 2 of its Discord
 // adapter loop: for each agent's `trust:[]`, look up each peer's Discord
-// bot user id via `lookupPlatformIdByAgent` and merge into the operator-
+// bot user id via `lookupPlatformIdByAgent` and merge into the principal-
 // explicit `trustedBotIds`. They live next to the resolver tests because
 // the algorithm is pure-data over resolver state — wiring into a live
 // DiscordAdapter would require a Discord.js mock that adds noise without
@@ -404,7 +404,7 @@ describe("cortex#98 (part B) — auto-populate trustedBotIds from agents[].trust
 
   test("operator-explicit trustedBotIds (cross-process bridge) merge with resolver-derived ids", () => {
     // luna trusts [echo, holly]; echo is in-process (registered), holly is
-    // cross-process (the operator put holly's bot id in
+    // cross-process (the principal put holly's bot id in
     // presence.discord.trustedBotIds because she lives in a server cortex).
     const resolver = new TrustResolver(registryOf(
       agentFixture({ id: "luna", trust: ["echo", "holly"] }),
@@ -418,7 +418,7 @@ describe("cortex#98 (part B) — auto-populate trustedBotIds from agents[].trust
     const merged = mergeFor(resolver, ["echo", "holly"], "luna", explicit);
     expect(merged.size).toBe(2);
     expect(merged.has(ECHO_DISCORD_ID)).toBe(true); // resolver-derived
-    expect(merged.has(HOLLY_DISCORD_ID)).toBe(true); // operator-explicit
+    expect(merged.has(HOLLY_DISCORD_ID)).toBe(true); // principal-explicit
   });
 
   test("cross-process peers (unregistered) are silently skipped — set stays at explicit baseline", () => {
@@ -457,7 +457,7 @@ describe("cortex#98 (part B) — auto-populate trustedBotIds from agents[].trust
   });
 
   test("explicit and resolver-derived ids dedupe when they overlap", () => {
-    // Edge case: operator hand-set echo's bot id in cortex.yaml AND echo
+    // Edge case: principal hand-set echo's bot id in cortex.yaml AND echo
     // is in-process (registered). The merge naturally dedupes via Set.
     const resolver = new TrustResolver(registryOf(
       agentFixture({ id: "luna", trust: ["echo"] }),

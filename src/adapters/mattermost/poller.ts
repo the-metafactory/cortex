@@ -369,7 +369,7 @@ export function createMattermostPoller(options: MattermostPollerOptions): { stop
             processedPosts.add(post.id);
             const replyId = await postReply(
               post.channel_id,
-              "Sorry, I'm only configured to respond to my operator. Please reach out to them if you need my help.",
+              "Sorry, I'm only configured to respond to my principal. Please reach out to them if you need my help.",
               post.root_id || post.id,
               apiUrl,
               apiToken

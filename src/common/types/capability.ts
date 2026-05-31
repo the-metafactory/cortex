@@ -5,7 +5,7 @@
  * 2026-05-13 Andreas):
  *
  *   "Two-part: (a) network capabilities = aggregated across all agents in all
- *   stacks part of the network; (b) operator can ALSO declare stack-level
+ *   stacks part of the network; (b) principal can ALSO declare stack-level
  *   capabilities (and per-agent capability annotations) in cortex.yaml using
  *   a constrained schema — defined interface, NOT free text. 'Keep it simple.'
  *   Schema covers: capability id, description, tags (e.g., language tags),
@@ -31,7 +31,7 @@
  *     registry service.
  *   - **Mirrors `AgentSchema.id` grammar.** `provided_by` uses the same
  *     letter-prefix regex `LETTER_PREFIX_ID_REGEX` as `AgentSchema.id` so the
- *     two cannot drift — closing the operator/stack/agent letter-prefix
+ *     two cannot drift — closing the principal/stack/agent letter-prefix
  *     trilogy (cortex#141 → cortex#144 → cortex#145). A future change to
  *     the agent-id grammar is a single coordinated edit to both regexes.
  *
@@ -194,7 +194,7 @@ const CapabilityTagSchema = z
 /**
  * Provider-id grammar — references an agent's `id` declared in the same
  * `cortex.yaml`'s `agents[]` array. The format mirrors `AgentSchema.id`:
- * `LETTER_PREFIX_ID_REGEX` (letter-prefix). cortex#145 closed the operator/
+ * `LETTER_PREFIX_ID_REGEX` (letter-prefix). cortex#145 closed the principal/
  * stack/agent letter-prefix trilogy (cortex#141 → cortex#144 → cortex#145);
  * `provided_by` tightened in the same PR for one-segment grammar parity.
  *
@@ -209,7 +209,7 @@ const CapabilityProviderIdSchema = z
   .string()
   .regex(
     LETTER_PREFIX_ID_REGEX,
-    "capability.provided_by entries must be agent ids — lowercase alphanumeric + hyphen, starting with a letter (matches AgentSchema.id grammar — operator/stack/agent letter-prefix trilogy closed by cortex#145); rename digit-prefixed ids like '2agent' to 'team-2agent' or 'agent-2026'",
+    "capability.provided_by entries must be agent ids — lowercase alphanumeric + hyphen, starting with a letter (matches AgentSchema.id grammar — principal/stack/agent letter-prefix trilogy closed by cortex#145); rename digit-prefixed ids like '2agent' to 'team-2agent' or 'agent-2026'",
   );
 
 // =============================================================================
@@ -226,19 +226,19 @@ const CapabilityProviderIdSchema = z
  * Field rationale:
  *   - `id`: stable network-wide name (Q3 registry indexes by id).
  *   - `description`: short human-readable summary surfaced on the dashboard
- *     and in registry queries. Non-empty so an operator can't accidentally
+ *     and in registry queries. Non-empty so a principal can't accidentally
  *     publish a `description: ""` field that surfaces as a blank line in
  *     the registry UI.
  *   - `tags`: taxonomic labels for tag-prefix matching. May be empty (a
  *     capability without tags is still a valid declaration), but every
  *     entry must conform to the tag grammar. Whether duplicate tags are
- *     allowed: yes — the schema does not de-dupe (an operator writing
+ *     allowed: yes — the schema does not de-dupe (a principal writing
  *     `[typescript, typescript]` parses cleanly; the registry layer can
  *     dedupe at query time). The design doc does not call out dedup as a
  *     concern; we keep the schema additive.
  *   - `provided_by`: ≥1 agent id. A capability with no provider is not a
  *     declarable thing — the capability would have no implementation. The
- *     ≥1 minimum is a deliberate fail-fast: an operator removing the last
+ *     ≥1 minimum is a deliberate fail-fast: a principal removing the last
  *     agent from `provided_by` is removing the capability, and that's a
  *     schema-level signal, not a runtime one.
  *   - `rate` (optional): rate envelope. Omit = no constraint.

@@ -31,7 +31,7 @@ Nothing in IAW makes the **assistant body** substrate-independent. Luna's person
 
 The unit of federation isn't the agent, isn't the stack, isn't even the network — it's **the (Soma-assistant, NKey-stack) tuple addressable across operators**.
 
-**One refinement up front (operator feedback, 2026-05-17 in `#soma`):** the assistant body is a *spectrum*, not a monolith. Luna and Ivy live at the thick end — full Identity / Telos / ISA / Skills / Memory / Policy. Echo lives at the thin end — "a wrapper around two slash commands with a persona file as an example." Soma must serve both. The `SomaCore` layer set is the *maximal* shape; thin assistants declare a subset. §2.5 unpacks this; §7's strawman shows both a thick (Luna) and a thin (Echo) entry side-by-side.
+**One refinement up front (principal feedback, 2026-05-17 in `#soma`):** the assistant body is a *spectrum*, not a monolith. Luna and Ivy live at the thick end — full Identity / Telos / ISA / Skills / Memory / Policy. Echo lives at the thin end — "a wrapper around two slash commands with a persona file as an example." Soma must serve both. The `SomaCore` layer set is the *maximal* shape; thin assistants declare a subset. §2.5 unpacks this; §7's strawman shows both a thick (Luna) and a thin (Echo) entry side-by-side.
 
 ---
 
@@ -110,7 +110,7 @@ When alpha ships and the metafactory then adds (say) a Codex agent and then a Ge
 
 ## §2.5 — The assistant-body spectrum (thin Echo ↔ thick Luna)
 
-Operator feedback during this design's review window (Andreas, in `#soma`, 2026-05-17 at 01:12 PM, verbatim):
+Principal feedback during this design's review window (Andreas, in `#soma`, 2026-05-17 at 01:12 PM, verbatim):
 
 > "Soma would need to handle the thin persona and wrapping layer around tooling and skills without all of the other stuff that we have in Luna and Ivy. Echo is a wrapper around two slash commands with a persona file as an example.
 >
@@ -122,7 +122,7 @@ This is a load-bearing refinement to §1's framing. The diagram and §1 prose sh
 |---|---|---|---|
 | **Thin** | Echo (cortex code-reviewer) | Persona file + skill index (2 slash commands) + role/trust scoping. No Telos. No long-running Memory. No Learning loop. | One `agents.d/echo.md` fragment + a couple of skill references. |
 | **Medium** | Sage, Alpha (cortex review peers) | Persona + capability declarations + per-substrate workdir lifecycle (clone, project, cleanup). Operational, not biographical. | The persona-staging shim from `design-cursor-substrate-bot.md` §4. |
-| **Thick** | Luna, Ivy (operator's primary assistants) | Full `SomaCore`: Identity + Telos + ISA + Skills + Memory + Policy + Learning. Long-running, biographical, evolving. | Full `~/.soma/profile/<name>/` tree with all compartments populated. |
+| **Thick** | Luna, Ivy (principal's primary assistants) | Full `SomaCore`: Identity + Telos + ISA + Skills + Memory + Policy + Learning. Long-running, biographical, evolving. | Full `~/.soma/profile/<name>/` tree with all compartments populated. |
 
 ### Implications for the Soma adapter contract
 
@@ -156,7 +156,7 @@ This is the subtle one. Cortex's IAW Phase B introduces a 3-tier NKey identity c
 
 These are not in conflict — they're complementary along **different axes**:
 
-- **NKey identity** (cortex / Myelin) — *"I am cryptographically agent X on stack Y of operator Z, and here's the signature to prove it."* Bus-level. Lives in `policy.principals[]` (post-Phase-C) and in the chain-of-stamps. Answers: *who signed this envelope?*
+- **NKey identity** (cortex / Myelin) — *"I am cryptographically agent X on stack Y of principal Z, and here's the signature to prove it."* Bus-level. Lives in `policy.principals[]` (post-Phase-C) and in the chain-of-stamps. Answers: *who signed this envelope?*
 - **Soma Identity** (Soma) — *"I am Luna; this is my voice, my profile, my preferences, my history."* Body-level. Lives in `~/.soma/profile/`. Answers: *who is the assistant?*
 
 The join key is the principal record. Post-cortex#243a the actual `PolicyPrincipalSchema` shape (`src/common/types/cortex-config.ts:1124`) is:
@@ -186,7 +186,7 @@ cortex.yaml policy.principals[<id>]
 
 **Validation rule (multi-presence-compatible).** §7 declares that multiple agents (`luna`, `luna-codex`, `luna-daemon`) can share one principal (`luna`) when they're substrate-different presences of the same logical assistant. The binding is therefore **agent → principal → body**, not **agent → body** directly. Stated precisely: every agent declares `body:` (its projection target) AND a principal binding (explicit `agent.principal_id` or implicit when `agent.id == principal.id`); the principal carries its own `body:` for federation; both `body:` values for an agent–principal pair MUST equal the same `soma://...` URL. Three agents bound to one principal therefore all carry the same `body:`, and the principal carries that body once for federation lookups. (Q9 in §9 captures this as the open binding question and the rule above is the leading answer.)
 
-This is what makes "Andreas's Luna calls jcfischer's sage" coherent across operator boundaries: both Luna and sage are Soma assistants; their identities resolve through the Phase D cloud network registry; the chain-of-stamps proves *which Soma assistant on which stack* signed which step.
+This is what makes "Andreas's Luna calls jcfischer's sage" coherent across principal boundaries: both Luna and sage are Soma assistants; their identities resolve through the Phase D cloud network registry; the chain-of-stamps proves *which Soma assistant on which stack* signed which step.
 
 The `did:mf:<name>` convention already used in cortex agent fragments (`did: did:mf:luna`, `did: did:mf:alpha`) is the natural URL-shape for the Soma reference; `body: soma://andreas/luna` is one strawman, `body: did:mf:luna` reusing the existing DID grammar is another. Picked in §9 open questions.
 
@@ -205,13 +205,13 @@ They compose cleanly: **Cortex's PolicyEngine gates *dispatch in*; Soma's writeb
 
 No naming conflict needs resolving in code; both can keep their names because they live in different repos and decide different things. The reconciliation is documentary: every place that says "Policy" in cortex docs should disambiguate as either *dispatch policy* (PolicyEngine) or *writeback policy* (Soma adapter). Same convention on the Soma side.
 
-**Open: does writeback carry principal context?** A substrate session runs bound to a (Principal, body) tuple. At session-end, the substrate emits a writeback. The writeback gate sees a mutation request; the question is whether that request includes only the body context (which body, what diff) or also the principal context (NKey, stack id, chain-of-stamps from the originating dispatch). The latter is more powerful — writeback policies can be principal-aware ("only stack-NKey-signed sessions can mutate Memory; cross-operator delegations can mutate ISA only") — but adds coupling. The former is simpler and treats Soma as cleanly substrate-agnostic. Tracked as §9 Q12; leaning principal-aware once chain-of-stamps reaches the writeback boundary (Phase B+), stateless for the initial cortex hook in §9 Q8.
+**Open: does writeback carry principal context?** A substrate session runs bound to a (Principal, body) tuple. At session-end, the substrate emits a writeback. The writeback gate sees a mutation request; the question is whether that request includes only the body context (which body, what diff) or also the principal context (NKey, stack id, chain-of-stamps from the originating dispatch). The latter is more powerful — writeback policies can be principal-aware ("only stack-NKey-signed sessions can mutate Memory; cross-principal delegations can mutate ISA only") — but adds coupling. The former is simpler and treats Soma as cleanly substrate-agnostic. Tracked as §9 Q12; leaning principal-aware once chain-of-stamps reaches the writeback boundary (Phase B+), stateless for the initial cortex hook in §9 Q8.
 
 ---
 
 ## §5 — Where it sequences in the IAW pipeline
 
-The IAW plan (`docs/plan-internet-of-agentic-work.md`) framed Phase C as the **single** operator-facing cortex.yaml schema flip. Soma adoption requires reshaping `agents[]` fragments (lifting inline `persona:` / `capabilities:` / `trust:` out, leaving a `body: soma://...` substrate-binding pointer in), which is a second schema flip. The honest framing is: **we accept a second flip.** v2.0.0 = C.2b/c policy cutover (in flight); v3.0.0 = Soma factor-out (post-stabilisation). Two flips, each small and testable on its own. The original IAW plan's "one flip" was a *target*, not a hard constraint; this design's review process forced the trade.
+The IAW plan (`docs/plan-internet-of-agentic-work.md`) framed Phase C as the **single** principal-facing cortex.yaml schema flip. Soma adoption requires reshaping `agents[]` fragments (lifting inline `persona:` / `capabilities:` / `trust:` out, leaving a `body: soma://...` substrate-binding pointer in), which is a second schema flip. The honest framing is: **we accept a second flip.** v2.0.0 = C.2b/c policy cutover (in flight); v3.0.0 = Soma factor-out (post-stabilisation). Two flips, each small and testable on its own. The original IAW plan's "one flip" was a *target*, not a hard constraint; this design's review process forced the trade.
 
 Current Phase C status (`plan-internet-of-agentic-work.md` §4):
 
@@ -245,9 +245,9 @@ Phase E              ─── orchestrator pattern: one assistant IS a Soma; ca
                          diversity; daemon mode adds bus-direct presence.
 ```
 
-**Recommendation: defer to v3.0.0.** Earlier drafts of this doc equivocated between fold-and-defer; ratification round 1 (Echo-equivalent review) pressure-tested that equivocation and made the call concrete. C.2b/c is mid-execution as of 2026-05-17 — cortex#293 + #295 + #302 + #305 + #306 are all visible on `main` running the iteration in `docs/iteration-policy-cutover.md`. Growing scope mid-cutover is the kind of thing the metafactory ecosystem has consistently moved away from (the cost is measured in *operator-migration confidence*, not just engineering hours). **Defer Soma factor-out to a separate v3.0.0 cycle once C.2b/c lands and stabilises.** Operators pay two migrations, but each one is small, testable, and ratifiable in isolation.
+**Recommendation: defer to v3.0.0.** Earlier drafts of this doc equivocated between fold-and-defer; ratification round 1 (Echo-equivalent review) pressure-tested that equivocation and made the call concrete. C.2b/c is mid-execution as of 2026-05-17 — cortex#293 + #295 + #302 + #305 + #306 are all visible on `main` running the iteration in `docs/iteration-policy-cutover.md`. Growing scope mid-cutover is the kind of thing the metafactory ecosystem has consistently moved away from (the cost is measured in *principal-migration confidence*, not just engineering hours). **Defer Soma factor-out to a separate v3.0.0 cycle once C.2b/c lands and stabilises.** Operators pay two migrations, but each one is small, testable, and ratifiable in isolation.
 
-**Runner-up: fold into v2.1.0, not v2.0.0.** If folding has to happen, the safer landing is a minor-bump-with-additive-field in v2.1.0 (`body:` as optional on both schemas, no removal of the inline persona path yet) once C.2c's `migrate-config` is stable. The breaking removal of inline persona then lands in v2.2.0 or v3.0.0. This is still two cycles, but the operator-facing burden is split: v2.1 = "you can move to Soma", v3.0 = "you must move to Soma."
+**Runner-up: fold into v2.1.0, not v2.0.0.** If folding has to happen, the safer landing is a minor-bump-with-additive-field in v2.1.0 (`body:` as optional on both schemas, no removal of the inline persona path yet) once C.2c's `migrate-config` is stable. The breaking removal of inline persona then lands in v2.2.0 or v3.0.0. This is still two cycles, but the principal-facing burden is split: v2.1 = "you can move to Soma", v3.0 = "you must move to Soma."
 
 **What's explicitly off the table: fold into v2.0.0.** The original framing in earlier drafts; rejected here on schedule-risk grounds. Documented as the rejected option so future readers see what was considered.
 
@@ -259,7 +259,7 @@ This is where it gets actually profound. Phase E's delegation pattern (§3.6 of 
 
 > "Your main digital assistant that will then delegate around and coordinate on your behalf by leaning into these different networks and stacks depending on their capability."
 
-For this to work, "your main digital assistant" must exist **independently of any one substrate**. Today Luna is `agents.d/luna.md` projected into Claude Code via ClaudeCodeHarness. She's substrate-coupled at the body level. For Phase E delegation to mean what the operator-vision script says it means, Luna has to be addressable across:
+For this to work, "your main digital assistant" must exist **independently of any one substrate**. Today Luna is `agents.d/luna.md` projected into Claude Code via ClaudeCodeHarness. She's substrate-coupled at the body level. For Phase E delegation to mean what the principal-vision script says it means, Luna has to be addressable across:
 
 - her Claude Code presence (where Andreas DMs her),
 - her Codex presence (where she might run a coding task),
@@ -268,18 +268,18 @@ For this to work, "your main digital assistant" must exist **independently of an
 
 …all at once, all with the **same identity, memory, telos, and skills**. That's only coherent if Luna is a Soma. The cortex-side identity (NKey on stack `andreas/main`) is shared across all four presences; the Soma-side body is shared across all four presences; what differs is the *substrate-native projection* in each case.
 
-Now consider the federation case. Andreas's Luna delegates a TypeScript review to jcfischer's network. The capability registry (Phase D `D.4` cloud-side network registry, `network.meta-factory.ai`) returns: "operator jcfischer has assistant `did:mf:sage` with capability `code-review.typescript`." How does Andreas's Luna know what sage *is*? Two options:
+Now consider the federation case. Andreas's Luna delegates a TypeScript review to jcfischer's network. The capability registry (Phase D `D.4` cloud-side network registry, `network.meta-factory.ai`) returns: "principal jcfischer has assistant `did:mf:sage` with capability `code-review.typescript`." How does Andreas's Luna know what sage *is*? Two options:
 
-- **(b) Opaque-principal model.** sage is just a principal — a public key, a capability tag, an SLA. Andreas's Luna doesn't know who sage is as an assistant. Mechanically simpler. The Phase D `network-registry` spec already supports this — it returns operator/stack/capability metadata, no body.
+- **(b) Opaque-principal model.** sage is just a principal — a public key, a capability tag, an SLA. Andreas's Luna doesn't know who sage is as an assistant. Mechanically simpler. The Phase D `network-registry` spec already supports this — it returns principal/stack/capability metadata, no body.
 - **(a) Soma-federated model.** sage's Soma identity (her body's *public* metadata — profile, voice, declared capabilities, lineage) is resolvable via the cloud network registry. Andreas's Luna can introspect *who* she's delegating to.
 
 (a) is the profound version because it makes **assistants themselves the unit of federation**, not just capabilities. The "Internet of Agentic Work" becomes literally an internet of assistants: every assistant has a Soma body, every assistant projects into substrate(s), every assistant is addressable across operators via a (NKey-identity, Soma-body) tuple. The chain-of-stamps becomes a chain of `(assistant, substrate, stack-NKey)` triples — full audit of *who* did *what* on *which substrate*.
 
-The Phase E delegation pattern (§3.6) becomes meaningful in (a), thin in (b). Without (a), "delegate to the best assistant for this task" reduces to "delegate to the best public key advertising this capability tag" — a marketplace primitive, not an assistant primitive. (a) is the form that matches the operator-vision script's intent.
+The Phase E delegation pattern (§3.6) becomes meaningful in (a), thin in (b). Without (a), "delegate to the best assistant for this task" reduces to "delegate to the best public key advertising this capability tag" — a marketplace primitive, not an assistant primitive. (a) is the form that matches the principal-vision script's intent.
 
 The substrate-independence claim — the thing this design is named after — is what makes (a) operable. An assistant identity that is portable across substrates is the prerequisite for an assistant identity that is portable across *operators*.
 
-**Concrete delegation example (the operator benefit of (a) made specific — illustrative; see caveat).** Andreas's Luna has a Telos line that says *"keep customer-facing prose warm; favour reviewers whose declared voice is conversational"*. She receives a `tasks.code-review.typescript` request that includes a customer-facing docs file. She queries the Phase D network registry for candidates with `code-review.typescript` capability and receives three peers: `jcfischer/sage` (Soma voice `terse-empirical`), `acme/holly` (Soma voice `conversational-warm`), `bigcorp/atlas` (no Soma body — option-(b) opaque principal). Under **option (a)**, Luna routes to `acme/holly` based on the voice-style match; under **option (b)**, she has no introspection, so the choice is round-robin or first-claim, defeating her Telos-driven routing. This is the kind of capability-aware-but-also-identity-aware delegation §3.6 of the IAW design promised; it requires (a).
+**Concrete delegation example (the principal benefit of (a) made specific — illustrative; see caveat).** Andreas's Luna has a Telos line that says *"keep customer-facing prose warm; favour reviewers whose declared voice is conversational"*. She receives a `tasks.code-review.typescript` request that includes a customer-facing docs file. She queries the Phase D network registry for candidates with `code-review.typescript` capability and receives three peers: `jcfischer/sage` (Soma voice `terse-empirical`), `acme/holly` (Soma voice `conversational-warm`), `bigcorp/atlas` (no Soma body — option-(b) opaque principal). Under **option (a)**, Luna routes to `acme/holly` based on the voice-style match; under **option (b)**, she has no introspection, so the choice is round-robin or first-claim, defeating her Telos-driven routing. This is the kind of capability-aware-but-also-identity-aware delegation §3.6 of the IAW design promised; it requires (a).
 
 > **Caveat — `voice.style` is illustrative, not currently a documented Soma schema field.** Soma's `CONTEXT.md` mentions "optional voice metadata" as part of the Identity layer (`Identity stores who the principal is and who the assistant is. It includes profile facts, communication preferences, personality metadata, and optional voice metadata.`) without specifying a structured `voice.style` enum with named tiers like `terse-empirical` / `conversational-warm`. The example above presumes such a field exists; if it does not, the example is best read as a *proposal back to Soma* — "if Soma's Identity layer exposed a structured `voice.style` enum, here's how Luna's federation routing would use it." Tracked as a follow-up question in §9 Q11 (registry-schema-ownership) and as a likely sibling issue to file in the-metafactory/soma if this design ratifies.
 
@@ -290,7 +290,7 @@ The substrate-independence claim — the thing this design is named after — is
 Today (post-Phase-A, pre-Soma):
 
 ```yaml
-operator: { id: andreas }
+principal: { id: andreas }
 stack:    { id: andreas/main, nkey_pub: SAA… }
 
 agents:
@@ -312,14 +312,14 @@ policy:
       home_stack: andreas/main
       role: [operator]
   roles:
-    - id: operator
+    - id: principal
       grants: [keyword.chat, keyword.async, keyword.team, dispatch.*]
 ```
 
-Post-Soma — **this is the v3.0.0 target shape per §5; today's cortex.yaml is the pre-Soma block above.** The block below is not what an operator's `cortex.yaml` looks like in v2.0.0; it is the shape the v3.0.0 cycle's `migrate-config` produces. Shown here to make the design concrete, not to pre-stage operator changes. Showing **both ends of the §2.5 spectrum** side-by-side — thick Luna (multi-substrate, full SomaCore) and thin Echo (single-substrate, persona + slash-commands only):
+Post-Soma — **this is the v3.0.0 target shape per §5; today's cortex.yaml is the pre-Soma block above.** The block below is not what an principal's `cortex.yaml` looks like in v2.0.0; it is the shape the v3.0.0 cycle's `migrate-config` produces. Shown here to make the design concrete, not to pre-stage principal changes. Showing **both ends of the §2.5 spectrum** side-by-side — thick Luna (multi-substrate, full SomaCore) and thin Echo (single-substrate, persona + slash-commands only):
 
 ```yaml
-operator: { id: andreas }
+principal: { id: andreas }
 stack:    { id: andreas/main, nkey_pub: SAA… }
 
 agents:
@@ -394,7 +394,7 @@ The first concrete deliverable, once this design ratifies:
    - **In-process** (`home` mode): projects a Soma assistant into `~/.config/cortex/agents.d/<name>.md` as the thin frontmatter+pointer fragment shown in §7.
    - **Daemon** (`daemon` mode): arc-installs a standalone bot from the Soma package; bot subscribes to Myelin subjects via the existing `MyelinRuntime` interface (no SessionHarness, no in-process spawn — pattern matches sage today).
 2. **Schema additions on the cortex side** — add `body: soma://...` to **both** `AgentSchema` (around line 421, for projection) and `PolicyPrincipalSchema` (around line 1124, for federation join) in `src/common/types/cortex-config.ts`. Optional string field at first (back-compat with pre-Soma agents that carry inline persona); cross-field validation enforces that when both are present they agree per id. Becomes the only path at v3.0.0 cutover.
-3. **`migrate-config` extension** — when an agent fragment carries inline persona + capabilities + trust, offer to lift those into a new Soma assistant scaffold under `~/.soma/profile/<id>/` and rewrite the fragment to `body: soma://...`. Idempotent. Operator pre-flight via `--check`.
+3. **`migrate-config` extension** — when an agent fragment carries inline persona + capabilities + trust, offer to lift those into a new Soma assistant scaffold under `~/.soma/profile/<id>/` and rewrite the fragment to `body: soma://...`. Idempotent. Principal pre-flight via `--check`.
 4. **Substrate provenance on chain-of-stamps** — coordinate with myelin#31 on whether `signed_by[].substrate` should be added before Phase D federation locks in. (See §9 Q3 — small extension, much cheaper to add in Phase B/C than retrofit in Phase E.)
 
 None of these is large. The harder work is the design ratification — once §5 sequencing is locked, the implementation is mechanical.
@@ -406,17 +406,17 @@ None of these is large. The harder work is the design ratification — once §5 
 | # | Question | Impact |
 |---|----------|--------|
 | **Q1** | ~~Fold into Phase C, or defer to v3?~~ **RESOLVED (this round):** defer to v3.0.0. C.2b/c is mid-execution ([PR #291](https://github.com/the-metafactory/cortex/pull/291)) and the metafactory ecosystem consistently moves away from growing scope mid-cutover. Operators pay two migrations; each is small and ratifiable in isolation. See §5 for the runner-up (v2.1.0 additive landing) and what's off the table (v2.0.0 fold). | ~~Schema-flip count: 1 vs 2~~ → committed to 2 |
-| **Q2** | **Reference URL grammar.** `body: soma://andreas/luna` or `body: did:mf:luna` (reuse existing DID grammar)? The DID form is already in agent fragments (`did: did:mf:luna`); using it as the Soma reference avoids inventing a new URL scheme. The `soma://` form makes the Soma layer explicit. Lean: reuse `did:mf:` for the operator-facing reference; Soma uses `did` → assistant lookup internally. | Documentation clarity; one fewer URL scheme |
+| **Q2** | **Reference URL grammar.** `body: soma://andreas/luna` or `body: did:mf:luna` (reuse existing DID grammar)? The DID form is already in agent fragments (`did: did:mf:luna`); using it as the Soma reference avoids inventing a new URL scheme. The `soma://` form makes the Soma layer explicit. Lean: reuse `did:mf:` for the principal-facing reference; Soma uses `did` → assistant lookup internally. | Documentation clarity; one fewer URL scheme |
 | **Q3** | **Substrate provenance on chain-of-stamps.** If alpha-as-Luna (Cursor) and luna-as-Luna (Claude Code) both sign with the same stack NKey, the audit trail loses substrate provenance. Add `signed_by[].substrate: "cursor" \| "claude-code" \| ...` before Phase D federation locks the envelope schema? | Audit fidelity post-federation |
-| **Q4** | **Federation model (§6 option (a) vs (b)).** Should the Phase D cloud network registry return Soma assistant metadata (profile, voice, public capability declarations) — option (a) — or just opaque principal data — option (b)? (a) is the profound version and matches the operator-vision script; (b) is simpler. | Phase D registry schema |
-| **Q5** | **Multi-presence trust.** If Luna's `claude-code` presence and `codex` presence are both online for the same operator on the same stack, how does the surface-router decide which one renders a Discord message? Today there's exactly one presence per agent. Soma multi-presence breaks that 1:1 mapping. | Surface-router routing logic |
+| **Q4** | **Federation model (§6 option (a) vs (b)).** Should the Phase D cloud network registry return Soma assistant metadata (profile, voice, public capability declarations) — option (a) — or just opaque principal data — option (b)? (a) is the profound version and matches the principal-vision script; (b) is simpler. | Phase D registry schema |
+| **Q5** | **Multi-presence trust.** If Luna's `claude-code` presence and `codex` presence are both online for the same principal on the same stack, how does the surface-router decide which one renders a Discord message? Today there's exactly one presence per agent. Soma multi-presence breaks that 1:1 mapping. | Surface-router routing logic |
 | **Q6** | **Soma-locality vs federation.** Soma is filesystem-local at `~/.soma/`. Federation means principals from other operators show up. Either (a) extend Soma to cover *remote* assistants discoverable via Phase D cloud registry, or (b) keep Soma local-only and let cortex/Myelin handle remote principals as opaque NKey identities. Q4 and Q6 are the same question viewed from different sides. | Soma scope |
-| **Q7** | **Daemon mode + Soma.** Soma's `daemon` mode subscribes to Myelin subjects directly. In cortex's worldview that's an `arc`-installable bot of `type: agent`. Does the Soma daemon ship as its own arc-installable repo (analogous to sage, alpha) or as a Soma command-line mode that the operator invokes from inside the Soma install? The two paths converge in implementation but diverge in operator ergonomics. | Distribution model |
+| **Q7** | **Daemon mode + Soma.** Soma's `daemon` mode subscribes to Myelin subjects directly. In cortex's worldview that's an `arc`-installable bot of `type: agent`. Does the Soma daemon ship as its own arc-installable repo (analogous to sage, alpha) or as a Soma command-line mode that the principal invokes from inside the Soma install? The two paths converge in implementation but diverge in principal ergonomics. | Distribution model |
 | **Q8** | **Writeback policy reconciliation.** Soma's writeback gate decides what cortex-substrate sessions are allowed to write back to Soma source. Today cortex has no concept of writeback (sessions run, emit envelopes, terminate; no body mutation). Adding writeback means the `ClaudeCodeHarness` needs a hook to capture session-end mutations and hand them to the Soma adapter. Phase scoping. | New cortex hook surface |
 | **Q9** | **Agent→principal→body binding rule under multi-presence.** §3's leading answer: every agent declares `body:` (projection target) AND a principal binding (explicit `agent.principal_id` or implicit when `agent.id == principal.id`); the principal carries its own `body:` for federation; both `body:` values for the agent–principal pair MUST equal the same `soma://...` URL. Multiple presence agents bound to one principal therefore share one body. Confirm this is the rule and the agent fragment stays source-of-truth (the agent declares its body; the principal table reflects it for federation lookups). | Where `body:` lives + multi-presence binding |
 | **Q10** | **`body:` URL grammar revisited.** Earlier draft listed `soma://andreas/luna` vs `did:mf:luna` as options. With §3 now showing `body:` co-living next to `nkey_pub?` on the principal record, and `did:mf:<name>` already being the assistant DID in `signed_by[].principal`, the natural call is `body: did:mf:luna` — reuse the existing DID, no new URL scheme. The `soma://` form survives only inside Soma's own filesystem layout (`~/.soma/profile/<did-tail>/`). | Documentation clarity |
 | **Q11** | **Federation registry layer placement — M6 transport, M7 surface, or part of Soma's M7 protocol?** §1's M7-layer reframe makes this question newly visible. Three coherent answers: **(i)** the Phase D cloud network registry is an M6 (composition) service that *carries* Soma metadata as opaque payload — schema is registry-defined, Soma fills the relevant fields; **(ii)** the registry is M7 infrastructure where Soma daemons publish themselves as peers alongside cortex/pilot/signal-collector — Soma is both a body protocol AND a registry peer; **(iii)** the registry schema itself is part of the Soma M7 protocol — Phase D is plumbing for a Soma-defined registry contract. Lean: **(i)** for v3.0.0 (cleanest layering — Phase D ships independently of Soma), with **(ii)** as the natural follow-up once Soma daemon mode is operational. (iii) is rejected as too coupled. Q4 captures *what* goes in the registry; Q11 picks *who defines the schema* and where the registry sits relative to Soma. | Federation registry ownership |
-| **Q12** | **Writeback-gate principal context.** §4 partitions PolicyEngine (dispatch in) and Soma writeback gate (body mutation out). Open: at session-end the substrate emits a writeback — does it carry the principal context (NKey, stack id, chain-of-stamps) or only the body context (which body, what diff)? Stateless-w.r.t.-cortex is simpler; principal-aware is more powerful (writeback policies become principal-aware: "only stack-NKey-signed substrate sessions can mutate Memory; cross-operator delegations can mutate ISA only"). Lean: principal-aware once chain-of-stamps reaches the writeback boundary (Phase B+); stateless for the initial cortex hook in Q8. | Writeback policy semantics |
+| **Q12** | **Writeback-gate principal context.** §4 partitions PolicyEngine (dispatch in) and Soma writeback gate (body mutation out). Open: at session-end the substrate emits a writeback — does it carry the principal context (NKey, stack id, chain-of-stamps) or only the body context (which body, what diff)? Stateless-w.r.t.-cortex is simpler; principal-aware is more powerful (writeback policies become principal-aware: "only stack-NKey-signed substrate sessions can mutate Memory; cross-principal delegations can mutate ISA only"). Lean: principal-aware once chain-of-stamps reaches the writeback boundary (Phase B+); stateless for the initial cortex hook in Q8. | Writeback policy semantics |
 
 ---
 

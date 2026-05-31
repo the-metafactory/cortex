@@ -27,7 +27,7 @@ service = "grove-api"
 # Optional vars (set via `wrangler secret put` or `[vars]` block):
 # CORTEX_FORWARDER_URL   — MIG-5.6: public URL of the local cortex
 #                           gh-webhook-receiver (typically a tunnel
-#                           exposing the operator laptop's
+#                           exposing the principal laptop's
 #                           127.0.0.1:8770). When set, validated webhooks
 #                           are additionally forwarded here so cortex can
 #                           publish `local.{org}.github.{event}.{action}`

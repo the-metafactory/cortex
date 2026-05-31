@@ -142,16 +142,16 @@ export type StackConfig = z.infer<typeof StackConfigSchema>;
  * Resolved stack identity — returned by `deriveStackId`. The three fields
  * are redundant by design: callers that need the two segments separately
  * (subject derivation, NKey lookup) get them already-split; callers that
- * just want the canonical `{operator}/{stack}` literal use `id`. Splitting
+ * just want the canonical `{principal}/{stack}` literal use `id`. Splitting
  * on `/` is mechanical but the helper does it once at boot so consumers
  * never have to.
  */
 export interface DerivedStackId {
-  /** The `{operator_id}` segment. */
-  operator: string;
+  /** The `{principal_id}` segment. */
+  principal: string;
   /** The `{stack_id}` segment. */
   stack: string;
-  /** The canonical literal — `${operator}/${stack}`. */
+  /** The canonical literal — `${principal}/${stack}`. */
   id: string;
 }
 
@@ -166,11 +166,9 @@ export interface DerivedStackId {
  * `CortexConfig`/`LoadedConfig` pass it through unchanged.
  */
 export interface DeriveStackIdInput {
-  // v3.0.0 BREAKING (manifest PR-11) — renamed from `operator?` per the
-  // top-level CortexConfig `principal:` rename. The internal `operator`
-  // variable below is the stack-id-half of the `{operator}/{stack}` grammar
-  // and stays as-is (the grammar name is distinct from the
-  // operator-the-human concept).
+  // v3.0.0 BREAKING (manifest PR-11) — renamed from the legacy field per
+  // the top-level CortexConfig `principal:` rename. The internal segment
+  // below is the principal-id-half of the `{principal}/{stack}` grammar.
   principal?: { id?: string };
   stack?: { id: string };
 }
@@ -180,7 +178,7 @@ export interface DeriveStackIdInput {
  *
  * Resolution order:
  *   1. **Explicit:** `config.stack?.id` set → split and return verbatim.
- *      The Zod schema enforces the `{operator}/{stack}` regex, so the
+ *      The Zod schema enforces the `{principal}/{stack}` regex, so the
  *      split is guaranteed to yield two non-empty segments.
  *   2. **Default-derived:** no `stack:` block → `${principal.id}/default`.
  *      Preserves identity for existing deployments that haven't migrated
@@ -215,14 +213,14 @@ export interface DeriveStackIdInput {
 export function deriveStackId(config: DeriveStackIdInput): DerivedStackId {
   // Explicit stack block — split on `/` and return.
   if (config.stack?.id) {
-    const [operator, stack] = config.stack.id.split("/");
+    const [principalSeg, stack] = config.stack.id.split("/");
     // The regex guarantees both segments are present and non-empty, so
     // these are never undefined in practice; the `??` is structural-
     // soundness insurance only (a downstream change to the regex that
     // accidentally permits an empty segment would surface here instead
     // of crashing the caller with `undefined.toString()`).
     return {
-      operator: operator ?? "default",
+      principal: principalSeg ?? "default",
       stack: stack ?? "default",
       id: config.stack.id,
     };
@@ -232,10 +230,10 @@ export function deriveStackId(config: DeriveStackIdInput): DerivedStackId {
   // guards the test-only path where a caller passes a partial config object
   // without a populated principal block; production callers always have
   // principal.id present because `PrincipalConfigSchema.id` is regex-enforced.
-  const operator = config.principal?.id ?? "default";
+  const principalSeg = config.principal?.id ?? "default";
   return {
-    operator,
+    principal: principalSeg,
     stack: "default",
-    id: `${operator}/default`,
+    id: `${principalSeg}/default`,
   };
 }

@@ -36,7 +36,7 @@ The spec says "working-but-not-blocked". Concretely, the set of states that land
 | State | In grid? | Why |
 |---|---|---|
 | `running` | ✅ | Actively producing work — the canonical "working" signal |
-| `dispatched` | ✅ | Accepted, about to run — still holding a slot, still "working" from operator's perspective |
+| `dispatched` | ✅ | Accepted, about to run — still holding a slot, still "working" from principal's perspective |
 | `queued` | ✅ | Waiting to start but already assigned — Luna is "working on" this even if nothing is moving yet |
 | `blocked` | ❌ | Already surfaced in F-6 focus area; double-surfacing fragments attention |
 | `completed` / `failed` / `cancelled` | ❌ | Terminal; no ongoing work |
@@ -104,7 +104,7 @@ interface WorkingAgentTile {
 }
 ```
 
-**Sort:** server returns rows ordered by `primary_state_rank ASC, primary_assignment.updated_at DESC`. Most-active agents first. Client does not re-sort in v1 — the grid is small enough that operator ordering is not a felt need.
+**Sort:** server returns rows ordered by `primary_state_rank ASC, primary_assignment.updated_at DESC`. Most-active agents first. Client does not re-sort in v1 — the grid is small enough that principal ordering is not a felt need.
 
 **No filters, no pagination.** The grid is a fixed visual surface. If a future iteration needs filtering ("show only heads"), it composes cleanly on top. The natural bound on the result set is `COUNT(DISTINCT agent_id)` in `agent_task_assignment` filtered by `state IN ('running','dispatched','queued')` — tiny in Phase B (single-digit to low-tens). No explicit `LIMIT` is needed in v1; if operational reality pushes that bound up a couple of orders of magnitude, the cap gets sized against the agent denominator (not copied from F-8's task denominator, which caps a different thing).
 
@@ -122,7 +122,7 @@ interface WorkingAgentTile {
 
 - Fixed tile dimensions so the grid wraps predictably. `grid-template-columns: repeat(auto-fill, minmax(160px, 1fr))`.
 - Tiles carry the same priority left-border accent as F-6 focus cards (P0 red, P1 amber, P2 muted, P3 dashed) so fleet-health scanning stays color-consistent with the focus row.
-- State label colour mirrors F-8's aggregate-state pill (accent blue for running, muted for queued/dispatched) — the operator's visual vocabulary is already trained.
+- State label colour mirrors F-8's aggregate-state pill (accent blue for running, muted for queued/dispatched) — the principal's visual vocabulary is already trained.
 - `+N` badge (Decision 1's "additional active count") renders as a small chip in the top-right of the tile when `additional_active_count > 0`. Clicking it does **not** drill in F-9 — see Decision 6.
 
 **Empty state** — see Decision 7.
@@ -131,7 +131,7 @@ interface WorkingAgentTile {
 
 Consistent with F-8 Decision 5: the drill-down entry point is singular. `+N` badge is not a selector for a specific non-primary assignment in F-9 (would require a disambiguation popover, which is scope creep). The badge is metadata.
 
-**If the operator wants to drill into the non-primary assignment:** use F-8's task table (each task is its own row) or F-6 if the assignment is blocked. The grid is the at-a-glance view, not a precision entry point.
+**If the principal wants to drill into the non-primary assignment:** use F-8's task table (each task is its own row) or F-6 if the assignment is blocked. The grid is the at-a-glance view, not a precision entry point.
 
 ## Decision 7 — Empty state: single heartbeat line
 

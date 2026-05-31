@@ -346,7 +346,7 @@ describe("startGithubWebhookReceiver — happy path", () => {
       // Receiver acks even when publish fails — fire-and-forget per
       // the MyelinRuntime.publish contract.
       expect(res.status).toBe(200);
-      // The error was logged so an operator can find it.
+      // The error was logged so a principal can find it.
       expect(errors.some((e) => e.includes("publish failed"))).toBe(true);
     } finally {
       console.error = originalError;

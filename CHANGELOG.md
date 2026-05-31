@@ -47,24 +47,25 @@ deployment-config + env-var + TS-type surface.
 
 ### BREAKING
 
-- **`cortex.yaml` top-level key renamed `operator:` → `principal:`** —
-  per R3 of the vocabulary migration. Operators upgrading from v2.x MUST
+- **`cortex.yaml` top-level key renamed `operator:` → `principal:`** — <!-- historical: legacy config key name -->
+  per R3 of the vocabulary migration. Principals upgrading from v2.x MUST
   run `cortex migrate-config <your-config.yaml>` to rewrite their config
   before installing v3. The transition-release dual-block reader
   (`DualBlockConflictError`) that accepted both keys on v2.x is removed
-  — a config carrying the legacy `operator:` key is treated as
+  — a config carrying the legacy `operator:` key is treated as <!-- historical: legacy config key name -->
   bot.yaml-shape and falls through to the legacy reader, which steers
-  the operator at `cortex migrate-config`.
+  the principal at `cortex migrate-config`.
 - **`CORTEX_OPERATOR*` env-var fallback removed** — the v2.x compat shim
   that resolved `CORTEX_OPERATOR*` with a deprecation warning is gone.
   Operators running those vars rename them to `CORTEX_PRINCIPAL*` before
   installing v3. `GROVE_OPERATOR*` (the pre-cortex tier) is still
   accepted — its removal is owned by the separate `GROVE_*` → `CORTEX_*`
   namespace migration that retires at MIG-8.
-- **`OperatorSchema` / `Operator` deprecated TypeScript aliases removed**
+- **`OperatorSchema` / `Operator` deprecated TypeScript aliases removed** <!-- historical: removed symbol names -->
   from `src/common/types/cortex-config.ts`. External importers update to
   `PrincipalConfigSchema` / `PrincipalConfig`.
-- **`DeriveStackIdInput.operator?` renamed to `.principal?`** —
+- **`DeriveStackIdInput.operator?` renamed to `.principal?`** — <!-- historical: removed field name -->
+
   the input shape `deriveStackId(…)` consumes. Cortex's internal
   call-sites (`src/cortex.ts:325`) updated in lockstep. External
   importers (rare — this is a boot-time resolver) update to the new
@@ -94,7 +95,7 @@ deployment-config + env-var + TS-type surface.
 ### Migration path for v2.x operators
 
 ```bash
-# 1. Convert your cortex.yaml from the legacy `operator:` shape to
+# 1. Convert your cortex.yaml from the legacy `operator:` shape to  <!-- historical: legacy config key name -->
 #    `principal:`. The CLI is idempotent — running it twice produces
 #    the same output.
 cortex migrate-config ~/.config/cortex/cortex.yaml \
@@ -121,7 +122,7 @@ arc upgrade Cortex
   Luna's myelin PR-6..PR-13 + cortex#396..#398 consumer cascades. v3
   doesn't move bytes; it removes the back-compat shims around the
   already-renamed wire.
-- The migrate-config CLI continues to READ legacy `operator:`-shaped
+- The migrate-config CLI continues to READ legacy `operator:`-shaped <!-- historical: legacy config key name -->
   bot.yaml + cortex.yaml input (historical record per the manifest's
   completion-signal allow-list). It just emits `principal:`-shaped
   output now.

@@ -54,7 +54,7 @@ export class MissingPositionalError extends CliArgsError {
  * match the pre-cortex#66 message wording ("unknown flag: X") for both
  * the universally-unknown case AND the per-subcommand-not-allowed case.
  *
- * Echo cortex#66 round-1 M3 — operator-visible error wording changed
+ * Echo cortex#66 round-1 M3 — principal-visible error wording changed
  * between F-3/F-4 legacy parser ("unknown flag: --verbose") and the
  * generic parser ("flag --verbose is not valid for subcommand 'list'").
  * The behavior is the same (both reject the flag at exit 2); only the

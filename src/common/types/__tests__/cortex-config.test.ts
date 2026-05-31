@@ -111,15 +111,15 @@ describe("PrincipalConfigSchema", () => {
   // cortex#141 — letter-prefix rule (unified with StackConfigSchema)
   // ---------------------------------------------------------------------
 
-  test("accepts canonical letter-prefixed operator ids", () => {
-    // The realistic operator population — all letter-prefixed today.
+  test("accepts canonical letter-prefixed principal ids", () => {
+    // The realistic principal population — all letter-prefixed today.
     expect(PrincipalConfigSchema.parse({ id: "andreas" }).id).toBe("andreas");
     expect(PrincipalConfigSchema.parse({ id: "jcfischer" }).id).toBe("jcfischer");
     expect(PrincipalConfigSchema.parse({ id: "metafactory" }).id).toBe("metafactory");
     expect(PrincipalConfigSchema.parse({ id: "team-research" }).id).toBe("team-research");
   });
 
-  test("accepts operator id with internal digits (only the prefix is gated)", () => {
+  test("accepts principal id with internal digits (only the prefix is gated)", () => {
     // The rule is letter-PREFIX, not letter-only. Internal digits are fine
     // — `team-42-research`, `andreas-2026` etc. round-trip through both
     // schemas after cortex#141 closes the gap.
@@ -128,7 +128,7 @@ describe("PrincipalConfigSchema", () => {
     expect(PrincipalConfigSchema.parse({ id: "a1" }).id).toBe("a1");
   });
 
-  test("rejects digit-prefix operator id (cortex#141 — letter-prefix rule)", () => {
+  test("rejects digit-prefix principal id (cortex#141 — letter-prefix rule)", () => {
     // The unified grammar requires letter-prefix on both `PrincipalConfigSchema.id`
     // and `StackConfigSchema.id` segments. A digit-prefix id like `"2andreas"`
     // would default-derive to `"2andreas/default"` — a string the stack
@@ -138,20 +138,20 @@ describe("PrincipalConfigSchema", () => {
     expect(() => PrincipalConfigSchema.parse({ id: "2andreas" })).toThrow(
       /starting with a letter/,
     );
-    // The error message MUST surface the migration hint so operators see
+    // The error message MUST surface the migration hint so principals see
     // what to do, not just what's wrong.
     expect(() => PrincipalConfigSchema.parse({ id: "2andreas" })).toThrow(
       /team2andreas|andreas-2026/,
     );
   });
 
-  test("rejects all-digit operator id", () => {
+  test("rejects all-digit principal id", () => {
     expect(() => PrincipalConfigSchema.parse({ id: "123" })).toThrow(
       /starting with a letter/,
     );
   });
 
-  test("rejects hyphen-prefix operator id (must start with a letter, not punctuation)", () => {
+  test("rejects hyphen-prefix principal id (must start with a letter, not punctuation)", () => {
     expect(() => PrincipalConfigSchema.parse({ id: "-andreas" })).toThrow(
       /starting with a letter/,
     );
@@ -226,7 +226,7 @@ describe("AgentSchema", () => {
   });
 
   // ---------------------------------------------------------------------
-  // cortex#145 — letter-prefix rule (closes the operator/stack/agent
+  // cortex#145 — letter-prefix rule (closes the principal/stack/agent
   // letter-prefix trilogy: cortex#141 → cortex#144 → cortex#145)
   // ---------------------------------------------------------------------
 
@@ -254,7 +254,7 @@ describe("AgentSchema", () => {
     expect(() => AgentSchema.parse(minAgent({ id: "2agent" }))).toThrow(
       /starting with a letter/,
     );
-    // The error message MUST surface the migration hint so operators see
+    // The error message MUST surface the migration hint so principals see
     // what to do, not just what's wrong.
     expect(() => AgentSchema.parse(minAgent({ id: "2agent" }))).toThrow(
       /team-2agent|agent-2026/,
@@ -287,7 +287,7 @@ describe("AgentSchema", () => {
   test("rejects trust entries that aren't agent ids (Holly W2-3; tightened by cortex#145)", () => {
     // Common typo / paste-bug: putting a Discord user id into the trust list.
     // Schema catches it with the same `^[a-z][a-z0-9-]*$` regex as agent ids
-    // (operator/stack/agent letter-prefix trilogy closed by cortex#145). The
+    // (principal/stack/agent letter-prefix trilogy closed by cortex#145). The
     // letter-prefix rule catches the digit-only Discord-snowflake paste-bug
     // deterministically — pre-#145 the regex was `^[a-z0-9-]+$` and digit-only
     // entries silently slipped past the structural check.
@@ -409,7 +409,7 @@ describe("NatsConfigSchema", () => {
 
   test("NatsIdentity rejects non-NKey publicKey", () => {
     expect(() => NatsIdentitySchema.parse({
-      seedPath: "/etc/cortex/operator.nk",
+      seedPath: "/etc/cortex/operator-account.nk",
       publicKey: "not-an-nkey",
     })).toThrow();
   });
@@ -419,11 +419,11 @@ describe("NatsConfigSchema", () => {
     // placeholders like "U1" or "UABCDEF1234567890" must be rejected so a
     // typo at config time fails fast, not silently at NatsLink.connect.
     expect(() => NatsIdentitySchema.parse({
-      seedPath: "/etc/cortex/operator.nk",
+      seedPath: "/etc/cortex/operator-account.nk",
       publicKey: "U1",
     })).toThrow();
     expect(() => NatsIdentitySchema.parse({
-      seedPath: "/etc/cortex/operator.nk",
+      seedPath: "/etc/cortex/operator-account.nk",
       publicKey: "UABCDEF1234567890",
     })).toThrow();
   });
@@ -435,13 +435,13 @@ describe("NatsConfigSchema", () => {
     const full = "U" + (valid55 + "Z");
     expect(full).toHaveLength(56);
     const parsed = NatsIdentitySchema.parse({
-      seedPath: "/etc/cortex/operator.nk",
+      seedPath: "/etc/cortex/operator-account.nk",
       publicKey: full,
     });
     expect(parsed.publicKey).toBe(full);
 
     expect(() => NatsIdentitySchema.parse({
-      seedPath: "/etc/cortex/operator.nk",
+      seedPath: "/etc/cortex/operator-account.nk",
       publicKey: "U" + "abcdefghijklmnopqrstuvwxyz".padEnd(55, "A"),
     })).toThrow();
   });
@@ -671,7 +671,7 @@ describe("CortexConfigSchema", () => {
         discordId: "1134000000000000000",
       },
       agents: [
-        minAgent({ id: "luna", roles: ["operator"], trust: ["echo", "holly"] }),
+        minAgent({ id: "luna", roles: ["principal"], trust: ["echo", "holly"] }),
         minAgent({ id: "echo", roles: ["agent-restricted"], trust: ["luna", "holly"] }),
         minAgent({ id: "holly", roles: ["agent-restricted"], trust: ["luna"] }),
       ],
@@ -759,7 +759,7 @@ describe("CortexConfigSchema", () => {
     // Top-level `discord:[]` was the grove-v2 sibling of `agent:`. In cortex,
     // per-instance credentials live under `agents[<id>].presence.discord`.
     // Without this guard, a hand-migration miss strips the legacy block
-    // silently and the operator gets a headless agent without an obvious
+    // silently and the principal gets a headless agent without an obvious
     // migration signal (cortex#245 removed the per-agent "at least one
     // presence" refine, so headless is no longer a useful proxy alert).
     expect(() => CortexConfigSchema.parse({

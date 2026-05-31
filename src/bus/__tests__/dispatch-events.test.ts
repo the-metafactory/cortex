@@ -325,10 +325,10 @@ describe("createDispatchTaskAbortedEvent", () => {
       agentId: "cortex",
       startedAt: STARTED_AT,
       abortedAt: COMPLETED_AT,
-      reason: "operator-cancel: SIGINT received during shutdown drain",
+      reason: "principal-cancel: SIGINT received during shutdown drain",
     });
     expect(env.payload.reason).toBe(
-      "operator-cancel: SIGINT received during shutdown drain",
+      "principal-cancel: SIGINT received during shutdown drain",
     );
     expect(validateEnvelope(env).ok).toBe(true);
   });

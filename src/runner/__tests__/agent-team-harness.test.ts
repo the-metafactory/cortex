@@ -20,7 +20,7 @@ const REQUEST: DispatchRequest = {
     {
       kind: "env",
       data: {
-        operator: "andreas",
+        principal: "andreas",
         entity: "cortex#408",
         project: "cortex",
       },
@@ -131,7 +131,7 @@ describe("AgentTeamHarness", () => {
     expect(opts?.groveChannel).toBe("codex");
     expect(opts?.groveNetwork).toBe("direction-a");
     expect(opts?.additionalArgs).toEqual(["--model", "sonnet"]);
-    expect(opts?.operator).toBe("andreas");
+    expect(opts?.principal).toBe("andreas");
     expect(opts?.entity).toBe("cortex#408");
     expect(opts?.project).toBe("cortex");
   });

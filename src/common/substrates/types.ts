@@ -180,7 +180,7 @@ export interface Capability {
  * **Why a negative deny-list in addition to allow?** Some substrates
  * expose a wildcard `*` allow-by-default mode (e.g. CC's hook-free runs).
  * In those cases, `deny[]` is the only practical surface for an
- * operator-side ACL — "let it do anything except this specific tool".
+ * principal-side ACL — "let it do anything except this specific tool".
  * Most call sites set only `allow[]` and leave `deny[]` undefined.
  */
 export interface ToolCapability {
@@ -192,7 +192,7 @@ export interface ToolCapability {
   allow: string[];
   /**
    * Optional deny-list. Intersection with `allow[]` resolves to "denied".
-   * Used when `allow[]` is a wildcard and the operator wants to subtract
+   * Used when `allow[]` is a wildcard and the principal wants to subtract
    * specific tools. Most dispatches leave this undefined.
    */
   deny?: string[];
@@ -230,7 +230,7 @@ export interface ToolCapability {
  * **Schema growth path.** Adding a new field here is a non-breaking
  * change — all fields are optional and unknown fields are simply ignored
  * by any harness that doesn't read them. A.3 / A.5 / B may introduce
- * stack-aware fields (operator id, stack id, signing key hint) into this
+ * stack-aware fields (principal id, stack id, signing key hint) into this
  * same block.
  */
 export interface DispatchRuntime {
@@ -262,8 +262,8 @@ export interface DispatchRuntime {
     repos: string[];
   };
   /**
-   * When `true`, disables the bash guard entirely. Used by operator DMs
-   * (the highest-privilege role) where the operator is trusted to run
+   * When `true`, disables the bash guard entirely. Used by principal DMs
+   * (the highest-privilege role) where the principal is trusted to run
    * arbitrary commands. Future non-CC harnesses ignore.
    */
   bashGuardDisabled?: boolean;
@@ -312,7 +312,7 @@ export interface DispatchRuntime {
  *     the persona file. Kept as an optional provenance hint and a
  *     forward door for substrates that DO inject the persona themselves
  *     at dispatch time.
- *   - `prompt` — the operator-or-agent-generated work request.
+ *   - `prompt` — the principal-or-agent-generated work request.
  *   - `tools` — Q1-α lock-in (substrate-native tool strings).
  *   - `context` — pluggable context bundle: discord-history, attachments,
  *     env vars, prior session state. Harness consumes whichever kinds it
@@ -367,7 +367,7 @@ export interface DispatchRequest {
    * Common kinds in v1:
    *   - `"discord-history"` — array of recent messages in the thread
    *   - `"attachments"` — list of `AttachmentInfo` objects
-   *   - `"env"` — operator-and-entity hints (operator id, repo, entity)
+   *   - `"env"` — principal-and-entity hints (principal id, repo, entity)
    *
    * The shape is `unknown` because we deliberately don't constrain
    * extensibility — adding a new context kind should not require a
@@ -393,7 +393,7 @@ export interface DispatchRequest {
      * want claude-code but you're calling a bus-peer harness").
      *
      * Stack identity (Q1) is NOT carried here — it's a property of
-     * the operator's cortex.yaml `stack:` block (A.5 work). The
+     * the principal's cortex.yaml `stack:` block (A.5 work). The
      * harness receives stack identity via the runner's outer scope,
      * not as a per-dispatch parameter.
      */
@@ -419,10 +419,10 @@ export interface DispatchRequest {
    * Q5 lock-in (design doc §5, 2026-05-13).
    *
    * Subject suffix for streaming envelopes. The full subject is
-   *   `local.{operator}.{stack}.dispatch.<harnessId>.<requestId>.progress`
-   *   `local.{operator}.{stack}.dispatch.<harnessId>.<requestId>.complete`
-   *   `local.{operator}.{stack}.dispatch.<harnessId>.<requestId>.error`
-   *   `local.{operator}.{stack}.dispatch.<harnessId>.<requestId>.timeout`
+   *   `local.{principal}.{stack}.dispatch.<harnessId>.<requestId>.progress`
+   *   `local.{principal}.{stack}.dispatch.<harnessId>.<requestId>.complete`
+   *   `local.{principal}.{stack}.dispatch.<harnessId>.<requestId>.error`
+   *   `local.{principal}.{stack}.dispatch.<harnessId>.<requestId>.timeout`
    *
    * A.1 types the convention but does NOT wire NATS publishing — the
    * harness emits envelopes via the async-iterable yield, and the
@@ -513,7 +513,7 @@ export interface DispatchRequest {
  *
  * **Cross-references:**
  *   - cortex#91 §"Proposed interface" — the canonical spec.
- *   - design doc §3.1 ("multi-stack per operator") — why this is M6.
+ *   - design doc §3.1 ("multi-stack per principal") — why this is M6.
  *   - design doc §4 "cortex#91" — dependency graph.
  *   - plan doc §2 Phase A.1 — implementation slice.
  */

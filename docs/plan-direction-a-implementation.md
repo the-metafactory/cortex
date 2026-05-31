@@ -18,7 +18,7 @@ Direction A is ~75% done on main. The earlier plan (closed PR #415) treated MIG-
 
 | Stage | Sub-issue | Status |
 |---|---|---|
-| 1 — adapter agent identity flip | #406 | **DONE** (no `BotConfig.agent.{discord,mattermost,slack}` refs anywhere in src) |
+| 1 — adapter agent identity flip | #406 | **DONE** (no `AgentConfig.agent.{discord,mattermost,slack}` refs anywhere in src) |
 | 2 — myelin chat capability + spec wiring | #407 | **Partial** (myelin#181 open for chat capability; cortex-side wiring done) |
 | 3 — `EnvelopePublishingAdapterBase` + `AgentTeamHarness` | #408 | **Partial** (`surfaceConfig`+`renderEnvelope` done on all three adapters; no `AgentTeamHarness` SessionHarness wrapping the existing `src/runner/agent-team.ts`; no shared base class) |
 | 4 — Discord adapter publishes inbound dispatch envelopes | #409 | **NOT DONE** — substantive work. Adapter currently routes user messages via `onMessage` callback → `src/bus/dispatch-handler.ts` (1291 LOC in-process path). Stage 4 = flip that to publish a bus envelope instead. |
@@ -153,7 +153,7 @@ The abortive autonomous loop on PR #416 surfaced critical lessons:
 ### Done
 
 - Design layer: `docs/design-platform-adapter-dispatch-publishing.md` + `docs/design-myelin-osi-scenarios.md` + `CONTEXT.md` corrections (PR #414, awaiting review)
-- Stage 1 (#406): adapter agent identity — `agent: Agent` constructor signature, no legacy `BotConfig.agent[]` reads
+- Stage 1 (#406): adapter agent identity — `agent: Agent` constructor signature, no legacy `AgentConfig.agent[]` reads
 - Stage 5 (#410): dispatch-sink via `surfaceConfig.render` — all three adapters
 - Stage 6 sink parity (#411 partial): all three adapters have matching surfaceConfig shape
 - Existing infrastructure on main: `src/adapters/{discord,mattermost,slack}/`, `src/adapters/types.ts`, `src/adapters/envelope-renderer.ts`, `src/bus/surface-router.ts`, `src/runner/agent-team.ts`, `HarnessId` enum at `src/common/substrates/types.ts:116`

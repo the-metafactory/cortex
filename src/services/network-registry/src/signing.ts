@@ -155,7 +155,7 @@ export async function signEd25519(
 /**
  * Derive the raw 32-byte Ed25519 public key from a PKCS#8 private key.
  * Used at boot to surface the registry's pubkey at GET /registry/pubkey
- * without the operator having to maintain two secrets.
+ * without the principal having to maintain two secrets.
  *
  * Approach: import the PKCS#8 key, export it as JWK, then base64-decode
  * the `x` field (which is the raw public key in url-safe base64).
@@ -189,7 +189,7 @@ export async function pubkeyFromPkcs8(privateKeyB64: string): Promise<string> {
  *
  * NOT used at runtime — production deployments provision the registry
  * key out-of-band via `wrangler secret put`. Kept here so tests have a
- * one-call way to mint operator credentials.
+ * one-call way to mint principal credentials.
  */
 export async function generateKeypair(): Promise<{
   privateKeyB64: string;

@@ -19,7 +19,7 @@ const FIXTURES = join(import.meta.dir, "fixtures");
 
 describe("loadAgentsDirectory", () => {
   describe("happy path", () => {
-    test("returns [] for non-existent directory (operator hasn't created it)", () => {
+    test("returns [] for non-existent directory (principal hasn't created it)", () => {
       const agents = loadAgentsDirectory(join(tmpdir(), `nonexistent-${Date.now()}`));
       expect(agents).toEqual([]);
     });
@@ -182,7 +182,7 @@ runtime:
     test("skips non-yaml files silently", () => {
       const dir = mkdtempSync(join(tmpdir(), "agents-d-mixed-"));
       writeFileSync(join(dir, "README.md"), "this is documentation, not a fragment\n");
-      writeFileSync(join(dir, "notes.txt"), "operator notes\n");
+      writeFileSync(join(dir, "notes.txt"), "principal notes\n");
       // Drop one valid fragment so we know the loader still picked something up
       writeFileSync(
         join(dir, "echo.yaml"),
@@ -325,7 +325,7 @@ runtime:
     });
 
     test("logs warning when agent.id differs from filename stem", () => {
-      // Echo N6 on cortex#62 — operator-UX warn for id↔filename drift.
+      // Echo N6 on cortex#62 — principal-UX warn for id↔filename drift.
       const dir = mkdtempSync(join(tmpdir(), "agents-d-id-mismatch-"));
       const personaPath = join(dir, "echo.md");
       writeFileSync(personaPath, `---\ndisplayName: Echo\n---\n`);

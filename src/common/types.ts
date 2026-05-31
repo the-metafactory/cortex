@@ -63,10 +63,10 @@ export interface PullRequestUpsertData {
  *     dashboard subscription split (D.5.1) and the badge colour (D.5.3).
  *   - `data_residency`  — free-form region tag (e.g. "nz", "eu"); rendered
  *     verbatim in the badge alongside the classification chip.
- *   - `home_principal`   — `signed_by[0].principal` operator segment with
- *     the `did:mf:` prefix stripped. Drives D.5.2 per-operator slicing.
+ *   - `home_principal`   — `signed_by[0].principal` principal segment with
+ *     the `did:mf:` prefix stripped. Drives D.5.2 per-principal slicing.
  *     The cloud worker also keeps `sessions.operator_id` (the API-key
- *     owner) which is the *receiving* operator; `home_principal` is who
+ *     owner) which is the *receiving* principal; `home_principal` is who
  *     the work originated from. For purely-local traffic the two match.
  */
 export interface SessionSovereignty {

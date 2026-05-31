@@ -1113,7 +1113,7 @@ export interface SystemDispatchStageOpts {
  *
  * Emitted at each stage of the runner's inbound dispatch path WHEN
  * tracing is enabled (`CORTEX_TRACE_DISPATCH=1` or `tracing.dispatch:
- * true`). Off by default — no caller emits these unless the operator
+ * true`). Off by default — no caller emits these unless the principal
  * opts in, so there is zero overhead in the default configuration.
  *
  * The envelope is principal-local (`system.*` convention) and joins to

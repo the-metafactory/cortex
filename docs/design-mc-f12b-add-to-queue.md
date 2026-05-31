@@ -13,17 +13,17 @@
 
 §3.4 of the parent spec contains one sentence about add-to-queue: *"the issue view has an 'add to queue' affordance that creates a task row with a `sourceRef` pointer into the existing `issues` table"*. The §9 Phase E bullet repeats it as one of five capabilities. F-12 shipped four of those five; this PR designs the fifth.
 
-The reason the split happened (F-12 Decision 1) was that the four assignment-state verbs all act on existing rows — every endpoint takes `:assignmentId`, every mutation reuses `applyTransition` — and a reviewer could audit them as a class. Add-to-queue is qualitatively different: it spans URL parsing, an external-source fetch (calling `gh` to pull title/body/labels), a duplicate-check against `tasks.source_external_id`, a UI affordance that doesn't yet exist anywhere on the dashboard, and the empty-assignment task lifecycle (zero `agent_task_assignment` rows until the operator hits Dispatch from F-12). Folding it into F-12 would have halved the reviewer's ability to audit the assignment-state-mutation class.
+The reason the split happened (F-12 Decision 1) was that the four assignment-state verbs all act on existing rows — every endpoint takes `:assignmentId`, every mutation reuses `applyTransition` — and a reviewer could audit them as a class. Add-to-queue is qualitatively different: it spans URL parsing, an external-source fetch (calling `gh` to pull title/body/labels), a duplicate-check against `tasks.source_external_id`, a UI affordance that doesn't yet exist anywhere on the dashboard, and the empty-assignment task lifecycle (zero `agent_task_assignment` rows until the principal hits Dispatch from F-12). Folding it into F-12 would have halved the reviewer's ability to audit the assignment-state-mutation class.
 
-F-12b therefore lives in its own design + PR. Together with F-12 it closes the Phase E iteration-tracker bullet. The two are independent at the route level (no shared endpoint), share two pieces of new wiring (the empty-assignment Dispatch site at `dashboard/index.html:2134` and the `operator.curation` event family), and share the synthetic shadow-session helper described below.
+F-12b therefore lives in its own design + PR. Together with F-12 it closes the Phase E iteration-tracker bullet. The two are independent at the route level (no shared endpoint), share two pieces of new wiring (the empty-assignment Dispatch site at `dashboard/index.html:2134` and the `principal.curation` event family), and share the synthetic shadow-session helper described below.
 
 **Invariant the implementer must absorb — `tasks.source_external_id` is a free-form `TEXT` column, no UNIQUE constraint, no index** (verified at `src/mission-control/db/schema.ts:21–35`). The schema accepts duplicate rows for the same upstream issue without complaint. F-12b enforces dedup in application code (Decision 5), not in SQL. Adding a partial unique index is in scope for this PR's scaffolding but out of scope for behaviour — see Decision 5's escape-hatch discussion.
 
-**Invariant the implementer must absorb — `sessions.assignment_id` is `NOT NULL REFERENCES agent_task_assignment(id) ON DELETE CASCADE`** (verified at `src/mission-control/db/schema.ts:70–79`). A "session attached to a task with zero assignments" is impossible at the schema level. Decision 8's `task-shadow-{taskId}` helper threads this needle by creating a synthetic *assignment* row first (against a synthetic agent), then attaching the shadow session to it; both are operator-visible only via the curation event log they anchor, never as runnable rows.
+**Invariant the implementer must absorb — `sessions.assignment_id` is `NOT NULL REFERENCES agent_task_assignment(id) ON DELETE CASCADE`** (verified at `src/mission-control/db/schema.ts:70–79`). A "session attached to a task with zero assignments" is impossible at the schema level. Decision 8's `task-shadow-{taskId}` helper threads this needle by creating a synthetic *assignment* row first (against a synthetic agent), then attaching the shadow session to it; both are principal-visible only via the curation event log they anchor, never as runnable rows.
 
 **Invariant the implementer must absorb — Grove's existing GitHub access path is `gh` CLI via `Bun.spawn`** (verified at `src/bot/lib/github-sync.ts:412–434`). No `@octokit/rest` import exists; only `@octokit/webhooks` is in `package.json` for HMAC verification of inbound webhooks. F-12b reuses the `gh` CLI shape (Decision 3) — no new SDK dependency, no new auth ceremony.
 
-## Decision 1 — Where the operator clicks "Add to queue": a button at the top of the F-8 task table
+## Decision 1 — Where the principal clicks "Add to queue": a button at the top of the F-8 task table
 
 The user's review enumerated four candidate placements: (a) top of the F-8 task table, (b) inside the F-6 focus area, (c) a dedicated `+` floating action button (FAB), (d) ⌘K command palette. F-12b picks (a) and adds (d) as a sibling shortcut once MIG-1's palette stub gains real commands (post-MIG-3).
 
@@ -45,7 +45,7 @@ The user's review enumerated four candidate placements: (a) top of the F-8 task 
 
 **Why ⌘K is a sibling, not a replacement.** ⌘K is great for power users who already know what they want; the explicit button onboards everyone else. Once MIG-3 lands the React palette with real commands (per the React migration addendum's "PR 7 — ⌘K real commands"), F-12b's task-create flow gets a parallel `Add task from GitHub…` palette entry that opens the same form modal. The two affordances cost ~10 lines of code together (one button click handler + one palette command, both opening the same modal); the redundancy is intentional — discoverable for new operators, fast for veterans. The palette entry ships in the same MIG-3-or-later PR that adds real commands; F-12b ships the button alone in v1.
 
-**Touch-side note.** The Discord CLI (`discord post …`) is not part of F-12b. Operators who want to add a task without leaving the terminal use the CLI to drop a message in #grove with a URL; an operator-on-dashboard then clicks "+ Add task" and pastes it. A `discord task add <url>` command is post-v2 — same out-of-scope reasoning F-11 used (Decision 10) for inbound slash commands.
+**Touch-side note.** The Discord CLI (`discord post …`) is not part of F-12b. Operators who want to add a task without leaving the terminal use the CLI to drop a message in #grove with a URL; an principal-on-dashboard then clicks "+ Add task" and pastes it. A `discord task add <url>` command is post-v2 — same out-of-scope reasoning F-11 used (Decision 10) for inbound slash commands.
 
 ## Decision 2 — The form: a modal with paste-then-preview-then-confirm flow
 
@@ -98,31 +98,31 @@ Clicking "+ Add task" opens a modal centered over the dashboard, dimming the bac
 └──────────────────────────────────────────────────────────────┘
 ```
 
-`[← Back]` returns to input state with all fields preserved (operator can correct a typo without re-entering everything). `[Add to queue]` fires the POST that creates the row.
+`[← Back]` returns to input state with all fields preserved (principal can correct a typo without re-entering everything). `[Add to queue]` fires the POST that creates the row.
 
 **Submitting state.** Decision 9 covers the in-flight UX (spinner, disabled buttons). On success, the modal closes and the task table refreshes to show the new row at the top.
 
-**Why a modal and not inline.** The form has three optional fields (title override, priority, plus the preview state itself), and the preview adds another ~6 lines of metadata display. Inline-rendered above the task table would push the actual table off-screen on smaller viewports. A modal scopes the interaction; on dismiss, the operator's view of the table returns unchanged.
+**Why a modal and not inline.** The form has three optional fields (title override, priority, plus the preview state itself), and the preview adds another ~6 lines of metadata display. Inline-rendered above the task table would push the actual table off-screen on smaller viewports. A modal scopes the interaction; on dismiss, the principal's view of the table returns unchanged.
 
-**Why preview-before-commit.** Two reasons: (a) confirm the operator pasted the right URL (the title makes the issue identity human-checkable), (b) catch dedup before write (Decision 5's `409 Conflict` lands on Preview, not on Submit, so the operator sees the existing-task deeplink without a row already created). Operators who paste a URL for an already-tracked issue will see the deeplink at preview-time and never reach the Submit button.
+**Why preview-before-commit.** Two reasons: (a) confirm the principal pasted the right URL (the title makes the issue identity human-checkable), (b) catch dedup before write (Decision 5's `409 Conflict` lands on Preview, not on Submit, so the principal sees the existing-task deeplink without a row already created). Operators who paste a URL for an already-tracked issue will see the deeplink at preview-time and never reach the Submit button.
 
 **Keyboard.** `Enter` advances input → preview → submit. `Esc` closes the modal at any state. `Tab` flows URL → title-override → priority → primary-button. Same UX shape F-12's curation-toolbar inline confirm uses (`docs/design-mc-f12-task-curation.md` Decision 8).
 
-## Decision 3 — GitHub access: reuse `gh` CLI via `Bun.spawn`; operator's existing `gh auth` is the trust root
+## Decision 3 — GitHub access: reuse `gh` CLI via `Bun.spawn`; principal's existing `gh auth` is the trust root
 
 The user's review asked which token F-12b uses. F-12b reuses Grove's existing GitHub access path: `gh` CLI shelled via `Bun.spawn`, exactly the shape `src/bot/lib/github-sync.ts:412–434` (`ghJsonArgs<T>`) uses today.
 
-**Auth.** Whatever `gh auth` produces. The operator runs `gh auth login` once when setting up Grove; that token is then implicitly used by every `gh api …` call. F-12b adds no new env var, no new secret, no new auth ceremony. Operators who haven't authenticated `gh` see a clear failure message at preview time (Decision 7's 401 path).
+**Auth.** Whatever `gh auth` produces. The principal runs `gh auth login` once when setting up Grove; that token is then implicitly used by every `gh api …` call. F-12b adds no new env var, no new secret, no new auth ceremony. Operators who haven't authenticated `gh` see a clear failure message at preview time (Decision 7's 401 path).
 
 **Why `gh` and not octokit.** `@octokit/rest` is not currently in `package.json` (verified — only `@octokit/webhooks` for HMAC verification on inbound webhooks). Adding a new dependency for one new endpoint when an existing CLI shells out cleanly is the wrong trade. The `gh` CLI also handles auth-token refresh transparently (octokit would require us to wire that ourselves), and matches the existing `github-sync.ts` shape — one less idiom for reviewers to absorb.
 
-**Rate limits.** GitHub's REST API limit is 5000/hour authenticated, 60/hour unauthenticated. F-12b's request rate is ~1 per operator-driven task-create; an operator creating ten tasks in an hour uses 0.2% of the quota. **F-12b does not implement rate-limit handling** — the `gh` CLI surfaces 403 with `X-RateLimit-Remaining: 0` and the server maps that to Decision 7's "rate-limited" UX. If operators hit it in practice (they won't), backoff is a one-line addition in a follow-up PR. Cited here so reviewers don't ask why the topic is unhandled.
+**Rate limits.** GitHub's REST API limit is 5000/hour authenticated, 60/hour unauthenticated. F-12b's request rate is ~1 per principal-driven task-create; an principal creating ten tasks in an hour uses 0.2% of the quota. **F-12b does not implement rate-limit handling** — the `gh` CLI surfaces 403 with `X-RateLimit-Remaining: 0` and the server maps that to Decision 7's "rate-limited" UX. If operators hit it in practice (they won't), backoff is a one-line addition in a follow-up PR. Cited here so reviewers don't ask why the topic is unhandled.
 
-**Shared rate-limit budget with `github-sync.ts`.** The 5000/hour authenticated quota is keyed off the `gh auth` token, which is the operator's single GitHub identity on the local machine. Every `gh` invocation Grove issues — F-12b's preview/create calls **and** the existing webhook-driven enrichment in `src/bot/lib/github-sync.ts` — draws against the same budget. The webhook-driven `github-sync` flow is event-coupled (it fires on GitHub webhook deliveries forwarded through `webhook-proxy/`, not on a polling timer), so its baseline footprint is bounded by GitHub's webhook-delivery rate, not by a Grove-controlled cadence. F-12b's incremental footprint (~1 call per operator action — preview is one `gh api`, submit is the same call cached at 200ms-old, abandon is zero `gh` calls) is small relative to that baseline; combined headroom against the 5000/hour quota remains comfortable for single-operator (Tier 1) use. Posture: F-12b stays **operator-frequency only** (no auto-poll, no scheduled imports — both already in Decision 11's scope-out list), which is the budget-protecting shape. If a future PR adds a polling import path it must revisit this budget; F-12b alone does not.
+**Shared rate-limit budget with `github-sync.ts`.** The 5000/hour authenticated quota is keyed off the `gh auth` token, which is the principal's single GitHub identity on the local machine. Every `gh` invocation Grove issues — F-12b's preview/create calls **and** the existing webhook-driven enrichment in `src/bot/lib/github-sync.ts` — draws against the same budget. The webhook-driven `github-sync` flow is event-coupled (it fires on GitHub webhook deliveries forwarded through `webhook-proxy/`, not on a polling timer), so its baseline footprint is bounded by GitHub's webhook-delivery rate, not by a Grove-controlled cadence. F-12b's incremental footprint (~1 call per principal action — preview is one `gh api`, submit is the same call cached at 200ms-old, abandon is zero `gh` calls) is small relative to that baseline; combined headroom against the 5000/hour quota remains comfortable for single-principal (Tier 1) use. Posture: F-12b stays **principal-frequency only** (no auto-poll, no scheduled imports — both already in Decision 11's scope-out list), which is the budget-protecting shape. If a future PR adds a polling import path it must revisit this budget; F-12b alone does not.
 
-**Network sandbox.** The mission-control server runs as a Bun process on the operator's local machine (Tier 1 deploy posture per parent spec §10). It has unrestricted outbound HTTPS via the operator's normal network stack — no CF Worker constraint applies. The `webhook-proxy/` and `worker/` Cloudflare Workers handle **inbound** GitHub webhooks (HMAC-validated, forwarded to `grove-api`); they are unrelated to F-12b's outbound `gh` call. Verified by reading `src/webhook-proxy/` and `src/worker/` directory listings in this worktree.
+**Network sandbox.** The mission-control server runs as a Bun process on the principal's local machine (Tier 1 deploy posture per parent spec §10). It has unrestricted outbound HTTPS via the principal's normal network stack — no CF Worker constraint applies. The `webhook-proxy/` and `worker/` Cloudflare Workers handle **inbound** GitHub webhooks (HMAC-validated, forwarded to `grove-api`); they are unrelated to F-12b's outbound `gh` call. Verified by reading `src/webhook-proxy/` and `src/worker/` directory listings in this worktree.
 
-**Server-side, not client-side.** The dashboard does not call `gh` directly (no shell access from a browser, and even if there were, the CORS posture against `api.github.com` would require operator auth headers in the browser — wrong trust boundary). The flow:
+**Server-side, not client-side.** The dashboard does not call `gh` directly (no shell access from a browser, and even if there were, the CORS posture against `api.github.com` would require principal auth headers in the browser — wrong trust boundary). The flow:
 
 ```
 dashboard           server (mission-control)         gh CLI / api.github.com
@@ -140,12 +140,12 @@ preview rendered
                                               ↓
                                               create shadow assignment + session (Decision 8)
                                               ↓
-                                              insert operator.curation event
+                                              insert principal.curation event
               ←── 201 CreateTaskResponse
 modal closes, task table refreshes
 ```
 
-**Two endpoints, not one.** Preview fetches GitHub metadata + checks dedup but does NOT write. Submit writes. The split lets the operator see the issue title before committing, and lets dedup short-circuit at preview-time without leaving a half-created row on retry. Decision 6 pins both endpoint shapes.
+**Two endpoints, not one.** Preview fetches GitHub metadata + checks dedup but does NOT write. Submit writes. The split lets the principal see the issue title before committing, and lets dedup short-circuit at preview-time without leaving a half-created row on retry. Decision 6 pins both endpoint shapes.
 
 ## Decision 4 — URL parser: accept full URL, `owner/repo#N` shorthand, or `#N` if a default repo is configured
 
@@ -163,17 +163,17 @@ The form accepts three input formats; the server-side parser canonicalises all t
 
 **Parser shape.** A new `parseGitHubRef(input: string, defaults: { owner?: string; repo?: string }): GitHubRef | ParseError` helper in `src/mission-control/db/github-ref.ts` (or `src/mission-control/api/github-ref.ts`; pick whichever feels less "DB-coupled"). Pure function, exhaustively tested against every accepted format and three rejected ones (`http://github.com/...` without HTTPS, `gist.github.com/...`, `github.com/orgs/...`).
 
-**`kind: "auto"` resolution.** Shorthand inputs don't carry issue-vs-PR distinction. The server resolves `auto` by trying `gh api /repos/{owner}/{repo}/issues/{number}` first; if that returns the issue, done. GitHub's REST API treats PRs as issues (they share the issue number space), so the call succeeds for both; the response's `pull_request` field disambiguates. The disambiguation lands in the preview metadata so the operator sees `State: OPEN (pull request)` vs `State: OPEN (issue)`.
+**`kind: "auto"` resolution.** Shorthand inputs don't carry issue-vs-PR distinction. The server resolves `auto` by trying `gh api /repos/{owner}/{repo}/issues/{number}` first; if that returns the issue, done. GitHub's REST API treats PRs as issues (they share the issue number space), so the call succeeds for both; the response's `pull_request` field disambiguates. The disambiguation lands in the preview metadata so the principal sees `State: OPEN (pull request)` vs `State: OPEN (issue)`.
 
 **Default repo configuration.** Optional. Read from `bot.yaml` under a new key `mission_control.default_github_repo: "the-metafactory/grove-v2"`. When absent, `#N` shorthand fails parse with a clear message; when present, it parses to that repo. The config key is documented in the PR's commit message and in the `Where this goes` section below.
 
 **Validation rules.** Owner/repo are validated against GitHub's identifier regex `^[A-Za-z0-9._-]+$` (length ≤ 100). Number is a positive integer (`> 0`, `< 2^31` to fit `INTEGER` in SQLite if we ever index on it). URLs that don't match `https://github.com/` are rejected with "Only github.com URLs are supported" — keeps F-12b's surface tight (Linear/Jira deferred per Decision 11).
 
-**SSRF posture.** F-12b only ever shells `gh api /repos/...` with a parsed-and-validated `{owner, repo, number}` triple. The CLI itself uses `https://api.github.com` as a hardcoded base; there is no operator-controlled hostname surface. Verified by reading `gh`'s public docs — `gh api` resolves the host from `gh auth` config, not from arbitrary URL input. Pasting a URL with `https://github.com/...` does not cause F-12b to fetch that URL; it parses out the `{owner, repo, number}` and re-issues a structured `gh api` call. This means operators cannot trick the server into fetching `https://internal.corp/...` even with a creatively malformed input — the parser would reject it, and even if it didn't, the `gh api` call ignores arbitrary URL components.
+**SSRF posture.** F-12b only ever shells `gh api /repos/...` with a parsed-and-validated `{owner, repo, number}` triple. The CLI itself uses `https://api.github.com` as a hardcoded base; there is no principal-controlled hostname surface. Verified by reading `gh`'s public docs — `gh api` resolves the host from `gh auth` config, not from arbitrary URL input. Pasting a URL with `https://github.com/...` does not cause F-12b to fetch that URL; it parses out the `{owner, repo, number}` and re-issues a structured `gh api` call. This means operators cannot trick the server into fetching `https://internal.corp/...` even with a creatively malformed input — the parser would reject it, and even if it didn't, the `gh api` call ignores arbitrary URL components.
 
 ## Decision 5 — Dedup: reject + deeplink at preview; no UNIQUE index in v1
 
-The user's review asked what happens when the operator pastes a URL for an issue Grove already tracks. F-12b rejects-and-deeplinks at preview time.
+The user's review asked what happens when the principal pastes a URL for an issue Grove already tracks. F-12b rejects-and-deeplinks at preview time.
 
 **Behaviour:**
 
@@ -198,11 +198,11 @@ The user's review asked what happens when the operator pastes a URL for an issue
    `[Open existing task →]` closes the modal and opens the F-7 drill-down on the existing task (via `openTaskDrillDown(task)` at `dashboard/index.html:2122`).
 5. If no row exists → continue with normal preview state (Decision 2).
 
-**Why preview-time and not submit-time.** Hitting Submit on a duplicate would either (a) require a server-side rollback after creation succeeds, or (b) require a SELECT-then-INSERT race window. Catching it at preview is cleaner and gives the operator the deeplink-to-existing as a primary action — the right reaction in 95% of dedup cases is *"oh, someone already added that, let me look at it"*.
+**Why preview-time and not submit-time.** Hitting Submit on a duplicate would either (a) require a server-side rollback after creation succeeds, or (b) require a SELECT-then-INSERT race window. Catching it at preview is cleaner and gives the principal the deeplink-to-existing as a primary action — the right reaction in 95% of dedup cases is *"oh, someone already added that, let me look at it"*.
 
 **Why not allow re-add with a warning.** Two tasks pointing at the same upstream issue is almost always a mistake, and it makes future behaviour weird (per-issue lookups return two rows; assignment counts get confusing; the dedup window for state-sync from GitHub webhooks would have to choose). The single-task-per-issue invariant is cheap to maintain and worth the tradeoff.
 
-**Why not a UNIQUE index.** A partial unique index `CREATE UNIQUE INDEX ... ON tasks(source_external_id) WHERE source_system = 'github' AND source_external_id IS NOT NULL` would be the schema-level enforcement of the application-level rule. F-12b lands the application-level check in v1 and **defers the index** because: (a) backfilling a unique index on existing rows risks failing if any duplicate snuck in via direct `POST /api/sessions` task creation (today the `internal` source path doesn't write `source_external_id`, but a future bug could), and (b) the application check is the operator-visible enforcement point — operators see the helpful error message, the index would just `INSERT ... ON CONFLICT` reject which surfaces as a 500. The index ships when v2 has more than one operator and concurrent task-create races become possible (Tier 2). Until then, single-operator + application-check is sufficient.
+**Why not a UNIQUE index.** A partial unique index `CREATE UNIQUE INDEX ... ON tasks(source_external_id) WHERE source_system = 'github' AND source_external_id IS NOT NULL` would be the schema-level enforcement of the application-level rule. F-12b lands the application-level check in v1 and **defers the index** because: (a) backfilling a unique index on existing rows risks failing if any duplicate snuck in via direct `POST /api/sessions` task creation (today the `internal` source path doesn't write `source_external_id`, but a future bug could), and (b) the application check is the principal-visible enforcement point — operators see the helpful error message, the index would just `INSERT ... ON CONFLICT` reject which surfaces as a 500. The index ships when v2 has more than one principal and concurrent task-create races become possible (Tier 2). Until then, single-principal + application-check is sufficient.
 
 **The dedup query is keyed off the canonical string.** Decision 6 pins `source_external_id = "owner/repo#number"`. The same canonicalisation runs on every input format from Decision 4, so paste-the-URL and paste-the-shorthand for the same issue both hit the same row.
 
@@ -253,13 +253,13 @@ Two new endpoints. Plus one inherited from F-12 (the `POST /api/tasks/:taskId/ab
 **403 Rate-Limited** — GitHub returned 403 with `X-RateLimit-Remaining: 0`.
 **5xx** — anything else (network error, GitHub 5xx, parse failure on response).
 
-**Body excerpt.** First 240 characters of the issue body, with newlines collapsed to spaces and trailing `…` if truncated. Pure cosmetic — gives the operator enough context to recognise the issue.
+**Body excerpt.** First 240 characters of the issue body, with newlines collapsed to spaces and trailing `…` if truncated. Pure cosmetic — gives the principal enough context to recognise the issue.
 
 **`fetched_at`.** ISO-8601 UTC timestamp the server fetched. Discarded after preview; not persisted.
 
 ### `POST /api/tasks`
 
-**Purpose:** Commit the task. Creates the task row, the shadow assignment + session (Decision 8), and the `operator.curation` event with `kind: "task.imported"` (Decision 10).
+**Purpose:** Commit the task. Creates the task row, the shadow assignment + session (Decision 8), and the `principal.curation` event with `kind: "task.imported"` (Decision 10).
 
 **Body:**
 ```json
@@ -283,7 +283,7 @@ Two new endpoints. Plus one inherited from F-12 (the `POST /api/tasks/:taskId/ab
 }
 ```
 
-**409 Conflict** — same shape as preview's conflict (defense-in-depth: if the operator races the dedup window between preview and submit, they get the same error here).
+**409 Conflict** — same shape as preview's conflict (defense-in-depth: if the principal races the dedup window between preview and submit, they get the same error here).
 **400 / 401 / 403 / 404 / 5xx** — same shapes as preview.
 
 **Priority wire shape.** `priority` crosses the wire as **integer 0..3**, matching the schema column `tasks.priority INTEGER NOT NULL DEFAULT 2` (verified at `src/mission-control/db/schema.ts:21–35`) and matching F-8's existing `GET /api/tasks` projection which returns `priority` as integer. The `P0 / P1 / P2 / P3` strings are a **client-side render label only** — Decision 2's modal renders the integer as `P{n}` in the radio-button group, and the dashboard converts the picker selection back to integer (`0..3`) at submit time. The server never sees the `P` prefix. Validation: server accepts integers `0`, `1`, `2`, `3`; rejects anything else (including strings) with 400. This rule is uniform across `POST /api/tasks` (request body and 201 response body both use integer priority) and applies forward to any future task-mutation endpoint.
@@ -320,20 +320,20 @@ Two new endpoints. Plus one inherited from F-12 (the `POST /api/tasks/:taskId/ab
 
 | Verb | Route | Mutates | When to use |
 |---|---|---|---|
-| Abandon assignment | `POST /api/assignments/:id/abandon` (F-12) | `agent_task_assignment.state = 'cancelled'` | Operator says *"this agent is going down a wrong path"* |
-| Abandon task | `POST /api/tasks/:taskId/abandon` (F-12b) | `tasks.status = 'cancelled'` | Operator says *"this whole task is no longer relevant"* (typically on empty-assignment GitHub-imported task or all-terminal task) |
+| Abandon assignment | `POST /api/assignments/:id/abandon` (F-12) | `agent_task_assignment.state = 'cancelled'` | Principal says *"this agent is going down a wrong path"* |
+| Abandon task | `POST /api/tasks/:taskId/abandon` (F-12b) | `tasks.status = 'cancelled'` | Principal says *"this whole task is no longer relevant"* (typically on empty-assignment GitHub-imported task or all-terminal task) |
 
 The dashboard's curation toolbar (F-12 Decision 3) routes `[Abandon]` to the right endpoint based on context (per F-12 Decision 5). F-12b extends the routing for the empty-assignment case (Decision 7 below).
 
-**Curation event.** Each `POST /api/tasks/:taskId/abandon` inserts an `operator.curation` event with `kind: "abandon"` and `targetKind: "task"` (matches F-12 Decision 9's payload shape). The event lands on the `task-shadow-{taskId}` session for empty-assignment tasks (Decision 8), or on the latest terminal session for tasks that had assignments. Either way, the event has a real session anchor — Decision 8 spells out the helper.
+**Curation event.** Each `POST /api/tasks/:taskId/abandon` inserts an `principal.curation` event with `kind: "abandon"` and `targetKind: "task"` (matches F-12 Decision 9's payload shape). The event lands on the `task-shadow-{taskId}` session for empty-assignment tasks (Decision 8), or on the latest terminal session for tasks that had assignments. Either way, the event has a real session anchor — Decision 8 spells out the helper.
 
 ## Decision 7 — Task-creation flow + empty-assignment Dispatch site
 
-Once `POST /api/tasks` returns 201, the new task is in the table with zero **non-shadow** assignments (the shadow assignment from Decision 8 is hidden from the F-8 task list and from the F-9 working grid; see Decision 8 for the filter shape). The operator now has two paths:
+Once `POST /api/tasks` returns 201, the new task is in the table with zero **non-shadow** assignments (the shadow assignment from Decision 8 is hidden from the F-8 task list and from the F-9 working grid; see Decision 8 for the filter shape). The principal now has two paths:
 
-1. **Dispatch immediately.** From the new task's row in F-8, click → drill-down opens. F-12 Decision 3's matrix's "no assignments yet" row activates: the curation toolbar shows `[Dispatch ▾]` enabled (with the agent picker), `[Abandon]` enabled (routes to `POST /api/tasks/:taskId/abandon`), and the other two disabled. Operator clicks Dispatch → existing `POST /api/sessions` flow, taskId pre-filled, agent picked from the dropdown. F-12b lands no new endpoint for this — F-12's Dispatch handler is reused.
+1. **Dispatch immediately.** From the new task's row in F-8, click → drill-down opens. F-12 Decision 3's matrix's "no assignments yet" row activates: the curation toolbar shows `[Dispatch ▾]` enabled (with the agent picker), `[Abandon]` enabled (routes to `POST /api/tasks/:taskId/abandon`), and the other two disabled. Principal clicks Dispatch → existing `POST /api/sessions` flow, taskId pre-filled, agent picked from the dropdown. F-12b lands no new endpoint for this — F-12's Dispatch handler is reused.
 
-2. **Leave it queued.** The task sits in F-8 with `status='open'` and `aggregate_state=null` (no assignments). Visually it renders as a row with empty agents column and `—` in the state column. Operator can come back later and Dispatch from the drill-down.
+2. **Leave it queued.** The task sits in F-8 with `status='open'` and `aggregate_state=null` (no assignments). Visually it renders as a row with empty agents column and `—` in the state column. Principal can come back later and Dispatch from the drill-down.
 
 **The empty-assignment drill-down site at `dashboard/index.html:2134`.** F-12 left this as a `showError("This task has no assignment yet…")` placeholder. F-12b replaces it with the F-12-curation-toolbar variant for zero-assignment tasks — task metadata header + curation toolbar with `[Dispatch]` and `[Abandon]` enabled, the rest disabled. Concretely:
 
@@ -350,7 +350,7 @@ function openTaskDrillDown(task) {
     return;
   }
   // No shadow either (pre-F-12b internal-source task with no assignments
-  // ever spawned): fall back to the original error pill until the operator
+  // ever spawned): fall back to the original error pill until the principal
   // backfills via Dispatch.
   showError("This task has no assignment yet. Click Dispatch to start.");
 }
@@ -358,7 +358,7 @@ function openTaskDrillDown(task) {
 
 The fallback pill stays for the rare case of a pre-F-12b `internal`-source task whose `POST /api/sessions` spawn-rollback path (`handlers.ts:347–364`) succeeded the rollback but somehow left the task row — defense-in-depth. New tasks created via F-12b always have a shadow assignment.
 
-**Sub-decision — shadow sessions get distinct input-gate copy from ended sessions.** F-10 Decision 6 disables the drill-down textarea when `session === null || session.ended_at` and renders *"Session ended. History is read-only."* (verified at `src/mission-control/dashboard/index.html:2622–2657` — `resolveDrillInputMode` returns `"ended"` for both null sessions and sessions with `ended_at` set, and `renderDrillInput` renders the same "Session ended" copy for both). Decision 8 sets the shadow session's `ended_at` immediately at insert, so a never-Dispatched empty-assignment task that an operator drills into would trigger the F-10 gate with the misleading "Session ended" copy — there was no session to begin with, much less one that ended.
+**Sub-decision — shadow sessions get distinct input-gate copy from ended sessions.** F-10 Decision 6 disables the drill-down textarea when `session === null || session.ended_at` and renders *"Session ended. History is read-only."* (verified at `src/mission-control/dashboard/index.html:2622–2657` — `resolveDrillInputMode` returns `"ended"` for both null sessions and sessions with `ended_at` set, and `renderDrillInput` renders the same "Session ended" copy for both). Decision 8 sets the shadow session's `ended_at` immediately at insert, so a never-Dispatched empty-assignment task that an principal drills into would trigger the F-10 gate with the misleading "Session ended" copy — there was no session to begin with, much less one that ended.
 
 F-12b therefore extends `resolveDrillInputMode` to recognise the shadow case explicitly and route to a new `"shadow"` mode with distinct copy: *"This task has no active session yet. Click Dispatch to start one."* The detection is keyed on the assignment's `agent_id === 'mc-shadow-agent'` (the well-known sentinel id), not on `endpoint_kind === 'local.observed'` — the latter is a legitimate read-only mode for observed real sessions and must keep its existing copy *"This session is observed. Input ships when you open it in a controlled Grove session."* The three modes (`ended`, `observed`, `shadow`) all disable the textarea and submit button; only the placeholder copy varies. Concretely:
 
@@ -387,9 +387,9 @@ The `shadow` branch in `renderDrillInput` mirrors the `ended`/`observed` shape (
 
 The user's review asked when the shadow session gets created (at task-create time? at first event-emit time?), and what `endpoint_kind` it uses.
 
-**Created at task-create time, eagerly, in the same transaction as the task row.** Lazy creation (at first event-emit) sounds cheaper but in practice every F-12b-imported task fires at least one event immediately (`operator.curation` with `kind: "task.imported"`), so there is no win. Eager creation also keeps `task.shadow_assignment_id` populated in the `GET /api/tasks` projection from the moment the task lands — the dashboard never has to handle a "task with no shadow yet" intermediate state.
+**Created at task-create time, eagerly, in the same transaction as the task row.** Lazy creation (at first event-emit) sounds cheaper but in practice every F-12b-imported task fires at least one event immediately (`principal.curation` with `kind: "task.imported"`), so there is no win. Eager creation also keeps `task.shadow_assignment_id` populated in the `GET /api/tasks` projection from the moment the task lands — the dashboard never has to handle a "task with no shadow yet" intermediate state.
 
-**The shadow assignment.** A real `agent_task_assignment` row, attached to a synthetic agent named `mc-shadow-agent` (lazy-created via the existing `ensureDefaultAgent` pattern, see `handlers.ts:281–288`). State is `cancelled` from the moment it lands — this is critical: the shadow assignment must NOT appear in the F-8 task table's assignment roll-up, the F-9 working-grid count, the F-6 focus area, or any operator-visible projection. Its sole purpose is to satisfy the `sessions.assignment_id NOT NULL` FK so the shadow session can attach.
+**The shadow assignment.** A real `agent_task_assignment` row, attached to a synthetic agent named `mc-shadow-agent` (lazy-created via the existing `ensureDefaultAgent` pattern, see `handlers.ts:281–288`). State is `cancelled` from the moment it lands — this is critical: the shadow assignment must NOT appear in the F-8 task table's assignment roll-up, the F-9 working-grid count, the F-6 focus area, or any principal-visible projection. Its sole purpose is to satisfy the `sessions.assignment_id NOT NULL` FK so the shadow session can attach.
 
 ```sql
 INSERT INTO agents (id, name, type, persistent)
@@ -422,15 +422,15 @@ INSERT INTO sessions (id, assignment_id, cc_session_id, endpoint_kind, pid, star
 
 **Why a real assignment row and not a sentinel `assignment_id = NULL` on sessions.** Schema-changing the FK to nullable is a wider blast radius than a synthetic row. A nullable FK forces every existing query against `sessions.assignment_id` to handle the null case (verified: `src/mission-control/db/sessions.ts:60–93` would all need updates), and the partial unique index on active sessions would need rewriting. The synthetic row threads the FK without any schema change.
 
-**Why one shadow agent and not one shadow agent per task.** A per-task shadow agent multiplies the agents table for no benefit — the shadow agent has no operator-visible meaning, no behaviour, no preferences. One row, well-known ID, never displayed. Same posture `mc-default-agent` already uses (`handlers.ts:88, 281`).
+**Why one shadow agent and not one shadow agent per task.** A per-task shadow agent multiplies the agents table for no benefit — the shadow agent has no principal-visible meaning, no behaviour, no preferences. One row, well-known ID, never displayed. Same posture `mc-default-agent` already uses (`handlers.ts:88, 281`).
 
-**Lifecycle.** When the operator finally Dispatches from the empty-assignment drill-down (Decision 7), the existing `POST /api/sessions` handler creates a new `agent_task_assignment` row to a real agent + spawns a controlled session — the shadow assignment is **left in place** as the curation-event anchor. Future curation events on the same task continue to land on the shadow session (the `findLatestSessionForAssignment` lookup picks the most recent terminal session, which is now either the real agent's terminal session or, if the real agent is still running, the shadow session). The shadow row is durable; it is never deleted in v2.
+**Lifecycle.** When the principal finally Dispatches from the empty-assignment drill-down (Decision 7), the existing `POST /api/sessions` handler creates a new `agent_task_assignment` row to a real agent + spawns a controlled session — the shadow assignment is **left in place** as the curation-event anchor. Future curation events on the same task continue to land on the shadow session (the `findLatestSessionForAssignment` lookup picks the most recent terminal session, which is now either the real agent's terminal session or, if the real agent is still running, the shadow session). The shadow row is durable; it is never deleted in v2.
 
 **Test coverage.** A new `task-shadow.test.ts` covers: (a) shadow assignment + session created on `POST /api/tasks` 201, (b) shadow session has `endpoint_kind='local.observed'` and `ended_at` set, (c) shadow assignment is filtered out of `GET /api/tasks`'s assignment roll-up, (d) `GET /api/tasks` returns `shadow_assignment_id` populated for F-12b-created tasks, null for `internal`-source tasks, (e) `POST /api/tasks/:taskId/abandon` writes the curation event onto the shadow session, (f) Dispatch-from-empty creates a real assignment without disturbing the shadow.
 
 ## Decision 9 — UX during the GitHub fetch: form blocks with a small spinner
 
-The user's review asked what the operator sees during the ~200ms–2s GitHub round-trip. F-12b's posture: form blocks with a spinner inside the primary button.
+The user's review asked what the principal sees during the ~200ms–2s GitHub round-trip. F-12b's posture: form blocks with a spinner inside the primary button.
 
 **Concretely.**
 
@@ -443,11 +443,11 @@ The user's review asked what the operator sees during the ~200ms–2s GitHub rou
 
 **Timeout.** The `gh api` call has no explicit timeout in `github-sync.ts` (it relies on `gh`'s defaults). F-12b adds a 30-second timeout via `AbortController`-equivalent (`Bun.spawn` supports `signal`). On timeout, the spinner clears and the form shows "GitHub took too long to respond. Try again." — same as a 5xx. Tests cover this path with a fake `Bun.spawn` that hangs.
 
-**Network failure.** If the operator's machine is offline (or `gh` itself isn't installed), the spawn fails immediately. Decision 7's UX maps the error.
+**Network failure.** If the principal's machine is offline (or `gh` itself isn't installed), the spawn fails immediately. Decision 7's UX maps the error.
 
-## Decision 10 — Observability: one `operator.curation` event with `kind: "task.imported"`
+## Decision 10 — Observability: one `principal.curation` event with `kind: "task.imported"`
 
-F-12 Decision 9 introduced the `operator.curation` event family with a `kind` discriminator. F-12b adds one new variant: `kind: "task.imported"`.
+F-12 Decision 9 introduced the `principal.curation` event family with a `kind` discriminator. F-12b adds one new variant: `kind: "task.imported"`.
 
 **Payload shape:**
 
@@ -465,7 +465,7 @@ type OperatorCurationPayload =
 
 - `task.imported` → `"Imported from GitHub: the-metafactory/grove-v2#42 (issue)"`
 
-A future `kind: "task.created"` would distinguish operator-typed-from-scratch tasks (no upstream) from imported ones — useful when someone adds a manual-task affordance in a follow-up PR. F-12b doesn't ship that flow, so reserving `task.imported` for the import case keeps the discriminator semantically clean. If a third source (Linear/Jira) lands, it becomes a new `source` value within `task.imported`, not a new kind. The kind axis is for **action**; the source axis is for **provenance**.
+A future `kind: "task.created"` would distinguish principal-typed-from-scratch tasks (no upstream) from imported ones — useful when someone adds a manual-task affordance in a follow-up PR. F-12b doesn't ship that flow, so reserving `task.imported` for the import case keeps the discriminator semantically clean. If a third source (Linear/Jira) lands, it becomes a new `source` value within `task.imported`, not a new kind. The kind axis is for **action**; the source axis is for **provenance**.
 
 **Where it's inserted.** Inside the `POST /api/tasks` transaction, after the task row, shadow assignment, and shadow session are inserted. Uses the same `createOperatorCurationEvent` helper F-12 introduced in `src/mission-control/db/events.ts`. The event's `session_id` is the shadow session's id.
 
@@ -476,9 +476,9 @@ A future `kind: "task.created"` would distinguish operator-typed-from-scratch ta
    the-metafactory/grove-v2 — fix webhook HMAC verification bypass
 ```
 
-**Why one event and not two (e.g. `task.created` + `task.imported`).** Two events for one operator action would be redundant and would force every consumer (replay tooling, audit export, dashboard render) to dedup. One event with sufficient payload to reconstruct the action is the right shape.
+**Why one event and not two (e.g. `task.created` + `task.imported`).** Two events for one principal action would be redundant and would force every consumer (replay tooling, audit export, dashboard render) to dedup. One event with sufficient payload to reconstruct the action is the right shape.
 
-**Operator id on the event.** Same posture as F-12 Decision 9 — `events` table doesn't carry `operator_id`; F-12b inherits the operator implicitly from the shadow assignment's task's `operator_id`. Tier 2 multi-operator wiring for `operator.curation` lands F-12 + F-12b in lock-step.
+**Principal id on the event.** Same posture as F-12 Decision 9 — `events` table doesn't carry `operator_id`; F-12b inherits the principal implicitly from the shadow assignment's task's `operator_id`. Tier 2 multi-principal wiring for `principal.curation` lands F-12 + F-12b in lock-step.
 
 ## Decision 11 — Scope OUT: explicit deferrals so the PR review stays tight
 
@@ -487,32 +487,32 @@ Things F-12b tempts the implementer to add but that ship in separate PRs (or nev
 - **Bulk import.** "Add all open issues with label `bug` from `the-metafactory/grove-v2`" is a useful capability and a different design exercise — needs query-shape selection (filter by label / state / assignee), pagination handling, partial-success UX. Out of scope. Operators with ten issues hit `+ Add task` ten times. (Same posture F-12 Decision 10 took for bulk curation.)
 - **Scheduled imports.** Cron-style "every hour, sync all open issues from these repos" overlaps with `github-sync.ts`'s existing background sync — but `github-sync.ts` populates the dashboard's read-only repos/issues/PRs cache, not the `tasks` table. Wiring a scheduler to convert issue-cache rows to tasks is a different problem (which issues qualify? when do they get archived?). Out of scope.
 - **GitHub project boards.** Importing all issues in a Project view, watching for additions, etc. Out of scope. Project boards are themselves an external task funnel; layering Grove's task funnel on top of GitHub's is double-bookkeeping.
-- **GitHub Actions integration.** "Auto-add a task when CI fails" is a webhook-driven flow, not an operator-initiated one. The existing `webhook-proxy/` already validates webhooks; an "auto-task-on-ci-failure" producer could land later as a dedicated capability. Out of scope. (Manual operator decisions are the v2 funnel discipline.)
+- **GitHub Actions integration.** "Auto-add a task when CI fails" is a webhook-driven flow, not an principal-initiated one. The existing `webhook-proxy/` already validates webhooks; an "auto-task-on-ci-failure" producer could land later as a dedicated capability. Out of scope. (Manual principal decisions are the v2 funnel discipline.)
 - **Cross-repo dependency tracking.** "This task depends on grove#43 and meta-factory#22" needs a dependency edge table, propagation rules, auto-wake on resolution — same posture F-12 Decision 10 took (parent spec §10's `blocked_by_task_id` is reserved but unsurfaced). Out of scope.
 - **Automatic title-extraction heuristics.** "Strip `[bug]` prefixes from titles", "auto-detect `WIP:` and set priority", etc. The title override field handles this manually. Out of scope.
 - **Linear / Jira / Asana / Notion / Trello support.** F-12b's hardcoded `'github'` source is intentional — the parent spec §10 explicitly defers the `TaskSource` interface (Conflict 4) until a second source ships. Out of scope. When the second source arrives, the parser, the dedup query, and the event payload's `source` axis all extend cleanly.
 - **GitHub Discussions.** Discussions live at a different REST path and have a different identity space. Out of scope; reuse the same parser-extension story when discussions are wanted.
-- **Inbound webhook → auto-add-to-queue.** Webhook says *"new issue opened with label `now`"* → Grove auto-creates a task. This is the inverse direction of F-12b (server-pulled vs server-pushed). Out of scope; would re-introduce the auto-curation question §3.4 deliberately closed (*"the operator decides what enters the queue"*).
-- **Editing imported tasks (sync-back to GitHub).** "Operator edits the task title; Grove pushes the rename to the upstream issue." Out of scope. F-12b is one-way (GitHub → Grove); two-way sync is a different capability.
+- **Inbound webhook → auto-add-to-queue.** Webhook says *"new issue opened with label `now`"* → Grove auto-creates a task. This is the inverse direction of F-12b (server-pulled vs server-pushed). Out of scope; would re-introduce the auto-curation question §3.4 deliberately closed (*"the principal decides what enters the queue"*).
+- **Editing imported tasks (sync-back to GitHub).** "Principal edits the task title; Grove pushes the rename to the upstream issue." Out of scope. F-12b is one-way (GitHub → Grove); two-way sync is a different capability.
 - **Pasting into an arbitrary input field on the dashboard.** A nice power-user shortcut — paste a URL anywhere, get a "Add this as a task?" toast. Discoverability is poor and intercepting paste events globally is a bug-magnet. Out of scope.
 - **`#N` shorthand without a configured default repo.** Decision 4 rejects this with a clear message. Configuring the default is a one-line `bot.yaml` edit; not an in-UI configuration flow.
-- **The UNIQUE index on `(source_system, source_external_id)`.** Decision 5's escape hatch — application-level enforcement is sufficient at single-operator. The index ships with Tier 2 multi-operator runtime.
+- **The UNIQUE index on `(source_system, source_external_id)`.** Decision 5's escape hatch — application-level enforcement is sufficient at single-principal. The index ships with Tier 2 multi-principal runtime.
 - **Discord slash command (`/grove add <url>`).** Same posture F-12 Decision 10 took — slash commands are a new ingestion surface with their own auth-and-component story. Out of scope; post-v2.
-- **Toast notifications beyond the post-create one.** "Toast on every state change", "configurable toast preferences", etc. Out of scope; the F-11 Discord notifications already carry the operator-attention burden.
+- **Toast notifications beyond the post-create one.** "Toast on every state change", "configurable toast preferences", etc. Out of scope; the F-11 Discord notifications already carry the principal-attention burden.
 
 ## Acceptance criteria
 
 - [ ] `POST /api/tasks/preview` validates the URL/shorthand, fetches GitHub metadata via `gh` CLI, and returns 200 with title/state/labels/body excerpt or 409 with the existing-task deeplink shape (Decision 6).
-- [ ] `POST /api/tasks` creates the task row, the `mc-shadow-agent` assignment row, the `local.observed` shadow session, and the `operator.curation` event with `kind: "task.imported"` — all in one transaction. Returns 201 with `taskId` + `shadowAssignmentId` + `shadowSessionId`.
-- [ ] `POST /api/tasks/:taskId/abandon` sets `tasks.status='cancelled'` and inserts an `operator.curation` event with `kind: "abandon"` + `targetKind: "task"` on the shadow session. Returns 404 / 409 / 5xx per Decision 6.
+- [ ] `POST /api/tasks` creates the task row, the `mc-shadow-agent` assignment row, the `local.observed` shadow session, and the `principal.curation` event with `kind: "task.imported"` — all in one transaction. Returns 201 with `taskId` + `shadowAssignmentId` + `shadowSessionId`.
+- [ ] `POST /api/tasks/:taskId/abandon` sets `tasks.status='cancelled'` and inserts an `principal.curation` event with `kind: "abandon"` + `targetKind: "task"` on the shadow session. Returns 404 / 409 / 5xx per Decision 6.
 - [ ] The URL parser (`parseGitHubRef`) accepts the five formats from Decision 4 and rejects the three explicitly-listed bad formats with clear messages.
 - [ ] Dedup is enforced at preview time via the `source_system='github' AND source_external_id=?` query; operators see the existing-task deeplink before any row is created.
 - [ ] The dashboard "+ Add task" button opens a modal with input → preview → submit flow (Decision 2). Keyboard navigation matches Decision 2.
 - [ ] During the GitHub fetch, the form blocks with a spinner; the rest of the dashboard remains responsive (Decision 9).
 - [ ] The empty-assignment drill-down at `dashboard/index.html:2134` is rewired to open the F-12 curation toolbar against the shadow assignment, with `[Dispatch]` and `[Abandon]` enabled per F-12 Decision 3's "no assignments yet" row.
 - [ ] `GET /api/tasks` filters out `mc-shadow-agent` assignments from the assignments roll-up; `aggregate_state` returns `null` for tasks with only the shadow assignment. Adds `shadow_assignment_id` to the projection.
-- [ ] F-9 working-grid query filters out `mc-shadow-agent`. The shadow agent never appears as an operator-visible row.
-- [ ] The F-7 event log renders `operator.curation` events with `kind: "task.imported"` per Decision 10's one-line summary shape.
+- [ ] F-9 working-grid query filters out `mc-shadow-agent`. The shadow agent never appears as an principal-visible row.
+- [ ] The F-7 event log renders `principal.curation` events with `kind: "task.imported"` per Decision 10's one-line summary shape.
 - [ ] All existing mission-control tests still pass; new tests for the parser, the preview/create/abandon endpoints, the shadow helper, and the dashboard form ship green.
 - [ ] No new schema migrations. No new tables. No changes to `state-machine.ts` or `transitions.ts`. The schema's existing `tasks.source_system='github'` enum value is sufficient.
 - [ ] No `@octokit/rest` dependency added; F-12b reuses the existing `gh` CLI shape.
@@ -545,7 +545,7 @@ Things F-12b tempts the implementer to add but that ship in separate PRs (or nev
   - New `.add-task-modal` markup + CSS (input / preview / submitting / conflict states).
   - Modal JS: paste handler, preview fetch, submit fetch, error mapping, conflict deeplink.
   - Rewire `openTaskDrillDown` empty-path (line 2122) to use `shadow_assignment_id` per Decision 7.
-  - New render branch for `operator.curation` events with `kind: "task.imported"` (Decision 10).
+  - New render branch for `principal.curation` events with `kind: "task.imported"` (Decision 10).
   - First dashboard spinner CSS, scoped to `.add-task-modal`.
 - Config: a new optional `mission_control.default_github_repo: "owner/repo"` key in `bot.yaml`. When present, the parser accepts `#N` shorthand. When absent, `#N` shorthand fails parse with a clear message.
 - Tests in `src/mission-control/__tests__/`:
@@ -553,7 +553,7 @@ Things F-12b tempts the implementer to add but that ship in separate PRs (or nev
   - `task-create-endpoints.test.ts` — preview happy path, dedup conflict, GitHub error mapping (404/401/403/5xx), create happy path, create dedup conflict (race-window safety).
   - `task-shadow.test.ts` — Decision 8's helper; covers the six test cases listed in that decision.
   - `task-abandon-endpoint.test.ts` — Decision 6's task-keyed abandon route (sibling of F-12's `assignment-keyed` abandon test).
-  - `task-import-event.test.ts` — Decision 10's `operator.curation` payload + render shape.
+  - `task-import-event.test.ts` — Decision 10's `principal.curation` payload + render shape.
 - Forward-link from `docs/design-mission-control.md` §3.4 (and the §9 Phase E bullet) to this addendum, alongside the existing F-12 forward-link.
 
 Forward-links from `docs/design-mission-control.md` §3.4 and §9 Phase E added in the same PR that lands this addendum. The Phase E iteration-tracker bullet for F-12b is updated to point at this addendum and to confirm the F-12 / F-12b split is fully designed.

@@ -48,7 +48,7 @@ Goal: add `src/bot/lib/myelin-subscriber.ts` that subscribes to NATS subjects un
 
 ## Retro
 
-**Cycle time** — first commit (G-1100.A initial) to G-1100 parent done: ~10h on 2026-05-08, single operator session driving five sub-features through 1-5 review rounds each.
+**Cycle time** — first commit (G-1100.A initial) to G-1100 parent done: ~10h on 2026-05-08, single principal session driving five sub-features through 1-5 review rounds each.
 
 **Throughput** — 5 sub-features merged + 1 design doc + 1 stocktake + 1 blueprint setup. Eight PRs from this iteration on `main`; ten review rounds across them.
 
@@ -91,7 +91,7 @@ Goal: add `src/bot/lib/myelin-subscriber.ts` that subscribes to NATS subjects un
 - **G-1104** Blueprint state-change ingestion
 - **G-1105** Artifact-aware drill-down
 - **G-1106** OTLP+CloudEvent timeline join
-- **G-1107** Universal operator-input return path
+- **G-1107** Universal principal-input return path
 - **G-1108** Cross-repo blueprint badge
 - **G-1109** Triggered-by-schedule cards
 - **G-1110** Sovereignty render

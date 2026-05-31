@@ -5,7 +5,7 @@
  * grove-v2 (plan §1.3 non-goal: behaviour parity). The rename to
  * `~/.config/cortex/cli.yaml` lands at MIG-7 alongside the broader
  * bot.yaml → cortex.yaml move; doing it now would create an intermediate
- * config-fork state for the operator. Tracked at plan §4 MIG-7.
+ * config-fork state for the principal. Tracked at plan §4 MIG-7.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";

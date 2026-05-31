@@ -5,7 +5,7 @@
  * cortex#79 — arc-delegated implementation. Mutation subcommands shell out
  * to `arc nats … --json` (schema `arc.nats.v1`, contract pinned at
  * the-metafactory/arc:docs/integrations/cortex-creds.md). arc owns nsc and
- * the operator's $SYS account; cortex stays a thin delegator with no
+ * the principal's $SYS account; cortex stays a thin delegator with no
  * signing-key handling of its own. Supersedes the cortex#67 daemon-IPC
  * implementation (deleted in this same PR).
  *
@@ -330,7 +330,7 @@ async function defaultArcRunner(argv: readonly string[]): Promise<ArcRunResult> 
 
 interface ArcCallResult {
   envelope: ArcEnvelope | null;
-  /** Surface raw output back to the operator on parse-failure paths. */
+  /** Surface raw output back to the principal on parse-failure paths. */
   rawStderr: string;
   rawStdout: string;
   /** Non-null on spawn failure (arc binary missing, not executable). */
@@ -691,7 +691,7 @@ function topLevelHelp(): string {
   return `cortex creds — manage per-agent NATS user credentials
 
 Cortex delegates credential minting to arc (\`arc nats … --json\`). arc owns
-nsc and the operator's $SYS account; cortex shells out and surfaces the
+nsc and the principal's $SYS account; cortex shells out and surfaces the
 result. See the-metafactory/arc:docs/integrations/cortex-creds.md for the
 contract.
 
@@ -762,7 +762,7 @@ Behavior:
 
 USER_NOT_FOUND on revoke is treated as idempotent (exit 0).
 PUSH_FAILED is surfaced with a WARNING — the old creds remain valid on the
-bus until the operator retries after fixing connectivity.
+bus until the principal retries after fixing connectivity.
 
 Exit codes:
   0    arc reported ok=true (or revoke-of-already-gone)

@@ -140,7 +140,7 @@ const defaultCCSessionFactory: CCSessionFactory = (opts) => new CCSession(opts);
 /**
  * Constructor options for `ClaudeCodeHarness`.
  *
- * Every field is either operator-derived (the `source` triple, used as
+ * Every field is either principal-derived (the `source` triple, used as
  * envelope `source` for lifecycle events) or test-injection (the
  * factory). No CC-binary path here — `CCSession` already resolves
  * `claude` from `$PATH`; injecting a path is out-of-scope for A.1.
@@ -149,7 +149,7 @@ export interface ClaudeCodeHarnessOpts {
   /**
    * Envelope source triple — `{org, agent, instance}` — stamped onto
    * every lifecycle envelope this harness produces. Sourced from
-   * cortex.yaml's `operator.id` + the agent id + `local` (or whatever
+   * cortex.yaml's `principal.id` + the agent id + `local` (or whatever
    * the runner uses as instance label).
    *
    * Per dispatch-events.ts: `agent` here is the *cortex* agent name,
@@ -320,7 +320,7 @@ export class ClaudeCodeHarness implements SessionHarness {
    * harness is the single place that knows about `CCSessionOpts`.
    *
    * **Decision: prefer `req.runtime` fields over context kinds.** A.1
-   * read operator/entity/project from `context[kind=env]`; A.1b adds
+   * read principal/entity/project from `context[kind=env]`; A.1b adds
    * the same fields under `req.runtime` plus the eight runtime fields
    * from the legacy listener. Both paths are kept (context kind = env
    * still works for forward compat with adapters that haven't migrated)
@@ -379,7 +379,7 @@ export class ClaudeCodeHarness implements SessionHarness {
     for (const ctx of req.context) {
       if (ctx.kind === "env" && typeof ctx.data === "object" && ctx.data !== null) {
         const env = ctx.data as Record<string, unknown>;
-        if (opts.operator === undefined && typeof env.operator === "string") opts.operator = env.operator;
+        if (opts.principal === undefined && typeof env.principal === "string") opts.principal = env.principal;
         if (opts.entity === undefined && typeof env.entity === "string") opts.entity = env.entity;
         if (opts.project === undefined && typeof env.project === "string") opts.project = env.project;
       }
@@ -406,7 +406,7 @@ export class ClaudeCodeHarness implements SessionHarness {
    * from accidental validation failures at publish time.
    *
    * **Echo cortex#125 nit.** When the fallback path fires (non-UUID
-   * input), we emit a one-time warning so the operator sees that the
+   * input), we emit a one-time warning so the principal sees that the
    * substrate is silently rewriting `correlation_id` — a misconfigured
    * producer would otherwise be undetectable except by stack trace
    * comparison across envelopes.

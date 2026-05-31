@@ -744,7 +744,7 @@ describe("envelope-validator — originator signature coverage (cortex#366)", ()
       resolver,
       receivingAgentId: "cortex",
       cryptoVerify: true,
-      principalId: "test-operator",
+      principalId: "test-principal",
     });
     expect(ok.valid).toBe(true);
 
@@ -771,7 +771,7 @@ describe("envelope-validator — originator signature coverage (cortex#366)", ()
       resolver,
       receivingAgentId: "cortex",
       cryptoVerify: true,
-      principalId: "test-operator",
+      principalId: "test-principal",
     });
 
     expect(result.valid).toBe(false);

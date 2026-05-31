@@ -6,7 +6,7 @@
  * - Secret generation (crypto-based, no shell-out)
  * - Wrangler output parsing (D1 database_id, KV namespace id)
  * - Wrangler.toml ID replacement
- * - add-operator HTTP call construction
+ * - add-principal HTTP call construction
  * - status endpoint parsing
  * - Credential file saving
  * - CLI argument parsing
@@ -226,15 +226,15 @@ describe("parseArgs", () => {
     expect(args.flags["cf-api-token"]).toBe("token456");
   });
 
-  test("parses cloud add-operator flags", () => {
+  test("parses cloud add-principal flags", () => {
     const args = parseArgs([
-      "cloud", "add-operator",
+      "cloud", "add-principal",
       "--name", "JC",
       "--agent-name", "Ivy",
       "--endpoint", "https://grove-api.meta-factory.ai",
       "--admin-key", "admin-secret",
     ]);
-    expect(args.command).toBe("add-operator");
+    expect(args.command).toBe("add-principal");
     expect(args.flags.name).toBe("JC");
     expect(args.flags["agent-name"]).toBe("Ivy");
     expect(args.flags.endpoint).toBe("https://grove-api.meta-factory.ai");

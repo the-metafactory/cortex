@@ -221,7 +221,7 @@ export interface ApiDeps {
 
 const DEFAULT_AGENT_ID = "mc-default-agent";
 const DEFAULT_AGENT_NAME = "Mission Control default";
-const DEFAULT_OPERATOR_ID = "mc-default-operator";
+const DEFAULT_PRINCIPAL_ID = "mc-default-principal";
 /**
  * Default priority for `internal`-source tasks created via POST /api/sessions.
  * Used by the INSERT below AND `buildNotificationContextFromCreate` — a
@@ -625,7 +625,7 @@ export async function handleCreateSession(
   // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
   const title = body.title?.trim() || "Untitled session";
   // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-  const principalId = body.principalId?.trim() || DEFAULT_OPERATOR_ID;
+  const principalId = body.principalId?.trim() || DEFAULT_PRINCIPAL_ID;
   // F-20 — when an observed session supplies an agentId we don't have on
   // file, register it on the spot using `agentName` as the display name.
   // Falls back to ensuring the default agent for unscoped controlled work.
@@ -1990,7 +1990,7 @@ export async function handleCreateTask(
   const taskId = generateId();
   const shadowAssignmentId = generateId();
   const shadowSessionId = generateId();
-  const principalId = DEFAULT_OPERATOR_ID;
+  const principalId = DEFAULT_PRINCIPAL_ID;
 
   // All four writes (task + shadow assignment + shadow session + curation
   // event) land under one transaction so a partial failure leaves no
@@ -2730,7 +2730,7 @@ export function handleAttachTaskToIteration(
           `INSERT INTO tasks
              (id, title, priority, principal_id, source_system, iteration_id)
            VALUES (?, ?, ?, ?, 'internal', ?)`
-        ).run(newTaskId, newTitle, prio, DEFAULT_OPERATOR_ID, iterationId);
+        ).run(newTaskId, newTitle, prio, DEFAULT_PRINCIPAL_ID, iterationId);
         touchIteration(db, iterationId);
       })();
     } catch (err) {

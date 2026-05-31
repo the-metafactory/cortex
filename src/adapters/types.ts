@@ -34,8 +34,8 @@ export interface InboundMessage {
   guildId?: string;
   /** Whether this message is from a DM channel */
   isDM?: boolean;
-  /** DM classification: operator (full access) or user (standard guards) */
-  dmType?: "operator" | "user";
+  /** DM classification: principal (full access) or user (standard guards) */
+  dmType?: "principal" | "user";
   /** Inbound file attachments */
   attachments: InboundAttachment[];
   /** Message timestamp */
@@ -66,7 +66,7 @@ export interface AccessDecision {
   dirRestrictions?: string[];
   /** G-121: Skills this role may invoke. undefined → all; [] → none; [...] → only listed. */
   allowedSkills?: string[];
-  /** Whether bash guard should be active. Default: true. Operator DM may set false. */
+  /** Whether bash guard should be active. Default: true. Principal DM may set false. */
   bashGuard?: boolean;
   /** Override bash allowlist (DM role may specify its own) */
   bashAllowlist?: { rules: { pattern: string; repos?: string[] }[]; repos: string[] };
@@ -164,8 +164,8 @@ export interface PlatformAdapter {
     channel: string;
     thread?: string;
   }): Promise<ResponseTarget | null>;
-  /** Send a notification to the operator */
-  notifyOperator(text: string): Promise<void>;
+  /** Send a notification to the principal */
+  notifyPrincipal(text: string): Promise<void>;
   /** F-092: Hot-reload adapter config (optional, for adapters that support it) */
   updateConfig?(config: unknown): void;
 }

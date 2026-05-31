@@ -440,11 +440,11 @@ export function importSubIssueFromMetadata(
   // parents per Decision 7).
   const taskId = generateId();
   const status = child.state === "closed" ? "done" : "open";
-  // Principal id mirrors F-12b's DEFAULT_OPERATOR_ID — the sub-issue
+  // Principal id mirrors F-12b's DEFAULT_PRINCIPAL_ID — the sub-issue
   // came in via webhook, no human acted; we attribute it to the
   // mission-control default principal the same way internal-task
   // creates do.
-  const DEFAULT_OPERATOR_ID = "mc-default-operator";
+  const DEFAULT_PRINCIPAL_ID = "mc-default-principal";
   db.query(
     `INSERT INTO tasks
        (id, title, priority, principal_id,
@@ -454,7 +454,7 @@ export function importSubIssueFromMetadata(
   ).run(
     taskId,
     child.title,
-    DEFAULT_OPERATOR_ID,
+    DEFAULT_PRINCIPAL_ID,
     child.htmlUrl,
     childCanonical,
     status,

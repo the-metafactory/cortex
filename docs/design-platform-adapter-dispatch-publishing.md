@@ -142,7 +142,7 @@ Per myelin canonical grammar (`myelin/specs/namespace.md` §Tasks Domain) and `C
 
 Lifecycle envelopes joined to inbound by `correlation_id`. **Free-form Discord/Mattermost/Slack `@assistant <message>` interactions publish with `capability = chat` — a first-class capability in myelin's seed taxonomy as of the C-405 corrections (see myelin issue for the taxonomy extension).**
 
-**Legacy:** the old `dispatch.task.received` subscription in `src/runner/dispatch-listener.ts` is pre-spec. Stage 4-B makes the listener default canonical (`tasks.*.>`; whole-token wildcard matching the `@{did}` assistant token). Explicit legacy subject overrides may exist in tests/operator config until #412 deletes `dispatch-handler.ts` and updates the remaining integration surfaces.
+**Legacy:** the old `dispatch.task.received` subscription in `src/runner/dispatch-listener.ts` is pre-spec. Stage 4-B makes the listener default canonical (`tasks.*.>`; whole-token wildcard matching the `@{did}` assistant token). Explicit legacy subject overrides may exist in tests/principal config until #412 deletes `dispatch-handler.ts` and updates the remaining integration surfaces.
 
 `response_routing` field on the inbound envelope payload — shape TBD; sketch:
 
@@ -200,7 +200,7 @@ Inbound subject identical to Direct (`tasks.@{did-encoded-assistant}.{capability
 | Stage | Work | Pre-requisite |
 |-------|------|----------------|
 | 0 | This design doc + OSI corrections doc; ADR equivalent recorded | — |
-| 1 | Finish MIG-7.2 — adapter holds an `agent` not legacy `BotConfig.agent.discord[]` | — |
+| 1 | Finish MIG-7.2 — adapter holds an `agent` not legacy `AgentConfig.agent.discord[]` | — |
 | 2 | **Implement against existing myelin spec (no negotiation needed).** Wire up `encodeDidSegment` helper from `@the-metafactory/myelin/subjects`; confirm `verifySignedByChain` reads `originator.principal` via `getActorPrincipal` for policy attribution. Land myelin taxonomy extension adding `chat` as a first-class capability. | Stage 1 |
 | 3 | Build `EnvelopePublishingAdapterBase` — shared dispatch-source helpers. Subject derivation uses `tasks.@{did-encoded-assistant}.{capability}`. Adapter populates `originator.identity` from `resolveAccess` output + sets `attribution = "adapter-resolved"`. Hand to `runtime.publish` for stack-signing. Add `AgentTeamHarness` (Q6c). Listener selects on `envelope.distribution_mode === 'delegate'` for AgentTeam routing. | Stages 1–2 |
 | 4 | Dispatch sources publish canonical envelopes by default. Discord/chat publishes onto `tasks.@{did-encoded-assistant}.chat` via the shared dispatch-source publisher; the listener default is `tasks.*.>` because router wildcards match whole tokens (`*` matches the full `@{did}` segment). **Defaults to model A (Discord-as-bridge for cross-principal channels)**; per-channel opt-in for model B (federation-by-default) once peer-principal NATS federation + trust roots are configured for that pair. **Stage 4-B lands the default chat path and retires the feature flag. Async/direct + team/delegate remain outstanding.** | Stage 3 + cortex federation-as-default issue |

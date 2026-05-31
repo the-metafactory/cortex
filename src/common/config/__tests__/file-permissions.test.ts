@@ -35,7 +35,7 @@ describe("enforceChmod600", () => {
     expect(() => enforceChmod600(file)).not.toThrow();
   });
 
-  test("rejects chmod 644 with operator-readable error containing path + actual mode", () => {
+  test("rejects chmod 644 with principal-readable error containing path + actual mode", () => {
     if (process.platform === "win32") return;
     chmodSync(file, 0o644);
     expect(() => enforceChmod600(file)).toThrow(
@@ -57,8 +57,8 @@ describe("enforceChmod600", () => {
 
   test("rejects chmod 400 (read-only but not the policy)", () => {
     // We require 0600 specifically — daemon needs to read AND write.
-    // 0400 usually means an operator ran `chmod a-w` by hand; that's
-    // a different operator action and should fail loudly, not slip past.
+    // 0400 usually means a principal ran `chmod a-w` by hand; that's
+    // a different principal action and should fail loudly, not slip past.
     if (process.platform === "win32") return;
     chmodSync(file, 0o400);
     expect(() => enforceChmod600(file)).toThrow(/must be chmod 600.*400/);

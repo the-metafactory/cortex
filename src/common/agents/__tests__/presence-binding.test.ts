@@ -101,7 +101,7 @@ class FakeAdapter implements PlatformAdapter {
   }): Promise<ResponseTarget | null> {
     return null;
   }
-  async notifyOperator(_text: string) {}
+  async notifyPrincipal(_text: string) {}
 }
 
 // =============================================================================

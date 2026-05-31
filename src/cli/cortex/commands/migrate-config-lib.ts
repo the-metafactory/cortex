@@ -1192,7 +1192,7 @@ function synthesizeSurfaceSubjects(
     principal: { id: principalId },
     stack: stackId ? { id: stackId } : undefined,
   });
-  const defaultSubject = `local.${derived.operator}.${derived.stack}.dispatch.task.*`;
+  const defaultSubject = `local.${derived.principal}.${derived.stack}.dispatch.task.*`;
 
   for (const rawAgent of agents) {
     if (!rawAgent || typeof rawAgent !== "object") continue;

@@ -77,7 +77,7 @@ These pieces are either outside v2's scope or are infrastructure v2 reuses as-is
 
 Decisions deferred until we actually need to make them:
 
-- **Does v2 keep a cloud Worker at all?** v2 is local-only during development. If post-cutover Grove wants remote access (dashboard hosted in cloud, accessible from a phone, shared with collaborators), v2 grows a Worker layer at that point. If Grove stays single-operator-local-only forever, `src/worker/` is deleted at cutover.
+- **Does v2 keep a cloud Worker at all?** v2 is local-only during development. If post-cutover Grove wants remote access (dashboard hosted in cloud, accessible from a phone, shared with collaborators), v2 grows a Worker layer at that point. If Grove stays single-principal-local-only forever, `src/worker/` is deleted at cutover.
 - **Does v2 keep Discord as an input channel?** v2's MVP is browser-driven, no Discord. Three possible futures:
   - (a) Discord retires entirely — v2 is local browser only.
   - (b) Discord becomes a secondary input — v2 adds a Discord listener that maps messages to dashboard-equivalent actions.

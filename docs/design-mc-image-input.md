@@ -32,7 +32,7 @@ Maestro ships both. F-10 operators expect both. Shipping only paste leaves scree
 
 **Out of scope:**
 - File picker button (explicit "Attach" button). Can add later; not idiomatic for Maestro, not in the v1 `§6.2` bullet list.
-- Image-only messages (no accompanying text). The stream-json frame accepts a content-array; we accept it if the operator submits with no text but at least one image. UI allows this — no friction required for what is a one-line JS guard.
+- Image-only messages (no accompanying text). The stream-json frame accepts a content-array; we accept it if the principal submits with no text but at least one image. UI allows this — no friction required for what is a one-line JS guard.
 - Pre-send image editing (crop, annotate). Post-v2.
 
 ## Decision 2 — Wire format: `buildStreamJsonMessage` is extended to accept rich content arrays
@@ -73,15 +73,15 @@ export function buildStreamJsonMessage(
 
 ## Decision 3 — Storage: embedded base64 in the event payload. No separate blob store in v1.
 
-**Chosen:** Images live inline in the `events.payload` JSON for `operator.input` events (the authoritative H-source for operator-sent turns; see Decision 4) and in the request body of `POST /api/assignments/:id/input` as raw base64 + `media_type`.
+**Chosen:** Images live inline in the `events.payload` JSON for `principal.input` events (the authoritative H-source for principal-sent turns; see Decision 4) and in the request body of `POST /api/assignments/:id/input` as raw base64 + `media_type`.
 
-**Event-type canonicalisation.** The dashboard already suppresses the `stream-json.user` text-block path (`dashboard/index.html:1226–1228`: *"CC echo of operator input. Suppressed — operator.input event is the authoritative H-source; rendering this too duplicates."*). Images follow the same rule: the operator's outbound turn — text and images — is stored on `operator.input` and rendered from there. The stream-json echo of the same turn carries the image blocks over the wire to CC (Decision 2) but is **not** the canonical store and is **not** rendered. Decisions 4 and 7 align on `operator.input` as the single canonical event type for operator-sent images.
+**Event-type canonicalisation.** The dashboard already suppresses the `stream-json.user` text-block path (`dashboard/index.html:1226–1228`: *"CC echo of principal input. Suppressed — principal.input event is the authoritative H-source; rendering this too duplicates."*). Images follow the same rule: the principal's outbound turn — text and images — is stored on `principal.input` and rendered from there. The stream-json echo of the same turn carries the image blocks over the wire to CC (Decision 2) but is **not** the canonical store and is **not** rendered. Decisions 4 and 7 align on `principal.input` as the single canonical event type for principal-sent images.
 
-**Why embedded.** §6.2 says "No temp files, no upload-to-cloud step". At Phase C scale (single operator, one dashboard), embedding is operationally indistinguishable from the alternative. Introducing a blob store (CF R2, S3, filesystem) is a distinct project with its own cleanup, auth, and data-retention concerns. Punt it.
+**Why embedded.** §6.2 says "No temp files, no upload-to-cloud step". At Phase C scale (single principal, one dashboard), embedding is operationally indistinguishable from the alternative. Introducing a blob store (CF R2, S3, filesystem) is a distinct project with its own cleanup, auth, and data-retention concerns. Punt it.
 
-**Known cost.** A 5 MB PNG becomes ~7 MB of JSON. Event-table rows get large. A dashboard session of 30 screenshot-assisted turns is ~200 MB of SQLite. That is acceptable at current deployment (local SQLite, single operator) and **unacceptable** at Tier 2 multi-operator D1 scale. Revisit before Tier 2 — recorded here so a future reviewer can point at the decision rather than re-derive it.
+**Known cost.** A 5 MB PNG becomes ~7 MB of JSON. Event-table rows get large. A dashboard session of 30 screenshot-assisted turns is ~200 MB of SQLite. That is acceptable at current deployment (local SQLite, single principal) and **unacceptable** at Tier 2 multi-principal D1 scale. Revisit before Tier 2 — recorded here so a future reviewer can point at the decision rather than re-derive it.
 
-**Pagination response size.** The existing `GET /api/assignments/:id/events` paginates with a default `limit=50`. With inline base64, half-image-bearing rows at ~6.7 MB apiece means the initial fetch page can carry up to ~170 MB over the HTTP boundary. SQLite's per-row ceiling (`SQLITE_MAX_LENGTH` default 1 GB) easily accommodates a single 5 MB image in a TEXT payload, but the aggregate page size is real memory for both server (JSON.stringify) and client (parse + render). The F-7 virtualised event log trims to `DRILL_MAX_EVENTS = 500` client-side, but the initial fetch is the hit. Not a blocker for v1 (single operator); noted so a follow-up can either cut pagination default for image-bearing sessions or strip payloads in list responses and hydrate per-event on demand.
+**Pagination response size.** The existing `GET /api/assignments/:id/events` paginates with a default `limit=50`. With inline base64, half-image-bearing rows at ~6.7 MB apiece means the initial fetch page can carry up to ~170 MB over the HTTP boundary. SQLite's per-row ceiling (`SQLITE_MAX_LENGTH` default 1 GB) easily accommodates a single 5 MB image in a TEXT payload, but the aggregate page size is real memory for both server (JSON.stringify) and client (parse + render). The F-7 virtualised event log trims to `DRILL_MAX_EVENTS = 500` client-side, but the initial fetch is the hit. Not a blocker for v1 (single principal); noted so a follow-up can either cut pagination default for image-bearing sessions or strip payloads in list responses and hydrate per-event on demand.
 
 **Retention stays coupled.** Images share the events table's retention policy (whatever we pick later — today there is no retention policy). If we add retention, images get purged with their session on the same schedule.
 
@@ -110,12 +110,12 @@ interface SendInputRequest {
 - On success, the handler builds a content-block array and passes it to `endpoint.write(...)` via the rich overload (Decision 2). `endpoint.write` signature grows a polymorphism (`string | StreamJsonContentBlock[]`); `resolveSessionEndpoint`'s implementation passes through to `buildStreamJsonMessage` unchanged.
 - **Polymorphism propagates.** `resolveSessionEndpoint` (`src/mission-control/session/endpoint-resolver.ts`) returns an endpoint whose `write` wraps the framer, so the polymorphism lifts outward from `buildStreamJsonMessage` → `EndpointWrite` → `handleSendInput`. `handleCreateSession` (handlers.ts ~line 365) also calls `endpoint.write(body.prompt)` for the optional initial prompt — that call site inherits the polymorphic signature, but the initial-prompt field stays **request-scoped text only in v1**; seeding a spawn with an image is explicitly deferred (keeps the spawn path simple).
 
-**Why not a new endpoint.** F-10 Decision 4 reused this endpoint. Images are additive to the same operator-input semantic. Two endpoints would fragment the contract for no gain.
+**Why not a new endpoint.** F-10 Decision 4 reused this endpoint. Images are additive to the same principal-input semantic. Two endpoints would fragment the contract for no gain.
 
-**Operator input event payload is the canonical store** (see Decision 3). It gains an `images` field in parallel:
+**Principal input event payload is the canonical store** (see Decision 3). It gains an `images` field in parallel:
 
 ```ts
-// events.payload when type === 'operator.input'
+// events.payload when type === 'principal.input'
 {
   text?: string;
   images?: Array<{ media_type: string; data: string }>;
@@ -132,17 +132,17 @@ Same shape as the request. Stored in the same event row (no N:1 explosion into a
 
 (a) **Render-context scope.** The risk isn't the `<img src="data:image/svg+xml;base64,...">` element itself — modern browsers treat that as a sandboxed image context (no script, no external fetch). The risk is *any* future code path that renders SVG inline via `innerHTML` (e.g., a lightbox thumbnail template, a custom preview tooltip). Excluding SVG upstream at the allowlist means the dashboard is never one innocent-looking template change away from a stored-XSS primitive.
 
-(b) **PDF embedded JavaScript.** PDFs carry JS-capable object streams and external references; browsers render them via plugin-style contexts that historically leak. Not a format we want in an operator-trusted attention view.
+(b) **PDF embedded JavaScript.** PDFs carry JS-capable object streams and external references; browsers render them via plugin-style contexts that historically leak. Not a format we want in an principal-trusted attention view.
 
 (c) **Base64 is not a sanitizer — it's an encoding.** Base64-encoding malicious bytes keeps the bytes intact; the allowlist is the defence, decoding doesn't validate anything. See the dedicated note below for the full treatment including GIF-polyglot handling.
 
-**Per-message cap:** 8 images. An operator pasting 50 screenshots is almost always a mistake, not a workflow.
+**Per-message cap:** 8 images. An principal pasting 50 screenshots is almost always a mistake, not a workflow.
 
 **Per-request body cap:** 25 MB. Sized against 5 × 5 MB + base64 overhead (~33%) + text + headroom. Applied as the `413 Payload Too Large` response. This sits alongside the 50 KB text-only cap — once the server-side text-length check lands (in-flight chore tracked alongside F-10; today `handleSendInput` in `src/mission-control/api/handlers.ts:400–402` only validates that `text` is a non-empty string), the text-only cap will be separately enforced on `text` alone, so the two caps coexist as two independent checks rather than one ambiguous "total bytes" limit.
 
 **Cap enforcement layer.** Three boundaries, three places:
 
-1. **Per-image 5 MB decoded.** Measured without fully decoding: compute `Math.floor(encoded.length * 3 / 4) - paddingBytes` from the base64 string and reject before decoding. This is a tight upper bound on decoded size; an operator submitting exactly 5 MB decoded passes, one submitting 5.1 MB is rejected with 413.
+1. **Per-image 5 MB decoded.** Measured without fully decoding: compute `Math.floor(encoded.length * 3 / 4) - paddingBytes` from the base64 string and reject before decoding. This is a tight upper bound on decoded size; an principal submitting exactly 5 MB decoded passes, one submitting 5.1 MB is rejected with 413.
 2. **Per-message 8 images.** Simple `images.length` check at the top of `handleSendInput`, before any decoding.
 3. **Per-body 25 MB.** Enforced at the server layer's JSON body limit (upstream of `handleSendInput` — the handler receives an already-parsed body, per the `handlers.ts` header comment). The JSON parser itself rejects oversized bodies at the framing layer; `handleSendInput` does not need to re-check total bytes post-parse. A 25 MB decoded JSON object is a real memory cost, so the cap belongs as early in the pipeline as possible.
 
@@ -182,11 +182,11 @@ The per-image and per-message checks are cheap and run post-parse in the handler
 
 **No paste-preview auto-prompt.** The current chip is the preview. No modal or additional confirmation dialogue.
 
-## Decision 7 — Event renderer: F-7 attention view grows an `image` handler on `operator.input`
+## Decision 7 — Event renderer: F-7 attention view grows an `image` handler on `principal.input`
 
-The F-7 `eventToRows()` function (docs/design-mc-f7-attention-view.md Decision 4) expands `content[]` into one rendered row per block on `stream-json.assistant` and only `tool_result` on `stream-json.user` — the `stream-json.user` `text` case is already suppressed because `operator.input` is the authoritative H-source (`dashboard/index.html:1226–1228`).
+The F-7 `eventToRows()` function (docs/design-mc-f7-attention-view.md Decision 4) expands `content[]` into one rendered row per block on `stream-json.assistant` and only `tool_result` on `stream-json.user` — the `stream-json.user` `text` case is already suppressed because `principal.input` is the authoritative H-source (`dashboard/index.html:1226–1228`).
 
-**Where the image case lands.** Since Decision 3 / Decision 4 make `operator.input` the canonical store for operator-sent images, the new rendering case belongs on the `operator.input` handler, **not** on `stream-json.user`. The existing `operator.input` branch today renders a single H-coloured row showing `ev.payload.text`; this addendum extends it to also emit one row per entry in `ev.payload.images[]` (thumbnail chip, identical visual treatment to pre-send chips). The `stream-json.user` suppression stays exactly as-is — no change there — so a single operator turn renders once, from `operator.input`.
+**Where the image case lands.** Since Decision 3 / Decision 4 make `principal.input` the canonical store for principal-sent images, the new rendering case belongs on the `principal.input` handler, **not** on `stream-json.user`. The existing `principal.input` branch today renders a single H-coloured row showing `ev.payload.text`; this addendum extends it to also emit one row per entry in `ev.payload.images[]` (thumbnail chip, identical visual treatment to pre-send chips). The `stream-json.user` suppression stays exactly as-is — no change there — so a single principal turn renders once, from `principal.input`.
 
 **Rendering:**
 - Inline `<img src="data:{media_type};base64,{data}">` with CSS `max-width: 320px; max-height: 240px; object-fit: contain`.
@@ -194,7 +194,7 @@ The F-7 `eventToRows()` function (docs/design-mc-f7-attention-view.md Decision 4
 - Below the image, the message text (if any) renders as the usual text-block row.
 
 **Accessibility.**
-- `alt` text is the filename (for operator-pasted chips, the auto-generated name; no user-level alt-text input in v1).
+- `alt` text is the filename (for principal-pasted chips, the auto-generated name; no user-level alt-text input in v1).
 - `role="img"` on the outer chip div.
 
 **Cost.** Rendering 5 MB base64 inline is fine for the message count F-7 deals with (virtualised to last-N events). If operators pile up dozens of screenshots per session, the drill-down's memory cap (`DRILL_MAX_EVENTS = 500`) caps the working set.
@@ -235,7 +235,7 @@ Three failure points:
 - 413 on > 25 MB combined body.
 - 413 on `images.length > 8`.
 - 409 on observed session with images present (belt-and-braces with Decision 8; server-side gate must reject writes regardless of payload shape).
-- Operator-input event payload contains both text and images[] as submitted.
+- Principal-input event payload contains both text and images[] as submitted.
 
 **Renderer tests** are dashboard-integration; matching F-7/F-8/F-9 precedent, rely on smoke + manual browser test. Not blocking.
 
@@ -268,7 +268,7 @@ Three failure points:
 - [ ] Image-only submit (no text) sends successfully.
 - [ ] 413 (oversized) and 400 (bad media_type) trigger the F-10 inline error banner with the Decision 9 copy.
 - [ ] Observed / ended sessions do not accept paste or drop (gate reuses F-10's `resolveDrillInputMode`).
-- [ ] The event log's `operator.input` row for a sent image renders the image inline (one row per `payload.images[]` entry), click-to-enlarge lightbox. The `stream-json.user` echo remains suppressed.
+- [ ] The event log's `principal.input` row for a sent image renders the image inline (one row per `payload.images[]` entry), click-to-enlarge lightbox. The `stream-json.user` echo remains suppressed.
 - [ ] `buildStreamJsonMessage` accepts both a string and a content-block array; legacy callers work unchanged.
 - [ ] All existing tests still pass; new framing + endpoint tests ship green.
 

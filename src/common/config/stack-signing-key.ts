@@ -51,7 +51,7 @@ const STACK_SEED_PREFIX = "SU";
 /**
  * Load + validate the stack signing nkey from disk.
  *
- * Throws (with a clear, operator-facing message) on:
+ * Throws (with a clear, principal-facing message) on:
  *   - File missing / unreadable (propagates ENOENT / EACCES).
  *   - chmod not exactly `0600` on POSIX (no group / world access).
  *   - Seed not prefixed `SU` (i.e. not a user-class seed).
@@ -75,9 +75,9 @@ export async function loadStackSigningKey(path: string): Promise<KeyPair> {
   const seed = raw.trim();
 
   // 3. Prefix gate. Reject early with a clear error that tells the
-  //    operator which kind of key they handed us. Operator account
-  //    keys (`SA`), operator root keys (`SO`), server keys (`SN`),
-  //    and curve keys (`SC`) all fail this check.
+  //    principal which kind of key they handed us. NSC operator-account
+  //    keys (`SA`), NSC operator-account root keys (`SO`), server keys
+  //    (`SN`), and curve keys (`SC`) all fail this check.
   if (!seed.startsWith(STACK_SEED_PREFIX)) {
     const actualPrefix = seed.slice(0, 2);
     throw new Error(

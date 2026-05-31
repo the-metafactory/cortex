@@ -154,7 +154,7 @@ describe("DispatchRequest", () => {
       tools: { allow: ["Read", "Grep"], deny: ["Bash"] },
       context: [
         { kind: "discord-history", data: [{ author: "andreas", text: "hi" }] },
-        { kind: "env", data: { operator: "andreas", entity: "pr/45" } },
+        { kind: "env", data: { principal: "andreas", entity: "pr/45" } },
       ],
       agent: {
         id: "luna",

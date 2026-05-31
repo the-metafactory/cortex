@@ -34,8 +34,8 @@ export interface CCSessionOpts {
   project?: string;
   /** H-001: Entity context (e.g., "issue/43", "pr/45", "g-204") */
   entity?: string;
-  /** H-001: Operator who triggered this session (Discord username or ID) */
-  operator?: string;
+  /** H-001: Principal who triggered this session (Discord username or ID) */
+  principal?: string;
 }
 
 export interface CCSessionResult {
@@ -116,7 +116,7 @@ export class CCSession extends EventEmitter {
       ...(this.opts.agentId && { GROVE_AGENT_ID: this.opts.agentId }),
       ...(this.opts.project && { GROVE_PROJECT: this.opts.project }),
       ...(this.opts.entity && { GROVE_ENTITY: this.opts.entity }),
-      ...(this.opts.operator && { GROVE_OPERATOR: this.opts.operator }),
+      ...(this.opts.principal && { GROVE_OPERATOR: this.opts.principal }),
     };
 
     // Pass bash allowlist config to bash-guard.hook.ts

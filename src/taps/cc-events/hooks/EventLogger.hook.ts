@@ -88,7 +88,7 @@ if (!groveChannel) {
 const groveNetwork = process.env.GROVE_NETWORK;
 const groveProject = process.env.GROVE_PROJECT;
 const groveEntity = process.env.GROVE_ENTITY;
-// R9 (cortex#388 PR-3): the operator-the-human concept is now `principal`.
+// R9 (cortex#388 PR-3): the human-the-stack-owner concept is now `principal`.
 // Read `CORTEX_PRINCIPAL` with a compat fallback to the legacy
 // `CORTEX_OPERATOR` / `GROVE_OPERATOR` names (see principal-env.ts).
 const principal = resolvePrincipalEnv();
@@ -204,12 +204,12 @@ async function main() {
       payload.command_preview = hookInput.tool_input.command.slice(0, 200);
     }
 
-    // H-001: Explicit metadata from spawn boundary. The `operator` payload
-    // key is a wire field (relay policy + dashboard read it) and is renamed
-    // separately under R2 — only the env-var source is `principal` here.
+    // H-001: Explicit metadata from spawn boundary. The `principal` payload
+    // key is a wire field (relay policy + dashboard read it), renamed from
+    // the legacy key under the vocabulary migration (R2).
     if (groveProject !== undefined) payload.project = groveProject;
     if (groveEntity !== undefined) payload.entity = groveEntity;
-    if (principal !== undefined) payload.operator = principal;
+    if (principal !== undefined) payload.principal = principal;
 
     // TodoWrite payload: extract task names and statuses
     if (toolName === "TodoWrite" && hookInput.tool_input?.todos !== undefined) {
@@ -253,7 +253,7 @@ async function main() {
       const heartbeat = createRawEvent(
         EVENT_TYPES.SESSION_HEARTBEAT,
         hookType,
-        { project: groveProject, entity: groveEntity, operator: principal },
+        { project: groveProject, entity: groveEntity, principal },
         { sessionId, networkId: groveNetwork }
       );
       await postEvent(heartbeat);

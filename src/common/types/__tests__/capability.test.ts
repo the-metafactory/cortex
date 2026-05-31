@@ -14,7 +14,7 @@
  *      `capabilities[].id`, and every `capabilities[].provided_by[]`
  *      reference resolves to a declared `agents[].id`. Symmetric dangling-
  *      reference guards; the error messages name the offending agent/id
- *      and the specific path the operator should edit.
+ *      and the specific path the principal should edit.
  *
  * Test layout mirrors `./stack.test.ts`: minimal fixture builders at the
  * top, schema-level tests next, document-level tests after, and the
@@ -177,7 +177,7 @@ describe("CapabilitySchema.description", () => {
 
   test("rejects whitespace-only description (`.trim().min(1)` guard)", () => {
     // `.min(1)` alone accepts `" "` (length 1) — `.trim().min(1)` rejects
-    // it because the trimmed length is 0. Pins the operator-facing contract:
+    // it because the trimmed length is 0. Pins the principal-facing contract:
     // blank-looking descriptions never propagate to the registry / dashboard.
     expect(() =>
       CapabilitySchema.parse(minCapability({ description: "   " })),
@@ -254,9 +254,9 @@ describe("CapabilitySchema.provided_by", () => {
   });
 
   test("rejects digit-only provider id (Discord-snowflake paste-bug; tightened by cortex#145)", () => {
-    // Real failure mode this pins: an operator pastes a Discord snowflake into
+    // Real failure mode this pins: a principal pastes a Discord snowflake into
     // provided_by and the schema silently accepts it. cortex#145 closed the
-    // operator/stack/agent letter-prefix trilogy (cortex#141 → cortex#144 →
+    // principal/stack/agent letter-prefix trilogy (cortex#141 → cortex#144 →
     // cortex#145) so the gate now catches the paste-bug deterministically at
     // parse time rather than relying on the cross-field provider-resolution
     // refine to surface it later. `provided_by` mirrors `AgentSchema.id`'s
@@ -603,7 +603,7 @@ describe("CortexConfigSchema — agents[].runtime.capabilities → catalog (A.6.
     // to the top-level catalog — the catalog is the source of truth.
     //
     // The reworded message:
-    //   - Leads with the verb "Fix:" so an operator scanning the error
+    //   - Leads with the verb "Fix:" so a principal scanning the error
     //     finds the actionable line immediately.
     //   - Spells out the asymmetry between catalog (registry consumed
     //     by the dispatch consumer) and runtime.capabilities[] (agent
@@ -746,7 +746,7 @@ describe("CortexConfigSchema — agents[].runtime.capabilities → catalog (A.6.
 // Both new fields are OPTIONAL siblings on `agents[].runtime`. The load-bearing
 // invariant is back-compat: every cortex.yaml that parsed before PR-4 MUST
 // continue to parse byte-identically. The new fields add validation only when
-// the operator opts in.
+// the principal opts in.
 //
 // Runtime consumption of these values (sovereignty checks in the per-envelope
 // pipeline, maxConcurrent backpressure naks) is PR-5/PR-6's concern — these

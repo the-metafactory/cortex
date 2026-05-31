@@ -32,7 +32,7 @@ import { AgentRegistry } from "./common/agents/registry";
 import { TrustResolver } from "./common/agents/trust-resolver";
 // cortex#79 — creds minting moved to `arc nats … --json` (shelled out from
 // `src/cli/cortex/commands/creds.ts`). No daemon-side RPC handler in
-// cortex; the operator-signature verifier in TrustResolver keeps using
+// cortex; the account-signature verifier in TrustResolver keeps using
 // `loadAccountSigningKey` independently.
 import type { UsageStats } from "./runner/stream-parser";
 
@@ -320,15 +320,15 @@ export interface StartCortexOptions {
    * from `PrincipalConfigSchema` via `LoadedConfig.principal`. Replaces the
    * `AgentConfig.agent.operatorDiscordId/Mattermost/Slack` fields retired
    * in cortex#297. `undefined` for legacy `bot.yaml` input — adapters
-   * then have no principal-DM target and `notifyOperator` is a no-op.
+   * then have no principal-DM target and `notifyPrincipal` is a no-op.
    *
    * @internal — not part of the public API; semver does not apply.
    */
-  operator?: {
+  principal?: {
     id: string;
     /**
      * cortex#429 PR-C — replaces the removed `AgentConfig.agent.operatorName`.
-     * Surfaced on the dashboard's `operator` column when present; defaults
+     * Surfaced on the dashboard's `principal` column when present; defaults
      * to `id` otherwise.
      */
     displayName?: string;
@@ -344,10 +344,10 @@ export interface StartCortexOptions {
  * cortex process. v3 vocabulary (cortex#388) made `principal.id` the
  * single source of truth on cortex.yaml; the loader surfaces it as
  * `LoadedConfig.principal.id`, which the entrypoint hands in here via
- * `options.operator.id`.
+ * `options.principal.id`.
  *
  * cortex#429 PR-C — the legacy `config.agent.operatorId` fallback has
- * been retired together with the schema field. Operators on un-migrated
+ * been retired together with the schema field. Principals on un-migrated
  * configs see a fail-fast startup error pointing at `principal.id`; this
  * IS the upgrade prompt.
  *
@@ -357,15 +357,15 @@ export interface StartCortexOptions {
  * error — not a silent collapse to `local.default.>` that hides
  * misconfiguration until the first cross-principal envelope leaks.
  *
- * @throws if `options.operator.id` is unset or empty — fail-fast at
+ * @throws if `options.principal.id` is unset or empty — fail-fast at
  *   boot rather than masking the gap.
  */
 function resolvePrincipalId(
-  operator: StartCortexOptions["operator"],
+  principal: StartCortexOptions["principal"],
 ): string {
-  const fromLoadedOperator = operator?.id;
-  if (fromLoadedOperator !== undefined && fromLoadedOperator !== "") {
-    return fromLoadedOperator;
+  const fromLoadedPrincipal = principal?.id;
+  if (fromLoadedPrincipal !== undefined && fromLoadedPrincipal !== "") {
+    return fromLoadedPrincipal;
   }
   throw new Error(
     "cortex: cannot resolve principal id — cortex.yaml must declare `principal.id` " +
@@ -417,14 +417,14 @@ export async function startCortex(
   // subsequent `{principal}` segment (NATS subjects, `signed_by` chains,
   // dashboard columns) reads from this variable. cortex#429 PR-C retired
   // the legacy `config.agent.operatorId` fallback together with the
-  // schema field — `options.operator.id` (sourced from `principal.id` by
+  // schema field — `options.principal.id` (sourced from `principal.id` by
   // the loader) is the single resolution path.
-  const principalId = resolvePrincipalId(options.operator);
+  const principalId = resolvePrincipalId(options.principal);
   console.log(`  Principal: ${principalId}`);
 
   // IAW Phase A.5 (refs cortex#113, closes cortex#262) — resolve the
   // deployment's stack identity at boot. `deriveStackId` returns
-  // `{operator, stack, id}`; the `stack` segment flows into
+  // `{principal, stack, id}`; the `stack` segment flows into
   // `MyelinRuntime.publish()` below so emitted envelopes land in the
   // 6-segment `local.{principal}.{stack}.{type}` grammar that sage's bridge
   // and pilot's review-request subscriber both expect.
@@ -1461,7 +1461,7 @@ export async function startCortex(
         {
           instanceId,
           principal: {
-            ...(options.operator?.discordId !== undefined && { discordId: options.operator.discordId }),
+            ...(options.principal?.discordId !== undefined && { discordId: options.principal.discordId }),
           },
           runtime,
           systemEventSource,
@@ -1641,7 +1641,7 @@ export async function startCortex(
         {
           instanceId,
           principal: {
-            ...(options.operator?.mattermostId !== undefined && { mattermostId: options.operator.mattermostId }),
+            ...(options.principal?.mattermostId !== undefined && { mattermostId: options.principal.mattermostId }),
           },
           ...(adapterPolicyEngine !== undefined && { policyEngine: adapterPolicyEngine }),
           ...(adapterPolicyLookup !== undefined && { policyLookup: adapterPolicyLookup }),
@@ -1722,7 +1722,7 @@ export async function startCortex(
         {
           instanceId,
           principal: {
-            ...(options.operator?.slackId !== undefined && { slackId: options.operator.slackId }),
+            ...(options.principal?.slackId !== undefined && { slackId: options.principal.slackId }),
           },
           ...(adapterPolicyEngine !== undefined && { policyEngine: adapterPolicyEngine }),
           ...(adapterPolicyLookup !== undefined && { policyLookup: adapterPolicyLookup }),
@@ -2072,7 +2072,7 @@ export async function startCortex(
   let usageMonitor: UsageMonitor | null = null;
   if (config.api.enabled && !options.disableDashboard) {
     try {
-      ({ api: dashboardApi, usageMonitor } = await setupDashboard(config, principalId, options.operator?.displayName, dispatchHandler, cloudPublisher));
+      ({ api: dashboardApi, usageMonitor } = await setupDashboard(config, principalId, options.principal?.displayName, dispatchHandler, cloudPublisher));
     } catch (err) {
       console.error("cortex: dashboard API startup error (non-fatal):", err instanceof Error ? err.message : err);
     }
@@ -2335,7 +2335,7 @@ async function setupDashboard(
     github: { ...config.github, repos: getAllRepos(config) },
     apiMode: config.api.mode,
     // cortex#427 — dashboard reads the shared `principalId` so the
-    // `operator` column matches the `{principal}` segment of incoming
+    // principal-id column matches the `{principal}` segment of incoming
     // envelopes. cortex#429 PR-C retired the legacy `agent.operatorName`
     // field; the dashboard display name now flows in via
     // `principalDisplayName` (sourced from
@@ -2659,10 +2659,9 @@ if (import.meta.main) {
         ...(inlineAgents.length > 0 && { inlineAgents }),
         ...(stack !== undefined && { stack }),
         ...(policy !== undefined && { policy }),
-        // PR-R13.B.i: LoadedConfig field is `.principal`; the
-        // StartCortexOptions field is still `.operator` (renames in
-        // PR-R13.B). Map between them here until that PR lands.
-        ...(principal !== undefined && { operator: principal }),
+        // PR-R13.B.i: both LoadedConfig and StartCortexOptions now use
+        // the canonical `.principal` field.
+        ...(principal !== undefined && { principal }),
         ...(bus !== undefined && { bus }),
       });
 

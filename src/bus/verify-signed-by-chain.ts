@@ -504,7 +504,7 @@ export function buildIdentityRegistry(
       id: `did:mf:${agent.id}`,
       display_name: agent.displayName,
       // R4 (vocabulary migration 2026-05) — myelin's `Identity` interface
-      // renamed `operator` → `network` (Luna's PR-5/PR-8 in #168/#171).
+      // historical: renamed the legacy field to `network` (Luna's PR-5/PR-8 in #168/#171).
       // `principalId` here stores the network slug per the
       // bus-addressing model — cortex's canonical principal/network id.
       network: principalId,

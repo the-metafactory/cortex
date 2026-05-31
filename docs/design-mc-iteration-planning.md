@@ -11,17 +11,17 @@
 
 ## Why this spec
 
-MC v1 (Phases A–E) and MC v2 (the React migration MIGs 1–6) cover the **execution half** of the funnel: a curated queue of tasks → assignments → state machine → drill-down. Everything *upstream* of that — figuring out what should enter the queue, sequencing it, writing the design notes — currently happens in the operator's head plus the `docs/iteration-*.md` files.
+MC v1 (Phases A–E) and MC v2 (the React migration MIGs 1–6) cover the **execution half** of the funnel: a curated queue of tasks → assignments → state machine → drill-down. Everything *upstream* of that — figuring out what should enter the queue, sequencing it, writing the design notes — currently happens in the principal's head plus the `docs/iteration-*.md` files.
 
 That works at single-developer scale. It will not work as the bot fleet scales or as a PM-agent starts pre-baking iterations. We need a **first-class design surface** in the dashboard:
 
 > Above the meat grinder. Below the source backlog. A place to assemble issues into iterations, write the design intent, decide what's ready, and promote it into the queue with one click.
 
-This is the gap the design conversation on 2026-04-26 surfaced. Phrased as the operator quote that triggered it: *"I want a kanban-type view so I can see what's in the meat grinder and what's being designed, what's being planned."*
+This is the gap the design conversation on 2026-04-26 surfaced. Phrased as the principal quote that triggered it: *"I want a kanban-type view so I can see what's in the meat grinder and what's being designed, what's being planned."*
 
 Three concrete reasons to build it now rather than later:
 
-1. **Multi-source future.** The current "promote one issue at a time via the F-12b modal" works while we have one source (GitHub). The moment Jira / Linear / internal-spec docs land, the modal pattern doesn't scale — the operator needs a board view to scan.
+1. **Multi-source future.** The current "promote one issue at a time via the F-12b modal" works while we have one source (GitHub). The moment Jira / Linear / internal-spec docs land, the modal pattern doesn't scale — the principal needs a board view to scan.
 2. **PM-agent role.** A long-running head whose job is "watch new issues and draft candidate iterations" needs an inbox + draft surface to write into. No surface = no place for that agent to exist.
 3. **Iteration plans are already a thing in this repo.** `docs/iteration-mission-control.md` is the manual version of what this spec formalizes. Promoting it from a flat markdown file to a tracked entity removes a coordination tax we're already paying.
 
@@ -58,21 +58,21 @@ We deliberately reject "derived status from source state" because it re-couples 
 | `queued`       | Iteration promoted; task is in the dispatch queue waiting to start.    |
 | `in_flight`    | At least one active assignment running.                                |
 | `blocked`      | Active assignment blocked.                                             |
-| `done`         | All assignments terminal AND operator marked the iteration complete.   |
-| `cancelled`    | Operator-driven abandonment (separate from `done`).                    |
+| `done`         | All assignments terminal AND principal marked the iteration complete.   |
+| `cancelled`    | Principal-driven abandonment (separate from `done`).                    |
 
-The state lives as a column on the iteration row (and an aggregated column on the task row, derived from the iteration + the task's own assignment states — but **not** from the source). Transitions are operator-driven moves on the kanban board, not source-state-driven.
+The state lives as a column on the iteration row (and an aggregated column on the task row, derived from the iteration + the task's own assignment states — but **not** from the source). Transitions are principal-driven moves on the kanban board, not source-state-driven.
 
 **What the source link gives us, then:**
-- A clickable URL on the iteration card (operator can open the upstream issue when they want context).
+- A clickable URL on the iteration card (principal can open the upstream issue when they want context).
 - An indicator chip showing whether the source is still open or has been closed since import (display only — does not move the Grove state).
 - A snapshot of the body at import time, editable in Grove afterward (Decision 9 — no write-back).
 
-**Source-closed-but-Grove-active** (and the inverse) are both legitimate states. The operator might close a GitHub issue early because the work scope changed, while the Grove iteration continues against revised acceptance criteria. The reverse — Grove-`done`-but-source-still-open — happens when the operator considers the work shipped from Grove's perspective and will close upstream separately. Neither case fights the model; both render with a small "source: closed" or "source: open" badge so the operator sees the divergence.
+**Source-closed-but-Grove-active** (and the inverse) are both legitimate states. The principal might close a GitHub issue early because the work scope changed, while the Grove iteration continues against revised acceptance criteria. The reverse — Grove-`done`-but-source-still-open — happens when the principal considers the work shipped from Grove's perspective and will close upstream separately. Neither case fights the model; both render with a small "source: closed" or "source: open" badge so the principal sees the divergence.
 
 **Vocabulary normalization is automatic** because Grove's status is independent. We never need to map "GitHub open + iteration draft" to a Grove column. The Grove column is just the Grove column.
 
-**Interaction with existing `tasks.status`.** Today `tasks.status` is `open / in_progress / done / cancelled`. The new lifecycle subsumes and refines it: `inbox` / `designing` / `queued` map onto the old `open`; `in_flight` / `blocked` map onto `in_progress`; `done` / `cancelled` are unchanged. We migrate existing rows by mapping `open → inbox` (operator drags into iterations later) and leaving the rest in place.
+**Interaction with existing `tasks.status`.** Today `tasks.status` is `open / in_progress / done / cancelled`. The new lifecycle subsumes and refines it: `inbox` / `designing` / `queued` map onto the old `open`; `in_flight` / `blocked` map onto `in_progress`; `done` / `cancelled` are unchanged. We migrate existing rows by mapping `open → inbox` (principal drags into iterations later) and leaving the rest in place.
 
 ## Decision 2 — GitHub parent-issue + sub-issues IS the iteration
 
@@ -83,11 +83,11 @@ Don't reinvent grouping. GitHub already has parent-issue / sub-issue (and before
 - Iteration title, body (design notes), priority, labels — snapshotted from the parent issue at import time, then Grove-owned (per Decision 1).
 - Grove holds the Grove-specific lifecycle (`inbox / designing / queued / in_flight / blocked / done / cancelled` per Decision 1), the queue position, and the bot assignments.
 
-**No ongoing sync.** Per Decision 1 (Grove owns the lifecycle) and Decision 9 (no write-back, ever), import is a one-time event. Subsequent edits to the GitHub parent issue do not flow into Grove; Grove edits do not flow back to GitHub. The operator can manually trigger a re-import on a single iteration if the upstream changed materially and they want the Grove copy refreshed — that's an explicit operator action, not background reconciliation.
+**No ongoing sync.** Per Decision 1 (Grove owns the lifecycle) and Decision 9 (no write-back, ever), import is a one-time event. Subsequent edits to the GitHub parent issue do not flow into Grove; Grove edits do not flow back to GitHub. The principal can manually trigger a re-import on a single iteration if the upstream changed materially and they want the Grove copy refreshed — that's an explicit principal action, not background reconciliation.
 
 **Non-GitHub sources later.** A `source_parent_ref` column on `iteration` rows points to the umbrella entity in the source (Jira epic, Linear project, internal-spec doc id). One adapter per source converts the upstream hierarchy into the Grove iteration shape. v1 ships GitHub only.
 
-**Iterations without an upstream parent.** Allowed — the iteration row can have `source_parent_ref = null`. This is the "internal-only" case for design work that has no upstream issue (e.g., a chore iteration the operator types straight into Grove). The kanban renders these alongside source-backed iterations; no special case in the UI.
+**Iterations without an upstream parent.** Allowed — the iteration row can have `source_parent_ref = null`. This is the "internal-only" case for design work that has no upstream issue (e.g., a chore iteration the principal types straight into Grove). The kanban renders these alongside source-backed iterations; no special case in the UI.
 
 ## Decision 3 — Two new entities, one schema extension
 
@@ -95,7 +95,7 @@ Don't reinvent grouping. GitHub already has parent-issue / sub-issue (and before
 -- New table. Lifecycle state lives here as a stored column — not derived
 -- from source state (Decision 1). `imported_at` + `imported_body` capture
 -- the source snapshot for audit; the live `body` column is what the
--- operator edits in Grove.
+-- principal edits in Grove.
 CREATE TABLE iterations (
   id                   TEXT PRIMARY KEY,
   title                TEXT NOT NULL,
@@ -120,9 +120,9 @@ CREATE INDEX idx_tasks_iteration ON tasks(iteration_id);
 
 **Why a separate `iterations` table** rather than a self-referencing `tasks.parent_id`? Iterations have shape that tasks don't: design-notes body, distinct lifecycle states, different priority semantics (an iteration's P0 isn't directly comparable to a task's P0 because iteration P0 means "ship this iteration ASAP", task P0 means "individual task is most urgent within its iteration"). Mixing them in one table breeds nullable columns and ambiguous queries. F-8's pattern (separate table + FK) wins.
 
-**Cardinality.** One iteration ↔ many tasks (1:N). One task ↔ at most one iteration (`iteration_id` is nullable for tasks not yet promoted to a iteration, including the legacy tasks already in `tasks` from MIG-1..6). No M:N — a task that contributes to two iterations is the operator's signal to clone, not to model nesting.
+**Cardinality.** One iteration ↔ many tasks (1:N). One task ↔ at most one iteration (`iteration_id` is nullable for tasks not yet promoted to a iteration, including the legacy tasks already in `tasks` from MIG-1..6). No M:N — a task that contributes to two iterations is the principal's signal to clone, not to model nesting.
 
-**Migration.** Existing tasks get `iteration_id = NULL`. They render in the "ungrouped" lane of the kanban (Decision 5). Operator can drag them into iterations retroactively.
+**Migration.** Existing tasks get `iteration_id = NULL`. They render in the "ungrouped" lane of the kanban (Decision 5). Principal can drag them into iterations retroactively.
 
 ## Decision 4 — Three new surfaces in the dashboard
 
@@ -152,7 +152,7 @@ CREATE INDEX idx_tasks_iteration ON tasks(iteration_id);
 - Iteration header: title, body (design notes, markdown editor), priority, source link.
 - Task list: rows for each task in this iteration. Each row shows task title + state pill + agent chips (mirrors F-8 task table column shape).
 - "Add task" affordance: pulls from the inbox lane or creates a new internal-only task.
-- "Promote to queued" button: gated on iteration having ≥1 task and the operator confirming.
+- "Promote to queued" button: gated on iteration having ≥1 task and the principal confirming.
 
 **Surface 3 — Iteration drill-down hook**.
 - The existing F-7 drill-down (assignment-keyed) gets a header chip: "Iteration: <title>". Clicking it goes to Surface 2.
@@ -162,21 +162,21 @@ The existing focus area / working grid / task table do **not** change behaviour 
 
 **Why not fold the kanban into the task table?** Different jobs. The task table answers "what's the state of every task right now" (operational query); the kanban answers "where in the funnel is each piece of work" (planning query). Conflating them produces a UI that does neither well — the F-9 / F-8 split already chose the same way.
 
-## Decision 5 — Promotion path: explicit operator action, no auto-promote
+## Decision 5 — Promotion path: explicit principal action, no auto-promote
 
-`inbox → designing → queued` is always an operator-driven transition in v1. No "auto-promote when CI green", no "auto-add new GitHub issues to the queue", no "auto-create iteration when ≥3 issues share a milestone".
+`inbox → designing → queued` is always an principal-driven transition in v1. No "auto-promote when CI green", no "auto-add new GitHub issues to the queue", no "auto-create iteration when ≥3 issues share a milestone".
 
-**Why?** The whole point of this surface is to give the operator (or the PM-agent — Decision 6) a place to think before work hits the meat grinder. Auto-promotion bypasses that thinking and reintroduces the original gap.
+**Why?** The whole point of this surface is to give the principal (or the PM-agent — Decision 6) a place to think before work hits the meat grinder. Auto-promotion bypasses that thinking and reintroduces the original gap.
 
 Auto-promote is a Phase G capability gated on the PM-agent landing.
 
 **Movement rules:**
-- `inbox → designing`: operator drags a card to the designing column. Creates iteration if none exists; or attaches to an existing iteration the operator picks from a popover.
-- `designing → queued`: operator clicks "Promote" on the iteration. Iteration state flips `designing → queued` (per the D1 enum). All tasks in the iteration get a task row in `tasks` (if they don't have one already from F-12b) and enter the dispatch queue.
+- `inbox → designing`: principal drags a card to the designing column. Creates iteration if none exists; or attaches to an existing iteration the principal picks from a popover.
+- `designing → queued`: principal clicks "Promote" on the iteration. Iteration state flips `designing → queued` (per the D1 enum). All tasks in the iteration get a task row in `tasks` (if they don't have one already from F-12b) and enter the dispatch queue.
 - `queued → in-flight`: derived. Computed when any task's assignment becomes active.
 - `in-flight → blocked`: derived. Any task's assignment hits `blocked`.
 - `* → done`: derived. All tasks terminal AND source closed.
-- `* → cancelled`: explicit operator action — closes the source issue, cancels open assignments, archives the iteration.
+- `* → cancelled`: explicit principal action — closes the source issue, cancels open assignments, archives the iteration.
 
 ## Decision 6 — PM-agent role (sketched, deferred to Phase G)
 
@@ -184,12 +184,12 @@ The schema and surfaces above already support a long-running PM-agent without fu
 
 - A `head`-type agent with `agent_id = 'pm-agent'` (or named `Iris` etc.) and an internal-only assignment to a long-running "PM duties" task.
 - Watches new issues via the existing webhook-proxy + DB. When a batch of related issues arrives (heuristic TBD), drafts a candidate iteration: groups them, sequences them, writes a first-pass design note in the iteration body.
-- The drafted iteration appears in the `designing` column with a marker `proposed by Iris`. Operator approves or edits, then promotes (Decision 5).
-- The PM-agent never auto-promotes to `queued`. That's the operator's gate (or a future Phase H autonomous-mode toggle).
+- The drafted iteration appears in the `designing` column with a marker `proposed by Iris`. Principal approves or edits, then promotes (Decision 5).
+- The PM-agent never auto-promotes to `queued`. That's the principal's gate (or a future Phase H autonomous-mode toggle).
 
-**Why this works without schema changes**: the PM-agent's actions look like operator actions — write iteration body, set state to `designing`, attach tasks. Same writes, different actor. Audit trail comes from the existing `events` stream.
+**Why this works without schema changes**: the PM-agent's actions look like principal actions — write iteration body, set state to `designing`, attach tasks. Same writes, different actor. Audit trail comes from the existing `events` stream.
 
-**v1 ships without the PM-agent.** Surfaces 1–3 give the operator the manual version; the PM-agent is an additive head once the surfaces stabilize.
+**v1 ships without the PM-agent.** Surfaces 1–3 give the principal the manual version; the PM-agent is an additive head once the surfaces stabilize.
 
 ## Decision 7 — Multi-source: GitHub in v1, others behind a small adapter
 
@@ -236,7 +236,7 @@ This falls out of Decision 1: import is an event, Grove owns the lifecycle. Once
 - The original imported body is preserved as a snapshot column for audit; Grove's edits live in the regular body column.
 - No write-back surface, no permission expansion on the grove-bot, no last-write-wins drift to design around.
 
-Operators who want to update the upstream issue (close it, edit the title there) do that through GitHub directly. Grove is the operator's planning surface; the upstream is the audit trail for non-operator stakeholders. The two intentionally diverge once import has happened.
+Operators who want to update the upstream issue (close it, edit the title there) do that through GitHub directly. Grove is the principal's planning surface; the upstream is the audit trail for non-principal stakeholders. The two intentionally diverge once import has happened.
 
 **Why this is a feature, not a limitation.** It means a multi-operator team can adopt Grove without negotiating "who's allowed to write to GitHub on behalf of the team." It means future sources (Jira, Linear) need only an import adapter, never a write adapter. It means the security surface area on the grove-bot stays exactly as small as it is today.
 
@@ -244,14 +244,14 @@ If a write-back path is ever genuinely needed (e.g., closing GitHub issues autom
 
 ## Decision 10 — Open questions to pin before code
 
-1. **Iteration completion criterion.** Is iteration `done` strictly "all tasks terminal AND source closed", or allow operator-driven `done` with open tasks (e.g., "shipped enough; remaining tasks become a follow-up iteration")? **Lean: derived only in v1; manual override is Phase G.**
+1. **Iteration completion criterion.** Is iteration `done` strictly "all tasks terminal AND source closed", or allow principal-driven `done` with open tasks (e.g., "shipped enough; remaining tasks become a follow-up iteration")? **Lean: derived only in v1; manual override is Phase G.**
 2. **Drag-and-drop library.** No external dep currently. Native HTML5 drag-and-drop is awkward but works; alternatives (`@dnd-kit/core`) add ~30KB. **Lean: native HTML5 in v1; revisit if the UX is poor.**
 3. **Inbox cap.** Streaming all GitHub issues from all repos could surface hundreds. Cap at N (e.g. 100), most recent first, with a "load older" button? **Lean: 100, server-side, mirrors F-8's `TASKS_QUERY_LIMIT`.**
-4. **Iteration sort within a kanban column.** Priority ASC → updated_at DESC (mirrors F-8 default)? Operator can re-sort? **Lean: priority + updated_at, server-side, no client re-sort in v1.**
-5. **Cross-iteration task dependencies.** Iteration A's task X depends on iteration B's task Y. Modelled? **Lean: no dependencies in v1; operator sequences via column ordering. Phase G.**
+4. **Iteration sort within a kanban column.** Priority ASC → updated_at DESC (mirrors F-8 default)? Principal can re-sort? **Lean: priority + updated_at, server-side, no client re-sort in v1.**
+5. **Cross-iteration task dependencies.** Iteration A's task X depends on iteration B's task Y. Modelled? **Lean: no dependencies in v1; principal sequences via column ordering. Phase G.**
 6. **GitHub label conventions.** `iteration` label is required for parent-issue detection? Or any issue with sub-issues? **Lean: explicit label `iteration` (or configurable per-repo); avoids accidental promotion of unrelated parent issues.**
 7. **Per-repo scope.** Does the iteration board show all repos in the network, or one at a time? **Lean: one at a time, with a repo selector. All-repos view is Phase G.**
-8. **Operator-as-user.** PM-agent action audit trail — does the events stream distinguish "operator wrote the body" from "PM-agent wrote the body"? **Lean: yes, `actor` field on iteration events.**
+8. **Principal-as-user.** PM-agent action audit trail — does the events stream distinguish "principal wrote the body" from "PM-agent wrote the body"? **Lean: yes, `actor` field on iteration events.**
 
 ## Acceptance criteria
 
@@ -281,7 +281,7 @@ Phase G (post-Phase-F):
 - Write-back to GitHub (Decision 9).
 - Auto-promotion (Decision 5).
 - Multi-source adapters (Jira / Linear).
-- Operator-driven `done` override (Decision 10 Q1).
+- Principal-driven `done` override (Decision 10 Q1).
 
 ## Forward links to add when this lands
 

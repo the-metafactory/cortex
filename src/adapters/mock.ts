@@ -42,7 +42,7 @@ export class MockAdapter implements PlatformAdapter {
    * returns `null` (the review sink then skips this adapter).
    */
   logicalSurface = "mock";
-  /** Recorded notifyOperator calls */
+  /** Recorded notifyPrincipal calls */
   operatorNotifications: string[] = [];
   /** MIG-3b: Recorded envelopes received via surfaceConfig.render() */
   envelopesRendered: Envelope[] = [];
@@ -141,7 +141,7 @@ export class MockAdapter implements PlatformAdapter {
     };
   }
 
-  async notifyOperator(text: string): Promise<void> {
+  async notifyPrincipal(text: string): Promise<void> {
     this.operatorNotifications.push(text);
   }
 

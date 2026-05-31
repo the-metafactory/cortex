@@ -5,7 +5,7 @@
 <!-- Lifted: 2026-05-11 — historical references to grove/grove-v2 retained for provenance. -->
 
 **Scope:** Cloudflare Worker + D1 event store (G-400), bot cloud publisher (G-401), API key management (G-402), dashboard mode detection (G-403), GitHub webhook migration (G-404)
-**Mission:** Multiple bot operators share a single dashboard without tunnels. Local-first mode stays as default zero-config option. Cloud mode is opt-in for multi-operator networks.
+**Mission:** Multiple bot operators share a single dashboard without tunnels. Local-first mode stays as default zero-config option. Cloud mode is opt-in for multi-principal networks.
 **Stack:** Cloudflare Workers (Hono + D1 + KV), batched event ingestion from bots, dashboard reads from cloud or local API
 **Inputs:** dashboard-api.ts contract, DashboardSnapshot schema, PublishedEvent schema, existing relay pipeline
 
@@ -13,11 +13,11 @@
 
 ## Why This Exists
 
-Today, each operator runs local SQLite + dashboard API + Cloudflare Tunnel. The dashboard merges multiple APIs in the browser with dedup heuristics. This works but is fragile:
+Today, each principal runs local SQLite + dashboard API + Cloudflare Tunnel. The dashboard merges multiple APIs in the browser with dedup heuristics. This works but is fragile:
 
 - GitHub events duplicated across operators
 - Merge logic is approximate (same agent ID = same agent?)
-- Every operator needs tunnel infrastructure
+- Every principal needs tunnel infrastructure
 - Dashboard reads from N endpoints, each with its own schema drift risk
 
 The cloud API is a single endpoint that all bots POST to. The dashboard reads from one place. Local mode (no cloud, no tunnel) remains the default for solo operators.
@@ -28,8 +28,8 @@ The cloud API is a single endpoint that all bots POST to. The dashboard reads fr
 
 | Mode | Config | Infrastructure | Use Case |
 |------|--------|---------------|----------|
-| `local` (default) | Zero config | Bot + SQLite only | Solo operator, no internet needed |
-| `cloud` | `api.mode: cloud` in bot.yaml | CF Worker + D1 | Multi-operator network |
+| `local` (default) | Zero config | Bot + SQLite only | Solo principal, no internet needed |
+| `cloud` | `api.mode: cloud` in bot.yaml | CF Worker + D1 | Multi-principal network |
 
 **Local mode:**
 - Bot runs dashboard API on localhost:8766 (Bun.serve)
@@ -40,7 +40,7 @@ The cloud API is a single endpoint that all bots POST to. The dashboard reads fr
 **Cloud mode:**
 - Bot POSTs events to `https://grove-api.{domain}.workers.dev/api/ingest`
 - Dashboard connects to the same Worker endpoint
-- Operator-scoped API keys via Workers KV (G-402)
+- Principal-scoped API keys via Workers KV (G-402)
 - All operators see all agents on one dashboard
 - D1 database (`grove-events`) in OC/AKL region
 
@@ -72,7 +72,7 @@ A Cloudflare Worker exposing the same REST API contract as the local dashboard-a
 | GET | `/api/repos/{owner}/{repo}/pulls` | None | List PRs for a repo |
 | GET | `/api/stats` | None | Daily stats (PRs merged, issues closed, commits) |
 | POST | `/api/github/webhook` | HMAC | GitHub webhook ingestion |
-| POST | `/admin/keys` | Admin secret | Create operator API key |
+| POST | `/admin/keys` | Admin secret | Create principal API key |
 | DELETE | `/admin/keys/:key` | Admin secret | Revoke API key |
 | POST | `/api/sync/issues` | None | Trigger GitHub issue sync |
 | POST | `/api/sync/prs` | None | Trigger GitHub PR sync |
@@ -88,7 +88,7 @@ Tables:
 - `usage_snapshots` — account usage tracking (5H/7D rate limits)
 
 Key fields:
-- `operator_id` on sessions/github_events — which bot operator sent this data
+- `operator_id` on sessions/github_events — which bot principal sent this data
 - `event_id` — dedup key (events are idempotent)
 - `session_id` — links agent sessions to events
 
@@ -122,8 +122,8 @@ Batched event publisher that POSTs published events from the bot to the cloud Wo
 api:
   mode: cloud                                      # "local" | "cloud"
   endpoint: "https://grove-api.andreas-aastroem.workers.dev"
-  apiKey: "grove_sk_..."                           # operator API key
-  operatorId: "andreas"                            # operator identifier
+  apiKey: "grove_sk_..."                           # principal API key
+  operatorId: "andreas"                            # principal identifier
 ```
 
 **Behavior:**
@@ -179,7 +179,7 @@ api:
 
 ### G-402: API Key Management
 
-Operator API keys stored in Workers KV. Admin endpoints for create/revoke.
+Principal API keys stored in Workers KV. Admin endpoints for create/revoke.
 
 **Key format:** `grove_sk_{48-char-hex}` (24 random bytes)
 
@@ -281,7 +281,7 @@ API_ENDPOINT=https://grove-api.andreas-aastroem.workers.dev \
 Migrate GitHub webhooks from per-bot tunnels to the cloud Worker.
 
 **Today:**
-- Each operator runs a Cloudflare Tunnel
+- Each principal runs a Cloudflare Tunnel
 - GitHub webhooks point to `https://{tunnel-id}.trycloudflare.com/api/github/webhook`
 - Each bot receives duplicate events
 - Dashboard deduplicates in browser
@@ -324,7 +324,7 @@ grove-bot cloud setup
 ```
 
 **Behavior:**
-1. Prompts for operator ID (e.g., "andreas")
+1. Prompts for principal ID (e.g., "andreas")
 2. Prompts for bot name (e.g., "Luna")
 3. Prompts for admin secret (from Cloudflare Workers env vars)
 4. Calls `POST /admin/keys` to create API key
@@ -333,12 +333,12 @@ grove-bot cloud setup
 
 **Output:**
 ```
-✓ Cloud API key created for operator: andreas
+✓ Cloud API key created for principal: andreas
 ✓ bot.yaml updated with cloud mode config
 ✓ Ready to start grove-bot
 
 Endpoint: https://grove-api.andreas-aastroem.workers.dev
-Operator: andreas
+Principal: andreas
 API key:  grove_sk_***...*** (48 chars)
 
 Next steps:
@@ -349,7 +349,7 @@ Next steps:
 **Acceptance Criteria:**
 - `grove-bot cloud setup` prompts for operator ID, bot name, admin secret
 - Creates API key via POST /admin/keys
-- Writes bot.yaml with `api.mode: cloud`, endpoint, key, operator ID
+- Writes bot.yaml with `api.mode: cloud`, endpoint, key, principal ID
 - Prints success message with masked key
 - If admin secret is invalid, prints error and exits (no partial config)
 
@@ -358,11 +358,11 @@ Next steps:
 ## Security Model
 
 **API Keys (G-402):**
-- Operator keys stored in Workers KV
+- Principal keys stored in Workers KV
 - Keys are Bearer tokens: `Authorization: Bearer grove_sk_...`
 - Key format: `grove_sk_{48-char-hex}` (24 random bytes)
 - Each key tied to one `operator_id`
-- Events ingested with a key are attributed to that operator
+- Events ingested with a key are attributed to that principal
 - Keys can be revoked via admin endpoint
 
 **Admin Secret:**
@@ -384,7 +384,7 @@ Next steps:
 - Access policy configured per deployment (e.g., Andreas + JC only)
 
 **Threat model:**
-- **Leaked API key:** Attacker can POST events attributed to that operator. Mitigation: revoke key via admin endpoint.
+- **Leaked API key:** Attacker can POST events attributed to that principal. Mitigation: revoke key via admin endpoint.
 - **Leaked admin secret:** Attacker can create/revoke keys. Mitigation: rotate secret via `wrangler secret put`.
 - **No GitHub webhook HMAC:** Attacker can inject fake events. Mitigation: HMAC is mandatory, enforced at Worker.
 - **Public dashboard data:** Anyone with Cloudflare Access can see all agent work. Mitigation: Access policy limits who can authenticate.
@@ -446,7 +446,7 @@ See `src/worker/schema.sql` for full schema.
 **Indexes:**
 - `idx_sessions_status` — query active sessions
 - `idx_sessions_completed` — query recent completions
-- `idx_sessions_operator` — filter by operator
+- `idx_sessions_operator` — filter by principal
 - `idx_github_repo` — query GitHub events by repo
 - `idx_github_agent` — filter agent-authored events
 
@@ -487,7 +487,7 @@ G-405 (Cloud Setup CLI)
 
 - **Multi-region D1:** Single OC/AKL region. If latency matters, add read replicas later.
 - **Event retention policy:** D1 grows forever. Add TTL or archival later if needed.
-- **Operator-scoped dashboard views:** All authenticated users see all operators. Per-operator filtering is a future option.
+- **Principal-scoped dashboard views:** All authenticated users see all operators. Per-principal filtering is a future option.
 - **Real-time WebSocket from Worker:** Dashboard polls `GET /api/state`. WebSocket support is a stretch goal.
 - **Billing/usage enforcement:** Operators trust each other. No rate limits or quotas.
 - **Audit log:** No log of who accessed what. Add if needed.
@@ -527,7 +527,7 @@ G-405 (Cloud Setup CLI)
 ## Success Metrics
 
 - **Zero-config local mode works:** Bot starts, dashboard loads, no cloud needed
-- **Multi-operator cloud mode works:** Andreas + JC bots POST to one Worker, dashboard shows both
+- **Multi-principal cloud mode works:** Andreas + JC bots POST to one Worker, dashboard shows both
 - **No tunnel infrastructure:** GitHub webhooks point to Worker, not per-bot tunnels
 - **Event deduplication eliminated:** One D1 source, no browser-side merge logic
 - **Setup time < 2 minutes:** `grove-bot cloud setup` gets you from zero to cloud-ready

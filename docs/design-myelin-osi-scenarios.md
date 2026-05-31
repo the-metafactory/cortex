@@ -542,7 +542,7 @@ Two classes of dispatch sink, by intent:
 
 ### 14.2 Multi-surface primary delivery (deferred design seam)
 
-A separate question — surfaced by Andreas during the C-405 review — is whether ONE dispatch should produce primary delivery to MULTIPLE surfaces. Example: a chat originates on Discord channel A, but the operator also wants the reply to render in Mattermost channel B (because the team uses Mattermost for archival and Discord for live chat). The bus already supports this via observer subscriptions, but observer mode is "always render"; what the operator wants is "for THIS dispatch, also primary-deliver to these other places".
+A separate question — surfaced by Andreas during the C-405 review — is whether ONE dispatch should produce primary delivery to MULTIPLE surfaces. Example: a chat originates on Discord channel A, but the principal also wants the reply to render in Mattermost channel B (because the team uses Mattermost for archival and Discord for live chat). The bus already supports this via observer subscriptions, but observer mode is "always render"; what the principal wants is "for THIS dispatch, also primary-deliver to these other places".
 
 Three viable mechanisms:
 

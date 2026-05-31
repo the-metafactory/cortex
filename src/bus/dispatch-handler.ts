@@ -91,8 +91,8 @@ interface DispatchTargetAgent {
 export interface DispatchHandlerOpts {
   config: AgentConfig;
   securityPreamble: string;
-  /** G-300: Relaxed preamble for operator DM (no bash guard, no filesystem restriction) */
-  operatorDMPreamble?: string;
+  /** G-300: Relaxed preamble for principal DM (no bash guard, no filesystem restriction) */
+  principalDMPreamble?: string;
   /** Path to config file (for building dynamic preambles) */
   configPath?: string;
   /**
@@ -201,7 +201,7 @@ export class DispatchHandler extends EventEmitter {
   private config: AgentConfig;
   private allRepos: string[];
   private securityPreamble: string;
-  private operatorDMPreamble: string;
+  private principalDMPreamble: string;
   private cleanupInterval: Timer;
   /**
    * MIG-3.8 / C-104 — bus runtime + source for emitting `system.inbound.aborted`
@@ -246,7 +246,7 @@ export class DispatchHandler extends EventEmitter {
     this.config = opts.config;
     this.allRepos = getAllRepos(opts.config);
     this.securityPreamble = opts.securityPreamble;
-    this.operatorDMPreamble = opts.operatorDMPreamble
+    this.principalDMPreamble = opts.principalDMPreamble
       ?? buildSecurityPreamble(this.config, opts.configPath, {
           skipBashGuard: true,
           skipFilesystemRestriction: true,
@@ -457,7 +457,7 @@ export class DispatchHandler extends EventEmitter {
     groveNetwork: string | undefined;
     project: string | undefined;
     entity: string | undefined;
-    operator: string | undefined;
+    principal: string | undefined;
   }): Promise<DispatchSourcePublishResult> {
     const wiring = this.canPublishSystemEvent();
     const result = await publishInboundChatDispatchEnvelope({
@@ -529,7 +529,7 @@ export class DispatchHandler extends EventEmitter {
     this.config = newConfig;
     this.allRepos = getAllRepos(newConfig);
     this.securityPreamble = buildSecurityPreamble(newConfig, configPath);
-    this.operatorDMPreamble = buildSecurityPreamble(newConfig, configPath, {
+    this.principalDMPreamble = buildSecurityPreamble(newConfig, configPath, {
       skipBashGuard: true,
       skipFilesystemRestriction: true,
     });
@@ -559,17 +559,17 @@ export class DispatchHandler extends EventEmitter {
         }
         console.log(`dispatch-handler: denied ${msg.authorName} (${msg.authorId}) on ${adapter.instanceId} — ${access.denyReason ?? "no role"}`);
         const target = this.targetFromMsg(adapter, msg);
-        await adapter.postResponse(target, access.denyReason ?? "Sorry, I'm not set up to respond to you. Ask the operator to add you to a role.");
+        await adapter.postResponse(target, access.denyReason ?? "Sorry, I'm not set up to respond to you. Ask the principal to add you to a role.");
         return;
       }
 
       // 2. Log DM access for audit trail
       if (msg.isDM) {
-        const dmLabel = msg.dmType === "operator" ? "operator" : `user:${msg.authorName}`;
+        const dmLabel = msg.dmType === "principal" ? "principal" : `user:${msg.authorName}`;
         console.log(`dispatch-handler: [DM-ACCESS] ${dmLabel} (${msg.authorId}) — bashGuard:${access.bashGuard !== false}`);
       } else {
-        // Operator notification (non-operator guild messages)
-        await this.notifyOperatorIfNeeded(adapter, msg);
+        // Principal notification (non-principal guild messages)
+        await this.notifyPrincipalIfNeeded(adapter, msg);
       }
 
       // 3. Parse keywords
@@ -672,9 +672,9 @@ export class DispatchHandler extends EventEmitter {
           },
         );
 
-      // 9. Build prompt — operator DM gets relaxed preamble (no filesystem/bash guidance — enforced at invocation level)
-      const isOperatorDM = msg.isDM && msg.dmType === "operator";
-      const effectivePreamble = isOperatorDM ? this.operatorDMPreamble : this.securityPreamble;
+      // 9. Build prompt — principal DM gets relaxed preamble (no filesystem/bash guidance — enforced at invocation level)
+      const isPrincipalDM = msg.isDM && msg.dmType === "principal";
+      const effectivePreamble = isPrincipalDM ? this.principalDMPreamble : this.securityPreamble;
 
       // G-121: Build skill restriction note for the preamble
       let skillRestrictionNote = "";
@@ -752,7 +752,7 @@ export class DispatchHandler extends EventEmitter {
       const groveEntity = channelCtx.entityType && channelCtx.entityRef
         ? `${channelCtx.entityType}/${channelCtx.entityRef}`
         : undefined;
-      const groveOperator = msg.authorName;
+      const principal = msg.authorName;
 
 
       // 11b. Direction A Stage 4-B (cortex#409) — chat/direct dispatches
@@ -776,7 +776,7 @@ export class DispatchHandler extends EventEmitter {
           groveNetwork: effectiveGroveNetwork,
           project: groveProject,
           entity: groveEntity,
-          operator: groveOperator,
+          principal,
         });
         if (publishResult.published) return;
         if (publishResult.reason === "invalid-originator") {
@@ -794,13 +794,13 @@ export class DispatchHandler extends EventEmitter {
       // 12. Route by mode
       switch (parsed.mode) {
         case "async":
-          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, groveOperator, effectiveCwd);
+          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, principal, effectiveCwd);
           break;
         case "team":
-          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, groveOperator, effectiveCwd);
+          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, principal, effectiveCwd);
           break;
         default:
-          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, groveOperator, effectiveCwd);
+          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, principal, effectiveCwd);
           break;
       }
     } catch (error) {
@@ -834,7 +834,7 @@ export class DispatchHandler extends EventEmitter {
     groveNetwork?: string,
     groveProject?: string,
     groveEntity?: string,
-    groveOperator?: string,
+    principal?: string,
     cwd?: string,
   ): Promise<void> {
     const target = this.targetFromMsg(adapter, msg);
@@ -882,7 +882,7 @@ export class DispatchHandler extends EventEmitter {
       bashGuardDisabled,
       project: groveProject,
       entity: groveEntity,
-      operator: groveOperator,
+      principal,
     };
 
     let finalResult: CCSessionResult | null = null;
@@ -1168,7 +1168,7 @@ export class DispatchHandler extends EventEmitter {
     groveNetwork?: string,
     groveProject?: string,
     groveEntity?: string,
-    groveOperator?: string,
+    principal?: string,
     cwd?: string,
   ): Promise<void> {
     const taskId = `task-${randomUUID()}`;
@@ -1195,7 +1195,7 @@ export class DispatchHandler extends EventEmitter {
       cwd,
       project: groveProject,
       entity: groveEntity,
-      operator: groveOperator,
+      principal,
       bashAllowlist,
       bashGuardDisabled,
     });
@@ -1297,7 +1297,7 @@ export class DispatchHandler extends EventEmitter {
     groveNetwork?: string,
     groveProject?: string,
     groveEntity?: string,
-    groveOperator?: string,
+    principal?: string,
     _cwd?: string,
   ): Promise<void> {
     const taskId = `team-${randomUUID()}`;
@@ -1327,7 +1327,7 @@ export class DispatchHandler extends EventEmitter {
       bashAllowlist,
       project: groveProject,
       entity: groveEntity,
-      operator: groveOperator,
+      principal,
     });
 
     // Dummy session for TaskTracker (AgentTeam manages its own sessions)
@@ -1395,7 +1395,7 @@ export class DispatchHandler extends EventEmitter {
       "`team: <question>` — Spawns analyst + creative + critic agents, synthesizes result",
       "",
       "**Direct Messages**",
-      "DM me directly — no @mention needed. Operator DMs get elevated privileges (broader bash access, full tool access). Other configured users get standard guild-level permissions. Unknown DMs are ignored.",
+      "DM me directly — no @mention needed. Principal DMs get elevated privileges (broader bash access, full tool access). Other configured users get standard guild-level permissions. Unknown DMs are ignored.",
       "",
       "**Channel Routing**",
       "Channel names map to repos by convention: `#grove` scopes work to the grove repo, `#meta-factory` to meta-factory. Threads like `grove/issue/43` or `grove/pr/45` scope to specific entities.",
@@ -1417,31 +1417,32 @@ export class DispatchHandler extends EventEmitter {
       "- Long tasks? Use `async:` to avoid waiting",
       "- Need depth? Use `context:50` to pull more history",
       "- In a thread? I keep context between messages",
-      "- DM for elevated access (operator only)",
+      "- DM for elevated access (principal only)",
       "- Use `cldyo-live <repo>` to pipe your CLI sessions to the dashboard",
     ].join("\n");
     await adapter.postResponse(target, helpText);
   }
 
   // ---------------------------------------------------------------------------
-  // Operator notification
+  // Principal notification
   // ---------------------------------------------------------------------------
 
-  private async notifyOperatorIfNeeded(adapter: PlatformAdapter, msg: InboundMessage): Promise<void> {
-    // v2.0.0 (cortex#297) — operator identity is policy-driven now. The
-    // adapter sets `msg.dmType = "operator"` when the inbound author
-    // holds the `operator` capability (the new policy-driven equivalent
-    // of the legacy `config.agent.operatorDiscordId` comparison). Skip
-    // notification when the operator is talking to their own bot — they
+  private async notifyPrincipalIfNeeded(adapter: PlatformAdapter, msg: InboundMessage): Promise<void> {
+    // v2.0.0 (cortex#297) — principal identity is policy-driven now. The
+    // adapter sets `msg.dmType = "principal"` when the inbound author
+    // holds the policy capability that grants principal-level DM access
+    // (the policy-driven equivalent of the legacy
+    // `config.agent.operatorDiscordId` comparison). Skip
+    // notification when the principal is talking to their own bot — they
     // already know the message arrived.
-    if (msg.dmType === "operator") return;
+    if (msg.dmType === "principal") return;
 
     const preview = (msg.content || "(mention only)").slice(0, 200);
     const text = `**${msg.authorName}** talked to me on ${adapter.instanceId}:\n> ${preview}`;
     try {
-      await adapter.notifyOperator(text);
+      await adapter.notifyPrincipal(text);
     } catch (err) {
-      console.warn("dispatch-handler: failed to notify operator:", err instanceof Error ? err.message : err);
+      console.warn("dispatch-handler: failed to notify principal:", err instanceof Error ? err.message : err);
     }
   }
 

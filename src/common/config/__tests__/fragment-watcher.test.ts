@@ -151,7 +151,7 @@ describe("AgentsDirectoryWatcher", () => {
 
     test("ignores non-yaml changes", async () => {
       await startWatcher();
-      writeFileSync(join(tmpAgentsDir, "README.md"), "operator notes\n");
+      writeFileSync(join(tmpAgentsDir, "README.md"), "principal notes\n");
       await sleep(WAIT_AFTER_EVENT);
       expect(events).toEqual([]);
     });

@@ -47,7 +47,7 @@ import { RealSlackClient, type SlackClient, type SlackInboundEvent, type SlackBo
  * pair. Mirror of `DiscordAdapterInfra` / `MattermostAdapterInfra`.
  *
  * `principal.slackId` is the principal's Slack user id (`U...`), used to
- * route `notifyOperator` DMs the same way the Discord/Mattermost
+ * route `notifyPrincipal` DMs the same way the Discord/Mattermost
  * variants route theirs.
  *
  * `client` is the pluggable Slack client surface — defaults to
@@ -523,9 +523,9 @@ export class SlackAdapter implements PlatformAdapter {
   }
 
   /**
-   * v2.0.0 (cortex#297) — operator detection via the policy `operator`
-   * capability. Kept for adapter-internal use; the `notifyOperator`
-   * path still routes by `infra.principal.slackId`.
+   * v2.0.0 (cortex#297) — principal-elevation detection via the policy
+   * capability that grants principal access. Kept for adapter-internal
+   * use; the `notifyPrincipal` path still routes by `infra.principal.slackId`.
    */
   protected isOperator(authorId: string): boolean {
     return isOperatorPrincipal(
@@ -617,7 +617,7 @@ export class SlackAdapter implements PlatformAdapter {
     return null;
   }
 
-  async notifyOperator(text: string): Promise<void> {
+  async notifyPrincipal(text: string): Promise<void> {
     const principalSlackId = this.infra.principal.slackId;
     if (!principalSlackId) return;
     try {
@@ -625,11 +625,11 @@ export class SlackAdapter implements PlatformAdapter {
       // Web API opens (or reuses) the IM channel implicitly.
       await this.client.postMessage(principalSlackId, text);
     } catch (err) {
-      // Match the Mattermost/Discord notifyOperator pattern: log + drop.
-      // A failed DM should never tear down the adapter; the operator can
+      // Match the Mattermost/Discord notifyPrincipal pattern: log + drop.
+      // A failed DM should never tear down the adapter; the principal can
       // see the same content on the dashboard / agent-log path.
       console.warn(
-        `slack-${this.instanceId}: failed to notify operator:`,
+        `slack-${this.instanceId}: failed to notify principal:`,
         err instanceof Error ? err.message : err,
       );
     }

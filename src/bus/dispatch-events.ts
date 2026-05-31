@@ -483,7 +483,7 @@ export interface DispatchTaskAbortedOpts extends DispatchTaskCommonOpts {
   abortedAt: Date;
   /**
    * Why the task was aborted. Free-form but conventional values include
-   * `"timeout"`, `"shutdown"`, `"operator-cancel"`, `"replaced"`. Surfaces
+   * `"timeout"`, `"shutdown"`, `"principal-cancel"`, `"replaced"`. Surfaces
    * may render verbatim.
    */
   reason: string;

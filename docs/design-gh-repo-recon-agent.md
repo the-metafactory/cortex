@@ -15,7 +15,7 @@
 
 Land the first **deterministic-class agent** on cortex's bus, packaged as a **PAI skill** with a **slash-command** wrapper. Validate the agent class itself, prove the trust boundary (sealed execution, no LLM in the loop, no judgment), and absorb the highest-frequency recurring read pattern in observed PAI usage (multi-call GitHub repo recon before any non-trivial work).
 
-Land in two repos. One **skill** is the load-bearing artefact; the slash command is the operator surface, and the bus path invokes the same skill directly without LLM rendering.
+Land in two repos. One **skill** is the load-bearing artefact; the slash command is the principal surface, and the bus path invokes the same skill directly without LLM rendering.
 
 **Repo 1 — `the-metafactory/arc-skill-recon`** (new repo).
 
@@ -39,7 +39,7 @@ Contains the deterministic-agent class itself: new `HarnessId` value, the `Deter
 
 | Surface | Entry | Resolution path | Output |
 |---|---|---|---|
-| **Operator** | `/recon the-metafactory/cortex` from any CC session | LLM-driven: model parses `--parameters` from `$ARGUMENTS`, invokes `Skill("Recon", "RepoRecon", ...)`, renders verdict as operator-readable summary | Rendered Markdown |
+| **Principal** | `/recon the-metafactory/cortex` from any CC session | LLM-driven: model parses `--parameters` from `$ARGUMENTS`, invokes `Skill("Recon", "RepoRecon", ...)`, renders verdict as principal-readable summary | Rendered Markdown |
 | **Judgment agent (inline)** | `Skill("Recon", "RepoRecon", ...)` from within a model's tool-use loop | LLM in the calling agent, but the skill's script execution is deterministic | Raw verdict, optionally LLM-rendered downstream |
 | **Deterministic agent (bus)** | `dispatch.recon.<id>` envelope to `gh-repo-recon-agent` | **Direct**: harness calls `invokeSkill(skill, workflow, input)` → spawns the script. No LLM in the loop. | Raw verdict envelope on `recon.<id>.complete` |
 
@@ -63,7 +63,7 @@ This agent is the first instance of a new class on the bus. The class introduces
 | Property | Means |
 |---|---|
 | **Deterministic** | No LLM nondeterminism in the loop. Given identical CLI tool outputs for a given input, the verdict envelope is bytewise-identical. This is **not** a cache or reproducibility guarantee against upstream state changes; the live GitHub world is allowed to move between invocations. |
-| **Sealed** | Execution path is fixed at agent-definition time. The caller (including the judgment agent that dispatched it) cannot inject, modify, or steer execution mid-flight. The **skill's script** is the contract. **Trust assumption: the seal is only as strong as the integrity of (a) the YAML fragment that names which skill to invoke, and (b) the skill files at `~/.claude/skills/<Name>/`. Both must be git-tracked. An operator with edit access to either can swap the behavior. Out-of-band skill or fragment tampering is out of scope for this design and is the responsibility of the operator's deployment pipeline.** |
+| **Sealed** | Execution path is fixed at agent-definition time. The caller (including the judgment agent that dispatched it) cannot inject, modify, or steer execution mid-flight. The **skill's script** is the contract. **Trust assumption: the seal is only as strong as the integrity of (a) the YAML fragment that names which skill to invoke, and (b) the skill files at `~/.claude/skills/<Name>/`. Both must be git-tracked. An principal with edit access to either can swap the behavior. Out-of-band skill or fragment tampering is out of scope for this design and is the responsibility of the principal's deployment pipeline.** |
 | **Judgment-free** | No LLM call, no model output, no tool selection during the skill's execution. The skill's `scripts/recon.ts` runs gh commands and structures the output. There is no model loop. |
 | **Identity-bearing** | Has a `did:mf:` identity, claims tasks on the bus, publishes verdict envelopes, shows up in the dashboard. Same fabric as judgment agents, different inside. |
 
@@ -91,7 +91,7 @@ The `Recon` skill is invocable from four surfaces. The skill itself is unchanged
 
 | Surface | Entry | When | Ships in MVP |
 |---|---|---|---|
-| **Slash command** | `/recon <owner/repo> [--parameters]` | Operator runs it from any CC session | Yes |
+| **Slash command** | `/recon <owner/repo> [--parameters]` | Principal runs it from any CC session | Yes |
 | **PAI Skill tool** | `Skill("Recon", "<args>")` from within an agent's loop | Judgment agent invokes inline (no bus round-trip) | Yes |
 | **Bus call-style** | `dispatch.recon.<request-id>` envelope | Judgment agent dispatches and awaits verdict | Yes |
 | **Bus scheduled** | cron-driven, no caller | Nightly tick to populate dashboard cache for active repos | Future |
@@ -143,11 +143,11 @@ context:
       pr_limit: 30                     # optional, default 30
       issue_limit: 30                  # optional, default 30
       commit_limit: 20                 # optional, default 20
-  # Operator identity for the "mine" cross-cut. Uses the existing "env"
+  # Principal identity for the "mine" cross-cut. Uses the existing "env"
   # context kind per cortex's convention; absent → no mine filtering.
   - kind: env
     data:
-      operator: andreas                # optional GitHub login of the caller
+      principal: andreas                # optional GitHub login of the caller
 ```
 
 ### 5.2 Output envelope (verdict)
@@ -195,7 +195,7 @@ payload:
       author: andreas
       date: 2026-05-13T22:00:00Z
       message: "docs: add Grove integration ..."
-  mine:                                # cross-cut, only if env-context "operator" was provided
+  mine:                                # cross-cut, only if env-context "principal" was provided
     open_prs: [92]
     open_issues: [91, 107]
 metadata:
@@ -238,7 +238,7 @@ the-metafactory/arc-skill-recon/
     └── recon.md                  # Slash command — parses --parameters to route to workflow
 ```
 
-The `RepoRecon` workflow is the only workflow shipped in MVP. `scripts/recon.ts` is its implementation. The script is the contract; reading it tells you exactly what every recon invocation does, regardless of which surface invoked it (operator slash, Skill tool, or bus harness).
+The `RepoRecon` workflow is the only workflow shipped in MVP. `scripts/recon.ts` is its implementation. The script is the contract; reading it tells you exactly what every recon invocation does, regardless of which surface invoked it (principal slash, Skill tool, or bus harness).
 
 ### 6.1 The sealed sequence (implemented in `scripts/recon.ts`)
 
@@ -333,12 +333,12 @@ You are invoking the `recon` slash command. Parse `$ARGUMENTS` as:
 - **`--prs` / `--issues`** (optional shorthand) — equivalent to `--include prs` or `--include issues`.
 - **`--state <state>`** (optional) — `open` (default), `closed`, `all`.
 
-Invoke the `Recon` skill via the `Skill` tool with the parsed parameters. The skill's matching workflow runs `bun skill/scripts/recon.ts` with structured input and returns a `ReconVerdict` JSON. Render the verdict as a compact summary for the operator.
+Invoke the `Recon` skill via the `Skill` tool with the parsed parameters. The skill's matching workflow runs `bun skill/scripts/recon.ts` with structured input and returns a `ReconVerdict` JSON. Render the verdict as a compact summary for the principal.
 ```
 
 ### 6.4 RepoRecon workflow shape
 
-`skill/Workflows/RepoRecon.md` declares the script path in **machine-readable YAML frontmatter**, then describes the workflow operator-readably in the body. The frontmatter is the resolver's source of truth (so `invokeSkill` does not have to parse prose); the body is documentation for humans and LLM-driven surfaces.
+`skill/Workflows/RepoRecon.md` declares the script path in **machine-readable YAML frontmatter**, then describes the workflow principal-readably in the body. The frontmatter is the resolver's source of truth (so `invokeSkill` does not have to parse prose); the body is documentation for humans and LLM-driven surfaces.
 
 ```markdown
 ---
@@ -406,13 +406,13 @@ agents:
         - GH_TOKEN                             # MVP reuses existing env var; see §12 R2 for the eventual GH_TOKEN_READONLY follow-up
 ```
 
-The `skill` field names the PAI skill this agent invokes. Cortex resolves it to `~/.claude/skills/<skill>/`, reads the SKILL.md routing table to find the workflow's script, and spawns the script via `Bun.spawn`. Cortex never reads the slash-command file `prompt/recon.md` — that's operator-facing LLM-prose, not machine-routable. An operator running `/recon owner/repo` ends up invoking the same `skill/scripts/recon.ts` via the LLM-driven slash-command path; the bus path skips the LLM and goes direct.
+The `skill` field names the PAI skill this agent invokes. Cortex resolves it to `~/.claude/skills/<skill>/`, reads the SKILL.md routing table to find the workflow's script, and spawns the script via `Bun.spawn`. Cortex never reads the slash-command file `prompt/recon.md` — that's principal-facing LLM-prose, not machine-routable. An principal running `/recon owner/repo` ends up invoking the same `skill/scripts/recon.ts` via the LLM-driven slash-command path; the bus path skips the LLM and goes direct.
 
 ### Schema delta — TWO parallel enums + persona shape + four runtime fields
 
 Cortex currently has two substrate enums living in different files. They are not unified today; this design touches both and acknowledges the unification work as out of scope for this PR.
 
-**1. `AgentRuntimeSchema.substrate` (operator-facing, `src/common/types/cortex-config.ts`).** Today a flat `z.enum(["claude-code", "codex", "pi-dev", "cursor", "custom"])` after cortex#124 merge. Gains `"deterministic-agent"` as a sixth value. The schema is NOT a discriminated union today; this design does not propose restructuring it. Instead, the new fields land as **optional top-level fields on `AgentRuntimeSchema`**, gated by a `.refine()` that requires `skill` when `substrate === "deterministic-agent"`. No breaking change to existing claude-code / codex / pi-dev / cursor / custom configs. Precedent for adding a substrate enum value is cortex#124 itself — one-line enum change plus design doc.
+**1. `AgentRuntimeSchema.substrate` (principal-facing, `src/common/types/cortex-config.ts`).** Today a flat `z.enum(["claude-code", "codex", "pi-dev", "cursor", "custom"])` after cortex#124 merge. Gains `"deterministic-agent"` as a sixth value. The schema is NOT a discriminated union today; this design does not propose restructuring it. Instead, the new fields land as **optional top-level fields on `AgentRuntimeSchema`**, gated by a `.refine()` that requires `skill` when `substrate === "deterministic-agent"`. No breaking change to existing claude-code / codex / pi-dev / cursor / custom configs. Precedent for adding a substrate enum value is cortex#124 itself — one-line enum change plus design doc.
 
 ```ts
 // Sketch — actual implementation lands in the follow-up PR
@@ -439,15 +439,15 @@ AgentRuntimeSchema.extend({
 
 The four runtime-level additions (`task_subjects`, `publish_subjects`, `secrets`, plus the already-existing `capabilities`) are broadly useful across substrates — judgment-class agents will eventually want to declare their bus subjects too. They are not gated by `substrate === "deterministic-agent"`; they are general additions. Documented here because the deterministic-agent path is the first user.
 
-**Two `capabilities` concepts — explicit bridge.** `AgentRuntimeSchema.capabilities` is `string[]` (operator-declared in YAML, consumed by the dispatcher and the NATS-KV capability registry). `SessionHarness.capabilities` is `Capability[]` with `{id, description, tags?}` objects (declared in TypeScript by the harness implementation). The contract between them: **each operator-declared string MUST equal a harness `Capability.id`.** The harness is the authoritative source of metadata; the YAML is the authoritative source of which subset this agent claims. At dispatch time, cortex validates that every `runtime.capabilities[]` string resolves to a known `Capability.id` on the resolved `SessionHarness`. Future deterministic-agent skills follow the same bridge: declare capability objects in the harness's `CAPABILITIES` constant, declare matching string ids in the operator fragment.
+**Two `capabilities` concepts — explicit bridge.** `AgentRuntimeSchema.capabilities` is `string[]` (principal-declared in YAML, consumed by the dispatcher and the NATS-KV capability registry). `SessionHarness.capabilities` is `Capability[]` with `{id, description, tags?}` objects (declared in TypeScript by the harness implementation). The contract between them: **each principal-declared string MUST equal a harness `Capability.id`.** The harness is the authoritative source of metadata; the YAML is the authoritative source of which subset this agent claims. At dispatch time, cortex validates that every `runtime.capabilities[]` string resolves to a known `Capability.id` on the resolved `SessionHarness`. Future deterministic-agent skills follow the same bridge: declare capability objects in the harness's `CAPABILITIES` constant, declare matching string ids in the principal fragment.
 
-**`.refine()` stacking.** Zod supports chaining `.refine()` calls; the existing standalone-mode refine on `AgentRuntimeSchema` (which requires `capabilities.length >= 1` when `mode === "standalone"`, per cortex#62 Echo M2) is **not replaced** by the new deterministic-agent refine — both apply. Per-refine error paths stay separate, so the operator sees one error message per violated invariant.
+**`.refine()` stacking.** Zod supports chaining `.refine()` calls; the existing standalone-mode refine on `AgentRuntimeSchema` (which requires `capabilities.length >= 1` when `mode === "standalone"`, per cortex#62 Echo M2) is **not replaced** by the new deterministic-agent refine — both apply. Per-refine error paths stay separate, so the principal sees one error message per violated invariant.
 
-**2. `HarnessId` (runner-facing, `src/common/substrates/types.ts`).** Today a TypeScript union of seven values. Gains `"deterministic-agent"` as an eighth. This is the type the runner uses to select a `SessionHarness` implementation; not operator-facing.
+**2. `HarnessId` (runner-facing, `src/common/substrates/types.ts`).** Today a TypeScript union of seven values. Gains `"deterministic-agent"` as an eighth. This is the type the runner uses to select a `SessionHarness` implementation; not principal-facing.
 
-The two enums are deliberately separate today (operator vocabulary vs runner vocabulary) and unifying them is a separate piece of work that belongs in cortex#92's follow-ups, not here. This design adds the new value to both lists.
+The two enums are deliberately separate today (principal vocabulary vs runner vocabulary) and unifying them is a separate piece of work that belongs in cortex#92's follow-ups, not here. This design adds the new value to both lists.
 
-**3. `persona` shape — additive via union, not breaking.** Today `persona: z.string().min(1)` is a bare path. Becomes `persona: z.union([z.string().min(1), z.object({ kind, path })])`. A bare string is interpreted as `{ kind: "system-prompt", path: <string> }` for backward compatibility. Existing operator configs continue to parse without migration. The new `kind: "behavior-contract"` variant signals that the linked file IS the contract (deterministic agents) rather than a system prompt (judgment agents).
+**3. `persona` shape — additive via union, not breaking.** Today `persona: z.string().min(1)` is a bare path. Becomes `persona: z.union([z.string().min(1), z.object({ kind, path })])`. A bare string is interpreted as `{ kind: "system-prompt", path: <string> }` for backward compatibility. Existing principal configs continue to parse without migration. The new `kind: "behavior-contract"` variant signals that the linked file IS the contract (deterministic agents) rather than a system prompt (judgment agents).
 
 ---
 
@@ -455,7 +455,7 @@ The two enums are deliberately separate today (operator vocabulary vs runner voc
 
 A new `DeterministicAgentHarness` implementing `SessionHarness` per cortex#92. Single responsibility: resolve the named skill+workflow to its script, spawn the script with the structured input from `DispatchRequest.context`, parse and validate the JSON verdict, emit the envelope.
 
-The harness does **not** read the slash-command file `~/.claude/commands/recon.md` — that file is operator-facing LLM-prose and contains no machine-parseable workflow routing. The skill's SKILL.md routing table is the machine-parseable mapping from workflow name to script path. The slash command exists for the operator surface only; the bus path bypasses it.
+The harness does **not** read the slash-command file `~/.claude/commands/recon.md` — that file is principal-facing LLM-prose and contains no machine-parseable workflow routing. The skill's SKILL.md routing table is the machine-parseable mapping from workflow name to script path. The slash command exists for the principal surface only; the bus path bypasses it.
 
 ```ts
 // src/substrates/deterministic-agent/harness.ts (NEW)
@@ -482,10 +482,10 @@ export class DeterministicAgentHarness implements SessionHarness {
 
   async *dispatch(req: DispatchRequest): AsyncIterable<MyelinEnvelope> {
     // Extract recon input from context. The dispatcher attaches a "recon-input"
-    // context kind whose .data is the ReconInput shape from §5.1. The "operator"
+    // context kind whose .data is the ReconInput shape from §5.1. The "principal"
     // for the mine cross-cut comes from the existing "env" context kind.
     const reconInput = req.context.find((c) => c.kind === "recon-input")?.data;
-    const operator = (req.context.find((c) => c.kind === "env")?.data as { operator?: string } | undefined)?.operator;
+    const principal = (req.context.find((c) => c.kind === "env")?.data as { principal?: string } | undefined)?.principal;
 
     yield envelope("dispatch.task.started", {
       requestId: req.requestId,
@@ -497,7 +497,7 @@ export class DeterministicAgentHarness implements SessionHarness {
       // routing table to find the workflow's script path, spawns the script via
       // Bun.spawn, passes input as JSON on stdin, returns parsed JSON stdout.
       const rawResult = await withTimeout(
-        invokeSkill(this.skill, this.workflow, { input: reconInput, caller: operator }),
+        invokeSkill(this.skill, this.workflow, { input: reconInput, caller: principal }),
         this.timeoutMs,
       );
       // Validate at the seam — invokeSkill returns unknown; the schema is the contract.
@@ -528,7 +528,7 @@ Field-name and contract notes for implementers:
 - `req.requestId` — the dispatch-correlation id (per `DispatchRequest`'s Q5 lock-in).
 - `req.agent.id` — logical agent id (`gh-repo-recon-agent`).
 - Input arrives via `req.context[]` with `kind: "recon-input"` (or whatever kind the dispatcher chooses — that decision is for cortex#92's dispatcher work, not this design). Recon must not assume an arbitrary `payload` field on the request.
-- Operator identity (for the `mine` cross-cut) arrives via `req.context[]` with `kind: "env"` per the existing convention. If absent, the cross-cut is skipped.
+- Principal identity (for the `mine` cross-cut) arrives via `req.context[]` with `kind: "env"` per the existing convention. If absent, the cross-cut is skipped.
 - `capabilities` must be `Capability[]` — array of `{ id, description, tags? }` objects, not bare strings.
 - `invokeSkill` is the new shared resolver at `src/skills/invoke.ts`. Its contract:
   1. Take `(skill, workflow | null, input)`.
@@ -611,7 +611,7 @@ arguments:
 
 Invoke the Recon skill on `{{target}}` with default include set (or `{{include}}` if supplied).
 The skill's RepoRecon workflow runs `~/.claude/skills/Recon/scripts/recon.ts` and returns
-a `ReconVerdict` JSON. Render the verdict as a compact summary for the operator.
+a `ReconVerdict` JSON. Render the verdict as a compact summary for the principal.
 ```
 
 The whole script is testable as a pure function: mock `ghPrList` etc. with fixtures, assert the verdict shape. No bus, no harness, no envelope concerns.
@@ -625,7 +625,7 @@ The whole script is testable as a pure function: mock `ghPrList` etc. with fixtu
 | `NOT_FOUND` | `gh repo view` returns 404 | Skill exits non-zero with structured error JSON; harness emits `recon.<id>.error`, no retry |
 | `RATE_LIMITED` | gh returns 403 with X-RateLimit-Remaining: 0 | Skill exits with `retry_after_ms`; harness retries after backoff |
 | `TIMEOUT` | Skill execution exceeds `timeout_ms` | Harness kills the subprocess and emits `dispatch.task.failed` with `code: TIMEOUT`, no partial verdict |
-| `GH_AUTH_FAILED` | gh returns 401 | Skill exits with auth error; harness emits error, no retry (config issue, needs operator) |
+| `GH_AUTH_FAILED` | gh returns 401 | Skill exits with auth error; harness emits error, no retry (config issue, needs principal) |
 | `partial` | Some sections succeed, some fail | Skill writes verdict with `status: partial` and `metadata.partial_sections: [...]` |
 | `UNKNOWN` | Any other exception | Skill writes error with stack trace; harness propagates |
 
@@ -696,7 +696,7 @@ For any well-formed input that passes `ReconInputSchema`, the output passes `Rec
 - [ ] Fragment example at `docs/examples/agents.d/gh-repo-recon-agent.yaml` references `skill: Recon`, `workflow: RepoRecon`, and the four new runtime fields
 - [ ] Integration test in cortex dispatches a real recon envelope through the harness, verifies verdict shape end-to-end
 
-### Operator-side
+### Principal-side
 
 - [ ] Fragment at `~/.config/cortex/agents.d/gh-repo-recon-agent.yaml` loaded by cortex without rejection
 - [ ] Manual smoke: Luna in `#cortex` channel emits `dispatch.recon.cortex`, receives verdict within 5s, summarizes "what's in flight for cortex" without making any gh calls herself
@@ -716,9 +716,9 @@ For any well-formed input that passes `ReconInputSchema`, the output passes `Rec
 1. **Caching policy.** MVP is no caching — every dispatch is a fresh fetch. If rate limits bite, add a 60-second TTL cache keyed by `(owner, repo, include-set, state)`. Defer until measured.
 2. **One agent per ecosystem, or per-org?** MVP: one agent, takes `owner` in the envelope. If we later want per-org scoping for credential reasons (different PATs for different orgs), split.
 3. **NATS queue group behavior.** Single subscriber for MVP. If a second instance is ever wanted (fan-out, redundancy), queue-group semantics apply for free — no agent-side changes.
-4. **`mine` cross-cut for non-GitHub identity.** Operators identified as `did:mf:...` in metafactory might not have a corresponding GitHub login. Need a mapping. Defer until first non-Andreas operator.
+4. **`mine` cross-cut for non-GitHub identity.** Operators identified as `did:mf:...` in metafactory might not have a corresponding GitHub login. Need a mapping. Defer until first non-Andreas principal.
 5. **Streaming progress.** For typical-size repos (<30 PRs), the verdict completes in ~2s — no need for streaming. For very large repos (Linux-kernel sized), would the deterministic-agent class want to emit `dispatch.task.progress` envelopes for each section? Defer until measured.
-6. **`AgentRuntimeSchema.substrate` and `HarnessId` unification.** The two enums are deliberately separate today (operator vocabulary vs runner vocabulary). This design adds `"deterministic-agent"` to both. Unification is a real piece of cortex#92 follow-up work; not blocking this design but worth tracking. File as `cortex#92` follow-up.
+6. **`AgentRuntimeSchema.substrate` and `HarnessId` unification.** The two enums are deliberately separate today (principal vocabulary vs runner vocabulary). This design adds `"deterministic-agent"` to both. Unification is a real piece of cortex#92 follow-up work; not blocking this design but worth tracking. File as `cortex#92` follow-up.
 
 ---
 
@@ -738,7 +738,7 @@ The trust-bearing demonstration of the class (a deterministic agent that *does s
 
 ## 14. Migration
 
-Three landing steps. The new skill repo lands first (lowest dependency); cortex changes land after #92 merges; operator install last.
+Three landing steps. The new skill repo lands first (lowest dependency); cortex changes land after #92 merges; principal install last.
 
 ### Step 1 — `the-metafactory/arc-skill-recon` (new repo)
 
@@ -769,13 +769,13 @@ Independent of cortex#92 — can land in parallel.
 | Fragment example | `docs/examples/agents.d/gh-repo-recon-agent.yaml` |
 | This doc, promoted | `docs/design-gh-repo-recon-agent.md` (currently this PR — already in place) |
 
-### Step 3 — Operator side
+### Step 3 — Principal side
 
 - `arc install github:the-metafactory/arc-skill-recon` — drops skill + slash command
 - `cp <fragment-example> ~/.config/cortex/agents.d/gh-repo-recon-agent.yaml`
-- Restart cortex so the new agent loads. Restart command is operator-deployment-specific:
+- Restart cortex so the new agent loads. Restart command is principal-deployment-specific:
   - On macOS (Andreas' deployment): `launchctl kickstart -k gui/$(id -u)/ai.meta-factory.cortex.meta-factory` (or `.work` for the parallel work stack)
-  - On Linux / containers: per the operator's process manager (systemd unit, docker restart, etc.)
+  - On Linux / containers: per the principal's process manager (systemd unit, docker restart, etc.)
 - Smoke test: `/recon the-metafactory/cortex` (slash command) AND publish a `dispatch.recon.<id>` envelope to verify the bus path (different resolution path, same verdict shape).
 
 ---

@@ -155,7 +155,7 @@ describe("BusDispatchListener — lifecycle", () => {
       runtime,
       resolver,
       receivingAgentId: "luna",
-      principalId: "test-operator",
+      principalId: "test-principal",
       source: SOURCE,
     });
 
@@ -175,7 +175,7 @@ describe("BusDispatchListener — lifecycle", () => {
       runtime,
       resolver,
       receivingAgentId: "luna",
-      principalId: "test-operator",
+      principalId: "test-principal",
       source: SOURCE,
     });
 
@@ -194,7 +194,7 @@ describe("BusDispatchListener — lifecycle", () => {
       runtime,
       resolver,
       receivingAgentId: "luna",
-      principalId: "test-operator",
+      principalId: "test-principal",
       source: SOURCE,
     });
 
@@ -219,7 +219,7 @@ describe("BusDispatchListener — peer-dispatch filter", () => {
       runtime,
       resolver,
       receivingAgentId: "luna",
-      principalId: "test-operator",
+      principalId: "test-principal",
       source: SOURCE,
     });
     listener.start();
@@ -252,7 +252,7 @@ describe("BusDispatchListener — peer-dispatch filter", () => {
       runtime,
       resolver,
       receivingAgentId: "luna",
-      principalId: "test-operator",
+      principalId: "test-principal",
       source: SOURCE,
     });
     listener.start();
@@ -287,7 +287,7 @@ describe("BusDispatchListener — verification gate", () => {
       runtime,
       resolver,
       receivingAgentId: "luna",
-      principalId: "test-operator",
+      principalId: "test-principal",
       source: SOURCE,
     });
     listener.start();
@@ -345,7 +345,7 @@ describe("BusDispatchListener — verification gate", () => {
         runtime,
         resolver,
         receivingAgentId: "luna",
-        principalId: "test-operator",
+        principalId: "test-principal",
         source: SOURCE,
       });
       listener.start();

@@ -15,7 +15,7 @@ allow_events:
 
 fields:
   agent.task.started:
-    include: [prompt_preview, project, entity, operator]
+    include: [prompt_preview, project, entity, principal]
   agent.task.completed:
     include: [summary, duration_ms, project, pr_url]
   tool.file.changed:
@@ -27,7 +27,7 @@ fields:
   tool.todo.updated:
     include: [todo_summary, active_task]
   agent.session.heartbeat:
-    include: [project, entity, operator]
+    include: [project, entity, principal]
 
 redact:
   # Home directory paths → ~

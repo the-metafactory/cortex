@@ -37,7 +37,7 @@ export interface InboundChatDispatchPublishOpts {
   groveNetwork: string | undefined;
   project: string | undefined;
   entity: string | undefined;
-  operator: string | undefined;
+  principal: string | undefined;
   /**
    * cortex#486 — PolicyEngine consulted at publish time to resolve the
    * inbound `(platform, authorId)` tuple to a registered principal id.
@@ -199,7 +199,7 @@ export async function publishInboundChatDispatchEnvelope(
       opts.additionalArgs.length > 0 && { additional_args: opts.additionalArgs }),
     ...(opts.project !== undefined && { project: opts.project }),
     ...(opts.entity !== undefined && { entity: opts.entity }),
-    ...(opts.operator !== undefined && { operator: opts.operator }),
+    ...(opts.principal !== undefined && { principal: opts.principal }),
   };
 
   let envelope: Envelope;

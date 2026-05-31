@@ -153,7 +153,7 @@
 **Fix:** Log auth events (successes and failures) to D1 `audit_log` table.
 
 **Events logged:**
-- API key auth success/failure (operator, endpoint, IP)
+- API key auth success/failure (principal, endpoint, IP)
 - Admin auth success/failure (endpoint, IP)
 - CF Access JWT validation success/failure (email, endpoint)
 - Rate limit hits (IP, endpoint)
@@ -187,7 +187,7 @@
 
 ## Out of Scope
 
-- Per-operator admin keys (replacing shared ADMIN_SECRET) — separate feature
+- Per-principal admin keys (replacing shared ADMIN_SECRET) — separate feature
 - API key rotation/expiry — separate feature
 - mTLS between bot and worker — unnecessary given API key auth
 - Encrypting JSONL files at rest — local files, user's machine

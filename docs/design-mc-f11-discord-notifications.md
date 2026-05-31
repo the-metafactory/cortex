@@ -12,7 +12,7 @@
 
 §4 is deliberately compact: Discord only, a ~10-line hardcoded `shouldNotify` priority map, a one-bit `bot.yaml` toggle, deep links keyed off `grove.baseUrl`. That is correct posture — "don't build a traffic-shaping system before there is traffic" (§4.2) — but the concrete shape of the DM-vs-channel split, the coalescing behaviour, the payload format, the interaction with the existing grove-bot v1 channel routing SOP, and the full transition matrix have all been deferred to implementation time. F-6 / F-7 / F-8 / F-9 / F-10 / image-input each shipped with a pre-implementation addendum; F-11 follows the same discipline so code review can focus on code against decided criteria rather than rediscovering the design at PR time.
 
-Crucially: the notification *hook points* already exist. `applyTransition` in `src/mission-control/db/transitions.ts` is called from two production sites — `src/mission-control/api/handlers.ts:347` (operator-driven transitions) and `src/mission-control/session/stdout-dispatcher.ts:157` (stream-json-driven transitions). Both call `broadcastTransition` from `src/mission-control/notifications.ts` immediately after. F-11 adds a **third** call at the same two sites: `maybeNotifyDiscord(...)`. No new dispatcher, no new pipeline, no new daemon — one more function call where the truth is already in hand. This addendum keeps the scope honest to that reality.
+Crucially: the notification *hook points* already exist. `applyTransition` in `src/mission-control/db/transitions.ts` is called from two production sites — `src/mission-control/api/handlers.ts:347` (principal-driven transitions) and `src/mission-control/session/stdout-dispatcher.ts:157` (stream-json-driven transitions). Both call `broadcastTransition` from `src/mission-control/notifications.ts` immediately after. F-11 adds a **third** call at the same two sites: `maybeNotifyDiscord(...)`. No new dispatcher, no new pipeline, no new daemon — one more function call where the truth is already in hand. This addendum keeps the scope honest to that reality.
 
 **Invariant the implementer must absorb — call-site is fired twice per spawn, coalesce in the hook, not in the loop.** `handlers.ts:347` sits inside `for (const action of [{ type: "dispatch" }, { type: "start" }])` — a single POST to create a session drives two consecutive transitions (`queued → dispatched` and `dispatched → running`), each followed by its own `broadcastTransition`. When F-11's `maybeNotifyDiscord(...)` is added after `broadcastTransition` at the ~354 call site, it will be invoked **twice** per spawn. Decision 1's matrix already marks both of those transitions as ❌ Notify=No, so the default output is zero DMs and zero channel posts. This is correct, and the implementer must not try to "fix" the double-fire by hoisting the call outside the loop or by adding a per-spawn guard at the call site — doing so would desynchronise F-11 from the canonical transition stream and silently drop any future transition that *does* opt into notification from that site. Coalescing / dedup is the `discord-sink`'s job (Decision 7's 5 s per-assignment window), not the loop's.
 
@@ -22,44 +22,44 @@ Crucially: the notification *hook points* already exist. `applyTransition` in `s
 
 | Transition | Notify? | Channel | Urgency | Rationale |
 |---|---|---|---|---|
-| `* → blocked` (kind=`permission.request`, risk=`high`) | ✅ | DM + channel ping | high | Operator is the bottleneck; high-risk tool use wants a second of attention before approval |
-| `* → blocked` (kind=`permission.request`, risk=`medium`/`low`, priority ≤ 1) | ✅ | DM | high | Lower-risk but P0/P1 — operator still needs to unblock |
+| `* → blocked` (kind=`permission.request`, risk=`high`) | ✅ | DM + channel ping | high | Principal is the bottleneck; high-risk tool use wants a second of attention before approval |
+| `* → blocked` (kind=`permission.request`, risk=`medium`/`low`, priority ≤ 1) | ✅ | DM | high | Lower-risk but P0/P1 — principal still needs to unblock |
 | `* → blocked` (kind=`permission.request`, risk=`medium`/`low`, priority ≥ 2) | ✅ | DM | normal | Default permission block — DM, no ping |
-| `* → blocked` (kind=`tool.error`, priority ≤ 1) | ✅ | DM | high | P0/P1 blocker — operator intervention likely needed |
+| `* → blocked` (kind=`tool.error`, priority ≤ 1) | ✅ | DM | high | P0/P1 blocker — principal intervention likely needed |
 | `* → blocked` (kind=`tool.error`, priority ≥ 2) | ✅ | DM | normal | Background failure that may still need eyes |
 | `* → blocked` (kind=`review.checkpoint`) | ✅ | DM | normal | Agent asked for human sign-off explicitly |
 | `* → failed` | ✅ | channel | normal | Post-mortem context, not urgent — lands in the repo thread |
 | `* → completed` (priority = 0) | ✅ | channel | low | P0 deserves a silent positive signal in the repo thread |
 | `* → completed` (priority ≥ 1) | ❌ | — | — | Noise; dashboard renders this, push doesn't need to |
-| `* → cancelled` | ❌ | — | — | Operator-driven terminal; already knows |
+| `* → cancelled` | ❌ | — | — | Principal-driven terminal; already knows |
 | `blocked → running` | ❌ | — | — | Self-resolved block (agent retried and succeeded) — dashboard's job |
-| `blocked → completed`/`failed` | ❌ | — | — | Follows the terminal rule above — if the operator cared about the block they'll see the outcome when they open the drill-down |
+| `blocked → completed`/`failed` | ❌ | — | — | Follows the terminal rule above — if the principal cared about the block they'll see the outcome when they open the drill-down |
 | `queued → dispatched` | ❌ | — | — | Mechanical progress; dashboard signal only |
 | `dispatched → running` | ❌ | — | — | Ditto |
 | `running → running` (no-op from state-machine perspective; doesn't happen) | ❌ | — | — | N/A |
-| `operator.input.requested` event (not a transition) | ✅ | DM | normal | Surfaced as a block-reason-shaped notification — see Decision 2 |
+| `principal.input.requested` event (not a transition) | ✅ | DM | normal | Surfaced as a block-reason-shaped notification — see Decision 2 |
 
 **Decision surface.** The matrix above is what `shouldNotify` actually codifies. §4.2's sketch is a 6-line prose summary of the first three rows plus `failed` + `completed`; the above matrix is the full truth. The implementation lives in one file (`src/mission-control/notifications/should-notify.ts`, new), pure function, fully unit-testable from the transition + task inputs alone.
 
-**`operator.input.requested` is not a state transition** — it's an event type in the `events` table (§5.1 input channel; used when an agent asks a specific question during a `running` turn without changing state). It's still notification-worthy because the operator is the addressee. F-11 adds a small shim: `maybeNotifyInputRequested(ev)` called from the same call sites that emit the event, routed through the same `shouldNotify` output shape. Same function family, different trigger.
+**`principal.input.requested` is not a state transition** — it's an event type in the `events` table (§5.1 input channel; used when an agent asks a specific question during a `running` turn without changing state). It's still notification-worthy because the principal is the addressee. F-11 adds a small shim: `maybeNotifyInputRequested(ev)` called from the same call sites that emit the event, routed through the same `shouldNotify` output shape. Same function family, different trigger.
 
 ## Decision 2 — DM vs channel: one recipient set, two audiences, two payloads
 
 Two surfaces, two distinct jobs.
 
-**DM** goes to `config.agent.operatorDiscordId`. Reserved for things that require operator action — blocks, permission requests, `operator.input.requested`. One audience: the operator. One payload shape: "something is waiting for you, here's the minimum context to decide if you care".
+**DM** goes to `config.agent.operatorDiscordId`. Reserved for things that require principal action — blocks, permission requests, `principal.input.requested`. One audience: the principal. One payload shape: "something is waiting for you, here's the minimum context to decide if you care".
 
-**Channel post** goes to the repo thread (Decision 5) or failing that `discord.agentChannelId`. Reserved for broadcast-worthy outcomes — failures and P0 completions. Audience: the operator AND anyone else watching the repo channel. Payload shape: "this happened, here's the link, scroll on".
+**Channel post** goes to the repo thread (Decision 5) or failing that `discord.agentChannelId`. Reserved for broadcast-worthy outcomes — failures and P0 completions. Audience: the principal AND anyone else watching the repo channel. Payload shape: "this happened, here's the link, scroll on".
 
-**Never both for the same event.** The matrix above explicitly assigns each notification-worthy transition to one of `dm` or `channel`, not both. The single-exception is **`blocked` with risk=`high` or priority ≤ 1** — those get a DM AND a role ping (`<@&{operatorRoleId}>` if `discord.operatorRoleId` is set, no ping otherwise) in the channel. The ping is the second audience, not a duplicate notification — it's the "yes, really, look now" escalation for the subset of blocks that warrant interrupting whatever else the operator or team is doing. Channel post here is context for everyone; DM is the actionable copy. Two roles, two payloads.
+**Never both for the same event.** The matrix above explicitly assigns each notification-worthy transition to one of `dm` or `channel`, not both. The single-exception is **`blocked` with risk=`high` or priority ≤ 1** — those get a DM AND a role ping (`<@&{operatorRoleId}>` if `discord.operatorRoleId` is set, no ping otherwise) in the channel. The ping is the second audience, not a duplicate notification — it's the "yes, really, look now" escalation for the subset of blocks that warrant interrupting whatever else the principal or team is doing. Channel post here is context for everyone; DM is the actionable copy. Two roles, two payloads.
 
-**Why not always dual-post.** The noise-to-signal ratio collapses instantly. An operator with twenty `blocked` DMs stacked up has twenty actionable items. The same operator with twenty DMs AND twenty channel posts has to learn which is canonical. DM-for-action, channel-for-record is the Discord convention operators already live in (GitHub app, PagerDuty bot, everything else), so F-11 inherits it without surprise.
+**Why not always dual-post.** The noise-to-signal ratio collapses instantly. An principal with twenty `blocked` DMs stacked up has twenty actionable items. The same principal with twenty DMs AND twenty channel posts has to learn which is canonical. DM-for-action, channel-for-record is the Discord convention operators already live in (GitHub app, PagerDuty bot, everything else), so F-11 inherits it without surprise.
 
-**No direct-mention in DMs.** DMs are 1:1 — the pinged-user-by-content pattern is pointless (the operator IS the recipient). DM copy omits `<@...>` mentions entirely.
+**No direct-mention in DMs.** DMs are 1:1 — the pinged-user-by-content pattern is pointless (the principal IS the recipient). DM copy omits `<@...>` mentions entirely.
 
 ## Decision 3 — Priority × attention-type routing table (concrete)
 
-Decision 1's matrix covers every transition. This decision pins the **full payload shape** per cell that gets DM or channel copy. The intent is that an operator can print this table, tape it to a wall, and predict every notification Grove will send.
+Decision 1's matrix covers every transition. This decision pins the **full payload shape** per cell that gets DM or channel copy. The intent is that an principal can print this table, tape it to a wall, and predict every notification Grove will send.
 
 | priority | to-state | block-reason.kind | risk | Channel | Role ping | DM urgency heuristic |
 |---|---|---|---|---|---|---|
@@ -79,9 +79,9 @@ Decision 1's matrix covers every transition. This decision pins the **full paylo
 | P2/P3 | `blocked` | `tool.error` | — | DM | no | (no prefix) |
 | P2/P3 | `blocked` | `review.checkpoint` | — | DM | no | (no prefix) |
 | P2/P3 | `failed` | — | — | channel | no | N/A |
-| any | `operator.input.requested` | — | — | DM | no | `[INPUT]` prefix |
+| any | `principal.input.requested` | — | — | DM | no | `[INPUT]` prefix |
 
-**Discord "urgent" is not a real API.** Discord has no per-message urgency flag. Mentions create the push-notification escalation; server settings (user-level) control whether DMs ping at all. F-11 sends the ping (and the operator-role ping in the channel when the matrix says "yes"), and does not try to smuggle in urgency via embeds. `[P0-HIGH]` as a text prefix is a human cue, not a protocol signal.
+**Discord "urgent" is not a real API.** Discord has no per-message urgency flag. Mentions create the push-notification escalation; server settings (user-level) control whether DMs ping at all. F-11 sends the ping (and the principal-role ping in the channel when the matrix says "yes"), and does not try to smuggle in urgency via embeds. `[P0-HIGH]` as a text prefix is a human cue, not a protocol signal.
 
 **Why text prefixes instead of emojis/embeds.** Embeds get collapsed on mobile Discord. Prefixes survive every render context. Matches the content-forward aesthetic of the dashboard (F-6/F-7/F-8/F-9 addenda all explicitly avoided decorative iconography).
 
@@ -106,7 +106,7 @@ Tier 1 default: `http://localhost:8766`. Tier 2: `https://grove.meta-factory.ai`
 
 **Deep-link landing behaviour** belongs to the dashboard router, not F-11. F-7's drill-down already keys off `location.hash` / `location.search` for focused assignments. F-11 generates the URL; the dashboard already knows what to do with it.
 
-**The link is an index, not a credential.** `?focus=assignment/{assignment_id}` carries no token, no session id, no signed query param — nothing an attacker could harvest from a forwarded Discord DM to impersonate the operator. Authentication happens exclusively at the dashboard surface (CF Access on Tier 2, localhost-only on Tier 1 per §6) when the operator's browser reaches `grove.meta-factory.ai`. The assignment id is non-secret — the same id is logged to `events`, surfaced in the WS broadcast, and printed in operator-facing CLI output. Someone who has the link without dashboard credentials sees a login redirect, not the assignment. This is important enough to state because Discord DMs are occasionally forwarded, screenshotted, or synced into other contexts where a treat-link-as-credential design would leak access; F-11's shape explicitly does not.
+**The link is an index, not a credential.** `?focus=assignment/{assignment_id}` carries no token, no session id, no signed query param — nothing an attacker could harvest from a forwarded Discord DM to impersonate the principal. Authentication happens exclusively at the dashboard surface (CF Access on Tier 2, localhost-only on Tier 1 per §6) when the principal's browser reaches `grove.meta-factory.ai`. The assignment id is non-secret — the same id is logged to `events`, surfaced in the WS broadcast, and printed in principal-facing CLI output. Someone who has the link without dashboard credentials sees a login redirect, not the assignment. This is important enough to state because Discord DMs are occasionally forwarded, screenshotted, or synced into other contexts where a treat-link-as-credential design would leak access; F-11's shape explicitly does not.
 
 ## Decision 5 — Channel routing: F-11 keeps it simple; v1 SOP remains out of v2's scope
 
@@ -120,9 +120,9 @@ grove-bot v1 ships a per-repo channel routing SOP (`docs/sop-discord-channel-rou
 
 **Why not auto-create threads.** Thread creation requires `ManageThreads` permission, a decision about archive duration, and a thread-name collision strategy. None of that is F-11's problem; the v1 SOP owns it. When the v1 channel-routing logic is ported into v2 (post-Phase-D, tracked as a separate chore), F-11's resolver swaps from `findExistingThread` to `findOrCreateThread`. One-line diff.
 
-**First-contact degradation (expected, not a bug).** The v1 SOP's threads are **agent-created-on-first-use**: the thread `grove/issue/43` only exists after the v1 chat-router has received a message routed to that issue. F-11 is read-only on channel topology — it does not create threads. Consequence: the **very first** notification-worthy transition for a GitHub-sourced task whose thread has not yet been materialised lands in the instance fallback (`instance.worklogChannelId ?? instance.agentChannelId`), not in the per-issue thread. Subsequent notifications for that same task, after a chat-router interaction has seeded the thread, route correctly. This is expected behaviour, not a routing bug — do not flag it in review. Migrating thread auto-creation into F-11 would drag the `ManageThreads` permission story and the v1-SOP port into this PR's scope, which is exactly what Decision 5 is refusing to do. The fallback channel is still the operator's channel; the operator still gets the notification; only the thread granularity degrades for that first event.
+**First-contact degradation (expected, not a bug).** The v1 SOP's threads are **agent-created-on-first-use**: the thread `grove/issue/43` only exists after the v1 chat-router has received a message routed to that issue. F-11 is read-only on channel topology — it does not create threads. Consequence: the **very first** notification-worthy transition for a GitHub-sourced task whose thread has not yet been materialised lands in the instance fallback (`instance.worklogChannelId ?? instance.agentChannelId`), not in the per-issue thread. Subsequent notifications for that same task, after a chat-router interaction has seeded the thread, route correctly. This is expected behaviour, not a routing bug — do not flag it in review. Migrating thread auto-creation into F-11 would drag the `ManageThreads` permission story and the v1-SOP port into this PR's scope, which is exactly what Decision 5 is refusing to do. The fallback channel is still the principal's channel; the principal still gets the notification; only the thread granularity degrades for that first event.
 
-**Operator-role ping config.** New optional key `discord.operatorRoleId` in the discord-instance block. When set, the subset of notifications the Decision 3 matrix marks "role ping: yes" render a `<@&{operatorRoleId}>` mention. When unset, those notifications render as plain channel posts with no mention. Default unset — operators opt in.
+**Principal-role ping config.** New optional key `discord.operatorRoleId` in the discord-instance block. When set, the subset of notifications the Decision 3 matrix marks "role ping: yes" render a `<@&{operatorRoleId}>` mention. When unset, those notifications render as plain channel posts with no mention. Default unset — operators opt in.
 
 **Interaction with the v1 SOP.** The v1 SOP explicitly owns chat-routing for the live bot. F-11 notifications are a **different class of message** — they are "push" not "chat" — and this addendum's split rule pins the scope: F-11 reads from the same channel-topology config (top-level `github.repos`, per `src/bot/types/config.ts:307`) when it exists, and falls back cleanly when it doesn't. The v1 SOP is not modified by F-11; it simply gets a new reader. The single most important decision: F-11 does **not** add a new channel-topology surface, does **not** mint new channel names, and does **not** introduce a second routing table that diverges from the v1 SOP. One source of truth, one reader.
 
@@ -156,7 +156,7 @@ A fleet of 20 agents hitting permission prompts in the same second must not prod
 
 1. **Per-assignment deduplication window: 5 seconds.** If the same `assignment_id` transitions `A → blocked` twice within 5 s (for example, the state machine bounces through a transient repair path), only the first produces a notification. Sliding window, per-process in-memory `Map<assignment_id, lastSentAt>`.
 
-2. **Coalescing window: 3 seconds.** When multiple **different** assignments for the **same operator** enter a notification-worthy state within a 3 s window, F-11 sends a single summary DM:
+2. **Coalescing window: 3 seconds.** When multiple **different** assignments for the **same principal** enter a notification-worthy state within a 3 s window, F-11 sends a single summary DM:
 
    ```
    [P1] 3 agents blocked
@@ -167,7 +167,7 @@ A fleet of 20 agents hitting permission prompts in the same second must not prod
    Dashboard: https://grove.meta-factory.ai/?focus=assignment/01HZABC...
    ```
 
-   The summary link points at the highest-priority assignment's focus URL. Individual assignments are listed inline so the operator can skim without opening the dashboard. Coalescing only kicks in at N ≥ 2 — single events render with the Decision 8 single-event payload unchanged.
+   The summary link points at the highest-priority assignment's focus URL. Individual assignments are listed inline so the principal can skim without opening the dashboard. Coalescing only kicks in at N ≥ 2 — single events render with the Decision 8 single-event payload unchanged.
 
 3. **Channel-post throttle: 1 per 10 s per channel.** Failed + completed-P0 channel posts don't swarm a channel. If more than one lands in the same 10 s window per destination channel, they coalesce into a single summary post with the same shape as the DM summary above. Independent of DM coalescing — each surface has its own window because the audiences are different.
 
@@ -216,13 +216,13 @@ Shorter because the audience is not the one taking action.
 
 **One-line AI summary (DM, line 5).** This is the "glance and decide" field. The implementation pulls from the assignment's block-reason `context` field when present (which is already a one-line rationale written by the agent, per the `block_reason` schema in §5.3.1). When the `context` field is missing — falls back to the most recent `assistant.message` event, truncated to 80 chars via miner-style extractive summarisation (no LLM in the render path; §5.4 pattern). When both are absent — the line is omitted entirely (six lines instead of seven). **No LLM call on the hot path.** §5.4 already pinned this for the dashboard summary header; F-11 inherits the same rule — a Discord DM is not the place to run an LLM call and wait.
 
-**Task title truncation: 80 chars at word boundary, suffix `…`.** Matches F-8 task table's column clamp. An operator who sees `"fix webhook HMAC verification with rotating secret…"` knows which task without needing the full title.
+**Task title truncation: 80 chars at word boundary, suffix `…`.** Matches F-8 task table's column clamp. An principal who sees `"fix webhook HMAC verification with rotating secret…"` knows which task without needing the full title.
 
 **No agent avatars / thumbnails / rich embeds.** §4 is deliberately low-chrome. Rich embeds in DMs render weirdly on mobile Discord; plain text ships consistently.
 
 **Structured fields hinted for future consumers.** The message body is plain text. The `context.footer` (invisible) can later carry machine-readable fields if a future Maestro-style "Approve from Discord" interactive flow lands — noted here, not shipped. F-11's message is human-consumed, nothing else.
 
-**Data handling posture — DM body is untrusted-string passthrough.** The DM's line-2 (`block_reason.context`) and line-5 (extractive summary of the most recent `assistant.message`) are both agent-generated free-form strings. F-11 does **not** sanitise, escape, redact, or rewrite them. The rationale is deliberate: (a) Discord's DM surface renders plain text — no HTML evaluation, no active markdown rendering beyond bold/italic/code which are cosmetic, no link auto-unfurl that exfiltrates content to a third party — so there is no injection attack surface to defend against on the render side; (b) the operator is the addressee and is already the trust boundary for everything the agent produces (the dashboard shows the same strings verbatim, CLI output shows them verbatim, the `events` row stores them verbatim); (c) any sanitisation pass would drop useful signal — `block_reason.context` often includes stack traces, file paths, tool invocations, and shell command fragments that the operator needs literally to diagnose. Posture: the operator sees exactly what the agent sent, on a surface that renders as text. No more, no less. The same rule applies to channel posts — they render agent strings verbatim as well, and the broader audience is a design choice (Decision 2's "channel-for-record" role) that the operator opts into by naming a channel at all. If an agent produces genuinely hostile content, the containment is operator-facing (revoke the agent's token, pause its queue) not notification-facing.
+**Data handling posture — DM body is untrusted-string passthrough.** The DM's line-2 (`block_reason.context`) and line-5 (extractive summary of the most recent `assistant.message`) are both agent-generated free-form strings. F-11 does **not** sanitise, escape, redact, or rewrite them. The rationale is deliberate: (a) Discord's DM surface renders plain text — no HTML evaluation, no active markdown rendering beyond bold/italic/code which are cosmetic, no link auto-unfurl that exfiltrates content to a third party — so there is no injection attack surface to defend against on the render side; (b) the principal is the addressee and is already the trust boundary for everything the agent produces (the dashboard shows the same strings verbatim, CLI output shows them verbatim, the `events` row stores them verbatim); (c) any sanitisation pass would drop useful signal — `block_reason.context` often includes stack traces, file paths, tool invocations, and shell command fragments that the principal needs literally to diagnose. Posture: the principal sees exactly what the agent sent, on a surface that renders as text. No more, no less. The same rule applies to channel posts — they render agent strings verbatim as well, and the broader audience is a design choice (Decision 2's "channel-for-record" role) that the principal opts into by naming a channel at all. If an agent produces genuinely hostile content, the containment is principal-facing (revoke the agent's token, pause its queue) not notification-facing.
 
 ## Decision 9 — Auth posture: reuse the existing bot's Discord client
 
@@ -230,7 +230,7 @@ Shorter because the audience is not the one taking action.
 
 **Why this is not a design waffle.** The alternative — a second bot token with its own login — would require (a) a second Discord app registration, (b) a second token in `bot.yaml`, (c) a second user-facing bot name in every server, (d) guild invites and permission grants for the new bot, and (e) a second authentication lifecycle to monitor. For zero user-visible benefit. One bot, one token, one gateway connection, two classes of outbound message (chat and push).
 
-**Rate-limiting within Discord's API envelope.** Discord DMs are rate-limited (~5/5s per bot-user pair; channel posts ~5/5s per channel). Decision 7's coalescing windows are sized comfortably inside those limits for Phase D scale (single operator, low-tens of daily push events). If the coalescer ever runs hot, the v1 chat-router's existing queue/backoff infrastructure (`response-poster.ts` splitting logic) is the blueprint for a more sophisticated outbound queue — not in F-11.
+**Rate-limiting within Discord's API envelope.** Discord DMs are rate-limited (~5/5s per bot-user pair; channel posts ~5/5s per channel). Decision 7's coalescing windows are sized comfortably inside those limits for Phase D scale (single principal, low-tens of daily push events). If the coalescer ever runs hot, the v1 chat-router's existing queue/backoff infrastructure (`response-poster.ts` splitting logic) is the blueprint for a more sophisticated outbound queue — not in F-11.
 
 **Error handling.** Discord API failures (network, rate-limit, permissions) are logged via `process.stderr.write()` + an `system.error` event in the `events` table (per the repo-wide "never swallow errors" rule in `CLAUDE.md`). The assignment state and the dashboard are unaffected — notification send is a best-effort side-channel, never in the critical path of the state machine.
 
@@ -241,9 +241,9 @@ Explicitly out of scope so the PR review stays tight:
 - **Interactive buttons in Discord (Approve/Deny).** Discord Components v2 (buttons, select menus, modal responses) would allow an operator to approve a permission request directly from the DM. That is a Maestro-style interaction and a **post-v2 Phase D+** feature — requires (a) a Discord slash-command or message-component framework wired into grove-bot, (b) an authenticated webhook endpoint on grove-bot that maps component-click → assignment action, (c) operator-identity verification per §6.5 (the DM recipient is trusted, but a button-click in a server channel is not), and (d) a second path into the state machine that duplicates the dashboard Approve/Deny path. Too much for F-11.
 - **Slash commands (`/grove`, `/block`, `/approve`).** Same class of scope as interactive buttons; same deferral. The existing `~/bin/discord` CLI handles the "notify from terminal" direction already; inbound slash-command ingestion is a new surface.
 - **SMS / email / OS desktop notification fallback.** §4.1 is Discord-only in v1. Every other channel is post-MVP and gates on the event-back-in automation pipeline (§4.1 rationale).
-- **Per-operator notification preferences UI.** Mute windows, quiet hours, per-priority mute, per-agent mute. All add UI, all add config state, all require a preferences persistence story. Operator can mute at the Discord level (server notification settings) until this lands post-Phase-D.
+- **Per-principal notification preferences UI.** Mute windows, quiet hours, per-priority mute, per-agent mute. All add UI, all add config state, all require a preferences persistence story. Principal can mute at the Discord level (server notification settings) until this lands post-Phase-D.
 - **Notification history view in the dashboard.** "Show me everything that was pushed today" — nice to have, but every notification-worthy event is already a row in `events` and renders on the F-7 drill-down. A dedicated history view is additive, not critical path.
-- **Multi-operator / team-wide fanout.** F-11 is single-operator — one `operatorDiscordId`. Tier 2's multi-operator fanout (where several operators need DMs for their own agents) is a §7.3 concern that grows out of operator identity becoming a first-class key on `tasks.operator_id`. Out of scope for v2.
+- **Multi-principal / team-wide fanout.** F-11 is single-principal — one `operatorDiscordId`. Tier 2's multi-principal fanout (where several operators need DMs for their own agents) is a §7.3 concern that grows out of principal identity becoming a first-class key on `tasks.operator_id`. Out of scope for v2.
 - **A v1-SOP-style `github.repos` config migration into `bot.yaml`.** Decision 5 uses the v1 SOP's config *if it is already present* and falls through cleanly when it is not. Migrating v1's channel-routing config into v2's `bot.yaml` is a separate chore with its own PR.
 - **Channel-post reaction handling.** "React with ✅ to acknowledge" is an interactive flow; see first bullet.
 - **Retry queue for failed sends.** Best-effort is the posture (Decision 9). A durable retry queue would need SQLite + a sweeper + a reconciliation story — deferred unless observable loss rate shows it's needed.
@@ -264,18 +264,18 @@ Explicitly out of scope so the PR review stays tight:
 
 - Interactive Discord components (buttons, slash commands, modal responses) — Decision 10.
 - Additional notification channels (desktop, SMS, email) — Decision 10.
-- Per-operator preferences UI — Decision 10.
-- Multi-operator fanout — Decision 10.
+- Per-principal preferences UI — Decision 10.
+- Multi-principal fanout — Decision 10.
 - Thread auto-creation in v2 — Decision 5 (inherits when v1 SOP ports in).
 - Durable retry queue + persistent coalescer — Decision 7 / Decision 9.
 - Notification history view in the dashboard — Decision 10.
-- **`operator.input.requested` notification wiring.** Decision 1's matrix (last row) and Decision 3's `[INPUT]`-prefix routing both contemplate this path, but the underlying event is not yet emitted by Mission Control v2 — no caller writes the `operator.input.requested` event type. The PR #23 sweep removed the unwired `maybeNotifyInputRequested` helper and `shouldNotifyInputRequested` policy stub to keep this PR free of dead exports (W2 in PR #23 review). When a follow-up feature emits the event, restore both functions and wire the call from the new emitter site; the routing decision (DM, `[INPUT]` tag, silent severity) is already pinned by Decision 3 and does not need re-deciding.
+- **`principal.input.requested` notification wiring.** Decision 1's matrix (last row) and Decision 3's `[INPUT]`-prefix routing both contemplate this path, but the underlying event is not yet emitted by Mission Control v2 — no caller writes the `principal.input.requested` event type. The PR #23 sweep removed the unwired `maybeNotifyInputRequested` helper and `shouldNotifyInputRequested` policy stub to keep this PR free of dead exports (W2 in PR #23 review). When a follow-up feature emits the event, restore both functions and wire the call from the new emitter site; the routing decision (DM, `[INPUT]` tag, silent severity) is already pinned by Decision 3 and does not need re-deciding.
 
 ## Acceptance criteria
 
 - [ ] `shouldNotify(transition, task, blockReason)` returns the exact `NotificationIntent | null` from Decision 1's matrix for every `(priority × to-state × block-reason.kind × risk)` cross.
 - [ ] `render(intent, ctx)` produces the single-event DM and channel payloads from Decision 8 with the field order and truncation pinned.
-- [ ] Multi-event coalescing triggers at N ≥ 2 within 3 s per operator and renders the Decision 7 summary payload.
+- [ ] Multi-event coalescing triggers at N ≥ 2 within 3 s per principal and renders the Decision 7 summary payload.
 - [ ] Per-assignment dedup suppresses duplicate notifications within 5 s.
 - [ ] Channel-post throttle of 1 per 10 s per destination channel collapses bursts into a single summary.
 - [ ] `grove.notifications.discord = false` or unset — zero Discord API calls, all other behaviour unchanged.

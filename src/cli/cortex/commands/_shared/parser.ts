@@ -322,6 +322,6 @@ function resolveFlagKind<S extends string>(
   // AND no-subcommand-and-unknown-flag). The legacy parsers in F-3/F-4
   // both said "unknown flag: X" in either case; the original cortex#66
   // implementation surfaced two different messages, which changed
-  // operator-visible output as a side effect of the refactor.
+  // principal-visible output as a side effect of the refactor.
   throw new UnknownFlagError(spec.cliName, flag);
 }

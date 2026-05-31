@@ -61,16 +61,16 @@ In `src/cli/cortex/commands/migrate-config.ts` + `migrate-config-lib.ts`:
 - [ ] Read legacy `agents[].presence.<discord|mattermost|slack>.roles[]` from input `cortex.yaml`
 - [ ] Unify per-user across the three adapter copies (§11.3 — 3 agents × 10 roles → 12 distinct principals + 3 synthetic anonymous + 1 template)
 - [ ] Emit top-level `policy.principals[]` per §6 algorithm — synthesise principal IDs from platform user IDs (or read from optional `--labels labels.yaml`)
-- [ ] Emit top-level `policy.roles[]` with namespaced capabilities (`keyword.{chat,async,team}`, `tool.<name>` via 243b's `invertDisallowedTools`, `operator`, `dispatch.<agent_id>`)
+- [ ] Emit top-level `policy.roles[]` with namespaced capabilities (`keyword.{chat,async,team}`, `tool.<name>` via 243b's `invertDisallowedTools`, `operator`, `dispatch.<agent_id>`) <!-- historical: `operator` here is the reserved policy-capability literal (migrate-config-policy.ts §5.5/§12.1); code identifier, not human-operator prose; not renamed by vocab-migration 0002 -->
 - [ ] Synthesise anonymous-per-instance principals for `defaultRole` semantic (§5.4)
-- [ ] Synthesise operator principal from `agent.operatorDiscordId/Mattermost/Slack` + DM `operatorRole` → `session_config.dm`
+- [ ] Synthesise principal from `agent.operatorDiscordId/Mattermost/Slack` + DM `operatorRole` → `session_config.dm`
 - [ ] Emit external-peer principals with `home_operator: "unknown"` + warning per §12.3
 - [ ] Cross-adapter role-conflict handling — warn + conservative union (§13 Q4)
-- [ ] **New `--check` mode** for the 242a operator pre-flight: fail when legacy role-resolver's principal set is not a subset of the new `policy.principals[]` lookup space (§9.1)
+- [ ] **New `--check` mode** for the 242a principal pre-flight: fail when legacy role-resolver's principal set is not a subset of the new `policy.principals[]` lookup space (§9.1)
 - [ ] Idempotent: running twice produces identical output
-- [ ] Operator-facing SOP at `docs/sop-migrate-config.md`
+- [ ] Principal-facing SOP at `docs/sop-migrate-config.md`
 - [ ] Sample inputs + expected outputs in `docs/migration-examples/`
-- [ ] Migration test against operator's actual `cortex.yaml` (snapshot test)
+- [ ] Migration test against principal's actual `cortex.yaml` (snapshot test)
 
 **Scope:** ~400 LOC + tests + docs. Single PR but the biggest of the five.
 
@@ -84,9 +84,9 @@ In `src/adapters/discord/index.ts`, `src/adapters/mattermost/index.ts`, `src/ada
 - [ ] **Resolution semantic:** most-restrictive intersection of legacy + new gates (§9.1 — security default, NOT new-system-wins)
 - [ ] Emit `system.access.disagreement` envelopes when legacy and new disagree (audit + dashboard visibility)
 - [ ] Add `system.access.disagreement` to `src/bus/system-events.ts` envelope builders
-- [ ] Add `cortex.yaml` flag `policy.parallel_mode_enabled` to gate the parallel-mode rollout per-deployment (default off until operator opts in)
+- [ ] Add `cortex.yaml` flag `policy.parallel_mode_enabled` to gate the parallel-mode rollout per-deployment (default off until principal opts in)
 - [ ] Integration tests pinning intersection semantics for: both-allow, both-deny, legacy-allow-new-deny, legacy-deny-new-allow
-- [ ] Operator pre-flight doc note: `migrate-config --check` MUST pass before enabling parallel mode
+- [ ] Principal pre-flight doc note: `migrate-config --check` MUST pass before enabling parallel mode
 
 **Scope:** ~250 LOC + tests. Single PR. Adapter changes touch 3 files but mechanically similar.
 
@@ -110,7 +110,7 @@ In `src/adapters/discord/index.ts`, `src/adapters/mattermost/index.ts`, `src/ada
 
 - [ ] All 5 sub-issues merged
 - [ ] `arc-manifest.yaml` at v2.0.0
-- [ ] Operator's `~/.config/cortex/cortex.yaml` migrated via `migrate-config` and running cleanly
+- [ ] Principal's `~/.config/cortex/cortex.yaml` migrated via `migrate-config` and running cleanly
 - [ ] `~/.config/cortex/cortex.work.yaml` rewritten by `migrate-config` to namespaced capabilities (`keyword.chat` etc.)
 - [ ] PolicyEngine is the sole authorization decision point — no role-resolver code anywhere
 - [ ] Phase E gaps explicitly tracked in their own follow-up issues (per-principal federated caps; Q2 `capabilities:` block)
@@ -119,7 +119,7 @@ In `src/adapters/discord/index.ts`, `src/adapters/mattermost/index.ts`, `src/ada
 
 - **Per-principal capability checks on federated dispatches.** Today's federation gate (Phase D) is network-level (`accept_subjects[]` + peer roster). Per-principal capability checking on inbound federated traffic is Phase E follow-up. The v2.0.0 schema doesn't block any approach.
 - **Q2 stack capability advertisement** (`capabilities:` block for the cloud network registry). Distinct namespace from `PolicyRole.capabilities[]` (auth vs. advertisement). Lands as Phase E additive work.
-- **Cloud-side network registry service** for cross-operator discovery. Phase E.
+- **Cloud-side network registry service** for cross-principal discovery. Phase E.
 
 ## Status tracking
 

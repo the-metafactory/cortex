@@ -46,7 +46,7 @@ import type { Agent, CortexConfig } from "../types/cortex-config";
 
 /**
  * Thrown when a trust reference cannot be resolved at registry construction.
- * The error carries the offending agent + the unresolved id so the operator
+ * The error carries the offending agent + the unresolved id so the principal
  * sees exactly which line of cortex.yaml is wrong.
  *
  * NOT used for plain `getById` misses — that's `AgentNotFoundError` with no

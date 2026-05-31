@@ -26,7 +26,7 @@ Concretely, cortex provides:
   schema validation, subject-pattern subscriptions, and reconnect-aware
   subscription lifecycle.
 - **Mission Control dashboard** — React surface at `grove.meta-factory.ai` for
-  task observation, dispatch, and operator input.
+  task observation, dispatch, and principal input.
 - **GitHub taps** — webhook proxy + in-bot handlers for issues/PRs/checks
   visibility into Discord threads.
 - **CC event pipeline** — Claude Code hook events flow through a relay (with
@@ -39,9 +39,9 @@ Concretely, cortex provides:
 Cortex is the destination of the `the-metafactory/grove-v2` → `cortex`
 migration. MIG-7 lands the entrypoint, agent registry, trust resolver, presence
 adapters, renderers, config migration helper, and arc-manifest cutover. The
-next operator-facing milestones:
+next principal-facing milestones:
 
-- **MIG-7.9** — operator config rename (`~/.config/grove/bot.yaml` →
+- **MIG-7.9** — principal config rename (`~/.config/grove/bot.yaml` →
   `~/.config/cortex/cortex.yaml`) via the `migrate-config` helper.
 - **MIG-7.13** — final integration test (all adapters connect, dashboard
   renders, NATS+myelin operational, fixture inbound round-trips).
@@ -97,7 +97,7 @@ cortex start --config ~/.config/cortex/cortex.yaml
 ```
 
 The Mission Control dashboard is at **https://grove.meta-factory.ai** (the
-domain name stays during the cortex cutover for operator continuity; it can be
+domain name stays during the cortex cutover for principal continuity; it can be
 renamed post-MIG-8).
 
 From Discord, mention any configured agent in a configured channel and cortex
@@ -121,17 +121,17 @@ CORTEX_CHANNEL=andreas CORTEX_AGENT_NAME=Andreas claude
 ## Bus Review Path
 
 Cortex owns the code-review bus consumer. Pilot or sage-shaped publishers send
-`tasks.code-review.*` envelopes to `local.{operator}.{stack}.tasks.code-review.*`;
+`tasks.code-review.*` envelopes to `local.{principal}.{stack}.tasks.code-review.*`;
 Cortex claims them through a JetStream durable, runs the configured review
 substrate, and emits `dispatch.task.started`, `review.verdict.*`, and
 `dispatch.task.completed` with `correlation_id` set to the request envelope id.
 
-Operator checks:
+Principal checks:
 
 ```bash
-arc nats provision-streams --network <operator> --agent <agent>
+arc nats provision-streams --network <principal> --agent <agent>
 nats stream info CODE_REVIEW
-nats consumer info CODE_REVIEW cortex-review-consumer-<operator>-<agent>
+nats consumer info CODE_REVIEW cortex-review-consumer-<principal>-<agent>
 ```
 
 Use `bus.review` in `cortex.yaml` to tune stream retention/storage and durable

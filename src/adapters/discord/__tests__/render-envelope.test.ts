@@ -4,7 +4,7 @@
  * Tests the bus-envelope rendering side of the Discord adapter (the
  * `surfaceConfig.render()` path). We pre-inject a fake `client` + a fake
  * `connectionHealth` to avoid spinning up a real Discord gateway —
- * matches the pattern already used in `operator-dm-buffer.test.ts`.
+ * matches the pattern already used in `principal-dm-buffer.test.ts`.
  *
  * Covers:
  *   - surfaceConfig: id, subjects, filter, render are all wired correctly
@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// Fakes — mirror the operator-dm-buffer.test.ts shape
+// Fakes — mirror the principal-dm-buffer.test.ts shape
 // ---------------------------------------------------------------------------
 
 interface FakeChannel {

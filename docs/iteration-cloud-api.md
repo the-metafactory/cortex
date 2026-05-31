@@ -6,7 +6,7 @@
 
 This plan captures the work for cloud API features. Iterations are logical vehicles, not timeboxes — this ships when the work is done.
 
-**Mission:** Multiple bot operators share a single dashboard without tunnels. Local-first mode stays as default zero-config option. Cloud mode is opt-in for multi-operator networks.
+**Mission:** Multiple bot principals share a single dashboard without tunnels. Local-first mode stays as default zero-config option. Cloud mode is opt-in for multi-principal networks.
 **Scope:** Grove cloud Worker, D1 event store, bot cloud publisher, API key management, dashboard mode detection, GitHub webhook migration, automated setup CLI
 **Design Spec:** `docs/design-cloud-api.md`
 **Project Brief:** None (tracked via GitHub issue #65)
@@ -298,7 +298,7 @@ This plan captures the work for cloud API features. Iterations are logical vehic
 
 - [ ] Create `src/cli/cloud-setup.ts`
 - [ ] Command: `grove-bot cloud setup`
-- [ ] Prompt for operator ID (e.g., "andreas")
+- [ ] Prompt for principal ID (e.g., "andreas")
 - [ ] Prompt for bot name (e.g., "Luna")
 - [ ] Prompt for admin secret (from Cloudflare Workers)
 - [ ] Prompt for Worker endpoint URL
@@ -322,7 +322,7 @@ This plan captures the work for cloud API features. Iterations are logical vehic
 ### Success Output
 
 - [ ] Print success message with masked key
-- [ ] Print endpoint and operator ID
+- [ ] Print endpoint and principal ID
 - [ ] Print next steps (start bot, deploy dashboard)
 
 ### Acceptance
@@ -381,7 +381,7 @@ G-405 (Cloud Setup CLI)
 ## Success Metrics
 
 - **Zero-config local mode works:** Bot starts, dashboard loads, no cloud needed
-- **Multi-operator cloud mode works:** Andreas + JC bots POST to one Worker, dashboard shows both
+- **Multi-principal cloud mode works:** Andreas + JC bots POST to one Worker, dashboard shows both
 - **No tunnel infrastructure:** GitHub webhooks point to Worker, not per-bot tunnels
 - **Event deduplication eliminated:** One D1 source, no browser-side merge logic
 - **Setup time < 2 minutes:** `grove-bot cloud setup` gets you from zero to cloud-ready
@@ -393,7 +393,7 @@ G-405 (Cloud Setup CLI)
 - [ ] Delete Cloudflare Tunnels from CF dashboard (grove-api, grove-api-jc) to stop incurring cost
 - [ ] Remove tunnel DNS records (grove-api.meta-factory.ai, grove-api-jc.meta-factory.ai)
 - [ ] Add custom domain to Worker (grove-api.meta-factory.ai → Worker route) if desired
-- [ ] Remove `cloudflared` from operator machines (optional)
+- [ ] Remove `cloudflared` from principal machines (optional)
 
 ---
 
@@ -401,7 +401,7 @@ G-405 (Cloud Setup CLI)
 
 - [ ] Admin runs `grove-bot cloud setup` (deploys Worker + D1)
 - [ ] Admin runs `grove-bot cloud add-operator` for each operator
-- [ ] Each operator adds `mode: cloud` + key to bot.yaml
+- [ ] Each principal adds `mode: cloud` + key to bot.yaml
 - [ ] Verify: dashboard shows both agents
 - [ ] Move GitHub webhooks to Worker endpoint
 - [ ] Delete old CF tunnels to save cost

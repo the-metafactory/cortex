@@ -113,7 +113,7 @@ Use this shape for: any non-Claude-Code substrate, anything that needs a separat
 
 **Cursor-substrate note (cortex#70):** the Cursor CLI (`cursor-agent`) is a one-shot binary with no `--system-prompt` flag and no daemon mode. Cursor-substrate bots therefore stage the persona per dispatch by writing the persona content into `<workdir>/.cursor/rules/persona.mdc` before each `cursor-agent -p --force --output-format stream-json` invocation. The standalone daemon is the long-lived bus subscriber; each claimed envelope spawns a fresh `cursor-agent` process in a workdir whose lifecycle the daemon owns. Detailed treatment in `docs/design-cursor-substrate-bot.md`.
 
-**Platform note (process supervision):** the sequence above shows the macOS path (`launchctl` + `~/Library/LaunchAgents/`). On Linux the equivalent is systemd user units (`systemctl --user` + `~/.config/systemd/user/`). The bot's `arc-manifest.yaml` declares OS-specific `provides` entries (`provides.plist` for darwin, `provides.systemd-unit` for linux), and arc renders + loads the appropriate one. The launchd shape is documented here as the operator's day-1 target since cortex's MIG-7 cutover ships only macOS plists; systemd ships in a follow-on milestone once a Linux host enters the deployment topology. The bus contracts and fragment files are platform-agnostic; only the daemon supervision layer differs.
+**Platform note (process supervision):** the sequence above shows the macOS path (`launchctl` + `~/Library/LaunchAgents/`). On Linux the equivalent is systemd user units (`systemctl --user` + `~/.config/systemd/user/`). The bot's `arc-manifest.yaml` declares OS-specific `provides` entries (`provides.plist` for darwin, `provides.systemd-unit` for linux), and arc renders + loads the appropriate one. The launchd shape is documented here as the principal's day-1 target since cortex's MIG-7 cutover ships only macOS plists; systemd ships in a follow-on milestone once a Linux host enters the deployment topology. The bus contracts and fragment files are platform-agnostic; only the daemon supervision layer differs.
 
 ### 3.3 Shape selection
 
@@ -158,7 +158,7 @@ identity:
 presence:
   discord:
     enabled: true
-    # token + guildId resolved at install time from operator env or vault
+    # token + guildId resolved at install time from principal env or vault
 
 provides:
   files:
@@ -211,17 +211,17 @@ presence:
   discord:
     enabled: true
     token: ${FOO_DISCORD_TOKEN}    # env-resolved at cortex load
-    guildId: "1487..."             # operator-provided at install
+    guildId: "1487..."             # principal-provided at install
 ```
 
 Cortex's `common/config/loader.ts` (extended per §6.1) merges all `agents.d/*.yaml` fragments into `CortexConfig.agents[]` on every reload. Order is filename-alphabetical (stable).
 
 **Merge conflict rules — explicit:**
 
-| Collision case | Resolution | Operator-visible signal |
+| Collision case | Resolution | Principal-visible signal |
 |---|---|---|
 | Same `id` appears in two fragments under `agents.d/` | **Load-time error.** Cortex refuses to start (or refuses the reload — old config retained). | Error logged with both filenames + the conflicting `id`. |
-| Same `id` appears in `cortex.yaml` inline `agents[]` AND a fragment | **Inline wins** (operator override semantics). Fragment is shadowed. | Warning logged at load time naming the inline source as winner and the shadowed fragment file. Useful during migration when an operator pins a hand-tuned identity over a stale arc-installed one. |
+| Same `id` appears in `cortex.yaml` inline `agents[]` AND a fragment | **Inline wins** (principal override semantics). Fragment is shadowed. | Warning logged at load time naming the inline source as winner and the shadowed fragment file. Useful during migration when an principal pins a hand-tuned identity over a stale arc-installed one. |
 | Trust references an `id` that doesn't resolve in the merged registry | **Load-time error** per `AgentRegistry` §9.3 rule 1 (see registry.ts header). Cortex refuses to start until trust resolves. See §9 for install-order implications. |
 
 **`CortexConfig.agents[]` semantics change** (back-compat note): today `agents[]` is populated solely from `cortex.yaml`. After §6.1 lands, `agents[]` is the *merge* of `cortex.yaml`'s inline `agents[]` and all fragments under `agents.d/` per the rules above. This is additive; existing deployments using only inline `agents[]` see no behaviour change.
@@ -239,7 +239,7 @@ These are the prerequisites for `arc install <bot>` to work end-to-end. None of 
 - Loader walks `~/.config/cortex/agents.d/*.yaml` after parsing `cortex.yaml`, merges into `agents[]`.
 - Watcher watches the directory; emits the same reload event as `cortex.yaml` does today.
 - New CLI: `cortex agents reload` — manual trigger for operators / lifecycle scripts. Calls into the same reload code path. SIGHUP also routes here.
-- Fragment schema = subset of `CortexConfigAgent` (no `operator:` block; cortex.yaml stays the source of truth for operator identity).
+- Fragment schema = subset of `CortexConfigAgent` (no `principal:` block; cortex.yaml stays the source of truth for principal identity).
 
 Estimated ~150 LOC + tests. Lands as a `feat(common/config)` PR.
 
@@ -263,7 +263,7 @@ export class CortexHostAdapter implements HostAdapter {
     skillsDir:    "",                                  // n/a — cortex isn't a skills host
     agentsDir:    "~/.config/cortex/agents.d/",        // arc#117 HostPaths field — identity fragments
     binDir:       "~/bin/",                            // arc#117 HostPaths field — standalone bot binaries
-    settingsPath: "~/.config/cortex/cortex.yaml",      // arc#117 HostPaths field — operator-edited core config
+    settingsPath: "~/.config/cortex/cortex.yaml",      // arc#117 HostPaths field — principal-edited core config
     hooksFormat:  "none",                              // arc#117 HostPaths field — no claude-code-style hooks
     // Cortex-internal extensions (not in arc#117 HostPaths today):
     personasDir:  "~/.config/cortex/personas/",        // persona markdown files
@@ -332,15 +332,15 @@ This matters because (a) arc already owns nsc and the `$SYS` account boundary, s
 
 **Surface:**
 
-- `cortex creds issue <agent-id>` mints a NATS user via `arc nats add-bot`. arc writes the `.creds` file to `~/.config/nats/<agent-id>.creds` (mode 600) and returns the path, JWT body, and durable U-prefixed pubkey. cortex surfaces the path + pubkey to the operator. Per-agent user — each agent gets its own NATS identity, separate keypair, separate creds file. Revocation is per-agent.
-- `cortex creds revoke <agent-id>` shells out to `arc nats remove-bot … --delete-creds`. arc revokes the user JWT server-side (adds the pubkey to the account revocation map and pushes), then deletes the local file. cortex surfaces the revoked pubkey + `credsFileDeleted` outcome. `USER_NOT_FOUND` is treated as idempotent (exit 0) — the agent is already gone server-side. `PUSH_FAILED` is surfaced with a loud WARNING: the old creds remain valid on the bus until the operator retries.
+- `cortex creds issue <agent-id>` mints a NATS user via `arc nats add-bot`. arc writes the `.creds` file to `~/.config/nats/<agent-id>.creds` (mode 600) and returns the path, JWT body, and durable U-prefixed pubkey. cortex surfaces the path + pubkey to the principal. Per-agent user — each agent gets its own NATS identity, separate keypair, separate creds file. Revocation is per-agent.
+- `cortex creds revoke <agent-id>` shells out to `arc nats remove-bot … --delete-creds`. arc revokes the user JWT server-side (adds the pubkey to the account revocation map and pushes), then deletes the local file. cortex surfaces the revoked pubkey + `credsFileDeleted` outcome. `USER_NOT_FOUND` is treated as idempotent (exit 0) — the agent is already gone server-side. `PUSH_FAILED` is surfaced with a loud WARNING: the old creds remain valid on the bus until the principal retries.
 - `cortex creds rotate <agent-id>` shells out to `arc nats reissue-bot`. arc atomically revokes the old pubkey, mints a new keypair, writes a new creds file, returns both `newPubKey` (the post-rotation identifier the bot should bind to) and `revokedPubKey` (the now-dead identifier).
 - `cortex creds list` enumerates local `.creds` files under `~/.config/nats/creds/` (default; override with `--creds-dir`). No arc call; filesystem-only. Filenames whose stem fails `/^[a-z0-9-]+$/` are skipped with a warning; symlinks are skipped (lstatSync).
 - `cortex.yaml` `nats.accountSigningKeyPath` survives the cortex#79 cut for `TrustResolver`'s operator-signature verifier (cortex#76). It is no longer required for `cortex creds *` — arc owns the nsc-side signing key, not cortex.
 - Lifecycle integration: `arc install <bot>`'s `issue-nats-creds.sh` invokes `cortex creds issue <bot.identity.id>`. cortex shells out to `arc nats add-bot`; the script fails (and arc rolls back the install) if (a) arc binary missing on PATH; (b) `arc.nats.v1` envelope returns `ok:false` with any code other than the revoke-only-idempotent `USER_NOT_FOUND`; (c) the agent fragment isn't yet visible to the cortex registry. The chicken-and-egg sequencing — drop fragment → signal reload → issue creds — is unchanged.
 - Required arc version: `>= 0.25.0` (the release that ships the stable `arc.nats.v1` contract per arc#134). Pinned in cortex's `arc-manifest.yaml` under `dependencies`.
 
-**Error-code taxonomy** (closed set, surfaced to operator via `code` + `message`): `NSC_NOT_INSTALLED`, `USER_NOT_FOUND`, `ACCOUNT_NOT_FOUND`, `ALREADY_EXISTS`, `PUSH_FAILED`, `REVOKE_FAILED`, `VALIDATION_ERROR`, `INVALID_USER_KEY`, `ROLLBACK_FAILED`, `UNKNOWN`. Definitions live in arc's `docs/integrations/cortex-creds.md` — this is arc's authoritative contract, not cortex's.
+**Error-code taxonomy** (closed set, surfaced to principal via `code` + `message`): `NSC_NOT_INSTALLED`, `USER_NOT_FOUND`, `ACCOUNT_NOT_FOUND`, `ALREADY_EXISTS`, `PUSH_FAILED`, `REVOKE_FAILED`, `VALIDATION_ERROR`, `INVALID_USER_KEY`, `ROLLBACK_FAILED`, `UNKNOWN`. Definitions live in arc's `docs/integrations/cortex-creds.md` — this is arc's authoritative contract, not cortex's.
 
 ---
 
@@ -424,7 +424,7 @@ identity:
 # no presence: block — Scout speaks bus only
 ```
 
-Operator interacts with Scout indirectly: another agent (Luna) dispatches a research task on the bus, Scout claims, executes, publishes results back. The dashboard renders Scout's lifecycle envelopes; humans don't chat with Scout directly. Even though Scout has no chat surface, it still declares `roles: [agent-restricted]` — per §4 the role-bundle's intersection with `runtime.capabilities` is what cortex actually dispatches against, so an empty roles list would leave Scout unable to claim any task. Roles are an authorization axis (what cortex permits), separate from presence (where the agent shows up).
+Principal interacts with Scout indirectly: another agent (Luna) dispatches a research task on the bus, Scout claims, executes, publishes results back. The dashboard renders Scout's lifecycle envelopes; humans don't chat with Scout directly. Even though Scout has no chat surface, it still declares `roles: [agent-restricted]` — per §4 the role-bundle's intersection with `runtime.capabilities` is what cortex actually dispatches against, so an empty roles list would leave Scout unable to claim any task. Roles are an authorization axis (what cortex permits), separate from presence (where the agent shows up).
 
 ---
 
@@ -433,7 +433,7 @@ Operator interacts with Scout indirectly: another agent (Luna) dispatches a rese
 ### 8.1 Install (in-process)
 
 ```
-operator: arc install foo-review-bot
+principal: arc install foo-review-bot
 arc:      preinstall: scripts/check-cortex-version.sh        [verify cortex target compat via CortexHostAdapter.detect()]
 arc:      drop persona.md   → ~/.config/cortex/personas/foo.md
 arc:      drop agent.yaml   → ~/.config/cortex/agents.d/foo.yaml
@@ -447,13 +447,13 @@ arc:      postinstall: scripts/issue-nats-creds.sh
             → daemon scopes the cred to foo's runtime.capabilities (which it
               just loaded from the fragment)
             → ~/.config/nats/creds/foo.creds written
-operator: foo appears in dashboard, can take tasks
+principal: foo appears in dashboard, can take tasks
 ```
 
 ### 8.2 Install (standalone)
 
 ```
-operator: arc install codex-review-bot
+principal: arc install codex-review-bot
 arc:      preinstall: scripts/check-cortex-version.sh         [via CortexHostAdapter.detect()]
 arc:      drop persona, agent.yaml, binary (~/bin/codex-rev-bot)
 arc:      drop plist → ~/Library/LaunchAgents/ai.meta-factory.codex-rev.plist
@@ -466,7 +466,7 @@ arc:      postinstall: scripts/launchctl-load.sh              [start daemon LAST
             → daemon starts
             → connects NATS with codex-rev.creds
             → publishes capabilities to local.{org}.agents.capabilities.codex-rev
-operator: codex-rev appears in dashboard alongside cortex-hosted agents
+principal: codex-rev appears in dashboard alongside cortex-hosted agents
 ```
 
 **Ordering invariant across both shapes (matches §6.2 `installArtifact` and §6.3 chicken-and-egg sequencing):** drop fragment → signal reload → issue creds → (standalone only) start daemon. The daemon needs the fragment loaded before it can scope the credential; the daemon (standalone shape) needs the credential before it can connect.
@@ -476,7 +476,7 @@ operator: codex-rev appears in dashboard alongside cortex-hosted agents
 **Ordering rule: revoke credentials BEFORE removing files.** Server-side revocation is the only authoritative invalidation. If file removal succeeded but server revocation failed (network blip, daemon crash mid-uninstall), the credential would remain valid on the NATS server with no local management surface to find it. Reversing the order is safer — a server-revoked credential with a still-on-disk creds file is harmless (next connect attempt fails authentication and the file is removed at the end of uninstall anyway); the inverse is a silent phantom.
 
 ```
-operator: arc uninstall foo-review-bot
+principal: arc uninstall foo-review-bot
 arc:      preuninstall: scripts/drain-tasks.sh        [OPEN — see §10]
             → publish local.{org}.agents.foo.draining
             → wait for in-flight dispatch.task.completed (with timeout)
@@ -486,18 +486,18 @@ arc:      preuninstall: cortex creds revoke foo
             → server-side: NATS user revoked via JWT account update
             → local: ~/.config/nats/creds/foo.creds deleted
             → revocation MUST succeed; if not, arc aborts uninstall and
-              leaves the package in place so operator can investigate
+              leaves the package in place so principal can investigate
 arc:      remove persona.md, agent.yaml, plist (if standalone), binary
 arc:      postuninstall: signal cortex reload (now sees no foo fragment)
             → AgentRegistry rebuilt without foo
             → any peers' trust references to foo are now unresolvable;
-              cortex refuses the reload per §9 (operator either: 1) edits
+              cortex refuses the reload per §9 (principal either: 1) edits
               dependent agents' trust lists, or 2) uninstalls them too in
               an arc transaction). Until resolved, the prior cortex state
               remains live.
 ```
 
-**Abort-on-revoke-failure rationale:** arc rolls back on a failed `creds revoke` rather than continuing. The alternative (continue, log) leaves the operator with a phantom credential they cannot easily discover. `cortex creds list` makes orphans discoverable retroactively, but prevention is cleaner than detection.
+**Abort-on-revoke-failure rationale:** arc rolls back on a failed `creds revoke` rather than continuing. The alternative (continue, log) leaves the principal with a phantom credential they cannot easily discover. `cortex creds list` makes orphans discoverable retroactively, but prevention is cleaner than detection.
 
 ---
 
@@ -513,7 +513,7 @@ Bot fragments declare `trust: [other-agent-ids]`. The trust list is propagated t
 2. **Use an arc transaction** — `arc install foo-A-bot foo-B-bot` in one command. Arc renders all fragments into a staging area, lets cortex validate the merged registry, then commits both or rolls back both. (Requires arc-side transaction support — listed in §10 as open Q2.)
 3. **Soft-trust opt-in (proposed but not adopted in v1)** — fragment field `trust: [{id: b, ifAvailable: true}]` lets A install before B, with B's binding picked up at the next reload after B exists. Cleaner for evolving deployments but weakens the registry's fail-fast invariant. **§10 Q7 captures this as an explicit future-iteration question.**
 
-The strict contract is the right v1 default because it surfaces config errors at install time (operator-fixable) rather than at runtime (silent miss). Soft-trust can be added later without breaking strict-trust deployments.
+The strict contract is the right v1 default because it surfaces config errors at install time (principal-fixable) rather than at runtime (silent miss). Soft-trust can be added later without breaking strict-trust deployments.
 
 **`AgentRegistry` rule 2** (self-trust silently allowed but filtered from `getTrustedPeers()`) and **rule 3** (registry is immutable per construction) both carry over unchanged for arc-installed bots.
 
@@ -526,7 +526,7 @@ The strict contract is the right v1 default because it surfaces config errors at
 | # | Decision | Source |
 |---|----------|--------|
 | D1 | **Drain-on-uninstall:** in-process bots no drain (cortex's dispatcher nak's on agent removal anyway); standalone bots emit `agents.{id}.draining` and wait for in-flight `dispatch.task.completed` with a 30s default timeout. Per-bot override via `lifecycle.drainTimeout` in the arc-manifest. | JC sign-off (Q4 — "no strong feelings", defaults proposed and accepted) |
-| D2 | **NATS creds rotation cadence:** operator policy by default — `cortex creds rotate --all` on operator schedule. Per-bot opt-in via fragment field `runtime.credsRotation: 90d` (or other ISO 8601 duration). | Inferred from per-agent-keys decision (Q2) |
+| D2 | **NATS creds rotation cadence:** principal policy by default — `cortex creds rotate --all` on principal schedule. Per-bot opt-in via fragment field `runtime.credsRotation: 90d` (or other ISO 8601 duration). | Inferred from per-agent-keys decision (Q2) |
 | D3 | **NATS server URL discovery:** creds file carries the URL by NATS convention. Bot daemon reads it from creds; no separate config field needed. | NATS standard, low-risk |
 | D4 | **Dashboard rendering:** badge per `runtime.mode` (in-process / standalone) and per `runtime.substrate` (claude-code / codex / pi-dev / custom). | Q3 answer |
 | D5 | **Persona format authority:** bot package is source of truth (Q1). Cortex documents the persona schema in `docs/persona-format.md` (separate forthcoming spec); bot authors test against that. Version-skew handled by cortex publishing schema with semver; bot package declares supported range. | Q1 sign-off |
@@ -560,7 +560,7 @@ The strict contract is the right v1 default because it surfaces config errors at
 ### Phase B — First bot package + lifecycle scripts
 
 - [ ] **B.1** `claude-review-bot` repo with arc-manifest (`targets: [cortex]`) + persona + lifecycle scripts (in-process pattern)
-- [ ] **B.2** Operator runbook: `docs/operator-installing-bots.md`
+- [ ] **B.2** Principal runbook: `docs/principal-installing-bots.md`
 
 ### Phase C — First standalone bot
 
@@ -568,7 +568,7 @@ The strict contract is the right v1 default because it surfaces config errors at
 - [ ] **C.2** Verify dashboard renders in-process vs standalone correctly
 - [ ] **C.3** `linux-systemd` HostAdapter in arc (once first Linux host enters deployment topology — arc#117 Phase 3 timing)
 
-### Phase D — Operator polish
+### Phase D — Principal polish
 
 - [ ] **D.1** Drain-on-uninstall semantics + timeout config (D1)
 - [ ] **D.2** Creds rotation scheduler (D2)
@@ -580,8 +580,8 @@ The strict contract is the right v1 default because it surfaces config errors at
 - **Cross-host bot installs** — assumes all bots install on the same host as cortex. Distributed deployments (cortex on host X, bot on host Y, shared NATS leaf) deferred to a separate "federated agents" design.
 - **Hot-swap substrate** — a bot can't switch from `claude-code` to `codex` without a reinstall. Acceptable for v1.
 - **Live persona reload** — persona changes require either a `arc upgrade <bot>` or a manual `cortex agents reload`. Live persona watch is a future enhancement.
-- **Permission/role-based install authority** — assumes operator has unilateral install authority. Multi-operator orgs with install policies deferred.
-- **Mixed-mode (same agent identity on both in-process AND standalone substrates simultaneously)** — possible per pi.dev design §8.2, but install machinery treats each as a separate bot package (`claude-rev` + `codex-rev` ids). Re-using a single identity across substrates is allowed via fragment override but considered an operator-side advanced pattern; not a primary install flow.
+- **Permission/role-based install authority** — assumes principal has unilateral install authority. Multi-principal orgs with install policies deferred.
+- **Mixed-mode (same agent identity on both in-process AND standalone substrates simultaneously)** — possible per pi.dev design §8.2, but install machinery treats each as a separate bot package (`claude-rev` + `codex-rev` ids). Re-using a single identity across substrates is allowed via fragment override but considered an principal-side advanced pattern; not a primary install flow.
 
 ---
 

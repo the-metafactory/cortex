@@ -15,7 +15,7 @@
  * lock-step.
  *
  * Sign is intentionally absent: cortex never signs registry assertions.
- * Only operator-side registration (separate concern, lives elsewhere
+ * Only principal-side registration (separate concern, lives elsewhere
  * in the federation tooling) signs.
  */
 

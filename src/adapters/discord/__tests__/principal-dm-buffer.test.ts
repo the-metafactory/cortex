@@ -1,15 +1,15 @@
 /**
- * Tests for the operator-DM buffer in DiscordAdapter.
+ * Tests for the principal-DM buffer in DiscordAdapter.
  *
  * Covers:
- *   - notifyOperator buffers when disconnected at check time
- *   - notifyOperator does NOT buffer permanently-undeliverable errors
+ *   - notifyPrincipal buffers when disconnected at check time
+ *   - notifyPrincipal does NOT buffer permanently-undeliverable errors
  *     (DiscordAPIError 50007 "cannot DM this user", 4xx, etc.)
- *   - notifyOperator buffers transient errors that surface after a TOCTOU
+ *   - notifyPrincipal buffers transient errors that surface after a TOCTOU
  *     disconnect mid-call
- *   - bufferOperatorDM evicts expired entries at write time (TTL parity
+ *   - bufferPrincipalDM evicts expired entries at write time (TTL parity
  *     with cleanExpiredPending for pendingResults)
- *   - bufferOperatorDM caps at PENDING_OPERATOR_MAX (drops oldest)
+ *   - bufferPrincipalDM caps at PENDING_PRINCIPAL_MAX (drops oldest)
  *   - drainPendingOperatorDMs delivers fresh entries and drops expired ones
  *   - drainPendingOperatorDMs surfaces a users.fetch failure without losing
  *     the buffer entries (they remain dropped — fetch failure is permanent
@@ -75,7 +75,7 @@ function makeAdapter(opts: {
   };
   const infra: DiscordAdapterInfra = {
     instanceId: "discord-test",
-    principal: { discordId: "operator-123" },
+    principal: { discordId: "principal-123" },
   };
   const adapter = new DiscordAdapter(agent, presence, infra);
 
@@ -105,22 +105,22 @@ function makeAdapter(opts: {
 }
 
 function getBuffer(adapter: DiscordAdapter): { text: string; createdAt: number }[] {
-  return (adapter as unknown as { pendingOperatorDMs: { text: string; createdAt: number }[] }).pendingOperatorDMs;
+  return (adapter as unknown as { pendingPrincipalDMs: { text: string; createdAt: number }[] }).pendingPrincipalDMs;
 }
 function setBuffer(adapter: DiscordAdapter, items: { text: string; createdAt: number }[]): void {
-  (adapter as unknown as { pendingOperatorDMs: { text: string; createdAt: number }[] }).pendingOperatorDMs = items;
+  (adapter as unknown as { pendingPrincipalDMs: { text: string; createdAt: number }[] }).pendingPrincipalDMs = items;
 }
 async function callDrain(adapter: DiscordAdapter): Promise<void> {
   await (adapter as unknown as { drainPendingOperatorDMs: () => Promise<void> }).drainPendingOperatorDMs();
 }
 
 const PENDING_TTL_MS = 10 * 60 * 1000;
-const PENDING_OPERATOR_MAX = 50;
+const PENDING_PRINCIPAL_MAX = 50;
 
-describe("notifyOperator + buffer write semantics", () => {
+describe("notifyPrincipal + buffer write semantics", () => {
   test("buffers when connectionHealth is disconnected at check time", async () => {
     const { adapter, sends } = makeAdapter({ connected: false });
-    await adapter.notifyOperator("hello");
+    await adapter.notifyPrincipal("hello");
     expect(sends).toEqual([]);
     expect(getBuffer(adapter).length).toBe(1);
     expect(getBuffer(adapter)[0]?.text).toBe("hello");
@@ -128,7 +128,7 @@ describe("notifyOperator + buffer write semantics", () => {
 
   test("delivers immediately when connected", async () => {
     const { adapter, sends } = makeAdapter({ connected: true });
-    await adapter.notifyOperator("hi");
+    await adapter.notifyPrincipal("hi");
     expect(sends).toEqual(["hi"]);
     expect(getBuffer(adapter).length).toBe(0);
   });
@@ -149,10 +149,10 @@ describe("notifyOperator + buffer write semantics", () => {
       },
     });
     const { adapter, sends } = makeAdapter({ connected: true, fetchUser });
-    await adapter.notifyOperator("you have a new task");
+    await adapter.notifyPrincipal("you have a new task");
     expect(sends).toEqual([]);
     // Critical: nothing should have been buffered. Buffering this would leak
-    // a forever-failing entry that crowds out genuine operator messages.
+    // a forever-failing entry that crowds out genuine principal messages.
     expect(getBuffer(adapter).length).toBe(0);
   });
 
@@ -165,7 +165,7 @@ describe("notifyOperator + buffer write semantics", () => {
       },
     });
     const { adapter } = makeAdapter({ connected: true, fetchUser });
-    await adapter.notifyOperator("oops");
+    await adapter.notifyPrincipal("oops");
     expect(getBuffer(adapter).length).toBe(0);
   });
 
@@ -187,7 +187,7 @@ describe("notifyOperator + buffer write semantics", () => {
     };
     const ctx = makeAdapter({ connected: true, fetchUser });
     healthRef = ctx.health;
-    await ctx.adapter.notifyOperator("retry me later");
+    await ctx.adapter.notifyPrincipal("retry me later");
     expect(getBuffer(ctx.adapter).length).toBe(1);
     expect(getBuffer(ctx.adapter)[0]?.text).toBe("retry me later");
   });
@@ -200,7 +200,7 @@ describe("notifyOperator + buffer write semantics", () => {
       throw err;
     };
     const { adapter } = makeAdapter({ connected: true, fetchUser });
-    await adapter.notifyOperator("flaky");
+    await adapter.notifyPrincipal("flaky");
     // Connection is healthy — we log+drop rather than buffer, otherwise a
     // genuinely-flaky-but-online discord would fill the buffer indefinitely.
     expect(getBuffer(adapter).length).toBe(0);
@@ -208,19 +208,19 @@ describe("notifyOperator + buffer write semantics", () => {
 });
 
 describe("buffer overflow + TTL eviction at write time", () => {
-  test("buffer overflow: shifts oldest at PENDING_OPERATOR_MAX", async () => {
+  test("buffer overflow: shifts oldest at PENDING_PRINCIPAL_MAX", async () => {
     const { adapter } = makeAdapter({ connected: false });
-    for (let i = 0; i < PENDING_OPERATOR_MAX + 5; i++) {
-      await adapter.notifyOperator(`msg-${i}`);
+    for (let i = 0; i < PENDING_PRINCIPAL_MAX + 5; i++) {
+      await adapter.notifyPrincipal(`msg-${i}`);
     }
     const buf = getBuffer(adapter);
-    expect(buf.length).toBe(PENDING_OPERATOR_MAX);
+    expect(buf.length).toBe(PENDING_PRINCIPAL_MAX);
     // Oldest dropped — first kept entry is msg-5.
     expect(buf[0]?.text).toBe("msg-5");
-    expect(buf[buf.length - 1]?.text).toBe(`msg-${PENDING_OPERATOR_MAX + 4}`);
+    expect(buf[buf.length - 1]?.text).toBe(`msg-${PENDING_PRINCIPAL_MAX + 4}`);
   });
 
-  test("TTL: bufferOperatorDM evicts expired entries at write time (TTL parity with pendingResults)", async () => {
+  test("TTL: bufferPrincipalDM evicts expired entries at write time (TTL parity with pendingResults)", async () => {
     const { adapter } = makeAdapter({ connected: false });
     // Pre-populate with one expired and one fresh entry, then trigger a write.
     const now = Date.now();
@@ -228,14 +228,14 @@ describe("buffer overflow + TTL eviction at write time", () => {
       { text: "stale", createdAt: now - PENDING_TTL_MS - 1_000 },
       { text: "fresh", createdAt: now - 5_000 },
     ]);
-    await adapter.notifyOperator("new");
+    await adapter.notifyPrincipal("new");
     const buf = getBuffer(adapter);
     expect(buf.map((e) => e.text)).toEqual(["fresh", "new"]);
   });
 });
 
 describe("drainPendingOperatorDMs", () => {
-  test("delivers fresh entries to the operator", async () => {
+  test("delivers fresh entries to the principal", async () => {
     const { adapter, sends } = makeAdapter({ connected: true });
     setBuffer(adapter, [
       { text: "first", createdAt: Date.now() - 1_000 },
@@ -263,14 +263,14 @@ describe("drainPendingOperatorDMs", () => {
     const errorMessages: string[] = [];
     console.error = (...args: unknown[]) => { errorMessages.push(args.join(" ")); };
     const fetchUser = async (): Promise<FakeUser> => {
-      throw new Error("operator-fetch-failed");
+      throw new Error("principal-fetch-failed");
     };
     const { adapter, sends } = makeAdapter({ connected: true, fetchUser });
     setBuffer(adapter, [{ text: "queued", createdAt: Date.now() }]);
     await callDrain(adapter);
     expect(sends).toEqual([]);
     // The failure must be reported via console.error so it shows up in logs.
-    expect(errorMessages.some((m) => m.includes("operator-fetch-failed"))).toBe(true);
+    expect(errorMessages.some((m) => m.includes("principal-fetch-failed"))).toBe(true);
     // Buffer was already cleared at the start of drain (entries are taken into
     // a local list); fetch failure does not preserve them. Document the choice.
     expect(getBuffer(adapter).length).toBe(0);

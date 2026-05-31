@@ -12,7 +12,7 @@
  * G-1111 §4.6 fail-safe rule's pairing requirement alongside
  * `PagerDutyRenderer` — operationally distinct platform classes both
  * subscribed to `local.{principal}.system.>` so a degraded NATS subscription
- * for one doesn't blind the operator on the other.
+ * for one doesn't blind the principal on the other.
  *
  * Implementation: a bounded ring buffer over the last N envelopes the
  * router delivered. Tests probe `getRecent()` to assert the renderer is
@@ -55,7 +55,7 @@ export class DashboardRenderer implements Renderer {
     this.bufferSize = options.bufferSize ?? 1000;
     // IAW Phase A.4 — capture the optional visibility block. Forwarded to
     // the surface-router via `surfaceConfig` so router-side filtering
-    // honours operator-declared constraints. Unset means "no filter".
+    // honours principal-declared constraints. Unset means "no filter".
     this.visibility = config.visibility;
   }
 
@@ -80,7 +80,7 @@ export class DashboardRenderer implements Renderer {
     return {
       id: this.id,
       subjects: this.subjects,
-      // IAW Phase A.4 — only set the visibility field when the operator
+      // IAW Phase A.4 — only set the visibility field when the principal
       // declared one. Leaving it `undefined` on the adapter means the
       // router's evaluateVisibility short-circuits to "no constraint",
       // matching pre-A.4 behaviour exactly. Spreading conditionally keeps

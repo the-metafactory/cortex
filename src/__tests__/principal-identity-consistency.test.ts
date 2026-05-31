@@ -134,7 +134,7 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
-      operator: { id: PRINCIPAL_ID },
+      principal: { id: PRINCIPAL_ID },
     });
 
     try {
@@ -235,7 +235,7 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
-      operator: { id: "v3-canonical-op" },
+      principal: { id: "v3-canonical-op" },
     });
 
     // Boot succeeded → resolution path found a valid principal.
@@ -280,7 +280,7 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
-      operator: { id: "v3-canonical-op" },
+      principal: { id: "v3-canonical-op" },
     });
 
     // Post cortex#484 Option D + cortex#491 + cortex#502: 4 handlers
@@ -345,7 +345,7 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
         disableDashboard: true,
         disableOutboundPoller: true,
         injectRuntime: runtime,
-        operator: { id: "" },
+        principal: { id: "" },
       });
     } catch (err) {
       threw = err;

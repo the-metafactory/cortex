@@ -200,7 +200,7 @@ describe("createCcEventEnvelope", () => {
   });
 
   test("originator set when originatorPrincipal supplied → attribution=adapter-resolved", () => {
-    // cortex#346 — cc-events originates from the operator's own stack;
+    // cortex#346 — cc-events originates from the principal's own stack;
     // the tap IS the adapter for the Claude-Code substrate. Attribution
     // is `adapter-resolved` per the agreement to use that mode for all
     // first-party in-process originators on cortex#346.
@@ -283,9 +283,9 @@ describe("createCcEventPublisher", () => {
     );
   });
 
-  test("stack-aware emit honours multi-stack operator config", () => {
+  test("stack-aware emit honours multi-stack principal config", () => {
     // Different stack value routes to a different subscriber wildcard.
-    // Multi-stack operators (`andreas/research`, `andreas/production`)
+    // Multi-stack principals (`andreas/research`, `andreas/production`)
     // depend on this isolation.
     const link = makeLink();
     const pub = createCcEventPublisher({

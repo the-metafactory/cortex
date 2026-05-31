@@ -33,7 +33,7 @@
  *     header explicitly acknowledges that wiring this into a real
  *     production inbound path requires B.1c to land first; until then
  *     this scaffold is safe behind a feature flag / capability
- *     declaration that no operator actually has bound to a peer.
+ *     declaration that no principal actually has bound to a peer.
  *   - **No production wire format for the outbound request envelope.**
  *     The harness builds a minimal `dispatch.task.dispatched`-shaped
  *     envelope from `DispatchRequest`. The richer "task contract" shape
@@ -296,7 +296,7 @@ export class BusPeerHarness implements SessionHarness {
           if (!verification.valid) {
             // Phase C wires audit envelopes; for now stderr is the
             // visibility surface. Format the reason discriminator
-            // inline so an operator grepping stderr gets the
+            // inline so a principal grepping stderr gets the
             // structural class without consulting code.
             const reason = verification.reason;
             process.stderr.write(

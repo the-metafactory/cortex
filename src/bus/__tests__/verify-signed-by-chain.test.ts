@@ -445,7 +445,7 @@ describe("verifySignedByChain — cryptoVerify (B.1c)", () => {
         resolver,
         receivingAgentId: "luna",
         cryptoVerify: true,
-        principalId: "test-operator",
+        principalId: "test-principal",
       },
     );
 
@@ -496,7 +496,7 @@ describe("verifySignedByChain — cryptoVerify (B.1c)", () => {
       resolver,
       receivingAgentId: "luna",
       cryptoVerify: true,
-      principalId: "test-operator",
+      principalId: "test-principal",
     });
 
     expect(result.valid).toBe(false);

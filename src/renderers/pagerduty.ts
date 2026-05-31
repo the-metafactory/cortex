@@ -7,7 +7,7 @@
  * subscribed to `local.{principal}.system.>` so an operational alert reliably
  * pages even if the dashboard is the thing that broke.
  *
- * Operator chooses what counts as page-worthy via the `subscribe` patterns
+ * Principal chooses what counts as page-worthy via the `subscribe` patterns
  * on the `PagerDutyRendererConfig`. Typical wiring:
  *
  *     - kind: pagerduty

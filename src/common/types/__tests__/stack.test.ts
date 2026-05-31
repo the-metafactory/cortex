@@ -2,7 +2,7 @@
  * IAW Phase A.5 — `StackConfigSchema` + `deriveStackId` tests (cortex#113).
  *
  * Two surfaces under test:
- *   1. `StackConfigSchema` — accepts well-formed `{operator}/{stack}` ids and
+ *   1. `StackConfigSchema` — accepts well-formed `{principal}/{stack}` ids and
  *      base32 NKey public keys; rejects uppercase, missing slash, garbage
  *      NKeys, and other shape violations the regexes guard against.
  *   2. `deriveStackId` — explicit `stack:` block wins; otherwise default-
@@ -70,7 +70,7 @@ function minConfig(overrides: Record<string, unknown> = {}) {
 // =============================================================================
 
 describe("StackConfigSchema", () => {
-  test("accepts canonical {operator}/{stack} id without nkey_pub", () => {
+  test("accepts canonical {principal}/{stack} id without nkey_pub", () => {
     const parsed = StackConfigSchema.parse({ id: "andreas/research" });
     expect(parsed.id).toBe("andreas/research");
     expect(parsed.nkey_pub).toBeUndefined();
@@ -89,7 +89,7 @@ describe("StackConfigSchema", () => {
     expect(parsed.nkey_pub).toBe(VALID_NKEY);
   });
 
-  test("rejects uppercase operator segment", () => {
+  test("rejects uppercase principal segment", () => {
     expect(() =>
       StackConfigSchema.parse({ id: "Andreas/research" }),
     ).toThrow(/stack\.id must match/);
@@ -113,7 +113,7 @@ describe("StackConfigSchema", () => {
     ).toThrow(/stack\.id must match/);
   });
 
-  test("rejects empty operator segment", () => {
+  test("rejects empty principal segment", () => {
     expect(() => StackConfigSchema.parse({ id: "/research" })).toThrow(
       /stack\.id must match/,
     );
@@ -185,7 +185,7 @@ describe("StackConfigSchema", () => {
   test("rejects nkey_pub with non-U prefix", () => {
     // Stack pub keys are user-identifier keys (`U` prefix). Account / cluster /
     // server prefixes (`A`/`C`/`X`) would silently work today (the NATS lib
-    // resolves them), but they signal a misconfiguration — the operator
+    // resolves them), but they signal a misconfiguration — the principal
     // pasted the wrong file's key. Fail-fast at config time.
     const otherPrefix = "A" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVZ";
     expect(otherPrefix).toHaveLength(56);
@@ -250,7 +250,7 @@ describe("deriveStackId", () => {
     );
     const derived: DerivedStackId = deriveStackId(config);
     expect(derived.id).toBe("andreas/research");
-    expect(derived.operator).toBe("andreas");
+    expect(derived.principal).toBe("andreas");
     expect(derived.stack).toBe("research");
   });
 
@@ -258,7 +258,7 @@ describe("deriveStackId", () => {
     const config = CortexConfigSchema.parse(minConfig());
     const derived = deriveStackId(config);
     expect(derived.id).toBe("andreas/default");
-    expect(derived.operator).toBe("andreas");
+    expect(derived.principal).toBe("andreas");
     expect(derived.stack).toBe("default");
   });
 
@@ -292,30 +292,30 @@ describe("deriveStackId", () => {
     const degraded: DeriveStackIdInput = { principal: {} };
     const derived = deriveStackId(degraded);
     expect(derived.id).toBe("default/default");
-    expect(derived.operator).toBe("default");
+    expect(derived.principal).toBe("default");
     expect(derived.stack).toBe("default");
   });
 
-  test("hyphenated operator id propagates through default derivation", () => {
+  test("hyphenated principal id propagates through default derivation", () => {
     const config = CortexConfigSchema.parse(
       minConfig({ principal: { id: "andreas-dev-2026" } }),
     );
     const derived = deriveStackId(config);
     expect(derived.id).toBe("andreas-dev-2026/default");
-    expect(derived.operator).toBe("andreas-dev-2026");
+    expect(derived.principal).toBe("andreas-dev-2026");
     expect(derived.stack).toBe("default");
   });
 
-  test("explicit block wins over operator id (the override path)", () => {
+  test("explicit block wins over principal id (the override path)", () => {
     const config = CortexConfigSchema.parse(
       minConfig({
-        operator: { id: "andreas" },
+        principal: { id: "andreas" },
         stack: { id: "jcfischer/sage-host" },
       }),
     );
     const derived = deriveStackId(config);
     expect(derived.id).toBe("jcfischer/sage-host");
-    expect(derived.operator).toBe("jcfischer");
+    expect(derived.principal).toBe("jcfischer");
     expect(derived.stack).toBe("sage-host");
   });
 });
@@ -342,22 +342,22 @@ describe("deriveStackId × StackConfigSchema round-trip invariant", () => {
 
   const stackIdSchema = StackConfigSchema.shape.id;
 
-  test("derived id round-trips for letter-prefixed alphanumeric operator", () => {
+  test("derived id round-trips for letter-prefixed alphanumeric principal", () => {
     const derived = deriveStackId({ principal: { id: "andreas" } });
     expect(() => stackIdSchema.parse(derived.id)).not.toThrow();
   });
 
-  test("derived id round-trips for hyphenated operator", () => {
+  test("derived id round-trips for hyphenated principal", () => {
     const derived = deriveStackId({ principal: { id: "andreas-dev-2026" } });
     expect(() => stackIdSchema.parse(derived.id)).not.toThrow();
   });
 
-  test("derived id round-trips for all-alpha operator", () => {
+  test("derived id round-trips for all-alpha principal", () => {
     const derived = deriveStackId({ principal: { id: "metafactory" } });
     expect(() => stackIdSchema.parse(derived.id)).not.toThrow();
   });
 
-  test("derived id round-trips for operator with internal digits", () => {
+  test("derived id round-trips for principal with internal digits", () => {
     const derived = deriveStackId({ principal: { id: "team-42-research" } });
     expect(() => stackIdSchema.parse(derived.id)).not.toThrow();
   });
@@ -370,7 +370,7 @@ describe("deriveStackId × StackConfigSchema round-trip invariant", () => {
     expect(() => stackIdSchema.parse(derived.id)).not.toThrow();
   });
 
-  test("cortex#141 closed: digit-prefix operator id is rejected at PrincipalConfigSchema gate", () => {
+  test("cortex#141 closed: digit-prefix principal id is rejected at PrincipalConfigSchema gate", () => {
     // Pre-cortex#141: `PrincipalConfigSchema.id` accepted `"2andreas"` (regex
     // `/^[a-z0-9-]+$/`), so `deriveStackId` produced `"2andreas/default"` —
     // a string `StackConfigSchema.id` rejected. The divergence was a latent
@@ -378,7 +378,7 @@ describe("deriveStackId × StackConfigSchema round-trip invariant", () => {
     // runtime error.
     //
     // Post-cortex#141: `PrincipalConfigSchema.id` regex is `/^[a-z][a-z0-9-]*$/`
-    // (letter-prefix mandatory). Digit-prefix operator ids are rejected at
+    // (letter-prefix mandatory). Digit-prefix principal ids are rejected at
     // the upstream Zod gate, so `deriveStackId` never receives an invalid
     // input from a parsed `CortexConfig`. The latent divergence is
     // structurally closed — this test pins the invariant.

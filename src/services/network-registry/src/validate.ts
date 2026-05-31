@@ -191,7 +191,7 @@ export function validateRegistrationClaim(
       // Build the canonical stack record. Only include optional keys
       // when they are actually defined — `canonicalJSON` is structural
       // and treats `metadata: undefined` as different from "no metadata".
-      // The operator-side signing rig also omits these keys when unset
+      // The principal-side signing rig also omits these keys when unset
       // (the helper builds the claim from spread defaults), so the
       // canonical bytes must match here.
       const stackRecord: StackIdentity = { stack_id: sObj.stack_id };

@@ -152,7 +152,7 @@ This plan tracks the HITL dashboard and PR review integration work. Features are
 
 #### Discord Notification Routing
 
-- [ ] On P0 inbox item creation → post to operator DM (if configured) or channel
+- [ ] On P0 inbox item creation → post to principal DM (if configured) or channel
 - [ ] On P1 inbox item creation → post to relevant channel thread
 - [ ] On P2 inbox item creation → no Discord notification
 - [ ] Notification format: emoji + agent name + summary + dashboard link
@@ -167,7 +167,7 @@ This plan tracks the HITL dashboard and PR review integration work. Features are
 
 #### Acceptance (G-903)
 
-- [ ] Critical events produce Discord DM to operator
+- [ ] Critical events produce Discord DM to principal
 - [ ] Review events produce Discord channel notification
 - [ ] Ambient events are dashboard-only
 - [ ] Notification config in bot.yaml is respected
@@ -193,8 +193,8 @@ This plan tracks the HITL dashboard and PR review integration work. Features are
 #### Approval Flow — Discord Side
 
 - [ ] Approval request → Discord message with approve/reject reactions
-- [ ] Operator reacts → grove-bot captures reaction → resolves approval
-- [ ] 💪 Operator replies with text → captured as rejection reason
+- [ ] Principal reacts → grove-bot captures reaction → resolves approval
+- [ ] 💪 Principal replies with text → captured as rejection reason
 
 #### Agent Resolution Endpoint
 

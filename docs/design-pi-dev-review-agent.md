@@ -312,7 +312,7 @@ cortex publishes → with target_principal: "echo"
 pi.dev Echo internally:
   ├── Review PR
   ├── Post inline comments
-  ├── Wait for operator to push fixes
+  ├── Wait for principal to push fixes
   ├── Re-run CodeReview on new commits
   └── Approve when clean
 ```
@@ -382,7 +382,7 @@ No cortex changes needed at all.
 | Review timeout (>5 min) | TaskTracker timeout | Emit `dispatch.task.failed` |
 | Model unavailable | API error | Fallback to secondary model |
 | GitHub rate limit | GH CLI 403 | `dispatch.task.failed` with `not_now` |
-| pi.dev crash | Process exit | Dashboard shows failed; operator re-dispatches |
+| pi.dev crash | Process exit | Dashboard shows failed; principal re-dispatches |
 
 ---
 

@@ -24,10 +24,10 @@ const REQUIRED_MODE = 0o600;
 /**
  * Assert that a file is `chmod 600` on POSIX (owner-only read/write).
  *
- * Throws an operator-readable error when the mode is anything else,
+ * Throws a principal-readable error when the mode is anything else,
  * including modes that are nominally tighter (e.g. `0o400`) — the
  * daemon expects to be able to read AND write its own secrets, and a
- * `0o400` file usually means the operator ran `chmod a-w` by hand and
+ * `0o400` file usually means the principal ran `chmod a-w` by hand and
  * we'd prefer the loud failure to a silent partial enforcement.
  *
  * On Windows the gate is skipped with a stderr note. NTFS uses ACLs,
@@ -42,10 +42,10 @@ const REQUIRED_MODE = 0o600;
  */
 export function enforceChmod600(path: string): void {
   if (process.platform === "win32") {
-    // Best-effort note so the operator knows the gate didn't fire.
+    // Best-effort note so the principal knows the gate didn't fire.
     // No logger threaded in here (this module stays dependency-free).
     process.stderr.write(
-      `[file-permissions] chmod 600 gate skipped on win32 — NTFS ACLs are the operator's responsibility (${path})\n`,
+      `[file-permissions] chmod 600 gate skipped on win32 — NTFS ACLs are the principal's responsibility (${path})\n`,
     );
     return;
   }

@@ -21,11 +21,11 @@ Every instance is the same underlying defect: **tools disagreed on what the segm
 
 ## 2. The verified root cause (2026-05-20 investigation)
 
-The first segment after the scope prefix is the **principal** — the human who owns the stack. Three tools derived it three ways (field names below are the pre-grill names; `operator.id` is being renamed `principal.id`):
+The first segment after the scope prefix is the **principal** — the human who owns the stack. Three tools derived it three ways (field names below are the pre-grill names; `principal.id` is being renamed `principal.id`):
 
 | Tool | How it derived the first segment | Result for this deployment |
 |---|---|---|
-| **cortex** | from `operator.id` in `cortex.yaml` — the principal identity. Review-consumer subscribes `local.{principal}.{stack}.tasks.code-review.>`. | `local.andreas.meta-factory.…` |
+| **cortex** | from `principal.id` in `cortex.yaml` — the principal identity. Review-consumer subscribes `local.{principal}.{stack}.tasks.code-review.>`. | `local.andreas.meta-factory.…` |
 | **pilot** | **hardcoded.** `publish-review-request.ts` sets envelope `source: "metafactory.pilot.{network}"`; myelin's `deriveNatsSubject()` takes `source.split('.')[0]` → `metafactory`. pilot never reads the principal. | `local.metafactory.meta-factory.…` |
 | **arc** | `arc nats provision-streams --network <X>` mints the consumer filter with the first segment = `<X>`. `--network metafactory` → `local.metafactory.…` | `cortex-review-consumer-metafactory-echo` |
 
@@ -198,7 +198,7 @@ Rendered from `cortex.{stack}.yaml`; any tool publishing toward a stack sets the
 | R1 | **pilot hardcodes `source: "metafactory.pilot.{network}"`** → every published subject's first segment is `metafactory`. | pilot derives the envelope `source` from the target stack's `cortex.{stack}.yaml` — `source` = `{principal}.{stack}.{assistant}` (myelin grill-Q3). Verify pilot#133 ("derive envelope source from the principal, no more `metafactory.*` hardcode") actually landed for the `request-review` path; the repo still shows the hardcode. | pilot |
 | R2 | **`arc nats provision-streams --network <X>`** places `<X>` in the consumer's first-segment filter. | The flag that determines the first segment must be the **principal**, not the network. Re-provision the malformed `cortex-review-consumer-metafactory-*` consumers as `…-andreas-{stack}-…`. | arc |
 | R3 | **myelin `namespace.md` grammar** uses the pre-grill vocabulary. | Apply the grill resolutions to `namespace.md`: rename the `{org}` token → `{principal}`; relabel the `@`-segment an *assistant address* (`@{assistant}`); "Reach" → "Scope". Filed as a myelin grammar issue. | myelin |
-| R4 | **`operator` / `Principal` / `source` rename** across myelin + cortex. | myelin: `Principal` interface → `Identity`, `signed_by[].principal` → `.identity`, `Identity.operator` → `.network`, `source` grammar → `{principal}.{stack}.{assistant}`. cortex: `operator.id` → `principal.id` in `cortex.yaml` schema + subject derivation + Mission Control copy. Tracked features. | myelin, cortex |
+| R4 | **`principal` / `Principal` / `source` rename** across myelin + cortex. | myelin: `Principal` interface → `Identity`, `signed_by[].principal` → `.identity`, `Identity.principal` → `.network`, `source` grammar → `{principal}.{stack}.{assistant}`. cortex: `principal.id` → `principal.id` in `cortex.yaml` schema + subject derivation + Mission Control copy. Tracked features. | myelin, cortex |
 
 Until R1 lands, the pilot review loop cannot deliver verdicts on this deployment (arc#182, compass#65 are blocked on exactly this). Interim path: in-session sub-agent review.
 

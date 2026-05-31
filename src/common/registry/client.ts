@@ -17,7 +17,7 @@
  *
  *   - If `options.pubkey` is supplied, the client pins it at
  *     construction time. This is the recommended posture — the
- *     trust anchor is operator-supplied, out-of-band.
+ *     trust anchor is principal-supplied, out-of-band.
  *   - If `options.pubkey` is absent, the client performs Trust-
  *     On-First-Use at `start()` via `GET /registry/pubkey`. The
  *     first response is pinned for the lifetime of the process.
@@ -30,7 +30,7 @@
  * ## Cache invalidation
  *
  * The client refreshes every entry every `refreshIntervalMs` (default
- * 5 minutes). When the eventual `system.operator.published` bus event
+ * 5 minutes). When the eventual `system.principal.published` bus event
  * lands (filed as a follow-up — the producer side isn't wired yet),
  * `invalidate(principalId)` provides the seam to short-circuit the
  * refresh. Until then, TTL is the only invalidation mechanism — the
@@ -221,7 +221,7 @@ export class RegistryClient implements RegistryClientReader {
   /**
    * Invalidate a single cache entry. The next `refreshAll()` (or an
    * explicit `refreshPrincipal(principalId)`) will repopulate it.
-   * Exposed for the future `system.operator.published` event handler.
+   * Exposed for the future `system.principal.published` event handler.
    */
   invalidate(principalId: string): void {
     this.cache.delete(principalId);
@@ -269,7 +269,7 @@ export class RegistryClient implements RegistryClientReader {
       }
       if (this.pinnedPubkey === undefined) {
         this.logError(
-          "refreshAll: no pinned pubkey (TOFU still failing or pubkey never supplied); skipping operator fetches this cycle",
+          "refreshAll: no pinned pubkey (TOFU still failing or pubkey never supplied); skipping principal fetches this cycle",
         );
         return;
       }

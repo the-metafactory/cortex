@@ -31,8 +31,8 @@
  * mistaking a leading-digit id for a numeric segment in
  * production routing.
  *
- * Used for: agent id, operator id, network id, role id,
- * principal id, peer operator id, capability id, federation
+ * Used for: agent id, principal id, network id, role id,
+ * principal id, peer principal id, capability id, federation
  * network id, and the dispatch-listener's runtime network
  * id check.
  */

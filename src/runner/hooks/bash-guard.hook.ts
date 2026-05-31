@@ -168,7 +168,7 @@ function buildBlockEvent(
       command_preview: command.slice(0, 200),
       project: process.env.GROVE_PROJECT,
       entity: process.env.GROVE_ENTITY,
-      operator: process.env.GROVE_OPERATOR,
+      principal: process.env.GROVE_OPERATOR,
     },
   };
 }
@@ -315,7 +315,7 @@ async function main(): Promise<void> {
       const reason =
         `[Grove Bash Guard] Blocked "${trimmed.slice(0, 80)}": ` +
         `command does not match any rule in the bash allowlist. ` +
-        `Ask the operator to widen the allowlist if this command is needed.`;
+        `Ask the principal to widen the allowlist if this command is needed.`;
       // Write the security decision FIRST — telemetry I/O
       // (a filesystem appendFileSync) must never delay a deny.
       deny(reason);

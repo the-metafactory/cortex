@@ -52,9 +52,9 @@
  *     `local.{principal}.github.*` via the surface-router; this file's job ends
  *     once the envelope is on the bus.
  *   - NOT a CF Worker → cortex forwarder. The actual cross-network glue
- *     (how the Worker reaches `127.0.0.1` on the operator's laptop)
+ *     (how the Worker reaches `127.0.0.1` on the principal's laptop)
  *     remains an open architectural decision — see cortex#37 follow-up.
- *     In local development the operator can curl the receiver directly:
+ *     In local development the principal can curl the receiver directly:
  *
  *       curl -X POST http://127.0.0.1:8770/internal/webhook \
  *         -H 'X-GitHub-Event: push' \
@@ -201,7 +201,7 @@ export function startGithubWebhookReceiver(
     async fetch(req): Promise<Response> {
       const url = new URL(req.url);
 
-      // Health check — no auth, no body parsing. Lets the operator (or
+      // Health check — no auth, no body parsing. Lets the principal (or
       // a sidecar) verify the receiver is up before sending real events.
       if (req.method === "GET" && url.pathname === "/health") {
         return Response.json({
@@ -242,7 +242,7 @@ export function startGithubWebhookReceiver(
         }
       } catch (err) {
         // Don't leak the verifier error to the caller; just 401. The
-        // operator sees the underlying cause in the structured log.
+        // principal sees the underlying cause in the structured log.
         console.error(
           "github-webhook-receiver: HMAC verifier threw:",
           err instanceof Error ? err.message : err,

@@ -123,7 +123,7 @@ export interface AgentTeamOpts {
   /** H-001: Explicit metadata */
   project?: string;
   entity?: string;
-  operator?: string;
+  principal?: string;
   /**
    * IAW Phase B.2b (cortex#114) — bus-peer dependencies. Required
    * when ANY participant has `kind: "bus-peer"`; the constructor
@@ -289,14 +289,14 @@ export class AgentTeamHarness implements SessionHarness {
       ...(req.timeoutMs !== undefined && { timeoutMs: req.timeoutMs }),
       ...(env.project !== undefined && { project: env.project }),
       ...(env.entity !== undefined && { entity: env.entity }),
-      ...(env.operator !== undefined && { operator: env.operator }),
+      ...(env.principal !== undefined && { principal: env.principal }),
     };
   }
 
   private envContext(req: DispatchRequest): {
     project?: string;
     entity?: string;
-    operator?: string;
+    principal?: string;
   } {
     for (const ctx of req.context) {
       if (ctx.kind !== "env" || typeof ctx.data !== "object" || ctx.data === null) {
@@ -306,7 +306,7 @@ export class AgentTeamHarness implements SessionHarness {
       return {
         ...(typeof env.project === "string" && { project: env.project }),
         ...(typeof env.entity === "string" && { entity: env.entity }),
-        ...(typeof env.operator === "string" && { operator: env.operator }),
+        ...(typeof env.principal === "string" && { principal: env.principal }),
       };
     }
     return {};
@@ -571,7 +571,7 @@ export class AgentTeam extends EventEmitter {
       bashAllowlist: this.opts.bashAllowlist,
       project: this.opts.project,
       entity: this.opts.entity,
-      operator: this.opts.operator,
+      principal: this.opts.principal,
     });
 
     this.members.set("moderator", {
@@ -680,7 +680,7 @@ export class AgentTeam extends EventEmitter {
       bashAllowlist: this.opts.bashAllowlist,
       project: this.opts.project,
       entity: this.opts.entity,
-      operator: this.opts.operator,
+      principal: this.opts.principal,
     });
 
     // Trace context env vars are passed via CC's environment-inheritance;
@@ -852,7 +852,7 @@ export class AgentTeam extends EventEmitter {
       bashAllowlist: this.opts.bashAllowlist,
       project: this.opts.project,
       entity: this.opts.entity,
-      operator: this.opts.operator,
+      principal: this.opts.principal,
     });
     this.synthesis = synthSession;
 

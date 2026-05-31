@@ -633,7 +633,7 @@ describe("dispatch-listener — success path", () => {
         additional_args: ["--verbose"],
         project: "cortex",
         entity: "issue/12",
-        operator: "andreas",
+        principal: "andreas",
         resume_session_id: "prior-session",
       }),
       CANONICAL_CORTEX_CHAT_SUBJECT,
@@ -655,7 +655,7 @@ describe("dispatch-listener — success path", () => {
     expect(opts.additionalArgs).toEqual(["--verbose"]);
     expect(opts.project).toBe("cortex");
     expect(opts.entity).toBe("issue/12");
-    expect(opts.operator).toBe("andreas");
+    expect(opts.principal).toBe("andreas");
     expect(opts.resumeSessionId).toBe("prior-session");
   });
 
@@ -719,7 +719,7 @@ describe("dispatch-listener — success path", () => {
     expect(opts.bashAllowlist).toBeUndefined();
     expect(opts.bashGuardDisabled).toBeUndefined();
     expect(opts.timeoutMs).toBeUndefined();
-    expect(opts.operator).toBeUndefined();
+    expect(opts.principal).toBeUndefined();
     expect(opts.entity).toBeUndefined();
     expect(opts.project).toBeUndefined();
     expect(opts.allowedTools).toBeUndefined();
@@ -1108,11 +1108,11 @@ function engineGranting(capabilities: readonly string[]): PolicyEngine {
         id: "cortex",
         home_operator: "andreas",
         home_stack: "andreas/research",
-        role: ["operator"],
+        role: ["principal"],
         trust: [],
       },
     ],
-    roles: [{ id: "operator", capabilities }],
+    roles: [{ id: "principal", capabilities }],
   });
 }
 
@@ -1258,11 +1258,11 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
           id: "cortex",
           home_operator: "andreas",
           home_stack: "andreas/research",
-          role: ["operator"],
+          role: ["principal"],
           trust: [],
         },
       ],
-      roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
+      roles: [{ id: "principal", capabilities: ["dispatch.cortex"] }],
     });
     // Wrap engine.check to capture inputs.
     const origCheck = engine.check.bind(engine);
@@ -1471,11 +1471,11 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
           id: "cortex",
           home_operator: "andreas",
           home_stack: homeStack,
-          role: ["operator"],
+          role: ["principal"],
           trust: [],
         },
       ],
-      roles: [{ id: "operator", capabilities: opts.capabilities }],
+      roles: [{ id: "principal", capabilities: opts.capabilities }],
       federated: {
         networks: [
           {
@@ -2252,11 +2252,11 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
           id: "alice",
           home_operator: "andreas",
           home_stack: "andreas/research",
-          role: ["operator"],
+          role: ["principal"],
           trust: [],
         },
       ],
-      roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
+      roles: [{ id: "principal", capabilities: ["dispatch.cortex"] }],
     });
     const origCheck = engine.check.bind(engine);
     engine.check = (principalId, intent) => {
@@ -2313,11 +2313,11 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
           id: "cortex",
           home_operator: "andreas",
           home_stack: "andreas/research",
-          role: ["operator"],
+          role: ["principal"],
           trust: [],
         },
       ],
-      roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
+      roles: [{ id: "principal", capabilities: ["dispatch.cortex"] }],
     });
     const origCheck = engine.check.bind(engine);
     engine.check = (principalId, intent) => {
@@ -2367,11 +2367,11 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
           id: "cortex",
           home_operator: "andreas",
           home_stack: "andreas/research",
-          role: ["operator"],
+          role: ["principal"],
           trust: [],
         },
       ],
-      roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
+      roles: [{ id: "principal", capabilities: ["dispatch.cortex"] }],
     });
     const origCheck = engine.check.bind(engine);
     engine.check = (principalId, intent) => {
@@ -2506,7 +2506,7 @@ describe("dispatch-listener — originator DID resolution (cortex#486)", () => {
           id: "andreas",
           home_operator: "andreas",
           home_stack: "andreas/research",
-          role: ["operator"],
+          role: ["principal"],
           trust: [],
           // platform_ids stays on the principal — still used by the
           // engine's `lookupPrincipalIdByPlatformId` surface (consumed
@@ -2514,7 +2514,7 @@ describe("dispatch-listener — originator DID resolution (cortex#486)", () => {
           platform_ids: { discord: ["1134325176796987522"] },
         },
       ],
-      roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
+      roles: [{ id: "principal", capabilities: ["dispatch.cortex"] }],
     });
     const origCheck = engine.check.bind(engine);
     engine.check = (principalId, intent) => {
@@ -2567,12 +2567,12 @@ describe("dispatch-listener — originator DID resolution (cortex#486)", () => {
           id: "andreas",
           home_operator: "andreas",
           home_stack: "andreas/research",
-          role: ["operator"],
+          role: ["principal"],
           trust: [],
           platform_ids: { discord: ["1134325176796987522"] },
         },
       ],
-      roles: [{ id: "operator", capabilities: ["dispatch.cortex"] }],
+      roles: [{ id: "principal", capabilities: ["dispatch.cortex"] }],
     });
     const origCheck = engine.check.bind(engine);
     engine.check = (principalId, intent) => {

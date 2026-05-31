@@ -30,9 +30,9 @@ This document extracts the Spawn-integration design so that:
 
 ## 2. Design principle: Spawn is invisible
 
-Spawn is the execution engine beneath the dashboard. It never appears in the UI by name. The operator never sees "EC2", "CF Worker", "tier", "backend", or "spawn profile." Spawn is like TCP/IP to a web app — essential infrastructure, completely hidden.
+Spawn is the execution engine beneath the dashboard. It never appears in the UI by name. The principal never sees "EC2", "CF Worker", "tier", "backend", or "spawn profile." Spawn is like TCP/IP to a web app — essential infrastructure, completely hidden.
 
-What the operator sees instead: **capacity** and **results**.
+What the principal sees instead: **capacity** and **results**.
 
 Mapping to v2 vocabulary: Spawn is a **host for hands runs**. A head (row in `agents`) does not care where its hands execute. An `agent_task_assignment` dispatches one or more hands runs; each hands run is a `session` bound to some execution backend. Spawn provides the backend; Grove never surfaces which backend was chosen.
 
@@ -40,7 +40,7 @@ Mapping to v2 vocabulary: Spawn is a **host for hands runs**. A head (row in `ag
 
 ## 3. Execution is automatic
 
-Task complexity determines the execution tier. The operator never chooses:
+Task complexity determines the execution tier. The principal never chooses:
 
 | Task complexity       | Example                                       | Execution tier                        | Latency         |
 | --------------------- | --------------------------------------------- | ------------------------------------- | --------------- |
@@ -48,9 +48,9 @@ Task complexity determines the execution tier. The operator never chooses:
 | Medium / scoped       | PR review, digest generation                  | CF Dynamic Worker or pooled EC2       | ~5ms – 30s      |
 | Heavy / agentic       | Implement feature, debug, refactor            | CC + PAI on local or long-lived EC2   | ~20 – 60s       |
 
-When the operator clicks "Review this PR", they see the result. Whether it ran on a CF Worker or an EC2 instance is irrelevant.
+When the principal clicks "Review this PR", they see the result. Whether it ran on a CF Worker or an EC2 instance is irrelevant.
 
-**Interaction with the v2 assignment model:** the tier selection is made inside Spawn when a new hands run is requested for an `agent_task_assignment`. The assignment row does not record which backend ran the hands run — that is a session-level detail, surfaced only in the agent attention view's event log if the operator expands a session event. The attention card and focus area stay backend-silent.
+**Interaction with the v2 assignment model:** the tier selection is made inside Spawn when a new hands run is requested for an `agent_task_assignment`. The assignment row does not record which backend ran the hands run — that is a session-level detail, surfaced only in the agent attention view's event log if the principal expands a session event. The attention card and focus area stay backend-silent.
 
 ---
 
@@ -58,11 +58,11 @@ When the operator clicks "Review this PR", they see the result. Whether it ran o
 
 The old design chapter split this as "pet agents vs workers". The v2 parent spec replaces that vocabulary. The equivalent Spawn-era framing is:
 
-- **Persistent heads** (`agents` row with `persistent: true`) — named, memoried, always visible. The operator dispatches work to them by name.
+- **Persistent heads** (`agents` row with `persistent: true`) — named, memoried, always visible. The principal dispatches work to them by name.
 - **Ephemeral heads** (`agents` row with `persistent: false`) — named for a single assignment, then garbage-collected.
 - **Anonymous hands capacity** — the Spawn-managed pool of execution slots that any head can consume. This is a **resource**, like tokens. It is not an agent. It has no `agents` row. It never renders as an agent card.
 
-Operator questions about hands capacity:
+Principal questions about hands capacity:
 
 - How busy is it? (utilisation)
 - Do we need more? (capacity planning)
@@ -108,7 +108,7 @@ The dispatch modal has no backend picker. No tier selector. Just:
 
 **"Luna"** = dispatch to a named persistent head (creates an `agent_task_assignment` row binding Luna to the task).
 
-**"Any available"** = dispatch to the best available head for the task type (may create an ephemeral head for this assignment), and let Spawn pick the right tier and hands host automatically. The operator never sees the backend choice.
+**"Any available"** = dispatch to the best available head for the task type (may create an ephemeral head for this assignment), and let Spawn pick the right tier and hands host automatically. The principal never sees the backend choice.
 
 This is compatible with the v2 Phase E curation UX (`design-mission-control.md` §9) — the manual dispatch button described there becomes this modal once Spawn is wired in. Until Spawn ships, dispatch is "run locally via `cc-session.ts`" and there is no tier question to ask.
 
@@ -123,7 +123,7 @@ This section describes the pattern Spawn integration must support. Even **locall
 ### 5a.1 The boundary
 
 ```
-  Grove operator UI         Grove bot            Hands run (Spawn)
+  Grove principal UI         Grove bot            Hands run (Spawn)
  ──────────────────── ──────────────────── ──────────────────────────
   browser                 grove-bot            local sandbox / EC2 / CF
   executionQueue          session endpoint     CC process + stdin
@@ -137,7 +137,7 @@ Everything left of the boundary is **client-side**. Everything right of the bot 
 
 The dashboard's per-assignment `executionQueue` (Mission Control §6.3, ported from Maestro's `executionQueue` pattern in `src/renderer/hooks/input/useInputProcessing.ts` — see the reference pins table in parent §5.3 for approximate line numbers at audit time) works the same way whether the hands run is local or Spawn-hosted:
 
-- Operator submits input → append to `executionQueue` for this assignment.
+- Principal submits input → append to `executionQueue` for this assignment.
 - While `assignment.state === 'running'`, items stay queued.
 - When `assignment.state` transitions to `idle` (or, for Spawn, when the remote hands run signals it is ready for the next turn), the queue drains.
 - UI reflects queue depth under the submit button.
@@ -192,7 +192,7 @@ Future kinds need an **events-out channel** in addition to the write-in channel.
 The agent attention view (`design-mission-control.md` §5) must not leak backend identity. When Spawn is integrated:
 
 - **No spawn metadata on the summary header.** No backend labels, no instance IDs, no spawn profile names.
-- **Session events in the event log** may include a single `hands.backend` field at debug level, expandable only when the operator explicitly opens the raw event. Default rendering hides it.
+- **Session events in the event log** may include a single `hands.backend` field at debug level, expandable only when the principal explicitly opens the raw event. Default rendering hides it.
 - The capacity gauge in the dashboard resource section is the **only** surface where hands-capacity information appears. It is not part of the attention view.
 
 ---
@@ -239,7 +239,7 @@ When Spawn ships and this document is reactivated, the work required to fold it 
 3. **Verify v2 data model compatibility.** Confirm that `agent_task_assignment` and `sessions` accept the descriptor without breaking any v2 call sites. The handle shape `{ kind, write, close }` from §5a.3 is the stable contract v2 commits to — confirm the resolver's call sites (grove-bot WebSocket write handler, approve/deny path in parent §5.3.1) do not leak beyond it.
 4. **Add the hands capacity gauge** to the dashboard resource section, polling Spawn's pool health API. Graceful degrade when the API is unreachable.
 5. **Replace the Phase E manual dispatch button** (parent spec §9) with the simplified dispatch modal from §5 of this doc.
-6. **Re-test the "Spawn is invisible" principle** — the operator must not be able to see backend identity anywhere except inside expanded raw session events.
+6. **Re-test the "Spawn is invisible" principle** — the principal must not be able to see backend identity anywhere except inside expanded raw session events.
 7. **Revisit the "deferred" row** in parent spec §10 and flip it to "shipped" once all of the above land.
 
 None of these steps is sized or scheduled. They exist only so that the next designer picking this up has a starting point.

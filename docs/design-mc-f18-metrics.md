@@ -4,15 +4,15 @@
 <!-- Original location: github.com/the-metafactory/grove-v2 docs/design-mc-f18-metrics.md -->
 <!-- Lifted: 2026-05-11 — historical references to grove/grove-v2 retained for provenance. -->
 
-**Addendum to:** `docs/design-mission-control.md` §1.1 (goal: "operator's cockpit") and §7.4 (events stream as the audit substrate).
+**Addendum to:** `docs/design-mission-control.md` §1.1 (goal: "principal's cockpit") and §7.4 (events stream as the audit substrate).
 **Date:** 2026-04-27.
-**Status:** Decided. Closes the open scope around "metrics that drive operator behaviour and provide signal to tweak the system" raised during the F-13→F-17 retro.
+**Status:** Decided. Closes the open scope around "metrics that drive principal behaviour and provide signal to tweak the system" raised during the F-13→F-17 retro.
 
 ## Why this addendum
 
-The mission-control spec is rich on the operator-loop primitives (focus area, attention drill-down, input affordance) and on the data substrate (state machine + events table) — but is silent on **aggregate observability**. After F-13→F-17 landed and the dashboard had real activity in it, the operator surfaced the gap explicitly: *"average cycle time, latency, wait time so we can optimise the workflow"*. F-18 closes that gap as a small, immediately-useful surface that can iterate based on what the data actually shows.
+The mission-control spec is rich on the principal-loop primitives (focus area, attention drill-down, input affordance) and on the data substrate (state machine + events table) — but is silent on **aggregate observability**. After F-13→F-17 landed and the dashboard had real activity in it, the principal surfaced the gap explicitly: *"average cycle time, latency, wait time so we can optimise the workflow"*. F-18 closes that gap as a small, immediately-useful surface that can iterate based on what the data actually shows.
 
-The spec is intentionally short. Metrics is a domain where over-design is more dangerous than under-design — three useful numbers in front of an operator beat thirty rarely-glanced charts. F-19 onwards is the place for sparklines, alerts, cost/token, drill-down — once the v1 surface has shown which cuts of the data are actually load-bearing.
+The spec is intentionally short. Metrics is a domain where over-design is more dangerous than under-design — three useful numbers in front of an principal beat thirty rarely-glanced charts. F-19 onwards is the place for sparklines, alerts, cost/token, drill-down — once the v1 surface has shown which cuts of the data are actually load-bearing.
 
 ## Decision 1 — No new schema
 
@@ -100,11 +100,11 @@ Walk the `state.transition` events for an assignment in `timestamp ASC` order. T
 
 For block reason breakdown: each `from=*, to='blocked'` transition's payload carries `blockReason.kind`. The interval until the next transition (`from='blocked', to=*`) is attributed to that kind. If a single blocked period is somehow followed by another blocked transition without an intervening non-blocked state (state machine forbids this — but the safety net), the previous block reason owns its segment and the new one owns the next.
 
-**Percentile computation:** sort the completed cycle times ascending, pick the index at `ceil(p * n) - 1` (clamped to `[0, n-1]`). Standard nearest-rank — adequate for the operator-readable "median / p90 / p95" numbers; no interpolation, no t-digest. Re-evaluate if the sample size grows past O(10⁴) per window.
+**Percentile computation:** sort the completed cycle times ascending, pick the index at `ceil(p * n) - 1` (clamped to `[0, n-1]`). Standard nearest-rank — adequate for the principal-readable "median / p90 / p95" numbers; no interpolation, no t-digest. Re-evaluate if the sample size grows past O(10⁴) per window.
 
-**Window membership for fleet metrics:** an assignment counts in the window if EITHER its `created_at` is `>= since` OR its terminal transition's `timestamp` is `>= since`. This catches both "started in the window" and "finished in the window", which matches operator intuition ("show me the last 24h of activity"). Assignments that started before and finished before the window are excluded; assignments that started before and are still in-flight at the window edge are included.
+**Window membership for fleet metrics:** an assignment counts in the window if EITHER its `created_at` is `>= since` OR its terminal transition's `timestamp` is `>= since`. This catches both "started in the window" and "finished in the window", which matches principal intuition ("show me the last 24h of activity"). Assignments that started before and finished before the window are excluded; assignments that started before and are still in-flight at the window edge are included.
 
-**Why Date math in TS, not SQL:** the JOIN / window-function cost is identical, and TS lets us reuse the same `BlockReason` tagged-union type the rest of the system already validates against (no JSON-extract gymnastics in SQLite). The function loads the raw `state.transition` rows for the windowed assignments — at Phase B operator scale, hundreds of rows max per query — and computes intervals in a single linear pass per assignment. SQL handles row selection; TS handles arithmetic.
+**Why Date math in TS, not SQL:** the JOIN / window-function cost is identical, and TS lets us reuse the same `BlockReason` tagged-union type the rest of the system already validates against (no JSON-extract gymnastics in SQLite). The function loads the raw `state.transition` rows for the windowed assignments — at Phase B principal scale, hundreds of rows max per query — and computes intervals in a single linear pass per assignment. SQL handles row selection; TS handles arithmetic.
 
 ## Decision 4 — REST surface
 
@@ -120,11 +120,11 @@ GET /api/metrics/fleet?window=24h|7d|30d&agent=<id?>
   400  if window param missing or not in the allowlist
 ```
 
-`window` is intentionally a closed allowlist (`24h | 7d | 30d`) rather than a free-form duration string. Three windows cover the operator-readable cases; opening it up invites bikeshedding (`6h`? `90d`?) without driving operator behaviour. Add new windows here only if a real workflow requires them.
+`window` is intentionally a closed allowlist (`24h | 7d | 30d`) rather than a free-form duration string. Three windows cover the principal-readable cases; opening it up invites bikeshedding (`6h`? `90d`?) without driving principal behaviour. Add new windows here only if a real workflow requires them.
 
 `agent` is optional; when omitted, fleet metrics span all agents. When present, `count` / `completedCount` / cycle-time stats are scoped to that agent's assignments only, and `perAgent` is a single-element array (echoing the filter for client convenience).
 
-**No write endpoints in F-18.** Metrics are read-only by definition. Configuration knobs (custom windows, alerting thresholds) are deferred — there's nothing to configure until we know what the operator wants to act on.
+**No write endpoints in F-18.** Metrics are read-only by definition. Configuration knobs (custom windows, alerting thresholds) are deferred — there's nothing to configure until we know what the principal wants to act on.
 
 **No WebSocket push of metrics.** The fleet view refreshes on user-initiated window switches and on the existing `state.transition` WS event (a rolled-up transition recomputes the fleet view client-side via refetch — same pattern as `use-iterations`). Real-time push of computed aggregates is overkill for v1; deferred to F-19 if operators ask for it.
 
@@ -153,13 +153,13 @@ Loading / error state mirrors `iteration-board.tsx`:
 
 ## Open questions
 
-- **Q1 — Wait-for-token (API latency).** Out of scope for F-18; needs a code-trace check first that the bot persists CC `usage` events into our `events` table. If yes, derive `wait-for-token` as `assistant.message.timestamp - operator.input.timestamp` with operator-input-not-followed-by-an-assistant-response handled as a boundary condition. Filed as F-19.1.
+- **Q1 — Wait-for-token (API latency).** Out of scope for F-18; needs a code-trace check first that the bot persists CC `usage` events into our `events` table. If yes, derive `wait-for-token` as `assistant.message.timestamp - principal.input.timestamp` with principal-input-not-followed-by-an-assistant-response handled as a boundary condition. Filed as F-19.1.
 
 - **Q2 — Cost per assignment.** Same precondition as Q1 (CC `usage` events landing in our events table). When that lands, `byAgentCostUsd` is a one-line addition to `FleetMetrics`. F-19.2.
 
-- **Q3 — Stale-fleet truncation.** At Phase B scale (tens to hundreds of assignments), the windowed query is fine. At Tier 2 / multi-operator scale, `since=30d` could pull thousands. Not a blocker for v1; flagged for the same SQL-level windowing pass that F-7's events endpoint already uses. F-19.3.
+- **Q3 — Stale-fleet truncation.** At Phase B scale (tens to hundreds of assignments), the windowed query is fine. At Tier 2 / multi-principal scale, `since=30d` could pull thousands. Not a blocker for v1; flagged for the same SQL-level windowing pass that F-7's events endpoint already uses. F-19.3.
 
-- **Q4 — Sparklines / time-series view.** The current surface is point-in-time aggregates only. Sparklines (cycle time over the last 30d) would need either a daily rollup table or a per-day GROUP BY at query time. Defer to F-19 once F-18 has been in operator hands long enough to know if the trend view is actually wanted.
+- **Q4 — Sparklines / time-series view.** The current surface is point-in-time aggregates only. Sparklines (cycle time over the last 30d) would need either a daily rollup table or a per-day GROUP BY at query time. Defer to F-19 once F-18 has been in principal hands long enough to know if the trend view is actually wanted.
 
 ## Deferred to F-19+
 
@@ -167,6 +167,6 @@ Loading / error state mirrors `iteration-board.tsx`:
 - Drill-from-metric-to-assignment (clicking an agent name → opens the per-assignment metrics view)
 - Sparklines / trend charts (Q4)
 - Alerting thresholds (e.g., "p90 over 4h triggers a Discord ping")
-- Cross-host metrics (Tier 2 only — same posture as the rest of the spec; multi-operator is parked)
+- Cross-host metrics (Tier 2 only — same posture as the rest of the spec; multi-principal is parked)
 - Custom windows beyond the 24h / 7d / 30d allowlist
 - Per-task or per-iteration metrics (the assignment is the fundamental unit of work in the spec — task and iteration breakdowns are roll-ups of assignment metrics, easy to add when needed)

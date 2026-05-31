@@ -539,7 +539,7 @@ describe("RegistryClient — periodic refresh + shutdown", () => {
     await client.start();
     try {
       expect(client.getPrincipal("andreas")?.operator_pubkey).toBe(FAKE_PEER_PUBKEY_V1);
-      // Operator rotates their pubkey upstream.
+      // Principal rotates their pubkey upstream.
       currentPubkey = FAKE_PEER_PUBKEY_V2;
       await client.refreshAll();
       expect(client.getPrincipal("andreas")?.operator_pubkey).toBe(FAKE_PEER_PUBKEY_V2);

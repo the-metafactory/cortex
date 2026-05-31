@@ -8,7 +8,7 @@
 Updated: 2026-04-24. Edit in place as features ship; mirror status on GitHub issue [#2](https://github.com/the-metafactory/grove-v2/issues/2).
 
 This doc maps the design spec's Phase A–E to concrete features, SpecFlow IDs,
-and shipped PRs. It is the operator/agent view of "what's done, what's next".
+and shipped PRs. It is the principal/agent view of "what's done, what's next".
 When a box ticks here, tick it on the GitHub tracking issue too.
 
 ---
@@ -20,7 +20,7 @@ module running on `localhost:8767` with HTTP + WebSocket + SQLite. Schema, state
 machine, session endpoint resolver, event ingestion, WS server.
 
 - [x] **F-1** — Bot scaffold + SQLite schema (tasks, assignments, agents, sessions, events) — `41be1b5`
-- [x] **F-2** — Assignment state machine + `operator.input` / `permission.request` events — `cc43727`
+- [x] **F-2** — Assignment state machine + `principal.input` / `permission.request` events — `cc43727`
 - [x] **F-3** — Session endpoint resolver (`local.process.controlled` + `local.observed`) — `680059a`
 - [x] **F-4** — Hook-stream reader for observed sessions (cursor-based) — `46b7a16`
 - [x] **F-5** — WebSocket server at `:8767/ws` — `56adeec`
@@ -45,20 +45,20 @@ and wire the dispatcher that reads CC stdout for controlled sessions into events
 
 **Phase B is complete.** The dashboard now implements the full §8.1 layout: focus area, working-agent grid, task table, attention drill-down.
 
-## Phase C — Operator input return
+## Phase C — Principal input return
 
 **Goal:** turn the cockpit from a monitor into a console.
 
 - [x] Transport — write-to-session via endpoint resolver (covered by F-3 + PR #1)
 - [x] **F-10** — Text input affordance in the F-7 drill-down + `executionQueue` (§5.1 ③, §6.3) — PR #17 (`d0fbb84`)
 - [x] Image/screenshot paste + drag-drop (§6.2) — design addendum `docs/design-mc-image-input.md` — PR #21
-- [ ] Operator audit-log aggregation (§6.4) — already implicit via `operator.input` events and F-7/F-8 views; dedicated cross-operator view deferred post-Phase-B
+- [ ] Principal audit-log aggregation (§6.4) — already implicit via `principal.input` events and F-7/F-8 views; dedicated cross-principal view deferred post-Phase-B
 
 ## Phase D — Discord notifications
 
 - [x] **F-11** — Hardcoded priority map + DM + channel post on state change + deep links back to focus area — PR #23 (`3bad23d`); addendum `docs/design-mc-f11-discord-notifications.md`
 
-**Phase D is shipped.** Default off (`grove.notifications.discord=false`); operator opts in via `bot.yaml`. 401 tests, FlushScheduler injection, per-channel coalescing.
+**Phase D is shipped.** Default off (`grove.notifications.discord=false`); principal opts in via `bot.yaml`. 401 tests, FlushScheduler injection, per-channel coalescing.
 
 ## Phase E — Task curation UX
 
@@ -91,7 +91,7 @@ Revised 2026-04-25: drill-down port folds V4 Session Context into MIG-3 so the d
 |---|---|---|
 | A — Data foundation + bot scaffold | ✅ complete | F-1…F-5 + REST + WS shipped via PR #1, #5 |
 | B — Dashboard attention core | ✅ complete | F-6 / F-7 / F-8 / F-9 / F-10 + image-input + server-side caps shipped |
-| C — Operator input return | ✅ shipped | F-10 + image-input on main |
+| C — Principal input return | ✅ shipped | F-10 + image-input on main |
 | D — Discord notifications | ✅ shipped (off by default) | F-11 via PR #23 (`3bad23d`) |
 | E — Task curation UX | ✅ shipped | F-12 via PR #30 (`07a7cba`) + F-12b via PR #31 (`4093d57`); curation toolbar + add-to-queue ported to React in MIG-4 |
 | Dashboard React migration | ✅ complete | All six MIGs landed; legacy monolith deleted; React app at `/` |

@@ -1120,7 +1120,7 @@ describe("createSurfaceRouter — visibility filter wiring", () => {
       systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
     });
     const a = recordingAdapter({
-      id: "operator-dashboard",
+      id: "principal-dashboard",
       subjects: [">"],
       visibility: { max_classification: "local" },
     });

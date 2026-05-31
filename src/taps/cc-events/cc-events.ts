@@ -37,7 +37,7 @@
  *     `payload.session_id` always carries the original value either way.
  *   - `sovereignty` defaults to local-only / NZ / max_hop=0 / frontier_ok=false /
  *     model_class=local-only. CC events expose internal session activity
- *     (file paths, tool names, command previews) — operator-only, no
+ *     (file paths, tool names, command previews) — principal-only, no
  *     federation, no frontier-model processing.
  *   - `type` is the PublishedEvent's `event_type` verbatim — it already has
  *     G-1111-grammar shape (`agent.task.started`, `tool.bash.executed`, etc.)
@@ -77,7 +77,7 @@ export interface CcEventSource {
   /** Stable instance name. Defaults to `"relay"`. */
   instance?: string;
   /**
-   * Operator residency code stamped into `envelope.sovereignty.data_residency`.
+   * Principal residency code stamped into `envelope.sovereignty.data_residency`.
    * Defaults to `"NZ"` when omitted — matches the original cortex deployment.
    * Operators in other jurisdictions pass their own ISO-3166-style code so
    * envelopes accurately reflect data residency. Mirrors the parameterisation
@@ -94,7 +94,7 @@ function buildSource(src: CcEventSource | undefined): string {
 
 /**
  * Default sovereignty for `cc.*` envelopes. Same posture as `system.*`:
- * operator-only by default, local residency, no frontier-model
+ * principal-only by default, local residency, no frontier-model
  * processing. `data_residency` reads from `source.dataResidency`
  * (defaulting to `"NZ"`). Returned as a fresh literal per call so a
  * downstream mutation on one envelope's sovereignty cannot leak into
@@ -103,8 +103,8 @@ function buildSource(src: CcEventSource | undefined): string {
  * **IAW Phase A.3:** `classification` is now an optional parameter
  * (defaulting to `"local"` for back-compat). Cortex's hook stream carries
  * internal session activity (file paths, tool names, command previews);
- * operator-private is the right default. Callers may opt into
- * `"federated"` or `"public"` for explicit cross-operator visibility
+ * principal-private is the right default. Callers may opt into
+ * `"federated"` or `"public"` for explicit cross-principal visibility
  * scenarios. Default preserves the prior posture.
  */
 function defaultCcSovereignty(
@@ -143,8 +143,8 @@ export interface CreateCcEventEnvelopeOpts {
   /**
    * IAW Phase A.3 — optional sovereignty classification. Defaults to
    * `"local"`. CC hook events carry internal session activity (file paths,
-   * tool names); operator-private is the sensible default. Callers may opt
-   * into `"federated"` or `"public"` for explicit cross-operator scenarios
+   * tool names); principal-private is the sensible default. Callers may opt
+   * into `"federated"` or `"public"` for explicit cross-principal scenarios
    * (e.g. a public demo session whose events should reach a community
    * dashboard). Mismatch with the publish-time subject is a protocol
    * violation (see {@link validateSubjectEnvelopeAlignment}).
@@ -157,7 +157,7 @@ export interface CreateCcEventEnvelopeOpts {
    *   `originator: { principal, attribution: "adapter-resolved" }`
    *
    * The cc-events tap IS the adapter for the Claude-Code substrate: it
-   * lifts hook events from the operator's own stack into the bus.
+   * lifts hook events from the principal's own stack into the bus.
    * Attribution is always `"adapter-resolved"` because the relay maps the
    * running CC session (a non-myelin identifier) to the stack's myelin
    * principal at sign time.
@@ -243,7 +243,7 @@ export interface CreateCcEventPublisherOpts {
    */
   principal?: string;
   /**
-   * Operator stack segment slotted between `{principal}` and `{type}` on the
+   * Principal stack segment slotted between `{principal}` and `{type}` on the
    * derived NATS subject (myelin#113 — IAW Phase A.5; closes cortex#266).
    * When supplied, relay-lifted cc-events publish on the 6-segment shape
    * `local.{principal}.{stack}.{type}` matching sage's bridge subscription
@@ -255,7 +255,7 @@ export interface CreateCcEventPublisherOpts {
    * Production callers (the cortex boot path in `src/cortex.ts`) source
    * this from `deriveStackId(loadedConfig).stack` — the same value
    * `MyelinRuntime.publish` receives, so the runtime path and the
-   * cc-events relay agree on the wire grammar for one operator instance.
+   * cc-events relay agree on the wire grammar for one principal instance.
    * `public.` classification ignores `stack` (per myelin's
    * `deriveNatsSubject` semantics — `public` subjects carry no principal or
    * stack segments).
@@ -270,7 +270,7 @@ export interface CreateCcEventPublisherOpts {
    */
   instance?: string;
   /**
-   * Operator residency stamped into envelope sovereignty. Defaults to `"NZ"`.
+   * Principal residency stamped into envelope sovereignty. Defaults to `"NZ"`.
    */
   dataResidency?: string;
   /**
@@ -290,7 +290,7 @@ export interface CreateCcEventPublisherOpts {
    * If you pass `buildEnvelope`, the override is fully responsible for
    * setting `envelope.sovereignty.classification` to whatever value you
    * configured via `opts.classification` — otherwise the subject
-   * (derived from the envelope) and the operator-intended classification
+   * (derived from the envelope) and the principal-intended classification
    * can silently diverge (cortex#130 item 3, Echo's suggestion).
    *
    * **Caller also owns `originator` when overriding** — see
@@ -309,7 +309,7 @@ export interface CreateCcEventPublisherOpts {
    * the relay maps the running CC session to the stack's myelin principal
    * at sign time — hence the `adapter-resolved` attribution mode.
    *
-   * Production callers source this from the operator's stack principal
+   * Production callers source this from the principal's stack principal
    * id (e.g. `did:mf:<stack-principal>` derived from cortex config).
    * Omit to preserve pre-#346 behaviour (no originator field; receivers
    * fall back to `signed_by[0].principal` for policy attribution).
@@ -371,7 +371,7 @@ export function createCcEventPublisher(
     } catch (err) {
       // Mirror MyelinRuntime.publish's swallow-and-log policy. The relay's
       // primary path is JSONL append; bus is best-effort. Logging here is
-      // operator-facing — when a publish fails repeatedly the operator
+      // principal-facing — when a publish fails repeatedly the principal
       // sees it in launchd output and can investigate the NATS server.
       process.stderr.write(
         `cortex-relay: nats publish failed for subject=${subject} id=${envelope.id} type=${envelope.type}: ${

@@ -4,13 +4,13 @@
  *
  * Subcommands:
  *   cloud setup          — Full Cloudflare infrastructure provisioning
- *   cloud add-operator   — Create a new principal API key
+ *   cloud add-principal   — Create a new principal API key
  *   cloud status         — Check deployed Worker health and state
  *   cloud webhooks       — Check webhook delivery health for all tracked repos
  *
  * Usage:
  *   bun src/bot/commands/cloud.ts setup --cf-account-id X --cf-api-token Y
- *   bun src/bot/commands/cloud.ts add-operator --name "JC" --agent-name "Ivy" --endpoint URL --admin-key KEY
+ *   bun src/bot/commands/cloud.ts add-principal --name "JC" --agent-name "Ivy" --endpoint URL --admin-key KEY
  *   bun src/bot/commands/cloud.ts status --endpoint URL [--admin-key KEY]
  */
 
@@ -535,11 +535,11 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
   console.log("\nNext steps:");
   console.log("  1. Add the bot.yaml snippet above to ~/.config/grove/bot.yaml");
   console.log("  2. Restart cortex: cortex stop && cortex start");
-  console.log("  3. Add more principals: cortex cloud add-operator --name JC --agent-name Ivy --endpoint URL --admin-key SECRET");
+  console.log("  3. Add more principals: cortex cloud add-principal --name JC --agent-name Ivy --endpoint URL --admin-key SECRET");
 }
 
 // =============================================================================
-// cloud add-operator
+// cloud add-principal
 // =============================================================================
 
 async function cloudAddOperator(flags: Record<string, string>): Promise<void> {
@@ -550,7 +550,7 @@ async function cloudAddOperator(flags: Record<string, string>): Promise<void> {
 
   if (!name || !agentName || !endpoint || !adminKey) {
     throw new Error(
-      "Usage: cortex cloud add-operator --name <principal> --agent-name <agent> --endpoint <URL> --admin-key <SECRET>",
+      "Usage: cortex cloud add-principal --name <principal> --agent-name <agent> --endpoint <URL> --admin-key <SECRET>",
     );
   }
 
@@ -604,7 +604,7 @@ async function cloudAddOperator(flags: Record<string, string>): Promise<void> {
 async function cloudStatus(flags: Record<string, string>): Promise<void> {
   const endpoint = flags.endpoint;
   // Note: `--admin-key` flag is accepted by the parser for future admin-only
-  // queries (e.g., operator-key listings) but the current `status` command
+  // queries (e.g., principal-key listings) but the current `status` command
   // only reads public endpoints. The flag stays in the usage line so the
   // help text matches the parser's contract.
 
@@ -1032,7 +1032,7 @@ export async function runCloudCommand(argv: string[]): Promise<void> {
     case "setup":
       await cloudSetup(flags);
       break;
-    case "add-operator":
+    case "add-principal":
       await cloudAddOperator(flags);
       break;
     case "status":
@@ -1059,13 +1059,13 @@ export async function runCloudCommand(argv: string[]): Promise<void> {
       console.log("grove-bot cloud — Automated cloud infrastructure management\n");
       console.log("Commands:");
       console.log("  setup           Provision D1, KV, deploy Worker, create first key");
-      console.log("  add-operator    Create a new operator API key on the deployed Worker");
+      console.log("  add-principal    Create a new principal API key on the deployed Worker");
       console.log("  status          Check Worker health and connected operators");
       console.log("  repos           Manage tracked repositories (list, add, remove)");
       console.log("  webhooks        Check webhook delivery health for all tracked repos\n");
       console.log("Examples:");
       console.log("  grove-bot cloud setup --cf-account-id X --cf-api-token Y");
-      console.log('  grove-bot cloud add-operator --name "JC" --agent-name "Ivy" --endpoint URL --admin-key KEY');
+      console.log('  grove-bot cloud add-principal --name "JC" --agent-name "Ivy" --endpoint URL --admin-key KEY');
       console.log("  grove-bot cloud status --endpoint URL --admin-key KEY");
       console.log("  grove-bot cloud repos list");
       console.log("  grove-bot cloud repos add the-metafactory/new-repo");

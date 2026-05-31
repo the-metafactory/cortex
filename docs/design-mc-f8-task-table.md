@@ -64,7 +64,7 @@ interface TaskListItem {
 
 **Sort:** server returns rows ordered by `(status IN ('done','cancelled')) ASC, priority ASC, updated_at DESC` as a stable default; the client re-sorts in-memory on column-header click. The leading boolean partition key sinks closed rows to the bottom of the result set regardless of how recent or high-priority they are, which matters once `includeClosed=true` is toggled (see next paragraph). No server-side sort params in v1 — client-side re-sort over a bounded page is faster than round-tripping.
 
-**No pagination in v1.** The Phase B operator working-set is bounded (tens to low hundreds of tasks at most). The server caps the payload at `TASKS_QUERY_LIMIT = 500` — well above any plausible v1 working-set — and a response at that cap is a signal to add pagination, not a user-facing problem. If the cap is ever hit, the follow-up is the same keyset cursor pattern F-7's events endpoint uses. Noted here so a future reviewer doesn't re-open the discussion.
+**No pagination in v1.** The Phase B principal working-set is bounded (tens to low hundreds of tasks at most). The server caps the payload at `TASKS_QUERY_LIMIT = 500` — well above any plausible v1 working-set — and a response at that cap is a signal to add pagination, not a user-facing problem. If the cap is ever hit, the follow-up is the same keyset cursor pattern F-7's events endpoint uses. Noted here so a future reviewer doesn't re-open the discussion.
 
 **`includeClosed=true` eviction safety.** A flat `ORDER BY priority ASC, updated_at DESC LIMIT 500` is unsafe when closed rows are included: a task that was P0 and resolved yesterday sorts above a currently-open P1 that hasn't been touched in a week, so closed rows can evict open ones from the 500-row window. The partition-first sort above fixes this: all open rows (`status NOT IN ('done','cancelled')`) sort ahead of all closed rows regardless of priority or `updated_at`, so the 500-row cap truncates closed tasks first. In the default `includeClosed=false` case the partition key is constant (all rows are open) and the sort degenerates to the original `priority ASC, updated_at DESC` — no behaviour change. If Phase E ever produces enough open tasks to hit the 500 cap on their own, a split-LIMIT (`open LIMIT 500 UNION ALL closed LIMIT 500`) is the next step; not needed at Phase B scale.
 
@@ -76,7 +76,7 @@ One task can have N assignments across its dispatch cycles. The column shows a h
 
 **Chip overflow:** when more than three chips would render, show the first two plus a `+N` tail chip. Clicking the tail expands the row inline (does not open the drill-down — the drill-down is gated on the row body click, Decision 5).
 
-**Why not a count** (e.g., "3 agents")? Loss of information; the operator needs to see which specific heads are on a task (e.g., "is Luna blocked on this?") without another click. Chips are visually scannable at the densities we care about (≤5 chips per row).
+**Why not a count** (e.g., "3 agents")? Loss of information; the principal needs to see which specific heads are on a task (e.g., "is Luna blocked on this?") without another click. Chips are visually scannable at the densities we care about (≤5 chips per row).
 
 **Why oldest-first** rather than active-first? Stable visual order across refreshes — an agent's position doesn't jump when it transitions state. Active-first would reorder the chips every time state changes, which is animation noise for no information gain.
 
@@ -88,18 +88,18 @@ v1 filters are `priority` (multi-select: which P-lanes to show) and `age` (singl
 
 **Why hash, not localStorage?**
 
-- Filter state is **shareable** — an operator can paste a URL into Discord/Slack ("here's the P0 blocked view") and the recipient sees the same filter.
+- Filter state is **shareable** — an principal can paste a URL into Discord/Slack ("here's the P0 blocked view") and the recipient sees the same filter.
 - Filter state is **per-tab** — two dashboards open side-by-side can show different filters without collision. localStorage is shared across tabs.
 - Filter state is **ephemeral** — we don't want "I was filtering P0-only three weeks ago" to persist after the user closes the tab. Hash clears on close.
 - No dependency on storage permissions (some browser modes block localStorage).
 
 **F-7 consistency:** F-7's drill-down state is also not persisted (Decision 2 of that addendum explicitly defers hash routing). F-8 introduces hash state for filters only — the drill-down overlay remains an in-memory-only affordance. When F-10 adds shareable drill-down URLs, the two hash schemes (`#tasks?…` and `#a/:id`) compose cleanly.
 
-## Decision 4 — Aggregate "state" is worst-case by operator-attention severity
+## Decision 4 — Aggregate "state" is worst-case by principal-attention severity
 
 The table's `state` column shows one state per task, but a task may have multiple assignments in different states. §8.4 says "worst-case across assignments" without defining the order.
 
-**Order (worst first — highest operator attention):**
+**Order (worst first — highest principal attention):**
 
 ```
 blocked > running > dispatched > queued > failed > completed > cancelled
@@ -107,9 +107,9 @@ blocked > running > dispatched > queued > failed > completed > cancelled
 
 Reasoning:
 
-- `blocked` is the top of the list because it is the only state that can need operator input right now.
+- `blocked` is the top of the list because it is the only state that can need principal input right now.
 - `running / dispatched / queued` are in-flight active states, ordered by how close to work they are (running is burning resources, dispatched has been accepted, queued is waiting).
-- `failed` outranks `completed` because it is a terminal-bad state that an operator might want to resurface.
+- `failed` outranks `completed` because it is a terminal-bad state that an principal might want to resurface.
 - `cancelled` is the lowest because it means the task's progress is no longer something to reason about.
 
 **Implementation:** `aggregate_state` is computed server-side on the `/api/tasks` projection (Decision 1). The full rank mapping (lower = more attention-worthy):
@@ -140,7 +140,7 @@ MIN(CASE a.state
 
 The rank is then reverse-mapped to the state string on the TypeScript side at hydrate time (simple array lookup: `STATE_RANKS[rank] ?? null`). Doing the reverse mapping in TS rather than a correlated-subquery in SQL keeps the query flat and makes the null-propagation case (no rows → NULL rank → null state) trivial. `MIN(CASE …)` over zero rows naturally returns `NULL`, which matches the `aggregate_state = null` behaviour specified for tasks with empty `assignments[]`.
 
-Note the two counter-intuitive orderings in this table: `dispatched > queued` (dispatched is further-along than queued, but from an *attention* perspective a dispatched assignment is actively holding a slot, so it outranks a queued one that's merely waiting), and `failed > completed > cancelled` (all three are terminal, ranked by "likelihood an operator wants to resurface this"). These are the ranks used everywhere the worst-case order appears — Decision 5 tie-break, the WS refresh trigger semantics — so pinning them down once avoids drift.
+Note the two counter-intuitive orderings in this table: `dispatched > queued` (dispatched is further-along than queued, but from an *attention* perspective a dispatched assignment is actively holding a slot, so it outranks a queued one that's merely waiting), and `failed > completed > cancelled` (all three are terminal, ranked by "likelihood an principal wants to resurface this"). These are the ranks used everywhere the worst-case order appears — Decision 5 tie-break, the WS refresh trigger semantics — so pinning them down once avoids drift.
 
 **Empty-assignment case:** a task that has never had an assignment (Phase E "added-but-not-dispatched" — a state F-8 doesn't create but may surface if Phase E backfills) shows `aggregate_state = null`. The column renders as a dim em-dash with tooltip "No assignment yet".
 
@@ -161,7 +161,7 @@ Note the two counter-intuitive orderings in this table: `dispatched > queued` (d
 
 A single checkbox above the table: "Show closed". Off by default. When on, `status IN ('done','cancelled')` rows appear at the bottom of the sort order at reduced opacity — same visual treatment as terminal assignment chips (Decision 2).
 
-**Why not a tab** (Active / Closed / All)? Tabs imply mutually exclusive views; in practice an operator looking at a closed task often wants to see whether there's an open follow-up at the same priority. One list with a toggle supports that without a view switch.
+**Why not a tab** (Active / Closed / All)? Tabs imply mutually exclusive views; in practice an principal looking at a closed task often wants to see whether there's an open follow-up at the same priority. One list with a toggle supports that without a view switch.
 
 **State persists via hash** (Decision 3). Two operators at the same URL see the same inclusion policy.
 
@@ -179,7 +179,7 @@ No decorative graphics / icons in v1 — the parent spec's aesthetic is text-for
 
 ## Decision 8 — Sort stability within priority ties uses `updated_at DESC`
 
-§8.4 says "within a priority lane, default sort is oldest first (longest-waiting surfaces first)." That rule applies to the **focus area** (F-6, `updated_at ASC` — longest-blocked surfaces first). For the **task table**, the operator is scanning all work, not triaging blockage, so the tie-break is **most recently touched first** (`updated_at DESC`).
+§8.4 says "within a priority lane, default sort is oldest first (longest-waiting surfaces first)." That rule applies to the **focus area** (F-6, `updated_at ASC` — longest-blocked surfaces first). For the **task table**, the principal is scanning all work, not triaging blockage, so the tie-break is **most recently touched first** (`updated_at DESC`).
 
 **Concretely:**
 
@@ -187,7 +187,7 @@ No decorative graphics / icons in v1 — the parent spec's aesthetic is text-for
 - Secondary (tie-break): `updated_at DESC`.
 - Tertiary (sub-second ties on `updated_at`): `id ASC`. Deterministic — our `generateId` is time-sortable so this is only a tiny deterministic nudge at the millisecond boundary.
 
-Sort direction on any column is operator-toggleable. The **default** is what the server returns; re-sort is client-side.
+Sort direction on any column is principal-toggleable. The **default** is what the server returns; re-sort is client-side.
 
 ## Decision 9 — Table is inline in the main column; not a separate route
 

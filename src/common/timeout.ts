@@ -7,7 +7,7 @@
  * deep in the router pipeline, it's impossible to tell *which* timeout fired
  * (attachment fetch? cloud publisher? usage monitor?).
  *
- * The 2026-05-09 outage burned hours of operator time on exactly this gap:
+ * The 2026-05-09 outage burned hours of principal time on exactly this gap:
  * `router error: AbortError` with no source attribution.
  *
  * Use `fetchWithTimeout({ source, ms, ... })` instead. On abort it produces a

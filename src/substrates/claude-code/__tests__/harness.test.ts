@@ -274,14 +274,14 @@ describe("ClaudeCodeHarness — DispatchRequest → CCSessionOpts mapping", () =
     const h = new ClaudeCodeHarness({ source: SOURCE, ccSessionFactory: cap.factory });
     const req = makeRequest({
       context: [
-        { kind: "env", data: { operator: "andreas", entity: "pr/45", project: "cortex" } },
+        { kind: "env", data: { principal: "andreas", entity: "pr/45", project: "cortex" } },
         { kind: "discord-history", data: [{ author: "andreas", text: "hi" }] },
       ],
     });
 
     await drain(h.dispatch(req));
 
-    expect(cap.opts[0]?.operator).toBe("andreas");
+    expect(cap.opts[0]?.principal).toBe("andreas");
     expect(cap.opts[0]?.entity).toBe("pr/45");
     expect(cap.opts[0]?.project).toBe("cortex");
   });
@@ -354,7 +354,7 @@ describe("ClaudeCodeHarness — DispatchRequest → CCSessionOpts mapping", () =
     const req = makeRequest({
       runtime: { cwd: "/work", groveChannel: "grove" },
       context: [
-        { kind: "env", data: { operator: "andreas", entity: "pr/45", project: "cortex" } },
+        { kind: "env", data: { principal: "andreas", entity: "pr/45", project: "cortex" } },
       ],
     });
 
@@ -362,7 +362,7 @@ describe("ClaudeCodeHarness — DispatchRequest → CCSessionOpts mapping", () =
 
     expect(cap.opts[0]?.cwd).toBe("/work");
     expect(cap.opts[0]?.groveChannel).toBe("grove");
-    expect(cap.opts[0]?.operator).toBe("andreas");
+    expect(cap.opts[0]?.principal).toBe("andreas");
     expect(cap.opts[0]?.entity).toBe("pr/45");
     expect(cap.opts[0]?.project).toBe("cortex");
   });

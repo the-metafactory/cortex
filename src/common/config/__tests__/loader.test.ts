@@ -209,7 +209,7 @@ describe("networksDir-missing log level (cortex#88 item 7)", () => {
   }
 
   test("default networksDir absent → info-level only (no warn)", () => {
-    // migrate-config emits `networksDir: ./networks` even when the operator
+    // migrate-config emits `networksDir: ./networks` even when the principal
     // never created the directory. Make sure that the default-value-absent
     // case is informational, not a warning.
     const configPath = writeCentralConfig(testDir, {
@@ -232,13 +232,13 @@ describe("networksDir-missing log level (cortex#88 item 7)", () => {
   });
 
   test("non-default networksDir absent → keeps console.warn", () => {
-    // Operator explicitly pointed networksDir at a non-default path that
+    // Principal explicitly pointed networksDir at a non-default path that
     // doesn't exist — that's almost certainly a typo or missing mount,
     // worth surfacing loudly.
     const configPath = writeCentralConfig(testDir, {
       agent: { name: "luna", displayName: "Luna" },
       claude: { timeoutMs: 120000 },
-      networksDir: "./operator-typo-here",
+      networksDir: "./principal-typo-here",
     });
 
     const cap = captureConsole();
@@ -283,11 +283,11 @@ describe("error reporting", () => {
 });
 
 // =============================================================================
-// MIG-7.2e — cortex-shape config (operator: + agents:[]) loading
+// MIG-7.2e — cortex-shape config (principal: + agents:[]) loading
 // =============================================================================
 //
 // `loadConfigWithAgents` accepts both legacy bot.yaml and cortex.yaml. The
-// detection is structural (operator: object + agents: non-empty array). For
+// detection is structural (principal: object + agents: non-empty array). For
 // cortex shape, the loader synthesizes a legacy-compatible AgentConfig and
 // returns the rich agents[] alongside via `inlineAgents` so `startCortex`
 // can route per-instance identity correctly.
@@ -338,7 +338,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     expect(loaded.inlineAgents[0]!.trust).toEqual(["luna"]);
   });
 
-  test("synthesizes AgentConfig.agent from operator + first agent", () => {
+  test("synthesizes AgentConfig.agent from principal + first agent", () => {
     const path = writeCortexConfig(testDir, minimalCortex());
     const { config, principal } = loadConfigWithAgents(path);
     expect(config.agent.name).toBe("ivy");
@@ -470,7 +470,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
   // is preserved through the cortex-shape → legacy AgentConfig synthesizer.
   // Before this fix, DiscordPresenceSchema lacked the field entirely and
   // zod's default unknown-key-strip behaviour silently dropped the
-  // operator-set value during `CortexConfigSchema.parse`, leaving the
+  // principal-set value during `CortexConfigSchema.parse`, leaving the
   // downstream DiscordInstance.trustedBotIds at its schema default ([]).
   test("threads agents[].presence.discord.trustedBotIds through to DiscordInstance.trustedBotIds", () => {
     const cfg = minimalCortex();
@@ -494,7 +494,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
   // operators can wire bus-envelope subjects into the Discord adapter's
   // surface-router match set. Before this fix, the field was absent from
   // both DiscordPresenceSchema and DiscordInstanceSchema, so zod's
-  // unknown-key-strip silently dropped any operator-set value.
+  // unknown-key-strip silently dropped any principal-set value.
   test("threads agents[].presence.discord.surfaceSubjects through to DiscordInstance.surfaceSubjects", () => {
     const cfg = minimalCortex();
     const firstAgent = (cfg.agents as Record<string, unknown>[])[0]!;
@@ -544,9 +544,9 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     // testing with a real snowflake as a JS Number literal silently rounds
     // at source-parse time and proves nothing about round-trip safety. Use
     // a small numeric to demonstrate ONLY the z.coerce.string() behavior:
-    // operator passes a number, schema returns a string of that number.
+    // principal passes a number, schema returns a string of that number.
     // The separate "preserves quoted snowflake string verbatim" test below
-    // exercises the realistic path (operator quotes the snowflake in yaml).
+    // exercises the realistic path (principal quotes the snowflake in yaml).
     const cfg = minimalCortex();
     const firstAgent = (cfg.agents as Record<string, unknown>[])[0]!;
     const discordPresence = (firstAgent.presence as Record<string, unknown>).discord as Record<string, unknown>;
@@ -560,7 +560,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
   });
 
   test("surfaceFallbackChannelId preserves a quoted snowflake string verbatim", () => {
-    // The realistic operator path: yaml configs surrounding `agentChannelId`,
+    // The realistic principal path: yaml configs surrounding `agentChannelId`,
     // `logChannelId`, etc. all quote Discord snowflakes as strings. Verify
     // a quoted snowflake survives the round-trip without any digit-loss
     // from JS Number precision.
@@ -596,7 +596,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
   test("IAW A.5.3 — omitted `stack:` block keeps LoadedConfig.stack undefined", () => {
     // Backward-compat path: cortex.yaml without a stack: block still parses,
     // and the loader returns `stack: undefined` so the boot path's
-    // `deriveStackId` falls through to `${operator.id}/default`.
+    // `deriveStackId` falls through to `${principal.id}/default`.
     const path = writeCortexConfig(testDir, minimalCortex());
     const loaded = loadConfigWithAgents(path);
     expect(loaded.stack).toBeUndefined();
@@ -645,7 +645,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     const presence = agent.presence as Record<string, unknown>;
     const discord = presence.discord as Record<string, unknown>;
     discord.roles = [
-      { name: "operator", users: ["100000000000000999"], features: ["chat"] },
+      { name: "principal", users: ["100000000000000999"], features: ["chat"] },
     ];
     const path = writeCortexConfig(testDir, cfg);
     expect(() => loadConfigWithAgents(path)).toThrow(
@@ -683,7 +683,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
   test("v2.0.0 rejects agents[].roles[] (legacy top-level agent-roles field)", () => {
     const cfg = minimalCortex();
     const agent = (cfg.agents as Record<string, unknown>[])[0]!;
-    agent.roles = [{ name: "operator", users: ["100000000000000999"] }];
+    agent.roles = [{ name: "principal", users: ["100000000000000999"] }];
     const path = writeCortexConfig(testDir, cfg);
     expect(() => loadConfigWithAgents(path)).toThrow(/agents\[0\]\.roles\[\]/);
     expect(() => loadConfigWithAgents(path)).toThrow(/migrate-config\.ts/);
@@ -702,7 +702,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
   });
 
   test("v2.0.0 lists every offender in a single error message", () => {
-    // Multi-offender case: operator left BOTH presence.discord.roles[] AND
+    // Multi-offender case: principal left BOTH presence.discord.roles[] AND
     // presence.discord.dm in the file. The error should enumerate both so
     // they can fix everything in one migrate-config run.
     const cfg = minimalCortex();

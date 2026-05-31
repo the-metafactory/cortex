@@ -12,7 +12,7 @@
  *
  * Each caller wraps the helper differently — adapter.getPlatformUserId
  * lets the throw propagate (PresenceBinding contract), poller wraps in
- * try/catch and returns null, notifyOperator inherits getPlatformUserId's
+ * try/catch and returns null, notifyPrincipal inherits getPlatformUserId's
  * caching. Pinning the helper's contract here means future changes can't
  * silently relax those guarantees.
  */

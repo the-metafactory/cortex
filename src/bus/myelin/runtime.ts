@@ -327,7 +327,7 @@ export interface MyelinRuntimeOptions {
    * `{principal}` in subscribe-side subject patterns. Replaces the
    * prior read from `config.agent.operatorId` (removed together with
    * the schema field). The entrypoint passes the value resolved by
-   * `resolvePrincipalId(options.operator)`; when undefined, the
+   * `resolvePrincipalId(options.principal)`; when undefined, the
    * substituter falls back to `"default"` to preserve legacy NATS-less
    * runtime no-op semantics.
    */
@@ -506,7 +506,7 @@ export async function startMyelinRuntime(
     link = await NatsLink.connect({
       url: nats.url,
       token: nats.token,
-      // cortex#86: operator-mode auth path. NatsLink loader expands ~/
+      // cortex#86: operator-account JWT auth path. NatsLink loader expands ~/
       // and enforces chmod 600; if both token and credsPath are set,
       // credsPath wins with a warn log.
       ...(nats.credsPath ? { credsPath: nats.credsPath } : {}),

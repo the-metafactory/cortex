@@ -222,7 +222,7 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
       agentsDir: tmpAgentsDir,
       injectRuntime: runtime,
       inlineAgents,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
 
     // One envelope per agent-with-capabilities. The capabilities list is
@@ -283,7 +283,7 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
           agentsDir: tmpAgentsDir,
           injectRuntime: runtime,
           inlineAgents,
-          operator: { id: "test-op" },
+          principal: { id: "test-op" },
         }),
       ),
     );
@@ -346,7 +346,7 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
         agentsDir: tmpAgentsDir,
         injectRuntime: runtime,
         inlineAgents,
-        operator: { id: "test-op" },
+        principal: { id: "test-op" },
       }),
     );
 
@@ -384,7 +384,7 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
       agentsDir: tmpAgentsDir,
       injectRuntime: runtime,
       inlineAgents,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
 
     expect(runtime.published.length).toBe(0);
@@ -421,7 +421,7 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
           agentsDir: tmpAgentsDir,
           injectRuntime: runtime,
           inlineAgents,
-          operator: { id: "test-op" },
+          principal: { id: "test-op" },
         }),
       ),
     );
@@ -461,7 +461,7 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
       agentsDir: tmpAgentsDir,
       injectRuntime: runtime,
       inlineAgents,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
 
     expect(runtime.published.length).toBe(2);
@@ -493,7 +493,7 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
       agentsDir: tmpAgentsDirA,
       injectRuntime: runtimeA,
       inlineAgents,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
     await handleA.stop();
     rmSync(tmpAgentsDirA, { recursive: true, force: true });
@@ -509,7 +509,7 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
       agentsDir: tmpAgentsDirB,
       injectRuntime: runtimeB,
       inlineAgents,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
     await handleB.stop();
     rmSync(tmpAgentsDirB, { recursive: true, force: true });

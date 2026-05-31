@@ -1,4 +1,4 @@
-# Iteration plan — F-19 Dispatch + F-20 Observe (operator loop closure)
+# Iteration plan — F-19 Dispatch + F-20 Observe (principal loop closure)
 
 <!-- lifted-from-grove-v2-at-MIG-7.11 -->
 <!-- Original location: github.com/the-metafactory/grove-v2 docs/iteration-mc-dispatch-observe.md -->
@@ -6,7 +6,7 @@
 
 Mirrors the umbrella GH issue. Specs: `docs/design-mc-f19-dispatch.md`, `docs/design-mc-f20-observe.md`.
 
-This pair of features closes the operator loop end-to-end on a single machine: F-19 makes the dispatch primitive operable from the dashboard (Maestro pattern, controlled subprocess); F-20 makes terminal-launched `cldyo-live` sessions visible in the dashboard (read-only, observed kind).
+This pair of features closes the principal loop end-to-end on a single machine: F-19 makes the dispatch primitive operable from the dashboard (Maestro pattern, controlled subprocess); F-20 makes terminal-launched `cldyo-live` sessions visible in the dashboard (read-only, observed kind).
 
 ## F-19 — Dispatch from task table / iteration kanban (PR 1)
 
@@ -41,14 +41,14 @@ Frontend: `observed` badge on agent cards + drill-down input gate.
 ## Deferred (file as separate issues post-merge)
 
 ### F-19 follow-ups
-- F-19.1 — Operator agent picker (replaces default-agent with a dropdown)
-- F-19.2 — Dispatch with custom prompt (one-line operator focus before confirm)
+- F-19.1 — Principal agent picker (replaces default-agent with a dropdown)
+- F-19.2 — Dispatch with custom prompt (one-line principal focus before confirm)
 - F-19.3 — Bulk dispatch from kanban column
 - F-19.4 — Re-dispatch on terminal-state task
 
 ### F-20 follow-ups
 - F-20.1 — Resume an observed session on `cldyo-live` re-launch
-- F-20.2 — Operator re-classify (mark `completed` observed session as `cancelled` after the fact — operator distinguishes finished from abandoned)
+- F-20.2 — Principal re-classify (mark `completed` observed session as `cancelled` after the fact — principal distinguishes finished from abandoned)
 - F-20.3 — Stale-observed-session sweeper based on PID liveness (belt-and-braces fallback for lost hook events)
 - F-20.4 — Backfill registration for already-running terminal sessions
 
@@ -67,4 +67,4 @@ After both PRs merge and MC v2 restarts on the new build:
    - Input textarea is hidden / shows the "owned by terminal" rationale
 4. F-18 metrics tab shows non-zero numbers as work flows through both surfaces.
 
-This is the spec's §2 operator loop, fully operable for the first time.
+This is the spec's §2 principal loop, fully operable for the first time.

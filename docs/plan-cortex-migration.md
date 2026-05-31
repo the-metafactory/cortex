@@ -32,7 +32,7 @@ Cortex is the new repo. It IS an **M7 application** — the conscious processing
 
 ### 1.2 Why now — the myelin architecture is already paying off
 
-The G-1100 ladder retro (`docs/iteration-collaboration-surface.md`, 2026-05-08) is the empirical data point: in ~10 hours, single-operator session, the team shipped five sub-features (NATS connection primitive → vendored myelin schema + envelope validator → subject-pattern subscription → myelin subscriber compose → wire-into-bot startup) through 1–5 review rounds each, with 53 unit tests on `main` and zero post-merge bugs. That throughput came from the architecture itself, not from heroics:
+The G-1100 ladder retro (`docs/iteration-collaboration-surface.md`, 2026-05-08) is the empirical data point: in ~10 hours, single-principal session, the team shipped five sub-features (NATS connection primitive → vendored myelin schema + envelope validator → subject-pattern subscription → myelin subscriber compose → wire-into-bot startup) through 1–5 review rounds each, with 53 unit tests on `main` and zero post-merge bugs. That throughput came from the architecture itself, not from heroics:
 
 - **Layer boundaries forced cleaner abstractions during review.** Round-1 of G-1100.D pushed back on the subscriber's API surface (single-error vs. all-errors return shape, undiscriminated reason union); the redesign that fell out is the right shape because the layer it lives in (L4 coordination) has clear consumers (L7 surface adapters) with clear needs.
 - **The vendored envelope schema gave a free contract test.** G-1100.B used the real upstream `myelin/examples/` fixtures, including the deliberately-broken `invalid-missing-sovereignty.json`. Anyone touching the validator can't quietly drift from the spec.
@@ -118,10 +118,10 @@ This is the affirmative case for cortex. The §1.1 symptoms are real, but the lo
 | `src/bot/lib/timeout.ts` | ~110 | infra (post-#82) | `src/common/timeout.ts` | **New in PR #82 (OPEN at snapshot).** Used by multiple components after merge. |
 | `src/bot/lib/__tests__/` | — | tests | tests stay alongside the file moved | |
 | `src/bot/types/config.ts` | 510 | infra | `src/common/types/config.ts` | The big shared config schema |
-| `src/cli/discord.ts` | 266 | operator CLI | `src/cli/discord/index.ts` | The `~/bin/discord` binary |
+| `src/cli/discord.ts` | 266 | principal CLI | `src/cli/discord/index.ts` | The `~/bin/discord` binary |
 | `src/cli/lib/` | — | CLI helpers | `src/cli/discord/lib/` | |
 | `src/cli/skill/` | — | skill packaging | `src/cli/discord/skill/` | The Discord agent skill. Preserves the `skill/` subpath under `cli/discord/`. |
-| `src/cli/cldyo-live` *(single bash script, not a directory)* | — | operator CLI | `src/cli/cldyo-live` (preserve as single file) | The CC instrumentation wrapper. **Bash script, not TypeScript.** Optional follow-on: rewrite as `src/cli/cldyo-live/index.ts` post-MIG-7. |
+| `src/cli/cldyo-live` *(single bash script, not a directory)* | — | principal CLI | `src/cli/cldyo-live` (preserve as single file) | The CC instrumentation wrapper. **Bash script, not TypeScript.** Optional follow-on: rewrite as `src/cli/cldyo-live/index.ts` post-MIG-7. |
 | `src/dashboard/` (entire tree, 28 files) | ~5,300 | surface (legacy mc-v2) | **RETIRE** at cutover; replaced by `src/surface/mc/` | This is mc-v2; mc-v3 is `src/mission-control/` and is canonical. |
 | `src/mission-control/` (entire tree, 149 files) | ~22,500 | surface (canonical mc-v3) | `src/surface/mc/` | The mc-v3 work (F-13..F-20.F). **Large** — single biggest move; budget MIG-2 accordingly. |
 | `src/relay/` (entire tree) | ~1,400 | tap (CC hooks) | `src/taps/cc-events/` | CC hook events → NATS publisher |
@@ -176,8 +176,8 @@ Legacy grove built a substantial agent-management subsystem that grove-v2 does n
 | `src/bot/lib/persona-merge.ts` | 160 | Merges persona overlays | Accept regression; v1 cortex personas are flat per agent, no overlay system. |
 | `src/bot/lib/identity-verification.ts` | 185 | Cross-bot identity verification | **Partial coverage in cortex.** §9.3 trust resolver provides the runtime `(platformId → agentId)` map; full cryptographic verification is M4-IDENTITY territory (myelin#8 / MY-400) and lands when myelin#36's signed-publish work lands in cortex. |
 | `src/bot/lib/trusted-bot-audit.ts` | 155 | Audit log for trusted-bot mention acceptance | **Partial coverage.** Today's `trusted-agent mention accepted from bot=...` log line in grove-v2's discord-client.ts covers the operational essential; full audit subsystem deferred. |
-| `src/bot/lib/message-rate-limiter.ts` | 118 | Per-author rate limiting | **Accept regression for v1.** Single-operator deployments don't need it; flag for re-implementation when multi-operator lands. |
-| `src/bot/lib/distill-instruction.ts` | 109 | Distills operator instruction into actionable form | Accept regression; cortex's prompt-builder handles this. |
+| `src/bot/lib/message-rate-limiter.ts` | 118 | Per-author rate limiting | **Accept regression for v1.** Single-principal deployments don't need it; flag for re-implementation when multi-principal lands. |
+| `src/bot/lib/distill-instruction.ts` | 109 | Distills principal instruction into actionable form | Accept regression; cortex's prompt-builder handles this. |
 | `src/bot/lib/workflow-log.ts` | 202 | Per-workflow audit log | Accept regression; cortex's worklog-manager + dispatch event stream cover the operational equivalent. |
 | `src/bot/lib/redact-stderr.ts` | 36 | Redacts secrets from stderr before forwarding | **Accept regression with TODO.** Worth re-porting before cortex handles secrets at scale. |
 | `src/bot/lib/atomic-write.ts` | 118 | Atomic file write helper | Accept regression; replace with grove-v2 equivalents or library. |
@@ -210,15 +210,15 @@ Independently of grove-v2's G-1100 ladder, legacy grove went down its own NATS+r
 | Legacy item | LOC / scope | v1 cortex decision |
 |-------------|-------------|--------------------|
 | `bots.d/` Apache-style per-bot config overlays (PR #333) | config schema | Accept regression for v1; single-instance config matches grove-v2 shape. |
-| T-10 AAA Phase 1 — per-bot AAA (PR #330) | wraps several agent-* / identity files above | Accept regression for v1; multi-operator authz lands when needed. |
+| T-10 AAA Phase 1 — per-bot AAA (PR #330) | wraps several agent-* / identity files above | Accept regression for v1; multi-principal authz lands when needed. |
 | `src/bot/lib/adapters/discord-attachments.ts` | adapter helper | grove-v2 covers via `attachment-handler.ts`; superseded. |
 | `src/bot/lib/command-dispatch.ts` | command routing | grove-v2 covers via `message-router.ts`; superseded. |
-| `src/cli/grove.ts` | operator CLI | The `grove` CLI is renamed `cortex` per MIG-7.7; legacy command set re-implemented as needed. |
+| `src/cli/grove.ts` | principal CLI | The `grove` CLI is renamed `cortex` per MIG-7.7; legacy command set re-implemented as needed. |
 | `src/cli/nats-review.ts` | review CLI | Re-implement via cortex's bus-driven review surface (post-MIG-7). |
 | `src/spikes/keygen.ts`, `nats-identity-test.ts` | spikes | Don't migrate. |
 | `src/bot/hooks/skill-guard.hook.ts` | hook script | Re-port if needed; not v1-critical. |
 | `src/statusline/` | empty in both repos | n/a |
-| `infra/nats-hub/` | NATS hub deployment infra | **Out of scope for cortex repo.** NATS hub deployment is operator infrastructure, lives wherever operator ops lives. |
+| `infra/nats-hub/` | NATS hub deployment infra | **Out of scope for cortex repo.** NATS hub deployment is principal infrastructure, lives wherever principal ops lives. |
 | `migration-aaa-phase1.md` / `migration-aaa-phase23.md` docs | Markdown | Archive for reference; not migrated. |
 
 #### 2.2.4 Honest summary
@@ -227,7 +227,7 @@ Cortex v1 is **narrower than legacy grove** by ~6,500 LOC of agent-management, p
 
 Re-implementations to track explicitly:
 1. **Cross-bot identity verification** (legacy `identity-verification.ts`, 185 LOC) — partial coverage via §9.3 trust resolver; full cryptographic verification arrives via myelin#8 / MY-400.
-2. **Per-author rate limiting** (legacy `message-rate-limiter.ts`, 118 LOC) — needed before multi-operator.
+2. **Per-author rate limiting** (legacy `message-rate-limiter.ts`, 118 LOC) — needed before multi-principal.
 3. **Stderr secret redaction** (legacy `redact-stderr.ts`, 36 LOC) — worth re-porting before cortex handles secrets at scale.
 
 Filed as cortex follow-on issues post-MIG-7 (TBD during MIG-0 issue setup).
@@ -305,7 +305,7 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
 
 **Steps (deterministic checklist):**
 
-- [ ] **0.1** `gh repo create the-metafactory/cortex --private --clone` (private at first; toggle public when content stabilises). Operator action — agent surfaces but does not execute.
+- [ ] **0.1** `gh repo create the-metafactory/cortex --private --clone` (private at first; toggle public when content stabilises). Principal action — agent surfaces but does not execute.
 - [ ] **0.2** Clone locally to `~/Developer/cortex/`.
 - [ ] **0.3** Apply compass-core label set: `bun ~/Developer/compass/standards/scripts/sync-labels.ts --owner the-metafactory --repo cortex`.
 - [ ] **0.4** `cp ~/Developer/compass/templates/CLAUDE.md.template CLAUDE.md`. Fill placeholders for the cortex-specific architecture summary (one-paragraph version of `design-cortex.md` §1).
@@ -371,7 +371,7 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
 - [x] **2.3** Copy from grove-v2: `src/bot/lib/dashboard-api.ts` + `dashboard-state.ts` + `dashboard-db.ts` → `cortex/src/surface/mc/{api,state,db}.ts`. *(landed as part of `src/surface/mc/` lift; the F-13..F-20.F dashboard's API/state/db tree)*
 - [x] **2.4** Update React build config (Bun.build) to point at new paths. *(metrics-panel.tsx import fixed to `../../../../shared/format-utils` for new depth; cortex#14)*
 - [x] **2.5** Update CF Worker `wrangler.toml` to deploy from `cortex/src/surface/mc/worker/` (or `dist/worker/`). *(file lifted in cortex#14; deploy path lives at the new location)*
-- [ ] **2.6** Update WebSocket client URLs to point at the deployed Worker URL — `grove.meta-factory.ai` is the host *for now*. **DNS rename to `cortex.meta-factory.ai` is OUT OF SCOPE for v1 cortex** — the operator-facing brand name (`Cortex`) and the legacy DNS host (`grove.meta-factory.ai`) can legitimately differ; renaming DNS is a separate phase post-MIG-8 if/when desired. Track as a follow-on issue. *(deferred to MIG-7 cutover — Worker URL flip happens with the rebrand, not the lift)*
+- [ ] **2.6** Update WebSocket client URLs to point at the deployed Worker URL — `grove.meta-factory.ai` is the host *for now*. **DNS rename to `cortex.meta-factory.ai` is OUT OF SCOPE for v1 cortex** — the principal-facing brand name (`Cortex`) and the legacy DNS host (`grove.meta-factory.ai`) can legitimately differ; renaming DNS is a separate phase post-MIG-8 if/when desired. Track as a follow-on issue. *(deferred to MIG-7 cutover — Worker URL flip happens with the rebrand, not the lift)*
 - [ ] **2.7** Confirm dashboard renders: `bun build src/surface/mc/index.html --outdir=dist/dashboard` then `bunx wrangler pages dev dist/dashboard`. Manual smoke test. *(deferred to MIG-7 — single env-dependent test for React shell remains gated on `bun build`; tsc green on both root + worker, 1137/1138 surface tests pass)*
 - [x] **2.8** **Do not** delete legacy `src/dashboard/` from grove-v2 yet. mc-v2 retirement happens in MIG-8 once cortex is the deployment target. *(observed — grove-v2 untouched)*
 - [x] **2.9** All test suites green. *(`bun test src/surface/` 1137/1138; root + worker `bunx tsc --noEmit` exit 0; 5 `src/common/*.ts` files pulled forward from MIG-7.6 for worker `../../../../../common/` imports — explicitly noted in commit 5a3b414)*
@@ -401,7 +401,7 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
 - [x] **3.5** Adapter no longer owns its inbound NATS subscription (it only owns its platform-side connection — Discord gateway, Mattermost websocket). *(cortex#18, merged 2026-05-09 — MIG-3a acknowledged: adapter never owned NATS sub in cortex)*
 - [x] **3.6** All tests moved + green. Add new test: surface-router registers the Discord adapter, publishes an envelope, asserts adapter renders. *(cortex#28, merged 2026-05-09 — MIG-3b surface-integration test exists)*
 - [x] **3.7** Wire `system.adapter.{disconnected,degraded,recovered}` event emission per G-1111 §3.5. The `onDegraded` callback (added in PR #82) now publishes via the bus instead of console.error. *(cortex#29, merged 2026-05-09 — MIG-3b-ii system.adapter.* envelopes emitted)*
-- [x] **3.8** Same for `system.dispatch.aborted` — `TimeoutSourceError` (PR #82) becomes a structured envelope. *(cortex#56, merged 2026-05-12 — closes cortex#38. Helper renamed to `system.inbound.aborted` per G-1111 §3.5 — `dispatch.*` is reserved for the operator-dispatches-work-to-agents domain. Discord attachment-fetch `fetchWithTimeout` failure path now publishes envelope via DispatchHandler. 3 non-adapter `fetchWithTimeout` callers — startup_sync, cloud_publisher, usage_monitor — out of scope; covered by separate slice if needed.)*
+- [x] **3.8** Same for `system.dispatch.aborted` — `TimeoutSourceError` (PR #82) becomes a structured envelope. *(cortex#56, merged 2026-05-12 — closes cortex#38. Helper renamed to `system.inbound.aborted` per G-1111 §3.5 — `dispatch.*` is reserved for the principal-dispatches-work-to-agents domain. Discord attachment-fetch `fetchWithTimeout` failure path now publishes envelope via DispatchHandler. 3 non-adapter `fetchWithTimeout` callers — startup_sync, cloud_publisher, usage_monitor — out of scope; covered by separate slice if needed.)*
 - [x] **3.9** All test suites green. *(cortex#28 + #29, merged 2026-05-09 — MIG-3b tests green)*
 
 **Acceptance:**
@@ -463,11 +463,11 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
 
 ---
 
-### MIG-6 — CLIs (operator tools)
+### MIG-6 — CLIs (principal tools)
 
 **Goal:** `~/bin/discord` and `~/bin/cldyo-live` distribute from cortex.
 
-**Issue:** `cortex#7 — MIG-6: Operator CLIs (discord, cldyo-live)`
+**Issue:** `cortex#7 — MIG-6: Principal CLIs (discord, cldyo-live)`
 
 **Steps:**
 
@@ -494,11 +494,11 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
 **Steps:**
 
 - [x] **7.1** Create `cortex/src/cortex.ts` — the entrypoint binary. Wires bus + runner + adapters + taps. (Equivalent of `grove-v2/src/bot/grove-bot.ts` but with the new module layout.) *(cortex#32 + #33, merged 2026-05-09 — cortex.ts entrypoint wiring runtime+router+adapters+runner+taps, plus round-1 observable wire-up + abandoned-set tracking)*
-- [x] **7.2** Move `src/bot/types/config.ts` → `cortex/src/common/types/config.ts`. Add new `nats.identity` schema (per JC's E2E NATS work). **Refactor schema per `design-cortex.md` §9.1 flipped model**: `operator:`, `agents[]` (each with own `persona`, `roles`, `trust`, `presence.<platform>`), `renderers[]` for non-agent-bound surfaces (dashboard, pagerduty, cli-tail). Replaces today's `agent:` + `discord:` + `mattermost:` + `trustedAgentBots:`. *(cortex#40 base + #44 review follow-ups, merged 2026-05-11 — CortexConfig schema foundation with operator:/agents[]/renderers[] flipped model)*
+- [x] **7.2** Move `src/bot/types/config.ts` → `cortex/src/common/types/config.ts`. Add new `nats.identity` schema (per JC's E2E NATS work). **Refactor schema per `design-cortex.md` §9.1 flipped model**: `principal:`, `agents[]` (each with own `persona`, `roles`, `trust`, `presence.<platform>`), `renderers[]` for non-agent-bound surfaces (dashboard, pagerduty, cli-tail). Replaces today's `agent:` + `discord:` + `mattermost:` + `trustedAgentBots:`. *(cortex#40 base + #44 review follow-ups, merged 2026-05-11 — CortexConfig schema foundation with principal:/agents[]/renderers[] flipped model)*
 - [x] **7.2a** Implement `cortex/src/common/agents/registry.ts` — given the parsed config, builds an `Agent` registry keyed by `id`. Each `Agent` exposes `{ id, displayName, persona, roles, trust, presence }`. Used by presence-adapter constructors and by the runner. *(cortex#42, merged 2026-05-11 — `src/common/agents/registry.ts` AgentRegistry over CortexConfig)*
 - [x] **7.2b** Implement `cortex/src/common/agents/trust-resolver.ts` — process-wide `(platformId → agentId)` map. Each presence adapter, on connect, fetches its own platform user id (e.g. `client.user.id` for Discord) and registers it. Inbound messages look up the source agent by platform id. Replaces today's hand-maintained `trustedAgentBots` list. *(cortex#43, merged 2026-05-11 — `src/common/agents/trust-resolver.ts` runtime platformId ↔ agentId map)*
 - [x] **7.2c** Refactor presence adapters to `new DiscordPresenceAdapter(agent: Agent, presence: DiscordPresence)` shape — the adapter holds a reference to its parent agent rather than re-reading the persona from a file path inside its own config. *(cortex#45–#49, merged 2026-05-11 — PresenceBinding on PlatformAdapter + Discord internal/flip/cleanup trilogy + Mattermost flip with /users/me dedup)*
-  - **BREAKING (introduced at MIG-7.2c-discord-flip):** default Discord adapter `instanceId` derivation changes from `discord-{guildId}` to `{agent.name}-discord-{guildId}`. Operator-visible surfaces: structured log prefixes (`discord-{guildId}: shard 0 ready` → `{agent.name}-discord-{guildId}: shard 0 ready`), `system.adapter.*` envelope `adapterId` fields, surface-router registration keys. Deployments that grep/alert on the old prefix need their queries updated. The `discord[].instanceId` operator-override field in `bot.yaml` still wins when set, so existing deployments can keep the old key by pinning it explicitly. Suffix collapses to plain `{agent.name}-discord` at MIG-7.2e when `migrate-config` emits a single-presence-per-agent `agents[]` array.
+  - **BREAKING (introduced at MIG-7.2c-discord-flip):** default Discord adapter `instanceId` derivation changes from `discord-{guildId}` to `{agent.name}-discord-{guildId}`. Principal-visible surfaces: structured log prefixes (`discord-{guildId}: shard 0 ready` → `{agent.name}-discord-{guildId}: shard 0 ready`), `system.adapter.*` envelope `adapterId` fields, surface-router registration keys. Deployments that grep/alert on the old prefix need their queries updated. The `discord[].instanceId` principal-override field in `bot.yaml` still wins when set, so existing deployments can keep the old key by pinning it explicitly. Suffix collapses to plain `{agent.name}-discord` at MIG-7.2e when `migrate-config` emits a single-presence-per-agent `agents[]` array.
 - [x] **7.2d** Implement `Renderer` interface + dashboard renderer + pagerduty renderer (the G-1111 §4.6 fail-safe rule's recommended pair). cli-tail renderer optional for v1. *(cortex#50, merged 2026-05-11 — Renderer interface + DashboardRenderer + PagerDutyRenderer; cli-tail deferred per plan caveat)*
 - [x] **7.2e** Write a one-shot migration helper `bun src/cli/cortex/commands/migrate-config.ts` that reads a grove-v2-shaped `bot.yaml` and emits a cortex-shaped `cortex.yaml`. Validation: every old `discord[].instanceId` maps to exactly one new `agents[id=X].presence.discord` block; every old `personaFile` resolves to a present file under `personas/`; every old `trustedAgentBots` entry resolves to a known agent (by Discord user id at the time of migration; logged as a one-time fixup). *(cortex#51, merged 2026-05-11 — `src/cli/cortex/commands/migrate-config.ts` bot.yaml → cortex.yaml with validation harness + 6 fixtures + 2 personas)*
 - [x] **7.3** Move `src/bot/lib/config-{loader,watcher}.ts` → `cortex/src/common/config/`. *(cortex#20, merged 2026-05-09 — config-loader.ts → loader.ts + config-watcher.ts → watcher.ts + 4 tests; 4 import rewrites)*
@@ -519,7 +519,7 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
     - `scripts/preupgrade.sh` — kills any lingering `~/bin/grove-bot` / `~/bin/grove-relay` PIDs, unloads (`launchctl unload`) and removes (`rm -f`) `~/Library/LaunchAgents/com.grove.bot.plist` and `com.grove.relay.plist` when present, then unloads cortex's own plists ready for symlink refresh. Idempotent on hosts where legacy was never installed.
     - `scripts/postinstall.sh` — renders `ai.meta-factory.cortex.{bot,relay}.plist` into `~/Library/LaunchAgents/`.
     - `scripts/postupgrade.sh` — `launchctl load`s the freshly rendered plists.
-  - **Operator command**: `arc upgrade Cortex` — single command runs the full cutover. The pre-flight `arc uninstall Grove` (plan §4 7.7) is *recommended* but no longer load-bearing; the preupgrade cleanup is belt-and-braces.
+  - **Principal command**: `arc upgrade Cortex` — single command runs the full cutover. The pre-flight `arc uninstall Grove` (plan §4 7.7) is *recommended* but no longer load-bearing; the preupgrade cleanup is belt-and-braces.
   - **Verification**: after `arc upgrade Cortex` completes:
     - `launchctl list | grep ai.meta-factory.cortex` — two entries (bot + relay)
     - `pgrep -f "${HOME}/bin/cortex start"` — non-empty PID
@@ -540,8 +540,8 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
 - [ ] **7.14** Bump cortex version. **Pick one path — see §6 question 3:** either `v0.2.0` (post-bootstrap, signals "running but not yet hardened") OR `v1.0.0` (signals "production target"). §6.3's lean is `v1.0.0`; if that lean holds at MIG-7 cutover time, bump to v1.0.0 here. Otherwise v0.2.0 stays.
 
 **Acceptance:**
-- Operator runs `arc upgrade Cortex` (fresh install).
-- Operator runs `cortex start --config ~/.config/cortex/cortex.yaml`.
+- Principal runs `arc upgrade Cortex` (fresh install).
+- Principal runs `cortex start --config ~/.config/cortex/cortex.yaml`.
 - Bot connects, dashboard loads, Discord round-trip works.
 - E2E NATS messaging works (per JC's identity config requirement).
 
@@ -551,7 +551,7 @@ Each phase = one umbrella issue with a task-list checklist + one or more PRs. Pi
 
 ### MIG-8 — Cleanup + retirement
 
-**Goal:** Legacy repos archived. Operator deployments cut over.
+**Goal:** Legacy repos archived. Principal deployments cut over.
 
 **Issue:** `cortex#9 — MIG-8: Retire grove + grove-v2`
 
@@ -612,11 +612,11 @@ Each PR runs through the standard pilot-review-loop skill with Echo as primary r
 5. **Bots.d / per-bot AAA regression.** Legacy grove v0.29.0 has features grove-v2 lacks (PR #330, #333). MIG-7 cutover accepts this regression. **Open: when does it get re-implemented in cortex?** Probably when multi-operator becomes a real requirement.
 6. **Naming for `src/bus/` directory.** Alternatives considered: `coordination/`, `myelin/`, `spine/`. **Decision: `bus/`** because it's the most operationally-evocative and doesn't conflict with the vendored myelin schema directory.
 7. **Pilot's relationship to cortex's runner.** Pilot already coordinates review loops; cortex's runner spawns CC. They're peers on the bus. **No change.** Cortex projects pilot's errand state via myelin envelopes (G-1101 in event-taxonomy plan), but does not import pilot.
-8. **Migration testing strategy.** Do we run cortex side-by-side with grove for a soak period, or hard cut over? **Lean: side-by-side for ≤7 days post-MIG-7**, then archive grove. The legacy grove process keeps responding; cortex takes over progressively as `arc upgrade` runs across operator hosts.
+8. **Migration testing strategy.** Do we run cortex side-by-side with grove for a soak period, or hard cut over? **Lean: side-by-side for ≤7 days post-MIG-7**, then archive grove. The legacy grove process keeps responding; cortex takes over progressively as `arc upgrade` runs across principal hosts.
 9. **Subject namespace reconciliation** (cross-references `design-cortex.md` §3.5). Whether `local.{org}.>` and `mf.net-{op}.>` are alternative subject hierarchies, nested, or transport-vs-envelope conventions. Resolution lives in myelin#7's still-pending acceptance criterion ("Seven-layer model documented in myelin"). MIG-1 tolerates both as input subjects; doc convergence happens upstream in myelin.
 10. **Envelope contract docs location** (cross-references `design-cortex.md` §6.1). `cortex/docs/api/` per-app vs. an ecosystem-wide catalogue alongside myelin's namespace spec. **Lean local-to-cortex**; revisit if a registry pattern emerges.
-11. **JetStream stream config ownership.** Cortex's MIG-1 "lost event ≠ lost state" guarantee relies on JetStream replay. Stream config (subjects, retention, max-msgs, ack policy) is NATS-server-side configuration. Where is this declared and tracked? Options: (a) cortex's `arc-manifest.yaml` declares JetStream stream requirements (operators provision externally); (b) a small `cortex jetstream apply` CLI does it imperatively per host; (c) myelin owns the canonical stream catalogue. **Lean (a) for v1** — declarative requirement in cortex's manifest, operator provisions externally; track ownership migration to (c) when myelin#7 doc lands. Open until then.
-12. **DNS rename `grove.meta-factory.ai` → `cortex.meta-factory.ai`.** Out of scope for v1 cortex per MIG-2.6. **Open**: when does the rename happen? Tied to operator-facing brand stability vs. ergonomic parity. Lean: post-MIG-8, treated as cosmetic with a 30-day redirect window. File follow-on at that point.
+11. **JetStream stream config ownership.** Cortex's MIG-1 "lost event ≠ lost state" guarantee relies on JetStream replay. Stream config (subjects, retention, max-msgs, ack policy) is NATS-server-side configuration. Where is this declared and tracked? Options: (a) cortex's `arc-manifest.yaml` declares JetStream stream requirements (principals provision externally); (b) a small `cortex jetstream apply` CLI does it imperatively per host; (c) myelin owns the canonical stream catalogue. **Lean (a) for v1** — declarative requirement in cortex's manifest, principal provisions externally; track ownership migration to (c) when myelin#7 doc lands. Open until then.
+12. **DNS rename `grove.meta-factory.ai` → `cortex.meta-factory.ai`.** Out of scope for v1 cortex per MIG-2.6. **Open**: when does the rename happen? Tied to principal-facing brand stability vs. ergonomic parity. Lean: post-MIG-8, treated as cosmetic with a 30-day redirect window. File follow-on at that point.
 
 ---
 
@@ -625,7 +625,7 @@ Each PR runs through the standard pilot-review-loop skill with Echo as primary r
 The migration is complete when all of:
 
 - [ ] MIG-0 through MIG-7 phases all closed.
-- [ ] Cortex is the deployed bot on **the v1 cutover host (Andreas's deployment)** — `launchctl list | grep cortex` returns a PID. Multi-operator hosts come post-MIG-8 (see §6.5 / §6.7); v1 cortex is single-operator-deterministic.
+- [ ] Cortex is the deployed bot on **the v1 cutover host (Andreas's deployment)** — `launchctl list | grep cortex` returns a PID. Multi-principal hosts come post-MIG-8 (see §6.5 / §6.7); v1 cortex is single-principal-deterministic.
 - [ ] Mission Control loads at the configured deployment URL with all mc-v3 features intact.
 - [ ] All three Discord adapters (Luna, Echo, Forge) connect to cortex on startup.
 - [ ] At least one round-trip review cycle has completed via cortex (Andreas pings Echo, Echo reviews PR, cortex routes the verdict).
@@ -649,21 +649,25 @@ The migration is complete when all of:
 
 ---
 
-## 9. Operator cutover — operator-mode NATS
+## 9. NATS cutover — nsc operator-mode NATS
+
+> Vocabulary note: throughout §9 the term is the **nsc / NATS account-operator**
+> (the `nsc` operator NKey that signs accounts), an infra carve-out per
+> vocab-migration 0002 §"Carve-out summary" #8 — NOT the human principal.
 
 This section captures the operational recipe for the v1 cutover host moving
-NATS from `--mem-resolver` test mode to operator mode while preserving the
+NATS from `--mem-resolver` test mode to nsc operator-mode while preserving the
 existing leafnode federation. Surfaced from the 2026-05-13 v1 cutover as
 cortex#88 item 8 — `nsc generate config --mem-resolver` produces a
 resolver.conf that does NOT carry the per-remote `account:` binding leaf
-federation needs, and `nats-server` refuses to start with
-`operator mode requires account nkeys in remotes` if you merge the two
-configs naively.
+federation needs, and `nats-server` refuses to start with the nsc
+error `operator mode requires account nkeys in remotes` (nsc) if you merge
+the two configs naively.
 
-### 9.1 Where the operator-mode requirement comes from
+### 9.1 Where the nsc operator-mode requirement comes from
 
-Operator-mode NATS demands every leafnode `remotes[]` entry declare which
-LOCAL account (in this operator's signing-key universe) the remote
+nsc operator-mode NATS demands every leafnode `remotes[]` entry declare which
+LOCAL account (in this nsc account-operator's signing-key universe) the remote
 connection is bound to. Without it, the server can't determine subject
 isolation for inbound leafnode traffic and refuses to start.
 
@@ -675,7 +679,7 @@ deployment and does not know about your `leafnodes:` block.
 
 For each `remotes[]` entry under `leafnodes:`, add an `account:` field
 carrying the 56-char A-prefixed pubkey of the LOCAL account the remote
-should bind to. Example for an operator using a single `ANDREAS_AGENTS`
+should bind to. Example for an nsc account-operator using a single `ANDREAS_AGENTS`
 account:
 
 ```conf
@@ -685,9 +689,9 @@ leafnodes {
       url:  "nats-leaf://leaf.example.com:7422"
       credentials: "/Users/andreas/.nats/leaf.creds"
 
-      # cortex#88 item 8 — operator-mode binding. Without this line
-      # nats-server fails to start with:
-      #   "operator mode requires account nkeys in remotes"
+      # cortex#88 item 8 — nsc operator-mode binding. Without this line
+      # nats-server fails to start with the nsc error:
+      #   "operator mode requires account nkeys in remotes"  (nsc account-operator)
       account: "ABXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
     }
   ]
@@ -707,43 +711,43 @@ nsc describe account ANDREAS_AGENTS | awk '/Account ID/ {print $3}'
 
 1. **Snapshot current config.** `cp ~/.nats/local.conf ~/.nats/local.conf.pre-cutover`.
 2. **Generate operator-mode resolver.** `nsc generate config --mem-resolver > /tmp/resolver.conf`.
-3. **Merge into local.conf.** Append the operator + accounts + resolver
+3. **Merge into local.conf.** Append the nsc account-operator + accounts + resolver
    blocks from `/tmp/resolver.conf` into `local.conf`, preserving the
    existing `leafnodes:` block.
 4. **Inject account binding.** For each entry under
    `leafnodes.remotes[]`, add the `account: "A..."` line per §9.2.
 5. **Restart nats-server.** `launchctl unload ~/Library/LaunchAgents/io.nats.server.plist && launchctl load ~/Library/LaunchAgents/io.nats.server.plist`.
 6. **Verify startup.**
-   - `tail -f /usr/local/var/log/nats/nats-server.log` should show
-     `Operator: <name>` + `Account [ANDREAS_AGENTS] cache loaded` +
-     no `operator mode requires account nkeys in remotes` error.
+   - `tail -f /usr/local/var/log/nats/nats-server.log` should show the
+     nsc log lines `Operator: <name>` (nsc) + `Account [ANDREAS_AGENTS] cache loaded` +
+     no `operator mode requires account nkeys in remotes` nsc error.
    - `nats stream ls --server nats://localhost:4222 --creds ~/.nats/user.creds`
      should return without auth errors.
-7. **Verify cortex.** `cortex start --config ~/.config/cortex/cortex.yaml --dry-run` confirms the config still parses (cortex#88 item 2); `cortex status` after `launchctl load …cortex.meta-factory.plist` (renamed from `cortex.bot.plist` at cortex#251) shows the daemon connected to the operator-mode server.
+7. **Verify cortex.** `cortex start --config ~/.config/cortex/cortex.yaml --dry-run` confirms the config still parses (cortex#88 item 2); `cortex status` after `launchctl load …cortex.meta-factory.plist` (renamed from `cortex.bot.plist` at cortex#251) shows the daemon connected to the nsc operator-mode server.
 
 ### 9.4 Rollback
 
 If step 6 surfaces an unrecoverable error: restore `local.conf` from the
 pre-cutover snapshot (`cp ~/.nats/local.conf.pre-cutover ~/.nats/local.conf`),
 unload/load the launchd plist again, and resume on the mem-resolver
-configuration while debugging the operator-mode setup offline. Cortex
+configuration while debugging the nsc operator-mode setup offline. Cortex
 itself does not need to be restarted — the bot reconnects to the
 re-loaded NATS server within a few seconds.
 
 ### 9.5 Related work
 
-The operator-mode pivot only carries weight end-to-end alongside the code
+The nsc operator-mode pivot only carries weight end-to-end alongside the code
 landings that make a federated, signed, trust-aware fabric usable. Cross-
 references so a reader of §9 can navigate to the related primitives:
 
 - [cortex#86 — NatsLink credsAuthenticator support](https://github.com/the-metafactory/cortex/issues/86):
-  landed the daemon's own connect path against operator-mode NATS
+  landed the daemon's own connect path against nsc operator-mode NATS
   (creds-based authenticator wired into the in-process bot↔server link).
   Without #86 the bot can connect to a mem-resolver server but not to an
-  operator-mode one — §9 assumes #86 is in place.
+  nsc operator-mode one — §9 assumes #86 is in place.
 - [cortex#98 — TrustResolver auto-populate `trustedBotIds`](https://github.com/the-metafactory/cortex/issues/98):
   landed the inter-bot allowlist so peer bots inside the same cortex
-  instance can DM each other under the operator-mode signing universe.
+  instance can DM each other under the nsc operator-mode signing universe.
   Without #98 the per-agent `trust:` lists in cortex.yaml are honoured
   for outbound trust but inbound trust silently drops peer messages.
 

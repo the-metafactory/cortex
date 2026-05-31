@@ -630,7 +630,7 @@ agents:                            # first-class agent bundles — the canonical
   - id: luna
     displayName: Luna
     persona: ./personas/luna.md
-    roles: [operator]              # cortex-wide capability set
+    roles: [operator]              # cortex-wide capability set <!-- historical: `operator` is the reserved policy-capability identifier (home_operator policy domain, cortex#448) — a code identifier, not human-operator prose; not renamed by vocab-migration 0002 -->
     trust:                         # peer agents this agent trusts (by agent id)
       - echo
       - holly

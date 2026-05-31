@@ -38,9 +38,9 @@ import type { RendererKind } from "../common/types/cortex-config";
  *      `Promise.allSettled` regardless, but renderers carry the moral
  *      obligation to not poison the dispatch path.
  *   3. `render()` MUST NOT publish on the bus as a side effect.
- *      Operator-input emitted from a renderer (e.g., a dashboard
+ *      Principal-input emitted from a renderer (e.g., a dashboard
  *      "approve" click) goes through the bus as a logical envelope
- *      from the operator, not from any agent (architecture §9.3).
+ *      from the principal, not from any agent (architecture §9.3).
  *
  * **Renderers are static across hot-reload.** Unlike platform adapters
  * (which carry an `updateConfig(AgentConfig)` hook that the
@@ -53,7 +53,7 @@ import type { RendererKind } from "../common/types/cortex-config";
  * its lifetime, and the failure modes of partial hot-reload (a
  * routing key swap mid-flight) are easier to reason about with a
  * full stop/start cycle. A future iteration MAY add an
- * `updateConfig(RendererConfig)` hook if the operator-visible cost of
+ * `updateConfig(RendererConfig)` hook if the principal-visible cost of
  * the restart proves too high (Holly cycle 1 W3).
  */
 export interface Renderer {

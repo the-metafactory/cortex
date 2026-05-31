@@ -120,7 +120,7 @@ describe("startCortex — construction", () => {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
     expect(handle).toBeDefined();
     expect(typeof handle.stop).toBe("function");
@@ -142,7 +142,7 @@ describe("startCortex — construction", () => {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
     expect(handle).toBeDefined();
     await handle.stop();
@@ -163,7 +163,7 @@ describe("startCortex — construction", () => {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
     expect(handle).toBeDefined();
     await handle.stop();
@@ -190,7 +190,7 @@ describe("startCortex — wire-up", () => {
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
     expect(handle).toBeDefined();
     // The surface-router's `start()` registers one envelope handler (its
@@ -225,7 +225,7 @@ describe("startCortex — wire-up", () => {
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
 
     // Hand-craft a `dispatch.task.received` envelope. The listener parses
@@ -301,7 +301,7 @@ describe("startCortex — wire-up", () => {
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
-      operator: { id: "v3-canonical-op" },
+      principal: { id: "v3-canonical-op" },
     });
     expect(handle).toBeDefined();
     // 4 handlers: surface-router fan-out + dispatch-listener (cortex#484
@@ -369,7 +369,7 @@ describe("startCortex — wire-up", () => {
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
     expect(handle).toBeDefined();
     // 4 handlers: surface-router fan-out + dispatch-listener (cortex#484
@@ -408,7 +408,7 @@ describe("startCortex — wire-up", () => {
       disableDashboard: true,
       disableOutboundPoller: true,
       injectRuntime: runtime,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
     expect(handle).toBeDefined();
     // 4 handlers: surface-router fan-out + dispatch-listener (cortex#484
@@ -433,7 +433,7 @@ describe("startCortex — shutdown", () => {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
 
     await handle.stop();
@@ -448,7 +448,7 @@ describe("startCortex — shutdown", () => {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
 
     const start = Date.now();
@@ -488,7 +488,7 @@ describe("startCortex — shutdown", () => {
         disableDashboard: true,
         disableOutboundPoller: true,
         injectRuntime: runtime,
-        operator: { id: "test-op" },
+        principal: { id: "test-op" },
         // Tight timeout — keeps the test fast. Production default is
         // 15_000ms; the same code path runs at both budgets.
         shutdownTimeoutMs: 100,
@@ -531,7 +531,7 @@ describe("startCortex — error surface", () => {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
     expect(handle).toBeDefined();
     await handle.stop();
@@ -547,7 +547,7 @@ describe("startCortex — error surface", () => {
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
     expect(handle).toBeDefined();
     await handle.stop();
@@ -571,7 +571,7 @@ describe("startCortex — agent registry (cortex#67 prereq C)", () => {
       disableDashboard: true,
       disableOutboundPoller: true,
       agentsDir: tmpAgentsDir,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
     expect(handle.agentRegistry).toBeDefined();
     expect(handle.agentRegistry.size).toBe(0);
@@ -672,7 +672,7 @@ presence:
       disableOutboundPoller: true,
       agentsDir: tmpAgentsDir,
       inlineAgents,
-      operator: { id: "test-op" },
+      principal: { id: "test-op" },
     });
 
     // Three agents total: luna (inline-only), echo (inline wins), holly (fragment-only).

@@ -21,11 +21,11 @@ F-6 used this same discipline (`docs/design-mc-f6-focus-area.md`). Keeping it co
 ```
 ┌──────────────────────────────────────────┐
 │ [text box — disabled]                    │
-│ Operator input ships in F-10 (Phase C)   │
+│ Principal input ships in F-10 (Phase C)   │
 └──────────────────────────────────────────┘
 ```
 
-**Why not omit?** The three-section layout is the operator's spatial mental model; shipping two sections and re-adding the third in F-10 would be a restructure, not a wire-up. A visible placeholder preserves the layout and signals the imminent capability.
+**Why not omit?** The three-section layout is the principal's spatial mental model; shipping two sections and re-adding the third in F-10 would be a restructure, not a wire-up. A visible placeholder preserves the layout and signals the imminent capability.
 
 **Exception:** the Approve / Deny affordance on `permission.request` rows (§5.3.1) also stays visual-only in F-7 — see Decision 6.
 
@@ -37,7 +37,7 @@ F-6 used this same discipline (`docs/design-mc-f6-focus-area.md`). Keeping it co
 - **Close:** `Esc` returns to focus-area root; clicking outside the overlay also closes.
 - **URL:** drill-down state does NOT change `location.hash` in F-7. If deep-linking is needed later, add `#/a/:assignmentId` as an additive concern — not a blocker for F-7.
 
-**Why not route-driven?** A router refactor isn't justified by F-7 alone. The dashboard is a single inline HTML file with no build step; introducing a router is a Phase C / F-10 concern at earliest when operator actions produce meaningful URL-shareable state.
+**Why not route-driven?** A router refactor isn't justified by F-7 alone. The dashboard is a single inline HTML file with no build step; introducing a router is a Phase C / F-10 concern at earliest when principal actions produce meaningful URL-shareable state.
 
 ## Decision 3 — New endpoint: `GET /api/assignments/:id/events`
 
@@ -72,7 +72,7 @@ Concrete event types in the system today (verified in `src/mission-control/sessi
 | `stream-json.result` | CC terminal | `subtype`, `result`, cost/token stats |
 | `stream-json.unknown` | fallback | unrecognised CC type |
 | `state.transition` | state machine | `from`, `to`, `block_reason` |
-| `operator.input` | REST | `text` |
+| `principal.input` | REST | `text` |
 | `permission.request` | state machine (F-2 helper, not yet emitted by dispatcher) | `requested_action`, `target`, `context`, `risk_hint` |
 | `system.error` | Grove internals | `message` |
 
@@ -84,22 +84,22 @@ Concrete event types in the system today (verified in `src/mission-control/sessi
 |---|---|---|
 | **D — green (deterministic)** | Tool calls and their results | `tool_use` + `tool_result` content blocks; `state.transition`; `system.error` |
 | **A — amber (agentic)** | Agent reasoning / output | `text` blocks inside `stream-json.assistant`; `thinking` blocks (rendered inline per Maestro pattern); `stream-json.system` as tertiary chip |
-| **H — rose (human)** | Operator actions / prompts to the operator | `operator.input`; `permission.request`; `text` blocks inside `stream-json.user` when the `user` event is operator-sourced (distinguishable by flag on the event — **see Decision 5**) |
+| **H — rose (human)** | Principal actions / prompts to the principal | `principal.input`; `permission.request`; `text` blocks inside `stream-json.user` when the `user` event is principal-sourced (distinguishable by flag on the event — **see Decision 5**) |
 | *(no colour)* | `stream-json.unknown`, `stream-json.result` | Rendered as thin tertiary chip only |
 
 **Visual-weight mapping** (from §5.3 table, resolved against our types):
 
-- **Primary:** `text` in `stream-json.assistant`, `operator.input`, `permission.request`, `state.transition` where `to = 'blocked'`.
+- **Primary:** `text` in `stream-json.assistant`, `principal.input`, `permission.request`, `state.transition` where `to = 'blocked'`.
 - **Secondary:** `tool_use`, `tool_result` — compact left-border accent row, collapsed by default.
 - **Tertiary:** `thinking` blocks, `stream-json.system`, `state.transition` (non-blocking), `system.error`, `stream-json.unknown`, `stream-json.result`.
 
 Permission-request rows are always primary even when their parent event would otherwise be secondary — §5.3 explicit rule.
 
-## Decision 5 — Operator-sourced `user` events are distinguishable by an explicit marker
+## Decision 5 — Principal-sourced `user` events are distinguishable by an explicit marker
 
-CC emits `stream-json.user` for both operator input turns (what the operator typed) AND tool-result callbacks (what tools returned). Classifying these as H or D requires disambiguation.
+CC emits `stream-json.user` for both principal input turns (what the principal typed) AND tool-result callbacks (what tools returned). Classifying these as H or D requires disambiguation.
 
-**Marker:** `operator.input` events emitted by `POST /api/assignments/:id/input` in `api/handlers.ts:270` already write a separate event type. The corresponding `stream-json.user` event that CC echoes back is classifiable by content: if `message.content[0].type === "tool_result"`, it's a tool callback (D); if `content[0].type === "text"`, it's an operator turn that CC is echoing (H).
+**Marker:** `principal.input` events emitted by `POST /api/assignments/:id/input` in `api/handlers.ts:270` already write a separate event type. The corresponding `stream-json.user` event that CC echoes back is classifiable by content: if `message.content[0].type === "tool_result"`, it's a tool callback (D); if `content[0].type === "text"`, it's an principal turn that CC is echoing (H).
 
 **Result:** content-block type alone is sufficient. No new field, no schema change. The renderer branches on `content_block.type`.
 
@@ -155,7 +155,7 @@ No DOM recycling (simple append/prepend + `max-height` + `overflow: auto`). 500 
 
 ## Scope summary — what F-7 DEFERS
 
-- Operator text input submission (F-10 / Phase C).
+- Principal text input submission (F-10 / Phase C).
 - Approve / Deny wire protocol (Phase C + verification; spec §5.3.1).
 - Running-state intent extraction in summary header (later iteration, §5.2 heuristic).
 - Token-level streaming + RAF batching (CC stream-json emits whole messages; re-evaluate if CC adds token streaming).

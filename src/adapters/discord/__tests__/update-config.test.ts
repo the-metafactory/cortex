@@ -15,7 +15,7 @@
  * semantics (safe fields update, reconnect-only fields don't), and the
  * agent-rebuild invariant. Tests stay implementation-light — they reach into
  * the adapter's private state via the same `as unknown as { … }` cast the
- * existing operator-dm-buffer / render-envelope suites use.
+ * existing principal-dm-buffer / render-envelope suites use.
  */
 
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";

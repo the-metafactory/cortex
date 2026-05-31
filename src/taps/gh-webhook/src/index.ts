@@ -199,7 +199,7 @@ app.post("/github", async (c) => {
  * `executionCtx.waitUntil` so the Worker doesn't return before the
  * forward completes, but its outcome never alters the response code.
  *
- * Errors are caught and surfaced via `console.error` so the operator
+ * Errors are caught and surfaced via `console.error` so the principal
  * sees them in `wrangler tail`; we deliberately do NOT propagate them.
  */
 async function forwardToCortex(

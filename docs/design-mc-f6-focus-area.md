@@ -9,19 +9,19 @@
 **Status:** design (pre-implementation).
 **Last updated:** 2026-04-22.
 
-F-6 is the first piece of the Phase B dashboard: the horizontal card row at the top of the page showing the items that need the operator's input, sorted by task priority. This addendum resolves three open questions surfaced during pre-implementation review so the coding feature can ship in one PR without design churn.
+F-6 is the first piece of the Phase B dashboard: the horizontal card row at the top of the page showing the items that need the principal's input, sorted by task priority. This addendum resolves three open questions surfaced during pre-implementation review so the coding feature can ship in one PR without design churn.
 
 ---
 
 ## 1. Resolved questions
 
-### Q1 — The `operator.input.requested` event type
+### Q1 — The `principal.input.requested` event type
 
-**Question.** The parent spec §8.2 defines focus-area content as *"blocked assignments, plus any assignment with an `operator.input.requested` event"*. Does any code today emit that event?
+**Question.** The parent spec §8.2 defines focus-area content as *"blocked assignments, plus any assignment with an `principal.input.requested` event"*. Does any code today emit that event?
 
-**Finding.** No. A repo-wide grep for `operator.input.requested` matches only `docs/design-mission-control.md`. Phase A shipped `permission.request` as a `BlockReason` (hard-block path, in `types.ts`) but no soft-prompt event. `operator.input.requested` is the soft path — the agent says "what do you want me to do next?" without entering the `blocked` state.
+**Finding.** No. A repo-wide grep for `principal.input.requested` matches only `docs/design-mission-control.md`. Phase A shipped `permission.request` as a `BlockReason` (hard-block path, in `types.ts`) but no soft-prompt event. `principal.input.requested` is the soft path — the agent says "what do you want me to do next?" without entering the `blocked` state.
 
-**Decision.** F-6 v1 queries **only `state = 'blocked'`**. The soft-prompt path is folded into **F-10** (operator input affordance) where the event is actually emitted. When F-10 lands, the focus-area query extends with a `UNION` against `events.type = 'operator.input.requested'` with an "unresolved" marker. F-6 ships with a TODO comment pointing at F-10 so the extension point is obvious.
+**Decision.** F-6 v1 queries **only `state = 'blocked'`**. The soft-prompt path is folded into **F-10** (principal input affordance) where the event is actually emitted. When F-10 lands, the focus-area query extends with a `UNION` against `events.type = 'principal.input.requested'` with an "unresolved" marker. F-6 ships with a TODO comment pointing at F-10 so the extension point is obvious.
 
 **Rationale.** All three Phase A `BlockReason` kinds (`permission.request`, `tool.error`, `review.checkpoint`) drive the assignment to `blocked` state, so "blocked" already covers 100% of today's attention signals. Shipping F-6 against an event that no code emits is pure design debt.
 
@@ -103,7 +103,7 @@ Block-reason-to-one-liner mapping:
 | F-7         | Attention view drill-down; `Enter`/`Esc` keyboard |
 | F-8         | Task table (the "+N more" tail chip links here once it exists; until F-8, the chip is inert) |
 | F-9         | Working-agent grid below focus area |
-| F-10        | Soft-prompt events (`operator.input.requested`) extending the focus-area query |
+| F-10        | Soft-prompt events (`principal.input.requested`) extending the focus-area query |
 | F-11        | Discord notification on blocked-state entry |
 
 ---
@@ -115,7 +115,7 @@ F-6 ships when all of the below are true:
 - [ ] `GET /api/focus-area` returns a JSON array of focus-area items, ordered by priority then updated_at, filtered to `state = 'blocked'`.
 - [ ] Dashboard renders a horizontal card row from that endpoint, with card fields and one-liners per §2 of this doc.
 - [ ] Moving an assignment into `blocked` state via `applyTransition` makes a card appear without a page reload (WS-triggered re-fetch).
-- [ ] Moving a `blocked` assignment out of that state (complete/fail/operator-requeue) removes the card without a reload.
+- [ ] Moving a `blocked` assignment out of that state (complete/fail/principal-requeue) removes the card without a reload.
 - [ ] Empty state renders "All clear" + most-active-agent line when no assignments are `blocked`.
 - [ ] `1`–`9` select by position; `←`/`→` move selection; selected card has a visual highlight.
 - [ ] Happy path and empty state have unit tests; the WS re-fetch trigger has one integration test that drives `block` then `operator_requeue` and asserts two re-renders.
@@ -125,6 +125,6 @@ F-6 ships when all of the below are true:
 
 ## 5. Non-decisions (explicitly left to implementer)
 
-- **CSS / visual design.** Cards get *some* colour differentiation so the operator can tell priorities apart, but the specific palette is not specified here. Use what's already in the placeholder dashboard as a starting point.
+- **CSS / visual design.** Cards get *some* colour differentiation so the principal can tell priorities apart, but the specific palette is not specified here. Use what's already in the placeholder dashboard as a starting point.
 - **Polling cadence of the fallback refetch timer** (if any). WS is the primary update path; a long-interval polling safety net (30s+) is fine if the implementer wants one.
 - **`task.id shortened`** — pick any short form that fits the card width; `T-42` or `#abc123` both acceptable.

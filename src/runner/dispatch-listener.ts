@@ -194,7 +194,7 @@ export interface DispatchTaskReceivedPayload {
   additional_args?: string[];
   project?: string;
   entity?: string;
-  operator?: string;
+  principal?: string;
   /**
    * cortex#491 — **Response routing** (CONTEXT.md §Response-routing): the
    * originating surface address `{ adapter_instance, channel_id,
@@ -549,7 +549,7 @@ function rawEnvelopeTraceContext(
  * brackets. This is the whole point: the motivating bug (cortex#491) was
  * a SILENT executor stall where an `await` (chain verification or a bus
  * publish) never resolved — so the trace must already be in the log
- * before that await is entered. If the next await hangs, the operator
+ * before that await is entered. If the next await hangs, the principal
  * still sees exactly how far the dispatch got.
  *
  * **The envelope leg is the nice-to-have.** When the runtime can publish,
@@ -949,11 +949,11 @@ function buildDispatchRequest(
   if (payload.resume_session_id !== undefined) runtime.resumeSessionId = payload.resume_session_id;
   const hasRuntime = Object.keys(runtime).length > 0;
 
-  // Env-kind context block carries operator/entity/project labels.
+  // Env-kind context block carries principal/entity/project labels.
   // Build it iff the payload supplied any of the three; the harness
   // surfaces them onto CCSessionOpts as before.
   const envContext: Record<string, unknown> = {};
-  if (payload.operator !== undefined) envContext.operator = payload.operator;
+  if (payload.principal !== undefined) envContext.principal = payload.principal;
   if (payload.entity !== undefined) envContext.entity = payload.entity;
   if (payload.project !== undefined) envContext.project = payload.project;
   const hasEnvContext = Object.keys(envContext).length > 0;

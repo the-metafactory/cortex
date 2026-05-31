@@ -254,8 +254,8 @@ export class MattermostAdapter implements PlatformAdapter {
   /**
    * v2.0.0 (cortex#297) — single-gate authorisation via PolicyEngine.
    * Mattermost messages aren't classified as DMs in the legacy shape;
-   * `dmType` synthesis is omitted. The operator short-circuit lives in
-   * `resolvePolicyAccess` via the `operator` capability.
+   * `dmType` synthesis is omitted. The principal-elevation short-circuit
+   * lives in `resolvePolicyAccess` via the principal-grant capability.
    */
   resolveAccess(msg: InboundMessage): AccessDecision {
     return resolvePolicyAccess({
@@ -267,9 +267,9 @@ export class MattermostAdapter implements PlatformAdapter {
   }
 
   /**
-   * v2.0.0 (cortex#297) — operator detection via the policy `operator`
-   * capability. Used elsewhere (e.g. operator-DM notifier paths) to
-   * decide privileged actions.
+   * v2.0.0 (cortex#297) — principal-elevation detection via the policy
+   * principal-grant capability. Used elsewhere (e.g. principal-DM notifier
+   * paths) to decide privileged actions.
    */
   protected isOperator(authorId: string): boolean {
     return isOperatorPrincipal(
@@ -357,7 +357,7 @@ export class MattermostAdapter implements PlatformAdapter {
     return null;
   }
 
-  async notifyOperator(text: string): Promise<void> {
+  async notifyPrincipal(text: string): Promise<void> {
     const principalMattermostId = this.infra.principal.mattermostId;
     if (!principalMattermostId) return;
 
@@ -366,10 +366,10 @@ export class MattermostAdapter implements PlatformAdapter {
       // id from `getPlatformUserId` instead of re-fetching /users/me here.
       // PresenceBinding populates the cache at startup; subsequent calls
       // are zero-RPC. Falls back to the shared helper on the rare path
-      // where notifyOperator is called before PresenceBinding finished.
+      // where notifyPrincipal is called before PresenceBinding finished.
       const botUserId = await this.getPlatformUserId();
 
-      // Create/get DM channel with operator.
+      // Create/get DM channel with principal.
       const dmRes = await fetch(`${this.apiUrl}/api/v4/channels/direct`, {
         method: "POST",
         headers: {
@@ -384,7 +384,7 @@ export class MattermostAdapter implements PlatformAdapter {
         await postReply(dmChannel.id, text, undefined, this.apiUrl, this.apiToken);
       }
     } catch (err) {
-      console.warn(`mattermost-${this.instanceId}: failed to notify operator:`, err instanceof Error ? err.message : err);
+      console.warn(`mattermost-${this.instanceId}: failed to notify principal:`, err instanceof Error ? err.message : err);
     }
   }
 

@@ -5,7 +5,7 @@
  * fake `SlackClient` via the adapter's infra so no real Socket Mode
  * connection is opened and no Slack API is hit. Each test exercises one
  * adapter responsibility: translateEvent, resolveAccess, postResponse,
- * createThread, notifyOperator, surfaceConfig.render.
+ * createThread, notifyPrincipal, surfaceConfig.render.
  */
 
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
@@ -670,10 +670,10 @@ describe("SlackAdapter — postResponse", () => {
 });
 
 // ---------------------------------------------------------------------------
-// sendProgress / createThread / notifyOperator
+// sendProgress / createThread / notifyPrincipal
 // ---------------------------------------------------------------------------
 
-describe("SlackAdapter — sendProgress + createThread + notifyOperator", () => {
+describe("SlackAdapter — sendProgress + createThread + notifyPrincipal", () => {
   test("sendProgress posts once and skips subsequent calls", async () => {
     const { adapter, state } = makeAdapter();
     const target = { instanceId: "slack-test", channelId: "C0CHANNEL1", threadId: "T123" };
@@ -758,27 +758,27 @@ describe("SlackAdapter — sendProgress + createThread + notifyOperator", () => 
     expect(target.threadId).toBe("1700000000.111111");
   });
 
-  test("notifyOperator no-ops when operator.slackId is not configured", async () => {
+  test("notifyPrincipal no-ops when principal.slackId is not configured", async () => {
     const { adapter, state } = makeAdapter();
-    await adapter.notifyOperator("ping");
+    await adapter.notifyPrincipal("ping");
     expect(state.postedMessages).toHaveLength(0);
   });
 
-  test("notifyOperator DMs the operator when slackId is configured", async () => {
+  test("notifyPrincipal DMs the principal when slackId is configured", async () => {
     const { adapter, state } = makeAdapter({
       infra: { principal: { slackId: "UOPERATOR" } },
     });
-    await adapter.notifyOperator("ping");
+    await adapter.notifyPrincipal("ping");
     expect(state.postedMessages).toEqual([{ channel: "UOPERATOR", text: "ping" }]);
   });
 
-  test("notifyOperator swallows post errors (log + drop)", async () => {
+  test("notifyPrincipal swallows post errors (log + drop)", async () => {
     const { adapter } = makeAdapter({
       infra: { principal: { slackId: "UOPERATOR" } },
       clientState: { postMessageError: new Error("403 not_in_channel") },
     });
-    // Must not throw — the operator's notification path is best-effort.
-    await expect(adapter.notifyOperator("ping")).resolves.toBeUndefined();
+    // Must not throw — the principal's notification path is best-effort.
+    await expect(adapter.notifyPrincipal("ping")).resolves.toBeUndefined();
   });
 });
 

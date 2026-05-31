@@ -111,7 +111,7 @@ ${ALPHA_WORKDIR_ROOT}/<dispatch-id>/
 
 Two reasons for stripping YAML frontmatter from the persona before staging it: (1) cursor's `.mdc` convention does not parse the frontmatter and would render it as literal text at the top of the persona, polluting the reviewer's voice; (2) the identity/trust/runtime metadata is for cortex's agent registry, not for the LLM.
 
-Cleanup is also a security boundary. The cloned repo contains the PR author's untrusted code; running cursor-agent against it grants read access to that code under the daemon's process identity. Tearing down the workdir after the dispatch prevents accumulation of stale code on the operator's machine and shortens the window in which a malicious payload could be re-exercised by an unrelated process.
+Cleanup is also a security boundary. The cloned repo contains the PR author's untrusted code; running cursor-agent against it grants read access to that code under the daemon's process identity. Tearing down the workdir after the dispatch prevents accumulation of stale code on the principal's machine and shortens the window in which a malicious payload could be re-exercised by an unrelated process.
 
 ---
 
@@ -310,7 +310,7 @@ When cortex#112 Phase B lands the NKey 3-tier identity chain, alpha's envelopes 
 ### Phase 3 — Publish alpha
 
 - [ ] Push `the-metafactory/alpha` to GitHub
-- [ ] Operator runs `arc install github:the-metafactory/alpha` against the running cortex
+- [ ] Principal runs `arc install github:the-metafactory/alpha` against the running cortex
 - [ ] Mint NATS creds (`cortex creds issue alpha`) scoped to alpha's declared capabilities
 - [ ] Verify launchd loads the plist; daemon connects bus; capability registry shows alpha
 - [ ] Run a real review dispatch end-to-end against the bus
@@ -355,13 +355,13 @@ When cortex#112 Phase B lands the NKey 3-tier identity chain, alpha's envelopes 
 
 | Failure | Detection | Recovery |
 |---|---|---|
-| `cursor-agent` not on PATH | `check-cursor-installed.sh` preinstall script | Install refuses; operator runs `curl https://cursor.com/install \| bash` |
-| Cursor not authenticated | First dispatch errors on cursor-agent invocation | `dispatch.task.failed` with detail; operator runs `cursor-agent login` or sets `CURSOR_API_KEY` |
+| `cursor-agent` not on PATH | `check-cursor-installed.sh` preinstall script | Install refuses; principal runs `curl https://cursor.com/install \| bash` |
+| Cursor not authenticated | First dispatch errors on cursor-agent invocation | `dispatch.task.failed` with detail; principal runs `cursor-agent login` or sets `CURSOR_API_KEY` |
 | Cursor CLI emits unparseable NDJSON | runner's JSON.parse fallback collects line as text | Lens output may fail JSON extraction → `dispatch.task.failed` with detail |
 | `git clone` of PR head fails | prepareWorkdir() rejects | `dispatch.task.failed` with `reason: workdir-setup-failed` |
 | Review timeout (>10 min) | cursor runner timer | SIGKILL the subprocess; `dispatch.task.failed` |
 | NATS disconnect | Status iterator logs `disconnect` event | Auto-reconnect with backoff; launchd restarts on FATAL consumer-loop failure |
-| Workdir disk pressure | OS-level monitoring (out of scope here) | Operator drains queue and `rm -rf ${ALPHA_WORKDIR_ROOT}` between dispatches |
+| Workdir disk pressure | OS-level monitoring (out of scope here) | Principal drains queue and `rm -rf ${ALPHA_WORKDIR_ROOT}` between dispatches |
 
 ---
 
@@ -374,8 +374,8 @@ When cortex#112 Phase B lands the NKey 3-tier identity chain, alpha's envelopes 
 | 3 | Cursor's session caching (`--resume`) could amortise model context across lenses in the same dispatch. v1 ships fresh-session per lens. | Performance |
 | 4 | When `cursor-agent` is unauthenticated, does the CLI exit non-zero with a stable error string? Some installs prompt interactively. | Failure detection |
 | 5 | DeepArchitecture lens needs a path/extension predicate to avoid firing on trivial diffs. Same shape as sage's Security lens predicate. | Phase 5 design |
-| 6 | Stack identity (cortex#112 Phase A `stack:` block) lands after this PR. Alpha's manifest is forward-compatible (optional fields), but the operator-supplied `stack_id` should appear in arc-rendered fragments once Phase A merges. | Forward-compat |
-| 7 | Should alpha and sage share a single launchd `EnvironmentVariables` block (common org/data-residency) or stay independent? Convenience vs blast-radius. | Operator ergonomics |
+| 6 | Stack identity (cortex#112 Phase A `stack:` block) lands after this PR. Alpha's manifest is forward-compatible (optional fields), but the principal-supplied `stack_id` should appear in arc-rendered fragments once Phase A merges. | Forward-compat |
+| 7 | Should alpha and sage share a single launchd `EnvironmentVariables` block (common org/data-residency) or stay independent? Convenience vs blast-radius. | Principal ergonomics |
 
 Questions 1–5 do not block this PR. Questions 6–7 are forward-compatibility notes that resolve in later phases.
 

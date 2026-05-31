@@ -1,6 +1,6 @@
 # SOP — `cortex migrate-config`
 
-> Operator-facing standard operating procedure for running the
+> Principal-facing standard operating procedure for running the
 > `migrate-config` CLI before the v2.0.0 policy cutover (cortex#296).
 >
 > **Related:** [design-policy-cutover.md](./design-policy-cutover.md) (the why),
@@ -36,7 +36,7 @@ The CLI accepts three input shapes (auto-detected by content):
    declarations.
 2. **Cortex-shape `cortex.yaml` with no `policy:` block** — the
    post-MIG-7 cortex schema, but pre-cutover. The CLI keeps the
-   `agents[]`/`operator:`/`renderers:` blocks verbatim and ADDS a
+   `agents[]`/`principal:`/`renderers:` blocks verbatim and ADDS a
    synthesised `policy:` block.
 3. **Cortex-shape `cortex.yaml` WITH a `policy:` block** — the
    post-cutover shape. The CLI normalises the existing policy block
@@ -55,8 +55,8 @@ Generated principals follow §6 of `design-policy-cutover.md`:
   one principal. The principal id is synthesised from the platform user
   id (`user-` + a hash) unless you override it with `--labels` (see
   below).
-- **One principal per declared operator** — id `operator` (or
-  `operator-<id>` for multi-operator deployments), populated from the
+- **One principal for the declared stack principal** — id `operator` <!-- historical: synthesised principal-id literal emitted by migrate-config-policy.ts; code identifier, not human-operator prose --> (or
+  `operator-<id>` for multi-principal deployments), <!-- historical: `operator-<id>` is the same code-emitted id literal --> populated from the
   legacy `agent.operatorDiscordId`/`operatorMattermostId`/`operatorSlackId`
   and tagged with the broadest `session_config.dm` from the legacy
   `dm.operatorRole` block.
@@ -175,7 +175,7 @@ for the inventory and cortex#293 for the inversion helper.
 ## See also
 
 - `docs/design-policy-cutover.md` — full architectural design, including
-  the migration algorithm (§6), the operator pre-flight requirement
+  the migration algorithm (§6), the principal pre-flight requirement
   (§9.1), and the resolved design questions (§13).
 - `docs/iteration-policy-cutover.md` — slice plan, including which
   slice landed which behaviour.

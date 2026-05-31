@@ -4,12 +4,12 @@
  * Replaces grove-v2's `AgentConfig` shape (`agent:` + `discord:[]` + `mattermost:[]` +
  * `trustedAgentBots:`) with a first-class agent model:
  *
- *   operator:                  who is running this cortex instance
+ *   principal:                  who is running this cortex instance
  *   agents:                    first-class agent bundles
  *     - id: luna
  *       displayName: Luna
  *       persona: ./personas/luna.md
- *       roles: [operator]
+ *       roles: [reviewer]
  *       trust: [echo, holly, ivy]
  *       presence:              owned by the agent — one per platform
  *         discord: { token, guildId, ... }
@@ -85,7 +85,7 @@ function emptyDefault<T extends z.ZodObject<z.ZodRawShape>>(schema: T) {
  * fields by lifting them out of the (now removed) singular `agent:` block.
  *
  * R1 vocabulary migration (cortex#388) — `principal:` is the canonical
- * key in `cortex.yaml`. The transition-release `operator:` block alias
+ * key in `cortex.yaml`. The transition-release legacy-block alias
  * was removed at v3.0.0 (manifest PR-11); operators upgrading from
  * cortex v2.x run `cortex migrate-config` to rewrite their cortex.yaml
  * before installing v3.
@@ -179,7 +179,7 @@ export const DiscordPresenceSchema = z.object({
    */
   operatorRoleId: z.coerce.string().optional(),
   /**
-   * cortex#98 (part A) — operator-set Discord user ids of peer bots that
+   * cortex#98 (part A) — principal-set Discord user ids of peer bots that
    * are permitted to trigger this presence. MIRROR of
    * `DiscordInstanceSchema.trustedBotIds` in `./config.ts`; the cortex.yaml
    * loader (`loadCortexShape` in `src/common/config/loader.ts`) threads
@@ -253,7 +253,7 @@ export type DiscordPresence = z.infer<typeof DiscordPresenceSchema>;
 // TODO(cortex#205-followup): add `surfaceSubjects` mirror —
 // `MattermostAdapter` already accepts it in its infra type
 // (`src/adapters/mattermost/index.ts:57`), so today the bus→chat render
-// path is operator-configurable via cortex.yaml for Discord but silently
+// path is principal-configurable via cortex.yaml for Discord but silently
 // unreachable for Mattermost.
 export const MattermostPresenceSchema = z.object({
   /** Whether this presence is active. Default: true. */
@@ -323,7 +323,7 @@ export const SlackPresenceSchema = z.object({
   workspaceId: z.coerce.string().regex(
     // cortex#235 r1#6 — bound the regex. Real Slack team ids are
     // 9-11 chars (T + 8-10 base32-ish). 16 gives Slack headroom for
-    // future expansion without admitting unbounded operator-pasted
+    // future expansion without admitting unbounded principal-pasted
     // garbage that would bloat downstream subject strings.
     /^T[A-Z0-9]{8,16}$/,
     "slack.workspaceId must be a Slack team id (T... with 8-16 trailing chars)",
@@ -350,7 +350,7 @@ export const SlackPresenceSchema = z.object({
    */
   allowedUserIds: z.array(z.string()).default([]),
   /**
-   * Operator-set Slack **bot ids** (`B…`) of peer bots permitted to
+   * Principal-set Slack **bot ids** (`B…`) of peer bots permitted to
    * trigger this presence. Mirrors `DiscordPresenceSchema.trustedBotIds`
    * — same cross-process bridge semantics.
    *
@@ -494,7 +494,7 @@ export const AgentRuntimeSchema = z.object({
   // Echo M2 on cortex#62 — a `standalone` agent with zero capabilities parses
   // fine but routes zero work. The daemon connects to NATS, publishes nothing
   // to the capability KV, and just sits there. Worst-of-both failure mode:
-  // operator sees the agent in the dashboard, dispatcher never gives it
+  // principal sees the agent in the dashboard, dispatcher never gives it
   // anything to do. Catch it at config-load time.
   (rt) => rt.mode !== "standalone" || rt.capabilities.length >= 1,
   {
@@ -580,7 +580,7 @@ export const AgentSchema = z.object({
    * NKeys are stack-scoped on the wire (the stack signs every envelope),
    * but at the cortex.yaml surface they're declared per-agent because
    * each agent has exactly one home stack today. When Phase D introduces
-   * multi-stack-per-operator membership, the principal model migrates
+   * multi-stack-per-principal membership, the principal model migrates
    * this off `AgentSchema` onto `policy.principals[]`.
    */
   nkey_pub: z.string().regex(
@@ -620,9 +620,9 @@ export const AgentSchema = z.object({
 //                            REJECTED for the same reason.
 //   - Platform sub-blocks    each enforce their own structural
 //                            requirements (token/guildId/...) when
-//                            an operator DOES declare a platform.
+//                            a principal DOES declare a platform.
 //
-// Net effect: operator-friendliness is preserved for the typo case;
+// Net effect: principal-friendliness is preserved for the typo case;
 // the relaxation is narrowly scoped to "explicit empty object."
 
 export type Agent = z.infer<typeof AgentSchema>;
@@ -763,7 +763,7 @@ export const PagerDutyRendererSchema = z.object({
   kind: z.literal("pagerduty"),
   /** Integration / routing key for PagerDuty events-v2. */
   routingKey: z.string().min(1),
-  /** Subject patterns to subscribe to. Operator chooses what counts as page-worthy. */
+  /** Subject patterns to subscribe to. Principal chooses what counts as page-worthy. */
   subscribe: z.array(z.string().min(1)).default([]),
   /**
    * IAW Phase A.4 — optional visibility guardrails. See
@@ -882,8 +882,8 @@ export const NatsConfigSchema = z.object({
   /** Optional NKey identity for envelope signing (MY-400). */
   identity: NatsIdentitySchema.optional(),
   /**
-   * cortex#86 — path to a NATS user `.creds` file for operator-mode connect
-   * auth. When set, the daemon authenticates via `credsAuthenticator(...)`
+   * cortex#86 — path to a NATS user `.creds` file for NSC operator-account
+   * JWT connect auth. When set, the daemon authenticates via `credsAuthenticator(...)`
    * instead of anonymous / bearer-token. Leading `~/` expands to `$HOME`;
    * the `NatsLink` loader enforces chmod 600 on POSIX. Wins over `token`
    * when both are set (warn log explains precedence).
@@ -1126,7 +1126,7 @@ const SessionConfigShape = z.object({
   /**
    * Whether the cortex bash-guard hook is active for this
    * principal's sessions. Defaults to `true` — guard ON unless
-   * an operator explicitly opts out (e.g. for their own `operator`
+   * a principal explicitly opts out (e.g. for their own
    * principal in a DM). Preserves the legacy `bashGuard` default.
    */
   bash_guard: z.boolean().default(true),
@@ -1135,7 +1135,7 @@ const SessionConfigShape = z.object({
    * `pattern` with an optional `repos[]` scope; if `repos` is
    * present the rule only matches when the session is anchored
    * to one of those repos. Top-level `repos[]` carries the
-   * always-allowed repo set (e.g. operator's own work tree).
+   * always-allowed repo set (e.g. principal's own work tree).
    *
    * Shape mirrors grove-v2's `presence.discord.dm.operatorRole.
    * bashAllowlist` so the cortex#243 migration CLI can copy
@@ -1177,7 +1177,7 @@ const SessionConfigShape = z.object({
  *     the right one so adapters stop deciding this.
  *
  * **Convention — federation peers do NOT carry `platform_ids`.**
- * A principal that represents a remote operator's stack (a
+ * A principal that represents a remote principal's stack (a
  * federation peer) is authenticated by the `signed_by[]` chain's
  * stack NKey, not by any platform-side identity. Setting
  * `platform_ids` on such a principal is meaningless at best and
@@ -1314,7 +1314,7 @@ export type PolicyPrincipal = z.infer<typeof PolicyPrincipalSchema>;
 export const PolicyRoleSchema = z.object({
   id: z.string().regex(
     LETTER_PREFIX_ID_REGEX,
-    "role id must be lowercase alphanumeric + hyphen, starting with a letter (e.g. 'operator', 'code-reviewer')",
+    "role id must be lowercase alphanumeric + hyphen, starting with a letter (e.g. 'reviewer', 'code-reviewer')",
   ),
   /**
    * Capability ids granted by this role. Convention follows
@@ -1347,8 +1347,8 @@ export type PolicyRole = z.infer<typeof PolicyRoleSchema>;
 /**
  * A single peer in a federation network — IAW Phase D.1 (cortex#116).
  *
- * Every peer is a remote operator's stack-NKey identity that this
- * operator's cortex will accept federated traffic from. The triple
+ * Every peer is a remote principal's stack-NKey identity that this
+ * principal's cortex will accept federated traffic from. The triple
  * `{operator_id, stack_id, operator_pubkey}` is the verifiable
  * attribution slot: incoming federated envelopes carry
  * `signed_by[].principal = did:mf:<stack_id>` + a signature that
@@ -1365,7 +1365,7 @@ export const PolicyFederatedPeerSchema = z.object({
    */
   operator_id: z.string().regex(
     LETTER_PREFIX_ID_REGEX,
-    "peer.operator_id must match the operator id grammar (lowercase alphanumeric + hyphen, starting with a letter)",
+    "peer.operator_id must match the principal id grammar (lowercase alphanumeric + hyphen, starting with a letter)",
   ),
   /**
    * Peer stack id in `{operator_id}/{stack_id}` form — same shape as
@@ -1380,7 +1380,7 @@ export const PolicyFederatedPeerSchema = z.object({
     "peer.stack_id must match {operator_id}/{stack_id} format",
   ),
   /**
-   * Peer operator's NKey public key — same 56-char U-prefixed base32
+   * Peer principal's NKey public key — same 56-char U-prefixed base32
    * grammar as every other NKey on the schema (StackConfigSchema,
    * PolicyPrincipalSchema). Phase D.4 swaps this static declaration
    * for a registry-resolved lookup; until then, operators paste the
@@ -1484,7 +1484,7 @@ export const PolicyFederatedNetworkSchema = z.object({
    * Capability ids this stack announces on the network. Mirrors the
    * Phase A.6 capability registry — the network publishes these on
    * `system.capability.announced.<network_id>` so peers can route
-   * tasks by capability without having to know each operator's
+   * tasks by capability without having to know each principal's
    * agent inventory. Empty = "announce nothing" (a silent
    * participant — consumes but doesn't offer work).
    */
@@ -1503,7 +1503,7 @@ export const PolicyFederatedNetworkSchema = z.object({
    *
    * **No default — required field.** Every other list-shaped field
    * on this schema defaults to `[]`, but `max_hop` is deliberately
-   * not defaulted: a hop budget MUST be a conscious operator
+   * not defaulted: a hop budget MUST be a conscious principal
    * choice. A silent `.default(0)` would let a typoed `max_hop:`
    * line pass parse with the most-restrictive setting and confuse
    * operators wondering why federated traffic stopped arriving;
@@ -1518,7 +1518,7 @@ export type PolicyFederatedNetwork = z.infer<typeof PolicyFederatedNetworkSchema
 /**
  * IAW Phase D.4.3 — optional `policy.federated.registry` block.
  *
- * Declares the cortex-network-registry endpoint the operator wants
+ * Declares the cortex-network-registry endpoint the principal wants
  * cortex to consult for peer-pubkey resolution. When present, the
  * `RegistryClient` (in `src/common/registry/`) is instantiated at
  * boot and consults `{url}/operators/{id}` on a refresh schedule
@@ -1574,7 +1574,7 @@ export type PolicyFederatedRegistry = z.infer<typeof PolicyFederatedRegistrySche
  * on cortex.yaml; absence means "no federation declared" and the
  * surface-router treats inbound `federated.*` envelopes as
  * unrecognised (rejected at the validator layer). When present,
- * carries the operator's network roster.
+ * carries the principal's network roster.
  *
  * IAW Phase D.4.3 extends with the optional `registry` sub-block —
  * see `PolicyFederatedRegistrySchema` for the trust-anchor model.
@@ -1631,7 +1631,7 @@ export const PolicySchema = z.object({
   // path so operators see the second declaration as the offender.
   // Federation peer principals SHOULD NOT carry platform_ids (see
   // PolicyPrincipalSchema JSDoc); when they do, this rule still
-  // applies — the convention is operator-side, the uniqueness
+  // applies — the convention is principal-side, the uniqueness
   // rule is schema-side.
   const seenPlatformTuple = new Map<string, { principalIdx: number; principalId: string }>();
   policy.principals.forEach((p, principalIdx) => {
@@ -1668,7 +1668,7 @@ export const PolicySchema = z.object({
   });
 
   // Cross-ref: every principal.role[] resolves to a declared role.
-  // Batch-emit (not first-failure) so an operator with multiple
+  // Batch-emit (not first-failure) so a principal with multiple
   // dangling refs sees all of them on one parse pass.
   const knownRoles = new Set(policy.roles.map((r) => r.id));
   policy.principals.forEach((p, principalIdx) => {
@@ -1747,8 +1747,8 @@ export const PolicySchema = z.object({
         // stack_id prefix must match operator_id — the two fields
         // are deliberately redundant so the file reads naturally,
         // but they MUST agree. A drift between them would let an
-        // operator declare "peer X has stack Y" where Y belongs to
-        // a different operator — the surface-router would then
+        // principal declare "peer X has stack Y" where Y belongs to
+        // a different principal — the surface-router would then
         // accept federated traffic claiming a forged identity.
         const expectedPrefix = `${peer.operator_id}/`;
         if (!peer.stack_id.startsWith(expectedPrefix)) {
@@ -1760,7 +1760,7 @@ export const PolicySchema = z.object({
         }
 
         // Uniqueness — peer.stack_id within a network. Two
-        // declarations of the same stack are operator error; the
+        // declarations of the same stack are principal error; the
         // schema rejects rather than silently dedup.
         const dupStackAt = seenPeerStack.get(peer.stack_id);
         if (dupStackAt !== undefined) {
@@ -1775,7 +1775,7 @@ export const PolicySchema = z.object({
 
         // Uniqueness — peer.operator_pubkey within a network. A
         // single pubkey appearing twice signals a copy-paste error
-        // (operator pasted the same key into two peer entries with
+        // (principal pasted the same key into two peer entries with
         // different stack_ids); the schema catches it.
         const dupKeyAt = seenPeerPubkey.get(peer.operator_pubkey);
         if (dupKeyAt !== undefined) {
@@ -1804,8 +1804,8 @@ export type Policy = z.infer<typeof PolicySchema>;
  * `config-watcher.ts` for fields that don't require a restart.
  *
  * Architecture §9 compliance: there is exactly ONE singular block
- * (`principal:` — renamed from `operator:` per the vocabulary migration
- * 2026-05 v3.0.0 BREAKING; manifest PR-11), and the agent list is the
+ * (`principal:` — renamed from the legacy singular block per the
+ * vocabulary migration 2026-05 v3.0.0 BREAKING; manifest PR-11), and the agent list is the
  * canonical source. Renderers are top-level peers, not properties of
  * any agent. No `agent:` (singular) — that's the legacy grove-v2 shape
  * and is replaced by the agents[] array.
@@ -1838,7 +1838,7 @@ export const CortexConfigSchema = z.object({
    * (taxonomic labels), `provided_by` (≥1 declared agent id), optional
    * `rate` / `cost` envelopes.
    *
-   * The block is OPTIONAL and defaults to `[]` — an operator running
+   * The block is OPTIONAL and defaults to `[]` — a principal running
    * cortex without any declared capabilities parses cleanly, same as
    * before this block landed. The cross-field invariants below run only
    * when at least one of `agents[].runtime.capabilities[]` or
@@ -1860,20 +1860,20 @@ export const CortexConfigSchema = z.object({
   /**
    * Anti-field: the legacy grove-v2 `agent:` (singular) block must not be
    * present in a cortex.yaml. Caught here with an explicit Zod refusal so
-   * the operator sees a clear migration error rather than the field being
+   * the principal sees a clear migration error rather than the field being
    * silently stripped by Zod's default unknown-key-strip behaviour. Holly
    * W2 flagged the strip path as a real migration safety gap — operators
    * who hand-edit a partially-translated config get no feedback otherwise.
    *
    * The schema-level error here complements `migrate-config` (MIG-7.2e):
    * the converter produces a cortex.yaml *without* `agent:`; this guard
-   * catches the case where an operator pastes a legacy block into a new
+   * catches the case where a principal pastes a legacy block into a new
    * file or fails to remove it during a hand migration.
    */
   agent: z.never({
     error: () =>
       "legacy `agent:` (singular) field is not supported by CortexConfig — " +
-      "use `operator:` + `agents:[]` per architecture §9.1. " +
+      "use `principal:` + `agents:[]` per architecture §9.1. " +
       "Run `cortex migrate-config <bot.yaml>` (MIG-7.2e) to convert.",
   }).optional(),
   /**
@@ -1976,11 +1976,11 @@ export const CortexConfigSchema = z.object({
   // IAW Phase A.6.3 — capability catalog invariants.
   //
   // Three document-level cross-field checks, each with a pointed error
-  // message so an operator hitting one knows exactly which key to fix:
+  // message so a principal hitting one knows exactly which key to fix:
   //
   //   1. Top-level capability ids are unique. Two entries with the same id
   //      represent two declarations of the same capability — likely a
-  //      copy-paste error; rejected at load time so the operator sees the
+  //      copy-paste error; rejected at load time so the principal sees the
   //      duplication immediately rather than the registry surfacing the
   //      "last write wins" silently.
   //
@@ -2020,7 +2020,7 @@ export const CortexConfigSchema = z.object({
   //
   // We emit ALL dangling references (not just the first) so a config with
   // many broken references surfaces them as a batch rather than the
-  // operator having to fix-and-rerun per failure.
+  // principal having to fix-and-rerun per failure.
   .superRefine((config, ctx) => {
     const agentIds = new Set(config.agents.map((a) => a.id));
     const declaredAgentList = [...agentIds].sort().join(", ") || "(none)";
@@ -2060,7 +2060,7 @@ export const CortexConfigSchema = z.object({
           // the dispatch consumer + future network registry consult;
           // the agent's runtime.capabilities[] is the agent's
           // declaration of intent. Spell that asymmetry out so a fresh
-          // operator hitting this error knows which surface to edit.
+          // principal hitting this error knows which surface to edit.
           ctx.addIssue({
             code: "custom",
             message:

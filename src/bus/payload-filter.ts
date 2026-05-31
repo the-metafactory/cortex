@@ -3,10 +3,10 @@
  *
  * Per `/tmp/g-1111-spec.md` §4.3 — surfaces declare client-side payload
  * filters that run AFTER NATS broker-side subject matching. v1 supports a
- * deliberately small operator set; the rest of EventBridge's grammar
+ * deliberately small matcher set; the rest of EventBridge's grammar
  * (numeric, cidr, wildcard, $or) is added only when a real adapter needs it.
  *
- * Operator support (v1):
+ * Matcher support (v1):
  *   - exact match (any-of)        ["a", "b"]
  *   - anything-but                [{"anything-but": v}] | [{"anything-but": [v1, v2]}]
  *   - prefix                      [{"prefix": str}]
@@ -152,7 +152,7 @@ function matchOne(actual: unknown, candidate: FilterValue): boolean {
     return actual === candidate;
   }
 
-  // Operator object — exactly one of the supported keys.
+  // Matcher object — exactly one of the supported keys.
   if ("anything-but" in candidate) {
     if (actual === undefined) return false; // see file-level note: anything-but requires presence
     const banned = candidate["anything-but"];
@@ -174,7 +174,7 @@ function matchOne(actual: unknown, candidate: FilterValue): boolean {
     );
   }
 
-  // Unknown operator — fail closed. New operators must be explicitly
+  // Unknown matcher — fail closed. New matchers must be explicitly
   // added here; silently accepting an unknown shape would mask config
   // typos.
   return false;

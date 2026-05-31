@@ -4,7 +4,7 @@
  * Consolidates the three previously-duplicated call sites:
  *   - `MattermostAdapter.getPlatformUserId` (PresenceBinding contract — must throw)
  *   - `poller.fetchBotUserId` (graceful degradation — wraps + returns null)
- *   - `MattermostAdapter.notifyOperator` (best-effort DM — wraps + early-return)
+ *   - `MattermostAdapter.notifyPrincipal` (best-effort DM — wraps + early-return)
  *
  * Each caller decides whether to swallow the error or propagate; the helper
  * itself fails closed (throws) so callers that want null-on-failure must
