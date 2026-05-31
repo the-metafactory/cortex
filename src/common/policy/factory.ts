@@ -54,7 +54,7 @@ export function policyEngineFromConfig(
   // slim `FederatedPolicy` shape. The engine only reads `id` +
   // `peers[].stack_id`; other fields (`accept_subjects`,
   // `deny_subjects`, `max_hop`, `announce_capabilities`,
-  // `operator_pubkey`, `operator_id`, `leaf_node`) are consumed
+  // `principal_pubkey`, `principal_id`, `leaf_node`) are consumed
   // elsewhere (surface-router D.2, verifier, registry D.4).
   const federated: FederatedPolicy | undefined = policy.federated
     ? {

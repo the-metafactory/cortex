@@ -1348,35 +1348,45 @@ export type PolicyRole = z.infer<typeof PolicyRoleSchema>;
  *
  * Every peer is a remote principal's stack-NKey identity that this
  * principal's cortex will accept federated traffic from. The triple
- * `{operator_id, stack_id, operator_pubkey}` is the verifiable
+ * `{principal_id, stack_id, principal_pubkey}` is the verifiable
  * attribution slot: incoming federated envelopes carry
  * `signed_by[].principal = did:mf:<stack_id>` + a signature that
- * verifies against `operator_pubkey`. Phase D verification wiring
+ * verifies against `principal_pubkey`. Phase D verification wiring
  * lands in D.2/D.3; the schema lands first so principals can declare
  * their federation topology before the verification path is live.
+ *
+ * R2.G vocabulary migration (cortex#436) — the canonical peer-identity
+ * keys are `principal_id` / `principal_pubkey`. The legacy
+ * `operator_id` / `operator_pubkey` keys are still accepted on load
+ * (rewritten by `acceptLegacyFederatedPeerPrincipal` with a one-time
+ * deprecation warning) so any hand-written federation block keeps
+ * working through the transition. Federation is pre-launch so the risk
+ * is low; accept-both is cheap insurance and keeps the peer block
+ * consistent with the R2.I cloud-block transition
+ * (`acceptLegacyCloudPrincipalId` in `config.ts`).
  */
-export const PolicyFederatedPeerSchema = z.object({
+const PolicyFederatedPeerObjectSchema = z.object({
   /**
    * Peer principal id — same letter-prefix grammar as `PrincipalConfigSchema.id`.
    * Distinct from the principal's local id; the local principal's id
    * doesn't appear in `federated.networks[].peers[]` (the local
    * principal IS the consumer of the peer list).
    */
-  operator_id: z.string().regex(
+  principal_id: z.string().regex(
     LETTER_PREFIX_ID_REGEX,
-    "peer.operator_id must match the principal id grammar (lowercase alphanumeric + hyphen, starting with a letter)",
+    "peer.principal_id must match the principal id grammar (lowercase alphanumeric + hyphen, starting with a letter)",
   ),
   /**
-   * Peer stack id in `{operator_id}/{stack_id}` form — same shape as
-   * `PolicyPrincipalSchema.home_stack`. The `operator_id` prefix MUST
-   * match the sibling `operator_id` field (cross-validated below);
+   * Peer stack id in `{principal_id}/{stack_id}` form — same shape as
+   * `PolicyPrincipalSchema.home_stack`. The `principal_id` prefix MUST
+   * match the sibling `principal_id` field (cross-validated below);
    * the redundancy is deliberate so principals can read the file and
    * see "yes, this is jcfischer's sage-host stack" without splitting
    * the identity across fields.
    */
   stack_id: z.string().regex(
     /^[a-z][a-z0-9_-]*\/[a-z][a-z0-9_-]*$/,
-    "peer.stack_id must match {operator_id}/{stack_id} format",
+    "peer.stack_id must match {principal_id}/{stack_id} format",
   ),
   /**
    * Peer principal's NKey public key — same 56-char U-prefixed base32
@@ -1385,11 +1395,93 @@ export const PolicyFederatedPeerSchema = z.object({
    * for a registry-resolved lookup; until then, principals paste the
    * peer's pubkey directly into cortex.yaml.
    */
-  operator_pubkey: z.string().regex(
+  principal_pubkey: z.string().regex(
     NKEY_PUBKEY_REGEX,
-    "peer.operator_pubkey must be a base32 NKey public key (U-prefixed, 56 chars total)",
+    "peer.principal_pubkey must be a base32 NKey public key (U-prefixed, 56 chars total)",
   ),
 });
+
+/**
+ * Thrown when a federated peer block declares BOTH a canonical key
+ * (`principal_id` / `principal_pubkey`) and its legacy alias
+ * (`operator_id` / `operator_pubkey`). Carries a stable `code`
+ * discriminator (parity with `CloudPrincipalIdConflictError` from the
+ * R2.I cloud-block transition).
+ */
+export class FederatedPeerPrincipalConflictError extends Error {
+  readonly code = "dual_field_conflict";
+  constructor(message: string) {
+    super(message);
+    this.name = "FederatedPeerPrincipalConflictError";
+  }
+}
+
+let warnedLegacyFederatedPeerPrincipal = false;
+/**
+ * Pre-parse rewriter: accept the legacy peer keys `operator_id` /
+ * `operator_pubkey` as aliases of the canonical `principal_id` /
+ * `principal_pubkey`. Runs as a `z.preprocess` BEFORE
+ * `PolicyFederatedPeerObjectSchema` validates, so the legacy keys
+ * never reach the (deliberately `operator_*`-free) object schema.
+ * Mirrors `acceptLegacyCloudPrincipalId` (R2.I) but covers two fields.
+ *
+ * Per field:
+ *   - canonical only            → pass through verbatim
+ *   - legacy only               → rewrite to the canonical key, warn once
+ *   - BOTH present              → throw (dual-key conflict, R3/R2.I parity)
+ *   - neither                   → pass through; the object schema's
+ *                                 `.regex(...)` surfaces the missing-key
+ *                                 error under the canonical name
+ */
+export function acceptLegacyFederatedPeerPrincipal(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const obj = raw as Record<string, unknown>;
+
+  // `!= null` (not `!== undefined`) so a valueless YAML key line
+  // (parses to null) is NOT treated as a live key — avoids a spurious
+  // dual-key rejection or rewrite for an empty alias line.
+  const hasCanonicalId = obj.principal_id != null;
+  const hasLegacyId = obj.operator_id != null;
+  const hasCanonicalPubkey = obj.principal_pubkey != null;
+  const hasLegacyPubkey = obj.operator_pubkey != null;
+
+  if ((hasCanonicalId && hasLegacyId) || (hasCanonicalPubkey && hasLegacyPubkey)) {
+    const which = hasCanonicalId && hasLegacyId ? "principal_id`/`operator_id" : "principal_pubkey`/`operator_pubkey";
+    throw new FederatedPeerPrincipalConflictError(
+      "federated peer declares BOTH the canonical and legacy form of " +
+        "`" + which + "`. R2.G (cortex#436) — the `operator_*` peer keys " +
+        "are deprecated but still accepted as aliases; a peer declaring " +
+        "both forms of a field is ambiguous and is rejected before any " +
+        "federation-attribution decision. Delete the legacy `operator_*` " +
+        "line(s) and keep the `principal_*` form.",
+    );
+  }
+
+  if (hasLegacyId || hasLegacyPubkey) {
+    if (!warnedLegacyFederatedPeerPrincipal) {
+      warnedLegacyFederatedPeerPrincipal = true;
+      console.warn(
+        "config: federated peer `operator_id:` / `operator_pubkey:` are " +
+          "deprecated (R2.G, cortex#436) — rename them to `principal_id:` / " +
+          "`principal_pubkey:`. The legacy keys are still accepted for now " +
+          "and rewritten on load. This warning prints once per process.",
+      );
+    }
+    const { operator_id, operator_pubkey, ...rest } = obj;
+    return {
+      ...rest,
+      ...(hasLegacyId && { principal_id: operator_id }),
+      ...(hasLegacyPubkey && { principal_pubkey: operator_pubkey }),
+    };
+  }
+
+  return raw;
+}
+
+export const PolicyFederatedPeerSchema = z.preprocess(
+  acceptLegacyFederatedPeerPrincipal,
+  PolicyFederatedPeerObjectSchema,
+);
 
 export type PolicyFederatedPeer = z.infer<typeof PolicyFederatedPeerSchema>;
 
@@ -1520,7 +1612,7 @@ export type PolicyFederatedNetwork = z.infer<typeof PolicyFederatedNetworkSchema
  * Declares the cortex-network-registry endpoint the principal wants
  * cortex to consult for peer-pubkey resolution. When present, the
  * `RegistryClient` (in `src/common/registry/`) is instantiated at
- * boot and consults `{url}/operators/{id}` on a refresh schedule
+ * boot and consults `{url}/principals/{id}` on a refresh schedule
  * to populate an in-memory cache of verified peer pubkeys.
  *
  * The trust anchor is the registry's own Ed25519 pubkey:
@@ -1555,7 +1647,7 @@ export const PolicyFederatedRegistrySchema = z.object({
    * pinned for the lifetime of the process. Principals wanting a
    * persistent pin across restarts must paste it here.
    *
-   * Grammar matches the registry service's `OperatorRecord.operator_pubkey`
+   * Grammar matches the registry service's `PrincipalRecord.principal_pubkey`
    * shape (base64 of 32 raw bytes → 44 chars including `=` padding).
    * Validated softly (length + base64 alphabet) — strict 32-byte
    * decoding happens at the client during initial fetch.
@@ -1743,17 +1835,17 @@ export const PolicySchema = z.object({
       const seenPeerStack = new Map<string, number>();
       const seenPeerPubkey = new Map<string, number>();
       n.peers.forEach((peer, peerIdx) => {
-        // stack_id prefix must match operator_id — the two fields
+        // stack_id prefix must match principal_id — the two fields
         // are deliberately redundant so the file reads naturally,
         // but they MUST agree. A drift between them would let an
         // principal declare "peer X has stack Y" where Y belongs to
         // a different principal — the surface-router would then
         // accept federated traffic claiming a forged identity.
-        const expectedPrefix = `${peer.operator_id}/`;
+        const expectedPrefix = `${peer.principal_id}/`;
         if (!peer.stack_id.startsWith(expectedPrefix)) {
           ctx.addIssue({
             code: "custom",
-            message: `peer.stack_id "${peer.stack_id}" must start with peer.operator_id "${peer.operator_id}" — got prefix "${peer.stack_id.split("/")[0]}/" instead`,
+            message: `peer.stack_id "${peer.stack_id}" must start with peer.principal_id "${peer.principal_id}" — got prefix "${peer.stack_id.split("/")[0]}/" instead`,
             path: ["federated", "networks", networkIdx, "peers", peerIdx, "stack_id"],
           });
         }
@@ -1772,19 +1864,19 @@ export const PolicySchema = z.object({
           seenPeerStack.set(peer.stack_id, peerIdx);
         }
 
-        // Uniqueness — peer.operator_pubkey within a network. A
+        // Uniqueness — peer.principal_pubkey within a network. A
         // single pubkey appearing twice signals a copy-paste error
         // (principal pasted the same key into two peer entries with
         // different stack_ids); the schema catches it.
-        const dupKeyAt = seenPeerPubkey.get(peer.operator_pubkey);
+        const dupKeyAt = seenPeerPubkey.get(peer.principal_pubkey);
         if (dupKeyAt !== undefined) {
           ctx.addIssue({
             code: "custom",
-            message: `peer.operator_pubkey already declared at federated.networks[${networkIdx}].peers[${dupKeyAt}] (pubkey collision — paste error?)`,
-            path: ["federated", "networks", networkIdx, "peers", peerIdx, "operator_pubkey"],
+            message: `peer.principal_pubkey already declared at federated.networks[${networkIdx}].peers[${dupKeyAt}] (pubkey collision — paste error?)`,
+            path: ["federated", "networks", networkIdx, "peers", peerIdx, "principal_pubkey"],
           });
         } else {
-          seenPeerPubkey.set(peer.operator_pubkey, peerIdx);
+          seenPeerPubkey.set(peer.principal_pubkey, peerIdx);
         }
       });
     });

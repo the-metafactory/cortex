@@ -1258,14 +1258,14 @@ export async function startCortex(
   let registryClient: RegistryClient | null = null;
   const registryConfig = options.policy?.federated?.registry;
   if (registryConfig !== undefined) {
-    const peerOperatorIds = Array.from(
+    const peerPrincipalIds = Array.from(
       new Set(
         (options.policy?.federated?.networks ?? []).flatMap((n) =>
-          n.peers.map((p) => p.operator_id),
+          n.peers.map((p) => p.principal_id),
         ),
       ),
     );
-    if (peerOperatorIds.length === 0) {
+    if (peerPrincipalIds.length === 0) {
       console.log(
         `cortex: policy.federated.registry configured (${registryConfig.url}) but no peers declared — registry client dormant`,
       );
@@ -1273,14 +1273,14 @@ export async function startCortex(
       registryClient = new RegistryClient({
         url: registryConfig.url,
         ...(registryConfig.pubkey !== undefined && { pubkey: registryConfig.pubkey }),
-        principalIds: peerOperatorIds,
+        principalIds: peerPrincipalIds,
       });
       // Boot the client asynchronously — TOFU + initial refresh must
       // not block the rest of cortex boot. Errors inside `start()`
       // are already logged via the client's own `logError` seam.
       void registryClient.start();
       console.log(
-        `cortex: registry client started (${registryConfig.url}, tracking ${peerOperatorIds.length} peer(s))`,
+        `cortex: registry client started (${registryConfig.url}, tracking ${peerPrincipalIds.length} peer(s))`,
       );
     }
   }

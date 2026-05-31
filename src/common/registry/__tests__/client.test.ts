@@ -20,7 +20,7 @@ import { describe, expect, mock, test } from "bun:test";
 
 import { RegistryClient } from "../client";
 import { canonicalJSON } from "../signing";
-import type { OperatorRecord, SignedAssertion } from "../types";
+import type { PrincipalRecord, SignedAssertion } from "../types";
 
 // =============================================================================
 // Test helpers — Ed25519 sign-side (the client only verifies; tests
@@ -78,12 +78,12 @@ const FAKE_PEER_PUBKEY_V2 = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=";
 /**
  * Build a wire-shape payload — the JSON the registry emits and the
  * client deserializes. Wire fields are `principal_id` / `principal_pubkey`
- * per PR-R7c-network-registry; cortex's internal `OperatorRecord`
- * cache type uses different field names and the client maps between
- * them. Tests assert against the in-memory `OperatorRecord` view, so
- * the fixture is left as `unknown`-typed wire bytes.
+ * (PR-R7c-network-registry); cortex's internal `PrincipalRecord` cache
+ * type now mirrors the same field names (PR-R2.G), and the client
+ * passes them through verbatim after verification. Tests assert
+ * against the in-memory `PrincipalRecord` view.
  */
-function makeOperator(
+function makePrincipalWire(
   principal_id: string,
   pubkeyB64 = FAKE_PEER_PUBKEY_V1,
 ): {
@@ -131,7 +131,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 describe("RegistryClient — TOFU + pinned pubkey", () => {
   test("TOFU: fetches /registry/pubkey at start() and pins the response", async () => {
     const kp = await generateKeypair();
-    const op = makeOperator("andreas");
+    const op = makePrincipalWire("andreas");
     const assertion = await signAssertion(kp.privateKey, kp.publicKeyB64, op);
 
     let pubkeyFetched = false;
@@ -155,7 +155,7 @@ describe("RegistryClient — TOFU + pinned pubkey", () => {
       expect(pubkeyFetched).toBe(true);
       const fetched = client.getPrincipal("andreas");
       expect(fetched).toBeDefined();
-      expect(fetched?.operator_id).toBe("andreas");
+      expect(fetched?.principal_id).toBe("andreas");
     } finally {
       client.stop();
     }
@@ -163,7 +163,7 @@ describe("RegistryClient — TOFU + pinned pubkey", () => {
 
   test("pinned pubkey from config skips the /registry/pubkey TOFU call", async () => {
     const kp = await generateKeypair();
-    const op = makeOperator("jcfischer");
+    const op = makePrincipalWire("jcfischer");
     const assertion = await signAssertion(kp.privateKey, kp.publicKeyB64, op);
 
     let pubkeyFetched = false;
@@ -196,7 +196,7 @@ describe("RegistryClient — TOFU + pinned pubkey", () => {
 describe("RegistryClient — getPrincipal()", () => {
   test("returns the verified record after a successful refresh", async () => {
     const kp = await generateKeypair();
-    const op = makeOperator("andreas", FAKE_PEER_PUBKEY_V1);
+    const op = makePrincipalWire("andreas", FAKE_PEER_PUBKEY_V1);
     const assertion = await signAssertion(kp.privateKey, kp.publicKeyB64, op);
 
     const fakeFetch = makeRouteFetch({
@@ -214,12 +214,12 @@ describe("RegistryClient — getPrincipal()", () => {
     await client.start();
     try {
       const got = client.getPrincipal("andreas");
-      // The cache is keyed on the cortex-internal `OperatorRecord`
-      // shape (`operator_id`/`operator_pubkey`), built from the wire
-      // payload (`principal_id`/`principal_pubkey`) per PR-R7c.
-      const expected: OperatorRecord = {
-        operator_id: op.principal_id,
-        operator_pubkey: op.principal_pubkey,
+      // The cache holds a cortex-internal `PrincipalRecord` whose
+      // field names (`principal_id`/`principal_pubkey`) now mirror the
+      // wire payload verbatim (PR-R7c wire + PR-R2.G symbol).
+      const expected: PrincipalRecord = {
+        principal_id: op.principal_id,
+        principal_pubkey: op.principal_pubkey,
         stacks: op.stacks,
         capabilities: op.capabilities,
         updated_at: op.updated_at,
@@ -239,7 +239,7 @@ describe("RegistryClient — getPrincipal()", () => {
     // structural shape correct" attack the verify step must catch.
     const signerKp = await generateKeypair();
     const pinnedKp = await generateKeypair();
-    const op = makeOperator("attacker");
+    const op = makePrincipalWire("attacker");
     const issued_at = new Date().toISOString();
     const bound = canonicalJSON({ payload: op, issued_at, registry: pinnedKp.publicKeyB64 });
     const sigBuf = await crypto.subtle.sign(
@@ -247,7 +247,7 @@ describe("RegistryClient — getPrincipal()", () => {
       signerKp.privateKey,
       new TextEncoder().encode(bound),
     );
-    const forged: SignedAssertion<ReturnType<typeof makeOperator>> = {
+    const forged: SignedAssertion<ReturnType<typeof makePrincipalWire>> = {
       payload: op,
       issued_at,
       registry: pinnedKp.publicKeyB64,
@@ -301,8 +301,8 @@ describe("RegistryClient — getPrincipal()", () => {
 
   test("returns undefined when the registry returned an `unconfigured` sentinel", async () => {
     const kp = await generateKeypair();
-    const op = makeOperator("andreas");
-    const unsignedAssertion: SignedAssertion<ReturnType<typeof makeOperator>> = {
+    const op = makePrincipalWire("andreas");
+    const unsignedAssertion: SignedAssertion<ReturnType<typeof makePrincipalWire>> = {
       payload: op,
       issued_at: new Date().toISOString(),
       registry: "unconfigured",
@@ -332,7 +332,7 @@ describe("RegistryClient — getPrincipal()", () => {
   test("returns undefined when the registry pubkey on the assertion does not match the pinned pubkey", async () => {
     const realKp = await generateKeypair();
     const otherKp = await generateKeypair();
-    const op = makeOperator("victim");
+    const op = makePrincipalWire("victim");
     // Assertion is well-signed by realKp, but the client pinned otherKp.
     const assertion = await signAssertion(realKp.privateKey, realKp.publicKeyB64, op);
     const fakeFetch = makeRouteFetch({
@@ -362,7 +362,7 @@ describe("RegistryClient — getPrincipal()", () => {
     // `alice`. The signature verifies, the registry pubkey matches —
     // only the per-principal id check catches it.
     const kp = await generateKeypair();
-    const eve = makeOperator("eve");
+    const eve = makePrincipalWire("eve");
     const assertion = await signAssertion(kp.privateKey, kp.publicKeyB64, eve);
     const fakeFetch = makeRouteFetch({
       "/principals/alice": () => jsonResponse(assertion),
@@ -394,7 +394,7 @@ describe("RegistryClient — getPrincipal()", () => {
     // assertion would have verified.
     const kp = await generateKeypair();
     const op = {
-      ...makeOperator("andreas"),
+      ...makePrincipalWire("andreas"),
       principal_pubkey: "definitely-not-base64-ed25519", // wrong length + alphabet
     };
     const assertion = await signAssertion(kp.privateKey, kp.publicKeyB64, op);
@@ -429,7 +429,7 @@ describe("RegistryClient — start()/stop() idempotency", () => {
     // doubled fetch count. The `started` flag fixes that. Echo
     // cortex#230 round 1.
     const kp = await generateKeypair();
-    const op = makeOperator("andreas");
+    const op = makePrincipalWire("andreas");
     const assertion = await signAssertion(kp.privateKey, kp.publicKeyB64, op);
     const fetchCalls: string[] = [];
     const fakeFetch: FakeFetchHandler = async (url: string) => {
@@ -473,7 +473,7 @@ describe("RegistryClient — start()/stop() idempotency", () => {
     // semantics persist beyond start() — not just "TOFU plus one
     // eager-refresh retry then give up".
     const kp = await generateKeypair();
-    const op = makeOperator("andreas");
+    const op = makePrincipalWire("andreas");
     const assertion = await signAssertion(kp.privateKey, kp.publicKeyB64, op);
 
     let pubkeyAttempts = 0;
@@ -519,7 +519,7 @@ describe("RegistryClient — periodic refresh + shutdown", () => {
     let currentPubkey = FAKE_PEER_PUBKEY_V1;
     const fakeFetch: FakeFetchHandler = async (url: string) => {
       if (url.endsWith("/principals/andreas")) {
-        const op = makeOperator("andreas", currentPubkey);
+        const op = makePrincipalWire("andreas", currentPubkey);
         const assertion = await signAssertion(kp.privateKey, kp.publicKeyB64, op);
         return jsonResponse(assertion);
       }
@@ -538,11 +538,11 @@ describe("RegistryClient — periodic refresh + shutdown", () => {
     });
     await client.start();
     try {
-      expect(client.getPrincipal("andreas")?.operator_pubkey).toBe(FAKE_PEER_PUBKEY_V1);
+      expect(client.getPrincipal("andreas")?.principal_pubkey).toBe(FAKE_PEER_PUBKEY_V1);
       // Principal rotates their pubkey upstream.
       currentPubkey = FAKE_PEER_PUBKEY_V2;
       await client.refreshAll();
-      expect(client.getPrincipal("andreas")?.operator_pubkey).toBe(FAKE_PEER_PUBKEY_V2);
+      expect(client.getPrincipal("andreas")?.principal_pubkey).toBe(FAKE_PEER_PUBKEY_V2);
     } finally {
       client.stop();
     }
@@ -550,7 +550,7 @@ describe("RegistryClient — periodic refresh + shutdown", () => {
 
   test("stop() cancels the refresh timer", async () => {
     const kp = await generateKeypair();
-    const op = makeOperator("andreas");
+    const op = makePrincipalWire("andreas");
     const assertion = await signAssertion(kp.privateKey, kp.publicKeyB64, op);
 
     const fetchCalls: string[] = [];
@@ -586,7 +586,7 @@ describe("RegistryClient — periodic refresh + shutdown", () => {
     // first completes. The fake `fetch` records every call; with the
     // guard the second invocation must NOT issue any GET.
     const kp = await generateKeypair();
-    const op = makeOperator("andreas");
+    const op = makePrincipalWire("andreas");
     const assertion = await signAssertion(kp.privateKey, kp.publicKeyB64, op);
 
     const fetchCalls: string[] = [];
@@ -635,7 +635,7 @@ describe("RegistryClient — periodic refresh + shutdown", () => {
 
   test("invalidate() drops a cache entry; the next refresh repopulates it", async () => {
     const kp = await generateKeypair();
-    const op = makeOperator("andreas");
+    const op = makePrincipalWire("andreas");
     const assertion = await signAssertion(kp.privateKey, kp.publicKeyB64, op);
     const fakeFetch = makeRouteFetch({
       "/principals/andreas": () => jsonResponse(assertion),

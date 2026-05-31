@@ -76,7 +76,7 @@ export interface FederatedNetwork {
    * `stack_id` to validate that an incoming principal's
    * `home_stack` belongs to the network's peer roster.
    *
-   * Other peer fields (`operator_id`, `operator_pubkey`) are
+   * Other peer fields (`principal_id`, `principal_pubkey`) are
    * consumed elsewhere (verifier, registry); the engine doesn't
    * read them.
    */

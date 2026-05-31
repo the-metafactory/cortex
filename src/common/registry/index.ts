@@ -8,7 +8,7 @@
 export { RegistryClient } from "./client";
 export type {
   Capability,
-  OperatorRecord,
+  PrincipalRecord,
   RegistryClientOptions,
   RegistryClientReader,
   RegistryPubkeyResponse,

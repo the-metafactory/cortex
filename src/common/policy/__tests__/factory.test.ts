@@ -16,7 +16,11 @@
 import { describe, expect, test } from "bun:test";
 import { policyEngineFromConfig } from "../factory";
 import { PolicyEngine } from "../engine";
-import { PolicySchema, type Policy } from "../../types/cortex-config";
+import {
+  PolicySchema,
+  FederatedPeerPrincipalConflictError,
+  type Policy,
+} from "../../types/cortex-config";
 
 function parsePolicy(input: unknown): Policy {
   return PolicySchema.parse(input);
@@ -75,9 +79,9 @@ describe("policyEngineFromConfig", () => {
             leaf_node: "leaf",
             peers: [
               {
-                operator_id: "andreas",
+                principal_id: "andreas",
                 stack_id: "andreas/research",
-                operator_pubkey: pubkey,
+                principal_pubkey: pubkey,
               },
             ],
             accept_subjects: ["federated.research-collab.>"],
@@ -679,9 +683,9 @@ describe("PolicyFederatedSchema", () => {
             leaf_node: "nats-leaf-research",
             peers: [
               {
-                operator_id: "jcfischer",
+                principal_id: "jcfischer",
                 stack_id: "jcfischer/sage-host",
-                operator_pubkey: PEER_PUBKEY_A,
+                principal_pubkey: PEER_PUBKEY_A,
               },
             ],
             accept_subjects: ["federated.research-collab.tasks.code-review.*"],
@@ -764,22 +768,22 @@ describe("PolicyFederatedSchema", () => {
     ).toThrow(/<domain>\.<entity>/);
   });
 
-  test("rejects peer.operator_pubkey that isn't a U-prefixed NKey", () => {
+  test("rejects peer.principal_pubkey that isn't a U-prefixed NKey", () => {
     expect(() =>
       PolicySchema.parse({
         federated: {
           networks: [{
             id: "n", leaf_node: "leaf",
             peers: [{
-              operator_id: "alpha", stack_id: "alpha/main",
-              operator_pubkey: "not-an-nkey",
+              principal_id: "alpha", stack_id: "alpha/main",
+              principal_pubkey: "not-an-nkey",
             }],
             accept_subjects: [], deny_subjects: [],
             announce_capabilities: [], max_hop: 0,
           }],
         },
       }),
-    ).toThrow(/operator_pubkey must be a base32 NKey/);
+    ).toThrow(/principal_pubkey must be a base32 NKey/);
   });
 });
 
@@ -797,24 +801,24 @@ describe("PolicyFederatedSchema cross-validation", () => {
     ).toThrow(/network id.*n.*already declared/);
   });
 
-  test("rejects peer.stack_id whose prefix doesn't match peer.operator_id", () => {
+  test("rejects peer.stack_id whose prefix doesn't match peer.principal_id", () => {
     expect(() =>
       PolicySchema.parse({
         federated: {
           networks: [{
             id: "n", leaf_node: "leaf",
             peers: [{
-              operator_id: "jcfischer",
+              principal_id: "jcfischer",
               // Drifted prefix — would let an operator forge attribution.
               stack_id: "evil-actor/sage-host",
-              operator_pubkey: PEER_PUBKEY_A,
+              principal_pubkey: PEER_PUBKEY_A,
             }],
             accept_subjects: [], deny_subjects: [],
             announce_capabilities: [], max_hop: 0,
           }],
         },
       }),
-    ).toThrow(/must start with peer\.operator_id/);
+    ).toThrow(/must start with peer\.principal_id/);
   });
 
   test("rejects duplicate peer.stack_id within a network", () => {
@@ -824,8 +828,8 @@ describe("PolicyFederatedSchema cross-validation", () => {
           networks: [{
             id: "n", leaf_node: "leaf",
             peers: [
-              { operator_id: "alpha", stack_id: "alpha/main", operator_pubkey: PEER_PUBKEY_A },
-              { operator_id: "alpha", stack_id: "alpha/main", operator_pubkey: PEER_PUBKEY_B },
+              { principal_id: "alpha", stack_id: "alpha/main", principal_pubkey: PEER_PUBKEY_A },
+              { principal_id: "alpha", stack_id: "alpha/main", principal_pubkey: PEER_PUBKEY_B },
             ],
             accept_subjects: [], deny_subjects: [],
             announce_capabilities: [], max_hop: 0,
@@ -835,25 +839,25 @@ describe("PolicyFederatedSchema cross-validation", () => {
     ).toThrow(/peer\.stack_id.*already declared/);
   });
 
-  test("rejects duplicate peer.operator_pubkey within a network (paste error)", () => {
+  test("rejects duplicate peer.principal_pubkey within a network (paste error)", () => {
     expect(() =>
       PolicySchema.parse({
         federated: {
           networks: [{
             id: "n", leaf_node: "leaf",
             peers: [
-              { operator_id: "alpha", stack_id: "alpha/main", operator_pubkey: PEER_PUBKEY_A },
-              { operator_id: "beta", stack_id: "beta/main", operator_pubkey: PEER_PUBKEY_A },
+              { principal_id: "alpha", stack_id: "alpha/main", principal_pubkey: PEER_PUBKEY_A },
+              { principal_id: "beta", stack_id: "beta/main", principal_pubkey: PEER_PUBKEY_A },
             ],
             accept_subjects: [], deny_subjects: [],
             announce_capabilities: [], max_hop: 0,
           }],
         },
       }),
-    ).toThrow(/operator_pubkey already declared.*pubkey collision/);
+    ).toThrow(/principal_pubkey already declared.*pubkey collision/);
   });
 
-  test("same operator_pubkey is allowed across DIFFERENT networks (cross-network dedup not enforced)", () => {
+  test("same principal_pubkey is allowed across DIFFERENT networks (cross-network dedup not enforced)", () => {
     // Per-network uniqueness only — a single operator's stack may
     // legitimately participate in multiple networks with the same
     // pubkey. The schema doesn't reject this.
@@ -862,13 +866,13 @@ describe("PolicyFederatedSchema cross-validation", () => {
         networks: [
           {
             id: "net-a", leaf_node: "leaf",
-            peers: [{ operator_id: "alpha", stack_id: "alpha/main", operator_pubkey: PEER_PUBKEY_A }],
+            peers: [{ principal_id: "alpha", stack_id: "alpha/main", principal_pubkey: PEER_PUBKEY_A }],
             accept_subjects: [], deny_subjects: [],
             announce_capabilities: [], max_hop: 0,
           },
           {
             id: "net-b", leaf_node: "leaf",
-            peers: [{ operator_id: "alpha", stack_id: "alpha/main", operator_pubkey: PEER_PUBKEY_A }],
+            peers: [{ principal_id: "alpha", stack_id: "alpha/main", principal_pubkey: PEER_PUBKEY_A }],
             accept_subjects: [], deny_subjects: [],
             announce_capabilities: [], max_hop: 0,
           },
@@ -888,7 +892,7 @@ describe("PolicyFederatedSchema cross-validation", () => {
             {
               id: "other", leaf_node: "leaf",
               peers: [
-                { operator_id: "alpha", stack_id: "wrong-prefix/main", operator_pubkey: PEER_PUBKEY_A },
+                { principal_id: "alpha", stack_id: "wrong-prefix/main", principal_pubkey: PEER_PUBKEY_A },
               ],
               accept_subjects: [], deny_subjects: [],
               announce_capabilities: [], max_hop: 0,
@@ -900,7 +904,7 @@ describe("PolicyFederatedSchema cross-validation", () => {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       expect(message).toContain("dup");
-      expect(message).toContain("must start with peer.operator_id");
+      expect(message).toContain("must start with peer.principal_id");
     }
   });
 
@@ -963,7 +967,7 @@ describe("PolicyFederatedSchema cross-validation", () => {
       federated: {
         networks: [{
           id: "research-collab", leaf_node: "leaf",
-          peers: [{ operator_id: "jcfischer", stack_id: "jcfischer/sage-host", operator_pubkey: PEER_PUBKEY_C }],
+          peers: [{ principal_id: "jcfischer", stack_id: "jcfischer/sage-host", principal_pubkey: PEER_PUBKEY_C }],
           accept_subjects: ["federated.research-collab.>"],
           deny_subjects: [],
           announce_capabilities: ["code-review.typescript"],
@@ -973,5 +977,97 @@ describe("PolicyFederatedSchema cross-validation", () => {
     });
     expect(policy.principals).toHaveLength(1);
     expect(policy.federated?.networks).toHaveLength(1);
+  });
+});
+
+describe("PolicyFederatedPeerSchema — R2.G operator→principal accept-both transition (cortex#436)", () => {
+  // Legacy peer keys (`operator_id` / `operator_pubkey`) are still
+  // accepted on load and rewritten to the canonical
+  // `principal_id` / `principal_pubkey` by
+  // `acceptLegacyFederatedPeerPrincipal`. Federation is pre-launch, so
+  // this transition is cheap insurance + parity with the R2.I cloud
+  // block. Removed in the breaking release.
+  function parsePeer(peer: Record<string, unknown>) {
+    return PolicySchema.parse({
+      federated: {
+        networks: [{
+          id: "n", leaf_node: "leaf",
+          peers: [peer],
+          accept_subjects: [], deny_subjects: [],
+          announce_capabilities: [], max_hop: 0,
+        }],
+      },
+    });
+  }
+
+  test("canonical principal_id / principal_pubkey parse verbatim", () => {
+    const policy = parsePeer({
+      principal_id: "alpha",
+      stack_id: "alpha/main",
+      principal_pubkey: PEER_PUBKEY_A,
+    });
+    const peer = policy.federated?.networks[0]?.peers[0];
+    expect(peer?.principal_id).toBe("alpha");
+    expect(peer?.principal_pubkey).toBe(PEER_PUBKEY_A);
+  });
+
+  test("legacy operator_id / operator_pubkey are rewritten to canonical", () => {
+    const policy = parsePeer({
+      operator_id: "alpha",
+      stack_id: "alpha/main",
+      operator_pubkey: PEER_PUBKEY_A,
+    });
+    const peer = policy.federated?.networks[0]?.peers[0];
+    // The parsed (canonical) shape carries no `operator_*` keys.
+    expect(peer?.principal_id).toBe("alpha");
+    expect(peer?.principal_pubkey).toBe(PEER_PUBKEY_A);
+    expect((peer as Record<string, unknown>).operator_id).toBeUndefined();
+    expect((peer as Record<string, unknown>).operator_pubkey).toBeUndefined();
+  });
+
+  test("mixed legacy id + canonical pubkey both rewrite/pass cleanly", () => {
+    const policy = parsePeer({
+      operator_id: "alpha",
+      stack_id: "alpha/main",
+      principal_pubkey: PEER_PUBKEY_A,
+    });
+    const peer = policy.federated?.networks[0]?.peers[0];
+    expect(peer?.principal_id).toBe("alpha");
+    expect(peer?.principal_pubkey).toBe(PEER_PUBKEY_A);
+  });
+
+  test("BOTH principal_id and operator_id present → dual-key conflict throws", () => {
+    expect(() =>
+      parsePeer({
+        principal_id: "alpha",
+        operator_id: "alpha",
+        stack_id: "alpha/main",
+        principal_pubkey: PEER_PUBKEY_A,
+      }),
+    ).toThrow(FederatedPeerPrincipalConflictError);
+  });
+
+  test("BOTH principal_pubkey and operator_pubkey present → dual-key conflict throws", () => {
+    expect(() =>
+      parsePeer({
+        principal_id: "alpha",
+        stack_id: "alpha/main",
+        principal_pubkey: PEER_PUBKEY_A,
+        operator_pubkey: PEER_PUBKEY_A,
+      }),
+    ).toThrow(FederatedPeerPrincipalConflictError);
+  });
+
+  test("legacy keys still cross-validate (stack_id prefix vs rewritten principal_id)", () => {
+    // The rewrite happens before cross-validation, so a drifted
+    // legacy `operator_id` is caught by the same prefix check that
+    // guards the canonical field.
+    expect(() =>
+      parsePeer({
+        operator_id: "jcfischer",
+        stack_id: "evil-actor/sage-host",
+        operator_pubkey: PEER_PUBKEY_A,
+      }),
+    ).toThrow(/must start with peer\.principal_id/);
   });
 });

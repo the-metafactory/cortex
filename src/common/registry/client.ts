@@ -58,7 +58,7 @@
 
 import { canonicalJSON, verifyEd25519 } from "./signing";
 import type {
-  OperatorRecord,
+  PrincipalRecord,
   RegistryClientOptions,
   RegistryClientReader,
 } from "./types";
@@ -90,8 +90,8 @@ export class RegistryClient implements RegistryClientReader {
    * fresh chance. Echo cortex#230 round 1.
    */
   private readonly tofuMode: boolean;
-  /** In-memory cache: `operator_id → verified OperatorRecord`. */
-  private readonly cache = new Map<string, OperatorRecord>();
+  /** In-memory cache: `principal_id → verified PrincipalRecord`. */
+  private readonly cache = new Map<string, PrincipalRecord>();
 
   private refreshTimer: ReturnType<typeof setInterval> | undefined;
   /** Abort controller scoped to the current cycle's in-flight requests. */
@@ -214,7 +214,7 @@ export class RegistryClient implements RegistryClientReader {
   }
 
   /** RegistryClientReader.getPrincipal — see interface JSDoc. */
-  getPrincipal(principalId: string): OperatorRecord | undefined {
+  getPrincipal(principalId: string): PrincipalRecord | undefined {
     return this.cache.get(principalId);
   }
 
@@ -324,9 +324,9 @@ export class RegistryClient implements RegistryClientReader {
     principalId: string,
     signal: AbortSignal,
   ): Promise<void> {
-    // Wire path is `/principals/:principal_id` per PR-R7c-network-registry.
-    // The cortex-internal cache type (`OperatorRecord`) keeps its symbol
-    // pending PR-R2.G; only the wire path + field reads flip here.
+    // Wire path is `/principals/:principal_id`; the cortex-internal
+    // cache type is `PrincipalRecord` (PR-R2.G aligned the symbol with
+    // the wire shape the service flipped to in PR-R7c).
     const url = `${this.url}/principals/${encodeURIComponent(principalId)}`;
     const raw = await this.fetchJson(url, signal);
     if (raw === undefined) return; // already logged inside fetchJson
@@ -348,7 +348,7 @@ export class RegistryClient implements RegistryClientReader {
   private async verifyAssertion(
     principalId: string,
     raw: unknown,
-  ): Promise<OperatorRecord | undefined> {
+  ): Promise<PrincipalRecord | undefined> {
     const pinned = this.pinnedPubkey;
     if (pinned === undefined) {
       this.logError(
@@ -452,13 +452,13 @@ export class RegistryClient implements RegistryClientReader {
     // Defensive: the producer types include arrays we trust the
     // service to populate, but a corrupted payload could send the
     // wrong shape past the structural checks above. Normalise. The
-    // cortex-internal cache type (`OperatorRecord`) keeps its symbol
-    // pending PR-R2.G; wire fields read as `principal_*` per R7c.
+    // cortex-internal cache type `PrincipalRecord` mirrors the wire
+    // `principal_*` fields the service emits (PR-R7c + PR-R2.G).
     return {
-      operator_id: principalId,
-      operator_pubkey: payload.principal_pubkey,
-      stacks: Array.isArray(payload.stacks) ? (payload.stacks as OperatorRecord["stacks"]) : [],
-      capabilities: Array.isArray(payload.capabilities) ? (payload.capabilities as OperatorRecord["capabilities"]) : [],
+      principal_id: principalId,
+      principal_pubkey: payload.principal_pubkey,
+      stacks: Array.isArray(payload.stacks) ? (payload.stacks as PrincipalRecord["stacks"]) : [],
+      capabilities: Array.isArray(payload.capabilities) ? (payload.capabilities as PrincipalRecord["capabilities"]) : [],
       updated_at: typeof payload.updated_at === "string" ? payload.updated_at : "",
     };
   }

@@ -248,9 +248,9 @@ function alphaFederated(beta: StackHandle): PolicyFederated {
     leaf_node: "leaf-research",
     peers: [
       {
-        operator_id: "beta",
+        principal_id: "beta",
         stack_id: beta.homeStack,
-        operator_pubkey: "U" + "A".repeat(55), // structural-only here; α doesn't crypto-verify β's reply via this field
+        principal_pubkey: "U" + "A".repeat(55), // structural-only here; α doesn't crypto-verify β's reply via this field
       },
     ],
     accept_subjects: [
@@ -275,9 +275,9 @@ function betaFederated(alpha: StackHandle): PolicyFederated {
     leaf_node: "leaf-research",
     peers: [
       {
-        operator_id: "alpha",
+        principal_id: "alpha",
         stack_id: alpha.homeStack,
-        operator_pubkey: "U" + "A".repeat(55),
+        principal_pubkey: "U" + "A".repeat(55),
       },
     ],
     accept_subjects: [
