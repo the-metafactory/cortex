@@ -105,6 +105,11 @@ ALLOWLIST_PATHS=(
   # The 0002 manifest itself enumerates every deprecated term as prose.
   'docs/migrations/0001-vocabulary-grilled-2026-05.md'
   'docs/migrations/0002-vocabulary-finish-2026-05.md'
+  # CONTEXT.md is the vocabulary CONTRACT — it DEFINES principal, the NSC
+  # operator carve-out, and the Mission Control authorization role, and lists
+  # the deprecated terms in _Avoid_ / Flagged-ambiguities. Same class as the
+  # manifests: a hit here is a definition, never a violation.
+  'CONTEXT.md'
   # The gate's own source + CI definition necessarily NAME the deprecated
   # terms (regex patterns + doc comments). Allowlist them so diff-mode runs
   # that touch the gate don't self-flag. (Whole-tree mode scans only src/+docs/
