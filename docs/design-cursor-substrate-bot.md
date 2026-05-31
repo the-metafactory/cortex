@@ -20,7 +20,7 @@ Cortex already runs two substrate patterns in production:
 
 Adding Cursor as a third recognised substrate is **complementary to sage**, not a replacement. Two value propositions:
 
-1. **Substrate diversity.** When alpha (Cursor) and sage (pi.dev) join the same NATS queue group, two reviewers from different brains compete on the same review tasks via claim-first-wins (per cortex#112 Q5 lock-in). Operators get a substrate-A/B without writing routing logic. A bug in any single substrate's reviewer cannot silently degrade review quality across the fleet.
+1. **Substrate diversity.** When alpha (Cursor) and sage (pi.dev) join the same NATS queue group, two reviewers from different brains compete on the same review tasks via claim-first-wins (per cortex#112 Q5 lock-in). Principals get a substrate-A/B without writing routing logic. A bug in any single substrate's reviewer cannot silently degrade review quality across the fleet.
 
 2. **Codebase locality.** Sage on pi.dev reviews diff-only. Cursor-agent runs in a working directory with the PR head ref cloned, so it can read whole files, trace symbols across modules, and reason about test coverage. This is a capability sage cannot economically replicate: a `DeepArchitecture` lens that requires the repo present at cwd is naturally Cursor-shaped.
 
@@ -256,7 +256,7 @@ cortex publishes → local.metafactory.tasks.code-review.typescript
                  → first to claim executes
 ```
 
-This is the cortex#112 Q5 lock-in for competing-consumers: NATS queue group, claim-first-wins, no reservation, no auction. Operators get substrate diversity at the cost of nothing: the bus picks whichever reviewer is idle, and consistent over-claiming by one substrate is a signal to investigate (slow review on the other, bad routing, broken auth).
+This is the cortex#112 Q5 lock-in for competing-consumers: NATS queue group, claim-first-wins, no reservation, no auction. Principals get substrate diversity at the cost of nothing: the bus picks whichever reviewer is idle, and consistent over-claiming by one substrate is a signal to investigate (slow review on the other, bad routing, broken auth).
 
 ### 10.2 Direct — `@alpha review #N`
 
@@ -266,7 +266,7 @@ cortex publishes → with target_principal: "did:mf:alpha"
                  → alpha claims unconditionally (or naks `not_now` if at capacity)
 ```
 
-Operators use this when they specifically want the Cursor substrate (for example, to exercise the `DeepArchitecture` lens or to investigate a substrate-A/B disagreement).
+Principals use this when they specifically want the Cursor substrate (for example, to exercise the `DeepArchitecture` lens or to investigate a substrate-A/B disagreement).
 
 ### 10.3 Delegate — not in v1
 
@@ -285,7 +285,7 @@ Same scope boundary as sage: delegate mode (drive a PR to merge with multiple re
 
 ### 11.2 Envelope sovereignty
 
-Alpha publishes with `sovereignty: { classification: "local", data_residency: "CH", max_hop: 0, frontier_ok: true, model_class: "any" }` by default. Same sovereignty model as cortex agents and sage. Operators override via env (`ALPHA_DATA_RESIDENCY`).
+Alpha publishes with `sovereignty: { classification: "local", data_residency: "CH", max_hop: 0, frontier_ok: true, model_class: "any" }` by default. Same sovereignty model as cortex agents and sage. Principals override via env (`ALPHA_DATA_RESIDENCY`).
 
 When cortex#112 Phase B lands the NKey 3-tier identity chain, alpha's envelopes gain a `signed_by[]` chain-of-stamps. The v1 design is forward-compatible: signing fields are optional in the envelope schema today, and adding them later does not require a wire-format flip.
 

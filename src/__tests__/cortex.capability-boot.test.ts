@@ -307,7 +307,7 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
 
     // cortex#288 follow-up — boot log must reflect wire-side reality, not
     // the publisher's "calls invoked" count. With one publish throwing and
-    // one succeeding, the operator should see "1 ... (1 failure(s)) for 2".
+    // one succeeding, the principal should see "1 ... (1 failure(s)) for 2".
     // We grep the captured logs rather than asserting a single match: other
     // boot-side `console.log` calls (router start, dispatch wiring) may
     // also land in `logs`, but the capability line is unambiguously
@@ -393,12 +393,12 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
     rmSync(tmpAgentsDir, { recursive: true, force: true });
   });
 
-  test("cortex#314 — zero agents-with-capabilities → stderr carries an operator-actionable WARNING (not just info-level log)", async () => {
+  test("cortex#314 — zero agents-with-capabilities → stderr carries a principal-actionable WARNING (not just info-level log)", async () => {
     // First-install safety regression guard. The boot wiring used to log
     // a single info-level `console.log("…skipped…")` line, which an
-    // operator running interactively (or tailing a non-debug log) does
+    // principal running interactively (or tailing a non-debug log) does
     // NOT notice. The capability-dispatch consumer then rejects every
-    // inbound request with `cant_do` and the operator has no surface
+    // inbound request with `cant_do` and the principal has no surface
     // signal pointing at the missing capabilities[] block in cortex.yaml.
     //
     // cortex#314's fix promotes the skip to a stderr WARNING with

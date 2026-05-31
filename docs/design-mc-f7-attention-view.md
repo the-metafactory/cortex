@@ -99,7 +99,7 @@ Permission-request rows are always primary even when their parent event would ot
 
 CC emits `stream-json.user` for both principal input turns (what the principal typed) AND tool-result callbacks (what tools returned). Classifying these as H or D requires disambiguation.
 
-**Marker:** `principal.input` events emitted by `POST /api/assignments/:id/input` in `api/handlers.ts:270` already write a separate event type. The corresponding `stream-json.user` event that CC echoes back is classifiable by content: if `message.content[0].type === "tool_result"`, it's a tool callback (D); if `content[0].type === "text"`, it's an principal turn that CC is echoing (H).
+**Marker:** `principal.input` events emitted by `POST /api/assignments/:id/input` in `api/handlers.ts:270` already write a separate event type. The corresponding `stream-json.user` event that CC echoes back is classifiable by content: if `message.content[0].type === "tool_result"`, it's a tool callback (D); if `content[0].type === "text"`, it's a principal turn that CC is echoing (H).
 
 **Result:** content-block type alone is sufficient. No new field, no schema change. The renderer branches on `content_block.type`.
 
@@ -110,7 +110,7 @@ CC emits `stream-json.user` for both principal input turns (what the principal t
 **F-7 behaviour:**
 - `permission.request` rows render at primary weight with visually present Approve / Deny buttons.
 - Both buttons are **disabled** and carry a tooltip: "Approve/deny wiring ships after CC stream-json permission protocol is verified (design §5.3.1)."
-- Text-based "deny with instructions to try differently" is still unavailable in F-7 because section ③ is disabled (Decision 1). Operators handle permission requests out-of-band (directly in the CC session) until F-10 and the verification land.
+- Text-based "deny with instructions to try differently" is still unavailable in F-7 because section ③ is disabled (Decision 1). Principals handle permission requests out-of-band (directly in the CC session) until F-10 and the verification land.
 
 **Why render at all?** So the attention view has the permission-request UI present from day one; when the verification lands and the wire protocol is implemented, the change is button enable + handler attach, not a layout reshape.
 

@@ -2,7 +2,7 @@
  * cortex#324 (v2.0.3) — boot-time WARNING when stack signing is not
  * configured.
  *
- * Walk-the-talk: stack signing is ON by default. When the operator's
+ * Walk-the-talk: stack signing is ON by default. When the principal's
  * config lacks `stack.nkey_seed_path`, cortex publishes UNSIGNED envelopes
  * (same shape as today) but emits a loud stderr WARNING with the
  * actionable fix-path. This test pins the contract:
@@ -135,10 +135,10 @@ describe("startCortex — stack-signing boot warning (cortex#324)", () => {
 
     // stderr carries the WARNING tag.
     expect(stderr).toContain("WARNING: stack identity not configured");
-    // …and the runtime consequence so operators understand the impact.
+    // …and the runtime consequence so principals understand the impact.
     expect(stderr).toContain("unsigned envelopes");
     expect(stderr).toContain("verify signed_by");
-    // …and BOTH fix-paths so operators see auto-provision + manual edit.
+    // …and BOTH fix-paths so principals see auto-provision + manual edit.
     expect(stderr).toContain("arc upgrade Cortex");
     expect(stderr).toContain("stack.nkey_seed_path");
     // …and the SOP cross-link.
@@ -149,7 +149,7 @@ describe("startCortex — stack-signing boot warning (cortex#324)", () => {
   });
 
   test("stack: {id} declared but no nkey_seed_path → WARN still fires (id alone is not enough)", async () => {
-    // Operators on Phase A.5 wired `stack.id` for namespace routing but
+    // Principals on Phase A.5 wired `stack.id` for namespace routing but
     // never declared `stack.nkey_seed_path` (B.3 was opt-in). The WARN
     // must still fire — the id alone doesn't enable signing.
     const runtime = createRecordingRuntime();
@@ -174,7 +174,7 @@ describe("startCortex — stack-signing boot warning (cortex#324)", () => {
   });
 
   test("stack.nkey_seed_path SET with a valid SU seed → no WARN, info log absent", async () => {
-    // Happy path: operator (or arc) wired the field, seed exists at
+    // Happy path: principal (or arc) wired the field, seed exists at
     // chmod 600 with `SU` prefix. The signer stages cleanly and the
     // WARN does NOT fire.
     const tmp = mkdtempSync(join(tmpdir(), "cortex-stack-signing-warn-test-"));

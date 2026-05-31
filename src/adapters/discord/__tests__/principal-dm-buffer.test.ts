@@ -10,8 +10,8 @@
  *   - bufferPrincipalDM evicts expired entries at write time (TTL parity
  *     with cleanExpiredPending for pendingResults)
  *   - bufferPrincipalDM caps at PENDING_PRINCIPAL_MAX (drops oldest)
- *   - drainPendingOperatorDMs delivers fresh entries and drops expired ones
- *   - drainPendingOperatorDMs surfaces a users.fetch failure without losing
+ *   - drainPendingPrincipalDMs delivers fresh entries and drops expired ones
+ *   - drainPendingPrincipalDMs surfaces a users.fetch failure without losing
  *     the buffer entries (they remain dropped — fetch failure is permanent
  *     enough that we don't replay; this matches existing behaviour)
  */
@@ -111,7 +111,7 @@ function setBuffer(adapter: DiscordAdapter, items: { text: string; createdAt: nu
   (adapter as unknown as { pendingPrincipalDMs: { text: string; createdAt: number }[] }).pendingPrincipalDMs = items;
 }
 async function callDrain(adapter: DiscordAdapter): Promise<void> {
-  await (adapter as unknown as { drainPendingOperatorDMs: () => Promise<void> }).drainPendingOperatorDMs();
+  await (adapter as unknown as { drainPendingPrincipalDMs: () => Promise<void> }).drainPendingPrincipalDMs();
 }
 
 const PENDING_TTL_MS = 10 * 60 * 1000;
@@ -234,7 +234,7 @@ describe("buffer overflow + TTL eviction at write time", () => {
   });
 });
 
-describe("drainPendingOperatorDMs", () => {
+describe("drainPendingPrincipalDMs", () => {
   test("delivers fresh entries to the principal", async () => {
     const { adapter, sends } = makeAdapter({ connected: true });
     setBuffer(adapter, [
@@ -246,7 +246,7 @@ describe("drainPendingOperatorDMs", () => {
     expect(getBuffer(adapter).length).toBe(0);
   });
 
-  test("drops expired entries on drain (cleanExpiredOperatorDMs is reused)", async () => {
+  test("drops expired entries on drain (cleanExpiredPrincipalDMs is reused)", async () => {
     const { adapter, sends } = makeAdapter({ connected: true });
     const now = Date.now();
     setBuffer(adapter, [

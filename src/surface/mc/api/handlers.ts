@@ -2068,7 +2068,7 @@ export async function handleCreateTask(
  *
  * Legal only when the task is not already `cancelled` AND has no non-shadow
  * non-terminal assignment (i.e. no real agent is in-flight on this task).
- * The 409 message names the alternative endpoint for operators who hit the
+ * The 409 message names the alternative endpoint for principals who hit the
  * wrong door.
  */
 export function handleAbandonTask(
@@ -2203,7 +2203,7 @@ export function handleAbandonTask(
 //            states is REJECTED in v1 (Phase G feature). The matrix in
 //            `db/iterations.ts#canTransitionServer` enforces this; the
 //            handler wraps the rejection with a friendlier message
-//            naming `cancel` as the alternative for operators who hit
+//            naming `cancel` as the alternative for principals who hit
 //            the wrong door.
 
 /** Cap for iteration title to keep it row-friendly. Mirrors F-12b's TITLE_OVERRIDE_MAX_LEN. */
@@ -2922,7 +2922,7 @@ export async function handleImportIterationFromGithub(
     return error("'ref' must be a string", 400);
   }
 
-  // Optional per-call label override. Operators can pass it explicitly
+  // Optional per-call label override. Principals can pass it explicitly
   // when working with a repo that uses a non-default label without
   // editing the network yaml; the default falls through from the
   // server's per-network config.

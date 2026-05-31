@@ -409,7 +409,7 @@ describe("NatsConfigSchema", () => {
 
   test("NatsIdentity rejects non-NKey publicKey", () => {
     expect(() => NatsIdentitySchema.parse({
-      seedPath: "/etc/cortex/operator-account.nk",
+      seedPath: "/etc/cortex/operator.nk",
       publicKey: "not-an-nkey",
     })).toThrow();
   });
@@ -419,11 +419,11 @@ describe("NatsConfigSchema", () => {
     // placeholders like "U1" or "UABCDEF1234567890" must be rejected so a
     // typo at config time fails fast, not silently at NatsLink.connect.
     expect(() => NatsIdentitySchema.parse({
-      seedPath: "/etc/cortex/operator-account.nk",
+      seedPath: "/etc/cortex/operator.nk",
       publicKey: "U1",
     })).toThrow();
     expect(() => NatsIdentitySchema.parse({
-      seedPath: "/etc/cortex/operator-account.nk",
+      seedPath: "/etc/cortex/operator.nk",
       publicKey: "UABCDEF1234567890",
     })).toThrow();
   });
@@ -435,13 +435,13 @@ describe("NatsConfigSchema", () => {
     const full = "U" + (valid55 + "Z");
     expect(full).toHaveLength(56);
     const parsed = NatsIdentitySchema.parse({
-      seedPath: "/etc/cortex/operator-account.nk",
+      seedPath: "/etc/cortex/operator.nk",
       publicKey: full,
     });
     expect(parsed.publicKey).toBe(full);
 
     expect(() => NatsIdentitySchema.parse({
-      seedPath: "/etc/cortex/operator-account.nk",
+      seedPath: "/etc/cortex/operator.nk",
       publicKey: "U" + "abcdefghijklmnopqrstuvwxyz".padEnd(55, "A"),
     })).toThrow();
   });
@@ -671,7 +671,7 @@ describe("CortexConfigSchema", () => {
         discordId: "1134000000000000000",
       },
       agents: [
-        minAgent({ id: "luna", roles: ["principal"], trust: ["echo", "holly"] }),
+        minAgent({ id: "luna", roles: ["operator"], trust: ["echo", "holly"] }),
         minAgent({ id: "echo", roles: ["agent-restricted"], trust: ["luna", "holly"] }),
         minAgent({ id: "holly", roles: ["agent-restricted"], trust: ["luna"] }),
       ],

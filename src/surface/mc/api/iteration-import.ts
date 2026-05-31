@@ -52,7 +52,7 @@ import { canonicalRef, type GitHubRef } from "./github-ref";
  * Per Decision 10 Q6 ("explicit label `iteration` (or configurable
  * per-repo); avoids accidental promotion of unrelated parent issues").
  *
- * Operators override per-network via `iterationLabel` in the network
+ * Principals override per-network via `iterationLabel` in the network
  * yaml; the absence of an override falls through to this default. The
  * label match is case-sensitive — GitHub itself preserves label case
  * exactly and treats `Iteration` as a different label from `iteration`,

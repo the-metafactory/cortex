@@ -5,7 +5,7 @@
 <!-- Lifted: 2026-05-11 — historical references to grove/grove-v2 retained for provenance. -->
 
 **Scope:** Cloudflare Worker + D1 event store (G-400), bot cloud publisher (G-401), API key management (G-402), dashboard mode detection (G-403), GitHub webhook migration (G-404)
-**Mission:** Multiple bot operators share a single dashboard without tunnels. Local-first mode stays as default zero-config option. Cloud mode is opt-in for multi-principal networks.
+**Mission:** Multiple bot principals share a single dashboard without tunnels. Local-first mode stays as default zero-config option. Cloud mode is opt-in for multi-principal networks.
 **Stack:** Cloudflare Workers (Hono + D1 + KV), batched event ingestion from bots, dashboard reads from cloud or local API
 **Inputs:** dashboard-api.ts contract, DashboardSnapshot schema, PublishedEvent schema, existing relay pipeline
 
@@ -15,12 +15,12 @@
 
 Today, each principal runs local SQLite + dashboard API + Cloudflare Tunnel. The dashboard merges multiple APIs in the browser with dedup heuristics. This works but is fragile:
 
-- GitHub events duplicated across operators
+- GitHub events duplicated across principals
 - Merge logic is approximate (same agent ID = same agent?)
 - Every principal needs tunnel infrastructure
 - Dashboard reads from N endpoints, each with its own schema drift risk
 
-The cloud API is a single endpoint that all bots POST to. The dashboard reads from one place. Local mode (no cloud, no tunnel) remains the default for solo operators.
+The cloud API is a single endpoint that all bots POST to. The dashboard reads from one place. Local mode (no cloud, no tunnel) remains the default for solo principals.
 
 ---
 
@@ -41,7 +41,7 @@ The cloud API is a single endpoint that all bots POST to. The dashboard reads fr
 - Bot POSTs events to `https://grove-api.{domain}.workers.dev/api/ingest`
 - Dashboard connects to the same Worker endpoint
 - Principal-scoped API keys via Workers KV (G-402)
-- All operators see all agents on one dashboard
+- All principals see all agents on one dashboard
 - D1 database (`grove-events`) in OC/AKL region
 
 **Mode detection (G-403):**
@@ -316,7 +316,7 @@ Migrate GitHub webhooks from per-bot tunnels to the cloud Worker.
 
 ### G-405: Automated Cloud Setup CLI
 
-A CLI command for operators to set up cloud mode in one step.
+A CLI command for principals to set up cloud mode in one step.
 
 **Usage:**
 ```bash
@@ -487,12 +487,12 @@ G-405 (Cloud Setup CLI)
 
 - **Multi-region D1:** Single OC/AKL region. If latency matters, add read replicas later.
 - **Event retention policy:** D1 grows forever. Add TTL or archival later if needed.
-- **Principal-scoped dashboard views:** All authenticated users see all operators. Per-principal filtering is a future option.
+- **Principal-scoped dashboard views:** All authenticated users see all principals. Per-principal filtering is a future option.
 - **Real-time WebSocket from Worker:** Dashboard polls `GET /api/state`. WebSocket support is a stretch goal.
-- **Billing/usage enforcement:** Operators trust each other. No rate limits or quotas.
+- **Billing/usage enforcement:** Principals trust each other. No rate limits or quotas.
 - **Audit log:** No log of who accessed what. Add if needed.
 - **Event replay:** Events are idempotent, but no UI to replay from JSONL.
-- **Local-to-cloud migration tool:** Operators manually reconfigure. No automated migration script.
+- **Local-to-cloud migration tool:** Principals manually reconfigure. No automated migration script.
 
 ---
 
@@ -517,7 +517,7 @@ G-405 (Cloud Setup CLI)
 2. `POST /api/ingest` with valid API key stores events in D1
 3. `GET /api/state` returns DashboardSnapshot matching local API
 4. Bot with `api.mode: cloud` sends events to Worker
-5. Dashboard connects to cloud API and shows all operators
+5. Dashboard connects to cloud API and shows all principals
 6. GitHub webhooks point to Worker, events stored in D1
 7. `grove-bot cloud setup` creates key and configures bot.yaml
 8. Local mode still works (zero-config default)

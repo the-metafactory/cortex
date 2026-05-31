@@ -445,7 +445,7 @@ async function getRecentCompletions(
 /**
  * IAW D.5.2 — return the distinct, non-null `home_principal` values seen in
  * recent sessions. Powers the dashboard's principal filter dropdown — the
- * frontend prepends "Local only" (default) + "All operators" to this list.
+ * frontend prepends "Local only" (default) + "All principals" to this list.
  *
  * Window: same 7-day horizon the heatmap uses, so the dropdown doesn't grow
  * unboundedly with historical federated peers that have gone dark.

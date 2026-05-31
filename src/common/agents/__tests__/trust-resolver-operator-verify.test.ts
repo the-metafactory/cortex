@@ -1,9 +1,9 @@
 /**
- * cortex#76 — TrustResolver operator-account-signature verifier tests.
+ * cortex#76 — TrustResolver operator-signature verifier tests.
  *
  * Covers:
  *   - Module-level `verifyOperatorUserJwt`:
- *       - Happy path: valid JWT minted by trusted operator account → ok
+ *       - Happy path: valid JWT minted by trusted operator → ok
  *       - wrong_issuer: JWT minted by a different account signing key
  *       - expired: JWT with `exp` in the past
  *       - not_yet_valid: JWT with `nbf` in the future
@@ -47,7 +47,7 @@ import type { Agent } from "../../types/cortex-config";
 // Fixtures
 // =============================================================================
 
-/** The operator-account signing keypair — the trust anchor for all tests. */
+/** Operator account signing keypair — the trust anchor for all tests. */
 let trustedAccountSigningKey: KeyPair;
 /** A different operator account signing keypair — used for "wrong issuer" tests. */
 let untrustedAccountSigningKey: KeyPair;
@@ -125,7 +125,7 @@ function registryWithLuna(): AgentRegistry {
 // =============================================================================
 
 describe("verifyOperatorUserJwt", () => {
-  test("happy path — JWT minted by trusted operator account verifies", async () => {
+  test("happy path — JWT minted by trusted operator verifies", async () => {
     const { jwt, userKey, agentName } = await mintJwtFixture(trustedAccountSigningKey, "luna");
     const result = verifyOperatorUserJwt(jwt, trustedAccountSigningKey.getPublicKey());
     expect(result.ok).toBe(true);
@@ -141,7 +141,7 @@ describe("verifyOperatorUserJwt", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toBe("wrong_issuer");
-      expect(result.detail).toContain("does not match trusted operator-account");
+      expect(result.detail).toContain("does not match trusted operator");
     }
   });
 
@@ -286,7 +286,7 @@ describe("verifyOperatorSignedRequest", () => {
     if (!result.ok) expect(result.reason).toBe("malformed_envelope");
   });
 
-  test("wrong_issuer — JWT signed by untrusted operator account is rejected", async () => {
+  test("wrong_issuer — JWT signed by untrusted operator is rejected", async () => {
     const { jwt, userKey } = await mintJwtFixture(untrustedAccountSigningKey, "rogue");
     const env = signRequest(userKey, {
       subject: "local.acme.cortex.creds.issue",
@@ -590,7 +590,7 @@ describe("TrustResolver.verifyOperatorSignature", () => {
     if (!result.ok) expect(result.reason).toBe("subject_mismatch");
   });
 
-  test("rejects JWT from untrusted operator account at instance layer too", async () => {
+  test("rejects JWT from untrusted operator at instance layer too", async () => {
     const resolver = new TrustResolver(registryWithLuna(), {
       operatorAccountSigningPublicKey: trustedAccountSigningKey.getPublicKey(),
     });

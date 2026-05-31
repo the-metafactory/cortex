@@ -315,7 +315,7 @@ export function dispatchAgents(argv: string[]): ExitResult {
 
 /**
  * Validation-only caveat appended to success output so arc lifecycle scripts
- * (and operators reading stdout) don't infer "the running daemon reloaded."
+ * (and principals reading stdout) don't infer "the running daemon reloaded."
  * Echo M3 on cortex#63.
  */
 const VALIDATION_ONLY_NOTE =

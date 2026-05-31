@@ -421,7 +421,7 @@ export interface SystemAccessFilteredOpts {
   source: SystemEventSource;
   /** Renderer/adapter id that dropped the envelope (e.g. `dashboard`). */
   rendererId: string;
-  /** NATS subject of the dropped envelope — operators correlate by this. */
+  /** NATS subject of the dropped envelope — principals correlate by this. */
   envelopeSubject: string;
   /** Specific rule that fired. See {@link SystemAccessFilteredReason}. */
   reason: SystemAccessFilteredReason;
@@ -440,7 +440,7 @@ export interface SystemAccessFilteredOpts {
  *
  * The surface-router emits this once per `(renderer, envelope, reason)`
  * tuple when a renderer's `visibility:` config drops an inbound envelope.
- * It's a side-channel for operators who want to audit/debug "why didn't I
+ * It's a side-channel for principals who want to audit/debug "why didn't I
  * see this envelope on my dashboard?" without instrumenting every renderer.
  *
  * Per IAW Phase A.4 the emit is direct — `runtime.publish()` straight from
@@ -488,7 +488,7 @@ export interface SystemBusPeerDispatchReceivedOpts {
    */
   peerSource: string;
   /**
-   * Envelope id of the peer's dispatch envelope. Lets operators join
+   * Envelope id of the peer's dispatch envelope. Lets principals join
    * the visibility event to the underlying dispatch on the dashboard
    * and in audit pipelines.
    */

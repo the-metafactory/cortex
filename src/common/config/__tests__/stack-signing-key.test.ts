@@ -76,7 +76,7 @@ describe("loadStackSigningKey", () => {
 
     // The shared `enforceChmod600` helper throws with "must be chmod 600"
     // (or equivalent platform-aware language). The exact wording is
-    // owned by file-permissions.ts; we assert on the principal-actionable
+    // owned by file-permissions.ts; we assert on the operator-actionable
     // fragment "chmod 600".
     await expect(loadStackSigningKey(path)).rejects.toThrow(/chmod 600/);
   });
@@ -89,7 +89,7 @@ describe("loadStackSigningKey", () => {
     await expect(loadStackSigningKey(path)).rejects.toThrow(/SA\.\.\./);
   });
 
-  test("rejects SO-prefixed (NSC operator-account root) seed with a clear error", async () => {
+  test("rejects SO-prefixed (operator) seed with a clear error", async () => {
     const seed = newOperatorSeed();
     const { path } = writeSeedFile("wrong-prefix.nk", seed, 0o600);
 

@@ -221,7 +221,7 @@ Cortex's `common/config/loader.ts` (extended per §6.1) merges all `agents.d/*.y
 | Collision case | Resolution | Principal-visible signal |
 |---|---|---|
 | Same `id` appears in two fragments under `agents.d/` | **Load-time error.** Cortex refuses to start (or refuses the reload — old config retained). | Error logged with both filenames + the conflicting `id`. |
-| Same `id` appears in `cortex.yaml` inline `agents[]` AND a fragment | **Inline wins** (principal override semantics). Fragment is shadowed. | Warning logged at load time naming the inline source as winner and the shadowed fragment file. Useful during migration when an principal pins a hand-tuned identity over a stale arc-installed one. |
+| Same `id` appears in `cortex.yaml` inline `agents[]` AND a fragment | **Inline wins** (principal override semantics). Fragment is shadowed. | Warning logged at load time naming the inline source as winner and the shadowed fragment file. Useful during migration when a principal pins a hand-tuned identity over a stale arc-installed one. |
 | Trust references an `id` that doesn't resolve in the merged registry | **Load-time error** per `AgentRegistry` §9.3 rule 1 (see registry.ts header). Cortex refuses to start until trust resolves. See §9 for install-order implications. |
 
 **`CortexConfig.agents[]` semantics change** (back-compat note): today `agents[]` is populated solely from `cortex.yaml`. After §6.1 lands, `agents[]` is the *merge* of `cortex.yaml`'s inline `agents[]` and all fragments under `agents.d/` per the rules above. This is additive; existing deployments using only inline `agents[]` see no behaviour change.
@@ -238,7 +238,7 @@ These are the prerequisites for `arc install <bot>` to work end-to-end. None of 
 
 - Loader walks `~/.config/cortex/agents.d/*.yaml` after parsing `cortex.yaml`, merges into `agents[]`.
 - Watcher watches the directory; emits the same reload event as `cortex.yaml` does today.
-- New CLI: `cortex agents reload` — manual trigger for operators / lifecycle scripts. Calls into the same reload code path. SIGHUP also routes here.
+- New CLI: `cortex agents reload` — manual trigger for principals / lifecycle scripts. Calls into the same reload code path. SIGHUP also routes here.
 - Fragment schema = subset of `CortexConfigAgent` (no `principal:` block; cortex.yaml stays the source of truth for principal identity).
 
 Estimated ~150 LOC + tests. Lands as a `feat(common/config)` PR.
@@ -507,7 +507,7 @@ Bot fragments declare `trust: [other-agent-ids]`. The trust list is propagated t
 
 **Bootstrapping aligns with `AgentRegistry` §9.3 rule 1** — every id in any agent's `trust:` list MUST be a known agent in the registry at construction time. `AgentRegistry` throws `UnknownAgentReferenceError` if a trust reference doesn't resolve. Cortex refuses to start (or refuses a reload) under that error and retains the prior valid state. The design adopts this contract — strict, fail-fast — for v1 of arc-installable bots.
 
-**Implication for install order:** if bot A trusts bot B (and B is not yet installed), `arc install foo-A-bot` alone would render an `agents.d/a.yaml` fragment whose `trust: [b]` cannot resolve, and the subsequent `cortex agents reload` would refuse the load. Three options for operators:
+**Implication for install order:** if bot A trusts bot B (and B is not yet installed), `arc install foo-A-bot` alone would render an `agents.d/a.yaml` fragment whose `trust: [b]` cannot resolve, and the subsequent `cortex agents reload` would refuse the load. Three options for principals:
 
 1. **Install B first, then A** — sequential install commands. Simplest when the trust graph is acyclic and known.
 2. **Use an arc transaction** — `arc install foo-A-bot foo-B-bot` in one command. Arc renders all fragments into a staging area, lets cortex validate the merged registry, then commits both or rolls back both. (Requires arc-side transaction support — listed in §10 as open Q2.)
@@ -581,7 +581,7 @@ The strict contract is the right v1 default because it surfaces config errors at
 - **Hot-swap substrate** — a bot can't switch from `claude-code` to `codex` without a reinstall. Acceptable for v1.
 - **Live persona reload** — persona changes require either a `arc upgrade <bot>` or a manual `cortex agents reload`. Live persona watch is a future enhancement.
 - **Permission/role-based install authority** — assumes principal has unilateral install authority. Multi-principal orgs with install policies deferred.
-- **Mixed-mode (same agent identity on both in-process AND standalone substrates simultaneously)** — possible per pi.dev design §8.2, but install machinery treats each as a separate bot package (`claude-rev` + `codex-rev` ids). Re-using a single identity across substrates is allowed via fragment override but considered an principal-side advanced pattern; not a primary install flow.
+- **Mixed-mode (same agent identity on both in-process AND standalone substrates simultaneously)** — possible per pi.dev design §8.2, but install machinery treats each as a separate bot package (`claude-rev` + `codex-rev` ids). Re-using a single identity across substrates is allowed via fragment override but considered a principal-side advanced pattern; not a primary install flow.
 
 ---
 
@@ -611,7 +611,7 @@ The strict contract is the right v1 default because it surfaces config errors at
 
 3. **Independence of decisions.** D1–D8 are unaffected — the substrate/presence decoupling, persona ownership, per-agent NATS keys, daemon-mediated signing, strict trust, revoke-before-remove, all hold regardless of arc#117's interface. arc#117 changes HOW arc routes the install to cortex (HostAdapter dispatch vs hard-coded paths); D1–D8 describe WHAT happens once it lands.
 
-4. **Sequencing.** Cortex#58 Phase A.1 (`agents.d/` support) and A.2 (`cortex creds issue` CLI) are independent of arc#117 — they land in cortex first and can be exercised manually (without arc) for testing. Phase A.3 (`CortexHostAdapter`) is blocked on arc#117 Phase 1 (the `PaiPaths` → `ArcPaths` + first `HostAdapter` legacy cut) merging. Until then, operators run a thin shell wrapper (`cortex install-bot <path>`) that does what `arc install` will eventually do.
+4. **Sequencing.** Cortex#58 Phase A.1 (`agents.d/` support) and A.2 (`cortex creds issue` CLI) are independent of arc#117 — they land in cortex first and can be exercised manually (without arc) for testing. Phase A.3 (`CortexHostAdapter`) is blocked on arc#117 Phase 1 (the `PaiPaths` → `ArcPaths` + first `HostAdapter` legacy cut) merging. Until then, principals run a thin shell wrapper (`cortex install-bot <path>`) that does what `arc install` will eventually do.
 
 **Open intersection points (carry-forward for arc#117 review):**
 

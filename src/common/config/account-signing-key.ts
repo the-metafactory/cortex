@@ -1,14 +1,14 @@
 /**
- * C-108 (Prereq B for cortex#67): NSC operator account signing key loader.
+ * C-108 (Prereq B for cortex#67): operator account signing key loader.
  *
- * The NSC operator account signing key (NATS "SA"-prefixed nkey seed) is what
+ * The operator's account signing key (NATS "SA"-prefixed nkey seed) is what
  * mints per-agent NATS user JWTs (cortex#58 D7 + §6.3, design-arc-agent-bots).
  * It is the most sensitive key material the cortex daemon holds — it never
  * leaves daemon memory, is never logged, and is never persisted to disk by
  * cortex itself.
  *
  * Threat model (one paragraph): a leaked account signing key lets an attacker
- * mint user JWTs for any agent in the NSC operator account, bypassing every
+ * mint user JWTs for any agent in the operator's account, bypassing every
  * cortex-side authorization check. Since the key sits on the principal's
  * laptop / server filesystem, the next-best mitigation is to refuse to load
  * it unless the file is chmod 600 (owner-only read/write). This loader
@@ -25,11 +25,11 @@
  *     platform for the daemon.
  *   - The seed file is read, trimmed of whitespace (principals tend to
  *     leave a trailing newline), and parsed via `nkeys.fromSeed`.
- *   - The parsed seed MUST be account-prefixed ("SA..."). NSC operator-account
- *     root signing keys ("SO...") and user signing keys ("SU...") are
- *     rejected — the design wants the *account* signing key, not the NSC
- *     operator-account root key, because account-level signing is what
- *     scopes minted JWTs to the NSC operator account.
+ *   - The parsed seed MUST be account-prefixed ("SA..."). Operator
+ *     signing keys ("SO...") and user signing keys ("SU...") are
+ *     rejected — the design wants the operator's *account* signing key,
+ *     not the operator root key, because account-level signing is what
+ *     scopes minted JWTs to the operator's account.
  *
  * NOT covered here (deferred to C-067 itself):
  *   - In-memory zeroization after use. The KeyPair is held for the
@@ -47,14 +47,14 @@ import { enforceChmod600 } from "./file-permissions";
 
 /**
  * Account signing key seed prefix. NATS nkey seeds for an *account* always
- * start with `SA` (Seed + Account prefix bytes, base32-encoded). NSC
- * operator-account seeds are `SO`, user seeds are `SU`, server seeds are `SN`,
- * etc. We want the account one specifically — see file header.
+ * start with `SA` (Seed + Account prefix bytes, base32-encoded). Operator
+ * seeds are `SO`, user seeds are `SU`, server seeds are `SN`, etc. We want
+ * the account one specifically — see file header.
  */
 const ACCOUNT_SEED_PREFIX = "SA";
 
 /**
- * Load + validate the NSC operator account signing nkey from disk.
+ * Load + validate the operator's account signing nkey from disk.
  *
  * Throws (with a clear, principal-facing message) on:
  *   - File missing / unreadable (propagates ENOENT / EACCES).
@@ -78,9 +78,9 @@ export async function loadAccountSigningKey(path: string): Promise<KeyPair> {
   const seed = raw.trim();
 
   // 3. Prefix gate. `nkeys.fromSeed` will accept anything that decodes
-  //    cleanly, including NSC operator account / user / server seeds — so we
-  //    have to enforce the SA prefix ourselves. Reject early with a clear
-  //    error that tells the principal which kind of key they handed us.
+  //    cleanly, including operator/user/server seeds — so we have to
+  //    enforce the SA prefix ourselves. Reject early with a clear error
+  //    that tells the principal which kind of key they handed us.
   if (!seed.startsWith(ACCOUNT_SEED_PREFIX)) {
     const actualPrefix = seed.slice(0, 2);
     throw new Error(

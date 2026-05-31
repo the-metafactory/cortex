@@ -23,7 +23,7 @@ Grove was originally built as a **bridge** — a synchronous Discord/Mattermost 
 The metafactory direction has changed. Two things have moved to the foundation:
 
 1. **myelin** is now the message envelope. Agent-to-agent traffic — pings, reviews, approval requests, status events — is being lifted onto a plain NATS bus with a published JSON-Schema envelope (`~/Developer/myelin/schemas/envelope.schema.json`) and a three-prefix subject namespace (`local.` / `federated.` / `public.` — see `~/Developer/myelin/specs/namespace.md`). Sovereignty (data residency, model class, hop count) travels in the envelope itself.
-2. **signal** is now the observability tap. Tool calls, skill invocations, subagent spawns, and session lifecycle are emitted as OTLP spans on the same NATS bus under `mf.net-{principal}.trace.>` (`~/Developer/signal/docs/design-signal-bundle-migration.md`). Operators choose any OTLP backend (Grafana Cloud, Honeycomb, Datadog, self-hosted VictoriaMetrics) without changing the tap.
+2. **signal** is now the observability tap. Tool calls, skill invocations, subagent spawns, and session lifecycle are emitted as OTLP spans on the same NATS bus under `mf.net-{principal}.trace.>` (`~/Developer/signal/docs/design-signal-bundle-migration.md`). Principals choose any OTLP backend (Grafana Cloud, Honeycomb, Datadog, self-hosted VictoriaMetrics) without changing the tap.
 
 Both run *under* Grove, on a transport Grove doesn't own. Two consequences for Grove:
 
@@ -78,7 +78,7 @@ The metafactory ecosystem now decomposes cleanly into seven layers. Each layer h
 
 | # | Layer | Job | Primary artifact | Primary repo |
 |---|-------|-----|------------------|--------------|
-| 1 | **Transport** | Move bytes between agents, hosts, and operators. | NATS server + leaf-node federation | `the-metafactory/nats` (config) + upstream NATS |
+| 1 | **Transport** | Move bytes between agents, hosts, and principals. | NATS server + leaf-node federation | `the-metafactory/nats` (config) + upstream NATS |
 | 2 | **Envelope** | Wrap every message in one universally-parseable schema with sovereignty travelling inside the message. | `envelope.schema.json` + `namespace.md` | `the-metafactory/myelin` |
 | 3 | **Telemetry** | Emit structured agent activity (tool use, skill invocation, subagent lifecycle) onto the bus as OTLP. | Hooks + W3C trace context lib + OTLP envelope builder | `the-metafactory/signal` |
 | 4 | **Coordination** | Agent-to-agent protocols built on the envelope: dispatch, observe, review, approve, hand-off. | Event taxonomies + interaction patterns | `the-metafactory/grove-v2` (`src/hooks/lib/event-taxonomy.ts`) + `the-metafactory/pilot` |
@@ -138,9 +138,9 @@ Grove v2 already implements a substantial fraction of the layer-7 surface. The r
 | Gap | Why it matters | Today |
 |-----|----------------|-------|
 | **Agent-to-agent visibility** — review pings, fix-and-ack cycles, hand-offs between agents | These are the *interesting* moments in collaboration; they used to ride through Grove's chat plumbing and now ride past it on myelin envelopes | Agents use myelin and pilot directly; Grove sees nothing |
-| **OTLP / signal cohabitation** — telemetry alongside CloudEvents, with the surface able to drill from a task → its trace tree | Operators currently pivot to Grafana to see what tools/skills an agent ran | Two surfaces, one task |
+| **OTLP / signal cohabitation** — telemetry alongside CloudEvents, with the surface able to drill from a task → its trace tree | Principals currently pivot to Grafana to see what tools/skills an agent ran | Two surfaces, one task |
 | **Process traceability** — which SOP an agent is following, which gate it's at, what's left to satisfy the gate | "Did the agent skip the security review SOP?" is unanswerable today | Compass SOPs are markdown the agent reads; the surface has no idea |
-| **Cross-repo blueprint visibility** — a feature in `grove:G-204` blocked on `arc:A-103` should be obvious from the surface | Operators read `blueprint ready` in the terminal | CLI-only; the dashboard treats grove as an island |
+| **Cross-repo blueprint visibility** — a feature in `grove:G-204` blocked on `arc:A-103` should be obvious from the surface | Principals read `blueprint ready` in the terminal | CLI-only; the dashboard treats grove as an island |
 | **Multi-trigger inbox** — principal-input items can arrive from CC backend, pilot bot, signal alerts, blueprint state changes; today they're scattered | One unified "needs you" queue is the load-bearing UX | F-7 attention view is the seed; needs broadening |
 
 The rethink in §5 is the design for closing those gaps without re-coupling Grove to the wire.
@@ -166,7 +166,7 @@ INBOX        SCHEDULED       IN-FLIGHT       IN-REVIEW       NEEDS-ME       DONE
   └─── new GitHub issue / new pilot ping / new principal note
 ```
 
-Today's `task-table.tsx` + `working-grid.tsx` + `iteration-board.tsx` are the seed of this. The change is widening "what counts as a card" beyond mc-v3's `tasks` row to include **anything an principal might want to see, steer, or approve**:
+Today's `task-table.tsx` + `working-grid.tsx` + `iteration-board.tsx` are the seed of this. The change is widening "what counts as a card" beyond mc-v3's `tasks` row to include **anything a principal might want to see, steer, or approve**:
 
 - A curated task (existing).
 - An in-flight feature with attached PR (new — sourced from blueprint + GitHub).
@@ -179,7 +179,7 @@ Today's `task-table.tsx` + `working-grid.tsx` + `iteration-board.tsx` are the se
 Clicking a card opens a drill-down with three stacked views, all live:
 
 1. **Activity timeline** (top). Time-descending stream of CloudEvents *and* OTLP spans for this task. The fact that two channels share a NATS bus (`mf.net-*.events.>` for product events, `mf.net-*.trace.>` for OTLP — see `~/Developer/signal/docs/design-signal-bundle-migration.md`) is invisible to the principal: the surface joins them by `correlation_id` from the myelin envelope.
-2. **Conversation / review log** (middle). Pilot review thread, agent reasoning excerpts, operator notes, Discord thread mirror. This is where the "agents pinging each other" becomes visible — every myelin envelope on `local.{org}.review.>` and `local.{org}.dispatch.>` lands here in time order.
+2. **Conversation / review log** (middle). Pilot review thread, agent reasoning excerpts, principal notes, Discord thread mirror. This is where the "agents pinging each other" becomes visible — every myelin envelope on `local.{org}.review.>` and `local.{org}.dispatch.>` lands here in time order.
 3. **Artifacts panel** (bottom). Linked PR, linked issue, iteration-plan checkbox progress, applicable SOP from compass, blueprint dependency status. Each entry is a hyperlink to the corresponding artifact in its native repo.
 
 The point of stacking these is: in one open card, the principal sees *what happened* (timeline), *why* (review log), and *against what* (artifacts).
@@ -193,18 +193,18 @@ Trigger sources (must support at least these three at v1):
 | Source | What gets enqueued | Today |
 |--------|--------------------|-------|
 | **Claude Code backend** | An agent's session hit a stop hook (Bash guard, permission prompt, an explicit human-in-the-loop pause). This is the existing F-10 pattern. | Already implemented for mc-v3 controlled sessions. Generalise to observed (cldyo-live) sessions too. |
-| **pilot bot** | A PR review cycle has produced findings that pilot couldn't auto-fix; needs operator decision (apply / defer / dismiss). Pilot's errand DB lives at `~/.metafactory/agents/pilot/errands.sqlite` and pilot already pings on Discord; we want it on the surface. | Currently lives only in pilot's own dashboard.md and Discord pings. Subscribe to pilot's myelin envelopes (`local.{org}.pilot.errand.needs-decision`) and surface in the inbox. |
+| **pilot bot** | A PR review cycle has produced findings that pilot couldn't auto-fix; needs principal decision (apply / defer / dismiss). Pilot's errand DB lives at `~/.metafactory/agents/pilot/errands.sqlite` and pilot already pings on Discord; we want it on the surface. | Currently lives only in pilot's own dashboard.md and Discord pings. Subscribe to pilot's myelin envelopes (`local.{org}.pilot.errand.needs-decision`) and surface in the inbox. |
 | **signal observability** | A trace anomaly: agent in a tight loop, exceeding token budget, error rate > threshold, sovereignty violation (`max_hop` exceeded, frontier-only signal hitting a frontier-disallowed agent). | Doesn't exist yet. signal layer 2 (collector profiles) is the natural place to define these and emit `local.{org}.signal.alert.>` envelopes the surface subscribes to. |
 | **blueprint state changes** | A feature transitioned to `ready` (dependencies just finished). Principal decision: dispatch now? defer? add a constraint? | `blueprint ready` is CLI-only today. Surface it as inbox cards once `B-202` (event-driven status sync) lands. |
 | **GitHub events** | A PR review has been left, a CI run failed on `main`, an issue was assigned to a person who's offline. | Some of this already lands in the activity timeline (G-203). We want a curation step that promotes a subset to the inbox. |
 
-The contract is: anything that wants the operator's attention publishes a myelin envelope on `local.{org}.attention.>` (or its source-specific subject), with a known minimum payload (`subject_id`, `summary`, `context_url`, `urgency`, `source_kind`). The surface subscribes, dedupes, ranks, renders. New trigger sources cost one envelope schema entry, not a Grove change.
+The contract is: anything that wants the principal's attention publishes a myelin envelope on `local.{org}.attention.>` (or its source-specific subject), with a known minimum payload (`subject_id`, `summary`, `context_url`, `urgency`, `source_kind`). The surface subscribes, dedupes, ranks, renders. New trigger sources cost one envelope schema entry, not a Grove change.
 
 ### 5.4 Principal-input return path — symmetric to triggers
 
 Today's F-10 principal-input flow is the *return* half of the loop: principal types, attaches a screenshot, hits send, agent resumes (`docs/design-mc-f10-operator-input.md`). The rethink keeps this exact mechanism for controlled CC sessions and generalises the rest:
 
-- For pilot errands: operator-input is decision metadata (`apply` / `defer` / `dismiss` + optional note). Posted as an envelope on `local.{org}.pilot.errand.decision`. Pilot's CLI already supports these state transitions; we just give them a UI affordance.
+- For pilot errands: principal-input is decision metadata (`apply` / `defer` / `dismiss` + optional note). Posted as an envelope on `local.{org}.pilot.errand.decision`. Pilot's CLI already supports these state transitions; we just give them a UI affordance.
 - For observed sessions: principal-input is *out of band* — there is no live process to send to. The "input" is a Discord ping-back to the human running `cldyo-live` plus a written note attached to the task. Honest framing: we can't unblock an observed session, only annotate it.
 - For blueprint cards: principal-input is metadata attached to the feature (`status` change, `note`, `assignee`, `priority`).
 
@@ -313,7 +313,7 @@ These are draft entries for `blueprint.yaml`. IDs avoid collision with existing 
 | ID | Feature | Depends on | Description |
 |----|---------|------------|-------------|
 | **G-1100** | Myelin subscriber in grove-bot | G-401 (cloud event publisher) | Add `src/bot/lib/myelin-subscriber.ts`. Mirrors `nats-publisher.ts` shape; subscribes to `local.{org}.>` subjects and fans into existing event handlers. Validates envelopes against `myelin/schemas/envelope.schema.json`. |
-| **G-1101** | Pilot errand projection | G-1100 | Subscribe to `local.{org}.pilot.errand.>` envelopes; project errand state onto a new `pilot_errands` D1 table; render as a card source on the surface. Two-way: operator decisions emit `local.{org}.pilot.errand.decision`. |
+| **G-1101** | Pilot errand projection | G-1100 | Subscribe to `local.{org}.pilot.errand.>` envelopes; project errand state onto a new `pilot_errands` D1 table; render as a card source on the surface. Two-way: principal decisions emit `local.{org}.pilot.errand.decision`. |
 | **G-1102** | Signal alert ingestion | G-1100, signal-collector v1 | Subscribe to `local.{org}.signal.alert.>`; render as inbox cards with severity, drill-link to the OTLP trace tree (when collector profile points at a backend whose UI we know how to deep-link to). |
 | **G-1103** | Generalised inbox | G-1101, G-1102 | Replace F-7 attention view's data source with a unified inbox table fed by all card sources. Prioritisation rules in front of the table. |
 | **G-1104** | Blueprint state-change ingestion | B-202 (blueprint event-sync) | Subscribe to `local.{org}.blueprint.feature.ready`; surface ready features as schedulable cards. Bidirectional: dispatch from a blueprint card emits `local.{org}.blueprint.feature.dispatched`. |
@@ -333,7 +333,7 @@ These are draft entries for `blueprint.yaml`. IDs avoid collision with existing 
 The same coupling discipline that keeps signal host-agnostic applies here, in reverse. To prevent Grove (now Cortex) from re-becoming the wire:
 
 - Cortex MAY subscribe to any subject under `local.{org}.>` and `mf.net-*.>`.
-- Cortex MAY publish operator-decision envelopes on `local.{org}.*.decision` and `local.{org}.*.update`.
+- Cortex MAY publish principal-decision envelopes on `local.{org}.*.decision` and `local.{org}.*.update`.
 - Cortex MUST NOT publish on subjects owned by other layers (no trace spans, no pilot errand updates, no blueprint state writes from the bot).
 - Cortex MUST NOT import the myelin **envelope schema** at runtime — the schema travels by value (vendored at `src/bus/myelin/vendor/envelope.schema.json` per the `SCHEMA_SOURCE_COMMIT` pin in `src/bus/myelin/envelope-validator.ts`). A myelin outage MUST NOT wedge cortex's envelope validator. Schema bumps are explicit PRs that re-vendor the file and update the pin.
 - Cortex MAY import **pure-string utility modules** from `@the-metafactory/myelin` when myelin explicitly publishes them for cross-consumer use with **zero transitive dependencies** on the envelope schema, Ajv, NATS, or any other heavy artefact (myelin#115 designed `@the-metafactory/myelin/subjects` to this contract). This relaxes the prior "MUST NOT import from `myelin/` at runtime" rule, which originated when myelin had not yet shipped a consumable TS library. Importing schema-bound or transport-bound surfaces from myelin remains forbidden under the schema-by-value rule above.
@@ -362,7 +362,7 @@ The metafactory `VISION.md` ("Every way agents do work can be captured, shared, 
 - **Not a re-architecture of mc-v3.** Every existing F-* feature retains its place; §7 maps each one explicitly.
 - **Not a transport.** Grove subscribes to NATS via myelin envelopes; it does not implement NATS, does not extend the envelope schema, does not own a subject namespace beyond what's documented in `myelin/specs/namespace.md`.
 - **Not a fork of pilot.** Pilot stays where it is; Grove projects pilot's state via subscription. Pilot's CLI remains the principal's other side of the conversation when they want to act on a review thread directly.
-- **Not a replacement for Grafana/Honeycomb/Datadog.** When operators want to drill into raw OTLP traces, they go to whichever backend `signal-collector` is pointed at. The surface deep-links there for context but does not own trace storage.
+- **Not a replacement for Grafana/Honeycomb/Datadog.** When principals want to drill into raw OTLP traces, they go to whichever backend `signal-collector` is pointed at. The surface deep-links there for context but does not own trace storage.
 - **Not a CLAUDE.md change.** The CLAUDE.md generation pipeline (`arc upgrade compass`) is unaffected. This document goes in `docs/` like every other design spec.
 - **Not a code change in this PR.** This document is the design only; G-1100..G-1110 are draft blueprint entries to discuss before implementation.
 

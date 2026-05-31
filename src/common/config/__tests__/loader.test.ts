@@ -645,7 +645,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     const presence = agent.presence as Record<string, unknown>;
     const discord = presence.discord as Record<string, unknown>;
     discord.roles = [
-      { name: "principal", users: ["100000000000000999"], features: ["chat"] },
+      { name: "operator", users: ["100000000000000999"], features: ["chat"] },
     ];
     const path = writeCortexConfig(testDir, cfg);
     expect(() => loadConfigWithAgents(path)).toThrow(
@@ -683,7 +683,7 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
   test("v2.0.0 rejects agents[].roles[] (legacy top-level agent-roles field)", () => {
     const cfg = minimalCortex();
     const agent = (cfg.agents as Record<string, unknown>[])[0]!;
-    agent.roles = [{ name: "principal", users: ["100000000000000999"] }];
+    agent.roles = [{ name: "operator", users: ["100000000000000999"] }];
     const path = writeCortexConfig(testDir, cfg);
     expect(() => loadConfigWithAgents(path)).toThrow(/agents\[0\]\.roles\[\]/);
     expect(() => loadConfigWithAgents(path)).toThrow(/migrate-config\.ts/);

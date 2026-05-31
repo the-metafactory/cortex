@@ -506,7 +506,7 @@ export async function startMyelinRuntime(
     link = await NatsLink.connect({
       url: nats.url,
       token: nats.token,
-      // cortex#86: operator-account JWT auth path. NatsLink loader expands ~/
+      // cortex#86: operator-mode auth path. NatsLink loader expands ~/
       // and enforces chmod 600; if both token and credsPath are set,
       // credsPath wins with a warn log.
       ...(nats.credsPath ? { credsPath: nats.credsPath } : {}),

@@ -25,11 +25,11 @@ Critically: a lot of F-10's plumbing already exists. The backend `POST /api/assi
 
 **Choice.** F-10 ships **text-only**. Images remain explicitly deferred to a Phase C follow-up — tracked by the "Image/screenshot paste + drag-drop" bullet in `docs/iteration-mission-control.md`; no sub-letter or separate feature-id, just the follow-up PR when stream-json content-blocks + the event-renderer image support land in lockstep. The F-7 drill-down's input placeholder is replaced with a live textarea for text; the attention view's event renderer stays unchanged for images (when they land, both the stream-json framer and the renderer extend in lockstep).
 
-**Why this split isn't scope-avoidance.** Principal text input on its own is the capability change that moves "console" from vaporware to lived reality. Images are a comfort upgrade on top of that reality, not the reality itself. Shipping text-only unlocks all the daily-driver workflows; images unblock a subset (paste-a-screenshot-and-say-fix-this) that operators can work around today by saving the screenshot and describing its content, pasting a URL, or using a local `cldyo-live` session. Not a functional regression — just an absent convenience.
+**Why this split isn't scope-avoidance.** Principal text input on its own is the capability change that moves "console" from vaporware to lived reality. Images are a comfort upgrade on top of that reality, not the reality itself. Shipping text-only unlocks all the daily-driver workflows; images unblock a subset (paste-a-screenshot-and-say-fix-this) that principals can work around today by saving the screenshot and describing its content, pasting a URL, or using a local `cldyo-live` session. Not a functional regression — just an absent convenience.
 
 ## Decision 2 — Submit is Enter; Shift+Enter is newline
 
-Standard chat UX. Matches Maestro, matches principal muscle memory from Claude desktop, matches every dashboard the principal already uses. `Cmd+Enter` / `Ctrl+Enter` is **not** bound as a secondary submit — two submit keys on the same affordance tempt operators into "which one did I press" doubt which is the opposite of the console's job. If a future principal-set disagrees, add a second bind then; don't pre-allocate friction.
+Standard chat UX. Matches Maestro, matches principal muscle memory from Claude desktop, matches every dashboard the principal already uses. `Cmd+Enter` / `Ctrl+Enter` is **not** bound as a secondary submit — two submit keys on the same affordance tempt principals into "which one did I press" doubt which is the opposite of the console's job. If a future principal-set disagrees, add a second bind then; don't pre-allocate friction.
 
 **Empty submit** (whitespace-only input after `trim()`) is a no-op with no error message. Not worth a toast.
 
@@ -80,7 +80,7 @@ F-7 Decision 6 explicitly gates Approve/Deny on CC stream-json permission-protoc
 
 **F-10 does NOT wire Approve/Deny.** The disabled-with-tooltip placeholder from F-7 stays in place. Approve/Deny becomes a clean follow-up after the verification lands — "button enable + handler attach", matching F-7's original framing.
 
-**Text-based deny.** §5.3.1 mentions "deny with instructions to try differently" — an principal reply via the text input that functionally vetoes a pending permission request. With F-10's text input live, the principal **can** type a deny-and-explain message, and the agent will see it mid-turn. CC's behaviour on that input is not something F-10 can engineer — we surface the channel, CC does what CC does. The design-spec language ("deny with instructions to try differently") is therefore implicitly satisfied via normal text input. No additional UI treatment in F-10.
+**Text-based deny.** §5.3.1 mentions "deny with instructions to try differently" — a principal reply via the text input that functionally vetoes a pending permission request. With F-10's text input live, the principal **can** type a deny-and-explain message, and the agent will see it mid-turn. CC's behaviour on that input is not something F-10 can engineer — we surface the channel, CC does what CC does. The design-spec language ("deny with instructions to try differently") is therefore implicitly satisfied via normal text input. No additional UI treatment in F-10.
 
 ## Decision 8 — Error UX: inline banner inside `.drill-input`, not the global error pill
 

@@ -266,7 +266,7 @@ describe("Thread C — signed pilot-shape envelope round-trip (P-VERIFY)", () =>
     if (!result.valid) {
       // The structural check fires BEFORE the crypto pass, so the
       // rejection reason is the trust-list miss, not a crypto failure.
-      // Fails-closed-on-trust: even if the bytes verify, the operator's
+      // Fails-closed-on-trust: even if the bytes verify, the principal's
       // local policy holds the gate.
       expect(result.reason.kind).toBe("signer_not_trusted");
       expect(result.rejectedAt).toBe(0);

@@ -9,7 +9,7 @@
  *     - id: luna
  *       displayName: Luna
  *       persona: ./personas/luna.md
- *       roles: [reviewer]
+ *       roles: [operator]
  *       trust: [echo, holly, ivy]
  *       presence:              owned by the agent — one per platform
  *         discord: { token, guildId, ... }
@@ -882,8 +882,8 @@ export const NatsConfigSchema = z.object({
   /** Optional NKey identity for envelope signing (MY-400). */
   identity: NatsIdentitySchema.optional(),
   /**
-   * cortex#86 — path to a NATS user `.creds` file for NSC operator-account
-   * JWT connect auth. When set, the daemon authenticates via `credsAuthenticator(...)`
+   * cortex#86 — path to a NATS user `.creds` file for operator-mode connect
+   * auth. When set, the daemon authenticates via `credsAuthenticator(...)`
    * instead of anonymous / bearer-token. Leading `~/` expands to `$HOME`;
    * the `NatsLink` loader enforces chmod 600 on POSIX. Wins over `token`
    * when both are set (warn log explains precedence).
@@ -1314,7 +1314,7 @@ export type PolicyPrincipal = z.infer<typeof PolicyPrincipalSchema>;
 export const PolicyRoleSchema = z.object({
   id: z.string().regex(
     LETTER_PREFIX_ID_REGEX,
-    "role id must be lowercase alphanumeric + hyphen, starting with a letter (e.g. 'reviewer', 'code-reviewer')",
+    "role id must be lowercase alphanumeric + hyphen, starting with a letter (e.g. 'operator', 'code-reviewer')",
   ),
   /**
    * Capability ids granted by this role. Convention follows

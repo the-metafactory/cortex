@@ -116,7 +116,7 @@ This is compatible with the v2 Phase E curation UX (`design-mission-control.md` 
 
 ## 5a. Command queue and session endpoint abstraction
 
-Grove's Mission Control v2 (`design-mission-control.md` §6.1) introduces a **session endpoint** abstraction for operator input. Today, at Tier 1 same-process, the endpoint is the in-process `cc-session.ts` stdin pipe. When Spawn enters the picture, the hands run no longer lives in the same process as grove-bot — possibly not even on the same machine — and the operator's input has to cross that boundary without changing shape.
+Grove's Mission Control v2 (`design-mission-control.md` §6.1) introduces a **session endpoint** abstraction for principal input. Today, at Tier 1 same-process, the endpoint is the in-process `cc-session.ts` stdin pipe. When Spawn enters the picture, the hands run no longer lives in the same process as grove-bot — possibly not even on the same machine — and the principal's input has to cross that boundary without changing shape.
 
 This section describes the pattern Spawn integration must support. Even **locally**, a hands run may live in a different sandbox context from grove-bot (container, bwrap, different cwd / mount namespace); Spawn is just the most general case of that boundary. The pattern below subsumes both.
 

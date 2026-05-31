@@ -192,7 +192,7 @@ export async function runMigrateConfig(argv: string[]): Promise<number> {
 
   // cortex#295 / #296 — `--check` is the principal pre-flight for
   // parallel-mode activation. The legacy mapping table is still useful
-  // diagnostically (operators eyeballing the conversion), so emit it
+  // diagnostically (principals eyeballing the conversion), so emit it
   // alongside the preflight gap report. Exit non-zero ONLY when there
   // are preflight gaps so CI / a future automated activator can gate on it.
   if (args.check) {

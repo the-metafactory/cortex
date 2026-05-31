@@ -716,7 +716,7 @@ For any well-formed input that passes `ReconInputSchema`, the output passes `Rec
 1. **Caching policy.** MVP is no caching — every dispatch is a fresh fetch. If rate limits bite, add a 60-second TTL cache keyed by `(owner, repo, include-set, state)`. Defer until measured.
 2. **One agent per ecosystem, or per-org?** MVP: one agent, takes `owner` in the envelope. If we later want per-org scoping for credential reasons (different PATs for different orgs), split.
 3. **NATS queue group behavior.** Single subscriber for MVP. If a second instance is ever wanted (fan-out, redundancy), queue-group semantics apply for free — no agent-side changes.
-4. **`mine` cross-cut for non-GitHub identity.** Operators identified as `did:mf:...` in metafactory might not have a corresponding GitHub login. Need a mapping. Defer until first non-Andreas principal.
+4. **`mine` cross-cut for non-GitHub identity.** Principals identified as `did:mf:...` in metafactory might not have a corresponding GitHub login. Need a mapping. Defer until first non-Andreas principal.
 5. **Streaming progress.** For typical-size repos (<30 PRs), the verdict completes in ~2s — no need for streaming. For very large repos (Linux-kernel sized), would the deterministic-agent class want to emit `dispatch.task.progress` envelopes for each section? Defer until measured.
 6. **`AgentRuntimeSchema.substrate` and `HarnessId` unification.** The two enums are deliberately separate today (principal vocabulary vs runner vocabulary). This design adds `"deterministic-agent"` to both. Unification is a real piece of cortex#92 follow-up work; not blocking this design but worth tracking. File as `cortex#92` follow-up.
 

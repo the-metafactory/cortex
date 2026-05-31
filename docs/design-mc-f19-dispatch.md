@@ -89,7 +89,7 @@ Enter confirms; Esc cancels. Keyboard-first matches the cockpit framing.
 
 - **Q2 — What if the default agent is already busy?** v1 default agent is a single shared head. If a previous dispatch is still running, the new dispatch creates a second assignment on a different task — both `running` simultaneously under the same agent identity. The working grid renders one agent card with multiple active assignments. F-9 already supports this. Not a v1 blocker.
 
-- **Q3 — Should Dispatch require an principal confirmation or be one-click?** **Confirmation popover** chosen. Spawning a CC subprocess is non-trivial work and the principal is paying for tokens; one keystroke confirmation prevents fat-finger dispatches. Returns to the cockpit pattern of "deliberate principal action over autonomous execution."
+- **Q3 — Should Dispatch require a principal confirmation or be one-click?** **Confirmation popover** chosen. Spawning a CC subprocess is non-trivial work and the principal is paying for tokens; one keystroke confirmation prevents fat-finger dispatches. Returns to the cockpit pattern of "deliberate principal action over autonomous execution."
 
 ## Deferred to F-19.1+
 

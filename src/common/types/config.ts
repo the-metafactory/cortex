@@ -277,8 +277,8 @@ export const AgentConfigSchema = z.object({
      * v2.0.0 cutover (cortex#297) — `operatorDiscordId/Mattermost/Slack` retired.
      * The principal's platform-side ids live on `PrincipalConfigSchema.discordId/mattermostId/slackId`
      * in cortex-config.ts and are surfaced through `LoadedConfig.principal` for the
-     * boot path. Runtime principal-elevation decisions consult the
-     * PolicyEngine per the new capability-driven model.
+     * boot path. Runtime "is this principal an operator?" decisions consult the
+     * PolicyEngine via the `operator` capability per the new model.
      */
     /** Principal data residency stamped into `sovereignty.data_residency` on emitted
      *  envelopes (system.*, dispatch.task.*, cc.*). ISO-3166 country code; defaults
@@ -505,8 +505,8 @@ export const AgentConfigSchema = z.object({
      */
     accountSigningKeyPath: z.string().optional(),
     /**
-     * cortex#86 — path to a NATS user `.creds` file for NSC operator-account
-     * JWT connect auth. See `NatsConfigSchema.credsPath` in `./cortex-config.ts`
+     * cortex#86 — path to a NATS user `.creds` file for operator-mode
+     * connect auth. See `NatsConfigSchema.credsPath` in `./cortex-config.ts`
      * for the canonical docstring; this entry MIRRORS the field so that
      * the migrate-config loader can synthesize an AgentConfig from cortex.yaml
      * without stripping the creds path. Drop both on MIG-7.2e.

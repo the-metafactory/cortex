@@ -560,7 +560,7 @@ describe("cortex#237 PR-9 — review-consumer end-to-end round-trip (§11.1 Laye
     expect(msg.term).toHaveBeenCalledTimes(1);
     expect(msg.ack).toHaveBeenCalledTimes(0);
     expect(msg.nak).toHaveBeenCalledTimes(0);
-    // The term reason carries the cant_do summary — operators reading
+    // The term reason carries the cant_do summary — principals reading
     // `nats consumer info` see WHY the message landed on the dead-letter
     // side.
     const termCall = msg.term.mock.calls[0]!;
@@ -697,7 +697,7 @@ describe("cortex#327 — signature verification gate", () => {
     expect(msg.nak).toHaveBeenCalledTimes(0);
 
     // The term reason argument surfaced on the dead-letter side echoes
-    // the verifier's reason verbatim — operators reading `nats consumer info`
+    // the verifier's reason verbatim — principals reading `nats consumer info`
     // can grep `chain verification failed: <class>` directly.
     const termCall = msg.term.mock.calls[0]!;
     expect(String(termCall[0])).toContain("chain verification failed");

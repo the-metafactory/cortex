@@ -292,7 +292,7 @@ export class DiscordAdapter implements PlatformAdapter {
     this.client.on("shardReady", () => {
       void (async () => {
         await this.drainPendingResults();
-        await this.drainPendingOperatorDMs();
+        await this.drainPendingPrincipalDMs();
       })();
     });
 
@@ -1061,7 +1061,7 @@ export class DiscordAdapter implements PlatformAdapter {
     // buffer at PENDING_PRINCIPAL_MAX of stale entries which then get dropped
     // wholesale at drain time; better to evict expired entries proactively
     // so newer principal events have room.
-    this.cleanExpiredOperatorDMs();
+    this.cleanExpiredPrincipalDMs();
     if (this.pendingPrincipalDMs.length >= DiscordAdapter.PENDING_PRINCIPAL_MAX) {
       this.pendingPrincipalDMs.shift();
     }
@@ -1071,7 +1071,7 @@ export class DiscordAdapter implements PlatformAdapter {
     );
   }
 
-  private cleanExpiredOperatorDMs(): void {
+  private cleanExpiredPrincipalDMs(): void {
     if (this.pendingPrincipalDMs.length === 0) return;
     const now = Date.now();
     const before = this.pendingPrincipalDMs.length;
@@ -1084,10 +1084,10 @@ export class DiscordAdapter implements PlatformAdapter {
     }
   }
 
-  private async drainPendingOperatorDMs(): Promise<void> {
+  private async drainPendingPrincipalDMs(): Promise<void> {
     // Re-use the write-time cleaner so drain-time TTL is consistent with
     // bufferPrincipalDM. Anything still in the buffer afterwards is fresh.
-    this.cleanExpiredOperatorDMs();
+    this.cleanExpiredPrincipalDMs();
     if (this.pendingPrincipalDMs.length === 0) return;
     const principalDiscordId = this.infra.principal.discordId;
     if (!principalDiscordId || !this.client) {

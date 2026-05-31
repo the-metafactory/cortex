@@ -25,7 +25,7 @@
  * via the unified `resolvePrincipalId` path, the dispatch-listener
  * registers exactly one envelope handler on the runtime
  * (`runtime.onEnvelopeHandlers.size === 1`) and the second
- * white-box test asserts `options.operator.id` is preferred over
+ * white-box test asserts `options.principal.id` is preferred over
  * `config.agent.operatorId`. A stray legacy-field reader that
  * registered an additional handler — or a different one on a
  * mismatched subject — would NOT be caught by the single-handler
@@ -49,8 +49,8 @@
  * Regression posture: if any future PR re-introduces a
  * `config.agent.operatorId ?? "default"` read in cortex.ts that
  * bypasses `resolvePrincipalId`, the fail-fast preference test
- * (`"options.operator.id" is preferred over "config.agent.operatorId"`)
- * catches it — that test supplies `options.operator.id` with a
+ * (`"options.principal.id" is preferred over "config.agent.operatorId"`)
+ * catches it — that test supplies `options.principal.id` with a
  * DIFFERENT value than the legacy field and asserts the resolved
  * principal id is the v3-canonical one. This headline test then
  * confirms the resolved value reaches the runtime registration
@@ -69,7 +69,7 @@ import type {
 // A minimal AgentConfig — NATS absent so the runtime stays in no-op mode
 // and no real socket is opened. cortex#429 PR-C — `agent.operatorId` was
 // removed from the schema; callers exercise the v3-canonical resolution
-// path via `options.operator.id` below.
+// path via `options.principal.id` below.
 function minimalConfig(overrides: Partial<Record<string, unknown>> = {}): AgentConfig {
   return AgentConfigSchema.parse({
     agent: {
@@ -114,7 +114,7 @@ function createRecordingRuntime(): RecordingRuntime {
 describe("principal-identity consistency (cortex#427 PR-A)", () => {
   test("publish-side `source.principal` equals listener-side `{principal}` subject segment", async () => {
     // Setup: the v3 canonical path supplies the principal id via
-    // `options.operator.id` (sourced from `cortexConfig.principal.id`
+    // `options.principal.id` (sourced from `cortexConfig.principal.id`
     // by the loader). cortex#429 PR-C removed the legacy
     // `agent.operatorId` schema field — any stray attempt to set it on
     // input is now silently stripped by Zod, so this test only needs
@@ -217,11 +217,11 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
     expect(runtime.onEnvelopeHandlers.size).toBe(0);
   });
 
-  test("`options.operator.id` is the sole resolution path (legacy field stripped)", async () => {
+  test("`options.principal.id` is the sole resolution path (legacy field stripped)", async () => {
     // cortex#429 PR-C — the legacy `agent.operatorId` schema field has
     // been retired. Any input attempting to set it is silently stripped
     // by Zod (default strip-unknown mode). Boot succeeds when the
-    // v3-canonical `options.operator.id` is provided.
+    // v3-canonical `options.principal.id` is provided.
     const runtime = createRecordingRuntime();
     const config = minimalConfig({
       agent: {
@@ -252,7 +252,7 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
     // The strongest assertion we can make at this layer is
     // negative: BOOT MUST NOT THROW. (`resolvePrincipalId` would
     // throw if neither source resolved to a non-empty string;
-    // a boot success with `options.operator.id = "this-must-win"`
+    // a boot success with `options.principal.id = "this-must-win"`
     // present proves the v3 path was at least one valid
     // candidate.) The positive "v3 wins" assertion is covered by
     // the unit test on `resolvePrincipalId` below.
@@ -263,10 +263,10 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
     await handle.stop();
   });
 
-  test("`options.operator.id` is the sole resolution path (PR-C — legacy fallback retired)", async () => {
+  test("`options.principal.id` is the sole resolution path (PR-C — legacy fallback retired)", async () => {
     // cortex#429 PR-C — the legacy `config.agent.operatorId` fallback
     // has been retired together with the schema field. Boot succeeds
-    // only when `options.operator.id` is present.
+    // only when `options.principal.id` is present.
     const runtime = createRecordingRuntime();
     const config = minimalConfig({
       agent: {
@@ -289,12 +289,12 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
     await handle.stop();
   });
 
-  test("missing `options.operator.id` is a startup error, not a silent default", async () => {
+  test("missing `options.principal.id` is a startup error, not a silent default", async () => {
     // Anti-fallback regression guard: the pre-cortex#427 code
     // collapsed to `local.default.>` when neither source resolved.
     // PR-A made that a fail-fast — a missing principal is a
     // misconfiguration, not a default. cortex#429 PR-C narrowed the
-    // resolution path to `options.operator.id` only (the legacy
+    // resolution path to `options.principal.id` only (the legacy
     // `config.agent.operatorId` fallback retired together with the
     // schema field).
     const runtime = createRecordingRuntime();
@@ -325,7 +325,7 @@ describe("principal-identity consistency (cortex#427 PR-A)", () => {
     expect(runtime.onEnvelopeHandlers.size).toBe(0);
   });
 
-  test("empty-string `options.operator.id` is treated as missing (no silent `\"\"` subject)", async () => {
+  test("empty-string `options.principal.id` is treated as missing (no silent `\"\"` subject)", async () => {
     // cortex#429 PR-C — the resolver must treat `""` the same as
     // undefined — otherwise the subject would render as
     // `local..tasks.*.>` (two consecutive dots) which is an invalid

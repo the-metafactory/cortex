@@ -277,7 +277,7 @@ export interface DispatchListenerOptions {
    * the runner now consumes envelopes directly off the runtime, so any
    * federation policy that should apply to the runner's subscription
    * path must be enforced here. Production wiring subscribes the runner
-   * to `local.*` only (federation never applies); tests and operators
+   * to `local.*` only (federation never applies); tests and principals
    * who explicitly subscribe the runner to `federated.*` MUST pass
    * `federated` so the deny / accept lists still gate.
    *

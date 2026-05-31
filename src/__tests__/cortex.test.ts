@@ -149,7 +149,7 @@ describe("startCortex — construction", () => {
   });
 
   test("IAW A.5.4 — boot path accepts an explicit stack: option and starts cleanly (cortex#113)", async () => {
-    // The boot wiring resolves `deriveStackId({ operator, stack })` and logs
+    // The boot wiring resolves `deriveStackId({ principal, stack })` and logs
     // the derived id; we don't assert on stdout because the existing tests
     // already capture the boot log line shape on the default-derived path.
     // The smoke check here is that passing the option shape through
@@ -286,7 +286,7 @@ describe("startCortex — wire-up", () => {
     // the resolved principal id (cortex#427).
     //
     // cortex#429 PR-C — the legacy `agent.operatorId` fallback is gone;
-    // the v3-canonical resolution path is `options.operator.id`. Verify
+    // the v3-canonical resolution path is `options.principal.id`. Verify
     // the router subscribes (single registered handler) when only the
     // canonical path is wired.
     const runtime = createRecordingRuntime();
@@ -317,7 +317,7 @@ describe("startCortex — wire-up", () => {
     // cortex#427 PR-A — `resolvePrincipalId` refuses to silently
     // collapse to `"default"`. cortex#429 PR-C — the legacy
     // `config.agent.operatorId` fallback has been retired together with
-    // the schema field; `options.operator.id` is the only resolution
+    // the schema field; `options.principal.id` is the only resolution
     // path. A config without it must fail-fast at boot — the previous
     // behaviour masked misconfiguration by emitting `local.default.>`
     // envelopes that competed with real principals on shared brokers.
@@ -508,7 +508,7 @@ describe("startCortex — shutdown", () => {
       // pinpoints the relevant subsystem name.
       expect(handle.lastShutdownAbandoned).toContain("runtime stop");
       // Belt-and-braces: the timeout warning is logged with the named
-      // subsystem so an operator grepping the log can identify the
+      // subsystem so a principal grepping the log can identify the
       // dirty subsystem without reading code.
       const timeoutWarn = warnLines.find((l) => l.includes("shutdown timed out"));
       expect(timeoutWarn).toBeDefined();
@@ -699,9 +699,9 @@ presence:
 
 describe("runDryRun — config validator (cortex#88 item 2)", () => {
   test("success path: returns exit 0 with one-line OK summary", () => {
-    // Minimal cortex.yaml-shape config: operator + one agent w/ discord
+    // Minimal cortex.yaml-shape config: principal + one agent w/ discord
     // presence. `loadConfigWithAgents` detects cortex shape from the
-    // presence of `operator:` + `agents:` and validates against
+    // presence of `principal:` + `agents:` and validates against
     // `CortexConfigSchema`.
     const dir = mkdtempSync(join(tmpdir(), "cortex-dryrun-ok-"));
     const cfgPath = join(dir, "cortex.yaml");
@@ -774,7 +774,7 @@ describe("runDryRun — config validator (cortex#88 item 2)", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("failure path: returns exit 2 with operator-readable schema error", () => {
+  test("failure path: returns exit 2 with principal-readable schema error", () => {
     // Cortex-shape input with a missing required field (no displayName on
     // the agent) — should be rejected by CortexConfigSchema.
     const dir = mkdtempSync(join(tmpdir(), "cortex-dryrun-fail-"));
@@ -804,7 +804,7 @@ describe("runDryRun — config validator (cortex#88 item 2)", () => {
     // loaded fine, the loader returned `inlineAgents: []`, and dry-run
     // reported "1 agents" via a hardcoded fallback that masked the
     // degenerate case. Post-cortex#106: report the actual zero-agent count
-    // and exit non-zero so the operator sees the config is invalid for
+    // and exit non-zero so the principal sees the config is invalid for
     // the cortex-shape pipeline.
     const dir = mkdtempSync(join(tmpdir(), "cortex-dryrun-zero-"));
     const cfgPath = join(dir, "bot.yaml");

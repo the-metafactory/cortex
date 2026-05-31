@@ -42,6 +42,6 @@ export function priorityLabel(priority: number): string {
   if (!Number.isFinite(priority) || priority < 0) return "P?";
   // Note: the visual `kind` token is clamped to p0..p3 in PriorityPill, but
   // the human-readable label intentionally preserves the raw value (so a
-  // mis-emitted P7 is visible to operators rather than silently masked as P3).
+  // mis-emitted P7 is visible to principals rather than silently masked as P3).
   return `P${priority}`;
 }

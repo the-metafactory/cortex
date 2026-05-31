@@ -1,5 +1,5 @@
 /**
- * Tests for `src/bus/payload-filter.ts` — G-1111.A v1 matcher subset.
+ * Tests for `src/bus/payload-filter.ts` — G-1111.A v1 operator subset.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -168,7 +168,7 @@ describe("matchesFilter — prefix", () => {
     expect(matchesFilter(env, filter)).toBe(true);
   });
 
-  test("non-string field never matches a prefix matcher", () => {
+  test("non-string field never matches a prefix operator", () => {
     const env = makeEnvelope({ payload: { count: 42 } });
     const filter: PayloadFilter = { payload: { count: [{ prefix: "4" }] } };
     expect(matchesFilter(env, filter)).toBe(false);
@@ -364,11 +364,11 @@ describe("matchesFilter — envelope-level", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Unknown-matcher fail-closed (defensive)
+// Unknown-operator fail-closed (defensive)
 // ---------------------------------------------------------------------------
 
-describe("matchesFilter — unknown matcher fails closed", () => {
-  test("matcher object with an unrecognised key never matches", () => {
+describe("matchesFilter — unknown operator fails closed", () => {
+  test("operator object with an unrecognised key never matches", () => {
     const env = makeEnvelope();
     // Build a value that bypasses the FilterValue union via a cast — this
     // models a malformed config that slipped past type-check (e.g.,

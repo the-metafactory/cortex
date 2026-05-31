@@ -164,7 +164,7 @@ The existing focus area / working grid / task table do **not** change behaviour 
 
 ## Decision 5 — Promotion path: explicit principal action, no auto-promote
 
-`inbox → designing → queued` is always an principal-driven transition in v1. No "auto-promote when CI green", no "auto-add new GitHub issues to the queue", no "auto-create iteration when ≥3 issues share a milestone".
+`inbox → designing → queued` is always a principal-driven transition in v1. No "auto-promote when CI green", no "auto-add new GitHub issues to the queue", no "auto-create iteration when ≥3 issues share a milestone".
 
 **Why?** The whole point of this surface is to give the principal (or the PM-agent — Decision 6) a place to think before work hits the meat grinder. Auto-promotion bypasses that thinking and reintroduces the original gap.
 
@@ -236,9 +236,9 @@ This falls out of Decision 1: import is an event, Grove owns the lifecycle. Once
 - The original imported body is preserved as a snapshot column for audit; Grove's edits live in the regular body column.
 - No write-back surface, no permission expansion on the grove-bot, no last-write-wins drift to design around.
 
-Operators who want to update the upstream issue (close it, edit the title there) do that through GitHub directly. Grove is the principal's planning surface; the upstream is the audit trail for non-principal stakeholders. The two intentionally diverge once import has happened.
+Principals who want to update the upstream issue (close it, edit the title there) do that through GitHub directly. Grove is the principal's planning surface; the upstream is the audit trail for non-principal stakeholders. The two intentionally diverge once import has happened.
 
-**Why this is a feature, not a limitation.** It means a multi-operator team can adopt Grove without negotiating "who's allowed to write to GitHub on behalf of the team." It means future sources (Jira, Linear) need only an import adapter, never a write adapter. It means the security surface area on the grove-bot stays exactly as small as it is today.
+**Why this is a feature, not a limitation.** It means a multi-principal team can adopt Grove without negotiating "who's allowed to write to GitHub on behalf of the team." It means future sources (Jira, Linear) need only an import adapter, never a write adapter. It means the security surface area on the grove-bot stays exactly as small as it is today.
 
 If a write-back path is ever genuinely needed (e.g., closing GitHub issues automatically when a Grove iteration completes), it lands as an explicit additive Phase H feature with its own threat model — it does not retrofit into v1.
 

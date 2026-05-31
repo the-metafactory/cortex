@@ -60,7 +60,7 @@ export interface TaskFilterState {
    * the iteration detail surface or share a kanban-context URL.
    *
    * Per design spec §"Surface 3" — "extend the task-table hash-state
-   * filter to include `?iter=<id>` so operators can pin to one
+   * filter to include `?iter=<id>` so principals can pin to one
    * iteration. Optional but nice — defer if it adds significant
    * complexity." Implementation cost is one new field + four lines
    * in the hash codec; the principal value is high (one-click
@@ -96,7 +96,7 @@ export function applyTaskFilters(
     // F-16 — iteration pin. Match on the denormalised tag id; tasks
     // without an iteration (`t.iteration === null`) are excluded when
     // the filter is active. The "ungrouped" lane is reachable via a
-    // sentinel filter value (deferred — operators can clear the
+    // sentinel filter value (deferred — principals can clear the
     // filter to see ungrouped tasks).
     if (filters.iterationId !== null) {
       if (!t.iteration || t.iteration.id !== filters.iterationId) return false;

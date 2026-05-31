@@ -26,7 +26,7 @@ cortex#237's acceptance criteria (issue body) admit two implementation paths. Bo
 | **Time to first verdict on the wire** | Days. Reuses `MyelinSubscriber`, `ClaudeCodeHarness`, `createDispatchTask*Event` builders, `MyelinRuntime.publish`. Net new code is the subscriber adapter + verdict envelope builder + PR-ref extraction + correlation-stash logic. | Weeks. New process, new PAI extension, new arc manifest, new launchd plist (or pi.dev runtime). Bus client + envelope validator must be vendored or re-imported. Bridges to gh CLI and the lens pipeline are net new. |
 | **Lockstep risk with pilot Phase C** | Low. Same release train as cortex bot upgrades. Principal runs `arc upgrade Cortex`, both sides flip together. | Medium. Two release trains. Principal must `arc upgrade Cortex` for the bot + install pi.dev review agent independently. Drift window between pilot Phase C and the consumer being available on the principal's machine. |
 | **Substrate decoupling** (the §1.1 framing in the anchor doc) | Compromised. Cortex still owns runtime + chat surface + bus consumer. Path B's framing — "presence and substrate are independent axes" — is the right long-term shape; Path A defers it. | Achieved. The anchor doc's intent realised: bus contracts decoupled from chat-surface adapters. Future research-agent / sage-agent slot in as siblings without touching cortex. |
-| **Operational footprint** | One process, one launchd plist, one log stream. Operators see the consumer in the existing cortex dashboard (it's an in-process surface). | Two processes minimum. Independent failure mode (pi.dev crashes ≠ cortex crashes — good for fault isolation, bad for "did Echo even claim this?" observability). |
+| **Operational footprint** | One process, one launchd plist, one log stream. Principals see the consumer in the existing cortex dashboard (it's an in-process surface). | Two processes minimum. Independent failure mode (pi.dev crashes ≠ cortex crashes — good for fault isolation, bad for "did Echo even claim this?" observability). |
 | **Capability-registration mechanics** | Cortex publishes Echo's capabilities to `local.{org}.agents.capabilities` as part of its startup sequence (mechanism §3 below). One registration, one expiry. | pi.dev publishes its own capability assertion. Two simultaneous Echo registrations (cortex-Echo + pi.dev-Echo) on the same `agent_id` could confuse the registry; the spec doesn't yet address tenant disambiguation. Open question for pi.dev path. |
 | **Test infrastructure reuse** | High. cortex's `src/runner/__tests__/dispatch-listener.test.ts`, `src/bus/__tests__/dispatch-events.test.ts`, `src/bus/myelin/__tests__/subscriber.test.ts` give us the existing harness pattern. Stub `MyelinRuntime` + stub `CCSessionFactory` and we have integration coverage. | Net new test infrastructure for the pi.dev side; cortex's harness doesn't apply. |
 | **Code path Echo's Discord-mention path uses today** | Identical substrate. The Discord-mention review path runs via `DispatchHandler.handleMessage` → `CCSession` with the `code-review` skill enabled. Path A wires a *second ingress* to the *same lens pipeline*. Echo's behaviour for "review PR X" stays byte-identical regardless of whether the request arrived via Discord-mention or capability-dispatch. | Reimplements the lens pipeline in pi.dev. Risk of divergence: pi.dev's gh-bridge subset, skill-execution context, model selection, and bash-guard policy all need to be re-derived to match Echo's existing behaviour. |
@@ -38,7 +38,7 @@ cortex#237's acceptance criteria (issue body) admit two implementation paths. Bo
 **Path A wins for cortex#237.** Three reasons:
 
 1. **Lockstep tightness.** Pilot Phase C's quantitative cutover gate (`design-pilot-restructure.md` §6.4: "≥5 consecutive cycles across ≥2 PRs over ≥48 hours") requires a producer-side to actually exist on the wire. Path A ships in days; Path B in weeks. Cortex#237's whole reason for being is to close the loop end-to-end — the *fastest correct* path is the right one.
-2. **Substrate parity.** Echo's Discord-mention review path runs the `CodeReview` skill inside a `CCSession` inside a `ClaudeCodeHarness`. Path A produces verdicts via the *same substrate* — operators get byte-identical review behaviour regardless of ingress. Path B would re-derive the lens pipeline in pi.dev's runtime and inherits divergence risk (different model defaults, different bash policy, different attachment handling, etc.) that we'd then have to chase down across two implementations.
+2. **Substrate parity.** Echo's Discord-mention review path runs the `CodeReview` skill inside a `CCSession` inside a `ClaudeCodeHarness`. Path A produces verdicts via the *same substrate* — principals get byte-identical review behaviour regardless of ingress. Path B would re-derive the lens pipeline in pi.dev's runtime and inherits divergence risk (different model defaults, different bash policy, different attachment handling, etc.) that we'd then have to chase down across two implementations.
 3. **Decoupling is not blocked.** Path A does not foreclose Path B. The wire contract is the abstraction layer (§4 below). Once Path A is operational and the contract is proven by ≥30 days of real review traffic, a pi.dev review agent slots in alongside as a *competing consumer* on the same JetStream pull consumer group. Path A is the bridge, not the destination.
 
 The decoupling debt we take on with Path A is real, and we discharge it explicitly as a follow-up issue (§13 open question 2).
@@ -48,7 +48,7 @@ The decoupling debt we take on with Path A is real, and we discharge it explicit
 Echo is **not a separate process or code module** in cortex today. Survey result (cortex source as of 2026-05-16):
 
 - `grep -rn "Echo" src/` returns only string-literal references (config docs, dispatch-listener docstrings, test fixtures, federated subject examples in surface-router tests). There is no `src/runner/echo.ts`, no `src/adapters/echo.ts`, no `EchoAgent` class.
-- Echo's review behaviour is configuration: cortex.yaml declares an agent named `echo` with persona file, roles, trust, and a Discord presence. When an principal @-mentions Echo in Discord, `DispatchHandler.handleMessage` runs the standard pipeline (parse → access-control → context-fetch → prompt-build → spawn CC session). The CC session has the `CodeReview` skill on its allowlist (per the agent's `roles` config), and Echo's persona file tells the model "you are Echo, a TypeScript-focused code reviewer."
+- Echo's review behaviour is configuration: cortex.yaml declares an agent named `echo` with persona file, roles, trust, and a Discord presence. When a principal @-mentions Echo in Discord, `DispatchHandler.handleMessage` runs the standard pipeline (parse → access-control → context-fetch → prompt-build → spawn CC session). The CC session has the `CodeReview` skill on its allowlist (per the agent's `roles` config), and Echo's persona file tells the model "you are Echo, a TypeScript-focused code reviewer."
 - The "Echo-ness" of a review is therefore the *combination* of (a) the persona file + (b) the skill-allowlist on the spawned CCSession + (c) the prompt-builder injecting Echo's persona prefix. Nothing in cortex distinguishes "Echo reviews" from "any other agent runs the CodeReview skill" at the runtime level.
 
 This matters for Path A's design: **the new consumer is not "wire Echo to NATS."** It is "wire a new subscriber that, on each capability-dispatch envelope, spawns a CC session configured as Echo." The configuration mapping (`code-review.<flavor>` → "spawn agent `echo` with persona + skill") happens in the new subscriber, not in any pre-existing Echo module.
@@ -83,7 +83,7 @@ Wired in `src/cortex.ts` alongside the existing `busDispatchListener` (which tod
 | **Durable** | Yes, named per above | We want the principal's pending review queue to survive a cortex restart. A non-durable consumer would silently drop tasks during the restart window. |
 | **Ack policy** | `explicit` | We ack only after the lens pipeline produces a terminal lifecycle envelope. A crash mid-review re-delivers the task to a competing consumer. |
 | **Ack wait** | `5 minutes` | Longest realistic review is 3–4 minutes of lens work + GH-API roundtrip. 5min gives ~30-50% safety margin before JetStream re-queues. Echo cortex#253 R1 (Major-3) flagged the original 15min as creating a 45min worst-case dead-letter window that would have exceeded pilot's `--wait` default (600s per `design-pilot-restructure.md` §5.2); 5min ack + 3 max-delivery = 15min worst case, which fits inside pilot's wait budget AND gives pilot a chance to re-publish on its own if needed. |
-| **Max delivery** | `3` | After 3 redeliveries (crash, re-delivery, crash again) the task moves to `local.{org}.tasks.dead-letter.code-review` per architecture §7.2. Operators investigate dead-letters out of band. **Co-emission of `dispatch.task.aborted` on redelivery > 1:** when the consumer detects it's processing an envelope for the second+ time (JetStream redelivery counter on the delivery metadata), emit `dispatch.task.aborted` with `reason: "redelivery"` to give pilot a structured "this task is in trouble" signal BEFORE the max-delivery threshold is reached. Operationally kinder than letting pilot's `--wait` time out on a struggling consumer. |
+| **Max delivery** | `3` | After 3 redeliveries (crash, re-delivery, crash again) the task moves to `local.{org}.tasks.dead-letter.code-review` per architecture §7.2. Principals investigate dead-letters out of band. **Co-emission of `dispatch.task.aborted` on redelivery > 1:** when the consumer detects it's processing an envelope for the second+ time (JetStream redelivery counter on the delivery metadata), emit `dispatch.task.aborted` with `reason: "redelivery"` to give pilot a structured "this task is in trouble" signal BEFORE the max-delivery threshold is reached. Operationally kinder than letting pilot's `--wait` time out on a struggling consumer. |
 | **Filter** | None (subscribed pattern IS the filter) | NATS's subject filter is the only matching layer we need; in-handler filtering (e.g. by `<flavor>` segment) happens after the envelope is parsed. |
 
 **Caveat — pull-consumer support in `MyelinSubscriber`.** The current `MyelinSubscriber` wraps `NatsSubscription`, which from a quick survey of `src/bus/nats/subscription.ts` is the **push** subscription primitive. We have two options:
@@ -224,7 +224,7 @@ The persona file stays the same; the skill restriction stays role-based (per the
 
 ### §3.5 v1 minimal-viable registration
 
-For cortex#237's first PR cluster, we ship registration in a **publish-only form**: the consumer publishes the registration envelope on startup; it does NOT yet read the bucket from other operators or peers. Reading is for §13 open question 3 (multi-network / federated capability discovery), which is deferred to a Phase D follow-up.
+For cortex#237's first PR cluster, we ship registration in a **publish-only form**: the consumer publishes the registration envelope on startup; it does NOT yet read the bucket from other principals or peers. Reading is for §13 open question 3 (multi-network / federated capability discovery), which is deferred to a Phase D follow-up.
 
 This means pilot's pre-publish "is anyone listening?" check (`design-pilot-restructure.md` §8.2) won't yet have a populated bucket to read against in Phase B. That's fine — pilot's Phase B explicitly accepts that the consumer's existence is implicit (publish-and-wait-for-timeout). The bucket reader ships when both the producer side (this consumer) and the consumer side (pilot's pre-publish check) are ready for it. Tracked in §13.
 
@@ -360,7 +360,7 @@ Cleaner v2: the skill writes a synchronous side-channel JSON line per lens (e.g.
 
 ### §4.7 Visibility of the consumer in cortex's existing dashboards
 
-The consumer's lifecycle envelopes (`dispatch.task.started/progress/completed/failed`) flow through the existing surface-router fan-out (cortex.ts wires it). The dashboard renderer, worklog-manager, and any subscribed Discord adapter renders them without modification — `dispatch.task.*` is already a renderer-known type. Operators see review activity on the dashboard without any new UI work for cortex#237.
+The consumer's lifecycle envelopes (`dispatch.task.started/progress/completed/failed`) flow through the existing surface-router fan-out (cortex.ts wires it). The dashboard renderer, worklog-manager, and any subscribed Discord adapter renders them without modification — `dispatch.task.*` is already a renderer-known type. Principals see review activity on the dashboard without any new UI work for cortex#237.
 
 ---
 
@@ -657,11 +657,11 @@ The two paths do NOT share:
 - The CC session's working directory (each invocation gets its own dir per `effectiveDirs` resolution in `dispatch-handler.ts`).
 - The CC session's session-id / conversation history.
 
-So if an principal @-mentions Echo to review PR #229 at 09:42 and pilot publishes a `tasks.code-review.typescript` envelope for PR #229 at 09:42:30, you get **two parallel CC sessions both running the CodeReview skill on PR #229**. Both will post GH reviews. Both will produce a verdict. This is OK in v1 — duplicate reviews are noisy but not broken (GitHub permits multiple reviews on the same PR).
+So if a principal @-mentions Echo to review PR #229 at 09:42 and pilot publishes a `tasks.code-review.typescript` envelope for PR #229 at 09:42:30, you get **two parallel CC sessions both running the CodeReview skill on PR #229**. Both will post GH reviews. Both will produce a verdict. This is OK in v1 — duplicate reviews are noisy but not broken (GitHub permits multiple reviews on the same PR).
 
 ### §9.3 Race-condition mitigation (v2, not v1)
 
-The duplicate-review scenario above is undesirable but rare in practice — the Discord-mention path is used interactively (an principal typing), while the capability-dispatch path is automated (pilot's review loop). They typically don't fire in the same window. For v1 we ship without race mitigation and accept the rare duplicate.
+The duplicate-review scenario above is undesirable but rare in practice — the Discord-mention path is used interactively (a principal typing), while the capability-dispatch path is automated (pilot's review loop). They typically don't fire in the same window. For v1 we ship without race mitigation and accept the rare duplicate.
 
 For v2, we add a **per-PR in-flight lock** at the skill level: the skill checks a "is there already an active review session for {repo}#{N}?" registry before running the lens pipeline; if yes, the new session degrades to "post a comment saying 'a review is already in flight, see prior'" rather than running its own pass. Tracked in §13.
 
@@ -681,7 +681,7 @@ If a future feature wants "every Echo review, regardless of ingress, emits a bus
 
 ### §9.6 Coexistence retires when pilot Phase D lands
 
-Per `design-pilot-restructure.md` §6.5 (Phase D), pilot retires the Discord-mention review path once Phase C is operationally proven (≥5 cycles over 48h). At that point cortex#237's consumer is the *only* path that pilot uses. The Discord-mention path remains in cortex for **principal-initiated** reviews (an principal typing into Discord) — that workflow is unrelated to pilot and continues indefinitely.
+Per `design-pilot-restructure.md` §6.5 (Phase D), pilot retires the Discord-mention review path once Phase C is operationally proven (≥5 cycles over 48h). At that point cortex#237's consumer is the *only* path that pilot uses. The Discord-mention path remains in cortex for **principal-initiated** reviews (a principal typing into Discord) — that workflow is unrelated to pilot and continues indefinitely.
 
 ---
 
@@ -791,12 +791,12 @@ When the last bullet ticks, cortex#237 is operationally proven and pilot can fli
 | Pull-consumer refactor (PR-1) breaks the existing push-mode subscribers | Medium | High — every cortex subscriber lives downstream | Behavioural-parity test in PR-1 covering every existing subscriber's expected behaviour. Default `mode: "push"` keeps all existing call sites unchanged. |
 | The CodeReview skill output isn't reliably parseable (free-form prose creeps into the JSON block) | High | High — verdict envelope can't be constructed | Skill markdown update in PR-8 with explicit "ALWAYS emit the JSON block at the end, fenced, exactly once" guidance. Verdict parser is forgiving — extracts the last fenced JSON block matching the schema; permissive about surrounding prose. Defensive nak (`cant_do: skill did not return parseable verdict block`) when parsing fails. |
 | Capability registry's KV-bucket primitive (PR-3) is new code with no operational precedent | Medium | Medium — registration may silently fail | Publish-only v1 (§3.5) means the registration is fire-and-forget; consumer behaviour is unaffected by registration failure. Heartbeat path is opt-in. Principal visibility via the `system.*` envelopes the registry emits on register/unregister. |
-| Pilot publishes envelopes faster than the consumer can process (backpressure) | Low (today's review tempo is human-paced) | Medium — `not_now` naks cause pilot to retry | `maxConcurrent` per agent in cortex.yaml gives operators a knob. JetStream's pull-consumer semantics naturally pace work. `not_now` nak with `retry_after_ms` hints lets pilot retry intelligently. |
+| Pilot publishes envelopes faster than the consumer can process (backpressure) | Low (today's review tempo is human-paced) | Medium — `not_now` naks cause pilot to retry | `maxConcurrent` per agent in cortex.yaml gives principals a knob. JetStream's pull-consumer semantics naturally pace work. `not_now` nak with `retry_after_ms` hints lets pilot retry intelligently. |
 | Crash mid-pipeline leaves orphan `dispatch.task.started` without a terminal envelope | Low | High — pilot waits forever (until timeout) | §2.4 shutdown drain emits `dispatch.task.aborted` for in-flight reviews. JetStream redelivery ensures the survivor consumer picks up the same envelope and emits a fresh `started` + terminal. Pilot's correlation-id filter accepts the survivor's `completed` regardless of how many `started`s preceded. |
 | The skill's GH-posting fails (rate-limit, transient network) | Medium | Medium — skill produces a verdict block but the GH-side review isn't posted | Skill returns the failure in the JSON block (`verdict: "commented"` with a summary noting GH post failed). Consumer emits a `commented` verdict regardless. Principal sees the failure in the summary; pilot retries on next cycle. v2 improvement: skill emits `dispatch.task.failed` with `not_now` for GH rate-limit per anchor doc §12 ("GitHub rate limit → `dispatch.task.failed` with `not_now`"); v1 ships the simpler "commented" fallback. |
 | Two consumers (cortex-Echo + a future pi.dev-Echo) on the same JetStream pull consumer group race for the same envelope | Low (Path B is not yet built) | Low — JetStream's at-most-one delivery is by design | Acknowledge that the wire contract supports the case (§1.3 — Path A doesn't foreclose Path B). When Path B ships, the principal decides which instance is authoritative (e.g. disable cortex-Echo via cortex.yaml). |
 | An agent's `runtime.capabilities[]` entry on cortex.yaml is misconfigured (e.g. typo `code-revew.typescript`) and silently no one claims the typo capability | High (config typos are common) | Low — pilot times out, principal notices | v1 ships a startup log line listing all registered capabilities. v2 adds a JSON Schema validator on the catalog-side capability ids (regex `code-review\.[a-z]+`); Phase A.6.3 cross-validation already catches typos that don't resolve to a top-level catalog entry. Tracked in §13. |
-| Echo's persona declarations are spread across cortex.yaml (capability + skill grants + presence) and persona.md; an principal changing one without the other produces silent capability drift | Medium | Low — principal-visible (review quality changes; observable in dashboards) | Document the persona-file ↔ cortex.yaml coupling in cortex.yaml's schema docstring. v2: emit a `system.config.warning` envelope at startup when an agent declares a capability but doesn't have the matching skill on its allowlist. Tracked in §13. |
+| Echo's persona declarations are spread across cortex.yaml (capability + skill grants + presence) and persona.md; a principal changing one without the other produces silent capability drift | Medium | Low — principal-visible (review quality changes; observable in dashboards) | Document the persona-file ↔ cortex.yaml coupling in cortex.yaml's schema docstring. v2: emit a `system.config.warning` envelope at startup when an agent declares a capability but doesn't have the matching skill on its allowlist. Tracked in §13. |
 
 ---
 
@@ -821,7 +821,7 @@ Owner: TBD post-cutover. The evaluation criteria are operational (reliability ov
 
 ### §13.3 — Multi-network / federated capability discovery
 
-Architecture §7.2 specifies one capability bucket per operator (`local.{org}.agents.capabilities`). When the IAW federation work ships full multi-network routing (cortex#116 Phase D landed but federated capability discovery is downstream), a request published on `federated.{network}.tasks.code-review.typescript` needs to discover federated consumers' capabilities.
+Architecture §7.2 specifies one capability bucket per principal (`local.{org}.agents.capabilities`). When the IAW federation work ships full multi-network routing (cortex#116 Phase D landed but federated capability discovery is downstream), a request published on `federated.{network}.tasks.code-review.typescript` needs to discover federated consumers' capabilities.
 
 Open: does cortex#237's consumer also subscribe to `federated.*.tasks.code-review.>` and treat federated requests symmetrically? Or is federated dispatch a separate consumer with its own sovereignty checks?
 
@@ -845,10 +845,10 @@ Recommendation: out of scope for cortex#237. The `compliance_block` branch is st
 
 PR-8 updates the CodeReview skill to emit a structured JSON verdict block. The skill is checked into cortex (well, into ~/.claude/skills/, which is principal-side, not cortex-repo). Two open questions:
 
-- Does the skill ship as part of cortex, or stays as an principal-managed skill that operators install separately? Today it's the latter (per the `~/.claude/skills/` location).
+- Does the skill ship as part of cortex, or stays as a principal-managed skill that principals install separately? Today it's the latter (per the `~/.claude/skills/` location).
 - If the latter, how do we version-pin the skill so cortex#237's verdict-parser knows what schema to expect?
 
-Recommendation: skill stays principal-side; cortex#237's parser is permissive about minor schema drift (extracts the verdict block by JSON-schema match on the required fields, ignores extras). Document the contract in PR-8's skill markdown so operators updating the skill don't break it. The verdict parser's tests cover the "permissive matching" behaviour. Track schema versioning as a future concern.
+Recommendation: skill stays principal-side; cortex#237's parser is permissive about minor schema drift (extracts the verdict block by JSON-schema match on the required fields, ignores extras). Document the contract in PR-8's skill markdown so principals updating the skill don't break it. The verdict parser's tests cover the "permissive matching" behaviour. Track schema versioning as a future concern.
 
 ### §13.7 — Per-PR in-flight review lock (§9.3)
 
@@ -864,7 +864,7 @@ Recommendation: shared primitive (option 3) when v2 ships. v1 accepts the duplic
 
 §2.4 picks a 30s grace window before force-aborting in-flight reviews on shutdown. This is a guess — typical lens pipelines run 30s–5min. 30s is aggressive (force-aborts most reviews); 5min is principal-frustrating.
 
-Recommendation: ship 30s in v1; make it configurable in cortex.yaml (`reviewConsumer.shutdownGraceMs` defaulting to 30000) so operators can tune. Track the operational data: if operators routinely raise it to 300000, the default is wrong.
+Recommendation: ship 30s in v1; make it configurable in cortex.yaml (`reviewConsumer.shutdownGraceMs` defaulting to 30000) so principals can tune. Track the operational data: if principals routinely raise it to 300000, the default is wrong.
 
 ---
 

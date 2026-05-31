@@ -17,7 +17,7 @@ On 2026-03-30, the Grove cloud Worker (`grove-api`) went down returning Cloudfla
 
 The dashboard polls 3 separate endpoints every 10 seconds per open tab. Cross-origin CORS preflights double each request. When the Worker started returning errors, the dashboard kept polling at the same rate, burning quota on failed requests. There's no caching on the Worker side — every `/api/state` request rebuilds the full snapshot from D1 queries.
 
-This is unsustainable. A single dashboard tab generates ~2,160 requests/hour. Two operators with the dashboard open burn through the daily Free plan limit in under 24 hours.
+This is unsustainable. A single dashboard tab generates ~2,160 requests/hour. Two principals with the dashboard open burn through the daily Free plan limit in under 24 hours.
 
 ---
 

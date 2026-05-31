@@ -38,7 +38,7 @@ function makePublishPolicyEngine(): PolicyEngine {
         id: "andreas",
         home_operator: "andreas",
         home_stack: "andreas/research",
-        role: ["principal"],
+        role: ["operator"],
         trust: [],
         platform_ids: {
           discord: ["1487204875912609844"],
@@ -46,7 +46,7 @@ function makePublishPolicyEngine(): PolicyEngine {
         },
       },
     ],
-    roles: [{ id: "principal", capabilities: ["dispatch.test-agent"] }],
+    roles: [{ id: "operator", capabilities: ["dispatch.test-agent"] }],
   });
 }
 
@@ -208,8 +208,8 @@ describe("DispatchHandler", () => {
         content: "/help",
       }));
 
-      expect(adapter.operatorNotifications).toHaveLength(1);
-      expect(adapter.operatorNotifications[0]!).toContain("Stranger");
+      expect(adapter.principalNotifications).toHaveLength(1);
+      expect(adapter.principalNotifications[0]!).toContain("Stranger");
     });
 
     test("principal does not trigger notification", async () => {
@@ -226,7 +226,7 @@ describe("DispatchHandler", () => {
         dmType: "principal",
       }));
 
-      expect(adapter.operatorNotifications).toHaveLength(0);
+      expect(adapter.principalNotifications).toHaveLength(0);
     });
   });
 

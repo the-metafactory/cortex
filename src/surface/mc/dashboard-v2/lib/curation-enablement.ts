@@ -19,7 +19,7 @@ export type CurationVerb = "dispatch" | "requeue" | "handoff" | "abandon";
 /**
  * One cell value: `true` = enabled, `string` = disabled with this tooltip.
  *
- * The string form is what the legacy uses for `button.title` — operators
+ * The string form is what the legacy uses for `button.title` — principals
  * learn the model from the disabled tooltip without reading docs (legacy
  * comment, dashboard/index.html:3479).
  */

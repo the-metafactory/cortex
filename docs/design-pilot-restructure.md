@@ -180,7 +180,7 @@ These bear special attention during the move (decide retire-vs-keep):
 | `nats-publish.ts` | Publishes to `local.{org}.tasks.code-review.<specialization>` — **canonical subject**. | Promote to `bus/publish-review-request.ts` (renamed for clarity; legacy name preserved as re-export). |
 | `gh.ts` | Re-export shim of `github-backend.ts`. Comment says "back-compat." | Keep across MIG-1; delete after MIG-3 once all importers consume `forge/github-backend.ts` directly. |
 | `forge-ping.ts` | Hybrid file: GitLab path posts via `glab` (forge), GitHub path delegates to `pingCommand` which posts to Discord. The "ping" verb is overloaded. | Split: GitLab logic into `forge/gitlab-ping.ts`; GitHub delegation into `workflow/review/ping.ts`. |
-| `watch.ts` | Generic poll loop. Used by `pilot watch` for labeled-issue scanning. | Stays — move to `workflow/watch/` or `forge/watch/`. Decision: `workflow/` (it's an principal-facing review-loop primitive). |
+| `watch.ts` | Generic poll loop. Used by `pilot watch` for labeled-issue scanning. | Stays — move to `workflow/watch/` or `forge/watch/`. Decision: `workflow/` (it's a principal-facing review-loop primitive). |
 | `gitlab-monitor.ts` | "Stopgap until cue system exists." | Stays — move to `forge/gitlab-monitor.ts`. |
 | `next-pick.ts` | Cross-ecosystem triage; separate from claim-loop. | Stays — move to `workflow/next-pick.ts`. |
 
@@ -551,7 +551,7 @@ Per `docs/design-pi-dev-review-agent.md` §4.2 + architecture §7.3, Echo emits 
 - `local.{org}.dispatch.task.progress` — after each lens.
 - `local.{org}.dispatch.task.completed` — fired alongside `review.verdict.*`.
 - `local.{org}.dispatch.task.failed` — error / crash.
-- `local.{org}.dispatch.task.aborted` — operator cancellation.
+- `local.{org}.dispatch.task.aborted` — principal cancellation.
 
 Pilot's **base case** is to wait for `review.verdict.*` (terminal). The `dispatch.task.*` lifecycle is **optional progress** for Tier-2 visibility on the cortex dashboard (architecture §3.6). Pilot's `subscribe-verdict.ts` may consume `dispatch.task.completed` as a co-terminal signal for crash-resilience: if Echo posts `dispatch.task.completed` with no preceding `review.verdict.*`, pilot treats it as `commented` with a "verdict not emitted" warning.
 
@@ -907,7 +907,7 @@ The plan is **phase-by-phase**, each phase shipping a discrete PR (or PR cluster
 **What stays compatible vs what breaks:**
 
 - **Compatible:** all existing verbs; `wait-for-review` (the github.* fallback) still works.
-- **Breaks:** if cortex#237 has not landed, `pilot request-review --wait` will time out at 30m. Operators get a clear error message and a hint to invoke `pilot wait-for-review` as fallback.
+- **Breaks:** if cortex#237 has not landed, `pilot request-review --wait` will time out at 30m. Principals get a clear error message and a hint to invoke `pilot wait-for-review` as fallback.
 
 ### §6.5 Phase D — Retire bot-mention path + LUNA_DISCORD_ID
 
@@ -971,7 +971,7 @@ Pilot's `bus/` subtree imports `NatsLink`, `MyelinSubscriber`, `Envelope`, `vali
 
 **Cons:**
 
-- Assumes cortex repo is at `../cortex` relative to pilot checkout. **False for the standard `~/Developer/cortex` + `~/.config/metafactory/pkg/repos/pilot` layout.** Operators would have to manually symlink.
+- Assumes cortex repo is at `../cortex` relative to pilot checkout. **False for the standard `~/Developer/cortex` + `~/.config/metafactory/pkg/repos/pilot` layout.** Principals would have to manually symlink.
 - CI configuration would need to clone cortex before `bun install`.
 - arc-manifest distribution (the `arc upgrade Pilot` story): `arc` does NOT install path-relative deps. The pilot binary at `~/bin/pilot` would silently break on principal machines that don't have cortex checked out alongside.
 
@@ -1004,10 +1004,10 @@ Pilot's `bus/` subtree imports `NatsLink`, `MyelinSubscriber`, `Envelope`, `vali
 
 Justification:
 
-1. **Matches the existing pattern.** Myelin already lives in `package.json` as `"https://github.com/the-metafactory/myelin.git#2a58668"`. Cortex slots in identically once A.0b's exports map ships. Operators know how to update sha-pinned deps.
+1. **Matches the existing pattern.** Myelin already lives in `package.json` as `"https://github.com/the-metafactory/myelin.git#2a58668"`. Cortex slots in identically once A.0b's exports map ships. Principals know how to update sha-pinned deps.
 2. **arc-upgrade-friendly.** The `arc upgrade Pilot` distribution story is load-bearing — pilot ships to principal machines via arc, not via a co-checkout assumption. Option A breaks this.
-3. **Pinning matters during the cortex#237 lockstep.** Phase C explicitly requires cortex#237 to have shipped. Pinning pilot's cortex dep to a sha AT OR AFTER cortex#237's merge commit is the natural way to encode that dependency. Operators updating cortex+pilot together get a coordinated upgrade.
-4. **The cost (sha-bump friction during co-dev) is bounded.** During active development, an principal can:
+3. **Pinning matters during the cortex#237 lockstep.** Phase C explicitly requires cortex#237 to have shipped. Pinning pilot's cortex dep to a sha AT OR AFTER cortex#237's merge commit is the natural way to encode that dependency. Principals updating cortex+pilot together get a coordinated upgrade.
+4. **The cost (sha-bump friction during co-dev) is bounded.** During active development, a principal can:
    - Temporarily switch to Option A with a `bun install file:../cortex --no-save` flag, OR
    - Use bun's `link` feature for local development without modifying `package.json`.
    The default `package.json` ships Option B for everyone else.

@@ -144,10 +144,10 @@ describe("loadAccountSigningKey — chmod gate", () => {
 // ---------------------------------------------------------------------------
 
 describe("loadAccountSigningKey — prefix gate", () => {
-  test("rejects NSC operator-account root seed (SO prefix)", async () => {
+  test("rejects operator seed (SO prefix)", async () => {
     const seed = newOperatorSeed();
     expect(seed.startsWith("SO")).toBe(true);
-    const { path } = writeSeedFile("operator-account.nk", seed, 0o600);
+    const { path } = writeSeedFile("operator.nk", seed, 0o600);
     await expect(loadAccountSigningKey(path)).rejects.toThrow(/expected account signing key/);
     await expect(loadAccountSigningKey(path)).rejects.toThrow(/SA\.\.\./);
     await expect(loadAccountSigningKey(path)).rejects.toThrow(/SO\.\.\./);

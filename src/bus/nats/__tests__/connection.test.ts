@@ -270,7 +270,7 @@ describe("NatsLink", () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────
-  // cortex#86: credsPath / credsAuthenticator wiring for operator-account NATS.
+  // cortex#86: credsPath / credsAuthenticator wiring for operator-mode NATS.
   //
   // These tests exercise the loader + connectImpl handoff using a synthetic
   // .creds file on disk. They DO NOT validate the JWT/seed content (NATS

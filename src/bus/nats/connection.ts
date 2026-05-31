@@ -30,7 +30,7 @@ export interface NatsLinkOptions {
   /** Bearer token for the connect-time auth. Optional. */
   token?: string;
   /**
-   * Path to a NATS user `.creds` file for operator-account JWT auth (cortex#86).
+   * Path to a NATS user `.creds` file for operator-mode auth (cortex#86).
    * The loader expands a leading `~/` to `$HOME`, enforces chmod 600 on
    * POSIX (file MUST NOT be group- or world-readable — `.creds` carries
    * an NKey seed + signed JWT), reads the bytes, and passes them to
@@ -55,8 +55,8 @@ export interface NatsLinkOptions {
  * Uses the canonical `expandTilde` from `common/config/loader.ts` (so
  * the no-`$HOME` failure surfaces consistently with cortex.yaml load)
  * and the shared `enforceChmod600` permission gate from
- * `common/config/file-permissions.ts` (same policy as the operator-account
- * signing-key loader — Echo cortex#87 round-1 extraction).
+ * `common/config/file-permissions.ts` (same policy as the operator
+ * account signing-key loader — Echo cortex#87 round-1 extraction).
  *
  * Throws with a principal-readable message when:
  *   - `expandTilde` rejects (no `$HOME` set).
@@ -109,7 +109,7 @@ export class NatsLink {
     const name = opts.name ?? "cortex";
 
     // Build base connect options. We branch on auth mode separately so that
-    // an operator-account `.creds` connection never leaks a bearer token into
+    // an operator-mode `.creds` connection never leaks a bearer token into
     // the wire — `credsAuthenticator` and `token` are mutually exclusive
     // server-side, and the warn log calls out the precedence explicitly.
     const connectOpts: ConnectionOptions = {
@@ -123,7 +123,7 @@ export class NatsLink {
       if (opts.token) {
         console.warn(
           `nats-connection: "${name}" — both 'token' and 'credsPath' set; ` +
-            `'credsPath' takes precedence (operator-account auth wins).`,
+            `'credsPath' takes precedence (operator-mode auth wins).`,
         );
       }
       const credsBytes = await loadCredsBytes(opts.credsPath);

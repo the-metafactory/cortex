@@ -12,7 +12,7 @@
 
 The mission-control spec is rich on the principal-loop primitives (focus area, attention drill-down, input affordance) and on the data substrate (state machine + events table) — but is silent on **aggregate observability**. After F-13→F-17 landed and the dashboard had real activity in it, the principal surfaced the gap explicitly: *"average cycle time, latency, wait time so we can optimise the workflow"*. F-18 closes that gap as a small, immediately-useful surface that can iterate based on what the data actually shows.
 
-The spec is intentionally short. Metrics is a domain where over-design is more dangerous than under-design — three useful numbers in front of an principal beat thirty rarely-glanced charts. F-19 onwards is the place for sparklines, alerts, cost/token, drill-down — once the v1 surface has shown which cuts of the data are actually load-bearing.
+The spec is intentionally short. Metrics is a domain where over-design is more dangerous than under-design — three useful numbers in front of a principal beat thirty rarely-glanced charts. F-19 onwards is the place for sparklines, alerts, cost/token, drill-down — once the v1 surface has shown which cuts of the data are actually load-bearing.
 
 ## Decision 1 — No new schema
 
@@ -126,7 +126,7 @@ GET /api/metrics/fleet?window=24h|7d|30d&agent=<id?>
 
 **No write endpoints in F-18.** Metrics are read-only by definition. Configuration knobs (custom windows, alerting thresholds) are deferred — there's nothing to configure until we know what the principal wants to act on.
 
-**No WebSocket push of metrics.** The fleet view refreshes on user-initiated window switches and on the existing `state.transition` WS event (a rolled-up transition recomputes the fleet view client-side via refetch — same pattern as `use-iterations`). Real-time push of computed aggregates is overkill for v1; deferred to F-19 if operators ask for it.
+**No WebSocket push of metrics.** The fleet view refreshes on user-initiated window switches and on the existing `state.transition` WS event (a rolled-up transition recomputes the fleet view client-side via refetch — same pattern as `use-iterations`). Real-time push of computed aggregates is overkill for v1; deferred to F-19 if principals ask for it.
 
 ## Decision 5 — UI surface
 

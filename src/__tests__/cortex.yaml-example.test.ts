@@ -1,10 +1,10 @@
 /**
  * cortex#314 — `cortex.yaml.example` parse test.
  *
- * The example file at the repo root is the first thing a fresh operator
+ * The example file at the repo root is the first thing a fresh principal
  * copies and edits. If it drifts from `CortexConfigSchema` (a field
  * renamed, a required key added, a regex tightened), copying it would
- * surface a confusing schema error during the operator's first boot.
+ * surface a confusing schema error during the principal's first boot.
  *
  * This test parses the on-disk file through `CortexConfigSchema.parse`
  * and asserts the schema accepts it without errors. Any future schema
@@ -41,7 +41,7 @@ describe("cortex.yaml.example — first-install starter config (cortex#314)", ()
     // The capability-dispatch design has 8 canonical code-review flavors
     // that arc-skill-code-review v0.4.0 ships with. The example MUST
     // declare all 8 in the top-level catalog (and reference all 8 from
-    // the echo agent's runtime.capabilities[]) so a fresh operator
+    // the echo agent's runtime.capabilities[]) so a fresh principal
     // copying the file does not have to know the flavor list to wire
     // capability-dispatch end-to-end.
     const examplePath = join(import.meta.dir, "..", "..", "cortex.yaml.example");

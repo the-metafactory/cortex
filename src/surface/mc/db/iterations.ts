@@ -48,7 +48,7 @@ export type IterationSourceSystem = "github" | "jira" | "linear" | null;
  *
  * Mirrors the spirit of `TASKS_QUERY_LIMIT` in db/tasks.ts but at a tighter
  * 100 cap — the inbox is a streaming firehose of upstream issues, not the
- * working set, so the server pre-trims aggressively. Operators who want
+ * working set, so the server pre-trims aggressively. Principals who want
  * the older tail use a paginated load (deferred to F-14 once the kanban
  * surface lands).
  */
@@ -647,7 +647,7 @@ export function detachTask(db: Database, taskId: string): boolean {
 // Decision 10 Q1 — principal-driven `done` from non-`in_flight`/non-
 // `blocked` states is rejected here. F-15 keeps the matrix tight; the
 // override is a Phase G feature with its own threat model. The error
-// message names `cancel` as the alternative for operators who hit the
+// message names `cancel` as the alternative for principals who hit the
 // wrong door.
 //
 // Per Echo grove-v2#42 (Major 1) — the matrix used to be redeclared

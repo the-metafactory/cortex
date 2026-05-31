@@ -60,7 +60,7 @@ interface TaskListItem {
 
 **Why a separate endpoint** (rather than client-side grouping of `/api/assignments`): task-keyed is the primary view for this page; shipping the aggregation once, on the server, is cheaper than shipping it to every client on every refresh. Matches the F-6 precedent (`/api/focus-area` is a server-side projection of the same underlying data).
 
-**Query param:** `includeClosed` (boolean, default `false`). When omitted/false, the server filters `status NOT IN ('done','cancelled')`. Operators opt in by toggling a checkbox (Decision 6). Rationale: at realistic fleet sizes the backlog of closed tasks will dwarf the active set within weeks. Surfacing all of them by default would drown the P0 row.
+**Query param:** `includeClosed` (boolean, default `false`). When omitted/false, the server filters `status NOT IN ('done','cancelled')`. Principals opt in by toggling a checkbox (Decision 6). Rationale: at realistic fleet sizes the backlog of closed tasks will dwarf the active set within weeks. Surfacing all of them by default would drown the P0 row.
 
 **Sort:** server returns rows ordered by `(status IN ('done','cancelled')) ASC, priority ASC, updated_at DESC` as a stable default; the client re-sorts in-memory on column-header click. The leading boolean partition key sinks closed rows to the bottom of the result set regardless of how recent or high-priority they are, which matters once `includeClosed=true` is toggled (see next paragraph). No server-side sort params in v1 — client-side re-sort over a bounded page is faster than round-tripping.
 
@@ -88,7 +88,7 @@ v1 filters are `priority` (multi-select: which P-lanes to show) and `age` (singl
 
 **Why hash, not localStorage?**
 
-- Filter state is **shareable** — an principal can paste a URL into Discord/Slack ("here's the P0 blocked view") and the recipient sees the same filter.
+- Filter state is **shareable** — a principal can paste a URL into Discord/Slack ("here's the P0 blocked view") and the recipient sees the same filter.
 - Filter state is **per-tab** — two dashboards open side-by-side can show different filters without collision. localStorage is shared across tabs.
 - Filter state is **ephemeral** — we don't want "I was filtering P0-only three weeks ago" to persist after the user closes the tab. Hash clears on close.
 - No dependency on storage permissions (some browser modes block localStorage).
@@ -109,7 +109,7 @@ Reasoning:
 
 - `blocked` is the top of the list because it is the only state that can need principal input right now.
 - `running / dispatched / queued` are in-flight active states, ordered by how close to work they are (running is burning resources, dispatched has been accepted, queued is waiting).
-- `failed` outranks `completed` because it is a terminal-bad state that an principal might want to resurface.
+- `failed` outranks `completed` because it is a terminal-bad state that a principal might want to resurface.
 - `cancelled` is the lowest because it means the task's progress is no longer something to reason about.
 
 **Implementation:** `aggregate_state` is computed server-side on the `/api/tasks` projection (Decision 1). The full rank mapping (lower = more attention-worthy):
@@ -140,7 +140,7 @@ MIN(CASE a.state
 
 The rank is then reverse-mapped to the state string on the TypeScript side at hydrate time (simple array lookup: `STATE_RANKS[rank] ?? null`). Doing the reverse mapping in TS rather than a correlated-subquery in SQL keeps the query flat and makes the null-propagation case (no rows → NULL rank → null state) trivial. `MIN(CASE …)` over zero rows naturally returns `NULL`, which matches the `aggregate_state = null` behaviour specified for tasks with empty `assignments[]`.
 
-Note the two counter-intuitive orderings in this table: `dispatched > queued` (dispatched is further-along than queued, but from an *attention* perspective a dispatched assignment is actively holding a slot, so it outranks a queued one that's merely waiting), and `failed > completed > cancelled` (all three are terminal, ranked by "likelihood an principal wants to resurface this"). These are the ranks used everywhere the worst-case order appears — Decision 5 tie-break, the WS refresh trigger semantics — so pinning them down once avoids drift.
+Note the two counter-intuitive orderings in this table: `dispatched > queued` (dispatched is further-along than queued, but from an *attention* perspective a dispatched assignment is actively holding a slot, so it outranks a queued one that's merely waiting), and `failed > completed > cancelled` (all three are terminal, ranked by "likelihood a principal wants to resurface this"). These are the ranks used everywhere the worst-case order appears — Decision 5 tie-break, the WS refresh trigger semantics — so pinning them down once avoids drift.
 
 **Empty-assignment case:** a task that has never had an assignment (Phase E "added-but-not-dispatched" — a state F-8 doesn't create but may surface if Phase E backfills) shows `aggregate_state = null`. The column renders as a dim em-dash with tooltip "No assignment yet".
 
@@ -161,9 +161,9 @@ Note the two counter-intuitive orderings in this table: `dispatched > queued` (d
 
 A single checkbox above the table: "Show closed". Off by default. When on, `status IN ('done','cancelled')` rows appear at the bottom of the sort order at reduced opacity — same visual treatment as terminal assignment chips (Decision 2).
 
-**Why not a tab** (Active / Closed / All)? Tabs imply mutually exclusive views; in practice an principal looking at a closed task often wants to see whether there's an open follow-up at the same priority. One list with a toggle supports that without a view switch.
+**Why not a tab** (Active / Closed / All)? Tabs imply mutually exclusive views; in practice a principal looking at a closed task often wants to see whether there's an open follow-up at the same priority. One list with a toggle supports that without a view switch.
 
-**State persists via hash** (Decision 3). Two operators at the same URL see the same inclusion policy.
+**State persists via hash** (Decision 3). Two principals at the same URL see the same inclusion policy.
 
 ## Decision 7 — Empty-state copy + copy-edits
 
@@ -213,7 +213,7 @@ Selection indicator reuses F-6's `1`–`9` paradigm? **No** — F-6's 1–9 work
 
 **Not in F-8:**
 
-- Source-system filter (github vs internal) — deferred until Phase E task curation gives operators more than one source that matters.
+- Source-system filter (github vs internal) — deferred until Phase E task curation gives principals more than one source that matters.
 - Agent filter (show only Luna's tasks) — deferred, probably a URL-level filter in a later iteration.
 - Date-range filter on `created_at` — deferred; `age` threshold covers the v1 need.
 

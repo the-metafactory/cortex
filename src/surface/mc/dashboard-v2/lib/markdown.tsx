@@ -9,7 +9,7 @@
  *  - Hyperlinks: <https://…> and bare URLs
  *  - Hard line-breaks preserved
  *
- * Anything more (headings, tables, footnotes) is out of scope. Operators
+ * Anything more (headings, tables, footnotes) is out of scope. Principals
  * who paste richer content still see plain text — readable, not styled.
  *
  * React's default text-content escaping is the XSS safety guarantee.

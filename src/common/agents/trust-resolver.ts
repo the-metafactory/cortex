@@ -14,7 +14,7 @@
  *   > adapter looks up the source agent and consults its parent's `trust:` list.
  *
  * This module owns that map. It replaces grove-v2's hand-maintained
- * `trustedAgentBots` list (an array of platform user ids that the principal
+ * `trustedAgentBots` list (an array of platform user ids that the operator
  * manually kept in sync). The resolver builds the equivalent state from
  * adapter-connect-time registrations — no manual sync, no drift.
  *
@@ -82,24 +82,23 @@ export interface PlatformIdentity {
 }
 
 // =============================================================================
-// NSC operator-account-signature verification (cortex#76)
+// Operator-signature verification (cortex#76)
 // =============================================================================
 
 /**
- * Options for an operator-account-aware `TrustResolver`. Optional — when
- * omitted, the resolver behaves as the pre-cortex#76 platform-identity map and
- * the operator-account-verification methods throw
- * `OperatorVerifierNotConfiguredError`.
+ * Options for an operator-aware `TrustResolver`. Optional — when omitted, the
+ * resolver behaves as the pre-cortex#76 platform-identity map and the
+ * operator-verification methods throw `OperatorVerifierNotConfiguredError`.
  *
- * The operator-account signing public key (`A…` prefix) is the trust anchor:
+ * The operator account signing public key (`A…` prefix) is the trust anchor:
  * every NATS user JWT minted by `mintUserCreds()` carries this pubkey in its
- * `iss` claim. A request is "operator-account-trusted" iff its user JWT chains
- * to this pubkey AND the request payload is signed by the user nkey that owns
+ * `iss` claim. A request is "operator-trusted" iff its user JWT chains to
+ * this pubkey AND the request payload is signed by the user nkey that owns
  * the JWT's `sub` claim.
  */
 export interface TrustResolverOptions {
   /**
-   * The operator-account signing public key (`A…`). Pass `keyPair.getPublicKey()`
+   * Operator account signing public key (`A…`). Pass `keyPair.getPublicKey()`
    * from the result of `loadAccountSigningKey()` in `cortex.ts`. The pubkey
    * is public material — safe to log, safe to embed in config diagnostics.
    *
@@ -210,10 +209,9 @@ export type OperatorVerificationFailure =
   | "signature_invalid";
 
 /**
- * Thrown when an operator-account-verification method is called on a
- * `TrustResolver` built without an `operatorAccountSigningPublicKey`. Lets the
- * consumer fail fast with a clear message rather than silently rejecting every
- * request.
+ * Thrown when an operator-verification method is called on a `TrustResolver`
+ * built without an `operatorAccountSigningPublicKey`. Lets the consumer fail
+ * fast with a clear message rather than silently rejecting every request.
  */
 export class OperatorVerifierNotConfiguredError extends Error {
   constructor() {
@@ -221,7 +219,7 @@ export class OperatorVerifierNotConfiguredError extends Error {
       "TrustResolver.verifyOperatorSignature called but no operatorAccountSigningPublicKey " +
         "was supplied at construction. Pass options.operatorAccountSigningPublicKey " +
         "(e.g. accountSigningKey.getPublicKey() from loadAccountSigningKey) when " +
-        "instantiating the resolver if you intend to verify operator-account-signed requests.",
+        "instantiating the resolver if you intend to verify operator-signed requests.",
     );
     this.name = "OperatorVerifierNotConfiguredError";
   }
@@ -257,12 +255,12 @@ export function canonicalSignedRequestBytes(parts: {
 }
 
 /**
- * Verify a NATS user JWT against the operator-account signing public key.
+ * Verify a NATS user JWT against the operator account signing public key.
  *
  * `@nats-io/jwt`'s `decode` already verifies the JWT signature against the
  * pubkey in the `iss` claim — so a successful decode means the JWT is
  * self-consistent. This wrapper adds the missing checks the consumer cares
- * about: (a) `iss` actually matches the operator account we trust, (b) the JWT is
+ * about: (a) `iss` actually matches the operator we trust, (b) the JWT is
  * within its validity window.
  *
  * Pure function over inputs. No I/O. No state.
@@ -292,7 +290,7 @@ export function verifyOperatorUserJwt(
       ok: false,
       reason: "wrong_issuer",
       detail:
-        `jwt iss=${claims.iss} does not match trusted operator-account pubkey ` +
+        `jwt iss=${claims.iss} does not match trusted operator pubkey ` +
         operatorAccountSigningPublicKey,
     };
   }
@@ -326,7 +324,7 @@ export function verifyOperatorUserJwt(
 }
 
 /**
- * Verify a full operator-account-signed request envelope: JWT chains to the operator account,
+ * Verify a full operator-signed request envelope: JWT chains to operator,
  * envelope shape is well-formed, the timestamp is within the freshness
  * window, and the ed25519 signature over the canonical bytes verifies
  * against the user's nkey pubkey (taken from the JWT's `sub`).
@@ -585,7 +583,7 @@ export class TrustResolver {
   private readonly reverse = new Map<string, Set<string>>();
 
   /**
-   * The operator-account signing public key, if configured. When undefined,
+   * Operator account signing public key, if configured. When undefined,
    * `verifyOperatorSignature` throws `OperatorVerifierNotConfiguredError`.
    * See `TrustResolverOptions.operatorAccountSigningPublicKey`.
    */
@@ -603,7 +601,7 @@ export class TrustResolver {
 
   /**
    * cortex#76 — verify that a NATS request envelope was signed by
-   * operator-account-trusted credentials. Returns a structured result rather than
+   * operator-trusted credentials. Returns a structured result rather than
    * a plain boolean so callers (e.g. the cortex#75 NATS transport gate)
    * can branch on the specific failure class for logging / metering.
    *
@@ -639,9 +637,9 @@ export class TrustResolver {
 
   /**
    * cortex#76 — convenience: verify just the user JWT against the trusted
-   * operator-account pubkey, without requiring a full signed envelope. Useful
-   * at NATS-connection authorization time when the application only has the
-   * connection's user JWT and wants to gate the connection on operator-account
+   * operator pubkey, without requiring a full signed envelope. Useful at
+   * NATS-connection authorization time when the application only has the
+   * connection's user JWT and wants to gate the connection on operator
    * trust before accepting subscriptions.
    *
    * @throws OperatorVerifierNotConfiguredError if the resolver was built
@@ -660,7 +658,7 @@ export class TrustResolver {
     });
   }
 
-  /** True iff the resolver was constructed with an operator-account pubkey. */
+  /** True iff the resolver was constructed with an operator pubkey. */
   get isOperatorVerifierConfigured(): boolean {
     return this.operatorAccountSigningPublicKey !== undefined;
   }

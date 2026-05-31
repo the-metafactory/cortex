@@ -57,7 +57,7 @@ export interface StdoutDispatcherHandle {
  * and closing the stream early would discard events we want to persist.
  *
  * Malformed lines are logged to stderr and skipped. Per CLAUDE.md's "no
- * empty catch" rule, every non-dispatched line is visible to operators.
+ * empty catch" rule, every non-dispatched line is visible to principals.
  */
 export function startStdoutDispatcher(
   stdout: ReadableStream<Uint8Array>,

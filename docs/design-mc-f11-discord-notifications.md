@@ -53,13 +53,13 @@ Two surfaces, two distinct jobs.
 
 **Never both for the same event.** The matrix above explicitly assigns each notification-worthy transition to one of `dm` or `channel`, not both. The single-exception is **`blocked` with risk=`high` or priority ≤ 1** — those get a DM AND a role ping (`<@&{operatorRoleId}>` if `discord.operatorRoleId` is set, no ping otherwise) in the channel. The ping is the second audience, not a duplicate notification — it's the "yes, really, look now" escalation for the subset of blocks that warrant interrupting whatever else the principal or team is doing. Channel post here is context for everyone; DM is the actionable copy. Two roles, two payloads.
 
-**Why not always dual-post.** The noise-to-signal ratio collapses instantly. An principal with twenty `blocked` DMs stacked up has twenty actionable items. The same principal with twenty DMs AND twenty channel posts has to learn which is canonical. DM-for-action, channel-for-record is the Discord convention operators already live in (GitHub app, PagerDuty bot, everything else), so F-11 inherits it without surprise.
+**Why not always dual-post.** The noise-to-signal ratio collapses instantly. An principal with twenty `blocked` DMs stacked up has twenty actionable items. The same principal with twenty DMs AND twenty channel posts has to learn which is canonical. DM-for-action, channel-for-record is the Discord convention principals already live in (GitHub app, PagerDuty bot, everything else), so F-11 inherits it without surprise.
 
 **No direct-mention in DMs.** DMs are 1:1 — the pinged-user-by-content pattern is pointless (the principal IS the recipient). DM copy omits `<@...>` mentions entirely.
 
 ## Decision 3 — Priority × attention-type routing table (concrete)
 
-Decision 1's matrix covers every transition. This decision pins the **full payload shape** per cell that gets DM or channel copy. The intent is that an principal can print this table, tape it to a wall, and predict every notification Grove will send.
+Decision 1's matrix covers every transition. This decision pins the **full payload shape** per cell that gets DM or channel copy. The intent is that a principal can print this table, tape it to a wall, and predict every notification Grove will send.
 
 | priority | to-state | block-reason.kind | risk | Channel | Role ping | DM urgency heuristic |
 |---|---|---|---|---|---|---|
@@ -114,7 +114,7 @@ grove-bot v1 ships a per-repo channel routing SOP (`docs/sop-discord-channel-rou
 
 **F-11 ships a deliberately narrower v2 channel-routing model** than the v1 SOP:
 
-1. **DM recipient.** `config.agent.operatorDiscordId` — the field already exists in `bot.yaml.template` and is already surfaced to `DiscordAdapter` (see `src/bot/grove-bot.ts:195`). No new config key. If `operatorDiscordId` is unset, DM-class notifications degrade silently to channel posts (Decision 6's degradation rule), because "no operator to DM" is a config gap, not a per-event decision.
+1. **DM recipient.** `config.agent.operatorDiscordId` — the field already exists in `bot.yaml.template` and is already surfaced to `DiscordAdapter` (see `src/bot/grove-bot.ts:195`). No new config key. If `operatorDiscordId` is unset, DM-class notifications degrade silently to channel posts (Decision 6's degradation rule), because "no principal to DM" is a config gap, not a per-event decision.
 2. **Channel recipient.** For tasks with `source_system = 'github'`, F-11 attempts thread resolution by the v1 SOP's naming pattern (`{repo-short-name}/issue/{N}` or `{repo-short-name}/pr/{N}`, derived from `tasks.source_url`) if and only if the top-level `github.repos` allowlist is configured (canonical path per `src/bot/types/config.ts:307` — top-level `github.repos`, not `discord.github.repos`). If the thread does not exist, F-11 **does not create it** — it falls through to `instance.worklogChannelId ?? instance.agentChannelId`. Thread auto-creation is a v1 chat-router concern; F-11 is read-only on channel topology.
 3. **For tasks with `source_system = 'internal'`** — no repo to map — F-11 posts to `instance.worklogChannelId ?? instance.agentChannelId` unconditionally.
 
@@ -122,7 +122,7 @@ grove-bot v1 ships a per-repo channel routing SOP (`docs/sop-discord-channel-rou
 
 **First-contact degradation (expected, not a bug).** The v1 SOP's threads are **agent-created-on-first-use**: the thread `grove/issue/43` only exists after the v1 chat-router has received a message routed to that issue. F-11 is read-only on channel topology — it does not create threads. Consequence: the **very first** notification-worthy transition for a GitHub-sourced task whose thread has not yet been materialised lands in the instance fallback (`instance.worklogChannelId ?? instance.agentChannelId`), not in the per-issue thread. Subsequent notifications for that same task, after a chat-router interaction has seeded the thread, route correctly. This is expected behaviour, not a routing bug — do not flag it in review. Migrating thread auto-creation into F-11 would drag the `ManageThreads` permission story and the v1-SOP port into this PR's scope, which is exactly what Decision 5 is refusing to do. The fallback channel is still the principal's channel; the principal still gets the notification; only the thread granularity degrades for that first event.
 
-**Principal-role ping config.** New optional key `discord.operatorRoleId` in the discord-instance block. When set, the subset of notifications the Decision 3 matrix marks "role ping: yes" render a `<@&{operatorRoleId}>` mention. When unset, those notifications render as plain channel posts with no mention. Default unset — operators opt in.
+**Principal-role ping config.** New optional key `discord.operatorRoleId` in the discord-instance block. When set, the subset of notifications the Decision 3 matrix marks "role ping: yes" render a `<@&{operatorRoleId}>` mention. When unset, those notifications render as plain channel posts with no mention. Default unset — principals opt in.
 
 **Interaction with the v1 SOP.** The v1 SOP explicitly owns chat-routing for the live bot. F-11 notifications are a **different class of message** — they are "push" not "chat" — and this addendum's split rule pins the scope: F-11 reads from the same channel-topology config (top-level `github.repos`, per `src/bot/types/config.ts:307`) when it exists, and falls back cleanly when it doesn't. The v1 SOP is not modified by F-11; it simply gets a new reader. The single most important decision: F-11 does **not** add a new channel-topology surface, does **not** mint new channel names, and does **not** introduce a second routing table that diverges from the v1 SOP. One source of truth, one reader.
 
@@ -142,7 +142,7 @@ Concrete semantics:
 
 - `true` — F-11 runs. `shouldNotify` routes normally. Missing downstream config (e.g. unset `operatorDiscordId`, unset thread) degrades per Decision 5, not per this toggle.
 - `false` — F-11 is a no-op. `shouldNotify` still runs (it's cheap and pure), the result is discarded before any Discord API call. The on-disk events and WS broadcast are unaffected — "off" means "no push", not "no observation".
-- unset / key absent — treat as `false`. Explicit off-by-default avoids surprising operators with a DM torrent after a fresh install.
+- unset / key absent — treat as `false`. Explicit off-by-default avoids surprising principals with a DM torrent after a fresh install.
 
 **What "off" does NOT silence.** The dashboard WS `state.transition` broadcast, the `events` table row, the audit log. Those are the ground truth and are orthogonal to push.
 
@@ -238,12 +238,12 @@ Shorter because the audience is not the one taking action.
 
 Explicitly out of scope so the PR review stays tight:
 
-- **Interactive buttons in Discord (Approve/Deny).** Discord Components v2 (buttons, select menus, modal responses) would allow an operator to approve a permission request directly from the DM. That is a Maestro-style interaction and a **post-v2 Phase D+** feature — requires (a) a Discord slash-command or message-component framework wired into grove-bot, (b) an authenticated webhook endpoint on grove-bot that maps component-click → assignment action, (c) operator-identity verification per §6.5 (the DM recipient is trusted, but a button-click in a server channel is not), and (d) a second path into the state machine that duplicates the dashboard Approve/Deny path. Too much for F-11.
+- **Interactive buttons in Discord (Approve/Deny).** Discord Components v2 (buttons, select menus, modal responses) would allow a principal to approve a permission request directly from the DM. That is a Maestro-style interaction and a **post-v2 Phase D+** feature — requires (a) a Discord slash-command or message-component framework wired into grove-bot, (b) an authenticated webhook endpoint on grove-bot that maps component-click → assignment action, (c) principal-identity verification per §6.5 (the DM recipient is trusted, but a button-click in a server channel is not), and (d) a second path into the state machine that duplicates the dashboard Approve/Deny path. Too much for F-11.
 - **Slash commands (`/grove`, `/block`, `/approve`).** Same class of scope as interactive buttons; same deferral. The existing `~/bin/discord` CLI handles the "notify from terminal" direction already; inbound slash-command ingestion is a new surface.
 - **SMS / email / OS desktop notification fallback.** §4.1 is Discord-only in v1. Every other channel is post-MVP and gates on the event-back-in automation pipeline (§4.1 rationale).
 - **Per-principal notification preferences UI.** Mute windows, quiet hours, per-priority mute, per-agent mute. All add UI, all add config state, all require a preferences persistence story. Principal can mute at the Discord level (server notification settings) until this lands post-Phase-D.
 - **Notification history view in the dashboard.** "Show me everything that was pushed today" — nice to have, but every notification-worthy event is already a row in `events` and renders on the F-7 drill-down. A dedicated history view is additive, not critical path.
-- **Multi-principal / team-wide fanout.** F-11 is single-principal — one `operatorDiscordId`. Tier 2's multi-principal fanout (where several operators need DMs for their own agents) is a §7.3 concern that grows out of principal identity becoming a first-class key on `tasks.operator_id`. Out of scope for v2.
+- **Multi-principal / team-wide fanout.** F-11 is single-principal — one `operatorDiscordId`. Tier 2's multi-principal fanout (where several principals need DMs for their own agents) is a §7.3 concern that grows out of principal identity becoming a first-class key on `tasks.operator_id`. Out of scope for v2.
 - **A v1-SOP-style `github.repos` config migration into `bot.yaml`.** Decision 5 uses the v1 SOP's config *if it is already present* and falls through cleanly when it is not. Migrating v1's channel-routing config into v2's `bot.yaml` is a separate chore with its own PR.
 - **Channel-post reaction handling.** "React with ✅ to acknowledge" is an interactive flow; see first bullet.
 - **Retry queue for failed sends.** Best-effort is the posture (Decision 9). A durable retry queue would need SQLite + a sweeper + a reconciliation story — deferred unless observable loss rate shows it's needed.

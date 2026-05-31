@@ -23,7 +23,7 @@ F-6 / F-7 / F-8 / F-9 / F-10 all shipped with addenda that resolve exactly this 
 
 ## Decision 1 — Scope: paste AND drag-drop ship together
 
-Maestro ships both. F-10 operators expect both. Shipping only paste leaves screenshot-from-file workflows stranded (quick Finder drag, screenshot to desktop → drag); shipping only drag-drop leaves copy-from-another-app workflows stranded (⌘-shift-4-then-⌘-V muscle memory). The delta in complexity between them is small — both end at the same "here's a Blob, base64-encode it, send" path — and splitting creates a confusing partial-availability UX.
+Maestro ships both. F-10 principals expect both. Shipping only paste leaves screenshot-from-file workflows stranded (quick Finder drag, screenshot to desktop → drag); shipping only drag-drop leaves copy-from-another-app workflows stranded (⌘-shift-4-then-⌘-V muscle memory). The delta in complexity between them is small — both end at the same "here's a Blob, base64-encode it, send" path — and splitting creates a confusing partial-availability UX.
 
 **In scope:**
 - Paste from clipboard (ClipboardEvent on the drill-down textarea).
@@ -132,7 +132,7 @@ Same shape as the request. Stored in the same event row (no N:1 explosion into a
 
 (a) **Render-context scope.** The risk isn't the `<img src="data:image/svg+xml;base64,...">` element itself — modern browsers treat that as a sandboxed image context (no script, no external fetch). The risk is *any* future code path that renders SVG inline via `innerHTML` (e.g., a lightbox thumbnail template, a custom preview tooltip). Excluding SVG upstream at the allowlist means the dashboard is never one innocent-looking template change away from a stored-XSS primitive.
 
-(b) **PDF embedded JavaScript.** PDFs carry JS-capable object streams and external references; browsers render them via plugin-style contexts that historically leak. Not a format we want in an principal-trusted attention view.
+(b) **PDF embedded JavaScript.** PDFs carry JS-capable object streams and external references; browsers render them via plugin-style contexts that historically leak. Not a format we want in a principal-trusted attention view.
 
 (c) **Base64 is not a sanitizer — it's an encoding.** Base64-encoding malicious bytes keeps the bytes intact; the allowlist is the defence, decoding doesn't validate anything. See the dedicated note below for the full treatment including GIF-polyglot handling.
 
@@ -142,7 +142,7 @@ Same shape as the request. Stored in the same event row (no N:1 explosion into a
 
 **Cap enforcement layer.** Three boundaries, three places:
 
-1. **Per-image 5 MB decoded.** Measured without fully decoding: compute `Math.floor(encoded.length * 3 / 4) - paddingBytes` from the base64 string and reject before decoding. This is a tight upper bound on decoded size; an principal submitting exactly 5 MB decoded passes, one submitting 5.1 MB is rejected with 413.
+1. **Per-image 5 MB decoded.** Measured without fully decoding: compute `Math.floor(encoded.length * 3 / 4) - paddingBytes` from the base64 string and reject before decoding. This is a tight upper bound on decoded size; a principal submitting exactly 5 MB decoded passes, one submitting 5.1 MB is rejected with 413.
 2. **Per-message 8 images.** Simple `images.length` check at the top of `handleSendInput`, before any decoding.
 3. **Per-body 25 MB.** Enforced at the server layer's JSON body limit (upstream of `handleSendInput` — the handler receives an already-parsed body, per the `handlers.ts` header comment). The JSON parser itself rejects oversized bodies at the framing layer; `handleSendInput` does not need to re-check total bytes post-parse. A 25 MB decoded JSON object is a real memory cost, so the cap belongs as early in the pipeline as possible.
 
@@ -197,7 +197,7 @@ The F-7 `eventToRows()` function (docs/design-mc-f7-attention-view.md Decision 4
 - `alt` text is the filename (for principal-pasted chips, the auto-generated name; no user-level alt-text input in v1).
 - `role="img"` on the outer chip div.
 
-**Cost.** Rendering 5 MB base64 inline is fine for the message count F-7 deals with (virtualised to last-N events). If operators pile up dozens of screenshots per session, the drill-down's memory cap (`DRILL_MAX_EVENTS = 500`) caps the working set.
+**Cost.** Rendering 5 MB base64 inline is fine for the message count F-7 deals with (virtualised to last-N events). If principals pile up dozens of screenshots per session, the drill-down's memory cap (`DRILL_MAX_EVENTS = 500`) caps the working set.
 
 ## Decision 8 — Observed sessions: image input disabled with the same UI gate as text
 

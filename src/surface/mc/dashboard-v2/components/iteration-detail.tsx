@@ -750,7 +750,7 @@ function AddTaskPopover({
 }
 
 /**
- * Cap on how many inbox items the dropdown shows at once. Operators
+ * Cap on how many inbox items the dropdown shows at once. Principals
  * who have more than this many should be using the kanban's drag-drop
  * affordance, not this popover (which is a fallback for the rare case
  * where dragging across the screen isn't ergonomic).
