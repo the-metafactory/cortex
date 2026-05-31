@@ -52,7 +52,7 @@ function minimalNetwork(id: string, overrides: Record<string, unknown> = {}): Re
     cloud: {
       endpoint: `https://${id}.workers.dev`,
       apiKey: `grove_sk_${id}`,
-      operatorId: `op-${id}`,
+      principalId: `op-${id}`,
     },
     ...overrides,
   };
@@ -164,6 +164,9 @@ describe("legacy fallback", () => {
     expect(config.networks).toHaveLength(1);
     expect(config.networks[0]!.id).toBe("default");
     expect(config.discord).toHaveLength(1);
+    // R2.I (cortex#436) — the legacy flat `api.operatorId` is rewritten into
+    // the canonical cloud `principalId` by buildLegacyNetwork.
+    expect(config.networks[0]!.cloud?.principalId).toBe("op1");
   });
 
   test("empty networksDir creates no networks (beyond legacy fallback)", () => {
@@ -178,6 +181,68 @@ describe("legacy fallback", () => {
     expect(config.networks).toHaveLength(0);
     expect(config.discord).toHaveLength(0);
     expect(config.mattermost).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R2.I (cortex#436) — cloud `operatorId` → `principalId` BREAKING-CONFIG
+// transition. The canonical key is `principalId`; the legacy `operatorId`
+// cloud key is still accepted on load (rewritten + deprecation-warned),
+// so existing user network files / cortex.yaml don't break. Mirrors the R3
+// top-level operator:→principal: accept-both pattern.
+// ---------------------------------------------------------------------------
+
+describe("R2.I cloud principalId transition", () => {
+  test("canonical cloud `principalId` loads", () => {
+    const configPath = writeCentralConfig(testDir, minimalCentral());
+    writeNetworkFile(testDir, "alpha.yaml", {
+      id: "alpha",
+      cloud: {
+        endpoint: "https://alpha.workers.dev",
+        apiKey: "grove_sk_alpha",
+        principalId: "andreas",
+      },
+    });
+
+    const config = loadConfig(configPath);
+    const alpha = config.networks.find((n) => n.id === "alpha");
+    expect(alpha?.cloud?.principalId).toBe("andreas");
+  });
+
+  test("LEGACY cloud `operatorId` still loads and is rewritten to `principalId`", () => {
+    // A pre-R2.I network file written by an existing user — the deprecated
+    // `operatorId:` cloud key MUST keep loading.
+    const configPath = writeCentralConfig(testDir, minimalCentral());
+    writeNetworkFile(testDir, "legacy.yaml", {
+      id: "legacy",
+      cloud: {
+        endpoint: "https://legacy.workers.dev",
+        apiKey: "grove_sk_legacy",
+        operatorId: "andreas-legacy",
+      },
+    });
+
+    const config = loadConfig(configPath);
+    const legacy = config.networks.find((n) => n.id === "legacy");
+    // Legacy key is accepted and surfaced under the canonical field.
+    expect(legacy?.cloud?.principalId).toBe("andreas-legacy");
+    // The deprecated key is NOT carried through on the validated type.
+    expect((legacy?.cloud as Record<string, unknown> | undefined)?.operatorId).toBeUndefined();
+  });
+
+  test("declaring BOTH `principalId` and legacy `operatorId` in a cloud block is rejected", () => {
+    const configPath = writeCentralConfig(testDir, minimalCentral());
+    writeNetworkFile(testDir, "conflict.yaml", {
+      id: "conflict",
+      cloud: {
+        endpoint: "https://conflict.workers.dev",
+        apiKey: "grove_sk_conflict",
+        principalId: "andreas",
+        operatorId: "andreas-legacy",
+      },
+    });
+
+    expect(() => loadConfig(configPath)).toThrow(/BOTH `principalId`.*`operatorId`/s);
   });
 });
 

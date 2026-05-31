@@ -32,9 +32,9 @@ function createTestNetworkResolver(endpoint: string, apiKey: string, principalId
       id: networkId ?? "default",
       endpoint,
       apiKey,
-      // `NetworkConfig.operatorId` is the TS field name pending R2.I;
-      // PR-R2d only renames the JSON wire field on the bus.
-      operatorId: principalId,
+      // R2.I (cortex#436) renamed the cloud-network TS field to `principalId`;
+      // it serialises to the `principal_id` wire field on the bus.
+      principalId,
     };
   };
 }

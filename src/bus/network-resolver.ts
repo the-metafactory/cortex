@@ -95,15 +95,15 @@ export function createNetworkResolver(config: AgentConfig): NetworkResolver {
     if (networkId) {
       const network = tables.networksById.get(networkId);
       if (!network?.cloud) return null;
-      const { endpoint, apiKey, operatorId, cfAccessClientId, cfAccessClientSecret } = network.cloud;
-      return { id: network.id, endpoint, apiKey, operatorId, cfAccessClientId, cfAccessClientSecret };
+      const { endpoint, apiKey, principalId, cfAccessClientId, cfAccessClientSecret } = network.cloud;
+      return { id: network.id, endpoint, apiKey, principalId, cfAccessClientId, cfAccessClientSecret };
     }
 
     // No network ID — return first network with cloud config
     for (const network of config.networks) {
       if (network.cloud) {
-        const { endpoint, apiKey, operatorId, cfAccessClientId, cfAccessClientSecret } = network.cloud;
-        return { id: network.id, endpoint, apiKey, operatorId, cfAccessClientId, cfAccessClientSecret };
+        const { endpoint, apiKey, principalId, cfAccessClientId, cfAccessClientSecret } = network.cloud;
+        return { id: network.id, endpoint, apiKey, principalId, cfAccessClientId, cfAccessClientSecret };
       }
     }
 

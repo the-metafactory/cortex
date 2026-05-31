@@ -75,10 +75,12 @@ export function updateWranglerToml(
 /**
  * Build a bot.yaml snippet for a cloud-mode principal.
  *
- * The `operatorId:` YAML key matches `NetworkCloudSchema.operatorId`
- * in src/common/types/config.ts (rename owned by R2.I — the config
- * schema field). PR-R2d renames the CLI flag + JSON wire field; the
- * config-schema rename is the next breaking cut.
+ * The `principalId:` YAML key matches `NetworkCloudSchema.principalId`
+ * in src/common/types/config.ts. R2.I (cortex#436) renamed the cloud
+ * config field operatorId → principalId; this emitter now writes the
+ * canonical key. Existing configs with the legacy `operatorId:` key still
+ * load (the schema accepts both and rewrites on load), but freshly
+ * generated snippets use the canonical name.
  */
 export function buildBotYamlSnippet(opts: {
   endpoint: string;
@@ -89,7 +91,7 @@ export function buildBotYamlSnippet(opts: {
   mode: cloud
   endpoint: ${opts.endpoint}
   apiKey: ${opts.apiKey}
-  operatorId: ${opts.principalId}`;
+  principalId: ${opts.principalId}`;
 }
 
 /**

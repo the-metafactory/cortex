@@ -176,14 +176,84 @@ function normalizeToArray(val: unknown): unknown {
 // G-500: Per-network file schemas
 // =============================================================================
 
-/** Cloud endpoint configuration for a network */
-export const NetworkCloudSchema = z.object({
+/**
+ * Cloud endpoint configuration for a network.
+ *
+ * R2.I vocabulary migration (cortex#436) — BREAKING-CONFIG with a
+ * backward-compatible transition. The canonical principal-identity key is
+ * `principalId`. The legacy `operatorId` key is still accepted on load so
+ * existing `cortex.yaml` / `networks/*.yaml` files keep working; it is
+ * rewritten to `principalId` by `acceptLegacyCloudPrincipalId` and emits a
+ * one-time deprecation warning. This mirrors the R3 top-level
+ * `operator:`→`principal:` transition (accept-both + deprecate; see
+ * `src/common/config/loader.ts` `resolvePrincipalBlock`).
+ *
+ * Trust-boundary rule (R3 parity): a single cloud block declaring BOTH
+ * `principalId` and `operatorId` is ambiguous and is rejected, rather than
+ * silently resolving to one — a hand-edited config mid-migration must
+ * surface the conflict loudly.
+ */
+const NetworkCloudObjectSchema = z.object({
   endpoint: z.string().min(1),
   apiKey: z.string().min(1),
-  operatorId: z.string().min(1),
+  principalId: z.string().min(1),
   cfAccessClientId: z.string().optional(),
   cfAccessClientSecret: z.string().optional(),
 });
+
+/**
+ * Pre-parse rewriter: accept the legacy cloud `operatorId` key as an alias of
+ * the canonical `principalId`. Runs as a `z.preprocess` BEFORE
+ * `NetworkCloudObjectSchema` validates, so the legacy key never reaches the
+ * (deliberately `operatorId`-free) object schema.
+ *
+ * - canonical only (`principalId`)              → pass through verbatim
+ * - legacy only (`operatorId`)                  → rewrite to `principalId`, warn once
+ * - BOTH present                                → throw (dual-key conflict, R3 parity)
+ * - neither                                     → pass through; object schema's
+ *                                                 `principalId.min(1)` surfaces the
+ *                                                 missing-key error with the canonical name
+ */
+let warnedLegacyCloudPrincipalId = false;
+export function acceptLegacyCloudPrincipalId(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const obj = raw as Record<string, unknown>;
+  const hasCanonical = obj.principalId !== undefined;
+  const hasLegacy = obj.operatorId !== undefined;
+
+  if (hasCanonical && hasLegacy) {
+    throw new Error(
+      "network cloud block declares BOTH `principalId` (canonical) and the " +
+        "legacy `operatorId` key. R2.I (cortex#436) BREAKING-CONFIG — the " +
+        "`operatorId` cloud key is deprecated but still accepted as an alias; " +
+        "a block declaring both is ambiguous and is rejected before any " +
+        "event-attribution decision. Delete the legacy `operatorId` line " +
+        "(run `cortex migrate-config <your-config.yaml>` to regenerate a " +
+        "clean `principalId:`-shaped config).",
+    );
+  }
+
+  if (hasLegacy) {
+    if (!warnedLegacyCloudPrincipalId) {
+      warnedLegacyCloudPrincipalId = true;
+      console.warn(
+        "config: network cloud `operatorId:` is deprecated (R2.I, cortex#436) — " +
+          "rename it to `principalId:`. The legacy key is still accepted for now " +
+          "and rewritten on load; run `cortex migrate-config <your-config.yaml>` " +
+          "to update your config. This warning prints once per process.",
+      );
+    }
+    const { operatorId, ...rest } = obj;
+    return { ...rest, principalId: operatorId };
+  }
+
+  return raw;
+}
+
+export const NetworkCloudSchema = z.preprocess(
+  acceptLegacyCloudPrincipalId,
+  NetworkCloudObjectSchema,
+);
 
 /** Per-network Claude security overrides */
 export const NetworkClaudeSchema = z.object({
@@ -428,7 +498,11 @@ export const AgentConfigSchema = z.object({
     port: z.number().int().positive().default(8766),
     corsOrigin: z.string().default("*"),
     mode: z.enum(["local", "cloud"]).default("local"),
-    // Legacy cloud fields — kept for backward compat, migrated to network files by config-loader
+    // Legacy cloud fields — kept for backward compat, migrated to network files by config-loader.
+    // R2.I (cortex#436): `operatorId` here is the LEGACY flat `api.*` key. It is
+    // intentionally NOT renamed — this block is the backward-compat reader, and
+    // `buildLegacyNetwork` rewrites it to the canonical cloud `principalId` when
+    // synthesising the default network. New configs use per-network `cloud.principalId`.
     endpoint: z.string().default(""),
     apiKey: z.string().default(""),
     operatorId: z.string().default(""),
@@ -558,8 +632,8 @@ export interface NetworkConfig {
   endpoint: string;
   /** API key for this network */
   apiKey: string;
-  /** Principal ID for event attribution */
-  operatorId: string;
+  /** Principal ID for event attribution (R2.I rename of legacy `operatorId`) */
+  principalId: string;
   /** S-001: CF Access service token for machine-to-machine auth (optional) */
   cfAccessClientId?: string;
   cfAccessClientSecret?: string;
@@ -567,7 +641,7 @@ export interface NetworkConfig {
 
 /**
  * Function type for resolving network config by network_id.
- * Used by CloudPublisher to look up endpoint/apiKey/operatorId.
+ * Used by CloudPublisher to look up endpoint/apiKey/principalId.
  * Returns null if network_id is unknown.
  */
 export type NetworkResolver = (networkId: string | undefined) => NetworkConfig | null;

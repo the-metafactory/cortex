@@ -197,10 +197,10 @@ export class CloudPublisher {
 
     const url = `${networkConfig.endpoint.replace(/\/+$/, "")}/api/ingest`;
     const body = JSON.stringify({
-      // Wire field is `principal_id` per PR-R2d. The TypeScript field
-      // `NetworkConfig.operatorId` still reads as `operatorId` pending
-      // PR-R2.I (config-schema rename).
-      principal_id: networkConfig.operatorId,
+      // Wire field is `principal_id` per PR-R2d. The TypeScript field is
+      // `NetworkConfig.principalId` after R2.I (cortex#436) renamed the
+      // cloud-network config field operatorId → principalId.
+      principal_id: networkConfig.principalId,
       events,
     });
 

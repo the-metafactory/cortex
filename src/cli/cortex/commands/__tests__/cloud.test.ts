@@ -178,10 +178,10 @@ describe("buildBotYamlSnippet", () => {
     expect(snippet).toContain("mode: cloud");
     expect(snippet).toContain("endpoint: https://grove-api.meta-factory.ai");
     expect(snippet).toContain("apiKey: grove_sk_abc123");
-    // bot.yaml's `operatorId:` YAML key is the NetworkCloudSchema field
-    // (R2.I — config-schema rename, separate PR). PR-R2d only renames
-    // the JSON wire field + CLI flag.
-    expect(snippet).toContain("operatorId: andreas");
+    // R2.I (cortex#436) renamed the NetworkCloudSchema field
+    // operatorId → principalId; the emitted snippet uses the canonical key.
+    expect(snippet).toContain("principalId: andreas");
+    expect(snippet).not.toContain("operatorId:");
   });
 });
 

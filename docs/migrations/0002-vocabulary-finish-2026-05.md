@@ -339,8 +339,14 @@ These are local variables holding the **principal's** Discord/Slack/Mattermost i
 
 ### R2.I — Config loader + watcher + types
 
+**Status (cortex#436):** DONE for the **cloud-network cluster** — `NetworkCloudSchema.operatorId` → `principalId` (BREAKING-CONFIG with a backward-compatible transition) + `NetworkConfig.principalId` type + `network-resolver` + `cloud-publisher` symbol reads + `buildBotYamlSnippet` emits `principalId:`. The transition mirrors R3's top-level `operator:`→`principal:` accept-both pattern:
+- `NetworkCloudSchema` is now `z.preprocess(acceptLegacyCloudPrincipalId, NetworkCloudObjectSchema)`. The object schema carries only the canonical `principalId`; the preprocess step rewrites a legacy `operatorId` key → `principalId` (one-time deprecation warning), rejects a block declaring BOTH keys (R3-parity dual-key conflict), and lets the canonical-only path through verbatim. Existing `cortex.yaml` / `networks/*.yaml` with cloud `operatorId` keep loading.
+- `loader.ts buildLegacyNetwork` rewrites the legacy flat `api.operatorId` (and grove-v2 `agent.operatorId`) into the canonical cloud `principalId` when synthesising the default network. The legacy flat `api.operatorId` schema slot (`config.ts` `api` block) is intentionally NOT renamed — it is the backward-compat reader.
+
+The remaining `operatorId` hits enumerated below are CARVE-OUTS (R7 `agent.operatorId` synthesis — already retired via cortex#429 PR-C — and the legacy `api.*` reader). They are NOT part of the cloud-network rename.
+
 `src/common/types/config.ts`:
-- `:183` `operatorId: z.string().min(1),` (in `NetworkConfig` cloud block — required)
+- `:183` `operatorId: z.string().min(1),` (in `NetworkConfig` cloud block — required) — **DONE → `principalId`**
 - `:269` `operatorId: z.string().optional(),` (in `BotConfig.agent`)
 - `:270` "Defaults to operatorId" — doc
 - `:274` `OperatorSchema.discordId/…` — R1 cascade

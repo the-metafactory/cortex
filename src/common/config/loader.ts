@@ -821,18 +821,23 @@ function buildLegacyNetwork(raw: Record<string, unknown>): NetworkFile {
   const api = raw.api as Record<string, unknown>;
   const agent = raw.agent as Record<string, unknown> | undefined;
 
-  const operatorId = (api.operatorId ?? (agent ? agent.operatorId : undefined)) as string | undefined;
-  if (!operatorId) {
+  // R2.I (cortex#436) — the cloud-network principal-identity field is now
+  // `principalId`. This legacy reader still accepts the legacy flat keys
+  // (`api.operatorId` / grove-v2 `agent.operatorId`) and rewrites them into
+  // the canonical cloud `principalId` when synthesising the default network,
+  // mirroring the R3 legacy-reader pattern.
+  const principalId = (api.operatorId ?? (agent ? agent.operatorId : undefined)) as string | undefined;
+  if (!principalId) {
     console.warn(
-      "config-loader: no operatorId configured (api.operatorId or agent.operatorId). " +
+      "config-loader: no principal id configured (api.operatorId or agent.operatorId). " +
       "Skipping cloud config for legacy default network to avoid phantom dashboard entries.",
     );
   }
 
-  const cloud: Record<string, unknown> | undefined = operatorId ? {
+  const cloud: Record<string, unknown> | undefined = principalId ? {
     endpoint: api.endpoint as string,
     apiKey: api.apiKey as string,
-    operatorId,
+    principalId,
     ...(api.cfAccessClientId ? { cfAccessClientId: api.cfAccessClientId } : {}),
     ...(api.cfAccessClientSecret ? { cfAccessClientSecret: api.cfAccessClientSecret } : {}),
   } : undefined;

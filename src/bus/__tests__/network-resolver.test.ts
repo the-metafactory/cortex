@@ -23,7 +23,7 @@ function makeNetwork(id: string, overrides: Partial<NetworkFile> = {}): NetworkF
     cloud: {
       endpoint: `https://${id}.workers.dev`,
       apiKey: `grove_sk_${id}`,
-      operatorId: `op-${id}`,
+      principalId: `op-${id}`,
     },
     discord: [],
     mattermost: [],
@@ -142,7 +142,7 @@ describe("createNetworkResolver", () => {
     expect(alphaConfig!.id).toBe("alpha");
     expect(alphaConfig!.endpoint).toBe("https://alpha.workers.dev");
     expect(alphaConfig!.apiKey).toBe("grove_sk_alpha");
-    expect(alphaConfig!.operatorId).toBe("op-alpha");
+    expect(alphaConfig!.principalId).toBe("op-alpha");
 
     const betaConfig = resolver("beta");
     expect(betaConfig).not.toBeNull();
