@@ -41,6 +41,7 @@ import {
   NetworkFileSchema,
 } from "./config";
 import { NKEY_PUBKEY_REGEX } from "./nkey";
+import { NatsSubjectsSchema } from "./nats-subjects";
 import { LETTER_PREFIX_ID_REGEX } from "./id";
 import { StackConfigSchema } from "./stack";
 
@@ -875,10 +876,16 @@ export const NatsConfigSchema = z.object({
   /** Connection name surfaced on the server's varz endpoint. */
   name: z.string().default("cortex"),
   /**
-   * Subject patterns to subscribe to. Default empty. `{principal}` is substituted
-   * with `principal.id` at runtime.
+   * Subject patterns to subscribe to. Default empty (pull-only, cortex#337).
+   * `{principal}` / `{stack}` are substituted at runtime.
+   *
+   * IAW CFG.b.2/CFG.b.3 — this is the single place subject overrides live, and
+   * the validator (`NatsSubjectsSchema`) fails LOUDLY on a malformed entry or a
+   * duplicate pattern. A duplicate here double-binds the boot subscriber and
+   * delivers every envelope twice (the double-message problem, cortex#491), so
+   * it is rejected at load rather than silently double-publishing.
    */
-  subjects: z.array(z.string().min(1)).default([]),
+  subjects: NatsSubjectsSchema,
   /** Optional NKey identity for envelope signing (MY-400). */
   identity: NatsIdentitySchema.optional(),
   /**

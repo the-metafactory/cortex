@@ -743,9 +743,9 @@ Neither epic flips the principal-facing schema in a breaking way: CFG ships a tr
 
 #### CFG.b Extract `system.yaml` (isolate the `nats.subjects` landmine)
 
-- [ ] **CFG.b.1** Move the cross-cutting machine config — `claude`, `execution`, `attachments`, `paths`, `nats`, `bus` — into `system/system.yaml`. The composer folds it into the same `LoadedConfig` slots.
-- [ ] **CFG.b.2** `nats.subjects` is isolated in `system.yaml` as its own clearly-commented block — the single place subject overrides live, removing the per-stack duplication that drives the double-message problem.
-- [ ] **CFG.b.3** Tests: a config with `system.yaml` present resolves `nats`/`bus`/`paths` identically to the pre-split single file; a malformed `nats.subjects` block fails loudly at load (not silently double-publishing).
+- [x] **CFG.b.1** Move the cross-cutting machine config — `claude`, `execution`, `attachments`, `paths`, `nats`, `bus` — into `system/system.yaml`. The composer folds it into the same `LoadedConfig` slots. — #523: composer base layer already merges these slots (CFG.a); CFG.b adds the documented reference layout `docs/config-layout/system/system.yaml` (+ `stacks/research.yaml` + README) proving the substrate blocks fold in unchanged. `LoadedConfig` shape untouched.
+- [x] **CFG.b.2** `nats.subjects` is isolated in `system.yaml` as its own clearly-commented block — the single place subject overrides live, removing the per-stack duplication that drives the double-message problem. — #523: prominently documented in the reference `system.yaml` + `docs/config-layout/README.md`.
+- [x] **CFG.b.3** Tests: a config with `system.yaml` present resolves `nats`/`bus`/`paths` identically to the pre-split single file; a malformed `nats.subjects` block fails loudly at load (not silently double-publishing). — #523: `src/common/types/nats-subjects.ts` (shared `NatsSubjectsSchema` — rejects malformed patterns AND duplicate entries loudly; mirrored onto both `NatsConfigSchema` and legacy `AgentConfigSchema`); tests in `src/common/config/__tests__/system-layer.test.ts` + `src/common/types/__tests__/nats-subjects.test.ts`.
 
 #### CFG.c Move surface bindings out of per-stack `agents.presence` into `surfaces.yaml`
 

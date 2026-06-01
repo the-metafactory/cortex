@@ -8,6 +8,7 @@
 
 import { z } from "zod/v4";
 import { NKEY_PUBKEY_REGEX } from "./nkey";
+import { NatsSubjectsSchema } from "./nats-subjects";
 
 // =============================================================================
 // Helper: typed empty default for nested Zod object schemas.
@@ -505,8 +506,12 @@ export const AgentConfigSchema = z.object({
      * provide at least one pattern when enabling NATS. The placeholder
      * `{principal}` is substituted with the boot-resolved `principal.id`
      * at runtime so a single template works across principals.
+     *
+     * MIRROR: `NatsConfigSchema.subjects` in `./cortex-config.ts`. Both use
+     * the shared `NatsSubjectsSchema` (IAW CFG.b.3) so a malformed or
+     * duplicate pattern fails loudly at load on either config shape.
      */
-    subjects: z.array(z.string().min(1)).default([]),
+    subjects: NatsSubjectsSchema,
     /**
      * Absolute path to operator account signing nkey file. Loaded into
      * daemon memory only. File MUST be chmod 600 (loader enforces).

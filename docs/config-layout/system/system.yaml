@@ -1,0 +1,118 @@
+# =============================================================================
+# system.yaml — the cross-cutting machine / substrate layer (IAW CFG.b)
+# =============================================================================
+#
+# This is the BASE layer of the multi-file config layout (IAW CFG). The boot
+# composer (`composeRawConfig` in src/common/config/loader.ts) reads the layered
+# files in a fixed precedence order and deep-merges them into the SAME in-memory
+# `LoadedConfig` cortex has always built from a single `cortex.yaml`:
+#
+#     system/system.yaml      ← THIS FILE (base — substrate / machine config)
+#     network/*.yaml          (federation roster, sorted by filename)
+#     surfaces/surfaces.yaml  (shared surface-gateway bindings — CFG.c / GW)
+#     stacks/*.yaml           (per-deployment policy / capabilities / agents)
+#
+# Later layers win on leaf keys. `system.yaml` is therefore the most GENERAL
+# layer — machine-wide substrate knobs that every stack on this host shares.
+#
+# Blast radius: WHOLE STACK. These are "the dangerous transport knobs"
+# (design-internet-of-agentic-work.md §3.7). A wrong value here is a
+# transport-level fault everywhere — which is exactly why they are isolated in
+# their own rarely-edited, reviewed-as-a-transport-change file, away from the
+# routine per-stack edits in `stacks/*.yaml`.
+#
+# What lives here (and ONLY here): claude / execution / attachments / paths /
+# nats / bus. `LoadedConfig` shape is unchanged — these fold into the identical
+# slots the single-file `cortex.yaml` populated. Single-file deployments keep
+# working via the transitional fallback; you do not have to split.
+
+# -----------------------------------------------------------------------------
+# claude — runtime config passed to spawned Claude Code sessions
+# -----------------------------------------------------------------------------
+claude:
+  timeoutMs: 300000          # sync chat dispatch budget
+  asyncTimeoutMs: 900000     # async: / team: dispatch budget
+  additionalArgs: []
+  allowedTools: []
+  disallowedTools:
+    - Write
+
+# -----------------------------------------------------------------------------
+# execution — dispatch backend selection
+# -----------------------------------------------------------------------------
+execution:
+  default: local
+  backends: []
+
+# -----------------------------------------------------------------------------
+# attachments — inbound file-handling limits
+# -----------------------------------------------------------------------------
+attachments:
+  enabled: true
+  maxFileSizeBytes: 10485760      # 10 MiB per file
+  maxTotalSizeBytes: 26214400     # 25 MiB per message
+  maxAttachmentsPerMessage: 10
+
+# -----------------------------------------------------------------------------
+# paths — on-disk locations cortex reads/writes (leading ~ expands to $HOME)
+# -----------------------------------------------------------------------------
+paths:
+  publishedEventsDir: ~/.claude/events/published
+  logDir: ~/.config/cortex/logs
+
+# =============================================================================
+# nats — M2 transport. THE SINGLE PLACE SUBJECT OVERRIDES LIVE (IAW CFG.b.2)
+# =============================================================================
+#
+# `nats.subjects` below is the most dangerous block in the whole config, and it
+# is isolated HERE — one place, one owner, reviewed as a transport change — so
+# it can never be duplicated across per-stack files. That per-stack duplication
+# is what drove the double-message problem: two layers each listing the same
+# subscribe pattern double-bound the boot subscriber, so every inbound envelope
+# was delivered AND dispatched twice (cortex#491; the `pre-natsdedup` era).
+nats:
+  url: nats://127.0.0.1:4222
+  name: cortex
+
+  # ---------------------------------------------------------------------------
+  # nats.subjects — push-mode broad-pattern subscriber list. (THE LANDMINE.)
+  # ---------------------------------------------------------------------------
+  #
+  # Default empty (`[]`) = pull-only mode (cortex#337). KEEP IT EMPTY unless you
+  # know exactly why you are adding a pattern. The runner's dispatch-listener
+  # self-subscribes its canonical `local.{principal}.{stack}.tasks.*.>` interest
+  # at start() (cortex#477/#479), so it is the SOLE binder for inbound tasks.
+  # Listing that same pattern here re-creates the boot-subscriber, double-binds
+  # the same handler set, and double-delivers + double-dispatches every
+  # chat/Direct/Delegate envelope — the double-message problem (cortex#491).
+  #
+  # The loader validates this block LOUDLY at load (IAW CFG.b.3,
+  # src/common/types/nats-subjects.ts):
+  #   - a malformed pattern (whitespace, empty segment, misplaced `>`) is rejected
+  #     with a clear error — never parsed into a silent partial config;
+  #   - a DUPLICATE pattern is rejected with the index of the first occurrence,
+  #     because a duplicate is precisely the double-bind footgun.
+  #
+  # Placeholder tokens `{principal}` / `{stack}` are substituted at runtime.
+  # Example (commented — do NOT enable without understanding the double-bind):
+  #   subjects:
+  #     - local.{principal}.{stack}.tasks.*.>
+  subjects: []
+
+  # NKey identity for envelope signing (paths point at on-disk key material;
+  # the loader enforces chmod 600 on the creds/account-signing files).
+  identity:
+    seedPath: ~/.config/nats/cortex.nk
+    publicKey: UD7OGEVBNJAUQ57H5NHSPJZOKKOXOZ4DEUJVAO5URHBIUAVSVTJGL4QV
+
+# -----------------------------------------------------------------------------
+# bus — application-level JetStream stream / consumer provisioning
+# -----------------------------------------------------------------------------
+bus:
+  review:
+    stream:
+      name: CODE_REVIEW
+      maxAgeSeconds: 86400      # 24h retention for unclaimed review tasks
+      maxBytes: 536870912       # 512 MiB finite cap
+    consumer:
+      maxDeliver: 5             # attempts before JetStream stops redelivery

@@ -264,12 +264,50 @@ function deepMerge(
 }
 
 /**
+ * List `*.yaml` / `*.yml` files in `dir` in deterministic (sorted) order,
+ * skipping dotfiles. Returns `[]` when `dir` is absent. Single source of truth
+ * for the yaml-listing pattern the composer (`listLayerFiles`), the network
+ * loader (`loadNetworkFiles`), and the agents loader (`loadAgentsDirectory`)
+ * all need — extracted so they cannot drift (Echo nit #3 on cortex#525; the
+ * pre-extraction `listLayerFiles` block had already drifted from
+ * `loadNetworkFiles`, which did not skip dotfiles).
+ */
+function listYamlFiles(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => !f.startsWith("."))
+    .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
+    .sort();
+}
+
+/**
  * Read + parse a single YAML layer file into a raw record. Returns `{}` for a
  * file that parses to null/empty (an empty layer contributes nothing to the
  * merge). Throws a clear error on YAML parse failure so a malformed layer
  * fails loudly at load rather than silently dropping config.
+ *
+ * Echo nit #1 on cortex#525 — a per-layer byte cap (parity with the
+ * `FRAGMENT_MAX_BYTES` guard on `loadAgentFromFile`). An unbounded
+ * `readFileSync` against an accident- or attacker-controlled layer file in
+ * `system/` / `stacks/` is the same footgun the fragment loader already guards;
+ * the cap stops a runaway file from consuming memory or stalling the loader.
  */
 function readLayerFile(filePath: string): Record<string, unknown> {
+  let size: number;
+  try {
+    size = statSync(filePath).size;
+  } catch (err) {
+    throw new Error(
+      `config-composer: failed to stat layer ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
+  if (size > FRAGMENT_MAX_BYTES) {
+    throw new Error(
+      `config-composer: layer ${filePath} exceeds ${FRAGMENT_MAX_BYTES} bytes (got ${size}); refusing to read`,
+    );
+  }
+
   const content = readFileSync(filePath, "utf-8");
   let parsed: unknown;
   try {
@@ -290,17 +328,14 @@ function readLayerFile(filePath: string): Record<string, unknown> {
 }
 
 /**
- * List `*.yaml` / `*.yml` files in `dir` in deterministic (sorted) order.
- * Returns `[]` when `dir` is absent — an optional layer directory contributes
- * nothing. Dotfiles are skipped (matching `loadAgentsDirectory`).
+ * List `*.yaml` / `*.yml` layer files in `dir` as full paths, in deterministic
+ * (sorted) order. Returns `[]` when `dir` is absent — an optional layer
+ * directory contributes nothing. Thin wrapper over the shared `listYamlFiles`
+ * helper that joins each entry to `dir` (the composer wants paths; the agents +
+ * networks loaders want filenames to re-join against an expanded base dir).
  */
 function listLayerFiles(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((f) => !f.startsWith("."))
-    .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
-    .sort()
-    .map((f) => join(dir, f));
+  return listYamlFiles(dir).map((f) => join(dir, f));
 }
 
 /**
@@ -316,7 +351,10 @@ function listLayerFiles(dir: string): string[] {
  * yields — so the existing `loadConfigWithAgents` parse/build is unchanged.
  */
 export function composeRawConfig(configPath: string): Record<string, unknown> {
-  const expandedPath = configPath.replace(/^~/, process.env.HOME ?? "~");
+  // Echo nit #2 on cortex#525 — use the fail-loud `expandTilde` helper instead
+  // of the silent `.replace(/^~/, … ?? "~")` form (which left a literal `~`
+  // when $HOME was unset, then failed obscurely deep in `readFileSync`).
+  const expandedPath = expandTilde(configPath);
   const configDir = dirname(expandedPath);
   const markerPath = join(configDir, LAYOUT_MARKER);
 
@@ -371,11 +409,15 @@ export function composeRawConfig(configPath: string): Record<string, unknown> {
  * unchanged across both paths.
  */
 export function loadConfigWithAgents(path: string): LoadedConfig {
-  const expandedPath = path.replace(/^~/, process.env.HOME ?? "~");
+  // Echo nit #2 on cortex#525 — expand the tilde ONCE here via the fail-loud
+  // helper, then hand the already-expanded path to `composeRawConfig`
+  // (`expandTilde` is idempotent on an absolute path), removing the redundant
+  // double expansion that previously happened in both functions.
+  const expandedPath = expandTilde(path);
   const configDir = dirname(expandedPath);
 
   // CFG.a.1/CFG.a.2 — compose from directory layout or fall back to single file.
-  const raw = composeRawConfig(path);
+  const raw = composeRawConfig(expandedPath);
 
   // Networks load against the on-disk path regardless of legacy/cortex shape —
   // both shapes share the same networks/ contract (G-500).
@@ -833,10 +875,7 @@ export function loadAgentsDirectory(dir: string): Agent[] {
     return [];
   }
 
-  const files = readdirSync(expandedDir)
-    .filter((f) => !f.startsWith("."))
-    .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
-    .sort();
+  const files = listYamlFiles(expandedDir);
 
   const agents: Agent[] = [];
   const seenIds = new Map<string, string>();
@@ -878,9 +917,7 @@ function loadNetworkFiles(networksDir: string, explicit: boolean): NetworkFile[]
     return [];
   }
 
-  const files = readdirSync(networksDir)
-    .filter(f => f.endsWith(".yaml") || f.endsWith(".yml"))
-    .sort();
+  const files = listYamlFiles(networksDir);
 
   const networks: NetworkFile[] = [];
   const seenIds = new Map<string, string>();
