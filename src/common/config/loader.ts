@@ -191,6 +191,160 @@ export function loadConfig(path: string): AgentConfig {
   return loadConfigWithAgents(path).config;
 }
 
+// =============================================================================
+// IAW CFG.a — multi-file config composer + transitional single-file fallback
+// =============================================================================
+//
+// CFG.a is a config-INGESTION refactor only: it builds the SAME `raw` object
+// `parseYaml(cortex.yaml)` produces, then feeds it through the existing
+// parse/build so `LoadedConfig` stays byte-identical. No consumer edits.
+//
+// Two ingestion paths, resolved deterministically by `composeRawConfig`:
+//
+//   1. Directory layout (CFG.a.1) — the config dir contains a marker file
+//      `system/system.yaml`. The composer reads the layer files in a fixed
+//      precedence order and deep-merges them into one raw object:
+//
+//          system/system.yaml   (base — cross-cutting machine config)
+//          network/*.yaml        (sorted by filename)
+//          surfaces/surfaces.yaml
+//          stacks/*.yaml         (sorted by filename)
+//
+//      Later layers win on leaf keys (deep-merge of objects; arrays + scalars
+//      replace wholesale — see `deepMerge`). The order is system → network →
+//      surfaces → stacks because system is the most general (machine-wide)
+//      and stacks are the most specific (per-deployment) — specific overrides
+//      general, the conventional config-cascade direction (Apache/nginx-style,
+//      matching the G-500 networks/ precedent).
+//
+//   2. Single-file fallback (CFG.a.2) — no `system/system.yaml` marker present.
+//      Read the single `cortex.yaml` (or bot.yaml) at `configPath` exactly as
+//      before. Identical `LoadedConfig`, no principal-facing break.
+//
+// Resolution rule (CFG.a.3): directory layout present (marker file exists) →
+// use it; else single-file fallback. The composer is deterministic (fixed
+// layer order, filename-sorted globs) and idempotent (composing twice yields
+// the same object — `deepMerge` is a pure fold, no in-place mutation of inputs).
+
+/** The marker file whose presence selects the directory-layout path. */
+const LAYOUT_MARKER = join("system", "system.yaml");
+
+/**
+ * Deep-merge `source` onto `base`, returning a new object. Plain objects are
+ * merged recursively; arrays and scalars from `source` replace the `base`
+ * value wholesale (no element-wise array merge — config arrays like
+ * `agents[]` / `nats.subjects[]` are replace-or-keep units, not append lists;
+ * element-wise merge would silently splice fragments together in surprising
+ * orders). Neither input is mutated — both are treated as read-only, so
+ * composing the same layers twice yields an identical result (idempotent).
+ */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function deepMerge(
+  base: Record<string, unknown>,
+  source: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base };
+  for (const key of Object.keys(source)) {
+    const sv = source[key];
+    const bv = out[key];
+    if (isPlainObject(bv) && isPlainObject(sv)) {
+      out[key] = deepMerge(bv, sv);
+    } else {
+      // Arrays + scalars (and object-over-non-object / non-object-over-object)
+      // replace wholesale. structuredClone keeps the merged object detached
+      // from the source layer so later idempotent re-composition can't alias
+      // and mutate a shared nested array/object.
+      out[key] = structuredClone(sv);
+    }
+  }
+  return out;
+}
+
+/**
+ * Read + parse a single YAML layer file into a raw record. Returns `{}` for a
+ * file that parses to null/empty (an empty layer contributes nothing to the
+ * merge). Throws a clear error on YAML parse failure so a malformed layer
+ * fails loudly at load rather than silently dropping config.
+ */
+function readLayerFile(filePath: string): Record<string, unknown> {
+  const content = readFileSync(filePath, "utf-8");
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(content);
+  } catch (err) {
+    throw new Error(
+      `config-composer: failed to parse layer ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
+  if (parsed === null || parsed === undefined) return {};
+  if (!isPlainObject(parsed)) {
+    throw new Error(
+      `config-composer: layer ${filePath} must be a YAML mapping at the top level, got ${Array.isArray(parsed) ? "array" : typeof parsed}`,
+    );
+  }
+  return parsed;
+}
+
+/**
+ * List `*.yaml` / `*.yml` files in `dir` in deterministic (sorted) order.
+ * Returns `[]` when `dir` is absent — an optional layer directory contributes
+ * nothing. Dotfiles are skipped (matching `loadAgentsDirectory`).
+ */
+function listLayerFiles(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => !f.startsWith("."))
+    .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
+    .sort()
+    .map((f) => join(dir, f));
+}
+
+/**
+ * CFG.a.1 — compose the raw config object from a directory layout, or fall
+ * back to the single file (CFG.a.2).
+ *
+ * `configPath` is the path the caller already passes (e.g. a `cortex.yaml`
+ * file). Layout detection keys off the file's directory: if
+ * `${dir}/system/system.yaml` exists, the directory layout is used; otherwise
+ * the single file at `configPath` is read verbatim.
+ *
+ * Returns the merged `raw` object — the exact shape `parseYaml(cortex.yaml)`
+ * yields — so the existing `loadConfigWithAgents` parse/build is unchanged.
+ */
+export function composeRawConfig(configPath: string): Record<string, unknown> {
+  const expandedPath = configPath.replace(/^~/, process.env.HOME ?? "~");
+  const configDir = dirname(expandedPath);
+  const markerPath = join(configDir, LAYOUT_MARKER);
+
+  // CFG.a.3 resolution rule: directory layout present → use it; else fallback.
+  if (!existsSync(markerPath)) {
+    // CFG.a.2 — transitional single-file fallback. Identical to pre-CFG.a.
+    const content = readFileSync(expandedPath, "utf-8");
+    return (parseYaml(content) ?? {}) as Record<string, unknown>;
+  }
+
+  // CFG.a.1 — directory layout. Fixed precedence: system → network → surfaces
+  // → stacks (later wins on leaf keys).
+  const layerFiles: string[] = [
+    markerPath,
+    ...listLayerFiles(join(configDir, "network")),
+    ...(existsSync(join(configDir, "surfaces", "surfaces.yaml"))
+      ? [join(configDir, "surfaces", "surfaces.yaml")]
+      : []),
+    ...listLayerFiles(join(configDir, "stacks")),
+  ];
+
+  let raw: Record<string, unknown> = {};
+  for (const file of layerFiles) {
+    raw = deepMerge(raw, readLayerFile(file));
+  }
+  return raw;
+}
+
 /**
  * MIG-7.2e — config-schema flip.
  *
@@ -210,13 +364,18 @@ export function loadConfig(path: string): AgentConfig {
  * rejections in `CortexConfigSchema` (legacy `agent:` / `discord:` /
  * `mattermost:` / `trustedAgentBots:` at the top level) surface as zod
  * errors only when the detection trips the cortex branch.
+ *
+ * IAW CFG.a — the raw config object is now built by `composeRawConfig`, which
+ * either deep-merges a directory layout (`system/`, `network/`, `surfaces/`,
+ * `stacks/`) or reads the single `cortex.yaml` verbatim. `LoadedConfig` is
+ * unchanged across both paths.
  */
 export function loadConfigWithAgents(path: string): LoadedConfig {
   const expandedPath = path.replace(/^~/, process.env.HOME ?? "~");
   const configDir = dirname(expandedPath);
 
-  const content = readFileSync(expandedPath, "utf-8");
-  const raw = (parseYaml(content) ?? {}) as Record<string, unknown>;
+  // CFG.a.1/CFG.a.2 — compose from directory layout or fall back to single file.
+  const raw = composeRawConfig(path);
 
   // Networks load against the on-disk path regardless of legacy/cortex shape —
   // both shapes share the same networks/ contract (G-500).
