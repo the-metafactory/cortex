@@ -16,6 +16,10 @@ _Avoid_: operator, user, owner, human, org
 One running cortex deployment under a **principal** — its own `cortex.yaml`, signing identity, subject sub-namespace, and JetStream consumers. A principal runs one or more stacks side by side, purpose-named. The second subject segment: `local.{principal}.{stack}.…`.
 _Avoid_: deployment, instance, node. Never use `stack` for the M1–M7 architecture — that is the **Myelin layer model**.
 
+**Cortex runtime**:
+The OS process that hosts a **principal**'s **stacks** — a single runtime runs one or more stacks side by side, each keeping its OWN signing identity (M3), subject sub-namespace (M4), policy (M6) and NatsLinks (one per **network** a stack joins, M1). The runtime is *process packaging, not a layer*: consolidating stacks into one process MUST preserve each stack's layer isolation — no cross-stack identity / subject / policy leakage (enforced by subject-segment isolation). Replaces the earlier one-process-per-stack model (cortex#117): a principal's stacks live in one runtime, cutting process sprawl, without merging their layers.
+_Avoid_: daemon (the per-assistant runtime identity is the **agent**), server, host, node.
+
 **Network**:
 A federation of **principals** whose **stacks** interconnect at the NATS leaf-node layer — `metafactory` is the network this ecosystem runs on. A network is **not a subject segment**: it is deployment topology. Cross-principal reach is the `federated.` **scope** prefix, never a network name on the wire. A principal may belong to more than one network.
 
@@ -90,6 +94,8 @@ _Avoid_: backend, executor, engine, runtime (overloaded with `MyelinRuntime`)
 
 **Dispatch source**:
 Anything that creates and publishes an inbound dispatch **envelope** onto the bus. A platform adapter (Discord, Mattermost, Slack) is a dispatch source: it turns a platform message into a `tasks.@{did-encoded-assistant}.{capability}` envelope (canonical) — adapter populates `originator.identity` with the resolved human/agent DID and `originator.attribution = "adapter-resolved"`; the **stack** then signs the envelope via `runtime.publish` using the stack NKey. The GitHub webhook tap is a dispatch source. The MC dashboard's "send task" action is a dispatch source. Future peer-stack agents publishing Offers cross-federation are dispatch sources. The dispatch source is the locus of policy-actor attribution (via `originator`); the **stack** is the cryptographic signer.
+
+When a dispatch source runs as a **separate process** — the shared surface **gateway** (cortex#524), which holds one platform connection per bot-user identity and demuxes to the bound stack — it cannot call `runtime.publish` to sign. It stamps `originator` and publishes on the local intra-principal hop **unsigned**; the bound **stack re-signs on ingest** with its own NKey. The stack stays the sole cryptographic signer (M3); the gateway is a pure surface/transport concern (M7) that never touches identity. (Decision 2026-06-02, cortex#524 OQ2.)
 _Avoid_: producer, ingress, intake
 
 **Dispatch sink**:
@@ -120,6 +126,7 @@ _Avoid_: reading dashboard `role: operator` as the **principal**; conflating the
 ## Relationships
 
 - A **principal** runs one or more **stacks**, and belongs to one or more **networks**.
+- A **principal**'s **stacks** run in a single **cortex runtime** (one OS process); each stack stays its own isolated M1–M7 slice (identity, subjects, policy) and opens one NatsLink per **network** it joins.
 - A **stack** hosts one or more **agents**.
 - An **agent** hosts exactly one **assistant**; the same assistant may be hosted by different agents on different stacks.
 - An **agent** may spawn zero or more **sub-agents**.
@@ -129,6 +136,8 @@ _Avoid_: reading dashboard `role: operator` as the **principal**; conflating the
 - An **agent** dispatches work via a **substrate harness** — the M6 runtime layer that executes one dispatch and yields lifecycle envelopes.
 - A **dispatch source** publishes inbound dispatch envelopes (signed by the hosted agent); a **dispatch sink** consumes lifecycle envelopes and renders to a surface. A platform adapter plays both roles.
 - A dispatch's inbound envelope carries **response routing**; the runner echoes it onto every lifecycle envelope so the originating dispatch sink can find its target without state.
+- **Layer discipline (the OSI foundation).** Each concern lives at its layer. The bus / Myelin (M2–M6) routes **envelopes**, carries `correlation_id`, verifies the `signed_by` chain, and seals payloads — and stays *dumb*. Application smarts — **orchestration, delegation**, surface rendering, dashboards — live at **M7** (the **agent** / surface). Never push application logic down into the protocol: the bus does **not** model delegation trees; a delegating **agent** owns its delegation/errand state durably and locally (pilot is the existing instance — an M7 agent delegating a review, owning its errand store, nothing in the bus). This is *dispatch-not-dictate* as a layering rule — the inversion (smarts leaking into transport) is what the seven layers exist to prevent.
+- **Federation confidentiality (v1).** Payloads cross `federated.` cleartext-over-TLS in v1 — M3 payload encryption is designed (sealed-payload, `docs/design-envelope-encryption.md`) but **deferred** (you + JC + a trusted hub). Revisit on an untrusted/3rd-party hub, a 3rd principal, or a confidential cross-internet workload.
 
 ## Example dialogue
 
