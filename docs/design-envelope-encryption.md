@@ -42,11 +42,11 @@ In Phase E, principal `andreas` (NZ) and principal `jcfischer` (Switzerland) pee
 | Adversary | Position | Can they read the payload today? | What stops them |
 |---|---|---|---|
 | **Network path** (transit ISPs, internet between NZ and CH) | On the wire between leaf-nodes | Yes, if the link is plain `nats://` | **Wire layer:** `tls://` leaf-node — §2 |
-| **NATS hub / relay operator** | Runs a shared hub all peers connect through (hub-and-spoke network topology) | Yes — TLS terminates at the hub; the hub sees plaintext | **Payload layer:** sealed payload — TLS does NOT help; the hub is an authorized TLS peer |
+| **NATS hub / relay host** | Runs a shared hub all peers connect through (hub-and-spoke network topology) | Yes — TLS terminates at the hub; the hub sees plaintext | **Payload layer:** sealed payload — TLS does NOT help; the hub is an authorized TLS peer |
 | **Peer principal** (`jcfischer`'s stacks, beyond the one addressed) | Authorized subscriber on `federated.>` for the network | Yes — sovereignty gates routing, not reading; any peer on the network can subscribe to `federated.*.tasks.>` | **Payload layer:** sealed-to-recipient payload — §3 |
 | **At-rest reader** (JetStream files on disk, on any stack that retains the stream) | Filesystem on the retaining node | Yes — JetStream persists payloads on disk | Out of scope for the *bus*: filesystem encryption (LUKS/FileVault) is principal infra. Sealed payload *also* protects at-rest for non-recipient stacks as a side effect — §6 |
 
-The load-bearing insight: **the peer principal and the hub operator are not outside attackers — they are legitimate, authorized participants on the federated bus.** TLS authenticates and encrypts the *link*; it cannot keep content from a party that is supposed to be on the link. Only payload-layer encryption, sealed to the intended recipient, removes a peer principal's and a hub's ability to read content they were never the addressee of.
+The load-bearing insight: **the peer principal and the hub host are not outside attackers — they are legitimate, authorized participants on the federated bus.** TLS authenticates and encrypts the *link*; it cannot keep content from a party that is supposed to be on the link. Only payload-layer encryption, sealed to the intended recipient, removes a peer principal's and a hub's ability to read content they were never the addressee of.
 
 ### §1.3 What MUST stay cleartext (routing + trust invariants)
 
