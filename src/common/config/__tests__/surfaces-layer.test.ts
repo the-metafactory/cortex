@@ -1,0 +1,388 @@
+/**
+ * IAW CFG.c — `surfaces.yaml` layer + the binding fold.
+ *
+ * CFG.c moves the per-platform surface bindings (Discord/Slack/Mattermost
+ * `token`, `guild`, channel/instance bindings) out of each stack's
+ * `agents[*].presence.{platform}` block into a top-level `surfaces.yaml` layer
+ * — the file the shared surface gateway (GW) consumes. It is a source-layout
+ * change, not a runtime-shape change: `LoadedConfig` is byte-identical and the
+ * per-stack adapters keep working unchanged.
+ *
+ * These tests prove:
+ *
+ *   (CFG.c.4 round-trip) bindings-in-surfaces.yaml resolve to the SAME
+ *     effective `LoadedConfig` (presence/binding view) as bindings-in-per-stack
+ *     presence — same tokens/guilds/channels resolved, for all three platforms;
+ *
+ *   (CFG.c.4 schema) `surfaces.yaml` validates required binding fields — a
+ *     binding missing `token` (Discord) / `botToken` (Slack) / `apiToken`
+ *     (Mattermost) fails loudly at load;
+ *
+ *   (CFG.c.2 fallback) a config with NO surfaces.yaml (per-stack presence only
+ *     — the three live-deployment shape) loads unchanged, fold is a no-op;
+ *
+ *   (design fork) when BOTH surfaces.yaml AND inline per-stack presence carry
+ *     the same platform, the surfaces.yaml binding wins on leaf keys (it is the
+ *     credential surface-of-truth) while inline non-binding knobs survive;
+ *
+ *   (loud failure) a binding naming an unknown agent fails loudly rather than
+ *     silently dropping a credential.
+ */
+
+import { test, expect, describe, beforeEach, afterEach } from "bun:test";
+import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
+import { stringify } from "yaml";
+import { loadConfigWithAgents } from "../loader";
+import { foldSurfaceBindings, SurfacesSchema } from "../../types/surfaces";
+
+let testDir: string;
+
+beforeEach(() => {
+  testDir = join(
+    tmpdir(),
+    `cortex-surfaces-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  mkdirSync(testDir, { recursive: true });
+});
+
+afterEach(() => {
+  if (testDir && existsSync(testDir)) {
+    rmSync(testDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Fixture builders
+// ---------------------------------------------------------------------------
+
+/** The substrate blocks (system.yaml layer — needed for the directory layout). */
+function systemBlocks(): Record<string, unknown> {
+  return {
+    claude: { timeoutMs: 300000, asyncTimeoutMs: 900000, disallowedTools: ["Write"] },
+    execution: { default: "local", backends: [] },
+    attachments: {
+      enabled: true,
+      maxFileSizeBytes: 10485760,
+      maxTotalSizeBytes: 26214400,
+      maxAttachmentsPerMessage: 10,
+    },
+    paths: { publishedEventsDir: "/tmp/events/published", logDir: "/tmp/cortex/logs" },
+    nats: {
+      url: "nats://127.0.0.1:4222",
+      name: "cortex",
+      subjects: [],
+      identity: {
+        seedPath: "/tmp/cortex.nk",
+        publicKey: "UD7OGEVBNJAUQ57H5NHSPJZOKKOXOZ4DEUJVAO5URHBIUAVSVTJGL4QV",
+      },
+    },
+    bus: {
+      review: {
+        stream: { name: "CODE_REVIEW", maxAgeSeconds: 86400, maxBytes: 536870912 },
+        consumer: { maxDeliver: 5 },
+      },
+    },
+  };
+}
+
+const DISCORD_BINDING = {
+  token: "fake-token-ivy",
+  guildId: "1487023327791808592",
+  agentChannelId: "1487029848164536361",
+  logChannelId: "1487029942129524786",
+};
+
+const SLACK_BINDING = {
+  botToken: "xoxb-fake-bot-token",
+  appToken: "xapp-fake-app-token",
+  workspaceId: "T0123456789",
+};
+
+const MATTERMOST_BINDING = {
+  apiUrl: "https://mm.example.com",
+  apiToken: "fake-mm-token",
+};
+
+/** Stack with bindings INLINE in per-stack presence (the pre-CFG.c shape). */
+function stackInline(): Record<string, unknown> {
+  return {
+    principal: { id: "andreas", displayName: "Andreas" },
+    agents: [
+      {
+        id: "ivy",
+        displayName: "Ivy",
+        persona: "./personas/ivy.md",
+        roles: [],
+        trust: [],
+        presence: {
+          discord: { ...DISCORD_BINDING },
+          slack: { ...SLACK_BINDING },
+          mattermost: { ...MATTERMOST_BINDING },
+        },
+      },
+    ],
+  };
+}
+
+/** Stack with NO bindings in presence — they live in surfaces.yaml instead. */
+function stackNoBindings(): Record<string, unknown> {
+  return {
+    principal: { id: "andreas", displayName: "Andreas" },
+    agents: [
+      {
+        id: "ivy",
+        displayName: "Ivy",
+        persona: "./personas/ivy.md",
+        roles: [],
+        trust: [],
+        presence: {},
+      },
+    ],
+  };
+}
+
+/** surfaces.yaml carrying the same bindings the inline stack carried. */
+function surfacesBlock(): Record<string, unknown> {
+  return {
+    surfaces: {
+      discord: [{ agent: "ivy", stack: "andreas/research", binding: { ...DISCORD_BINDING } }],
+      slack: [{ agent: "ivy", stack: "andreas/research", binding: { ...SLACK_BINDING } }],
+      mattermost: [
+        { agent: "ivy", stack: "andreas/research", binding: { ...MATTERMOST_BINDING } },
+      ],
+    },
+  };
+}
+
+function writeSingleFile(dir: string, config: Record<string, unknown>): string {
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "cortex.yaml");
+  writeFileSync(path, stringify(config));
+  return path;
+}
+
+/** Write system/ + surfaces/ + stacks/ layout; return the conventional path. */
+function writeSurfacesLayout(
+  dir: string,
+  system: Record<string, unknown>,
+  surfaces: Record<string, unknown>,
+  stack: Record<string, unknown>,
+): string {
+  mkdirSync(join(dir, "system"), { recursive: true });
+  writeFileSync(join(dir, "system", "system.yaml"), stringify(system));
+  mkdirSync(join(dir, "surfaces"), { recursive: true });
+  // surfaces.yaml's top-level key is `surfaces:` — write the block verbatim.
+  writeFileSync(join(dir, "surfaces", "surfaces.yaml"), stringify(surfaces));
+  mkdirSync(join(dir, "stacks"), { recursive: true });
+  writeFileSync(join(dir, "stacks", "research.yaml"), stringify(stack));
+  return join(dir, "cortex.yaml");
+}
+
+// ---------------------------------------------------------------------------
+// CFG.c.4 — round-trip: surfaces.yaml resolves to the SAME effective view as
+// inline per-stack presence (same tokens/guilds/channels for all 3 platforms)
+// ---------------------------------------------------------------------------
+
+describe("CFG.c.4 — surfaces.yaml round-trips to the same effective presence/binding view", () => {
+  test("split layout (system + surfaces + stack) == inline single-file LoadedConfig", () => {
+    // Inline baseline: single file with bindings in per-stack presence.
+    const inlineFull = { ...systemBlocks(), ...stackInline() };
+    const inlinePath = writeSingleFile(join(testDir, "inline"), inlineFull);
+
+    // surfaces.yaml form: bindings live in surfaces.yaml, presence is empty.
+    const splitPath = writeSurfacesLayout(
+      join(testDir, "split"),
+      systemBlocks(),
+      surfacesBlock(),
+      stackNoBindings(),
+    );
+
+    const inline = loadConfigWithAgents(inlinePath);
+    const split = loadConfigWithAgents(splitPath);
+
+    // Whole-LoadedConfig identity — the strongest assertion: the move is a
+    // source-layout change, not a runtime-shape change.
+    expect(split).toEqual(inline);
+
+    // Spell out the resolved binding view per platform so a regression names
+    // the exact platform that drifted. The effective view consumers read is
+    // (a) inlineAgents[*].presence (cortex.ts per-presence-token wiring) and
+    // (b) the flattened config.{discord,slack,mattermost} arrays (adapters).
+    const ivy = split.inlineAgents[0]!;
+    expect(ivy.presence.discord?.token).toBe(DISCORD_BINDING.token);
+    expect(ivy.presence.discord?.guildId).toBe(DISCORD_BINDING.guildId);
+    expect(ivy.presence.slack?.botToken).toBe(SLACK_BINDING.botToken);
+    expect(ivy.presence.slack?.workspaceId).toBe(SLACK_BINDING.workspaceId);
+    expect(ivy.presence.mattermost?.apiToken).toBe(MATTERMOST_BINDING.apiToken);
+
+    // Flattened adapter arrays — same tokens/guilds resolved.
+    expect(split.config.discord[0]?.token).toBe(DISCORD_BINDING.token);
+    expect(split.config.discord[0]?.guildId).toBe(DISCORD_BINDING.guildId);
+    expect(split.config.slack[0]?.botToken).toBe(SLACK_BINDING.botToken);
+    expect(split.config.mattermost[0]?.apiToken).toBe(MATTERMOST_BINDING.apiToken);
+  });
+
+  test("inline-single-file baseline and split agree on the flattened instanceIds", () => {
+    const inlinePath = writeSingleFile(join(testDir, "inline"), {
+      ...systemBlocks(),
+      ...stackInline(),
+    });
+    const splitPath = writeSurfacesLayout(
+      join(testDir, "split"),
+      systemBlocks(),
+      surfacesBlock(),
+      stackNoBindings(),
+    );
+    const inline = loadConfigWithAgents(inlinePath);
+    const split = loadConfigWithAgents(splitPath);
+    expect(split.config.discord.map((d) => d.instanceId)).toEqual(
+      inline.config.discord.map((d) => d.instanceId),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CFG.c.2 — fallback: a config with NO surfaces.yaml loads unchanged
+// (the three live-deployment shape; per-stack presence is the fallback)
+// ---------------------------------------------------------------------------
+
+describe("CFG.c.2 — no surfaces.yaml → per-stack presence is the fallback (fold is a no-op)", () => {
+  test("single-file inline config with no surfaces key loads unchanged", () => {
+    const path = writeSingleFile(join(testDir, "live"), {
+      ...systemBlocks(),
+      ...stackInline(),
+    });
+    const loaded = loadConfigWithAgents(path);
+    expect(loaded.inlineAgents[0]!.presence.discord?.token).toBe(DISCORD_BINDING.token);
+    expect(loaded.config.discord[0]?.token).toBe(DISCORD_BINDING.token);
+  });
+
+  test("foldSurfaceBindings returns input untouched when no surfaces key present", () => {
+    const raw = { ...stackInline() };
+    const folded = foldSurfaceBindings(raw);
+    // Same effective agents shape (no surfaces key was present to fold).
+    expect(folded.agents).toEqual(raw.agents);
+    expect("surfaces" in folded).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CFG.c.4 — schema validates required binding fields (loud failure)
+// ---------------------------------------------------------------------------
+
+describe("CFG.c.4 — surfaces.yaml schema validates required binding fields", () => {
+  test("Discord binding missing token fails loudly", () => {
+    expect(() =>
+      SurfacesSchema.parse({
+        discord: [{ agent: "ivy", binding: { guildId: "1", agentChannelId: "2", logChannelId: "3" } }],
+      }),
+    ).toThrow();
+  });
+
+  test("Slack binding with a non-xoxb botToken fails loudly", () => {
+    expect(() =>
+      SurfacesSchema.parse({
+        slack: [{ agent: "ivy", binding: { botToken: "nope", appToken: "xapp-x", workspaceId: "T01234567" } }],
+      }),
+    ).toThrow();
+  });
+
+  test("Mattermost binding missing apiToken fails loudly", () => {
+    expect(() =>
+      SurfacesSchema.parse({
+        mattermost: [{ agent: "ivy", binding: { apiUrl: "https://mm.example.com" } }],
+      }),
+    ).toThrow();
+  });
+
+  test("unknown top-level platform key fails loudly (typo guard)", () => {
+    expect(() =>
+      SurfacesSchema.parse({
+        discrod: [{ agent: "ivy", binding: { ...DISCORD_BINDING } }],
+      }),
+    ).toThrow();
+  });
+
+  test("malformed surfaces.yaml fails at load via the composer", () => {
+    const path = writeSurfacesLayout(
+      join(testDir, "bad"),
+      systemBlocks(),
+      { surfaces: { discord: [{ agent: "ivy", binding: { guildId: "1" } }] } },
+      stackNoBindings(),
+    );
+    expect(() => loadConfigWithAgents(path)).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Design fork — surfaces.yaml binding wins over inline presence on leaf keys;
+// inline non-binding knobs survive
+// ---------------------------------------------------------------------------
+
+describe("CFG.c design fork — surfaces.yaml binding precedence over inline presence", () => {
+  test("surfaces.yaml binding wins on leaf keys; inline non-binding knobs survive", () => {
+    // Stack carries an inline discord presence with an OLD token + a
+    // non-binding knob (contextDepth). surfaces.yaml supplies the NEW token.
+    const stack = {
+      principal: { id: "andreas", displayName: "Andreas" },
+      agents: [
+        {
+          id: "ivy",
+          displayName: "Ivy",
+          persona: "./personas/ivy.md",
+          roles: [],
+          trust: [],
+          presence: {
+            discord: {
+              token: "OLD-inline-token",
+              guildId: DISCORD_BINDING.guildId,
+              agentChannelId: DISCORD_BINDING.agentChannelId,
+              logChannelId: DISCORD_BINDING.logChannelId,
+              contextDepth: 42,
+            },
+          },
+        },
+      ],
+    };
+    const surfaces = {
+      surfaces: {
+        discord: [{ agent: "ivy", binding: { ...DISCORD_BINDING, token: "NEW-surfaces-token" } }],
+      },
+    };
+    const path = writeSurfacesLayout(join(testDir, "fork"), systemBlocks(), surfaces, stack);
+    const loaded = loadConfigWithAgents(path);
+    // surfaces.yaml token wins.
+    expect(loaded.inlineAgents[0]!.presence.discord?.token).toBe("NEW-surfaces-token");
+    // inline non-binding knob survives the merge.
+    expect(loaded.inlineAgents[0]!.presence.discord?.contextDepth).toBe(42);
+  });
+
+  test("binding naming an unknown agent fails loudly", () => {
+    const path = writeSurfacesLayout(
+      join(testDir, "unknown"),
+      systemBlocks(),
+      { surfaces: { discord: [{ agent: "ghost", binding: { ...DISCORD_BINDING } }] } },
+      stackNoBindings(),
+    );
+    expect(() => loadConfigWithAgents(path)).toThrow(/names agent "ghost"/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Idempotence — folding twice yields the same object
+// ---------------------------------------------------------------------------
+
+describe("CFG.c — foldSurfaceBindings is pure + idempotent", () => {
+  test("folding the same raw twice yields equal results and does not mutate input", () => {
+    const raw = { ...stackNoBindings(), ...surfacesBlock() };
+    const snapshot = structuredClone(raw);
+    const once = foldSurfaceBindings(raw);
+    const twiceInput = { ...stackNoBindings(), ...surfacesBlock() };
+    const twice = foldSurfaceBindings(twiceInput);
+    expect(once).toEqual(twice);
+    // Input not mutated (surfaces key still present on the original).
+    expect(raw).toEqual(snapshot);
+  });
+});

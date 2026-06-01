@@ -49,13 +49,57 @@ The loader validates the block **loudly at load** (CFG.b.3,
 throws a clear error rather than parsing into a silent partial config that would
 double-publish.
 
+## The surface binding map (CFG.c)
+
+`surfaces/surfaces.yaml` holds the per-platform **surface bindings**
+(Discord/Slack/Mattermost `token`, `guild`, channel/instance bindings), moved
+out of each stack's `agents[*].presence.{platform}` block. It is the
+`{surface-instance → stack}` map the **shared surface gateway (GW, §13.2)**
+consumes to hold one platform connection per bot and route inbound messages to
+the right stack.
+
+The composer **folds** each binding back into the matching agent's
+`presence.{platform}` block at load (joining on the binding's `agent:` id
+against `stacks/*.yaml` `agents[].id`) and drops the top-level `surfaces:` key —
+so the composed raw config is identical to the inline (pre-CFG.c) form and
+`LoadedConfig` is **byte-identical**. It is a source-layout change, not a
+runtime-shape change; the per-stack adapters and the per-presence-token wiring
+in `src/cortex.ts` are untouched.
+
+Binding-map shape (validated loudly at load — CFG.c.4,
+`src/common/types/surfaces.ts`):
+
+```yaml
+surfaces:
+  <platform>:                  # discord | slack | mattermost
+    - agent: <agent-id>        # join key against stacks/*.yaml agents[].id
+      stack: <principal>/<stack>   # OPTIONAL — the {instance → stack} GW routes on
+      binding:                 # the required per-platform credential/instance fields
+        ...
+```
+
+Required binding fields: discord → `token`, `guildId`, `agentChannelId`,
+`logChannelId`; slack → `botToken` (`xoxb-…`), `appToken` (`xapp-…`),
+`workspaceId` (`T…`); mattermost → `apiUrl`, `apiToken`.
+
+**Precedence / fallback.** `surfaces.yaml` is OPTIONAL — per-stack
+`presence.{platform}` is always the fallback (the three live single-file
+deployments carry bindings inline and have no `surfaces.yaml`). When BOTH are
+present for the same platform, the surfaces.yaml binding **wins on leaf keys**
+(it is the credential surface-of-truth) while inline non-binding knobs
+(`contextDepth`, `surfaceSubjects`, …) survive the merge. A binding naming an
+agent absent from every stack fails **loudly** rather than silently dropping a
+credential.
+
 ## This example
 
 - [`system/system.yaml`](./system/system.yaml) — the substrate layer, with the
   prominently-commented `nats.subjects` block (kept at the safe `[]` default).
+- [`surfaces/surfaces.yaml`](./surfaces/surfaces.yaml) — the surface binding map;
+  binds the `ivy` agent's Discord presence (Slack + Mattermost commented out).
 - [`stacks/research.yaml`](./stacks/research.yaml) — one per-deployment stack
-  (principal + one agent), carrying no transport knobs.
+  (principal + one agent), carrying no transport knobs and an EMPTY
+  `presence: {}` — its Discord binding folds in from `surfaces.yaml`.
 
-`surfaces/` and `network/` are omitted here — `surfaces.yaml` lands with CFG.c
-and the network roster with the federation phases; both are optional layers the
-composer skips when absent.
+`network/` is omitted here — the network roster lands with the federation
+phases; it is an optional layer the composer skips when absent.

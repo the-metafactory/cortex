@@ -14,9 +14,16 @@
 # to make this example self-contained.
 #
 # Note what is ABSENT: no `nats.subjects`, no `nats` transport block at all, no
-# surface tokens. Transport lives in system.yaml; surface bindings move to
-# surfaces.yaml (CFG.c / GW). A stack file never re-declares the subject list —
-# that is the structural fix for the double-message problem.
+# surface tokens. Transport lives in system.yaml; surface bindings live in
+# surfaces.yaml (CFG.c / GW) and the composer FOLDS them back into this agent's
+# `presence.discord` block at load. A stack file never re-declares the subject
+# list — that is the structural fix for the double-message problem.
+#
+# The agent below declares an EMPTY `presence: {}` — its surface binding (the
+# Discord token + guild + channels) lives in `surfaces/surfaces.yaml`, keyed by
+# this agent's id (`ivy`). Non-binding presence knobs (e.g. `contextDepth`,
+# `surfaceSubjects`) could still be declared here inline; the surfaces.yaml
+# binding merges on top, winning on the credential leaf keys.
 
 principal:
   id: andreas
@@ -28,9 +35,4 @@ agents:
     persona: ./personas/ivy.md
     roles: []
     trust: []
-    presence:
-      discord:
-        token: REPLACE_WITH_DISCORD_BOT_TOKEN
-        guildId: "000000000000000000"
-        agentChannelId: "000000000000000000"
-        logChannelId: "000000000000000000"
+    presence: {}

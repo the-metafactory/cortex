@@ -22,6 +22,7 @@ import {
   type SlackPresence,
   type StackConfig,
 } from "../types/cortex-config";
+import { foldSurfaceBindings } from "../types/surfaces";
 
 /**
  * Hardening cap on a single fragment file's size. Echo M3 on cortex#62 —
@@ -360,9 +361,14 @@ export function composeRawConfig(configPath: string): Record<string, unknown> {
 
   // CFG.a.3 resolution rule: directory layout present → use it; else fallback.
   if (!existsSync(markerPath)) {
-    // CFG.a.2 — transitional single-file fallback. Identical to pre-CFG.a.
+    // CFG.a.2 — transitional single-file fallback. Identical to pre-CFG.a,
+    // except a single file MAY also carry an inline `surfaces:` block — fold
+    // it the same way so the two ingestion paths stay symmetric (CFG.c). A
+    // file with no `surfaces:` key (the three live deployments) is returned
+    // untouched by the fold.
     const content = readFileSync(expandedPath, "utf-8");
-    return (parseYaml(content) ?? {}) as Record<string, unknown>;
+    const single = (parseYaml(content) ?? {}) as Record<string, unknown>;
+    return foldSurfaceBindings(single);
   }
 
   // CFG.a.1 — directory layout. Fixed precedence: system → network → surfaces
@@ -380,7 +386,12 @@ export function composeRawConfig(configPath: string): Record<string, unknown> {
   for (const file of layerFiles) {
     raw = deepMerge(raw, readLayerFile(file));
   }
-  return raw;
+  // CFG.c — fold any `surfaces:` block into `agents[*].presence.{platform}`
+  // and drop the top-level `surfaces:` key, so the result is the exact shape
+  // the inline (pre-CFG.c) config produced. `LoadedConfig` is unchanged. A
+  // layout with no surfaces.yaml leaves `raw` without a `surfaces:` key, so the
+  // fold is a no-op and per-stack presence is the fallback.
+  return foldSurfaceBindings(raw);
 }
 
 /**

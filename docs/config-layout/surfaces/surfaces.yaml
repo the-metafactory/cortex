@@ -1,0 +1,91 @@
+# =============================================================================
+# surfaces/surfaces.yaml — the shared surface-gateway binding map (IAW CFG.c)
+# =============================================================================
+#
+# This is the SURFACES layer of the multi-file config layout (IAW CFG). It moves
+# the per-platform surface bindings (Discord/Slack/Mattermost `token`, `guild`,
+# channel/instance bindings) OUT of each stack's `agents[*].presence.{platform}`
+# block and INTO one top-level file. The boot composer
+# (`composeRawConfig` in src/common/config/loader.ts) reads it in this fixed
+# precedence and FOLDS each binding back into the matching agent's
+# `presence.{platform}` block:
+#
+#     system/system.yaml      (base — substrate / machine config)
+#     network/*.yaml          (federation roster, sorted by filename)
+#     surfaces/surfaces.yaml  ← THIS FILE (cross-stack surface bindings)
+#     stacks/*.yaml           (per-deployment policy / capabilities / agents)
+#
+# It is a SOURCE-LAYOUT change, not a runtime-shape change: after the fold the
+# composed raw config is identical to the inline (pre-CFG.c) form, so
+# `LoadedConfig` is byte-identical and every consumer (the per-stack adapters,
+# the per-presence-token wiring in src/cortex.ts) keeps working unchanged.
+#
+# OPTIONAL layer. A deployment with no surfaces.yaml keeps its bindings inline
+# in per-stack presence — that is the transitional fallback the three live
+# single-file configs (cortex.yaml / cortex.work.yaml / cortex.halden.yaml)
+# take. Per-stack presence is ALWAYS the fallback; surfaces.yaml layers on top.
+#
+# -----------------------------------------------------------------------------
+# Why this file exists: the shared surface gateway (GW, plan §13.2) precondition
+# -----------------------------------------------------------------------------
+#
+# This is the `{surface-instance → stack}` binding map the shared surface
+# gateway (GW) consumes. The gateway holds ONE platform connection per bot and
+# routes inbound platform messages to the right stack — it reads
+# `surfaces.{platform}[]` to build its `{instance → stack}` routing table
+# (GW.a.1 / GW.c.1 / GW.d.1 / GW.e.1). Pulling the bindings into this single
+# file is what lets the gateway own the platform edge without each stack opening
+# its own connection.
+#
+# -----------------------------------------------------------------------------
+# Shape (the binding map — what GW reads)
+# -----------------------------------------------------------------------------
+#
+#   surfaces:
+#     <platform>:                 # discord | slack | mattermost
+#       - agent: <agent-id>       # which agent's presence.<platform> this fills
+#                                 #   (join key against stacks/*.yaml agents[].id)
+#         stack: <principal>/<stack>   # OPTIONAL — the {instance → stack} binding
+#                                      #   GW routes on. Carried verbatim for the
+#                                      #   gateway; the composer does not consume
+#                                      #   it (agent id is the fold key).
+#         binding:                # the per-platform credential / instance fields
+#           ...                   #   (the binding subset of *PresenceSchema)
+#
+# Required binding fields, per platform (validated LOUDLY at load — CFG.c.4):
+#   - discord:    token, guildId, agentChannelId, logChannelId
+#   - slack:      botToken (xoxb-…), appToken (xapp-…), workspaceId (T…)
+#   - mattermost: apiUrl, apiToken
+#
+# Non-binding presence knobs (e.g. discord `contextDepth`, `surfaceSubjects`,
+# `trustedBotIds`) MAY stay inline in the stack's presence block; surfaces.yaml
+# owns only the binding. When both carry the same platform, the surfaces.yaml
+# binding WINS on leaf keys (it is the credential surface-of-truth), while inline
+# non-binding knobs survive the merge.
+#
+# Copy this file to your config dir and fill in real tokens/keys.
+
+surfaces:
+  discord:
+    - agent: ivy
+      stack: andreas/research
+      binding:
+        token: REPLACE_WITH_DISCORD_BOT_TOKEN
+        guildId: "000000000000000000"
+        agentChannelId: "000000000000000000"
+        logChannelId: "000000000000000000"
+
+  # slack:
+  #   - agent: ivy
+  #     stack: andreas/research
+  #     binding:
+  #       botToken: xoxb-REPLACE
+  #       appToken: xapp-REPLACE
+  #       workspaceId: T01234567
+
+  # mattermost:
+  #   - agent: ivy
+  #     stack: andreas/research
+  #     binding:
+  #       apiUrl: https://mattermost.example.com
+  #       apiToken: REPLACE_WITH_MATTERMOST_TOKEN

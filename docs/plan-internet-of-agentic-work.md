@@ -749,18 +749,18 @@ Neither epic flips the principal-facing schema in a breaking way: CFG ships a tr
 
 #### CFG.c Move surface bindings out of per-stack `agents.presence` into `surfaces.yaml`
 
-- [ ] **CFG.c.1** Surface bindings (Discord/Mattermost/Slack `token`, `guild`, channel/instance bindings) move from each stack's `agents.presence` block into a top-level `surfaces.yaml`.
-- [ ] **CFG.c.2** `LoadedConfig` still exposes the same effective presence/binding view to today's consumers (per-stack adapters keep working); the move is a source-layout change, not a runtime-shape change.
-- [ ] **CFG.c.3** `surfaces.yaml` is the file the shared surface gateway (GW) consumes — this slice is the GW precondition.
-- [ ] **CFG.c.4** Tests: per-stack adapter behaviour unchanged after the move (same tokens/guilds resolved); `surfaces.yaml` schema validates required binding fields.
+- [x] **CFG.c.1** Surface bindings (Discord/Mattermost/Slack `token`, `guild`, channel/instance bindings) move from each stack's `agents.presence` block into a top-level `surfaces.yaml`. — #523: `surfaces.yaml` layer + `SurfacesSchema` (`src/common/types/surfaces.ts`) — the `{surface-instance → stack}` binding map keyed by platform; the composer (`composeRawConfig`) reads `surfaces/surfaces.yaml` and `foldSurfaceBindings` folds each binding back into `agents[*].presence.{platform}`.
+- [x] **CFG.c.2** `LoadedConfig` still exposes the same effective presence/binding view to today's consumers (per-stack adapters keep working); the move is a source-layout change, not a runtime-shape change. — #523: the fold drops the top-level `surfaces:` key so the composed raw config is identical to the inline form; `LoadedConfig` byte-identical (round-trip test asserts `toEqual`). The per-presence-token wiring in `src/cortex.ts` + the flattened `config.{discord,slack,mattermost}` arrays are untouched.
+- [x] **CFG.c.3** `surfaces.yaml` is the file the shared surface gateway (GW) consumes — this slice is the GW precondition. — #523: binding-map shape documented in `docs/config-layout/surfaces/surfaces.yaml` + `docs/config-layout/README.md` (the `{agent, stack?, binding}` map + required fields per platform).
+- [x] **CFG.c.4** Tests: per-stack adapter behaviour unchanged after the move (same tokens/guilds resolved); `surfaces.yaml` schema validates required binding fields. — #523: `src/common/config/__tests__/surfaces-layer.test.ts` — round-trip (bindings-in-surfaces.yaml resolves to the same effective view as bindings-in-per-stack-presence, all 3 platforms), required-binding-field validation (missing `token`/`botToken`/`apiToken` + typo'd platform key fail loudly), no-surfaces.yaml fallback, surfaces-wins-over-inline precedence, unknown-agent loud failure, fold idempotence.
 
 #### EPIC CFG acceptance criteria
 
-- [ ] Multi-file directory layout composes to a `LoadedConfig` identical to the equivalent single file.
-- [ ] Single-file `cortex.yaml` still loads via the transitional fallback (no principal-facing break).
-- [ ] `system.yaml` exists with `claude`/`execution`/`attachments`/`paths`/`nats`/`bus`; `nats.subjects` isolated in one place.
-- [ ] Surface bindings live in `surfaces.yaml`, out of per-stack `agents.presence`; per-stack adapters unchanged at runtime.
-- [ ] `LoadedConfig` shape unchanged across the whole epic; no consumer edits required.
+- [x] Multi-file directory layout composes to a `LoadedConfig` identical to the equivalent single file. — CFG.a #525 + CFG.b #529 + CFG.c #523.
+- [x] Single-file `cortex.yaml` still loads via the transitional fallback (no principal-facing break). — CFG.a #525; CFG.c confirmed the 3 live single-file configs still load through the modified composer (fold is a no-op when no `surfaces:` key present).
+- [x] `system.yaml` exists with `claude`/`execution`/`attachments`/`paths`/`nats`/`bus`; `nats.subjects` isolated in one place. — CFG.b #529.
+- [x] Surface bindings live in `surfaces.yaml`, out of per-stack `agents.presence`; per-stack adapters unchanged at runtime. — CFG.c #523.
+- [x] `LoadedConfig` shape unchanged across the whole epic; no consumer edits required. — CFG.a/b/c: round-trip `toEqual` identity tests at each slice; no consumer edits in CFG.c (the fold runs entirely inside `composeRawConfig`).
 
 ### 13.2 EPIC GW — Shared surface gateway (one assistant, many deployments)
 
