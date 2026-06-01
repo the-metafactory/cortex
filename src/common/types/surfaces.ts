@@ -219,7 +219,6 @@ export type MattermostSurfaceBinding = z.infer<typeof MattermostSurfaceBindingSc
 // =============================================================================
 
 const PLATFORMS = ["discord", "slack", "mattermost"] as const;
-type Platform = (typeof PLATFORMS)[number];
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -304,11 +303,9 @@ export function foldSurfaceBindings(
             `Fix the binding's \`agent:\` field or add the agent to a stack.`,
         );
       }
-      const presence = isPlainObject(agent.presence)
-        ? (agent.presence as Record<string, unknown>)
-        : {};
+      const presence = isPlainObject(agent.presence) ? agent.presence : {};
       const existing = isPlainObject(presence[platform])
-        ? (presence[platform] as Record<string, unknown>)
+        ? presence[platform]
         : {};
       // Binding wins on leaf keys (surfaces.yaml is the credential surface of
       // truth, layered over any inline non-binding presence knobs).
