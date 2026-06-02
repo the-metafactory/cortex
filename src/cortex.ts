@@ -91,6 +91,8 @@ import type { PlatformAdapter } from "./adapters/types";
 import { createDispatchSink, type DispatchSink } from "./adapters/dispatch-sink";
 import { createReviewSink, type ReviewSink } from "./adapters/review-sink";
 import { startGatewayIfEnabled } from "./gateway/start-gateway";
+import { isGatewayEnabled } from "./gateway/gateway-bootstrap";
+import { gatewayOwnedSurfaceKeys } from "./gateway/gateway-adapters";
 import type { Surfaces } from "./common/types/surfaces";
 import type { SurfaceGateway } from "./gateway/surface-gateway";
 
@@ -1365,6 +1367,25 @@ export async function startCortex(
   const adapters: PlatformAdapter[] = [];
   const adapterCleanup: (() => void)[] = [];
 
+  // GW.a.3b.2c (cortex#524) — the per-stack adapter suppression set. When
+  // `CORTEX_GATEWAY` is set, the shared surface gateway (constructed below via
+  // `startGatewayIfEnabled`) builds ONE adapter per `surfaces:` binding on the
+  // SAME bot token the fold also wrote into `agents[].presence.{platform}`.
+  // Starting the per-stack adapter too would double-connect that bot identity
+  // and double-deliver every message (the §1.2 bug). Each loop below skips an
+  // instance whose `{platform}:{agent.id}` is in this set, yielding that
+  // surface to the gateway.
+  //
+  // SAFETY: `gatewayOwnedSurfaceKeys` returns an EMPTY set when the flag is off
+  // (or no surfaces are configured). An empty set makes every `.has(...)` below
+  // false → no `continue` → the per-stack loops are byte-identical to the
+  // pre-GW boot. `CORTEX_GATEWAY` is off on every live stack, so this is a
+  // true no-op on the live boot path.
+  const gatewayOwned = gatewayOwnedSurfaceKeys(
+    options.surfaces,
+    isGatewayEnabled(process.env),
+  );
+
   // MIG-7.2e: per-instance agent lookup. When cortex.yaml supplies
   // `inlineAgents` (reused from the registry-merge block above), each
   // Discord/Mattermost adapter binds to the declared Agent (real id,
@@ -1462,6 +1483,17 @@ export async function startCortex(
       trust: [],
       presence: { discord: presence },
     };
+    // GW.a.3b.2c — the gateway owns this surface; yield it so we don't
+    // double-connect the same bot token. `gatewayOwned` is empty when
+    // CORTEX_GATEWAY is off → this is never taken on the live boot path. The
+    // suppressed instance never enters `startedDiscord`, so the Pass-2 trust
+    // merge / outbound-poller bookkeeping simply never sees it.
+    if (gatewayOwned.has(`discord:${agent.id}`)) {
+      console.log(
+        `cortex: per-stack discord adapter for agent "${agent.id}" suppressed — the shared surface gateway owns this surface (CORTEX_GATEWAY).`,
+      );
+      continue; // skip — the gateway owns this connection
+    }
     try {
       // cortex#84: build the trusted-peer-bot allowlist once per adapter
       // start so the messageCreate hot path doesn't re-allocate per event.
@@ -1648,6 +1680,16 @@ export async function startCortex(
       trust: [],
       presence: { mattermost: presence },
     };
+    // GW.a.3b.2c — yield to the gateway when it owns this surface (see the
+    // Discord block above). `gatewayOwned` is empty when CORTEX_GATEWAY is off,
+    // so this never fires on the live boot path. The Mattermost loop pushes
+    // nothing to a later bookkeeping pass, so skipping is a clean `continue`.
+    if (gatewayOwned.has(`mattermost:${agent.id}`)) {
+      console.log(
+        `cortex: per-stack mattermost adapter for agent "${agent.id}" suppressed — the shared surface gateway owns this surface (CORTEX_GATEWAY).`,
+      );
+      continue; // skip — the gateway owns this connection
+    }
     try {
       const adapter = new MattermostAdapter(
         agent,
@@ -1729,6 +1771,16 @@ export async function startCortex(
       trust: [],
       presence: { slack: presence },
     };
+    // GW.a.3b.2c — yield to the gateway when it owns this surface (see the
+    // Discord block above). `gatewayOwned` is empty when CORTEX_GATEWAY is off,
+    // so this never fires on the live boot path. The suppressed instance never
+    // enters `startedSlack`, so the Pass-2 trust merge never sees it.
+    if (gatewayOwned.has(`slack:${agent.id}`)) {
+      console.log(
+        `cortex: per-stack slack adapter for agent "${agent.id}" suppressed — the shared surface gateway owns this surface (CORTEX_GATEWAY).`,
+      );
+      continue; // skip — the gateway owns this connection
+    }
     try {
       const adapter = new SlackAdapter(
         agent,

@@ -264,3 +264,60 @@ export function buildGatewayAdapters(
 
   return adapters;
 }
+
+// =============================================================================
+// gatewayOwnedSurfaceKeys — the per-stack suppression set (GW.a.3b.2c)
+// =============================================================================
+
+/**
+ * Build the set of `{platform}:{agentId}` keys the gateway OWNS, so the
+ * per-stack adapter loops in `src/cortex.ts` can yield those surfaces to the
+ * gateway and avoid a second connection on the same bot identity (cortex#524,
+ * the §1.2 double-message bug).
+ *
+ * The problem this closes: `foldSurfaceBindings` folds a `surfaces:` binding
+ * INTO `agents[].presence.{platform}`, so the per-stack loop would start an
+ * adapter on that token — AND `buildGatewayAdapters` (above) ALSO builds an
+ * adapter on the same token from the same `Surfaces` map. Two connections on
+ * one bot identity in one runtime double-deliver every message. This set lets
+ * the per-stack loop skip exactly the (platform, agent) pairs the gateway owns.
+ *
+ * Keying convention: `{platform}:{agentId}` where `agentId` is the binding's
+ * `.agent` field (the fold-join key against `agents[].id`). The per-stack loop
+ * matches each instance to its `Agent` and checks `has(`{platform}:${agent.id}`)`.
+ * This is the SAME agent id both sides reference — the binding names it, the
+ * fold writes it into that agent's presence, and the loop resolves it back.
+ *
+ * ## Hard safety contract
+ *
+ * Returns an **empty set** when `enabled` is false OR `surfaces` is undefined.
+ * The per-stack loops gate their skip on `gatewayOwned.has(...)`; an empty set
+ * makes every `.has(...)` false → no skip → byte-identical flag-off boot. This
+ * is the single point that guarantees `CORTEX_GATEWAY` off changes nothing.
+ *
+ * Pure + side-effect-free — independently unit-testable.
+ */
+export function gatewayOwnedSurfaceKeys(
+  surfaces: Surfaces | undefined,
+  enabled: boolean,
+): Set<string> {
+  const keys = new Set<string>();
+
+  // Flag off OR no surfaces → empty set → zero suppression (byte-identical
+  // flag-off boot). This guard is the safety contract; do not weaken it.
+  if (!enabled || surfaces === undefined) {
+    return keys;
+  }
+
+  for (const entry of surfaces.discord ?? []) {
+    keys.add(`discord:${entry.agent}`);
+  }
+  for (const entry of surfaces.slack ?? []) {
+    keys.add(`slack:${entry.agent}`);
+  }
+  for (const entry of surfaces.mattermost ?? []) {
+    keys.add(`mattermost:${entry.agent}`);
+  }
+
+  return keys;
+}
