@@ -90,6 +90,9 @@ import { SlackAdapter } from "./adapters/slack";
 import type { PlatformAdapter } from "./adapters/types";
 import { createDispatchSink, type DispatchSink } from "./adapters/dispatch-sink";
 import { createReviewSink, type ReviewSink } from "./adapters/review-sink";
+import { startGatewayIfEnabled } from "./gateway/start-gateway";
+import type { Surfaces } from "./common/types/surfaces";
+import type { SurfaceGateway } from "./gateway/surface-gateway";
 
 import { createDispatchListener, type DispatchListener } from "./runner/dispatch-listener";
 import { WorklogManager } from "./runner/worklog-manager";
@@ -315,6 +318,17 @@ export interface StartCortexOptions {
    * @internal — not part of the public API; semver does not apply.
    */
   bus?: BusConfig;
+  /**
+   * IAW GW (cortex#524) — validated surface binding map from
+   * `LoadedConfig.surfaces`. Consumed ONLY by the flag-gated
+   * `startGatewayIfEnabled` block below; when `CORTEX_GATEWAY` is unset (the
+   * default on every live stack) this field is read but the gateway is never
+   * constructed. Undefined for legacy `bot.yaml` input and for cortex-shape
+   * input with no `surfaces:` block.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  surfaces?: Surfaces;
   /**
    * v2.0.0 cutover (cortex#297) — principal's platform-side ids surfaced
    * from `PrincipalConfigSchema` via `LoadedConfig.principal`. Replaces the
@@ -2108,6 +2122,24 @@ export async function startCortex(
     );
   }
 
+  // IAW GW (cortex#524) — shared surface gateway, flag-gated + DORMANT by
+  // default. `startGatewayIfEnabled` reads `CORTEX_GATEWAY` from the env;
+  // when the flag is unset (every live stack today) it returns `undefined`
+  // and constructs NOTHING — this block is a true no-op and the per-stack
+  // adapter boot above is entirely unaffected. When the flag IS set AND
+  // `surfaces:` bindings exist, it builds one adapter per binding, constructs
+  // a shadow-stage SurfaceGateway (LoggingInboundSink — no bus publish yet),
+  // starts it, and returns the instance so `gw?.stop()` joins the shutdown
+  // drain below. The flag-on path is shadow/log-only this slice; the
+  // BusInboundSink flip is a later slice. This is purely additive — it does
+  // not touch, reorder, or risk the existing adapter-construction flow.
+  const gw: SurfaceGateway | undefined = await startGatewayIfEnabled({
+    env: process.env,
+    surfaces: options.surfaces,
+    principal: principalId,
+    runtime,
+  });
+
   // Shutdown — reverse-order; capped at SHUTDOWN_TIMEOUT_MS.
   //
   // Echo round-1 N2 — abandoned-set tracking: each drain step is named
@@ -2144,6 +2176,10 @@ export async function startCortex(
       "dispatch-listener stop",
       "dispatch-sink stop",
       "review-sink stop",
+      // IAW GW (cortex#524) — only present when the flag-gated gateway started;
+      // `gw` is `undefined` on every dormant (default) stack, in which case the
+      // drain step below is a no-op and this slot self-completes immediately.
+      "surface-gateway stop",
       "surface-router stop",
       "dispatch-handler shutdown",
       ...adapterStopNames,
@@ -2204,6 +2240,13 @@ export async function startCortex(
       // surface-router / adapters close, so no late `postResponse` lands
       // after the platform connections close. `stop()` is idempotent.
       await completeAsync("review-sink stop", reviewSink.stop());
+      // IAW GW (cortex#524) — stop the shared surface gateway (its own
+      // adapter connections, separate from the per-stack `adapters[]`) on the
+      // same boundary as the sinks: after the runner stops publishing but
+      // before the surface-router / per-stack adapters close. `gw` is
+      // `undefined` on every dormant (default) stack — `gw?.stop()` is then a
+      // no-op and the slot self-completes.
+      await completeAsync("surface-gateway stop", gw?.stop());
       // IAW B.2a — bus-dispatch-listener drain runs after the dispatch
       // listener (which feeds dispatch-handler) but before the
       // surface-router stop. The listener's `stop()` awaits its
@@ -2653,7 +2696,7 @@ if (import.meta.main) {
       // block when the principal declared one — `startCortex` calls
       // `deriveStackId` and logs the resolved stack id. Today this is
       // observational only; emit subjects are unchanged.
-      const { config, inlineAgents, stack, policy, principal, bus } = loadConfigWithAgents(options.config);
+      const { config, inlineAgents, stack, policy, principal, bus, surfaces } = loadConfigWithAgents(options.config);
       const handle = await startCortex(config, {
         configPath: options.config,
         ...(inlineAgents.length > 0 && { inlineAgents }),
@@ -2663,6 +2706,11 @@ if (import.meta.main) {
         // the canonical `.principal` field.
         ...(principal !== undefined && { principal }),
         ...(bus !== undefined && { bus }),
+        // IAW GW (cortex#524) — thread the validated surface binding map
+        // through so the flag-gated gateway block in startCortex can read it.
+        // Dormant unless CORTEX_GATEWAY is set; undefined when no surfaces:
+        // block was declared.
+        ...(surfaces !== undefined && { surfaces }),
       });
 
       const shutdown = async () => {
