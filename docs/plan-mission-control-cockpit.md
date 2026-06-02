@@ -294,18 +294,29 @@ session, and attention state. Recasts the existing `Iterations` tab.
 
 **Sub-features (sketched — refined at phase start):**
 
-- [ ] **G-1113.D.1** — `Plan` + `PlanPhase` types + storage
-- [ ] **G-1113.D.2** — Plan ingestion: parse repo-local plan docs
+- [x] **G-1113.D.1** — `Plan` + `PlanPhase` types + storage (#584)
+- [x] **G-1113.D.2** — Plan ingestion: parse repo-local plan docs
   (`docs/plan-*.md`, `docs/iteration-*.md`) into `Plan` rows with
-  `sourceDocumentUrl`
-- [ ] **G-1113.D.3** — Plan overview surface (a new tab or recast `Iterations`)
+  `sourceDocumentUrl` (#585)
+- [x] **G-1113.D.3** — Plan overview surface (a new tab or recast `Iterations`)
   showing the design §7.1 layout: title, current phase, per-phase progress,
-  WI/PR/release/attention counts
-- [ ] **G-1113.D.4** — Phase detail view (design §7.2)
+  WI/PR/release/attention counts (#586)
+- [ ] **G-1113.D.4** — Phase detail view (design §7.2) — *in review (#588)*.
+  Introduces the `WorkItem` model + `work_items` storage + phase-detail
+  projection/UI. Honest empty state until ingestion (D.5b) lands.
 - [ ] **G-1113.D.5** — Work-item detail evolves to show plan/phase context
   + linked branches/PRs/checks (design §7.3)
+- [ ] **G-1113.D.5b** — WorkItem ingestion, **provider-neutral from the start**
+  (#587): define a generic `WorkItemSource` interface behind `adapters/`,
+  implement GitHub as the *first* adapter against it (umbrella → sub-issues →
+  `WorkItem`s; link PRs via `pull_requests.work_item_id`). Forces neutrality to
+  be exercised by design rather than asserted.
 - [ ] **G-1113.D.6** — Compatibility: keep the legacy iteration kanban
   available behind a tab toggle until plan surface reaches parity
+- [ ] **G-1113.D.7** — Migrate the legacy github-coupled `tasks`/`iterations`
+  layer (`source_system` CHECK, `api/iteration-import.ts`) onto the
+  provider-neutral `SourceRef` (#590). Behaviour-preserving; coordinates with
+  D.5b's adapter boundary so GitHub stays *a* provider, not *the* provider.
 
 **Acceptance criteria:**
 
@@ -318,9 +329,7 @@ session, and attention state. Recasts the existing `Iterations` tab.
 **Dependencies:** Phase B; benefits from Phase C but does not block on C
 beyond the WI ⇄ PR linkage (D.5).
 
-**Open question carried from design §11:** canonical noun — `Plan` vs
-`Program` vs `Work Plan`. Defaulted to **`Plan`** in this doc; revisit during
-D.1.
+**Resolved (D.1, #584):** canonical noun is **`Plan`** (design §11 Q1 struck).
 
 ---
 
