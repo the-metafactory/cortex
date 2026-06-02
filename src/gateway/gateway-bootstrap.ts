@@ -35,7 +35,10 @@
  *    with its own Discord/Slack application and bot token is needed to connect
  *    real platform adapters to the gateway during the shadow dry-run. These are
  *    injected via the `adapters` parameter; constructing them from a live config
- *    is GW.a.3b.2 work.
+ *    is GW.a.3b.2 work. **Precondition a.3b.2 must honour:** pass ≥1 adapter when
+ *    bindings are present — this factory does not guard `adapters: []` (a gateway
+ *    with bindings but no connections has nothing to receive on); a.3b.2 builds
+ *    one adapter per `(platform, identity)` the gateway owns.
  *
  * ## Decision log (principal-locked 2026-06-02)
  *

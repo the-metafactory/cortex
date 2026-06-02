@@ -18,7 +18,7 @@
  *  13.  maybeCreateSurfaceGateway — buildBindingIndex throws (duplicate key) → propagates error
  */
 
-import { describe, expect, test, spyOn, beforeEach, afterEach } from "bun:test";
+import { describe, expect, test, spyOn } from "bun:test";
 import {
   isGatewayEnabled,
   maybeCreateSurfaceGateway,
