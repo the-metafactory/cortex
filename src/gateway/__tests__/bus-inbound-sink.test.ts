@@ -15,7 +15,7 @@
  *      no throw
  *   8. { published: false, reason: "missing-runtime" } → logged to stderr
  *   9. runtime: undefined → publishFn still called (publisher handles it)
- *  10. publish() never throws even when publishFn rejects
+ *  10. publishFn rejection propagates to the gateway's outer catch (sink is not the firewall)
  */
 
 import { describe, expect, test } from "bun:test";
@@ -309,13 +309,12 @@ describe("BusInboundSink", () => {
 
   // ── Test 10: publishFn rejects → no throw (safety net) ───────────────────────
 
-  test("publish() never throws even when publishFn rejects", async () => {
-    const stderrLines: string[] = [];
-    // We do NOT swallow in this test — let the gateway's outer try/catch handle it
-    // BUT: the sink's publish() itself must not throw.
-    // The SurfaceGateway wraps handleInbound in a try/catch; the sink is inside that.
-    // What we verify: sink.publish() itself has NO uncaught throw even if publishFn throws.
-    // (In practice the gateway's outer catch swallows it, but we test the sink in isolation.)
+  test("publishFn rejection propagates to the gateway's outer catch — sink is not the firewall", async () => {
+    // The sink deliberately does NOT catch publishFn throws. It lets them
+    // propagate to SurfaceGateway.handleInbound's outer try/catch, which IS the
+    // adapter-loop firewall (see surface-gateway.ts). Keeping the firewall in one
+    // place (the gateway) avoids a redundant second catch here. This test pins
+    // that boundary: an unexpected publisher throw surfaces as a rejection.
     const sink = new BusInboundSink({
       runtime: STUB_RUNTIME,
       source: STUB_SOURCE,
@@ -325,14 +324,9 @@ describe("BusInboundSink", () => {
       },
     });
 
-    // The sink does NOT swallow publishFn throws — it lets them propagate to
-    // SurfaceGateway.handleInbound's outer catch. This is intentional: the sink
-    // is not a firewall; the gateway loop IS the firewall. Verify: no unhandled
-    // rejection escapes.
     await expect(sink.publish(makeDecision(), makeMsg())).rejects.toThrow(
       "NATS connection lost",
     );
-    void stderrLines; // suppress unused warning
   });
 
   // ── Test 11: stack optional (undefined) → mapped as undefined ──────────────
