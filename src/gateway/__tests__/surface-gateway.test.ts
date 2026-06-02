@@ -218,6 +218,7 @@ describe("SurfaceGateway.start()", () => {
     expect(a2.attachCalled).toBe(1);
     // attach MUST come after start (start stores onMessage; attach registers the listener).
     expect(a1.callOrder).toEqual(["start", "attach"]);
+    expect(a2.callOrder).toEqual(["start", "attach"]);
   });
 });
 
