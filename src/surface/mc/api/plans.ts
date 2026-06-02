@@ -7,9 +7,9 @@
  * Honest-data scope: per-phase WI/PR/release/attention counts (design §7.1)
  * are NOT projected here — that data doesn't exist until work-item linkage
  * (D.5+). We surface only what the skeleton genuinely knows: phase order +
- * status. `currentPhaseId` is set only when a phase is explicitly `active`
- * (never guessed from order), so the UI highlights a current phase only when
- * the data actually marks one.
+ * status. `currentPhaseId` is the first phase explicitly marked `active`
+ * (by phase order), or null when none is — so the UI highlights a current
+ * phase only when the data actually marks one, and never guesses from order.
  */
 import type { Database } from "bun:sqlite";
 import type { Plan, PlanPhase, PlanPhaseStatus } from "../types";
@@ -20,7 +20,12 @@ export type PhaseStatusCounts = Record<PlanPhaseStatus, number>;
 export interface PlanOverview {
   plan: Plan;
   phases: PlanPhase[];
-  /** The phase explicitly marked `active`, if exactly one is — else null (no guessing). */
+  /**
+   * The first phase explicitly marked `active` (by phase order), or null when
+   * none is. No single-active invariant is enforced upstream (the schema CHECK
+   * only constrains the status value), so a malformed multi-active plan
+   * resolves to the earliest active phase rather than signalling ambiguity.
+   */
   currentPhaseId: string | null;
   /** Tally of phases by status, for the card's progress line. */
   phaseCounts: PhaseStatusCounts;

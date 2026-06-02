@@ -63,7 +63,7 @@ export function PlansView({ plans, loaded }: PlansViewProps) {
             <p className="plan-meta">
               <span className={`badge kind-${ov.plan.kind}`}>{ov.plan.kind}</span>
               <span className={`badge status-${ov.plan.status}`}>{ov.plan.status}</span>
-              <span className="dim">{progressLine(ov)}</span>
+              {ov.phases.length > 0 ? <span className="dim">{progressLine(ov)}</span> : null}
             </p>
             {ov.phases.length === 0 ? (
               <p className="dim faint">No phases parsed from the source doc.</p>

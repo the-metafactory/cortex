@@ -7,8 +7,9 @@ import { tmpdir } from "os";
 import { rmSync, existsSync } from "fs";
 import { initDatabase } from "../db/init";
 import { upsertPlan, upsertPlanPhase } from "../db/plans";
-import { getPlansOverview } from "../api/plans";
+import { getPlansOverview, handleListPlans } from "../api/plans";
 import type { Plan, PlanPhase } from "../types";
+import type { PlanOverview } from "../api/plans";
 
 const plan: Plan = {
   id: "plan-1",
@@ -78,6 +79,54 @@ describe("getPlansOverview (D.3)", () => {
     expect(ov?.phases).toEqual([]);
     expect(ov?.currentPhaseId).toBeNull();
     expect(ov?.phaseCounts).toEqual(emptyExpected());
+  });
+
+  it("tallies the blocked + cancelled buckets (not just done/active)", () => {
+    const db = freshDb();
+    upsertPlan(db, plan);
+    upsertPlanPhase(db, phase("p-a", 0, "blocked"));
+    upsertPlanPhase(db, phase("p-b", 1, "cancelled"));
+    upsertPlanPhase(db, phase("p-c", 2, "done"));
+    const [ov] = getPlansOverview(db);
+    expect(ov?.phaseCounts).toEqual({
+      not_started: 0,
+      active: 0,
+      blocked: 1,
+      done: 1,
+      cancelled: 1,
+    });
+  });
+
+  it("resolves currentPhaseId to the EARLIEST active phase when several are active", () => {
+    const db = freshDb();
+    upsertPlan(db, plan);
+    upsertPlanPhase(db, phase("p-a", 0, "done"));
+    upsertPlanPhase(db, phase("p-b", 1, "active"));
+    upsertPlanPhase(db, phase("p-c", 2, "active"));
+    const [ov] = getPlansOverview(db);
+    // First-wins by (phase_order, id) — no single-active invariant upstream.
+    expect(ov?.currentPhaseId).toBe("p-b");
+    expect(ov?.phaseCounts.active).toBe(2);
+  });
+
+  it("orders multiple plans by title", () => {
+    const db = freshDb();
+    upsertPlan(db, { ...plan, id: "p-z", title: "Zeta plan" });
+    upsertPlan(db, { ...plan, id: "p-a", title: "Alpha plan" });
+    expect(getPlansOverview(db).map((o) => o.plan.title)).toEqual(["Alpha plan", "Zeta plan"]);
+  });
+
+  it("handleListPlans returns a { plans } envelope with 200 + JSON content-type", async () => {
+    const db = freshDb();
+    upsertPlan(db, plan);
+    upsertPlanPhase(db, phase("p-a", 0, "active"));
+    const res = handleListPlans(db);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const body = (await res.json()) as { plans: PlanOverview[] };
+    expect(body.plans).toHaveLength(1);
+    expect(body.plans[0]?.plan.id).toBe("plan-1");
+    expect(body.plans[0]?.currentPhaseId).toBe("p-a");
   });
 });
 
