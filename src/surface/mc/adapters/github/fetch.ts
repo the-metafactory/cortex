@@ -445,6 +445,70 @@ export async function fetchPullRequest(
 }
 
 /**
+ * G-1113.D.5b — a sub-issue of an umbrella issue, as the WorkItem ingester
+ * needs it. Subset of GitHub's `/issues/:n/sub_issues` array element.
+ */
+export interface GitHubSubIssue {
+  number: number;
+  title: string;
+  /** "open" | "closed" — verbatim from GitHub. */
+  state: string;
+  html_url: string;
+  /** Label names only. */
+  labels: string[];
+}
+
+interface RawGithubSubIssue {
+  number?: number;
+  title?: string;
+  state?: string;
+  html_url?: string;
+  labels?: ({ name?: string } | string)[];
+}
+
+/**
+ * G-1113.D.5b — fetch the sub-issues of an umbrella issue via
+ * `/repos/:owner/:repo/issues/:number/sub_issues`. Returns the normalized
+ * array or a {@link GitHubFetchError}. Used by the GitHub WorkItemSource to
+ * enumerate a plan's work items. Same `gh` CLI trust root + error mapping as
+ * {@link fetchPullRequest}.
+ */
+export async function fetchSubIssues(
+  ref: { owner: string; repo: string; number: number },
+  opts: { spawn?: GhSpawnFn; timeoutMs?: number } = {}
+): Promise<GitHubSubIssue[] | GitHubFetchError> {
+  const res = await runGhApi(`/repos/${ref.owner}/${ref.repo}/issues/${ref.number}/sub_issues`, opts);
+  if ("kind" in res) return res;
+
+  let raw: RawGithubSubIssue[];
+  try {
+    const parsed = JSON.parse(res.stdout) as unknown;
+    if (!Array.isArray(parsed)) {
+      return { kind: "parse_error", message: "GitHub sub_issues response was not an array." };
+    }
+    raw = parsed as RawGithubSubIssue[];
+  } catch (err) {
+    return { kind: "parse_error", message: `Could not parse GitHub sub_issues response: ${(err as Error).message}` };
+  }
+
+  const out: GitHubSubIssue[] = [];
+  for (const r of raw) {
+    if (typeof r.number !== "number" || typeof r.title !== "string" || typeof r.state !== "string" || typeof r.html_url !== "string") {
+      // Skip malformed rows rather than failing the whole ingest — a single
+      // odd sub-issue shouldn't sink the batch. (Logged by the caller's count.)
+      continue;
+    }
+    const labels = Array.isArray(r.labels)
+      ? r.labels
+          .map((l) => (typeof l === "string" ? l : l.name))
+          .filter((n): n is string => typeof n === "string")
+      : [];
+    out.push({ number: r.number, title: r.title, state: r.state, html_url: r.html_url, labels });
+  }
+  return out;
+}
+
+/**
  * Type guard: distinguish error from successful metadata.
  */
 export function isGitHubFetchError(
