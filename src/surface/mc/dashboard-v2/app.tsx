@@ -405,6 +405,10 @@ export function App() {
               // drill-header). No drill-down close because the table
               // click is happening with no overlay open.
               onOpenIteration={(iterationId) => {
+                // G-1113.D.6 — the iteration cell routes into the legacy kanban;
+                // when legacy is toggled off that surface is hidden, so no-op
+                // rather than bounce through the reset effect.
+                if (!legacyIterations) return;
                 setSelectedIterationId(iterationId);
                 setView("kanban-detail");
               }}
@@ -688,6 +692,10 @@ export function App() {
         // clean iteration surface; the existing F-7 history pattern
         // is "Esc closes, no breadcrumb back" so this matches.
         onOpenIteration={(iterationId) => {
+          // G-1113.D.6 — guard BEFORE the drill-down teardown: when legacy is
+          // off the kanban surface is hidden, so don't tear down the open
+          // drill-down for a navigation that the reset effect would bounce.
+          if (!legacyIterations) return;
           setDrillId(null);
           setFocusMode(false);
           setSelectedIterationId(iterationId);
