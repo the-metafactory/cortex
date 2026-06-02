@@ -1,0 +1,44 @@
+##
+## normalize-fixture.yaml — realistic cortex.yaml carrying the legacy
+## policy.principals[].home_operator field. Used by normalize-config tests
+## to verify the "JC case": a v3 config that passes migration but still
+## carries the pre-v4 key that the clean-break broke.
+##
+## The fixture is INTENTIONALLY invalid against CortexConfigSchema once
+## the home_operator key is present (the field is rejected as an unknown
+## key because CortexConfigSchema is strict on PolicyPrincipalSchema).
+## normalize-config renames it to home_principal so the result parses.
+##
+principal:
+  id: jcfischer
+  displayName: JC Fischer
+  dataResidency: CH
+
+agents:
+  - id: sage
+    displayName: Sage
+    persona: ./personas/sage.md
+    presence:
+      discord:
+        token: "DISCORD_TOKEN_PLACEHOLDER"
+        guildId: "123456789012345678"
+        agentChannelId: "234567890123456789"
+        logChannelId: "345678901234567890"
+
+renderers: []
+
+claude:
+  model: claude-opus-4-5
+  apiKey: env:ANTHROPIC_API_KEY
+
+policy:
+  principals:
+    - id: jcfischer
+      home_operator: jcfischer
+      home_stack: jcfischer/sage-host
+      role: []
+    - id: echo
+      home_operator: echo-principal
+      home_stack: echo/default
+      role: []
+  roles: []
