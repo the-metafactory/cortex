@@ -22,6 +22,8 @@ export const TABLE_NAMES = [
   "deployments",
   "artifacts",
   "releases",
+  "plans",
+  "plan_phases",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
@@ -370,6 +372,41 @@ export const SCHEMA_SQL: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_deployments_repository ON deployments(repository_id)`,
   `CREATE INDEX IF NOT EXISTS idx_artifacts_repository ON artifacts(repository_id)`,
   `CREATE INDEX IF NOT EXISTS idx_releases_repository ON releases(repository_id)`,
+
+  // --- plans (G-1113.D.1 — design §6) ---
+  // kind/status CHECK-constrained (closed enums); provider app-validated via
+  // isProvider (no CHECK).
+  `CREATE TABLE IF NOT EXISTS plans (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    kind TEXT NOT NULL
+      CHECK(kind IN ('research','design','iteration','migration','release','rollout','incident')),
+    source_document_url TEXT,
+    provider TEXT NOT NULL,
+    external_id TEXT,
+    umbrella_work_item_id TEXT,
+    status TEXT NOT NULL DEFAULT 'draft'
+      CHECK(status IN ('draft','active','blocked','done','cancelled')),
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+
+  // --- plan_phases (G-1113.D.1) ---
+  // `phase_order` column (avoids the SQL reserved word ORDER); maps to the
+  // PlanPhase.order field.
+  `CREATE TABLE IF NOT EXISTS plan_phases (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE RESTRICT,
+    title TEXT NOT NULL,
+    phase_order INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'not_started'
+      CHECK(status IN ('not_started','active','blocked','done','cancelled')),
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+
+  // Phase lookup by plan, ordered.
+  `CREATE INDEX IF NOT EXISTS idx_plan_phases_plan ON plan_phases(plan_id, phase_order)`,
 ];
 
 /**

@@ -310,6 +310,45 @@ export interface Release {
   state: ReleaseState;
 }
 
+// --- Plan lineage (G-1113.D — design §6) ---
+
+export type PlanKind =
+  | "research"
+  | "design"
+  | "iteration"
+  | "migration"
+  | "release"
+  | "rollout"
+  | "incident";
+export type PlanStatus = "draft" | "active" | "blocked" | "done" | "cancelled";
+
+/**
+ * A plan/program — the work-management layer above tasks/work items (design §6).
+ * `umbrellaWorkItemId` links to the umbrella issue when one backs it (wired in
+ * later D slices). The phases are stored separately ({@link PlanPhase}).
+ */
+export interface Plan {
+  id: string;
+  title: string;
+  kind: PlanKind;
+  sourceDocumentUrl: string | null;
+  provider: Provider;
+  externalId: string | null;
+  umbrellaWorkItemId: string | null;
+  status: PlanStatus;
+}
+
+export type PlanPhaseStatus = "not_started" | "active" | "blocked" | "done" | "cancelled";
+
+/** An ordered phase/wave within a {@link Plan}. */
+export interface PlanPhase {
+  id: string;
+  planId: string;
+  title: string;
+  order: number;
+  status: PlanPhaseStatus;
+}
+
 export interface Task {
   id: string;
   title: string;
