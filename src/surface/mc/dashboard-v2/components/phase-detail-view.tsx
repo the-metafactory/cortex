@@ -14,9 +14,11 @@ export interface PhaseDetailViewProps {
   detail: PhaseDetail | null;
   loaded: boolean;
   onClose: () => void;
+  /** Open the work-item detail surface (D.5). */
+  onOpenWorkItem?: (workItemId: string) => void;
 }
 
-export function PhaseDetailView({ detail, loaded, onClose }: PhaseDetailViewProps) {
+export function PhaseDetailView({ detail, loaded, onClose, onOpenWorkItem }: PhaseDetailViewProps) {
   return (
     <section className="scaffold-section phase-detail" aria-label="Phase detail">
       <div className="phase-detail-head">
@@ -49,13 +51,29 @@ export function PhaseDetailView({ detail, loaded, onClose }: PhaseDetailViewProp
               {detail.workItems.map(({ workItem: w, pullRequests }) => (
                 <li key={w.id} className="work-item">
                   <div className="work-item-head">
-                    {w.url ? (
-                      <a href={w.url} target="_blank" rel="noopener noreferrer">
+                    {onOpenWorkItem ? (
+                      <button
+                        type="button"
+                        className="work-item-open"
+                        onClick={() => onOpenWorkItem(w.id)}
+                        aria-label={`Open work item ${w.title}`}
+                      >
                         {w.title}
-                      </a>
+                      </button>
                     ) : (
                       <span>{w.title}</span>
                     )}
+                    {w.url ? (
+                      <a
+                        className="dim mono wid-ext"
+                        href={w.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label="Open on provider"
+                      >
+                        ↗
+                      </a>
+                    ) : null}
                     {w.status ? <span className="badge">{w.status}</span> : null}
                   </div>
                   {pullRequests.length > 0 ? (
