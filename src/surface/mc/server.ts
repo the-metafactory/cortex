@@ -42,6 +42,7 @@ import { handleListGitLinks } from "./api/git-links";
 import { handleListRepositories } from "./api/git-repos";
 import { handleListPlans } from "./api/plans";
 import { handleGetPhaseDetail } from "./api/phase-detail";
+import { handleGetWorkItemDetail } from "./api/work-item-detail";
 import type { ProcessManager } from "./session/process-manager";
 import type { SpawnFn } from "./session/endpoint-resolver";
 import { join, dirname } from "path";
@@ -433,6 +434,23 @@ async function handleApi(
       });
     }
     return handleGetPhaseDetail(db, phaseId);
+  }
+
+  // G-1113.D.5 — GET /api/work-items?id=… — work-item detail (plan/phase context
+  // + linked PRs with reviews). The id is a query param (not a path segment)
+  // because work-item ids are `owner/repo#N` and carry `/` and `#`.
+  if (pathname === "/api/work-items") {
+    if (req.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
+    const id = url.searchParams.get("id");
+    if (!id) {
+      return new Response(JSON.stringify({ error: "missing id query param" }), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return handleGetWorkItemDetail(db, id);
   }
 
   if (pathname === "/api/tasks") {
