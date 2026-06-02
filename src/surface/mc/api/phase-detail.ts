@@ -14,8 +14,7 @@
  */
 import type { Database } from "bun:sqlite";
 import type { Plan, PlanPhase, WorkItem, PullRequest } from "../types";
-import { getPlan } from "../db/plans";
-import { getPlanPhase } from "../db/plans";
+import { getPlan, getPlanPhase } from "../db/plans";
 import { listWorkItemsForPhase } from "../db/work-items";
 import { listPullRequestsForWorkItem } from "../db/git-objects";
 

@@ -598,8 +598,10 @@ export function App() {
           />
         )}
 
-        {view === "phase-detail" && softwareMode && (
-          /* G-1113.D.4 — phase-detail surface (reached from a Plans phase row). */
+        {view === "phase-detail" && softwareMode && selectedPhaseId && (
+          /* G-1113.D.4 — phase-detail surface (reached from a Plans phase row).
+             Guard on selectedPhaseId too (mirrors kanban-detail) so the surface
+             never renders a perpetual "Loading…" if view is ever set without one. */
           <PhaseDetailView
             detail={phaseDetail.detail}
             loaded={phaseDetail.loaded}

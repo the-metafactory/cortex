@@ -79,7 +79,13 @@ export function getWorkItem(db: Database, id: string): WorkItem | null {
   return row ? rowToWorkItem(row) : null;
 }
 
-/** Work items filed under a phase, ordered by priority then title (stable). */
+/**
+ * Work items filed under a phase, ordered by priority then title (stable on id).
+ * NOTE: `priority` is an open string (§6), so this ORDER BY is lexicographic —
+ * `'10'` sorts before `'2'`. Faithful to the spec today; when ingestion (#587)
+ * lands and a provider emits numeric priorities, revisit whether a numeric-aware
+ * sort key is wanted. The behaviour is locked by a test.
+ */
 export function listWorkItemsForPhase(db: Database, phaseId: string): WorkItem[] {
   const rows = db
     .query(`SELECT * FROM work_items WHERE phase_id = ? ORDER BY priority, title, id`)

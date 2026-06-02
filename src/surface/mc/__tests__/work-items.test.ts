@@ -94,6 +94,27 @@ describe("work-items storage (D.4)", () => {
     expect(() => upsertWorkItem(db, wi({ planId: "ghost" }))).toThrow();
     expect(() => upsertWorkItem(db, wi({ parentId: "ghost" }))).toThrow();
   });
+
+  it("self-ref parent FK satisfied: child links to a parent work item", () => {
+    const db = freshDb();
+    upsertPlan(db, plan);
+    upsertPlanPhase(db, phaseA);
+    // Insert order is load-bearing under FK enforcement: parent before child.
+    upsertWorkItem(db, wi({ id: "wi-parent", parentId: null, title: "parent" }));
+    upsertWorkItem(db, wi({ id: "wi-child", parentId: "wi-parent", title: "child" }));
+    expect(getWorkItem(db, "wi-child")?.parentId).toBe("wi-parent");
+    expect(listWorkItemsForPhase(db, "phase-a").map((w) => w.id)).toEqual(["wi-child", "wi-parent"]);
+  });
+
+  it("phase ordering is lexicographic by priority (spec: priority is a string)", () => {
+    const db = freshDb();
+    upsertPlan(db, plan);
+    upsertPlanPhase(db, phaseA);
+    upsertWorkItem(db, wi({ id: "wi-10", priority: "10", title: "ten" }));
+    upsertWorkItem(db, wi({ id: "wi-2", priority: "2", title: "two" }));
+    // '10' < '2' lexicographically — locks the documented (§6 string-priority) behaviour.
+    expect(listWorkItemsForPhase(db, "phase-a").map((w) => w.id)).toEqual(["wi-10", "wi-2"]);
+  });
 });
 
 describe("getPhaseDetail / handleGetPhaseDetail (D.4)", () => {
