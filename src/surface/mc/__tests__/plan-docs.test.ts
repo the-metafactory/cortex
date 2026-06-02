@@ -88,12 +88,65 @@ describe("parsePlanDoc (D.2, pure)", () => {
     expect(k("docs/plan-collaboration-surface.md")).toBe("design"); // default
   });
 
-  it("does not false-match 'Phase sequencing' / 'Phase-by-phase' headings", () => {
+  it("does not false-match separator-less headings (corpus near-misses)", () => {
     const { phases } = parsePlanDoc({
-      content: "# T\n## 4. Phase sequencing\n## 4. Phase-by-phase plan\n",
+      content: [
+        "# T",
+        "## 4. Phase sequencing", // no separator
+        "## 4. Phase-by-phase plan", // hyphen-joined, not 'Phase <label>'
+        "### Phase A acceptance criteria — ✅ all met (2026-05-15)", // IoAW:149 — words before dash
+        "### Cross-phase parallelism during Phase B", // 'Phase' not at heading start
+      ].join("\n"),
       path: "docs/plan-x.md",
     });
     expect(phases).toHaveLength(0);
+  });
+
+  it("preserves descriptive trailing parens; strips only id-shaped ones (IoAW corpus)", () => {
+    const { phases } = parsePlanDoc({
+      content: [
+        "# Internet of Agentic Work",
+        "## 2. Phase A — Foundation (substrate harness + visibility consumption + stack identity)",
+        "## 3. Phase B — Identity (NKey-signed bot↔bot)",
+        "## 4. Phase C — Policy + schema flip (PolicyEngine at M6)",
+        "### 5.4 Phase D — Plan Lineage UI (G-1113.D)", // id-shaped → stripped
+      ].join("\n"),
+      path: "docs/plan-internet-of-agentic-work.md",
+    });
+    expect(phases.map((p) => p.title)).toEqual([
+      "Foundation (substrate harness + visibility consumption + stack identity)",
+      "Identity (NKey-signed bot↔bot)",
+      "Policy + schema flip (PolicyEngine at M6)",
+      "Plan Lineage UI", // (G-1113.D) stripped
+    ]);
+  });
+
+  it("parses colon-delimited phase headings; preserves non-id '(Future)' (licensing corpus)", () => {
+    const { phases } = parsePlanDoc({
+      content: [
+        "# Licensing",
+        "## Phase 2A: License Foundation",
+        "## Phase 2B: Attribution and Documentation",
+        "## Phase 2D: Brand Protection (Future)",
+      ].join("\n"),
+      path: "docs/iteration-licensing.md",
+    });
+    expect(phases.map((p) => [p.id, p.title])).toEqual([
+      ["iteration-licensing-phase-2a", "License Foundation"],
+      ["iteration-licensing-phase-2b", "Attribution and Documentation"],
+      ["iteration-licensing-phase-2d", "Brand Protection (Future)"],
+    ]);
+  });
+
+  it("status: leading clause wins over narrative prose; word-boundaried (corpus)", () => {
+    const status = (line: string) =>
+      parsePlanDoc({ content: `# T\n\n**Status:** ${line}\n`, path: "docs/plan-x.md" }).plan.status;
+    // direction-a: "Active campaign … ~75% done already" → active, not done
+    expect(status("Active campaign. Re-grounded after audit revealed ~75% done already")).toBe("active");
+    expect(status("disclosed scope")).not.toBe("done"); // 'closed' ⊄ 'disclosed'
+    expect(status("Planned")).toBe("draft"); // licensing
+    expect(status("draft for review")).toBe("draft"); // cockpit
+    expect(status("Blocked on cortex#535")).toBe("blocked");
   });
 
   it("doc with no phase headings → plan with zero phases (still valid)", () => {

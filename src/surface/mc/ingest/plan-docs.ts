@@ -41,19 +41,30 @@ export interface ParsedPlanDoc {
 }
 
 /**
- * Phase heading shapes handled (the two doc families in scope):
- *   `### 5.4 Phase D — Plan Lineage UI (G-1113.D)`  (cockpit-plan: numbered, id suffix)
- *   `## Phase A — Data foundation + local bot scaffold`  (iteration: bare)
- * The optional `5.4 ` numeric prefix is skipped; the label (`D`, `A`, `1`) is
- * captured non-greedily up to the first em/en-dash or hyphen separator.
+ * Phase heading shapes handled across the real `docs/plan-*` / `docs/iteration-*`
+ * corpus (H2–H6 ATX):
+ *   `### 5.4 Phase D — Plan Lineage UI (G-1113.D)`     (cockpit: numbered, id suffix)
+ *   `## 2. Phase A — Foundation (substrate harness …)`  (IoAW: numbered, descriptive paren)
+ *   `## Phase A — Data foundation + local bot scaffold` (iteration: bare, em-dash)
+ *   `## Phase 2A: License Foundation`                   (iteration: colon separator)
+ * The optional numeric prefix (`5.4 `, `2. `) is skipped; the label (`D`, `2A`)
+ * is captured non-greedily up to the first em/en-dash, hyphen, OR colon. A
+ * separator is required, so subsection headings with words between the label and
+ * a later dash (`### Phase A acceptance criteria — ✅ all met`) do NOT match.
  */
-const PHASE_RE = /^#{2,4}\s+(?:[\d.]+\.?\s+)?Phase\s+(\S+?)\s*[—–-]\s*(.+?)\s*$/;
+const PHASE_RE = /^#{2,6}\s+(?:[\d.]+\.?\s+)?Phase\s+(\S+?)\s*[—–:-]\s*(.+?)\s*$/;
 /** First ATX H1 — the plan title. */
 const H1_RE = /^#\s+(.+?)\s*$/;
 /** Author-written status line, e.g. `**Status:** draft for review`. */
 const STATUS_RE = /^\*\*Status:\*\*\s*(.+)$/im;
-/** Trailing parenthetical to strip from a phase title, e.g. ` (G-1113.D)`. */
-const TRAILING_PAREN_RE = /\s*\([^)]*\)\s*$/;
+/**
+ * Trailing parenthetical to strip from a phase title — ONLY when it's a compact
+ * id token (a feature/issue id like `(G-1113.D)` or `(#42)`): no spaces, and at
+ * least one digit. Descriptive parens that are part of the human title
+ * (`(substrate harness + visibility consumption)`, `(NKey-signed bot↔bot)`,
+ * `(Future)`) contain spaces and/or no digit, so they're preserved.
+ */
+const TRAILING_PAREN_RE = /\s*\((?=[\w.#-]*\d)[\w.#-]+\)\s*$/;
 
 /** Slug used as the plan id — the doc basename without its `.md` extension. */
 function planIdFromPath(path: string): string {
@@ -77,12 +88,16 @@ function inferKind(path: string, title: string): PlanKind {
 function inferStatus(content: string): PlanStatus {
   const raw = STATUS_RE.exec(content)?.[1];
   if (raw !== undefined) {
-    const s = raw.toLowerCase();
-    if (s.includes("cancel")) return "cancelled";
-    if (/\bdone\b|complete|shipped|closed|merged/.test(s)) return "done";
-    if (s.includes("block")) return "blocked";
-    if (/draft|proposed|review/.test(s)) return "draft";
-    if (/active|progress|in[- ]flight|current/.test(s)) return "active";
+    // Match keywords against the LEADING CLAUSE only. Status lines often run on
+    // into narrative prose (`Active campaign. … ~75% done already`) that would
+    // poison a whole-line scan — the "done" in the narrative must not beat the
+    // leading "Active". Word boundaries keep `closed` out of `disclosed` etc.
+    const head = (raw.split(/[.,;:—–]/)[0] ?? "").toLowerCase().trim();
+    if (/\bcancel(?:l?ed)?\b/.test(head)) return "cancelled";
+    if (/\b(?:done|complete|completed|shipped|closed|merged)\b/.test(head)) return "done";
+    if (/\bblock(?:ed)?\b/.test(head)) return "blocked";
+    if (/\b(?:draft|proposed|review|planned|backlog)\b/.test(head)) return "draft";
+    if (/\b(?:active|progress|in[- ]flight|current)\b/.test(head)) return "active";
   }
   // A plan doc that exists and isn't marked otherwise is treated as active work.
   return "active";
@@ -120,6 +135,10 @@ export function parsePlanDoc(src: PlanDocSource): ParsedPlanDoc {
     const rawTitle = m?.[2];
     if (label === undefined || rawTitle === undefined) continue;
     const phaseTitle = rawTitle.replace(TRAILING_PAREN_RE, "").trim();
+    // Phase id is derived from the label; real plan docs use unique labels
+    // (A/B/C…). If a doc ever repeated a label, parsePlanDoc still yields both
+    // rows (distinct order), but ingestPlanDoc's upsert would collapse them onto
+    // one row by id (last writer wins) — acceptable given the corpus, noted here.
     phases.push({
       id: `${id}-phase-${label.toLowerCase()}`,
       planId: id,
