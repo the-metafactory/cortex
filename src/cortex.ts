@@ -2180,16 +2180,24 @@ export async function startCortex(
   // and constructs NOTHING — this block is a true no-op and the per-stack
   // adapter boot above is entirely unaffected. When the flag IS set AND
   // `surfaces:` bindings exist, it builds one adapter per binding, constructs
-  // a shadow-stage SurfaceGateway (LoggingInboundSink — no bus publish yet),
-  // starts it, and returns the instance so `gw?.stop()` joins the shutdown
-  // drain below. The flag-on path is shadow/log-only this slice; the
-  // BusInboundSink flip is a later slice. This is purely additive — it does
-  // not touch, reorder, or risk the existing adapter-construction flow.
+  // a SurfaceGateway, starts it, and returns the instance so `gw?.stop()` joins
+  // the shutdown drain below. Sink selection is a SECOND opt-in flag: with
+  // `CORTEX_GATEWAY_PUBLISH` unset the gateway runs SHADOW (LoggingInboundSink —
+  // no bus publish, unchanged from today); only when CORTEX_GATEWAY_PUBLISH=1 is
+  // ALSO set does it run LIVE (BusInboundSink — publishing to the bus). This is
+  // purely additive — it does not touch, reorder, or risk the existing
+  // adapter-construction flow.
   const gw: SurfaceGateway | undefined = await startGatewayIfEnabled({
     env: process.env,
     surfaces: options.surfaces,
     principal: principalId,
     runtime,
+    // Threaded for the live-path BusInboundSink (selected only when the second
+    // opt-in flag CORTEX_GATEWAY_PUBLISH is set). When the gateway is off
+    // (default) startGatewayIfEnabled returns before reading either — purely
+    // additive args, no behaviour change on a dormant stack.
+    source: systemEventSource,
+    policyEngine: adapterPolicyEngine,
   });
 
   // Shutdown — reverse-order; capped at SHUTDOWN_TIMEOUT_MS.

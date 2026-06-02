@@ -14,11 +14,14 @@
 
 import { describe, expect, test } from "bun:test";
 import { startGatewayIfEnabled } from "../start-gateway";
-import { SurfaceGateway } from "../surface-gateway";
+import { SurfaceGateway, LoggingInboundSink } from "../surface-gateway";
+import { BusInboundSink } from "../bus-inbound-sink";
 import type { GatewayAdapterFactory } from "../gateway-adapters";
 import type { PlatformAdapter } from "../../adapters/types";
 import type { Surfaces } from "../../common/types/surfaces";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
+import type { SystemEventSource } from "../../bus/system-events";
+import type { PolicyEngine } from "../../common/policy/engine";
 
 // =============================================================================
 // Fakes
@@ -29,6 +32,20 @@ const RUNTIME_STUB = {
   onEnvelope: () => () => {},
   stop: async () => {},
 } as unknown as MyelinRuntime;
+
+// Live-sink deps. They only need to be present (non-undefined) for the
+// BusInboundSink to be constructed; these tests assert the SELECTED SINK TYPE,
+// not a real publish (BusInboundSink publish behaviour is covered in
+// bus-inbound-sink.test.ts).
+const SOURCE_STUB = {
+  scope: "local",
+  principal: "andreas",
+  instance: "gateway-1",
+} as unknown as SystemEventSource;
+
+const POLICY_ENGINE_STUB = {
+  resolve: () => undefined,
+} as unknown as PolicyEngine;
 
 function makeFakeAdapter(
   platform: "discord" | "slack" | "mattermost",
@@ -115,6 +132,8 @@ describe("startGatewayIfEnabled — flag off", () => {
       surfaces: DISCORD_SURFACES,
       principal: "andreas",
       runtime: RUNTIME_STUB,
+      source: SOURCE_STUB,
+      policyEngine: POLICY_ENGINE_STUB,
       factory,
     });
     expect(gw).toBeUndefined();
@@ -131,6 +150,8 @@ describe("startGatewayIfEnabled — flag off", () => {
       surfaces: DISCORD_SURFACES,
       principal: "andreas",
       runtime: RUNTIME_STUB,
+      source: SOURCE_STUB,
+      policyEngine: POLICY_ENGINE_STUB,
       factory,
     });
     expect(gw).toBeUndefined();
@@ -146,6 +167,8 @@ describe("startGatewayIfEnabled — flag off", () => {
       surfaces: DISCORD_SURFACES,
       principal: "andreas",
       runtime: RUNTIME_STUB,
+      source: SOURCE_STUB,
+      policyEngine: POLICY_ENGINE_STUB,
       factory,
     });
     expect(gw).toBeUndefined();
@@ -162,6 +185,8 @@ describe("startGatewayIfEnabled — flag on", () => {
       surfaces: DISCORD_SURFACES,
       principal: "andreas",
       runtime: RUNTIME_STUB,
+      source: SOURCE_STUB,
+      policyEngine: POLICY_ENGINE_STUB,
       factory,
     });
     expect(gw).toBeInstanceOf(SurfaceGateway);
@@ -179,6 +204,8 @@ describe("startGatewayIfEnabled — flag on", () => {
       surfaces: undefined,
       principal: "andreas",
       runtime: RUNTIME_STUB,
+      source: SOURCE_STUB,
+      policyEngine: POLICY_ENGINE_STUB,
       factory,
     });
     expect(gw).toBeUndefined();
@@ -195,6 +222,8 @@ describe("startGatewayIfEnabled — flag on", () => {
       surfaces: {},
       principal: "andreas",
       runtime: RUNTIME_STUB,
+      source: SOURCE_STUB,
+      policyEngine: POLICY_ENGINE_STUB,
       factory,
     });
     expect(gw).toBeUndefined();
@@ -209,10 +238,119 @@ describe("startGatewayIfEnabled — flag on", () => {
       surfaces: DISCORD_SURFACES,
       principal: "andreas",
       runtime: RUNTIME_STUB,
+      source: SOURCE_STUB,
+      policyEngine: POLICY_ENGINE_STUB,
       factory,
     });
     expect(gw).toBeInstanceOf(SurfaceGateway);
     // stop() resolves without throwing
     await gw?.stop();
+  });
+});
+
+// =============================================================================
+// Sink selection — the CORTEX_GATEWAY_PUBLISH double-opt-in gate
+// =============================================================================
+
+describe("startGatewayIfEnabled — sink selection (CORTEX_GATEWAY_PUBLISH)", () => {
+  test("publish flag OFF (gateway on) → gateway uses LoggingInboundSink (SHADOW)", async () => {
+    const started: string[] = [];
+    const { factory } = makeCountingFactory(started);
+    const gw = await startGatewayIfEnabled({
+      env: { CORTEX_GATEWAY: "1" }, // publish flag absent
+      surfaces: DISCORD_SURFACES,
+      principal: "andreas",
+      runtime: RUNTIME_STUB,
+      source: SOURCE_STUB,
+      policyEngine: POLICY_ENGINE_STUB,
+      factory,
+    });
+    expect(gw).toBeInstanceOf(SurfaceGateway);
+    // SHADOW: no bus publish. The gateway's sink is a LoggingInboundSink,
+    // exactly as it is today.
+    expect(gw?.inboundSink).toBeInstanceOf(LoggingInboundSink);
+    expect(gw?.inboundSink).not.toBeInstanceOf(BusInboundSink);
+  });
+
+  test("publish flag '0' (gateway on) → still SHADOW (only '1' is truthy)", async () => {
+    const started: string[] = [];
+    const { factory } = makeCountingFactory(started);
+    const gw = await startGatewayIfEnabled({
+      env: { CORTEX_GATEWAY: "1", CORTEX_GATEWAY_PUBLISH: "0" },
+      surfaces: DISCORD_SURFACES,
+      principal: "andreas",
+      runtime: RUNTIME_STUB,
+      source: SOURCE_STUB,
+      policyEngine: POLICY_ENGINE_STUB,
+      factory,
+    });
+    expect(gw?.inboundSink).toBeInstanceOf(LoggingInboundSink);
+  });
+
+  test("publish flag 'true' (gateway on) → still SHADOW (only '1' is truthy)", async () => {
+    const started: string[] = [];
+    const { factory } = makeCountingFactory(started);
+    const gw = await startGatewayIfEnabled({
+      env: { CORTEX_GATEWAY: "1", CORTEX_GATEWAY_PUBLISH: "true" },
+      surfaces: DISCORD_SURFACES,
+      principal: "andreas",
+      runtime: RUNTIME_STUB,
+      source: SOURCE_STUB,
+      policyEngine: POLICY_ENGINE_STUB,
+      factory,
+    });
+    expect(gw?.inboundSink).toBeInstanceOf(LoggingInboundSink);
+  });
+
+  test("BOTH flags '1' → gateway uses BusInboundSink (LIVE — publishing)", async () => {
+    const started: string[] = [];
+    const { factory } = makeCountingFactory(started);
+    const gw = await startGatewayIfEnabled({
+      env: { CORTEX_GATEWAY: "1", CORTEX_GATEWAY_PUBLISH: "1" },
+      surfaces: DISCORD_SURFACES,
+      principal: "andreas",
+      runtime: RUNTIME_STUB,
+      source: SOURCE_STUB,
+      policyEngine: POLICY_ENGINE_STUB,
+      factory,
+    });
+    expect(gw).toBeInstanceOf(SurfaceGateway);
+    // LIVE: the double-opt-in flipped the gateway to the bus-publishing sink.
+    expect(gw?.inboundSink).toBeInstanceOf(BusInboundSink);
+  });
+
+  test("publish flag '1' but gateway flag OFF → undefined (gateway gate still wins)", async () => {
+    const started: string[] = [];
+    const { factory, constructed } = makeCountingFactory(started);
+    const gw = await startGatewayIfEnabled({
+      env: { CORTEX_GATEWAY_PUBLISH: "1" }, // gateway flag absent
+      surfaces: DISCORD_SURFACES,
+      principal: "andreas",
+      runtime: RUNTIME_STUB,
+      source: SOURCE_STUB,
+      policyEngine: POLICY_ENGINE_STUB,
+      factory,
+    });
+    // The publish flag alone does NOT enable the gateway — CORTEX_GATEWAY is the
+    // primary gate. Nothing is constructed.
+    expect(gw).toBeUndefined();
+    expect(constructed).toEqual([]);
+    expect(started).toEqual([]);
+  });
+
+  test("both flags '1' but no bindings → undefined, never reaches BusInboundSink", async () => {
+    const started: string[] = [];
+    const { factory, constructed } = makeCountingFactory(started);
+    const gw = await startGatewayIfEnabled({
+      env: { CORTEX_GATEWAY: "1", CORTEX_GATEWAY_PUBLISH: "1" },
+      surfaces: {}, // no bindings → Path-2 degrade, no publish
+      principal: "andreas",
+      runtime: RUNTIME_STUB,
+      source: SOURCE_STUB,
+      policyEngine: POLICY_ENGINE_STUB,
+      factory,
+    });
+    expect(gw).toBeUndefined();
+    expect(constructed).toEqual([]);
   });
 });

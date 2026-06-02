@@ -151,6 +151,20 @@ export class SurfaceGateway {
   }
 
   /**
+   * The inbound sink this gateway publishes routing decisions to.
+   *
+   * Read-only observability accessor: lets callers (and tests) inspect which
+   * sink mode the gateway was constructed with — {@link LoggingInboundSink}
+   * (shadow, no bus publish) vs a live `BusInboundSink` (publishing). The
+   * shadow-vs-live selection is made by `startGatewayIfEnabled` behind the
+   * `CORTEX_GATEWAY_PUBLISH` flag; exposing the sink here is how the boot path
+   * and tests confirm which mode is in effect without reaching into privates.
+   */
+  get inboundSink(): GatewayInboundSink {
+    return this.sink;
+  }
+
+  /**
    * Start all adapters, rebinding each `onMessage` callback to route through
    * this gateway.
    *
