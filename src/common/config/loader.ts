@@ -363,7 +363,10 @@ function listLayerFiles(dir: string): string[] {
  * `composeRawConfig` returned pre-GW.a.3b.2a. The fold is unchanged; the only
  * addition is the separately captured `surfaces` value.
  */
-export function composeRawConfigWithSurfaces(configPath: string): {
+// Not exported — `loadConfigWithAgents` is the public entry for the `surfaces`
+// field; `composeRawConfig` (the delegating wrapper below) stays the public
+// raw-compose API for its existing callers.
+function composeRawConfigWithSurfaces(configPath: string): {
   raw: Record<string, unknown>;
   surfaces: Surfaces | undefined;
 } {
