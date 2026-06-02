@@ -595,7 +595,9 @@ The next cycle should preserve the current surfaces and evolve them:
 
 ## 11. Open Questions
 
-1. Should the canonical top-level noun be `Plan`, `Program`, or `Work Plan`?
+1. ~~Should the canonical top-level noun be `Plan`, `Program`, or `Work Plan`?~~
+   **Resolved (G-1113.D.1, #578): `Plan`.** Matches the §3.5 and §6 doc
+   default; the `Plan` type + `plans` table commit to it.
 2. Should "phase" and "wave" be aliases, or should one be canonical?
 3. ~~Should `PullRequest` be the normalized model name, with GitLab merge request
    as a provider-native label, or should the model use `ChangeRequest`?~~
