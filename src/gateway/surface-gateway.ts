@@ -160,9 +160,22 @@ export class SurfaceGateway {
    */
   async start(): Promise<void> {
     await Promise.all(
-      this.adapters.map((adapter) =>
-        adapter.start((msg) => this.handleInbound(adapter, msg)),
-      ),
+      this.adapters.map(async (adapter) => {
+        await adapter.start((msg) => this.handleInbound(adapter, msg));
+        // Two-phase inbound: start() connects + stores onMessage; this registers
+        // the platform message listener (Discord/Slack split the two — see
+        // PlatformAdapter.attachInboundDispatch). Without it the adapter connects
+        // but never delivers inbound (the cortex#524 dry-run caught exactly this).
+        // The gateway has no Pass-2 trust merge to defer for, so attach right
+        // after start. Optional-chaining: single-phase adapters (Mattermost) omit
+        // it → no-op.
+        adapter.attachInboundDispatch?.();
+        process.stdout.write(
+          `[surface-gateway] adapter started + inbound listener attached — ` +
+            `platform=${adapter.platform} instanceId=${adapter.instanceId}` +
+            `${adapter.attachInboundDispatch === undefined ? " (single-phase; no attach)" : ""}\n`,
+        );
+      }),
     );
   }
 
@@ -192,6 +205,16 @@ export class SurfaceGateway {
     msg: InboundMessage,
   ): Promise<void> {
     try {
+      // Observability: every message that reaches the gateway is logged at
+      // entry, BEFORE routing — so "message arrived but didn't route" (a binding
+      // gap) is distinguishable from "no message arrived" (an adapter filter /
+      // listener gap) without guessing. (Interim stdout; the proper system.*
+      // bus/signal emission is the GW-observability follow-up.)
+      process.stdout.write(
+        `[surface-gateway] handleInbound received — platform=${msg.platform} ` +
+          `instanceId=${msg.instanceId} channel=${msg.channelId} ` +
+          `author=${msg.authorName} contentLen=${msg.content.length}\n`,
+      );
       const match = resolveBinding(this.index, msg);
 
       if (match === null) {
