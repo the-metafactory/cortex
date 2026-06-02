@@ -12,7 +12,7 @@
  * Honest no-op: if the plan carries no umbrella link (doc-ingested plans from
  * D.2 have `umbrellaWorkItemId === null`), or the link doesn't parse, the source
  * returns `[]` — it never guesses. Wiring the umbrella link onto a plan is a
- * separate concern (a D.2 enhancement or operator action).
+ * separate concern (a D.2 enhancement or principal action).
  */
 import type { Plan, PlanPhase, Provider, WorkItem } from "../../types";
 import type { WorkItemSource, WorkItemSourceContext } from "../work-item-source";
