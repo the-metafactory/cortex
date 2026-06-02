@@ -168,4 +168,16 @@ export interface PlatformAdapter {
   notifyPrincipal(text: string): Promise<void>;
   /** F-092: Hot-reload adapter config (optional, for adapters that support it) */
   updateConfig?(config: unknown): void;
+  /**
+   * Two-phase inbound registration (optional). `start()` connects + stores the
+   * `onMessage` callback; this SECOND call registers the platform's message
+   * listener so inbound events actually dispatch. Discord + Slack split start
+   * from listen (the per-stack boot defers this until after Pass-2 trust merge);
+   * single-phase adapters (Mattermost) register inside `start()` and omit it.
+   *
+   * Callers that drive an adapter directly (the shared surface gateway,
+   * cortex#524) MUST call this after `start()` or no inbound is ever delivered.
+   * Idempotent — adapters latch on first attach so re-calls are no-ops.
+   */
+  attachInboundDispatch?(): void;
 }

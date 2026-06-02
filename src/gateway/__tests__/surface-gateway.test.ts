@@ -118,6 +118,9 @@ class MockAdapter implements PlatformAdapter {
 
   startCalled = 0;
   stopCalled = 0;
+  attachCalled = 0;
+  /** Records start/attach order so tests can assert attach happens AFTER start. */
+  readonly callOrder: string[] = [];
 
   private _onMessage: ((msg: InboundMessage) => Promise<void>) | null = null;
 
@@ -128,7 +131,13 @@ class MockAdapter implements PlatformAdapter {
 
   async start(onMessage: (msg: InboundMessage) => Promise<void>): Promise<void> {
     this.startCalled++;
+    this.callOrder.push("start");
     this._onMessage = onMessage;
+  }
+
+  attachInboundDispatch(): void {
+    this.attachCalled++;
+    this.callOrder.push("attach");
   }
 
   async stop(): Promise<void> {
@@ -203,6 +212,13 @@ describe("SurfaceGateway.start()", () => {
 
     expect(a1.startCalled).toBe(1);
     expect(a2.startCalled).toBe(1);
+    // Two-phase inbound: start() must ALSO attach the message listener, or the
+    // adapter connects but never delivers inbound (the cortex#524 dry-run bug).
+    expect(a1.attachCalled).toBe(1);
+    expect(a2.attachCalled).toBe(1);
+    // attach MUST come after start (start stores onMessage; attach registers the listener).
+    expect(a1.callOrder).toEqual(["start", "attach"]);
+    expect(a2.callOrder).toEqual(["start", "attach"]);
   });
 });
 
