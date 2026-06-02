@@ -8,6 +8,7 @@
  * renders only the genuinely-linked context: plan/phase + PRs + reviews.
  */
 import type { WorkItemDetail } from "../../api/work-item-detail";
+import { ProviderBadge } from "./provider-badge";
 
 export interface WorkItemDetailViewProps {
   detail: WorkItemDetail | null;
@@ -43,9 +44,7 @@ export function WorkItemDetailView({ detail, loaded, onClose }: WorkItemDetailVi
             {/* plan / phase breadcrumb */}
             {detail.plan ? <span className="dim">{detail.plan.title}</span> : null}
             {detail.phase ? <span className="dim">› {detail.phase.title}</span> : null}
-            <span className={`badge provider-${detail.workItem.provider}`}>
-              {detail.workItem.provider}
-            </span>
+            <ProviderBadge provider={detail.workItem.provider} />
             {detail.workItem.status ? (
               <span className="badge">{detail.workItem.status}</span>
             ) : null}

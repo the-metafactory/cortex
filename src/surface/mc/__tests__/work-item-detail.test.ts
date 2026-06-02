@@ -63,6 +63,33 @@ describe("getWorkItemDetail (D.5)", () => {
     expect(detail?.pullRequests[0]?.reviews.map((r) => r.state)).toEqual(["approved"]);
   });
 
+  it("projects multiple PRs; a PR with no reviews → reviews:[] (the D.5 delta)", () => {
+    const db = freshDb();
+    upsertPlan(db, plan);
+    upsertPlanPhase(db, phase);
+    upsertWorkItem(db, wi);
+    upsertRepository(db, repo);
+    upsertPullRequest(db, pr); // pr-588, has one review
+    upsertReview(db, review);
+    upsertPullRequest(db, { ...pr, id: "pr-589", numberOrKey: "589", reviewState: "needs_review" }); // no reviews
+
+    const detail = getWorkItemDetail(db, "the-metafactory/cortex#581");
+    expect(detail?.pullRequests).toHaveLength(2);
+    expect(detail?.pullRequests.find((p) => p.pullRequest.id === "pr-589")?.reviews).toEqual([]);
+    expect(detail?.pullRequests.find((p) => p.pullRequest.id === "pr-588")?.reviews).toHaveLength(1);
+  });
+
+  it("handler 200 returns the detail envelope", async () => {
+    const db = freshDb();
+    upsertPlan(db, plan);
+    upsertPlanPhase(db, phase);
+    upsertWorkItem(db, wi);
+    const res = handleGetWorkItemDetail(db, "the-metafactory/cortex#581");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { workItem: { id: string } };
+    expect(body.workItem.id).toBe("the-metafactory/cortex#581");
+  });
+
   it("unphased / unplanned work item → null plan & phase, still projects", () => {
     const db = freshDb();
     upsertWorkItem(db, { ...wi, id: "wi-orphan", planId: null, phaseId: null });
