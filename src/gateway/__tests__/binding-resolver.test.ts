@@ -450,3 +450,44 @@ describe("instance-id determinism", () => {
     expect(mB!.instance).toBe("discord:GUILD_B");
   });
 });
+
+// ─── 11. unknown platform (the fallthrough safety net) ────────────────────────
+
+describe("resolveBinding — unknown platform", () => {
+  test("a platform with no resolver branch (e.g. 'teams') → null", () => {
+    const index = buildBindingIndex(DISCORD_SURFACES);
+    // InboundMessage.platform is typed `string`, so a future/unknown platform
+    // is representable; the resolver must fall through to null, never throw.
+    const inbound = msg({ platform: "teams", guildId: "111222333444555666" });
+    expect(resolveBinding(index, inbound)).toBeNull();
+  });
+});
+
+// ─── 12. degenerate stack strings ─────────────────────────────────────────────
+
+describe("stack-parsing — degenerate inputs collapse to undefined", () => {
+  test("stack='/' (admitted by .min(1)) → principal and stack are undefined", () => {
+    const loneSlash: Surfaces = {
+      discord: [
+        {
+          agent: "luna",
+          stack: "/",
+          binding: {
+            token: "tok-luna-slash",
+            guildId: "GUILD_SLASH",
+            agentChannelId: "ccc",
+            logChannelId: "ddd",
+          },
+        },
+      ],
+    };
+    const index = buildBindingIndex(loneSlash);
+    const match = resolveBinding(
+      index,
+      msg({ platform: "discord", guildId: "GUILD_SLASH" }),
+    );
+    expect(match).not.toBeNull();
+    expect(match!.principal).toBeUndefined();
+    expect(match!.stack).toBeUndefined();
+  });
+});

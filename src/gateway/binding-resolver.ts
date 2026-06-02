@@ -170,7 +170,13 @@ function parseStack(raw: string | undefined): {
   if (!raw) return { principal: undefined, stack: undefined };
   const idx = raw.indexOf("/");
   if (idx === -1) return { principal: raw, stack: undefined };
-  return { principal: raw.slice(0, idx), stack: raw.slice(idx + 1) };
+  // Empty halves (a leading/trailing or lone "/") collapse to undefined so the
+  // {principal,stack}-absent contract holds for degenerate inputs the schema's
+  // `.min(1)` still admits (e.g. "/").
+  return {
+    principal: raw.slice(0, idx) || undefined,
+    stack: raw.slice(idx + 1) || undefined,
+  };
 }
 
 // =============================================================================
@@ -273,6 +279,20 @@ export function buildBindingIndex(surfaces: Surfaces): GatewayBindingIndex {
 // resolveBinding
 // =============================================================================
 
+/** Build the public match from a platform + its resolved index entry. */
+function matchFrom(
+  platform: GatewayBindingMatch["platform"],
+  entry: IndexEntry,
+): GatewayBindingMatch {
+  return {
+    platform,
+    agent: entry.agent,
+    principal: entry.principal,
+    stack: entry.stack,
+    instance: entry.instance,
+  };
+}
+
 /**
  * Resolve one `InboundMessage` to a `GatewayBindingMatch` using the pre-built
  * index.
@@ -299,7 +319,7 @@ export function resolveBinding(
     }
     const entry = index.discord.get(demuxKey);
     if (!entry) return null;
-    return { platform: "discord", agent: entry.agent, principal: entry.principal, stack: entry.stack, instance: entry.instance };
+    return matchFrom("discord", entry);
   }
 
   if (platform === "slack") {
@@ -309,7 +329,7 @@ export function resolveBinding(
     if (!demuxKey) return null;
     const entry = index.slack.get(demuxKey);
     if (!entry) return null;
-    return { platform: "slack", agent: entry.agent, principal: entry.principal, stack: entry.stack, instance: entry.instance };
+    return matchFrom("slack", entry);
   }
 
   if (platform === "mattermost") {
@@ -322,8 +342,7 @@ export function resolveBinding(
       // No Mattermost bindings at all.
       return null;
     }
-    const entry = index.mattermostSingle;
-    return { platform: "mattermost", agent: entry.agent, principal: entry.principal, stack: entry.stack, instance: entry.instance };
+    return matchFrom("mattermost", index.mattermostSingle);
   }
 
   // Unknown platform — no bindings.
