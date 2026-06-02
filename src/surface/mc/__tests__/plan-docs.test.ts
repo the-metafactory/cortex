@@ -1,0 +1,213 @@
+/**
+ * G-1113.D.2 — Plan-doc ingestion: parser purity + round-trip persistence.
+ */
+import { describe, it, expect, afterEach } from "bun:test";
+import { join } from "path";
+import { tmpdir } from "os";
+import { mkdtempSync, writeFileSync, rmSync, existsSync } from "fs";
+import { initDatabase } from "../db/init";
+import { getPlan, listPlans, listPhasesForPlan } from "../db/plans";
+import {
+  parsePlanDoc,
+  ingestPlanDoc,
+  ingestPlanDocsFromDir,
+} from "../ingest/plan-docs";
+
+// Cockpit-plan shape: H1 title, **Status:** line, numbered phase headings with id suffix.
+const COCKPIT = `# Plan — Mission Control Cortex Cockpit (G-1113)
+
+**Status:** draft for review
+
+## 5. Phases
+
+### 5.1 Phase A — Grounding (G-1113.A)
+- [ ] something
+### 5.2 Phase B — Provider-Neutral Source Refs (G-1113.B)
+### 5.3 Phase C — Software Mode Domain Model (G-1113.C)
+### 5.4 Phase D — Plan Lineage UI (G-1113.D)
+### 5.5 Phase E — Attention + Notifications (G-1113.E)
+`;
+
+// Iteration shape: bare `## Phase X — Title` headings, no numeric prefix, no Status line.
+const ITERATION = `# Mission Control v2 — Iteration plan
+
+## Phase A — Data foundation + local bot scaffold
+## Phase B — Dashboard attention core
+`;
+
+describe("parsePlanDoc (D.2, pure)", () => {
+  it("parses cockpit-shaped doc: title, kind, status, 5 ordered phases", () => {
+    const { plan, phases } = parsePlanDoc({
+      content: COCKPIT,
+      path: "docs/plan-mission-control-cockpit.md",
+      sourceDocumentUrl: "https://example/blob/docs/plan-mission-control-cockpit.md",
+    });
+    expect(plan.id).toBe("plan-mission-control-cockpit");
+    expect(plan.title).toBe("Plan — Mission Control Cortex Cockpit (G-1113)");
+    expect(plan.kind).toBe("design"); // generic plan default
+    expect(plan.status).toBe("draft"); // from "**Status:** draft for review"
+    expect(plan.provider).toBe("internal"); // repo-local doc default
+    expect(plan.externalId).toBeNull();
+    expect(plan.umbrellaWorkItemId).toBeNull();
+    expect(plan.sourceDocumentUrl).toBe(
+      "https://example/blob/docs/plan-mission-control-cockpit.md"
+    );
+    // 5 phases A–E, document order, trailing "(G-1113.x)" stripped, default not_started.
+    expect(phases.map((p) => [p.id, p.title, p.order, p.status])).toEqual([
+      ["plan-mission-control-cockpit-phase-a", "Grounding", 0, "not_started"],
+      ["plan-mission-control-cockpit-phase-b", "Provider-Neutral Source Refs", 1, "not_started"],
+      ["plan-mission-control-cockpit-phase-c", "Software Mode Domain Model", 2, "not_started"],
+      ["plan-mission-control-cockpit-phase-d", "Plan Lineage UI", 3, "not_started"],
+      ["plan-mission-control-cockpit-phase-e", "Attention + Notifications", 4, "not_started"],
+    ]);
+    expect(phases.every((p) => p.planId === plan.id)).toBe(true);
+  });
+
+  it("parses iteration-shaped doc: kind=iteration, bare phase headings, status defaults active", () => {
+    const { plan, phases } = parsePlanDoc({
+      content: ITERATION,
+      path: "docs/iteration-mission-control.md",
+    });
+    expect(plan.kind).toBe("iteration");
+    expect(plan.status).toBe("active"); // no **Status:** line → active default
+    expect(plan.sourceDocumentUrl).toBeNull();
+    expect(phases.map((p) => p.title)).toEqual([
+      "Data foundation + local bot scaffold",
+      "Dashboard attention core",
+    ]);
+  });
+
+  it("infers kind from filename / title keywords", () => {
+    const k = (path: string, content = "# T\n") => parsePlanDoc({ content, path }).plan.kind;
+    expect(k("docs/iteration-x.md")).toBe("iteration");
+    expect(k("docs/plan-cortex-migration.md")).toBe("migration");
+    expect(k("docs/plan-prod-rollout.md")).toBe("rollout");
+    expect(k("docs/plan-v3-release.md")).toBe("release");
+    expect(k("docs/plan-incident-2026.md")).toBe("incident");
+    expect(k("docs/plan-research-spike.md")).toBe("research");
+    expect(k("docs/plan-collaboration-surface.md")).toBe("design"); // default
+  });
+
+  it("does not false-match separator-less headings (corpus near-misses)", () => {
+    const { phases } = parsePlanDoc({
+      content: [
+        "# T",
+        "## 4. Phase sequencing", // no separator
+        "## 4. Phase-by-phase plan", // hyphen-joined, not 'Phase <label>'
+        "### Phase A acceptance criteria — ✅ all met (2026-05-15)", // IoAW:149 — words before dash
+        "### Cross-phase parallelism during Phase B", // 'Phase' not at heading start
+      ].join("\n"),
+      path: "docs/plan-x.md",
+    });
+    expect(phases).toHaveLength(0);
+  });
+
+  it("preserves descriptive trailing parens; strips only id-shaped ones (IoAW corpus)", () => {
+    const { phases } = parsePlanDoc({
+      content: [
+        "# Internet of Agentic Work",
+        "## 2. Phase A — Foundation (substrate harness + visibility consumption + stack identity)",
+        "## 3. Phase B — Identity (NKey-signed bot↔bot)",
+        "## 4. Phase C — Policy + schema flip (PolicyEngine at M6)",
+        "### 5.4 Phase D — Plan Lineage UI (G-1113.D)", // id-shaped → stripped
+      ].join("\n"),
+      path: "docs/plan-internet-of-agentic-work.md",
+    });
+    expect(phases.map((p) => p.title)).toEqual([
+      "Foundation (substrate harness + visibility consumption + stack identity)",
+      "Identity (NKey-signed bot↔bot)",
+      "Policy + schema flip (PolicyEngine at M6)",
+      "Plan Lineage UI", // (G-1113.D) stripped
+    ]);
+  });
+
+  it("parses colon-delimited phase headings; preserves non-id '(Future)' (licensing corpus)", () => {
+    const { phases } = parsePlanDoc({
+      content: [
+        "# Licensing",
+        "## Phase 2A: License Foundation",
+        "## Phase 2B: Attribution and Documentation",
+        "## Phase 2D: Brand Protection (Future)",
+      ].join("\n"),
+      path: "docs/iteration-licensing.md",
+    });
+    expect(phases.map((p) => [p.id, p.title])).toEqual([
+      ["iteration-licensing-phase-2a", "License Foundation"],
+      ["iteration-licensing-phase-2b", "Attribution and Documentation"],
+      ["iteration-licensing-phase-2d", "Brand Protection (Future)"],
+    ]);
+  });
+
+  it("status: leading clause wins over narrative prose; word-boundaried (corpus)", () => {
+    const status = (line: string) =>
+      parsePlanDoc({ content: `# T\n\n**Status:** ${line}\n`, path: "docs/plan-x.md" }).plan.status;
+    // direction-a: "Active campaign … ~75% done already" → active, not done
+    expect(status("Active campaign. Re-grounded after audit revealed ~75% done already")).toBe("active");
+    expect(status("disclosed scope")).not.toBe("done"); // 'closed' ⊄ 'disclosed'
+    expect(status("Planned")).toBe("draft"); // licensing
+    expect(status("draft for review")).toBe("draft"); // cockpit
+    expect(status("Blocked on cortex#535")).toBe("blocked");
+  });
+
+  it("doc with no phase headings → plan with zero phases (still valid)", () => {
+    const { plan, phases } = parsePlanDoc({
+      content: "# Just a plan\n\nProse only.\n",
+      path: "docs/plan-prose.md",
+    });
+    expect(plan.id).toBe("plan-prose");
+    expect(phases).toEqual([]);
+  });
+});
+
+describe("ingestPlanDoc / ingestPlanDocsFromDir (D.2, persistence)", () => {
+  const dbPaths: string[] = [];
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const p of dbPaths) if (existsSync(p)) rmSync(p);
+    for (const d of dirs) if (existsSync(d)) rmSync(d, { recursive: true, force: true });
+    dbPaths.length = 0;
+    dirs.length = 0;
+  });
+  function freshDb() {
+    const p = join(tmpdir(), `plandocs-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+    dbPaths.push(p);
+    return initDatabase(p);
+  }
+
+  it("round-trips a doc into plan + phase rows; idempotent re-ingest", () => {
+    const db = freshDb();
+    const src = { content: COCKPIT, path: "docs/plan-mission-control-cockpit.md" };
+    ingestPlanDoc(db, src);
+    const plan = getPlan(db, "plan-mission-control-cockpit");
+    expect(plan?.kind).toBe("design");
+    expect(listPhasesForPlan(db, "plan-mission-control-cockpit")).toHaveLength(5);
+    // Re-ingesting the same doc updates in place — no duplicate plan or phase rows.
+    ingestPlanDoc(db, src);
+    expect(listPlans(db)).toHaveLength(1);
+    expect(listPhasesForPlan(db, "plan-mission-control-cockpit")).toHaveLength(5);
+  });
+
+  it("scans a dir for plan-*/iteration-* docs only, building source URLs", () => {
+    const db = freshDb();
+    const dir = mkdtempSync(join(tmpdir(), "plandocs-dir-"));
+    dirs.push(dir);
+    writeFileSync(join(dir, "plan-mission-control-cockpit.md"), COCKPIT);
+    writeFileSync(join(dir, "iteration-mission-control.md"), ITERATION);
+    writeFileSync(join(dir, "architecture.md"), "# Not a plan\n## Phase A — nope\n"); // ignored
+
+    const ingested = ingestPlanDocsFromDir(db, {
+      docsDir: dir,
+      urlForPath: (rel) => `https://example/blob/${rel}`,
+    });
+
+    expect(ingested.map((p) => p.plan.id).sort()).toEqual([
+      "iteration-mission-control",
+      "plan-mission-control-cockpit",
+    ]);
+    expect(listPlans(db)).toHaveLength(2); // architecture.md skipped
+    expect(getPlan(db, "plan-mission-control-cockpit")?.sourceDocumentUrl).toBe(
+      "https://example/blob/docs/plan-mission-control-cockpit.md"
+    );
+    expect(getPlan(db, "architecture")).toBeNull();
+  });
+});
