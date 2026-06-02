@@ -184,6 +184,42 @@ describe("normalizeVocab", () => {
     // Must not throw
     expect(() => CortexConfigSchema.parse(result)).not.toThrow();
   });
+
+  test("key collision: home_operator + home_principal in same block → warn, NOT rename (no clobber)", () => {
+    // Both keys present in one object — renaming would overwrite home_principal.
+    const raw: StringRecord = {
+      policy: {
+        principals: [
+          {
+            id: "jc",
+            home_operator: "LEGACY_VALUE",
+            home_principal: "CANONICAL_VALUE",
+            home_stack: "jc/default",
+            role: [],
+          },
+        ],
+      },
+    };
+    const { result, renames, warnings } = normalizeVocab(raw);
+    // No rename performed.
+    expect(renames).toHaveLength(0);
+    // A collision warning is emitted, naming both keys.
+    expect(warnings.some((w) => w.includes("Key collision") && w.includes("home_principal"))).toBe(true);
+    // Neither value is clobbered — both keys survive untouched for manual resolution.
+    const principal = (result as { policy: { principals: StringRecord[] } }).policy.principals[0]!;
+    expect(principal.home_principal).toBe("CANONICAL_VALUE");
+    expect(principal.home_operator).toBe("LEGACY_VALUE");
+  });
+
+  test("key collision is order-independent (canonical key declared first)", () => {
+    // home_principal appears BEFORE home_operator — guard must still catch it.
+    const raw: StringRecord = {
+      principals: [{ home_principal: "A", home_operator: "B" }],
+    };
+    const { renames, warnings } = normalizeVocab(raw);
+    expect(renames).toHaveLength(0);
+    expect(warnings.some((w) => w.includes("Key collision"))).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

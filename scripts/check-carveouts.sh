@@ -193,10 +193,8 @@ ALLOWLIST_PATHS=(
   # terms in order to rename/detect them. RETIRE: with normalize-config removal.
   'src/cli/cortex/commands/normalize-config.ts'
   'src/cli/cortex/commands/__tests__/normalize-config.test.ts'
-  # normalize-config fixture — carries the legacy home_operator key as INPUT
-  # to the normalization test. Same class as migrate-config test fixtures.
-  # RETIRE: with normalize-config removal.
-  'src/cli/cortex/commands/__tests__/fixtures/normalize-fixture.yaml'
+  # (normalize-config's fixture needs no entry — the dir-level
+  # `__tests__/fixtures/` allowlist above already covers it.)
   # IAW design/plan docs — #510-owned (refreshed); residual hits are
   # code-identifier mentions discussed as prose, tracked on the IAW epic.
   'docs/design-internet-of-agentic-work.md'

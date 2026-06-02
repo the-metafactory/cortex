@@ -181,9 +181,23 @@ export function normalizeVocab(raw: unknown): NormalizeResult {
         const canonical = UNAMBIGUOUS_RENAME_MAP[k];
         if (canonical !== undefined) {
           const fromPath = path ? `${path}.${k}` : k;
-          const toPath = path ? `${path}.${canonical}` : canonical;
-          renames.push(`${fromPath} → ${toPath}`);
-          out[canonical] = walk(v, toPath);
+          // Collision guard: if the canonical target key ALSO exists in this
+          // same object, renaming would silently overwrite one value
+          // (last-writer-wins). We check `src` (not `out`) so the result is
+          // independent of key iteration order. Refuse the rename — warn and
+          // keep the legacy key untouched so the conflict surfaces (to the
+          // operator + schema validation) instead of losing data silently.
+          if (canonical in src) {
+            warnings.push(
+              `Key collision at ${fromPath}: both "${k}" and "${canonical}" exist in the same block — ` +
+                `NOT renaming (would overwrite "${canonical}"). Resolve manually: keep "${canonical}" and remove "${k}".`,
+            );
+            out[k] = walk(v, fromPath);
+          } else {
+            const toPath = path ? `${path}.${canonical}` : canonical;
+            renames.push(`${fromPath} → ${toPath}`);
+            out[canonical] = walk(v, toPath);
+          }
         } else {
           out[k] = walk(v, path ? `${path}.${k}` : k);
         }
@@ -362,17 +376,24 @@ export async function runNormalizeConfig(argv: string[]): Promise<number> {
     process.stderr.write(`warning: ${w}\n`);
   }
 
-  if (renames.length === 0 && warnings.length === 0) {
-    // Idempotent — nothing to change.
-    process.stderr.write(`normalize-config: no legacy keys found in ${inputPath} — nothing to do\n`);
-    return 0;
+  if (renames.length === 0) {
+    // No unambiguous renames → nothing to write. Even when ambiguous keys were
+    // warned above, the vocabulary is unchanged, so we must NOT reformat the
+    // file or drop a backup (that would falsely signal a modification).
+    if (warnings.length === 0) {
+      process.stderr.write(`normalize-config: no legacy keys found in ${inputPath} — nothing to do\n`);
+    } else {
+      process.stderr.write(
+        `normalize-config: no unambiguous renames; ${warnings.length} ambiguous key(s) warned above — ` +
+          `review manually (see 'cortex migrate-config'). Nothing written.\n`,
+      );
+    }
+    return args.strict && warnings.length > 0 ? 2 : 0;
   }
 
-  if (renames.length > 0) {
-    process.stderr.write(`normalize-config: ${renames.length} key(s) to rename:\n`);
-    for (const r of renames) {
-      process.stderr.write(`  ${r}\n`);
-    }
+  process.stderr.write(`normalize-config: ${renames.length} key(s) to rename:\n`);
+  for (const r of renames) {
+    process.stderr.write(`  ${r}\n`);
   }
 
   // Validate the normalized output against the schema BEFORE writing.
