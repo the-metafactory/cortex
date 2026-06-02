@@ -54,6 +54,20 @@ has_stack_seed_path() {
   ' "${config}"
 }
 
+# Detect whether the config declares stack.id under a top-level `stack:` block.
+# Mirrors has_stack_seed_path. Guards against wiring signing fields into a config
+# that has no stack.id — which would Zod-reject at boot and exit the service.
+has_stack_id() {
+  local config="$1"
+  [ -f "${config}" ] || return 1
+  awk '
+    /^stack:/ { in_stack = 1; next }
+    /^[a-zA-Z]/ && !/^stack:/ { in_stack = 0 }
+    in_stack && /^[ \t]+id:/ { found = 1; exit }
+    END { exit (found ? 0 : 1) }
+  ' "${config}"
+}
+
 # Derive the U-prefixed public key from a seed file.
 # Strategy: run `nsc inbox-keys` is heavy; we use bun + nkeys.js if
 # available, otherwise return empty and skip the nkey_pub field.
@@ -122,6 +136,25 @@ provision_stack_identity() {
 
   if has_stack_seed_path "${config}"; then
     echo "  ⊘ Stack identity already configured in ${config##*/}"
+    return 0
+  fi
+
+  # cortex#563 (JC v4 snag): never wire signing fields into a config that lacks
+  # stack.id. The awk editor below would otherwise emit / extend a `stack:` block
+  # carrying nkey_seed_path but no id — which Zod-rejects at the next boot
+  # ("stack.id: expected string, received undefined") and EXITS the service
+  # (crashed clawbox once during a fresh signed deploy). Refuse loudly with
+  # actionable guidance instead; the daemon keeps booting (publishes unsigned)
+  # and the operator fixes the gap deliberately rather than via a crash loop.
+  if ! has_stack_id "${config}"; then
+    {
+      echo "  ⚠ ${config##*/} has no stack.id — refusing to wire signing identity."
+      echo "    Writing nkey_seed_path without stack.id Zod-rejects at boot and exits"
+      echo "    the service. Add the stack block first, e.g.:"
+      echo "        stack:"
+      echo "          id: {principal}/{stack}   # e.g. jc/default"
+      echo "    to ${config}, then re-run. Skipping for now (cortex publishes unsigned)."
+    } >&2
     return 0
   fi
 
