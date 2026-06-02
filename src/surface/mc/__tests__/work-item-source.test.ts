@@ -101,4 +101,14 @@ describe("ingestWorkItems (D.5b orchestrator)", () => {
     expect(res.workItems).toEqual([]);
     expect(listWorkItemsForPlan(db, "plan-1")).toEqual([]);
   });
+
+  it("is all-or-nothing — a mid-batch upsert failure rolls back the whole transaction", async () => {
+    const db = freshDb();
+    upsertPlan(db, plan);
+    // Second row has a ghost phaseId → its upsert violates the phase FK and throws.
+    const src = mockSource([wi("a#1"), wi("a#2", { phaseId: "ghost-phase" })]);
+    await expect(ingestWorkItems(db, src, "plan-1")).rejects.toThrow();
+    // a#1 must NOT have persisted — the transaction rolled back, not a partial write.
+    expect(listWorkItemsForPlan(db, "plan-1")).toEqual([]);
+  });
 });

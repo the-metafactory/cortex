@@ -27,24 +27,39 @@ export interface GithubWorkItemSourceOptions {
 
 /**
  * Map a sub-issue to one of the plan's phases via the phase label embedded in
- * the slice id convention (`G-1113.<PHASE>.<n>` → phase label `<PHASE>`). The
+ * the slice-id convention (`G-1113.<PHASE>.<n>` → phase label `<PHASE>`). The
  * labels come from the plan's OWN phases (`{planId}-phase-{label}`, set by D.2),
  * so this isn't hardcoded to one plan — it matches whatever labels the plan has.
- * Returns null when no phase label is found in the title (work item stays filed
- * under the plan, unphased — honest rather than guessing a phase).
+ *
+ * Matching is deliberately STRICT to avoid mis-filing: phase labels are often
+ * single letters (a–e), so a loose token match would mis-attribute incidental
+ * letters in prose (label `c` ⊂ "fix the c compiler"). We accept only:
+ *   - the dotted slice-id form `<…>.<LABEL>.<n>` (or `<LABEL>.<n>` at the start), and
+ *   - the explicit prose form `Phase <LABEL>` (the word "phase" must precede).
+ * If MORE THAN ONE phase label matches, the title is ambiguous → returns null
+ * (work item stays unphased — honest rather than guessing). Returns null when no
+ * label matches.
  */
 function mapPhaseId(title: string, phases: PlanPhase[], planId: string): string | null {
   const prefix = `${planId}-phase-`;
+  let found: string | null = null;
+  let count = 0;
   for (const ph of phases) {
     if (!ph.id.startsWith(prefix)) continue;
     const label = ph.id.slice(prefix.length);
     if (!label) continue;
-    // Match the label as a dot/space-delimited token (e.g. ".D." in
-    // "G-1113.D.4 — …", or " D " in "Phase D — …"), case-insensitive.
-    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (new RegExp(`[.\\s](${escaped})[.\\s]`, "i").test(title)) return ph.id;
+    const esc = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Slice-id form: label dot-bounded (or at string start) + a numeric slice
+    // index — `.D.4` / leading `D.4`. Prose form: the word "phase" then the label.
+    const sliceForm = new RegExp(`(?:^|\\.)${esc}\\.\\d`, "i");
+    const proseForm = new RegExp(`\\bphase\\s+${esc}\\b`, "i");
+    if (sliceForm.test(title) || proseForm.test(title)) {
+      found = ph.id;
+      count += 1;
+    }
   }
-  return null;
+  // Exactly one phase label matched → file under it; zero or ambiguous → null.
+  return count === 1 ? found : null;
 }
 
 function subIssueToWorkItem(

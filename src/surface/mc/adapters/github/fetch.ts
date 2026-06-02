@@ -387,7 +387,7 @@ async function runGhApi(
   if (exitCode !== 0) {
     const n = stderr.toLowerCase();
     if (n.includes("rate limit")) return { kind: "rate_limited", message: "GitHub rate limit reached. Try again in a few minutes.", stderr };
-    if (n.includes("http 404") || n.includes("not found")) return { kind: "not_found", message: "That pull request could not be found on GitHub.", stderr };
+    if (n.includes("http 404") || n.includes("not found")) return { kind: "not_found", message: "That GitHub resource could not be found.", stderr };
     if (n.includes("http 401") || n.includes("unauthorized") || n.includes("gh auth") || n.includes("authentication required"))
       return { kind: "unauthorized", message: "GitHub auth failed. Run 'gh auth login' to authenticate, then try again.", stderr };
     return { kind: "upstream", message: `gh CLI exited ${exitCode}: ${stderr.trim() || "(empty stderr)"}`, stderr };

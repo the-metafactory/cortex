@@ -60,6 +60,34 @@ describe("GithubWorkItemSource (D.5b)", () => {
     expect(items.every((w) => w.planId === "plan-mission-control-cockpit")).toBe(true);
   });
 
+  it("phase mapping is strict: incidental prose letters don't mis-file (false-positive guard)", async () => {
+    const json = JSON.stringify([
+      // Incidental ' c ' in prose must NOT pull this into phase C — the slice
+      // token .D.4 wins, and the bare 'c' is ignored.
+      { number: 1, title: "G-1113.D.4 — fix the c compiler warning", state: "open", html_url: "https://x/1" },
+      // Bare letter in prose, no slice token, no "Phase X" → unphased (not phase C).
+      { number: 2, title: "Refactor the c module", state: "open", html_url: "https://x/2" },
+      // Explicit prose form maps.
+      { number: 3, title: "Phase C cleanup", state: "open", html_url: "https://x/3" },
+    ]);
+    const src = new GithubWorkItemSource({ spawn: fakeSpawn(json) });
+    const items = await src.fetchWorkItems(ctx(plan()));
+    expect(items.map((w) => [w.id, w.phaseId])).toEqual([
+      ["the-metafactory/cortex#1", "plan-mission-control-cockpit-phase-d"], // .D.4 wins, not ' c '
+      ["the-metafactory/cortex#2", null], // incidental 'c' ignored
+      ["the-metafactory/cortex#3", "plan-mission-control-cockpit-phase-c"], // prose "Phase C"
+    ]);
+  });
+
+  it("ambiguous title citing two phases → unphased (null), never first-wins", async () => {
+    const json = JSON.stringify([
+      { number: 9, title: "G-1113.C.3 follow-up rolled into G-1113.D.4", state: "open", html_url: "https://x/9" },
+    ]);
+    const src = new GithubWorkItemSource({ spawn: fakeSpawn(json) });
+    const items = await src.fetchWorkItems(ctx(plan()));
+    expect(items[0]?.phaseId).toBeNull();
+  });
+
   it("no umbrella link → honest empty (never guesses)", async () => {
     const src = new GithubWorkItemSource({ spawn: fakeSpawn("[]") });
     expect(await src.fetchWorkItems(ctx(plan({ umbrellaWorkItemId: null })))).toEqual([]);
