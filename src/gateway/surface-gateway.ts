@@ -177,41 +177,49 @@ export class SurfaceGateway {
    * Route one inbound message to the sink.
    *
    * Called from inside the adapter's `onMessage` callback — MUST NOT throw.
-   * Any error (unroutable, sink failure) is logged and the method returns
-   * cleanly so the adapter loop stays alive.
+   * The ENTIRE body runs under one try/catch so never-throw is a code
+   * invariant, not a caller obligation: a throwing `onUnroutable` hook, a
+   * throwing `sink.publish`, or anything else is logged with full context and
+   * swallowed so the adapter loop stays alive.
+   *
+   * @param _adapter the adapter that received the message. Unused in the shadow
+   *   stage; reserved for GW.a.3, where the outbound mux needs the per-connection
+   *   context to render replies. Kept on the signature (design §5 references
+   *   `gateway.handleInbound(adapter, msg)`) rather than re-threaded later.
    */
   async handleInbound(
     _adapter: PlatformAdapter,
     msg: InboundMessage,
   ): Promise<void> {
-    const match = resolveBinding(this.index, msg);
-
-    if (match === null) {
-      const reason = unroutableReason(msg, this.index);
-      this.onUnroutable(msg, reason);
-      return;
-    }
-
-    const decision: GatewayInboundDecision = {
-      match,
-      responseRouting: {
-        // adapter_instance = msg.instanceId — the connection-instance key.
-        // See module doc "v1 decisions" for the reconciliation note.
-        adapter_instance: msg.instanceId,
-        channel_id: msg.channelId,
-        ...(msg.threadId !== undefined && { thread_id: msg.threadId }),
-      },
-    };
-
     try {
+      const match = resolveBinding(this.index, msg);
+
+      if (match === null) {
+        const reason = unroutableReason(msg, this.index);
+        this.onUnroutable(msg, reason);
+        return;
+      }
+
+      const decision: GatewayInboundDecision = {
+        match,
+        responseRouting: {
+          // adapter_instance = msg.instanceId — the connection-instance key.
+          // See module doc "v1 decisions" for the reconciliation note.
+          adapter_instance: msg.instanceId,
+          channel_id: msg.channelId,
+          ...(msg.threadId !== undefined && { thread_id: msg.threadId }),
+        },
+      };
+
       await this.sink.publish(decision, msg);
     } catch (err: unknown) {
-      // Sink errors are logged but never re-thrown — the adapter loop must
-      // survive a transient publish failure (e.g., bus not yet connected at
-      // Shadow stage). This is NOT an empty catch: the error is written to
-      // stderr with full context so it surfaces in logs.
+      // handleInbound runs inside the adapter's onMessage loop and MUST NOT
+      // throw — a throw can crash the adapter's event loop. Any error (a
+      // throwing onUnroutable hook, a sink failure at Shadow stage before the
+      // bus is connected, etc.) is logged with full context and swallowed so
+      // the loop stays alive. This is NOT an empty catch.
       process.stderr.write(
-        `[surface-gateway] sink.publish error — dropping message. ` +
+        `[surface-gateway] handleInbound error — dropping message. ` +
           `platform=${msg.platform} instanceId=${msg.instanceId} ` +
           `channelId=${msg.channelId} ` +
           `error=${err instanceof Error ? err.message : String(err)}\n`,

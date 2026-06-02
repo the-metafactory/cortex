@@ -179,10 +179,12 @@ class FakeSink implements GatewayInboundSink {
   readonly calls: { decision: GatewayInboundDecision; msg: InboundMessage }[] =
     [];
 
-  shouldThrow: Error | null = null;
+  /** Set to make publish() throw — `unknown` so non-Error throws are exercisable. */
+  shouldThrow: unknown = null;
 
   async publish(decision: GatewayInboundDecision, msg: InboundMessage): Promise<void> {
-    if (this.shouldThrow) throw this.shouldThrow;
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- a test deliberately throws a non-Error value to exercise handleInbound's String(err) defensive branch (production sinks may be JS that throws non-Errors)
+    if (this.shouldThrow !== null) throw this.shouldThrow;
     this.calls.push({ decision, msg });
   }
 }
@@ -490,8 +492,79 @@ describe("handleInbound — sink throws", () => {
 
       // Error should have been written to stderr
       const combined = stderrChunks.join("");
-      expect(combined).toContain("sink.publish error");
+      expect(combined).toContain("handleInbound error");
       expect(combined).toContain("bus not connected");
+    } finally {
+      process.stderr.write = savedWrite;
+    }
+  });
+
+  test("non-Error sink throw is stringified, no throw escapes", async () => {
+    const adapter = new MockAdapter("discord", "discord-luna-mf");
+    const index = buildBindingIndex(DISCORD_SURFACES);
+    const sink = new FakeSink();
+    sink.shouldThrow = "boom-string"; // non-Error throw value → String(err) branch
+
+    const stderrChunks: string[] = [];
+    const savedWrite: typeof process.stderr.write = process.stderr.write;
+    process.stderr.write = (chunk: string | Uint8Array): boolean => {
+      if (typeof chunk === "string") stderrChunks.push(chunk);
+      return savedWrite.call(process.stderr, chunk);
+    };
+
+    try {
+      const gw = new SurfaceGateway([adapter], index, sink);
+      await gw.start();
+      const inbound = msg({
+        platform: "discord",
+        instanceId: "discord-luna-mf",
+        guildId: "111222333444555666",
+        channelId: "ch-9000",
+      });
+      await expect(adapter.trigger(inbound)).resolves.toBeUndefined();
+      expect(stderrChunks.join("")).toContain("boom-string");
+    } finally {
+      process.stderr.write = savedWrite;
+    }
+  });
+});
+
+// ─── 12. onUnroutable hook throws → caught, loop survives ─────────────────────
+
+describe("handleInbound — onUnroutable hook throws", () => {
+  test("a throwing onUnroutable is caught, no throw escapes the adapter loop", async () => {
+    const adapter = new MockAdapter("discord", "discord-luna-mf");
+    const index = buildBindingIndex(DISCORD_SURFACES);
+    const sink = new FakeSink();
+
+    const stderrChunks: string[] = [];
+    const savedWrite: typeof process.stderr.write = process.stderr.write;
+    process.stderr.write = (chunk: string | Uint8Array): boolean => {
+      if (typeof chunk === "string") stderrChunks.push(chunk);
+      return savedWrite.call(process.stderr, chunk);
+    };
+
+    try {
+      const gw = new SurfaceGateway([adapter], index, sink, {
+        onUnroutable: () => {
+          throw new Error("hook blew up");
+        },
+      });
+      await gw.start();
+
+      // DM → unroutable → onUnroutable throws; handleInbound must still not throw.
+      const inbound = msg({
+        platform: "discord",
+        instanceId: "discord-luna-mf",
+        channelId: "dm-ch",
+        isDM: true,
+      });
+      await expect(adapter.trigger(inbound)).resolves.toBeUndefined();
+
+      const combined = stderrChunks.join("");
+      expect(combined).toContain("handleInbound error");
+      expect(combined).toContain("hook blew up");
+      expect(sink.calls).toHaveLength(0);
     } finally {
       process.stderr.write = savedWrite;
     }
