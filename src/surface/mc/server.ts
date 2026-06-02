@@ -40,6 +40,7 @@ import {
 } from "./api/handlers";
 import { handleListGitLinks } from "./api/git-links";
 import { handleListRepositories } from "./api/git-repos";
+import { handleListPlans } from "./api/plans";
 import type { ProcessManager } from "./session/process-manager";
 import type { SpawnFn } from "./session/endpoint-resolver";
 import { join, dirname } from "path";
@@ -406,6 +407,15 @@ async function handleApi(
       return methodNotAllowed(["GET"]);
     }
     return handleListRepositories(db);
+  }
+
+  // G-1113.D.3 — GET /api/plans — plans with ordered phases + status tally for
+  // the Plans overview surface.
+  if (pathname === "/api/plans") {
+    if (req.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
+    return handleListPlans(db);
   }
 
   if (pathname === "/api/tasks") {
