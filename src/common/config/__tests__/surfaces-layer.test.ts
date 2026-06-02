@@ -202,9 +202,18 @@ describe("CFG.c.4 — surfaces.yaml round-trips to the same effective presence/b
     const inline = loadConfigWithAgents(inlinePath);
     const split = loadConfigWithAgents(splitPath);
 
-    // Whole-LoadedConfig identity — the strongest assertion: the move is a
-    // source-layout change, not a runtime-shape change.
-    expect(split).toEqual(inline);
+    // Fold-output identity — the move is a source-layout change, not a
+    // runtime-shape change. The split config additionally carries `surfaces`
+    // (the validated binding map captured before foldSurfaceBindings drops the
+    // top-level key — GW.a.3b.2a, cortex#524); the inline config does not have
+    // a `surfaces:` key in its input, so `inline.surfaces` is undefined. The
+    // fold output (agents presence + flattened adapter arrays) is unchanged.
+    expect(split.config).toEqual(inline.config);
+    expect(split.inlineAgents).toEqual(inline.inlineAgents);
+    expect(split.principal).toEqual(inline.principal);
+    expect(split.stack).toEqual(inline.stack);
+    expect(split.policy).toEqual(inline.policy);
+    expect(split.bus).toEqual(inline.bus);
 
     // Spell out the resolved binding view per platform so a regression names
     // the exact platform that drifted. The effective view consumers read is

@@ -22,7 +22,7 @@ import {
   type SlackPresence,
   type StackConfig,
 } from "../types/cortex-config";
-import { foldSurfaceBindings } from "../types/surfaces";
+import { foldSurfaceBindings, SurfacesSchema, type Surfaces } from "../types/surfaces";
 
 /**
  * Hardening cap on a single fragment file's size. Echo M3 on cortex#62 —
@@ -119,6 +119,13 @@ export interface LoadedConfig {
    * undefined and the boot path uses hardcoded defaults.
    */
   bus?: BusConfig;
+  /**
+   * Optional surface binding map (IAW GW, cortex#524). Populated only when
+   * the input declared a `surfaces:` block / surfaces.yaml layer. Consumed
+   * by the runtime gateway bootstrap (`maybeCreateSurfaceGateway`). Legacy
+   * bot.yaml input yields undefined.
+   */
+  surfaces?: Surfaces;
 }
 
 /**
@@ -340,35 +347,39 @@ function listLayerFiles(dir: string): string[] {
 }
 
 /**
- * CFG.a.1 — compose the raw config object from a directory layout, or fall
- * back to the single file (CFG.a.2).
+ * GW.a.3b.2a surfaces-aware variant of the composer (cortex#524).
  *
- * `configPath` is the path the caller already passes (e.g. a `cortex.yaml`
- * file). Layout detection keys off the file's directory: if
- * `${dir}/system/system.yaml` exists, the directory layout is used; otherwise
- * the single file at `configPath` is read verbatim.
+ * Seam choice: option (b) — this new `composeRawConfigWithSurfaces` function
+ * captures the validated `Surfaces` object BEFORE `foldSurfaceBindings` drops
+ * the top-level `surfaces:` key, and returns it alongside the folded `raw`.
+ * `composeRawConfig` delegates here and returns only `.raw`, so its existing
+ * signature and every caller (composer tests, external consumers) are
+ * untouched. `loadConfigWithAgents` calls this variant directly and threads
+ * `.surfaces` through to `LoadedConfig.surfaces`.
  *
- * Returns the merged `raw` object — the exact shape `parseYaml(cortex.yaml)`
- * yields — so the existing `loadConfigWithAgents` parse/build is unchanged.
+ * Caller blast-radius: zero — `composeRawConfig`'s signature is unchanged.
+ *
+ * HARD INVARIANT: the `.raw` returned is byte-identical to what
+ * `composeRawConfig` returned pre-GW.a.3b.2a. The fold is unchanged; the only
+ * addition is the separately captured `surfaces` value.
  */
-export function composeRawConfig(configPath: string): Record<string, unknown> {
-  // Echo nit #2 on cortex#525 — use the fail-loud `expandTilde` helper instead
-  // of the silent `.replace(/^~/, … ?? "~")` form (which left a literal `~`
-  // when $HOME was unset, then failed obscurely deep in `readFileSync`).
+export function composeRawConfigWithSurfaces(configPath: string): {
+  raw: Record<string, unknown>;
+  surfaces: Surfaces | undefined;
+} {
   const expandedPath = expandTilde(configPath);
   const configDir = dirname(expandedPath);
   const markerPath = join(configDir, LAYOUT_MARKER);
 
   // CFG.a.3 resolution rule: directory layout present → use it; else fallback.
   if (!existsSync(markerPath)) {
-    // CFG.a.2 — transitional single-file fallback. Identical to pre-CFG.a,
-    // except a single file MAY also carry an inline `surfaces:` block — fold
-    // it the same way so the two ingestion paths stay symmetric (CFG.c). A
-    // file with no `surfaces:` key (the three live deployments) is returned
-    // untouched by the fold.
+    // CFG.a.2 — single-file fallback. Capture any `surfaces:` block BEFORE
+    // the fold so `LoadedConfig.surfaces` is populated symmetrically with the
+    // directory-layout path (CFG.c design: both ingestion paths are symmetric).
     const content = readFileSync(expandedPath, "utf-8");
     const single = (parseYaml(content) ?? {}) as Record<string, unknown>;
-    return foldSurfaceBindings(single);
+    const surfaces = parseSurfaces(single.surfaces);
+    return { raw: foldSurfaceBindings(single), surfaces };
   }
 
   // CFG.a.1 — directory layout. Fixed precedence: system → network → surfaces
@@ -382,16 +393,47 @@ export function composeRawConfig(configPath: string): Record<string, unknown> {
     ...listLayerFiles(join(configDir, "stacks")),
   ];
 
-  let raw: Record<string, unknown> = {};
+  let merged: Record<string, unknown> = {};
   for (const file of layerFiles) {
-    raw = deepMerge(raw, readLayerFile(file));
+    merged = deepMerge(merged, readLayerFile(file));
   }
-  // CFG.c — fold any `surfaces:` block into `agents[*].presence.{platform}`
-  // and drop the top-level `surfaces:` key, so the result is the exact shape
-  // the inline (pre-CFG.c) config produced. `LoadedConfig` is unchanged. A
-  // layout with no surfaces.yaml leaves `raw` without a `surfaces:` key, so the
-  // fold is a no-op and per-stack presence is the fallback.
-  return foldSurfaceBindings(raw);
+  // Capture surfaces BEFORE the fold drops the `surfaces:` key. The fold
+  // itself (`foldSurfaceBindings`) already calls `SurfacesSchema.parse`
+  // internally — `parseSurfaces` re-uses the same schema so the parse is
+  // redundant but cheap (no I/O). Both share the same validated result shape.
+  const surfaces = parseSurfaces(merged.surfaces);
+  return { raw: foldSurfaceBindings(merged), surfaces };
+}
+
+/**
+ * Parse the raw `surfaces:` value against `SurfacesSchema`. Returns `undefined`
+ * when the value is absent or null (no surfaces declared). Throws on malformed
+ * input — the caller (`composeRawConfigWithSurfaces`) lets this propagate so
+ * a bad surfaces.yaml fails loudly at load, matching `foldSurfaceBindings`'s
+ * own validation contract.
+ */
+function parseSurfaces(value: unknown): Surfaces | undefined {
+  if (value === undefined || value === null) return undefined;
+  return SurfacesSchema.parse(value);
+}
+
+/**
+ * CFG.a.1 — compose the raw config object from a directory layout, or fall
+ * back to the single file (CFG.a.2).
+ *
+ * `configPath` is the path the caller already passes (e.g. a `cortex.yaml`
+ * file). Layout detection keys off the file's directory: if
+ * `${dir}/system/system.yaml` exists, the directory layout is used; otherwise
+ * the single file at `configPath` is read verbatim.
+ *
+ * Returns the merged `raw` object — the exact shape `parseYaml(cortex.yaml)`
+ * yields — so the existing `loadConfigWithAgents` parse/build is unchanged.
+ *
+ * Delegates to `composeRawConfigWithSurfaces` and returns only `.raw`.
+ * Callers that need `LoadedConfig.surfaces` should use `loadConfigWithAgents`.
+ */
+export function composeRawConfig(configPath: string): Record<string, unknown> {
+  return composeRawConfigWithSurfaces(configPath).raw;
 }
 
 /**
@@ -421,14 +463,16 @@ export function composeRawConfig(configPath: string): Record<string, unknown> {
  */
 export function loadConfigWithAgents(path: string): LoadedConfig {
   // Echo nit #2 on cortex#525 — expand the tilde ONCE here via the fail-loud
-  // helper, then hand the already-expanded path to `composeRawConfig`
+  // helper, then hand the already-expanded path to `composeRawConfigWithSurfaces`
   // (`expandTilde` is idempotent on an absolute path), removing the redundant
   // double expansion that previously happened in both functions.
   const expandedPath = expandTilde(path);
   const configDir = dirname(expandedPath);
 
-  // CFG.a.1/CFG.a.2 — compose from directory layout or fall back to single file.
-  const raw = composeRawConfig(expandedPath);
+  // CFG.a.1/CFG.a.2 — compose from directory layout or fall back to single
+  // file. Capture the validated `Surfaces` binding map before the fold drops
+  // the top-level `surfaces:` key (GW.a.3b.2a, cortex#524).
+  const { raw, surfaces } = composeRawConfigWithSurfaces(expandedPath);
 
   // Networks load against the on-disk path regardless of legacy/cortex shape —
   // both shapes share the same networks/ contract (G-500).
@@ -448,7 +492,7 @@ export function loadConfigWithAgents(path: string): LoadedConfig {
   const networks = loadNetworkFiles(networksDir, explicitNetworksDir);
 
   if (isCortexShape(raw)) {
-    return loadCortexShape(raw, networks);
+    return loadCortexShape(raw, networks, surfaces);
   }
 
   // ---------------------------------------------------------------------
@@ -566,6 +610,7 @@ function detectLegacyAuthorisationFields(raw: Record<string, unknown>): string[]
 function loadCortexShape(
   raw: Record<string, unknown>,
   networks: NetworkFile[],
+  surfaces: Surfaces | undefined,
 ): LoadedConfig {
   // v3.0.0 BREAKING (manifest PR-11) — cortex.yaml requires the canonical
   // `principal:` key. Pass the raw config straight to the schema; the
@@ -680,6 +725,11 @@ function loadCortexShape(
     // cross-references + uniqueness, so this is a pure carry-through.
     ...(cortexConfig.policy !== undefined && { policy: cortexConfig.policy }),
     bus: cortexConfig.bus,
+    // IAW GW, cortex#524 — surface the validated `surfaces:` binding map to
+    // the boot path. Captured before foldSurfaceBindings drops the top-level
+    // key; undefined when the input declared no surfaces block. The gateway
+    // bootstrap (`maybeCreateSurfaceGateway`) reads this at boot.
+    ...(surfaces !== undefined && { surfaces }),
   };
 }
 
