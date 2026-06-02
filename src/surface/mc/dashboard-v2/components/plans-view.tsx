@@ -30,9 +30,11 @@ function progressLine(ov: PlanOverview): string {
 export interface PlansViewProps {
   plans: PlanOverview[];
   loaded: boolean;
+  /** Open the phase-detail surface for a phase (D.4). */
+  onOpenPhase?: (phaseId: string) => void;
 }
 
-export function PlansView({ plans, loaded }: PlansViewProps) {
+export function PlansView({ plans, loaded, onOpenPhase }: PlansViewProps) {
   return (
     <section className="scaffold-section plans-view" aria-label="Plans">
       <h2>Plans</h2>
@@ -69,17 +71,33 @@ export function PlansView({ plans, loaded }: PlansViewProps) {
               <p className="dim faint">No phases parsed from the source doc.</p>
             ) : (
               <ol className="plan-phases">
-                {ov.phases.map((ph) => (
-                  <li
-                    key={ph.id}
-                    className={`plan-phase${ph.id === ov.currentPhaseId ? " current" : ""}`}
-                  >
-                    <span className="phase-title">{ph.title}</span>
-                    <span className={`phase-status status-${ph.status}`}>
-                      {PHASE_STATUS_LABEL[ph.status]}
-                    </span>
-                  </li>
-                ))}
+                {ov.phases.map((ph) => {
+                  const cls = `plan-phase${ph.id === ov.currentPhaseId ? " current" : ""}`;
+                  const inner = (
+                    <>
+                      <span className="phase-title">{ph.title}</span>
+                      <span className={`phase-status status-${ph.status}`}>
+                        {PHASE_STATUS_LABEL[ph.status]}
+                      </span>
+                    </>
+                  );
+                  return (
+                    <li key={ph.id} className={cls}>
+                      {onOpenPhase ? (
+                        <button
+                          type="button"
+                          className="plan-phase-btn"
+                          onClick={() => onOpenPhase(ph.id)}
+                          aria-label={`Open phase ${ph.title}`}
+                        >
+                          {inner}
+                        </button>
+                      ) : (
+                        inner
+                      )}
+                    </li>
+                  );
+                })}
               </ol>
             )}
           </div>

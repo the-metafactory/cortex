@@ -345,6 +345,18 @@ export function listPullRequestsForRepository(db: Database, repositoryId: string
   return rows.map(rowToPullRequest);
 }
 
+/**
+ * G-1113.D.4 — PRs linked to a work item (via `work_item_id`, index-backed by
+ * `idx_pull_requests_work_item`). Drives the phase-detail projection: a phase's
+ * work items each carry their linked PRs.
+ */
+export function listPullRequestsForWorkItem(db: Database, workItemId: string): PullRequest[] {
+  const rows = db
+    .query(`SELECT * FROM pull_requests WHERE work_item_id = ? ORDER BY number_or_key`)
+    .all(workItemId) as PullRequestRow[];
+  return rows.map(rowToPullRequest);
+}
+
 interface ReviewRow {
   id: string;
   pull_request_id: string;

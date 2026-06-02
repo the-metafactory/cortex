@@ -349,6 +349,29 @@ export interface PlanPhase {
   status: PlanPhaseStatus;
 }
 
+/**
+ * A unit of work within a plan/phase (design §6) — the cockpit's work-management
+ * noun, distinct from the legacy {@link Task}. Links up to a {@link Plan} and
+ * {@link PlanPhase}, and self-references via `parentId` for sub-items. Git
+ * objects link back via {@link PullRequest.workItemId}. Per §6, `status` and
+ * `priority` are open provider-native strings (no closed enum), so they are
+ * deliberately not narrowed here. `phaseId`/`planId` are nullable — a work item
+ * can exist before it's filed under a phase.
+ */
+export interface WorkItem {
+  id: string;
+  planId: string | null;
+  phaseId: string | null;
+  parentId: string | null;
+  title: string;
+  description: string | null;
+  status: string;
+  priority: string;
+  provider: Provider;
+  externalId: string | null;
+  url: string | null;
+}
+
 export interface Task {
   id: string;
   title: string;

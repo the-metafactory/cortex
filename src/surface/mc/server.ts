@@ -41,6 +41,7 @@ import {
 import { handleListGitLinks } from "./api/git-links";
 import { handleListRepositories } from "./api/git-repos";
 import { handleListPlans } from "./api/plans";
+import { handleGetPhaseDetail } from "./api/phase-detail";
 import type { ProcessManager } from "./session/process-manager";
 import type { SpawnFn } from "./session/endpoint-resolver";
 import { join, dirname } from "path";
@@ -416,6 +417,22 @@ async function handleApi(
       return methodNotAllowed(["GET"]);
     }
     return handleListPlans(db);
+  }
+
+  // G-1113.D.4 — GET /api/phases/:id — phase detail (plan + work items + linked
+  // PRs) for the phase-detail surface.
+  if (pathname.startsWith("/api/phases/")) {
+    if (req.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
+    const phaseId = decodeURIComponent(pathname.slice("/api/phases/".length));
+    if (!phaseId || phaseId.includes("/")) {
+      return new Response(JSON.stringify({ error: "invalid phase id" }), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return handleGetPhaseDetail(db, phaseId);
   }
 
   if (pathname === "/api/tasks") {

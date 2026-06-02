@@ -22,6 +22,7 @@ import { MetricsPanel } from "./components/metrics-panel";
 import { SourcesView } from "./components/sources-view";
 import { RepositoriesView } from "./components/repositories-view";
 import { PlansView } from "./components/plans-view";
+import { PhaseDetailView } from "./components/phase-detail-view";
 import { Toast } from "./components/toast";
 import { useFocusArea } from "./hooks/use-focus-area";
 import { useTasks } from "./hooks/use-tasks";
@@ -29,6 +30,7 @@ import { useGitLinks } from "./hooks/use-git-links";
 import { useSoftwareMode } from "./hooks/use-software-mode";
 import { useRepositories } from "./hooks/use-repositories";
 import { usePlans } from "./hooks/use-plans";
+import { usePhaseDetail } from "./hooks/use-phase-detail";
 import { useTheme } from "./hooks/use-theme";
 import { useWebSocket } from "./hooks/use-websocket";
 import { ApiFailure, postJson } from "./lib/api";
@@ -51,7 +53,7 @@ import type { Command } from "./components/command-palette";
  * may upgrade to a hash route if deep-linking turns out to be
  * principal-requested; for now the in-memory view is sufficient.
  */
-type DashboardView = "default" | "metrics" | "iterations" | "sources" | "repositories" | "plans" | "kanban-detail";
+type DashboardView = "default" | "metrics" | "iterations" | "sources" | "repositories" | "plans" | "phase-detail" | "kanban-detail";
 
 export function App() {
   const { theme, toggle: toggleTheme } = useTheme();
@@ -89,15 +91,22 @@ export function App() {
   // returns to `iterations`).
   const [view, setView] = useState<DashboardView>("default");
   const [selectedIterationId, setSelectedIterationId] = useState<string | null>(null);
+  // G-1113.D.4 — selected phase for the phase-detail surface (reached from the
+  // Plans overview by clicking a phase; exited back to `plans`).
+  const [selectedPhaseId, setSelectedPhaseId] = useState<string | null>(null);
   // G-1113.C.7 — Repositories panel data (fetched only when on its tab).
   const repos = useRepositories(softwareMode && view === "repositories");
   // G-1113.D.3 — Plans overview data (fetched only when on its tab).
   const plans = usePlans(softwareMode && view === "plans");
+  // G-1113.D.4 — phase-detail data (fetched whenever a phase is selected).
+  const phaseDetail = usePhaseDetail(view === "phase-detail" ? selectedPhaseId : null);
   // If software mode is toggled OFF while on a software-mode view (Repositories
-  // / Plans), the tab + render both gate off — reset to default so the main
-  // area isn't left blank.
+  // / Plans / phase-detail), the tab + render both gate off — reset to default
+  // so the main area isn't left blank.
   useEffect(() => {
-    if (!softwareMode && (view === "repositories" || view === "plans")) setView("default");
+    if (!softwareMode && (view === "repositories" || view === "plans" || view === "phase-detail")) {
+      setView("default");
+    }
   }, [softwareMode, view]);
 
   // Drill-down state — only one open at a time per F-7 Decision 9.
@@ -452,8 +461,16 @@ export function App() {
         )}
 
         {view === "plans" && softwareMode && (
-          /* G-1113.D.3 — plan overview surface. */
-          <PlansView plans={plans.plans} loaded={plans.loaded} />
+          /* G-1113.D.3 — plan overview surface. D.4 — clicking a phase opens
+             the phase-detail surface. */
+          <PlansView
+            plans={plans.plans}
+            loaded={plans.loaded}
+            onOpenPhase={(phaseId) => {
+              setSelectedPhaseId(phaseId);
+              setView("phase-detail");
+            }}
+          />
         )}
 
         {view === "iterations" && (
@@ -577,6 +594,18 @@ export function App() {
               // applied optimistic updates, but a refetch is cheap and
               // resyncs any inbox drift).
               iterations.refetch();
+            }}
+          />
+        )}
+
+        {view === "phase-detail" && softwareMode && (
+          /* G-1113.D.4 — phase-detail surface (reached from a Plans phase row). */
+          <PhaseDetailView
+            detail={phaseDetail.detail}
+            loaded={phaseDetail.loaded}
+            onClose={() => {
+              setView("plans");
+              setSelectedPhaseId(null);
             }}
           />
         )}

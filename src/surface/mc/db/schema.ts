@@ -24,6 +24,7 @@ export const TABLE_NAMES = [
   "releases",
   "plans",
   "plan_phases",
+  "work_items",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
@@ -407,6 +408,34 @@ export const SCHEMA_SQL: string[] = [
 
   // Phase lookup by plan, ordered.
   `CREATE INDEX IF NOT EXISTS idx_plan_phases_plan ON plan_phases(plan_id, phase_order)`,
+
+  // --- work_items (G-1113.D.4 — design §6) ---
+  // The cockpit's work-management noun (distinct from `tasks`). Links up to a
+  // plan + phase, and self-references via parent_id for sub-items. Per §6,
+  // `status` and `priority` are open provider-native strings — NOT CHECK-
+  // constrained (unlike plan/phase status), so any provider's vocabulary maps
+  // through. `provider` is app-validated via isProvider (no CHECK), matching
+  // the Git-object tables. All FKs ON DELETE RESTRICT: ingestion only upserts,
+  // never deletes, so these are orphan safety-nets rather than live policy.
+  `CREATE TABLE IF NOT EXISTS work_items (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT REFERENCES plans(id) ON DELETE RESTRICT,
+    phase_id TEXT REFERENCES plan_phases(id) ON DELETE RESTRICT,
+    parent_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT '',
+    priority TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL,
+    external_id TEXT,
+    url TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+
+  // Work-item lookup by phase (phase detail, D.4) and by plan.
+  `CREATE INDEX IF NOT EXISTS idx_work_items_phase ON work_items(phase_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_work_items_plan ON work_items(plan_id)`,
 ];
 
 /**
