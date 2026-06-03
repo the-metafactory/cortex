@@ -5,13 +5,16 @@
  * at least one surface binding exists, builds the binding index, and returns a
  * fully constructed (but not yet started) {@link SurfaceGateway}.
  *
- * ## Shadow stage (this slice)
+ * ## Sink selection (shadow default, live opt-in)
  *
- * `maybeCreateSurfaceGateway` ALWAYS wires {@link LoggingInboundSink} as the
- * inbound sink — it logs the routing decision that WOULD be published to the
- * bus, but does NOT publish. This lets the gateway run alongside per-stack
- * adapters on a staging identity to prove demux correctness before any stack
- * loses its own adapter. The live bus-publishing sink flip is GW.a.3b.2.
+ * `maybeCreateSurfaceGateway` defaults to {@link LoggingInboundSink} (SHADOW)
+ * when no `sink` is injected — it logs the routing decision that WOULD be
+ * published to the bus, but does NOT publish. This lets the gateway run
+ * alongside per-stack adapters on a staging identity to prove demux
+ * correctness before any stack loses its own adapter. A live `BusInboundSink`
+ * is injected by `startGatewayIfEnabled` ONLY when the second opt-in flag
+ * `CORTEX_GATEWAY_PUBLISH` is set — making live publish a deliberate
+ * double-opt-in (`CORTEX_GATEWAY` AND `CORTEX_GATEWAY_PUBLISH`).
  *
  * ## GW.a.3b.2 prerequisites (NOT done in this slice)
  *
@@ -59,6 +62,7 @@ import { buildBindingIndex } from "./binding-resolver";
 import {
   SurfaceGateway,
   LoggingInboundSink,
+  type GatewayInboundSink,
 } from "./surface-gateway";
 
 // =============================================================================
@@ -87,6 +91,17 @@ export interface GatewayBootstrapOpts {
   /** Platform adapters the gateway will own — injected by GW.a.3b.2 caller. */
   adapters: PlatformAdapter[];
   /**
+   * The inbound sink the gateway publishes routing decisions to.
+   *
+   * Defaults to {@link LoggingInboundSink} (SHADOW — logs the decision that
+   * WOULD be published, but does NOT touch the bus) when omitted, so every
+   * existing caller and the default shadow stage are unchanged. The live-path
+   * `BusInboundSink` is injected here by `startGatewayIfEnabled` ONLY when the
+   * second opt-in flag `CORTEX_GATEWAY_PUBLISH` is set — making live publish a
+   * deliberate double-opt-in.
+   */
+  sink?: GatewayInboundSink;
+  /**
    * Optional unroutable-message hook forwarded to {@link SurfaceGateway}.
    * When absent the gateway's default `console.warn` fires.
    */
@@ -111,6 +126,33 @@ export function isGatewayEnabled(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
   return env.CORTEX_GATEWAY === "1";
+}
+
+// =============================================================================
+// isGatewayPublishEnabled
+// =============================================================================
+
+/**
+ * Read the `CORTEX_GATEWAY_PUBLISH` flag from `env` (defaults to `process.env`).
+ *
+ * Returns `true` iff `env.CORTEX_GATEWAY_PUBLISH === "1"`. All other values —
+ * including `"true"`, `"yes"`, `"on"`, and `undefined` — return `false`,
+ * mirroring {@link isGatewayEnabled}'s strict `"1"`-only contract.
+ *
+ * This is the SECOND, independent opt-in gate. The gateway only publishes to
+ * the bus (live `BusInboundSink`) when BOTH `CORTEX_GATEWAY` AND
+ * `CORTEX_GATEWAY_PUBLISH` are `"1"`. With the gateway flag on but THIS flag
+ * off, the gateway runs in SHADOW (`LoggingInboundSink` — no publish), exactly
+ * as it does today. Live publish is a deliberate double-opt-in because it runs
+ * on live stacks.
+ *
+ * Kept separate from {@link isGatewayEnabled} so each flag is independently
+ * testable without constructing anything.
+ */
+export function isGatewayPublishEnabled(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return env.CORTEX_GATEWAY_PUBLISH === "1";
 }
 
 // =============================================================================
@@ -184,19 +226,22 @@ export function maybeCreateSurfaceGateway(
   // (loud startup failure on bad config). The throw propagates to the caller.
   const index = buildBindingIndex(surfaces);
 
-  // Shadow stage: ALWAYS use LoggingInboundSink here.
-  // The real BusInboundSink flip (publishing to the bus) is GW.a.3b.2 work —
-  // that slice wires the live runtime and swaps LoggingInboundSink for
-  // BusInboundSink in the cortex.ts boot path.
-  const sink = new LoggingInboundSink();
+  // Sink selection: defaults to LoggingInboundSink (SHADOW — no bus publish)
+  // when the caller omits `sink`, so every existing caller and the default
+  // shadow stage are byte-unchanged. A live BusInboundSink is injected by
+  // `startGatewayIfEnabled` only when the second opt-in flag
+  // `CORTEX_GATEWAY_PUBLISH` is set. This factory does not read either flag —
+  // it trusts the caller's choice of sink, keeping it pure and testable.
+  const sink = opts.sink ?? new LoggingInboundSink();
+  const live = !(sink instanceof LoggingInboundSink);
 
   const gw = new SurfaceGateway(adapters, index, sink, { onUnroutable });
 
   process.stdout.write(
-    `[surface-gateway] surface gateway constructed (SHADOW)` +
+    `[surface-gateway] surface gateway constructed (${live ? "LIVE" : "SHADOW"})` +
       ` — ${bindingCount} ${bindingCount === 1 ? "binding" : "bindings"},` +
       ` ${adapters.length} ${adapters.length === 1 ? "adapter" : "adapters"};` +
-      ` LoggingInboundSink (no bus publish)\n`,
+      ` ${live ? "BusInboundSink (publishing to the bus)" : "LoggingInboundSink (no bus publish)"}\n`,
   );
 
   return gw;

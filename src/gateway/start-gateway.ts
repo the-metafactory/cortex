@@ -24,11 +24,16 @@
  *   3. flag on + bindings → build adapters, construct the gateway, `gw.start()`,
  *      return the started instance.
  *
- * ## Shadow stage (this slice)
+ * ## Sink selection — shadow default, live double-opt-in
  *
- * `maybeCreateSurfaceGateway` always wires `LoggingInboundSink` — even the
- * flag-on path is shadow/log-only and publishes NOTHING to the bus. The
- * `BusInboundSink` flip is a later slice.
+ * `CORTEX_GATEWAY=1` alone runs the gateway in SHADOW: `maybeCreateSurfaceGateway`
+ * defaults to `LoggingInboundSink` (logs the routing decision, publishes
+ * NOTHING) — unchanged from today. Only when `CORTEX_GATEWAY_PUBLISH=1` is ALSO
+ * set does this function construct a `BusInboundSink` and inject it, flipping
+ * the gateway LIVE (publishing canonical dispatch envelopes to the bus). Live
+ * publish is a deliberate double-opt-in because the gateway runs on live stacks.
+ * The empty-bindings Path-2 always stays on `LoggingInboundSink` (there is
+ * nothing to publish without bindings anyway).
  *
  * ## Why bindings are checked before building adapters
  *
@@ -41,6 +46,7 @@
 
 import {
   isGatewayEnabled,
+  isGatewayPublishEnabled,
   maybeCreateSurfaceGateway,
 } from "./gateway-bootstrap";
 import {
@@ -48,9 +54,12 @@ import {
   defaultGatewayAdapterFactory,
   type GatewayAdapterFactory,
 } from "./gateway-adapters";
+import { BusInboundSink } from "./bus-inbound-sink";
 import type { SurfaceGateway } from "./surface-gateway";
 import type { Surfaces } from "../common/types/surfaces";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
+import type { SystemEventSource } from "../bus/system-events";
+import type { PolicyEngine } from "../common/policy/engine";
 import type { InboundMessage } from "../adapters/types";
 
 // =============================================================================
@@ -67,6 +76,21 @@ export interface StartGatewayOpts {
   principal: string;
   /** Myelin runtime (may be dormant — adapters track state locally either way). */
   runtime: MyelinRuntime | undefined;
+  /**
+   * The gateway's dispatch-source identity, threaded into a live
+   * {@link BusInboundSink}. Supplies principal / agent / instance for the
+   * envelope `source`. `undefined` before the bus connects → the publisher
+   * refuses with `reason: "missing-runtime"`. Only consumed when
+   * `CORTEX_GATEWAY_PUBLISH` selects the live sink.
+   */
+  source: SystemEventSource | undefined;
+  /**
+   * Policy engine that resolves `(platform, authorId)` → principal DID for the
+   * envelope `originator.identity`, threaded into a live {@link BusInboundSink}.
+   * `undefined` → the publisher refuses with `reason: "invalid-originator"`.
+   * Only consumed when `CORTEX_GATEWAY_PUBLISH` selects the live sink.
+   */
+  policyEngine: PolicyEngine | undefined;
   /**
    * Adapter-construction seam. Production omits this and gets
    * {@link defaultGatewayAdapterFactory}; tests inject a recording fake that
@@ -131,10 +155,45 @@ export async function startGatewayIfEnabled(
     factory: opts.factory ?? defaultGatewayAdapterFactory,
   });
 
+  // Sink selection — the SECOND opt-in gate.
+  //
+  // SHADOW (default): `CORTEX_GATEWAY_PUBLISH` unset → omit `sink`, so
+  // `maybeCreateSurfaceGateway` defaults to `LoggingInboundSink` (logs only, no
+  // bus publish). This is the unchanged-from-today behaviour for a gateway-on,
+  // publish-off stack.
+  //
+  // LIVE (double-opt-in): `CORTEX_GATEWAY` AND `CORTEX_GATEWAY_PUBLISH` both
+  // "1" → construct a `BusInboundSink` and inject it, so each routable inbound
+  // message is published to the bus as a canonical dispatch envelope.
+  //
+  // D1 (CONTEXT.md §Dispatch-source, 2026-06-02): the gateway is a separate
+  // process with NO stack NKey, so `BusInboundSink` publishes via this runtime
+  // UNSIGNED + originator-stamped on the intra-principal hop (Shape A v1). The
+  // bound stack's consumer tolerates unsigned (`rejectEmpty:false`). The
+  // explicit re-sign-on-ingest (Shape B) is deferred to cortex#552 — signing is
+  // a property of the injected runtime, not of this sink.
+  const publish = isGatewayPublishEnabled(opts.env);
+  const sink = publish
+    ? new BusInboundSink({
+        runtime: opts.runtime,
+        source: opts.source,
+        policyEngine: opts.policyEngine,
+      })
+    : undefined;
+
+  process.stdout.write(
+    publish
+      ? "[surface-gateway] CORTEX_GATEWAY_PUBLISH set — gateway LIVE" +
+          " (BusInboundSink — publishing to the bus)\n"
+      : "[surface-gateway] CORTEX_GATEWAY_PUBLISH unset — gateway SHADOW" +
+          " (LoggingInboundSink — no bus publish)\n",
+  );
+
   const gw = maybeCreateSurfaceGateway({
     enabled: true,
     surfaces,
     adapters,
+    ...(sink !== undefined && { sink }),
     ...(opts.onUnroutable !== undefined && { onUnroutable: opts.onUnroutable }),
   });
 

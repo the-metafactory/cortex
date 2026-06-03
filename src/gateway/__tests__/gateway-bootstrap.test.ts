@@ -21,10 +21,16 @@
 import { describe, expect, test, spyOn } from "bun:test";
 import {
   isGatewayEnabled,
+  isGatewayPublishEnabled,
   maybeCreateSurfaceGateway,
   type GatewayBootstrapOpts,
 } from "../gateway-bootstrap";
-import { SurfaceGateway } from "../surface-gateway";
+import {
+  SurfaceGateway,
+  LoggingInboundSink,
+  type GatewayInboundSink,
+  type GatewayInboundDecision,
+} from "../surface-gateway";
 import type { PlatformAdapter, InboundMessage } from "../../adapters/types";
 import type { Surfaces } from "../../common/types/surfaces";
 
@@ -129,6 +135,42 @@ describe("isGatewayEnabled", () => {
 
   test("returns false when CORTEX_GATEWAY is undefined in the env record", () => {
     expect(isGatewayEnabled({ CORTEX_GATEWAY: undefined })).toBe(false);
+  });
+});
+
+// =============================================================================
+// isGatewayPublishEnabled — the second, independent opt-in gate
+// =============================================================================
+
+describe("isGatewayPublishEnabled", () => {
+  test("returns false when CORTEX_GATEWAY_PUBLISH is unset", () => {
+    expect(isGatewayPublishEnabled({})).toBe(false);
+  });
+
+  test("returns true when CORTEX_GATEWAY_PUBLISH is '1'", () => {
+    expect(isGatewayPublishEnabled({ CORTEX_GATEWAY_PUBLISH: "1" })).toBe(true);
+  });
+
+  test("returns false when CORTEX_GATEWAY_PUBLISH is '0'", () => {
+    expect(isGatewayPublishEnabled({ CORTEX_GATEWAY_PUBLISH: "0" })).toBe(false);
+  });
+
+  test("returns false when CORTEX_GATEWAY_PUBLISH is 'true' (only '1' is truthy)", () => {
+    expect(isGatewayPublishEnabled({ CORTEX_GATEWAY_PUBLISH: "true" })).toBe(false);
+  });
+
+  test("returns false when CORTEX_GATEWAY_PUBLISH is undefined in the env record", () => {
+    expect(isGatewayPublishEnabled({ CORTEX_GATEWAY_PUBLISH: undefined })).toBe(false);
+  });
+
+  test("is independent of CORTEX_GATEWAY (reads only its own key)", () => {
+    // The two flags are orthogonal at the read layer; the AND is composed by
+    // the caller (startGatewayIfEnabled). isGatewayPublishEnabled ignores
+    // CORTEX_GATEWAY entirely.
+    expect(isGatewayPublishEnabled({ CORTEX_GATEWAY: "1" })).toBe(false);
+    expect(
+      isGatewayPublishEnabled({ CORTEX_GATEWAY: "0", CORTEX_GATEWAY_PUBLISH: "1" }),
+    ).toBe(true);
   });
 });
 
@@ -353,6 +395,68 @@ describe("maybeCreateSurfaceGateway — happy path", () => {
       expect(combined).toMatch(/1\s+binding/);
       // 2 adapters
       expect(combined).toMatch(/2\s+adapter/);
+    } finally {
+      stdoutSpy.mockRestore();
+    }
+  });
+});
+
+// =============================================================================
+// maybeCreateSurfaceGateway — sink injection (shadow default, live override)
+// =============================================================================
+
+describe("maybeCreateSurfaceGateway — sink injection", () => {
+  test("defaults to LoggingInboundSink when no sink is injected", () => {
+    const gw = maybeCreateSurfaceGateway({
+      enabled: true,
+      surfaces: DISCORD_SURFACES,
+      adapters: [makeFakeAdapter()],
+    });
+    expect(gw).toBeInstanceOf(SurfaceGateway);
+    expect(gw!.inboundSink).toBeInstanceOf(LoggingInboundSink);
+  });
+
+  test("uses the injected sink when one is provided", () => {
+    // A minimal custom sink (not a LoggingInboundSink) — proves the factory
+    // honours the injection rather than always constructing its own default.
+    const calls: GatewayInboundDecision[] = [];
+    const customSink: GatewayInboundSink = {
+      publish: async (decision: GatewayInboundDecision) => {
+        calls.push(decision);
+      },
+    };
+
+    const gw = maybeCreateSurfaceGateway({
+      enabled: true,
+      surfaces: DISCORD_SURFACES,
+      adapters: [makeFakeAdapter()],
+      sink: customSink,
+    });
+    expect(gw).toBeInstanceOf(SurfaceGateway);
+    // identity check — exactly the injected instance, not a default
+    expect(gw!.inboundSink).toBe(customSink);
+    expect(gw!.inboundSink).not.toBeInstanceOf(LoggingInboundSink);
+  });
+
+  test("logs LIVE + BusInboundSink wording when a non-logging sink is injected", () => {
+    const messages: string[] = [];
+    const stdoutSpy = spyOn(process.stdout, "write").mockImplementation((msg) => {
+      messages.push(String(msg));
+      return true;
+    });
+    try {
+      const customSink: GatewayInboundSink = {
+        publish: async () => {},
+      };
+      maybeCreateSurfaceGateway({
+        enabled: true,
+        surfaces: DISCORD_SURFACES,
+        adapters: [makeFakeAdapter()],
+        sink: customSink,
+      });
+      const combined = messages.join("");
+      expect(combined).toContain("LIVE");
+      expect(combined).toContain("BusInboundSink");
     } finally {
       stdoutSpy.mockRestore();
     }

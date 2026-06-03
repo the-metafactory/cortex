@@ -29,6 +29,7 @@ import { useFocusArea } from "./hooks/use-focus-area";
 import { useTasks } from "./hooks/use-tasks";
 import { useGitLinks } from "./hooks/use-git-links";
 import { useSoftwareMode } from "./hooks/use-software-mode";
+import { useLegacyIterations } from "./hooks/use-legacy-iterations";
 import { useRepositories } from "./hooks/use-repositories";
 import { usePlans } from "./hooks/use-plans";
 import { usePhaseDetail } from "./hooks/use-phase-detail";
@@ -61,6 +62,9 @@ export function App() {
   const { theme, toggle: toggleTheme } = useTheme();
   // G-1113.C.7 — software mode gates the Repositories panel.
   const { softwareMode, toggle: toggleSoftwareMode } = useSoftwareMode();
+  // G-1113.D.6 — legacy-iterations toggle gates the legacy Iterations kanban
+  // (default ON until the Plans surface reaches parity).
+  const { legacyIterations, toggle: toggleLegacyIterations } = useLegacyIterations();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [toast, setToast] = useState<{ message: string; tone?: "ok" | "error" | "info" } | null>(null);
 
@@ -121,6 +125,13 @@ export function App() {
       setView("default");
     }
   }, [softwareMode, view]);
+  // G-1113.D.6 — if the legacy kanban is toggled OFF while on the Iterations
+  // tab or its detail surface, reset to default so the main area isn't blank.
+  useEffect(() => {
+    if (!legacyIterations && (view === "iterations" || view === "kanban-detail")) {
+      setView("default");
+    }
+  }, [legacyIterations, view]);
 
   // Drill-down state — only one open at a time per F-7 Decision 9.
   const [drillId, setDrillId] = useState<string | null>(null);
@@ -248,6 +259,15 @@ export function App() {
           </button>
           <button
             type="button"
+            className={`theme-btn${legacyIterations ? " active" : ""}`}
+            onClick={toggleLegacyIterations}
+            aria-pressed={legacyIterations}
+            title="Show the legacy iteration kanban (kept until the Plans surface reaches parity)"
+          >
+            {legacyIterations ? "◆ legacy" : "◇ legacy"}
+          </button>
+          <button
+            type="button"
             className="theme-btn"
             onClick={toggleTheme}
             aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
@@ -281,15 +301,17 @@ export function App() {
         >
           Metrics
         </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={view === "iterations"}
-          className={`tab${view === "iterations" ? " active" : ""}`}
-          onClick={() => setView("iterations")}
-        >
-          Iterations
-        </button>
+        {legacyIterations && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "iterations"}
+            className={`tab${view === "iterations" ? " active" : ""}`}
+            onClick={() => setView("iterations")}
+          >
+            Iterations
+          </button>
+        )}
         <button
           type="button"
           role="tab"
@@ -383,6 +405,10 @@ export function App() {
               // drill-header). No drill-down close because the table
               // click is happening with no overlay open.
               onOpenIteration={(iterationId) => {
+                // G-1113.D.6 — the iteration cell routes into the legacy kanban;
+                // when legacy is toggled off that surface is hidden, so no-op
+                // rather than bounce through the reset effect.
+                if (!legacyIterations) return;
                 setSelectedIterationId(iterationId);
                 setView("kanban-detail");
               }}
@@ -666,6 +692,10 @@ export function App() {
         // clean iteration surface; the existing F-7 history pattern
         // is "Esc closes, no breadcrumb back" so this matches.
         onOpenIteration={(iterationId) => {
+          // G-1113.D.6 — guard BEFORE the drill-down teardown: when legacy is
+          // off the kanban surface is hidden, so don't tear down the open
+          // drill-down for a navigation that the reset effect would bounce.
+          if (!legacyIterations) return;
           setDrillId(null);
           setFocusMode(false);
           setSelectedIterationId(iterationId);
