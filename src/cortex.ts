@@ -91,6 +91,10 @@ import type { PlatformAdapter } from "./adapters/types";
 import { createDispatchSink, type DispatchSink } from "./adapters/dispatch-sink";
 import { createReviewSink, type ReviewSink } from "./adapters/review-sink";
 import { startGatewayIfEnabled } from "./gateway/start-gateway";
+// G-1113 ML.5 — cockpit live-refresh loop (opt-in via config.cockpit).
+import { refreshCockpit, defaultWorkItemSourceFor } from "./surface/mc/refresh";
+import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/refresh-loop";
+import type { Database as BunDatabase } from "bun:sqlite";
 import { isGatewayEnabled } from "./gateway/gateway-bootstrap";
 import { gatewayOwnedSurfaceKeys } from "./gateway/gateway-adapters";
 import type { Surfaces } from "./common/types/surfaces";
@@ -2059,11 +2063,20 @@ export async function startCortex(
   // `formatDispatchLifecycle`, and posts back. NOT wired via
   // `surfaceSubjects` (that would double-reply). Dormant when the runtime
   // is disabled (no NATS) or no adapters started.
+  // ML.5 — attention notifications (system.attention.*) render to the configured
+  // cockpit channel. Only wired when a channel is set; otherwise the sink ignores
+  // attention envelopes (unchanged behaviour).
+  const attn = config.cockpit.attention;
+  const attentionRouting =
+    attn.channel !== ""
+      ? { surface: attn.surface, channel: attn.channel, ...(attn.thread !== undefined && { thread: attn.thread }) }
+      : undefined;
   const reviewSink: ReviewSink = createReviewSink({
     runtime,
     adapters,
     principal: principalId,
     stack: derivedStack.stack,
+    ...(attentionRouting !== undefined && { attentionRouting }),
   });
   await reviewSink.start();
   console.log(
@@ -2136,12 +2149,39 @@ export async function startCortex(
   // Dashboard API + usage monitor (G-201 / G-206) — opt-in.
   let dashboardApi: { stop?: () => void } | null = null;
   let usageMonitor: UsageMonitor | null = null;
+  let mcDb: BunDatabase | null = null;
   if (config.api.enabled && !options.disableDashboard) {
     try {
-      ({ api: dashboardApi, usageMonitor } = await setupDashboard(config, principalId, options.principal?.displayName, dispatchHandler, cloudPublisher));
+      ({ api: dashboardApi, usageMonitor, mcDb } = await setupDashboard(config, principalId, options.principal?.displayName, dispatchHandler, cloudPublisher));
     } catch (err) {
       console.error("cortex: dashboard API startup error (non-fatal):", err instanceof Error ? err.message : err);
     }
+  }
+
+  // G-1113 ML.5 — cockpit live-refresh loop. Opt-in via `config.cockpit.enabled`;
+  // runs refreshCockpit (ingest → reconcile) on an interval and publishes
+  // `system.attention.*` notifications via the bus (the review-sink renders them
+  // to `cockpit.attention.channel`). Closes the make-it-live loop end-to-end.
+  let cockpitLoop: CockpitRefreshLoop | null = null;
+  if (config.cockpit.enabled && mcDb !== null) {
+    const cockpitDb = mcDb;
+    const [repoOwner, repoName] = config.cockpit.repo.split("/");
+    const defaultRepo = repoOwner && repoName ? { owner: repoOwner, repo: repoName } : undefined;
+    const baseUrl = config.grove.baseUrl !== "" ? config.grove.baseUrl : `http://localhost:${config.api.port}`;
+    cockpitLoop = startCockpitRefreshLoop({
+      intervalMs: config.cockpit.refreshIntervalMs,
+      run: () =>
+        refreshCockpit(cockpitDb, {
+          docsDir: config.cockpit.docsDir,
+          ...(defaultRepo !== undefined && { defaultRepo }),
+          stackId: derivedStack.stack,
+          publish: (env) => runtime.publish(env),
+          notifySource: { principal: principalId, agent: "cortex", instance: "local" },
+          deepLinkFor: (item) => (item.workItemId !== null ? `${baseUrl}/work-items/${item.workItemId}` : null),
+          workItemSourceFor: defaultWorkItemSourceFor,
+        }),
+    });
+    console.log(`cortex: cockpit refresh loop started — every ${config.cockpit.refreshIntervalMs}ms, docs=${config.cockpit.docsDir}`);
   }
 
   // MIG-5.6 (C-106): GitHub webhook receiver — opt-in via `github.receiver.enabled`
@@ -2268,6 +2308,7 @@ export async function startCortex(
     const drain = async (): Promise<void> => {
       completeSync("config-watcher stop", () => configWatcher?.stop());
       completeSync("usage-monitor stop", () => usageMonitor?.stop());
+      completeSync("cockpit refresh loop stop", () => cockpitLoop?.stop());
       completeSync("dashboard stop", () => dashboardApi?.stop?.());
       completeSync("github webhook receiver stop", () => githubReceiver?.stop());
       for (let i = 0; i < adapterCleanup.length; i++) {
@@ -2426,7 +2467,7 @@ async function setupDashboard(
   principalDisplayName: string | undefined,
   dispatchHandler: DispatchHandler,
   cloudPublisher: CloudPublisher | null,
-): Promise<{ api: { stop?: () => void }; usageMonitor: UsageMonitor }> {
+): Promise<{ api: { stop?: () => void }; usageMonitor: UsageMonitor; mcDb: BunDatabase | null }> {
   const { DashboardApi } = await import("./surface/mc/api/index" as string);
   const dbPath = join(STATE_DIR, "dashboard.db");
   const cortexRoot = join(dirname(import.meta.dir), ".");
@@ -2483,7 +2524,10 @@ async function setupDashboard(
     const changed = api.getState().updateSessionUsage(sessionId, usage);
     if (changed) api.notifyStateChanged();
   });
-  return { api, usageMonitor };
+  // ML.5 — expose the MC DB handle so the bot can run the cockpit refresh loop
+  // (it has `runtime.publish` in scope; the dashboard owns the DB).
+  const mcDb = (api.getDb() ?? null) as BunDatabase | null;
+  return { api, usageMonitor, mcDb };
 }
 /* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unnecessary-type-assertion */
 

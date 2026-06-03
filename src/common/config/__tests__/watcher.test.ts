@@ -69,6 +69,13 @@ const TEST_CONFIG: AgentConfig = {
     publishedEventsDir: "~/.claude/events/published",
     logDir: "~/.config/grove/logs",
   },
+  cockpit: {
+    enabled: false,
+    docsDir: "docs",
+    repo: "",
+    refreshIntervalMs: 300_000,
+    attention: { surface: "discord", channel: "" },
+  },
   networksDir: "./networks",
   networks: [],
 };

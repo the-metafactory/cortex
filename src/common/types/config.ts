@@ -476,6 +476,30 @@ export const AgentConfigSchema = z.object({
     baseUrl: z.string().default(""),
   }).default(emptyDefault()),
 
+  /**
+   * G-1113 ML.5: Mission Control Cockpit live-refresh. OFF by default (opt-in)
+   * so existing deployments are unchanged. When `enabled`, the bot runs
+   * `refreshCockpit` on `refreshIntervalMs` (plan-doc ingestion → work-item
+   * ingestion → attention reconcile) and publishes `system.attention.*`
+   * notifications; `attention.channel` is the review-sink destination those
+   * render to (empty → notifications stay on the bus but aren't routed).
+   */
+  cockpit: z.object({
+    enabled: z.boolean().default(false),
+    /** Path to the plan/iteration docs dir (relative to cwd or absolute). */
+    docsDir: z.string().default("docs"),
+    /** Default repo ("owner/name") for short umbrella refs + doc URLs. */
+    repo: z.string().default(""),
+    /** Refresh interval in ms (default 5 min). */
+    refreshIntervalMs: z.number().int().positive().default(300_000),
+    /** Attention notification destination (the review-sink's attentionRouting). */
+    attention: z.object({
+      surface: z.string().default("discord"),
+      channel: z.string().default(""),
+      thread: z.string().optional(),
+    }).default(emptyDefault()),
+  }).default(emptyDefault()),
+
   /** G-500: Directory containing per-network YAML files */
   networksDir: z.string().default("./networks"),
 
