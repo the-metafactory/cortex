@@ -498,7 +498,24 @@ export const AgentConfigSchema = z.object({
       channel: z.string().default(""),
       thread: z.string().optional(),
     }).default(emptyDefault()),
-  }).default(emptyDefault()),
+  }).default(emptyDefault()).transform((val) => ({
+    // Same `emptyDefault()` quirk documented on the `github` block above:
+    // `.default(emptyDefault())` returns `{}` literally rather than re-parsing
+    // the inner defaults, so `config.cockpit.attention` would be undefined.
+    // Re-apply the inner defaults so callers get the populated shape. The `??`
+    // chains are load-bearing (not redundant) for the all-defaults parse path.
+    /* eslint-disable @typescript-eslint/no-unnecessary-condition */
+    enabled: val.enabled ?? false,
+    docsDir: val.docsDir ?? "docs",
+    repo: val.repo ?? "",
+    refreshIntervalMs: val.refreshIntervalMs ?? 300_000,
+    attention: {
+      surface: val.attention?.surface ?? "discord",
+      channel: val.attention?.channel ?? "",
+      ...(val.attention?.thread !== undefined && { thread: val.attention.thread }),
+    },
+    /* eslint-enable @typescript-eslint/no-unnecessary-condition */
+  })),
 
   /** G-500: Directory containing per-network YAML files */
   networksDir: z.string().default("./networks"),
