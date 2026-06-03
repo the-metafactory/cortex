@@ -38,7 +38,10 @@ export const SCHEMA_SQL: string[] = [
     description TEXT,
     priority INTEGER NOT NULL DEFAULT 2,
     principal_id TEXT NOT NULL,
-    source_system TEXT NOT NULL CHECK(source_system IN ('github','internal')),
+    -- G-1113.D.7c — provider-neutral: no CHECK (app-validated via isProvider at
+    -- the read boundary, matching the git/work-item tables). Existing DBs are
+    -- migrated off the old CHECK by REBUILD_MIGRATIONS below.
+    source_system TEXT NOT NULL,
     source_url TEXT,
     source_external_id TEXT,
     related_refs_json TEXT,
@@ -468,6 +471,78 @@ export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
     column: "iteration_id",
     ddl: `ALTER TABLE tasks ADD COLUMN iteration_id TEXT REFERENCES iterations(id)`,
     post: [
+      `CREATE INDEX IF NOT EXISTS idx_tasks_iteration ON tasks(iteration_id)`,
+    ],
+  },
+];
+
+/**
+ * G-1113.D.7c — table-rebuild migrations for EXISTING DBs.
+ *
+ * SQLite can't `ALTER TABLE ... DROP CONSTRAINT`, so relaxing a CHECK on an
+ * existing table requires the standard rebuild recipe (new table → copy → drop
+ * → rename). Fresh DBs already get the relaxed schema from SCHEMA_SQL, so each
+ * rebuild is GUARDED by `detect(currentSql)` and only fires when the OLD shape
+ * is still present — making it idempotent (post-migration it never re-runs).
+ *
+ * init.ts runs these AFTER COLUMN_ADD_MIGRATIONS (so added columns like
+ * tasks.iteration_id already exist) with foreign_keys OFF, inside a transaction,
+ * and a foreign_key_check afterwards.
+ *
+ * ⚠️ TRANSITIONAL + DATA-CRITICAL: `steps` must reproduce the table's FULL
+ * current shape = base SCHEMA_SQL columns + every COLUMN_ADD_MIGRATIONS column
+ * (today: tasks.iteration_id). If a future column-add lands, it MUST be added to
+ * the rebuild DDL below until this migration is retired (once all deployments
+ * have migrated past the source_system CHECK). The INSERT uses an explicit
+ * column list — never SELECT * — so a shape mismatch fails loudly, not silently.
+ */
+export interface RebuildMigration {
+  table: string;
+  /** Fire the rebuild only when the live table's stored SQL still matches the OLD shape. */
+  detect: (currentTableSql: string) => boolean;
+  /** Ordered DDL/DML, run with foreign_keys OFF inside a transaction. */
+  steps: string[];
+}
+
+export const REBUILD_MIGRATIONS: RebuildMigration[] = [
+  {
+    table: "tasks",
+    // Old shape carried `CHECK(source_system IN ('github','internal'))`.
+    detect: (sql) => /source_system\s+TEXT\s+NOT\s+NULL\s+CHECK\s*\(\s*source_system\s+IN/i.test(sql),
+    steps: [
+      // New tasks shape: base columns (source_system CHECK dropped; status CHECK
+      // kept) + the iteration_id column added by COLUMN_ADD_MIGRATIONS.
+      `CREATE TABLE tasks_new (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT,
+        priority INTEGER NOT NULL DEFAULT 2,
+        principal_id TEXT NOT NULL,
+        source_system TEXT NOT NULL,
+        source_url TEXT,
+        source_external_id TEXT,
+        related_refs_json TEXT,
+        status TEXT NOT NULL DEFAULT 'open'
+          CHECK(status IN ('open','in_progress','done','cancelled')),
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        iteration_id TEXT REFERENCES iterations(id)
+      )`,
+      // Explicit column list (never SELECT *) so a shape mismatch errors loudly.
+      `INSERT INTO tasks_new
+         (id, title, description, priority, principal_id, source_system,
+          source_url, source_external_id, related_refs_json, status,
+          created_at, updated_at, iteration_id)
+       SELECT
+          id, title, description, priority, principal_id, source_system,
+          source_url, source_external_id, related_refs_json, status,
+          created_at, updated_at, iteration_id
+       FROM tasks`,
+      `DROP TABLE tasks`,
+      `ALTER TABLE tasks_new RENAME TO tasks`,
+      // Recreate the indexes (SCHEMA_SQL's + the iteration_id partner index).
+      `CREATE INDEX IF NOT EXISTS idx_tasks_status_priority_updated
+         ON tasks(status, priority, updated_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_tasks_iteration ON tasks(iteration_id)`,
     ],
   },

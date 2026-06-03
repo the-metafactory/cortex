@@ -19,7 +19,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import type { SourceRef } from "../types";
+import type { Provider, SourceRef } from "../types";
 import { epochSecondsToIso, taskRowToSourceRef } from "./tasks";
 import {
   ITERATION_STATES,
@@ -41,8 +41,12 @@ import {
  */
 export { ITERATION_STATES, type IterationState };
 
-/** Recognised source systems (Decision 7 — GitHub in v1, others later). */
-export type IterationSourceSystem = "github" | "jira" | "linear" | null;
+/**
+ * Source system of an imported iteration. G-1113.D.7c — provider-neutral: any
+ * {@link Provider} (or null for internal/manually-typed). The DB column is open
+ * TEXT (no CHECK); consumers read the normalized `source.provider` (D.7a).
+ */
+export type IterationSourceSystem = Provider | null;
 
 /**
  * Default cap on inbox results (Decision 10 Q3 — "lean: 100, server-side").
