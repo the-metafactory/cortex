@@ -18,6 +18,12 @@ import { ingestPlanDocsFromDir } from "./ingest/plan-docs";
 import { ingestWorkItems, type WorkItemSource } from "./adapters/work-item-source";
 import { GithubWorkItemSource } from "./adapters/github/work-items";
 import { reconcileAttention } from "./db/attention-sources";
+import {
+  publishReconcileDelta,
+  type AttentionNotifySource,
+  type EnvelopePublisher,
+} from "./attention-notify";
+import type { AttentionItem } from "./types";
 
 /** Map a plan's provider → the WorkItemSource that ingests its work items (null = unsupported). */
 export type WorkItemSourceFactory = (provider: Provider) => WorkItemSource | null;
@@ -49,6 +55,15 @@ export interface RefreshCockpitOptions {
   staleAfterMs?: number;
   /** Injected current epoch seconds (deterministic tests). */
   nowEpochSec?: number;
+  /**
+   * ML.3 — optional bus publisher. When provided (with `notifySource`), the
+   * reconcile delta is published as `system.attention.*` envelopes. Omitted by
+   * the DB-only CLI trigger; supplied by the bot where the MyelinRuntime lives.
+   */
+  publish?: EnvelopePublisher;
+  notifySource?: AttentionNotifySource;
+  /** Builds a deep-link URL for an attention item (for the notification). */
+  deepLinkFor?: (item: AttentionItem) => string | null;
 }
 
 export interface RefreshResult {
@@ -62,6 +77,9 @@ export interface RefreshResult {
   failedPlans: number;
   /** Open attention items after reconcile. */
   attentionOpen: number;
+  /** Attention notifications published this run (0 when no publisher is wired). */
+  notifiedOpened: number;
+  notifiedResolved: number;
 }
 
 /**
@@ -110,11 +128,34 @@ export async function refreshCockpit(db: Database, opts: RefreshCockpitOptions):
     nowEpochSec: opts.nowEpochSec,
   });
 
+  // 4. ML.3 — publish the open/resolve delta onto the bus when a publisher is
+  //    wired (the bot; the DB-only CLI omits it). Best-effort: never let a
+  //    publish failure abort the refresh.
+  let notifiedOpened = 0;
+  let notifiedResolved = 0;
+  if (opts.publish && opts.notifySource) {
+    try {
+      const n = await publishReconcileDelta(
+        { opened: attention.opened, resolved: attention.resolved },
+        { source: opts.notifySource, deepLinkFor: opts.deepLinkFor },
+        opts.publish
+      );
+      notifiedOpened = n.opened;
+      notifiedResolved = n.resolved;
+    } catch (err) {
+      process.stderr.write(
+        `[cockpit-refresh] attention notification publish failed: ${err instanceof Error ? err.message : String(err)}\n`
+      );
+    }
+  }
+
   return {
     plans: parsed.length,
     workItems,
     unsupportedProviders,
     failedPlans,
     attentionOpen: attention.open.length,
+    notifiedOpened,
+    notifiedResolved,
   };
 }

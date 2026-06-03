@@ -33,7 +33,7 @@ describe("parseCockpitRefreshArgs (ML.2)", () => {
 });
 
 describe("runCockpitRefresh (ML.2)", () => {
-  const RESULT: RefreshResult = { plans: 2, workItems: 3, unsupportedProviders: 1, failedPlans: 0, attentionOpen: 1 };
+  const RESULT: RefreshResult = { plans: 2, workItems: 3, unsupportedProviders: 1, failedPlans: 0, attentionOpen: 1, notifiedOpened: 0, notifiedResolved: 0 };
 
   it("opens the db at the given path and threads parsed opts into refresh", async () => {
     const openedPaths: string[] = [];

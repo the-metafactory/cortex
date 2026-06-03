@@ -45,6 +45,15 @@ export interface ReconcileAttentionOptions {
   nowEpochSec?: number;
 }
 
+export interface ReconcileResult {
+  /** The full set of items currently open after this reconcile. */
+  open: AttentionItem[];
+  /** Items that transitioned absent → open this run (notify "opened"). */
+  opened: AttentionItem[];
+  /** Items that transitioned open → resolved this run (notify "resolved"). */
+  resolved: AttentionItem[];
+}
+
 /** Map a block reason to its attention kind + severity. Exhaustive over BlockReason. */
 function blockReasonToAttention(reason: BlockReason): { kind: AttentionKind; severity: AttentionSeverity } {
   switch (reason.kind) {
@@ -62,9 +71,14 @@ function blockReasonToAttention(reason: BlockReason): { kind: AttentionKind; sev
  * any previously-open reconciled item whose condition has cleared. Idempotent.
  * Returns the items currently derived as open.
  */
-export function reconcileAttention(db: Database, opts: ReconcileAttentionOptions): { open: AttentionItem[] } {
+export function reconcileAttention(db: Database, opts: ReconcileAttentionOptions): ReconcileResult {
   const nowSec = opts.nowEpochSec ?? Math.floor(Date.now() / 1000);
   const staleBeforeSec = nowSec - Math.floor((opts.staleAfterMs ?? DEFAULT_STALE_AFTER_MS) / 1000);
+
+  // Snapshot the open set BEFORE mutating, to compute the open/resolve delta
+  // (ML.3 — what to notify on). An item absent-before-but-derived-now is newly
+  // opened (incl. a re-opened condition that was previously resolved).
+  const openBefore = new Set(listOpenAttention(db).map((i) => i.id));
 
   const derived = new Map<string, AttentionItem>();
 
@@ -114,13 +128,20 @@ export function reconcileAttention(db: Database, opts: ReconcileAttentionOptions
   // Upsert everything derived as open (idempotent by id).
   for (const item of derived.values()) upsertAttentionItem(db, item);
 
+  // newly-opened = derived now but not open before this run.
+  const opened = [...derived.values()].filter((i) => !openBefore.has(i.id));
+
   // Resolve previously-open RECONCILED items whose condition no longer holds
   // (assignment unblocked / work item touched or terminal). Only our own
   // prefixes — never touch items produced by other sources.
+  const resolved: AttentionItem[] = [];
   for (const open of listOpenAttention(db)) {
     const reconciled = open.id.startsWith(BLOCK_PREFIX) || open.id.startsWith(STALE_PREFIX);
-    if (reconciled && !derived.has(open.id)) resolveAttentionItem(db, open.id);
+    if (reconciled && !derived.has(open.id)) {
+      resolveAttentionItem(db, open.id);
+      resolved.push(open);
+    }
   }
 
-  return { open: [...derived.values()] };
+  return { open: [...derived.values()], opened, resolved };
 }

@@ -121,3 +121,18 @@ export async function publishAttentionNotifications(
   }
   return count;
 }
+
+/**
+ * ML.3 — publish a reconcile delta: newly-opened items as `system.attention.opened`
+ * and newly-resolved as `system.attention.resolved`, via the injected publisher.
+ * The thin glue between {@link reconcileAttention}'s delta and E.4's envelopes.
+ */
+export async function publishReconcileDelta(
+  delta: { opened: AttentionItem[]; resolved: AttentionItem[] },
+  opts: AttentionNotifyOptions & { deepLinkFor?: (item: AttentionItem) => string | null },
+  publish: EnvelopePublisher,
+): Promise<{ opened: number; resolved: number }> {
+  const opened = await publishAttentionNotifications(delta.opened, "opened", opts, publish);
+  const resolved = await publishAttentionNotifications(delta.resolved, "resolved", opts, publish);
+  return { opened, resolved };
+}
