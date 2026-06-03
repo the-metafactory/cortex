@@ -93,7 +93,7 @@ describe("mission-control server", () => {
     // mount point + page title rather than route strings (which now
     // live inside the bundled JS, not the HTML).
     expect(body).toContain('<div id="root">');
-    expect(body).toContain("Grove · Mission Control");
+    expect(body).toContain("Cortex · Mission Control");
   });
 
   // Spec NFR: "On port already in use: exit with clear error message naming the port".

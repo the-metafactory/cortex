@@ -528,7 +528,7 @@ export function DrillInput({ assignmentId, assignment, ws, onSend }: DrillInputP
 
 function readonlyPlaceholder(mode: ReturnType<typeof resolveDrillInputMode>): string {
   if (mode === "observed") {
-    return "This session is observed. Input ships when you open it in a controlled Grove session.";
+    return "This session is observed. Input ships when you open it in a controlled Cortex session.";
   }
   if (mode === "shadow") {
     return "This task has no active session yet. Click Dispatch to start one.";

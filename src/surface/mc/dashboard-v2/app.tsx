@@ -237,7 +237,7 @@ export function App() {
   return (
     <div className="scaffold-shell">
       <header className="scaffold-header">
-        <h1>Grove · Mission Control</h1>
+        <h1>Cortex · Mission Control</h1>
         <div className="right">
           {/*
             G-1113 — Mission Control Cockpit redesign signpost. Links to the
