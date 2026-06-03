@@ -392,7 +392,7 @@ function IterationCard({ entry, dragging, onOpen, onDragStart, onDragEnd }: Iter
         {/*
           F-17 — inbox column visual hint. Tasks that arrived via the
           GitHub auto-import (webhook or principal-driven path) carry
-          `source_system === 'github'` on the InboxItem. The denorm is
+          `source.provider === 'github'` on the InboxItem. The denorm is
           identical to the iteration-side badge above; rendering here
           gives the principal a one-glance signal that a row landed via
           the upstream pipeline rather than being typed directly.
@@ -401,8 +401,11 @@ function IterationCard({ entry, dragging, onOpen, onDragStart, onDragEnd }: Iter
           URL on the iteration card") the badge is informational only —
           it never drives state or behaviour. Click-through stays via
           the `source-link` rendered above.
+
+          G-1113.D.7a — branch on the provider-neutral `source.provider`,
+          not the raw `source_system` column.
         */}
-        {isInbox && (entry.item as InboxItem).source_system === "github" && (
+        {isInbox && (entry.item as InboxItem).source.provider === "github" && (
           <span
             className="source-badge gh"
             title="Auto-imported from GitHub"

@@ -512,6 +512,23 @@ describe("listInboxItems", () => {
     expect(items[0]?.updated_at).toMatch(/T.*Z$/);
   });
 
+  it("D.7a — exposes a provider-neutral source narrowed from source_system", () => {
+    insertTask(h.db, "t-1", {
+      source_system: "github",
+      source_url: "https://github.com/foo/bar/issues/1",
+      source_external_id: "foo/bar#1",
+    });
+    const item = listInboxItems(h.db)[0];
+    expect(item?.source).toEqual({
+      provider: "github",
+      externalId: "foo/bar#1",
+      url: "https://github.com/foo/bar/issues/1",
+      providerNativeType: null,
+    });
+    // raw column still present (storage detail) until D.7c relaxes the CHECK.
+    expect(item?.source_system).toBe("github");
+  });
+
   it("?source=github filters to a single source system", () => {
     // Insert via the schema-bypass path so we can exercise the source
     // filter even with non-CHECK-allowed values. (`tasks.source_system`

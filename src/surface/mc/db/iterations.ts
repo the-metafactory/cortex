@@ -19,6 +19,8 @@
  */
 
 import type { Database } from "bun:sqlite";
+import type { SourceRef } from "../types";
+import { isProvider } from "../types";
 import { epochSecondsToIso } from "./tasks";
 import {
   ITERATION_STATES,
@@ -163,6 +165,14 @@ export interface InboxItem {
   title: string;
   priority: number;
   status: string;
+  /**
+   * Provider-neutral origin (G-1113.D.7a) — the shape new code should read,
+   * mirroring the task DTO's `source` (B.2). `source_system` / `source_url` /
+   * `source_external_id` remain as the raw storage columns (relaxing their
+   * CHECK to provider-neutral is D.7c); consumers should branch on
+   * `source.provider`, not the raw `source_system`.
+   */
+  source: SourceRef;
   source_system: string;
   source_url: string | null;
   source_external_id: string | null;
@@ -321,6 +331,14 @@ export function listInboxItems(
     title: r.title,
     priority: r.priority,
     status: r.status,
+    // Provider-neutral origin (D.7a): narrow source_system → Provider at the
+    // read boundary, exactly as the task DTO does (B.2). Unknown → "custom".
+    source: {
+      provider: isProvider(r.source_system) ? r.source_system : "custom",
+      externalId: r.source_external_id,
+      url: r.source_url,
+      providerNativeType: null,
+    } satisfies SourceRef,
     source_system: r.source_system,
     source_url: r.source_url,
     source_external_id: r.source_external_id,

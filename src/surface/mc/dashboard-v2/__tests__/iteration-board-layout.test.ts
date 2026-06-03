@@ -19,6 +19,7 @@ import {
   ITERATION_BOARD_COLUMNS,
   type IterationBoardColumn,
 } from "../lib/iteration-board-layout";
+import { isProvider } from "../../types";
 import type {
   InboxItem,
   IterationListItem,
@@ -42,14 +43,24 @@ function iter(over: Partial<IterationListItem> = {}): IterationListItem {
 }
 
 function inbox(over: Partial<InboxItem> = {}): InboxItem {
+  const source_system = over.source_system ?? "github";
+  const source_url = over.source_url ?? "https://github.com/foo/bar/issues/1";
+  const source_external_id = over.source_external_id ?? "github:foo/bar#1";
   return {
     id: over.id ?? "t-1",
     title: over.title ?? "Inbox task",
     priority: over.priority ?? 2,
     status: over.status ?? "open",
-    source_system: over.source_system ?? "github",
-    source_url: over.source_url ?? "https://github.com/foo/bar/issues/1",
-    source_external_id: over.source_external_id ?? "github:foo/bar#1",
+    // D.7a — provider-neutral origin, kept consistent with the raw columns.
+    source: over.source ?? {
+      provider: isProvider(source_system) ? source_system : "custom",
+      externalId: source_external_id,
+      url: source_url,
+      providerNativeType: null,
+    },
+    source_system,
+    source_url,
+    source_external_id,
     created_at: over.created_at ?? "2026-04-26T00:00:00.000Z",
     updated_at: over.updated_at ?? "2026-04-26T00:00:00.000Z",
   };
