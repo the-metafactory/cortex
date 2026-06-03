@@ -20,8 +20,7 @@
 
 import type { Database } from "bun:sqlite";
 import type { SourceRef } from "../types";
-import { isProvider } from "../types";
-import { epochSecondsToIso } from "./tasks";
+import { epochSecondsToIso, taskRowToSourceRef } from "./tasks";
 import {
   ITERATION_STATES,
   TRANSITIONS,
@@ -331,14 +330,9 @@ export function listInboxItems(
     title: r.title,
     priority: r.priority,
     status: r.status,
-    // Provider-neutral origin (D.7a): narrow source_system → Provider at the
-    // read boundary, exactly as the task DTO does (B.2). Unknown → "custom".
-    source: {
-      provider: isProvider(r.source_system) ? r.source_system : "custom",
-      externalId: r.source_external_id,
-      url: r.source_url,
-      providerNativeType: null,
-    } satisfies SourceRef,
+    // Provider-neutral origin (D.7a): reuse the task DTO's single normalization
+    // boundary (B.2) so the inbox + task mappers can't drift. Unknown → "custom".
+    source: taskRowToSourceRef(r),
     source_system: r.source_system,
     source_url: r.source_url,
     source_external_id: r.source_external_id,
