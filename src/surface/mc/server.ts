@@ -43,6 +43,7 @@ import { handleListRepositories } from "./api/git-repos";
 import { handleListPlans } from "./api/plans";
 import { handleGetPhaseDetail } from "./api/phase-detail";
 import { handleGetWorkItemDetail } from "./api/work-item-detail";
+import { handleListAttention } from "./api/attention";
 import type { ProcessManager } from "./session/process-manager";
 import type { SpawnFn } from "./session/endpoint-resolver";
 import { join, dirname } from "path";
@@ -451,6 +452,14 @@ async function handleApi(
       });
     }
     return handleGetWorkItemDetail(db, id);
+  }
+
+  // G-1113.E.3 — GET /api/attention — open attention items with deep-links.
+  if (pathname === "/api/attention") {
+    if (req.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
+    return handleListAttention(db);
   }
 
   if (pathname === "/api/tasks") {

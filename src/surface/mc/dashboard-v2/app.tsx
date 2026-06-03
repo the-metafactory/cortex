@@ -24,6 +24,7 @@ import { RepositoriesView } from "./components/repositories-view";
 import { PlansView } from "./components/plans-view";
 import { PhaseDetailView } from "./components/phase-detail-view";
 import { WorkItemDetailView } from "./components/work-item-detail-view";
+import { AttentionView } from "./components/attention-view";
 import { Toast } from "./components/toast";
 import { useFocusArea } from "./hooks/use-focus-area";
 import { useTasks } from "./hooks/use-tasks";
@@ -33,6 +34,7 @@ import { useLegacyIterations } from "./hooks/use-legacy-iterations";
 import { useRepositories } from "./hooks/use-repositories";
 import { usePlans } from "./hooks/use-plans";
 import { usePhaseDetail } from "./hooks/use-phase-detail";
+import { useAttention } from "./hooks/use-attention";
 import { useWorkItemDetail } from "./hooks/use-work-item-detail";
 import { useTheme } from "./hooks/use-theme";
 import { useWebSocket } from "./hooks/use-websocket";
@@ -56,7 +58,7 @@ import type { Command } from "./components/command-palette";
  * may upgrade to a hash route if deep-linking turns out to be
  * principal-requested; for now the in-memory view is sufficient.
  */
-type DashboardView = "default" | "metrics" | "iterations" | "sources" | "repositories" | "plans" | "phase-detail" | "work-item-detail" | "kanban-detail";
+type DashboardView = "default" | "metrics" | "iterations" | "sources" | "repositories" | "plans" | "phase-detail" | "work-item-detail" | "attention" | "kanban-detail";
 
 export function App() {
   const { theme, toggle: toggleTheme } = useTheme();
@@ -100,9 +102,12 @@ export function App() {
   // G-1113.D.4 — selected phase for the phase-detail surface (reached from the
   // Plans overview by clicking a phase; exited back to `plans`).
   const [selectedPhaseId, setSelectedPhaseId] = useState<string | null>(null);
-  // G-1113.D.5 — selected work item for the work-item-detail surface (reached
-  // from phase-detail by clicking a work item; exited back to `phase-detail`).
+  // G-1113.D.5 — selected work item for the work-item-detail surface.
   const [selectedWorkItemId, setSelectedWorkItemId] = useState<string | null>(null);
+  // G-1113.E.3 — work-item-detail is reachable from TWO surfaces (phase-detail
+  // and the Attention queue); remember which to return to on close so "back"
+  // never lands on a blank phase-detail (no phase selected).
+  const [workItemBackView, setWorkItemBackView] = useState<DashboardView>("phase-detail");
   // G-1113.C.7 — Repositories panel data (fetched only when on its tab).
   const repos = useRepositories(softwareMode && view === "repositories");
   // G-1113.D.3 — Plans overview data (fetched only when on its tab).
@@ -111,16 +116,19 @@ export function App() {
   const phaseDetail = usePhaseDetail(view === "phase-detail" ? selectedPhaseId : null);
   // G-1113.D.5 — work-item-detail data (fetched whenever a work item is selected).
   const workItemDetail = useWorkItemDetail(view === "work-item-detail" ? selectedWorkItemId : null);
+  // G-1113.E.3 — attention queue data (fetched only when on the Attention tab).
+  const attention = useAttention(softwareMode && view === "attention");
   // If software mode is toggled OFF while on a software-mode view (Repositories
-  // / Plans / phase-detail / work-item-detail), the tab + render both gate off —
-  // reset to default so the main area isn't left blank.
+  // / Plans / phase-detail / work-item-detail / attention), the tab + render
+  // both gate off — reset to default so the main area isn't left blank.
   useEffect(() => {
     if (
       !softwareMode &&
       (view === "repositories" ||
         view === "plans" ||
         view === "phase-detail" ||
-        view === "work-item-detail")
+        view === "work-item-detail" ||
+        view === "attention")
     ) {
       setView("default");
     }
@@ -341,6 +349,17 @@ export function App() {
             onClick={() => setView("plans")}
           >
             Plans
+          </button>
+        )}
+        {softwareMode && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "attention"}
+            className={`tab${view === "attention" ? " active" : ""}`}
+            onClick={() => setView("attention")}
+          >
+            Attention
           </button>
         )}
       </nav>
@@ -650,21 +669,36 @@ export function App() {
             }}
             onOpenWorkItem={(workItemId) => {
               setSelectedWorkItemId(workItemId);
+              setWorkItemBackView("phase-detail");
               setView("work-item-detail");
             }}
           />
         )}
 
         {view === "work-item-detail" && softwareMode && selectedWorkItemId && (
-          /* G-1113.D.5 — work-item detail (reached from a phase-detail work item).
-             Back returns to the phase-detail surface (selectedPhaseId is retained). */
+          /* G-1113.D.5 — work-item detail. Back returns to whichever surface
+             opened it (phase-detail or the Attention queue) — see workItemBackView. */
           <WorkItemDetailView
             detail={workItemDetail.detail}
             loaded={workItemDetail.loaded}
             onClose={() => {
-              setView("phase-detail");
+              setView(workItemBackView);
               setSelectedWorkItemId(null);
             }}
+          />
+        )}
+
+        {view === "attention" && softwareMode && (
+          /* G-1113.E.3 — attention queue surface (deep-links to WI / session). */
+          <AttentionView
+            entries={attention.entries}
+            loaded={attention.loaded}
+            onOpenWorkItem={(workItemId) => {
+              setSelectedWorkItemId(workItemId);
+              setWorkItemBackView("attention");
+              setView("work-item-detail");
+            }}
+            onOpenAssignment={(assignmentId) => setDrillId(assignmentId)}
           />
         )}
       </main>
