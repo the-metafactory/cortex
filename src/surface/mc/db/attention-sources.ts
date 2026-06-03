@@ -71,13 +71,22 @@ export function reconcileAttention(db: Database, opts: ReconcileAttentionOptions
   // 1. Blocked assignments (listFocusArea is the state='blocked' projection).
   for (const a of listFocusArea(db)) {
     if (!a.block_reason) continue; // schema guarantees non-null when blocked, but be defensive
+    const sessionId = a.session?.id ?? null;
+    // §7.4 requires every attention item to deep-link; the session is the only
+    // link target for a block-source item (no work-item linkage from an
+    // assignment). A blocked assignment with no session therefore has no
+    // deep-link target — skip rather than surface an un-actionable item. This
+    // honours the invariant the E.1 schema note delegates to the producer.
+    // (In practice the three block reasons all originate from a running CC
+    // session, so this is an edge; revisit if a session-less block proves real.)
+    if (!sessionId) continue;
     const { kind, severity } = blockReasonToAttention(a.block_reason);
     const id = `${BLOCK_PREFIX}${a.id}`;
     derived.set(id, {
       id,
       stackId: opts.stackId,
       workItemId: null,
-      sessionId: a.session?.id ?? null,
+      sessionId,
       kind,
       severity,
       status: "open",
