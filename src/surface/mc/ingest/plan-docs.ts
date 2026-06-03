@@ -20,6 +20,8 @@ import { readdirSync, readFileSync } from "fs";
 import { basename, join } from "path";
 import type { Plan, PlanKind, PlanPhase, PlanStatus, Provider } from "../types";
 import { upsertPlan, upsertPlanPhase } from "../db/plans";
+// ML.1 — reuse the GitHub adapter boundary to parse/normalize an umbrella ref.
+import { parseGitHubRef, isParseError, canonicalRef } from "../adapters/github";
 
 export interface PlanDocSource {
   /** Markdown body of the doc. */
@@ -31,8 +33,18 @@ export interface PlanDocSource {
   path: string;
   /** Canonical URL to the doc (e.g. a GitHub blob URL), when known. */
   sourceDocumentUrl?: string | null;
-  /** Provider the plan is sourced from. Defaults to `internal` (a repo-local doc). */
+  /**
+   * Provider the plan is sourced from. Defaults to `internal` for a repo-local
+   * doc — UNLESS a GitHub umbrella ref is parsed (ML.1), which implies `github`
+   * (so D.5b dispatches the GitHub WorkItemSource). An explicit value here
+   * always wins.
+   */
   provider?: Provider;
+  /**
+   * ML.1 — default `{owner, repo}` used to qualify a short umbrella ref
+   * (`#N` / `repo#N`) declared in the doc. Typically the repo the docs live in.
+   */
+  defaultRepo?: { owner: string; repo: string };
 }
 
 export interface ParsedPlanDoc {
@@ -69,6 +81,29 @@ const TRAILING_PAREN_RE = /\s*\((?=[\w.#-]*\d)[\w.#-]+\)\s*$/;
 /** Slug used as the plan id — the doc basename without its `.md` extension. */
 function planIdFromPath(path: string): string {
   return basename(path).replace(/\.md$/i, "");
+}
+
+/** The author-written umbrella declaration line, e.g. `**Umbrella issue:** cortex#354`. */
+const UMBRELLA_LINE_RE = /^\*\*Umbrella(?:\s+issue)?:\*\*\s*(.+)$/im;
+/** A candidate ref token within that line: a github issues/pull URL, owner/repo#N, repo#N, or #N. */
+const UMBRELLA_TOKEN_RE =
+  /https?:\/\/github\.com\/\S+|[\w.-]+\/[\w.-]+#\d+|[\w.-]+#\d+|#\d+/;
+
+/**
+ * ML.1 — parse a plan doc's declared umbrella issue into the canonical
+ * `owner/repo#N` form the GitHub WorkItemSource (D.5b) consumes. Returns null
+ * when no umbrella line exists, the line is a placeholder (e.g.
+ * `_(to be filed)_`), or the ref can't be resolved (short ref with no
+ * `defaultRepo`). Reuses the GitHub adapter's parser/normalizer.
+ */
+function extractUmbrellaRef(content: string, defaultRepo?: { owner: string; repo: string }): string | null {
+  const line = UMBRELLA_LINE_RE.exec(content)?.[1];
+  if (line === undefined) return null;
+  const token = UMBRELLA_TOKEN_RE.exec(line)?.[0];
+  if (token === undefined) return null; // placeholder / no ref
+  const ref = parseGitHubRef(token, defaultRepo ?? {});
+  if (isParseError(ref)) return null;
+  return canonicalRef(ref); // owner/repo#N
 }
 
 /** Infer {@link PlanKind} from the filename + title. Generic plans default to `design`. */
@@ -115,14 +150,17 @@ function extractTitle(content: string, fallback: string): string {
 export function parsePlanDoc(src: PlanDocSource): ParsedPlanDoc {
   const id = planIdFromPath(src.path);
   const title = extractTitle(src.content, id);
+  // ML.1 — a declared GitHub umbrella links the plan to its sub-issues (D.5b)
+  // and implies a github provider (unless the caller set one explicitly).
+  const umbrellaWorkItemId = extractUmbrellaRef(src.content, src.defaultRepo);
   const plan: Plan = {
     id,
     title,
     kind: inferKind(src.path, title),
     sourceDocumentUrl: src.sourceDocumentUrl ?? null,
-    provider: src.provider ?? "internal",
+    provider: src.provider ?? (umbrellaWorkItemId !== null ? "github" : "internal"),
     externalId: null,
-    umbrellaWorkItemId: null,
+    umbrellaWorkItemId,
     status: inferStatus(src.content),
   };
 
@@ -174,6 +212,8 @@ export interface IngestDirOptions {
   repoRelDir?: string;
   /** Build a `sourceDocumentUrl` from a repo-relative path; return null when unknown. */
   urlForPath?: (repoRelPath: string) => string | null;
+  /** ML.1 — default `{owner, repo}` for qualifying short umbrella refs (the docs' repo). */
+  defaultRepo?: { owner: string; repo: string };
 }
 
 /**
@@ -194,6 +234,7 @@ export function ingestPlanDocsFromDir(db: Database, opts: IngestDirOptions): Par
         content,
         path: repoRel,
         sourceDocumentUrl: opts.urlForPath?.(repoRel) ?? null,
+        defaultRepo: opts.defaultRepo,
       })
     );
   }

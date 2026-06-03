@@ -211,3 +211,63 @@ describe("ingestPlanDoc / ingestPlanDocsFromDir (D.2, persistence)", () => {
     expect(getPlan(db, "architecture")).toBeNull();
   });
 });
+
+describe("parsePlanDoc — umbrella linkage (ML.1)", () => {
+  const docWith = (umbrellaLine: string) =>
+    `# A plan\n\n**Status:** active\n${umbrellaLine}\n\n## Phase A — X\n`;
+
+  it("parses a full owner/repo#N umbrella ref → owner/repo#N + github provider", () => {
+    const { plan } = parsePlanDoc({
+      content: docWith("**Umbrella issue:** the-metafactory/cortex#354"),
+      path: "docs/plan-x.md",
+    });
+    expect(plan.umbrellaWorkItemId).toBe("the-metafactory/cortex#354");
+    expect(plan.provider).toBe("github"); // a github umbrella implies github provider
+  });
+
+  it("parses a GitHub issues URL", () => {
+    const { plan } = parsePlanDoc({
+      content: docWith("**Umbrella:** https://github.com/the-metafactory/cortex/issues/110"),
+      path: "docs/plan-x.md",
+    });
+    expect(plan.umbrellaWorkItemId).toBe("the-metafactory/cortex#110");
+  });
+
+  it("qualifies a short ref (#N) via defaultRepo", () => {
+    const { plan } = parsePlanDoc({
+      content: docWith("**Umbrella issue:** #354"),
+      path: "docs/plan-x.md",
+      defaultRepo: { owner: "the-metafactory", repo: "cortex" },
+    });
+    expect(plan.umbrellaWorkItemId).toBe("the-metafactory/cortex#354");
+  });
+
+  it("a short ref with NO defaultRepo → null (can't qualify, honest)", () => {
+    const { plan } = parsePlanDoc({
+      content: docWith("**Umbrella issue:** #354"),
+      path: "docs/plan-x.md",
+    });
+    expect(plan.umbrellaWorkItemId).toBeNull();
+    expect(plan.provider).toBe("internal"); // no github umbrella → stays internal
+  });
+
+  it("a placeholder umbrella line → null (the cockpit doc's '_(to be filed)_' case)", () => {
+    const { plan } = parsePlanDoc({
+      content: docWith("**Umbrella issue:** _(to be filed once this plan is agreed)_"),
+      path: "docs/plan-x.md",
+      defaultRepo: { owner: "the-metafactory", repo: "cortex" },
+    });
+    expect(plan.umbrellaWorkItemId).toBeNull();
+  });
+
+  it("no umbrella line → null; an explicit provider is not overridden by an umbrella", () => {
+    expect(parsePlanDoc({ content: docWith(""), path: "docs/plan-x.md" }).plan.umbrellaWorkItemId).toBeNull();
+    const { plan } = parsePlanDoc({
+      content: docWith("**Umbrella issue:** the-metafactory/cortex#354"),
+      path: "docs/plan-x.md",
+      provider: "internal", // explicit wins over the github-umbrella inference
+    });
+    expect(plan.umbrellaWorkItemId).toBe("the-metafactory/cortex#354");
+    expect(plan.provider).toBe("internal");
+  });
+});
