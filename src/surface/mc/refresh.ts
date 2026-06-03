@@ -133,6 +133,11 @@ export async function refreshCockpit(db: Database, opts: RefreshCockpitOptions):
   //    publish failure abort the refresh.
   let notifiedOpened = 0;
   let notifiedResolved = 0;
+  if (opts.publish && !opts.notifySource) {
+    process.stderr.write(
+      "[cockpit-refresh] publisher supplied without notifySource — attention notifications skipped\n"
+    );
+  }
   if (opts.publish && opts.notifySource) {
     try {
       const n = await publishReconcileDelta(

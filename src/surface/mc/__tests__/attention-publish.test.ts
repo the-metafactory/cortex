@@ -45,6 +45,34 @@ describe("reconcileAttention delta (ML.3)", () => {
     expect(r3.opened).toEqual([]);
     expect(r3.resolved.map((i) => i.id)).toEqual(["att:stale:wi"]);
   });
+
+  it("respects dismiss: a dismissed-but-still-stale item is NOT reopened or re-notified", () => {
+    const db = freshDb(paths);
+    db.query(`INSERT INTO work_items (id, title, status, priority, provider, updated_at) VALUES ('wi', 'x', 'open', '', 'github', ?)`).run(NOW - 30 * DAY);
+    const opts = { stackId: "laptop", nowEpochSec: NOW };
+    reconcileAttention(db, opts); // opens att:stale:wi
+    // Principal dismisses it (still stale).
+    db.query(`UPDATE attention_items SET status = 'dismissed' WHERE id = 'att:stale:wi'`).run();
+    const r = reconcileAttention(db, opts);
+    expect(r.opened).toEqual([]); // not re-notified
+    // And the row stays dismissed (not clobbered back to open).
+    const row = db.query(`SELECT status FROM attention_items WHERE id = 'att:stale:wi'`).get() as { status: string };
+    expect(row.status).toBe("dismissed");
+    expect(r.open.some((i) => i.id === "att:stale:wi")).toBe(false);
+  });
+
+  it("re-notifies after RESOLVE (not dismiss): a recurring condition opens again", () => {
+    const db = freshDb(paths);
+    db.query(`INSERT INTO work_items (id, title, status, priority, provider, updated_at) VALUES ('wi', 'x', 'open', '', 'github', ?)`).run(NOW - 30 * DAY);
+    const opts = { stackId: "laptop", nowEpochSec: NOW };
+    reconcileAttention(db, opts); // opened
+    db.query(`UPDATE work_items SET updated_at = ? WHERE id = 'wi'`).run(NOW); // touch → resolved next run
+    reconcileAttention(db, opts);
+    // Re-age it → recurs → should re-open + re-notify (resolved≠dismissed).
+    db.query(`UPDATE work_items SET updated_at = ? WHERE id = 'wi'`).run(NOW - 30 * DAY);
+    const r = reconcileAttention(db, opts);
+    expect(r.opened.map((i) => i.id)).toEqual(["att:stale:wi"]);
+  });
 });
 
 describe("publishReconcileDelta (ML.3)", () => {
