@@ -47,18 +47,31 @@ export class DashboardSocket extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  /** Internal: the worker POSTs `{message}` here after a write so all clients get it. */
+  /**
+   * Internal: the worker POSTs `{messages:[...]}` (batch, preferred — one DO
+   * round-trip per ingest) or `{message}` (single) here so all clients get it.
+   */
   private async handleBroadcast(request: Request): Promise<Response> {
-    let payload: { message?: unknown };
+    let payload: { message?: unknown; messages?: unknown[] };
     try {
-      payload = (await request.json()) as { message?: unknown };
+      payload = (await request.json()) as { message?: unknown; messages?: unknown[] };
     } catch (_err) {
       return Response.json({ ok: false, error: "invalid JSON" }, { status: 400 });
     }
-    if (typeof payload.message === "undefined") {
-      return Response.json({ ok: false, error: "message required" }, { status: 400 });
+    const batch: unknown[] = Array.isArray(payload.messages)
+      ? payload.messages
+      : typeof payload.message !== "undefined"
+        ? [payload.message]
+        : [];
+    if (batch.length === 0) {
+      return Response.json({ ok: false, error: "message or messages required" }, { status: 400 });
     }
-    const sent = fanout(this.ctx.getWebSockets() as unknown as SocketSink[], payload.message);
+    // Fetch the socket set once and reuse across the batch (fanout prunes dead ones).
+    const sockets = this.ctx.getWebSockets() as unknown as SocketSink[];
+    let sent = 0;
+    for (const message of batch) {
+      sent += fanout(sockets, message);
+    }
     return Response.json({ ok: true, sent });
   }
 
@@ -101,6 +114,9 @@ export class DashboardSocket extends DurableObject<Env> {
   }
 
   private async ensurePingAlarm(): Promise<void> {
+    // Idempotent by design: a DO holds at most one pending alarm, so two
+    // concurrent upgrades both observing null and both calling setAlarm just
+    // overwrite to the same ~30s target — no duplicate alarms, no leak.
     const existing = await this.ctx.storage.getAlarm();
     if (existing === null) {
       await this.ctx.storage.setAlarm(Date.now() + PING_INTERVAL_MS);

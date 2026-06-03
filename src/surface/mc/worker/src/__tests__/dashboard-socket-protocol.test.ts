@@ -9,6 +9,7 @@ import {
   connectedMessage,
   clientReply,
   eventMessage,
+  toDashboardEvent,
   fanout,
   type SocketSink,
 } from "../dashboard-socket-protocol";
@@ -54,10 +55,33 @@ describe("clientReply", () => {
   });
 });
 
+describe("toDashboardEvent", () => {
+  it("maps the ingest wire shape to the McEvent shape the renderer expects", () => {
+    const ingest = {
+      event_id: "e1",
+      event_type: "tool.bash",
+      session_id: "s1",
+      payload: { cmd: "ls" },
+      timestamp: "2026-06-04T00:00:00Z",
+    };
+    expect(toDashboardEvent(ingest)).toEqual({
+      id: "e1", // event_id → id (renderer keys on .id)
+      session_id: "s1",
+      type: "tool.bash", // event_type → type (renderer switches on .type)
+      payload: { cmd: "ls" },
+      timestamp: "2026-06-04T00:00:00Z",
+    });
+  });
+});
+
 describe("eventMessage", () => {
-  it("mirrors notifications.ts broadcastEvent shape", () => {
-    const ev = { event_id: "e1", event_type: "tool.bash", session_id: "s1" };
-    expect(eventMessage("s1", ev)).toEqual({ type: "event", sessionId: "s1", event: ev });
+  it("wraps a DashboardEvent (McEvent shape) in the {type:event,sessionId,event} envelope", () => {
+    const ev = { id: "e1", session_id: "s1", type: "tool.bash", payload: {}, timestamp: "t" };
+    const msg = eventMessage("s1", ev);
+    expect(msg).toEqual({ type: "event", sessionId: "s1", event: ev });
+    // The body the frontend casts as McEvent must carry id + type, not event_id/event_type.
+    expect(msg.event.id).toBe("e1");
+    expect(msg.event.type).toBe("tool.bash");
   });
 });
 

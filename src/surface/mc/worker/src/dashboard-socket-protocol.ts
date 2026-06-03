@@ -44,8 +44,46 @@ export function clientReply(raw: string): string | null {
   return null;
 }
 
-/** The live `event` push shape — mirrors notifications.ts broadcastEvent. */
-export function eventMessage(sessionId: string, event: unknown): { type: "event"; sessionId: string; event: unknown } {
+/**
+ * The dashboard-facing event shape — mirrors `McEvent` in src/surface/mc/types.ts
+ * (`id`/`type`, NOT the ingest wire's `event_id`/`event_type`). The renderer
+ * (`dashboard-v2/lib/event-rows.ts`) switches on `.type` and keys on `.id`, so
+ * the live push MUST carry this shape, not a raw IngestEvent.
+ */
+export interface DashboardEvent {
+  id: string;
+  session_id: string;
+  type: string;
+  payload: Record<string, unknown>;
+  timestamp: string;
+}
+
+/** The subset of the ingest wire event this mapper needs. */
+interface IngestEventLike {
+  event_id: string;
+  event_type: string;
+  session_id: string;
+  payload: Record<string, unknown>;
+  timestamp: string;
+}
+
+/**
+ * Map an ingest-wire event (`event_id`/`event_type`) to the dashboard `McEvent`
+ * shape (`id`/`type`). Without this the frontend renders every live row as
+ * "unknown" (switch on undefined `.type`) with colliding React keys (undefined `.id`).
+ */
+export function toDashboardEvent(e: IngestEventLike): DashboardEvent {
+  return {
+    id: e.event_id,
+    session_id: e.session_id,
+    type: e.event_type,
+    payload: e.payload,
+    timestamp: e.timestamp,
+  };
+}
+
+/** The live `event` push envelope — mirrors notifications.ts broadcastEvent ({type:"event",sessionId,event}). */
+export function eventMessage(sessionId: string, event: DashboardEvent): { type: "event"; sessionId: string; event: DashboardEvent } {
   return { type: "event", sessionId, event };
 }
 

@@ -22,7 +22,7 @@ import type {
   UsageSnapshotData,
 } from "../../../../../common/types";
 import { invalidateCache } from "./state";
-import { eventMessage } from "../dashboard-socket-protocol";
+import { eventMessage, toDashboardEvent } from "../dashboard-socket-protocol";
 
 type Variables = { principalId: string; principalKey: PrincipalKey };
 
@@ -114,17 +114,19 @@ ingestRoutes.post("/api/ingest", requireApiKey, async (c) => {
  */
 async function broadcastIngestedEvents(env: Env, events: IngestEvent[]): Promise<void> {
   if (!env.DASHBOARD_SOCKET) return; // binding absent (e.g. bare local dev) — skip
+  // Map each ingest-wire event to the dashboard McEvent shape (event_id→id,
+  // event_type→type) the renderer expects, and send the whole batch in ONE DO
+  // round-trip (not one subrequest per event).
+  const messages = events.map((event) => eventMessage(event.session_id, toDashboardEvent(event)));
   const stub = env.DASHBOARD_SOCKET.get(env.DASHBOARD_SOCKET.idFromName("global"));
-  for (const event of events) {
-    try {
-      await stub.fetch("https://do/broadcast", {
-        method: "POST",
-        body: JSON.stringify({ message: eventMessage(event.session_id, event) }),
-      });
-    } catch (err) {
-      // Best-effort live push; log and continue. Ingest already succeeded.
-      console.error("[ingest] WS broadcast failed:", err instanceof Error ? err.message : String(err));
-    }
+  try {
+    await stub.fetch("https://do/broadcast", {
+      method: "POST",
+      body: JSON.stringify({ messages }),
+    });
+  } catch (err) {
+    // Best-effort live push; log and continue. Ingest already succeeded.
+    console.error("[ingest] WS broadcast failed:", err instanceof Error ? err.message : String(err));
   }
 }
 
