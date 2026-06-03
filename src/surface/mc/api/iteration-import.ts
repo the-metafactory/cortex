@@ -408,11 +408,11 @@ export function importSubIssueFromMetadata(
     };
   }
 
-  // Fresh task row. Mirrors F-12b's INSERT shape (the schema's
-  // `source_system` CHECK rejects anything other than 'github' /
-  // 'internal', so we lean on the parent's source_system being
-  // 'github' — sub-issues only flow through this path for GitHub
-  // parents per Decision 7).
+  // Fresh task row. Mirrors F-12b's INSERT shape. Sub-issues only flow
+  // through this path for GitHub parents (Decision 7), so source_system is
+  // hardcoded 'github' below. (The DB's source_system CHECK was dropped in
+  // G-1113.D.7c — the column is now provider-neutral — but this path remains
+  // GitHub-specific by design until other providers grow an import path.)
   const taskId = generateId();
   const status = child.state === "closed" ? "done" : "open";
   // Principal id mirrors F-12b's DEFAULT_PRINCIPAL_ID — the sub-issue

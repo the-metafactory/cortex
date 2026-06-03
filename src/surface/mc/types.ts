@@ -58,6 +58,13 @@ export type BlockReason =
 
 // --- Entity types ---
 
+/**
+ * Legacy closed source-system set. As of G-1113.D.7c the `tasks.source_system`
+ * column is open provider-neutral `TEXT` (the CHECK was dropped), so this is no
+ * longer the type of {@link Task.source_system} (now `string`). Retained as the
+ * historical set + for the `TaskSourceSystem extends Provider` subset assertion
+ * (source-ref.test.ts) that proves the migrated values stay valid Providers.
+ */
 export type TaskSourceSystem = "github" | "internal";
 
 // --- Provider / source-ref model (G-1113.B.1) ---
@@ -378,7 +385,8 @@ export interface Task {
   description: string | null;
   priority: number;
   principal_id: string;
-  source_system: TaskSourceSystem;
+  /** Raw stored provider key — open `string` since D.7c (CHECK dropped). */
+  source_system: string;
   source_url: string | null;
   source_external_id: string | null;
   related_refs_json: string | null;

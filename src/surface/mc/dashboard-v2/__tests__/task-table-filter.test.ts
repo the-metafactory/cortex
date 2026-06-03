@@ -20,6 +20,7 @@ import {
 } from "../lib/task-table-filter";
 import type { TaskListItem, TaskAssignmentRow } from "../../db/tasks";
 import type { AssignmentState } from "../../types";
+import { isProvider } from "../../types";
 
 const NOW = Date.parse("2026-04-24T12:00:00.000Z");
 
@@ -35,7 +36,9 @@ function task(over: Partial<TaskListItem> = {}): TaskListItem {
     source_ref: over.source_ref ?? null,
     source_url: over.source_url ?? null,
     source: over.source ?? {
-      provider: over.source_system ?? "internal",
+      // source_system is open `string` post-D.7c — narrow to a Provider here
+      // (mirrors taskRowToSourceRef); unknown/undefined → "internal" default.
+      provider: isProvider(over.source_system) ? over.source_system : "internal",
       externalId: null,
       url: over.source_url ?? null,
       providerNativeType: null,

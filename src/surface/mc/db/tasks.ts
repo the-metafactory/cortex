@@ -87,7 +87,9 @@ export interface TaskListItem {
   created_at: string;
   /** ISO-8601 UTC (hydrated from INTEGER epoch). */
   updated_at: string;
-  source_system: "github" | "internal";
+  /** Raw stored provider key. Open `string` since D.7c dropped the CHECK;
+   *  the normalized {@link SourceRef} (`source`) is what consumers should read. */
+  source_system: string;
   source_ref: string | null;
   source_url: string | null;
   /**
@@ -123,18 +125,17 @@ export interface TaskListItem {
 }
 
 /**
- * G-1113.B.2 — map a task's legacy `source_*` columns onto a normalized
- * {@link SourceRef}. The DB still stores `source_system` (`github` | `internal`)
- * + `source_url` + `source_external_id` (B.2 is additive — columns and the
- * `source_system` CHECK are unchanged; widening to new providers is B.3+). This
- * shim is the single boundary that produces the normalized shape, so the rest
- * of Mission Control can stop branching on `source_system === "github"`
- * (the remaining call sites migrate in B.3/B.4).
+ * G-1113.B.2 — map a task's `source_*` columns onto a normalized
+ * {@link SourceRef}. The DB stores `source_system` + `source_url` +
+ * `source_external_id`. This shim is the single boundary that produces the
+ * normalized shape, so the rest of Mission Control branches on
+ * `source.provider`, never the raw `source_system`.
  *
- * `provider` falls back to `"custom"` only if the stored value isn't a known
- * {@link Provider} — today the CHECK guarantees `github`/`internal`, both valid
- * providers, so the fallback is defensive. `providerNativeType` is null until a
- * provider-specific adapter (B.3+) populates it.
+ * As of G-1113.D.7c the `source_system` CHECK has been DROPPED — the column is
+ * open provider-neutral `TEXT`. So `provider` is narrowed via {@link isProvider}
+ * here and the `"custom"` fallback is now a LIVE path for any stored value
+ * that isn't a known {@link Provider}, not merely defensive. `providerNativeType`
+ * is null until a provider-specific adapter populates it.
  */
 export function taskRowToSourceRef(row: {
   source_system: string;
@@ -203,7 +204,8 @@ interface TaskRow {
   status: TaskStatus;
   created_at: number;
   updated_at: number;
-  source_system: "github" | "internal";
+  // Raw DB column — open `string` since D.7c dropped the source_system CHECK.
+  source_system: string;
   source_url: string | null;
   source_external_id: string | null;
   aggregate_state_rank: number | null;

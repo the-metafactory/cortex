@@ -58,16 +58,18 @@ export function initDatabase(dbPath: string): Database {
       db.run("BEGIN");
       try {
         for (const sql of rb.steps) db.run(sql);
+        // Verify integrity BEFORE committing — a violating rebuild is rolled
+        // back, never made durable (prevention, not just detection).
+        const violations = db.query("PRAGMA foreign_key_check").all();
+        if (violations.length > 0) {
+          throw new Error(
+            `D.7c rebuild of '${rb.table}' left ${violations.length} foreign-key violation(s): ${JSON.stringify(violations)}`
+          );
+        }
         db.run("COMMIT");
       } catch (err) {
         db.run("ROLLBACK");
         throw err;
-      }
-      const violations = db.query("PRAGMA foreign_key_check").all();
-      if (violations.length > 0) {
-        throw new Error(
-          `D.7c rebuild of '${rb.table}' left ${violations.length} foreign-key violation(s): ${JSON.stringify(violations)}`
-        );
       }
     } finally {
       // Always restore the connection-level FK enforcement the rest of the app expects.

@@ -141,6 +141,34 @@ describe("D.7c — tasks.source_system CHECK rebuild migration", () => {
     db2.close();
   });
 
+  it("rolls back (and leaves the original table intact) if the rebuild would break FK integrity", () => {
+    const path = freshPath();
+    const old = buildOldDb(path);
+    old.run(
+      `INSERT INTO tasks (id, title, principal_id, source_system, status) VALUES ('t-1', 'A', 'andreas', 'github', 'open')`
+    );
+    old.run(`INSERT INTO agents (id, name, type) VALUES ('a-1', 'Echo', 'head')`);
+    // Pre-seed an ORPHAN assignment (task_id points at no task) with FK enforcement
+    // off — so the post-rebuild foreign_key_check finds a violation and the rebuild
+    // must roll back rather than commit.
+    old.run("PRAGMA foreign_keys = OFF");
+    old.run(
+      `INSERT INTO agent_task_assignment (id, agent_id, task_id, state) VALUES ('x-orphan', 'a-1', 'ghost-task', 'queued')`
+    );
+    old.close();
+
+    // initDatabase must THROW (the rebuild detected the FK violation pre-COMMIT).
+    expect(() => initDatabase(path)).toThrow(/foreign-key violation/i);
+
+    // Rollback proven: the ORIGINAL CHECK'd tasks table is intact, data preserved.
+    const raw = new Database(path);
+    const tasksSql = (raw.query(`SELECT sql FROM sqlite_master WHERE name='tasks'`).get() as { sql: string }).sql;
+    expect(tasksSql).toMatch(/CHECK\s*\(\s*source_system\s+IN/i); // still the old shape
+    expect((raw.query(`SELECT COUNT(*) c FROM tasks`).get() as { c: number }).c).toBe(1);
+    expect((raw.query(`SELECT title FROM tasks WHERE id='t-1'`).get() as { title: string }).title).toBe("A");
+    raw.close();
+  });
+
   it("a fresh DB is born neutral — no CHECK, no rebuild needed", () => {
     const path = freshPath();
     const db = initDatabase(path);
