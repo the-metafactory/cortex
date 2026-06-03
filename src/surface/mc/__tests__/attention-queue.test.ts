@@ -65,9 +65,9 @@ describe("getAttentionQueue (E.3)", () => {
     upsertPlanPhase(db, phase);
     upsertWorkItem(db, wi); // wi-1
     upsertWorkItem(db, { ...wi, id: "wi-2", title: "Other" });
-    // The work_item_id FK (enforced on insert) means a link is always either a
-    // real work item or NULL — a dangling ref can't exist, so resolveLink's
-    // id-fallback is defensive/unreachable; we test with real work items.
+    // work_item_id is an FK with ON DELETE SET NULL, so a link is always either
+    // a real work item or NULL — a dangling ref can't exist, so resolveLink's
+    // id-fallback is defensively unreachable; we test with real work items.
     upsertAttentionItem(db, att({ id: "att-low", workItemId: "wi-2", kind: "stale", severity: "low" }));
     upsertAttentionItem(db, att({ id: "att-crit", workItemId: "wi-1", kind: "blocked", severity: "critical" }));
     upsertAttentionItem(db, att({ id: "att-done", workItemId: "wi-1", severity: "critical", status: "resolved" }));

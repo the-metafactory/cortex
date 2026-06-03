@@ -7,7 +7,9 @@
  *   - sessionId  → its assignment id (sessions.assignment_id) → the drill-down.
  * §7.4 requires every item to deep-link; E.2 already guarantees an open item
  * carries at least one of these targets, so `link.kind` is never "none" for a
- * reconciled item — but the projection tolerates an unresolved link defensively.
+ * reconciled item. `work_item_id`/`session_id` are FK columns with ON DELETE
+ * SET NULL, so each is either a live row or NULL — never a dangling ref — which
+ * is why the label / assignmentId fallbacks below are defensively unreachable.
  */
 import type { Database } from "bun:sqlite";
 import type { AttentionItem } from "../types";
