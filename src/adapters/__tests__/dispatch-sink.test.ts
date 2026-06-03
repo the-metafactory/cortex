@@ -324,3 +324,154 @@ describe("dispatch-sink — no-routing and non-lifecycle envelopes", () => {
     expect(adapter.sentMessages).toHaveLength(1);
   });
 });
+
+// =============================================================================
+// a.3d (cortex#524) — multi-stack `stacks` option (shared surface gateway)
+// =============================================================================
+
+describe("dispatch-sink — gateway multi-stack subscription (a.3d)", () => {
+  test("`stacks` builds one distinct lifecycle subject per bound stack", async () => {
+    const { runtime, subscribedPatterns } = fakeRuntime();
+    const sink = createDispatchSink({
+      runtime,
+      adapters: [],
+      principal: "andreas",
+      stacks: ["meta-factory", "research"],
+    });
+    await sink.start();
+    expect(sink.subjects).toEqual([
+      "local.andreas.meta-factory.dispatch.task.>",
+      "local.andreas.research.dispatch.task.>",
+    ]);
+    expect(subscribedPatterns).toEqual([...sink.subjects]);
+  });
+
+  test("`undefined` stack entry → the 5-segment legacy subject (gap-4 binding)", async () => {
+    const { runtime } = fakeRuntime();
+    const sink = createDispatchSink({
+      runtime,
+      adapters: [],
+      principal: "andreas",
+      stacks: ["meta-factory", undefined],
+    });
+    await sink.start();
+    expect(sink.subjects).toEqual([
+      "local.andreas.meta-factory.dispatch.task.>",
+      "local.andreas.dispatch.task.>",
+    ]);
+  });
+
+  test("duplicate stacks collapse to one subject each (incl. duplicate undefined)", async () => {
+    const { runtime } = fakeRuntime();
+    const sink = createDispatchSink({
+      runtime,
+      adapters: [],
+      principal: "andreas",
+      stacks: ["a", "a", undefined, undefined, "b"],
+    });
+    await sink.start();
+    expect(sink.subjects).toEqual([
+      "local.andreas.a.dispatch.task.>",
+      "local.andreas.dispatch.task.>",
+      "local.andreas.b.dispatch.task.>",
+    ]);
+  });
+
+  test("`stacks` (non-empty) takes precedence over a single `stack`", async () => {
+    const { runtime } = fakeRuntime();
+    const sink = createDispatchSink({
+      runtime,
+      adapters: [],
+      principal: "andreas",
+      stack: "ignored-single",
+      stacks: ["meta-factory"],
+    });
+    await sink.start();
+    expect(sink.subjects).toEqual([
+      "local.andreas.meta-factory.dispatch.task.>",
+    ]);
+  });
+
+  test("EMPTY `stacks: []` falls back to the single `stack` (no silent zero-subscribe)", async () => {
+    const { runtime, subscribedPatterns } = fakeRuntime();
+    const sink = createDispatchSink({
+      runtime,
+      adapters: [],
+      principal: "andreas",
+      stack: "fallback-stack",
+      stacks: [],
+    });
+    await sink.start();
+    // The guard is `stacks.length > 0`; an empty array must NOT yield zero
+    // subjects (which would silently drop every reply) — it falls back to
+    // the single-stack subject.
+    expect(sink.subjects).toEqual([
+      "local.andreas.fallback-stack.dispatch.task.>",
+    ]);
+    expect(subscribedPatterns).toEqual([...sink.subjects]);
+  });
+
+  test("delivers across bound stacks, keyed by adapter_instance, with no cross-posting", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    // Two gateway adapters (one per bound stack), plus a THIRD instance that
+    // the gateway does NOT own — proves the adapter_instance filter is the
+    // sole delivery gate even with a broad multi-stack subscription.
+    const adapterA = new MockAdapter("discord:guild-A");
+    const adapterB = new MockAdapter("discord:guild-B");
+    const sink = createDispatchSink({
+      runtime,
+      adapters: [adapterA, adapterB],
+      principal: "andreas",
+      stacks: ["meta-factory", "research"],
+    });
+    await sink.start();
+
+    // A `started` event for stack `meta-factory`, routed to gateway adapter A
+    // → progress/typing indicator (sendProgress), NOT a durable postResponse.
+    trigger(
+      lifecycleEnvelope("dispatch.task.started", {
+        agent_id: "luna",
+        started_at: "2026-05-09T12:00:00Z",
+        response_routing: routing("discord:guild-A", "C-A"),
+      }),
+    );
+    // Reply for stack `research`, routed to gateway adapter B.
+    trigger(
+      lifecycleEnvelope("dispatch.task.completed", {
+        agent_id: "ivy",
+        chat_response: "research reply",
+        response_routing: routing("discord:guild-B", "C-B", "T-B"),
+      }),
+    );
+    // Reply routed to an instance the gateway does NOT own → ignored.
+    trigger(
+      lifecycleEnvelope("dispatch.task.completed", {
+        agent_id: "luna",
+        chat_response: "not ours",
+        response_routing: routing("discord:guild-OTHER", "C-X"),
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Only adapter B posted the terminal reply; A never cross-posts another
+    // instance's reply.
+    expect(adapterB.sentMessages).toHaveLength(1);
+    expect(adapterB.sentMessages[0]!.text).toBe("research reply");
+    expect(adapterB.sentMessages[0]!.target).toEqual({
+      instanceId: "discord:guild-B",
+      channelId: "C-B",
+      threadId: "T-B",
+    });
+    expect(adapterA.sentMessages).toHaveLength(0);
+    // The `started` event went to adapter A as a progress indicator, keyed by
+    // its own instance — proving the started→sendProgress path works over the
+    // multi-stack subscription and stays instance-scoped.
+    expect(adapterA.progressSent).toHaveLength(1);
+    expect(adapterA.progressSent[0]!.target).toEqual({
+      instanceId: "discord:guild-A",
+      channelId: "C-A",
+    });
+    expect(adapterB.progressSent).toHaveLength(0);
+  });
+});

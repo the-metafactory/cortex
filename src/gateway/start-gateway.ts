@@ -55,12 +55,13 @@ import {
   type GatewayAdapterFactory,
 } from "./gateway-adapters";
 import { BusInboundSink } from "./bus-inbound-sink";
+import { distinctBoundStacks, crossPrincipalBindings } from "./binding-resolver";
 import type { SurfaceGateway } from "./surface-gateway";
 import type { Surfaces } from "../common/types/surfaces";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { SystemEventSource } from "../bus/system-events";
 import type { PolicyEngine } from "../common/policy/engine";
-import type { InboundMessage } from "../adapters/types";
+import type { InboundMessage, PlatformAdapter } from "../adapters/types";
 
 // =============================================================================
 // Public API
@@ -101,6 +102,32 @@ export interface StartGatewayOpts {
   onUnroutable?: (msg: InboundMessage, reason: string) => void;
 }
 
+/**
+ * What a successfully-started gateway hands back to the cortex.ts boot path.
+ *
+ * a.3d (cortex#524) — the gateway owns its platform adapters AND the set of
+ * bound stacks; the OUTBOUND dispatch sink (constructed in `cortex.ts`,
+ * mirroring the per-stack sink) needs both. Rather than reaching into the
+ * gateway's internals, `startGatewayIfEnabled` exposes them here so the
+ * subject derivation stays in the gateway layer (where `surfaces` is parsed)
+ * while the sink construction stays at the boot site (where `runtime` lives).
+ */
+export interface StartedGateway {
+  /** The started inbound demux gateway. Joins the shutdown drain via `stop()`. */
+  gateway: SurfaceGateway;
+  /**
+   * The gateway's own platform adapters — one per surface binding. The
+   * outbound dispatch sink drives THESE (its `adapter_instance` filter keys
+   * off their `instanceId`), disjoint from the per-stack `adapters[]`.
+   */
+  adapters: readonly PlatformAdapter[];
+  /**
+   * Distinct bound-stack leaves (`undefined` = a gap-4 no-stack binding) for
+   * the outbound sink's subscribe subjects. See {@link distinctBoundStacks}.
+   */
+  stacks: readonly (string | undefined)[];
+}
+
 /** Count the total bindings across all platforms in a `Surfaces` map. */
 function countBindings(surfaces: Surfaces): number {
   return (
@@ -124,7 +151,7 @@ function countBindings(surfaces: Surfaces): number {
  */
 export async function startGatewayIfEnabled(
   opts: StartGatewayOpts,
-): Promise<SurfaceGateway | undefined> {
+): Promise<StartedGateway | undefined> {
   const enabled = isGatewayEnabled(opts.env);
 
   // ── Path 1: flag off → true no-op. Construct NOTHING. ─────────────────────
@@ -138,17 +165,36 @@ export async function startGatewayIfEnabled(
   const { surfaces } = opts;
   if (surfaces === undefined || countBindings(surfaces) === 0) {
     // maybeCreateSurfaceGateway emits the principal-facing stderr warning for
-    // the no-binding case; delegate to it (with empty adapters) so the log
-    // line lives in exactly one place.
-    return maybeCreateSurfaceGateway({
+    // the no-binding case AND returns `undefined` (zero bindings). Call it for
+    // that one-place log side-effect, then return `undefined` — there is no
+    // gateway, no adapters, and no outbound sink to wire.
+    maybeCreateSurfaceGateway({
       enabled: true,
       surfaces,
       adapters: [],
       ...(opts.onUnroutable !== undefined && { onUnroutable: opts.onUnroutable }),
     });
+    return undefined;
   }
 
   // ── Path 3: flag on + bindings → build, construct, start. ─────────────────
+  //
+  // a.3d review (single-principal v1 enforcement): the inbound publisher and
+  // the outbound dispatch sink both key off the gateway's OWN principal and
+  // discard each binding's parsed principal. Reject any cross-principal binding
+  // LOUDLY at boot rather than silently absorbing it into the gateway
+  // principal's namespace (the latent cross-principal leak single-principal v1
+  // excludes). Same loud-validation stance as `buildBindingIndex`.
+  const crossPrincipal = crossPrincipalBindings(surfaces, opts.principal);
+  if (crossPrincipal.length > 0) {
+    throw new Error(
+      `gateway: cross-principal surface bindings are not supported in single-principal v1 — ` +
+        `${crossPrincipal.map((s) => `"${s}"`).join(", ")} ` +
+        `declare a principal other than "${opts.principal}". ` +
+        `Either move them under "${opts.principal}/…" or run a separate gateway for that principal.`,
+    );
+  }
+
   const adapters = buildGatewayAdapters(surfaces, {
     principal: opts.principal,
     runtime: opts.runtime,
@@ -199,8 +245,20 @@ export async function startGatewayIfEnabled(
 
   // `gw` is defined here (bindings > 0 + adapters built), but the factory
   // contract returns `SurfaceGateway | undefined` — guard rather than assert.
-  if (gw !== undefined) {
-    await gw.start();
+  if (gw === undefined) {
+    return undefined;
   }
-  return gw;
+  await gw.start();
+
+  // a.3d (cortex#524) — hand the boot path the adapters + bound stacks the
+  // OUTBOUND dispatch sink needs. The sink itself is constructed in cortex.ts
+  // (it owns the `runtime`), but the bound-stack subject set is derived HERE,
+  // where `surfaces` is parsed, so subject-shape logic stays in the gateway
+  // layer. Single-principal v1: the sink's principal segment is the gateway
+  // principal (supplied at the boot site).
+  return {
+    gateway: gw,
+    adapters,
+    stacks: distinctBoundStacks(surfaces),
+  };
 }

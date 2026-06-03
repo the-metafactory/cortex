@@ -99,6 +99,21 @@ export interface DispatchSinkOptions {
    * (the 6-segment grammar), the subscribe pattern must carry it too.
    */
   stack?: string;
+  /**
+   * a.3d (cortex#524) — MULTIPLE `{stack}` segments. The shared surface
+   * gateway serves many bound stacks under ONE principal, so its outbound
+   * sink must subscribe to every bound stack's lifecycle subject, not just
+   * one. When provided and non-empty, `stacks` takes precedence over `stack`:
+   * one subscribe subject is built per DISTINCT entry. An `undefined` entry
+   * maps to the 5-segment legacy subject (`local.{principal}.dispatch.task.>`)
+   * — the shape a gap-4 binding with no `stack` field publishes on.
+   *
+   * Single-stack callers (the per-stack `cortex.ts` wiring) keep passing
+   * `stack`. Regardless of subject count there is still exactly ONE
+   * `onEnvelope` handler, so multiple subjects never double-deliver an
+   * envelope; the `adapter_instance` filter remains the sole delivery gate.
+   */
+  stacks?: readonly (string | undefined)[];
 }
 
 export interface DispatchSink {
@@ -126,6 +141,32 @@ function lifecycleSubject(principal: string, stack?: string): string {
 }
 
 /**
+ * De-duplicate a `(string | undefined)[]` of stack tokens, preserving order.
+ * `undefined` (the gap-4 / 5-segment case) is its own single bucket, tracked
+ * with a boolean so it never collides with any real stack name. Used to fold
+ * the gateway's per-binding stacks into one subscribe-subject set.
+ */
+function distinctStacks(
+  stacks: readonly (string | undefined)[],
+): (string | undefined)[] {
+  const seen = new Set<string>();
+  let sawUndefined = false;
+  const out: (string | undefined)[] = [];
+  for (const s of stacks) {
+    if (s === undefined) {
+      if (sawUndefined) continue;
+      sawUndefined = true;
+      out.push(undefined);
+      continue;
+    }
+    if (seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+/**
  * Create a dispatch sink. Wires nothing until `start()` is called.
  */
 export function createDispatchSink(opts: DispatchSinkOptions): DispatchSink {
@@ -134,7 +175,13 @@ export function createDispatchSink(opts: DispatchSinkOptions): DispatchSink {
   const adapterByInstance = new Map<string, PlatformAdapter>(
     adapters.map((a) => [a.instanceId, a]),
   );
-  const subjects = [lifecycleSubject(principal, stack)];
+  // a.3d — `stacks` (gateway multi-stack) takes precedence over the single
+  // `stack` when present: one subscribe subject per distinct bound stack.
+  // Otherwise the single-stack (per-stack caller) path is unchanged.
+  const subjects =
+    opts.stacks !== undefined && opts.stacks.length > 0
+      ? distinctStacks(opts.stacks).map((s) => lifecycleSubject(principal, s))
+      : [lifecycleSubject(principal, stack)];
 
   let registration: { unregister: () => void } | null = null;
   let subscribers: MyelinSubscriber[] = [];

@@ -19,6 +19,8 @@ import { describe, expect, test } from "bun:test";
 import {
   buildBindingIndex,
   resolveBinding,
+  distinctBoundStacks,
+  crossPrincipalBindings,
   type GatewayBindingIndex,
   type GatewayBindingMatch,
 } from "../binding-resolver";
@@ -489,5 +491,160 @@ describe("stack-parsing — degenerate inputs collapse to undefined", () => {
     expect(match).not.toBeNull();
     expect(match!.principal).toBeUndefined();
     expect(match!.stack).toBeUndefined();
+  });
+});
+
+// ─── 13. distinctBoundStacks (a.3d outbound subjects) ─────────────────────────
+
+describe("distinctBoundStacks — gateway outbound subject derivation", () => {
+  test("single binding → its parsed stack leaf", () => {
+    expect(distinctBoundStacks(DISCORD_SURFACES)).toEqual(["meta-factory"]);
+  });
+
+  test("distinct stacks across platforms, deduped, in iteration order", () => {
+    const surfaces: Surfaces = {
+      discord: [
+        {
+          agent: "luna",
+          stack: "andreas/meta-factory",
+          binding: { token: "t1", guildId: "G1", agentChannelId: "a", logChannelId: "b" },
+        },
+        {
+          agent: "ivy",
+          stack: "andreas/research",
+          binding: { token: "t2", guildId: "G2", agentChannelId: "c", logChannelId: "d" },
+        },
+      ],
+      slack: [
+        {
+          agent: "luna",
+          // same leaf as the first discord binding → collapses to one entry
+          stack: "andreas/meta-factory",
+          binding: { botToken: "xoxb", appToken: "xapp", workspaceId: "W1" },
+        },
+      ],
+      mattermost: [
+        {
+          agent: "forge",
+          // a third, mattermost-only leaf → exercises the mattermost loop
+          stack: "andreas/ops",
+          binding: { apiUrl: "https://mm.example.com", apiToken: "mm-tok" },
+        },
+      ],
+    };
+    expect(distinctBoundStacks(surfaces)).toEqual([
+      "meta-factory",
+      "research",
+      "ops",
+    ]);
+  });
+
+  test("gap-4 binding (no stack field) → a single `undefined` entry", () => {
+    const noStack: Surfaces = {
+      discord: [
+        {
+          agent: "luna",
+          // no `stack:` — gap 4
+          binding: { token: "t", guildId: "G", agentChannelId: "a", logChannelId: "b" },
+        },
+      ],
+    };
+    expect(distinctBoundStacks(noStack)).toEqual([undefined]);
+  });
+
+  test("mixed stacked + gap-4 bindings → leaf plus one undefined", () => {
+    const mixed: Surfaces = {
+      discord: [
+        {
+          agent: "luna",
+          stack: "andreas/meta-factory",
+          binding: { token: "t1", guildId: "G1", agentChannelId: "a", logChannelId: "b" },
+        },
+        {
+          agent: "ivy",
+          binding: { token: "t2", guildId: "G2", agentChannelId: "c", logChannelId: "d" },
+        },
+      ],
+    };
+    expect(distinctBoundStacks(mixed)).toEqual(["meta-factory", undefined]);
+  });
+
+  test("no bindings → empty list", () => {
+    expect(distinctBoundStacks({})).toEqual([]);
+  });
+});
+
+// ─── 14. crossPrincipalBindings (single-principal v1 enforcement) ──────────────
+
+describe("crossPrincipalBindings — single-principal v1 guard", () => {
+  test("all bindings under the gateway principal → no offenders", () => {
+    const surfaces: Surfaces = {
+      discord: [
+        {
+          agent: "luna",
+          stack: "andreas/meta-factory",
+          binding: { token: "t1", guildId: "G1", agentChannelId: "a", logChannelId: "b" },
+        },
+      ],
+      slack: [
+        {
+          agent: "ivy",
+          stack: "andreas/research",
+          binding: { botToken: "xoxb", appToken: "xapp", workspaceId: "W1" },
+        },
+      ],
+    };
+    expect(crossPrincipalBindings(surfaces, "andreas")).toEqual([]);
+  });
+
+  test("a binding under another principal → flagged (across all platforms)", () => {
+    const surfaces: Surfaces = {
+      discord: [
+        {
+          agent: "luna",
+          stack: "andreas/meta-factory",
+          binding: { token: "t1", guildId: "G1", agentChannelId: "a", logChannelId: "b" },
+        },
+      ],
+      mattermost: [
+        {
+          agent: "forge",
+          stack: "someone-else/ops",
+          binding: { apiUrl: "https://mm.example.com", apiToken: "mm-tok" },
+        },
+      ],
+    };
+    expect(crossPrincipalBindings(surfaces, "andreas")).toEqual(["someone-else/ops"]);
+  });
+
+  test("gap-4 binding (no stack / no principal) is never flagged", () => {
+    const surfaces: Surfaces = {
+      discord: [
+        {
+          agent: "luna",
+          // no stack → no principal → cannot be cross-principal
+          binding: { token: "t", guildId: "G", agentChannelId: "a", logChannelId: "b" },
+        },
+      ],
+    };
+    expect(crossPrincipalBindings(surfaces, "andreas")).toEqual([]);
+  });
+
+  test("duplicate offending stack ids collapse to one", () => {
+    const surfaces: Surfaces = {
+      discord: [
+        {
+          agent: "a",
+          stack: "other/x",
+          binding: { token: "t1", guildId: "G1", agentChannelId: "a", logChannelId: "b" },
+        },
+        {
+          agent: "b",
+          stack: "other/x",
+          binding: { token: "t2", guildId: "G2", agentChannelId: "c", logChannelId: "d" },
+        },
+      ],
+    };
+    expect(crossPrincipalBindings(surfaces, "andreas")).toEqual(["other/x"]);
   });
 });

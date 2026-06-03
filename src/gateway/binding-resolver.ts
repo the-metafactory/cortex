@@ -180,6 +180,109 @@ function parseStack(raw: string | undefined): {
 }
 
 // =============================================================================
+// distinctBoundStacks  (a.3d outbound — cortex#524)
+// =============================================================================
+
+/**
+ * The distinct set of bound stack leaves across every surface binding.
+ *
+ * The shared surface gateway serves many bound stacks under ONE principal.
+ * Its OUTBOUND dispatch sink (cortex#491 `createDispatchSink`, reused here per
+ * a.3d) must subscribe to the lifecycle subject of EVERY bound stack — the
+ * bound stack's OWN runner republishes `dispatch.task.*` on
+ * `local.{principal}.{stack}.dispatch.task.>`, stamping its own runtime
+ * principal (which EQUALS the gateway principal under single-principal v1 — the
+ * gateway is a separate process and does not stamp the reply) and its stack
+ * leaf. A stack whose subject the sink never subscribes to would have its
+ * replies silently dropped.
+ *
+ * Returns one entry per DISTINCT parsed `stack` leaf (re-using `parseStack`,
+ * the single source of `{principal}/{stack}` parsing — no drift). A gap-4
+ * binding (no `stack` field, §4 above) yields a single `undefined` entry,
+ * which the sink turns into the 5-segment legacy subject
+ * `local.{principal}.dispatch.task.>` — the shape such a binding publishes on.
+ *
+ * Single-principal v1 (§ "v1 decisions" above): the principal segment is the
+ * gateway's own principal, supplied by the caller; cross-principal bindings are
+ * rejected loudly at boot ({@link crossPrincipalBindings}), so this safely
+ * returns stack leaves only.
+ */
+export function distinctBoundStacks(
+  surfaces: Surfaces,
+): (string | undefined)[] {
+  const seen = new Set<string>();
+  let sawUndefined = false;
+  const out: (string | undefined)[] = [];
+  const add = (raw: string | undefined): void => {
+    const { stack } = parseStack(raw);
+    if (stack === undefined) {
+      // gap-4 binding (no stack field) → a single `undefined` bucket, tracked
+      // with a boolean so it never collides with any real stack name.
+      if (sawUndefined) return;
+      sawUndefined = true;
+      out.push(undefined);
+      return;
+    }
+    if (seen.has(stack)) return;
+    seen.add(stack);
+    out.push(stack);
+  };
+  for (const e of surfaces.discord ?? []) add(e.stack);
+  for (const e of surfaces.slack ?? []) add(e.stack);
+  for (const e of surfaces.mattermost ?? []) add(e.stack);
+  return out;
+}
+
+// =============================================================================
+// crossPrincipalBindings  (single-principal v1 enforcement — a.3d review)
+// =============================================================================
+
+/**
+ * The `stack` ids of any bindings whose parsed principal differs from the
+ * gateway's own principal — i.e. cross-principal bindings.
+ *
+ * **Why this exists (a.3d review finding).** The gateway is single-principal
+ * in v1 (§ "v1 decisions" above): both the inbound publisher and the outbound
+ * dispatch sink key off the gateway's OWN principal and discard each binding's
+ * parsed principal. That makes the single-principal rule an *assumption*. A
+ * binding that declared `{otherPrincipal}/{stack}` would then be silently
+ * absorbed into the gateway principal's namespace on both legs — the exact
+ * latent cross-principal leak single-principal v1 is meant to exclude.
+ *
+ * This helper turns the assumption into an enforceable gate: the caller throws
+ * a loud boot error when the result is non-empty (same loud-validation style as
+ * {@link buildBindingIndex}'s duplicate-key throw), so a cross-principal
+ * misconfig fails at startup rather than mis-routing at runtime. Bindings with
+ * no `stack` field (gap-4) carry no principal and are never flagged.
+ *
+ * Returns the offending raw `stack` values (deduped, in iteration order) so the
+ * error message can name them.
+ */
+export function crossPrincipalBindings(
+  surfaces: Surfaces,
+  principal: string,
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const check = (raw: string | undefined): void => {
+    // Narrow `raw` to a string up front: a gap-4 binding (no `stack`) carries
+    // no principal and can never be cross-principal, so skip it. This also
+    // lets us push `raw` without a non-null assertion.
+    if (raw === undefined) return;
+    const parsed = parseStack(raw);
+    if (parsed.principal !== undefined && parsed.principal !== principal) {
+      if (seen.has(raw)) return;
+      seen.add(raw);
+      out.push(raw);
+    }
+  };
+  for (const e of surfaces.discord ?? []) check(e.stack);
+  for (const e of surfaces.slack ?? []) check(e.stack);
+  for (const e of surfaces.mattermost ?? []) check(e.stack);
+  return out;
+}
+
+// =============================================================================
 // buildBindingIndex
 // =============================================================================
 

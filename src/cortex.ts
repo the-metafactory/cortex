@@ -2239,7 +2239,7 @@ export async function startCortex(
   // ALSO set does it run LIVE (BusInboundSink — publishing to the bus). This is
   // purely additive — it does not touch, reorder, or risk the existing
   // adapter-construction flow.
-  const gw: SurfaceGateway | undefined = await startGatewayIfEnabled({
+  const startedGateway = await startGatewayIfEnabled({
     env: process.env,
     surfaces: options.surfaces,
     principal: principalId,
@@ -2251,6 +2251,59 @@ export async function startCortex(
     source: systemEventSource,
     policyEngine: adapterPolicyEngine,
   });
+  const gw: SurfaceGateway | undefined = startedGateway?.gateway;
+
+  // a.3d (cortex#524) — gateway OUTBOUND reply round-trip. Reuse the per-stack
+  // `createDispatchSink` (cortex#491) over the GATEWAY's own adapters instead
+  // of building a second mux. The sink subscribes to every bound stack's
+  // lifecycle subject (`stacks` derived from the surface bindings) and posts
+  // each reply back to the exact originating channel/thread via the gateway
+  // adapter named by the envelope's echoed `response_routing.adapter_instance`.
+  //
+  // Coexists safely with the per-stack dispatch sink wired above: both register
+  // an `onEnvelope` handler on the SAME runtime, but the `adapter_instance`
+  // filter keys off disjoint adapter-instance sets (gateway adapters vs the
+  // per-stack `adapters[]`), so any one lifecycle envelope is delivered by at
+  // most one sink — never double-replied. Idle in SHADOW (no inbound published
+  // → nothing routes to the gateway adapters); active once the gateway is LIVE.
+  //
+  // a.3d review: that no-double-reply / no-wrong-channel safety RESTS on the
+  // instance-id sets being disjoint. The gateway-owned-surface suppression
+  // (GW.a.3b.2c) already keeps gateway-owned surfaces out of `adapters[]`, but
+  // a per-stack adapter whose `instanceId` is hand-set to the gateway's
+  // `{platform}:{demuxKey}` form would collide and let one envelope post to two
+  // channels. Assert disjointness LOUDLY at boot rather than trust convention.
+  if (startedGateway !== undefined) {
+    const perStackInstances = new Set(adapters.map((a) => a.instanceId));
+    const collisions = startedGateway.adapters
+      .map((a) => a.instanceId)
+      .filter((id) => perStackInstances.has(id));
+    if (collisions.length > 0) {
+      throw new Error(
+        `cortex: gateway adapter instanceId(s) ${collisions.map((c) => `"${c}"`).join(", ")} ` +
+          `collide with per-stack adapter instanceId(s). The gateway and per-stack ` +
+          `dispatch sinks share one runtime and route by instanceId, so a collision ` +
+          `would deliver one reply through both — posting to two channels. Ensure no ` +
+          `per-stack adapter sets its instanceId to the gateway's "{platform}:{demuxKey}" form.`,
+      );
+    }
+  }
+
+  const gatewayDispatchSink: DispatchSink | undefined = startedGateway
+    ? createDispatchSink({
+        runtime,
+        adapters: startedGateway.adapters,
+        principal: principalId,
+        stacks: startedGateway.stacks,
+      })
+    : undefined;
+  if (gatewayDispatchSink !== undefined) {
+    await gatewayDispatchSink.start();
+    console.log(
+      `cortex: gateway dispatch-sink started — subjects=[${gatewayDispatchSink.subjects.join(", ")}], ` +
+        `adapters=${startedGateway?.adapters.length ?? 0}`,
+    );
+  }
 
   // Shutdown — reverse-order; capped at SHUTDOWN_TIMEOUT_MS.
   //
@@ -2288,6 +2341,10 @@ export async function startCortex(
       "dispatch-listener stop",
       "dispatch-sink stop",
       "review-sink stop",
+      // a.3d (cortex#524) — gateway outbound dispatch sink; `undefined` on a
+      // dormant (default) stack, in which case the drain step is a no-op and
+      // this slot self-completes immediately.
+      "gateway-dispatch-sink stop",
       // IAW GW (cortex#524) — only present when the flag-gated gateway started;
       // `gw` is `undefined` on every dormant (default) stack, in which case the
       // drain step below is a no-op and this slot self-completes immediately.
@@ -2353,6 +2410,15 @@ export async function startCortex(
       // surface-router / adapters close, so no late `postResponse` lands
       // after the platform connections close. `stop()` is idempotent.
       await completeAsync("review-sink stop", reviewSink.stop());
+      // a.3d (cortex#524) — drain the gateway outbound dispatch sink BEFORE the
+      // gateway's own adapters close (surface-gateway stop, below), mirroring
+      // the per-stack dispatch-sink boundary so no late `postResponse` lands
+      // after the gateway's platform connections close. `stop()` is idempotent;
+      // `undefined` on a dormant stack → no-op.
+      await completeAsync(
+        "gateway-dispatch-sink stop",
+        gatewayDispatchSink?.stop(),
+      );
       // IAW GW (cortex#524) — stop the shared surface gateway (its own
       // adapter connections, separate from the per-stack `adapters[]`) on the
       // same boundary as the sinks: after the runner stops publishing but
