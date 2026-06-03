@@ -2168,11 +2168,21 @@ export async function startCortex(
     const [repoOwner, repoName] = config.cockpit.repo.split("/");
     const defaultRepo = repoOwner && repoName ? { owner: repoOwner, repo: repoName } : undefined;
     const baseUrl = config.grove.baseUrl !== "" ? config.grove.baseUrl : `http://localhost:${config.api.port}`;
+    // Resolve docsDir to an absolute path so the ingest doesn't depend on the
+    // launchd plist's CWD (which isn't guaranteed to be the repo root). Warn
+    // once at startup if it's missing rather than only failing every tick.
+    const docsDir = isAbsolute(config.cockpit.docsDir) ? config.cockpit.docsDir : join(process.cwd(), config.cockpit.docsDir);
+    if (!existsSync(docsDir)) {
+      console.warn(`cortex: cockpit.enabled but docsDir not found at ${docsDir} — plan ingest will be empty until it exists`);
+    }
+    if (config.cockpit.attention.channel === "") {
+      console.warn("cortex: cockpit.enabled but cockpit.attention.channel is empty — attention notifications publish to the bus only (no surface rendering); set it to route them");
+    }
     cockpitLoop = startCockpitRefreshLoop({
       intervalMs: config.cockpit.refreshIntervalMs,
       run: () =>
         refreshCockpit(cockpitDb, {
-          docsDir: config.cockpit.docsDir,
+          docsDir,
           ...(defaultRepo !== undefined && { defaultRepo }),
           stackId: derivedStack.stack,
           publish: (env) => runtime.publish(env),
@@ -2181,7 +2191,9 @@ export async function startCortex(
           workItemSourceFor: defaultWorkItemSourceFor,
         }),
     });
-    console.log(`cortex: cockpit refresh loop started — every ${config.cockpit.refreshIntervalMs}ms, docs=${config.cockpit.docsDir}`);
+    console.log(`cortex: cockpit refresh loop started — every ${config.cockpit.refreshIntervalMs}ms, docs=${docsDir}`);
+  } else if (config.cockpit.enabled && mcDb === null) {
+    console.warn(`cortex: cockpit.enabled but dashboard DB unavailable (api.enabled=${config.api.enabled}, disableDashboard=${!!options.disableDashboard}) — refresh loop not started`);
   }
 
   // MIG-5.6 (C-106): GitHub webhook receiver — opt-in via `github.receiver.enabled`
