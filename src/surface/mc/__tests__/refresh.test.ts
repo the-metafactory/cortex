@@ -106,6 +106,43 @@ describe("refreshCockpit (ML.2)", () => {
     expect(listWorkItemsForPlan(db, "plan-cockpit")).toHaveLength(1);
   });
 
+  it("a github plan with a null umbrella dispatches the source but ingests nothing (honest no-op)", async () => {
+    const db = freshDb();
+    // No **Umbrella** line → provider stays internal → no github source. To exercise
+    // a github plan whose source returns [] (null-umbrella no-op), inject a source
+    // that returns [] and a doc whose umbrella makes it github.
+    const dir = docsDir({ "plan-cockpit.md": GH_PLAN });
+    const res = await refreshCockpit(db, {
+      docsDir: dir, stackId: "laptop", nowEpochSec: NOW,
+      workItemSourceFor: mockFactory({}), // github source returns [] for this plan
+    });
+    expect(res.plans).toBe(1);
+    expect(res.workItems).toBe(0);
+    expect(res.unsupportedProviders).toBe(0); // a source WAS dispatched, it just had nothing
+    expect(res.failedPlans).toBe(0);
+    expect(listWorkItemsForPlan(db, "plan-cockpit")).toEqual([]);
+  });
+
+  it("isolates a throwing source: the batch continues + reconcile still runs", async () => {
+    const db = freshDb();
+    const dir = docsDir({ "plan-cockpit.md": GH_PLAN });
+    db.query(
+      `INSERT INTO work_items (id, title, status, priority, provider, updated_at) VALUES ('wi-stale', 'old', 'open', '', 'github', ?)`
+    ).run(NOW - 30 * DAY);
+    const throwingFactory: WorkItemSourceFactory = (provider) =>
+      provider === "github"
+        ? ({ provider: "github", fetchWorkItems: async () => { throw new Error("gh boom"); } } satisfies WorkItemSource)
+        : null;
+    const res = await refreshCockpit(db, {
+      docsDir: dir, stackId: "laptop", nowEpochSec: NOW, workItemSourceFor: throwingFactory,
+    });
+    expect(res.failedPlans).toBe(1); // the throw was isolated, not propagated
+    expect(res.workItems).toBe(0);
+    // reconcile still ran despite the failed plan — the stale item is flagged.
+    expect(res.attentionOpen).toBeGreaterThanOrEqual(1);
+    expect(listOpenAttention(db).some((a) => a.id === "att:stale:wi-stale")).toBe(true);
+  });
+
   it("defaultWorkItemSourceFor dispatches github → GithubWorkItemSource, others → null", () => {
     expect(defaultWorkItemSourceFor("github")).toBeInstanceOf(GithubWorkItemSource);
     expect(defaultWorkItemSourceFor("gitlab")).toBeNull();

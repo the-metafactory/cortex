@@ -58,6 +58,8 @@ export interface RefreshResult {
   workItems: number;
   /** Plans whose provider had no WorkItemSource (skipped ingestion). */
   unsupportedProviders: number;
+  /** Plans whose work-item ingestion threw (isolated; reconcile still ran). */
+  failedPlans: number;
   /** Open attention items after reconcile. */
   attentionOpen: number;
 }
@@ -78,16 +80,27 @@ export async function refreshCockpit(db: Database, opts: RefreshCockpitOptions):
   });
 
   // 2. Per plan, dispatch a source by provider and ingest its work items.
+  //    Isolate each plan: one provider source misbehaving must NOT abort the
+  //    batch or skip the reconcile step (best-effort, matching the posture the
+  //    GithubWorkItemSource already takes internally).
   let workItems = 0;
   let unsupportedProviders = 0;
+  let failedPlans = 0;
   for (const { plan } of parsed) {
     const source = sourceFor(plan.provider);
     if (source === null) {
       unsupportedProviders += 1;
       continue;
     }
-    const res = await ingestWorkItems(db, source, plan.id);
-    workItems += res.workItems.length;
+    try {
+      const res = await ingestWorkItems(db, source, plan.id);
+      workItems += res.workItems.length;
+    } catch (err) {
+      failedPlans += 1;
+      process.stderr.write(
+        `[cockpit-refresh] work-item ingestion failed for plan ${plan.id}: ${err instanceof Error ? err.message : String(err)}\n`
+      );
+    }
   }
 
   // 3. Reconcile attention from the freshly-ingested state.
@@ -101,6 +114,7 @@ export async function refreshCockpit(db: Database, opts: RefreshCockpitOptions):
     plans: parsed.length,
     workItems,
     unsupportedProviders,
+    failedPlans,
     attentionOpen: attention.open.length,
   };
 }
