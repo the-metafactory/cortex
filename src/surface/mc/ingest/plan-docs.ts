@@ -85,9 +85,14 @@ function planIdFromPath(path: string): string {
 
 /** The author-written umbrella declaration line, e.g. `**Umbrella issue:** cortex#354`. */
 const UMBRELLA_LINE_RE = /^\*\*Umbrella(?:\s+issue)?:\*\*\s*(.+)$/im;
-/** A candidate ref token within that line: a github issues/pull URL, owner/repo#N, repo#N, or #N. */
-const UMBRELLA_TOKEN_RE =
-  /https?:\/\/github\.com\/\S+|[\w.-]+\/[\w.-]+#\d+|[\w.-]+#\d+|#\d+/;
+// Candidate ref forms, tried MOST-QUALIFIED FIRST regardless of position —
+// crucial for the markdown-link form `[#59](https://github.com/o/r/issues/59)`,
+// where the bracketed `#59` label sits left of the canonical URL. Trying the
+// URL first picks the real repo (grove-v2#59), not the bare label. The URL is
+// bounded by `[^\s)\]]+` so it doesn't swallow the markdown link's closing `)`.
+const UMBRELLA_URL_RE = /https?:\/\/github\.com\/[^\s)\]]+/;
+const UMBRELLA_OWNER_REPO_RE = /[\w.-]+\/[\w.-]+#\d+/;
+const UMBRELLA_SHORT_RE = /[\w.-]+#\d+|#\d+/;
 
 /**
  * ML.1 — parse a plan doc's declared umbrella issue into the canonical
@@ -95,11 +100,18 @@ const UMBRELLA_TOKEN_RE =
  * when no umbrella line exists, the line is a placeholder (e.g.
  * `_(to be filed)_`), or the ref can't be resolved (short ref with no
  * `defaultRepo`). Reuses the GitHub adapter's parser/normalizer.
+ *
+ * Only the FIRST `**Umbrella…**` line is consulted (by design): a placeholder
+ * first line intentionally yields null ("not yet filed"). The line must START
+ * with `**Umbrella`, so body prose like "the umbrella cortex#110" can't match.
  */
 function extractUmbrellaRef(content: string, defaultRepo?: { owner: string; repo: string }): string | null {
   const line = UMBRELLA_LINE_RE.exec(content)?.[1];
   if (line === undefined) return null;
-  const token = UMBRELLA_TOKEN_RE.exec(line)?.[0];
+  const token =
+    UMBRELLA_URL_RE.exec(line)?.[0] ??
+    UMBRELLA_OWNER_REPO_RE.exec(line)?.[0] ??
+    UMBRELLA_SHORT_RE.exec(line)?.[0];
   if (token === undefined) return null; // placeholder / no ref
   const ref = parseGitHubRef(token, defaultRepo ?? {});
   if (isParseError(ref)) return null;
