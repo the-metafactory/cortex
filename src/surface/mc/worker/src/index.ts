@@ -16,6 +16,7 @@ import { githubRoutes } from "./routes/github";
 import { adminRoutes } from "./routes/admin";
 import { syncRoutes } from "./routes/sync";
 import { dashboardRoutes } from "./routes/dashboard";
+import { DashboardSocket } from "./dashboard-socket";
 
 export interface Env extends AuthBindings {
   GROVE_KEYS: KVNamespace;
@@ -24,6 +25,8 @@ export interface Env extends AuthBindings {
   GITHUB_TOKEN: string;
   GITHUB_REPOS: string;
   CORS_ORIGIN: string;
+  /** DO backing the dashboard WebSocket (/ws) — single global instance per stack. */
+  DASHBOARD_SOCKET: DurableObjectNamespace;
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -133,4 +136,24 @@ app.notFound((c) => {
   return c.json({ error: "not found" }, 404);
 });
 
-export default app;
+// ---------------------------------------------------------------------------
+// WebSocket (/ws) — handled at the module level, BEFORE Hono.
+// Routing the 101 upgrade through Hono's `*` CORS middleware would clone the
+// Response and drop the `webSocket` handle. So we intercept /ws here and forward
+// the raw request straight to the single global DashboardSocket DO instance.
+// Auth: /ws inherits the host-level CF Access app (the browser sends the
+// CF_Authorization cookie on the same-origin handshake) — no code-level bypass.
+// ---------------------------------------------------------------------------
+const worker = {
+  fetch(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === "/ws") {
+      const id = env.DASHBOARD_SOCKET.idFromName("global");
+      return env.DASHBOARD_SOCKET.get(id).fetch(request);
+    }
+    return app.fetch(request, env, ctx);
+  },
+};
+
+export default worker;
+export { DashboardSocket };

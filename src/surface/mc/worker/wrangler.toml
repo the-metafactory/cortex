@@ -20,6 +20,18 @@ database_id = "placeholder-local-id"
 binding = "GROVE_KEYS"
 id = "placeholder-local-kv-id"
 
+# DashboardSocket DO — backs the dashboard WebSocket (/ws). Named environments
+# do NOT inherit top-level DO bindings, so it is re-declared in each env below;
+# this base binding covers bare `wrangler dev`. The migration is top-level and
+# shared across environments.
+[[durable_objects.bindings]]
+name = "DASHBOARD_SOCKET"
+class_name = "DashboardSocket"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DashboardSocket"]
+
 # ──────────────────────────────────────────────────────────────────
 # Environment: Development (grove-dev.meta-factory.{ai,dev,io})
 # ──────────────────────────────────────────────────────────────────
@@ -29,11 +41,19 @@ workers_dev = false
 routes = [
   { pattern = "grove-dev.meta-factory.ai/api/*", zone_name = "meta-factory.ai" },
   { pattern = "grove-dev.meta-factory.ai/admin/*", zone_name = "meta-factory.ai" },
+  { pattern = "grove-dev.meta-factory.ai/ws", zone_name = "meta-factory.ai" },
   { pattern = "grove-dev.meta-factory.dev/api/*", zone_name = "meta-factory.dev" },
   { pattern = "grove-dev.meta-factory.dev/admin/*", zone_name = "meta-factory.dev" },
+  { pattern = "grove-dev.meta-factory.dev/ws", zone_name = "meta-factory.dev" },
   { pattern = "grove-dev.meta-factory.io/api/*", zone_name = "meta-factory.io" },
-  { pattern = "grove-dev.meta-factory.io/admin/*", zone_name = "meta-factory.io" }
+  { pattern = "grove-dev.meta-factory.io/admin/*", zone_name = "meta-factory.io" },
+  { pattern = "grove-dev.meta-factory.io/ws", zone_name = "meta-factory.io" }
 ]
+
+# DashboardSocket DO binding (dev) — env configs don't inherit the base binding.
+[[env.dev.durable_objects.bindings]]
+name = "DASHBOARD_SOCKET"
+class_name = "DashboardSocket"
 
 [env.dev.vars]
 CORS_ORIGIN = "https://grove-dev.meta-factory.ai,https://grove-dev.meta-factory.dev,https://grove-dev.meta-factory.io,http://localhost:8766,http://localhost:8765"
@@ -73,11 +93,20 @@ workers_dev = false
 routes = [
   { pattern = "grove.meta-factory.ai/api/*", zone_name = "meta-factory.ai" },
   { pattern = "grove.meta-factory.ai/admin/*", zone_name = "meta-factory.ai" },
+  { pattern = "grove.meta-factory.ai/ws", zone_name = "meta-factory.ai" },
   { pattern = "grove.meta-factory.dev/api/*", zone_name = "meta-factory.dev" },
   { pattern = "grove.meta-factory.dev/admin/*", zone_name = "meta-factory.dev" },
+  { pattern = "grove.meta-factory.dev/ws", zone_name = "meta-factory.dev" },
   { pattern = "grove.meta-factory.io/api/*", zone_name = "meta-factory.io" },
-  { pattern = "grove.meta-factory.io/admin/*", zone_name = "meta-factory.io" }
+  { pattern = "grove.meta-factory.io/admin/*", zone_name = "meta-factory.io" },
+  { pattern = "grove.meta-factory.io/ws", zone_name = "meta-factory.io" }
 ]
+
+# DashboardSocket DO binding (production) — config ready; deploy is a separate
+# promote (this work deploys --env dev only).
+[[env.production.durable_objects.bindings]]
+name = "DASHBOARD_SOCKET"
+class_name = "DashboardSocket"
 
 [env.production.vars]
 # S-002: CORS for production — restricted to dashboard origins (all three TLDs).

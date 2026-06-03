@@ -22,6 +22,7 @@ import type {
   UsageSnapshotData,
 } from "../../../../../common/types";
 import { invalidateCache } from "./state";
+import { eventMessage } from "../dashboard-socket-protocol";
 
 type Variables = { principalId: string; principalKey: PrincipalKey };
 
@@ -58,6 +59,8 @@ ingestRoutes.post("/api/ingest", requireApiKey, async (c) => {
 
   const db = c.env.GROVE_DB;
   const activitySessionIds = new Set<string>();
+  // Events that committed this request — fanned to live dashboards after the response.
+  const broadcastable: IngestEvent[] = [];
 
   for (const event of body.events) {
     if (!event.event_id || !event.event_type || !event.session_id) {
@@ -77,6 +80,7 @@ ingestRoutes.post("/api/ingest", requireApiKey, async (c) => {
       }
 
       ingested++;
+      broadcastable.push(event);
     } catch {
       // INSERT OR IGNORE handles duplicates; other errors are skipped
       skipped++;
@@ -93,8 +97,36 @@ ingestRoutes.post("/api/ingest", requireApiKey, async (c) => {
     invalidateCache();
   }
 
+  // Live push: fan each committed event to connected dashboards via the
+  // DashboardSocket DO. Best-effort and off the response path (waitUntil) — a
+  // broadcast failure must never affect the ingest result.
+  if (broadcastable.length > 0) {
+    c.executionCtx.waitUntil(broadcastIngestedEvents(c.env, broadcastable));
+  }
+
   return c.json({ ok: true, ingested, skipped });
 });
+
+/**
+ * Fan committed events to live dashboard clients via the DashboardSocket DO.
+ * Mirrors the local bot's `broadcastEvent` ({type:"event", sessionId, event}).
+ * Never throws — a dead/absent DO must not surface to the ingesting bot.
+ */
+async function broadcastIngestedEvents(env: Env, events: IngestEvent[]): Promise<void> {
+  if (!env.DASHBOARD_SOCKET) return; // binding absent (e.g. bare local dev) — skip
+  const stub = env.DASHBOARD_SOCKET.get(env.DASHBOARD_SOCKET.idFromName("global"));
+  for (const event of events) {
+    try {
+      await stub.fetch("https://do/broadcast", {
+        method: "POST",
+        body: JSON.stringify({ message: eventMessage(event.session_id, event) }),
+      });
+    } catch (err) {
+      // Best-effort live push; log and continue. Ingest already succeeded.
+      console.error("[ingest] WS broadcast failed:", err instanceof Error ? err.message : String(err));
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // D1 persistence — maps ProcessedSessionEvent variants to D1 SQL
