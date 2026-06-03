@@ -66,6 +66,11 @@ export function getAttentionItem(db: Database, id: string): AttentionItem | null
 /**
  * Open items only, queue-ordered: critical → low, then oldest first (FIFO within
  * a severity). `critical|high|normal|low` isn't lexical, so order via a CASE rank.
+ *
+ * NB: idx_attention_status_severity serves the `status = 'open'` FILTER, not this
+ * CASE-rank sort (the index is on the raw severity string), so SQLite still sorts
+ * the open set — negligible at queue sizes; revisit with a numeric rank column if
+ * the open queue ever grows large.
  */
 export function listOpenAttention(db: Database): AttentionItem[] {
   const rows = db

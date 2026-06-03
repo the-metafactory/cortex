@@ -448,6 +448,10 @@ export const SCHEMA_SQL: string[] = [
   // tables): attention is a transient/derived projection, so when its target
   // entity churns the item survives with the link cleared rather than blocking
   // the delete. (stack_id is a plain key — no stacks table in the MC DB yet.)
+  // E.2/E.3 FOLLOW-UP: if SET NULL clears the LAST link of an open item (both
+  // work_item_id + session_id null), the producer/reconciler must auto-resolve
+  // or dismiss it — an open item with no deep-link target violates §7.4. Storage
+  // alone can't decide that; it's a producer responsibility.
   `CREATE TABLE IF NOT EXISTS attention_items (
     id TEXT PRIMARY KEY,
     stack_id TEXT NOT NULL,

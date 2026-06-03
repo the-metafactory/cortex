@@ -51,16 +51,41 @@ describe("attention storage (E.1)", () => {
     upsertPlanPhase(db, phase);
     upsertWorkItem(db, wi);
   }
+  /** Seed the agents→tasks→assignment→sessions FK chain; returns the session id. */
+  function seedSession(db: ReturnType<typeof initDatabase>): string {
+    db.query(`INSERT INTO agents (id, name, type) VALUES ('ag-1', 'Echo', 'head')`).run();
+    db.query(
+      `INSERT INTO tasks (id, title, principal_id, source_system, status) VALUES ('tk-1', 'T', 'andreas', 'github', 'open')`
+    ).run();
+    db.query(
+      `INSERT INTO agent_task_assignment (id, agent_id, task_id, state) VALUES ('asg-1', 'ag-1', 'tk-1', 'running')`
+    ).run();
+    db.query(
+      `INSERT INTO sessions (id, assignment_id, endpoint_kind) VALUES ('sess-1', 'asg-1', 'local.observed')`
+    ).run();
+    return "sess-1";
+  }
 
-  it("round-trips an item + idempotent upsert", () => {
+  it("round-trips an item + idempotent upsert overwrites every mutable column", () => {
     const db = freshDb();
     seed(db);
     const item = att({});
     upsertAttentionItem(db, item);
     expect(getAttentionItem(db, "att-1")).toEqual(item);
-    upsertAttentionItem(db, { ...item, severity: "high" });
-    expect(getAttentionItem(db, "att-1")?.severity).toBe("high");
     expect(getAttentionItem(db, "nope")).toBeNull();
+    // Re-upsert the SAME id with a fully different record — proves the ON
+    // CONFLICT clause overwrites every mutable column (not just one).
+    const changed = att({
+      id: "att-1",
+      stackId: "clawbox",
+      workItemId: null,
+      sessionId: null,
+      kind: "review",
+      severity: "high",
+      status: "resolved",
+    });
+    upsertAttentionItem(db, changed);
+    expect(getAttentionItem(db, "att-1")).toEqual(changed);
   });
 
   it("CHECK rejects out-of-vocabulary kind / severity / status", () => {
@@ -105,5 +130,19 @@ describe("attention storage (E.1)", () => {
     const item = getAttentionItem(db, "a-1");
     expect(item).not.toBeNull();
     expect(item?.workItemId).toBeNull();
+  });
+
+  it("FK SET NULL: deleting the linked session clears session_id, keeps the item", () => {
+    const db = freshDb();
+    seed(db);
+    const sessionId = seedSession(db);
+    // The session is the PRIMARY link for this 'blocked' item (no work item).
+    upsertAttentionItem(db, att({ id: "a-1", workItemId: null, sessionId, kind: "blocked" }));
+    // Sessions cascade-delete with their assignment in production — deleting the
+    // session must clear the link (SET NULL), not block the delete or drop the item.
+    db.query(`DELETE FROM sessions WHERE id = ?`).run(sessionId);
+    const item = getAttentionItem(db, "a-1");
+    expect(item).not.toBeNull();
+    expect(item?.sessionId).toBeNull();
   });
 });
