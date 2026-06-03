@@ -96,11 +96,15 @@ function readLogicalRouting(envelope: Envelope): WireLogicalRouting | null {
 
 const LIFECYCLE_TYPE_PREFIX = "dispatch.task.";
 const VERDICT_TYPE_PREFIX = "review.verdict.";
+// G-1113.ML.4 — the attention notification stream (system.attention.{opened,resolved}).
+const ATTENTION_TYPE_PREFIX = "system.attention.";
 
 /** True for the envelope types the review sink acts on. */
 function isReviewSinkType(type: string): boolean {
   return (
-    type.startsWith(LIFECYCLE_TYPE_PREFIX) || type.startsWith(VERDICT_TYPE_PREFIX)
+    type.startsWith(LIFECYCLE_TYPE_PREFIX) ||
+    type.startsWith(VERDICT_TYPE_PREFIX) ||
+    type.startsWith(ATTENTION_TYPE_PREFIX)
   );
 }
 
@@ -126,6 +130,14 @@ export interface ReviewSinkOptions {
   principal: string;
   /** Optional `{stack}` segment (the 6-segment grammar). */
   stack?: string;
+  /**
+   * G-1113.ML.4 — destination for attention notifications. Unlike verdicts
+   * (which reply to the request's `response_routing`), attention items are
+   * unsolicited, so the sink needs a configured channel. When omitted,
+   * `system.attention.*` envelopes are ignored (no destination — matching the
+   * missing-`response_routing` behaviour for verdicts).
+   */
+  attentionRouting?: WireLogicalRouting;
 }
 
 export interface ReviewSink {
@@ -147,7 +159,8 @@ export interface ReviewSink {
  */
 function reviewSubjects(principal: string, stack?: string): string[] {
   const base = stack === undefined ? `local.${principal}` : `local.${principal}.${stack}`;
-  return [`${base}.dispatch.task.>`, `${base}.review.verdict.>`];
+  // G-1113.ML.4 — also the attention stream (same `local` classification).
+  return [`${base}.dispatch.task.>`, `${base}.review.verdict.>`, `${base}.system.attention.>`];
 }
 
 /**
@@ -157,6 +170,16 @@ function reviewSubjects(principal: string, stack?: string): string[] {
  * be posted.
  */
 function renderText(envelope: Envelope): string | null {
+  // G-1113.ML.4 — attention notifications render their deterministic
+  // `presentation` verbatim (built in code by E.4 / ML.3, never an LLM token).
+  // No reviewer mention — an attention item is an unsolicited signal, not a reply.
+  if (envelope.type.startsWith(ATTENTION_TYPE_PREFIX)) {
+    const presentation =
+      typeof envelope.payload.presentation === "string"
+        ? envelope.payload.presentation.trim()
+        : "";
+    return presentation.length > 0 ? presentation : null;
+  }
   if (envelope.type.startsWith(VERDICT_TYPE_PREFIX)) {
     // cortex#503 — surfaces render ONLY the deterministic `presentation`
     // markdown when cortex stamped it (verbatim, never a JSON dump). The
@@ -218,7 +241,7 @@ function reviewingAgentId(envelope: Envelope): string | null {
  * Create a review sink. Wires nothing until `start()` is called.
  */
 export function createReviewSink(opts: ReviewSinkOptions): ReviewSink {
-  const { runtime, adapters, principal, stack } = opts;
+  const { runtime, adapters, principal, stack, attentionRouting } = opts;
   const subjects = reviewSubjects(principal, stack);
 
   let registration: { unregister: () => void } | null = null;
@@ -289,8 +312,14 @@ export function createReviewSink(opts: ReviewSinkOptions): ReviewSink {
   async function deliver(envelope: Envelope): Promise<void> {
     if (!isReviewSinkType(envelope.type)) return;
 
-    const routing = readLogicalRouting(envelope);
-    if (routing === null) return; // pilot-only / bus-peer / Offer / malformed.
+    // Attention notifications carry no `response_routing` (they're unsolicited);
+    // they route to the configured `attentionRouting`. Verdict/lifecycle keep
+    // their reply-to routing. An attention envelope MAY still carry its own
+    // response_routing (forward-compat) — prefer it when present.
+    const routing =
+      readLogicalRouting(envelope) ??
+      (envelope.type.startsWith(ATTENTION_TYPE_PREFIX) ? attentionRouting ?? null : null);
+    if (routing === null) return; // pilot-only / bus-peer / Offer / malformed / unconfigured attention.
 
     const text = renderText(envelope);
     if (text === null || text.length === 0) return;

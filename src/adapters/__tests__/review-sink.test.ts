@@ -119,10 +119,12 @@ describe("review-sink — subscription", () => {
     expect(sink.subjects).toEqual([
       "local.metafactory.dispatch.task.>",
       "local.metafactory.review.verdict.>",
+      "local.metafactory.system.attention.>",
     ]);
     expect(subscribedPatterns).toEqual([
       "local.metafactory.dispatch.task.>",
       "local.metafactory.review.verdict.>",
+      "local.metafactory.system.attention.>",
     ]);
   });
 
@@ -138,6 +140,7 @@ describe("review-sink — subscription", () => {
     expect(subscribedPatterns).toEqual([
       "local.andreas.meta-factory.dispatch.task.>",
       "local.andreas.meta-factory.review.verdict.>",
+      "local.andreas.meta-factory.system.attention.>",
     ]);
   });
 
@@ -146,7 +149,7 @@ describe("review-sink — subscription", () => {
     const sink = createReviewSink({ runtime, adapters: [], principal: "metafactory" });
     await sink.start();
     await sink.start();
-    expect(subscribedPatterns).toHaveLength(2);
+    expect(subscribedPatterns).toHaveLength(3);
     await sink.stop();
     await sink.stop();
     expect(subscribers.every((s) => s.stopped)).toBe(true);
@@ -627,5 +630,58 @@ describe("review-sink — cortex#503 presentation rendering", () => {
 
     // Exactly ONE post despite two deliveries.
     expect(adapter.sentMessages).toHaveLength(1);
+  });
+});
+
+describe("review-sink — attention delivery (ML.4)", () => {
+  const attnPayload = (presentation: string) => ({
+    attention: { id: "att:stale:wi-1", stack_id: "laptop", kind: "stale", severity: "low", work_item_id: "wi-1", session_id: null },
+    deep_link_url: "https://cortex.meta-factory.ai/work-items/wi-1",
+    presentation,
+  });
+
+  test("posts the deterministic presentation to the configured attention channel", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({
+      runtime,
+      adapters: [adapter],
+      principal: "metafactory",
+      attentionRouting: logicalRouting("discord", "attention"),
+    });
+    await sink.start();
+
+    trigger(envelope("system.attention.opened", attnPayload("[low] stale needs attention — https://x/wi-1")));
+    await flushMicrotasks();
+
+    // Routed to the CONFIGURED attention channel (no response_routing on the envelope).
+    expect(adapter.logicalTargetsResolved).toEqual([{ surface: "discord", channel: "attention" }]);
+    expect(adapter.sentMessages).toHaveLength(1);
+    // Posts the presentation verbatim (no @reviewer ping — attention isn't a reply).
+    expect(adapter.sentMessages[0]!.text).toBe("[low] stale needs attention — https://x/wi-1");
+    expect(adapter.sentMessages[0]!.text).not.toContain("@");
+  });
+
+  test("ignored when no attentionRouting is configured (no destination)", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+    trigger(envelope("system.attention.resolved", attnPayload("[low] stale cleared")));
+    await flushMicrotasks();
+    expect(adapter.sentMessages).toHaveLength(0);
+  });
+
+  test("an envelope with no presentation is not posted", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({
+      runtime, adapters: [adapter], principal: "metafactory",
+      attentionRouting: logicalRouting("discord", "attention"),
+    });
+    await sink.start();
+    trigger(envelope("system.attention.opened", { attention: {}, deep_link_url: null }));
+    await flushMicrotasks();
+    expect(adapter.sentMessages).toHaveLength(0);
   });
 });
