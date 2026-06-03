@@ -74,4 +74,16 @@ describe("attentionNotificationEnvelope (E.4)", () => {
     expect((published[0]?.payload as { deep_link_url: string }).deep_link_url).toBe("https://x/wi-1");
     expect((published[1]?.payload as { deep_link_url: string }).deep_link_url).toBe("https://x/wi-2");
   });
+
+  it("publishAttentionNotifications falls back to opts.deepLinkUrl when deepLinkFor is absent", async () => {
+    const published: Envelope[] = [];
+    await publishAttentionNotifications(
+      [item({ id: "a-1" })],
+      "opened",
+      { source, deepLinkUrl: "https://fixed/link" }, // no deepLinkFor
+      (env) => { published.push(env); }
+    );
+    expect((published[0]?.payload as { deep_link_url: string }).deep_link_url).toBe("https://fixed/link");
+    expect((published[0]?.payload as { presentation: string }).presentation).toContain("https://fixed/link");
+  });
 });

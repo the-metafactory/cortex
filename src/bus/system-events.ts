@@ -87,7 +87,7 @@ export interface SystemEventSource {
   dataResidency?: string;
 }
 
-function buildSource(src: SystemEventSource): string {
+export function buildSource(src: SystemEventSource): string {
   return `${src.principal}.${src.agent}.${src.instance}`;
 }
 
@@ -108,7 +108,7 @@ function buildSource(src: SystemEventSource): string {
  * envelope's reach. The default keeps every existing call site behaving
  * identically.
  */
-function defaultSystemSovereignty(
+export function defaultSystemSovereignty(
   source: SystemEventSource,
   classification: Classification = "local",
 ): Envelope["sovereignty"] {
