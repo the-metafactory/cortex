@@ -379,6 +379,36 @@ export interface WorkItem {
   url: string | null;
 }
 
+// --- Attention (G-1113.E — design §6 / §7.4) ---
+
+export type AttentionKind =
+  | "input_needed"
+  | "permission"
+  | "review"
+  | "failed_dispatch"
+  | "stale"
+  | "blocked";
+export type AttentionSeverity = "low" | "normal" | "high" | "critical";
+export type AttentionStatus = "open" | "resolved" | "dismissed";
+
+/**
+ * One item in the cross-cutting attention queue (design §6 / §7.4) — something
+ * that needs principal action. `workItemId` / `sessionId` are the direct
+ * deep-link targets; plan / phase / PR deep-links derive through the work item
+ * (resolved in the E.3 UI). `kind` producers are wired in E.2; notification
+ * routing is E.4. Lifecycle: `open` → `resolved` (condition cleared) | `dismissed`.
+ */
+export interface AttentionItem {
+  id: string;
+  /** Stack/deployment the item belongs to (multi-stack federation). */
+  stackId: string;
+  workItemId: string | null;
+  sessionId: string | null;
+  kind: AttentionKind;
+  severity: AttentionSeverity;
+  status: AttentionStatus;
+}
+
 export interface Task {
   id: string;
   title: string;

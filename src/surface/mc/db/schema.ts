@@ -25,6 +25,7 @@ export const TABLE_NAMES = [
   "plans",
   "plan_phases",
   "work_items",
+  "attention_items",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
@@ -439,6 +440,33 @@ export const SCHEMA_SQL: string[] = [
   // Work-item lookup by phase (phase detail, D.4) and by plan.
   `CREATE INDEX IF NOT EXISTS idx_work_items_phase ON work_items(phase_id)`,
   `CREATE INDEX IF NOT EXISTS idx_work_items_plan ON work_items(plan_id)`,
+
+  // --- attention_items (G-1113.E.1 — design §6 / §7.4) ---
+  // The cross-cutting attention queue. kind/severity/status are CHECK-bounded
+  // closed enums (cast in the mapper). work_item_id / session_id are the
+  // deep-link targets — FK ON DELETE SET NULL (NOT RESTRICT like the plan/work
+  // tables): attention is a transient/derived projection, so when its target
+  // entity churns the item survives with the link cleared rather than blocking
+  // the delete. (stack_id is a plain key — no stacks table in the MC DB yet.)
+  `CREATE TABLE IF NOT EXISTS attention_items (
+    id TEXT PRIMARY KEY,
+    stack_id TEXT NOT NULL,
+    work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
+    session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+    kind TEXT NOT NULL
+      CHECK(kind IN ('input_needed','permission','review','failed_dispatch','stale','blocked')),
+    severity TEXT NOT NULL DEFAULT 'normal'
+      CHECK(severity IN ('low','normal','high','critical')),
+    status TEXT NOT NULL DEFAULT 'open'
+      CHECK(status IN ('open','resolved','dismissed')),
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+
+  // Queue query: open items first, by severity. Plus work-item lookup.
+  `CREATE INDEX IF NOT EXISTS idx_attention_status_severity
+     ON attention_items(status, severity)`,
+  `CREATE INDEX IF NOT EXISTS idx_attention_work_item ON attention_items(work_item_id)`,
 ];
 
 /**
