@@ -95,11 +95,14 @@ import {
   DEFAULT_ITERATION_LABEL,
   importIterationFromMetadata,
   importSubIssueFromMetadata,
+  parentRef,
+} from "./iteration-import";
+// D.7b — the GitHub webhook/response parsers live behind the adapter boundary.
+import {
   parentMetadataFromGhResponse,
   parentMetadataFromWebhook,
-  parentRef,
   subIssueRefsFromWebhook,
-} from "./iteration-import";
+} from "../adapters/github";
 import { applyTransition } from "../db/transitions";
 import {
   computeAssignmentMetrics,

@@ -33,14 +33,17 @@ import {
   hasIterationLabel,
   importIterationFromMetadata,
   importSubIssueFromMetadata,
-  parentMetadataFromGhResponse,
-  parentMetadataFromWebhook,
   parentRef,
-  subIssueRefsFromWebhook,
   truncateToBytes,
   type ParentIssueMetadata,
   type SubIssueMetadata,
 } from "../api/iteration-import";
+// D.7b — GitHub payload parsers moved behind the adapter boundary.
+import {
+  parentMetadataFromGhResponse,
+  parentMetadataFromWebhook,
+  subIssueRefsFromWebhook,
+} from "../adapters/github";
 
 interface H {
   db: Database;
