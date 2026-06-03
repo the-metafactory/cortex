@@ -684,4 +684,41 @@ describe("review-sink — attention delivery (ML.4)", () => {
     await flushMicrotasks();
     expect(adapter.sentMessages).toHaveLength(0);
   });
+
+  test("attentionRouting must NOT rescue a non-attention envelope with no response_routing", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({
+      runtime, adapters: [adapter], principal: "metafactory",
+      attentionRouting: logicalRouting("discord", "attention"),
+    });
+    await sink.start();
+    // A verdict with NO response_routing (pilot-only/Offer) must stay ignored —
+    // attentionRouting is for system.attention.* only, never verdict/lifecycle.
+    trigger(envelope("review.verdict.approved", verdictPayload({ verdict: "approved" })));
+    await flushMicrotasks();
+    expect(adapter.sentMessages).toHaveLength(0);
+  });
+
+  test("an attention envelope's own response_routing wins over attentionRouting", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({
+      runtime, adapters: [adapter], principal: "metafactory",
+      attentionRouting: logicalRouting("discord", "attention"),
+    });
+    await sink.start();
+    trigger(
+      envelope("system.attention.opened", {
+        attention: { id: "att:stale:wi-1" },
+        deep_link_url: null,
+        presentation: "[low] stale needs attention",
+        response_routing: logicalRouting("discord", "ops", "ops/thread"),
+      })
+    );
+    await flushMicrotasks();
+    // Routed to the envelope's own response_routing, not the configured default.
+    expect(adapter.logicalTargetsResolved).toEqual([{ surface: "discord", channel: "ops", thread: "ops/thread" }]);
+    expect(adapter.sentMessages).toHaveLength(1);
+  });
 });
