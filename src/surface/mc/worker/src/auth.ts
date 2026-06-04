@@ -69,19 +69,19 @@ export async function requireApiKey(c: Context<{ Bindings: Env; Variables: { pri
   const auth = c.req.header("Authorization");
 
   if (!auth || !auth.startsWith("Bearer ")) {
-    logAuditEvent(c.env.GROVE_DB, { eventType: "api_key_auth", result: "failure", ip, endpoint, method, detail: "missing bearer header" });
+    logAuditEvent(c.env.CORTEX_DB, { eventType: "api_key_auth", result: "failure", ip, endpoint, method, detail: "missing bearer header" });
     return c.json({ error: "missing Authorization: Bearer header" }, 401);
   }
 
   const token = auth.slice(7);
   if (!token) {
-    logAuditEvent(c.env.GROVE_DB, { eventType: "api_key_auth", result: "failure", ip, endpoint, method, detail: "empty token" });
+    logAuditEvent(c.env.CORTEX_DB, { eventType: "api_key_auth", result: "failure", ip, endpoint, method, detail: "empty token" });
     return c.json({ error: "empty bearer token" }, 401);
   }
 
-  const keyData = await c.env.GROVE_KEYS.get(token, "json") as PrincipalKey | null;
+  const keyData = await c.env.CORTEX_KEYS.get(token, "json") as PrincipalKey | null;
   if (!keyData) {
-    logAuditEvent(c.env.GROVE_DB, { eventType: "api_key_auth", result: "failure", ip, endpoint, method, detail: "invalid or revoked key" });
+    logAuditEvent(c.env.CORTEX_DB, { eventType: "api_key_auth", result: "failure", ip, endpoint, method, detail: "invalid or revoked key" });
     return c.json({ error: "invalid or revoked API key" }, 401);
   }
 
@@ -90,10 +90,10 @@ export async function requireApiKey(c: Context<{ Bindings: Env; Variables: { pri
   // empty principal that ingest would then trust as the attribution identity.
   const principalId = keyData.principal_id;
   if (!principalId) {
-    logAuditEvent(c.env.GROVE_DB, { eventType: "api_key_auth", result: "failure", ip, endpoint, method, detail: "key missing principal_id" });
+    logAuditEvent(c.env.CORTEX_DB, { eventType: "api_key_auth", result: "failure", ip, endpoint, method, detail: "key missing principal_id" });
     return c.json({ error: "API key missing principal identity" }, 401);
   }
-  logAuditEvent(c.env.GROVE_DB, { eventType: "api_key_auth", result: "success", ip, endpoint, method, identity: principalId });
+  logAuditEvent(c.env.CORTEX_DB, { eventType: "api_key_auth", result: "success", ip, endpoint, method, identity: principalId });
   c.set("principalId", principalId);
   c.set("principalKey", keyData);
   await next();
@@ -109,18 +109,18 @@ export async function requireAdmin(c: Context<{ Bindings: Env }>, next: Next) {
   const auth = c.req.header("Authorization");
 
   if (!auth || !auth.startsWith("Bearer ")) {
-    logAuditEvent(c.env.GROVE_DB, { eventType: "admin_auth", result: "failure", ip, endpoint, method, detail: "missing bearer header" });
+    logAuditEvent(c.env.CORTEX_DB, { eventType: "admin_auth", result: "failure", ip, endpoint, method, detail: "missing bearer header" });
     return c.json({ error: "missing Authorization: Bearer header" }, 401);
   }
 
   const token = auth.slice(7);
   const adminSecret = c.env.ADMIN_SECRET;
   if (!adminSecret || token !== adminSecret) {
-    logAuditEvent(c.env.GROVE_DB, { eventType: "admin_auth", result: "failure", ip, endpoint, method, detail: "invalid admin secret" });
+    logAuditEvent(c.env.CORTEX_DB, { eventType: "admin_auth", result: "failure", ip, endpoint, method, detail: "invalid admin secret" });
     return c.json({ error: "unauthorized" }, 403);
   }
 
-  logAuditEvent(c.env.GROVE_DB, { eventType: "admin_auth", result: "success", ip, endpoint, method, identity: "admin" });
+  logAuditEvent(c.env.CORTEX_DB, { eventType: "admin_auth", result: "success", ip, endpoint, method, identity: "admin" });
   await next();
 }
 
@@ -252,19 +252,19 @@ export async function requireCfAccess(c: Context<{ Bindings: Env; Variables: { c
   const token = match?.[1];
 
   if (!token) {
-    logAuditEvent(c.env.GROVE_DB, { eventType: "cf_access_auth", result: "failure", ip, endpoint, method, detail: "no CF_Authorization cookie" });
+    logAuditEvent(c.env.CORTEX_DB, { eventType: "cf_access_auth", result: "failure", ip, endpoint, method, detail: "no CF_Authorization cookie" });
     return c.json({ error: "authentication required" }, 403);
   }
 
   const payload = await validateCfAccessJwt(token, audience);
   if (!payload) {
-    logAuditEvent(c.env.GROVE_DB, { eventType: "cf_access_auth", result: "failure", ip, endpoint, method, detail: "invalid or expired JWT" });
+    logAuditEvent(c.env.CORTEX_DB, { eventType: "cf_access_auth", result: "failure", ip, endpoint, method, detail: "invalid or expired JWT" });
     return c.json({ error: "invalid or expired access token" }, 403);
   }
 
   // Attach identity to context for downstream use
   const email = (payload.email as string) ?? "unknown";
-  logAuditEvent(c.env.GROVE_DB, { eventType: "cf_access_auth", result: "success", ip, endpoint, method, identity: email });
+  logAuditEvent(c.env.CORTEX_DB, { eventType: "cf_access_auth", result: "success", ip, endpoint, method, identity: email });
   c.set("cfAccessEmail", email);
   await next();
 }

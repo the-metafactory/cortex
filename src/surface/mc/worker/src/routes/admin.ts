@@ -50,7 +50,7 @@ adminRoutes.post("/admin/keys", requireAdmin, async (c) => {
   };
 
   // Store in KV (key as key, metadata as value)
-  await c.env.GROVE_KEYS.put(key, JSON.stringify(keyData));
+  await c.env.CORTEX_KEYS.put(key, JSON.stringify(keyData));
 
   return c.json({
     key,
@@ -65,7 +65,7 @@ adminRoutes.post("/admin/keys", requireAdmin, async (c) => {
 // ---------------------------------------------------------------------------
 
 adminRoutes.get("/admin/audit", requireRole("admin"), async (c) => {
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
   const limit = Math.min(parseInt(c.req.query("limit") ?? "100"), 500);
   const eventType = c.req.query("type"); // Optional filter: api_key_auth, admin_auth, cf_access_auth
   const resultFilter = c.req.query("result"); // Optional filter: success, failure
@@ -105,12 +105,12 @@ adminRoutes.delete("/admin/keys/:key", requireAdmin, async (c) => {
   }
 
   // Check if key exists
-  const existing = await c.env.GROVE_KEYS.get(key);
+  const existing = await c.env.CORTEX_KEYS.get(key);
   if (!existing) {
     return c.json({ error: "key not found" }, 404);
   }
 
-  await c.env.GROVE_KEYS.delete(key);
+  await c.env.CORTEX_KEYS.delete(key);
 
   return c.json({ ok: true, revoked: key });
 });
@@ -127,7 +127,7 @@ adminRoutes.delete("/admin/repos/:owner/:name", requireAdmin, async (c) => {
   }
 
   const fullName = `${owner}/${name}`;
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
 
   // Delete from all tables that reference this repo
   const results = await db.batch([

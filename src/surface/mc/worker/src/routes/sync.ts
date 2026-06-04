@@ -24,7 +24,7 @@ syncRoutes.post("/api/sync", requireApiKey, async (c) => {
     return c.json({ error: "GITHUB_REPOS not configured" }, 503);
   }
 
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
   const totals = { repos: 0, issues: 0, prs: 0, releases: 0, commits: 0 };
 
   for (const repoFullName of reposConfig) {

@@ -18,7 +18,7 @@ export const repoRoutes = new Hono<{ Bindings: Env }>();
 // ---------------------------------------------------------------------------
 
 repoRoutes.get("/api/repos", async (c) => {
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
 
   const { results } = await db.prepare(`
     SELECT r.full_name, r.short_name, r.description, r.default_branch, r.synced_at,
@@ -50,7 +50,7 @@ repoRoutes.get("/api/repos", async (c) => {
 // ---------------------------------------------------------------------------
 
 repoRoutes.get("/api/repos/:name/issues", async (c) => {
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
   const repoName = c.req.param("name");
   const state = c.req.query("state") as "open" | "closed" | undefined;
 
@@ -93,7 +93,7 @@ repoRoutes.get("/api/repos/:name/issues", async (c) => {
 // ---------------------------------------------------------------------------
 
 repoRoutes.get("/api/repos/:name/pulls", async (c) => {
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
   const repoName = c.req.param("name");
   const state = c.req.query("state") as "open" | "closed" | "merged" | undefined;
 
@@ -138,7 +138,7 @@ repoRoutes.get("/api/repos/:name/pulls", async (c) => {
 // ---------------------------------------------------------------------------
 
 repoRoutes.get("/api/repos/:name/pulls/:n/comments", async (c) => {
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
   const repoName = c.req.param("name");
   const prNumber = parseInt(c.req.param("n"));
 

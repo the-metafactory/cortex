@@ -30,7 +30,7 @@ export async function authenticateUser(
   if (!email) {
     return { ok: false, error: "no CF Access identity" };
   }
-  const user = await getUserByEmail(env.GROVE_DB, email);
+  const user = await getUserByEmail(env.CORTEX_DB, email);
   if (!user) {
     return { ok: false, error: "user not provisioned", email };
   }
@@ -52,14 +52,14 @@ export function requireAuth() {
 
     const auth = await authenticateUser(c.env, c.req);
     if (!auth.ok) {
-      logAuditEvent(c.env.GROVE_DB, {
+      logAuditEvent(c.env.CORTEX_DB, {
         eventType: "auth", result: "failure", ip, endpoint, method,
         identity: auth.email, detail: auth.error,
       });
       return c.json({ error: "authentication required" }, 401);
     }
 
-    logAuditEvent(c.env.GROVE_DB, {
+    logAuditEvent(c.env.CORTEX_DB, {
       eventType: "auth", result: "success", ip, endpoint, method,
       identity: auth.email,
     });

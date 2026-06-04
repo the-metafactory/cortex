@@ -46,6 +46,6 @@ export interface GrantRecord {
  * The consuming Worker's Env must extend this.
  */
 export interface AuthBindings {
-  GROVE_DB: D1Database;
+  CORTEX_DB: D1Database;
   CF_ACCESS_AUD: string;
 }

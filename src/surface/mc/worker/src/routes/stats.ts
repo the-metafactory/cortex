@@ -10,7 +10,7 @@ import type { Env } from "../index";
 export const statsRoutes = new Hono<{ Bindings: Env }>();
 
 statsRoutes.get("/api/stats/activity", async (c) => {
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
   const days = Math.min(parseInt(c.req.query("days") ?? "7"), 90);
 
   const now = new Date();

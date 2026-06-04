@@ -57,7 +57,7 @@ ingestRoutes.post("/api/ingest", requireApiKey, async (c) => {
   let ingested = 0;
   let skipped = 0;
 
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
   const activitySessionIds = new Set<string>();
   // Events that committed this request — fanned to live dashboards after the response.
   const broadcastable: IngestEvent[] = [];

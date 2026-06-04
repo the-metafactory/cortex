@@ -34,7 +34,7 @@ export function requireAgentAccess(requiredScope: GrantScope) {
     }
 
     // Single query: fetch agent + best matching grant in one round-trip
-    const row = await c.env.GROVE_DB.prepare(`
+    const row = await c.env.CORTEX_DB.prepare(`
       SELECT
         a.id AS agent_id,
         a.owner_id,
@@ -58,7 +58,7 @@ export function requireAgentAccess(requiredScope: GrantScope) {
     }>();
 
     if (!row) {
-      logAuditEvent(c.env.GROVE_DB, {
+      logAuditEvent(c.env.CORTEX_DB, {
         eventType: "agent_access", result: "failure", ip, endpoint, method,
         identity: user.email, detail: `agent ${agentId} not found`,
       });
@@ -75,7 +75,7 @@ export function requireAgentAccess(requiredScope: GrantScope) {
     });
 
     if (!result.allowed) {
-      logAuditEvent(c.env.GROVE_DB, {
+      logAuditEvent(c.env.CORTEX_DB, {
         eventType: "agent_access", result: "failure", ip, endpoint, method,
         identity: user.email,
         detail: `no_agent_access: agent=${agentId}, required=${requiredScope}, available=${result.availableScope ?? "none"}`,
@@ -88,7 +88,7 @@ export function requireAgentAccess(requiredScope: GrantScope) {
       }, 403);
     }
 
-    logAuditEvent(c.env.GROVE_DB, {
+    logAuditEvent(c.env.CORTEX_DB, {
       eventType: "agent_access", result: "success", ip, endpoint, method,
       identity: user.email,
       detail: `agent=${agentId}, scope=${requiredScope}, resolution=${result.resolution}, available=${result.availableScope}`,

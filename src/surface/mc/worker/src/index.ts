@@ -19,7 +19,7 @@ import { dashboardRoutes } from "./routes/dashboard";
 import { DashboardSocket } from "./dashboard-socket";
 
 export interface Env extends AuthBindings {
-  GROVE_KEYS: KVNamespace;
+  CORTEX_KEYS: KVNamespace;
   ADMIN_SECRET: string;
   GITHUB_WEBHOOK_SECRET: string;
   GITHUB_TOKEN: string;
@@ -73,7 +73,7 @@ app.get("/api/health", (c) => {
 
 // H-002: Pipeline health — cloud version (no relay, just last-event stats from D1)
 app.get("/api/pipeline/health", async (c) => {
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
   const row = await db.prepare(`
     SELECT MAX(last_event_at) as last_event_at, COUNT(*) as active_sessions
     FROM sessions WHERE status = 'active'

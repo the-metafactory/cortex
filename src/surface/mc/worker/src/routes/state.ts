@@ -206,7 +206,7 @@ export async function getCachedSnapshot(db: D1Database): Promise<{ json: string;
 export const stateRoutes = new Hono<{ Bindings: Env }>();
 
 stateRoutes.get("/api/state", async (c) => {
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
   const project = c.req.query("project");
   // IAW D.5.2 — `?home_principal=<id>` slices the snapshot to a single
   // originating principal. Sentinel `"local"` means "null home_principal

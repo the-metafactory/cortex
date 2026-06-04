@@ -52,7 +52,7 @@ async function resolveAgentAccess(
 ): Promise<{ agent: AgentRecord } | Response> {
   const user = c.get("user");
   const agentId = c.req.param("agentId");
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
 
   const agent = await db.prepare("SELECT * FROM agents WHERE id = ?").bind(agentId).first<AgentRecord>();
   if (!agent) {
@@ -77,7 +77,7 @@ async function resolveAgentAccess(
   });
 
   if (!access.allowed) {
-    logAuditEvent(c.env.GROVE_DB, {
+    logAuditEvent(c.env.CORTEX_DB, {
       eventType: "agent_access", result: "failure",
       ip: getClientIp(c), endpoint: new URL(c.req.url).pathname, method: c.req.method,
       identity: user.email,
@@ -103,7 +103,7 @@ authRoutes.use("/api/auth/*", requireAuth());
 
 authRoutes.get("/api/auth/me", async (c) => {
   const user = c.get("user");
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
 
   const [ownedAgents, receivedGrants, givenGrants] = await Promise.all([
     db.prepare("SELECT * FROM agents WHERE owner_id = ?").bind(user.id).all(),
@@ -138,7 +138,7 @@ authRoutes.get("/api/auth/users", async (c) => {
   const user = c.get("user");
   const result = checkRole(user.role, "admin");
   if (!result.allowed) {
-    logAuditEvent(c.env.GROVE_DB, {
+    logAuditEvent(c.env.CORTEX_DB, {
       eventType: "role_check", result: "failure",
       ip: getClientIp(c), endpoint: new URL(c.req.url).pathname, method: "GET",
       identity: user.email,
@@ -148,7 +148,7 @@ authRoutes.get("/api/auth/users", async (c) => {
   }
 
   const { limit, offset } = parsePagination(c);
-  const users = await c.env.GROVE_DB.prepare(
+  const users = await c.env.CORTEX_DB.prepare(
     "SELECT * FROM users ORDER BY created_at LIMIT ? OFFSET ?",
   ).bind(limit, offset).all();
   return c.json({ users: users.results, limit, offset });
@@ -162,7 +162,7 @@ authRoutes.put("/api/auth/users/:id/role", async (c) => {
   const caller = c.get("user");
   const result = checkRole(caller.role, "admin");
   if (!result.allowed) {
-    logAuditEvent(c.env.GROVE_DB, {
+    logAuditEvent(c.env.CORTEX_DB, {
       eventType: "role_check", result: "failure",
       ip: getClientIp(c), endpoint: new URL(c.req.url).pathname, method: "PUT",
       identity: caller.email,
@@ -177,7 +177,7 @@ authRoutes.put("/api/auth/users/:id/role", async (c) => {
     return c.json({ error: "invalid role", valid: ["viewer", "operator", "admin"] }, 400);
   }
 
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
   const target = await db.prepare("SELECT * FROM users WHERE id = ?").bind(targetId).first<UserRecord>();
   if (!target) {
     return c.json({ error: "user_not_found", id: targetId }, 404);
@@ -213,7 +213,7 @@ authRoutes.put("/api/auth/users/:id/role", async (c) => {
 
 authRoutes.get("/api/auth/agents", async (c) => {
   const user = c.get("user");
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
 
   if (user.role === "admin") {
     const { limit, offset } = parsePagination(c);
@@ -252,7 +252,7 @@ authRoutes.get("/api/auth/agents/:agentId", async (c) => {
   const { agent } = result;
 
   const agentId = c.req.param("agentId");
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
 
   const [grants, owner] = await Promise.all([
     db.prepare(`
@@ -275,7 +275,7 @@ authRoutes.get("/api/auth/agents/:agentId", async (c) => {
 authRoutes.post("/api/auth/agents/:agentId/grants", async (c) => {
   const caller = c.get("user");
   const agentId = c.req.param("agentId");
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
 
   const agent = await db.prepare("SELECT * FROM agents WHERE id = ?").bind(agentId).first<AgentRecord>();
   if (!agent) {
@@ -355,7 +355,7 @@ authRoutes.get("/api/auth/agents/:agentId/grants", async (c) => {
   if (result instanceof Response) return result;
 
   const agentId = c.req.param("agentId");
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
   const { limit, offset } = parsePagination(c);
 
   const grants = await db.prepare(`
@@ -376,7 +376,7 @@ authRoutes.get("/api/auth/agents/:agentId/grants", async (c) => {
 authRoutes.delete("/api/auth/grants/:grantId", async (c) => {
   const caller = c.get("user");
   const grantId = c.req.param("grantId");
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
 
   const grant = await db.prepare(
     "SELECT * FROM agent_grants WHERE id = ?",

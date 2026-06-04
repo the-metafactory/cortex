@@ -11,7 +11,7 @@ import { getCachedSnapshot } from "./state";
 export const dashboardRoutes = new Hono<{ Bindings: Env }>();
 
 dashboardRoutes.get("/api/dashboard", async (c) => {
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
   const { json } = await getCachedSnapshot(db);
 
   return new Response(json, {

@@ -12,12 +12,12 @@ CORS_ORIGIN = "http://localhost:8766,http://localhost:8765"
 
 # Base bindings for local dev (wrangler dev uses these defaults)
 [[d1_databases]]
-binding = "GROVE_DB"
+binding = "CORTEX_DB"
 database_name = "grove-events-local"
 database_id = "placeholder-local-id"
 
 [[kv_namespaces]]
-binding = "GROVE_KEYS"
+binding = "CORTEX_KEYS"
 id = "placeholder-local-kv-id"
 
 # DashboardSocket DO — backs the dashboard WebSocket (/ws). Named environments
@@ -33,21 +33,21 @@ tag = "v1"
 new_sqlite_classes = ["DashboardSocket"]
 
 # ──────────────────────────────────────────────────────────────────
-# Environment: Development (grove-dev.meta-factory.{ai,dev,io})
+# Environment: Development (cortex-dev.meta-factory.{ai,dev,io})
 # ──────────────────────────────────────────────────────────────────
 [env.dev]
-name = "grove-api-dev"
+name = "cortex-api-dev"
 workers_dev = false
 routes = [
-  { pattern = "grove-dev.meta-factory.ai/api/*", zone_name = "meta-factory.ai" },
-  { pattern = "grove-dev.meta-factory.ai/admin/*", zone_name = "meta-factory.ai" },
-  { pattern = "grove-dev.meta-factory.ai/ws", zone_name = "meta-factory.ai" },
-  { pattern = "grove-dev.meta-factory.dev/api/*", zone_name = "meta-factory.dev" },
-  { pattern = "grove-dev.meta-factory.dev/admin/*", zone_name = "meta-factory.dev" },
-  { pattern = "grove-dev.meta-factory.dev/ws", zone_name = "meta-factory.dev" },
-  { pattern = "grove-dev.meta-factory.io/api/*", zone_name = "meta-factory.io" },
-  { pattern = "grove-dev.meta-factory.io/admin/*", zone_name = "meta-factory.io" },
-  { pattern = "grove-dev.meta-factory.io/ws", zone_name = "meta-factory.io" }
+  { pattern = "cortex-dev.meta-factory.ai/api/*", zone_name = "meta-factory.ai" },
+  { pattern = "cortex-dev.meta-factory.ai/admin/*", zone_name = "meta-factory.ai" },
+  { pattern = "cortex-dev.meta-factory.ai/ws", zone_name = "meta-factory.ai" },
+  { pattern = "cortex-dev.meta-factory.dev/api/*", zone_name = "meta-factory.dev" },
+  { pattern = "cortex-dev.meta-factory.dev/admin/*", zone_name = "meta-factory.dev" },
+  { pattern = "cortex-dev.meta-factory.dev/ws", zone_name = "meta-factory.dev" },
+  { pattern = "cortex-dev.meta-factory.io/api/*", zone_name = "meta-factory.io" },
+  { pattern = "cortex-dev.meta-factory.io/admin/*", zone_name = "meta-factory.io" },
+  { pattern = "cortex-dev.meta-factory.io/ws", zone_name = "meta-factory.io" }
 ]
 
 # DashboardSocket DO binding (dev) — env configs don't inherit the base binding.
@@ -56,19 +56,19 @@ name = "DASHBOARD_SOCKET"
 class_name = "DashboardSocket"
 
 [env.dev.vars]
-CORS_ORIGIN = "https://grove-dev.meta-factory.ai,https://grove-dev.meta-factory.dev,https://grove-dev.meta-factory.io,http://localhost:8766,http://localhost:8765"
+CORS_ORIGIN = "https://cortex-dev.meta-factory.ai,https://cortex-dev.meta-factory.dev,https://cortex-dev.meta-factory.io,http://localhost:8766,http://localhost:8765"
 ENVIRONMENT = "development"
 
-# Dev D1 (provisioned 2026-04-12, region OC)
+# Dev D1 (cortex-events-dev, provisioned 2026-06-04, region OC)
 [[env.dev.d1_databases]]
-binding = "GROVE_DB"
-database_name = "grove-events-dev"
-database_id = "761252d9-d553-4461-aae8-bbe32c16abce"
+binding = "CORTEX_DB"
+database_name = "cortex-events-dev"
+database_id = "44d8f835-cb8e-4c1e-b6ca-21572f44ba03"
 
-# Dev KV (provisioned 2026-04-12)
+# Dev KV (cortex-keys-dev, provisioned 2026-06-04)
 [[env.dev.kv_namespaces]]
-binding = "GROVE_KEYS"
-id = "f8de83818fc54d978609a0aab79ebbb7"
+binding = "CORTEX_KEYS"
+id = "078d4e580a8c4d39a431a19dde191102"
 
 # ──────────────────────────────────────────────────────────────────
 # Environment: Production (grove.meta-factory.{ai,dev,io})
@@ -117,13 +117,13 @@ ENVIRONMENT = "production"
 
 # Production D1 (existing)
 [[env.production.d1_databases]]
-binding = "GROVE_DB"
+binding = "CORTEX_DB"
 database_name = "grove-events"
 database_id = "bf59021b-5a65-46ef-a33a-37882294fcc0"
 
 # Production KV (existing)
 [[env.production.kv_namespaces]]
-binding = "GROVE_KEYS"
+binding = "CORTEX_KEYS"
 id = "b8b33e5ff1bd43c19efa8ceb91cb5337"
 
 # Secrets (set via wrangler secret put --env production):

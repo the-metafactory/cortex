@@ -26,7 +26,7 @@ export function requireRole(minRole: Role) {
 
     const auth = await authenticateUser(c.env, c.req);
     if (!auth.ok) {
-      logAuditEvent(c.env.GROVE_DB, {
+      logAuditEvent(c.env.CORTEX_DB, {
         eventType: "role_check", result: "failure", ip, endpoint, method,
         identity: auth.email, detail: auth.error,
       });
@@ -35,14 +35,14 @@ export function requireRole(minRole: Role) {
 
     const result = checkRole(auth.user.role, minRole);
     if (!result.allowed) {
-      logAuditEvent(c.env.GROVE_DB, {
+      logAuditEvent(c.env.CORTEX_DB, {
         eventType: "role_check", result: "failure", ip, endpoint, method,
         identity: auth.email, detail: `insufficient_role: has ${auth.user.role}, needs ${minRole}`,
       });
       return c.json({ error: result.error, required: result.required, current: result.current }, 403);
     }
 
-    logAuditEvent(c.env.GROVE_DB, {
+    logAuditEvent(c.env.CORTEX_DB, {
       eventType: "role_check", result: "success", ip, endpoint, method,
       identity: auth.email, detail: `role=${auth.user.role} meets ${minRole}`,
     });

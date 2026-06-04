@@ -46,7 +46,7 @@ githubRoutes.post("/api/github/webhook", async (c) => {
   }
 
   const payload = JSON.parse(body);
-  const db = c.env.GROVE_DB;
+  const db = c.env.CORTEX_DB;
 
   // Get allowed repos from env (comma-separated)
   const allowedRepos = (c.env.GITHUB_REPOS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
