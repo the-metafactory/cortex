@@ -1,4 +1,4 @@
-name = "grove-api"
+name = "cortex-api"
 main = "src/index.ts"
 compatibility_date = "2025-03-30"
 compatibility_flags = ["nodejs_compat"]
@@ -13,7 +13,7 @@ CORS_ORIGIN = "http://localhost:8766,http://localhost:8765"
 # Base bindings for local dev (wrangler dev uses these defaults)
 [[d1_databases]]
 binding = "CORTEX_DB"
-database_name = "grove-events-local"
+database_name = "cortex-events-local"
 database_id = "placeholder-local-id"
 
 [[kv_namespaces]]
@@ -71,10 +71,10 @@ binding = "CORTEX_KEYS"
 id = "078d4e580a8c4d39a431a19dde191102"
 
 # ──────────────────────────────────────────────────────────────────
-# Environment: Production (grove.meta-factory.{ai,dev,io})
+# Environment: Production (cortex.meta-factory.{ai,dev,io})
 # ──────────────────────────────────────────────────────────────────
 [env.production]
-name = "grove-api"
+name = "cortex-api"
 # S-001: Disabled workers_dev to prevent CF Access bypass via .workers.dev URL
 workers_dev = false
 
@@ -85,21 +85,21 @@ workers_dev = false
 # the CF Pages catch-all on the same domain. Non-API paths serve the dashboard.
 #
 # M2M traffic: NO CF Access bypass policies. Instead:
-# - GitHub webhooks arrive via grove-webhook-proxy (hooks.meta-factory.ai),
+# - GitHub webhooks arrive via cortex-webhook-proxy (hooks.meta-factory.ai),
 #   which validates HMAC, then forwards via Service Binding (direct
 #   Worker-to-Worker tunnel, no CF Access needed).
 # - Bot ingest/sync includes CF Access service token headers directly,
 #   authenticated via Service Auth policy with "Grove Bot" service token.
 routes = [
-  { pattern = "grove.meta-factory.ai/api/*", zone_name = "meta-factory.ai" },
-  { pattern = "grove.meta-factory.ai/admin/*", zone_name = "meta-factory.ai" },
-  { pattern = "grove.meta-factory.ai/ws", zone_name = "meta-factory.ai" },
-  { pattern = "grove.meta-factory.dev/api/*", zone_name = "meta-factory.dev" },
-  { pattern = "grove.meta-factory.dev/admin/*", zone_name = "meta-factory.dev" },
-  { pattern = "grove.meta-factory.dev/ws", zone_name = "meta-factory.dev" },
-  { pattern = "grove.meta-factory.io/api/*", zone_name = "meta-factory.io" },
-  { pattern = "grove.meta-factory.io/admin/*", zone_name = "meta-factory.io" },
-  { pattern = "grove.meta-factory.io/ws", zone_name = "meta-factory.io" }
+  { pattern = "cortex.meta-factory.ai/api/*", zone_name = "meta-factory.ai" },
+  { pattern = "cortex.meta-factory.ai/admin/*", zone_name = "meta-factory.ai" },
+  { pattern = "cortex.meta-factory.ai/ws", zone_name = "meta-factory.ai" },
+  { pattern = "cortex.meta-factory.dev/api/*", zone_name = "meta-factory.dev" },
+  { pattern = "cortex.meta-factory.dev/admin/*", zone_name = "meta-factory.dev" },
+  { pattern = "cortex.meta-factory.dev/ws", zone_name = "meta-factory.dev" },
+  { pattern = "cortex.meta-factory.io/api/*", zone_name = "meta-factory.io" },
+  { pattern = "cortex.meta-factory.io/admin/*", zone_name = "meta-factory.io" },
+  { pattern = "cortex.meta-factory.io/ws", zone_name = "meta-factory.io" }
 ]
 
 # DashboardSocket DO binding (production) — config ready; deploy is a separate
@@ -112,19 +112,19 @@ class_name = "DashboardSocket"
 # S-002: CORS for production — restricted to dashboard origins (all three TLDs).
 # NOTE: Do NOT use "" here — JS falsy-string fallback in the CORS middleware
 # would resolve "" || "*" to wildcard. Use the explicit dashboard URLs.
-CORS_ORIGIN = "https://grove.meta-factory.ai,https://grove.meta-factory.dev,https://grove.meta-factory.io"
+CORS_ORIGIN = "https://cortex.meta-factory.ai,https://cortex.meta-factory.dev,https://cortex.meta-factory.io"
 ENVIRONMENT = "production"
 
 # Production D1 (existing)
 [[env.production.d1_databases]]
 binding = "CORTEX_DB"
-database_name = "grove-events"
-database_id = "bf59021b-5a65-46ef-a33a-37882294fcc0"
+database_name = "cortex-events"
+database_id = "d13d6f3e-e5c0-47b6-bc3f-165ee8bca0f7"
 
 # Production KV (existing)
 [[env.production.kv_namespaces]]
 binding = "CORTEX_KEYS"
-id = "b8b33e5ff1bd43c19efa8ceb91cb5337"
+id = "303f2784ce30456396e3b9acf055b336"
 
 # Secrets (set via wrangler secret put --env production):
 # ADMIN_SECRET - admin key for key management
