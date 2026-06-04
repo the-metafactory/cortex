@@ -6,8 +6,10 @@
  */
 
 import { EventEmitter } from "events";
+import { homedir } from "os";
 import { parseStreamLine, StreamLineBuffer, type UsageStats, type StreamEvent } from "./stream-parser";
 import { buildClaudeArgs, type ClaudeInvocationOpts } from "./claude-invoker";
+import { createIsolatedSettings, scopeSessionEnv, type IsolatedSettings } from "./session-settings";
 
 // Re-export for convenience
 export type { UsageStats, StreamEvent };
@@ -36,6 +38,26 @@ export interface CCSessionOpts {
   entity?: string;
   /** H-001: Principal who triggered this session (Discord username or ID) */
   principal?: string;
+  /**
+   * cortex#701 (Part A — session settings isolation). When `true` (the
+   * DEFAULT for every bot session), the session spawns under a
+   * cortex-owned curated settings scope: `--setting-sources project,local`
+   * (EXCLUDES the principal's global `~/.claude/settings.json` "user"
+   * source) plus a generated `--settings` file carrying ONLY cortex's own
+   * hooks. The child env is scoped so principal-personal `CLAUDE_*` vars
+   * can't re-introduce hooks/plugins/settings. See `session-settings.ts`.
+   *
+   * Set to `false` ONLY for a session the principal runs as themselves
+   * (where inheriting their global settings is the intent). Bot sessions
+   * spawned from the dispatch path leave this unset → isolated.
+   */
+  settingsIsolation?: boolean;
+  /**
+   * cortex#701 — override the cortex-owned `.claude` directory holding the
+   * installed hook symlinks. Defaults to `${HOME}/.claude`. Exists so
+   * tests can point at a fixture dir; production leaves it unset.
+   */
+  claudeDir?: string;
 }
 
 export interface CCSessionResult {
@@ -72,6 +94,8 @@ export class CCSession extends EventEmitter {
   private lineBuffer = new StreamLineBuffer();
   private startTime = 0;
   private stdoutDone: Promise<void> = Promise.resolve();
+  /** cortex#701 — materialised curated-settings file for this session; cleaned up on exit. */
+  private isolatedSettings: IsolatedSettings | null = null;
 
   sessionId?: string;
   result?: string;
@@ -90,6 +114,20 @@ export class CCSession extends EventEmitter {
   start(): this {
     this.startTime = performance.now();
 
+    // cortex#701 (Part A) — settings isolation. Default ON for every bot
+    // session: exclude the principal's global `~/.claude/settings.json`
+    // ("user" source) and load a cortex-owned curated settings file with
+    // ONLY cortex's hooks. The args are appended to additionalArgs so they
+    // sit before `-p <prompt>` (buildClaudeArgs puts the prompt last).
+    const isolate = this.opts.settingsIsolation !== false;
+    const isolationArgs: string[] = [];
+    if (isolate) {
+      this.isolatedSettings = createIsolatedSettings(
+        this.opts.claudeDir ?? `${homedir()}/.claude`,
+      );
+      isolationArgs.push(...this.isolatedSettings.args);
+    }
+
     // Build args from existing buildClaudeArgs, then inject stream-json
     const invokerOpts: ClaudeInvocationOpts = {
       prompt: this.opts.prompt,
@@ -102,14 +140,25 @@ export class CCSession extends EventEmitter {
       additionalArgs: [
         "--verbose",
         "--output-format", "stream-json",
+        ...isolationArgs,
         ...(this.opts.additionalArgs ?? []),
       ],
     };
 
     const args = buildClaudeArgs(invokerOpts);
 
+    // cortex#701 — scope the child env when isolating: drop principal-
+    // personal CLAUDE_* vars that could re-introduce hooks/plugins/settings
+    // (default-deny, allowlist in session-settings.ts). Cortex's own
+    // pipeline vars (GROVE_*/CORTEX_*) are layered ON TOP below so they
+    // always survive. When not isolating (principal-as-self), inherit the
+    // full parent env unchanged (legacy behaviour).
+    const baseEnv: Record<string, string> = isolate
+      ? scopeSessionEnv(process.env)
+      : { ...(process.env as Record<string, string>) };
+
     const env: Record<string, string> = {
-      ...process.env as Record<string, string>,
+      ...baseEnv,
       ...(this.opts.groveChannel && { GROVE_CHANNEL: this.opts.groveChannel }),
       ...(this.opts.groveNetwork && { GROVE_NETWORK: this.opts.groveNetwork }),
       ...(this.opts.agentName && { GROVE_AGENT_NAME: this.opts.agentName }),
@@ -151,12 +200,26 @@ export class CCSession extends EventEmitter {
       // Wire exit (waits for stdout drain before emitting "exit")
       void this.wireExit();
     } catch (error) {
+      // Spawn failed before the process existed — clean up the curated
+      // settings temp dir we just created (cortex#701).
+      this.cleanupSettings();
       const err = error instanceof Error ? error : new Error(String(error));
       this.emit("error", err);
       this.emit("exit", 1);
     }
 
     return this;
+  }
+
+  /**
+   * cortex#701 — remove the per-session curated-settings temp dir. Called
+   * on process exit (wireExit) and on spawn failure. Idempotent.
+   */
+  private cleanupSettings(): void {
+    if (this.isolatedSettings) {
+      this.isolatedSettings.cleanup();
+      this.isolatedSettings = null;
+    }
   }
 
   /** Kill the CC process with graceful escalation (SIGINT → 2s → SIGTERM). */
@@ -326,6 +389,10 @@ export class CCSession extends EventEmitter {
       clearTimeout(this.timeoutId);
       this.timeoutId = null;
     }
+
+    // cortex#701 — drop the curated-settings temp dir now the process has
+    // exited (the file is only needed for the lifetime of the CC process).
+    this.cleanupSettings();
 
     // Don't emit a second "error" if timeout already handled it (exit 143 = SIGTERM from kill)
     if (exitCode !== 0 && !this.result && !this.timedOut) {

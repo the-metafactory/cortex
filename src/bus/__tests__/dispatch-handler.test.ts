@@ -1020,6 +1020,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
     resumeSessionId: undefined,
     allowedDirs: ["/Users/andreas/Developer/cortex"],
     disallowedTools: ["WebSearch"],
+    allowedTools: [],
     timeoutMs: 120_000,
     cwd: "/Users/andreas/Developer/cortex",
     additionalArgs: ["--foo"],
@@ -1649,5 +1650,79 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
     expect(wouldIntercept("team")).toBe(false);
     expect(wouldIntercept("help")).toBe(false);
     expect(wouldIntercept("learning")).toBe(false);
+  });
+});
+
+// =============================================================================
+// cortex#701 (Part B) — least-privilege skill gate flows into the session
+// =============================================================================
+//
+// These drive the DIRECT sync path (no policyEngine ⇒ the canonical
+// bus-publish is unavailable ⇒ handleSync runs) and capture the spawned
+// CCSessionOpts via the stub factory. They assert the gate the dispatch
+// handler computed actually lands on the session's allow/deny tools.
+describe("DispatchHandler — skill gate (cortex#701)", () => {
+  let originalWarn: typeof console.warn;
+  let originalError: typeof console.error;
+  let originalLog: typeof console.log;
+
+  beforeEach(() => {
+    originalWarn = console.warn;
+    originalError = console.error;
+    originalLog = console.log;
+    console.warn = () => {};
+    console.error = () => {};
+    console.log = () => {};
+  });
+  afterEach(() => {
+    console.warn = originalWarn;
+    console.error = originalError;
+    console.log = originalLog;
+  });
+
+  async function runWithSkills(
+    allowedSkills: string[] | undefined,
+  ): Promise<CCSessionOpts> {
+    const { factory, optsLog } = makeStubFactory([successResult()]);
+    const adapter = new MockAdapter();
+    adapter.accessDecision = {
+      allowed: true,
+      features: { chat: true, async: false, team: false },
+      ...(allowedSkills !== undefined && { allowedSkills }),
+    };
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      systemEventSource: { principal: "metafactory", agent: "cortex", instance: "local" },
+      ccSessionFactory: factory,
+      // No policyEngine ⇒ direct sync path (handleSync).
+    });
+    await handler.handleMessage(adapter, makeMsg({ content: "do the thing" }));
+    await handler.shutdown();
+    const log = optsLog();
+    expect(log.length).toBe(1);
+    return log[0]!;
+  }
+
+  test("no skill grant ⇒ Skill tool denied, no Skill(...) allow (default-deny)", async () => {
+    const opts = await runWithSkills(undefined);
+    expect(opts.disallowedTools).toContain("Skill");
+    expect((opts.allowedTools ?? []).some((t) => t.startsWith("Skill("))).toBe(false);
+  });
+
+  test("empty grant [] ⇒ Skill tool denied", async () => {
+    const opts = await runWithSkills([]);
+    expect(opts.disallowedTools).toContain("Skill");
+    expect((opts.allowedTools ?? []).some((t) => t.startsWith("Skill("))).toBe(false);
+  });
+
+  test("one granted skill ⇒ exactly Skill(code-review), bare Skill still denied", async () => {
+    const opts = await runWithSkills(["code-review"]);
+    expect(opts.allowedTools).toContain("Skill(code-review)");
+    // Nothing else skill-shaped leaked in.
+    const skillAllows = (opts.allowedTools ?? []).filter((t) => t.startsWith("Skill("));
+    expect(skillAllows).toEqual(["Skill(code-review)"]);
+    // The bare Skill deny backstops un-granted skills.
+    expect(opts.disallowedTools).toContain("Skill");
   });
 });

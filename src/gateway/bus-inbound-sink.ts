@@ -165,6 +165,10 @@ export class BusInboundSink implements GatewayInboundSink {
       // We do NOT double-stamp it here.
       allowedDirs: [],
       disallowedTools: [],
+      // cortex#701 (Part B) — the gateway grants NO skills/tools. It is a
+      // thin demux; the bound stack's dispatch-handler applies its own
+      // least-privilege skill/tool gate. Default-deny: empty allow list.
+      allowedTools: [],
       // Optional opts — the gateway does not own these; the bound stack applies
       // its own policy and session context.
       resumeSessionId: undefined,

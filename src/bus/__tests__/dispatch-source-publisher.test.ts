@@ -131,6 +131,7 @@ function baseOpts(
     resumeSessionId: undefined,
     allowedDirs: [],
     disallowedTools: [],
+    allowedTools: [],
     timeoutMs: undefined,
     cwd: undefined,
     additionalArgs: undefined,

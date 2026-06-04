@@ -30,6 +30,13 @@ export interface InboundChatDispatchPublishOpts {
   resumeSessionId: string | undefined;
   allowedDirs: string[];
   disallowedTools: string[];
+  /**
+   * cortex#701 (Part B) — positive tool ALLOW rules (e.g. `Skill(code-review)`
+   * from the per-skill gate). Threaded onto the dispatch payload's
+   * `allowed_tools` so the bus-mediated runner path applies the same
+   * least-privilege grants the direct path does. Empty ⇒ no allow rules.
+   */
+  allowedTools: string[];
   timeoutMs: number | undefined;
   cwd: string | undefined;
   additionalArgs: string[] | undefined;
@@ -220,6 +227,9 @@ export async function publishInboundChatDispatchEnvelope(
     }),
     ...(opts.disallowedTools.length > 0 && {
       disallowed_tools: opts.disallowedTools,
+    }),
+    ...(opts.allowedTools.length > 0 && {
+      allowed_tools: opts.allowedTools,
     }),
     ...(opts.allowedDirs.length > 0 && { allowed_dirs: opts.allowedDirs }),
     ...(opts.timeoutMs !== undefined && { timeout_ms: opts.timeoutMs }),
