@@ -12,12 +12,14 @@ import type { WsClientRegistry } from "../ws/client-registry";
 import type { WsData } from "../ws/types";
 
 // Mirror `DASHBOARD_DIST` from ../server.ts. Server resolves it as
-// `<server.ts dir>/../../dist/dashboard-v2`; from this test file that's
-// three levels up (out of `__tests__/`, `mc/`, `surface/`) plus the same
-// `dist/dashboard-v2` tail. Kept in lockstep with server.ts by hand —
-// if the server path ever moves, this needs to move with it.
+// `<server.ts dir>/../../../dist/dashboard-v2` (repo root); from this
+// test file that's four levels up (out of `__tests__/`, `mc/`,
+// `surface/`, `src/`) plus the same `dist/dashboard-v2` tail. Kept in
+// lockstep with server.ts by hand — if the server path ever moves,
+// this needs to move with it.
 const DASHBOARD_DIST = join(
   dirname(fileURLToPath(import.meta.url)),
+  "..",
   "..",
   "..",
   "..",

@@ -58,12 +58,15 @@ const startTime = Date.now();
 // booting the server — when the dist/ tree is missing the / route 404s
 // instead of falling back to the legacy HTML.
 //
-// Path resolution is two levels above the running server.ts at
-// src/mission-control/. When packaged, the resolver follows the same
-// relative offset, but a `dist/` folder is still expected to sit at the
-// project root.
+// Path resolution is three levels above the running server.ts at
+// src/surface/mc/ (the grove-v2 lift moved it down one level from
+// src/mission-control/ — two `..` left it pointing at `src/dist/`,
+// which never exists, so `/` 500'd on every install). When packaged,
+// the resolver follows the same relative offset, but a `dist/` folder
+// is still expected to sit at the project root.
 const DASHBOARD_DIST = join(
   dirname(fileURLToPath(import.meta.url)),
+  "..",
   "..",
   "..",
   "dist",
