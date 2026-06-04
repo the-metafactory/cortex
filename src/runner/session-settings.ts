@@ -29,14 +29,39 @@
  * only cortex's hooks (EventLogger, bash-guard, context) plus the
  * explicitly-granted skills/tools for this session.
  *
- * ### Why `--setting-sources project,local` and not `--bare`?
+ * ### Why `--setting-sources ` (empty) and not `--bare`?
  *
  * `--bare` skips hooks ENTIRELY (and LSP, plugin sync, auto-memory, etc.).
  * That would also disable cortex's own EventLogger + bash-guard hooks,
  * which we MUST preserve — the event pipeline and the bash safety guard
- * are load-bearing. `--setting-sources` is surgical: it drops only the
- * principal-personal `user` source while letting our `--settings` file
- * re-introduce exactly cortex's own hooks.
+ * are load-bearing. Passing an EMPTY `--setting-sources` is surgical: it
+ * loads NO ambient setting source (not `user`, not `project`, not `local`)
+ * while letting our `--settings` file re-introduce exactly cortex's own
+ * hooks.
+ *
+ * ### Why drop `project` and `local`, not just `user`? (cortex#701 self-check)
+ *
+ * `--setting-sources project,local` excludes the principal's GLOBAL
+ * `~/.claude/settings.json` (`user`) — but `--settings` is ADDITIVE, not a
+ * replacement, so `project` (`<cwd>/.claude/settings.json`) and `local`
+ * (`<cwd>/.claude/settings.local.json`) STILL load alongside the curated
+ * file. Empirically verified (CLI 2.1.158): a project/local hook in the
+ * session cwd fires INSIDE the bot session even with `--settings` present.
+ *
+ * That re-opens the very boundary this module closes, two ways:
+ *   1. The session cwd is a WORKING REPO (first `allowedDir`). Its
+ *      checked-in `.claude/settings.json` is repo content — a malicious
+ *      PR/branch the bot checks out can register an arbitrary hook command
+ *      that then runs in the bot session (supply-chain hook injection).
+ *   2. `<cwd>/.claude/settings.local.json` is principal-personal,
+ *      gitignored config — exactly the principal context a hard-isolated
+ *      stack must NOT inherit.
+ *
+ * cortex does NOT control the CONTENTS of `.claude/` inside a working repo,
+ * only which cwd it hands the session. So the only sound posture is to load
+ * NONE of the ambient sources and rely solely on the curated `--settings`
+ * file. We pass an EMPTY source list to do that. The issue itself lists
+ * "drop project too" as the tighter, correct default.
  *
  * ### Why generate a per-session temp file (not a checked-in file)?
  *
@@ -70,17 +95,27 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 /**
- * The setting sources cortex bot sessions load. Deliberately EXCLUDES
- * `user` — that's the principal's global `~/.claude/settings.json` and the
- * single largest leak vector (global hooks/skills/plugins). `project` +
- * `local` are repo-scoped and live inside the cwd cortex hands the
- * session; cortex controls the cwd, so those are in-policy.
+ * The setting sources cortex bot sessions load: NONE. Deliberately empty.
  *
- * Exported so the test suite can assert the exact value and so a future
- * config-split (#5) can override it from the system layer if a stack ever
- * needs an even tighter scope (e.g. drop `project` too).
+ * `user` is the principal's global `~/.claude/settings.json` (global
+ * hooks/skills/plugins) — the single largest leak vector. But `project`
+ * (`<cwd>/.claude/settings.json`) and `local`
+ * (`<cwd>/.claude/settings.local.json`) are NOT safe to load either:
+ * `--settings` is additive, so any hook/permission in the session cwd's
+ * `.claude/` would fire alongside the curated file (verified, CLI 2.1.158).
+ * The cwd is a working repo whose `.claude/` is repo content (project,
+ * mutable by any branch/PR) and principal-personal config (local), neither
+ * of which cortex controls the contents of. So we load ZERO ambient
+ * sources and rely solely on the curated `--settings` file.
+ *
+ * Materialised on the CLI as `--setting-sources ` with an empty value,
+ * which Claude Code accepts as "load no setting source" (the curated
+ * `--settings` file still loads). Exported so the test suite can assert
+ * the exact (empty) value and so a future config-split (#5) could, in
+ * principle, RE-ADD a source from the system layer for a stack that
+ * explicitly opts into repo-scoped config — never the silent default.
  */
-export const CORTEX_SETTING_SOURCES = ["project", "local"] as const;
+export const CORTEX_SETTING_SOURCES = [] as const;
 
 /**
  * Claude Code env vars that can re-introduce principal-personal behaviour
@@ -153,8 +188,9 @@ export interface IsolatedSettings {
   /** Path to the generated curated settings JSON. */
   settingsPath: string;
   /**
-   * CLI args to append: `--setting-sources project,local --settings <path>`.
-   * Order matters only in that both must precede `-p <prompt>` (handled by
+   * CLI args to append: `--setting-sources "" --settings <path>` (empty
+   * source list ⇒ load no ambient source; only the curated file). Order
+   * matters only in that both must precede `-p <prompt>` (handled by
    * buildClaudeArgs putting the prompt last).
    */
   args: string[];

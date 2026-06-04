@@ -36,7 +36,7 @@ afterEach(() => {
 });
 
 describe("CCSession — settings isolation (default ON)", () => {
-  test("spawn excludes principal `user` source and loads a curated --settings file", () => {
+  test("spawn loads NO ambient source and loads a curated --settings file", () => {
     const { calls, restore } = captureSpawn();
     try {
       const session = new CCSession({
@@ -54,9 +54,15 @@ describe("CCSession — settings isolation (default ON)", () => {
       expect(argv[0]).toBe("claude");
       const sourcesIdx = argv.indexOf("--setting-sources");
       expect(sourcesIdx).toBeGreaterThan(-1);
-      expect(argv[sourcesIdx + 1]).toBe("project,local");
-      // MUST NOT load the principal's user source.
+      // Empty value ⇒ load NO ambient source. `--settings` is additive, so
+      // loading project/local would let the cwd repo's `.claude/` fire
+      // hooks inside the bot session (cortex#701 self-check / regression).
+      expect(argv[sourcesIdx + 1]).toBe("");
+      // MUST NOT load the principal's user source NOR the repo-scoped
+      // project/local sources.
       expect(argv[sourcesIdx + 1]).not.toContain("user");
+      expect(argv[sourcesIdx + 1]).not.toContain("project");
+      expect(argv[sourcesIdx + 1]).not.toContain("local");
 
       const settingsIdx = argv.indexOf("--settings");
       expect(settingsIdx).toBeGreaterThan(-1);

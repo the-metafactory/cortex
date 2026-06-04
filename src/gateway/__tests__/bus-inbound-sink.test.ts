@@ -6,7 +6,7 @@
  *   1. Routable decision → publishFn called once with correctly-mapped opts
  *      (stack / agentName / agentDisplayName / principal / prompt / msg)
  *   2. allowedDirs is always an empty array
- *   3. disallowedTools is always an empty array
+ *   3. default-deny Skill gate: disallowedTools === ["Skill"], allowedTools === []
  *   4. taskId is non-empty on each call
  *   5. taskId is unique across two calls (crypto.randomUUID — no collision)
  *   6. Optional opts (resumeSessionId, groveChannel, groveNetwork, timeoutMs,
@@ -159,15 +159,27 @@ describe("BusInboundSink", () => {
     expect(opts.allowedDirs).toEqual([]);
   });
 
-  // ── Test 3: disallowedTools always empty ────────────────────────────────────
+  // ── Test 3: default-deny Skill gate on the gateway path (cortex#701) ─────────
+  //
+  // Regression for the gateway-path default-deny bypass: the gateway publishes
+  // to the bound stack's runner subscription, which is consumed by the harness
+  // — NOT by dispatch-handler — so the per-skill gate never re-runs there. If
+  // the gateway emitted empty allow/deny lists, the spawned session would have
+  // the `Skill` tool AVAILABLE BY DEFAULT (verified, CLI 2.1.158), bypassing
+  // the default-deny posture. The gateway must therefore emit the bare `Skill`
+  // deny itself (resolveSkillGate(undefined).deny) and grant nothing.
 
-  test("disallowedTools is always an empty array", async () => {
+  test("emits the default-deny Skill gate (deny bare Skill, grant nothing)", async () => {
     const { sink, calls } = makeSink();
     await sink.publish(makeDecision(), makeMsg());
     const opts = calls[0];
     if (opts === undefined) throw new Error("expected publishFn to have been called");
 
-    expect(opts.disallowedTools).toEqual([]);
+    // Default-DENY: the bare `Skill` tool is denied so no installed skill is
+    // reachable via the gateway-mediated runner path.
+    expect(opts.disallowedTools).toEqual(["Skill"]);
+    // The gateway grants NO skills/tools.
+    expect(opts.allowedTools).toEqual([]);
   });
 
   // ── Test 4: taskId is non-empty ──────────────────────────────────────────────

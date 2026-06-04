@@ -21,15 +21,22 @@ import {
   scopeSessionEnv,
 } from "../session-settings";
 
-describe("CORTEX_SETTING_SOURCES — principal global excluded", () => {
+describe("CORTEX_SETTING_SOURCES — no ambient source loaded", () => {
   test("never loads the principal's `user` source", () => {
     // The principal's global ~/.claude/settings.json is the `user` source.
     // Excluding it is the whole point of the isolation.
     expect(CORTEX_SETTING_SOURCES).not.toContain("user");
   });
 
-  test("loads only repo-scoped project/local sources", () => {
-    expect([...CORTEX_SETTING_SOURCES].sort()).toEqual(["local", "project"]);
+  test("loads NO ambient source (not project/local either)", () => {
+    // cortex#701 self-check: `--settings` is additive, so loading `project`
+    // or `local` would let the cwd repo's `.claude/` (repo content +
+    // principal-personal local config) fire hooks inside the bot session.
+    // The only sound default is an empty source list — rely solely on the
+    // curated --settings file.
+    expect([...CORTEX_SETTING_SOURCES]).toEqual([]);
+    expect(CORTEX_SETTING_SOURCES).not.toContain("project");
+    expect(CORTEX_SETTING_SOURCES).not.toContain("local");
   });
 });
 
@@ -67,9 +74,13 @@ describe("createIsolatedSettings — materialised file + args", () => {
     const iso = createIsolatedSettings("/fake/.claude");
     try {
       expect(existsSync(iso.settingsPath)).toBe(true);
-      // Args MUST exclude the user source and load our curated file.
-      expect(iso.args).toContain("--setting-sources");
-      expect(iso.args).toContain("project,local");
+      // Args MUST load NO ambient source (empty value) and load our
+      // curated file. The empty string is the "no source" sentinel.
+      const srcIdx = iso.args.indexOf("--setting-sources");
+      expect(srcIdx).toBeGreaterThan(-1);
+      expect(iso.args[srcIdx + 1]).toBe("");
+      expect(iso.args).not.toContain("project,local");
+      expect(iso.args).not.toContain("user");
       expect(iso.args).toContain("--settings");
       expect(iso.args).toContain(iso.settingsPath);
 

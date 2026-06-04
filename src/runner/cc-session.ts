@@ -41,11 +41,13 @@ export interface CCSessionOpts {
   /**
    * cortex#701 (Part A — session settings isolation). When `true` (the
    * DEFAULT for every bot session), the session spawns under a
-   * cortex-owned curated settings scope: `--setting-sources project,local`
-   * (EXCLUDES the principal's global `~/.claude/settings.json` "user"
-   * source) plus a generated `--settings` file carrying ONLY cortex's own
-   * hooks. The child env is scoped so principal-personal `CLAUDE_*` vars
-   * can't re-introduce hooks/plugins/settings. See `session-settings.ts`.
+   * cortex-owned curated settings scope: `--setting-sources ""` (loads NO
+   * ambient setting source — not the principal's global `user`, nor the
+   * cwd repo's `project`/`local` `.claude/`, which `--settings` would
+   * otherwise load additively) plus a generated `--settings` file carrying
+   * ONLY cortex's own hooks. The child env is scoped so principal-personal
+   * `CLAUDE_*` vars can't re-introduce hooks/plugins/settings. See
+   * `session-settings.ts`.
    *
    * Set to `false` ONLY for a session the principal runs as themselves
    * (where inheriting their global settings is the intent). Bot sessions
@@ -115,10 +117,11 @@ export class CCSession extends EventEmitter {
     this.startTime = performance.now();
 
     // cortex#701 (Part A) — settings isolation. Default ON for every bot
-    // session: exclude the principal's global `~/.claude/settings.json`
-    // ("user" source) and load a cortex-owned curated settings file with
-    // ONLY cortex's hooks. The args are appended to additionalArgs so they
-    // sit before `-p <prompt>` (buildClaudeArgs puts the prompt last).
+    // session: load NO ambient setting source (not the principal's global
+    // `user`, nor the cwd repo's `project`/`local` `.claude/`) and load a
+    // cortex-owned curated settings file with ONLY cortex's hooks. The args
+    // are appended to additionalArgs so they sit before `-p <prompt>`
+    // (buildClaudeArgs puts the prompt last).
     const isolate = this.opts.settingsIsolation !== false;
     const isolationArgs: string[] = [];
     if (isolate) {
