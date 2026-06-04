@@ -26,7 +26,6 @@ import type { AttachmentInfo } from "../adapters/discord/attachment-types";
 import { parseMessageKeywords } from "../runner/message-parser";
 import { buildPrompt } from "../runner/prompt-builder";
 import { scanPrompt } from "../runner/prompt-filter";
-import { resolveSkillGate } from "./skill-gate";
 import { CCSession, type CCSessionOpts, type CCSessionResult } from "../runner/cc-session";
 import type {
   CCSessionFactory,
@@ -451,8 +450,6 @@ export class DispatchHandler extends EventEmitter {
     resumeSessionId: string | undefined;
     allowedDirs: string[];
     disallowedTools: string[];
-    /** cortex#701 (Part B) — positive tool ALLOW rules (per-skill grants). */
-    allowedTools: string[];
     timeoutMs: number | undefined;
     cwd: string | undefined;
     additionalArgs: string[] | undefined;
@@ -727,29 +724,12 @@ export class DispatchHandler extends EventEmitter {
       const networkDisallowed = networkClaude?.disallowedTools ?? [];
       const globalDisallowed = this.config.claude.disallowedTools;
       const effectiveDisallowed = access.toolRestrictions?.length
-        ? [...access.toolRestrictions]
+        ? access.toolRestrictions
         : [...new Set([...globalDisallowed, ...networkDisallowed])];
-      // cortex#701 (Part B) — least-privilege skill gate, DEFAULT-DENY.
-      // Replaces the legacy binary G-121 gate. Resolve the per-skill
-      // allowlist into Claude Code tool rules:
-      //   - no grant / []          → deny the bare `Skill` tool (no skills).
-      //   - [code-review, ...]     → allow exactly `Skill(code-review)`…,
-      //                              and deny the bare `Skill` backstop so
-      //                              un-granted skills can't be invoked.
-      // The bare `Skill` deny is merged into effectiveDisallowed; the
-      // `Skill(<name>)` allows flow onto the dispatch payload's
-      // allowed_tools (and the direct CCSession.allowedTools).
-      const skillGate = resolveSkillGate(access.allowedSkills);
-      for (const denyRule of skillGate.deny) {
-        if (!effectiveDisallowed.includes(denyRule)) {
-          effectiveDisallowed.push(denyRule);
-        }
+      // G-121: If allowedSkills is explicitly empty, hard-block the Skill tool
+      if (access.allowedSkills?.length === 0 && !effectiveDisallowed.includes("Skill")) {
+        effectiveDisallowed.push("Skill");
       }
-      // Positive Skill(<name>) grants layered on top of the global allow
-      // list. De-dup so repeated invocations stay stable.
-      const effectiveAllowedTools = [
-        ...new Set([...this.config.claude.allowedTools, ...skillGate.allow]),
-      ];
       // G-500: Per-network claude overrides take precedence over global
       const effectiveDirs = access.dirRestrictions?.length
         ? access.dirRestrictions
@@ -789,7 +769,6 @@ export class DispatchHandler extends EventEmitter {
           resumeSessionId: existingSession?.sessionId,
           allowedDirs: invokeDirs,
           disallowedTools: effectiveDisallowed,
-          allowedTools: effectiveAllowedTools,
           timeoutMs: this.config.claude.timeoutMs,
           cwd: effectiveCwd,
           additionalArgs: this.config.claude.additionalArgs,
@@ -815,13 +794,13 @@ export class DispatchHandler extends EventEmitter {
       // 12. Route by mode
       switch (parsed.mode) {
         case "async":
-          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, effectiveAllowedTools, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, principal, effectiveCwd);
+          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, principal, effectiveCwd);
           break;
         case "team":
-          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, effectiveDisallowed, effectiveAllowedTools, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, principal, effectiveCwd);
+          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, principal, effectiveCwd);
           break;
         default:
-          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, effectiveAllowedTools, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, principal, effectiveCwd);
+          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, principal, effectiveCwd);
           break;
       }
     } catch (error) {
@@ -846,8 +825,6 @@ export class DispatchHandler extends EventEmitter {
     resumeSessionId: string | undefined,
     invokeDirs: string[],
     disallowedTools: string[],
-    /** cortex#701 (Part B) — effective tool allow rules incl. per-skill grants. */
-    allowedTools: string[],
     attachmentSessionId: string,
     sessionKey: string,
     useSession: boolean,
@@ -897,7 +874,7 @@ export class DispatchHandler extends EventEmitter {
       timeoutMs: this.config.claude.timeoutMs,
       additionalArgs: this.config.claude.additionalArgs,
       resumeSessionId,
-      allowedTools,
+      allowedTools: this.config.claude.allowedTools,
       disallowedTools,
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
       cwd,
@@ -1183,8 +1160,6 @@ export class DispatchHandler extends EventEmitter {
     resumeSessionId: string | undefined,
     invokeDirs: string[],
     disallowedTools: string[],
-    /** cortex#701 (Part B) — effective tool allow rules incl. per-skill grants. */
-    allowedTools: string[],
     attachmentSessionId: string,
     sessionKey: string,
     bashGuardDisabled?: boolean,
@@ -1214,7 +1189,7 @@ export class DispatchHandler extends EventEmitter {
       timeoutMs: this.config.claude.asyncTimeoutMs,
       additionalArgs: this.config.claude.additionalArgs,
       resumeSessionId,
-      allowedTools,
+      allowedTools: this.config.claude.allowedTools,
       disallowedTools,
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
       cwd,
@@ -1316,8 +1291,6 @@ export class DispatchHandler extends EventEmitter {
     teamContent: string,
     invokeDirs: string[],
     disallowedTools: string[],
-    /** cortex#701 (Part B) — effective tool allow rules incl. per-skill grants. */
-    allowedTools: string[],
     bashGuardDisabled?: boolean,
     bashAllowlist?: CCSessionOpts["bashAllowlist"],
     groveChannel?: string,
@@ -1346,7 +1319,7 @@ export class DispatchHandler extends EventEmitter {
         { name: "critic", prompt: "Critical evaluation — identify weaknesses, counterarguments, and risks" },
       ],
       additionalArgs: this.config.claude.additionalArgs,
-      allowedTools,
+      allowedTools: this.config.claude.allowedTools,
       disallowedTools,
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
       timeoutMs: this.config.claude.asyncTimeoutMs,

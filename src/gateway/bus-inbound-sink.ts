@@ -42,7 +42,6 @@ import {
   type InboundChatDispatchPublishOpts,
   type DispatchSourcePublishResult,
 } from "../bus/dispatch-source-publisher";
-import { resolveSkillGate } from "../bus/skill-gate";
 
 // =============================================================================
 // Public types
@@ -165,17 +164,17 @@ export class BusInboundSink implements GatewayInboundSink {
       // responseRoutingFromMessage() — consistent with decision.responseRouting.
       // We do NOT double-stamp it here.
       allowedDirs: [],
-      // cortex#701 (Part B) — the gateway grants NO skills/tools and emits
-      // the DEFAULT-DENY gate result so the bound stack's harness (which
-      // consumes this envelope via the runner subscription, NOT via
-      // dispatch-handler — so it never re-runs the gate) spawns the session
-      // with the bare `Skill` deny in place. Without this, an envelope
-      // carrying empty allow/deny lists spawns a session where the `Skill`
-      // tool is AVAILABLE BY DEFAULT (verified, CLI 2.1.158) — a default-deny
-      // bypass for the gateway path. resolveSkillGate(undefined) ⇒
-      // { allow: [], deny: ["Skill"] }. Fail-closed.
-      disallowedTools: resolveSkillGate(undefined).deny,
-      allowedTools: resolveSkillGate(undefined).allow,
+      // cortex#701 — the gateway grants NO skills and emits the bare `Skill`
+      // deny so the bound stack's harness (which consumes this envelope via
+      // the runner subscription, NOT via dispatch-handler — so it never runs
+      // the skill gate) spawns the session with the Skill tool denied.
+      // Without this, an envelope carrying empty allow/deny lists spawns a
+      // session where the `Skill` tool is AVAILABLE BY DEFAULT (verified,
+      // CLI 2.1.158) — a fail-open hole on the gateway path. Fail-closed.
+      // Per-skill grants on this path are the cortex#701 Part B follow-up
+      // (PreToolUse-hook design); until it lands the gateway path has no
+      // skills, by design.
+      disallowedTools: ["Skill"],
       // Optional opts — the gateway does not own these; the bound stack applies
       // its own policy and session context.
       resumeSessionId: undefined,
