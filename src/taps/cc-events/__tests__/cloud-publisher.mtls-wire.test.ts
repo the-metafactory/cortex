@@ -156,6 +156,28 @@ function startNodeServer(
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Poll `condition` every 50ms for up to `timeoutMs` (default 2000ms), resolving
+ * true when condition first holds or false after the deadline. Replaces bare
+ * setTimeout(100) waits that proved racy on loaded CI runners: the Node server
+ * subprocess writes its stdout JSON asynchronously, and 100ms was not always
+ * enough under ubuntu GitHub Actions concurrency (cortex#699).
+ */
+async function pollUntil(
+  condition: () => boolean,
+  timeoutMs = 2000,
+  intervalMs = 50,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return true;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return condition();
+}
+
+// ---------------------------------------------------------------------------
+
 const nodeBin = findNode();
 const describeWire = nodeBin ? describe : describe.skip;
 
@@ -186,8 +208,9 @@ describeWire("CloudPublisher — wire-level mTLS (Node https server, requestCert
       pub.publish(makeEvent());
       await pub.flush();
       await pub.close();
-      // Give the server a tick to flush its stdout line.
-      await new Promise((r) => setTimeout(r, 100));
+      // Poll until the server has logged the ingest line (cortex#699 — 100ms
+      // fixed wait proved racy under loaded CI; poll for up to 2 s instead).
+      await pollUntil(() => srv.lines().some((l) => l.path === "/api/ingest"));
 
       const ingest = srv.lines().find((l) => l.path === "/api/ingest");
       expect(ingest).toBeDefined();
@@ -206,7 +229,8 @@ describeWire("CloudPublisher — wire-level mTLS (Node https server, requestCert
         ["default"],
         mtlsMaterial,
       );
-      await new Promise((r) => setTimeout(r, 100));
+      // Poll until the server has logged the health line (cortex#699).
+      await pollUntil(() => srv.lines().some((l) => l.path === "/api/health"));
 
       const health = srv.lines().find((l) => l.path === "/api/health");
       expect(health).toBeDefined();
@@ -229,7 +253,10 @@ describeWire("CloudPublisher — wire-level mTLS (Node https server, requestCert
       pub.publish(makeEvent());
       await pub.flush(); // must NOT throw — error is swallowed, events kept locally
       await pub.close();
-      await new Promise((r) => setTimeout(r, 100));
+      // Poll until the server has logged a tlsClientError line (cortex#699 —
+      // the Node subprocess writes its tlsClientError event asynchronously; a
+      // fixed 100ms wait proved racy under loaded CI runners).
+      await pollUntil(() => srv.lines().some((l) => typeof l.tlsClientError === "string"));
 
       const allLines = srv.lines();
       // No request reached the handler presenting our client CN.

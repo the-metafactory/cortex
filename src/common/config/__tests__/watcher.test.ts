@@ -10,6 +10,38 @@ import { ConfigWatcher } from "../watcher";
 import type { AgentConfig } from "../../types/config";
 
 /**
+ * Poll `condition` every `intervalMs` until it returns truthy or `timeoutMs`
+ * expires (default 2000ms). Returns true when condition satisfied, false on
+ * timeout. Replaces fixed-duration `setTimeout(300)` waits that proved racy
+ * under loaded CI runners where fs.watch + the 200ms ConfigWatcher debounce
+ * together could exceed 300ms (cortex#699).
+ */
+async function pollUntil(
+  condition: () => boolean,
+  timeoutMs = 2000,
+  intervalMs = 30,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return true;
+    await new Promise<void>((r) => setTimeout(r, intervalMs));
+  }
+  return condition();
+}
+
+/**
+ * Small grace period after `watcher.start()` before writing a file.
+ * ConfigWatcher uses `node:fs.watch` whose subscription is not guaranteed to
+ * be bound synchronously — writing the file immediately after start() risks
+ * missing the event (macOS FSEvents / Linux inotify subscription races).
+ * 100ms is deliberately larger than AgentsDirectoryWatcher's 30ms
+ * `registrationGraceMs` to provide margin on slow CI runners (cortex#699).
+ */
+function watcherReady(): Promise<void> {
+  return new Promise<void>((r) => setTimeout(r, 100));
+}
+
+/**
  * Write a single-file config fixture at 0600. TC-4a (cortex#636): the
  * single-file config read enforces chmod 600 (it carries platform bot
  * tokens), so the watcher's reload path rejects looser modes. `chmodSync`
@@ -212,10 +244,16 @@ paths:
 `;
 
     watcher.start();
+    // Grace period: ensure the fs.watch subscription is bound before writing
+    // (cortex#699 — see watcherReady() above).
+    await watcherReady();
     writeConfigFixture(testConfigPath, updatedYaml);
 
-    // Wait for debounced reload
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Poll until callback fires: fs.watch + 200ms debounce can exceed a fixed
+    // 300ms wait on loaded CI runners (cortex#699). 4 s stays inside the bun
+    // default 5 s per-test timeout while absorbing kernel inotify/FSEvents
+    // delays under peak I/O.
+    await pollUntil(() => capturedEvent !== null, 4_000);
     watcher.stop();
 
     expect(capturedEvent).not.toBeNull();
@@ -278,10 +316,12 @@ paths:
 `;
 
     watcher.start();
+    await watcherReady();
     writeConfigFixture(testConfigPath, updatedYaml);
 
-    // Wait for debounced reload
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Poll until callback fires (cortex#699 — see comment in "identifies safe
+    // field changes" for why a fixed 300ms wait is racy on loaded CI).
+    await pollUntil(() => capturedEvent !== null);
     watcher.stop();
 
     expect(capturedEvent).not.toBeNull();
@@ -404,8 +444,9 @@ paths:
 `;
 
     watcher.start();
+    await watcherReady();
     writeConfigFixture(testConfigPath, updatedYaml);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await pollUntil(() => capturedEvent !== null);
     watcher.stop();
 
     expect(capturedEvent).not.toBeNull();
@@ -479,8 +520,9 @@ paths:
 `;
 
     watcher.start();
+    await watcherReady();
     writeConfigFixture(testConfigPath, updatedYaml);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await pollUntil(() => capturedEvent !== null);
     watcher.stop();
 
     expect(capturedEvent).not.toBeNull();

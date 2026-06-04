@@ -86,7 +86,11 @@ describe("generate-registry-keypair — correctness contract", () => {
     expect(await verifyEd25519(pub, signature, message)).toBe(true);
 
     // Tamper → must NOT verify.
-    const tampered = new TextEncoder().encode(canonicalJSON({ ...payload, registry: "x" + pub.slice(1) }));
+    // We change `issued_at` rather than the registry pubkey to guarantee a
+    // different canonicalJSON regardless of the generated key's base64 prefix.
+    // ("x" + pub.slice(1) would be identical to pub when pub starts with "x",
+    // causing verifyEd25519 to correctly return true — a ~2% flake rate.)
+    const tampered = new TextEncoder().encode(canonicalJSON({ ...payload, issued_at: "2026-06-04T00:00:01.000Z" }));
     expect(await verifyEd25519(pub, signature, tampered)).toBe(false);
   });
 
