@@ -1056,6 +1056,133 @@ describe("DispatchHandler — prompt-filter trust scope (cortex#723)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// cortex#729 — #724 trust-scoped the prompt filter for the home principal's
+// DMs, but gated the bypass on `isPrincipalDM` (msg.isDM && msg.dmType ===
+// "principal"). `dmType` is set only inside the adapter's `if (isDM)` branch, so
+// the home principal's CHANNEL @mention (isDM=false → dmType undefined) fell
+// through and stayed hard-blocked (live FP: PI-002 "act as a jumphost" in
+// #halden-observe, where Luna has dmOwner:false so a channel @mention is the
+// only path). The fix adds `msg.authorIsPrincipal`, computed by the adapter for
+// EVERY inbound message via the same non-spoofable PolicyEngine principal-role
+// check, and the handler now bypasses on `(isPrincipalDM || msg.authorIsPrincipal)`.
+//
+// Contract:
+//   - home-principal CHANNEL @mention (isDM=false, authorIsPrincipal=true) whose
+//     content matches a block pattern → PROCESSED (reaches CC, NO can't-process
+//     reply), match LOGGED for visibility.
+//   - non-principal CHANNEL sender, same content → still BLOCKED.
+//   - the home-principal DM path (#724) is unchanged (covered above).
+// ---------------------------------------------------------------------------
+
+describe("DispatchHandler — prompt-filter trust scope, channel @mentions (cortex#729)", () => {
+  // Same PI-002-tripping content the #723 tests use — the exact live FP class.
+  const ACT_AS_CONTENT =
+    "Dig deeper — the probe is not the jump host. A different machine would act as a jumphost.";
+
+  let originalWarn: typeof console.warn;
+  let originalError: typeof console.error;
+  let originalLog: typeof console.log;
+  let logLines: string[];
+
+  beforeEach(() => {
+    originalWarn = console.warn;
+    originalError = console.error;
+    originalLog = console.log;
+    logLines = [];
+    console.warn = () => {};
+    console.error = () => {};
+    console.log = (...args: unknown[]) => {
+      logLines.push(args.map((a) => String(a)).join(" "));
+    };
+  });
+
+  afterEach(() => {
+    console.warn = originalWarn;
+    console.error = originalError;
+    console.log = originalLog;
+  });
+
+  test("home-principal CHANNEL @mention matching a block pattern is PROCESSED (not blocked) and the match is logged", async () => {
+    const { factory, spawnCount } = makeStubFactory([
+      successResult({ response: "On it — here's the jumphost answer." }),
+    ]);
+
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      ccSessionFactory: factory,
+    });
+
+    // A guild CHANNEL @mention (NOT a DM) from the home principal. `isDM` is
+    // false so `dmType` is undefined — the home-principal signal arrives solely
+    // via `authorIsPrincipal`, which is exactly the #729 path.
+    await handler.handleMessage(
+      adapter,
+      makeMsg({
+        platform: "discord",
+        authorId: "principal1",
+        content: ACT_AS_CONTENT,
+        isDM: false,
+        authorIsPrincipal: true,
+      }),
+    );
+
+    // The message reached the CC path — the filter did NOT short-circuit it.
+    expect(spawnCount()).toBe(1);
+
+    const texts = adapter.sentMessages.map((m) => m.text);
+    expect(texts.some((t) => t.includes("I can't process that message"))).toBe(false);
+    expect(texts.some((t) => t.includes("Content filter blocked"))).toBe(false);
+    expect(texts).toContain("On it — here's the jumphost answer.");
+
+    // The match is logged for principal visibility (cortex#723/#729).
+    expect(
+      logLines.some(
+        (l) => l.includes("[PROMPT-FILTER]") && l.includes("home-principal"),
+      ),
+    ).toBe(true);
+
+    await handler.shutdown();
+  });
+
+  test("non-principal CHANNEL sender with the same role-play content is still BLOCKED (no CC spawn)", async () => {
+    const { factory, spawnCount } = makeStubFactory([
+      successResult({ response: "should never run" }),
+    ]);
+
+    const adapter = new MockAdapter();
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      ccSessionFactory: factory,
+    });
+
+    // Same content, same channel shape — but the sender is NOT the home
+    // principal (authorIsPrincipal omitted → undefined/false). Must stay blocked.
+    await handler.handleMessage(
+      adapter,
+      makeMsg({
+        platform: "discord",
+        authorId: "user999",
+        authorName: "Stranger",
+        content: ACT_AS_CONTENT,
+        isDM: false,
+      }),
+    );
+
+    expect(spawnCount()).toBe(0);
+
+    const texts = adapter.sentMessages.map((m) => m.text);
+    expect(texts.length).toBe(1);
+    expect(texts[0]).toContain("I can't process that message");
+    expect(texts[0]).toContain("Content filter blocked");
+
+    await handler.shutdown();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Direction A Stage 4-B (cortex#409) — publishInboundDispatchEnvelope
 //
 // Dispatch-source path. The handler publishes chat/direct dispatches as

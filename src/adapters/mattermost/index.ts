@@ -157,6 +157,13 @@ export class MattermostAdapter implements PlatformAdapter {
           content: mmMsg.content,
           channelId: mmMsg.channelId,
           threadId: mmMsg.rootId, // Thread to original message for proper reply threading
+          // cortex#729 — stamp the home-principal trust signal for parity with
+          // the Discord adapter, so the dispatch-handler's prompt-filter
+          // trust-scope bypasses the hard-block for the home principal's
+          // messages here too (Mattermost has no DM-classification, so this is
+          // the ONLY trust signal it carries). Non-spoofable: the same
+          // PolicyEngine principal-role check on the authenticated user id.
+          authorIsPrincipal: this.isOperator(mmMsg.userId),
           attachments: mmMsg.fileIds
             ? await this.fetchFileAttachments(mmMsg.fileIds)
             : [],

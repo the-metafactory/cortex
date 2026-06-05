@@ -714,15 +714,25 @@ export class DispatchHandler extends EventEmitter {
         // cortex#723 — trust-scope the hard-block. A prompt-injection filter
         // gates UNTRUSTED content (cross-principal, relayed, webhook); the home
         // principal commands their OWN assistant and cannot "inject" it.
-        // Hard-blocking the principal's direct messages is a category error
-        // that breaks principal control (live FP: PI-002 "act as a jumphost" —
-        // legit infra language). `isPrincipalDM` (set above) is true only when
-        // an adapter classified the sender as the home principal via the
-        // PolicyEngine principal-role capability — the authoritative trust
-        // signal. For that sender, log the match for visibility and ALLOW.
-        // Untrusted senders (unknown / cross-principal without trust) stay
-        // hard-blocked exactly as before — the filter is NOT weakened for them.
-        if (isPrincipalDM) {
+        // Hard-blocking the principal's messages is a category error that
+        // breaks principal control (live FP: PI-002 "act as a jumphost" —
+        // legit infra language).
+        //
+        // cortex#729 — extend the bypass from DM-only to channel @mentions.
+        // #724 gated this on `isPrincipalDM`, but `dmType` is set only for DMs,
+        // so the home principal's CHANNEL @mention fell through and stayed
+        // blocked (live: PI-002 in #halden-observe, where Luna has
+        // `dmOwner: false` so a channel @mention is the ONLY path).
+        // `msg.authorIsPrincipal` is the sibling signal the adapter now computes
+        // for every inbound message via the SAME PolicyEngine principal-role
+        // check — non-spoofable, keyed on the authenticated author id. The home
+        // principal, DM OR channel, is commanding their own assistant; log the
+        // match for visibility and ALLOW. Non-principal senders (unknown /
+        // cross-principal without trust, in DMs OR channels) stay hard-blocked
+        // exactly as before — the filter is NOT weakened for them. Note the
+        // relaxed preamble (above) stays DM-only: channels are less private, so
+        // only the FILTER BYPASS goes channel-inclusive, not the preamble.
+        if (isPrincipalDM || msg.authorIsPrincipal) {
           console.log(
             `dispatch-handler: [PROMPT-FILTER] allowing home-principal message despite match (${filterResult.reason ?? "unspecified"}) — the principal commands their own assistant (cortex#723): "${parsed.content.slice(0, 100)}"`,
           );

@@ -472,16 +472,24 @@ export class DiscordAdapter implements PlatformAdapter {
       // `infra.principal.discordId` field is preserved for the
       // `notifyPrincipal` / `bufferPrincipalDM` paths which still need a
       // Discord-side mailbox.
+      // cortex#729 — the home-principal trust signal must be computed for
+      // EVERY inbound message (DM and channel @mention), not just DMs. The
+      // PolicyEngine principal-role check on the authenticated Discord author
+      // id is non-spoofable. `dmType` stays DM-only (it carries DM-specific
+      // routing semantics); `authorIsPrincipal` is the sibling signal the
+      // dispatch-handler's filter trust-scope reads so the home principal's
+      // CHANNEL @mentions aren't hard-blocked (live FP: PI-002 "act as a
+      // jumphost" in #halden-observe, where Luna has `dmOwner: false` so a
+      // channel @mention is the only path).
+      const authorIsPrincipal = isOperatorPrincipal(
+        "discord",
+        message.author.id,
+        this.infra.policyEngine,
+        this.infra.policyLookup,
+      );
       let dmType: "principal" | "user" | undefined;
       if (isDM) {
-        dmType = isOperatorPrincipal(
-          "discord",
-          message.author.id,
-          this.infra.policyEngine,
-          this.infra.policyLookup,
-        )
-          ? "principal"
-          : "user";
+        dmType = authorIsPrincipal ? "principal" : "user";
       }
 
       // G-204c: Resolve channel/thread names for context routing
@@ -522,6 +530,7 @@ export class DiscordAdapter implements PlatformAdapter {
         guildId: message.guildId ?? undefined,
         isDM,
         dmType,
+        authorIsPrincipal,
         attachments: allAttachments
           .filter((a) => !(a.name === "message.txt" && messageTxt))
           .map((a) => ({

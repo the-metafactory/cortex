@@ -36,6 +36,16 @@ export interface InboundMessage {
   isDM?: boolean;
   /** DM classification: principal (full access) or user (standard guards) */
   dmType?: "principal" | "user";
+  /**
+   * cortex#729: True when the authenticated sender is the home principal,
+   * computed for EVERY inbound message (DM and channel @mention) via the
+   * PolicyEngine principal-role check. Unlike `dmType` (DM-only), this signal
+   * is set in channels too, so the dispatch-handler's prompt-filter
+   * trust-scope can bypass the hard-block for the home principal's channel
+   * @mentions — not just their DMs. Non-spoofable (keyed on the
+   * authenticated platform author id). Defaults to false/undefined.
+   */
+  authorIsPrincipal?: boolean;
   /** Inbound file attachments */
   attachments: InboundAttachment[];
   /** Message timestamp */
