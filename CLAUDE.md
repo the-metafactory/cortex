@@ -4,6 +4,15 @@
 
 Layer-7 collaboration surface for the metafactory Myelin stack
 
+## Domain Context
+
+Before doing work in this repo, load the domain language:
+
+- **`./CONTEXT.md`** — this repo's bounded-context glossary, if present. One canonical term per concept, with the aliases to avoid. If you find yourself using a term loosely, check it here first. Every ecosystem repo is expected to grow a `CONTEXT.md` (authored via the `grill-with-docs` skill).
+- **`compass/ecosystem/CONTEXT-MAP.md`** — the ecosystem context map: the bounded contexts (soma, cortex, myelin, signal, …) and how their boundary terms reconcile.
+
+When `CONTEXT.md` and your instinct disagree, `CONTEXT.md` wins. When a term crosses a repo boundary, the `CONTEXT-MAP.md` is authoritative.
+
 ## Architecture
 
 cortex is the **M7 application** of the metafactory Myelin stack — the operator's collaboration surface that consumes the bus (M2–M6) and presents activity to humans. It replaces both `the-metafactory/grove` (legacy v0.29.0) and `the-metafactory/grove-v2` (v0.22.1) as the canonical home for Discord/Mattermost adapters, Mission Control dashboard, workflow runner, and bus-side taps.
@@ -32,10 +41,10 @@ Internal componentisation (per `docs/architecture.md` §8):
 - `src/adapters/` — Platform adapters (Discord, Mattermost) that register with the surface-router rather than subscribing to NATS directly. `mock.ts` for tests.
 - `src/runner/` — CC orchestration: cc-session (streaming `claude --print --output-format stream-json`), session-manager (per-thread CC session for `--resume`), stream-parser, agent-team (multi-agent moderator + participants), dispatch-listener, security-preamble, prompt-builder, worklog-manager, task-tracker, bash-guard hook.
 - `src/taps/` — Publishers onto the bus: `cc-events/` (CC hooks + EventLogger + relay + cloud-publisher), `gh-webhook/` (CF Worker at `hooks.meta-factory.ai` validating GitHub HMAC and forwarding).
-- `src/cli/` — Operator CLIs: `discord/` (post messages, read channels, list threads from terminal), `cldyo-live` (instrumented Opus session wrapper), `cortex/` (top-level CLI).
+- `src/cli/` — Principal CLIs: `discord/` (post messages, read channels, list threads from terminal), `cldyo-live` (instrumented Opus session wrapper), `cortex/` (top-level CLI).
 - `src/renderers/` — Renderer interface + dashboard renderer + pagerduty renderer (the G-1111 §4.6 fail-safe pair).
 - `src/common/` — Shared types + utilities: agent-detection, event-processor, event-utils, github-events, agents/, config/, timeout, types/, usage.
-- `src/services/` — launchd plists: `ai.meta-factory.cortex.bot.plist`, `ai.meta-factory.cortex.relay.plist`.
+- `src/services/` — launchd plists: `ai.meta-factory.cortex.meta-factory.plist` (metafactory dev stack), `ai.meta-factory.cortex.work.plist` (parallel work stack — cortex#244), `ai.meta-factory.cortex.relay.plist` (shared relay).
 - `src/settings/` — `cortex-hooks.json` (CC hook registration).
 - Config: `~/.config/cortex/cortex.yaml` (post-MIG-7.9 — migrated from grove-v2 `~/.config/grove/bot.yaml` via `migrate-config`).
 
@@ -120,6 +129,7 @@ Useful at the end of workflows to update the team. See `discord --help` for full
 ## Critical Rules
 
 - NEVER describe code you haven't read. Use Read/Glob/Grep to verify before making claims.
+- An **"X doesn't exist" claim is an assertion — verify it before acting on it.** Grep is case- and separator-blind: a `response_routing` search silently misses `responseRouting`/`ResponseRouting`. Before concluding a symbol/field/string is absent, prefer **LSP symbol search** (`workspaceSymbol`/`findReferences`), or grep case-insensitively (`-i`) and across snake/camel/Pascal variants. Case-blind greps have caused both a missed-migration cluster and a redundant rebuild of already-shipped code.
 - NEVER fabricate file names, class names, or architecture. If unsure, read the source.
 - Fix ALL errors found during type checks, tests, or linting -- even if pre-existing or introduced by another developer. Never dismiss errors as "not from our changes." If you see it, fix it.
 - Before fixing a bug or implementing a feature, ALWAYS check open PRs (`gh pr list`) and issues (`gh issue list`) first. Someone may already be working on it, or there may be a PR ready to merge that addresses it. Don't duplicate work -- review what exists before racing to write code.
@@ -247,6 +257,8 @@ This repo follows ecosystem SOPs defined in [compass](https://github.com/the-met
 | **Retrospective** | Post-work review, extracting process patterns | `compass/sops/retrospective-and-process-mining.md` |
 | **New repo** | Bootstrapping a new repository in the ecosystem | `compass/metafactory/sops/new-repo.md` |
 | **PR review** | Reviewing a PR, before approving or merging | `compass/sops/pr-review.md` |
+| **Federation wire protocol** | Writing/reviewing any `federated.*` / cross-principal bus code (subjects, source, originator, deriveNatsSubject, selectLink, peers[], review consumer) | `compass/sops/federation-wire-protocol.md` |
+| **Autonomous work** | Driving delegated work unattended (principal asleep/away) — slice loop, review, gate, merge | `compass/sops/autonomous-work.md` |
 | **Security incident response** | Detecting, containing, or investigating a security finding | `compass/metafactory/sops/security-incident-response.md` |
 
 ### Examples
