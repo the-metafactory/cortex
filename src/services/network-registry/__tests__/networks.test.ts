@@ -13,6 +13,7 @@ import {
   type PrincipalKey,
 } from "./helpers";
 import { canonicalJSON, verifyEd25519 } from "../src/signing";
+import { getStore } from "../src/store";
 import type {
   NetworkDescriptor,
   NetworkRoster,
@@ -108,114 +109,23 @@ describe("GET /networks/:id/roster", () => {
 });
 
 // =============================================================================
-// S2.5 (#745, DD-12) — GET /networks/:id descriptor + POST register
+// S2.5 (#745, DD-12) — GET /networks/:id descriptor
+//
+// Topology is seeded at the STORE level (admin act), NOT via a public HTTP
+// write route — an unauthenticated write the registry then signs would defeat
+// DD-9 (descriptor poisoning → federation MITM). `getStore(env)` returns the
+// same memoised in-memory singleton the route reads, so a direct
+// `putNetwork(...)` here is what the GET handler will serve.
 // =============================================================================
 
-/** Seed a network's topology via the register route. */
+/** Seed a network's topology directly at the store level (admin act). */
 async function seedNetwork(
   networkId: string,
   hubUrl: string,
   leafPort: number,
-): Promise<Response> {
-  return post(`/networks/${networkId}/register`, {
-    network_id: networkId,
-    hub_url: hubUrl,
-    leaf_port: leafPort,
-  });
+): Promise<void> {
+  await getStore(env).putNetwork(networkId, hubUrl, leafPort);
 }
-
-describe("POST /networks/:id/register — seed topology", () => {
-  test("seeds a network and returns a signed descriptor", async () => {
-    const res = await seedNetwork(
-      "research-collab",
-      "tls://hub.meta-factory.ai:7422",
-      7422,
-    );
-    expect(res.status).toBe(201);
-    const json = (await res.json()) as SignedAssertion<NetworkDescriptor>;
-    expect(json.payload.network_id).toBe("research-collab");
-    expect(json.payload.hub_url).toBe("tls://hub.meta-factory.ai:7422");
-    expect(json.payload.leaf_port).toBe(7422);
-    expect(json.payload.members).toEqual([]);
-    expect(json.signature.length).toBeGreaterThan(0);
-  });
-
-  test("rejects invalid network_id in path", async () => {
-    const res = await post("/networks/INVALID_CAPS/register", {
-      network_id: "INVALID_CAPS",
-      hub_url: "tls://h:7422",
-      leaf_port: 7422,
-    });
-    expect(res.status).toBe(400);
-  });
-
-  test("rejects body network_id mismatch with path", async () => {
-    const res = await post("/networks/research-collab/register", {
-      network_id: "other-net",
-      hub_url: "tls://h:7422",
-      leaf_port: 7422,
-    });
-    expect(res.status).toBe(400);
-    const json = (await res.json()) as { details: { field: string }[] };
-    expect(json.details.some((d) => d.field === "network_id")).toBe(true);
-  });
-
-  test("rejects empty hub_url", async () => {
-    const res = await post("/networks/research-collab/register", {
-      network_id: "research-collab",
-      hub_url: "",
-      leaf_port: 7422,
-    });
-    expect(res.status).toBe(400);
-  });
-
-  test("rejects out-of-range / non-integer leaf_port", async () => {
-    const bad = await post("/networks/research-collab/register", {
-      network_id: "research-collab",
-      hub_url: "tls://h:7422",
-      leaf_port: 70000,
-    });
-    expect(bad.status).toBe(400);
-    const float = await post("/networks/research-collab/register", {
-      network_id: "research-collab",
-      hub_url: "tls://h:7422",
-      leaf_port: 74.22,
-    });
-    expect(float.status).toBe(400);
-  });
-
-  test("re-seed UPSERTs the topology in place", async () => {
-    await seedNetwork("research-collab", "tls://old:7422", 7422);
-    const res = await seedNetwork("research-collab", "tls://new:7500", 7500);
-    expect(res.status).toBe(201);
-
-    const get1 = await get("/networks/research-collab");
-    const json = (await get1.json()) as SignedAssertion<NetworkDescriptor>;
-    expect(json.payload.hub_url).toBe("tls://new:7500");
-    expect(json.payload.leaf_port).toBe(7500);
-  });
-
-  test("returns 503 and does not mutate when REGISTRY_SIGNING_KEY is absent", async () => {
-    const unconfigured: Env = { ENVIRONMENT: "test" };
-    const res = await app.fetch(
-      new Request("http://localhost/networks/research-collab/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          network_id: "research-collab",
-          hub_url: "tls://h:7422",
-          leaf_port: 7422,
-        }),
-      }),
-      unconfigured,
-    );
-    expect(res.status).toBe(503);
-
-    // Confirm nothing was persisted via the 503 path (configured env, 404).
-    const getRes = await get("/networks/research-collab");
-    expect(getRes.status).toBe(404);
-  });
-});
 
 describe("GET /networks/:id — descriptor (DD-12)", () => {
   test("rejects invalid network_id", async () => {
@@ -239,12 +149,23 @@ describe("GET /networks/:id — descriptor (DD-12)", () => {
 
     // Shape the S1 client's parseDescriptor reads.
     expect(json.payload.network_id).toBe("research-collab");
-    expect(typeof json.payload.hub_url).toBe("string");
+    expect(json.payload.hub_url).toBe("tls://hub.meta-factory.ai:7422");
     expect(json.payload.hub_url.length).toBeGreaterThan(0);
+    expect(json.payload.leaf_port).toBe(7422);
     expect(Number.isInteger(json.payload.leaf_port)).toBe(true);
-    expect(Array.isArray(json.payload.members)).toBe(true);
+    expect(json.payload.members).toEqual([]);
     expect(json.registry).toBe(env.REGISTRY_PUBLIC_KEY ?? "");
     expect(json.signature.length).toBeGreaterThan(0);
+  });
+
+  test("reflects a re-seed (store UPSERT) on the next GET", async () => {
+    await seedNetwork("research-collab", "tls://old:7422", 7422);
+    await seedNetwork("research-collab", "tls://new:7500", 7500);
+
+    const res = await get("/networks/research-collab");
+    const json = (await res.json()) as SignedAssertion<NetworkDescriptor>;
+    expect(json.payload.hub_url).toBe("tls://new:7500");
+    expect(json.payload.leaf_port).toBe(7500);
   });
 
   test("signature verifies against the registry pubkey (mirrors principals route)", async () => {
@@ -294,7 +215,7 @@ describe("GET /networks/:id — descriptor (DD-12)", () => {
 
     const res = await get("/networks/research-collab");
     const json = (await res.json()) as SignedAssertion<NetworkDescriptor>;
-    // Sorted, de-duplicated principal ids.
+    // Sorted principal ids (one entry per principal — inherently unique).
     expect(json.payload.members).toEqual(["alpha", "beta"]);
   });
 });

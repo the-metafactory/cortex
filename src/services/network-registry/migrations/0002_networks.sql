@@ -1,9 +1,13 @@
 -- cortex#745 (S2.5 — Network Join Control Plane, epic #733, spec DD-12):
 -- durable storage for network TOPOLOGY records (hub_url / leaf_port).
 --
--- Backs `POST /networks/:id/register` (admin-seed) + `GET /networks/:id`
--- (the signed descriptor a joining stack reads to autoconfigure its leaf —
--- DD-12, the "feel like TCP/IP" north star: no out-of-band port/creds).
+-- Backs `GET /networks/:id` (the signed descriptor a joining stack reads to
+-- autoconfigure its leaf — DD-12, the "feel like TCP/IP" north star: no
+-- out-of-band port/creds). Rows are seeded at the STORE level by an admin
+-- (deploy-time seed script / direct D1 write), NOT via a public HTTP route —
+-- an unauthenticated write the registry then signs would defeat DD-9
+-- (descriptor poisoning → federation MITM). The secure signed-admin write API
+-- is a separate follow-up.
 --
 -- Apply:
 --   bunx wrangler d1 migrations apply cortex-network-registry-dev --env dev --remote

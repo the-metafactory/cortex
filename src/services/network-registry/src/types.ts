@@ -196,9 +196,12 @@ export interface NetworkDescriptor {
 
 /**
  * S2.5 (#745) — the stored network-topology record backing the descriptor's
- * `hub_url` + `leaf_port`. Admin-seeded via `POST /networks/{id}/register`
- * and read by `GET /networks/{id}`. `members[]` is NOT stored here — it is
- * derived from the principal roster at descriptor-read time.
+ * `hub_url` + `leaf_port`. Seeded at the STORE level by an admin (deploy-time
+ * seed script / direct D1 write), NOT via a public HTTP route — an
+ * unauthenticated write that the registry then signs would defeat DD-9
+ * (descriptor poisoning → federation MITM). Read by `GET /networks/{id}`.
+ * `members[]` is NOT stored here — it is derived from the principal roster at
+ * descriptor-read time.
  */
 export interface NetworkRecord {
   network_id: string;
@@ -208,19 +211,6 @@ export interface NetworkRecord {
   leaf_port: number;
   /** ISO-8601 UTC; when the topology was last (re-)seeded. */
   updated_at: string;
-}
-
-/**
- * The body an admin posts to `POST /networks/{network_id}/register` to
- * seed/update a network's topology. Narrow + hand-validated (no Zod) like the
- * rest of the registry; the route enforces the network-id path match and the
- * `hub_url` / `leaf_port` grammar before the store upsert.
- */
-export interface NetworkRegistration {
-  /** Must match the URL path parameter. */
-  network_id: string;
-  hub_url: string;
-  leaf_port: number;
 }
 
 /**

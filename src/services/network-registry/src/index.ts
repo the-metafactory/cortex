@@ -8,7 +8,6 @@
  * Endpoints (D.4.2):
  *   POST /principals/{principal_id}/register
  *   GET  /principals/{principal_id}
- *   POST /networks/{network_id}/register  — admin-seed topology (S2.5)
  *   GET  /networks/{network_id}           — signed descriptor (S2.5, DD-12)
  *   GET  /networks/{network_id}/roster
  *   GET  /capabilities?query=<substring>

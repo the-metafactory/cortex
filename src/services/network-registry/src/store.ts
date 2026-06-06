@@ -108,9 +108,11 @@ export interface RegistryStore {
 
   /**
    * S2.5 (#745) — upsert a network's topology record (`hub_url` /
-   * `leaf_port`). Backs `POST /networks/{id}/register`. Returns the post-write
-   * view. The route layer has already enforced grammar; the store only
-   * persists.
+   * `leaf_port`). Seeded by an admin at the store level (deploy-time seed
+   * script / direct D1 write), NOT via a public HTTP route — an unauthenticated
+   * write the registry then signs would defeat DD-9 (descriptor poisoning).
+   * Returns the post-write view. Callers are responsible for validating
+   * `hubUrl` / `leafPort`; the store only persists.
    */
   putNetwork(
     networkId: string,
@@ -569,8 +571,9 @@ export function rosterFromPrincipals(
  * for the descriptor. Reuses the SAME implicit-membership rule as
  * {@link rosterFromPrincipals} (a principal is "in" network X if any announced
  * capability lists X) so the descriptor's `members[]` can never disagree with
- * `/roster`. Returns sorted, de-duplicated principal ids for a stable,
- * canonical-friendly response.
+ * `/roster`. The roster already yields at most one entry per principal, so the
+ * ids are inherently unique; we sort them for a stable, canonical-friendly
+ * response.
  */
 export function membersFromPrincipals(
   principals: PrincipalRecord[],
