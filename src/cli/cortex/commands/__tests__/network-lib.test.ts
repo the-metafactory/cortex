@@ -587,6 +587,38 @@ describe("#762 empty roster preserves hand-pins", () => {
     // A non-empty roster is the normal path — no preservation warning.
     expect(res.warnings).toBeUndefined();
   });
+
+  test("join PRESERVES the hand-authored announce_capabilities (does not blank it)", async () => {
+    // The hand-authored caps are the SOURCE deriveJoinInputs reads to announce
+    // into the roster. If join blanks them to [], a re-join announces nothing →
+    // the roster empties again, defeating the fix. They must survive a join.
+    const withCaps: PolicyFederatedNetwork = {
+      ...handPinnedNetwork("metafactory"),
+      announce_capabilities: ["chat", "release"],
+    };
+
+    // Non-empty roster path (the normal converge).
+    const a = makeFakes({ initialNetworks: [withCaps] });
+    const resA = await joinNetwork("metafactory", LOCAL, a.ports);
+    expect(resA.ok).toBe(true);
+    expect(
+      a.storeRef.networks.find((n) => n.id === "metafactory")!.announce_capabilities,
+    ).toEqual(["chat", "release"]);
+
+    // Empty-roster path (the bug condition) — caps still preserved.
+    const b = makeFakes({
+      fetch: {
+        status: "ok",
+        value: { descriptor: descriptorFor("metafactory"), roster: emptyRosterFor("metafactory") },
+      },
+      initialNetworks: [withCaps],
+    });
+    const resB = await joinNetwork("metafactory", LOCAL, b.ports);
+    expect(resB.ok).toBe(true);
+    expect(
+      b.storeRef.networks.find((n) => n.id === "metafactory")!.announce_capabilities,
+    ).toEqual(["chat", "release"]);
+  });
 });
 
 // =============================================================================

@@ -254,7 +254,13 @@ export async function joinNetwork(
     peers,
     accept_subjects: [acceptSubject],
     deny_subjects: [],
-    announce_capabilities: [],
+    // #762 — PRESERVE the hand-authored announce_capabilities for this network.
+    // `deriveJoinInputs` sources the caps the join announces INTO the roster from
+    // exactly this config block, so blanking it to [] here would make a re-join
+    // (or any later config-derived join) announce nothing → the roster empties
+    // again, defeating the fix above. Carry the prior entry's value verbatim
+    // (default [] only on a first join where no block exists yet).
+    announce_capabilities: priorEntry?.announce_capabilities ?? [],
     max_hop: stack.maxHop ?? 1,
   };
 
