@@ -1731,10 +1731,85 @@ export const PolicyFederatedSchema = z.object({
 
 export type PolicyFederated = z.infer<typeof PolicyFederatedSchema>;
 
+/**
+ * `policy.public` block — IAW S5 (Network Join Control Plane, #739, spec F5) —
+ * the **public scope opt-in** (the open square of the Internet of Agentic Work).
+ *
+ * The `public` scope (CONTEXT.md §Scope) is unrestricted and carries NO
+ * principal/stack segment: subjects are `public.{domain}.{entity}.{action}`,
+ * NOT `public.{principal}.{stack}.…`. A stack opts in explicitly with
+ * `cortex network join public`, which writes this block.
+ *
+ * ## Safe-by-default (OQ1 — the deferred abuse story)
+ *
+ * Spec OQ1 leaves the public-scope abuse model OPEN: anonymous offer/claim on
+ * `public.>` needs a spam/abuse story before it can be enabled beyond an
+ * allowlist. So this block is **deny-by-default** on the INBOUND side:
+ *
+ *   - `enabled: false` (the default) — the surface-router drops ALL inbound
+ *     `public.*` traffic. Opting into the public scope to ANNOUNCE/DISCOVER
+ *     capabilities (the registry control-plane side) does not by itself open
+ *     the local bus to public senders.
+ *   - `enabled: true` + `allow_principals: []` — still drops every inbound
+ *     public sender. An empty allowlist is "trust nobody on public", NOT
+ *     "trust everybody". A non-allowlisted public sender is NEVER auto-trusted.
+ *   - `enabled: true` + `allow_principals: ["jc", …]` — admits inbound public
+ *     traffic ONLY from those signing principals. This is the allowlist gate.
+ *
+ * There is deliberately NO `open_claim`/`anonymous` flag: open anonymous claim
+ * on `public.>` is OUT OF SCOPE for S5 and is a later decision on the security
+ * ramp (DD-7), gated on the OQ1 abuse story. Until then the allowlist is the
+ * only way to admit a public sender.
+ *
+ * The block is fully additive — absence means "not opted into public scope"
+ * and the gate drops inbound `public.*` exactly as `enabled: false` does.
+ */
+export const PolicyPublicSchema = z.object({
+  /**
+   * Opt-in switch for the public scope. `false` (default) → inbound `public.*`
+   * is dropped by the surface-router; announcing/discovering capabilities via
+   * the registry is unaffected (that is a control-plane action, not a wire
+   * trust grant). `true` → inbound public traffic is admitted, but ONLY from
+   * `allow_principals[]` (still deny-by-default when that list is empty).
+   */
+  enabled: z.boolean().default(false),
+  /**
+   * Allowlist of public-scope sender principal ids. An inbound `public.*`
+   * envelope is admitted only when its SOURCE principal
+   * (`principalFromEnvelope`) is in this list. Empty = "trust nobody on
+   * public" (the safe default — a non-allowlisted sender is NOT auto-trusted).
+   * This is the OQ1 safe gate: open anonymous claim is deferred to the
+   * security ramp.
+   */
+  allow_principals: z.array(
+    z.string().regex(
+      LETTER_PREFIX_ID_REGEX,
+      "public.allow_principals[] entries must match the principal id grammar (lowercase alphanumeric + hyphen, starting with a letter)",
+    ),
+  ).default([]),
+  /**
+   * Capability ids this stack announces to the registry's PUBLIC capability
+   * index (the `/capabilities` search surface) when joined to the public
+   * scope. Distinct from `policy.federated.networks[].announce_capabilities`
+   * (which scopes announcements to a named network) — public announcements are
+   * unrestricted-discovery. Empty = "discoverable presence with no advertised
+   * capabilities". Same `<domain>.<entity>` grammar as the federated list.
+   */
+  announce_capabilities: z.array(
+    z.string().regex(
+      /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/,
+      "announce_capabilities[] entries must follow the <domain>.<entity> capability id grammar (e.g. 'code-review.typescript')",
+    ),
+  ).default([]),
+}).strict();
+
+export type PolicyPublic = z.infer<typeof PolicyPublicSchema>;
+
 export const PolicySchema = z.object({
   principals: z.array(PolicyPrincipalSchema).default([]),
   roles: z.array(PolicyRoleSchema).default([]),
   federated: PolicyFederatedSchema.optional(),
+  public: PolicyPublicSchema.optional(),
   // v2.0.0 cutover (cortex#297) — `parallel_mode_enabled` retired with
   // the parallel-mode plumbing in adapters. PolicyEngine is the sole
   // authorisation gate; legacy role-resolver is gone.

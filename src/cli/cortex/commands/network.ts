@@ -56,8 +56,15 @@ import type { NetworkPorts } from "./network-ports";
 import {
   buildLivePorts,
   buildDryRunPorts,
+  buildLivePublicPorts,
+  buildDryRunPublicPorts,
   type LivePortsConfig,
 } from "./network-adapters";
+import {
+  joinPublic,
+  leavePublic,
+  type PublicJoinInputs,
+} from "./network-public-lib";
 
 export { type ExitResult } from "./_shared/exit-result";
 
@@ -69,6 +76,9 @@ type NetworkSubcommand = "join" | "leave" | "status";
 
 const NETWORK_ID_RE = /^[a-z][a-z0-9-]*$/;
 const PRINCIPAL_ID_RE = /^[a-z][a-z0-9-]*$/;
+// S5 — capability id grammar (`<domain>.<entity>`, matches the schema's
+// announce_capabilities[] rule) + principal-id grammar for the allowlist.
+const CAPABILITY_ID_RE = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/;
 
 const SPEC: SubcommandSpec<NetworkSubcommand> = {
   cliName: "network",
@@ -87,6 +97,12 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--plist": "value",
         "--max-hop": "value",
         "--leaf-node": "value",
+        // S5 (#739) — public-scope flags. `--capabilities` (comma-separated)
+        // announces to the public index; `--allow` (comma-separated) is the
+        // INBOUND allowlist (empty ⇒ deny-by-default, OQ1 safe). Only consumed
+        // on `join public`; ignored on a federated join.
+        "--capabilities": "value",
+        "--allow": "value",
         "--apply": "bool",
         "--dry-run": "bool",
       },
@@ -96,6 +112,8 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
       flags: {
         "--principal": "value",
         "--stack": "value",
+        "--registry-url": "value",
+        "--seed-path": "value",
         "--nats-config": "value",
         "--plist": "value",
         "--apply": "bool",
@@ -181,6 +199,13 @@ async function runJoin(
   flags: Record<string, string | true>,
   json: boolean,
 ): Promise<ExitResult> {
+  // S5 (#739) — `join public` is the open-square opt-in, structurally distinct
+  // from a federated join (no leaf, no creds/account, no peers). Route it to
+  // the public path BEFORE the federated network-id grammar check ("public" is
+  // the literal scope name, not a network id).
+  if (networkId === "public") {
+    return runJoinPublic(flags, json);
+  }
   if (!NETWORK_ID_RE.test(networkId)) {
     return usageError("join", `network "${networkId}" must be lowercase alphanumeric + hyphen, letter-prefixed`, json);
   }
@@ -239,6 +264,10 @@ async function runLeave(
   flags: Record<string, string | true>,
   json: boolean,
 ): Promise<ExitResult> {
+  // S5 (#739) — `leave public` reverses the open-square opt-in.
+  if (networkId === "public") {
+    return runLeavePublic(flags, json);
+  }
   if (!NETWORK_ID_RE.test(networkId)) {
     return usageError("leave", `network "${networkId}" must be lowercase alphanumeric + hyphen, letter-prefixed`, json);
   }
@@ -295,6 +324,94 @@ async function runStatus(
     lines.push("");
   }
   return ok(lines.join("\n"));
+}
+
+// =============================================================================
+// S5 (#739) — public-scope opt-in (join/leave public)
+// =============================================================================
+
+/** Split a comma-separated flag value into trimmed, non-empty tokens. */
+function splitCsv(raw: string | undefined): string[] {
+  if (raw === undefined) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+async function runJoinPublic(
+  flags: Record<string, string | true>,
+  json: boolean,
+): Promise<ExitResult> {
+  const principalRes = requireValueFlag(flags, "--principal");
+  if (!principalRes.ok) return usageError("join", principalRes.reason, json);
+  if (!PRINCIPAL_ID_RE.test(principalRes.value)) {
+    return usageError("join", `--principal "${principalRes.value}" must be lowercase alphanumeric + hyphen, letter-prefixed`, json);
+  }
+  const slugRes = resolveStackSlug(principalRes.value, optionalValueFlag(flags, "--stack"));
+  if (!slugRes.ok) return usageError("join", slugRes.reason, json);
+
+  // Public-path required flags: registry (announce), seed (proof-of-possession),
+  // nats-config (subscribe public.>), plist (daemon arg). NOT creds/account —
+  // public has no leaf.
+  for (const required of ["--registry-url", "--seed-path", "--nats-config", "--plist"]) {
+    const r = requireValueFlag(flags, required);
+    if (!r.ok) return usageError("join", r.reason, json);
+  }
+
+  // --capabilities (CSV) — announce to the public index. Validate each id.
+  const capabilities = splitCsv(optionalValueFlag(flags, "--capabilities"));
+  for (const cap of capabilities) {
+    if (!CAPABILITY_ID_RE.test(cap)) {
+      return usageError("join", `--capabilities "${cap}" must be a <domain>.<entity> capability id (e.g. 'code-review.typescript')`, json);
+    }
+  }
+
+  // --allow (CSV) — the INBOUND allowlist. Empty ⇒ deny-by-default (OQ1 safe).
+  const allowPrincipals = splitCsv(optionalValueFlag(flags, "--allow"));
+  for (const p of allowPrincipals) {
+    if (!PRINCIPAL_ID_RE.test(p)) {
+      return usageError("join", `--allow "${p}" must be a principal id (lowercase alphanumeric + hyphen, letter-prefixed)`, json);
+    }
+  }
+
+  const applyRes = resolveApply(flags);
+  if (!applyRes.ok) return usageError("join", applyRes.reason, json);
+
+  const cfg = portsConfig("public", principalRes.value, slugRes.slug, flags);
+  const ports = applyRes.apply ? buildLivePublicPorts(cfg) : buildDryRunPublicPorts(cfg);
+  const inputs: PublicJoinInputs = { capabilities, allowPrincipals };
+
+  const res = await joinPublic(inputs, ports);
+  return renderFlowResult("join", "public", res.ok, res.reason, res.steps, applyRes.apply, json, {
+    inbound: res.written?.enabled === true ? "enabled" : "disabled",
+    allow: (res.written?.allow_principals ?? []).join(","),
+    announced: capabilities.join(","),
+  });
+}
+
+async function runLeavePublic(
+  flags: Record<string, string | true>,
+  json: boolean,
+): Promise<ExitResult> {
+  const principalRes = requireValueFlag(flags, "--principal");
+  if (!principalRes.ok) return usageError("leave", principalRes.reason, json);
+  const slugRes = resolveStackSlug(principalRes.value, optionalValueFlag(flags, "--stack"));
+  if (!slugRes.ok) return usageError("leave", slugRes.reason, json);
+  for (const required of ["--registry-url", "--seed-path", "--nats-config", "--plist"]) {
+    const r = requireValueFlag(flags, required);
+    if (!r.ok) return usageError("leave", r.reason, json);
+  }
+  const applyRes = resolveApply(flags);
+  if (!applyRes.ok) return usageError("leave", applyRes.reason, json);
+
+  const cfg = portsConfig("public", principalRes.value, slugRes.slug, flags);
+  const ports = applyRes.apply ? buildLivePublicPorts(cfg) : buildDryRunPublicPorts(cfg);
+
+  const res = await leavePublic(ports);
+  return renderFlowResult("leave", "public", res.ok, res.reason, res.steps, applyRes.apply, json, {
+    not_joined: res.notJoined === true ? "true" : "false",
+  });
 }
 
 // =============================================================================
@@ -426,6 +543,17 @@ Subcommands:
   leave   Reverse a join cleanly: remove the network + leaf include, drop the
           plist -c arg if no networks remain, restart. Idempotent.
 
+  join public   (S5, #739) Opt into the PUBLIC scope — the open square of the
+          Internet of Agentic Work. Announces --capabilities to the registry
+          public index + subscribes public.> + writes the policy.public opt-in.
+          SAFE BY DEFAULT (OQ1): without --allow, inbound public is DISABLED
+          (announce/discover only). With --allow <ids>, inbound is enabled but
+          ALLOWLIST-gated to those principals — a non-allowlisted public sender
+          is NEVER auto-trusted. There is no open-claim flag (deferred to the
+          security ramp). public carries NO leaf — no --creds/--account needed.
+  leave public  Reverse it: deregister from the public index + unsubscribe
+          public.> + remove policy.public. Idempotent.
+
 Safety:
   join/leave default to DRY-RUN (no disk/daemon mutation — they print the
   intended actions). Pass --apply to execute for real. --apply and --dry-run
@@ -443,6 +571,11 @@ Flags:
   --plist <p>             nats-server launchd plist to ensure loads the config.
   --leaf-node <name>      Leaf connection name on the network entry (default: network id).
   --max-hop <n>           Hop budget written on the network (default: 1).
+  --capabilities <csv>    (join public) Comma-separated capability ids to announce
+                          to the public index (e.g. code-review.typescript,research.synthesis).
+  --allow <csv>           (join public) Comma-separated INBOUND allowlist of public
+                          sender principals. Empty (default) = inbound DISABLED (OQ1
+                          safe). Non-empty = inbound enabled, gated to these ids only.
   --monitor-url <url>     (status) nats-server monitor base URL for leaf telemetry.
   --apply                 Execute the live mutation (default: dry-run).
   --json                  Emit a { status, items, data, error } envelope.

@@ -31,6 +31,7 @@ import {
   PathsConfigSchema,
   PolicyFederatedRegistrySchema,
   PolicyFederatedSchema,
+  PolicyPublicSchema,
   RendererSchema,
 } from "../cortex-config";
 
@@ -851,6 +852,49 @@ describe("PolicyFederatedRegistrySchema — IAW D.4.3", () => {
       registry: { url: "https://network.meta-factory.ai" },
     });
     expect(withReg.registry?.url).toBe("https://network.meta-factory.ai");
+  });
+});
+
+describe("PolicyPublicSchema — IAW S5 (#739) public-scope opt-in (OQ1 safe default)", () => {
+  test("defaults are deny-by-default: enabled=false, empty allowlist", () => {
+    const parsed = PolicyPublicSchema.parse({});
+    expect(parsed.enabled).toBe(false);
+    expect(parsed.allow_principals).toEqual([]);
+    expect(parsed.announce_capabilities).toEqual([]);
+  });
+
+  test("there is NO open-claim / anonymous knob (strict — rejects extra keys)", () => {
+    // The safe-default contract: a config CANNOT express 'open anonymous claim'.
+    // .strict() rejects an attempt to add one, so the abuse story stays deferred.
+    expect(() =>
+      PolicyPublicSchema.parse({ enabled: true, open_claim: true }),
+    ).toThrow();
+    expect(() =>
+      PolicyPublicSchema.parse({ enabled: true, anonymous: true }),
+    ).toThrow();
+  });
+
+  test("accepts an explicit allowlist (the only way to admit a public sender)", () => {
+    const parsed = PolicyPublicSchema.parse({
+      enabled: true,
+      allow_principals: ["jc", "joel"],
+      announce_capabilities: ["code-review.typescript"],
+    });
+    expect(parsed.enabled).toBe(true);
+    expect(parsed.allow_principals).toEqual(["jc", "joel"]);
+    expect(parsed.announce_capabilities).toEqual(["code-review.typescript"]);
+  });
+
+  test("rejects a malformed allow_principals id", () => {
+    expect(() =>
+      PolicyPublicSchema.parse({ enabled: true, allow_principals: ["BAD_ID"] }),
+    ).toThrow();
+  });
+
+  test("rejects a malformed announce_capabilities id (must be <domain>.<entity>)", () => {
+    expect(() =>
+      PolicyPublicSchema.parse({ announce_capabilities: ["nodot"] }),
+    ).toThrow();
   });
 });
 

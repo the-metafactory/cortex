@@ -25,10 +25,12 @@ import { validateEnvelope } from "../myelin/envelope-validator";
 import {
   createSurfaceRouter,
   evaluateFederationGate,
+  evaluatePublicGate,
   evaluateVisibility,
   subjectMatches,
   type SurfaceAdapter,
 } from "../surface-router";
+import type { PolicyPublic } from "../../common/types/cortex-config";
 import type { SystemEventSource } from "../system-events";
 
 // ---------------------------------------------------------------------------
@@ -957,9 +959,23 @@ describe("evaluateVisibility — pure rule predicate", () => {
   });
 });
 
+// S5 (#739) — these visibility tests dispatch `public.*` envelopes to exercise
+// the VISIBILITY filter (not the public gate). After S5 the public gate is
+// deny-by-default, so they must first opt into the public scope and allowlist
+// the test envelope's source principal (`metafactory`, from `makeEnvelope`'s
+// default source `metafactory.pilot.local`) — otherwise the public gate drops
+// them BEFORE the visibility filter under test ever runs.
+const PUBLIC_VISIBILITY_OPTIN: PolicyPublic = {
+  enabled: true,
+  allow_principals: ["metafactory"],
+  announce_capabilities: [],
+};
+
 describe("createSurfaceRouter — visibility filter wiring", () => {
   test("adapter with no visibility config receives every envelope (back-compat)", async () => {
-    const router = createSurfaceRouter(fakeRuntime());
+    const router = createSurfaceRouter(fakeRuntime(), {
+      public: PUBLIC_VISIBILITY_OPTIN,
+    });
     const a = recordingAdapter({ id: "a", subjects: [">"] });
     router.register(a.adapter);
 
@@ -1146,6 +1162,7 @@ describe("createSurfaceRouter — visibility filter wiring", () => {
     const fake = fakeRuntimeWithPublishLog();
     const router = createSurfaceRouter(fake.runtime, {
       systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+      public: PUBLIC_VISIBILITY_OPTIN,
     });
     const a = recordingAdapter({
       id: "federation-surface",
@@ -1225,6 +1242,7 @@ describe("createSurfaceRouter — visibility filter wiring", () => {
     const fake = fakeRuntimeWithPublishLog();
     const router = createSurfaceRouter(fake.runtime, {
       systemEventSource: TEST_SYSTEM_EVENT_SOURCE,
+      public: PUBLIC_VISIBILITY_OPTIN,
     });
     const a = recordingAdapter({
       id: "strict-dashboard",
@@ -2137,6 +2155,203 @@ describe("createSurfaceRouter — F-3d sourceLink threaded into the gate", () =>
       makeFederatedEnvelope(),
       "federated.research-collab.tasks.code-review.ts",
       "leaf-research",
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(a.calls).toHaveLength(1);
+  });
+});
+
+// ===========================================================================
+// S5 (#739) — public-scope allowlist gate (OQ1 safe default)
+// ===========================================================================
+
+// A `public.*` envelope carries NO principal/stack on the SUBJECT (scope grammar:
+// `public.{domain}.{entity}.{action}`). The gate keys on the SOURCE principal
+// (the signing identity, leading segment of `envelope.source`), NOT the subject.
+function makePublicEnvelope(sourcePrincipal: string): Envelope {
+  return makeEnvelope({
+    source: `${sourcePrincipal}.somestack.someagent`,
+    sovereignty: {
+      classification: "public",
+      data_residency: "NZ",
+      max_hop: 0,
+      frontier_ok: true,
+      model_class: "any",
+    },
+  });
+}
+
+describe("evaluatePublicGate — OQ1 safe default (deny-by-default)", () => {
+  test("no policy.public block → drop (not opted in; never auto-trusted)", () => {
+    const decision = evaluatePublicGate(
+      "public.tasks.code-review.typescript",
+      makePublicEnvelope("stranger"),
+      undefined,
+    );
+    expect(decision).toMatchObject({ kind: "public_not_enabled" });
+  });
+
+  test("enabled:false → drop even with a populated allowlist", () => {
+    const pub: PolicyPublic = {
+      enabled: false,
+      allow_principals: ["jc"],
+      announce_capabilities: [],
+    };
+    const decision = evaluatePublicGate(
+      "public.tasks.code-review.typescript",
+      makePublicEnvelope("jc"),
+      pub,
+    );
+    expect(decision).toMatchObject({ kind: "public_not_enabled" });
+  });
+
+  test("enabled:true + empty allowlist → drop (trust nobody, NOT everybody)", () => {
+    const pub: PolicyPublic = {
+      enabled: true,
+      allow_principals: [],
+      announce_capabilities: [],
+    };
+    const decision = evaluatePublicGate(
+      "public.tasks.code-review.typescript",
+      makePublicEnvelope("anyone"),
+      pub,
+    );
+    expect(decision).toMatchObject({ kind: "public_sender_not_allowlisted" });
+  });
+
+  test("enabled:true + sender NOT in allowlist → drop (no open anonymous claim)", () => {
+    const pub: PolicyPublic = {
+      enabled: true,
+      allow_principals: ["jc"],
+      announce_capabilities: [],
+    };
+    const decision = evaluatePublicGate(
+      "public.tasks.code-review.typescript",
+      makePublicEnvelope("attacker"),
+      pub,
+    );
+    expect(decision).toMatchObject({
+      kind: "public_sender_not_allowlisted",
+      sourcePrincipal: "attacker",
+    });
+  });
+
+  test("enabled:true + sender IN allowlist → allow", () => {
+    const pub: PolicyPublic = {
+      enabled: true,
+      allow_principals: ["jc", "joel"],
+      announce_capabilities: [],
+    };
+    const decision = evaluatePublicGate(
+      "public.tasks.code-review.typescript",
+      makePublicEnvelope("joel"),
+      pub,
+    );
+    expect(decision).toBe("allow");
+  });
+
+  test("non-public subject → allow (gate is scoped to public.* only)", () => {
+    // Defensive: the gate is only called for public.* subjects, but a
+    // federated/local subject must never be denied by THIS gate.
+    const decision = evaluatePublicGate(
+      "federated.andreas.main.tasks.code-review.ts",
+      makePublicEnvelope("andreas"),
+      { enabled: true, allow_principals: [], announce_capabilities: [] },
+    );
+    expect(decision).toBe("allow");
+  });
+});
+
+describe("evaluatePublicGate — no-principal-segment scope does NOT trip federated peer checks", () => {
+  test("a public.* subject is never routed through the federated peer/network resolution", () => {
+    // The federated gate resolves the SOURCE network from peers[]; if a public
+    // subject leaked into evaluateFederationGate it would be denied as an
+    // unknown_network. Confirm the PUBLIC gate decides public.* purely on the
+    // allowlist — it neither needs nor consults any federated network/peer.
+    const pub: PolicyPublic = {
+      enabled: true,
+      allow_principals: ["jc"],
+      announce_capabilities: [],
+    };
+    // `jc` is allowlisted on PUBLIC but is in NO federated network's peers[].
+    const decision = evaluatePublicGate(
+      "public.tasks.code-review.typescript",
+      makePublicEnvelope("jc"),
+      pub,
+    );
+    expect(decision).toBe("allow");
+
+    // And the federated gate, fed the SAME public subject, would (defensively)
+    // allow-pass it untouched — it is out of the federated domain. This proves
+    // the two gates are disjoint: public never enters federated peer logic.
+    const fedDecision = evaluateFederationGate(
+      "public.tasks.code-review.typescript",
+      makePublicEnvelope("jc"),
+      networksMap([makeNetwork()]),
+    );
+    expect(fedDecision).toBe("allow");
+  });
+});
+
+describe("createSurfaceRouter — public gate threaded into dispatch", () => {
+  test("public.* dropped when not opted in (no adapter render)", async () => {
+    const router = createSurfaceRouter(fakeRuntime(), {});
+    const a = recordingAdapter({ id: "a", subjects: ["public.>"] });
+    router.register(a.adapter);
+    await router.start();
+
+    await router.dispatch(
+      makePublicEnvelope("stranger"),
+      "public.tasks.code-review.typescript",
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(a.calls).toHaveLength(0);
+  });
+
+  test("public.* dropped when sender not allowlisted (no adapter render)", async () => {
+    const router = createSurfaceRouter(fakeRuntime(), {
+      public: { enabled: true, allow_principals: ["jc"], announce_capabilities: [] },
+    });
+    const a = recordingAdapter({ id: "a", subjects: ["public.>"] });
+    router.register(a.adapter);
+    await router.start();
+
+    await router.dispatch(
+      makePublicEnvelope("attacker"),
+      "public.tasks.code-review.typescript",
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(a.calls).toHaveLength(0);
+  });
+
+  test("public.* admitted when sender is allowlisted (adapter renders)", async () => {
+    const router = createSurfaceRouter(fakeRuntime(), {
+      public: { enabled: true, allow_principals: ["jc"], announce_capabilities: [] },
+    });
+    const a = recordingAdapter({ id: "a", subjects: ["public.>"] });
+    router.register(a.adapter);
+    await router.start();
+
+    await router.dispatch(
+      makePublicEnvelope("jc"),
+      "public.tasks.code-review.typescript",
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(a.calls).toHaveLength(1);
+  });
+
+  test("federated.* dispatch is unchanged by the presence of a public block", async () => {
+    const router = createSurfaceRouter(fakeRuntime(), {
+      federated: { networks: [makeNetwork()] },
+      public: { enabled: true, allow_principals: ["jc"], announce_capabilities: [] },
+    });
+    const a = recordingAdapter({ id: "a", subjects: ["federated.research-collab.>"] });
+    router.register(a.adapter);
+    await router.start();
+
+    await router.dispatch(
+      makeFederatedEnvelope(),
+      "federated.research-collab.tasks.code-review.typescript",
     );
     await new Promise((r) => setTimeout(r, 0));
     expect(a.calls).toHaveLength(1);

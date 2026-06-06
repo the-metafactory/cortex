@@ -48,7 +48,10 @@ import {
   materialFromSeedString,
   registerStackIdentity,
 } from "../../../bus/stack-provisioning";
-import type { PolicyFederatedNetwork } from "../../../common/types/cortex-config";
+import type {
+  PolicyFederatedNetwork,
+  PolicyPublic,
+} from "../../../common/types/cortex-config";
 
 import type {
   ConfigStorePort,
@@ -60,6 +63,12 @@ import type {
   PlistPort,
   RenderLeafInputs,
 } from "./network-ports";
+import type {
+  PublicPolicyPort,
+  PublicRegistryPort,
+  PublicScopePorts,
+  PublicSubscribePort,
+} from "./network-public-ports";
 
 /** Everything the live adapters need, threaded from the CLI flags. */
 export interface LivePortsConfig {
@@ -78,6 +87,49 @@ export interface LivePortsConfig {
 // Registry port — S1 client + provision-stack register (proof-of-possession).
 // =============================================================================
 
+/**
+ * Shared idempotent proof-of-possession registration (reused by the S4
+ * `registerStack` and the S5 public-index announce/deregister). Loads the seed,
+ * builds + signs the claim with the supplied `capabilities`, and POSTs it. An
+ * EMPTY `capabilities` list de-advertises the stack on the public index
+ * (the registry searches over the claim's `capabilities`). Never throws.
+ */
+async function registerWithCapabilities(
+  cfg: LivePortsConfig,
+  capabilities: { id: string }[],
+): Promise<{ ok: true; note: string } | { ok: false; reason: string }> {
+  const url = cfg.registryUrl ?? "";
+  if (cfg.seedPath === undefined) {
+    return { ok: false, reason: "no --seed-path for registration" };
+  }
+  const seedFile = expandTilde(cfg.seedPath);
+  if (!existsSync(seedFile)) {
+    return { ok: false, reason: `seed file not found at ${seedFile}` };
+  }
+  let material;
+  try {
+    material = materialFromSeedString(readFileSync(seedFile, "utf-8"));
+  } catch (err) {
+    return { ok: false, reason: `seed load failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  const body = await buildRegistrationClaim({
+    principalId: cfg.principalId,
+    material,
+    stacks: [{ stack_id: cfg.stackId }],
+    capabilities,
+  });
+  let result;
+  try {
+    result = await registerStackIdentity({ registryUrl: url, principalId: cfg.principalId, body });
+  } catch (err) {
+    return { ok: false, reason: `registry POST failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (!result.ok) {
+    return { ok: false, reason: `registry rejected registration (HTTP ${result.status.toString()})` };
+  }
+  return { ok: true, note: `HTTP ${result.status.toString()}` };
+}
+
 function buildRegistryPort(cfg: LivePortsConfig): NetworkRegistryPort {
   const url = cfg.registryUrl ?? "";
   const client = new NetworkRegistryClient({
@@ -87,34 +139,8 @@ function buildRegistryPort(cfg: LivePortsConfig): NetworkRegistryPort {
 
   return {
     async registerStack() {
-      if (cfg.seedPath === undefined) {
-        return { ok: false, reason: "no --seed-path for registration" };
-      }
-      const seedFile = expandTilde(cfg.seedPath);
-      if (!existsSync(seedFile)) {
-        return { ok: false, reason: `seed file not found at ${seedFile}` };
-      }
-      let material;
-      try {
-        material = materialFromSeedString(readFileSync(seedFile, "utf-8"));
-      } catch (err) {
-        return { ok: false, reason: `seed load failed: ${err instanceof Error ? err.message : String(err)}` };
-      }
-      const body = await buildRegistrationClaim({
-        principalId: cfg.principalId,
-        material,
-        stacks: [{ stack_id: cfg.stackId }],
-      });
-      let result;
-      try {
-        result = await registerStackIdentity({ registryUrl: url, principalId: cfg.principalId, body });
-      } catch (err) {
-        return { ok: false, reason: `registry POST failed: ${err instanceof Error ? err.message : String(err)}` };
-      }
-      if (!result.ok) {
-        return { ok: false, reason: `registry rejected registration (HTTP ${result.status.toString()})` };
-      }
-      return { ok: true, note: `HTTP ${result.status.toString()}` };
+      // S4 federated register — proof-of-possession with no capability change.
+      return registerWithCapabilities(cfg, []);
     },
     fetchVerified(networkId) {
       // S1's fetchAndCache returns { descriptor, roster } on ok and refreshes
@@ -360,4 +386,131 @@ export function buildLivePorts(cfg: LivePortsConfig): NetworkPorts {
  */
 export function buildDryRunPorts(cfg: LivePortsConfig): NetworkPorts {
   return buildPorts(cfg, false);
+}
+
+// =============================================================================
+// S5 (#739) — public-scope adapters (join/leave public)
+// =============================================================================
+
+/**
+ * The system-layer config file that carries `nats.subjects[]` — `system/system.yaml`
+ * under the cortex config dir (the config-split puts the transport block in the
+ * system layer, NOT the stack file — the double-message structural fix). The
+ * `public.>` subscription is added/removed here.
+ */
+function systemConfigPath(): string {
+  return join(expandTilde("~/.config/cortex"), "system", "system.yaml");
+}
+
+/** The literal `public.>` subscribe pattern. */
+const PUBLIC_SUBSCRIBE = "public.>";
+
+// S5 — public capability announce/deregister: re-register the stack with (caps)
+// or (empty) so the registry's `/capabilities` public index includes/drops it.
+function buildPublicRegistryPort(cfg: LivePortsConfig): PublicRegistryPort {
+  return {
+    async announceCapabilities(capabilities) {
+      return registerWithCapabilities(
+        cfg,
+        capabilities.map((id) => ({ id })),
+      );
+    },
+    async deregisterCapabilities() {
+      // De-advertise — register with an EMPTY capability list.
+      return registerWithCapabilities(cfg, []);
+    },
+  };
+}
+
+// S5 — manage `public.>` in system.yaml's `nats.subjects[]`.
+function buildPublicSubscribePort(mutate: boolean): PublicSubscribePort {
+  const path = systemConfigPath();
+  const readSubjects = (): string[] => {
+    if (!existsSync(path)) return [];
+    const raw = parseYaml(readFileSync(path, "utf-8")) as
+      | { nats?: { subjects?: string[] } }
+      | null;
+    return raw?.nats?.subjects ?? [];
+  };
+  return {
+    hasPublicSubscription() {
+      return readSubjects().includes(PUBLIC_SUBSCRIBE);
+    },
+    addPublicSubscription() {
+      if (!mutate) return;
+      const raw = existsSync(path)
+        ? ((parseYaml(readFileSync(path, "utf-8")) ?? {}) as Record<string, unknown>)
+        : {};
+      const nats = (raw.nats ??= {}) as Record<string, unknown>;
+      const subjects = Array.isArray(nats.subjects) ? (nats.subjects as string[]) : [];
+      // Idempotent — never double-bind (the cortex#491 double-message footgun).
+      if (!subjects.includes(PUBLIC_SUBSCRIBE)) subjects.push(PUBLIC_SUBSCRIBE);
+      nats.subjects = subjects;
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, stringifyYaml(raw), "utf-8");
+    },
+    removePublicSubscription() {
+      if (!mutate) return;
+      if (!existsSync(path)) return;
+      const raw = (parseYaml(readFileSync(path, "utf-8")) ?? {}) as Record<string, unknown>;
+      const nats = raw.nats as { subjects?: string[] } | undefined;
+      if (nats?.subjects === undefined) return;
+      nats.subjects = nats.subjects.filter((s) => s !== PUBLIC_SUBSCRIBE);
+      writeFileSync(path, stringifyYaml(raw), "utf-8");
+    },
+  };
+}
+
+// S5 — read/write `policy.public` in the stack file (same file S4's
+// ConfigStorePort writes policy.federated.networks[] to).
+function buildPublicPolicyPort(cfg: LivePortsConfig, mutate: boolean): PublicPolicyPort {
+  const path = stackConfigPath(cfg);
+  return {
+    readPublic() {
+      if (!existsSync(path)) return undefined;
+      const raw = parseYaml(readFileSync(path, "utf-8")) as
+        | { policy?: { public?: PolicyPublic } }
+        | null;
+      return raw?.policy?.public;
+    },
+    writePublic(next) {
+      if (!mutate) return;
+      const raw = existsSync(path)
+        ? ((parseYaml(readFileSync(path, "utf-8")) ?? {}) as Record<string, unknown>)
+        : {};
+      const policy = (raw.policy ??= {}) as Record<string, unknown>;
+      if (next === undefined) {
+        // Leave teardown — drop the block entirely.
+        delete (policy as { public?: unknown }).public;
+      } else {
+        (policy as { public?: unknown }).public = next;
+      }
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, stringifyYaml(raw), "utf-8");
+    },
+  };
+}
+
+function buildPublicPorts(cfg: LivePortsConfig, mutate: boolean): PublicScopePorts {
+  return {
+    registry: buildPublicRegistryPort(cfg),
+    subscribe: buildPublicSubscribePort(mutate),
+    policy: buildPublicPolicyPort(cfg, mutate),
+    daemon: buildDaemonPort(cfg, mutate),
+  };
+}
+
+/** Live public-scope ports — mutate system.yaml + stack config. `--apply` only. */
+export function buildLivePublicPorts(cfg: LivePortsConfig): PublicScopePorts {
+  return buildPublicPorts(cfg, true);
+}
+
+/**
+ * Dry-run public-scope ports — the S5 default-safe posture. Reads hit disk (so
+ * idempotency checks like `hasPublicSubscription` are accurate); every
+ * WRITE/RESTART is a no-op. An accidental `join public` during development
+ * touches nothing.
+ */
+export function buildDryRunPublicPorts(cfg: LivePortsConfig): PublicScopePorts {
+  return buildPublicPorts(cfg, false);
 }

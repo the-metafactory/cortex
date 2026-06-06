@@ -228,3 +228,104 @@ describe("leave usage", () => {
     expect(res.stdout).toContain("not joined");
   });
 });
+
+// =============================================================================
+// S5 (#739) — `join public` / `leave public` (the open square)
+// =============================================================================
+
+describe("join public usage", () => {
+  test("rejects a malformed --capabilities id (exit 2)", async () => {
+    const dir = freshDir();
+    const res = await dispatchNetwork([
+      "join", "public",
+      "--principal", "andreas",
+      "--registry-url", "http://r.test",
+      "--seed-path", join(dir, "seed.nk"),
+      "--nats-config", join(dir, "local.conf"),
+      "--plist", join(dir, "nats.plist"),
+      "--capabilities", "BAD_CAP",
+    ]);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain("capability");
+  });
+
+  test("rejects a malformed --allow principal id (exit 2)", async () => {
+    const dir = freshDir();
+    const res = await dispatchNetwork([
+      "join", "public",
+      "--principal", "andreas",
+      "--registry-url", "http://r.test",
+      "--seed-path", join(dir, "seed.nk"),
+      "--nats-config", join(dir, "local.conf"),
+      "--plist", join(dir, "nats.plist"),
+      "--allow", "BAD_PRINCIPAL",
+    ]);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain("allow");
+  });
+
+  test("does NOT require --creds / --account (public has no leaf)", async () => {
+    // The public path validates its OWN required flags — creds/account are
+    // federated-only. Omitting them must NOT surface a creds/account error.
+    const dir = freshDir();
+    const res = await dispatchNetwork([
+      "join", "public",
+      "--principal", "andreas",
+      "--registry-url", "http://127.0.0.1:0", // unreachable by construction
+      "--seed-path", join(dir, "seed.nk"),
+      "--nats-config", join(dir, "local.conf"),
+      "--plist", join(dir, "nats.plist"),
+      "--capabilities", "code-review.typescript",
+    ]);
+    // It will FAIL at announce (no seed / unreachable registry) — exit 1 — but
+    // NOT a usage error about creds/account.
+    expect(res.exitCode).not.toBe(2);
+    expect(res.stderr).not.toContain("--creds");
+    expect(res.stderr).not.toContain("--account");
+  });
+});
+
+describe("join public dry-run safety (OQ1 + no live mutation)", () => {
+  test("dry-run join public writes NOTHING to disk", async () => {
+    const dir = freshDir();
+    const natsConfig = join(dir, "nats", "local.conf");
+    const plist = join(dir, "nats.plist");
+    const uniqueSlug = `s5pub${Date.now().toString()}`;
+
+    const res = await dispatchNetwork([
+      "join", "public",
+      "--principal", "andreas",
+      "--stack", `andreas/${uniqueSlug}`,
+      "--registry-url", "http://127.0.0.1:0",
+      "--seed-path", join(dir, "seed.nk"),
+      "--nats-config", natsConfig,
+      "--plist", plist,
+      "--capabilities", "code-review.typescript",
+    ]);
+
+    // Critical S5 SAFETY: a dry-run touches no disk + no daemon.
+    expect(existsSync(natsConfig)).toBe(false);
+    expect(existsSync(join(dir, "nats"))).toBe(false);
+    expect(existsSync(plist)).toBe(false);
+    // Output carries the dry-run banner.
+    expect(res.stderr + res.stdout).toContain("dry-run");
+  });
+});
+
+describe("leave public", () => {
+  test("leaving public when never joined is a clean no-op (exit 0)", async () => {
+    const dir = freshDir();
+    const uniqueSlug = `s5publeave${Date.now().toString()}`;
+    const res = await dispatchNetwork([
+      "leave", "public",
+      "--principal", "andreas",
+      "--stack", `andreas/${uniqueSlug}`,
+      "--registry-url", "http://127.0.0.1:0",
+      "--seed-path", join(dir, "seed.nk"),
+      "--nats-config", join(dir, "local.conf"),
+      "--plist", join(dir, "nats.plist"),
+    ]);
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("nothing to do");
+  });
+});

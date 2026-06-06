@@ -1577,6 +1577,11 @@ export async function startCortex(
   const router: SurfaceRouter = createSurfaceRouter(runtime, {
     systemEventSource,
     ...(options.policy?.federated !== undefined && { federated: options.policy.federated }),
+    // IAW S5 (#739) — the public-scope opt-in. Absent ⇒ the router drops all
+    // inbound `public.*` (deny-by-default, OQ1 safe). Written by
+    // `cortex network join public`; an inbound public sender is admitted only
+    // when `enabled: true` AND its source principal is on `allow_principals[]`.
+    ...(options.policy?.public !== undefined && { public: options.policy.public }),
     onAdapterError: (adapterId, err) => {
       console.error(`cortex: surface adapter "${adapterId}" render error:`, err.message);
     },

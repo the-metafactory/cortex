@@ -35,6 +35,7 @@
 import type {
   PolicyFederated,
   PolicyFederatedNetwork,
+  PolicyPublic,
   RendererVisibility,
 } from "../common/types/cortex-config";
 import {
@@ -156,6 +157,24 @@ export interface SurfaceRouterOptions {
    * gates handle those).
    */
   federated?: PolicyFederated;
+  /**
+   * IAW S5 (#739) — the `policy.public` block. When the principal has opted
+   * into the public scope (`cortex network join public`), this carries the
+   * inbound allowlist. The router gates every inbound `public.*` envelope
+   * against {@link evaluatePublicGate}:
+   *
+   *   - block ABSENT or `enabled: false` → inbound `public.*` is DROPPED
+   *     (not opted in; a public sender is never auto-trusted).
+   *   - `enabled: true` → admit ONLY senders whose source principal is in
+   *     `allow_principals[]` (empty = drop everyone — OQ1 safe default; no
+   *     open anonymous claim).
+   *
+   * This closes the OQ1 gap the pre-S5 router left open ("none for public" in
+   * the dispatch comment): public inbound was previously ungated. Announcing
+   * capabilities to the registry is a separate control-plane action and does
+   * NOT relax this gate.
+   */
+  public?: PolicyPublic;
 }
 
 export interface SurfaceRouter {
@@ -288,6 +307,11 @@ export function createSurfaceRouter(
     federatedNetworksById.set(network.id, network);
   }
 
+  // IAW S5 (#739) — the public-scope opt-in + allowlist. Captured once at
+  // construction (same reload contract as `federated`). `undefined` ⇒ not
+  // opted into public; the gate drops all inbound `public.*`.
+  const policyPublic: PolicyPublic | undefined = opts?.public;
+
   let started = false;
   let stopped = false;
   let envelopeReg: { unregister: () => void } | null = null;
@@ -393,6 +417,36 @@ export function createSurfaceRouter(
           // audit envelope above is the principal's only signal that
           // this dispatch was attempted; without it the deny is
           // silent.
+          return;
+        }
+      }
+
+      // IAW S5 (#739) — the public-scope gate. CLOSES the OQ1 gap the pre-S5
+      // router left open (the comment above used to read "none for public"):
+      // inbound `public.*` was previously ungated, so any public sender was
+      // implicitly trusted. Now it is DENY-BY-DEFAULT — dropped unless the
+      // principal opted into the public scope AND the sender's source principal
+      // is on the allowlist. This is a SEPARATE branch from the federated gate
+      // (above): `public.*` carries no `{principal}.{stack}` segment, so it must
+      // NOT be routed through the federated peer/network resolution (a different
+      // trust tier, not a federated peer — wire-protocol SOP check #5). Local
+      // (`local.*`) subjects are unaffected — `evaluatePublicGate` only gates
+      // `public.*` and the visibility filter governs local rendering.
+      if (effectiveSubject.startsWith("public.")) {
+        const decision = evaluatePublicGate(
+          effectiveSubject,
+          envelope,
+          policyPublic,
+        );
+        if (decision !== "allow") {
+          emitPublicDenied(
+            runtime,
+            systemEventSource,
+            envelope,
+            effectiveSubject,
+            decision,
+          );
+          // Hard drop — a non-allowlisted public sender never reaches adapters.
           return;
         }
       }
@@ -895,6 +949,84 @@ export function evaluateFederationGate(
   return "allow";
 }
 
+// ===========================================================================
+// S5 (#739) — public-scope allowlist gate (OQ1 safe default)
+// ===========================================================================
+
+/**
+ * The decision the public gate returns. `"allow"` admits the envelope; any
+ * object is a deny carrying a searchable reason for the audit stream.
+ *
+ *   - `public_not_enabled` — the stack has not opted into the public scope
+ *     (`policy.public` absent or `enabled: false`). Inbound `public.*` is
+ *     dropped. Opting in to ANNOUNCE capabilities to the registry does NOT
+ *     enable inbound public trust — that is a separate control-plane action.
+ *   - `public_sender_not_allowlisted` — the stack IS opted in, but the
+ *     envelope's SOURCE principal is not in `allow_principals[]` (this
+ *     includes the empty-allowlist case: "trust nobody on public"). This is
+ *     the OQ1 safe gate: a non-allowlisted public sender is NEVER auto-trusted;
+ *     open anonymous claim is deferred to the security ramp.
+ */
+export type PublicGateDecision =
+  | "allow"
+  | { kind: "public_not_enabled" }
+  | { kind: "public_sender_not_allowlisted"; sourcePrincipal: string };
+
+/**
+ * IAW S5 (#739) — gate an inbound `public.*` envelope against the principal's
+ * `policy.public` opt-in + allowlist. The OQ1 SAFE DEFAULT in code:
+ *
+ *   policy.public absent / enabled:false  → DENY (public_not_enabled)
+ *   enabled:true, allow_principals = []    → DENY (public_sender_not_allowlisted)
+ *   enabled:true, sender ∉ allow_principals → DENY (public_sender_not_allowlisted)
+ *   enabled:true, sender ∈ allow_principals → ALLOW
+ *
+ * ## Trust tier — NOT a federated peer (wire-protocol SOP check #5)
+ *
+ * `public.*` carries NO `{principal}.{stack}` segment on the subject (scope
+ * grammar: `public.{domain}.{entity}.{action}`, CONTEXT.md §Scope). So this
+ * gate is DISJOINT from {@link evaluateFederationGate}: it never resolves a
+ * source NETWORK from `peers[]`, never runs the leaf anti-spoof cross-check,
+ * and never reads a target principal off the subject. It keys ONLY on the
+ * SOURCE principal (the signing identity — leading segment of
+ * `envelope.source`, via {@link principalFromEnvelope}) against the public
+ * allowlist. Public is a different trust tier, not a federated peer; mixing
+ * the two would mis-apply the federated peer checks to the no-principal-segment
+ * scope (the precise failure the S5 brief calls out).
+ *
+ * Pure function — exported so tests can probe each branch without a runtime.
+ * Defensive: a NON-`public.` subject returns `"allow"` (the caller only ever
+ * routes `public.*` here; a leaked federated/local subject must not be denied
+ * by THIS gate — its own gate governs it).
+ */
+export function evaluatePublicGate(
+  subject: string,
+  envelope: Envelope,
+  policyPublic: PolicyPublic | undefined,
+): PublicGateDecision {
+  // Out of the public domain — not ours to gate. The caller guards on the
+  // prefix; this fail-open (for THIS gate) keeps standalone tests of
+  // local/federated subjects from being denied here.
+  if (!subject.startsWith("public.")) {
+    return "allow";
+  }
+
+  // Not opted in → drop. Absence and `enabled: false` are identical: the stack
+  // is not accepting inbound public traffic. (Announcing capabilities to the
+  // registry is a control-plane action that does not flip this.)
+  if (!policyPublic?.enabled) {
+    return { kind: "public_not_enabled" };
+  }
+
+  // Opted in — admit ONLY allowlisted source principals. An empty allowlist
+  // means "trust nobody on public" (deny-by-default), NOT "trust everybody".
+  const sourcePrincipal = principalFromEnvelope(envelope);
+  if (!policyPublic.allow_principals.includes(sourcePrincipal)) {
+    return { kind: "public_sender_not_allowlisted", sourcePrincipal };
+  }
+  return "allow";
+}
+
 /**
  * Emit a `system.access.denied` envelope describing a federation-gate
  * rejection. Mirrors `emitAccessFiltered` — best-effort, runtime
@@ -1006,6 +1138,43 @@ export function emitFederationDenied(
       err instanceof Error ? err.message : err,
     );
   }
+}
+
+/**
+ * IAW S5 (#739) — observe a public-gate denial. The SECURITY property (a
+ * non-allowlisted public sender never reaches an adapter) is enforced by the
+ * hard-drop in `dispatch`; this is the OBSERVABILITY of that drop.
+ *
+ * Bounded by design: it logs the denial rather than emitting a fully-typed
+ * `system.access.denied` envelope. The existing
+ * `createSystemAccessFederationDeniedEvent` reason union is FEDERATION-specific
+ * (`peer_not_in_accept_list` / `source_link_mismatch` / `max_hop_exceeded`),
+ * and reusing it for a public deny would mislabel a public-tier drop as a
+ * federated-peer rejection — exactly the trust-tier confusion the S5 brief
+ * warns against. A dedicated `public_denied` audit-event variant is a
+ * follow-up (tracked against the OQ1 security-ramp work); S5 keeps the gate's
+ * observability to a structured log line and leaves the typed audit envelope
+ * to the phase that also decides open-claim/enforce.
+ *
+ * No-op-safe: `source` is accepted for signature-symmetry with
+ * {@link emitFederationDenied} (so a future typed-envelope upgrade is a
+ * drop-in) but is not required to log.
+ */
+export function emitPublicDenied(
+  _runtime: MyelinRuntime,
+  _source: SystemEventSource | undefined,
+  _envelope: Envelope,
+  envelopeSubject: string,
+  decision: Exclude<PublicGateDecision, "allow">,
+): void {
+  const detail =
+    decision.kind === "public_sender_not_allowlisted"
+      ? `source="${decision.sourcePrincipal}" not in policy.public.allow_principals`
+      : "policy.public absent or enabled:false (not opted into the public scope)";
+  console.info(
+    `surface-router: public deny subject="${envelopeSubject}" reason=${decision.kind} — ${detail} ` +
+      `(OQ1 safe default — dropped, not auto-trusted)`,
+  );
 }
 
 /**
