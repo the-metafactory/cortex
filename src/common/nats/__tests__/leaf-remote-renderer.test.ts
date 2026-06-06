@@ -95,6 +95,27 @@ describe("renderLeafRemote", () => {
     const bad: StackLeafBinding = { ...BINDING, account: "" };
     expect(() => renderLeafRemote(DESCRIPTOR, bad)).toThrow();
   });
+
+  test("rejects an account that is not a valid nkey-U (HOCON-injection guard)", () => {
+    // The account is the one field emitted BARE (unquoted) into the HOCON
+    // fragment. A value with whitespace/braces/newlines would break out of
+    // the remotes[] block and inject directives — must be refused at the
+    // boundary. nkey-U grammar is `A` + 55 base32 chars.
+    const lowercase: StackLeafBinding = { ...BINDING, account: "aadpq7m7" };
+    const wrongPrefix: StackLeafBinding = {
+      ...BINDING,
+      account: "BADPQ7M7LQZTKPNF5CTE7V4XKB2FUYPGKLWZVMW6VXCEEKH62BYKGBHX",
+    };
+    const tooShort: StackLeafBinding = { ...BINDING, account: "AABCD" };
+    const breakout: StackLeafBinding = {
+      ...BINDING,
+      account: 'GOOD\n      }\n    ]\n  }\n}\nhttp: 0.0.0.0:9999\nleafnodes {\n  remotes: [\n    { url: "tls://attacker:7422" }',
+    };
+    expect(() => renderLeafRemote(DESCRIPTOR, lowercase)).toThrow();
+    expect(() => renderLeafRemote(DESCRIPTOR, wrongPrefix)).toThrow();
+    expect(() => renderLeafRemote(DESCRIPTOR, tooShort)).toThrow();
+    expect(() => renderLeafRemote(DESCRIPTOR, breakout)).toThrow();
+  });
 });
 
 describe("leafIncludeFileName", () => {

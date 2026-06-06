@@ -109,6 +109,18 @@ export interface LeafRemote {
 const SAFE_NETWORK_ID = /^[a-z][a-z0-9-]*$/;
 
 /**
+ * A NATS nkey-U account public key: `A` + 55 base32 (RFC 4648, upper, no pad)
+ * characters. This is the ONE field {@link serializeRemote} emits BARE
+ * (unquoted) into the HOCON fragment — to match the live `local.conf` shape,
+ * which leaves the account pubkey unquoted. An unquoted token that contained
+ * whitespace/braces/newlines would break out of the `remotes[]` block and let
+ * a malformed (or hostile) account inject arbitrary nats-server directives, so
+ * we constrain it to the exact nkey-U grammar before serialization. (url +
+ * credentials are quoted, so HOCON's JSON-style escapes already contain them.)
+ */
+const NKEY_ACCOUNT = /^A[A-Z2-7]{55}$/;
+
+/**
  * Build the fully-qualified leaf dial URL from the descriptor. `hub_url` may
  * already be a full `tls://host:port` URL (the common case, DD-12) or a bare
  * host; `leaf_port` is the authority when the URL carries no port. We never
@@ -185,6 +197,15 @@ export function renderLeafRemote(
   if (account.length === 0) {
     throw new Error(
       `leaf-remote-renderer: operator-mode requires a bound account (nkey-U) for network "${descriptor.network_id}"; got empty`,
+    );
+  }
+  if (!NKEY_ACCOUNT.test(account)) {
+    // The account is emitted BARE into HOCON (matching local.conf). Anything
+    // outside the nkey-U grammar could break out of the remotes[] block and
+    // inject directives, so reject it at the boundary — a bad account is a
+    // broken/dormant leaf, the exact trap S3 closes.
+    throw new Error(
+      `leaf-remote-renderer: account for network "${descriptor.network_id}" is not a valid nkey-U account public key (expected ${NKEY_ACCOUNT}); got ${JSON.stringify(binding.account)}`,
     );
   }
 
