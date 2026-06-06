@@ -94,6 +94,82 @@ export interface RegistryPubkeyResponse {
 }
 
 /**
+ * S1 (Network Join Control Plane, #735) — the network **descriptor** payload
+ * carried by `GET /networks/{network_id}` inside a `SignedAssertion`.
+ *
+ * **DD-12 (hub via registry-served descriptor).** The hub's reachability
+ * (`hub_url` + `leaf_port`) is served by the registry, NOT pinned in each
+ * peer's local config, so the hub can relocate without every peer
+ * re-editing `cortex.yaml`. The join command (S4) and the leaf renderer
+ * (S3) derive the nats-server leaf remote from this descriptor.
+ *
+ * Like every registry GET, the descriptor is wrapped in a
+ * `SignedAssertion<NetworkDescriptor>` and verified against the pinned
+ * registry pubkey before it is trusted (DD-9).
+ *
+ * NOTE: at S1 the server-side `GET /networks/{id}` route is not yet
+ * implemented (the registry currently serves only `/roster`); the client +
+ * its stub tests land first per the epic's phasing. The shape below is the
+ * client's contract for that route and the source of truth the S3/S4 server
+ * work targets.
+ */
+export interface NetworkDescriptor {
+  /** Network id — letter-prefixed lowercase-alphanumeric + hyphen. */
+  network_id: string;
+  /**
+   * The hub's leaf-node dial URL (e.g. `tls://hub.meta-factory.ai:7422`).
+   * Where a joining stack's nats-server leaf remote points. DD-12: relocatable
+   * via the registry, never hand-pinned.
+   */
+  hub_url: string;
+  /**
+   * The hub's leaf-node listen port (e.g. 7422). Carried alongside `hub_url`
+   * so the leaf renderer can validate / reconstruct the remote independently
+   * of URL parsing.
+   */
+  leaf_port: number;
+  /**
+   * Principal ids that are members of this network. The lightweight
+   * membership view on the descriptor; the full per-peer roster (with
+   * pubkeys + stacks) comes from `GET /networks/{id}/roster`.
+   */
+  members: string[];
+}
+
+/**
+ * S1 (#735) — a single peer entry in a network roster as consumed by the
+ * cortex client. Mirrors one element of the service-side `NetworkRoster.
+ * members[]` (`src/services/network-registry/src/types.ts`), narrowed to the
+ * fields the join/resolve path needs: who the peer is (`principal_id`), which
+ * stack carries its signing identity (`stack_id`), and the verified Ed25519
+ * pubkey to anchor trust against (`principal_pubkey`, base64 raw — DD-8
+ * translates to nkey-U at the config surface).
+ *
+ * `stack_id` is OPTIONAL: the registry's roster route derives membership from
+ * announced capabilities and does not always carry a stack id per member at
+ * S1. When absent, S2's resolver falls back to the principal's first
+ * registered stack via `GET /principals/{id}`.
+ */
+export interface NetworkRosterPeer {
+  /** Peer principal id — letter-prefixed lowercase-alphanumeric + hyphen. */
+  principal_id: string;
+  /** `{principal_id}/{stack_slug}` — the peer's signing stack, when known. */
+  stack_id?: string;
+  /** Base64 Ed25519 pubkey (32 raw bytes → 44 chars w/ padding). */
+  principal_pubkey: string;
+}
+
+/**
+ * S1 (#735) — the roster payload carried by `GET /networks/{network_id}/roster`
+ * inside a `SignedAssertion<NetworkRosterResult>`. Mirrors the service-side
+ * `NetworkRoster` shape; `members[]` is narrowed to {@link NetworkRosterPeer}.
+ */
+export interface NetworkRosterResult {
+  network_id: string;
+  members: NetworkRosterPeer[];
+}
+
+/**
  * Configuration for `RegistryClient`. The required fields are the
  * registry URL and the list of peer principal ids to track; everything
  * else has a sensible default. Tests supply `fetch` + `setTimer` to

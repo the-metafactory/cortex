@@ -20,6 +20,16 @@ export {
   PrincipalPubkeyResolver,
   resolvePrincipalPubkey,
 } from "./resolve-pubkey";
+export { NetworkRegistryClient } from "./network-client";
+export type {
+  NetworkFetchResult,
+  NetworkRegistryClientOptions,
+} from "./network-client";
+export { NetworkCache } from "./network-cache";
+export type { CachedNetwork, NetworkCacheOptions } from "./network-cache";
+export { base64PubkeyToNkey, nkeyToBase64Pubkey } from "./encoding";
+export { verifySignedAssertion } from "./verify-assertion";
+export type { VerifyAssertionResult } from "./verify-assertion";
 export type {
   PrincipalPubkeyResolverOptions,
   ResolveResult,
@@ -34,6 +44,9 @@ export type {
 } from "./identity-registry";
 export type {
   Capability,
+  NetworkDescriptor,
+  NetworkRosterPeer,
+  NetworkRosterResult,
   PrincipalRecord,
   RegistryClientOptions,
   RegistryClientReader,
