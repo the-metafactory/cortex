@@ -34,7 +34,9 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 import { expandTilde } from "../../../common/config/loader";
 import {
+  ensureLeafInclude,
   leafIncludeFileName,
+  removeLeafInclude,
   renderLeafIncludeFile,
 } from "../../../common/nats/leaf-remote-renderer";
 import {
@@ -176,6 +178,30 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
       if (!mutate) return;
       const p = join(dir, leafIncludeFileName(networkId));
       rmSync(p, { force: true });
+    },
+    ensureInclude(networkId) {
+      // #754 — wire the main nats config to `include` the rendered leaf file.
+      // Read local.conf, apply S3's idempotent ensure, write back. Dry-run is
+      // inert (the orchestrator's step log still records the intended action).
+      if (!mutate) return;
+      const configPath = expandTilde(cfg.natsConfigPath ?? "");
+      const current = existsSync(configPath)
+        ? readFileSync(configPath, "utf-8")
+        : "";
+      const next = ensureLeafInclude(current, networkId);
+      if (next === current) return; // byte-stable no-op.
+      mkdirSync(dirname(configPath), { recursive: true });
+      writeFileSync(configPath, next, "utf-8");
+    },
+    removeInclude(networkId) {
+      // #754 — leave teardown: drop the include directive (inverse of ensure).
+      if (!mutate) return;
+      const configPath = expandTilde(cfg.natsConfigPath ?? "");
+      if (!existsSync(configPath)) return;
+      const current = readFileSync(configPath, "utf-8");
+      const next = removeLeafInclude(current, networkId);
+      if (next === current) return; // no-op.
+      writeFileSync(configPath, next, "utf-8");
     },
     list() {
       if (!existsSync(dir)) return [];

@@ -253,6 +253,115 @@ export function leafIncludeFileName(networkId: string): string {
   return `leafnodes-${networkId}.conf`;
 }
 
+// =============================================================================
+// #754 — wiring the include directive into the main nats config.
+//
+// S3 rendered the per-network `leafnodes-<network>.conf` and S4 ensured the
+// launchd plist loads `local.conf` — but NOTHING made `local.conf` actually
+// `include` the rendered leaf file, so nats-server loaded a config that never
+// referenced the leaf → dormant leaf (the exact DD-6 trap S3 set out to kill).
+//
+// These two pure helpers mirror the plist `ensureConfigArg`/`dropConfigArg`
+// idempotent-ensure pattern, but at the nats-config TEXT level: ensure the
+// `include "leafnodes-<network>.conf"` directive is present (byte-stable
+// no-op when already there), and remove exactly that one directive on leave.
+//
+// HOCON `include "file"` is a top-level statement; the included file's tokens
+// are spliced at the point of inclusion. We append the directive on its own
+// top-level line (column 0) so it sits OUTSIDE any `{ ... }` block — appending
+// at end-of-file is always at top level. For the single-network case (the
+// common onboarding path) the included `leafnodes { remotes: [...] }` becomes
+// the config's `leafnodes` block; for multi-network the OQ3 note in the module
+// header still holds (the runtime composes), but each network's include is
+// tracked independently and idempotently here.
+// =============================================================================
+
+/**
+ * The literal include directive a config carries for `networkId`. Quoted (the
+ * file name carries a `.`, and quoting is the canonical HOCON form). Uses
+ * {@link leafIncludeFileName} so the directive and the written file can never
+ * drift apart.
+ */
+function leafIncludeDirective(networkId: string): string {
+  return `include "${leafIncludeFileName(networkId)}"`;
+}
+
+/**
+ * A matcher for an EXISTING include of `networkId`'s leaf file, tolerant of the
+ * hand-written shapes a human might have typed: single OR double quotes, and
+ * any run of horizontal whitespace between `include` and the file name. Used so
+ * we never add a duplicate directive for a network already wired by hand.
+ */
+function leafIncludeDirectiveRegex(networkId: string): RegExp {
+  // leafIncludeFileName validates the id; escape the literal `.` in `.conf`.
+  const file = leafIncludeFileName(networkId).replace(/\./g, "\\.");
+  return new RegExp(`^[ \\t]*include[ \\t]+["']${file}["'][ \\t]*$`, "m");
+}
+
+/**
+ * True iff `natsConfigText` already includes `networkId`'s leaf file (any
+ * quote/whitespace shape). The predicate callers gate on before a rewrite.
+ */
+export function leafIncludeDirectivePresent(
+  natsConfigText: string,
+  networkId: string,
+): boolean {
+  return leafIncludeDirectiveRegex(networkId).test(natsConfigText);
+}
+
+/**
+ * Return `natsConfigText` with a top-level `include "leafnodes-<network>.conf"`
+ * directive ensured. Mirrors {@link ensureConfigArg}'s idempotent contract:
+ *
+ *   - directive already present (any quote/whitespace shape) → returned
+ *     UNCHANGED (byte-stable no-op).
+ *   - directive absent → the canonical double-quoted directive is appended as
+ *     its own top-level line (with a single trailing newline), so it sits
+ *     outside any `{ ... }` block.
+ *
+ * Pure: the input string is never mutated. Throws on an invalid network id
+ * (delegated to {@link leafIncludeFileName}) — a bad id must never reach disk.
+ */
+export function ensureLeafInclude(
+  natsConfigText: string,
+  networkId: string,
+): string {
+  const directive = leafIncludeDirective(networkId); // validates the id
+
+  if (leafIncludeDirectivePresent(natsConfigText, networkId)) {
+    return natsConfigText; // idempotent no-op (byte-stable).
+  }
+
+  // Append as a fresh top-level line. Normalise so there is exactly one
+  // newline before the directive and one after — byte-stable on re-render
+  // because the present-check above short-circuits the second call.
+  const base = natsConfigText.replace(/\n*$/, "");
+  const prefix = base.length === 0 ? "" : `${base}\n`;
+  return `${prefix}${directive}\n`;
+}
+
+/**
+ * Return `natsConfigText` with `networkId`'s include directive removed. Removes
+ * exactly the matching line(s) (any quote/whitespace shape) and nothing else;
+ * a config that never had the directive is returned UNCHANGED. The inverse of
+ * {@link ensureLeafInclude}: ensure→remove round-trips to the original bytes.
+ *
+ * Pure. Throws on an invalid network id.
+ */
+export function removeLeafInclude(
+  natsConfigText: string,
+  networkId: string,
+): string {
+  const re = leafIncludeDirectiveRegex(networkId);
+  if (!re.test(natsConfigText)) {
+    return natsConfigText; // idempotent no-op.
+  }
+  // Drop the matching line AND the newline it owns, so removing the directive
+  // we appended in ensureLeafInclude restores the pre-ensure bytes exactly.
+  const global = new RegExp(re.source + "\\n?", "gm");
+  return natsConfigText.replace(global, "");
+}
+
 /** Serialize one {@link LeafRemote} as a HOCON object literal (indented). */
 function serializeRemote(remote: LeafRemote, indent: string): string {
   // `url` + `credentials` are quoted (they contain `:`, `/`, `.` which are

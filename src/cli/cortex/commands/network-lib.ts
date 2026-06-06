@@ -224,6 +224,13 @@ export async function joinNetwork(
     ports.plist.ensureConfigLoaded(ports.leafFile.natsConfigPath());
     steps.push(`ensured nats-server plist loads ${ports.leafFile.natsConfigPath()}`);
 
+    // (c, cont.) Ensure the nats config actually `include`s the rendered leaf
+    // file (#754). Without this the plist loads a config that never references
+    // the leaf → the leaf sits configured-but-dormant (the DD-6 trap). This is
+    // the idempotent ensure-include step mirroring the plist ensure pattern.
+    ports.leafFile.ensureInclude(networkId);
+    steps.push(`ensured local.conf includes leafnodes-${networkId}.conf`);
+
     // (d) Merge the network into the federation config with registry-resolved
     // peers (DD-5) + the OWN accept-subject (wire contract). Idempotent: replace
     // the entry keyed by network id, never append a duplicate.
@@ -352,7 +359,13 @@ export async function leaveNetwork(
     ports.configStore.writeNetworks(remaining);
     steps.push(`removed policy.federated.networks["${networkId}"]`);
 
-    // Delete the leaf include (idempotent).
+    // Remove the `include` directive from the nats config (#754 — the inverse
+    // of join's ensure-include) BEFORE deleting the file, so the config never
+    // references a missing include.
+    ports.leafFile.removeInclude(networkId);
+    steps.push(`removed local.conf include for leafnodes-${networkId}.conf`);
+
+    // Delete the leaf include file (idempotent).
     ports.leafFile.remove(networkId);
     steps.push(`deleted leaf include for "${networkId}"`);
 

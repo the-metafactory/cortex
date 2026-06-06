@@ -8,8 +8,11 @@
  */
 
 export {
+  ensureLeafInclude,
+  leafIncludeDirectivePresent,
   leafIncludeFileName,
   mergeLeafRemotes,
+  removeLeafInclude,
   renderLeafIncludeFile,
   renderLeafRemote,
 } from "./leaf-remote-renderer";

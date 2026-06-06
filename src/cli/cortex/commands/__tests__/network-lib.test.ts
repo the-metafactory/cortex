@@ -98,6 +98,10 @@ interface Recorder {
   restarts: number;
   writes: RenderLeafInputs[];
   removes: string[];
+  /** #754 — networks whose include directive was ensured into local.conf. */
+  includesEnsured: string[];
+  /** #754 — networks whose include directive was removed from local.conf. */
+  includesRemoved: string[];
   ensured: string[];
   dropped: string[];
   configWrites: PolicyFederatedNetwork[][];
@@ -117,6 +121,8 @@ function makeFakes(opts: {
     restarts: 0,
     writes: [],
     removes: [],
+    includesEnsured: [],
+    includesRemoved: [],
     ensured: [],
     dropped: [],
     configWrites: [],
@@ -155,6 +161,12 @@ function makeFakes(opts: {
     remove(networkId) {
       rec.removes.push(networkId);
       leafFilesPresent.delete(networkId);
+    },
+    ensureInclude(networkId) {
+      rec.includesEnsured.push(networkId);
+    },
+    removeInclude(networkId) {
+      rec.includesRemoved.push(networkId);
     },
     list() {
       return [...leafFilesPresent];
@@ -223,6 +235,12 @@ describe("join", () => {
     expect(rendered).toContain("tls://hub.meta-factory.ai:7422");
     // (c) plist ensured to load the nats config.
     expect(rec.ensured).toEqual(["/Users/andreas/.config/nats/local.conf"]);
+    // (c) #754 — local.conf ensured to INCLUDE the rendered leaf file, so the
+    // leaf is actually loaded (not dormant).
+    expect(rec.includesEnsured).toEqual(["metafactory"]);
+    expect(
+      res.steps.some((s) => s === "ensured local.conf includes leafnodes-metafactory.conf"),
+    ).toBe(true);
     // (d) config block written.
     expect(storeRef.networks.length).toBe(1);
     const net = storeRef.networks[0]!;
@@ -398,6 +416,8 @@ describe("leave", () => {
     expect(res.ok).toBe(true);
     // Config entry removed.
     expect(storeRef.networks.length).toBe(0);
+    // #754 — the include directive removed from local.conf (inverse of join).
+    expect(rec.includesRemoved).toEqual(["metafactory"]);
     // Leaf include deleted.
     expect(rec.removes).toEqual(["metafactory"]);
     // No networks remain → plist -c dropped.

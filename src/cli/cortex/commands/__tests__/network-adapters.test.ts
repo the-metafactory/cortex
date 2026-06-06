@@ -18,7 +18,11 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { buildLivePorts, type LivePortsConfig } from "../network-adapters";
+import {
+  buildDryRunPorts,
+  buildLivePorts,
+  type LivePortsConfig,
+} from "../network-adapters";
 import {
   ensureConfigArg,
   renderProgramArguments,
@@ -130,5 +134,105 @@ describe("live plist writer uses S3's canonical renderProgramArguments", () => {
     expect(after).toContain(expectedBlock);
     expect(after).not.toContain("<string>-c</string>");
     expect(after).not.toContain(`<string>${NATS_CONFIG}</string>`);
+  });
+});
+
+// =============================================================================
+// #754 — the live leaf-file port wires local.conf to INCLUDE the rendered leaf
+// (close the dormant-leaf gap). Round-trips a real temp nats config; dry-run
+// is inert.
+// =============================================================================
+
+/** A representative operator-mode local.conf with ZERO include directives. */
+function bareLocalConf(): string {
+  return [
+    "// nats-server operator-mode config.",
+    "system_account: ADSYSACCOUNT",
+    "jetstream { store_dir: /Users/andreas/.config/nats/js }",
+    "",
+  ].join("\n");
+}
+
+function cfgWithConfig(natsConfigPath: string): LivePortsConfig {
+  return {
+    networkId: "metafactory",
+    principalId: "andreas",
+    stackId: "andreas/meta-factory",
+    natsConfigPath,
+    plistPath: "/nonexistent/plist", // not exercised here
+  };
+}
+
+describe("#754 live leaf-include wiring", () => {
+  test("ensureInclude adds the include directive to local.conf (was dormant)", () => {
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    writeFileSync(conf, bareLocalConf(), "utf-8");
+
+    const ports = buildLivePorts(cfgWithConfig(conf));
+    ports.leafFile.ensureInclude("metafactory");
+
+    const after = readFileSync(conf, "utf-8");
+    expect(after).toContain('include "leafnodes-metafactory.conf"');
+    // Original content preserved.
+    expect(after).toContain("system_account: ADSYSACCOUNT");
+  });
+
+  test("ensureInclude is idempotent + byte-stable on the live file", () => {
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    writeFileSync(conf, bareLocalConf(), "utf-8");
+    const ports = buildLivePorts(cfgWithConfig(conf));
+
+    ports.leafFile.ensureInclude("metafactory");
+    const first = readFileSync(conf, "utf-8");
+    ports.leafFile.ensureInclude("metafactory");
+    const second = readFileSync(conf, "utf-8");
+    expect(second).toBe(first);
+  });
+
+  test("ensure → removeInclude round-trips local.conf back to original bytes", () => {
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    const original = bareLocalConf();
+    writeFileSync(conf, original, "utf-8");
+    const ports = buildLivePorts(cfgWithConfig(conf));
+
+    ports.leafFile.ensureInclude("metafactory");
+    ports.leafFile.removeInclude("metafactory");
+    expect(readFileSync(conf, "utf-8")).toBe(original);
+  });
+
+  test("multiple networks each get their own include directive", () => {
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    writeFileSync(conf, bareLocalConf(), "utf-8");
+    const ports = buildLivePorts(cfgWithConfig(conf));
+
+    ports.leafFile.ensureInclude("metafactory");
+    ports.leafFile.ensureInclude("research");
+    const after = readFileSync(conf, "utf-8");
+    expect(after).toContain('include "leafnodes-metafactory.conf"');
+    expect(after).toContain('include "leafnodes-research.conf"');
+
+    // removeInclude drops exactly one.
+    ports.leafFile.removeInclude("metafactory");
+    const final = readFileSync(conf, "utf-8");
+    expect(final).not.toContain('include "leafnodes-metafactory.conf"');
+    expect(final).toContain('include "leafnodes-research.conf"');
+  });
+
+  test("dry-run ensureInclude / removeInclude write NOTHING (inert)", () => {
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    const original = bareLocalConf();
+    writeFileSync(conf, original, "utf-8");
+
+    const ports = buildDryRunPorts(cfgWithConfig(conf));
+    ports.leafFile.ensureInclude("metafactory");
+    ports.leafFile.removeInclude("metafactory");
+
+    // The file on disk is untouched.
+    expect(readFileSync(conf, "utf-8")).toBe(original);
   });
 });

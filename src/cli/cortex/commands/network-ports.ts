@@ -123,6 +123,22 @@ export interface LeafFilePort {
   write(inputs: RenderLeafInputs): void;
   /** Delete a network's include file (idempotent — absent file is a no-op). */
   remove(networkId: string): void;
+  /**
+   * Ensure the nats config (`local.conf`) `include`s the network's leaf file
+   * (#754 — close the dormant-leaf gap). Mirrors {@link PlistPort.ensureConfigLoaded}:
+   * idempotent + byte-stable when the directive is already present. Without
+   * this step nats-server loads a config that never references the rendered
+   * leaf, so the leaf sits configured-but-dormant. Live adapter reads
+   * `natsConfigPath()`, applies S3's `ensureLeafInclude`, and writes it back;
+   * the dry-run adapter is inert.
+   */
+  ensureInclude(networkId: string): void;
+  /**
+   * Remove the network's `include` directive from the nats config (leave
+   * teardown — the inverse of {@link ensureInclude}). Idempotent. Live adapter
+   * applies S3's `removeLeafInclude`; dry-run inert.
+   */
+  removeInclude(networkId: string): void;
   /** Network ids that currently have an include file present. */
   list(): string[];
   /**
