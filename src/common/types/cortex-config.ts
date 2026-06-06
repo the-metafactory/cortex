@@ -1425,14 +1425,26 @@ export const PolicyFederatedPeerSchema = z.object({
   /**
    * Peer principal's NKey public key — same 56-char U-prefixed base32
    * grammar as every other NKey on the schema (StackConfigSchema,
-   * PolicyPrincipalSchema). Phase D.4 swaps this static declaration
-   * for a registry-resolved lookup; until then, principals paste the
-   * peer's pubkey directly into cortex.yaml.
+   * PolicyPrincipalSchema).
+   *
+   * S2 (Network Join Control Plane, #736, DD-5) — now OPTIONAL. A peer
+   * may declare just `principal_id` + `stack_id` and leave the pubkey to
+   * be **registry-resolved** at config-load: the config-load resolver
+   * (`src/common/registry/resolve-federated-peers.ts`) fetches the peer's
+   * pubkey from the registry-signed roster, re-encodes it to nkey-U
+   * (DD-8), and fills this field before the surface-router gate +
+   * crypto-verify path consume it. Hand-pinning stays as the offline
+   * fallback (DD-5) — a hand-pinned peer always resolves without the
+   * registry. When BOTH a hand-pin AND a registry-resolved key exist and
+   * they DIFFER, the resolver fails that peer closed (DD-11). The
+   * downstream consumers (`evaluateFederationGate`, `buildIdentityRegistry`)
+   * always see a populated key for an admitted peer, however it was
+   * obtained — so there is no separate registry-resolved code path.
    */
   principal_pubkey: z.string().regex(
     NKEY_PUBKEY_REGEX,
     "peer.principal_pubkey must be a base32 NKey public key (U-prefixed, 56 chars total)",
-  ),
+  ).optional(),
 }).strict();
 
 export type PolicyFederatedPeer = z.infer<typeof PolicyFederatedPeerSchema>;
@@ -1923,15 +1935,24 @@ export const PolicySchema = z.object({
         // single pubkey appearing twice signals a copy-paste error
         // (principal pasted the same key into two peer entries with
         // different stack_ids); the schema catches it.
-        const dupKeyAt = seenPeerPubkey.get(peer.principal_pubkey);
-        if (dupKeyAt !== undefined) {
-          ctx.addIssue({
-            code: "custom",
-            message: `peer.principal_pubkey already declared at federated.networks[${networkIdx}].peers[${dupKeyAt}] (pubkey collision — paste error?)`,
-            path: ["federated", "networks", networkIdx, "peers", peerIdx, "principal_pubkey"],
-          });
-        } else {
-          seenPeerPubkey.set(peer.principal_pubkey, peerIdx);
+        //
+        // S2 (#736, DD-5) — `principal_pubkey` is now optional (registry-
+        // resolved peers omit it). An ABSENT pubkey is not a collision, so
+        // the uniqueness check only runs on hand-pinned peers. Registry
+        // resolution at config-load fills the absent keys later, and the
+        // resolver's DD-11 mismatch guard catches the cross-source drift a
+        // schema-time check cannot see anyway.
+        if (peer.principal_pubkey !== undefined) {
+          const dupKeyAt = seenPeerPubkey.get(peer.principal_pubkey);
+          if (dupKeyAt !== undefined) {
+            ctx.addIssue({
+              code: "custom",
+              message: `peer.principal_pubkey already declared at federated.networks[${networkIdx}].peers[${dupKeyAt}] (pubkey collision — paste error?)`,
+              path: ["federated", "networks", networkIdx, "peers", peerIdx, "principal_pubkey"],
+            });
+          } else {
+            seenPeerPubkey.set(peer.principal_pubkey, peerIdx);
+          }
         }
       });
     });

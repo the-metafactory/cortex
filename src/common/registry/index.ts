@@ -13,6 +13,13 @@
  *     peer-stamped registry: a pinned local boot principal plus peers
  *     resolved on demand via the TC-2a resolver. Materialises the myelin
  *     `IdentityRegistry` the `federated.*` crypto-verify path (TC-2d) reads.
+ *   - `NetworkRegistryClient` (S1, cortex#735) — typed network descriptor +
+ *     roster client (DD-9 pin+verify, DD-10 disk cache, DD-12 descriptor).
+ *   - `resolveFederatedPeers` (S2, cortex#736) — config-load resolver that
+ *     fills each `policy.federated.networks[].peers[].principal_pubkey` from
+ *     the verified roster (DD-5), falls back to the cached roster when the
+ *     registry is unreachable (DD-10), and fails a peer closed when a
+ *     hand-pinned key and the resolved key disagree (DD-11).
  */
 
 export { RegistryClient } from "./client";
@@ -30,6 +37,13 @@ export type { CachedNetwork, NetworkCacheOptions } from "./network-cache";
 export { base64PubkeyToNkey, nkeyToBase64Pubkey } from "./encoding";
 export { verifySignedAssertion } from "./verify-assertion";
 export type { VerifyAssertionResult } from "./verify-assertion";
+export { resolveFederatedPeers } from "./resolve-federated-peers";
+export type {
+  FederatedPeerResolveError,
+  NetworkRosterProvider,
+  ResolveFederatedPeersOptions,
+  ResolveFederatedPeersResult,
+} from "./resolve-federated-peers";
 export type {
   PrincipalPubkeyResolverOptions,
   ResolveResult,
