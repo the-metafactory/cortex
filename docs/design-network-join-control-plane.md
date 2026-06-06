@@ -71,6 +71,10 @@ This is the **Internet of Agentic Work** made concrete: `local` is your machine,
 - **DD-6 — The runtime/arc owns the nats-server leaf rendering.** "Join" updates the **actual running server** (renders the leaf remote + ensures the launchd plist loads the config), not a file the server ignores. This closes the single biggest trap from bring-up.
 - **DD-7 — Security ramp is orthogonal to join** (§3). Join works at any signing posture; the IoAW security ramp (off→permissive→enforce, mTLS, payload encryption / TC-3) is a separate axis.
 - **DD-8 — One canonical pubkey encoding per surface.** Config = nkey-U (`U…`); registry = base64 raw ed25519. The join command translates; humans never hand-convert.
+- **DD-9 — Pin + verify the registry (trust anchor).** [decided 2026-06-06] The registry signs its roster/principal responses (`registry:` pubkey + `signature`). Cortex pins the registry pubkey in config and verifies **every** roster/principal response signature before trusting a resolved peer pubkey. A spoofed/compromised registry cannot inject peer keys. *(Resolves the implicit trust gap; shapes S1.)*
+- **DD-10 — Registry-down → cached roster + warn.** [decided 2026-06-06] On registry-unreachable at boot, use the last-known-good cached roster and emit a loud `system.error`/warn; federation stays up. Hand-pinned peers always resolve offline. Federation is **not** silently torn down by a transient registry outage. *(Resolves OQ2; shapes S2.)*
+- **DD-11 — Resolved-vs-pinned mismatch → fail-closed.** [decided 2026-06-06] If a peer carries both a hand-pinned `principal_pubkey` and a *different* registry-resolved key, refuse to load that peer and alert — a divergence is a drift/attack signal, not a merge. Catches stale config **and** registry tampering. *(Shapes S2; complements DD-5's "pin is fallback" — when both exist they MUST agree.)*
+- **DD-12 — Hub via registry-served descriptor.** [decided 2026-06-06] The network's `hub_url` + `leaf_port` come from `GET /networks/:id` (the descriptor), not local config — so the hub can relocate without every peer re-editing config. *(Resolves OQ4; shapes S1 + S3.)*
 
 ---
 
@@ -110,8 +114,8 @@ This is the **Internet of Agentic Work** made concrete: `local` is your machine,
 
 ## 6. Feature breakdown (acceptance criteria)
 
-- **F1 — Network descriptor + roster in the registry client.** AC: cortex can `GET /networks/:id` + `/roster` and parse a typed descriptor; registry signature verified; unit + integration tests against a stub registry.
-- **F2 — Registry-resolved peers at config-load.** AC: a `peers[]` entry with only `principal_id` resolves pubkey+stack from the roster; hand-pinned `principal_pubkey` still honored (fallback); fail-closed + clear error if a peer is unresolvable; vocab/lint clean.
+- **F1 — Network descriptor + roster in the registry client.** AC: cortex can `GET /networks/:id` (descriptor: `hub_url`/`leaf_port`/`members[]`, DD-12) + `/roster` and parse typed responses; **every** response signature verified against the **pinned registry pubkey** (DD-9) — unverified responses rejected; responses cached to disk for offline reuse (DD-10); unit + integration tests against a stub registry incl. a bad-signature rejection test.
+- **F2 — Registry-resolved peers at config-load.** AC: a `peers[]` entry with only `principal_id` resolves pubkey+stack from the (verified) roster; on registry-unreachable, last-known-good **cache + loud warn**, federation stays up (DD-10); a hand-pinned `principal_pubkey` that **differs** from the resolved key → **fail-closed** for that peer + alert (DD-11); a matching pin is honored; clear error if a registry-only peer is unresolvable and uncached; vocab/lint clean.
 - **F3 — Leaf renderer + plist loader (DD-6).** AC: rendering a network's leaf remote updates the running nats-server (config loaded, leaf ESTABLISHED); idempotent; does not clobber the config-split layout (#717-aware); survives `arc upgrade`.
 - **F4 — `cortex network join/leave/status`.** AC: `join <network>` performs register → pull descriptor → render leaf → write `policy.federated.networks[]` (registry-resolved peers) → restart, idempotently; `status` shows leaf state + peers + counters; `leave` reverses cleanly.
 - **F5 — Public scope opt-in.** AC: `join public` wires `public.>` publish/subscribe + registers announced capabilities to the public index; gate correctness for the no-principal-segment scope; documented.
@@ -138,7 +142,20 @@ This is the **Internet of Agentic Work** made concrete: `local` is your machine,
 
 ## 8. Open questions
 
-1. **OQ1** — Public-scope trust: anonymous offer/claim on `public.>` needs a spam/abuse story before enabling beyond a allowlist. Defer enforce to the security ramp?
-2. **OQ2** — Registry as a hard dependency: if `network.meta-factory.ai` is down, does `join` block or fall back to cached roster? (Propose: cache + warn, hand-pin still works offline.)
-3. **OQ3** — Multi-network: a stack joining N networks (CONTEXT.md allows it) — confirm the LinkPool (#657/#659) + leaf renderer compose cleanly per network.
-4. **OQ4** — Who runs the network hub for `metafactory` long-term (JC's box today)? Descriptor should make the hub relocatable without re-pinning peers.
+1. **OQ1** — Public-scope trust: anonymous offer/claim on `public.>` needs a spam/abuse story before enabling beyond an allowlist. Defer enforce to the security ramp? *(Open — Phase C / S5.)*
+2. ~~**OQ2** — Registry-down behavior.~~ **Resolved → DD-10** (cached roster + warn; hand-pin works offline).
+3. **OQ3** — Multi-network: a stack joining N networks (CONTEXT.md allows it) — confirm the LinkPool (#657/#659) + leaf renderer compose cleanly per network. *(Verify in S3.)*
+4. ~~**OQ4** — Hub relocatability.~~ **Resolved → DD-12** (registry-served descriptor; `hub_url`/`leaf_port` from `GET /networks/:id`).
+
+## 9. North star — "feel like TCP/IP"
+
+The success test for this epic: **a principal joins the IoAW the way a machine joins the internet — plug in and it works.** No one configures the IP stack to reach the internet: DHCP autoconfigures, the layers are invisible, the endpoints are well-known, and the standard is the same everywhere. Joining a network should feel the same.
+
+What "feel like TCP/IP" means concretely:
+
+1. **Autoconfiguration (DHCP-style).** `cortex network join <network>` is the whole story — no nats-server config, no creds wrangling, no pubkey copy-paste, no choosing `max_hop`/`accept_subjects`. The registry is the DHCP/DNS-equivalent: hand it a network name, it hands back everything the layers need (descriptor + roster + trust anchor). Every detail in §1's friction table is absorbed by the command + registry.
+2. **Invisible layers.** A principal never touches M1–M6 to join, exactly as a user never touches Ethernet/IP/TCP framing to open a socket. The OSI model stays intact *under* the abstraction (DD-1); the principal just sees "joined."
+3. **Well-known + uniform.** One verb (`join`), one source of truth (registry), one grammar (the wire-protocol SOP) — identical for `local`, `federated`, and `public`. Like a socket API that's the same whether you talk to localhost, a LAN, or the open internet — only the scope changes, never the interface.
+4. **Graceful degradation, like the IP stack.** Transient registry outage ≠ network down (DD-10, cached roster); a bad/tampered response is dropped, not trusted (DD-9/DD-11). The network is robust to partial failure the way routing is.
+
+If any join step still needs NATS/PKI expertise, it's a bug in this design — not the principal's problem.
