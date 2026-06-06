@@ -361,6 +361,37 @@ describe("bash-guard.hook — no-bypass (metacharacter rejection)", () => {
     expectDeny("ls $((1+1))");
   });
 
+  // ---------------------------------------------------------------------------
+  // Regression: env-prefix command-substitution smuggle (Echo adversarial review,
+  // PR #770). stripEnvPrefix() launders an env-assignment prefix out of the
+  // command BEFORE the metacharacter scan. But bash EVALUATES the prefix value —
+  // including `$( )` / backticks — when building the command's environment, so
+  // `X="$(curl evil)" aws sts get-caller-identity` RUNS `curl evil` while the
+  // visible (post-strip) command is an allowed `aws` call. The metacharacter
+  // scan therefore must run on the RAW command, not the stripped one.
+  // ---------------------------------------------------------------------------
+  test("rejects command substitution hidden in a double-quoted env-prefix value", () => {
+    expectDeny('AWS_PROFILE="$(touch /tmp/pwned)" aws sts get-caller-identity');
+  });
+
+  test("rejects command substitution in an unquoted env-prefix value", () => {
+    expectDeny("X=$(id) aws sts get-caller-identity");
+  });
+
+  test("rejects a backtick substitution hidden in a quoted env-prefix value", () => {
+    expectDeny('X="`id`" aws sts get-caller-identity');
+  });
+
+  test("a plain (metacharacter-free) env-prefix is still allowed", () => {
+    // The whole point of PR #770: `AWS_PROFILE=halden-dev <allowed> …` must
+    // pass. Use `ls` (in DEFAULT_CONFIG) so this case is independent of the
+    // aws rule — it proves the raw-command metacharacter scan does not
+    // over-reject a benign `NAME=value` prefix.
+    const r = runHook("AWS_PROFILE=halden-dev ls", env);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
   test("a chain of ALL-allowed commands still passes (&& preserved)", () => {
     const r = runHook("ls && pwd", env);
     expect(r.status).toBe(0);
