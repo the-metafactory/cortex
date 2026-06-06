@@ -122,7 +122,8 @@ export interface StatusNetworkRow {
  *   (c) render + write the leaf include and ensure the plist loads it (DD-6),
  *   (d) merge the network into policy.federated.networks[] with registry-
  *       resolved peers (DD-5) + the OWN accept-subject,
- *   (e) restart the daemon.
+ *   (e) restart nats-server so it reloads local.conf + the new leaf (#757),
+ *       THEN restart the cortex daemon so it reconnects to the bus.
  *
  * Never throws — every failure becomes a `{ ok: false, reason }`.
  */
@@ -248,7 +249,31 @@ export async function joinNetwork(
     };
   }
 
-  // (e) Restart the daemon so the rendered leaf takes effect.
+  // (e.1) Restart nats-server so it RELOADS local.conf + the freshly-included
+  // leaf (#757). nats-server is the process that actually reads local.conf; the
+  // config writes above + the plist ensure are dormant until it restarts. Order
+  // matters: bring the bus up with the leaf FIRST, then reconnect cortex (e.2)
+  // so it attaches to a leaf that is already established. Kept inside the
+  // never-throws contract — a failed nats restart is a recoverable `{ ok: false }`.
+  // Skipped only when no nats-server port is wired (a caller that doesn't mutate
+  // the leaf); the live `join` path always supplies one.
+  if (ports.natsServer !== undefined) {
+    const natsRestart = await ports.natsServer.restart();
+    if (!natsRestart.ok) {
+      return {
+        ok: false,
+        steps,
+        reason: `config written but nats-server restart failed: ${natsRestart.reason}`,
+        network: entry,
+        usedCache,
+        resolvedPeers: peers.map((p) => p.principal_id),
+      };
+    }
+    steps.push("restarted nats-server to load leaf config");
+  }
+
+  // (e.2) Restart the cortex daemon so it reconnects to the bus (now carrying
+  // the leaf).
   const restart = await ports.daemon.restart();
   if (!restart.ok) {
     return {

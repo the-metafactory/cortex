@@ -14,9 +14,11 @@
  */
 
 import { describe, test, expect, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "fs";
-import { tmpdir } from "os";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "fs";
+import { tmpdir, homedir } from "os";
 import { join } from "path";
+
+import { parse as parseYaml } from "yaml";
 
 import {
   buildDryRunPorts,
@@ -27,6 +29,7 @@ import {
   ensureConfigArg,
   renderProgramArguments,
 } from "../../../../common/nats/nats-plist-loader";
+import type { PolicyFederatedNetwork } from "../../../../common/types/cortex-config";
 
 const tmpDirs: string[] = [];
 function freshDir(): string {
@@ -234,5 +237,299 @@ describe("#754 live leaf-include wiring", () => {
 
     // The file on disk is untouched.
     expect(readFileSync(conf, "utf-8")).toBe(original);
+  });
+});
+
+// =============================================================================
+// #756 — the config-store port is CONFIG-SPLIT-AWARE: it writes
+// policy.federated.networks[] to the per-stack split path
+// (~/.config/cortex/<slug>/stacks/<slug>.yaml) when the per-stack dir exists,
+// falling back to the flat legacy path otherwise. The join's policy block must
+// land in the file the DAEMON composes, not a stray orphan.
+//
+// expandTilde() reads $HOME, so each test points $HOME at a temp dir and builds
+// the layout under <tmp>/.config/cortex/.
+// =============================================================================
+
+const realHome = homedir();
+
+function withHome(home: string, fn: () => void): void {
+  const prev = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    fn();
+  } finally {
+    if (prev === undefined) delete process.env.HOME;
+    else process.env.HOME = prev;
+  }
+}
+
+function cfgForStack(slug: string): LivePortsConfig {
+  return {
+    networkId: "metafactory",
+    principalId: "andreas",
+    stackId: `andreas/${slug}`,
+    natsConfigPath: "/Users/andreas/.config/nats/local.conf",
+    plistPath: "/nonexistent/plist",
+  };
+}
+
+function sampleNetwork(id: string): PolicyFederatedNetwork {
+  return {
+    id,
+    leaf_node: id,
+    peers: [],
+    accept_subjects: ["federated.andreas.meta-factory.>"],
+    deny_subjects: [],
+    announce_capabilities: [],
+    max_hop: 1,
+  };
+}
+
+describe("#756 config-split-aware policy write", () => {
+  test("writes to <slug>/stacks/<slug>.yaml when the per-stack split dir exists", () => {
+    const home = freshDir();
+    const cortexDir = join(home, ".config", "cortex");
+    // Build the config-split layout: the per-stack dir with its system marker.
+    mkdirSync(join(cortexDir, "meta-factory", "system"), { recursive: true });
+    writeFileSync(
+      join(cortexDir, "meta-factory", "system", "system.yaml"),
+      "nats:\n  url: nats://localhost:4222\n",
+      "utf-8",
+    );
+
+    withHome(home, () => {
+      const ports = buildLivePorts(cfgForStack("meta-factory"));
+      ports.configStore.writeNetworks([sampleNetwork("metafactory")]);
+    });
+
+    const splitPath = join(cortexDir, "meta-factory", "stacks", "meta-factory.yaml");
+    const flatPath = join(cortexDir, "stacks", "meta-factory.yaml");
+    // The policy block landed in the SPLIT path (the file the daemon composes).
+    expect(existsSync(splitPath)).toBe(true);
+    // And NOT in the flat orphan path.
+    expect(existsSync(flatPath)).toBe(false);
+
+    const parsed = parseYaml(readFileSync(splitPath, "utf-8")) as {
+      policy?: { federated?: { networks?: PolicyFederatedNetwork[] } };
+    };
+    expect(parsed.policy?.federated?.networks?.[0]?.id).toBe("metafactory");
+  });
+
+  test("derives the slug from the part AFTER the `/` in --stack", () => {
+    const home = freshDir();
+    const cortexDir = join(home, ".config", "cortex");
+    mkdirSync(join(cortexDir, "meta-factory", "system"), { recursive: true });
+    writeFileSync(join(cortexDir, "meta-factory", "system", "system.yaml"), "{}\n", "utf-8");
+
+    withHome(home, () => {
+      // stackId = "andreas/meta-factory" → slug "meta-factory" (NOT "andreas").
+      const ports = buildLivePorts(cfgForStack("meta-factory"));
+      ports.configStore.writeNetworks([sampleNetwork("metafactory")]);
+    });
+
+    expect(existsSync(join(cortexDir, "meta-factory", "stacks", "meta-factory.yaml"))).toBe(true);
+    expect(existsSync(join(cortexDir, "andreas", "stacks", "andreas.yaml"))).toBe(false);
+  });
+
+  test("idempotent: replace network-by-id, preserving the rest of the policy block", () => {
+    const home = freshDir();
+    const cortexDir = join(home, ".config", "cortex");
+    const stacksDir = join(cortexDir, "meta-factory", "stacks");
+    mkdirSync(join(cortexDir, "meta-factory", "system"), { recursive: true });
+    writeFileSync(join(cortexDir, "meta-factory", "system", "system.yaml"), "{}\n", "utf-8");
+    mkdirSync(stacksDir, { recursive: true });
+    // An EXISTING stack file with principals/roles/agents + a hand-pinned peer
+    // network — none of which the join must clobber.
+    const existing = [
+      "policy:",
+      "  principals:",
+      "    - id: andreas",
+      "      roles: [operator]",
+      "  agents:",
+      "    - id: echo",
+      "  federated:",
+      "    networks:",
+      "      - id: metafactory",
+      "        leaf_node: metafactory",
+      "        peers:",
+      "          - principal_id: jc",
+      "            stack_id: jc/sage-host",
+      "            principal_pubkey: UHANDPINNEDKEY",
+      "        accept_subjects: [federated.andreas.meta-factory.>]",
+      "        deny_subjects: []",
+      "        announce_capabilities: []",
+      "        max_hop: 1",
+      "      - id: research",
+      "        leaf_node: research",
+      "        peers: []",
+      "        accept_subjects: [federated.andreas.meta-factory.>]",
+      "        deny_subjects: []",
+      "        announce_capabilities: []",
+      "        max_hop: 1",
+      "",
+    ].join("\n");
+    const splitPath = join(stacksDir, "meta-factory.yaml");
+    writeFileSync(splitPath, existing, "utf-8");
+
+    withHome(home, () => {
+      const ports = buildLivePorts(cfgForStack("meta-factory"));
+      const current = ports.configStore.readNetworks();
+      // Replace metafactory by id (idempotent merge done by the orchestrator;
+      // here we simulate it), keep research untouched.
+      const replaced = current.map((n) =>
+        n.id === "metafactory" ? { ...sampleNetwork("metafactory"), max_hop: 2 } : n,
+      );
+      ports.configStore.writeNetworks(replaced);
+    });
+
+    const parsed = parseYaml(readFileSync(splitPath, "utf-8")) as {
+      policy?: {
+        principals?: { id: string }[];
+        agents?: { id: string }[];
+        federated?: { networks?: PolicyFederatedNetwork[] };
+      };
+    };
+    // The rest of the policy block is intact.
+    expect(parsed.policy?.principals?.[0]?.id).toBe("andreas");
+    expect(parsed.policy?.agents?.[0]?.id).toBe("echo");
+    // Both networks still present; research untouched; metafactory replaced.
+    const nets = parsed.policy?.federated?.networks ?? [];
+    expect(nets.map((n) => n.id).sort()).toEqual(["metafactory", "research"]);
+    const meta = nets.find((n) => n.id === "metafactory")!;
+    expect(meta.max_hop).toBe(2);
+    const research = nets.find((n) => n.id === "research")!;
+    // research's hand state is preserved verbatim.
+    expect(research.max_hop).toBe(1);
+  });
+
+  test("preserves a peer's hand-pinned pubkey on an unrelated network", () => {
+    const home = freshDir();
+    const cortexDir = join(home, ".config", "cortex");
+    const stacksDir = join(cortexDir, "meta-factory", "stacks");
+    mkdirSync(join(cortexDir, "meta-factory", "system"), { recursive: true });
+    writeFileSync(join(cortexDir, "meta-factory", "system", "system.yaml"), "{}\n", "utf-8");
+    mkdirSync(stacksDir, { recursive: true });
+    const existing = [
+      "policy:",
+      "  federated:",
+      "    networks:",
+      "      - id: research",
+      "        leaf_node: research",
+      "        peers:",
+      "          - principal_id: jc",
+      "            stack_id: jc/sage-host",
+      "            principal_pubkey: UHANDPINNEDKEY12345",
+      "        accept_subjects: [federated.andreas.meta-factory.>]",
+      "        deny_subjects: []",
+      "        announce_capabilities: []",
+      "        max_hop: 1",
+      "",
+    ].join("\n");
+    const splitPath = join(stacksDir, "meta-factory.yaml");
+    writeFileSync(splitPath, existing, "utf-8");
+
+    withHome(home, () => {
+      const ports = buildLivePorts(cfgForStack("meta-factory"));
+      const current = ports.configStore.readNetworks();
+      // Join a DIFFERENT network — research must be untouched.
+      ports.configStore.writeNetworks([...current, sampleNetwork("metafactory")]);
+    });
+
+    const parsed = parseYaml(readFileSync(splitPath, "utf-8")) as {
+      policy?: { federated?: { networks?: PolicyFederatedNetwork[] } };
+    };
+    const research = parsed.policy?.federated?.networks?.find((n) => n.id === "research");
+    expect(research?.peers?.[0]?.principal_pubkey).toBe("UHANDPINNEDKEY12345");
+  });
+
+  test("falls back to the flat legacy path when no per-stack split dir exists", () => {
+    const home = freshDir();
+    const cortexDir = join(home, ".config", "cortex");
+    // No per-stack dir / marker — legacy flat layout.
+    mkdirSync(cortexDir, { recursive: true });
+
+    withHome(home, () => {
+      const ports = buildLivePorts(cfgForStack("meta-factory"));
+      ports.configStore.writeNetworks([sampleNetwork("metafactory")]);
+    });
+
+    expect(existsSync(join(cortexDir, "stacks", "meta-factory.yaml"))).toBe(true);
+    expect(existsSync(join(cortexDir, "meta-factory", "stacks", "meta-factory.yaml"))).toBe(false);
+  });
+
+  test("dry-run writeNetworks is inert even on the split layout", () => {
+    const home = freshDir();
+    const cortexDir = join(home, ".config", "cortex");
+    mkdirSync(join(cortexDir, "meta-factory", "system"), { recursive: true });
+    writeFileSync(join(cortexDir, "meta-factory", "system", "system.yaml"), "{}\n", "utf-8");
+
+    withHome(home, () => {
+      const ports = buildDryRunPorts(cfgForStack("meta-factory"));
+      ports.configStore.writeNetworks([sampleNetwork("metafactory")]);
+    });
+
+    // Nothing written anywhere.
+    expect(existsSync(join(cortexDir, "meta-factory", "stacks", "meta-factory.yaml"))).toBe(false);
+    expect(existsSync(join(cortexDir, "stacks", "meta-factory.yaml"))).toBe(false);
+    // Sanity: we never touched the real home.
+    expect(realHome).not.toBe(home);
+  });
+});
+
+// =============================================================================
+// #757 — the live nats-server port restarts the service named by the --plist's
+// <key>Label</key>. The dry-run port is inert; error branches (missing plist /
+// missing label) never spawn launchctl. We do NOT exercise the real launchctl
+// spawn in tests (the S4 SAFETY rule — no live mutation).
+// =============================================================================
+
+describe("#757 nats-server restart port", () => {
+  test("dry-run nats-server restart is inert (no spawn, ok)", async () => {
+    const dir = freshDir();
+    const plistPath = join(dir, "nats-server.plist");
+    writeFileSync(plistPath, barePlist(), "utf-8");
+    const ports = buildDryRunPorts(cfgFor(plistPath));
+    expect(ports.natsServer).toBeDefined();
+    const res = await ports.natsServer!.restart();
+    expect(res.ok).toBe(true);
+  });
+
+  test("live restart fails cleanly when the plist is absent (no spawn)", async () => {
+    const cfg: LivePortsConfig = {
+      networkId: "metafactory",
+      principalId: "andreas",
+      stackId: "andreas/meta-factory",
+      natsConfigPath: "/x/local.conf",
+      plistPath: "/nonexistent/nats-server.plist",
+    };
+    const ports = buildLivePorts(cfg);
+    const res = await ports.natsServer!.restart();
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain("plist not found");
+  });
+
+  test("live restart fails cleanly when the plist has no Label (no spawn)", async () => {
+    const dir = freshDir();
+    const plistPath = join(dir, "no-label.plist");
+    // A plist with ProgramArguments but NO <key>Label</key>.
+    writeFileSync(
+      plistPath,
+      [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<plist version="1.0">',
+        "<dict>",
+        "\t<key>ProgramArguments</key>",
+        "\t<array><string>/opt/homebrew/bin/nats-server</string></array>",
+        "</dict>",
+        "</plist>",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const ports = buildLivePorts(cfgFor(plistPath));
+    const res = await ports.natsServer!.restart();
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain("Label");
   });
 });

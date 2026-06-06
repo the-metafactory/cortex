@@ -175,12 +175,30 @@ export interface ConfigStorePort {
 }
 
 /**
- * The daemon-restart seam — `launchctl kickstart` of the stack's nats-server
- * (and/or cortex) so the rendered config takes effect. Injected so tests
+ * The daemon-restart seam — `launchctl kickstart` of the stack's CORTEX daemon
+ * so it reconnects after the leaf config takes effect. Injected so tests
  * assert the restart was requested without touching launchctl.
  */
 export interface DaemonPort {
-  /** Restart the stack daemon so the new leaf config is loaded. */
+  /** Restart the stack (cortex) daemon so it reconnects to the bus. */
+  restart(): Promise<{ ok: true } | { ok: false; reason: string }>;
+}
+
+/**
+ * The nats-server-restart seam (#757). `join` mutates `local.conf` (the leaf
+ * include + the `include` directive) and ensures the plist loads it — but
+ * nats-server, the process that actually READS `local.conf`, must be restarted
+ * for the leaf to take effect. Without this the leaf change stays dormant until
+ * a manual `launchctl kickstart` of nats-server (the #757 trap, sibling of the
+ * #754 dormant-include trap).
+ *
+ * The live adapter restarts the launchd service named by the join's `--plist`
+ * (the **nats-server** plist, read from its `<key>Label</key>`); the dry-run
+ * adapter is inert. The orchestrator calls this BEFORE {@link DaemonPort.restart}
+ * so the bus carries the leaf before cortex reconnects.
+ */
+export interface NatsServerPort {
+  /** Restart nats-server so it reloads `local.conf` (the new leaf include). */
   restart(): Promise<{ ok: true } | { ok: false; reason: string }>;
 }
 
@@ -212,6 +230,13 @@ export interface NetworkPorts {
   plist: PlistPort;
   configStore: ConfigStorePort;
   daemon: DaemonPort;
+  /**
+   * Restart nats-server so it reloads `local.conf` (#757). Optional so `leave`
+   * / `status` and any caller that does not mutate the leaf can omit it; `join`
+   * calls it when present. Absent → the nats-server restart step is skipped
+   * (the pre-#757 behavior, kept for callers that don't supply it).
+   */
+  natsServer?: NatsServerPort;
   /** Optional — status link telemetry. Absent → link state "unknown". */
   leafState?: LeafStatePort;
 }

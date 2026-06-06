@@ -30,6 +30,7 @@ import type {
   DaemonPort,
   LeafFilePort,
   LeafStatePort,
+  NatsServerPort,
   NetworkPorts,
   NetworkRegistryPort,
   PlistPort,
@@ -96,6 +97,10 @@ function rosterFor(networkId: string): NetworkRosterResult {
 interface Recorder {
   registered: number;
   restarts: number;
+  /** #757 — count of nats-server restarts requested. */
+  natsRestarts: number;
+  /** #757 — ordered restart log: "nats" / "cortex" in call order. */
+  restartOrder: ("nats" | "cortex")[];
   writes: RenderLeafInputs[];
   removes: string[];
   /** #754 — networks whose include directive was ensured into local.conf. */
@@ -113,12 +118,18 @@ function makeFakes(opts: {
   cached?: { descriptor: NetworkDescriptor; roster: NetworkRosterResult };
   registerOk?: boolean;
   restartOk?: boolean;
+  /** #757 — make the nats-server restart fail (default: ok). */
+  natsRestartOk?: boolean;
+  /** #757 — omit the nats-server port entirely (pre-#757 caller). */
+  withoutNatsServer?: boolean;
   initialNetworks?: PolicyFederatedNetwork[];
   leafState?: LeafStatePort;
 }): { ports: NetworkPorts; rec: Recorder; storeRef: { networks: PolicyFederatedNetwork[] } } {
   const rec: Recorder = {
     registered: 0,
     restarts: 0,
+    natsRestarts: 0,
+    restartOrder: [],
     writes: [],
     removes: [],
     includesEnsured: [],
@@ -198,14 +209,33 @@ function makeFakes(opts: {
   const daemon: DaemonPort = {
     async restart() {
       rec.restarts++;
+      rec.restartOrder.push("cortex");
       return opts.restartOk === false
         ? { ok: false, reason: "launchctl kickstart failed" }
         : { ok: true };
     },
   };
 
+  const natsServer: NatsServerPort = {
+    async restart() {
+      rec.natsRestarts++;
+      rec.restartOrder.push("nats");
+      return opts.natsRestartOk === false
+        ? { ok: false, reason: "nats-server kickstart failed" }
+        : { ok: true };
+    },
+  };
+
   return {
-    ports: { registry, leafFile, plist, configStore, daemon, leafState: opts.leafState },
+    ports: {
+      registry,
+      leafFile,
+      plist,
+      configStore,
+      daemon,
+      ...(opts.withoutNatsServer === true ? {} : { natsServer }),
+      leafState: opts.leafState,
+    },
     rec,
     storeRef,
   };
@@ -299,6 +329,76 @@ describe("join", () => {
     const { ports, storeRef } = makeFakes({});
     await joinNetwork("metafactory", LOCAL, ports);
     expect(storeRef.networks[0]!.max_hop).toBe(1);
+  });
+});
+
+// =============================================================================
+// #757 — join restarts nats-server (so the leaf loads) BEFORE the cortex daemon
+// =============================================================================
+
+describe("#757 nats-server restart on join", () => {
+  test("join restarts nats-server, then the cortex daemon (order matters)", async () => {
+    const { ports, rec } = makeFakes({});
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+
+    expect(res.ok).toBe(true);
+    // nats-server restarted exactly once (loads local.conf + the new leaf).
+    expect(rec.natsRestarts).toBe(1);
+    // cortex daemon also restarted (reconnect).
+    expect(rec.restarts).toBe(1);
+    // Order: nats-server FIRST (bus carries the leaf), THEN cortex reconnects.
+    expect(rec.restartOrder).toEqual(["nats", "cortex"]);
+  });
+
+  test("the nats-server restart happens AFTER the config writes", async () => {
+    const { ports, rec, storeRef } = makeFakes({});
+    await joinNetwork("metafactory", LOCAL, ports);
+    // Config + include were written before the restart fired.
+    expect(storeRef.networks.length).toBe(1);
+    expect(rec.includesEnsured).toEqual(["metafactory"]);
+    expect(rec.ensured.length).toBe(1);
+    // The restart order proves nats came after the writes (writes are sync,
+    // restarts are the last two awaited calls).
+    expect(rec.restartOrder).toEqual(["nats", "cortex"]);
+  });
+
+  test("step log records the nats-server restart line", async () => {
+    const { ports } = makeFakes({});
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+    expect(
+      res.steps.some((s) => s === "restarted nats-server to load leaf config"),
+    ).toBe(true);
+    expect(res.steps.some((s) => s === "restarted stack daemon")).toBe(true);
+    // nats-server step precedes the cortex daemon step.
+    const natsIdx = res.steps.indexOf("restarted nats-server to load leaf config");
+    const cortexIdx = res.steps.indexOf("restarted stack daemon");
+    expect(natsIdx).toBeLessThan(cortexIdx);
+  });
+
+  test("a nats-server restart failure fails the join (config NOT lost, never throws)", async () => {
+    const { ports, rec, storeRef } = makeFakes({ natsRestartOk: false });
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("nats-server restart failed");
+    // The config block WAS written (mutation got that far) — re-running converges.
+    expect(storeRef.networks.length).toBe(1);
+    // The cortex daemon was NOT restarted — we abort on the nats failure first.
+    expect(rec.restarts).toBe(0);
+    expect(rec.restartOrder).toEqual(["nats"]);
+  });
+
+  test("absent nats-server port → restart skipped (pre-#757 caller still works)", async () => {
+    const { ports, rec } = makeFakes({ withoutNatsServer: true });
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+    expect(res.ok).toBe(true);
+    // No nats restart, but the cortex daemon still restarts.
+    expect(rec.natsRestarts).toBe(0);
+    expect(rec.restarts).toBe(1);
+    expect(rec.restartOrder).toEqual(["cortex"]);
+    expect(
+      res.steps.some((s) => s === "restarted nats-server to load leaf config"),
+    ).toBe(false);
   });
 });
 

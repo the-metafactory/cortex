@@ -60,6 +60,7 @@ import type {
   DaemonPort,
   LeafFilePort,
   LeafStatePort,
+  NatsServerPort,
   NetworkPorts,
   NetworkRegistryPort,
   PlistPort,
@@ -294,14 +295,37 @@ function buildPlistPort(cfg: LivePortsConfig, mutate: boolean): PlistPort {
 // Config-store port — read/write policy.federated.networks[] in stacks/<stack>.yaml.
 // =============================================================================
 
-/** The stack-scoped config file that carries policy.federated.networks[]. */
+/**
+ * The stack-scoped config file that carries policy.federated.networks[] (#756).
+ *
+ * Two layouts, resolved the same way the loader's composer resolves its
+ * ingestion path (`LAYOUT_MARKER = system/system.yaml`):
+ *
+ *   - **config-split (current, migration 0003 / #714):** per-stack dirs. Each
+ *     stack lives at `~/.config/cortex/<slug>/`, with its policy block in
+ *     `~/.config/cortex/<slug>/stacks/<slug>.yaml`. This is the file the daemon
+ *     actually composes + loads, so the join's `policy.federated.networks[]`
+ *     MUST land here. Detected by the per-stack marker
+ *     `~/.config/cortex/<slug>/system/system.yaml`.
+ *   - **flat (legacy):** `~/.config/cortex/stacks/<slug>.yaml`. The pre-split
+ *     path; used only as a fallback when the per-stack dir is absent.
+ *
+ * Before #756 the join wrote the FLAT path unconditionally, so on a config-split
+ * deployment the policy block landed as a stray orphan the daemon never read.
+ * We now prefer the split layout whenever its per-stack dir exists.
+ */
 function stackConfigPath(cfg: LivePortsConfig): string {
-  // The config-split stack file. The stack id is `{principal}/{slug}`; the file
-  // is `stacks/<slug>.yaml` under the cortex config dir derived from the nats
-  // config's grandparent (~/.config/cortex). Kept overridable via a future
-  // flag; for S4 we derive it deterministically from the stack slug.
   const slug = cfg.stackId.split("/")[1] ?? "default";
   const cortexDir = expandTilde("~/.config/cortex");
+  // Config-split: the per-stack dir is marked by `<slug>/system/system.yaml`
+  // (the same marker the loader's composer keys on). When present, the policy
+  // block belongs in the per-stack `stacks/<slug>.yaml` the daemon composes.
+  const perStackDir = join(cortexDir, slug);
+  const splitMarker = join(perStackDir, "system", "system.yaml");
+  if (existsSync(splitMarker)) {
+    return join(perStackDir, "stacks", `${slug}.yaml`);
+  }
+  // Flat (legacy) fallback.
   return join(cortexDir, "stacks", `${slug}.yaml`);
 }
 
@@ -353,6 +377,54 @@ function buildDaemonPort(cfg: LivePortsConfig, mutate: boolean): DaemonPort {
 }
 
 // =============================================================================
+// Nats-server port — launchctl kickstart of the nats-server plist's service
+// (#757). The join mutates local.conf (leaf include + `include` directive); the
+// nats-server process that reads local.conf must be restarted for the leaf to
+// take effect. We restart the service named by the join's `--plist`
+// (the nats-server plist), reading its `<key>Label</key>` so the kickstart
+// target is whatever the principal's plist declares (homebrew.mxcl.nats-server,
+// a custom label, etc.) — no hardcoded label.
+// =============================================================================
+
+/** Read the launchd `<key>Label</key><string>…</string>` from a plist. */
+function readPlistLabel(plistPath: string): string | undefined {
+  const xml = readFileSync(plistPath, "utf-8");
+  const m = /<key>Label<\/key>\s*<string>([\s\S]*?)<\/string>/.exec(xml);
+  if (m === null) return undefined;
+  const label = unescapeXml(m[1] ?? "").trim();
+  return label === "" ? undefined : label;
+}
+
+function buildNatsServerPort(cfg: LivePortsConfig, mutate: boolean): NatsServerPort {
+  const plistPath = expandTilde(cfg.plistPath ?? "");
+  return {
+    async restart() {
+      if (!mutate) return { ok: true }; // dry-run: pretend success, touch nothing.
+      if (cfg.plistPath === undefined || !existsSync(plistPath)) {
+        return { ok: false, reason: `nats-server plist not found at ${plistPath}` };
+      }
+      const label = readPlistLabel(plistPath);
+      if (label === undefined) {
+        return { ok: false, reason: `no <key>Label</key> in nats-server plist ${plistPath}` };
+      }
+      const proc = Bun.spawn(
+        ["launchctl", "kickstart", "-k", `gui/${process.getuid?.() ?? 501}/${label}`],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const code = await proc.exited;
+      if (code !== 0) {
+        const err = await new Response(proc.stderr).text();
+        return {
+          ok: false,
+          reason: `launchctl kickstart ${label} exited ${code.toString()}: ${err.trim()}`,
+        };
+      }
+      return { ok: true };
+    },
+  };
+}
+
+// =============================================================================
 // Leaf-state port — nats-server monitor /leafz for status.
 // =============================================================================
 
@@ -397,6 +469,7 @@ function buildPorts(cfg: LivePortsConfig, mutate: boolean): NetworkPorts {
     plist: buildPlistPort(cfg, mutate),
     configStore: buildConfigStorePort(cfg, mutate),
     daemon: buildDaemonPort(cfg, mutate),
+    natsServer: buildNatsServerPort(cfg, mutate),
     ...(leafState !== undefined ? { leafState } : {}),
   };
 }
