@@ -1,3 +1,18 @@
+> # ⚠️ SUPERSEDED — use `cortex network join`
+>
+> **This manual, cloudflared-led runbook (#728) is superseded by the one-command join** ([`docs/sop-network-join.md`](./sop-network-join.md), S6 / Network Join Control Plane #733). For the steady-state case, **do not follow the steps below** — run:
+>
+> ```bash
+> cortex provision-stack register <principal-id> --seed-path <p> --registry-url <url> --stack-id <id>   # once
+> cortex network join <network> --principal <id> --registry-url <url> --registry-pubkey <b64> \
+>   --seed-path <p> --creds <p> --account <A…> --nats-config <p> --plist <p> --apply
+> cortex network status --principal <id>
+> ```
+>
+> The registry is now the source of truth (descriptor + roster + trust anchor — [ADR-0003](./adr/0003-network-join-control-plane.md) DD-2/DD-9/DD-12); the command absorbs every manual step below.
+>
+> **This document is kept for historical reference and as the manual fallback** for: no reachable registry, the offline hand-pin path (DD-5 fallback), or bringing up a brand-new hub before its descriptor exists. Note that a **public NATS hub** (JC's hub) makes the cloudflared "Reachability" section below **moot for the 2-party case** — leaf nodes dial outbound to the public hub (NAT-safe), so no tunnel is needed.
+
 # Runbook — Configure Federation Peering (cross-principal review test)
 
 **Goal:** wire two principals' cortex stacks together so a `pilot request-review` on one side is reviewed by the other and the verdict comes back — the end-to-end cross-principal review loop.

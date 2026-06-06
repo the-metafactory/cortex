@@ -23,6 +23,8 @@ _Avoid_: daemon (the per-assistant runtime identity is the **agent**), server, h
 **Network**:
 A federation of **principals** whose **stacks** interconnect at the NATS leaf-node layer — `metafactory` is the network this ecosystem runs on. A network is **not a subject segment**: it is deployment topology. Cross-principal reach is the `federated.` **scope** prefix, never a network name on the wire. A principal may belong to more than one network.
 
+A stack **joins** a network through the **network-join control plane** — `cortex network join <network>` (`docs/sop-network-join.md`, spec `docs/design-network-join-control-plane.md`, binding decisions `docs/adr/0003-network-join-control-plane.md`). The control plane is additive over the unchanged L1–L7 data plane: the **registry** (`network.meta-factory.ai`) is the source of truth for the network descriptor (`hub_url`/`leaf_port`) + peer roster; cortex pins + verifies the registry (DD-9), resolves peers from the roster (DD-5), and renders the leaf link from the descriptor (DD-12). Joining is one command, not the ~10 manual steps it replaces. Hand-pinning a peer pubkey survives as the offline fallback only.
+
 **Federation is the default for multi-principal collaboration**, not the exception. When two principals' bots interact (e.g. Andreas's assistant replies to a message JC's user posted), the dispatch envelope MUST publish on `federated.{principal}.{stack}.…` — `local.` never crosses the principal boundary. This is the OSI/L3 routing equivalent: `local.` is one broadcast domain, `federated.` is cross-network routing. A shared platform channel (Discord, Mattermost, Slack) does NOT make cross-principal traffic intra-principal — the surface is L7; the routing happens at L1–L3 on the bus.
 _Avoid_: federation (that is the relationship, not the thing), mesh, fabric, org, cluster
 
@@ -48,7 +50,9 @@ _Avoid_: topic (the Kafka/MQTT word — NATS subjects have different semantics),
 
 **Scope**:
 How far a **subject** may travel, set by its prefix — exactly three values: `local` (never leaves the **principal** boundary), `federated` (crosses to peer principals in a **network**), `public` (unrestricted; carries no principal/stack segment).
-_Avoid_: reach, visibility, tier, level
+
+The three scopes are also the three **onboarding tiers** of the network-join control plane (`docs/adr/0003-network-join-control-plane.md`, `docs/sop-network-join.md`): **local** is zero-config (the home bus — nothing to join); **federated** is the registry-mediated `cortex network join <network>` (the registry resolves hub + roster + peer pubkeys); **public** is the opt-in open square — the Internet of Agentic Work. The same wire grammar governs all three; only the scope prefix and the gate's trust source differ. The security posture (`signing: off → permissive → enforce`) is orthogonal to scope — joining a tier never changes your signing posture.
+_Avoid_: reach, visibility, tier, level (when naming the prefix; "onboarding tier" is fine for the join model)
 
 **Domain**:
 The functional-domain segment of a **subject** — groups related signals. Values: `tasks`, `agent`, `system`, `code`, `review`, `dispatch`. Always the segment ("the tasks domain"). The `tasks` and `dispatch` domains are distinct and coexist: **`tasks.{capability}.{subcapability}`** is the work-request namespace (where Offer-mode work is published, capability-routed); **`dispatch.task.{action}`** is the task-lifecycle namespace (events about an active dispatch — `received`, `dispatched`, `started`, `completed`, `failed`, `aborted`). Not a rename in flight.
