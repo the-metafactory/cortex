@@ -38,6 +38,56 @@ interface AllowRule {
   repos?: string[];
 }
 
+/**
+ * Read-only AWS CLI allowlist pattern.
+ *
+ * This is the regex halden's `bashAllowlist` uses for its `aws` rule. It is
+ * exported (and unit-tested in bash-guard.hook.test.ts) so the live config
+ * inherits a *proven* read-only-only pattern rather than a hand-rolled one.
+ *
+ * Tolerates, before the verb:
+ *   - global flags `--profile <x>` / `--region <x>` / `--output <x>` and the
+ *     valueless `--no-cli-pager`.
+ *   (A leading env prefix — `AWS_PROFILE=… aws …` — is stripped by the hook's
+ *    stripEnvPrefix() before matching, so it is not modelled in the regex.)
+ *
+ * Allows ONLY read-only verbs:
+ *   - `sts get-caller-identity`
+ *   - `<service> describe-*` / `<service> get-*` / `<service> list-*`
+ *
+ * MUST NOT match any write/exec verb: send-command, start-session,
+ * run-instances, terminate-*, stop-*, start-*, *-create-*, delete-*, put-*,
+ * modify-*, update-*, reboot-*, etc. Those never begin with describe/get/list,
+ * so the verb-prefix anchor denies them by construction. When in doubt, deny.
+ *
+ * Note: this pattern only governs whether a single, well-formed `aws …`
+ * invocation is *read-only*. The hook's metacharacter guard (rejectsChaining)
+ * independently refuses any attempt to smuggle a second command via pipes,
+ * substitution, backticks, redirects, background `&`, or newlines — so an
+ * allow-match here can never carry a hidden destructive command.
+ */
+export const READONLY_AWS_PATTERN =
+  // ^aws
+  "^aws" +
+  // optional global flags before the service. Each --profile/--region/--output
+  // consumes its value via \S+ (which excludes whitespace, so a flag value can
+  // never itself supply a "service verb" pair); --no-cli-pager is valueless.
+  "(?:\\s+(?:--(?:profile|region|output)\\s+\\S+|--no-cli-pager))*" +
+  // service + read-only verb
+  "\\s+(?:" +
+  // sts get-caller-identity (the one explicitly-allowed get on sts)
+  "sts\\s+get-caller-identity" +
+  "|" +
+  // <service> describe-* / get-* / list-*. Service must start with a letter
+  // so a flag token like `--profile` can never be mistaken for a service (which
+  // would let `--profile describe-instances` smuggle a read verb past the flag
+  // consumer).
+  "[a-z][a-z0-9-]*\\s+(?:describe|get|list)-[a-z0-9-]+" +
+  ")" +
+  // must end here or be followed by whitespace (args) — never glued to more
+  // verb characters (blocks `run-describe-hack` from matching `describe`).
+  "(?:\\s|$)";
+
 interface GuardConfig {
   rules: AllowRule[];
   repos?: string[];  // Global repo whitelist (applies to all gh commands)
@@ -107,6 +157,48 @@ function stripEnvPrefix(command: string): string {
     /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s]*)\s+)*/,
     "",
   );
+}
+
+/**
+ * No-bypass guard: detect shell metacharacters that could smuggle a SECOND
+ * command past an allow-prefix.
+ *
+ * The allowlist matcher below splits on `&& || ;` and validates each segment,
+ * so a chain of *allowed* commands (`ls && pwd`) is fine. But the following
+ * constructs can carry a command that the segment-matcher never inspects, so
+ * any command containing them is denied outright — regardless of which allow
+ * pattern the head matches. This protects EVERY pattern (gh / git / aws / …),
+ * not just the read-only aws rule.
+ *
+ *   |          pipe — RHS command never validated
+ *   $(  )      command substitution
+ *   `  `       backtick command substitution
+ *   &          background / job-control (a lone `&`, not part of `&&`)
+ *   <  >       redirection (can clobber files / read secrets)
+ *   newline    a second command on the next line
+ *
+ * Returns true when the command must be rejected.
+ *
+ * Note: this is intentionally conservative. It does not attempt to parse
+ * quoting — a `|` inside a quoted argument is rare in the read-only command
+ * surface this guard governs, and denying it (false positive) is the safe
+ * direction. When in doubt, deny.
+ */
+function rejectsChaining(command: string): boolean {
+  // Newline (any flavour) → a second command line.
+  if (/[\r\n]/.test(command)) return true;
+  // Command substitution `$(` (covers `$(( ))` too) and backticks.
+  if (command.includes("$(")) return true;
+  if (command.includes("`")) return true;
+  // Redirection — can clobber files or read secrets.
+  if (/[<>]/.test(command)) return true;
+  // A single pipe `|` that is NOT one half of the `||` chain operator. We
+  // collapse every `||` to a placeholder first, then look for a remaining `|`.
+  if (command.replace(/\|\|/g, "").includes("|")) return true;
+  // A single `&` that is NOT part of the `&&` chain operator (i.e. background
+  // / job-control). Same collapse trick.
+  if (command.replace(/&&/g, "").includes("&")) return true;
+  return false;
 }
 
 // =============================================================================
@@ -273,8 +365,6 @@ async function main(): Promise<void> {
   const sessionId =
     input.session_id ?? process.env.CLAUDE_SESSION_ID ?? "unknown";
 
-  // Handle chained commands: split on && ; || and check each part
-  const parts = command.split(/\s*(?:&&|\|\||;)\s*/);
   const config = loadConfig();
 
   // G-300: Guard disabled (principal DM) — allow everything
@@ -282,6 +372,25 @@ async function main(): Promise<void> {
     allow();
     return;
   }
+
+  // No-bypass guard: refuse shell metacharacters that could smuggle a second
+  // command past an allow-prefix (pipes, $( ), backticks, redirects, lone `&`,
+  // newlines). Runs BEFORE the allowlist match so it protects every rule. The
+  // segment splitter below only neutralises `&& || ;` chains of allowed
+  // commands; everything else is denied here.
+  if (rejectsChaining(command)) {
+    const reason =
+      `[Grove Bash Guard] Blocked "${command.slice(0, 80)}": ` +
+      `command contains a shell metacharacter (pipe, command substitution, ` +
+      `backtick, redirect, background '&', or newline) that could chain a ` +
+      `second command. Split it into separate, individually-allowed commands.`;
+    deny(reason);
+    await emitBlockEvent(sessionId, reason, command);
+    return;
+  }
+
+  // Handle chained commands: split on && ; || and check each part
+  const parts = command.split(/\s*(?:&&|\|\||;)\s*/);
 
   for (const part of parts) {
     const trimmed = part.trim();
