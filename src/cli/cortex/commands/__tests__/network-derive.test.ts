@@ -83,7 +83,61 @@ describe("deriveJoinInputs — config-only (the one-liner)", () => {
       plistPath: "~/Library/LaunchAgents/nats.plist",
       account: "A" + "B".repeat(55),
       credsPath: "~/.config/nats/mf.creds",
+      // #762 — FULL declares no network block, so no caps to announce.
+      announceCapabilities: [],
     });
+  });
+
+  test("#762 — announceCapabilities derives from the matching network block", () => {
+    const cfg = loaded({
+      principal: { id: "andreas" },
+      stack: {
+        id: "andreas/meta-factory",
+        nkey_seed_path: "~/seed.nk",
+        nats_infra: {
+          config_path: "~/local.conf",
+          plist_path: "~/nats.plist",
+          account: "A" + "B".repeat(55),
+        },
+      },
+      policy: {
+        principals: [],
+        roles: [],
+        federated: {
+          networks: [
+            {
+              id: "other-net",
+              leaf_node: "other-net",
+              peers: [],
+              accept_subjects: ["federated.andreas.meta-factory.>"],
+              deny_subjects: [],
+              announce_capabilities: ["chat", "code-review.typescript"],
+              max_hop: 1,
+            },
+            {
+              id: "metafactory",
+              leaf_node: "metafactory",
+              peers: [],
+              accept_subjects: ["federated.andreas.meta-factory.>"],
+              deny_subjects: [],
+              announce_capabilities: ["chat", "release"],
+              max_hop: 1,
+            },
+          ],
+          registry: { url: "https://registry.meta-factory.ai" },
+        },
+      },
+    });
+    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(cfg));
+    expect(res.ok).toBe(true);
+    // Only the metafactory block's caps — never the other network's.
+    expect(res.inputs?.announceCapabilities).toEqual(["chat", "release"]);
+  });
+
+  test("#762 — no matching network block → announceCapabilities is empty", () => {
+    const res = deriveJoinInputs("brand-new-net", {}, "/cfg/cortex.yaml", reader(FULL));
+    expect(res.ok).toBe(true);
+    expect(res.inputs?.announceCapabilities).toEqual([]);
   });
 
   test("creds_path absent in config → convention ~/.config/nats/<network>.creds", () => {
@@ -181,6 +235,8 @@ describe("deriveJoinInputs — flag overrides win", () => {
       plistPath: "/flag/nats.plist",
       account: "A" + "F".repeat(55),
       credsPath: "/flag/x.creds",
+      // #762 — no caps flag exists; caps derive from the network block (none here).
+      announceCapabilities: [],
     });
   });
 

@@ -559,6 +559,9 @@ function portsConfigFromInputs(
     natsConfigPath: inputs.natsConfigPath,
     plistPath: inputs.plistPath,
     monitorUrl: optionalValueFlag(flags, "--monitor-url"),
+    // #762 — caps the join announces INTO the network so the principal joins
+    // the roster (registry control-plane; never on the wire).
+    announceCapabilities: inputs.announceCapabilities,
   };
 }
 

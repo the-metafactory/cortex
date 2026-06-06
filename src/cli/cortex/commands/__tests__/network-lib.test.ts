@@ -491,6 +491,105 @@ describe("join failure surfacing", () => {
 });
 
 // =============================================================================
+// #762 — empty roster must NOT clobber a working hand-pinned peer
+// =============================================================================
+
+/** A roster with NO members — the bug condition (nobody announced caps in). */
+function emptyRosterFor(networkId: string): NetworkRosterResult {
+  return { network_id: networkId, members: [] };
+}
+
+/** An existing config entry carrying a hand-pinned peer (the offline fallback). */
+function handPinnedNetwork(networkId: string): PolicyFederatedNetwork {
+  return {
+    id: networkId,
+    leaf_node: networkId,
+    peers: [
+      {
+        principal_id: "andreas",
+        stack_id: "andreas/meta-factory",
+        principal_pubkey: "U" + "A".repeat(55), // valid nkey-U grammar
+      },
+    ],
+    accept_subjects: [`federated.jc.sage-host.>`],
+    deny_subjects: [],
+    announce_capabilities: [],
+    max_hop: 1,
+  };
+}
+
+describe("#762 empty roster preserves hand-pins", () => {
+  test("empty roster + existing hand-pin → hand-pin PRESERVED, not wiped", async () => {
+    const { ports, storeRef, rec } = makeFakes({
+      fetch: {
+        status: "ok",
+        value: { descriptor: descriptorFor("metafactory"), roster: emptyRosterFor("metafactory") },
+      },
+      initialNetworks: [handPinnedNetwork("metafactory")],
+    });
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+
+    expect(res.ok).toBe(true);
+    // The hand-pinned peer SURVIVES the join (was NOT overwritten with []).
+    const net = storeRef.networks.find((n) => n.id === "metafactory")!;
+    expect(net.peers.map((p) => p.principal_id)).toEqual(["andreas"]);
+    expect(net.peers[0]!.principal_pubkey).toBe("U" + "A".repeat(55));
+    // The config was still written (the join converges other fields), but the
+    // peer list is the preserved hand-pin, not the empty roster.
+    expect(rec.configWrites.length).toBe(1);
+  });
+
+  test("empty roster + hand-pin → a warning is emitted (not silent)", async () => {
+    const { ports, storeRef } = makeFakes({
+      fetch: {
+        status: "ok",
+        value: { descriptor: descriptorFor("metafactory"), roster: emptyRosterFor("metafactory") },
+      },
+      initialNetworks: [handPinnedNetwork("metafactory")],
+    });
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+
+    expect(res.warnings).toBeDefined();
+    expect(res.warnings!.some((w) => w.includes("0 peers"))).toBe(true);
+    expect(res.warnings!.some((w) => w.includes("preserved"))).toBe(true);
+    // The warning is also in the step log (principal-visible).
+    expect(res.steps.some((s) => s.startsWith("WARN:"))).toBe(true);
+    expect(storeRef.networks[0]!.peers.length).toBe(1);
+  });
+
+  test("empty roster + NO existing peers → writes 0 peers (nothing to preserve, no warning)", async () => {
+    const { ports, storeRef } = makeFakes({
+      fetch: {
+        status: "ok",
+        value: { descriptor: descriptorFor("metafactory"), roster: emptyRosterFor("metafactory") },
+      },
+      // No initial networks — first join, nothing to clobber.
+    });
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+
+    expect(res.ok).toBe(true);
+    expect(storeRef.networks[0]!.peers).toEqual([]);
+    // No hand-pin existed, so no preservation warning.
+    expect(res.warnings).toBeUndefined();
+  });
+
+  test("non-empty roster + existing hand-pin → roster peers used (registry is source of truth, DD-5)", async () => {
+    const { ports, storeRef } = makeFakes({
+      // Default fetch returns rosterFor() with peer "jc".
+      initialNetworks: [handPinnedNetwork("metafactory")],
+    });
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+
+    expect(res.ok).toBe(true);
+    // The roster resolved "jc" → that wins; the stale hand-pin is replaced.
+    const net = storeRef.networks.find((n) => n.id === "metafactory")!;
+    expect(net.peers.map((p) => p.principal_id)).toEqual(["jc"]);
+    // A non-empty roster is the normal path — no preservation warning.
+    expect(res.warnings).toBeUndefined();
+  });
+});
+
+// =============================================================================
 // leave
 // =============================================================================
 

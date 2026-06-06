@@ -54,6 +54,14 @@ export interface DerivedJoinInputs {
   plistPath: string;
   account: string;
   credsPath: string;
+  /**
+   * #762 — the capability ids this stack announces INTO the network, read from
+   * the matching `policy.federated.networks[].announce_capabilities[]` block in
+   * config (empty when the network isn't yet declared locally or declares no
+   * caps). The join announces these with `networks: [<network>]` so the
+   * principal joins the network's roster.
+   */
+  announceCapabilities: string[];
 }
 
 /** The leave inputs — a strict subset (no registry / seed / account / creds). */
@@ -231,6 +239,15 @@ export function deriveJoinInputs(
   const credsPath =
     overrides.credsPath ?? natsInfra?.creds_path ?? defaultCredsPath(networkId);
 
+  // #762 — announce_capabilities for THIS network, read from the matching
+  // policy.federated.networks[] block. The join announces these to the registry
+  // with networks:[networkId] so the principal joins the roster. Absent network
+  // block (first join before the block exists) → empty; the join then warns +
+  // preserves hand-pins rather than wiping them.
+  const announceCapabilities =
+    cfg.policy?.federated?.networks.find((n) => n.id === networkId)
+      ?.announce_capabilities ?? [];
+
   return {
     ok: true,
     inputs: {
@@ -243,6 +260,7 @@ export function deriveJoinInputs(
       plistPath,
       account,
       credsPath,
+      announceCapabilities,
     },
   };
 }

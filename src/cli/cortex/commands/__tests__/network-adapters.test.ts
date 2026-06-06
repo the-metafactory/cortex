@@ -30,6 +30,12 @@ import {
   renderProgramArguments,
 } from "../../../../common/nats/nats-plist-loader";
 import type { PolicyFederatedNetwork } from "../../../../common/types/cortex-config";
+import { generateStackIdentity } from "../../../../bus/stack-provisioning";
+import {
+  InMemoryRegistryStore,
+  rosterFromPrincipals,
+  membersFromPrincipals,
+} from "../../../../services/network-registry/src/store";
 
 const tmpDirs: string[] = [];
 function freshDir(): string {
@@ -531,5 +537,129 @@ describe("#757 nats-server restart port", () => {
     const res = await ports.natsServer!.restart();
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toContain("Label");
+  });
+});
+
+// =============================================================================
+// #762 — federated registerStack() announces caps INTO the network (roster)
+// =============================================================================
+
+describe("#762 registerStack announces capabilities into the network", () => {
+  /** The shape the registry route receives (mirror of RegistrationClaimShape). */
+  interface CapturedClaim {
+    claim: {
+      principal_id: string;
+      principal_pubkey: string;
+      stacks: { stack_id: string }[];
+      capabilities: { id: string; networks?: string[] }[];
+    };
+  }
+
+  /**
+   * Stub global fetch to capture the POSTed registration body and return a
+   * 201. Restores the real fetch on cleanup. Fakes only — no live mutation.
+   */
+  function withFetchCapture(
+    fn: (capture: { last?: CapturedClaim }) => Promise<void>,
+  ): Promise<void> {
+    const real = globalThis.fetch;
+    const capture: { last?: CapturedClaim } = {};
+    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+      // registerStackIdentity always sends a JSON string body — parse it.
+      const body = typeof init?.body === "string" ? init.body : "";
+      capture.last = JSON.parse(body) as CapturedClaim;
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof globalThis.fetch;
+    return fn(capture).finally(() => {
+      globalThis.fetch = real;
+    });
+  }
+
+  function cfgWithSeed(
+    seedPath: string,
+    announceCapabilities: string[],
+  ): LivePortsConfig {
+    return {
+      networkId: "metafactory",
+      principalId: "jc",
+      stackId: "jc/sage-host",
+      registryUrl: "https://registry.meta-factory.ai",
+      seedPath,
+      natsConfigPath: "/x/local.conf",
+      plistPath: "/nonexistent/plist",
+      announceCapabilities,
+    };
+  }
+
+  test("announces each declared cap with networks:[networkId] → principal lands in roster", async () => {
+    const dir = freshDir();
+    const seedPath = join(dir, "jc.nk");
+    generateStackIdentity({ seedPath }); // real seed file (no network I/O)
+
+    await withFetchCapture(async (capture) => {
+      const ports = buildLivePorts(cfgWithSeed(seedPath, ["chat", "release"]));
+      const res = await ports.registry.registerStack();
+      expect(res.ok).toBe(true);
+
+      const claim = capture.last!.claim;
+      // Every announced cap carries networks:[networkId] — the implicit-
+      // membership key the registry roster reads.
+      expect(claim.capabilities).toEqual([
+        { id: "chat", networks: ["metafactory"] },
+        { id: "release", networks: ["metafactory"] },
+      ]);
+
+      // PROOF the shape lands in the roster: feed the captured claim into the
+      // registry's own derivation. The principal now appears as a member.
+      const store = new InMemoryRegistryStore();
+      await store.putPrincipal(
+        claim.principal_id,
+        claim.principal_pubkey,
+        claim.stacks,
+        claim.capabilities,
+      );
+      const principals = await store.listPrincipals();
+      expect(membersFromPrincipals(principals, "metafactory")).toEqual(["jc"]);
+      const roster = rosterFromPrincipals(principals, "metafactory");
+      expect(roster.members[0]?.principal_id).toBe("jc");
+      expect(roster.members[0]?.capabilities).toEqual(["chat", "release"]);
+    });
+  });
+
+  test("a cap targeting ANOTHER network is NOT in this network's roster", async () => {
+    const store = new InMemoryRegistryStore();
+    // jc announced chat into "metafactory"; andreas announced chat into "other".
+    await store.putPrincipal("jc", "k1", [{ stack_id: "jc/sage-host" }], [
+      { id: "chat", networks: ["metafactory"] },
+    ]);
+    await store.putPrincipal("andreas", "k2", [{ stack_id: "andreas/meta-factory" }], [
+      { id: "chat", networks: ["other"] },
+    ]);
+    const principals = await store.listPrincipals();
+    // Only jc is in metafactory; andreas (targets "other") is NOT.
+    expect(membersFromPrincipals(principals, "metafactory")).toEqual(["jc"]);
+    expect(membersFromPrincipals(principals, "other")).toEqual(["andreas"]);
+  });
+
+  test("empty announceCapabilities → registers with NO cap (pre-#762 empty-roster path)", async () => {
+    const dir = freshDir();
+    const seedPath = join(dir, "jc.nk");
+    generateStackIdentity({ seedPath });
+
+    await withFetchCapture(async (capture) => {
+      const ports = buildLivePorts(cfgWithSeed(seedPath, []));
+      const res = await ports.registry.registerStack();
+      expect(res.ok).toBe(true);
+      // No capability announced → the principal does NOT join the roster.
+      expect(capture.last!.claim.capabilities).toEqual([]);
+      const store = new InMemoryRegistryStore();
+      const c = capture.last!.claim;
+      await store.putPrincipal(c.principal_id, c.principal_pubkey, c.stacks, c.capabilities);
+      const principals = await store.listPrincipals();
+      expect(membersFromPrincipals(principals, "metafactory")).toEqual([]);
+    });
   });
 });

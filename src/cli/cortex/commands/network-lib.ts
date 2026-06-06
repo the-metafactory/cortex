@@ -84,6 +84,12 @@ export interface JoinResult {
   usedCache?: boolean;
   /** Peers that resolved (principal ids) — for the CLI summary. */
   resolvedPeers?: string[];
+  /**
+   * Non-fatal warnings surfaced during the join (#762). The empty-roster
+   * hand-pin-preservation warning lands here (and in {@link steps}) so the CLI
+   * can render it and a caller can assert on it without scraping prose.
+   */
+  warnings?: string[];
 }
 
 export interface LeaveResult {
@@ -208,8 +214,40 @@ export async function joinNetwork(
   // written, config not). A failed `--apply` is recoverable: re-running join
   // converges (idempotent). `try` spans both writes so the step log records how
   // far the mutation got before the failure.
-  const peers = buildPeers(stack.principalId, roster);
+  const resolvedPeers = buildPeers(stack.principalId, roster);
   const acceptSubject = `federated.${stack.principalId}.${stack.stackSlug}.>`;
+  const warnings: string[] = [];
+
+  // (d-pre) #762 — never clobber a working hand-pin with 0 resolved peers.
+  //
+  // The registry roster is populated implicitly: a principal is "in" a network
+  // only if one of its announced capabilities lists that network in
+  // `capability.networks[]`. If nobody has announced into the network yet (the
+  // exact bug found in clawbox dry-runs — `jc` registered but announced no caps
+  // into `metafactory`), the roster is EMPTY and `buildPeers` yields 0 peers.
+  //
+  // Writing those 0 peers over an existing entry would wipe a hand-pinned peer
+  // (the DD-5 offline fallback) that is actively carrying federated traffic. So
+  // when the roster resolves no peers, we PRESERVE the existing hand-pins for
+  // this network rather than overwriting them, and warn loudly. When the roster
+  // DOES resolve peers we use them as-is (registry is source of truth, DD-5).
+  const existing = ports.configStore.readNetworks();
+  const priorEntry = existing.find((n) => n.id === networkId);
+  const priorPeers = priorEntry?.peers ?? [];
+  let peers = resolvedPeers;
+  if (resolvedPeers.length === 0 && priorPeers.length > 0) {
+    // Preserve every existing hand-pin (the roster named nobody, so there is no
+    // registry peer to merge or supersede). The hand-pins stay verbatim.
+    peers = priorPeers.map((p) => ({ ...p }));
+    const warn =
+      `registry roster for "${networkId}" resolved 0 peers — ` +
+      `preserved ${priorPeers.length.toString()} existing hand-pinned peer(s) ` +
+      `(${priorPeers.map((p) => p.principal_id).join(", ")}) rather than wiping them. ` +
+      `Peers join the roster by announcing a capability with networks:["${networkId}"].`;
+    warnings.push(warn);
+    steps.push(`WARN: ${warn}`);
+  }
+
   const entry: PolicyFederatedNetwork = {
     id: networkId,
     leaf_node: stack.leafNode ?? networkId,
@@ -235,7 +273,6 @@ export async function joinNetwork(
     // (d) Merge the network into the federation config with registry-resolved
     // peers (DD-5) + the OWN accept-subject (wire contract). Idempotent: replace
     // the entry keyed by network id, never append a duplicate.
-    const existing = ports.configStore.readNetworks();
     const merged = mergeNetwork(existing, entry);
     ports.configStore.writeNetworks(merged);
     steps.push(
@@ -267,6 +304,7 @@ export async function joinNetwork(
         network: entry,
         usedCache,
         resolvedPeers: peers.map((p) => p.principal_id),
+        ...(warnings.length > 0 && { warnings }),
       };
     }
     steps.push("restarted nats-server to load leaf config");
@@ -283,6 +321,7 @@ export async function joinNetwork(
       network: entry,
       usedCache,
       resolvedPeers: peers.map((p) => p.principal_id),
+      ...(warnings.length > 0 && { warnings }),
     };
   }
   steps.push("restarted stack daemon");
@@ -293,6 +332,7 @@ export async function joinNetwork(
     network: entry,
     usedCache,
     resolvedPeers: peers.map((p) => p.principal_id),
+    ...(warnings.length > 0 && { warnings }),
   };
 }
 

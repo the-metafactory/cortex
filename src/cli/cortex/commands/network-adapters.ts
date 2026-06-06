@@ -84,6 +84,17 @@ export interface LivePortsConfig {
   natsConfigPath?: string;
   plistPath?: string;
   monitorUrl?: string;
+  /**
+   * #762 — the capability ids this stack announces INTO `networkId`, sourced
+   * from the network's `announce_capabilities[]` policy block. The federated
+   * `registerStack` step announces these to the registry with
+   * `networks: [networkId]` so the principal joins the network's roster
+   * (`membersFromPrincipals` — implicit membership via `capability.networks[]`).
+   * Empty/absent → the stack registers with no capability targeting the network
+   * (the pre-#762 behaviour that left the roster empty); the join then warns and
+   * preserves any existing hand-pins rather than wiping them.
+   */
+  announceCapabilities?: string[];
 }
 
 // =============================================================================
@@ -99,7 +110,7 @@ export interface LivePortsConfig {
  */
 async function registerWithCapabilities(
   cfg: LivePortsConfig,
-  capabilities: { id: string }[],
+  capabilities: { id: string; description?: string; networks?: string[] }[],
 ): Promise<{ ok: true; note: string } | { ok: false; reason: string }> {
   const url = cfg.registryUrl ?? "";
   if (cfg.seedPath === undefined) {
@@ -142,8 +153,24 @@ function buildRegistryPort(cfg: LivePortsConfig): NetworkRegistryPort {
 
   return {
     async registerStack() {
-      // S4 federated register — proof-of-possession with no capability change.
-      return registerWithCapabilities(cfg, []);
+      // #762 — federated register MUST announce the stack's declared
+      // capabilities INTO this network so the principal joins the network's
+      // roster. Roster membership is implicit (`membersFromPrincipals`): a
+      // principal is "in" `networkId` iff one of its announced capabilities
+      // lists `networkId` in `capability.networks[]`. The pre-#762 code
+      // registered with an EMPTY capability list — the principal appeared at
+      // `/principals/{id}` but never in `/networks/{networkId}/roster`, so a
+      // registry-resolved join wrote 0 peers (and risked wiping a working
+      // hand-pin). We tag each announced capability with `networks: [networkId]`.
+      //
+      // This is a registry CONTROL-PLANE action (a signed HTTP POST to
+      // /principals/.../register), NOT a `federated.*` wire envelope — the
+      // network name never goes on the bus (federation-wire-protocol check 1).
+      const announced = (cfg.announceCapabilities ?? []).map((id) => ({
+        id,
+        networks: [cfg.networkId],
+      }));
+      return registerWithCapabilities(cfg, announced);
     },
     fetchVerified(networkId) {
       // S1's fetchAndCache returns { descriptor, roster } on ok and refreshes
