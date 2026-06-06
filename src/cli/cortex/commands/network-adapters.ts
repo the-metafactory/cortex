@@ -40,6 +40,7 @@ import {
 import {
   ensureConfigArg,
   plistConfigArgPresent,
+  renderProgramArguments,
 } from "../../../common/nats/nats-plist-loader";
 import { NetworkRegistryClient } from "../../../common/registry/network-client";
 import {
@@ -163,7 +164,11 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
 }
 
 // =============================================================================
-// Plist port — S3 ensureConfigArg / renderProgramArguments.
+// Plist port — built on S3's canonical ensureConfigArg + renderProgramArguments
+// (`src/common/nats/nats-plist-loader.ts`) as the single source of truth for
+// the ProgramArguments arg-list transform AND its XML rendering. This adapter
+// only does the plist I/O: read the existing args back out, and splice S3's
+// rendered block into the file. No bespoke arg/XML logic lives here.
 // =============================================================================
 
 /** Read the `ProgramArguments` <string> entries from a launchd plist. */
@@ -189,23 +194,20 @@ function unescapeXml(v: string): string {
     .replace(/&amp;/g, "&");
 }
 
-function escapeXml(v: string): string {
-  return v
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
-
-/** Rewrite the plist's ProgramArguments array in place with `nextArgs`. */
+/**
+ * Rewrite the plist's ProgramArguments block in place with `nextArgs`. The XML
+ * block is rendered by S3's canonical {@link renderProgramArguments} (the
+ * single source of truth for the ProgramArguments key+array XML, including the
+ * five-entity escaping) — this adapter only splices it into the plist. Matches
+ * the existing `<key>ProgramArguments</key>` block INCLUDING its leading
+ * horizontal indent so S3's own `\t`-prefixed output replaces it 1:1 (no
+ * double-indent), keeping the on-disk plist byte-shape stable.
+ */
 function writeProgramArguments(plistPath: string, nextArgs: string[]): void {
   const xml = readFileSync(plistPath, "utf-8");
-  const items = nextArgs.map((a) => `\t\t<string>${escapeXml(a)}</string>`).join("\n");
-  const replacement = `<key>ProgramArguments</key>\n\t<array>\n${items}\n\t</array>`;
   const next = xml.replace(
-    /<key>ProgramArguments<\/key>\s*<array>[\s\S]*?<\/array>/,
-    replacement,
+    /[ \t]*<key>ProgramArguments<\/key>\s*<array>[\s\S]*?<\/array>/,
+    renderProgramArguments(nextArgs),
   );
   writeFileSync(plistPath, next, "utf-8");
 }
