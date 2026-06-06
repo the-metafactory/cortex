@@ -1,0 +1,361 @@
+/**
+ * S4 (#738) — the REAL + DRY-RUN port adapters for `cortex network`.
+ *
+ * The orchestration (`network-lib.ts`) is pure over {@link NetworkPorts}. This
+ * module builds the two concrete bundles:
+ *
+ *   - {@link buildLivePorts}   — mutates the live deployment (leaf include file,
+ *     nats-server plist, the stack's federation config, launchctl). Used only
+ *     on `--apply`.
+ *   - {@link buildDryRunPorts} — the DEFAULT-safe bundle: every effect is a
+ *     no-op that the orchestrator's step log captures, so an accidental run
+ *     during development touches nothing (the S4 SAFETY rule). Reads still hit
+ *     disk (a dry-run join needs to know the current config to show the diff),
+ *     but no write/exec/restart happens.
+ *
+ * Wiring of the S1–S3 pieces:
+ *   - S1 `NetworkRegistryClient` (pin+verify, DD-9) + `registerStackIdentity`
+ *     (proof-of-possession, reused from provision-stack) → {@link NetworkRegistryPort}.
+ *   - S3 `renderLeafIncludeFile` + `leafIncludeFileName` → {@link LeafFilePort}.
+ *   - S3 `ensureConfigArg` + `renderProgramArguments` → {@link PlistPort}.
+ */
+
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "fs";
+import { dirname, join } from "path";
+
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+
+import { expandTilde } from "../../../common/config/loader";
+import {
+  leafIncludeFileName,
+  renderLeafIncludeFile,
+} from "../../../common/nats/leaf-remote-renderer";
+import {
+  ensureConfigArg,
+  plistConfigArgPresent,
+} from "../../../common/nats/nats-plist-loader";
+import { NetworkRegistryClient } from "../../../common/registry/network-client";
+import {
+  buildRegistrationClaim,
+  materialFromSeedString,
+  registerStackIdentity,
+} from "../../../bus/stack-provisioning";
+import type { PolicyFederatedNetwork } from "../../../common/types/cortex-config";
+
+import type {
+  ConfigStorePort,
+  DaemonPort,
+  LeafFilePort,
+  LeafStatePort,
+  NetworkPorts,
+  NetworkRegistryPort,
+  PlistPort,
+  RenderLeafInputs,
+} from "./network-ports";
+
+/** Everything the live adapters need, threaded from the CLI flags. */
+export interface LivePortsConfig {
+  networkId: string;
+  principalId: string;
+  stackId: string;
+  registryUrl?: string;
+  registryPubkey?: string;
+  seedPath?: string;
+  natsConfigPath?: string;
+  plistPath?: string;
+  monitorUrl?: string;
+}
+
+// =============================================================================
+// Registry port — S1 client + provision-stack register (proof-of-possession).
+// =============================================================================
+
+function buildRegistryPort(cfg: LivePortsConfig): NetworkRegistryPort {
+  const url = cfg.registryUrl ?? "";
+  const client = new NetworkRegistryClient({
+    url,
+    ...(cfg.registryPubkey !== undefined ? { pubkey: cfg.registryPubkey } : {}),
+  });
+
+  return {
+    async registerStack() {
+      if (cfg.seedPath === undefined) {
+        return { ok: false, reason: "no --seed-path for registration" };
+      }
+      const seedFile = expandTilde(cfg.seedPath);
+      if (!existsSync(seedFile)) {
+        return { ok: false, reason: `seed file not found at ${seedFile}` };
+      }
+      let material;
+      try {
+        material = materialFromSeedString(readFileSync(seedFile, "utf-8"));
+      } catch (err) {
+        return { ok: false, reason: `seed load failed: ${err instanceof Error ? err.message : String(err)}` };
+      }
+      const body = await buildRegistrationClaim({
+        principalId: cfg.principalId,
+        material,
+        stacks: [{ stack_id: cfg.stackId }],
+      });
+      let result;
+      try {
+        result = await registerStackIdentity({ registryUrl: url, principalId: cfg.principalId, body });
+      } catch (err) {
+        return { ok: false, reason: `registry POST failed: ${err instanceof Error ? err.message : String(err)}` };
+      }
+      if (!result.ok) {
+        return { ok: false, reason: `registry rejected registration (HTTP ${result.status.toString()})` };
+      }
+      return { ok: true, note: `HTTP ${result.status.toString()}` };
+    },
+    fetchVerified(networkId) {
+      // S1's fetchAndCache returns { descriptor, roster } on ok and refreshes
+      // the disk cache (DD-10) — exactly the port's contract.
+      return client.fetchAndCache(networkId);
+    },
+    loadCached(networkId) {
+      return client.loadCached(networkId);
+    },
+  };
+}
+
+// =============================================================================
+// Leaf-file port — S3 renderer output written to the nats config dir.
+// =============================================================================
+
+/** Directory the per-network leaf include files live in (beside nats config). */
+function leafDir(cfg: LivePortsConfig): string {
+  const natsConfig = expandTilde(cfg.natsConfigPath ?? "");
+  return dirname(natsConfig);
+}
+
+function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort {
+  const dir = leafDir(cfg);
+  return {
+    write(inputs: RenderLeafInputs) {
+      const content = renderLeafIncludeFile(inputs.descriptor, inputs.binding);
+      if (!mutate) return; // dry-run: render to validate, but do not write.
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, leafIncludeFileName(inputs.descriptor.network_id)), content, "utf-8");
+    },
+    remove(networkId) {
+      if (!mutate) return;
+      const p = join(dir, leafIncludeFileName(networkId));
+      rmSync(p, { force: true });
+    },
+    list() {
+      if (!existsSync(dir)) return [];
+      return readdirSync(dir)
+        .filter((f) => /^leafnodes-[a-z][a-z0-9-]*\.conf$/.test(f))
+        .map((f) => f.replace(/^leafnodes-/, "").replace(/\.conf$/, ""));
+    },
+    natsConfigPath() {
+      return expandTilde(cfg.natsConfigPath ?? "");
+    },
+  };
+}
+
+// =============================================================================
+// Plist port — S3 ensureConfigArg / renderProgramArguments.
+// =============================================================================
+
+/** Read the `ProgramArguments` <string> entries from a launchd plist. */
+function readProgramArguments(plistPath: string): string[] {
+  const xml = readFileSync(plistPath, "utf-8");
+  const block = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(xml);
+  if (block === null) return [];
+  const args: string[] = [];
+  const re = /<string>([\s\S]*?)<\/string>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(block[1] ?? "")) !== null) {
+    args.push(unescapeXml(m[1] ?? ""));
+  }
+  return args;
+}
+
+function unescapeXml(v: string): string {
+  return v
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function escapeXml(v: string): string {
+  return v
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+/** Rewrite the plist's ProgramArguments array in place with `nextArgs`. */
+function writeProgramArguments(plistPath: string, nextArgs: string[]): void {
+  const xml = readFileSync(plistPath, "utf-8");
+  const items = nextArgs.map((a) => `\t\t<string>${escapeXml(a)}</string>`).join("\n");
+  const replacement = `<key>ProgramArguments</key>\n\t<array>\n${items}\n\t</array>`;
+  const next = xml.replace(
+    /<key>ProgramArguments<\/key>\s*<array>[\s\S]*?<\/array>/,
+    replacement,
+  );
+  writeFileSync(plistPath, next, "utf-8");
+}
+
+function buildPlistPort(cfg: LivePortsConfig, mutate: boolean): PlistPort {
+  const plistPath = expandTilde(cfg.plistPath ?? "");
+  return {
+    ensureConfigLoaded(configPath) {
+      if (!existsSync(plistPath)) return;
+      const args = readProgramArguments(plistPath);
+      if (plistConfigArgPresent(args, configPath)) return; // idempotent no-op
+      const next = ensureConfigArg(args, configPath);
+      if (!mutate) return;
+      writeProgramArguments(plistPath, next);
+    },
+    dropConfigArg(configPath) {
+      if (!existsSync(plistPath)) return;
+      const args = readProgramArguments(plistPath);
+      const next = args.filter((a, i) => {
+        if (a === "-c" || a === "--config") return false;
+        if (i > 0 && (args[i - 1] === "-c" || args[i - 1] === "--config")) return false;
+        if (a === `--config=${configPath}`) return false;
+        return true;
+      });
+      if (!mutate) return;
+      writeProgramArguments(plistPath, next);
+    },
+  };
+}
+
+// =============================================================================
+// Config-store port — read/write policy.federated.networks[] in stacks/<stack>.yaml.
+// =============================================================================
+
+/** The stack-scoped config file that carries policy.federated.networks[]. */
+function stackConfigPath(cfg: LivePortsConfig): string {
+  // The config-split stack file. The stack id is `{principal}/{slug}`; the file
+  // is `stacks/<slug>.yaml` under the cortex config dir derived from the nats
+  // config's grandparent (~/.config/cortex). Kept overridable via a future
+  // flag; for S4 we derive it deterministically from the stack slug.
+  const slug = cfg.stackId.split("/")[1] ?? "default";
+  const cortexDir = expandTilde("~/.config/cortex");
+  return join(cortexDir, "stacks", `${slug}.yaml`);
+}
+
+function buildConfigStorePort(cfg: LivePortsConfig, mutate: boolean): ConfigStorePort {
+  const path = stackConfigPath(cfg);
+  return {
+    readNetworks() {
+      if (!existsSync(path)) return [];
+      const raw = parseYaml(readFileSync(path, "utf-8")) as
+        | { policy?: { federated?: { networks?: PolicyFederatedNetwork[] } } }
+        | null;
+      return raw?.policy?.federated?.networks ?? [];
+    },
+    writeNetworks(networks) {
+      if (!mutate) return;
+      const raw = existsSync(path)
+        ? ((parseYaml(readFileSync(path, "utf-8")) ?? {}) as Record<string, unknown>)
+        : {};
+      const policy = (raw.policy ??= {}) as Record<string, unknown>;
+      const federated = ((policy as { federated?: unknown }).federated ??= {}) as Record<string, unknown>;
+      federated.networks = networks;
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, stringifyYaml(raw), "utf-8");
+    },
+  };
+}
+
+// =============================================================================
+// Daemon port — launchctl kickstart of the stack daemon.
+// =============================================================================
+
+function buildDaemonPort(cfg: LivePortsConfig, mutate: boolean): DaemonPort {
+  return {
+    async restart() {
+      if (!mutate) return { ok: true }; // dry-run: pretend success.
+      const label = `ai.meta-factory.cortex.${cfg.stackId.split("/")[1] ?? "default"}`;
+      const proc = Bun.spawn(["launchctl", "kickstart", "-k", `gui/${process.getuid?.() ?? 501}/${label}`], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const code = await proc.exited;
+      if (code !== 0) {
+        const err = await new Response(proc.stderr).text();
+        return { ok: false, reason: `launchctl kickstart exited ${code.toString()}: ${err.trim()}` };
+      }
+      return { ok: true };
+    },
+  };
+}
+
+// =============================================================================
+// Leaf-state port — nats-server monitor /leafz for status.
+// =============================================================================
+
+function buildLeafStatePort(cfg: LivePortsConfig): LeafStatePort | undefined {
+  if (cfg.monitorUrl === undefined) return undefined;
+  const base = cfg.monitorUrl.replace(/\/+$/, "");
+  return {
+    async linkStates() {
+      try {
+        const res = await fetch(`${base}/leafz`);
+        if (!res.ok) return {};
+        const body = (await res.json()) as {
+          leafs?: { account?: string; name?: string; in_msgs?: number; out_msgs?: number }[];
+        };
+        const out: Record<string, { state: "established"; inMsgs?: number; outMsgs?: number }> = {};
+        for (const leaf of body.leafs ?? []) {
+          const key = leaf.name ?? leaf.account ?? "";
+          if (key === "") continue;
+          out[key] = { state: "established", inMsgs: leaf.in_msgs, outMsgs: leaf.out_msgs };
+        }
+        return out;
+      } catch (err) {
+        // Monitor unreachable — status degrades to "unknown" link state.
+        process.stderr.write(
+          `network-adapters: leaf-state fetch failed: ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+        return {};
+      }
+    },
+  };
+}
+
+// =============================================================================
+// Bundle builders
+// =============================================================================
+
+function buildPorts(cfg: LivePortsConfig, mutate: boolean): NetworkPorts {
+  const leafState = buildLeafStatePort(cfg);
+  return {
+    registry: buildRegistryPort(cfg),
+    leafFile: buildLeafFilePort(cfg, mutate),
+    plist: buildPlistPort(cfg, mutate),
+    configStore: buildConfigStorePort(cfg, mutate),
+    daemon: buildDaemonPort(cfg, mutate),
+    ...(leafState !== undefined ? { leafState } : {}),
+  };
+}
+
+/** Live ports — every effect mutates the deployment. Use only on `--apply`. */
+export function buildLivePorts(cfg: LivePortsConfig): NetworkPorts {
+  return buildPorts(cfg, true);
+}
+
+/**
+ * Dry-run ports — reads hit disk; every WRITE/EXEC/RESTART is a no-op (the
+ * orchestrator's step log still records the intended action). The S4 default.
+ */
+export function buildDryRunPorts(cfg: LivePortsConfig): NetworkPorts {
+  return buildPorts(cfg, false);
+}
