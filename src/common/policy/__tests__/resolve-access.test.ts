@@ -149,6 +149,17 @@ describe("resolvePolicyAccess — happy path (user)", () => {
     expect(result.features.team).toBe(false);
   });
 
+  test("cortex#741: a recognized NON-operator (peer) principal is NOT trusted", () => {
+    // The content-filter trust gate keys off `trusted`. A recognized peer
+    // principal must NOT carry it — they keep the prompt-injection hard block.
+    const result = resolvePolicyAccess({
+      msg: msg({ authorId: "285727653603049472" }),
+      ...buildHarness(USER_POLICY),
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.trusted).toBeUndefined();
+  });
+
   test("user without async or team caps gets toolRestrictions for ungranted tools", () => {
     const result = resolvePolicyAccess({
       msg: msg({ authorId: "285727653603049472" }),
@@ -185,6 +196,19 @@ describe("resolvePolicyAccess — operator short-circuit", () => {
     expect(result.features.chat).toBe(true);
     expect(result.features.async).toBe(true);
     expect(result.features.team).toBe(true);
+  });
+
+  test("cortex#741: an operator-role principal is marked trusted for the content filter", () => {
+    // `trusted` is the single signal the dispatch-handler reads to skip the
+    // prompt-injection hard block for the operator/home principal. It must be
+    // set ONLY for the operator role (conservative boundary) — see the
+    // companion peer-principal assertion in the user happy-path block.
+    const result = resolvePolicyAccess({
+      msg: msg({ authorId: "1134325176796987522" }),
+      ...buildHarness(OPERATOR_POLICY),
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.trusted).toBe(true);
   });
 });
 

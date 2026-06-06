@@ -46,6 +46,26 @@ export interface PromptFilterResult {
 }
 
 /**
+ * cortex#741 — options controlling how `scanPrompt` treats a BLOCKED match.
+ */
+export interface ScanPromptOptions {
+  /**
+   * Whether the sender is TRUSTED — the stack's home principal, i.e. the
+   * principal `resolvePolicyAccess` marks via `AccessDecision.trusted`. When
+   * true, an injection-pattern match on this sender's *direct* chat message is
+   * NOT hard-blocked: `scanPrompt` returns `allowed: true` BUT still emits a
+   * loud audit line so the match is observable (no silent bypass). When
+   * false/omitted, the existing hard block applies.
+   *
+   * This flag ONLY relaxes the direct home-principal chat path. It is never
+   * threaded into the untrusted/indirect content paths (`ContentFilter.hook`,
+   * `payload-filter.ts`, file-read scanning), which call the underlying filter
+   * directly and remain fully active.
+   */
+  trusted?: boolean;
+}
+
+/**
  * Scan an inbound chat prompt for prompt injection patterns.
  * Returns allowed: true if the prompt is safe, or allowed: false with a reason.
  *
@@ -58,8 +78,20 @@ export interface PromptFilterResult {
  * BLOCKED for content matching a block-severity pattern. We only reject on
  * BLOCKED — HUMAN_REVIEW is treated as allowed because there's no principal
  * in the loop on every Discord/Mattermost message.
+ *
+ * cortex#741 — trust gate: when `opts.trusted` is set, a BLOCKED match is
+ * downgraded to allowed-with-audit. The home principal can already command
+ * their own agent within its grants, so the injection filter adds no security
+ * against them — only false positives on their own infra phrasing (e.g. EX-004
+ * firing on "access the environment"). The exemption is keyed off the home
+ * principal only (set by `resolvePolicyAccess`), NOT "any recognized principal"
+ * — peer / non-home principals keep the hard block.
  */
-export function scanPrompt(prompt: string, source: string): PromptFilterResult {
+export function scanPrompt(
+  prompt: string,
+  source: string,
+  opts: ScanPromptOptions = {},
+): PromptFilterResult {
   if (!filterContentString) {
     return { allowed: true };
   }
@@ -77,6 +109,18 @@ export function scanPrompt(prompt: string, source: string): PromptFilterResult {
       const encodingTypes = result.encodings.map((e) => e.type).filter(Boolean);
       const reasons = [...patternIds, ...encodingTypes];
       const reasonStr = reasons.length > 0 ? reasons.join(", ") : "unspecified";
+
+      // cortex#741 — TRUSTED senders (the home principal) are not hard-blocked,
+      // but the match is ALWAYS audited so it stays observable. This is a
+      // downgrade, not a silent bypass — keep the log line loud.
+      if (opts.trusted) {
+        console.log(
+          `prompt-filter: AUDIT trusted-sender match NOT blocked (${reasonStr}) ` +
+            `source=${source}: ${prompt.slice(0, 100)}`,
+        );
+        return { allowed: true, score: result.overall_confidence };
+      }
+
       console.log(
         `prompt-filter: prompt blocked by content filter (${reasonStr}): ${prompt.slice(0, 100)}`,
       );

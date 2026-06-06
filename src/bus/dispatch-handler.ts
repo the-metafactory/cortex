@@ -709,38 +709,39 @@ export class DispatchHandler extends EventEmitter {
       // Scanning the full prompt false-positives on our own boilerplate:
       // buildPrompt adds "You are responding..." (PI-001) and security preamble
       // includes /Users/... paths (PII-008). See grove#179.
-      const filterResult = scanPrompt(parsed.content, msg.platform);
+      // cortex#741 — the prompt-injection filter is now TRUST-AWARE: the trust
+      // decision lives INSIDE `scanPrompt`, not scattered across this call site.
+      //
+      // A prompt-injection filter gates UNTRUSTED content (cross-principal,
+      // relayed, webhook). The stack's home principal commands their OWN
+      // assistant and cannot "inject" it; hard-blocking their *direct* chat
+      // message is a category error that breaks home-principal control (live
+      // FPs: PI-002 "act as a jumphost" — cortex#723/#729; EX-004 "access the
+      // environment" — cortex#741). When the sender is trusted, `scanPrompt`
+      // downgrades a BLOCKED match to allowed-with-audit (it logs a loud AUDIT
+      // line — never a silent bypass), so we never reach the reject branch here.
+      //
+      // The trust signal is `access.trusted`, set by `resolvePolicyAccess` ONLY
+      // for the resolved, authenticated home principal (the reserved policy-role
+      // short-circuit). This is the single source of truth for EVERY adapter
+      // (Discord/Mattermost/Slack) — no per-adapter `authorIsPrincipal` plumbing
+      // gap (Slack never set it; cortex#741). It is conservative: peer / non-home
+      // principals get `trusted` unset and stay hard-blocked. We OR in the legacy
+      // `isPrincipalDM || msg.authorIsPrincipal` signals so any adapter not yet
+      // migrated to `access.trusted` still trusts the home principal's DM /
+      // @mention exactly as #723/#729 did — the gate only ever widens to the
+      // home principal, never to an untrusted sender.
+      const senderTrusted =
+        access.trusted === true ||
+        isPrincipalDM === true ||
+        msg.authorIsPrincipal === true;
+      const filterResult = scanPrompt(parsed.content, msg.platform, {
+        trusted: senderTrusted,
+      });
       if (!filterResult.allowed) {
-        // cortex#723 — trust-scope the hard-block. A prompt-injection filter
-        // gates UNTRUSTED content (cross-principal, relayed, webhook); the home
-        // principal commands their OWN assistant and cannot "inject" it.
-        // Hard-blocking the principal's messages is a category error that
-        // breaks principal control (live FP: PI-002 "act as a jumphost" —
-        // legit infra language).
-        //
-        // cortex#729 — extend the bypass from DM-only to channel @mentions.
-        // #724 gated this on `isPrincipalDM`, but `dmType` is set only for DMs,
-        // so the home principal's CHANNEL @mention fell through and stayed
-        // blocked (live: PI-002 in #halden-observe, where Luna has
-        // `dmOwner: false` so a channel @mention is the ONLY path).
-        // `msg.authorIsPrincipal` is the sibling signal the adapter now computes
-        // for every inbound message via the SAME PolicyEngine principal-role
-        // check — non-spoofable, keyed on the authenticated author id. The home
-        // principal, DM OR channel, is commanding their own assistant; log the
-        // match for visibility and ALLOW. Non-principal senders (unknown /
-        // cross-principal without trust, in DMs OR channels) stay hard-blocked
-        // exactly as before — the filter is NOT weakened for them. Note the
-        // relaxed preamble (above) stays DM-only: channels are less private, so
-        // only the FILTER BYPASS goes channel-inclusive, not the preamble.
-        if (isPrincipalDM || msg.authorIsPrincipal) {
-          console.log(
-            `dispatch-handler: [PROMPT-FILTER] allowing home-principal message despite match (${filterResult.reason ?? "unspecified"}) — the principal commands their own assistant (cortex#723): "${parsed.content.slice(0, 100)}"`,
-          );
-        } else {
-          const target = this.targetFromMsg(adapter, msg);
-          await adapter.postResponse(target, `I can't process that message. ${filterResult.reason ?? ""}`);
-          return;
-        }
+        const target = this.targetFromMsg(adapter, msg);
+        await adapter.postResponse(target, `I can't process that message. ${filterResult.reason ?? ""}`);
+        return;
       }
 
       // 11. Build CC invocation options

@@ -170,6 +170,14 @@ export function resolvePolicyAccess(input: ResolvePolicyAccessInput): AccessDeci
     bashGuard,
     ...(bashAllowlist !== undefined && { bashAllowlist }),
     ...(msg.isDM === true && { isDM: true }),
+    // cortex#741 — exemption boundary: TRUST only the operator role. A principal
+    // holding the `operator` capability is the stack's home principal / operator;
+    // their *direct* chat command to their own agent is not adversarial content,
+    // so the inbound prompt-injection filter must not hard-block it (the match is
+    // still audited downstream). Non-operator/peer principals get `trusted` unset
+    // (falsy) and keep the existing hard block. Keyed off `operator` — NOT "any
+    // recognized principal" — to stay conservative: this is a security control.
+    ...(isOperator && { trusted: true }),
   };
 }
 

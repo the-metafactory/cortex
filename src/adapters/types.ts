@@ -82,6 +82,18 @@ export interface AccessDecision {
   bashAllowlist?: { rules: { pattern: string; repos?: string[] }[]; repos: string[] };
   /** Whether this is a DM conversation */
   isDM?: boolean;
+  /**
+   * cortex#741 — whether this sender is TRUSTED for the inbound prompt-injection
+   * filter. True only for the stack's home principal (the principal that
+   * `resolvePolicyAccess` resolves as holding the reserved policy-role
+   * short-circuit). The dispatch-handler consults this at the `scanPrompt` gate:
+   * a trusted sender's *direct* chat message is NOT hard-blocked on an
+   * injection-pattern match (the match is still logged / audited — never
+   * silently bypassed). Untrusted/indirect content paths (ContentFilter.hook,
+   * payload-filter, file-read scanning) ignore this flag and stay fully active.
+   * See the PR for the exemption-boundary rationale.
+   */
+  trusted?: boolean;
   /** Human-readable denial reason */
   denyReason?: string;
 }

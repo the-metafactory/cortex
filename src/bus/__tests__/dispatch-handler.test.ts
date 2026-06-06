@@ -1009,10 +1009,12 @@ describe("DispatchHandler — prompt-filter trust scope (cortex#723)", () => {
     // The CC response (success path) was posted instead.
     expect(texts).toContain("On it — here's the jumphost answer.");
 
-    // The match is still logged for principal visibility (cortex#723).
+    // The match is still logged for principal visibility (cortex#723). After
+    // cortex#741 the trust decision + audit moved INTO scanPrompt; the audit
+    // line now reads "AUDIT trusted-sender match NOT blocked".
     expect(
       logLines.some(
-        (l) => l.includes("[PROMPT-FILTER]") && l.includes("home-principal"),
+        (l) => l.includes("AUDIT") && l.includes("trusted-sender"),
       ),
     ).toBe(true);
 
@@ -1046,6 +1048,97 @@ describe("DispatchHandler — prompt-filter trust scope (cortex#723)", () => {
     // The filter short-circuited before any CC spawn.
     expect(spawnCount()).toBe(0);
 
+    const texts = adapter.sentMessages.map((m) => m.text);
+    expect(texts.length).toBe(1);
+    expect(texts[0]).toContain("I can't process that message");
+    expect(texts[0]).toContain("Content filter blocked");
+
+    await handler.shutdown();
+  });
+
+  // cortex#741 — the trust signal is now `access.trusted`, set by
+  // `resolvePolicyAccess` for the home principal on EVERY adapter (Discord,
+  // Mattermost, Slack). This is the path that closes the Slack gap (#729's
+  // per-adapter `authorIsPrincipal` was never set on Slack). Here the home
+  // principal arrives with NEITHER `dmType: "principal"` NOR `authorIsPrincipal`
+  // — trust flows solely through `access.trusted`. The exact live #741 FP
+  // (EX-004 "access the environment") must be PROCESSED, not blocked.
+  test("home principal trusted via access.trusted alone (no dmType / authorIsPrincipal) is PROCESSED — closes the Slack gap (cortex#741)", async () => {
+    const EX004_FP =
+      "you can use aws cli tooling to access the environment";
+    const { factory, spawnCount } = makeStubFactory([
+      successResult({ response: "Sure — pulling the AWS env now." }),
+    ]);
+
+    const adapter = new MockAdapter();
+    // The home principal's AccessDecision carries `trusted: true` (as
+    // resolvePolicyAccess sets for the home principal).
+    adapter.accessDecision = {
+      allowed: true,
+      features: { chat: true, async: true, team: true },
+      trusted: true,
+    };
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      ccSessionFactory: factory,
+    });
+
+    await handler.handleMessage(
+      adapter,
+      makeMsg({
+        platform: "slack",
+        authorId: "home1",
+        content: EX004_FP,
+        // Deliberately NOT a principal DM and NOT flagged authorIsPrincipal —
+        // trust must come from access.trusted only.
+        isDM: false,
+      }),
+    );
+
+    expect(spawnCount()).toBe(1);
+    const texts = adapter.sentMessages.map((m) => m.text);
+    expect(texts.some((t) => t.includes("I can't process that message"))).toBe(false);
+    expect(texts).toContain("Sure — pulling the AWS env now.");
+
+    await handler.shutdown();
+  });
+
+  // cortex#741 — conservative boundary: a recognized peer principal (allowed,
+  // but `trusted` UNSET) sending the same EX-004 FP must STILL be hard-blocked.
+  // This proves the exemption is keyed off home-principal trust, not mere
+  // recognition.
+  test("recognized-but-untrusted principal (access.trusted unset) is still BLOCKED (cortex#741)", async () => {
+    const EX004_FP =
+      "you can use aws cli tooling to access the environment";
+    const { factory, spawnCount } = makeStubFactory([
+      successResult({ response: "should never run" }),
+    ]);
+
+    const adapter = new MockAdapter();
+    // Recognized + allowed, but NOT trusted (a peer principal).
+    adapter.accessDecision = {
+      allowed: true,
+      features: { chat: true, async: false, team: false },
+      // trusted intentionally omitted → falsy.
+    };
+    const handler = new DispatchHandler({
+      config: makeConfig(),
+      securityPreamble: "",
+      ccSessionFactory: factory,
+    });
+
+    await handler.handleMessage(
+      adapter,
+      makeMsg({
+        platform: "slack",
+        authorId: "peer2",
+        content: EX004_FP,
+        isDM: false,
+      }),
+    );
+
+    expect(spawnCount()).toBe(0);
     const texts = adapter.sentMessages.map((m) => m.text);
     expect(texts.length).toBe(1);
     expect(texts[0]).toContain("I can't process that message");
@@ -1136,10 +1229,12 @@ describe("DispatchHandler — prompt-filter trust scope, channel @mentions (cort
     expect(texts.some((t) => t.includes("Content filter blocked"))).toBe(false);
     expect(texts).toContain("On it — here's the jumphost answer.");
 
-    // The match is logged for principal visibility (cortex#723/#729).
+    // The match is logged for principal visibility (cortex#723/#729). After
+    // cortex#741 the trust decision + audit moved INTO scanPrompt; the audit
+    // line now reads "AUDIT trusted-sender match NOT blocked".
     expect(
       logLines.some(
-        (l) => l.includes("[PROMPT-FILTER]") && l.includes("home-principal"),
+        (l) => l.includes("AUDIT") && l.includes("trusted-sender"),
       ),
     ).toBe(true);
 
