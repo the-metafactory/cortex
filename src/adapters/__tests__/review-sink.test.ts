@@ -251,6 +251,31 @@ describe("review-sink — lifecycle delivery", () => {
     expect(adapter.progressSent[0]!.target.sessionId).toBe("req-1");
   });
 
+  test("terminal event clears the 'reviewing…' placeholder (same correlation key) then posts (cortex#731)", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      envelope("dispatch.task.completed", {
+        agent_id: "echo",
+        chat_response: "Verdict: approved.",
+        response_routing: logicalRouting("discord", "cortex", "cortex/pr/57"),
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Placeholder cleared with the SAME correlation-keyed target the `started`
+    // branch used, so it doesn't orphan above the durable verdict (cortex#731).
+    expect(adapter.progressCleared).toHaveLength(1);
+    expect(adapter.progressCleared[0]!.sessionId).toBe("req-1");
+    expect(adapter.sentMessages).toHaveLength(1);
+    expect(adapter.sentMessages[0]!.target.sessionId).toBeUndefined();
+  });
+
   test("dispatch.task.failed → postResponse error reply", async () => {
     const { runtime, trigger } = fakeRuntime();
     const adapter = discordMock();

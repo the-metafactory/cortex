@@ -288,27 +288,32 @@ export function createDispatchSink(opts: DispatchSinkOptions): DispatchSink {
       ...(routing.thread_id !== undefined && { threadId: routing.thread_id }),
     };
 
+    // cortex#721 — key per-dispatch progress on the lifecycle envelope's
+    // correlation id so two dispatches in the same channel/thread each get
+    // their OWN "working…" placeholder instead of editing one shared message.
+    // `sessionId` rides ONLY the progress target: `postResponse` ignores it,
+    // and only `sendProgress`/`clearProgress` read it via the adapter's
+    // `progressKey`. The terminal branch MUST reuse this exact key to delete
+    // the placeholder the `started` branch created (cortex#731).
+    const correlationKey = dispatchCorrelationKey(envelope);
+    const progressTarget: ResponseTarget =
+      correlationKey !== undefined
+        ? { ...target, sessionId: correlationKey }
+        : target;
+
     try {
       if (envelope.type === "dispatch.task.started") {
         // A `started` event is a progress/typing indicator, not a final
         // reply — edit-in-place so the terminal `completed`/`failed`
         // reply is the durable message in the channel.
-        //
-        // cortex#721 — key per-dispatch progress on the lifecycle envelope's
-        // correlation id so two dispatches in the same channel/thread each
-        // get their OWN "working…" placeholder instead of editing one shared
-        // message. Set `sessionId` ONLY on the progress target: `postResponse`
-        // ignores it, and only `sendProgress` (edit-in-place) reads it via
-        // the adapter's `progressKey`.
-        const correlationKey = dispatchCorrelationKey(envelope);
-        const progressTarget: ResponseTarget =
-          correlationKey !== undefined
-            ? { ...target, sessionId: correlationKey }
-            : target;
         await adapter.sendProgress(progressTarget, text);
         return;
       }
-      // `completed` / `failed` / `aborted` — the terminal reply.
+      // `completed` / `failed` / `aborted` — the terminal reply. Clear the
+      // `started` "working…" placeholder first (same correlation-keyed
+      // target), else it orphans above the durable reply (cortex#731), then
+      // post the reply.
+      await adapter.clearProgress(progressTarget);
       await adapter.postResponse(target, text);
     } catch (err) {
       // A platform post failure must not crash the fan-out. Log to

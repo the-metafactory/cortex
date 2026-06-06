@@ -351,27 +351,32 @@ export function createReviewSink(opts: ReviewSinkOptions): ReviewSink {
     const adapter = adapters.find((a) => a.instanceId === target.instanceId);
     if (adapter === undefined) return;
 
+    // cortex#721 — key the per-review progress placeholder on the lifecycle
+    // envelope's correlation id (resolved targets carry no `sessionId`), so
+    // two reviews in the same channel/thread each get their OWN "reviewing…"
+    // message instead of editing one shared placeholder. `postResponse`
+    // ignores `sessionId`; only `sendProgress`/`clearProgress` read it via the
+    // adapter's `progressKey`. The terminal branch MUST reuse this exact key
+    // to delete the placeholder the `started` branch created (cortex#731).
+    const correlationKey = dispatchCorrelationKey(envelope);
+    const progressTarget: ResponseTarget =
+      correlationKey !== undefined
+        ? { ...target, sessionId: correlationKey }
+        : target;
+
     try {
       if (envelope.type === "dispatch.task.started") {
         // `started` is a progress/typing indicator (e.g. "Echo is
         // reviewing…"), not a final reply — edit-in-place so the terminal
         // verdict/failed reply is the durable message.
-        //
-        // cortex#721 — key the per-review progress placeholder on the
-        // lifecycle envelope's correlation id (resolved targets carry no
-        // `sessionId`), so two reviews in the same channel/thread each get
-        // their OWN "reviewing…" message instead of editing one shared
-        // placeholder. `postResponse` ignores `sessionId`; only
-        // `sendProgress` reads it via the adapter's `progressKey`.
-        const correlationKey = dispatchCorrelationKey(envelope);
-        const progressTarget: ResponseTarget =
-          correlationKey !== undefined
-            ? { ...target, sessionId: correlationKey }
-            : target;
         await adapter.sendProgress(progressTarget, text);
         return;
       }
-      // Verdict / completed / failed / aborted — the terminal reply.
+      // Verdict / completed / failed / aborted — the terminal reply. Clear the
+      // `started` "reviewing…" placeholder first (same correlation-keyed
+      // target), else it orphans above the durable verdict (cortex#731), then
+      // post the reply.
+      await adapter.clearProgress(progressTarget);
       await adapter.postResponse(target, text);
     } catch (err) {
       // A platform post failure must not crash the fan-out (per CLAUDE.md

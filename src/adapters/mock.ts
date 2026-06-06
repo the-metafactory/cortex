@@ -31,6 +31,8 @@ export class MockAdapter implements PlatformAdapter {
   typingSent: ResponseTarget[] = [];
   /** Recorded sendProgress calls */
   progressSent: { target: ResponseTarget; text: string }[] = [];
+  /** Recorded clearProgress calls (cortex#731) */
+  progressCleared: ResponseTarget[] = [];
   /** Recorded createThread calls */
   threadsCreated: { msg: InboundMessage; name: string }[] = [];
   /** cortex#502 — recorded resolveLogicalTarget calls */
@@ -127,8 +129,8 @@ export class MockAdapter implements PlatformAdapter {
     this.progressSent.push({ target, text });
   }
 
-  async clearProgress(_target: ResponseTarget): Promise<void> {
-    // No-op for mock
+  async clearProgress(target: ResponseTarget): Promise<void> {
+    this.progressCleared.push(target);
   }
 
   async createThread(msg: InboundMessage, name: string): Promise<ResponseTarget> {

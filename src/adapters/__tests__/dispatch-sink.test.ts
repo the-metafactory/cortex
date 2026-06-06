@@ -226,6 +226,56 @@ describe("dispatch-sink — delivery to the originating target", () => {
     // `sessionId` so the adapter's `progressKey` scopes it per-dispatch.
     expect(adapter.progressSent[0]!.target.sessionId).toBe("task-1");
   });
+
+  test("completed clears the progress placeholder (same correlation key) then posts the reply (cortex#731)", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = new MockAdapter("discord-pai-collab");
+    const sink = createDispatchSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      lifecycleEnvelope("dispatch.task.completed", {
+        agent_id: "luna",
+        chat_response: "Yep, I can access both.",
+        response_routing: routing("discord-pai-collab", "C123", "T456"),
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The "working…" placeholder is cleared so it doesn't orphan above the reply,
+    // keyed on the SAME correlation id the `started` branch used.
+    expect(adapter.progressCleared).toHaveLength(1);
+    expect(adapter.progressCleared[0]!.sessionId).toBe("task-1");
+    expect(adapter.progressCleared[0]!.channelId).toBe("C123");
+    // The durable reply is still posted (channel-scoped, no sessionId).
+    expect(adapter.sentMessages).toHaveLength(1);
+    expect(adapter.sentMessages[0]!.text).toBe("Yep, I can access both.");
+    expect(adapter.sentMessages[0]!.target.sessionId).toBeUndefined();
+  });
+
+  test("failed clears the placeholder then surfaces the failure (cortex#731 bubble-back)", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = new MockAdapter("discord-pai-collab");
+    const sink = createDispatchSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      lifecycleEnvelope("dispatch.task.failed", {
+        agent_id: "luna",
+        error_summary: "session timed out",
+        response_routing: routing("discord-pai-collab", "C123", "T456"),
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(adapter.progressCleared).toHaveLength(1);
+    expect(adapter.progressCleared[0]!.sessionId).toBe("task-1");
+    // The failure bubbles to the surface instead of leaving "working…" forever.
+    expect(adapter.sentMessages).toHaveLength(1);
+    expect(adapter.sentMessages[0]!.text).toContain("failed");
+  });
 });
 
 // =============================================================================
