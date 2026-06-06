@@ -199,12 +199,14 @@ export async function joinNetwork(
   }
   steps.push(`wrote leaf include for "${networkId}" (hub ${verified.hub_url})`);
 
-  ports.plist.ensureConfigLoaded(ports.leafFile.natsConfigPath());
-  steps.push(`ensured nats-server plist loads ${ports.leafFile.natsConfigPath()}`);
-
-  // (d) Merge the network into the federation config with registry-resolved
-  // peers (DD-5) + the OWN accept-subject (wire contract). Idempotent: replace
-  // the entry keyed by network id, never append a duplicate.
+  // The plist + config writes hit the live filesystem in the `--apply` adapter
+  // (plist XML splice + stack YAML rewrite). A failure there (permission denied,
+  // an unparseable plist, a disk error) must surface as a `{ ok: false }` per
+  // this function's "never throws" contract — NOT as an uncaught exception that
+  // escapes with a stack trace and leaves the deployment half-mutated (leaf
+  // written, config not). A failed `--apply` is recoverable: re-running join
+  // converges (idempotent). `try` spans both writes so the step log records how
+  // far the mutation got before the failure.
   const peers = buildPeers(stack.principalId, roster);
   const acceptSubject = `federated.${stack.principalId}.${stack.stackSlug}.>`;
   const entry: PolicyFederatedNetwork = {
@@ -217,12 +219,27 @@ export async function joinNetwork(
     max_hop: stack.maxHop ?? 1,
   };
 
-  const existing = ports.configStore.readNetworks();
-  const merged = mergeNetwork(existing, entry);
-  ports.configStore.writeNetworks(merged);
-  steps.push(
-    `wrote policy.federated.networks["${networkId}"] — ${peers.length.toString()} peer(s), accept ${acceptSubject}`,
-  );
+  try {
+    // (c, cont.) Ensure the plist loads the nats config (DD-6).
+    ports.plist.ensureConfigLoaded(ports.leafFile.natsConfigPath());
+    steps.push(`ensured nats-server plist loads ${ports.leafFile.natsConfigPath()}`);
+
+    // (d) Merge the network into the federation config with registry-resolved
+    // peers (DD-5) + the OWN accept-subject (wire contract). Idempotent: replace
+    // the entry keyed by network id, never append a duplicate.
+    const existing = ports.configStore.readNetworks();
+    const merged = mergeNetwork(existing, entry);
+    ports.configStore.writeNetworks(merged);
+    steps.push(
+      `wrote policy.federated.networks["${networkId}"] — ${peers.length.toString()} peer(s), accept ${acceptSubject}`,
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      steps,
+      reason: `plist/config write failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 
   // (e) Restart the daemon so the rendered leaf takes effect.
   const restart = await ports.daemon.restart();
@@ -324,21 +341,35 @@ export async function leaveNetwork(
     };
   }
 
-  // Remove from federation config.
   const remaining = existing.filter((n) => n.id !== networkId);
-  ports.configStore.writeNetworks(remaining);
-  steps.push(`removed policy.federated.networks["${networkId}"]`);
+  // The config rewrite, leaf-include delete, and plist edit hit the live
+  // filesystem in `--apply`. As in join, a write failure must surface as a
+  // `{ ok: false }` per contract, not an uncaught throw — and the step log
+  // records how far teardown got. A failed `--apply` leave is recoverable:
+  // re-running converges (idempotent).
+  try {
+    // Remove from federation config.
+    ports.configStore.writeNetworks(remaining);
+    steps.push(`removed policy.federated.networks["${networkId}"]`);
 
-  // Delete the leaf include (idempotent).
-  ports.leafFile.remove(networkId);
-  steps.push(`deleted leaf include for "${networkId}"`);
+    // Delete the leaf include (idempotent).
+    ports.leafFile.remove(networkId);
+    steps.push(`deleted leaf include for "${networkId}"`);
 
-  // If no networks have a leaf include anymore, drop the plist -c arg so the
-  // server reverts to its bare invocation (clean teardown).
-  const stillHaveLeaves = ports.leafFile.list().length > 0;
-  if (!stillHaveLeaves) {
-    ports.plist.dropConfigArg(ports.leafFile.natsConfigPath());
-    steps.push("no networks remain — dropped nats-server plist -c arg");
+    // If no networks have a leaf include anymore, drop the plist -c arg so the
+    // server reverts to its bare invocation (clean teardown).
+    const stillHaveLeaves = ports.leafFile.list().length > 0;
+    if (!stillHaveLeaves) {
+      ports.plist.dropConfigArg(ports.leafFile.natsConfigPath());
+      steps.push("no networks remain — dropped nats-server plist -c arg");
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      steps,
+      reason: `teardown write failed: ${err instanceof Error ? err.message : String(err)}`,
+      remaining: remaining.map((n) => n.id),
+    };
   }
 
   const restart = await ports.daemon.restart();
