@@ -183,6 +183,55 @@ describe("join dry-run safety", () => {
 });
 
 // =============================================================================
+// #763 — Linux/systemd: `--unit` join is accepted + writes nothing on dry-run
+// =============================================================================
+
+describe("#763 — systemd `--unit` join", () => {
+  test("dry-run join with --unit (no --plist) writes nothing and routes to systemd", async () => {
+    const dir = freshDir();
+    const unit = join(dir, "nats-server.service");
+    const natsConfig = join(dir, "nats", "local.conf");
+
+    const res = await dispatchNetwork([
+      "join", "metafactory",
+      "--principal", "jc",
+      "--registry-url", "http://127.0.0.1:0", // unreachable by construction
+      "--seed-path", join(dir, "seed.nk"),
+      "--creds", join(dir, "jc.creds"),
+      "--account", "A" + "B".repeat(55),
+      "--nats-config", natsConfig,
+      "--unit", unit, // systemd descriptor — self-describing, platform-independent
+    ], EMPTY_READER);
+
+    // DRY-RUN SAFETY: the systemd unit + config are NOT written/created.
+    expect(existsSync(unit)).toBe(false);
+    expect(existsSync(natsConfig)).toBe(false);
+    expect(existsSync(join(dir, "nats"))).toBe(false);
+    // Join fails on the unreachable registry (register step), exit 1 — but it
+    // got PAST descriptor resolution (no "cannot resolve … unit" usage error).
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).not.toContain("cannot resolve");
+  });
+
+  test("passing BOTH --plist and --unit is a clear usage error (exit 2)", async () => {
+    const dir = freshDir();
+    const res = await dispatchNetwork([
+      "join", "metafactory",
+      "--principal", "jc",
+      "--registry-url", "http://r.test",
+      "--seed-path", join(dir, "seed.nk"),
+      "--creds", join(dir, "x.creds"),
+      "--account", "A" + "B".repeat(55),
+      "--nats-config", join(dir, "local.conf"),
+      "--plist", join(dir, "nats.plist"),
+      "--unit", join(dir, "nats-server.service"),
+    ], EMPTY_READER);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain("only one of --plist");
+  });
+});
+
+// =============================================================================
 // status — renders against a real (temp) stack config
 // =============================================================================
 

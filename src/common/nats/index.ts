@@ -26,3 +26,23 @@ export {
   plistConfigArgPresent,
   renderProgramArguments,
 } from "./nats-plist-loader";
+
+export {
+  ensureUnitConfigArg,
+  systemdUnitConfigArgPresent,
+  systemdUnitServiceId,
+} from "./systemd-unit-loader";
+
+export {
+  bunExecRunner,
+  currentServicePlatform,
+  detectDescriptorKind,
+  selectNatsServiceManager,
+} from "./nats-service-manager";
+export type {
+  ExecResult,
+  ExecRunner,
+  NatsServiceManager,
+  SelectServiceManagerOptions,
+  ServicePlatform,
+} from "./nats-service-manager";

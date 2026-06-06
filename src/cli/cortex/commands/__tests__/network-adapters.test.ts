@@ -78,6 +78,10 @@ function cfgFor(plistPath: string): LivePortsConfig {
     stackId: "andreas/meta-factory",
     natsConfigPath: NATS_CONFIG,
     plistPath,
+    // #763 — pin darwin so the launchd-plist adapter is selected deterministically
+    // (on Linux CI the default platform would otherwise route to systemd and
+    // reject the .plist descriptor as a mismatch).
+    platform: "darwin",
   };
 }
 

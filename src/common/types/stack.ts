@@ -75,10 +75,22 @@ export const StackNatsInfraSchema = z.object({
    */
   config_path: z.string().min(1).optional(),
   /**
-   * Path to the nats-server launchd plist `cortex network join` ensures loads
-   * the config (and reloads on join/leave). Maps to the `--plist` flag.
+   * macOS only — path to the nats-server **launchd plist** `cortex network
+   * join` ensures loads the config (and `launchctl kickstart` reloads on
+   * join/leave). Maps to the `--plist` flag. On a Linux/systemd stack use
+   * {@link StackNatsInfraSchema.shape.unit_path} instead (#763).
    */
   plist_path: z.string().min(1).optional(),
+  /**
+   * #763 — Linux only — path to the nats-server **systemd unit** `cortex
+   * network join` ensures loads the config (the unit's `[Service] ExecStart=`
+   * carries `-c <config>`; `systemctl [--user] restart` reloads on
+   * join/leave). The systemd analogue of {@link StackNatsInfraSchema.shape.plist_path};
+   * a stack declares the one that matches its platform. Maps to the `--unit`
+   * flag. `--user` vs system scope is inferred from the unit's on-disk location
+   * (`~/.config/systemd/user/…` → user scope, otherwise system).
+   */
+  unit_path: z.string().min(1).optional(),
   /**
    * The local NATS account (`A…` nkey-U) the network's leaf binds to. Maps to
    * the `--account` flag. Same 56-char U-prefixed base32 NKey grammar as every

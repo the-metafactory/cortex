@@ -128,6 +128,9 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--account": "value",
         "--nats-config": "value",
         "--plist": "value",
+        // #763 — Linux/systemd: the nats-server systemd unit path (the
+        // launchd plist's sibling). Maps to stack.nats_infra.unit_path.
+        "--unit": "value",
         "--max-hop": "value",
         "--leaf-node": "value",
         // S5 (#739) — public-scope flags. `--capabilities` (comma-separated)
@@ -151,6 +154,7 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--seed-path": "value",
         "--nats-config": "value",
         "--plist": "value",
+        "--unit": "value",
         "--apply": "bool",
         "--dry-run": "bool",
       },
@@ -284,6 +288,7 @@ async function runJoin(
         ...readOverride(flags, "--registry-pubkey", "registryPubkey"),
         ...readOverride(flags, "--nats-config", "natsConfigPath"),
         ...readOverride(flags, "--plist", "plistPath"),
+        ...readOverride(flags, "--unit", "unitPath"),
         ...readOverride(flags, "--account", "account"),
         ...readOverride(flags, "--creds", "credsPath"),
       },
@@ -359,6 +364,7 @@ async function runLeave(
         ...readOverride(flags, "--stack", "stack"),
         ...readOverride(flags, "--nats-config", "natsConfigPath"),
         ...readOverride(flags, "--plist", "plistPath"),
+        ...readOverride(flags, "--unit", "unitPath"),
       },
       expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH),
       load,
@@ -381,7 +387,10 @@ async function runLeave(
     principalId: inputs.principal,
     stackId: `${inputs.principal}/${slugRes.slug}`,
     natsConfigPath: inputs.natsConfigPath,
-    plistPath: inputs.plistPath,
+    // #763 — platform-resolved descriptor (plist on macOS, unit on Linux).
+    ...(inputs.plistPath !== undefined && { plistPath: inputs.plistPath }),
+    ...(inputs.unitPath !== undefined && { unitPath: inputs.unitPath }),
+    platform: inputs.platform,
   };
   const ports = applyRes.apply ? buildLivePorts(cfg) : buildDryRunPorts(cfg);
 
@@ -557,7 +566,12 @@ function portsConfigFromInputs(
     ...(inputs.registryPubkey !== undefined && { registryPubkey: inputs.registryPubkey }),
     seedPath: inputs.seedPath,
     natsConfigPath: inputs.natsConfigPath,
-    plistPath: inputs.plistPath,
+    // #763 — platform-resolved service descriptor: plist on macOS, systemd unit
+    // on Linux. The deriver sets exactly one + the platform; thread both through
+    // so the adapter selects the right NatsServiceManager.
+    ...(inputs.plistPath !== undefined && { plistPath: inputs.plistPath }),
+    ...(inputs.unitPath !== undefined && { unitPath: inputs.unitPath }),
+    platform: inputs.platform,
     monitorUrl: optionalValueFlag(flags, "--monitor-url"),
     // #762 — caps the join announces INTO the network so the principal joins
     // the roster (registry control-plane; never on the wire).
@@ -720,7 +734,9 @@ Flags (all OPTIONAL OVERRIDES — derived from cortex.yaml when omitted; #753):
   --creds <p>             Override stack.nats_infra.creds_path (default: ~/.config/nats/<network>.creds).
   --account <nkey-U>      Override stack.nats_infra.account (A… nkey-U the leaf binds to).
   --nats-config <p>       Override stack.nats_infra.config_path (nats-server -c config).
-  --plist <p>             Override stack.nats_infra.plist_path (nats-server launchd plist).
+  --plist <p>             Override stack.nats_infra.plist_path (macOS nats-server launchd plist).
+  --unit <p>              Override stack.nats_infra.unit_path (Linux nats-server systemd unit; #763).
+                          Pass exactly ONE of --plist / --unit; each is self-describing.
   --leaf-node <name>      Leaf connection name on the network entry (default: network id).
   --max-hop <n>           Hop budget written on the network (default: 1).
   --capabilities <csv>    (join public) Comma-separated capability ids to announce

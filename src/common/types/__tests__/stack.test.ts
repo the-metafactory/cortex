@@ -196,6 +196,72 @@ describe("StackConfigSchema", () => {
 });
 
 // =============================================================================
+// #753/#763 — stack.nats_infra (plist_path on macOS, unit_path on Linux)
+// =============================================================================
+
+const VALID_ACCOUNT = "A" + "B".repeat(55); // A + 55 base32
+
+describe("StackConfigSchema.nats_infra — platform service descriptor", () => {
+  test("accepts a macOS nats_infra with plist_path", () => {
+    const parsed = StackConfigSchema.parse({
+      id: "andreas/meta-factory",
+      nats_infra: {
+        config_path: "~/.config/nats/local.conf",
+        plist_path: "~/Library/LaunchAgents/nats.plist",
+        account: VALID_ACCOUNT,
+      },
+    });
+    expect(parsed.nats_infra?.plist_path).toBe("~/Library/LaunchAgents/nats.plist");
+    expect(parsed.nats_infra?.unit_path).toBeUndefined();
+  });
+
+  test("#763 — accepts a Linux nats_infra with unit_path (systemd unit)", () => {
+    const parsed = StackConfigSchema.parse({
+      id: "jc/clawbox",
+      nats_infra: {
+        config_path: "~/.config/nats/local.conf",
+        unit_path: "~/.config/systemd/user/nats-server.service",
+        account: VALID_ACCOUNT,
+      },
+    });
+    expect(parsed.nats_infra?.unit_path).toBe("~/.config/systemd/user/nats-server.service");
+    expect(parsed.nats_infra?.plist_path).toBeUndefined();
+  });
+
+  test("#763 — a stack may carry BOTH descriptors (the join picks per platform)", () => {
+    const parsed = StackConfigSchema.parse({
+      id: "andreas/meta-factory",
+      nats_infra: {
+        config_path: "~/c",
+        plist_path: "~/nats.plist",
+        unit_path: "~/nats-server.service",
+        account: VALID_ACCOUNT,
+      },
+    });
+    expect(parsed.nats_infra?.plist_path).toBe("~/nats.plist");
+    expect(parsed.nats_infra?.unit_path).toBe("~/nats-server.service");
+  });
+
+  test("rejects an empty unit_path (min(1))", () => {
+    expect(() =>
+      StackConfigSchema.parse({
+        id: "jc/clawbox",
+        nats_infra: { unit_path: "" },
+      }),
+    ).toThrow();
+  });
+
+  test("rejects an unknown nats_infra key (strict schema)", () => {
+    expect(() =>
+      StackConfigSchema.parse({
+        id: "jc/clawbox",
+        nats_infra: { unit_path: "~/x.service", bogus: "no" },
+      }),
+    ).toThrow();
+  });
+});
+
+// =============================================================================
 // CortexConfigSchema — stack block is optional at the top level
 // =============================================================================
 

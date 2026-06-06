@@ -71,7 +71,8 @@ const FULL = loaded({
 
 describe("deriveJoinInputs — config-only (the one-liner)", () => {
   test("derives all inputs from config with NO flags", () => {
-    const res = deriveJoinInputs("metafactory", {}, "/cfg/cortex.yaml", reader(FULL));
+    // Pin darwin so the macOS plist-path derivation is deterministic on Linux CI.
+    const res = deriveJoinInputs("metafactory", {}, "/cfg/cortex.yaml", reader(FULL), "darwin");
     expect(res.ok).toBe(true);
     expect(res.inputs).toEqual({
       principal: "andreas",
@@ -81,6 +82,7 @@ describe("deriveJoinInputs — config-only (the one-liner)", () => {
       registryPubkey: "A".repeat(43) + "=",
       natsConfigPath: "~/.config/nats/local.conf",
       plistPath: "~/Library/LaunchAgents/nats.plist",
+      platform: "darwin",
       account: "A" + "B".repeat(55),
       credsPath: "~/.config/nats/mf.creds",
       // #762 — FULL declares no network block, so no caps to announce.
@@ -223,6 +225,7 @@ describe("deriveJoinInputs — flag overrides win", () => {
       },
       "/cfg",
       reader(FULL),
+      "darwin",
     );
     expect(res.ok).toBe(true);
     expect(res.inputs).toEqual({
@@ -233,6 +236,7 @@ describe("deriveJoinInputs — flag overrides win", () => {
       registryPubkey: "Z".repeat(43) + "=",
       natsConfigPath: "/flag/local.conf",
       plistPath: "/flag/nats.plist",
+      platform: "darwin",
       account: "A" + "F".repeat(55),
       credsPath: "/flag/x.creds",
       // #762 — no caps flag exists; caps derive from the network block (none here).
@@ -332,13 +336,14 @@ describe("deriveJoinInputs — actionable missing-config errors", () => {
 
 describe("deriveLeaveInputs", () => {
   test("derives principal/stack/nats-config/plist from config (no flags)", () => {
-    const res = deriveLeaveInputs({}, "/cfg", reader(FULL));
+    const res = deriveLeaveInputs({}, "/cfg", reader(FULL), "darwin");
     expect(res.ok).toBe(true);
     expect(res.inputs).toEqual({
       principal: "andreas",
       stack: "andreas/meta-factory",
       natsConfigPath: "~/.config/nats/local.conf",
       plistPath: "~/Library/LaunchAgents/nats.plist",
+      platform: "darwin",
     });
   });
 
@@ -357,5 +362,86 @@ describe("deriveLeaveInputs", () => {
     const res = deriveLeaveInputs({}, "/cfg", reader(cfg));
     expect(res.ok).toBe(false);
     expect(res.reason).toContain("stack.nats_infra.config_path");
+  });
+});
+
+// =============================================================================
+// #763 — Linux/systemd platform-aware descriptor derivation
+// =============================================================================
+
+// A Linux-shape config: nats_infra carries `unit_path` (the systemd unit), not
+// `plist_path`. Otherwise identical to FULL.
+const FULL_LINUX = loaded({
+  principal: { id: "jc" },
+  stack: {
+    id: "jc/clawbox",
+    nkey_seed_path: "~/.config/nats/cortex.nk",
+    nats_infra: {
+      config_path: "~/.config/nats/local.conf",
+      unit_path: "~/.config/systemd/user/nats-server.service",
+      account: "A" + "B".repeat(55),
+    },
+  },
+  policy: {
+    principals: [],
+    roles: [],
+    federated: {
+      networks: [],
+      registry: { url: "https://registry.meta-factory.ai" },
+    },
+  },
+});
+
+describe("#763 — deriveJoinInputs platform-aware descriptor", () => {
+  test("on LINUX, derives the systemd unit_path (not plist_path) + platform", () => {
+    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(FULL_LINUX), "linux");
+    expect(res.ok).toBe(true);
+    expect(res.inputs?.unitPath).toBe("~/.config/systemd/user/nats-server.service");
+    expect(res.inputs?.plistPath).toBeUndefined();
+    expect(res.inputs?.platform).toBe("linux");
+  });
+
+  test("on macOS, derives the plist_path (not unit_path) + platform", () => {
+    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(FULL), "darwin");
+    expect(res.ok).toBe(true);
+    expect(res.inputs?.plistPath).toBe("~/Library/LaunchAgents/nats.plist");
+    expect(res.inputs?.unitPath).toBeUndefined();
+    expect(res.inputs?.platform).toBe("darwin");
+  });
+
+  test("--unit flag overrides the config unit_path on Linux", () => {
+    const res = deriveJoinInputs(
+      "metafactory",
+      { unitPath: "/flag/nats.service" },
+      "/cfg",
+      reader(FULL_LINUX),
+      "linux",
+    );
+    expect(res.inputs?.unitPath).toBe("/flag/nats.service");
+  });
+
+  test("on LINUX with NO unit configured → actionable error naming unit_path", () => {
+    // FULL has only plist_path; on linux that is not the right descriptor.
+    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(FULL), "linux");
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("stack.nats_infra.unit_path");
+    expect(res.reason).toContain("--unit");
+  });
+
+  test("on macOS with NO plist configured → actionable error naming plist_path", () => {
+    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(FULL_LINUX), "darwin");
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("stack.nats_infra.plist_path");
+    expect(res.reason).toContain("--plist");
+  });
+});
+
+describe("#763 — deriveLeaveInputs platform-aware descriptor", () => {
+  test("on LINUX derives unit_path + platform", () => {
+    const res = deriveLeaveInputs({}, "/cfg", reader(FULL_LINUX), "linux");
+    expect(res.ok).toBe(true);
+    expect(res.inputs?.unitPath).toBe("~/.config/systemd/user/nats-server.service");
+    expect(res.inputs?.plistPath).toBeUndefined();
+    expect(res.inputs?.platform).toBe("linux");
   });
 });

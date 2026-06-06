@@ -40,10 +40,12 @@ import {
   renderLeafIncludeFile,
 } from "../../../common/nats/leaf-remote-renderer";
 import {
-  ensureConfigArg,
-  plistConfigArgPresent,
-  renderProgramArguments,
-} from "../../../common/nats/nats-plist-loader";
+  bunExecRunner,
+  currentServicePlatform,
+  selectNatsServiceManager,
+  type NatsServiceManager,
+  type ServicePlatform,
+} from "../../../common/nats/nats-service-manager";
 import { NetworkRegistryClient } from "../../../common/registry/network-client";
 import {
   buildRegistrationClaim,
@@ -82,7 +84,24 @@ export interface LivePortsConfig {
   registryPubkey?: string;
   seedPath?: string;
   natsConfigPath?: string;
+  /**
+   * macOS (launchd) nats-server descriptor — the plist whose `ProgramArguments`
+   * carry `-c <config>` and that `launchctl kickstart` restarts. On a Linux
+   * stack this is absent and {@link LivePortsConfig.unitPath} is set instead.
+   */
   plistPath?: string;
+  /**
+   * #763 — Linux (systemd) nats-server descriptor: the systemd unit whose
+   * `[Service] ExecStart=` carries `-c <config>` and that `systemctl restart`
+   * reloads. Mutually-platform-exclusive with {@link LivePortsConfig.plistPath}.
+   */
+  unitPath?: string;
+  /**
+   * #763 — platform the join runs on. Selects launchd vs systemd service
+   * management. Defaults to `process.platform` when omitted (the CLI sets it
+   * explicitly; tests pin it).
+   */
+  platform?: ServicePlatform;
   monitorUrl?: string;
   /**
    * #762 — the capability ids this stack announces INTO `networkId`, sourced
@@ -244,76 +263,62 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
 }
 
 // =============================================================================
-// Plist port — built on S3's canonical ensureConfigArg + renderProgramArguments
-// (`src/common/nats/nats-plist-loader.ts`) as the single source of truth for
-// the ProgramArguments arg-list transform AND its XML rendering. This adapter
-// only does the plist I/O: read the existing args back out, and splice S3's
-// rendered block into the file. No bespoke arg/XML logic lives here.
+// nats-server service management — the launchd/systemd abstraction (#763).
+//
+// Pre-#763 this adapter hardcoded launchd: it read/wrote the plist
+// `ProgramArguments` and restarted via `launchctl`. On Linux (clawbox) the
+// descriptor is a systemd unit, so feeding it here errored cryptically
+// ("ProgramArguments is empty"). The launchd/systemd split now lives in
+// `src/common/nats/nats-service-manager.ts` (the `NatsServiceManager` seam);
+// this adapter only selects the right manager per platform/descriptor and
+// threads it into BOTH the `PlistPort` (config-arg ensure) and the
+// `NatsServerPort` (restart) — the two ports the orchestrator already depends
+// on. The macOS behavior is byte-for-byte the lifted launchd implementation.
 // =============================================================================
 
-/** Read the `ProgramArguments` <string> entries from a launchd plist. */
-function readProgramArguments(plistPath: string): string[] {
-  const xml = readFileSync(plistPath, "utf-8");
-  const block = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(xml);
-  if (block === null) return [];
-  const args: string[] = [];
-  const re = /<string>([\s\S]*?)<\/string>/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(block[1] ?? "")) !== null) {
-    args.push(unescapeXml(m[1] ?? ""));
-  }
-  return args;
-}
-
-function unescapeXml(v: string): string {
-  return v
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
+/**
+ * Resolve the nats-server service descriptor for the stack: the systemd unit
+ * (`unitPath`) on Linux, the launchd plist (`plistPath`) on macOS. Returns the
+ * tilde-expanded path, or `undefined` when the platform's descriptor is unset
+ * (a caller that does not manage the nats-server service — the port then no-ops
+ * gracefully, matching the pre-#763 "plist not found" contract).
+ */
+function descriptorPathFor(cfg: LivePortsConfig): string | undefined {
+  const platform = cfg.platform ?? currentServicePlatform();
+  const raw = platform === "linux" ? cfg.unitPath ?? cfg.plistPath : cfg.plistPath ?? cfg.unitPath;
+  if (raw === undefined || raw === "") return undefined;
+  return expandTilde(raw);
 }
 
 /**
- * Rewrite the plist's ProgramArguments block in place with `nextArgs`. The XML
- * block is rendered by S3's canonical {@link renderProgramArguments} (the
- * single source of truth for the ProgramArguments key+array XML, including the
- * five-entity escaping) — this adapter only splices it into the plist. Matches
- * the existing `<key>ProgramArguments</key>` block INCLUDING its leading
- * horizontal indent so S3's own `\t`-prefixed output replaces it 1:1 (no
- * double-indent), keeping the on-disk plist byte-shape stable.
+ * Build the {@link NatsServiceManager} for the stack, or `undefined` when no
+ * descriptor is configured for the platform. A descriptor whose type does not
+ * match the platform (plist-on-Linux / unit-on-macOS) makes
+ * `selectNatsServiceManager` throw a CLEAR error — the join's never-throws
+ * orchestration surfaces it as a `{ ok: false }` (it runs inside the port
+ * methods, which the orchestrator's try/await guards).
  */
-function writeProgramArguments(plistPath: string, nextArgs: string[]): void {
-  const xml = readFileSync(plistPath, "utf-8");
-  const next = xml.replace(
-    /[ \t]*<key>ProgramArguments<\/key>\s*<array>[\s\S]*?<\/array>/,
-    renderProgramArguments(nextArgs),
-  );
-  writeFileSync(plistPath, next, "utf-8");
+function buildServiceManager(
+  cfg: LivePortsConfig,
+  mutate: boolean,
+): NatsServiceManager | undefined {
+  const descriptorPath = descriptorPathFor(cfg);
+  if (descriptorPath === undefined) return undefined;
+  return selectNatsServiceManager({
+    descriptorPath,
+    platform: cfg.platform ?? currentServicePlatform(),
+    mutate,
+    exec: bunExecRunner,
+  });
 }
 
 function buildPlistPort(cfg: LivePortsConfig, mutate: boolean): PlistPort {
-  const plistPath = expandTilde(cfg.plistPath ?? "");
   return {
     ensureConfigLoaded(configPath) {
-      if (!existsSync(plistPath)) return;
-      const args = readProgramArguments(plistPath);
-      if (plistConfigArgPresent(args, configPath)) return; // idempotent no-op
-      const next = ensureConfigArg(args, configPath);
-      if (!mutate) return;
-      writeProgramArguments(plistPath, next);
+      buildServiceManager(cfg, mutate)?.ensureConfigLoaded(configPath);
     },
     dropConfigArg(configPath) {
-      if (!existsSync(plistPath)) return;
-      const args = readProgramArguments(plistPath);
-      const next = args.filter((a, i) => {
-        if (a === "-c" || a === "--config") return false;
-        if (i > 0 && (args[i - 1] === "-c" || args[i - 1] === "--config")) return false;
-        if (a === `--config=${configPath}`) return false;
-        return true;
-      });
-      if (!mutate) return;
-      writeProgramArguments(plistPath, next);
+      buildServiceManager(cfg, mutate)?.dropConfigArg(configPath);
     },
   };
 }
@@ -404,49 +409,38 @@ function buildDaemonPort(cfg: LivePortsConfig, mutate: boolean): DaemonPort {
 }
 
 // =============================================================================
-// Nats-server port — launchctl kickstart of the nats-server plist's service
+// Nats-server port — restart the nats-server service so it reloads local.conf
 // (#757). The join mutates local.conf (leaf include + `include` directive); the
 // nats-server process that reads local.conf must be restarted for the leaf to
-// take effect. We restart the service named by the join's `--plist`
-// (the nats-server plist), reading its `<key>Label</key>` so the kickstart
-// target is whatever the principal's plist declares (homebrew.mxcl.nats-server,
-// a custom label, etc.) — no hardcoded label.
+// take effect. The restart is delegated to the platform's
+// {@link NatsServiceManager}: `launchctl kickstart -k gui/<uid>/<label>` on
+// macOS (label read from the plist `<key>Label</key>`), `systemctl
+// [--user] restart <unit>` on Linux (#763, unit id read from the `.service`
+// file name). No hardcoded service id; no platform branching here.
 // =============================================================================
 
-/** Read the launchd `<key>Label</key><string>…</string>` from a plist. */
-function readPlistLabel(plistPath: string): string | undefined {
-  const xml = readFileSync(plistPath, "utf-8");
-  const m = /<key>Label<\/key>\s*<string>([\s\S]*?)<\/string>/.exec(xml);
-  if (m === null) return undefined;
-  const label = unescapeXml(m[1] ?? "").trim();
-  return label === "" ? undefined : label;
-}
-
 function buildNatsServerPort(cfg: LivePortsConfig, mutate: boolean): NatsServerPort {
-  const plistPath = expandTilde(cfg.plistPath ?? "");
   return {
     async restart() {
-      if (!mutate) return { ok: true }; // dry-run: pretend success, touch nothing.
-      if (cfg.plistPath === undefined || !existsSync(plistPath)) {
-        return { ok: false, reason: `nats-server plist not found at ${plistPath}` };
+      // `buildServiceManager` → `selectNatsServiceManager` throws on a
+      // platform/descriptor mismatch (plist-on-Linux / unit-on-macOS, #763).
+      // The orchestrator awaits this restart OUTSIDE a try/catch, so we honor
+      // the never-throws contract here and surface the clear message as a
+      // `{ ok: false }` reason rather than letting it escape as a stack trace.
+      let mgr: NatsServiceManager | undefined;
+      try {
+        mgr = buildServiceManager(cfg, mutate);
+      } catch (err) {
+        return { ok: false, reason: err instanceof Error ? err.message : String(err) };
       }
-      const label = readPlistLabel(plistPath);
-      if (label === undefined) {
-        return { ok: false, reason: `no <key>Label</key> in nats-server plist ${plistPath}` };
-      }
-      const proc = Bun.spawn(
-        ["launchctl", "kickstart", "-k", `gui/${process.getuid?.() ?? 501}/${label}`],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      const code = await proc.exited;
-      if (code !== 0) {
-        const err = await new Response(proc.stderr).text();
+      if (mgr === undefined) {
         return {
           ok: false,
-          reason: `launchctl kickstart ${label} exited ${code.toString()}: ${err.trim()}`,
+          reason:
+            "no nats-server service descriptor configured (set stack.nats_infra.plist_path on macOS or unit_path on Linux)",
         };
       }
-      return { ok: true };
+      return mgr.restart();
     },
   };
 }
