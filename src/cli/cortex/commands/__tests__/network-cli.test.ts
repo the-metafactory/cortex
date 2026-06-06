@@ -17,6 +17,17 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { dispatchNetwork } from "../network";
+import type { LoadedConfig } from "../../../../common/config/loader";
+import type { AgentConfig } from "../../../../common/types/config";
+
+// #753 — a reader returning an EMPTY config so derivation tests are
+// deterministic (no dependence on the dev machine's real ~/.config/cortex).
+// With an empty config + no flags, every derived field is absent, so the
+// derivation surfaces its actionable "cannot resolve …" usage error.
+const EMPTY_READER = (): LoadedConfig => ({
+  config: {} as AgentConfig,
+  inlineAgents: [],
+});
 
 const tmpDirs: string[] = [];
 function freshDir(): string {
@@ -66,17 +77,24 @@ describe("join usage", () => {
     expect(res.stderr).toContain("must be lowercase");
   });
 
-  test("requires --principal (exit 2)", async () => {
-    const res = await dispatchNetwork(["join", "metafactory"]);
+  test("#753 — no principal anywhere → actionable usage error (exit 2)", async () => {
+    // With an empty config and no --principal flag, derivation names the
+    // missing config field + the override flag (the flag-wall is gone; #753).
+    const res = await dispatchNetwork(["join", "metafactory"], EMPTY_READER);
     expect(res.exitCode).toBe(2);
-    expect(res.stderr).toContain("--principal is required");
+    expect(res.stderr).toContain("cannot resolve principal");
+    expect(res.stderr).toContain("principal.id");
   });
 
-  test("requires the live-config flags (exit 2)", async () => {
-    const res = await dispatchNetwork(["join", "metafactory", "--principal", "andreas"]);
+  test("#753 — principal flagged but no registry derivable → names registry field (exit 2)", async () => {
+    const res = await dispatchNetwork(
+      ["join", "metafactory", "--principal", "andreas"],
+      EMPTY_READER,
+    );
     expect(res.exitCode).toBe(2);
-    // First missing required flag surfaces.
-    expect(res.stderr).toMatch(/--registry-url is required/);
+    // First underivable required value after seed surfaces; with empty config
+    // the seed is also missing, so seed is named first.
+    expect(res.stderr).toMatch(/cannot resolve (signing seed|registry URL)/);
   });
 
   test("--apply and --dry-run are mutually exclusive (exit 2)", async () => {
@@ -91,7 +109,7 @@ describe("join usage", () => {
       "--nats-config", join(dir, "local.conf"),
       "--plist", join(dir, "nats.plist"),
       "--apply", "--dry-run",
-    ]);
+    ], EMPTY_READER);
     expect(res.exitCode).toBe(2);
     expect(res.stderr).toContain("mutually exclusive");
   });
@@ -107,7 +125,7 @@ describe("join usage", () => {
       "--account", "A" + "B".repeat(55),
       "--nats-config", "/tmp/local.conf",
       "--plist", "/tmp/nats.plist",
-    ]);
+    ], EMPTY_READER);
     expect(res.exitCode).toBe(2);
     expect(res.stderr).toContain("prefix matching");
   });
@@ -136,7 +154,7 @@ describe("join dry-run safety", () => {
       "--account", "A" + "B".repeat(55),
       "--nats-config", natsConfig,
       "--plist", plist,
-    ]);
+    ], EMPTY_READER);
 
     // The join FAILS (no seed / unreachable registry) — but the critical S4
     // SAFETY assertion is that NOTHING was written to disk on a dry-run.
@@ -158,7 +176,7 @@ describe("join dry-run safety", () => {
       "--account", "A" + "B".repeat(55),
       "--nats-config", join(dir, "local.conf"),
       "--plist", join(dir, "nats.plist"),
-    ]);
+    ], EMPTY_READER);
     // Failure output goes to stderr; it still carries the dry-run banner.
     expect(res.stderr).toContain("dry-run");
   });
@@ -208,10 +226,11 @@ describe("status", () => {
 // =============================================================================
 
 describe("leave usage", () => {
-  test("requires --principal (exit 2)", async () => {
-    const res = await dispatchNetwork(["leave", "metafactory"]);
+  test("#753 — no principal/nats-config derivable → actionable usage error (exit 2)", async () => {
+    const res = await dispatchNetwork(["leave", "metafactory"], EMPTY_READER);
     expect(res.exitCode).toBe(2);
-    expect(res.stderr).toContain("--principal is required");
+    // Empty config + no flags: principal is the first underivable value.
+    expect(res.stderr).toContain("cannot resolve principal");
   });
 
   test("leaving an un-joined network is a clean no-op (exit 0)", async () => {
@@ -223,7 +242,7 @@ describe("leave usage", () => {
       "--stack", `andreas/${uniqueSlug}`,
       "--nats-config", join(dir, "local.conf"),
       "--plist", join(dir, "nats.plist"),
-    ]);
+    ], EMPTY_READER);
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain("not joined");
   });
@@ -324,7 +343,7 @@ describe("leave public", () => {
       "--seed-path", join(dir, "seed.nk"),
       "--nats-config", join(dir, "local.conf"),
       "--plist", join(dir, "nats.plist"),
-    ]);
+    ], EMPTY_READER);
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain("nothing to do");
   });

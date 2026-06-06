@@ -40,7 +40,27 @@
  * Exit codes: 0 success · 1 operational failure · 2 usage error.
  */
 
-import { expandTilde } from "../../../common/config/loader";
+import { existsSync } from "fs";
+
+import { expandTilde, loadConfigWithAgents } from "../../../common/config/loader";
+
+import {
+  deriveJoinInputs,
+  deriveLeaveInputs,
+  tolerantReader,
+  type ConfigReader,
+} from "./network-derive";
+
+/**
+ * #753 — the production config reader: `loadConfigWithAgents` wrapped so a
+ * MISSING cortex.yaml is benign (a fully-flagged back-compat invocation works
+ * on a machine with no config), while a present-but-broken file still surfaces
+ * its parse/schema error. Tests inject their own reader through `dispatchNetwork`.
+ */
+const DEFAULT_READER: ConfigReader = tolerantReader(
+  loadConfigWithAgents,
+  (path) => existsSync(expandTilde(path)),
+);
 
 import { CliArgsError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
@@ -74,6 +94,13 @@ export { type ExitResult } from "./_shared/exit-result";
 
 type NetworkSubcommand = "join" | "leave" | "status";
 
+/**
+ * #753 — default cortex.yaml path the config-deriver reads when no `--config`
+ * is passed. Same canonical path as `cortex agents` (`agents.ts`). The
+ * one-liner `cortex network join <network>` reads here.
+ */
+const DEFAULT_CONFIG_PATH = "~/.config/cortex/cortex.yaml";
+
 const NETWORK_ID_RE = /^[a-z][a-z0-9-]*$/;
 const PRINCIPAL_ID_RE = /^[a-z][a-z0-9-]*$/;
 // S5 — capability id grammar (`<domain>.<entity>`, matches the schema's
@@ -86,6 +113,12 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
     join: {
       positionals: ["network"],
       flags: {
+        // #753 — `--config` points the deriver at the cortex.yaml to read
+        // principal / stack / seed / registry / nats-infra from. All other
+        // value-flags below are now OPTIONAL OVERRIDES: present ⇒ wins;
+        // absent ⇒ derived from this config (or convention). The one-liner is
+        // `cortex network join <network>` with NO other flags.
+        "--config": "value",
         "--principal": "value",
         "--stack": "value",
         "--registry-url": "value",
@@ -110,6 +143,8 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
     leave: {
       positionals: ["network"],
       flags: {
+        // #753 — same config-derivation seam as join (subset of inputs).
+        "--config": "value",
         "--principal": "value",
         "--stack": "value",
         "--registry-url": "value",
@@ -152,6 +187,27 @@ function optionalValueFlag(
 ): string | undefined {
   const v = flags[name];
   return typeof v === "string" ? v : undefined;
+}
+
+/**
+ * #753 — build a single-key override fragment for the config-deriver from a
+ * value-flag. When the flag is absent (or valueless) the fragment is empty, so
+ * the deriver falls through to config / convention. `key` defaults to the
+ * camelCase of the flag's tail; pass it explicitly where the names differ.
+ * Spreading the result keeps the override object free of `undefined` keys
+ * (which would otherwise shadow the config value with `undefined`).
+ */
+function readOverride(
+  flags: Record<string, string | true>,
+  flagName: string,
+  key?: string,
+): Record<string, string> {
+  const v = optionalValueFlag(flags, flagName);
+  if (v === undefined) return {};
+  // Default key: strip leading `--`, drop hyphens → `principal` from
+  // `--principal`. Callers pass an explicit `key` for the renamed inputs.
+  const resolvedKey = key ?? flagName.replace(/^--/, "").replace(/-/g, "");
+  return { [resolvedKey]: v };
 }
 
 /** Resolve the stack slug from `--stack` (`{principal}/{slug}`) or default. */
@@ -198,6 +254,7 @@ async function runJoin(
   networkId: string,
   flags: Record<string, string | true>,
   json: boolean,
+  load: ConfigReader,
 ): Promise<ExitResult> {
   // S5 (#739) — `join public` is the open-square opt-in, structurally distinct
   // from a federated join (no leaf, no creds/account, no peers). Route it to
@@ -209,24 +266,44 @@ async function runJoin(
   if (!NETWORK_ID_RE.test(networkId)) {
     return usageError("join", `network "${networkId}" must be lowercase alphanumeric + hyphen, letter-prefixed`, json);
   }
-  const principalRes = requireValueFlag(flags, "--principal");
-  if (!principalRes.ok) return usageError("join", principalRes.reason, json);
-  if (!PRINCIPAL_ID_RE.test(principalRes.value)) {
-    return usageError("join", `--principal "${principalRes.value}" must be lowercase alphanumeric + hyphen, letter-prefixed`, json);
-  }
-  const slugRes = resolveStackSlug(principalRes.value, optionalValueFlag(flags, "--stack"));
-  if (!slugRes.ok) return usageError("join", slugRes.reason, json);
 
-  // All six are required for a live join; resolve them typed so the stack
-  // identity carries real strings (no non-null assertions).
-  for (const required of ["--registry-url", "--seed-path", "--nats-config", "--plist"]) {
-    const r = requireValueFlag(flags, required);
-    if (!r.ok) return usageError("join", r.reason, json);
+  // #753 — derive principal / stack / seed / registry / nats-infra (config +
+  // convention), with each flag surviving as an optional override. Config-load
+  // errors (bad YAML, schema violations) surface as an op-error with the
+  // loader's message; a derivable-but-missing required value surfaces as a
+  // usage error naming the config field.
+  let derived;
+  try {
+    derived = deriveJoinInputs(
+      networkId,
+      {
+        ...readOverride(flags, "--principal"),
+        ...readOverride(flags, "--stack", "stack"),
+        ...readOverride(flags, "--seed-path", "seedPath"),
+        ...readOverride(flags, "--registry-url", "registryUrl"),
+        ...readOverride(flags, "--registry-pubkey", "registryPubkey"),
+        ...readOverride(flags, "--nats-config", "natsConfigPath"),
+        ...readOverride(flags, "--plist", "plistPath"),
+        ...readOverride(flags, "--account", "account"),
+        ...readOverride(flags, "--creds", "credsPath"),
+      },
+      expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH),
+      load,
+    );
+  } catch (err) {
+    return opError("join", `config load failed: ${err instanceof Error ? err.message : String(err)}`, json);
   }
-  const credsRes = requireValueFlag(flags, "--creds");
-  if (!credsRes.ok) return usageError("join", credsRes.reason, json);
-  const accountRes = requireValueFlag(flags, "--account");
-  if (!accountRes.ok) return usageError("join", accountRes.reason, json);
+  if (!derived.ok || derived.inputs === undefined) {
+    return usageError("join", derived.reason ?? "could not derive join inputs", json);
+  }
+  const inputs = derived.inputs;
+
+  // Grammar checks on the RESOLVED principal (derived or flagged).
+  if (!PRINCIPAL_ID_RE.test(inputs.principal)) {
+    return usageError("join", `principal "${inputs.principal}" must be lowercase alphanumeric + hyphen, letter-prefixed`, json);
+  }
+  const slugRes = resolveStackSlug(inputs.principal, inputs.stack);
+  if (!slugRes.ok) return usageError("join", slugRes.reason, json);
 
   const maxHopRaw = optionalValueFlag(flags, "--max-hop");
   let maxHop: number | undefined;
@@ -241,15 +318,15 @@ async function runJoin(
   if (!applyRes.ok) return usageError("join", applyRes.reason, json);
 
   const stack: JoiningStack = {
-    principalId: principalRes.value,
+    principalId: inputs.principal,
     stackSlug: slugRes.slug,
-    credentials: expandTilde(credsRes.value),
-    account: accountRes.value,
+    credentials: expandTilde(inputs.credsPath),
+    account: inputs.account,
     leafNode: optionalValueFlag(flags, "--leaf-node"),
     maxHop,
   };
 
-  const cfg = portsConfig(networkId, principalRes.value, slugRes.slug, flags);
+  const cfg = portsConfigFromInputs(networkId, inputs, slugRes.slug, flags);
   const ports = applyRes.apply ? buildLivePorts(cfg) : buildDryRunPorts(cfg);
 
   const res = await joinNetwork(networkId, stack, ports);
@@ -263,6 +340,7 @@ async function runLeave(
   networkId: string,
   flags: Record<string, string | true>,
   json: boolean,
+  load: ConfigReader,
 ): Promise<ExitResult> {
   // S5 (#739) — `leave public` reverses the open-square opt-in.
   if (networkId === "public") {
@@ -271,18 +349,40 @@ async function runLeave(
   if (!NETWORK_ID_RE.test(networkId)) {
     return usageError("leave", `network "${networkId}" must be lowercase alphanumeric + hyphen, letter-prefixed`, json);
   }
-  const principalRes = requireValueFlag(flags, "--principal");
-  if (!principalRes.ok) return usageError("leave", principalRes.reason, json);
-  const slugRes = resolveStackSlug(principalRes.value, optionalValueFlag(flags, "--stack"));
-  if (!slugRes.ok) return usageError("leave", slugRes.reason, json);
-  for (const required of ["--nats-config", "--plist"]) {
-    const r = requireValueFlag(flags, required);
-    if (!r.ok) return usageError("leave", r.reason, json);
+
+  // #753 — derive principal / stack / nats-config / plist (the leave subset).
+  let derived;
+  try {
+    derived = deriveLeaveInputs(
+      {
+        ...readOverride(flags, "--principal"),
+        ...readOverride(flags, "--stack", "stack"),
+        ...readOverride(flags, "--nats-config", "natsConfigPath"),
+        ...readOverride(flags, "--plist", "plistPath"),
+      },
+      expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH),
+      load,
+    );
+  } catch (err) {
+    return opError("leave", `config load failed: ${err instanceof Error ? err.message : String(err)}`, json);
   }
+  if (!derived.ok || derived.inputs === undefined) {
+    return usageError("leave", derived.reason ?? "could not derive leave inputs", json);
+  }
+  const inputs = derived.inputs;
+
+  const slugRes = resolveStackSlug(inputs.principal, inputs.stack);
+  if (!slugRes.ok) return usageError("leave", slugRes.reason, json);
   const applyRes = resolveApply(flags);
   if (!applyRes.ok) return usageError("leave", applyRes.reason, json);
 
-  const cfg = portsConfig(networkId, principalRes.value, slugRes.slug, flags);
+  const cfg: LivePortsConfig = {
+    networkId,
+    principalId: inputs.principal,
+    stackId: `${inputs.principal}/${slugRes.slug}`,
+    natsConfigPath: inputs.natsConfigPath,
+    plistPath: inputs.plistPath,
+  };
   const ports = applyRes.apply ? buildLivePorts(cfg) : buildDryRunPorts(cfg);
 
   const res = await leaveNetwork(networkId, ports);
@@ -437,6 +537,31 @@ function portsConfig(
   };
 }
 
+/**
+ * #753 — build the live/dry-run ports config from the DERIVED join inputs
+ * (config + convention + flag-overrides resolved upstream by the deriver),
+ * rather than re-reading raw flags. `--monitor-url` is the one read-only-status
+ * flag that doesn't participate in the join derivation, so it's read here.
+ */
+function portsConfigFromInputs(
+  networkId: string,
+  inputs: import("./network-derive").DerivedJoinInputs,
+  stackSlug: string,
+  flags: Record<string, string | true>,
+): LivePortsConfig {
+  return {
+    networkId,
+    principalId: inputs.principal,
+    stackId: `${inputs.principal}/${stackSlug}`,
+    registryUrl: inputs.registryUrl,
+    ...(inputs.registryPubkey !== undefined && { registryPubkey: inputs.registryPubkey }),
+    seedPath: inputs.seedPath,
+    natsConfigPath: inputs.natsConfigPath,
+    plistPath: inputs.plistPath,
+    monitorUrl: optionalValueFlag(flags, "--monitor-url"),
+  };
+}
+
 function renderFlowResult(
   sub: string,
   networkId: string,
@@ -478,11 +603,29 @@ function usageError(sub: string, reason: string, json: boolean): ExitResult {
   return { exitCode: 2, stdout: "", stderr };
 }
 
+/**
+ * #753 — operational failure (exit 1), distinct from a usage error (exit 2).
+ * Used when the config file itself fails to load/parse — that is an
+ * operational problem, not a CLI-grammar mistake.
+ */
+function opError(sub: string, reason: string, json: boolean): ExitResult {
+  const stderr = json
+    ? renderJson(envelopeError(reason, { subcommand: sub }))
+    : `cortex network ${sub}: ${reason}\n`;
+  return { exitCode: 1, stdout: "", stderr };
+}
+
 // =============================================================================
 // Dispatcher
 // =============================================================================
 
-export async function dispatchNetwork(argv: string[]): Promise<ExitResult> {
+export async function dispatchNetwork(
+  argv: string[],
+  // #753 — injectable config reader so CLI tests can derive from a fixture
+  // config without touching the principal's real `~/.config/cortex/`.
+  // Production callers omit it and the real `loadConfigWithAgents` is used.
+  load: ConfigReader = DEFAULT_READER,
+): Promise<ExitResult> {
   let parsed;
   try {
     parsed = parseSubcommandArgs(SPEC, argv);
@@ -508,9 +651,9 @@ export async function dispatchNetwork(argv: string[]): Promise<ExitResult> {
 
   switch (parsed.subcommand) {
     case "join":
-      return runJoin(parsed.positionals.network ?? "", parsed.flags, json);
+      return runJoin(parsed.positionals.network ?? "", parsed.flags, json, load);
     case "leave":
-      return runLeave(parsed.positionals.network ?? "", parsed.flags, json);
+      return runLeave(parsed.positionals.network ?? "", parsed.flags, json, load);
     case "status":
       return runStatus(parsed.flags, json);
   }
@@ -521,17 +664,22 @@ export async function dispatchNetwork(argv: string[]): Promise<ExitResult> {
 // =============================================================================
 
 function topLevelHelp(): string {
-  return `cortex network — one-command join to the Internet of Agentic Work (S4, #738)
+  return `cortex network — one-command join to the Internet of Agentic Work (S4, #738; #752/#753)
 
 Usage:
-  cortex network join  <network> --principal <id> --registry-url <url> \\
-                        --seed-path <p> --creds <p> --account <nkey-U> \\
-                        --nats-config <p> --plist <p> [--stack <id>] \\
-                        [--registry-pubkey <b64>] [--leaf-node <name>] \\
-                        [--max-hop <n>] [--apply] [--json]
-  cortex network leave  <network> --principal <id> --nats-config <p> \\
-                        --plist <p> [--stack <id>] [--apply] [--json]
-  cortex network status --principal <id> [--stack <id>] [--monitor-url <url>] [--json]
+  cortex network join  <network> [--apply] [--config <p>] [overrides…]
+  cortex network leave  <network> [--apply] [--config <p>] [overrides…]
+  cortex network status [--principal <id>] [--stack <id>] [--monitor-url <url>] [--json]
+
+The one-liner (#753): \`cortex network join <network>\` derives EVERYTHING from
+the loaded cortex.yaml — principal (principal.id), stack (stack.id), signing
+seed (stack.nkey_seed_path), registry (policy.federated.registry.{url,pubkey}),
+and the nats-server infra (stack.nats_infra.{config_path,plist_path,account,
+creds_path}). Pass --config <p> to point at a non-default cortex.yaml
+(default: ~/.config/cortex/cortex.yaml). The flags below are OPTIONAL
+OVERRIDES: a passed flag wins; otherwise the value derives from config (or, for
+creds, the convention ~/.config/nats/<network>.creds). A required value that is
+neither flagged nor derivable fails with a clear error naming the config field.
 
 Subcommands:
   join    Register → pull the SIGNED+VERIFIED network descriptor (DD-9; cached
@@ -559,16 +707,17 @@ Safety:
   intended actions). Pass --apply to execute for real. --apply and --dry-run
   are mutually exclusive.
 
-Flags:
-  --principal <id>        Local principal id (the {me} subject segment).
-  --stack <id>            {principal}/{slug}; defaults to <principal>/default.
-  --registry-url <url>    Network-registry base URL (control plane).
-  --registry-pubkey <b64> Pinned registry Ed25519 pubkey (DD-9); TOFU if omitted.
-  --seed-path <p>         Stack signing seed for registration (proof-of-possession).
-  --creds <p>             nats-server leaf .creds file (absolute).
-  --account <nkey-U>      Local NATS account the leaf binds to (A… nkey-U).
-  --nats-config <p>       nats-server config the plist loads (-c) + includes the leaf.
-  --plist <p>             nats-server launchd plist to ensure loads the config.
+Flags (all OPTIONAL OVERRIDES — derived from cortex.yaml when omitted; #753):
+  --config <p>            cortex.yaml to derive inputs from (default: ~/.config/cortex/cortex.yaml).
+  --principal <id>        Override principal.id (the {me} subject segment).
+  --stack <id>            Override stack.id; {principal}/{slug}; defaults to <principal>/default.
+  --registry-url <url>    Override policy.federated.registry.url.
+  --registry-pubkey <b64> Override policy.federated.registry.pubkey (DD-9); TOFU if omitted.
+  --seed-path <p>         Override stack.nkey_seed_path (proof-of-possession).
+  --creds <p>             Override stack.nats_infra.creds_path (default: ~/.config/nats/<network>.creds).
+  --account <nkey-U>      Override stack.nats_infra.account (A… nkey-U the leaf binds to).
+  --nats-config <p>       Override stack.nats_infra.config_path (nats-server -c config).
+  --plist <p>             Override stack.nats_infra.plist_path (nats-server launchd plist).
   --leaf-node <name>      Leaf connection name on the network entry (default: network id).
   --max-hop <n>           Hop budget written on the network (default: 1).
   --capabilities <csv>    (join public) Comma-separated capability ids to announce

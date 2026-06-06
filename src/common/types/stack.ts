@@ -43,6 +43,66 @@ import { z } from "zod/v4";
 import { NKEY_PUBKEY_REGEX } from "./nkey";
 
 // =============================================================================
+// Per-stack NATS infrastructure paths — #753 (one-liner `cortex network join`)
+// =============================================================================
+
+/**
+ * `stack.nats_infra` — the stable per-stack nats-server infrastructure paths +
+ * leaf account that `cortex network join`/`leave` need to render the leaf
+ * include file, ensure the plist loads it, and bind the leaf to the local
+ * account. These are set ONCE per stack (they describe where the stack's
+ * nats-server config + launchd plist live on disk and which account its leaf
+ * binds to), then every `cortex network join <network>` derives its
+ * `--nats-config` / `--plist` / `--account` / `--creds` from this block.
+ *
+ * #753 — the friction-removal block. Before this, every `cortex network join`
+ * had to pass `--nats-config --plist --account --creds` on the command line;
+ * these never change between joins on the same stack, so they belong in config.
+ * The headline `cortex network join <network>` derives all four from here, with
+ * the CLI flags surviving only as optional per-invocation overrides.
+ *
+ * Fully OPTIONAL — a stack that never federates omits the block entirely and
+ * the legacy fully-flagged `cortex network join` invocation still works
+ * unchanged (the derivation falls back to flags; a missing value that is
+ * neither in config nor on the flag fails with a clear, field-naming error).
+ */
+export const StackNatsInfraSchema = z.object({
+  /**
+   * Path to the nats-server config the launchd plist loads (`-c`). The leaf
+   * include file is rendered beside it and wired in via an `include`
+   * directive. Maps to the `--nats-config` join flag. Leading `~/` expands to
+   * `$HOME` at the CLI (same `expandTilde` treatment as `nkey_seed_path`).
+   */
+  config_path: z.string().min(1).optional(),
+  /**
+   * Path to the nats-server launchd plist `cortex network join` ensures loads
+   * the config (and reloads on join/leave). Maps to the `--plist` flag.
+   */
+  plist_path: z.string().min(1).optional(),
+  /**
+   * The local NATS account (`A…` nkey-U) the network's leaf binds to. Maps to
+   * the `--account` flag. Same 56-char U-prefixed base32 NKey grammar as every
+   * other NKey on the schema, but the prefix is `A` (account) not `U` (user) —
+   * validated softly here (length + alphabet) since the leaf account is an
+   * account-class key, and strict prefix discrimination happens in the leaf
+   * renderer.
+   */
+  account: z.string().regex(
+    /^A[A-Z0-9]{55}$/,
+    "stack.nats_infra.account must be an account-class NKey (A-prefixed, 56 chars total)",
+  ).optional(),
+  /**
+   * Path to the leaf `.creds` file for the network connection. Maps to the
+   * `--creds` flag. OPTIONAL even within the block: when omitted, the join
+   * derives the convention default `~/.config/nats/<network>.creds`
+   * (per-network creds file). Declare here only to override the convention.
+   */
+  creds_path: z.string().min(1).optional(),
+}).strict();
+
+export type StackNatsInfra = z.infer<typeof StackNatsInfraSchema>;
+
+// =============================================================================
 // Schema
 // =============================================================================
 
@@ -130,6 +190,14 @@ export const StackConfigSchema = z.object({
    * `loadStackSigningKey` seam.
    */
   nkey_seed_path: z.string().optional(),
+  /**
+   * #753 — per-stack nats-server infrastructure paths + leaf account that
+   * `cortex network join`/`leave` derive their `--nats-config` / `--plist` /
+   * `--account` / `--creds` inputs from. Stable per stack; set once. Fully
+   * optional — omitting it keeps the legacy fully-flagged join working
+   * unchanged. See {@link StackNatsInfraSchema}.
+   */
+  nats_infra: StackNatsInfraSchema.optional(),
 });
 
 export type StackConfig = z.infer<typeof StackConfigSchema>;

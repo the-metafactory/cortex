@@ -82,6 +82,27 @@ stack:
   # principal=…`) into the field after first boot for the consistency
   # check to kick in.
   nkey_pub: UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA  # <REPLACE_ME>: paste the U-prefixed pubkey from the seed
+  # ---------------------------------------------------------------------------
+  # nats_infra — per-stack nats-server infra paths + leaf account (#753)
+  # ---------------------------------------------------------------------------
+  # The stable per-stack values `cortex network join <network>` derives its
+  # --nats-config / --plist / --account / --creds from, so joining a federation
+  # network is a true one-liner: `cortex network join metafactory --apply`.
+  # Set ONCE per stack; the CLI flags survive only as optional per-invocation
+  # overrides. Fully OPTIONAL — omit the block and pass the flags by hand
+  # (legacy fully-flagged join still works). arc-populating this block at
+  # install is a follow-up; for now set it once by hand.
+  # nats_infra:
+  #   # nats-server config the launchd plist loads (-c). The per-network leaf
+  #   # include file is rendered beside it and wired in via `include`.
+  #   config_path: ~/.config/nats/local.conf
+  #   # launchd plist `cortex network join` ensures loads the config.
+  #   plist_path: ~/Library/LaunchAgents/ai.meta-factory.nats.plist
+  #   # Local NATS ACCOUNT (A…-prefixed nkey-U) the network's leaf binds to.
+  #   account: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+  #   # OPTIONAL — leaf .creds file. When omitted, the join uses the convention
+  #   # ~/.config/nats/<network>.creds (per-network creds file).
+  #   creds_path: ~/.config/nats/metafactory.creds
 
 # -----------------------------------------------------------------------------
 # security — TC-0 unified posture toggles (#628). OPTIONAL; every layer
@@ -212,6 +233,14 @@ policy:
   # identity are intentionally not accepted here.
   #
   # federated:
+  #   # registry — the network-registry endpoint + DD-9 trust pin.
+  #   # `cortex network join <network>` (#753) derives its --registry-url /
+  #   # --registry-pubkey from here, so the one-liner needs no registry flags.
+  #   registry:
+  #     url: https://registry.meta-factory.ai
+  #     # OPTIONAL pinned Ed25519 pubkey (base64, 44 chars). Omit for TOFU on
+  #     # first boot; paste the pinned value here for zero-TOFU.
+  #     # pubkey: AAAA…=
   #   networks:
   #     - id: research-collab
   #       leaf_node: nats-leaf-research   # routing label / link-pool key

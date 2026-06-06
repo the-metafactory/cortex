@@ -108,6 +108,13 @@ import type { SurfaceGateway } from "./gateway/surface-gateway";
 import { createDispatchListener, type DispatchListener } from "./runner/dispatch-listener";
 import { WorklogManager } from "./runner/worklog-manager";
 
+// #752 — the `network` + `provision-stack` subcommand dispatchers. Registered
+// as passthrough commander subcommands below so `cortex network join …` and
+// `cortex provision-stack register …` work directly (no `bun src/...` prefix).
+// These do NOT boot the daemon — only `start` does.
+import { dispatchNetwork } from "./cli/cortex/commands/network";
+import { dispatchProvisionStack } from "./cli/cortex/commands/provision-stack";
+
 import { CloudPublisher } from "./taps/cc-events/cloud-publisher";
 import {
   RegistryClient,
@@ -2901,7 +2908,7 @@ export async function startCortex(
  * well-defined. Suppressing the unsafe-* family inside this function is
  * the boundary; production callers see the typed return signature.
  */
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unnecessary-type-assertion */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unnecessary-type-assertion */
 /**
  * cortex#338 — resolve the JetStreamManager-shaped provisioning
  * capability needed by the review-stream + per-agent durable boot
@@ -3002,7 +3009,7 @@ async function setupDashboard(
   const mcDb = (api.getDb() ?? null) as BunDatabase | null;
   return { api, usageMonitor, mcDb };
 }
-/* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unnecessary-type-assertion */
+/* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unnecessary-type-assertion */
 
 /** Subscribe a Discord adapter to the published-events JSONL stream so legacy
  *  `#agent-log` and per-task worklog threads keep working. Mirrors grove-bot's
@@ -3272,6 +3279,11 @@ if (import.meta.main) {
   const program = new Command()
     .name("cortex")
     .description("Cortex — the M7 conscious processing surface agent")
+    // #752 — required so the `network` / `provision-stack` passthrough
+    // subcommands below can call `.passThroughOptions()`: commander stops
+    // interpreting options after the subcommand name and hands the raw
+    // remaining argv to the subcommand's own `[args...]` parser.
+    .enablePositionalOptions()
     .version(getVersion());
 
   program
@@ -3387,6 +3399,42 @@ if (import.meta.main) {
         console.log(`cortex: stale PID file ${pidFile}`);
         unlinkSync(pidFile);
       }
+    });
+
+  // #752 — passthrough subcommands. The module dispatchers
+  // (`dispatchNetwork` / `dispatchProvisionStack`) own their own arg parsing
+  // via `parseSubcommandArgs(SPEC, argv)`, so commander must hand them the raw
+  // remaining argv UNTOUCHED: no option interpretation, no `--help`
+  // interception, no unknown-option rejection. The variadic `[args...]`
+  // argument + `.allowUnknownOption()` + `passThroughOptions()` +
+  // `.helpOption(false)` achieve that. Neither boots the daemon — only `start`
+  // does — so `cortex network join …` runs the CLI flow and exits.
+  program
+    .command("network")
+    .description("Manage federation network membership (join / leave / status)")
+    .argument("[args...]", "network subcommand + flags (see `cortex network --help`)")
+    .allowUnknownOption()
+    .passThroughOptions()
+    .helpOption(false)
+    .action(async (args: string[]) => {
+      const result = await dispatchNetwork(args);
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      process.exit(result.exitCode);
+    });
+
+  program
+    .command("provision-stack")
+    .description("Provision a stack signing identity (generate / claim / register)")
+    .argument("[args...]", "provision-stack subcommand + flags (see `cortex provision-stack --help`)")
+    .allowUnknownOption()
+    .passThroughOptions()
+    .helpOption(false)
+    .action(async (args: string[]) => {
+      const result = await dispatchProvisionStack(args);
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      process.exit(result.exitCode);
     });
 
   program.parse();
