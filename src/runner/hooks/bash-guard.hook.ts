@@ -192,10 +192,10 @@ function rejectsChaining(command: string): boolean {
   if (command.includes("`")) return true;
   // Redirection — can clobber files or read secrets.
   if (/[<>]/.test(command)) return true;
-  // A single pipe `|` that is NOT one half of the `||` chain operator. We
+  // A single pipe `|` that is NOT one half of the `||` chain token. We
   // collapse every `||` to a placeholder first, then look for a remaining `|`.
   if (command.replace(/\|\|/g, "").includes("|")) return true;
-  // A single `&` that is NOT part of the `&&` chain operator (i.e. background
+  // A single `&` that is NOT part of the `&&` chain token (i.e. background
   // / job-control). Same collapse trick.
   if (command.replace(/&&/g, "").includes("&")) return true;
   return false;
