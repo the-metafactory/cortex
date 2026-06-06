@@ -18,6 +18,7 @@
 
 import type {
   Capability,
+  NetworkRegistration,
   RegistrationClaim,
   SignedRegistration,
   StackIdentity,
@@ -294,6 +295,67 @@ export function validateRegistrationClaim(
       capabilities,
       issued_at: c.issued_at as string,
       nonce: c.nonce as string,
+    },
+  };
+}
+
+/**
+ * S2.5 (#745) — validate the `POST /networks/{id}/register` body that seeds a
+ * network's topology (`hub_url` + `leaf_port`). Hand-rolled, same posture as
+ * the principal validators (no Zod in the Worker bundle).
+ *
+ * Cross-field rules:
+ *   - `network_id` MUST equal the URL path param (no forged-attribution seed).
+ *   - `hub_url` is a non-empty string. We do NOT over-constrain the scheme here
+ *     (the leaf renderer in S3 parses/validates the dial URL); an empty value
+ *     is the only structural error — it would make the descriptor useless to
+ *     the S1 client (which rejects an empty `hub_url`).
+ *   - `leaf_port` is an integer in the TCP port range (1..65535).
+ */
+export function validateNetworkRegistration(
+  body: unknown,
+  expectedNetworkId: string,
+): { ok: true; registration: NetworkRegistration } | { ok: false; errors: ValidationError[] } {
+  const errors: ValidationError[] = [];
+
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return { ok: false, errors: [{ field: "body", message: "must be an object" }] };
+  }
+  const b = body as Record<string, unknown>;
+
+  if (typeof b.network_id !== "string" || !isValidNetworkId(b.network_id)) {
+    errors.push({
+      field: "network_id",
+      message: "must be lowercase alphanumeric + hyphen, letter-prefixed",
+    });
+  } else if (b.network_id !== expectedNetworkId) {
+    errors.push({
+      field: "network_id",
+      message: `body network_id "${b.network_id}" does not match path "${expectedNetworkId}"`,
+    });
+  }
+
+  if (typeof b.hub_url !== "string" || b.hub_url.length === 0 || b.hub_url.length > 512) {
+    errors.push({ field: "hub_url", message: "must be a non-empty string (max 512 chars)" });
+  }
+
+  if (
+    typeof b.leaf_port !== "number" ||
+    !Number.isInteger(b.leaf_port) ||
+    b.leaf_port < 1 ||
+    b.leaf_port > 65535
+  ) {
+    errors.push({ field: "leaf_port", message: "must be an integer in 1..65535" });
+  }
+
+  if (errors.length > 0) return { ok: false, errors };
+
+  return {
+    ok: true,
+    registration: {
+      network_id: b.network_id as string,
+      hub_url: b.hub_url as string,
+      leaf_port: b.leaf_port as number,
     },
   };
 }

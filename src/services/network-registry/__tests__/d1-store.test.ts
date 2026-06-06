@@ -118,6 +118,63 @@ describe("D1RegistryStore", () => {
 });
 
 // =============================================================================
+// D1RegistryStore — network topology round-trips (S2.5 #745)
+// =============================================================================
+
+describe("D1RegistryStore — networks (S2.5)", () => {
+  test("putNetwork then getNetwork round-trips the topology record", async () => {
+    const store = new D1RegistryStore(asD1(new MockD1()));
+    const written = await store.putNetwork(
+      "research-collab",
+      "tls://hub.meta-factory.ai:7422",
+      7422,
+    );
+    expect(written.network_id).toBe("research-collab");
+    expect(written.hub_url).toBe("tls://hub.meta-factory.ai:7422");
+    expect(written.leaf_port).toBe(7422);
+    expect(written.updated_at.length).toBeGreaterThan(0);
+
+    const got = await store.getNetwork("research-collab");
+    expect(got).toBeDefined();
+    expect(got!.hub_url).toBe("tls://hub.meta-factory.ai:7422");
+    expect(got!.leaf_port).toBe(7422);
+    expect(got!.updated_at).toBe(written.updated_at);
+  });
+
+  test("getNetwork returns undefined for an unseeded network", async () => {
+    const store = new D1RegistryStore(asD1(new MockD1()));
+    expect(await store.getNetwork("nope")).toBeUndefined();
+  });
+
+  test("putNetwork UPSERTs in place (no duplicate row)", async () => {
+    const shared = new MockD1();
+    const store = new D1RegistryStore(asD1(shared));
+    await store.putNetwork("research-collab", "tls://old:7422", 7422);
+    await store.putNetwork("research-collab", "tls://new:7500", 7500);
+    expect(shared.networks.size).toBe(1);
+    const got = await store.getNetwork("research-collab");
+    expect(got!.hub_url).toBe("tls://new:7500");
+    expect(got!.leaf_port).toBe(7500);
+  });
+
+  test("reset clears networks too", async () => {
+    const store = new D1RegistryStore(asD1(new MockD1()));
+    await store.putNetwork("n", "tls://h:7422", 7422);
+    await store.reset();
+    expect(await store.getNetwork("n")).toBeUndefined();
+  });
+
+  test("in-memory backend round-trips putNetwork/getNetwork", async () => {
+    const store = new InMemoryRegistryStore();
+    await store.putNetwork("research-collab", "tls://h:7422", 7422);
+    const got = await store.getNetwork("research-collab");
+    expect(got!.leaf_port).toBe(7422);
+    await store.reset();
+    expect(await store.getNetwork("research-collab")).toBeUndefined();
+  });
+});
+
+// =============================================================================
 // D1NonceCache — durability across isolates
 // =============================================================================
 

@@ -28,6 +28,7 @@
 import type {
   Capability,
   CapabilityHit,
+  NetworkRecord,
   NetworkRoster,
   PrincipalRecord,
   StackIdentity,
@@ -104,6 +105,24 @@ export interface RegistryStore {
    * SQL.
    */
   listPrincipals(): Promise<PrincipalRecord[]>;
+
+  /**
+   * S2.5 (#745) — upsert a network's topology record (`hub_url` /
+   * `leaf_port`). Backs `POST /networks/{id}/register`. Returns the post-write
+   * view. The route layer has already enforced grammar; the store only
+   * persists.
+   */
+  putNetwork(
+    networkId: string,
+    hubUrl: string,
+    leafPort: number,
+  ): Promise<NetworkRecord>;
+
+  /**
+   * S2.5 (#745) — fetch a network's topology record, or `undefined` if the
+   * network has never been seeded. Backs the 404 on `GET /networks/{id}`.
+   */
+  getNetwork(networkId: string): Promise<NetworkRecord | undefined>;
 
   /** Test/admin helper. Not exposed via HTTP. */
   reset(): Promise<void>;
@@ -219,6 +238,26 @@ export class D1NonceCache implements NonceCache {
 
 export class InMemoryRegistryStore implements RegistryStore {
   private readonly principals = new Map<string, PrincipalRecord>();
+  private readonly networks = new Map<string, NetworkRecord>();
+
+  async putNetwork(
+    networkId: string,
+    hubUrl: string,
+    leafPort: number,
+  ): Promise<NetworkRecord> {
+    const record: NetworkRecord = {
+      network_id: networkId,
+      hub_url: hubUrl,
+      leaf_port: leafPort,
+      updated_at: new Date().toISOString(),
+    };
+    this.networks.set(networkId, record);
+    return record;
+  }
+
+  async getNetwork(networkId: string): Promise<NetworkRecord | undefined> {
+    return this.networks.get(networkId);
+  }
 
   async putPrincipal(
     principalId: string,
@@ -247,6 +286,7 @@ export class InMemoryRegistryStore implements RegistryStore {
 
   async reset(): Promise<void> {
     this.principals.clear();
+    this.networks.clear();
   }
 }
 
@@ -320,6 +360,43 @@ export class D1RegistryStore implements RegistryStore {
     return row ? rowToRecord(row) : undefined;
   }
 
+  async putNetwork(
+    networkId: string,
+    hubUrl: string,
+    leafPort: number,
+  ): Promise<NetworkRecord> {
+    const record: NetworkRecord = {
+      network_id: networkId,
+      hub_url: hubUrl,
+      leaf_port: leafPort,
+      updated_at: new Date().toISOString(),
+    };
+    // UPSERT: re-seeding a network replaces the topology row in place.
+    // Parameterised — no value is string-interpolated into SQL.
+    await this.db
+      .prepare(
+        `INSERT INTO networks (network_id, hub_url, leaf_port, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(network_id) DO UPDATE SET
+           hub_url    = excluded.hub_url,
+           leaf_port  = excluded.leaf_port,
+           updated_at = excluded.updated_at`,
+      )
+      .bind(networkId, hubUrl, leafPort, record.updated_at)
+      .run();
+    return record;
+  }
+
+  async getNetwork(networkId: string): Promise<NetworkRecord | undefined> {
+    const row = await this.db
+      .prepare(
+        "SELECT network_id, hub_url, leaf_port, updated_at FROM networks WHERE network_id = ?",
+      )
+      .bind(networkId)
+      .first<NetworkRow>();
+    return row ? rowToNetworkRecord(row) : undefined;
+  }
+
   async listPrincipals(): Promise<PrincipalRecord[]> {
     const res = await this.db
       .prepare(
@@ -331,6 +408,7 @@ export class D1RegistryStore implements RegistryStore {
 
   async reset(): Promise<void> {
     await this.db.prepare("DELETE FROM principals").run();
+    await this.db.prepare("DELETE FROM networks").run();
   }
 }
 
@@ -341,6 +419,24 @@ interface PrincipalRow {
   stacks: string;
   capabilities: string;
   updated_at: string;
+}
+
+/** Raw column shape for a `networks` row. */
+interface NetworkRow {
+  network_id: string;
+  hub_url: string;
+  /** SQLite stores the INTEGER column; D1 returns it as a JS number. */
+  leaf_port: number;
+  updated_at: string;
+}
+
+function rowToNetworkRecord(row: NetworkRow): NetworkRecord {
+  return {
+    network_id: row.network_id,
+    hub_url: row.hub_url,
+    leaf_port: row.leaf_port,
+    updated_at: row.updated_at,
+  };
 }
 
 /**
@@ -466,6 +562,23 @@ export function rosterFromPrincipals(
     }
   }
   return { network_id: networkId, members };
+}
+
+/**
+ * S2.5 (#745) — derive a network's lightweight membership list (principal ids)
+ * for the descriptor. Reuses the SAME implicit-membership rule as
+ * {@link rosterFromPrincipals} (a principal is "in" network X if any announced
+ * capability lists X) so the descriptor's `members[]` can never disagree with
+ * `/roster`. Returns sorted, de-duplicated principal ids for a stable,
+ * canonical-friendly response.
+ */
+export function membersFromPrincipals(
+  principals: PrincipalRecord[],
+  networkId: string,
+): string[] {
+  return rosterFromPrincipals(principals, networkId)
+    .members.map((m) => m.principal_id)
+    .sort();
 }
 
 /**

@@ -32,6 +32,13 @@ interface PrincipalRow {
   updated_at: string;
 }
 
+interface NetworkRow {
+  network_id: string;
+  hub_url: string;
+  leaf_port: number;
+  updated_at: string;
+}
+
 /** What D1's `.run()` returns — we only populate `meta.changes`. */
 interface RunResult {
   meta: { changes: number };
@@ -74,6 +81,7 @@ class MockStatement {
 
 export class MockD1 {
   readonly principals = new Map<string, PrincipalRow>();
+  readonly networks = new Map<string, NetworkRow>();
   readonly nonces = new Map<string, number>();
 
   /** Count of writes, exposed so tests can assert query activity if needed. */
@@ -140,6 +148,31 @@ export class MockD1 {
       return { meta: { changes: n } };
     }
 
+    // networks: UPSERT (S2.5)
+    if (sql.startsWith("INSERT INTO networks")) {
+      const [networkId, hubUrl, leafPort, updatedAt] = args as [
+        string,
+        string,
+        number,
+        string,
+      ];
+      this.networks.set(networkId, {
+        network_id: networkId,
+        hub_url: hubUrl,
+        leaf_port: leafPort,
+        updated_at: updatedAt,
+      });
+      // An UPSERT always touches exactly one row (insert or update).
+      return { meta: { changes: 1 } };
+    }
+
+    // networks: reset (S2.5)
+    if (sql === "DELETE FROM networks") {
+      const n = this.networks.size;
+      this.networks.clear();
+      return { meta: { changes: n } };
+    }
+
     throw new Error(`MockD1: unhandled write statement: ${sql}`);
   }
 
@@ -156,6 +189,13 @@ export class MockD1 {
     // principals: SELECT all
     if (sql.startsWith("SELECT") && sql.includes("FROM principals")) {
       return [...this.principals.values()];
+    }
+
+    // networks: SELECT one by id (S2.5)
+    if (sql.includes("FROM networks WHERE network_id =")) {
+      const id = args[0] as string;
+      const row = this.networks.get(id);
+      return row ? [row] : [];
     }
 
     throw new Error(`MockD1: unhandled read statement: ${sql}`);

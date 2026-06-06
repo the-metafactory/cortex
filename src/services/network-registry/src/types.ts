@@ -144,6 +144,86 @@ export interface NetworkRoster {
 }
 
 /**
+ * S2.5 (Network Join Control Plane, #745 · epic #733 · spec DD-12) — the
+ * network **descriptor** payload carried by `GET /networks/{network_id}`
+ * inside a `SignedAssertion<NetworkDescriptor>`.
+ *
+ * **DD-12 — hub via registry-served descriptor.** The hub's reachability
+ * (`hub_url` + `leaf_port`) is served by the registry, NOT pinned in each
+ * peer's local config, so the hub can relocate without every peer re-editing
+ * `cortex.yaml`. The join command (S4) and the leaf renderer (S3) derive the
+ * nats-server leaf remote from this descriptor.
+ *
+ * Like every registry GET, the descriptor is wrapped in a `SignedAssertion`
+ * and the cortex client verifies it against the pinned registry pubkey before
+ * trusting it (DD-9).
+ *
+ * **Source-of-truth split.** `hub_url` + `leaf_port` come from a stored
+ * {@link NetworkRecord} (admin-seeded topology); `members[]` is the
+ * lightweight membership view DERIVED from the principal roster at read time
+ * (the same implicit membership the `/roster` route computes — a principal is
+ * "in" a network if any announced capability targets it). The full per-peer
+ * roster (with pubkeys + stacks) remains `GET /networks/{id}/roster`.
+ *
+ * This shape MUST stay structurally compatible with the cortex-side
+ * `NetworkDescriptor` in `src/common/registry/types.ts` (the S1 client's
+ * `parseDescriptor` reads exactly `network_id` / `hub_url` (non-empty string) /
+ * `leaf_port` (integer) / `members` (string[])). The service is the source of
+ * truth for the schema; the client mirrors it.
+ */
+export interface NetworkDescriptor {
+  /** Network id — letter-prefixed lowercase-alphanumeric + hyphen. */
+  network_id: string;
+  /**
+   * The hub's leaf-node dial URL (e.g. `tls://hub.meta-factory.ai:7422`).
+   * Where a joining stack's nats-server leaf remote points. DD-12: relocatable
+   * via the registry, never hand-pinned.
+   */
+  hub_url: string;
+  /**
+   * The hub's leaf-node listen port (e.g. 7422). Carried alongside `hub_url`
+   * so the leaf renderer can validate / reconstruct the remote independently
+   * of URL parsing.
+   */
+  leaf_port: number;
+  /**
+   * Principal ids that are members of this network — the lightweight
+   * membership view. Derived from the roster (implicit membership via announced
+   * capabilities), not stored on the network record.
+   */
+  members: string[];
+}
+
+/**
+ * S2.5 (#745) — the stored network-topology record backing the descriptor's
+ * `hub_url` + `leaf_port`. Admin-seeded via `POST /networks/{id}/register`
+ * and read by `GET /networks/{id}`. `members[]` is NOT stored here — it is
+ * derived from the principal roster at descriptor-read time.
+ */
+export interface NetworkRecord {
+  network_id: string;
+  /** The hub's leaf-node dial URL. */
+  hub_url: string;
+  /** The hub's leaf-node listen port. */
+  leaf_port: number;
+  /** ISO-8601 UTC; when the topology was last (re-)seeded. */
+  updated_at: string;
+}
+
+/**
+ * The body an admin posts to `POST /networks/{network_id}/register` to
+ * seed/update a network's topology. Narrow + hand-validated (no Zod) like the
+ * rest of the registry; the route enforces the network-id path match and the
+ * `hub_url` / `leaf_port` grammar before the store upsert.
+ */
+export interface NetworkRegistration {
+  /** Must match the URL path parameter. */
+  network_id: string;
+  hub_url: string;
+  leaf_port: number;
+}
+
+/**
  * A capability search hit. `GET /capabilities?query=foo` returns the
  * matching capability ids alongside the principal that announced
  * them. The caller resolves principal → pubkey via a follow-up

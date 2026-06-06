@@ -13,6 +13,8 @@ Refs cortex#116 (Phase D umbrella) â†’ `docs/plan-internet-of-agentic-work.md` Â
 |--------|---------------------------------------|---------------------------------------------------|
 | POST   | `/principals/{principal_id}/register` | Principal publishes signed assertion (D.4.2)      |
 | GET    | `/principals/{principal_id}`          | Peers query principal's current pubkey + stacks   |
+| POST   | `/networks/{network_id}/register`     | Admin-seed network topology (`hub_url`/`leaf_port`, S2.5) |
+| GET    | `/networks/{network_id}`              | Signed network descriptor (`hub_url`/`leaf_port`/`members[]`, S2.5 DD-12) |
 | GET    | `/networks/{network_id}/roster`       | Who's in this network                             |
 | GET    | `/capabilities?query=<substring>`     | Capability search across networks                 |
 | GET    | `/registry/pubkey`                    | Returns the registry's Ed25519 pubkey (pin this)  |
