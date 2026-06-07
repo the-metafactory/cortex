@@ -37,69 +37,13 @@ import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { MyelinSubscriber } from "../bus/myelin/subscriber";
 import { formatDispatchLifecycle } from "./envelope-renderer";
+import {
+  deliverRoutedResponse,
+  LIFECYCLE_TYPE_PREFIX,
+  readResponseRouting,
+} from "./response-routing-delivery";
+export { dispatchCorrelationKey } from "./response-routing-delivery";
 import type { PlatformAdapter, ResponseTarget } from "./types";
-
-/**
- * Response-routing shape as it appears on a lifecycle envelope's payload
- * (snake_case wire idiom). Structurally the same triple a `ResponseTarget`
- * carries. Mirrors `ResponseRouting` in `src/bus/dispatch-events.ts`; kept
- * local to the sink's parse so the consumer doesn't depend on the runner's
- * publish-side type for a read-only decode.
- */
-interface WireResponseRouting {
-  adapter_instance: string;
-  channel_id: string;
-  thread_id?: string;
-}
-
-/**
- * Parse `payload.response_routing` into a typed routing record, or `null`
- * when the envelope carried none / it was malformed. Bus-peer and Offer
- * dispatches have no originating surface address, so a missing field is a
- * normal, non-error case — the sink simply ignores those envelopes.
- */
-function readResponseRouting(envelope: Envelope): WireResponseRouting | null {
-  const raw = envelope.payload.response_routing;
-  if (raw === null || typeof raw !== "object") return null;
-  const r = raw as Record<string, unknown>;
-  if (typeof r.adapter_instance !== "string" || typeof r.channel_id !== "string") {
-    return null;
-  }
-  return {
-    adapter_instance: r.adapter_instance,
-    channel_id: r.channel_id,
-    ...(typeof r.thread_id === "string" && { thread_id: r.thread_id }),
-  };
-}
-
-/**
- * cortex#721 — derive the per-dispatch correlation key for progress keying.
- *
- * The Discord adapter keys its "working…" progress placeholder on
- * `target.sessionId` (`progressKey` = `sessionId ? scope:sessionId : scope`).
- * The in-process dispatch-handler path (cortex#708/#713) threads the inbound
- * correlation onto `sessionId`; the BUS sink path never did, so every
- * dispatch's `started` progress fell back to channel-scope and collapsed
- * onto ONE edited-in-place message.
- *
- * The lifecycle envelope already carries a per-dispatch correlation: the
- * UUID-shaped `envelope.correlation_id` (set to the task UUID by
- * `dispatch-events.buildBaseEnvelope`), with `payload.task_id` as the
- * belt-and-braces fallback (the same `correlation_id ?? task_id` join the
- * runner uses). Returns `undefined` only when neither is present — then
- * channel-scoped keying is the correct (pre-#708) behaviour.
- */
-export function dispatchCorrelationKey(envelope: Envelope): string | undefined {
-  if (typeof envelope.correlation_id === "string" && envelope.correlation_id.length > 0) {
-    return envelope.correlation_id;
-  }
-  const taskId = envelope.payload.task_id;
-  if (typeof taskId === "string" && taskId.length > 0) return taskId;
-  return undefined;
-}
-
-/** Lifecycle event types the sink delivers. */
-const LIFECYCLE_TYPE_PREFIX = "dispatch.task.";
 
 export interface DispatchSinkOptions {
   /**
@@ -288,44 +232,23 @@ export function createDispatchSink(opts: DispatchSinkOptions): DispatchSink {
       ...(routing.thread_id !== undefined && { threadId: routing.thread_id }),
     };
 
-    // cortex#721 — key per-dispatch progress on the lifecycle envelope's
-    // correlation id so two dispatches in the same channel/thread each get
-    // their OWN "working…" placeholder instead of editing one shared message.
-    // `sessionId` rides ONLY the progress target: `postResponse` ignores it,
-    // and only `sendProgress`/`clearProgress` read it via the adapter's
-    // `progressKey`. The terminal branch MUST reuse this exact key to delete
-    // the placeholder the `started` branch created (cortex#731).
-    const correlationKey = dispatchCorrelationKey(envelope);
-    const progressTarget: ResponseTarget =
-      correlationKey !== undefined
-        ? { ...target, sessionId: correlationKey }
-        : target;
-
-    try {
-      if (envelope.type === "dispatch.task.started") {
-        // A `started` event is a progress/typing indicator, not a final
-        // reply — edit-in-place so the terminal `completed`/`failed`
-        // reply is the durable message in the channel.
-        await adapter.sendProgress(progressTarget, text);
-        return;
-      }
-      // `completed` / `failed` / `aborted` — the terminal reply. Clear the
-      // `started` "working…" placeholder first (same correlation-keyed
-      // target), else it orphans above the durable reply (cortex#731), then
-      // post the reply.
-      await adapter.clearProgress(progressTarget);
-      await adapter.postResponse(target, text);
-    } catch (err) {
-      // A platform post failure must not crash the fan-out. Log to
-      // stderr (per CLAUDE.md no-empty-catch rule) and move on; the
-      // dispatch already completed on the bus, only the surface delivery
-      // failed (rate limit, deleted channel, etc.).
-      process.stderr.write(
-        `cortex: dispatch-sink postResponse failed (instance=${routing.adapter_instance}, ` +
-          `channel=${routing.channel_id}, type=${envelope.type}): ` +
-          `${err instanceof Error ? err.message : String(err)}\n`,
-      );
-    }
+    await deliverRoutedResponse({
+      envelope,
+      adapter,
+      target,
+      text,
+      onError: (err) => {
+        // A platform post failure must not crash the fan-out. Log to
+        // stderr (per CLAUDE.md no-empty-catch rule) and move on; the
+        // dispatch already completed on the bus, only the surface delivery
+        // failed (rate limit, deleted channel, etc.).
+        process.stderr.write(
+          `cortex: dispatch-sink postResponse failed (instance=${routing.adapter_instance}, ` +
+            `channel=${routing.channel_id}, type=${envelope.type}): ` +
+            `${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      },
+    });
   }
 
   return {

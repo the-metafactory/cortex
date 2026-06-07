@@ -56,46 +56,18 @@
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { MyelinSubscriber } from "../bus/myelin/subscriber";
-import { dispatchCorrelationKey } from "./dispatch-sink";
 import {
   formatDispatchLifecycle,
   formatReviewVerdict,
 } from "./envelope-renderer";
+import {
+  deliverRoutedResponse,
+  LIFECYCLE_TYPE_PREFIX,
+  readLogicalRouting,
+  type WireLogicalRouting,
+} from "./response-routing-delivery";
 import type { PlatformAdapter, ResponseTarget } from "./types";
 
-/**
- * The logical response-routing shape as it appears on a review envelope's
- * payload. Mirrors `LogicalResponseRouting` in `src/bus/dispatch-events.ts`;
- * kept local to the sink's parse so the consumer doesn't depend on the
- * publish-side type for a read-only decode.
- */
-interface WireLogicalRouting {
-  surface: string;
-  channel: string;
-  thread?: string;
-}
-
-/**
- * Parse `payload.response_routing` into a typed logical routing record, or
- * `null` when the envelope carried none / it was malformed. Bus-peer /
- * pilot-only / Offer dispatches have no originating surface address, so a
- * missing field is a normal, non-error case — the sink ignores those.
- */
-function readLogicalRouting(envelope: Envelope): WireLogicalRouting | null {
-  const raw = envelope.payload.response_routing;
-  if (raw === null || typeof raw !== "object") return null;
-  const r = raw as Record<string, unknown>;
-  if (typeof r.surface !== "string" || typeof r.channel !== "string") {
-    return null;
-  }
-  return {
-    surface: r.surface,
-    channel: r.channel,
-    ...(typeof r.thread === "string" && { thread: r.thread }),
-  };
-}
-
-const LIFECYCLE_TYPE_PREFIX = "dispatch.task.";
 const VERDICT_TYPE_PREFIX = "review.verdict.";
 // G-1113.ML.4 — the attention notification stream (system.attention.{opened,resolved}).
 const ATTENTION_TYPE_PREFIX = "system.attention.";
@@ -351,45 +323,24 @@ export function createReviewSink(opts: ReviewSinkOptions): ReviewSink {
     const adapter = adapters.find((a) => a.instanceId === target.instanceId);
     if (adapter === undefined) return;
 
-    // cortex#721 — key the per-review progress placeholder on the lifecycle
-    // envelope's correlation id (resolved targets carry no `sessionId`), so
-    // two reviews in the same channel/thread each get their OWN "reviewing…"
-    // message instead of editing one shared placeholder. `postResponse`
-    // ignores `sessionId`; only `sendProgress`/`clearProgress` read it via the
-    // adapter's `progressKey`. The terminal branch MUST reuse this exact key
-    // to delete the placeholder the `started` branch created (cortex#731).
-    const correlationKey = dispatchCorrelationKey(envelope);
-    const progressTarget: ResponseTarget =
-      correlationKey !== undefined
-        ? { ...target, sessionId: correlationKey }
-        : target;
-
-    try {
-      if (envelope.type === "dispatch.task.started") {
-        // `started` is a progress/typing indicator (e.g. "Echo is
-        // reviewing…"), not a final reply — edit-in-place so the terminal
-        // verdict/failed reply is the durable message.
-        await adapter.sendProgress(progressTarget, text);
-        return;
-      }
-      // Verdict / completed / failed / aborted — the terminal reply. Clear the
-      // `started` "reviewing…" placeholder first (same correlation-keyed
-      // target), else it orphans above the durable verdict (cortex#731), then
-      // post the reply.
-      await adapter.clearProgress(progressTarget);
-      await adapter.postResponse(target, text);
-    } catch (err) {
-      // A platform post failure must not crash the fan-out (per CLAUDE.md
-      // no-empty-catch rule). The review already completed on the bus;
-      // only the surface delivery failed (rate limit, deleted channel,
-      // etc.). The authoritative verdict still reached pilot via
-      // correlation_id.
-      process.stderr.write(
-        `cortex: review-sink postResponse failed (surface=${routing.surface}, ` +
-          `channel=${routing.channel}, type=${envelope.type}): ` +
-          `${err instanceof Error ? err.message : String(err)}\n`,
-      );
-    }
+    await deliverRoutedResponse({
+      envelope,
+      adapter,
+      target,
+      text,
+      onError: (err) => {
+        // A platform post failure must not crash the fan-out (per CLAUDE.md
+        // no-empty-catch rule). The review already completed on the bus;
+        // only the surface delivery failed (rate limit, deleted channel,
+        // etc.). The authoritative verdict still reached pilot via
+        // correlation_id.
+        process.stderr.write(
+          `cortex: review-sink postResponse failed (surface=${routing.surface}, ` +
+            `channel=${routing.channel}, type=${envelope.type}): ` +
+            `${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      },
+    });
   }
 
   return {
