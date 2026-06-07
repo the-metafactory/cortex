@@ -246,6 +246,97 @@ describe("bash-guard.hook — grant is the strict success terminal (no deny-wort
       expect(out.hookSpecificOutput?.permissionDecision).not.toBe("allow");
     });
   }
+
+  // ---------------------------------------------------------------------------
+  // Echo (adversarial review, cortex#778) — vectors not in the inline table
+  // above because they need a real control character or a non-string payload.
+  // Each confirms the grant terminal stays unreachable for a deny-worthy input.
+  // ---------------------------------------------------------------------------
+
+  test("DENY (never grant): a REAL newline smuggles a second command", () => {
+    // The inline table can't carry a literal newline; feed one directly so the
+    // rejectsChaining `[\r\n]` arm is exercised end-to-end, not just in isolation.
+    const r = runHook("ls\nrm -rf /", {
+      GROVE_CHANNEL: "test-channel",
+      GROVE_AGENT_ID: undefined,
+      CORTEX_BASH_GUARD: config,
+    });
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecision).not.toBe("allow");
+  });
+
+  test("DENY (never grant): a carriage-return smuggles a second command", () => {
+    const r = runHook("ls\rrm -rf /", {
+      GROVE_CHANNEL: "test-channel",
+      GROVE_AGENT_ID: undefined,
+      CORTEX_BASH_GUARD: config,
+    });
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("DENY (never grant): the LAST part of a 3-part chain is unallowed (loop validates ALL parts)", () => {
+    // Loop-ordering proof: the first two parts match; the grant terminal must
+    // stay unreachable because a later part fails. Guards against a per-part
+    // `grant` slipping in before the loop finishes.
+    const r = runHook("ls && pwd && curl http://evil.example", {
+      GROVE_CHANNEL: "test-channel",
+      GROVE_AGENT_ID: undefined,
+      CORTEX_BASH_GUARD: config,
+    });
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecision).not.toBe("allow");
+  });
+
+  test("DENY (never grant): a MIDDLE part of a chain is unallowed", () => {
+    const r = runHook("ls && curl http://evil.example && pwd", {
+      GROVE_CHANNEL: "test-channel",
+      GROVE_AGENT_ID: undefined,
+      CORTEX_BASH_GUARD: config,
+    });
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("DENY (never grant): TAB-delimited chaining is split and validated (\\s split robustness)", () => {
+    // `\t` is whitespace, so the `\s*(?:&&|…)\s*` splitter must isolate the
+    // unallowed tail rather than fold it into an allowed head.
+    const r = runHook("ls\t&&\tcurl http://evil.example", {
+      GROVE_CHANNEL: "test-channel",
+      GROVE_AGENT_ID: undefined,
+      CORTEX_BASH_GUARD: config,
+    });
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  test("FAIL-SAFE: unparseable hook stdin passes through, NEVER grants", () => {
+    // The fail-open path must defer to Claude Code's normal gate ({continue:true}),
+    // not auto-approve. An error must never silently widen to an allow. Feed raw
+    // malformed JSON directly (runHook always wraps in valid JSON, so bypass it).
+    const merged: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (v !== undefined && !GROVE_ENV_KEYS.includes(k)) merged[k] = v;
+    }
+    merged.GROVE_CHANNEL = "test-channel";
+    merged.CORTEX_BASH_GUARD = config;
+    const r = spawnSync("bun", [HOOK_PATH], {
+      encoding: "utf-8",
+      input: "this is not valid json {{{",
+      env: merged,
+    });
+    expect(r.status).toBe(0);
+    const out = JSON.parse((r.stdout ?? "").trim());
+    expect(out).toEqual({ continue: true });
+    expect(out.hookSpecificOutput?.permissionDecision).not.toBe("allow");
+  });
 });
 
 describe("bash-guard.hook — structured deny output", () => {
