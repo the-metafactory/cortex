@@ -130,14 +130,20 @@ describe("deriveJoinInputs — config-only (the one-liner)", () => {
         },
       },
     });
-    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(cfg));
+    // Pin darwin: this fixture configures `plist_path` (launchd), so the
+    // service-descriptor resolves on macOS. Without the pin the host platform
+    // leaks in and the descriptor fails on Linux CI (cortex#771 — these
+    // platform-default tests were green on macOS dev boxes but red on the
+    // Linux runner, a pre-existing #762/#763 breakage surfaced here).
+    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(cfg), "darwin");
     expect(res.ok).toBe(true);
     // Only the metafactory block's caps — never the other network's.
     expect(res.inputs?.announceCapabilities).toEqual(["chat", "release"]);
   });
 
   test("#762 — no matching network block → announceCapabilities is empty", () => {
-    const res = deriveJoinInputs("brand-new-net", {}, "/cfg/cortex.yaml", reader(FULL));
+    // Pin darwin — FULL configures `plist_path` (cortex#771; see above).
+    const res = deriveJoinInputs("brand-new-net", {}, "/cfg/cortex.yaml", reader(FULL), "darwin");
     expect(res.ok).toBe(true);
     expect(res.inputs?.announceCapabilities).toEqual([]);
   });
@@ -160,7 +166,8 @@ describe("deriveJoinInputs — config-only (the one-liner)", () => {
         federated: { networks: [], registry: { url: "https://r.test" } },
       },
     });
-    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(cfg));
+    // Pin darwin — `plist_path` fixture (cortex#771; see above).
+    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(cfg), "darwin");
     expect(res.ok).toBe(true);
     expect(res.inputs?.credsPath).toBe("~/.config/nats/metafactory.creds");
     expect(defaultCredsPath("metafactory")).toBe("~/.config/nats/metafactory.creds");
@@ -179,7 +186,8 @@ describe("deriveJoinInputs — config-only (the one-liner)", () => {
         federated: { networks: [], registry: { url: "https://r.test" } },
       },
     });
-    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(cfg));
+    // Pin darwin — `plist_path` fixture (cortex#771; see above).
+    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(cfg), "darwin");
     expect(res.ok).toBe(true);
     expect(res.inputs?.registryPubkey).toBeUndefined();
   });
@@ -198,7 +206,8 @@ describe("deriveJoinInputs — config-only (the one-liner)", () => {
         federated: { networks: [], registry: { url: "https://r.test" } },
       },
     });
-    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(cfg));
+    // Pin darwin — `plist_path` fixture (cortex#771; see above).
+    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(cfg), "darwin");
     expect(res.ok).toBe(true);
     expect(res.inputs?.stack).toBe("andreas/default");
   });
@@ -324,7 +333,11 @@ describe("deriveJoinInputs — actionable missing-config errors", () => {
         federated: { networks: [], registry: { url: "https://r" } },
       },
     });
-    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(cfg));
+    // Pin darwin so the deriver reaches the account check (the `plist_path`
+    // fixture satisfies the macOS descriptor); without the pin, the Linux CI
+    // host hits the systemd `unit_path` error FIRST and names the wrong field
+    // (cortex#771 — pre-existing #762/#763 breakage surfaced here).
+    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(cfg), "darwin");
     expect(res.ok).toBe(false);
     expect(res.reason).toContain("stack.nats_infra.account");
   });

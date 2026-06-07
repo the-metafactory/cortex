@@ -512,6 +512,11 @@ describe("#757 nats-server restart port", () => {
       stackId: "andreas/meta-factory",
       natsConfigPath: "/x/local.conf",
       plistPath: "/nonexistent/nats-server.plist",
+      // Pin darwin (launchd): the assertion is about the plist-not-found path.
+      // Without it the Linux CI host defaults to systemd and never inspects
+      // `plistPath`, so the "plist not found" reason never appears (cortex#771
+      // — pre-existing #757/#763 host-platform leak surfaced here).
+      platform: "darwin",
     };
     const ports = buildLivePorts(cfg);
     const res = await ports.natsServer!.restart();
