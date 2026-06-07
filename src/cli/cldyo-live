@@ -40,7 +40,7 @@ export GROVE_AGENT_ID="${LIVE_ID}"
 # The legacy export is removed in v3.0.0 (PR-11).
 export CORTEX_PRINCIPAL="${LIVE_NAME}"
 export GROVE_OPERATOR="${LIVE_NAME}"
-export GROVE_BASH_GUARD='{"disabled":true}'
+export CORTEX_BASH_GUARD='{"disabled":true}'
 TASK_LABEL="${1:-${LIVE_ID}}"
 shift 2>/dev/null
 

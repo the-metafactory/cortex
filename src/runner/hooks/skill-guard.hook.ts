@@ -27,7 +27,7 @@
  *     `Skill` in the curated `--settings` file, AND broadly allows `Skill`.
  *   - The grant list reaches this hook via the `CORTEX_SKILL_GRANTS` env
  *     var (a JSON array of allowed skill names), set on the child env by
- *     `cc-session.ts` — the same layering as `GROVE_BASH_GUARD`.
+ *     `cc-session.ts` — the same layering as `CORTEX_BASH_GUARD`.
  *   - A session with NO grants does NOT register this hook; it keeps the
  *     bare-`Skill` `disallowedTools` deny (default-deny, no Skill tool).
  *

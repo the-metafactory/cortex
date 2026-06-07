@@ -157,7 +157,7 @@ export const CORTEX_PRESERVED_CLAUDE_ENV = new Set<string>([
  * Set on the child env by `cc-session.ts`, layered AFTER `scopeSessionEnv`
  * (it is not a `CLAUDE_*` var, so scoping passes it through regardless; the
  * explicit layering keeps it alongside cortex's other pipeline vars). Mirrors
- * how `GROVE_BASH_GUARD` carries the bash-guard config to that hook.
+ * how `CORTEX_BASH_GUARD` carries the bash-guard config to that hook.
  */
 export const CORTEX_SKILL_GRANTS_ENV = "CORTEX_SKILL_GRANTS";
 

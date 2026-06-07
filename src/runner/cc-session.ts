@@ -33,7 +33,7 @@ export interface CCSessionOpts {
   timeoutMs?: number;
   cwd?: string;
   additionalArgs?: string[];
-  /** Bash allowlist config — passed to bash-guard.hook.ts via GROVE_BASH_GUARD env var. */
+  /** Bash allowlist config — passed to bash-guard.hook.ts via CORTEX_BASH_GUARD env var. */
   bashAllowlist?: { rules: { pattern: string; repos?: string[] }[]; repos: string[] };
   /** G-300: When true, disables bash guard entirely (principal DM). */
   bashGuardDisabled?: boolean;
@@ -233,9 +233,9 @@ export class CCSession extends EventEmitter {
 
     // Pass bash allowlist config to bash-guard.hook.ts
     if (this.opts.bashGuardDisabled) {
-      env.GROVE_BASH_GUARD = JSON.stringify({ disabled: true });
+      env.CORTEX_BASH_GUARD = JSON.stringify({ disabled: true });
     } else if (this.opts.bashAllowlist) {
-      env.GROVE_BASH_GUARD = JSON.stringify(this.opts.bashAllowlist);
+      env.CORTEX_BASH_GUARD = JSON.stringify(this.opts.bashAllowlist);
     }
 
     // Suppress ANTHROPIC_API_KEY when OAuth token is present

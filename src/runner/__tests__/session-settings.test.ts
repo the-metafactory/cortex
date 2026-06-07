@@ -185,11 +185,11 @@ describe("scopeSessionEnv — principal CLAUDE_* vars dropped", () => {
   test("preserves cortex's own pipeline + non-Claude vars", () => {
     const scoped = scopeSessionEnv({
       CORTEX_CHANNEL: "andreas",
-      GROVE_BASH_GUARD: "{}",
+      CORTEX_BASH_GUARD: "{}",
       SOME_OTHER_VAR: "v",
     });
     expect(scoped.CORTEX_CHANNEL).toBe("andreas");
-    expect(scoped.GROVE_BASH_GUARD).toBe("{}");
+    expect(scoped.CORTEX_BASH_GUARD).toBe("{}");
     expect(scoped.SOME_OTHER_VAR).toBe("v");
   });
 

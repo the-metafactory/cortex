@@ -6,7 +6,7 @@
  * Enforces a command allowlist with repo restrictions for gh CLI.
  * Non-Grove sessions pass through unchanged.
  *
- * Config via GROVE_BASH_GUARD env var (JSON):
+ * Config via CORTEX_BASH_GUARD env var (JSON):
  *   { "rules": [{ "pattern": "^gh\\s+pr", "repos": ["owner/repo"] }] }
  *
  * If no config env var, uses sensible defaults (gh, git read-only, ls, pwd).
@@ -110,7 +110,7 @@ const DEFAULT_CONFIG: GuardConfig = {
   repos: [],
 };
 
-// Narrow projection of the GROVE_BASH_GUARD env var payload. The hook
+// Narrow projection of the CORTEX_BASH_GUARD env var payload. The hook
 // reads only `disabled` / `rules` / `repos`; anything else is ignored.
 interface GuardConfigRaw {
   disabled?: boolean;
@@ -119,7 +119,7 @@ interface GuardConfigRaw {
 }
 
 function loadConfig(): GuardConfig | null {
-  const raw = process.env.GROVE_BASH_GUARD;
+  const raw = process.env.CORTEX_BASH_GUARD;
   if (raw) {
     try {
       const parsed = JSON.parse(raw) as GuardConfigRaw;
@@ -311,7 +311,7 @@ async function main(): Promise<void> {
   }
 
   // CLI principal session (cldyo-live sets GROVE_AGENT_ID) — full trust, bypass guard.
-  // Bot sessions also set GROVE_AGENT_ID but override via GROVE_BASH_GUARD config,
+  // Bot sessions also set GROVE_AGENT_ID but override via CORTEX_BASH_GUARD config,
   // so they still get guarded by the loadConfig() path below.
   if (process.env.GROVE_AGENT_ID) {
     allow();

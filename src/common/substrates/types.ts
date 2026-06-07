@@ -253,7 +253,7 @@ export interface DispatchRuntime {
   allowedDirs?: string[];
   /**
    * Bash guard allowlist config. CC's `bash-guard.hook.ts` reads this
-   * via the `GROVE_BASH_GUARD` env var and refuses any `Bash` tool
+   * via the `CORTEX_BASH_GUARD` env var and refuses any `Bash` tool
    * invocation whose command doesn't match the allowlist. Future
    * non-CC harnesses ignore this field.
    */

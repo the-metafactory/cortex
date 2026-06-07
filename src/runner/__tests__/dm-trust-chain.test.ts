@@ -89,13 +89,13 @@ describe("DM trust chain", () => {
   // tests cover the surface).
 
   describe("bash guard config propagation", () => {
-    test("GROVE_BASH_GUARD disabled config is valid JSON", () => {
+    test("CORTEX_BASH_GUARD disabled config is valid JSON", () => {
       const config = JSON.stringify({ disabled: true });
       const parsed = JSON.parse(config);
       expect(parsed.disabled).toBe(true);
     });
 
-    test("GROVE_BASH_GUARD with allowlist config is valid JSON", () => {
+    test("CORTEX_BASH_GUARD with allowlist config is valid JSON", () => {
       const allowlist = {
         rules: [
           { pattern: "^gh\\s+", repos: ["the-metafactory/grove"] },

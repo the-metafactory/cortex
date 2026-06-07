@@ -5,7 +5,7 @@
  *   - structured PreToolUse deny output (replaces exit(2) + stderr)
  *   - unchanged pass-through ({"continue": true})
  *   - preserved GROVE_CHANNEL gate / GROVE_AGENT_ID bypass /
- *     GROVE_BASH_GUARD disabled behaviour
+ *     CORTEX_BASH_GUARD disabled behaviour
  *   - block telemetry event written to the JSONL fallback
  *   - block telemetry event POSTed to the HTTP ingest endpoint
  */
@@ -27,14 +27,14 @@ interface RunResult {
 // Grove env vars the hook reads. The test process itself may run inside a
 // Cortex agent session (which sets these), so the helper strips ALL of them
 // from the child env first, then re-applies only what each test specifies.
-// Without this, an inherited GROVE_BASH_GUARD / GROVE_AGENT_ID silently
+// Without this, an inherited CORTEX_BASH_GUARD / GROVE_AGENT_ID silently
 // bypasses the guard and tests pass for the wrong reason.
 const GROVE_ENV_KEYS = [
   "GROVE_CHANNEL",
   "GROVE_AGENT_ID",
   "GROVE_AGENT_NAME",
   "GROVE_NETWORK",
-  "GROVE_BASH_GUARD",
+  "CORTEX_BASH_GUARD",
   "GROVE_PROJECT",
   "GROVE_ENTITY",
   "GROVE_OPERATOR",
@@ -90,7 +90,7 @@ describe("bash-guard.hook — pass-through behaviour", () => {
     const r = runHook("rm -rf /tmp/x", {
       GROVE_CHANNEL: "test-channel",
       GROVE_AGENT_ID: undefined,
-      GROVE_BASH_GUARD: JSON.stringify({ disabled: true }),
+      CORTEX_BASH_GUARD: JSON.stringify({ disabled: true }),
     });
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
@@ -115,7 +115,7 @@ describe("bash-guard.hook — pass-through behaviour", () => {
     const r = runHook("bun test", {
       GROVE_CHANNEL: "test-channel",
       GROVE_AGENT_ID: undefined,
-      GROVE_BASH_GUARD: JSON.stringify({ rules: [{ pattern: "^bun\\s+" }] }),
+      CORTEX_BASH_GUARD: JSON.stringify({ rules: [{ pattern: "^bun\\s+" }] }),
     });
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
@@ -154,7 +154,7 @@ describe("bash-guard.hook — structured deny output", () => {
     const r = runHook("gh pr view --repo evil/repo 1", {
       GROVE_CHANNEL: "test-channel",
       GROVE_AGENT_ID: undefined,
-      GROVE_BASH_GUARD: JSON.stringify({
+      CORTEX_BASH_GUARD: JSON.stringify({
         rules: [{ pattern: "^gh\\s+" }],
         repos: ["the-metafactory/cortex"],
       }),
@@ -493,7 +493,7 @@ describe("bash-guard.hook — read-only aws (integration via hook + halden confi
     return runHook(cmd, {
       GROVE_CHANNEL: "test-channel",
       GROVE_AGENT_ID: undefined,
-      GROVE_BASH_GUARD: haldenConfig,
+      CORTEX_BASH_GUARD: haldenConfig,
     });
   }
 
