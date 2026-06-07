@@ -2,7 +2,8 @@
 /**
  * T-2.1 + T-2.2 + T-2.3: EventLogger Hook
  * Captures raw events to JSONL. Zero external dependencies beyond filesystem.
- * Only active when GROVE_CHANNEL env var is set (session scoping).
+ * Only active when CORTEX_CHANNEL (legacy GROVE_CHANNEL) env var is set
+ * (session scoping).
  */
 
 import { appendFileSync, mkdirSync, chmodSync, existsSync, readFileSync } from "fs";
@@ -10,6 +11,7 @@ import { join } from "path";
 import { createRawEvent, type RawEvent } from "./lib/event-types";
 import { mapHookToEventType, EVENT_TYPES } from "./lib/event-taxonomy";
 import { resolvePrincipalEnv } from "./lib/principal-env";
+import { resolveSurfaceEnv } from "./lib/surface-env";
 
 // =============================================================================
 // Hook input shape — what Claude Code writes to stdin per hook firing.
@@ -80,17 +82,20 @@ const INGEST_URL = "http://localhost:8766/api/events/ingest";
 // Session Scoping (T-2.2)
 // =============================================================================
 
-const groveChannel = process.env.GROVE_CHANNEL;
+// cortex#774: read CORTEX_* first, fall back to legacy GROVE_* (see
+// surface-env.ts). The session is instrumented when a channel resolves
+// from either tier.
+const groveChannel = resolveSurfaceEnv("CHANNEL");
 if (!groveChannel) {
-  process.exit(0); // Not a Grove session — silent exit
+  process.exit(0); // Not an instrumented session — silent exit
 }
 
-const groveNetwork = process.env.GROVE_NETWORK;
-const groveProject = process.env.GROVE_PROJECT;
-const groveEntity = process.env.GROVE_ENTITY;
+const groveNetwork = resolveSurfaceEnv("NETWORK");
+const groveProject = resolveSurfaceEnv("PROJECT");
+const groveEntity = resolveSurfaceEnv("ENTITY");
 // R9 (cortex#388 PR-3): the human-the-stack-owner concept is now `principal`.
 // Read `CORTEX_PRINCIPAL` with a compat fallback to the legacy
-// `CORTEX_OPERATOR` / `GROVE_OPERATOR` names (see principal-env.ts).
+// `GROVE_OPERATOR` name (see principal-env.ts).
 const principal = resolvePrincipalEnv();
 
 // =============================================================================

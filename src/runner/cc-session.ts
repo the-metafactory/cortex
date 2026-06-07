@@ -112,6 +112,46 @@ export interface CCSessionResult {
   abortReason?: "timeout";
 }
 
+/**
+ * cortex#774 (G-2a/G-3a) — layer cortex's instrumentation env vars onto the
+ * (already-scoped) base env for a spawned CC session.
+ *
+ * Sets the canonical `CORTEX_*` names — `CORTEX_CHANNEL`, `CORTEX_NETWORK`,
+ * `CORTEX_AGENT_NAME`, `CORTEX_AGENT_ID`, `CORTEX_PROJECT`, `CORTEX_ENTITY`,
+ * and `CORTEX_PRINCIPAL` — that the EventLogger / GroveContext hooks read.
+ * The legacy `GROVE_*` instrumentation names are NO LONGER set here; the
+ * hooks retain a `GROVE_*` read-fallback (see `surface-env.ts` /
+ * `principal-env.ts`) so external setters still on `GROVE_*` keep resolving
+ * during the transition.
+ *
+ * Pure function: does not mutate `baseEnv`. Extracted from `start()` so the
+ * spawned env is unit-testable without invoking the `claude` binary.
+ */
+export function buildSessionEnv(
+  baseEnv: Record<string, string>,
+  opts: Pick<
+    CCSessionOpts,
+    | "groveChannel"
+    | "groveNetwork"
+    | "agentName"
+    | "agentId"
+    | "project"
+    | "entity"
+    | "principal"
+  >,
+): Record<string, string> {
+  return {
+    ...baseEnv,
+    ...(opts.groveChannel && { CORTEX_CHANNEL: opts.groveChannel }),
+    ...(opts.groveNetwork && { CORTEX_NETWORK: opts.groveNetwork }),
+    ...(opts.agentName && { CORTEX_AGENT_NAME: opts.agentName }),
+    ...(opts.agentId && { CORTEX_AGENT_ID: opts.agentId }),
+    ...(opts.project && { CORTEX_PROJECT: opts.project }),
+    ...(opts.entity && { CORTEX_ENTITY: opts.entity }),
+    ...(opts.principal && { CORTEX_PRINCIPAL: opts.principal }),
+  };
+}
+
 export class CCSession extends EventEmitter {
   private proc: ReturnType<typeof Bun.spawn> | null = null;
   private timeoutId: Timer | null = null;
@@ -213,14 +253,7 @@ export class CCSession extends EventEmitter {
       : { ...(process.env as Record<string, string>) };
 
     const env: Record<string, string> = {
-      ...baseEnv,
-      ...(this.opts.groveChannel && { GROVE_CHANNEL: this.opts.groveChannel }),
-      ...(this.opts.groveNetwork && { GROVE_NETWORK: this.opts.groveNetwork }),
-      ...(this.opts.agentName && { GROVE_AGENT_NAME: this.opts.agentName }),
-      ...(this.opts.agentId && { GROVE_AGENT_ID: this.opts.agentId }),
-      ...(this.opts.project && { GROVE_PROJECT: this.opts.project }),
-      ...(this.opts.entity && { GROVE_ENTITY: this.opts.entity }),
-      ...(this.opts.principal && { GROVE_OPERATOR: this.opts.principal }),
+      ...buildSessionEnv(baseEnv, this.opts),
       // cortex#710 — pass the per-skill grant list to the Skill Guard hook.
       // Only set when the curated settings actually registered the hook
       // (hasSkillGrants), so the env var and the hook move atomically. Layered

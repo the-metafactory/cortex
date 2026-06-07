@@ -31,6 +31,13 @@ LIVE_NAME="${OPERATOR_NAME:-${DISPLAY_NAME:-$(whoami)}}"
 BOT_NAME="${DISPLAY_NAME:-${AGENT_NAME:-Ivy}}"
 
 export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+# cortex#774 (G-2a/G-3a): export the canonical CORTEX_* instrumentation names.
+# The legacy GROVE_* exports are kept alongside during the transition so any
+# unmigrated reader still resolves; both are dropped once the GROVE_* read
+# fallbacks retire (a future PR, after MIG-8 is confirmed closed).
+export CORTEX_CHANNEL="${1:-${LIVE_ID}}"
+export CORTEX_AGENT_NAME="${BOT_NAME}"
+export CORTEX_AGENT_ID="${LIVE_ID}"
 export GROVE_CHANNEL="${1:-${LIVE_ID}}"
 export GROVE_AGENT_NAME="${BOT_NAME}"
 export GROVE_AGENT_ID="${LIVE_ID}"

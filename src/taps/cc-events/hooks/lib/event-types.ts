@@ -4,6 +4,7 @@
  */
 
 import { z } from "zod/v4";
+import { resolveSurfaceEnv } from "./surface-env";
 
 // =============================================================================
 // Raw Event (PAI-internal, never exposed to consumers)
@@ -66,10 +67,11 @@ export function createRawEvent(
     event_type: eventType,
     timestamp: new Date().toISOString(),
     session_id: options?.sessionId ?? process.env.CLAUDE_SESSION_ID ?? "unknown",
-    grove_channel: options?.groveChannel ?? process.env.GROVE_CHANNEL,
-    agent_id: options?.agentId ?? process.env.GROVE_AGENT_ID,
-    agent_name: options?.agentName ?? process.env.GROVE_AGENT_NAME,
-    network_id: options?.networkId ?? process.env.GROVE_NETWORK,
+    // cortex#774: read CORTEX_* first, fall back to legacy GROVE_*.
+    grove_channel: options?.groveChannel ?? resolveSurfaceEnv("CHANNEL"),
+    agent_id: options?.agentId ?? resolveSurfaceEnv("AGENT_ID"),
+    agent_name: options?.agentName ?? resolveSurfaceEnv("AGENT_NAME"),
+    network_id: options?.networkId ?? resolveSurfaceEnv("NETWORK"),
     source: {
       hook,
       tool_name: options?.toolName,

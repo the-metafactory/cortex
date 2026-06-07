@@ -236,7 +236,7 @@ export class CloudPublisher {
     if (!networkConfig) {
       console.warn(
         `cloud-publisher: unknown network "${networkId}" — skipping ${events.length} event(s). ` +
-        `Check networks[] config or ensure GROVE_NETWORK matches a configured network.`,
+        `Check networks[] config or ensure CORTEX_NETWORK (legacy GROVE_NETWORK) matches a configured network.`,
       );
       return;
     }

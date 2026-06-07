@@ -1,22 +1,27 @@
 #!/usr/bin/env bun
 /**
  * G-501: GroveContext Hook
- * Injects network identity and Grove-specific context into Claude Code sessions.
- * Only active when GROVE_CHANNEL env var is set (session scoping).
+ * Injects network identity and session context into Claude Code sessions.
+ * Only active when CORTEX_CHANNEL (legacy GROVE_CHANNEL) env var is set
+ * (session scoping).
  */
+
+import { resolveSurfaceEnv } from "./lib/surface-env";
 
 // =============================================================================
 // Session Scoping
 // =============================================================================
 
-const groveChannel = process.env.GROVE_CHANNEL;
+// cortex#774: read CORTEX_* first, fall back to legacy GROVE_* (see
+// surface-env.ts).
+const groveChannel = resolveSurfaceEnv("CHANNEL");
 if (!groveChannel) {
-  process.exit(0); // Not a Grove session — silent exit
+  process.exit(0); // Not an instrumented session — silent exit
 }
 
-const groveNetwork = process.env.GROVE_NETWORK;
-const groveAgentId = process.env.GROVE_AGENT_ID;
-const groveAgentName = process.env.GROVE_AGENT_NAME;
+const groveNetwork = resolveSurfaceEnv("NETWORK");
+const groveAgentId = resolveSurfaceEnv("AGENT_ID");
+const groveAgentName = resolveSurfaceEnv("AGENT_NAME");
 
 // =============================================================================
 // Context Injection

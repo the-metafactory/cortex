@@ -208,7 +208,7 @@ program
 
     if (!existsSync(RAW_DIR)) {
       console.error(`Raw events directory not found: ${RAW_DIR}`);
-      console.error("Events will be created when GROVE_CHANNEL is set");
+      console.error("Events will be created when CORTEX_CHANNEL (legacy GROVE_CHANNEL) is set");
       // Create it so the watcher doesn't fail
       const { mkdirSync } = await import("fs");
       mkdirSync(RAW_DIR, { recursive: true, mode: 0o700 });

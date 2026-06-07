@@ -99,7 +99,8 @@ describe("CCSession — settings isolation (default ON)", () => {
       expect(env.CLAUDE_CODE_EXTRA_SETTINGS).toBeUndefined();
       expect(env.CLAUDE_HOOKS_PATH).toBeUndefined();
       // Cortex's own pipeline var (set from groveChannel) survives.
-      expect(env.GROVE_CHANNEL).toBe("test");
+      // cortex#774: the setter now writes the canonical CORTEX_CHANNEL name.
+      expect(env.CORTEX_CHANNEL).toBe("test");
     } finally {
       restore();
       process.env.CLAUDE_CODE_EXTRA_SETTINGS = prev.CLAUDE_CODE_EXTRA_SETTINGS;

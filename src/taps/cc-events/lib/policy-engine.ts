@@ -4,6 +4,7 @@
  */
 
 import type { RawEvent, PublishedEvent } from "../hooks/lib/event-types";
+import { resolveSurfaceEnv } from "../hooks/lib/surface-env";
 import type { RelayPolicy } from "./policy-schema";
 
 // =============================================================================
@@ -135,7 +136,8 @@ export function processEvent(
     event_type: raw.event_type,
     timestamp: raw.timestamp,
     session_id: raw.session_id,
-    grove_channel: raw.grove_channel ?? process.env.GROVE_CHANNEL,
+    // cortex#774: read CORTEX_CHANNEL first, fall back to legacy GROVE_CHANNEL.
+    grove_channel: raw.grove_channel ?? resolveSurfaceEnv("CHANNEL"),
     agent_id: raw.agent_id,
     agent_name: raw.agent_name,
     payload: redacted,
