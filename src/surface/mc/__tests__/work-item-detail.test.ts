@@ -1,10 +1,7 @@
 /**
  * G-1113.D.5 — work-item detail projection (api/work-item-detail.ts).
  */
-import { describe, it, expect, afterEach } from "bun:test";
-import { join } from "path";
-import { tmpdir } from "os";
-import { rmSync, existsSync } from "fs";
+import { describe, it, expect } from "bun:test";
 import { initDatabase } from "../db/init";
 import { upsertPlan, upsertPlanPhase } from "../db/plans";
 import { upsertWorkItem } from "../db/work-items";
@@ -37,12 +34,13 @@ const review: Review = {
 };
 
 describe("getWorkItemDetail (D.5)", () => {
-  const paths: string[] = [];
-  afterEach(() => { for (const p of paths) if (existsSync(p)) rmSync(p); paths.length = 0; });
+  // In-memory DB (cortex#771): the prior on-disk tmp-file path ran the full
+  // schema + WAL journal on disk, and under full-suite parallel disk I/O the
+  // synchronous init occasionally blew past the 5s per-test timeout (a pure
+  // I/O-contention flake, no logic race). `:memory:` runs the same schema with
+  // zero filesystem contention and needs no afterEach cleanup.
   function freshDb() {
-    const p = join(tmpdir(), `wid-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
-    paths.push(p);
-    return initDatabase(p);
+    return initDatabase(":memory:");
   }
 
   it("projects work item + plan/phase context + linked PRs with reviews", () => {

@@ -15,6 +15,26 @@ import type { Agent, SlackPresence } from "../../../common/types/cortex-config";
 import type { InboundMessage } from "../../types";
 import type { Envelope } from "../../../bus/myelin/envelope-validator";
 
+/**
+ * Poll `condition` until truthy or `timeoutMs` expires (cortex#771). The inbound
+ * drain runs `setTimeout`-backed async callbacks; a fixed sleep for "all N
+ * messages drained" raced that loop under full-suite concurrency (Bun runs test
+ * FILES in parallel, the event loop is saturated, the drain lands after the
+ * fixed wait), so we poll a predicate with a generous deadline instead.
+ */
+async function pollFor(
+  condition: () => boolean,
+  timeoutMs = 2000,
+  intervalMs = 5,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return true;
+    await new Promise<void>((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return condition();
+}
+
 // ---------------------------------------------------------------------------
 // Fake SlackClient — records calls and exposes a hook to simulate inbound
 // events. Tests assert against `postedMessages` / `wasStopped` and drive
@@ -1230,7 +1250,10 @@ describe("SlackAdapter — two-pass dispatch gate (cortex#235 r1#7)", () => {
     // picks it up via the per-iteration length check, arrival
     // order preserved.
     await emit(makeSlackEvent({ ts: "1700000000.000003", text: "mid-drain-3" }));
-    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    // Poll until all three messages have drained instead of a fixed 30ms wait:
+    // the drain awaits a 5ms-per-message callback, and on a loaded CI runner the
+    // three callbacks land past 30ms (cortex#771).
+    await pollFor(() => calls.length === 3);
     expect(calls).toEqual(["queued-1", "queued-2", "mid-drain-3"]);
     await adapter.stop();
   });

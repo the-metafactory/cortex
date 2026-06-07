@@ -51,6 +51,82 @@ const SOURCE: SystemEventSource = {
 const TASK_ID = "11111111-1111-4111-8111-111111111111";
 
 /**
+ * Wait for the async dispatch pipeline to finish, instead of sleeping a fixed
+ * 10ms (cortex#771 — de-flake the full-suite Test gate).
+ *
+ * THE FLAKE. After a synchronous `r.trigger(...)` the listener runs
+ * chain-verify → (optional) re-sign → policy gate → harness before pushing onto
+ * `r.published[]`. The chain-verify and re-sign steps call WebCrypto
+ * (`signAsync`/`verifyAsync` → `subtle.digest`), which runs OFF the JS thread.
+ * The original `await new Promise(r => setTimeout(r, 10))` was a blind race:
+ * under full-suite concurrency Bun runs many test FILES in parallel, the event
+ * loop is saturated, the off-thread crypto resolves AFTER the 10ms timer, and
+ * the assertion read a half-populated (often empty) `published[]` — surfacing as
+ * `expected array/object, received undefined` on the audit envelope, and as
+ * `toEqual([...])` mismatches on the lifecycle sequence. There is NO shared
+ * mutable state and no product bug; it is purely the fixed sleep racing
+ * off-thread crypto.
+ *
+ * THE FIX — wait for an OBSERVABLE TERMINAL CONDITION, never a fixed duration.
+ * Every accepted dispatch ends by publishing a TERMINAL envelope:
+ *   - a lifecycle terminal — `dispatch.task.{completed,failed,aborted}`, or
+ *   - a denial — `system.access.denied` (paired with `dispatch.task.failed`).
+ * A REJECTED dispatch (subject/recipient mismatch, empty-chain reject) publishes
+ * nothing at all (a "drop"). `settle()` returns as soon as a terminal envelope is
+ * observed — deterministic and immune to off-thread-crypto latency, because the
+ * terminal only appears AFTER the whole chain-verify → re-sign → policy → harness
+ * path (including all WebCrypto) has run. The brief idle confirmation after a
+ * terminal lets any same-turn trailing envelope (e.g. the `failed` that pairs a
+ * `denied`) land so the following assertion sees the complete set.
+ *
+ * For DROP tests (which publish nothing by design) there is no terminal to wait
+ * for, so `settle` falls back to a bounded observation window: it waits long
+ * enough that the synchronously-scheduled verify/policy path has demonstrably
+ * run and produced nothing. `minObserveMs` is deliberately generous so the
+ * off-thread verify crypto on a loaded runner completes inside it — a drop is
+ * only concluded after the pipeline has had real time to (not) produce.
+ *
+ * No per-test counts, nothing serialized: a saturated event loop just means the
+ * terminal envelope arrives a few ms later and `settle` waits for it.
+ */
+const TERMINAL_TYPES = new Set([
+  "dispatch.task.completed",
+  "dispatch.task.failed",
+  "dispatch.task.aborted",
+  "system.access.denied",
+]);
+
+async function settle(
+  published: () => readonly Envelope[],
+  {
+    idleMs = 25,
+    minObserveMs = 250,
+  }: { idleMs?: number; minObserveMs?: number } = {},
+): Promise<void> {
+  const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 2));
+  const hasTerminal = () => published().some((e) => TERMINAL_TYPES.has(e.type));
+
+  // Wait UP TO `minObserveMs` for a terminal envelope. `minObserveMs` is the
+  // grace in which the off-thread chain-verify/re-sign/policy crypto must
+  // produce a terminal if the dispatch is accepted; it is sized to dwarf that
+  // crypto even on a loaded runner. A drop publishes nothing, so it simply
+  // exhausts this window.
+  const observeUntil = Date.now() + minObserveMs;
+  while (Date.now() < observeUntil && !hasTerminal()) {
+    await tick();
+  }
+
+  // Terminal seen → drain a short idle window so any same-turn trailing
+  // envelope (e.g. the `failed` that pairs a `denied`) also lands before the
+  // caller asserts. No terminal → it's a drop; we already observed long enough
+  // to be sure nothing was produced.
+  if (hasTerminal()) {
+    const until = Date.now() + idleMs;
+    while (Date.now() < until) await tick();
+  }
+}
+
+/**
  * Canonical Tasks-Domain chat subject for cortex (`@did-mf-cortex`). Shared
  * across every `trigger()` call so a future canonical-grammar change is a
  * one-line edit here rather than a mechanical sweep of every test (cortex#409
@@ -498,7 +574,7 @@ describe("dispatch-listener — success path", () => {
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
 
     // Wait briefly for async render to complete
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     // v2.0.1: policy engine is active, so an audit envelope precedes lifecycle.
     expect(r.published).toHaveLength(3);
@@ -534,7 +610,7 @@ describe("dispatch-listener — success path", () => {
     await router.start();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     const completed = r.published.find((e) => e.type === "dispatch.task.completed");
     expect(completed).toBeDefined();
@@ -570,7 +646,7 @@ describe("dispatch-listener — success path", () => {
       }),
       CANONICAL_CORTEX_CHAT_SUBJECT,
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     // Every LIFECYCLE envelope (started/completed) carries the echoed
     // routing so the dispatch sink can target the reply. The audit
@@ -597,7 +673,7 @@ describe("dispatch-listener — success path", () => {
 
     // bus-peer / Offer style inbound — no response_routing on the payload.
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     const lifecycle = r.published.filter((e) => e.type.startsWith("dispatch.task."));
     expect(lifecycle.length).toBeGreaterThan(0);
@@ -638,7 +714,7 @@ describe("dispatch-listener — success path", () => {
       }),
       CANONICAL_CORTEX_CHAT_SUBJECT,
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(optsCaptured).toHaveLength(1);
     const opts = optsCaptured[0]!;
@@ -685,7 +761,7 @@ describe("dispatch-listener — success path", () => {
       }),
       CANONICAL_CORTEX_CHAT_SUBJECT,
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(optsCaptured).toHaveLength(1);
     const opts = optsCaptured[0]!;
@@ -714,7 +790,7 @@ describe("dispatch-listener — success path", () => {
 
     // No agent_name on the payload — only agent_id.
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(optsCaptured).toHaveLength(1);
     const opts = optsCaptured[0]!;
@@ -741,7 +817,7 @@ describe("dispatch-listener — success path", () => {
     await router.start();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(optsCaptured).toHaveLength(1);
     const opts = optsCaptured[0]!;
@@ -788,7 +864,7 @@ describe("dispatch-listener — success path", () => {
       },
       CANONICAL_CORTEX_CHAT_SUBJECT,
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(cc.optsCaptured).toHaveLength(0);
     expect(team.optsCaptured).toHaveLength(1);
@@ -827,7 +903,7 @@ describe("dispatch-listener — failure paths", () => {
       },
       CANONICAL_CORTEX_CHAT_SUBJECT,
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(cc.optsCaptured).toHaveLength(0);
     expect(r.published).toHaveLength(1);
@@ -850,7 +926,7 @@ describe("dispatch-listener — failure paths", () => {
     await router.start();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published.map((e) => e.type)).toEqual([
       "system.access.allowed",
@@ -875,7 +951,7 @@ describe("dispatch-listener — failure paths", () => {
     await router.start();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published.map((e) => e.type)).toEqual([
       "system.access.allowed",
@@ -901,7 +977,7 @@ describe("dispatch-listener — failure paths", () => {
     await router.start();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published.map((e) => e.type)).toEqual([
       "system.access.allowed",
@@ -927,7 +1003,7 @@ describe("dispatch-listener — failure paths", () => {
     await router.start();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published.map((e) => e.type)).toEqual([
       "system.access.allowed",
@@ -969,7 +1045,7 @@ describe("dispatch-listener — malformed payload", () => {
       payload: { task_id: TASK_ID, agent_id: "cortex" }, // no prompt
     };
     r.trigger(malformed, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published).toHaveLength(0);
   });
@@ -1000,7 +1076,7 @@ describe("dispatch-listener — malformed payload", () => {
       payload: { agent_id: "cortex", prompt: "x" },
     };
     r.trigger(malformed, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published).toHaveLength(0);
   });
@@ -1037,7 +1113,7 @@ describe("dispatch-listener — malformed payload", () => {
       payload: { task_id: "not-a-uuid", agent_id: "cortex", prompt: "x" },
     };
     r.trigger(malformed, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published).toHaveLength(0);
     expect(optsCaptured).toHaveLength(0);
@@ -1063,7 +1139,7 @@ describe("dispatch-listener — start/stop", () => {
     await router.start();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     // Single registration → exactly one started + one completed (not double)
     expect(r.published.map((e) => e.type)).toEqual([
@@ -1087,7 +1163,7 @@ describe("dispatch-listener — start/stop", () => {
     await listener.stop();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published).toHaveLength(0);
   });
@@ -1125,7 +1201,7 @@ describe("dispatch-listener — subject filtering", () => {
 
     // Same envelope, different subject — should not match
     r.trigger(makeReceivedEnvelope(), "local.othermetafactory.tasks.@did-mf-cortex.chat");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published).toHaveLength(0);
   });
@@ -1175,7 +1251,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     await router.start();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published.map((e) => e.type)).toEqual(["dispatch.task.failed"]);
     const failed = r.published[0]!;
@@ -1198,7 +1274,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     await router.start();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     // C.4.1 — system.access.allowed audit envelope precedes the
     // lifecycle envelopes on the allow path.
@@ -1224,7 +1300,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     await router.start();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     // C.4.2 — deny path emits both system.access.denied (audit) +
     // dispatch.task.failed (lifecycle terminal — Echo cortex#220 M-1).
@@ -1268,7 +1344,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
       makeReceivedEnvelope({ agent_id: "ghost-agent" }),
       "local.metafactory.tasks.@did-mf-ghost-agent.chat",
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published.map((e) => e.type)).toEqual([
       "system.access.denied",
@@ -1334,7 +1410,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     };
 
     r.trigger(env, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(captured).toHaveLength(1);
     const seen = captured[0]!;
@@ -1373,7 +1449,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     ];
 
     r.trigger(env, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published.map((e) => e.type)).toEqual([
       "system.access.allowed",
@@ -1402,7 +1478,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     await router.start();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     const allowed = r.published.find((e) => e.type === "system.access.allowed");
     expect(allowed).toBeDefined();
@@ -1465,7 +1541,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
       },
     ];
     r.trigger(env, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     const allowed = r.published.find((e) => e.type === "system.access.allowed");
     expect(allowed).toBeDefined();
@@ -1580,7 +1656,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
       makeReceivedEnvelope(),
       "federated.research-collab.dispatch.task.received",
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published.map((e) => e.type)).toEqual([
       "system.access.allowed",
@@ -1622,7 +1698,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
       makeReceivedEnvelope(),
       "federated.partner-only.dispatch.task.received",
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published.map((e) => e.type)).toEqual([
       "system.access.denied",
@@ -1674,7 +1750,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
       makeReceivedEnvelope(),
       "federated.andreas.meta-factory.dispatch.task.received",
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published.map((e) => e.type)).toEqual([
       "system.access.denied",
@@ -1720,7 +1796,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
       makeReceivedEnvelope(),
       "federated.research-collab.dispatch.task.received",
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     const denied = r.published.find((e) => e.type === "system.access.denied");
     expect(denied).toBeDefined();
@@ -1760,7 +1836,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
     await router.start();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published.map((e) => e.type)).toEqual([
       "system.access.allowed",
@@ -1806,7 +1882,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
       makeReceivedEnvelope(),
       "federated.research-collab.dispatch.task.received",
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(captured).toHaveLength(1);
     expect(captured[0]!.intent.source_network).toBe("research-collab");
@@ -1835,7 +1911,7 @@ describe("dispatch-listener — policy gating (C.3.1)", () => {
       },
     ];
     r.trigger(env, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     const denied = r.published.find((e) => e.type === "system.access.denied");
     expect(denied).toBeDefined();
@@ -1960,7 +2036,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     env.signed_by = [runnerEd25519Stamp("did:mf:cortex")];
 
     r.trigger(env, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     // Verifier accepts → policy gate sees verified principal → allow →
     // audit envelope + lifecycle pair.
@@ -1997,7 +2073,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
 
     // No signed_by on the envelope — legitimate adapter shape.
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     // Verifier sees empty chain, returns `valid: true` (rejectEmpty=false).
     // Policy gate sees the empty-chain fallback principal id (agent_id)
@@ -2037,7 +2113,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     env.signed_by = [runnerEd25519Stamp("did:mf:ghost")];
 
     r.trigger(env, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published.map((e) => e.type)).toEqual([
       "system.access.denied",
@@ -2094,7 +2170,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     await router.start();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     // Empty chain accepted; lifecycle flows.
     expect(r.published.map((e) => e.type)).toEqual([
@@ -2135,7 +2211,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     const signed = await signEnvelope(base, privateKeyBase64, "did:mf:cortex");
 
     r.trigger(signed, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published.map((e) => e.type)).toEqual([
       "system.access.allowed",
@@ -2183,7 +2259,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     const signed = await signEnvelope(base, stackSeed, stackIdentity);
 
     r.trigger(signed, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     // Verifier short-circuits on stackIdentity match (no registry hit
     // needed); crypto pass finds the stack registered in the bridged
@@ -2250,7 +2326,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     };
 
     r.trigger(tampered, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published.map((e) => e.type)).toEqual([
       "system.access.denied",
@@ -2292,7 +2368,7 @@ describe("dispatch-listener — chain verification (cortex#320)", () => {
     await router.start();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     // Both audit (system.access.denied) and lifecycle (dispatch.task.failed)
     // envelopes emitted; harness never constructed.
@@ -2404,7 +2480,7 @@ describe("dispatch-listener — Shape B re-sign on ingest (TC-1c #552)", () => {
     await router.start();
 
     r.trigger(gatewayInjectedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     // Allow path: audit + lifecycle envelopes flow (dispatch is not dropped).
     expect(r.published.map((e) => e.type)).toEqual([
@@ -2457,7 +2533,7 @@ describe("dispatch-listener — Shape B re-sign on ingest (TC-1c #552)", () => {
     await router.start();
 
     r.trigger(gatewayInjectedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     // Dispatch is NOT dropped — allow + lifecycle flow.
     expect(r.published.map((e) => e.type)).toEqual([
@@ -2528,7 +2604,7 @@ describe("dispatch-listener — Shape B re-sign on ingest (TC-1c #552)", () => {
     expect(chainOf(preSigned)).toHaveLength(1);
 
     r.trigger(preSigned, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     // Allow + lifecycle (own-stack short-circuit accepts the single stamp).
     expect(r.published.map((e) => e.type)).toEqual([
@@ -2590,7 +2666,7 @@ describe("dispatch-listener — Shape B re-sign on ingest (TC-1c #552)", () => {
     await router.start();
 
     r.trigger(gatewayInjectedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     // Dispatch is NOT dropped — the sign failure fell through to the policy
     // gate and the harness ran (allow + lifecycle).
@@ -2689,7 +2765,7 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
     };
 
     r.trigger(env, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(captured).toHaveLength(1);
     expect(captured[0]!.principalId).toBe("alice");
@@ -2742,7 +2818,7 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
     // No env.originator on purpose — legacy envelope.
 
     r.trigger(env, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(captured).toHaveLength(1);
     expect(captured[0]!.principalId).toBe("cortex");
@@ -2790,7 +2866,7 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
       makeReceivedEnvelope(),
       CANONICAL_CORTEX_CHAT_SUBJECT,
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(captured).toHaveLength(1);
     expect(captured[0]!.principalId).toBe("cortex");
@@ -2851,7 +2927,7 @@ describe("dispatch-listener — originator (cortex#346 / myelin#161)", () => {
     };
 
     r.trigger(tampered, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(r.published.map((e) => e.type)).toEqual([
       "system.access.denied",
@@ -2934,7 +3010,7 @@ describe("dispatch-listener — originator DID resolution (cortex#486)", () => {
     };
 
     r.trigger(env, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(captured).toHaveLength(1);
     expect(captured[0]!.principalId).toBe("andreas");
@@ -2995,7 +3071,7 @@ describe("dispatch-listener — originator DID resolution (cortex#486)", () => {
     };
 
     r.trigger(env, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(captured).toHaveLength(1);
     // Listener strips `did:mf:` and forwards the raw tail verbatim.
@@ -3044,7 +3120,7 @@ describe("dispatch-listener — stage tracing (cortex#492)", () => {
       await listener.start();
 
       r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await settle(() => r.published);
 
       // Lifecycle + audit envelopes still flow; ZERO trace envelopes.
       expect(traceEnvelopes(r.published)).toHaveLength(0);
@@ -3074,7 +3150,7 @@ describe("dispatch-listener — stage tracing (cortex#492)", () => {
       await listener.start();
 
       r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await settle(() => r.published);
 
       expect(traceEnvelopes(r.published).length).toBeGreaterThan(0);
     } finally {
@@ -3096,7 +3172,7 @@ describe("dispatch-listener — stage tracing (cortex#492)", () => {
     await listener.start();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     // No trustResolver wired → chain-verify-start / chain-verified stages
     // are skipped (the verifier is the only legitimate skip path). Every
@@ -3146,7 +3222,7 @@ describe("dispatch-listener — stage tracing (cortex#492)", () => {
       makeReceivedEnvelope(),
       "local.someoneelse.tasks.@did-mf-other.chat",
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(traceStages(r.published)).toEqual(["received", "subject-rejected"]);
     const rejected = traceEnvelopes(r.published).find(
@@ -3174,7 +3250,7 @@ describe("dispatch-listener — stage tracing (cortex#492)", () => {
     await listener.start();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     const stages = traceStages(r.published);
     expect(stages).toEqual([
@@ -3205,7 +3281,7 @@ describe("dispatch-listener — stage tracing (cortex#492)", () => {
     await listener.start();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     expect(traceStages(r.published)).toEqual([
       "received",
@@ -3249,7 +3325,7 @@ describe("dispatch-listener — stage tracing (cortex#492)", () => {
 
     // Empty signed_by[] (adapter-originated) → verification passes.
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     const stages = traceStages(r.published);
     // chain-verify-start lands immediately before chain-verified, between
@@ -3290,7 +3366,7 @@ describe("dispatch-listener — stage tracing (cortex#492)", () => {
     // Subject's assistant segment (@did-mf-other) won't match the
     // envelope target (did:mf:cortex) → mismatch.
     r.trigger(env, "local.metafactory.tasks.@did-mf-other.chat");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(() => r.published);
 
     const stages = traceStages(r.published);
     // received → subject-matched (tasks.*.> matches) → parsed →

@@ -26,10 +26,15 @@ const WAIT_AFTER_EVENT = 130;
  * Poll `condition` every `intervalMs` until truthy or `timeoutMs` expires.
  * Returns true when satisfied, false on deadline. Replaces fixed-duration
  * sleeps that proved racy under loaded CI runners (cortex#699).
+ *
+ * Default deadline 4000ms (cortex#771): these tests await a real
+ * `node:fs.watch` event plus the 50ms debounce, and the 2000ms default was
+ * still occasionally missed under full-suite concurrency. 4000ms stays inside
+ * Bun's 5s per-test timeout while absorbing kernel inotify/FSEvents latency.
  */
 async function pollUntil(
   condition: () => boolean,
-  timeoutMs = 2000,
+  timeoutMs = 4000,
   intervalMs = 30,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
@@ -110,7 +115,10 @@ describe("AgentsDirectoryWatcher", () => {
     test("drop a fragment → fires with agentsAdded", async () => {
       await startWatcher();
       dropFragment("echo");
-      await sleep(WAIT_AFTER_EVENT);
+      // Poll for the semantic event instead of a fixed sleep: fs.watch + the
+      // 50ms debounce can exceed WAIT_AFTER_EVENT on a loaded CI runner, so a
+      // fixed wait raced the event and read 0 events (cortex#771).
+      await pollUntil(() => events.some((e) => e.agentsAdded.includes("echo")));
       // macOS fs.watch sometimes fires duplicate events; assert there is AT
       // LEAST one event that captured the change. Each test asserts the
       // semantic-content event, not the last event.
@@ -127,7 +135,8 @@ describe("AgentsDirectoryWatcher", () => {
       await startWatcher(initial);
       // Modify: change the displayName by rewriting with extra field
       dropFragment("echo", "echo.md", { trust: ["holly"] });
-      await sleep(WAIT_AFTER_EVENT);
+      // Poll for the semantic event (cortex#771 — see "drop a fragment").
+      await pollUntil(() => events.some((e) => e.agentsChanged.includes("echo")));
       const significant = events.find((e) => e.agentsChanged.includes("echo"));
       expect(significant).toBeDefined();
       expect(significant!.failed).toBe(false);
@@ -140,7 +149,8 @@ describe("AgentsDirectoryWatcher", () => {
       const initial = loadAgentsDirectory(tmpAgentsDir);
       await startWatcher(initial);
       unlinkSync(join(tmpAgentsDir, "echo.yaml"));
-      await sleep(WAIT_AFTER_EVENT);
+      // Poll for the semantic event (cortex#771 — see "drop a fragment").
+      await pollUntil(() => events.some((e) => e.agentsRemoved.includes("echo")));
       const significant = events.find((e) => e.agentsRemoved.includes("echo"));
       expect(significant).toBeDefined();
       expect(significant!.failed).toBe(false);

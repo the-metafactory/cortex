@@ -11,14 +11,21 @@ import type { AgentConfig } from "../../types/config";
 
 /**
  * Poll `condition` every `intervalMs` until it returns truthy or `timeoutMs`
- * expires (default 2000ms). Returns true when condition satisfied, false on
- * timeout. Replaces fixed-duration `setTimeout(300)` waits that proved racy
- * under loaded CI runners where fs.watch + the 200ms ConfigWatcher debounce
- * together could exceed 300ms (cortex#699).
+ * expires. Returns true when condition satisfied, false on timeout. Replaces
+ * fixed-duration `setTimeout(300)` waits that proved racy under loaded CI
+ * runners where fs.watch + the 200ms ConfigWatcher debounce together could
+ * exceed 300ms (cortex#699).
+ *
+ * The default deadline is 4000ms (cortex#771): the reload tests depend on a
+ * real `node:fs.watch` event PLUS the watcher's 200ms debounce, and under
+ * full-suite concurrency the 2000ms default was still occasionally missed
+ * (observed: an `identifies restart-required field changes` reload that landed
+ * at ~2.1s). 4000ms stays inside Bun's default 5s per-test timeout while
+ * absorbing kernel inotify/FSEvents latency on a loaded runner.
  */
 async function pollUntil(
   condition: () => boolean,
-  timeoutMs = 2000,
+  timeoutMs = 4000,
   intervalMs = 30,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
@@ -133,7 +140,14 @@ describe("ConfigWatcher", () => {
   let testConfigPath: string;
 
   beforeEach(() => {
-    testConfigPath = join(tmpdir(), `test-bot-${Date.now()}.yaml`);
+    // Unique suffix (not just Date.now()) so concurrent test FILES — Bun runs
+    // them in parallel — can never collide on the same /tmp fixture path and
+    // unlink each other's config mid-watch (cortex#771). Mirrors the
+    // github.repos block's `${Date.now()}-${Math.random()}` pattern below.
+    testConfigPath = join(
+      tmpdir(),
+      `test-bot-${Date.now()}-${Math.random().toString(36).slice(2)}.yaml`,
+    );
     // Write initial config
     const yaml = `
 agent:

@@ -1,0 +1,15 @@
+# Bun configuration.
+#
+# [test] timeout — per-test timeout in ms (cortex#771). Bun's default is 5000ms.
+# A handful of suite tests spawn child processes (`cortex` / `bun` CLIs) or wait
+# on real `node:fs.watch` events; on a loaded/shared CI runner these legitimately
+# approach the 5s ceiling and time out non-deterministically (observed in the
+# #771 investigation: `cortex network --help`, the bash-guard PreToolUse hook,
+# `updateIteration`, and the agents-directory watcher all timed out at 5–6.7s
+# only under peak parallelism, never in a clean single run). Raising the global
+# ceiling to 20s gives subprocess/fs tests headroom under CI load while still
+# bounding a genuine hang. It does NOT mask the assertion-race flakes #771 was
+# about — those are fixed at the source (terminal-event waits + de-raced fixtures
+# in the runner/config tests); this is defense-in-depth for the timeout class.
+[test]
+timeout = 20000
