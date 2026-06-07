@@ -202,12 +202,54 @@ function rejectsChaining(command: string): boolean {
 }
 
 // =============================================================================
-// Pass / deny output — Claude Code PreToolUse hook protocol.
+// Pass / grant / deny output — Claude Code PreToolUse hook protocol.
+//
+// Three decisions, three meanings:
+//   pass()  — pass-through ({"continue": true}). Defer to Claude Code's normal
+//             permission flow. Used by the paths that are out of this guard's
+//             scope (non-Grove / CLI-principal / disabled-guard / non-Bash /
+//             empty command). NOT an approval: in a restricted default-mode
+//             session the normal gate still applies. That is intentional for
+//             these paths — they are either already-permissive or not ours.
+//   grant() — auto-approve (permissionDecision:"allow"). The STRICT success
+//             terminal of the allowlist (cortex#777). Emitted ONLY after a
+//             command passed rejectsChaining, matched an allowlist rule for
+//             every chained part, and cleared any gh repo-restriction. This is
+//             what lets an allowlisted+safe command run in async `--print`
+//             dispatch without a "requires approval" prompt.
+//   deny()  — permissionDecision:"deny" with a reason that surfaces to the
+//             agent and the Cortex→Discord relay.
 // =============================================================================
 
-/** Emit the pass-through decision (unchanged contract). */
-function allow(): void {
+/** Emit the pass-through decision (unchanged contract). Defers to CC's gate. */
+function pass(): void {
   console.log(JSON.stringify({ continue: true }));
+}
+
+/**
+ * Emit Claude Code's structured PreToolUse *auto-approve* decision (cortex#777).
+ *
+ * This is the allowlist's success terminal. The harness reads
+ * `hookSpecificOutput.permissionDecision` — "allow" tells Claude Code to run
+ * the tool call WITHOUT prompting, so an allowlisted command actually executes
+ * in a restricted async `--print` session instead of stalling on "requires
+ * approval".
+ *
+ * SECURITY INVARIANT: grant() is the strict success terminal. It is reachable
+ * ONLY from the end of main() — after rejectsChaining passed, every chained
+ * part matched an allowlist rule, and any gh repo-restriction passed. There is
+ * no other call site, and every deny-worthy branch returns BEFORE this point.
+ */
+function grant(reason: string): void {
+  console.log(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "allow",
+        permissionDecisionReason: reason,
+      },
+    }),
+  );
 }
 
 /**
@@ -306,7 +348,7 @@ async function emitBlockEvent(
 async function main(): Promise<void> {
   // Not a Grove session — pass through silently
   if (!process.env.GROVE_CHANNEL) {
-    allow();
+    pass();
     return;
   }
 
@@ -314,7 +356,7 @@ async function main(): Promise<void> {
   // Bot sessions also set GROVE_AGENT_ID but override via CORTEX_BASH_GUARD config,
   // so they still get guarded by the loadConfig() path below.
   if (process.env.GROVE_AGENT_ID) {
-    allow();
+    pass();
     return;
   }
 
@@ -335,18 +377,18 @@ async function main(): Promise<void> {
     await Promise.race([readLoop, new Promise<void>((r) => setTimeout(r, 200))]);
 
     if (!raw.trim()) {
-      allow();
+      pass();
       return;
     }
     input = JSON.parse(raw) as HookInput;
   } catch {
-    allow();
+    pass();
     return;
   }
 
   // Only guard Bash commands
   if (input.tool_name !== "Bash") {
-    allow();
+    pass();
     return;
   }
 
@@ -358,7 +400,7 @@ async function main(): Promise<void> {
   const command = stripEnvPrefix(rawCommand).trim();
 
   if (!command) {
-    allow();
+    pass();
     return;
   }
 
@@ -367,9 +409,12 @@ async function main(): Promise<void> {
 
   const config = loadConfig();
 
-  // G-300: Guard disabled (principal DM) — allow everything
+  // G-300: Guard disabled (principal DM) — pass through, defer to the already-
+  // permissive bypass session. Intentionally NOT a grant: this path is out of
+  // the allowlist's scope, and broadening it to auto-approve would be a strictly
+  // wider authority than the disabled-guard contract promises (cortex#777).
   if (config === null) {
-    allow();
+    pass();
     return;
   }
 
@@ -445,10 +490,18 @@ async function main(): Promise<void> {
     }
   }
 
-  // All parts matched — allow
-  allow();
+  // All parts matched, no chaining metacharacters, repo-restriction (if any)
+  // cleared — this is the STRICT success terminal. Auto-approve so the
+  // allowlisted+safe command runs in async dispatch without a "requires
+  // approval" prompt (cortex#777). Every deny-worthy branch returned above.
+  grant(
+    "[Grove Bash Guard] Auto-approved: command matches the bash allowlist " +
+      "and contains no chaining metacharacters.",
+  );
 }
 
 main().catch(() => {
-  allow();
+  // Fail open to Claude Code's normal permission gate (pass-through), NOT to an
+  // auto-approve. An unexpected error must never silently grant.
+  pass();
 });
