@@ -118,7 +118,8 @@ This SOP covers the **federated** scope (joining a named network of peer princip
 Reach for the manual fallback in [`docs/runbook-federation-peering.md`](./runbook-federation-peering.md) (#728) only when:
 
 - there is **no reachable registry** for the network, or
-- you need an **offline hand-pin** of a peer (DD-5's fallback: a `principal_pubkey` pasted out-of-band), or
-- you are bringing up a **brand-new network/hub** before its descriptor exists in the registry.
+- you need an **offline hand-pin** of a peer (DD-5's fallback: a `principal_pubkey` pasted out-of-band).
+
+Bringing up a **brand-new network** before its descriptor exists is **not** a fallback case — it is its own one command: a network admin runs `cortex network create <network> --hub <tls-url> --leaf-port <port> --admin-seed <seed> --apply` to write the topology row, then principals `join` it as below. See [`sop-stack-onboarding.md` §B1](./sop-stack-onboarding.md) for the full create flow + the one-time `REGISTRY_ADMIN_PUBKEYS` prerequisite (#747).
 
 Otherwise, the one command above is the path. If a join step still demands NATS/PKI expertise, that is a design bug (spec §9) — file it against #733.

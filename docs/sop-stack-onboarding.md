@@ -162,19 +162,48 @@ Federating turns the stack's hard-isolated local bus into a **leaf** of a shared
 - **A reachable NATS leaf hub** (`host:port` + TLS). Reuse an existing endpoint under a NEW network id (e.g. `tls://nats.meta-factory.dev:7422`), or stand one up.
 - **A leaf `.creds` for THIS stack on that hub** — the gating manual artifact (like a VPN cert). Issued by the hub admin (`nsc`: a user under the hub's leaf account → `nsc generate creds`). Drop at `~/.config/nats/<network>.creds`. Note the **account** NKey (`A…`) it belongs to — it goes in `stack.nats_infra.account`. See [`runbook-federation-peering.md`](./runbook-federation-peering.md) for the manual hub side.
 
-### B1 — Seed the network in the registry (admin)
+### B1 — Create the network in the registry (network admin)
 
-The registry has no public create route (#747) — seed the topology row directly (D1 UPSERT, the `putNetwork` shape). Needs `CLOUDFLARE_API_TOKEN` + Node 22:
+Standing up a network is now **one command** (#747, v5.2.0) — no raw SQL, no `CLOUDFLARE_API_TOKEN`. `cortex network create` POSTs a **signed-admin claim** to the registry's fail-closed `POST /networks/<network>`; the registry verifies the Ed25519 signature and checks the signing pubkey against its `REGISTRY_ADMIN_PUBKEYS` allowlist before writing the topology row.
+
+**One-time prerequisite (per registry, done once).** The registry must trust a network-admin key before it will accept any create:
+
+1. Generate the network-admin signing key — the same `SU…` seed shape every stack identity uses. Keep the seed chmod 600; note the base64 pubkey it prints:
+   ```bash
+   cortex provision-stack generate <network-admin-id> \
+     --seed-path ~/.config/nats/network-admin.nk \
+     --stack-id <network-admin-id>/registry-admin
+   ```
+2. Allowlist that pubkey on the registry and redeploy (a one-time `wrangler secret put` — the value is the **base64 admin pubkey**, comma-separated if more than one admin):
+   ```bash
+   cd <pkg>/src/services/network-registry
+   wrangler secret put REGISTRY_ADMIN_PUBKEYS --env production   # paste the base64 pubkey(s)
+   wrangler deploy --env production
+   ```
+   Until `REGISTRY_ADMIN_PUBKEYS` is set the route **fails closed** — `POST /networks/<network>` returns `503 admin_not_configured` and nothing is persisted (there is never an anonymous `hub_url` write). A claim signed by a key NOT in the allowlist gets `403 admin_not_authorized`.
+
+**Create the network** (dry-run is the default — it prints the signed claim it *would* POST and touches no registry; add `--apply` to write):
 
 ```bash
-cd <pkg>/src/services/network-registry
-CLOUDFLARE_API_TOKEN=… fnm exec --using=22 -- npx wrangler d1 execute cortex-network-registry --env production --remote \
-  --command "INSERT INTO networks (network_id, hub_url, leaf_port, updated_at) \
-    VALUES ('<network>', 'tls://<hub>:<port>', <port>, strftime('%Y-%m-%dT%H:%M:%SZ','now')) \
-    ON CONFLICT(network_id) DO UPDATE SET hub_url=excluded.hub_url, leaf_port=excluded.leaf_port, updated_at=excluded.updated_at"
+# dry-run first — inspect the claim + the derived admin_pubkey
+cortex network create <network> \
+  --hub tls://<hub>:<port> \
+  --leaf-port <port> \
+  --admin-seed ~/.config/nats/network-admin.nk \
+  --registry-url https://network.meta-factory.ai
+
+# then write it
+cortex network create <network> \
+  --hub tls://<hub>:<port> \
+  --leaf-port <port> \
+  --admin-seed ~/.config/nats/network-admin.nk \
+  --registry-url https://network.meta-factory.ai \
+  --apply
 ```
 
-Verify: `curl https://network.meta-factory.ai/networks/<network>` returns the signed descriptor.
+`--registry-url` defaults to the production registry, so it can be omitted in the common case. The command derives `admin_pubkey` from the seed (the same key shape `provision-stack` uses), so the pubkey you allowlisted in the prerequisite is exactly the one the registry checks.
+
+Verify: `curl https://network.meta-factory.ai/networks/<network>` returns the signed descriptor (`hub_url` / `leaf_port` matching what you created).
 
 ### B2 — Federated config on the stack
 

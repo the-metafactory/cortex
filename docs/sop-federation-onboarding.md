@@ -103,6 +103,8 @@ Schema: `PolicyFederatedRegistrySchema` in `src/common/types/cortex-config.ts`. 
 
 This is the one mutual topology step. Both principals **agree on which side hosts the leaf hub**, then wire the leafnode link that joins the two buses into the `metafactory` network. This is a NATS-server config concern, **separate from the registry** ([§6](#6-the-leaf-link-topology)). The registry resolves *identity*; it does **not** create the bus link.
 
+> **Standing up a brand-new network.** For `metafactory` the network descriptor (its `hub_url` / `leaf_port`) already exists in the registry. When you bring up a *new* network, a network admin first creates its topology row with one command — `cortex network create <network> --hub <tls-url> --leaf-port <port> --admin-seed <seed> --apply` (#747, v5.2.0; signed-admin claim, no raw SQL). See [`sop-stack-onboarding.md` §B1](./sop-stack-onboarding.md) for the full flow + the one-time `REGISTRY_ADMIN_PUBKEYS` prerequisite.
+
 ### Step (v) — set `accept_subjects` + announce capabilities
 
 On the network entry in `policy.federated.networks[]` (`PolicyFederatedNetworkSchema`, `src/common/types/cortex-config.ts`), declare what inbound federated traffic you accept and what you offer:
