@@ -35,5 +35,7 @@ sections:
     file: docs/agents-md/critical-rules.md
   - position: "after:sop-table"
     file: docs/agents-md/implementation-workflow.md
+  - position: "after:sop-table"
+    file: docs/agents-md/network-management.md
   - position: "after:versioning"
     file: docs/agents-md/dashboard-deployment.md

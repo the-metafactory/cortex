@@ -10,6 +10,21 @@
 
 ---
 
+## Managing networks (the whole command surface)
+
+`cortex network` is the control plane for a stack's network lifecycle. Four subcommands, one mental model — joining a network should feel like a machine joining the internet (spec §9):
+
+| Command | What it does | Notes |
+|---|---|---|
+| **`cortex network create <id>`** | Network admin stands up a NEW network's topology row in the registry — a **signed-admin** claim, **no raw SQL / no D1 write** (#747). Required flags: `--hub <tls-url>`, `--leaf-port <port>`, `--admin-seed <path>` (an `SU…` nkey seed — the same key shape `provision-stack` uses). `--registry-url` defaults to `https://network.meta-factory.ai`. **Dry-run by default**; pass `--apply` to POST. | One-time per registry: the admin pubkey must be on the registry's `REGISTRY_ADMIN_PUBKEYS` allowlist or the route fails closed (`503 admin_not_configured` / `403 admin_not_authorized`). See [`sop-stack-onboarding.md` §B1](./sop-stack-onboarding.md). |
+| **`cortex network join <id>`** | A principal joins one of their **stacks** to an existing network: register → pull the signature-verified descriptor → render the leaf + load the daemon → write `policy.federated.networks[]` → restart. Idempotent. Derives everything from `cortex.yaml` (#753). | **Single-stack** (first stack): just `cortex network join <id>`. **Multi-stack** (a principal's 2nd+ stack): add `--principal-seed <root-seed>` (#791 — see [§ Multi-stack join](#multi-stack-join-a-principals-2nd-stack-791)). **Dry-run by default**; pass `--apply`. |
+| **`cortex network status`** | Read-only: joined networks, leaf link state, resolved peers, accept-subjects, max-hop, in/out counters. | `--principal <id>` required; `--stack`, `--monitor-url`, `--json` optional. |
+| **`cortex network leave <id>`** | Reverse a join cleanly + idempotently: drop the network entry + leaf include, remove the daemon's `-c` config arg if no networks remain, restart. | **Dry-run by default**; pass `--apply`. |
+
+**The one rule that bites:** a stack's nats bus must be **operator-mode** (it must define the `account` the leaf binds to) to federate onto an operator-mode hub. An **anonymous / hard-isolated** bus (the `halden` / `community` pattern — no NSC operator, no accounts) **cannot federate** as-is: the rendered leaf remote references an account the server doesn't know and `nats-server` crashes (`cannot find local account`). Convert the bus to operator-mode first — see [`sop-stack-onboarding.md` §B0.1 — Operator-mode bus prerequisite](./sop-stack-onboarding.md#b01--the-bus-must-be-operator-mode-the-794-lesson) (#794).
+
+---
+
 ## Pre-flight
 
 After reading this SOP, output:
@@ -72,6 +87,35 @@ cortex network status --principal <principal-id> [--stack <principal>/<slug>] [-
 ```
 
 Shows each joined network with its leaf link state, resolved peers, accept-subjects, max-hop, and in/out counters. A healthy join shows the leaf `link:` established and the expected peers listed.
+
+---
+
+## Multi-stack join: a principal's 2nd+ stack (#791)
+
+A **principal** may run more than one stack (e.g. `andreas/meta-factory` and `andreas/community`). The registry stores **one** record per principal carrying **all** their stacks, and the registry's `POST /principals/{id}/register` is a **full-overwrite** of the `stacks` column authorized by the principal's **root** key (the first stack's seed). So a naive second-stack register signed by the *new* stack's own key is unauthorized — historically it `409`-ed.
+
+To join a **second or later** stack, pass `--principal-seed <root-seed>` — the FIRST stack's seed:
+
+```bash
+cortex network join <network> \
+  --config ~/.config/cortex/<slug>/<slug>.yaml \
+  --principal-seed ~/.config/nats/cortex.nk \
+  --apply
+```
+
+What `--principal-seed` does on the register step (mirrors `cortex provision-stack register --principal-seed`, #791):
+
+- The add-stack claim is **signed by the root** (the authorization the registry requires), while the stack's own `--seed-path` key (derived from config) becomes the new stack's `stack_pubkey`.
+- cortex **fetch-merges** the principal's existing stacks from the registry and re-attests the full set, so the principal's **other stacks survive** the full-overwrite (they are not dropped).
+- It is **idempotent**: re-running, or running `join` after a separate `provision-stack register`, no-ops when the stack is already on record. `--principal-seed` is therefore only needed to register a genuinely NEW 2nd+ stack — not to re-run a converged one.
+
+**Boundaries:**
+
+- **Omit `--principal-seed` for a first-stack join** — then `--seed-path` is itself the root (the original behavior).
+- On the standalone `provision-stack register --principal-seed` path, the **pinned `--registry-pubkey` is required** (C-791 security): the merge-read of existing stacks is signature-verified against the pin before it drives the destructive full-overwrite, so a compromised registry can't silently omit (drop) a stack. The `network join` path threads the pin from config (`policy.federated.registry.pubkey`).
+- `--principal-seed` is **flag-only** — there is no `cortex.yaml` field for the principal root seed (no natural home), so it must be passed explicitly when adding a stack.
+
+> **Prerequisite, same as any join:** the second stack's bus must be **operator-mode** (see [Managing networks](#managing-networks-the-whole-command-surface) + [`sop-stack-onboarding.md` §B0.1](./sop-stack-onboarding.md#b01--the-bus-must-be-operator-mode-the-794-lesson)). `andreas/community` is the worked example that surfaced #794: its registration succeeded with `--principal-seed`, but its leaf link was blocked until the bus was made operator-mode.
 
 ---
 

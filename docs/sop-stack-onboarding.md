@@ -162,6 +162,43 @@ Federating turns the stack's hard-isolated local bus into a **leaf** of a shared
 - **A reachable NATS leaf hub** (`host:port` + TLS). Reuse an existing endpoint under a NEW network id (e.g. `tls://nats.meta-factory.dev:7422`), or stand one up.
 - **A leaf `.creds` for THIS stack on that hub** — the gating manual artifact (like a VPN cert). Issued by the hub admin (`nsc`: a user under the hub's leaf account → `nsc generate creds`). Drop at `~/.config/nats/<network>.creds`. Note the **account** NKey (`A…`) it belongs to — it goes in `stack.nats_infra.account`. See [`runbook-federation-peering.md`](./runbook-federation-peering.md) for the manual hub side.
 
+### B0.1 — The bus MUST be operator-mode (the #794 lesson)
+
+> ⚠️ **READ THIS BEFORE JOINING.** Part 1 stands the stack up on a **hard-isolated, anonymous** bus (the `halden` / `community` pattern — Step 2: *no* `leafnodes{}` / `cluster{}` / `gateway{}`, no operator-mode account tree at all; the isolation is the absence of all of those). **An anonymous bus cannot federate.**
+
+`cortex network join` renders a leaf remote that binds the creds' **account** (the `A…` nkey from B0). To bind a leaf to an **operator-mode hub** (the metafactory hub is operator-mode + account-bound), the local `nats-server` must itself be operator-mode and **define that account** — otherwise it doesn't know the account the leaf remote names, and on (re)start it crashes:
+
+```
+nats-server: cannot find local account "AADPQ7…" specified in leafnode remote
+```
+
+→ the daemon fails to start and the stack's bus goes **down**. The fix (cortex#794) makes `cortex network join` **detect an anonymous bus and refuse, fail-fast** — rather than rendering a leaf that crashes the server — so a join never silently takes a bus offline. (Surfaced joining `andreas/community` on `:4224` to `metafactory-community`; recovered with `cortex network leave`. The fail-fast lands with #794; until it does, the guard below — convert the bus to operator-mode first — is the principal's responsibility.)
+
+**To federate a hard-isolated stack, convert its bus to operator-mode first.** Edit the stack's `~/.config/nats/<slug>.conf` to add the NSC operator / system-account / resolver blocks — mirroring the meta-factory bus's `~/.config/nats/local.conf` (`OP_ANDREAS` operator + `ANDREAS_AGENTS` account + `resolver: MEMORY` + `resolver_preload`):
+
+```hocon
+server_name: <slug>-<principal>          # KEEP the stack's own identity/ports/JS domain
+listen: 127.0.0.1:<port>
+http: 127.0.0.1:<monitor-port>
+jetstream { store_dir: …; domain: <slug>-<principal>; max_mem: 64mb; max_file: 1gb }
+
+# --- copied from ~/.config/nats/local.conf (the operator-mode blocks) ---
+operator: <OP_… JWT>                     # the NSC operator JWT
+system_account: <SYS account A…>
+resolver: MEMORY
+resolver_preload: {
+  <ANDREAS_AGENTS account A…>: <account JWT>   # the account the leaf creds bind to
+  <SYS account A…>:           <account JWT>
+}
+# ------------------------------------------------------------------------
+# DROP the meta-factory leaf include — `cortex network join` adds its OWN
+# `include "leafnodes-<network>.conf"` for THIS network.
+```
+
+Copy verbatim the four operator-mode blocks from `~/.config/nats/local.conf` — the `operator:` JWT, the `system_account`, the `resolver`, and the `resolver_preload` account map; **keep** the stack's own `server_name` / `listen` port / `jetstream.domain` / `http` monitor port (do not collide with the meta-factory bus); and **do not** copy meta-factory's `include "leafnodes-metafactory.conf"` line (the join renders this network's leaf include itself). Restart the bus, confirm it comes up, then run `cortex network join`.
+
+> **Principal's call (the open design question, #794):** whether a deliberately hard-isolated, public-facing stack like `andreas/community` *should* be converted to operator-mode to federate, or stay isolated, is a posture decision — operator-mode opens the bus to the network. The fail-fast only guarantees the join never crashes the bus; it does not decide the posture for you.
+
 ### B1 — Create the network in the registry (network admin)
 
 Standing up a network is now **one command** (#747, v5.2.0) — no raw SQL, no `CLOUDFLARE_API_TOKEN`. `cortex network create` POSTs a **signed-admin claim** to the registry's fail-closed `POST /networks/<network>`; the registry verifies the Ed25519 signature and checks the signing pubkey against its `REGISTRY_ADMIN_PUBKEYS` allowlist before writing the topology row.
@@ -233,6 +270,17 @@ cortex network join <network> --config ~/.config/cortex/<slug>/<slug>.yaml --app
 ```
 
 Dry-run first (omit `--apply`). The join pulls the signature-verified descriptor → renders a `leafnodes` include into the stack's nats config → writes `policy.federated.networks[]` with registry-resolved peers → restarts. If the B2 config blocks are absent, pass `--registry-pubkey / --creds / --account / --nats-config / --plist` overrides instead.
+
+**If this is the principal's 2nd+ stack** (e.g. you already federated `andreas/meta-factory` and are now adding `andreas/community`), the register step needs the principal **root** seed to authorize the add-stack — pass `--principal-seed <root-seed>` (#791):
+
+```bash
+cortex network join <network> --config ~/.config/cortex/<slug>/<slug>.yaml \
+  --principal-seed ~/.config/nats/cortex.nk --apply
+```
+
+It root-signs the add-stack claim and fetch-merges the principal's existing stacks (so the other stacks survive). Idempotent. See [`sop-network-join.md` § Multi-stack join](./sop-network-join.md#multi-stack-join-a-principals-2nd-stack-791).
+
+> ⚠️ **Operator-mode bus is a hard prerequisite** for B3 — if you stood this stack up anonymous in Part 1, convert its bus first ([§B0.1](#b01--the-bus-must-be-operator-mode-the-794-lesson)), or `cortex network join` fails fast (#794).
 
 ### B4 — Peer side (mutual)
 
