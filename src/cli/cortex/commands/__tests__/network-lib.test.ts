@@ -111,6 +111,8 @@ interface Recorder {
   dropped: string[];
   configWrites: PolicyFederatedNetwork[][];
   warnings: string[];
+  /** #794 — accounts the orchestrator pre-flighted via canBindAccount(). */
+  bindChecks: string[];
 }
 
 function makeFakes(opts: {
@@ -124,6 +126,8 @@ function makeFakes(opts: {
   withoutNatsServer?: boolean;
   initialNetworks?: PolicyFederatedNetwork[];
   leafState?: LeafStatePort;
+  /** #794 — make the stack's nats config UNABLE to bind the leaf account. */
+  canBind?: boolean;
 }): { ports: NetworkPorts; rec: Recorder; storeRef: { networks: PolicyFederatedNetwork[] } } {
   const rec: Recorder = {
     registered: 0,
@@ -138,6 +142,7 @@ function makeFakes(opts: {
     dropped: [],
     configWrites: [],
     warnings: [],
+    bindChecks: [],
   };
   const storeRef = { networks: opts.initialNetworks ?? [] };
   const leafFilesPresent = new Set<string>(
@@ -184,6 +189,18 @@ function makeFakes(opts: {
     },
     natsConfigPath() {
       return "/Users/andreas/.config/nats/local.conf";
+    },
+    canBindAccount(account) {
+      rec.bindChecks.push(account);
+      // #794 — default: the bus can bind (operator-mode). A test opts into the
+      // anonymous-bus crash case via `canBind: false`.
+      return opts.canBind === false
+        ? {
+            canBind: false,
+            reason:
+              "config is anonymous/hard-isolated (no operator-mode account tree)",
+          }
+        : { canBind: true };
     },
   };
 
@@ -277,6 +294,64 @@ describe("join", () => {
     expect(net.id).toBe("metafactory");
     // (e) restarted.
     expect(rec.restarts).toBe(1);
+    // (b.5) #794 — the account was pre-flighted before any mutation.
+    expect(rec.bindChecks).toEqual([LOCAL.account]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // #794 — FAIL FAST on a bus that can't bind the leaf account (no crash).
+  // ---------------------------------------------------------------------------
+  describe("#794 fail-fast (anonymous / hard-isolated bus)", () => {
+    test("REFUSES when the nats config can't bind the leaf account", async () => {
+      const { ports } = makeFakes({ canBind: false });
+      const res = await joinNetwork("metafactory", LOCAL, ports);
+
+      expect(res.ok).toBe(false);
+      // Actionable error: names the config path, the missing account, the fix.
+      expect(res.reason).toContain("/Users/andreas/.config/nats/local.conf");
+      expect(res.reason).toContain(LOCAL.account);
+      expect(res.reason).toContain("operator-mode");
+      expect(res.reason).toContain("cortex#794");
+    });
+
+    test("touches NOTHING when it refuses (no leaf, no include, no restart)", async () => {
+      const { ports, rec, storeRef } = makeFakes({ canBind: false });
+      const res = await joinNetwork("metafactory", LOCAL, ports);
+
+      expect(res.ok).toBe(false);
+      // The pre-flight ran...
+      expect(rec.bindChecks).toEqual([LOCAL.account]);
+      // ...but NO mutation followed it.
+      expect(rec.writes.length).toBe(0); // no leaf include written
+      expect(rec.includesEnsured).toEqual([]); // no local.conf include
+      expect(rec.ensured).toEqual([]); // no plist ensure
+      expect(rec.configWrites.length).toBe(0); // no federation config write
+      expect(rec.restarts).toBe(0); // no daemon restart
+      expect(rec.natsRestarts).toBe(0); // no nats-server restart
+      expect(storeRef.networks.length).toBe(0); // config untouched
+    });
+
+    test("dry-run surfaces the SAME refusal (canBindAccount is a READ)", async () => {
+      // The orchestrator is identical under dry-run/live; the fake models the
+      // dry-run adapter (reads hit disk, writes no-op) — and the guard fires on
+      // the READ, so a dry-run join refuses just like --apply would.
+      const { ports, rec } = makeFakes({ canBind: false });
+      const res = await joinNetwork("metafactory", LOCAL, ports);
+      expect(res.ok).toBe(false);
+      expect(res.reason).toContain("cortex#794");
+      expect(rec.writes.length).toBe(0);
+    });
+
+    test("proceeds normally when the config CAN bind the account", async () => {
+      const { ports, rec, storeRef } = makeFakes({ canBind: true });
+      const res = await joinNetwork("metafactory", LOCAL, ports);
+      expect(res.ok).toBe(true);
+      expect(rec.bindChecks).toEqual([LOCAL.account]);
+      // Existing join flow unchanged: leaf written, restarted, config written.
+      expect(rec.writes.length).toBe(1);
+      expect(rec.restarts).toBe(1);
+      expect(storeRef.networks.length).toBe(1);
+    });
   });
 
   test("accept_subjects is the stack's OWN federated.{me}.{stack}.> (wire contract)", async () => {

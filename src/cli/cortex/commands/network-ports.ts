@@ -31,7 +31,10 @@ import type {
   NetworkRosterResult,
 } from "../../../common/registry/types";
 import type { NetworkFetchResult } from "../../../common/registry/network-client";
-import type { StackLeafBinding } from "../../../common/nats/leaf-remote-renderer";
+import type {
+  AccountBindCheck,
+  StackLeafBinding,
+} from "../../../common/nats/leaf-remote-renderer";
 import type { PolicyFederatedNetwork } from "../../../common/types/cortex-config";
 
 // =============================================================================
@@ -147,6 +150,17 @@ export interface LeafFilePort {
    * owns where it lives so the plist port can be told which path to ensure.
    */
   natsConfigPath(): string;
+  /**
+   * #794 — pre-flight: can the stack's nats config (`natsConfigPath()`) BIND a
+   * leaf to `account` (nkey-U) without crashing nats-server? An anonymous /
+   * hard-isolated bus (no operator-mode account tree) does NOT define the
+   * account, so rendering a leaf that binds it makes nats-server crash on
+   * startup (`cannot find local account "<A…>"`), taking the bus down. The
+   * orchestrator calls this BEFORE any mutation and REFUSES the join when the
+   * config can't bind — a READ, so live + dry-run behave identically. Delegates
+   * to {@link natsConfigCanBindAccount}; an absent config file → cannot bind.
+   */
+  canBindAccount(account: string): AccountBindCheck;
 }
 
 /**

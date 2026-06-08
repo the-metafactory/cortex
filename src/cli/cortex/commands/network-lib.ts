@@ -189,6 +189,33 @@ export async function joinNetwork(
   // would be a tsc error at the next line.
   const verified = brandVerified(descriptor);
 
+  // (b.5) #794 — FAIL FAST: never render a leaf that would CRASH the stack's
+  // bus. The leaf remote binds `stack.account` (nkey-U); nats-server resolves
+  // that account against the LOCAL nats config's account tree on startup. If
+  // the config is anonymous + hard-isolated (no operator-mode account tree —
+  // the halden/community pattern) or is operator-mode but doesn't define THIS
+  // account, nats-server crashes (`cannot find local account "<A…>" specified
+  // in leafnode remote`) and the whole bus goes DOWN. So pre-validate the
+  // resolved config BEFORE any mutation (no leaf write, no include, no
+  // restart) — a READ, so dry-run surfaces the same refusal. Recoverable: the
+  // operator converts the bus to operator-mode (define the account) or passes a
+  // config that does. Refusing here is strictly safer than a crashed server.
+  const bind = ports.leafFile.canBindAccount(stack.account);
+  if (!bind.canBind) {
+    const configPath = ports.leafFile.natsConfigPath();
+    return {
+      ok: false,
+      steps,
+      reason:
+        `nats config ${configPath} cannot bind account ${stack.account} ` +
+        `(${bind.reason ?? "unknown"}) — this bus is anonymous/isolated and ` +
+        `cannot federate. Convert it to operator-mode (define the account; see ` +
+        `docs/sop-stack-onboarding.md §Part 2) or pass a config that defines the ` +
+        `account (--nats-config). Refusing to render a leaf that would crash ` +
+        `nats-server (cortex#794).`,
+    };
+  }
+
   // (c) Render + write the leaf include (S3) and ensure the plist loads the
   // nats config (DD-6, closes the configured-but-dormant trap). The renderer
   // fails loud on a bad binding — surface it as a join failure, never a crash.

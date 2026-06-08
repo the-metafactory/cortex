@@ -362,6 +362,124 @@ export function removeLeafInclude(
   return natsConfigText.replace(global, "");
 }
 
+// =============================================================================
+// #794 — pre-flight: can this nats config BIND the leaf account?
+//
+// `cortex network join` renders a leaf remote with `account: <A…>` (the leaf
+// creds' account) and restarts nats-server. nats-server resolves that account
+// against the LOCAL config's account tree. If the config is operator-mode and
+// defines the account (e.g. via `resolver_preload`/`accounts`), the leaf binds.
+// If the config is anonymous + hard-isolated (no `operator:` and no account
+// tree — the halden/community pattern), the account is unknown and nats-server
+// CRASHES on startup with `cannot find local account "<A…>" specified in
+// leafnode remote`, taking the whole bus DOWN.
+//
+// So before the join writes the leaf include + restarts nats, the orchestrator
+// pre-validates with {@link natsConfigCanBindAccount}. The check is a targeted
+// text heuristic (documented below) rather than a full HOCON+JWT parse: a
+// false "cannot bind" only blocks a join (recoverable — the principal converts
+// the bus or passes a config that defines the account), whereas the failure we
+// must never produce is a leaf render that crashes the server.
+// =============================================================================
+
+/**
+ * Strip line comments (`//` and `#`) from a nats config so a commented-out
+ * account-tree directive or account string can't produce a false positive. We
+ * strip only LINE comments (the shapes humans actually leave in `local.conf`);
+ * HOCON block comments are rare and treated as content (worst case: a
+ * false-positive bind decision inside a block comment, which is benign — the
+ * server would simply not see a real account there and the join re-runs).
+ */
+function stripConfigComments(natsConfigText: string): string {
+  return natsConfigText
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trimStart();
+      if (trimmed.startsWith("//") || trimmed.startsWith("#")) return "";
+      return line;
+    })
+    .join("\n");
+}
+
+/** The result of the #794 pre-flight bind check. */
+export interface AccountBindCheck {
+  /** True iff the config is operator-mode AND names the account (can bind). */
+  canBind: boolean;
+  /** Present when `canBind` is false — why the config can't bind the account. */
+  reason?: string;
+}
+
+/**
+ * Decide whether `natsConfigText` can bind a leaf to `account` (an nkey-U
+ * public key, `A…`) WITHOUT crashing nats-server (#794).
+ *
+ * Heuristic (deliberately simple + robust; a full HOCON+JWT parse is not worth
+ * the dependency and the failure mode of the heuristic is a recoverable refusal,
+ * never a crash):
+ *
+ *   - The config must be **operator-mode** — it contains a top-level
+ *     `operator:` / `operator =` key (the NSC operator JWT reference) OR an
+ *     account tree (`accounts` / `resolver_preload`). A config with NONE of
+ *     these is **anonymous + hard-isolated**: it defines no accounts, so the
+ *     account the leaf binds can never be found → `canBind: false`.
+ *   - AND the literal `account` nkey-U string must appear in the config (it is
+ *     the key/value naming the account in `resolver_preload`/`accounts`). An
+ *     operator-mode config that does not name THIS account also cannot bind it
+ *     → `canBind: false`.
+ *
+ * Comments are stripped first so a commented-out directive never counts.
+ *
+ * Pure: reads the text, writes nothing. The caller (the join orchestrator)
+ * passes the resolved `config_path` contents and refuses BEFORE any mutation
+ * when `canBind` is false.
+ */
+export function natsConfigCanBindAccount(
+  natsConfigText: string,
+  account: string,
+): AccountBindCheck {
+  const trimmedAccount = account.trim();
+  if (trimmedAccount.length === 0 || !NKEY_ACCOUNT.test(trimmedAccount)) {
+    // A malformed/empty account can't be reasoned about — treat as un-bindable
+    // (the renderer would reject it anyway; refuse early with a clear reason).
+    return {
+      canBind: false,
+      reason: `account ${JSON.stringify(account)} is not a valid nkey-U account public key`,
+    };
+  }
+
+  const text = stripConfigComments(natsConfigText);
+
+  // operator-mode signal: an NSC operator JWT key OR an account-tree directive
+  // (`accounts` / `resolver_preload`). HOCON allows `key:` or `key =` and
+  // leading whitespace; the regex matches the literal config key as its own
+  // token (the NATS account-tree root NSC operator JWT key, not the principal).
+  const hasAccountTree =
+    /^[ \t]*operator[ \t]*[:=]/m.test(text) || // NSC operator JWT key
+    /^[ \t]*accounts[ \t]*[:={]/m.test(text) ||
+    /^[ \t]*resolver_preload[ \t]*[:={]/m.test(text);
+
+  if (!hasAccountTree) {
+    return {
+      canBind: false,
+      reason:
+        "config is anonymous/hard-isolated (no operator-mode account tree: " +
+        "no NSC operator JWT key, `accounts`, or `resolver_preload`)",
+    };
+  }
+
+  // operator-mode, but does it name THIS account? The nkey-U appears as the
+  // key (resolver_preload) or value naming the account. A substring check is
+  // sufficient: nkey-U keys are high-entropy and won't collide with prose.
+  if (!text.includes(trimmedAccount)) {
+    return {
+      canBind: false,
+      reason: `config is operator-mode but does not define account ${trimmedAccount}`,
+    };
+  }
+
+  return { canBind: true };
+}
+
 /** Serialize one {@link LeafRemote} as a HOCON object literal (indented). */
 function serializeRemote(remote: LeafRemote, indent: string): string {
   // `url` + `credentials` are quoted (they contain `:`, `/`, `.` which are

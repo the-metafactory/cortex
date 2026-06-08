@@ -36,6 +36,7 @@ import { expandTilde } from "../../../common/config/loader";
 import {
   ensureLeafInclude,
   leafIncludeFileName,
+  natsConfigCanBindAccount,
   removeLeafInclude,
   renderLeafIncludeFile,
 } from "../../../common/nats/leaf-remote-renderer";
@@ -378,6 +379,17 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
     },
     natsConfigPath() {
       return expandTilde(cfg.natsConfigPath ?? "");
+    },
+    canBindAccount(account) {
+      // #794 — pure READ (identical in live + dry-run): an anonymous bus that
+      // can't bind the leaf account would crash nats-server on restart, so the
+      // orchestrator refuses BEFORE any mutation. An absent/empty config file is
+      // anonymous-by-definition → cannot bind.
+      const configPath = expandTilde(cfg.natsConfigPath ?? "");
+      const text = existsSync(configPath)
+        ? readFileSync(configPath, "utf-8")
+        : "";
+      return natsConfigCanBindAccount(text, account);
     },
   };
 }
