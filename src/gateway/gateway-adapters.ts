@@ -51,6 +51,8 @@
  * can be threaded through `deps` if needed.
  */
 
+import { createHash } from "node:crypto";
+
 import { DiscordAdapter } from "../adapters/discord";
 import { SlackAdapter } from "../adapters/slack";
 import { MattermostAdapter } from "../adapters/mattermost";
@@ -92,6 +94,8 @@ interface FactoryArgsBase {
 
 interface DiscordFactoryArgs extends FactoryArgsBase {
   presence: DiscordPresence;
+  /** Discord guild ids accepted by this gateway-owned token connection. */
+  allowedGuildIds: ReadonlySet<string>;
 }
 interface SlackFactoryArgs extends FactoryArgsBase {
   presence: SlackPresence;
@@ -158,12 +162,13 @@ function syntheticGatewayAgent(
  * adapters are CONSTRUCTED only — `buildGatewayAdapters` does not start them.
  */
 export const defaultGatewayAdapterFactory: GatewayAdapterFactory = {
-  discord: ({ instanceId, source, presence, runtime }) =>
+  discord: ({ instanceId, source, presence, runtime, allowedGuildIds }) =>
     new DiscordAdapter(syntheticGatewayAgent(source.agent, { discord: presence }), presence, {
       instanceId,
       principal: {},
       ...(runtime !== undefined && { runtime }),
       systemEventSource: source,
+      allowedGuildIds,
     }),
 
   slack: ({ instanceId, source, presence, runtime }) =>
@@ -196,6 +201,27 @@ function gatewaySource(principal: string, instance: string): SystemEventSource {
   return { principal, agent: "gateway", instance };
 }
 
+function discordTokenInstanceId(token: string): string {
+  const digest = createHash("sha256").update(token).digest("hex").slice(0, 12);
+  return `discord:token:${digest}`;
+}
+
+function discordTokenGroups(
+  entries: NonNullable<Surfaces["discord"]>,
+): Map<string, NonNullable<Surfaces["discord"]>> {
+  const groups = new Map<string, NonNullable<Surfaces["discord"]>>();
+  for (const entry of entries) {
+    const token = entry.binding.token;
+    const group = groups.get(token);
+    if (group) {
+      group.push(entry);
+    } else {
+      groups.set(token, [entry]);
+    }
+  }
+  return groups;
+}
+
 /**
  * Construct ONE {@link PlatformAdapter} per surface binding.
  *
@@ -217,17 +243,28 @@ export function buildGatewayAdapters(
   const { principal, runtime, factory } = deps;
   const adapters: PlatformAdapter[] = [];
 
-  // ── Discord — demux key = guildId ─────────────────────────────────────────
-  for (const entry of surfaces.discord ?? []) {
-    const presence = DiscordPresenceSchema.parse(entry.binding);
-    const instanceId = `discord:${presence.guildId}`;
+  // ── Discord — one gateway connection per bot token ────────────────────────
+  //
+  // Discord delivers every guild event for a bot token over that token's one
+  // gateway session. Surface routing remains guild-keyed, but the platform
+  // connection is token-keyed so one assistant can serve multiple guilds
+  // without opening duplicate sessions for the same bot identity.
+  for (const group of discordTokenGroups(surfaces.discord ?? []).values()) {
+    const presences = group.map((entry) => DiscordPresenceSchema.parse(entry.binding));
+    const presence = presences[0];
+    const firstBinding = group[0]?.binding;
+    if (!presence || !firstBinding) continue;
+    const allowedGuildIds = new Set(presences.map((p) => p.guildId));
+    const instanceId =
+      presences.length === 1 ? `discord:${presence.guildId}` : discordTokenInstanceId(presence.token);
     adapters.push(
       factory.discord({
         instanceId,
         source: gatewaySource(principal, instanceId),
-        binding: entry.binding,
+        binding: firstBinding,
         runtime,
         presence,
+        allowedGuildIds,
       }),
     );
   }

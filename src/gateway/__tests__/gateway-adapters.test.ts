@@ -36,6 +36,7 @@ interface FactoryCall {
   /** The credential block handed to the factory (presence-shaped). */
   binding: Record<string, unknown>;
   runtime: MyelinRuntime | undefined;
+  allowedGuildIds?: string[];
 }
 
 function makeFakeAdapter(
@@ -76,6 +77,7 @@ function makeRecordingFactory(): {
         source: args.source,
         binding: args.binding,
         runtime: args.runtime,
+        allowedGuildIds: [...args.allowedGuildIds].sort(),
       });
       return makeFakeAdapter("discord", args.instanceId);
     },
@@ -131,6 +133,31 @@ const DISCORD_SURFACES: Surfaces = {
         guildId: "111222333444555666",
         agentChannelId: "aaa000000000000001",
         logChannelId: "bbb000000000000002",
+      },
+    },
+  ],
+};
+
+const SAME_TOKEN_DISCORD_SURFACES: Surfaces = {
+  discord: [
+    {
+      agent: "juniper",
+      stack: "jc/default",
+      binding: {
+        token: "tok-juniper",
+        guildId: "1487023327791808592",
+        agentChannelId: "1487023328324616266",
+        logChannelId: "1487023328324616266",
+      },
+    },
+    {
+      agent: "juniper",
+      stack: "jc/default",
+      binding: {
+        token: "tok-juniper",
+        guildId: "1505549701674700991",
+        agentChannelId: "1513296336739635322",
+        logChannelId: "1513296336739635322",
       },
     },
   ],
@@ -223,6 +250,20 @@ describe("buildGatewayAdapters", () => {
     const { factory, calls } = makeRecordingFactory();
     buildGatewayAdapters(DISCORD_SURFACES, makeDeps(factory));
     expect(calls[0]?.runtime).toBe(RUNTIME_STUB);
+  });
+
+  test("same Discord token across two guild bindings → one adapter with both guilds allowed", () => {
+    const { factory, calls } = makeRecordingFactory();
+    const adapters = buildGatewayAdapters(SAME_TOKEN_DISCORD_SURFACES, makeDeps(factory));
+
+    expect(adapters.length).toBe(1);
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.platform).toBe("discord");
+    expect(calls[0]?.instanceId).toMatch(/^discord:token:[0-9a-f]{12}$/);
+    expect(calls[0]?.allowedGuildIds).toEqual([
+      "1487023327791808592",
+      "1505549701674700991",
+    ]);
   });
 
   test("mixed surfaces → one adapter per binding, correct platforms", () => {

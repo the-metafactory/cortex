@@ -255,6 +255,52 @@ describe("startGatewayIfEnabled — flag on", () => {
     ]);
   });
 
+  test("same Discord token across two guild bindings → starts one token-scoped adapter", async () => {
+    const started: string[] = [];
+    const { factory, constructed } = makeCountingFactory(started);
+    const sameToken: Surfaces = {
+      discord: [
+        {
+          agent: "juniper",
+          stack: "jc/default",
+          binding: {
+            token: "tok-juniper",
+            guildId: "1487023327791808592",
+            agentChannelId: "1487023328324616266",
+            logChannelId: "1487023328324616266",
+          },
+        },
+        {
+          agent: "juniper",
+          stack: "jc/default",
+          binding: {
+            token: "tok-juniper",
+            guildId: "1505549701674700991",
+            agentChannelId: "1513296336739635322",
+            logChannelId: "1513296336739635322",
+          },
+        },
+      ],
+    };
+
+    const gw = await startGatewayWithPlan({
+      env: { CORTEX_GATEWAY: "1" },
+      surfaces: sameToken,
+      principal: "jc",
+      runtime: RUNTIME_STUB,
+      source: SOURCE_STUB,
+      policyEngine: POLICY_ENGINE_STUB,
+      factory,
+    });
+
+    expect(gw?.gateway).toBeInstanceOf(SurfaceGateway);
+    expect(constructed).toHaveLength(1);
+    expect(started).toEqual(constructed);
+    expect(constructed[0]).toMatch(/^discord:token:[0-9a-f]{12}$/);
+    expect(gw?.adapters.map((a) => a.instanceId)).toEqual(constructed);
+    expect(gw?.principalStacks).toEqual([{ principal: "jc", stack: "default" }]);
+  });
+
   test("multi-principal bindings → WARNS, starts, exposes per-principal pairs (F-1, cortex#629)", async () => {
     const started: string[] = [];
     const { factory } = makeCountingFactory(started);

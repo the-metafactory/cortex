@@ -125,6 +125,42 @@ describe("planSurfaceOwnership", () => {
     ]);
     expect(plan.crossPrincipalBindings).toEqual(["robin/research"]);
   });
+
+  test("same Discord token across two guild bindings plans one token-scoped Gateway id", () => {
+    const plan = planSurfaceOwnership({
+      surfaces: {
+        discord: [
+          {
+            agent: "juniper",
+            stack: "jc/default",
+            binding: {
+              token: "discord-token",
+              guildId: "1487023327791808592",
+              agentChannelId: "1487023328324616266",
+              logChannelId: "1487023328324616266",
+            },
+          },
+          {
+            agent: "juniper",
+            stack: "jc/default",
+            binding: {
+              token: "discord-token",
+              guildId: "1505549701674700991",
+              agentChannelId: "1513296336739635322",
+              logChannelId: "1513296336739635322",
+            },
+          },
+        ],
+      },
+      gatewayEnabled: true,
+      principal: "jc",
+    });
+
+    expect(plan.gatewayAdapterInstanceIds).toHaveLength(1);
+    expect(plan.gatewayAdapterInstanceIds[0]).toMatch(/^discord:token:[0-9a-f]{12}$/);
+    expect([...plan.ownedSurfaceKeys]).toEqual(["discord:juniper"]);
+    expect(plan.outboundPrincipalStacks).toEqual([{ principal: "jc", stack: "default" }]);
+  });
 });
 
 describe("gatewayAdapterInstanceCollisions", () => {

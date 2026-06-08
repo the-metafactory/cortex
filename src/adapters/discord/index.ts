@@ -124,6 +124,12 @@ export interface DiscordAdapterInfra {
    * the principal record.
    */
   policyRegistry?: PrincipalRegistry;
+  /**
+   * Gateway-only guild allowlist. Direct per-stack adapters omit this and keep
+   * the strict single-guild isolation gate from `presence.guildId`; grouped
+   * gateway adapters pass every guild served by the one Discord token.
+   */
+  allowedGuildIds?: ReadonlySet<string>;
 }
 
 interface PendingResult {
@@ -163,6 +169,7 @@ export class DiscordAdapter implements PlatformAdapter {
    */
   private runtime: MyelinRuntime | undefined;
   private systemEventSource: SystemEventSource | undefined;
+  private readonly allowedGuildIds: ReadonlySet<string>;
   /**
    * cortex#84: snapshot of `infra.trustedBotIds` taken at construction
    * time. `ReadonlySet` so the messageCreate hot path can't accidentally
@@ -197,6 +204,7 @@ export class DiscordAdapter implements PlatformAdapter {
     this.instanceId = infra.instanceId;
     this.runtime = infra.runtime;
     this.systemEventSource = infra.systemEventSource;
+    this.allowedGuildIds = infra.allowedGuildIds ?? new Set([presence.guildId]);
     // cortex#84: snapshot the allowlist at construction. Pre-build the
     // empty-set sentinel so the messageCreate hot path can call
     // `set.has` unconditionally without a null check.
@@ -377,7 +385,7 @@ export class DiscordAdapter implements PlatformAdapter {
       //     that branch unreachable.
       //   - String compare (no coercion games): both sides are Discord
       //     snowflake strings post-schema; `!==` is exact.
-      if (message.guildId && message.guildId !== this.presence.guildId) {
+      if (message.guildId && !this.allowedGuildIds.has(message.guildId)) {
         return;
       }
 
