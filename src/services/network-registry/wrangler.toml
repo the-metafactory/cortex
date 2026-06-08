@@ -199,7 +199,7 @@ simple = { limit = 120, period = 60 }
 #                           topology records via POST /networks/:id (the
 #                           secure signed-admin replacement for raw-SQL/D1
 #                           seeding). The matching admin SEED (nkey SU…) is
-#                           held by the operator and used by
+#                           held by the network admin and used by
 #                           `cortex network create --admin-seed`; only the
 #                           PUBLIC key goes here. FAIL-CLOSED: if this secret
 #                           is unset/empty the route returns 503
