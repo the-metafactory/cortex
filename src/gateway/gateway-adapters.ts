@@ -95,6 +95,8 @@ interface DiscordFactoryArgs extends FactoryArgsBase {
   presence: DiscordPresence;
   /** Discord guild ids accepted by this gateway-owned token connection. */
   allowedGuildIds: ReadonlySet<string>;
+  /** Per-guild presence config for grouped token connections. */
+  presenceByGuildId: ReadonlyMap<string, DiscordPresence>;
 }
 interface SlackFactoryArgs extends FactoryArgsBase {
   presence: SlackPresence;
@@ -161,13 +163,14 @@ function syntheticGatewayAgent(
  * adapters are CONSTRUCTED only — `buildGatewayAdapters` does not start them.
  */
 export const defaultGatewayAdapterFactory: GatewayAdapterFactory = {
-  discord: ({ instanceId, source, presence, runtime, allowedGuildIds }) =>
+  discord: ({ instanceId, source, presence, runtime, allowedGuildIds, presenceByGuildId }) =>
     new DiscordAdapter(syntheticGatewayAgent(source.agent, { discord: presence }), presence, {
       instanceId,
       principal: {},
       ...(runtime !== undefined && { runtime }),
       systemEventSource: source,
       allowedGuildIds,
+      presenceByGuildId,
     }),
 
   slack: ({ instanceId, source, presence, runtime }) =>
@@ -232,7 +235,8 @@ export function buildGatewayAdapters(
     const presence = presences[0];
     const firstBinding = group.entries[0]?.binding;
     if (!presence || !firstBinding) continue;
-    const allowedGuildIds = new Set(presences.map((p) => p.guildId));
+    const presenceByGuildId = new Map(presences.map((p) => [p.guildId, p] as const));
+    const allowedGuildIds = new Set(presenceByGuildId.keys());
     adapters.push(
       factory.discord({
         instanceId: group.instanceId,
@@ -241,6 +245,7 @@ export function buildGatewayAdapters(
         runtime,
         presence,
         allowedGuildIds,
+        presenceByGuildId,
       }),
     );
   }

@@ -130,6 +130,11 @@ export interface DiscordAdapterInfra {
    * gateway adapters pass every guild served by the one Discord token.
    */
   allowedGuildIds?: ReadonlySet<string>;
+  /**
+   * Gateway-only per-guild presence map for grouped token connections. Direct
+   * adapters omit this and read the constructor `presence` for their one guild.
+   */
+  presenceByGuildId?: ReadonlyMap<string, DiscordPresence>;
 }
 
 interface PendingResult {
@@ -170,6 +175,7 @@ export class DiscordAdapter implements PlatformAdapter {
   private runtime: MyelinRuntime | undefined;
   private systemEventSource: SystemEventSource | undefined;
   private readonly allowedGuildIds: ReadonlySet<string>;
+  private readonly presenceByGuildId: ReadonlyMap<string, DiscordPresence>;
   /**
    * cortex#84: snapshot of `infra.trustedBotIds` taken at construction
    * time. `ReadonlySet` so the messageCreate hot path can't accidentally
@@ -204,7 +210,11 @@ export class DiscordAdapter implements PlatformAdapter {
     this.instanceId = infra.instanceId;
     this.runtime = infra.runtime;
     this.systemEventSource = infra.systemEventSource;
-    this.allowedGuildIds = infra.allowedGuildIds ?? new Set([presence.guildId]);
+    this.presenceByGuildId = new Map([
+      [presence.guildId, presence],
+      ...(infra.presenceByGuildId ?? new Map()),
+    ]);
+    this.allowedGuildIds = infra.allowedGuildIds ?? new Set(this.presenceByGuildId.keys());
     // cortex#84: snapshot the allowlist at construction. Pre-build the
     // empty-set sentinel so the messageCreate hot path can call
     // `set.has` unconditionally without a null check.
@@ -220,6 +230,11 @@ export class DiscordAdapter implements PlatformAdapter {
         `discord-${this.instanceId}: surfaceSubjects is empty — adapter will never render bus envelopes`,
       );
     }
+  }
+
+  private presenceForGuild(guildId: string | null | undefined): DiscordPresence {
+    if (!guildId) return this.presence;
+    return this.presenceByGuildId.get(guildId) ?? this.presence;
   }
 
   /**
@@ -388,6 +403,7 @@ export class DiscordAdapter implements PlatformAdapter {
       if (message.guildId && !this.allowedGuildIds.has(message.guildId)) {
         return;
       }
+      const messagePresence = this.presenceForGuild(message.guildId);
 
       // Deduplicate — skip if we've already seen this message ID
       if (recentMessageIds.has(message.id)) return;
@@ -413,7 +429,7 @@ export class DiscordAdapter implements PlatformAdapter {
         // `DiscordPresenceSchema.dmOwner` for the misconfiguration semantics
         // (all-true → today's double-answer; all-false → DMs unanswered, the
         // deliberate fail-safe direction).
-        if (!this.presence.dmOwner) {
+        if (!messagePresence.dmOwner) {
           return;
         }
         // Self-loop guard — never respond to our own DMs, regardless of

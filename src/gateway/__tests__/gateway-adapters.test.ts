@@ -37,6 +37,7 @@ interface FactoryCall {
   binding: Record<string, unknown>;
   runtime: MyelinRuntime | undefined;
   allowedGuildIds?: string[];
+  presenceByGuildId?: Record<string, { agentChannelId: string; logChannelId: string }>;
 }
 
 function makeFakeAdapter(
@@ -71,6 +72,15 @@ function makeRecordingFactory(): {
   const calls: FactoryCall[] = [];
   const factory: GatewayAdapterFactory = {
     discord: (args) => {
+      const presenceByGuildId = Object.fromEntries(
+        [...args.presenceByGuildId].map(([guildId, presence]) => [
+          guildId,
+          {
+            agentChannelId: presence.agentChannelId,
+            logChannelId: presence.logChannelId,
+          },
+        ]),
+      );
       calls.push({
         platform: "discord",
         instanceId: args.instanceId,
@@ -78,6 +88,7 @@ function makeRecordingFactory(): {
         binding: args.binding,
         runtime: args.runtime,
         allowedGuildIds: [...args.allowedGuildIds].sort(),
+        presenceByGuildId,
       });
       return makeFakeAdapter("discord", args.instanceId);
     },
@@ -264,6 +275,16 @@ describe("buildGatewayAdapters", () => {
       "1487023327791808592",
       "1505549701674700991",
     ]);
+    expect(calls[0]?.presenceByGuildId).toEqual({
+      "1487023327791808592": {
+        agentChannelId: "1487023328324616266",
+        logChannelId: "1487023328324616266",
+      },
+      "1505549701674700991": {
+        agentChannelId: "1513296336739635322",
+        logChannelId: "1513296336739635322",
+      },
+    });
   });
 
   test("mixed surfaces → one adapter per binding, correct platforms", () => {
