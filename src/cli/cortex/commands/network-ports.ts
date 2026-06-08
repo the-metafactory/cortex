@@ -33,6 +33,7 @@ import type {
 import type { NetworkFetchResult } from "../../../common/registry/network-client";
 import type {
   AccountBindCheck,
+  LeafBindMode,
   StackLeafBinding,
 } from "../../../common/nats/leaf-remote-renderer";
 import type { PolicyFederatedNetwork } from "../../../common/types/cortex-config";
@@ -161,18 +162,44 @@ export interface LeafFilePort {
    * to {@link natsConfigCanBindAccount}; an absent config file → cannot bind.
    */
   canBindAccount(account: string): AccountBindCheck;
+  /**
+   * #799 — choose the leaf-remote BIND MODE for the stack's nats config:
+   *   - `operator-account` — operator-mode bus that defines the account →
+   *     render an `account:`-bound remote (the #794-safe path).
+   *   - `creds-only` — `$G`/default bus WITH creds → render a NO-account remote;
+   *     the creds JWT binds it (the case #794 wrongly refused).
+   *   - `refuse` — no creds (can't authenticate to the hub), or an operator-mode
+   *     bus that doesn't define the account (would crash nats-server).
+   *
+   * Delegates to {@link resolveLeafBindMode}. The orchestrator calls this BEFORE
+   * any mutation (a READ — identical in live + dry-run) and either renders the
+   * chosen remote or refuses. `hasCreds` is judged from the stack's resolved
+   * creds path; `account` is the candidate nkey-U (or `undefined`).
+   */
+  resolveBindMode(account: string | undefined, hasCreds: boolean): LeafBindMode;
 }
 
 /**
  * The launchd plist seam (S3 `ensureConfigArg`/`renderProgramArguments`).
- * `ensureConfigLoaded` rewrites the nats-server plist so it loads
- * `configPath` (closing the configured-but-dormant trap, DD-6);
- * `dropConfigArg` reverts to a bare invocation when no networks remain.
+ * `ensureConfigLoaded` rewrites the nats-server plist so it loads `configPath`
+ * (closing the configured-but-dormant trap, DD-6).
+ *
+ * #801 — `leave` NO LONGER calls `dropConfigArg`. The `-c <config>` arg names
+ * the BASE nats-server config (`local.conf`); the per-network leaf remotes are
+ * `include`d INTO it. Stripping the base `-c` on leave left nats-server with no
+ * config to load → unstartable. The base `-c` is owned by stack provisioning,
+ * never by join/leave. `dropConfigArg` stays on the port for provisioning-side
+ * teardown (the inverse of `ensureConfigLoaded`), but the leave flow does not
+ * use it.
  */
 export interface PlistPort {
   /** Ensure the nats-server plist loads `configPath` via `-c`. Idempotent. */
   ensureConfigLoaded(configPath: string): void;
-  /** Remove the `-c <configPath>` arg from the plist (leave teardown). */
+  /**
+   * Remove the `-c <configPath>` arg from the plist. NOT used by `leave` (#801)
+   * — retained for provisioning-side teardown (the inverse of
+   * {@link PlistPort.ensureConfigLoaded}).
+   */
   dropConfigArg(configPath: string): void;
 }
 

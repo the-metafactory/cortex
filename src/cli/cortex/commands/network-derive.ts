@@ -65,7 +65,14 @@ export interface DerivedJoinInputs {
   unitPath?: string;
   /** #763 — the platform the descriptor was resolved for (launchd vs systemd). */
   platform: ServicePlatform;
-  account: string;
+  /**
+   * The leaf account (nkey-U) the leaf binds to — OPTIONAL (#799). Present for
+   * an operator-mode bus (`--account` / `stack.nats_infra.account`); ABSENT for
+   * a `$G`/default-account bus, where the account binding rides in the creds
+   * JWT and rendering an `account:` line would crash nats-server. No longer a
+   * hard requirement: a `$G` peer (e.g. jc/default) joins with creds only.
+   */
+  account?: string;
   credsPath: string;
   /**
    * #762 — the capability ids this stack announces INTO the network, read from
@@ -324,12 +331,15 @@ export function deriveJoinInputs(
   );
   if (!descriptor.ok) return fail(descriptor.reason);
 
-  const account = overrides.account ?? natsInfra?.account;
-  if (account === undefined || account === "") {
-    return fail(
-      "cannot resolve leaf account — pass --account or set `stack.nats_infra.account` in cortex.yaml",
-    );
-  }
+  // #799 — the leaf account is OPTIONAL. An operator-mode bus supplies it (via
+  // `--account` / `stack.nats_infra.account`) → the leaf renders an `account:`
+  // line. A `$G`/default-account bus has none → the join renders a no-account
+  // leaf (binding rides in the creds JWT). So an absent account is NOT an
+  // error here; the bind-mode decision (resolveLeafBindMode) refuses only the
+  // genuinely-unjoinable case (no creds, or operator-mode missing the account).
+  const accountRaw = overrides.account ?? natsInfra?.account;
+  const account =
+    accountRaw === undefined || accountRaw === "" ? undefined : accountRaw;
 
   // creds — flag wins, else stack.nats_infra.creds_path, else convention.
   const credsPath =
@@ -356,7 +366,7 @@ export function deriveJoinInputs(
       ...(descriptor.plistPath !== undefined && { plistPath: descriptor.plistPath }),
       ...(descriptor.unitPath !== undefined && { unitPath: descriptor.unitPath }),
       platform: descriptor.platform,
-      account,
+      ...(account !== undefined && { account }),
       credsPath,
       announceCapabilities,
     },

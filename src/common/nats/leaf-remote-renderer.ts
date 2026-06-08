@@ -80,13 +80,25 @@ export interface StackLeafBinding {
    */
   credentials: string;
   /**
-   * The LOCAL NATS account (nkey-U `A…`) that leaf traffic binds to.
-   * NSC operator-mode requires each leaf remote to declare this; it is the
-   * stack's user-data account (system traffic stays on SYS). DD-8: the
-   * config surface uses nkey-U; the registry stores base64 — translation
-   * is the join command's job, this renderer takes the already-nkey-U value.
+   * The LOCAL NATS account (nkey-U `A…`) that leaf traffic binds to —
+   * OPTIONAL (#799).
+   *
+   *   - **Operator-mode bus** (NSC operator JWT + `accounts`/`resolver_preload`
+   *     defining the account): the leaf remote MUST declare the account so
+   *     nats-server can resolve it against the local account tree. Pass the
+   *     nkey-U here → the rendered remote carries an `account:` line.
+   *   - **`$G`/default-account bus** (a simple creds-authenticated leaf-client —
+   *     no `operator:`/`accounts{}`): there is NO local account tree to resolve
+   *     an `account:` against, so emitting one makes nats-server refuse to boot
+   *     (`cannot find local account "<A…>"`). The account binding rides in the
+   *     `.creds` JWT instead. OMIT this field (leave `undefined`) → the rendered
+   *     remote has NO `account:` line, mirroring a working hand-built `$G` leaf.
+   *
+   * DD-8: the config surface uses nkey-U; the registry stores base64 —
+   * translation is the join command's job; this renderer takes the
+   * already-nkey-U value (or `undefined` for the `$G`/creds-bound case).
    */
-  account: string;
+  account?: string;
 }
 
 /**
@@ -99,10 +111,15 @@ export interface LeafRemote {
   network_id: string;
   /** Fully-qualified leaf dial URL, e.g. `tls://nats.meta-factory.dev:7422`. */
   url: string;
-  /** Absolute path to the `.creds` file (operator-mode leaf auth). */
+  /** Absolute path to the `.creds` file (leaf auth). */
   credentials: string;
-  /** The local NATS account (nkey-U) the leaf binds to. */
-  account: string;
+  /**
+   * The local NATS account (nkey-U) the leaf binds to — present ONLY in
+   * operator-mode (#799). Absent (`undefined`) for a `$G`/default bus, where
+   * the account binding rides in the `.creds` JWT and an `account:` line would
+   * crash nats-server. When absent, {@link serializeRemote} omits the line.
+   */
+  account?: string;
 }
 
 /** A network id may only be a single path segment of safe characters. */
@@ -171,10 +188,18 @@ function resolveLeafUrl(descriptor: NetworkDescriptor): string {
 
 /**
  * Render a single {@link LeafRemote} from a verified descriptor + the stack's
- * leaf binding. Fails loud at the boundary on a missing/relative creds path
- * or a missing account — operator-mode cannot connect a leaf without either,
- * so a silent bad value would produce a dormant link, the exact trap S3
- * closes.
+ * leaf binding. Fails loud at the boundary on a missing/relative creds path —
+ * a leaf cannot authenticate to the hub without creds, so a silent bad value
+ * would produce a dormant link, the exact trap S3 closes.
+ *
+ * The `account` is OPTIONAL (#799):
+ *   - present → operator-mode; the nkey-U is validated (grammar + HOCON-injection
+ *     guard) and the rendered remote carries an `account:` line.
+ *   - absent → a `$G`/default bus; the rendered remote has NO `account:` line
+ *     and the account binding rides in the `.creds` JWT. (The caller — the join
+ *     orchestrator — decides which mode applies via the bus-type detection in
+ *     {@link natsConfigCanBindAccount}: it passes the account only for an
+ *     operator-mode bus that defines it, and omits it for a `$G`+creds bus.)
  */
 export function renderLeafRemote(
   descriptor: NetworkDescriptor,
@@ -193,27 +218,31 @@ export function renderLeafRemote(
     );
   }
 
-  const account = binding.account.trim();
-  if (account.length === 0) {
-    throw new Error(
-      `leaf-remote-renderer: operator-mode requires a bound account (nkey-U) for network "${descriptor.network_id}"; got empty`,
-    );
-  }
-  if (!NKEY_ACCOUNT.test(account)) {
-    // The account is emitted BARE into HOCON (matching local.conf). Anything
-    // outside the nkey-U grammar could break out of the remotes[] block and
-    // inject directives, so reject it at the boundary — a bad account is a
-    // broken/dormant leaf, the exact trap S3 closes.
-    throw new Error(
-      `leaf-remote-renderer: account for network "${descriptor.network_id}" is not a valid nkey-U account public key (expected ${NKEY_ACCOUNT}); got ${JSON.stringify(binding.account)}`,
-    );
+  // #799 — the account is OPTIONAL. When absent/empty the remote is rendered
+  // WITHOUT an `account:` line (the `$G`/default-bus mode — binding rides in the
+  // creds JWT). When present it must be a valid nkey-U: it is emitted BARE
+  // (unquoted) into HOCON (matching local.conf), so anything outside the nkey-U
+  // grammar could break out of the remotes[] block and inject directives.
+  const account = binding.account?.trim();
+  if (account !== undefined && account.length > 0) {
+    if (!NKEY_ACCOUNT.test(account)) {
+      throw new Error(
+        `leaf-remote-renderer: account for network "${descriptor.network_id}" is not a valid nkey-U account public key (expected ${NKEY_ACCOUNT}); got ${JSON.stringify(binding.account)}`,
+      );
+    }
+    return {
+      network_id: descriptor.network_id,
+      url: resolveLeafUrl(descriptor),
+      credentials,
+      account,
+    };
   }
 
+  // No account → `$G`/default mode: omit `account:` entirely.
   return {
     network_id: descriptor.network_id,
     url: resolveLeafUrl(descriptor),
     credentials,
-    account,
   };
 }
 
@@ -450,15 +479,9 @@ export function natsConfigCanBindAccount(
   const text = stripConfigComments(natsConfigText);
 
   // operator-mode signal: an NSC operator JWT key OR an account-tree directive
-  // (`accounts` / `resolver_preload`). HOCON allows `key:` or `key =` and
-  // leading whitespace; the regex matches the literal config key as its own
-  // token (the NATS account-tree root NSC operator JWT key, not the principal).
-  const hasAccountTree =
-    /^[ \t]*operator[ \t]*[:=]/m.test(text) || // NSC operator JWT key
-    /^[ \t]*accounts[ \t]*[:={]/m.test(text) ||
-    /^[ \t]*resolver_preload[ \t]*[:={]/m.test(text);
-
-  if (!hasAccountTree) {
+  // (`accounts` / `resolver_preload`). Shared with {@link natsConfigHasAccountTree}
+  // so the #794 guard and the #799 bind-mode decision cannot drift.
+  if (!natsConfigHasAccountTree(natsConfigText)) {
     return {
       canBind: false,
       reason:
@@ -480,18 +503,134 @@ export function natsConfigCanBindAccount(
   return { canBind: true };
 }
 
+// =============================================================================
+// #799 — choose the leaf-remote BIND MODE by bus type.
+//
+// #794 added `natsConfigCanBindAccount` to refuse a join that would render an
+// `account:`-bound leaf onto a bus with no matching account (→ nats-server
+// crash). But that conflated two distinct un-bindable shapes:
+//
+//   1. An operator-mode bus that doesn't DEFINE the account → genuinely
+//      un-joinable with that account (still refuse).
+//   2. A `$G`/default-account bus (a simple creds-authenticated leaf-client,
+//      no `operator:`/`accounts{}`) → joinable WITHOUT an `account:` line; the
+//      binding rides in the creds JWT (the working hand-built-leaf shape).
+//
+// Case 2 was wrongly refused. {@link resolveLeafBindMode} is the corrected
+// decision: it returns the bind MODE the renderer should use, given the bus
+// config + the candidate account + whether creds are available.
+// =============================================================================
+
+/** The leaf-remote bind mode {@link resolveLeafBindMode} selects (#799). */
+export type LeafBindMode =
+  /** operator-mode bus that defines the account → render `{ url, creds, account }`. */
+  | { mode: "operator-account"; account: string }
+  /** `$G`/default bus with creds → render `{ url, creds }` (omit `account:`). */
+  | { mode: "creds-only" }
+  /** Un-joinable (no creds, or operator-mode bus missing the account). */
+  | { mode: "refuse"; reason: string };
+
+/**
+ * Decide how a leaf remote for this bus should bind (#799), WITHOUT crashing
+ * nats-server. Pure: reads the config text + the candidate account, writes
+ * nothing.
+ *
+ *   - **operator-mode bus that defines `account`** → `operator-account` (the
+ *     #794-safe account-bound remote; unchanged behaviour).
+ *   - **`$G`/default bus (no operator-mode account tree) WITH creds** →
+ *     `creds-only`: render a no-account remote; the creds JWT binds it. This is
+ *     the case #794 wrongly refused.
+ *   - **no creds at all** → `refuse`: a leaf cannot authenticate to the hub
+ *     without creds, so neither mode is possible.
+ *   - **operator-mode bus that does NOT define `account`** → `refuse`: rendering
+ *     an account-bound remote there crashes nats-server, and there is no creds-
+ *     only fallback for an operator-mode bus (operator-mode leaves are
+ *     account-bound by construction).
+ *
+ * `hasCreds` is supplied by the caller (the orchestrator knows the resolved
+ * creds path); an absent/empty account is treated as "no account offered"
+ * (the `$G` path).
+ */
+export function resolveLeafBindMode(
+  natsConfigText: string,
+  account: string | undefined,
+  hasCreds: boolean,
+): LeafBindMode {
+  if (!hasCreds) {
+    return {
+      mode: "refuse",
+      reason:
+        "no leaf creds available — a leaf cannot authenticate to the hub " +
+        "without a `.creds` file (set stack.nats_infra.creds_path or pass --creds)",
+    };
+  }
+
+  const trimmedAccount = account?.trim();
+  const hasAccount = trimmedAccount !== undefined && trimmedAccount.length > 0;
+
+  // When an account is offered, reuse the #794 detection: if the operator-mode
+  // bus binds it, render account-bound. (canBindAccount also validates the
+  // nkey-U grammar.)
+  if (hasAccount) {
+    const bind = natsConfigCanBindAccount(natsConfigText, trimmedAccount);
+    if (bind.canBind) {
+      return { mode: "operator-account", account: trimmedAccount };
+    }
+    // The bus can't bind the offered account. If it's an OPERATOR-MODE bus that
+    // simply doesn't define this account, refuse (no creds-only fallback for
+    // operator-mode — its leaves are account-bound). If it's a `$G`/default bus
+    // (no account tree at all), fall through to the creds-only path: the offered
+    // account is moot because the binding rides in the creds JWT.
+    if (natsConfigHasAccountTree(natsConfigText)) {
+      return {
+        mode: "refuse",
+        reason: bind.reason ?? `operator-mode bus does not define account ${trimmedAccount}`,
+      };
+    }
+  }
+
+  // No account offered (or a `$G` bus where the account is moot) + creds present
+  // → bind via the creds JWT, no `account:` line.
+  return { mode: "creds-only" };
+}
+
+/**
+ * True iff the config is OPERATOR-MODE — it carries an NSC operator JWT key OR
+ * an account tree (`accounts` / `resolver_preload`). The negation is a
+ * `$G`/default-account bus (a simple creds-authenticated leaf-client). Mirrors
+ * the operator-mode signal inside {@link natsConfigCanBindAccount} (comments
+ * stripped first) so the two cannot drift. (#799)
+ */
+export function natsConfigHasAccountTree(natsConfigText: string): boolean {
+  const text = stripConfigComments(natsConfigText);
+  return (
+    /^[ \t]*operator[ \t]*[:=]/m.test(text) || // NSC operator JWT key
+    /^[ \t]*accounts[ \t]*[:={]/m.test(text) ||
+    /^[ \t]*resolver_preload[ \t]*[:={]/m.test(text)
+  );
+}
+
 /** Serialize one {@link LeafRemote} as a HOCON object literal (indented). */
 function serializeRemote(remote: LeafRemote, indent: string): string {
   // `url` + `credentials` are quoted (they contain `:`, `/`, `.` which are
   // HOCON-significant); `account` is a bare nkey-U token (matches the live
   // local.conf, which leaves the account pubkey unquoted).
-  return [
+  //
+  // #799 — `account:` is OMITTED entirely for a `$G`/default-bus remote (no
+  // account on the binding). A working hand-built `$G` leaf has no `account:`
+  // line — the binding rides in the creds JWT — and emitting one would crash
+  // nats-server (`cannot find local account "<A…>"`). Only an operator-mode
+  // remote (account present) carries the line.
+  const lines = [
     `${indent}{`,
     `${indent}  url: ${JSON.stringify(remote.url)}`,
     `${indent}  credentials: ${JSON.stringify(remote.credentials)}`,
-    `${indent}  account: ${remote.account}`,
-    `${indent}}`,
-  ].join("\n");
+  ];
+  if (remote.account !== undefined && remote.account.length > 0) {
+    lines.push(`${indent}  account: ${remote.account}`);
+  }
+  lines.push(`${indent}}`);
+  return lines.join("\n");
 }
 
 /**

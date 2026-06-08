@@ -165,8 +165,14 @@ function writeProgramArguments(plistPath: string, nextArgs: string[]): void {
   writeFileSync(plistPath, next, "utf-8");
 }
 
-/** Read the launchd `<key>Label</key><string>…</string>`. */
-function readPlistLabel(plistPath: string): string | undefined {
+/**
+ * Read the launchd `<key>Label</key><string>…</string>` from a plist file at
+ * `plistPath`. Returns `undefined` when the file is absent or carries no Label.
+ * Exported (#800) so the daemon-restart adapter can derive the launchctl target
+ * from the CONFIGURED nats plist's Label rather than a slug guess.
+ */
+export function readPlistLabel(plistPath: string): string | undefined {
+  if (!existsSync(plistPath)) return undefined;
   const xml = readFileSync(plistPath, "utf-8");
   const m = /<key>Label<\/key>\s*<string>([\s\S]*?)<\/string>/.exec(xml);
   if (m === null) return undefined;

@@ -25,8 +25,12 @@ import {
   buildLeafStatePort,
   buildLivePorts,
   DEFAULT_MONITOR_URL,
+  resolveDaemonLabel,
   type LivePortsConfig,
 } from "../network-adapters";
+import { leaveNetwork } from "../network-lib";
+import { brandVerified, type RenderLeafInputs } from "../network-ports";
+import type { NetworkDescriptor } from "../../../../common/registry/types";
 import {
   ensureConfigArg,
   renderProgramArguments,
@@ -1168,5 +1172,305 @@ describe("C-797 buildLeafStatePort (/leafz monitor)", () => {
     } finally {
       f.restore();
     }
+  });
+});
+
+// =============================================================================
+// #800 — the cortex DAEMON restart target is resolved from the configured
+// nats plist's <key>Label</key> (suffix-shared with the cortex daemon label),
+// NOT from the stack slug. The peer bug: slug `default`, but the real plists
+// are `…cortex.meta-factory` / `…nats.meta-factory` → a slug-derived
+// `…cortex.default` label always 113/503s.
+// =============================================================================
+
+/** A nats-server plist whose Label is `ai.meta-factory.nats.<suffix>`. */
+function natsPlistWithLabel(suffix: string): string {
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<plist version="1.0">',
+    "<dict>",
+    "\t<key>Label</key>",
+    `\t<string>ai.meta-factory.nats.${suffix}</string>`,
+    "\t<key>ProgramArguments</key>",
+    "\t<array><string>/opt/homebrew/bin/nats-server</string></array>",
+    "</dict>",
+    "</plist>",
+    "",
+  ].join("\n");
+}
+
+describe("#800 daemon restart label resolves from nats_infra.plist_path", () => {
+  test("slug ≠ plist suffix → daemon label uses the PLIST suffix, not the slug", () => {
+    const dir = freshDir();
+    const plistPath = join(dir, "nats.plist");
+    // The peer case: real nats plist suffix is `meta-factory`...
+    writeFileSync(plistPath, natsPlistWithLabel("meta-factory"), "utf-8");
+
+    const cfg: LivePortsConfig = {
+      networkId: "metafactory-community",
+      principalId: "jc",
+      // ...but the stack slug is `default` (the slug-guess bug source).
+      stackId: "jc/default",
+      natsConfigPath: "/Users/jc/.config/nats/local.conf",
+      plistPath,
+      platform: "darwin",
+    };
+
+    // The daemon label maps `…nats.meta-factory` → `…cortex.meta-factory`,
+    // NOT the slug-derived `…cortex.default`.
+    expect(resolveDaemonLabel(cfg)).toBe("ai.meta-factory.cortex.meta-factory");
+    expect(resolveDaemonLabel(cfg)).not.toBe("ai.meta-factory.cortex.default");
+  });
+
+  test("slug == plist suffix → unchanged (label matches the slug, as before)", () => {
+    const dir = freshDir();
+    const plistPath = join(dir, "nats.plist");
+    writeFileSync(plistPath, natsPlistWithLabel("community"), "utf-8");
+    const cfg: LivePortsConfig = {
+      networkId: "community",
+      principalId: "andreas",
+      stackId: "andreas/community",
+      natsConfigPath: "/x/local.conf",
+      plistPath,
+      platform: "darwin",
+    };
+    expect(resolveDaemonLabel(cfg)).toBe("ai.meta-factory.cortex.community");
+  });
+
+  test("a plist already carrying a `.cortex.` label is used verbatim", () => {
+    const dir = freshDir();
+    const plistPath = join(dir, "daemon.plist");
+    writeFileSync(
+      plistPath,
+      natsPlistWithLabel("x").replace("nats.x", "cortex.work"),
+      "utf-8",
+    );
+    const cfg: LivePortsConfig = {
+      networkId: "n",
+      principalId: "andreas",
+      stackId: "andreas/default",
+      natsConfigPath: "/x/local.conf",
+      plistPath,
+      platform: "darwin",
+    };
+    expect(resolveDaemonLabel(cfg)).toBe("ai.meta-factory.cortex.work");
+  });
+
+  test("no readable plist label → falls back to the slug-derived label", () => {
+    const cfg: LivePortsConfig = {
+      networkId: "n",
+      principalId: "jc",
+      stackId: "jc/default",
+      natsConfigPath: "/x/local.conf",
+      plistPath: "/nonexistent/nats.plist",
+      platform: "darwin",
+    };
+    // No plist to read → the slug fallback (best effort) rather than a guess at
+    // the suffix.
+    expect(resolveDaemonLabel(cfg)).toBe("ai.meta-factory.cortex.default");
+  });
+});
+
+// =============================================================================
+// #799 — the live leaf-file port renders a NO-ACCOUNT remote for a $G/default
+// bus (binding rides in the creds JWT) and an account-bound remote for an
+// operator-mode bus. Round-trips a real temp nats config + leaf dir.
+// =============================================================================
+
+function descriptorForLeaf(networkId: string): NetworkDescriptor {
+  return {
+    network_id: networkId,
+    hub_url: "tls://hub.meta-factory.ai:7422",
+    leaf_port: 7422,
+    members: [],
+  };
+}
+
+describe("#799 live leaf write renders no-account vs account-bound by bus type", () => {
+  test("$G/default bus + creds → leaf include file has NO account line", () => {
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    // A $G/default-account bus: no account tree (no operator-mode key,
+    // no `accounts{}`, no resolver_preload).
+    writeFileSync(conf, "jetstream { store_dir: /x/js }\nhttp: localhost:8222\n", "utf-8");
+
+    const cfg: LivePortsConfig = {
+      networkId: "metafactory-community",
+      principalId: "jc",
+      stackId: "jc/default",
+      natsConfigPath: conf,
+      plistPath: "/nonexistent/plist",
+    };
+    const ports = buildLivePorts(cfg);
+
+    // The orchestrator decides the bind mode is creds-only → it passes a binding
+    // with NO account. Here we drive the port directly with that binding.
+    const inputs: RenderLeafInputs = {
+      descriptor: brandVerified(descriptorForLeaf("metafactory-community")),
+      binding: { credentials: "/Users/jc/.config/nats/jc.creds" },
+    };
+    ports.leafFile.write(inputs);
+
+    const leaf = readFileSync(join(dir, "leafnodes-metafactory-community.conf"), "utf-8");
+    expect(leaf).toContain('credentials: "/Users/jc/.config/nats/jc.creds"');
+    expect(leaf).toContain('url: "tls://hub.meta-factory.ai:7422"');
+    // The critical assertion: NO account line (would crash a $G nats-server).
+    expect(leaf).not.toContain("account:");
+
+    // And resolveBindMode for this bus + creds returns creds-only.
+    const mode = ports.leafFile.resolveBindMode(undefined, true);
+    expect(mode.mode).toBe("creds-only");
+  });
+
+  test("operator-mode bus that defines the account → leaf has the account line", () => {
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    const account = "AADPQ7M7LQZTKPNF5CTE7V4XKB2FUYPGKLWZVMW6VXCEEKH62BYKGBHX";
+    writeFileSync(
+      conf,
+      `operator: /x/operator.creds\nresolver_preload: {\n  ${account}: eyJ...\n}\n`,
+      "utf-8",
+    );
+    const cfg: LivePortsConfig = {
+      networkId: "metafactory",
+      principalId: "andreas",
+      stackId: "andreas/meta-factory",
+      natsConfigPath: conf,
+      plistPath: "/nonexistent/plist",
+    };
+    const ports = buildLivePorts(cfg);
+
+    // resolveBindMode says operator-account for this bus + the defined account.
+    const mode = ports.leafFile.resolveBindMode(account, true);
+    expect(mode.mode).toBe("operator-account");
+
+    const inputs: RenderLeafInputs = {
+      descriptor: brandVerified(descriptorForLeaf("metafactory")),
+      binding: { credentials: "/Users/andreas/.config/nats/andreas.creds", account },
+    };
+    ports.leafFile.write(inputs);
+    const leaf = readFileSync(join(dir, "leafnodes-metafactory.conf"), "utf-8");
+    expect(leaf).toContain(`account: ${account}`);
+  });
+
+  test("no creds at all → resolveBindMode refuses (can't authenticate)", () => {
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    writeFileSync(conf, "jetstream { store_dir: /x/js }\n", "utf-8");
+    const ports = buildLivePorts({
+      networkId: "n",
+      principalId: "jc",
+      stackId: "jc/default",
+      natsConfigPath: conf,
+      plistPath: "/nonexistent/plist",
+    });
+    const mode = ports.leafFile.resolveBindMode(undefined, false);
+    expect(mode.mode).toBe("refuse");
+  });
+});
+
+// =============================================================================
+// #801 — `leave` (live) preserves the base `-c <config>` plist arg. Drives the
+// REAL leave orchestration over live FILE ports, but injects a NO-OP daemon
+// port so no `launchctl` is ever spawned (the S4 SAFETY rule — no live
+// mutation/exec in tests). After leaving the last network, the plist STILL
+// carries `-c <config>` so nats-server stays startable.
+// =============================================================================
+
+describe("#801 leave preserves the base -c arg (nats stays startable)", () => {
+  test("after leave with NO networks remaining, the plist still has -c <config>", async () => {
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    const plistPath = join(dir, "nats.plist");
+
+    // Base config that INCLUDES one leaf, and a plist already loading `-c conf`.
+    writeFileSync(
+      conf,
+      ['system_account: ADSYS', 'include "leafnodes-metafactory.conf"', ""].join("\n"),
+      "utf-8",
+    );
+    writeFileSync(join(dir, "leafnodes-metafactory.conf"), "leafnodes { remotes: [] }\n", "utf-8");
+    // Plist with -c <conf> already present + a real nats Label.
+    writeFileSync(
+      plistPath,
+      [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<plist version="1.0">',
+        "<dict>",
+        "\t<key>Label</key>",
+        "\t<string>ai.meta-factory.nats.meta-factory</string>",
+        "\t<key>ProgramArguments</key>",
+        "\t<array>",
+        "\t\t<string>/opt/homebrew/bin/nats-server</string>",
+        "\t\t<string>-c</string>",
+        `\t\t<string>${conf}</string>`,
+        "\t</array>",
+        "</dict>",
+        "</plist>",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    // A stack config carrying the one joined network, in the flat layout under a
+    // temp HOME (so the live ConfigStorePort reads/writes it).
+    const home = freshDir();
+    const stacksDir = join(home, ".config", "cortex", "stacks");
+    mkdirSync(stacksDir, { recursive: true });
+    writeFileSync(
+      join(stacksDir, "default.yaml"),
+      [
+        "policy:",
+        "  federated:",
+        "    networks:",
+        "      - id: metafactory",
+        "        leaf_node: metafactory",
+        "        peers: []",
+        "        accept_subjects: [federated.jc.default.>]",
+        "        deny_subjects: []",
+        "        announce_capabilities: []",
+        "        max_hop: 1",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const cfg: LivePortsConfig = {
+      networkId: "metafactory",
+      principalId: "jc",
+      stackId: "jc/default",
+      natsConfigPath: conf,
+      plistPath,
+      platform: "darwin",
+    };
+
+    const prevHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const ports = buildLivePorts(cfg);
+      // Inject a no-op daemon port — the live file teardown is what we assert on;
+      // we must NOT spawn launchctl in a test (S4 SAFETY rule).
+      const noSpawnPorts = {
+        ...ports,
+        daemon: { async restart() { return { ok: true } as const; } },
+      };
+      await leaveNetwork("metafactory", noSpawnPorts);
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+    }
+
+    // The base config is intact and STILL referenced by the plist `-c` arg
+    // (the #801 fix: leave NEVER strips it).
+    const plistAfter = readFileSync(plistPath, "utf-8");
+    expect(plistAfter).toContain("<string>-c</string>");
+    expect(plistAfter).toContain(`<string>${conf}</string>`);
+
+    // The network-specific teardown DID happen: the include directive is gone +
+    // the leaf file deleted + the policy entry removed.
+    const confAfter = readFileSync(conf, "utf-8");
+    expect(confAfter).not.toContain('include "leafnodes-metafactory.conf"');
+    expect(confAfter).toContain("system_account: ADSYS"); // base config intact
+    expect(existsSync(join(dir, "leafnodes-metafactory.conf"))).toBe(false);
   });
 });

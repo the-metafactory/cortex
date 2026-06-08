@@ -20,10 +20,12 @@ import { describe, expect, test } from "bun:test";
 
 import type { NetworkDescriptor } from "../../registry/types";
 import {
+  natsConfigHasAccountTree,
   leafIncludeFileName,
   mergeLeafRemotes,
   renderLeafIncludeFile,
   renderLeafRemote,
+  resolveLeafBindMode,
   type LeafRemote,
   type StackLeafBinding,
 } from "../leaf-remote-renderer";
@@ -91,9 +93,21 @@ describe("renderLeafRemote", () => {
     expect(() => renderLeafRemote(DESCRIPTOR, bad)).toThrow();
   });
 
-  test("throws on a missing account (operator-mode requires the bound account)", () => {
-    const bad: StackLeafBinding = { ...BINDING, account: "" };
-    expect(() => renderLeafRemote(DESCRIPTOR, bad)).toThrow();
+  // #799 — a missing account is NO LONGER an error: it is the $G/default-bus
+  // mode where the binding rides in the creds JWT. The remote renders WITHOUT
+  // an account.
+  test("#799 omits account when none is supplied ($G/default bus)", () => {
+    const noAccount: StackLeafBinding = { credentials: BINDING.credentials };
+    const remote = renderLeafRemote(DESCRIPTOR, noAccount);
+    expect(remote.account).toBeUndefined();
+    expect(remote.url).toBe("tls://nats.meta-factory.dev:7422");
+    expect(remote.credentials).toBe(BINDING.credentials);
+  });
+
+  test("#799 treats an empty-string account the same as absent (no account)", () => {
+    const empty: StackLeafBinding = { ...BINDING, account: "" };
+    const remote = renderLeafRemote(DESCRIPTOR, empty);
+    expect(remote.account).toBeUndefined();
   });
 
   test("rejects an account that is not a valid nkey-U (HOCON-injection guard)", () => {
@@ -227,5 +241,115 @@ describe("renderLeafIncludeFile — HOCON fragment for a single network", () => 
     expect(renderLeafIncludeFile(DESCRIPTOR, BINDING)).toBe(
       renderLeafIncludeFile(DESCRIPTOR, BINDING),
     );
+  });
+
+  // #799 — a $G/default bus renders a NO-ACCOUNT remote: no `account:` line at
+  // all (the creds JWT binds it). An emitted `account:` would crash nats-server.
+  test("#799 emits NO `account:` line for a $G/default bus (account omitted)", () => {
+    const noAccount: StackLeafBinding = { credentials: BINDING.credentials };
+    const conf = renderLeafIncludeFile(DESCRIPTOR, noAccount);
+    // url + credentials still present...
+    expect(conf).toContain('url: "tls://nats.meta-factory.dev:7422"');
+    expect(conf).toContain(
+      'credentials: "/Users/andreas/.config/nats/andreas.creds"',
+    );
+    // ...but NO account line anywhere (the regression that crashed the bus).
+    expect(conf).not.toContain("account:");
+    expect(conf).not.toMatch(/account\s*:/);
+  });
+
+  test("#799 operator-mode bus still emits the account line (unchanged)", () => {
+    const conf = renderLeafIncludeFile(DESCRIPTOR, BINDING);
+    expect(conf).toContain(
+      "account: AADPQ7M7LQZTKPNF5CTE7V4XKB2FUYPGKLWZVMW6VXCEEKH62BYKGBHX",
+    );
+  });
+});
+
+// =============================================================================
+// #799 — bus-type detection + bind-mode resolution.
+// =============================================================================
+
+// A representative operator-mode config: NSC operator JWT + resolver +
+// system_account + the account named in the account tree. (The account-tree
+// root key path is an NSC operator.creds carve-out, not a principal.)
+const OPERATOR_MODE_CONF = [
+  "operator: /Users/andreas/.config/nats/operator.creds",
+  "system_account: ADSYSACCOUNT",
+  "resolver_preload: {",
+  "  AADPQ7M7LQZTKPNF5CTE7V4XKB2FUYPGKLWZVMW6VXCEEKH62BYKGBHX: eyJ...",
+  "}",
+  "",
+].join("\n");
+
+// A $G/default-account config: a simple creds-authenticated leaf-client — no
+// account tree (no operator-mode key, no `accounts{}`, no resolver_preload).
+const DEFAULT_G_CONF = [
+  "// $G/default-account bus — a simple leaf-client.",
+  "jetstream { store_dir: /Users/jc/.config/nats/js }",
+  "http: localhost:8222",
+  "",
+].join("\n");
+
+const VALID_ACCOUNT = "AADPQ7M7LQZTKPNF5CTE7V4XKB2FUYPGKLWZVMW6VXCEEKH62BYKGBHX";
+
+describe("#799 natsConfigHasAccountTree", () => {
+  test("true for an operator-mode config (operator JWT / resolver_preload)", () => {
+    expect(natsConfigHasAccountTree(OPERATOR_MODE_CONF)).toBe(true);
+  });
+
+  test("true when only `accounts {` is present", () => {
+    expect(natsConfigHasAccountTree("accounts {\n  A: { users: [] }\n}\n")).toBe(true);
+  });
+
+  test("false for a $G/default-account config (no account tree)", () => {
+    expect(natsConfigHasAccountTree(DEFAULT_G_CONF)).toBe(false);
+  });
+
+  test("a COMMENTED-OUT account-tree key does not count (comments stripped)", () => {
+    const commented = "// operator: /x/operator.creds\n# accounts { }\njetstream { }\n";
+    expect(natsConfigHasAccountTree(commented)).toBe(false);
+  });
+});
+
+describe("#799 resolveLeafBindMode", () => {
+  test("operator-mode bus + defined account + creds → operator-account", () => {
+    const mode = resolveLeafBindMode(OPERATOR_MODE_CONF, VALID_ACCOUNT, true);
+    expect(mode.mode).toBe("operator-account");
+    if (mode.mode === "operator-account") expect(mode.account).toBe(VALID_ACCOUNT);
+  });
+
+  test("$G/default bus + creds (no account) → creds-only (the #799 fix)", () => {
+    const mode = resolveLeafBindMode(DEFAULT_G_CONF, undefined, true);
+    expect(mode.mode).toBe("creds-only");
+  });
+
+  test("$G/default bus + creds + a stray account → STILL creds-only (account moot)", () => {
+    // Even if an account is offered, a $G bus has no account tree to bind it —
+    // the binding rides in the creds JWT, so we render no-account rather than
+    // refuse (and rather than crash by emitting an unresolvable account line).
+    const mode = resolveLeafBindMode(DEFAULT_G_CONF, VALID_ACCOUNT, true);
+    expect(mode.mode).toBe("creds-only");
+  });
+
+  test("no creds at all → refuse (cannot authenticate to the hub)", () => {
+    const mode = resolveLeafBindMode(DEFAULT_G_CONF, undefined, false);
+    expect(mode.mode).toBe("refuse");
+    if (mode.mode === "refuse") expect(mode.reason).toContain("creds");
+  });
+
+  test("operator-mode bus that does NOT define the account → refuse (would crash)", () => {
+    // An operator-mode bus whose account tree lacks THIS account: rendering an
+    // account-bound leaf crashes nats-server, and operator-mode has no creds-
+    // only fallback (its leaves are account-bound by construction).
+    const otherAccountConf = [
+      "operator: /x/operator.creds",
+      "resolver_preload: {",
+      "  ASOMEOTHERACCOUNTXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX: eyJ...",
+      "}",
+      "",
+    ].join("\n");
+    const mode = resolveLeafBindMode(otherAccountConf, VALID_ACCOUNT, true);
+    expect(mode.mode).toBe("refuse");
   });
 });

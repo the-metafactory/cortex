@@ -320,7 +320,32 @@ describe("deriveJoinInputs — actionable missing-config errors", () => {
     expect(res.reason).toContain("stack.nats_infra.config_path");
   });
 
-  test("no account → names stack.nats_infra.account", () => {
+  test("#799 no account → derives OK with account undefined ($G/default bus)", () => {
+    // Pre-#799 a missing account FAILED ("names stack.nats_infra.account"). After
+    // #799 the account is OPTIONAL: a $G/default-account bus has none, and the
+    // join renders a no-account leaf (binding via the creds JWT). The genuine
+    // refusal (no creds / operator-mode missing account) is decided downstream
+    // by resolveLeafBindMode, not here.
+    const cfg = loaded({
+      principal: { id: "jc" },
+      stack: {
+        id: "jc/default",
+        nkey_seed_path: "~/s",
+        nats_infra: { config_path: "~/c", plist_path: "~/p" },
+      },
+      policy: {
+        principals: [], roles: [],
+        federated: { networks: [], registry: { url: "https://r" } },
+      },
+    });
+    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(cfg), "darwin");
+    expect(res.ok).toBe(true);
+    expect(res.inputs?.account).toBeUndefined();
+    // creds still resolve via convention.
+    expect(res.inputs?.credsPath).toBeDefined();
+  });
+
+  test("#799 --account override is still honoured (operator-mode opt-in)", () => {
     const cfg = loaded({
       principal: { id: "andreas" },
       stack: {
@@ -333,13 +358,10 @@ describe("deriveJoinInputs — actionable missing-config errors", () => {
         federated: { networks: [], registry: { url: "https://r" } },
       },
     });
-    // Pin darwin so the deriver reaches the account check (the `plist_path`
-    // fixture satisfies the macOS descriptor); without the pin, the Linux CI
-    // host hits the systemd `unit_path` error FIRST and names the wrong field
-    // (cortex#771 — pre-existing #762/#763 breakage surfaced here).
-    const res = deriveJoinInputs("metafactory", {}, "/cfg", reader(cfg), "darwin");
-    expect(res.ok).toBe(false);
-    expect(res.reason).toContain("stack.nats_infra.account");
+    const acct = "A" + "B".repeat(55);
+    const res = deriveJoinInputs("metafactory", { account: acct }, "/cfg", reader(cfg), "darwin");
+    expect(res.ok).toBe(true);
+    expect(res.inputs?.account).toBe(acct);
   });
 });
 

@@ -113,6 +113,8 @@ interface Recorder {
   warnings: string[];
   /** #794 — accounts the orchestrator pre-flighted via canBindAccount(). */
   bindChecks: string[];
+  /** #799 — bind-mode resolutions: the (account, hasCreds) pairs queried. */
+  bindModeChecks: { account: string | undefined; hasCreds: boolean }[];
 }
 
 function makeFakes(opts: {
@@ -128,6 +130,13 @@ function makeFakes(opts: {
   leafState?: LeafStatePort;
   /** #794 — make the stack's nats config UNABLE to bind the leaf account. */
   canBind?: boolean;
+  /**
+   * #799 — model the bus type the leaf-file port resolves a bind mode against:
+   *   - "operator-mode" (default) → operator-mode bus that binds the account.
+   *   - "default-g"               → $G/default-account bus (no account tree).
+   * The fake's `resolveBindMode` mirrors the real `resolveLeafBindMode` decision.
+   */
+  busType?: "operator-mode" | "default-g";
 }): { ports: NetworkPorts; rec: Recorder; storeRef: { networks: PolicyFederatedNetwork[] } } {
   const rec: Recorder = {
     registered: 0,
@@ -143,6 +152,7 @@ function makeFakes(opts: {
     configWrites: [],
     warnings: [],
     bindChecks: [],
+    bindModeChecks: [],
   };
   const storeRef = { networks: opts.initialNetworks ?? [] };
   const leafFilesPresent = new Set<string>(
@@ -201,6 +211,34 @@ function makeFakes(opts: {
               "config is anonymous/hard-isolated (no operator-mode account tree)",
           }
         : { canBind: true };
+    },
+    resolveBindMode(account, hasCreds) {
+      rec.bindModeChecks.push({ account, hasCreds });
+      // #799 — mirror the real resolveLeafBindMode decision over the modelled
+      // bus type. No creds → refuse (can't authenticate to the hub).
+      if (!hasCreds) {
+        return { mode: "refuse", reason: "no leaf creds available" };
+      }
+      const busType = opts.busType ?? "operator-mode";
+      if (busType === "default-g") {
+        // $G/default-account bus + creds → no-account remote (creds JWT binds).
+        return { mode: "creds-only" };
+      }
+      // operator-mode bus. `canBind: false` models an operator-mode bus that
+      // does NOT define the offered account → refuse (would crash nats-server).
+      if (opts.canBind === false) {
+        return {
+          mode: "refuse",
+          reason: "operator-mode bus does not define the leaf account",
+        };
+      }
+      const trimmed = account?.trim();
+      if (trimmed !== undefined && trimmed.length > 0) {
+        return { mode: "operator-account", account: trimmed };
+      }
+      // operator-mode bus but no account offered → creds-only (the binding must
+      // ride in the creds JWT; nothing to account-bind).
+      return { mode: "creds-only" };
     },
   };
 
@@ -294,33 +332,40 @@ describe("join", () => {
     expect(net.id).toBe("metafactory");
     // (e) restarted.
     expect(rec.restarts).toBe(1);
-    // (b.5) #794 — the account was pre-flighted before any mutation.
-    expect(rec.bindChecks).toEqual([LOCAL.account]);
+    // (b.5) #799 — the bind mode was resolved before any mutation (account +
+    // creds present → operator-account).
+    expect(rec.bindModeChecks).toEqual([
+      { account: LOCAL.account, hasCreds: true },
+    ]);
+    // The operator-mode account WAS written into the leaf remote.
+    expect(rec.writes[0]!.binding.account).toBe(LOCAL.account);
   });
 
   // ---------------------------------------------------------------------------
-  // #794 — FAIL FAST on a bus that can't bind the leaf account (no crash).
+  // #794/#799 — choose the bind mode by bus type; FAIL FAST only on a genuinely
+  // un-joinable bus (no crash). #799 relaxes the #794 guard for $G+creds buses.
   // ---------------------------------------------------------------------------
-  describe("#794 fail-fast (anonymous / hard-isolated bus)", () => {
-    test("REFUSES when the nats config can't bind the leaf account", async () => {
-      const { ports } = makeFakes({ canBind: false });
+  describe("#794/#799 bind-mode fail-fast", () => {
+    test("REFUSES when an operator-mode bus does NOT define the leaf account", async () => {
+      // canBind:false models an operator-mode bus missing THIS account → still
+      // refuse (rendering an account-bound leaf there crashes nats-server).
+      const { ports } = makeFakes({ canBind: false, busType: "operator-mode" });
       const res = await joinNetwork("metafactory", LOCAL, ports);
 
       expect(res.ok).toBe(false);
-      // Actionable error: names the config path, the missing account, the fix.
+      // Actionable error: names the config path + the fix + the issue refs.
       expect(res.reason).toContain("/Users/andreas/.config/nats/local.conf");
-      expect(res.reason).toContain(LOCAL.account);
       expect(res.reason).toContain("operator-mode");
-      expect(res.reason).toContain("cortex#794");
+      expect(res.reason).toContain("cortex#794/#799");
     });
 
     test("touches NOTHING when it refuses (no leaf, no include, no restart)", async () => {
-      const { ports, rec, storeRef } = makeFakes({ canBind: false });
+      const { ports, rec, storeRef } = makeFakes({ canBind: false, busType: "operator-mode" });
       const res = await joinNetwork("metafactory", LOCAL, ports);
 
       expect(res.ok).toBe(false);
-      // The pre-flight ran...
-      expect(rec.bindChecks).toEqual([LOCAL.account]);
+      // The bind-mode pre-flight ran...
+      expect(rec.bindModeChecks).toEqual([{ account: LOCAL.account, hasCreds: true }]);
       // ...but NO mutation followed it.
       expect(rec.writes.length).toBe(0); // no leaf include written
       expect(rec.includesEnsured).toEqual([]); // no local.conf include
@@ -331,26 +376,84 @@ describe("join", () => {
       expect(storeRef.networks.length).toBe(0); // config untouched
     });
 
-    test("dry-run surfaces the SAME refusal (canBindAccount is a READ)", async () => {
-      // The orchestrator is identical under dry-run/live; the fake models the
-      // dry-run adapter (reads hit disk, writes no-op) — and the guard fires on
-      // the READ, so a dry-run join refuses just like --apply would.
-      const { ports, rec } = makeFakes({ canBind: false });
+    test("dry-run surfaces the SAME refusal (resolveBindMode is a READ)", async () => {
+      const { ports, rec } = makeFakes({ canBind: false, busType: "operator-mode" });
       const res = await joinNetwork("metafactory", LOCAL, ports);
       expect(res.ok).toBe(false);
-      expect(res.reason).toContain("cortex#794");
+      expect(res.reason).toContain("cortex#794/#799");
       expect(rec.writes.length).toBe(0);
     });
 
-    test("proceeds normally when the config CAN bind the account", async () => {
-      const { ports, rec, storeRef } = makeFakes({ canBind: true });
+    test("proceeds account-bound when the operator-mode bus CAN bind the account", async () => {
+      const { ports, rec, storeRef } = makeFakes({ canBind: true, busType: "operator-mode" });
       const res = await joinNetwork("metafactory", LOCAL, ports);
       expect(res.ok).toBe(true);
-      expect(rec.bindChecks).toEqual([LOCAL.account]);
-      // Existing join flow unchanged: leaf written, restarted, config written.
+      expect(rec.bindModeChecks).toEqual([{ account: LOCAL.account, hasCreds: true }]);
+      // Existing join flow unchanged: account-bound leaf written, restarted.
       expect(rec.writes.length).toBe(1);
+      expect(rec.writes[0]!.binding.account).toBe(LOCAL.account);
       expect(rec.restarts).toBe(1);
       expect(storeRef.networks.length).toBe(1);
+    });
+
+    // -------------------------------------------------------------------------
+    // #799 — the critical new behaviour: a $G/default-account bus + creds is
+    // now JOINABLE via a NO-ACCOUNT leaf remote (the case #794 wrongly refused).
+    // -------------------------------------------------------------------------
+    test("#799 $G/default bus + creds → joins with a NO-ACCOUNT leaf remote", async () => {
+      // The driving case: jc/default ($G bus + jc.creds) → metafactory-community.
+      const G_PEER: JoiningStack = {
+        principalId: "jc",
+        stackSlug: "default",
+        credentials: "/Users/jc/.config/nats/jc.creds",
+        // No account — a $G bus has no operator-mode account to bind.
+      };
+      const { ports, rec, storeRef } = makeFakes({ busType: "default-g" });
+      const res = await joinNetwork("metafactory-community", G_PEER, ports);
+
+      expect(res.ok).toBe(true);
+      // The leaf remote was rendered WITHOUT an account (creds JWT binds it).
+      expect(rec.writes.length).toBe(1);
+      expect(rec.writes[0]!.binding.account).toBeUndefined();
+      expect(rec.writes[0]!.binding.credentials).toBe(
+        "/Users/jc/.config/nats/jc.creds",
+      );
+      // The join completed end-to-end (config written, restarted) — the bus is
+      // NOT taken down.
+      expect(storeRef.networks.length).toBe(1);
+      expect(rec.restarts).toBe(1);
+      // The bind-mode pre-flight saw creds present (account omitted is fine).
+      expect(rec.bindModeChecks).toEqual([{ account: undefined, hasCreds: true }]);
+    });
+
+    test("#799 a $G+creds bus is NOT refused by the #794 fail-fast", async () => {
+      // Explicit regression for the #794-over-refusal: a $G bus with creds must
+      // NOT be refused even though it cannot bind an account.
+      const G_PEER: JoiningStack = {
+        principalId: "jc",
+        stackSlug: "default",
+        credentials: "/Users/jc/.config/nats/jc.creds",
+      };
+      const { ports } = makeFakes({ busType: "default-g" });
+      const res = await joinNetwork("metafactory-community", G_PEER, ports);
+      expect(res.ok).toBe(true);
+      if (!res.ok) expect(res.reason).toBeUndefined();
+    });
+
+    test("#799 REFUSES when there are NO creds (can't authenticate to the hub)", async () => {
+      const NO_CREDS: JoiningStack = {
+        principalId: "jc",
+        stackSlug: "default",
+        credentials: "", // no creds
+      };
+      const { ports, rec, storeRef } = makeFakes({ busType: "default-g" });
+      const res = await joinNetwork("metafactory-community", NO_CREDS, ports);
+      expect(res.ok).toBe(false);
+      expect(res.reason).toContain("cortex#794/#799");
+      // No mutation followed the refusal.
+      expect(rec.writes.length).toBe(0);
+      expect(storeRef.networks.length).toBe(0);
+      expect(rec.bindModeChecks).toEqual([{ account: undefined, hasCreds: false }]);
     });
   });
 
@@ -713,7 +816,7 @@ describe("leave", () => {
     };
   }
 
-  test("reverses exactly: removes config + leaf, drops plist arg, restarts", async () => {
+  test("reverses exactly: removes config + leaf, PRESERVES base -c arg, restarts (#801)", async () => {
     const { ports, rec, storeRef } = makeFakes({
       initialNetworks: [joinedNetwork("metafactory")],
     });
@@ -726,13 +829,20 @@ describe("leave", () => {
     expect(rec.includesRemoved).toEqual(["metafactory"]);
     // Leaf include deleted.
     expect(rec.removes).toEqual(["metafactory"]);
-    // No networks remain → plist -c dropped.
-    expect(rec.dropped).toEqual(["/Users/andreas/.config/nats/local.conf"]);
+    // #801 — even with NO networks remaining, the base nats-server `-c <config>`
+    // arg is NEVER stripped (it names the BASE config the leaf files include
+    // INTO; stripping it leaves nats-server unstartable). dropConfigArg is never
+    // called by leave.
+    expect(rec.dropped).toEqual([]);
+    // The step log records the intentional preservation.
+    expect(
+      res.steps.some((s) => s.includes("left intact") && s.includes("#801")),
+    ).toBe(true);
     // Restarted.
     expect(rec.restarts).toBe(1);
   });
 
-  test("keeps the plist arg when other networks remain", async () => {
+  test("#801 leave with networks remaining also never drops the base -c arg", async () => {
     const { ports, rec, storeRef } = makeFakes({
       initialNetworks: [joinedNetwork("metafactory"), joinedNetwork("research")],
     });
@@ -740,7 +850,7 @@ describe("leave", () => {
     expect(res.ok).toBe(true);
     expect(storeRef.networks.map((n) => n.id)).toEqual(["research"]);
     expect(rec.removes).toEqual(["metafactory"]);
-    // research still has a leaf → plist arg NOT dropped.
+    // base -c arg never dropped (true regardless of remaining networks).
     expect(rec.dropped.length).toBe(0);
   });
 

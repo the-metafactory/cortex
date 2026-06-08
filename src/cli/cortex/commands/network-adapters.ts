@@ -39,10 +39,12 @@ import {
   natsConfigCanBindAccount,
   removeLeafInclude,
   renderLeafIncludeFile,
+  resolveLeafBindMode,
 } from "../../../common/nats/leaf-remote-renderer";
 import {
   bunExecRunner,
   currentServicePlatform,
+  readPlistLabel,
   selectNatsServiceManager,
   type NatsServiceManager,
   type ServicePlatform,
@@ -391,6 +393,17 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
         : "";
       return natsConfigCanBindAccount(text, account);
     },
+    resolveBindMode(account, hasCreds) {
+      // #799 — pure READ (identical in live + dry-run): choose the leaf-remote
+      // bind mode by bus type. operator-mode + account → account-bound; $G
+      // /default + creds → no-account (creds JWT binds); neither possible →
+      // refuse. An absent/empty config file reads as a $G/default bus.
+      const configPath = expandTilde(cfg.natsConfigPath ?? "");
+      const text = existsSync(configPath)
+        ? readFileSync(configPath, "utf-8")
+        : "";
+      return resolveLeafBindMode(text, account, hasCreds);
+    },
   };
 }
 
@@ -521,11 +534,44 @@ function buildConfigStorePort(cfg: LivePortsConfig, mutate: boolean): ConfigStor
 // Daemon port — launchctl kickstart of the stack daemon.
 // =============================================================================
 
+/**
+ * #800 — resolve the cortex DAEMON launchctl label.
+ *
+ * The bug: the label was derived as `ai.meta-factory.cortex.<stack-slug>`. When
+ * the slug ≠ the plist suffix (the peer case — slug `default`, but the real
+ * plists are `…cortex.meta-factory` / `…nats.meta-factory`) the kickstart always
+ * 113/503s against a service that does not exist.
+ *
+ * The cortex daemon plist and the nats-server plist share a SUFFIX
+ * (`ai.meta-factory.cortex.<suffix>` ↔ `ai.meta-factory.nats.<suffix>`). The
+ * configured `stack.nats_infra.plist_path` is the authority for that suffix, so
+ * we read the nats plist's `<key>Label</key>` and swap its service segment
+ * (`…nats.<suffix>` → `…cortex.<suffix>`) to name the cortex daemon. The slug is
+ * only a last-resort fallback when no plist label can be read (e.g. a Linux
+ * stack with a unit, or a missing plist).
+ */
+export function resolveDaemonLabel(cfg: LivePortsConfig): string {
+  const slugFallback = `ai.meta-factory.cortex.${cfg.stackId.split("/")[1] ?? "default"}`;
+  const plistPath = cfg.plistPath !== undefined ? expandTilde(cfg.plistPath) : undefined;
+  if (plistPath === undefined) return slugFallback;
+  const natsLabel = readPlistLabel(plistPath);
+  if (natsLabel === undefined) return slugFallback;
+  // Map the nats-server service segment to the cortex daemon segment, preserving
+  // the shared suffix: `<prefix>.nats.<suffix>` → `<prefix>.cortex.<suffix>`.
+  // If the label is already a `.cortex.` label (a stack that points plist_path
+  // at the cortex daemon plist directly), use it verbatim.
+  if (natsLabel.includes(".cortex.")) return natsLabel;
+  if (natsLabel.includes(".nats.")) return natsLabel.replace(/\.nats\./, ".cortex.");
+  // An unrecognised label shape — fall back to the slug-derived label rather
+  // than kickstart an unexpected service.
+  return slugFallback;
+}
+
 function buildDaemonPort(cfg: LivePortsConfig, mutate: boolean): DaemonPort {
   return {
     async restart() {
       if (!mutate) return { ok: true }; // dry-run: pretend success.
-      const label = `ai.meta-factory.cortex.${cfg.stackId.split("/")[1] ?? "default"}`;
+      const label = resolveDaemonLabel(cfg);
       const proc = Bun.spawn(["launchctl", "kickstart", "-k", `gui/${process.getuid?.() ?? 501}/${label}`], {
         stdout: "pipe",
         stderr: "pipe",
@@ -533,7 +579,7 @@ function buildDaemonPort(cfg: LivePortsConfig, mutate: boolean): DaemonPort {
       const code = await proc.exited;
       if (code !== 0) {
         const err = await new Response(proc.stderr).text();
-        return { ok: false, reason: `launchctl kickstart exited ${code.toString()}: ${err.trim()}` };
+        return { ok: false, reason: `launchctl kickstart ${label} exited ${code.toString()}: ${err.trim()}` };
       }
       return { ok: true };
     },

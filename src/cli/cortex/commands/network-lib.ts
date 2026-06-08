@@ -57,8 +57,12 @@ export interface JoiningStack {
   stackSlug: string;
   /** Path to the leaf `.creds` file (absolute). */
   credentials: string;
-  /** Local nkey-U account the leaf binds to (DD-8 already in nkey-U). */
-  account: string;
+  /**
+   * Local nkey-U account the leaf binds to (DD-8 already in nkey-U) — OPTIONAL
+   * (#799). Present for an operator-mode bus; OMITTED for a `$G`/default bus
+   * (the binding rides in the creds JWT, so no `account:` is rendered).
+   */
+  account?: string;
   /**
    * The `leaf_node` connection name to write on the network entry. Defaults to
    * the network id when unset (one leaf per network, OQ3-clean).
@@ -189,32 +193,40 @@ export async function joinNetwork(
   // would be a tsc error at the next line.
   const verified = brandVerified(descriptor);
 
-  // (b.5) #794 — FAIL FAST: never render a leaf that would CRASH the stack's
-  // bus. The leaf remote binds `stack.account` (nkey-U); nats-server resolves
-  // that account against the LOCAL nats config's account tree on startup. If
-  // the config is anonymous + hard-isolated (no operator-mode account tree —
-  // the halden/community pattern) or is operator-mode but doesn't define THIS
-  // account, nats-server crashes (`cannot find local account "<A…>" specified
-  // in leafnode remote`) and the whole bus goes DOWN. So pre-validate the
-  // resolved config BEFORE any mutation (no leaf write, no include, no
-  // restart) — a READ, so dry-run surfaces the same refusal. Recoverable: the
-  // operator converts the bus to operator-mode (define the account) or passes a
-  // config that does. Refusing here is strictly safer than a crashed server.
-  const bind = ports.leafFile.canBindAccount(stack.account);
-  if (!bind.canBind) {
+  // (b.5) #799 (peer-side counterpart to #794) — choose the leaf-remote BIND
+  // MODE by bus type, and FAIL FAST only on a genuinely un-joinable bus.
+  //
+  // The leaf remote authenticates with `stack.credentials` and (in operator-mode)
+  // binds `stack.account`. nats-server resolves an `account:` line against the
+  // LOCAL config's account tree on startup:
+  //   - operator-mode bus that defines the account → render account-bound (#794).
+  //   - `$G`/default bus (no account tree) + creds → render NO-account; the
+  //     creds JWT binds it (the case #794 wrongly refused → bus stayed down).
+  //   - no creds, or operator-mode bus missing the account → REFUSE (rendering
+  //     an account-bound leaf there crashes nats-server, taking the bus DOWN).
+  // This is a READ (no mutation), so dry-run surfaces the same decision.
+  const hasCreds =
+    typeof stack.credentials === "string" && stack.credentials.trim().length > 0;
+  const bindMode = ports.leafFile.resolveBindMode(stack.account, hasCreds);
+  if (bindMode.mode === "refuse") {
     const configPath = ports.leafFile.natsConfigPath();
     return {
       ok: false,
       steps,
       reason:
-        `nats config ${configPath} cannot bind account ${stack.account} ` +
-        `(${bind.reason ?? "unknown"}) — this bus is anonymous/isolated and ` +
-        `cannot federate. Convert it to operator-mode (define the account; see ` +
-        `docs/sop-stack-onboarding.md §Part 2) or pass a config that defines the ` +
-        `account (--nats-config). Refusing to render a leaf that would crash ` +
-        `nats-server (cortex#794).`,
+        `nats config ${configPath} cannot federate (${bindMode.reason}). ` +
+        `An operator-mode bus must DEFINE the leaf account (convert it — see ` +
+        `docs/sop-stack-onboarding.md §Part 2 — or pass a config that does via ` +
+        `--nats-config); a $G/default bus needs valid leaf creds. Refusing to ` +
+        `render a leaf that would crash nats-server (cortex#794/#799).`,
     };
   }
+
+  // The account written into the leaf remote: the nkey-U for an operator-mode
+  // bus, or OMITTED (undefined) for a $G/default bus (#799 — the binding rides
+  // in the creds JWT; an `account:` line there crashes nats-server).
+  const leafAccount =
+    bindMode.mode === "operator-account" ? bindMode.account : undefined;
 
   // (c) Render + write the leaf include (S3) and ensure the plist loads the
   // nats config (DD-6, closes the configured-but-dormant trap). The renderer
@@ -222,7 +234,10 @@ export async function joinNetwork(
   try {
     ports.leafFile.write({
       descriptor: verified,
-      binding: { credentials: stack.credentials, account: stack.account },
+      binding: {
+        credentials: stack.credentials,
+        ...(leafAccount !== undefined && { account: leafAccount }),
+      },
     });
   } catch (err) {
     return {
@@ -423,9 +438,13 @@ export function mergeNetwork(
 /**
  * Leave `networkId` — the exact reverse of join, idempotently:
  *   - remove the network from policy.federated.networks[],
+ *   - remove the `include` directive from the base nats config,
  *   - delete the leaf include file,
- *   - if NO leaf includes remain, drop the plist `-c` arg,
  *   - restart the daemon.
+ *
+ * #801 — leave NEVER strips the base `-c <config>` plist arg. That config is
+ * the BASE nats-server config the leaf files are `include`d into, not a
+ * per-network artifact; removing it would leave nats-server unstartable.
  *
  * A leave of a network that was never joined is a clean no-op (ok, notJoined).
  */
@@ -467,12 +486,19 @@ export async function leaveNetwork(
     ports.leafFile.remove(networkId);
     steps.push(`deleted leaf include for "${networkId}"`);
 
-    // If no networks have a leaf include anymore, drop the plist -c arg so the
-    // server reverts to its bare invocation (clean teardown).
-    const stillHaveLeaves = ports.leafFile.list().length > 0;
-    if (!stillHaveLeaves) {
-      ports.plist.dropConfigArg(ports.leafFile.natsConfigPath());
-      steps.push("no networks remain — dropped nats-server plist -c arg");
+    // #801 — DO NOT touch the plist `-c <config>` arg. That config (e.g.
+    // local.conf) is the BASE nats-server config; the per-network leaf remotes
+    // are `include`d INTO it, they are not the base config itself. Stripping
+    // `-c <config>` on leave (even when no networks remain) leaves nats-server
+    // with no config to load → unstartable (the #801 bug: jc/default leave
+    // stripped `-c local.conf` and the bus would not come back up). Leave's
+    // teardown is exactly: remove the policy.federated.networks[] entry, remove
+    // the `include` directive, delete the leaf file. The base `-c` arg is
+    // owned by stack provisioning, never by join/leave.
+    if (ports.leafFile.list().length === 0) {
+      steps.push(
+        "no networks remain — base nats-server `-c <config>` arg left intact (#801)",
+      );
     }
   } catch (err) {
     return {
