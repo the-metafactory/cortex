@@ -223,7 +223,11 @@ export interface NatsServerPort {
  * monitor client is out of S4 scope).
  */
 export interface LeafStatePort {
-  /** Per-network leaf link state + in/out counters, keyed by network id. */
+  /**
+   * Leaf link state + in/out counters, keyed by the leaf-node (remote) name as
+   * reported by `/leafz`. `networkStatus` joins these against each network's
+   * `leaf_node` (C-797), falling back to the network id and then "unknown".
+   */
   linkStates(): Promise<Record<string, LeafLinkState>>;
 }
 

@@ -808,4 +808,74 @@ describe("status", () => {
     expect(res.ok).toBe(true);
     expect(res.networks.length).toBe(0);
   });
+
+  // C-797 — leafz keys the leaf connection by the leaf-node (remote) name, which
+  // is NOT necessarily the network id. The status join must key on `leaf_node`
+  // so a connected leaf reports `established` (up), not `unknown`.
+  test("C-797: joins leafz by leaf_node when it differs from the network id", async () => {
+    const net: PolicyFederatedNetwork = {
+      ...joinedNetwork("research-collab"),
+      // The physical leaf link is named differently from the network id.
+      leaf_node: "shared-hub",
+    };
+    const leafState: LeafStatePort = {
+      async linkStates() {
+        // leafz reports the link keyed by the leaf-node name, not the network id.
+        return { "shared-hub": { state: "established", inMsgs: 5, outMsgs: 3 } };
+      },
+    };
+    const { ports } = makeFakes({ initialNetworks: [net], leafState });
+    const res = await networkStatus(ports);
+
+    const row = res.networks[0]!;
+    expect(row.networkId).toBe("research-collab");
+    // BEFORE the fix this was "unknown" (lookup by network id missed the
+    // leaf_node-keyed leafz row) — the exact #797 symptom.
+    expect(row.link.state).toBe("established");
+    expect(row.link.inMsgs).toBe(5);
+    expect(row.link.outMsgs).toBe(3);
+  });
+
+  test("C-797: a genuinely-down leaf reports its reported state, not 'unknown'", async () => {
+    const leafState: LeafStatePort = {
+      async linkStates() {
+        return { metafactory: { state: "down" } };
+      },
+    };
+    const { ports } = makeFakes({
+      initialNetworks: [joinedNetwork("metafactory")],
+      leafState,
+    });
+    const res = await networkStatus(ports);
+    expect(res.networks[0]!.link.state).toBe("down");
+  });
+
+  test("C-797: leaf_node lookup still works when leaf_node equals the network id", async () => {
+    const leafState: LeafStatePort = {
+      async linkStates() {
+        return { metafactory: { state: "established" } };
+      },
+    };
+    const { ports } = makeFakes({
+      initialNetworks: [joinedNetwork("metafactory")], // leaf_node === id
+      leafState,
+    });
+    const res = await networkStatus(ports);
+    expect(res.networks[0]!.link.state).toBe("established");
+  });
+
+  test("C-797: degrades to 'unknown' when leafz has no row for the leaf (genuinely unreachable monitor)", async () => {
+    const leafState: LeafStatePort = {
+      async linkStates() {
+        // Monitor unreachable / no matching leaf row — empty map.
+        return {};
+      },
+    };
+    const { ports } = makeFakes({
+      initialNetworks: [joinedNetwork("metafactory")],
+      leafState,
+    });
+    const res = await networkStatus(ports);
+    expect(res.networks[0]!.link.state).toBe("unknown");
+  });
 });

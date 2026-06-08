@@ -22,7 +22,9 @@ import { parse as parseYaml } from "yaml";
 
 import {
   buildDryRunPorts,
+  buildLeafStatePort,
   buildLivePorts,
+  DEFAULT_MONITOR_URL,
   type LivePortsConfig,
 } from "../network-adapters";
 import {
@@ -1057,5 +1059,114 @@ describe("C-791 — registerStack supports a principal's 2nd+ stack", () => {
       const stacks = await getStacks("andreas");
       expect(stacks.map((s) => s.stack_id)).toEqual(["andreas/meta-factory"]);
     });
+  });
+});
+
+// =============================================================================
+// C-797 — leaf-state port reads the authoritative /leafz view
+// =============================================================================
+
+describe("C-797 buildLeafStatePort (/leafz monitor)", () => {
+  function leafCfg(monitorUrl?: string): LivePortsConfig {
+    return {
+      networkId: "metafactory",
+      principalId: "andreas",
+      stackId: "andreas/meta-factory",
+      natsConfigPath: NATS_CONFIG,
+      ...(monitorUrl !== undefined && { monitorUrl }),
+    };
+  }
+
+  /** Stub global fetch, recording the URL hit, returning the given /leafz body. */
+  function stubFetch(
+    body: unknown,
+    opts: { ok?: boolean; throws?: boolean } = {},
+  ): { urls: string[]; restore: () => void } {
+    const real = globalThis.fetch;
+    const urls: string[] = [];
+    // The leafz adapter always calls fetch() with a string URL (mirrors the
+    // existing withFetchCapture stub in this file).
+    globalThis.fetch = (async (url: string) => {
+      urls.push(url);
+      if (opts.throws === true) throw new Error("ECONNREFUSED");
+      return {
+        ok: opts.ok ?? true,
+        async json() {
+          return body;
+        },
+      } as Response;
+    }) as typeof globalThis.fetch;
+    return { urls, restore: () => (globalThis.fetch = real) };
+  }
+
+  test("always wires a port (never undefined) — C-797 status reads leafz by default", () => {
+    // Pre-#797 this returned undefined when monitorUrl was omitted → link:unknown.
+    expect(typeof buildLeafStatePort(leafCfg()).linkStates).toBe("function");
+  });
+
+  test("defaults to the local nats-server monitor when --monitor-url is omitted", async () => {
+    const f = stubFetch({ leafs: [] });
+    try {
+      await buildLeafStatePort(leafCfg()).linkStates();
+      expect(f.urls).toEqual([`${DEFAULT_MONITOR_URL}/leafz`]);
+    } finally {
+      f.restore();
+    }
+  });
+
+  test("honors an explicit --monitor-url override (trailing slash trimmed)", async () => {
+    const f = stubFetch({ leafs: [] });
+    try {
+      await buildLeafStatePort(leafCfg("http://127.0.0.1:8224/")).linkStates();
+      expect(f.urls).toEqual(["http://127.0.0.1:8224/leafz"]);
+    } finally {
+      f.restore();
+    }
+  });
+
+  test("maps a connected leaf to 'established', keyed by the leaf-node name", async () => {
+    const f = stubFetch({
+      leafs: [{ name: "shared-hub", in_msgs: 12, out_msgs: 4 }],
+    });
+    try {
+      const states = await buildLeafStatePort(leafCfg()).linkStates();
+      expect(states["shared-hub"]).toEqual({
+        state: "established",
+        inMsgs: 12,
+        outMsgs: 4,
+      });
+    } finally {
+      f.restore();
+    }
+  });
+
+  test("falls back to the bound account when /leafz omits the leaf name", async () => {
+    const f = stubFetch({ leafs: [{ account: "ALOCALACCOUNT", in_msgs: 1 }] });
+    try {
+      const states = await buildLeafStatePort(leafCfg()).linkStates();
+      expect(states.ALOCALACCOUNT?.state).toBe("established");
+    } finally {
+      f.restore();
+    }
+  });
+
+  test("degrades to {} when the monitor is unreachable (status → 'unknown')", async () => {
+    const f = stubFetch(undefined, { throws: true });
+    try {
+      const states = await buildLeafStatePort(leafCfg()).linkStates();
+      expect(states).toEqual({});
+    } finally {
+      f.restore();
+    }
+  });
+
+  test("degrades to {} on a non-200 monitor response", async () => {
+    const f = stubFetch({ leafs: [{ name: "x" }] }, { ok: false });
+    try {
+      const states = await buildLeafStatePort(leafCfg()).linkStates();
+      expect(states).toEqual({});
+    } finally {
+      f.restore();
+    }
   });
 });

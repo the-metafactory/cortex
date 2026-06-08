@@ -581,26 +581,58 @@ function buildNatsServerPort(cfg: LivePortsConfig, mutate: boolean): NatsServerP
 // Leaf-state port — nats-server monitor /leafz for status.
 // =============================================================================
 
-function buildLeafStatePort(cfg: LivePortsConfig): LeafStatePort | undefined {
-  if (cfg.monitorUrl === undefined) return undefined;
-  const base = cfg.monitorUrl.replace(/\/+$/, "");
+/**
+ * C-797 — the nats-server HTTP monitor endpoint defaults to `127.0.0.1:8222`
+ * (the upstream default `http_port`). Before this fix `buildLeafStatePort`
+ * returned `undefined` whenever `--monitor-url` was omitted, so `cortex network
+ * status` never queried `/leafz` and every link fell back to `link:unknown` —
+ * even though leafz (the authoritative source) showed the leaf up. Defaulting
+ * the monitor URL makes status read the authoritative leaf-state out of the box;
+ * a genuinely-unreachable monitor still degrades gracefully to "unknown" via the
+ * fetch catch below.
+ */
+export const DEFAULT_MONITOR_URL = "http://127.0.0.1:8222";
+
+export function buildLeafStatePort(cfg: LivePortsConfig): LeafStatePort {
+  // C-797 — always wire the port; default to the local nats-server monitor when
+  // no `--monitor-url` was supplied. (Previously: undefined ⇒ no port ⇒
+  // link:unknown for everyone.)
+  const base = (cfg.monitorUrl ?? DEFAULT_MONITOR_URL).replace(/\/+$/, "");
   return {
     async linkStates() {
       try {
         const res = await fetch(`${base}/leafz`);
         if (!res.ok) return {};
         const body = (await res.json()) as {
-          leafs?: { account?: string; name?: string; in_msgs?: number; out_msgs?: number }[];
+          leafs?: {
+            account?: string;
+            name?: string;
+            in_msgs?: number;
+            out_msgs?: number;
+          }[];
         };
-        const out: Record<string, { state: "established"; inMsgs?: number; outMsgs?: number }> = {};
+        const out: Record<
+          string,
+          { state: "established"; inMsgs?: number; outMsgs?: number }
+        > = {};
         for (const leaf of body.leafs ?? []) {
+          // `/leafz` reports each leaf connection by its remote/leaf-node name
+          // (`name`), falling back to the bound NATS `account`. `networkStatus`
+          // joins these against each network's `leaf_node` (C-797), so an
+          // established leaf maps onto its network and reports `established`
+          // (up) rather than `unknown`.
           const key = leaf.name ?? leaf.account ?? "";
           if (key === "") continue;
-          out[key] = { state: "established", inMsgs: leaf.in_msgs, outMsgs: leaf.out_msgs };
+          out[key] = {
+            state: "established",
+            inMsgs: leaf.in_msgs,
+            outMsgs: leaf.out_msgs,
+          };
         }
         return out;
       } catch (err) {
-        // Monitor unreachable — status degrades to "unknown" link state.
+        // Monitor genuinely unreachable — status degrades to "unknown" link
+        // state (the #797 graceful-fallback path, preserved).
         process.stderr.write(
           `network-adapters: leaf-state fetch failed: ${err instanceof Error ? err.message : String(err)}\n`,
         );
@@ -615,7 +647,6 @@ function buildLeafStatePort(cfg: LivePortsConfig): LeafStatePort | undefined {
 // =============================================================================
 
 function buildPorts(cfg: LivePortsConfig, mutate: boolean): NetworkPorts {
-  const leafState = buildLeafStatePort(cfg);
   return {
     registry: buildRegistryPort(cfg),
     leafFile: buildLeafFilePort(cfg, mutate),
@@ -623,7 +654,9 @@ function buildPorts(cfg: LivePortsConfig, mutate: boolean): NetworkPorts {
     configStore: buildConfigStorePort(cfg, mutate),
     daemon: buildDaemonPort(cfg, mutate),
     natsServer: buildNatsServerPort(cfg, mutate),
-    ...(leafState !== undefined ? { leafState } : {}),
+    // C-797 — always present now (defaults to the local monitor); status reads
+    // the authoritative leafz view instead of falling back to link:unknown.
+    leafState: buildLeafStatePort(cfg),
   };
 }
 

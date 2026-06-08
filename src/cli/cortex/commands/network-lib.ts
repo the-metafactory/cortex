@@ -518,7 +518,13 @@ export async function networkStatus(ports: NetworkPorts): Promise<StatusResult> 
     peers: n.peers.map((p) => p.principal_id),
     acceptSubjects: n.accept_subjects,
     maxHop: n.max_hop,
-    link: linkStates[n.id] ?? { state: "unknown" },
+    // C-797 — `/leafz` keys each connection by the leaf-node (remote) name, which
+    // is NOT necessarily the network id (two networks may share one `leaf_node`,
+    // or it may be named independently). Join on `leaf_node` first so a connected
+    // leaf reports `established` (up); fall back to the network-id key for the
+    // common case where they coincide, then to "unknown" when leafz has no row
+    // (monitor genuinely unreachable).
+    link: linkStates[n.leaf_node] ?? linkStates[n.id] ?? { state: "unknown" },
   }));
 
   return { ok: true, networks: rows };
