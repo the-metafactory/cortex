@@ -373,6 +373,71 @@ export async function buildRegistrationClaim(
   return { claim, signature };
 }
 
+// =============================================================================
+// #747 — signed-admin network-create claim
+// =============================================================================
+
+/**
+ * Mirror of the network-registry `NetworkCreateClaim` wire shape
+ * (`src/services/network-registry/src/validate.ts`). Reproduced rather than
+ * imported because the registry is a separately-bundled CF Worker excluded
+ * from the root tsconfig. MUST stay field-compatible with the route validator.
+ */
+export interface NetworkCreateClaimShape {
+  network_id: string;
+  hub_url: string;
+  leaf_port: number;
+  admin_pubkey: string;
+  issued_at: string;
+  nonce: string;
+}
+
+/** A network-create claim + detached signature, ready to POST. */
+export interface SignedNetworkCreateBody {
+  readonly claim: NetworkCreateClaimShape;
+  /** Base64 ed25519 signature over `canonicalJSON(claim)`. */
+  readonly signature: string;
+}
+
+export interface BuildNetworkCreateClaimOptions {
+  readonly networkId: string;
+  readonly hubUrl: string;
+  readonly leafPort: number;
+  /** The admin identity material (carries the seed to sign with). */
+  readonly material: StackIdentityMaterial;
+  /** Override issued-at (tests / skew checks). Defaults to now. @internal */
+  readonly issuedAt?: string;
+  /** Override nonce (tests). Defaults to a fresh random hex. @internal */
+  readonly nonce?: string;
+}
+
+/**
+ * Build a signed network-create body (#747) proving possession of an admin
+ * Ed25519 key. Reuses the EXACT key + signing path as
+ * {@link buildRegistrationClaim} — the admin key is an nkey seed (`SU…`) and
+ * `admin_pubkey` is its base64 form (`material.pubkeyB64`), so the registry's
+ * `verifyEd25519(claim.admin_pubkey, …)` succeeds and a tampered/forged claim
+ * is rejected. Does NOT POST — returns the body for the caller to send/print.
+ */
+export async function buildNetworkCreateClaim(
+  opts: BuildNetworkCreateClaimOptions,
+): Promise<SignedNetworkCreateBody> {
+  const claim: NetworkCreateClaimShape = {
+    network_id: opts.networkId,
+    hub_url: opts.hubUrl,
+    leaf_port: opts.leafPort,
+    admin_pubkey: opts.material.pubkeyB64,
+    issued_at: opts.issuedAt ?? new Date().toISOString(),
+    nonce: opts.nonce ?? randomNonce(),
+  };
+  // Re-derive the KeyPair from the in-memory seed and sign over the SAME
+  // canonical-JSON the registry route reconstructs and verifies.
+  const kp = fromSeed(new TextEncoder().encode(opts.material.seed.trim()));
+  const message = new TextEncoder().encode(canonicalJSON(claim));
+  const signature = await signWithNKey(kp, message);
+  return { claim, signature };
+}
+
 /** Fresh 16-byte random nonce, lowercase hex — matches the registry's window. */
 export function randomNonce(): string {
   const bytes = new Uint8Array(16);
@@ -420,16 +485,53 @@ export async function registerStackIdentity(
 ): Promise<RegisterStackIdentityResult> {
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
   const url = `${opts.registryUrl.replace(/\/+$/, "")}/principals/${encodeURIComponent(opts.principalId)}/register`;
+  return postSigned(fetchImpl, url, opts.body, opts.timeoutMs);
+}
 
+export interface PostNetworkCreateOptions {
+  /** Registry base URL (no trailing slash needed). */
+  readonly registryUrl: string;
+  /** The network id (becomes the `:network_id` path segment). */
+  readonly networkId: string;
+  /** The signed body from {@link buildNetworkCreateClaim}. */
+  readonly body: SignedNetworkCreateBody;
+  /** Injected fetch (tests). Defaults to global fetch. @internal */
+  readonly fetchImpl?: typeof globalThis.fetch;
+  /** Request timeout (ms). Default 10s. */
+  readonly timeoutMs?: number;
+}
+
+/**
+ * POST the signed-admin network-create body to `POST /networks/{networkId}`
+ * (#747). Like {@link registerStackIdentity}, this is opt-in network I/O —
+ * never called as a side effect of building the claim. Returns the same
+ * `{ ok, status, response }` triple so a caller can surface the registry's
+ * error JSON verbatim (admin_not_configured / admin_not_authorized / etc.).
+ */
+export async function postNetworkCreate(
+  opts: PostNetworkCreateOptions,
+): Promise<RegisterStackIdentityResult> {
+  const fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const url = `${opts.registryUrl.replace(/\/+$/, "")}/networks/${encodeURIComponent(opts.networkId)}`;
+  return postSigned(fetchImpl, url, opts.body, opts.timeoutMs);
+}
+
+/** Shared POST-JSON-with-timeout used by both register + network-create. */
+async function postSigned(
+  fetchImpl: typeof globalThis.fetch,
+  url: string,
+  body: unknown,
+  timeoutMs?: number,
+): Promise<RegisterStackIdentityResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => {
     controller.abort();
-  }, opts.timeoutMs ?? 10_000);
+  }, timeoutMs ?? 10_000);
   try {
     const res = await fetchImpl(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(opts.body),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
     let response: unknown;

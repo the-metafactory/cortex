@@ -86,6 +86,13 @@ routes = [
 
 [env.dev.vars]
 ENVIRONMENT = "development"
+# #747 — REGISTRY_ADMIN_PUBKEYS is a SECRET, set at deploy time (NOT here):
+#   bunx wrangler secret put REGISTRY_ADMIN_PUBKEYS --env dev
+# Comma-separated base64 Ed25519 admin pubkeys authorised for
+# POST /networks/:id (signed-admin create/update). FAIL-CLOSED: if unset/empty
+# the route returns 503 admin_not_configured and writes NOTHING — never an
+# anonymous hub_url write. Per dev=prod parity, dev is NOT laxer: the same
+# fail-closed gate applies. Do NOT put a real key in this file.
 
 # ──────────────────────────────────────────────────────────────────
 # #680 — App-layer rate limiting (PARITY GUARD: dev == prod).
@@ -140,6 +147,13 @@ migrations_dir = "migrations"
 
 [env.production.vars]
 ENVIRONMENT = "production"
+# #747 — REGISTRY_ADMIN_PUBKEYS is a SECRET, set at deploy time (NOT here):
+#   bunx wrangler secret put REGISTRY_ADMIN_PUBKEYS --env production
+# Comma-separated base64 Ed25519 admin pubkeys authorised for
+# POST /networks/:id (signed-admin create/update). FAIL-CLOSED: if unset/empty
+# the route returns 503 admin_not_configured and writes NOTHING — never an
+# anonymous hub_url write (the descriptor-poisoning vuln #745 → #747 closes).
+# Do NOT put a real key in this file.
 
 # ──────────────────────────────────────────────────────────────────
 # #680 — App-layer rate limiting (PARITY GUARD: prod == dev).
@@ -179,3 +193,16 @@ simple = { limit = 120, period = 60 }
 #                           The corresponding public key is exposed at
 #                           GET /registry/pubkey so peers can pin it at
 #                           config time (and is printed by `gen-key`).
+#
+#   REGISTRY_ADMIN_PUBKEYS — #747. Comma-separated base64 Ed25519 admin
+#                           pubkeys authorised to create/update network
+#                           topology records via POST /networks/:id (the
+#                           secure signed-admin replacement for raw-SQL/D1
+#                           seeding). The matching admin SEED (nkey SU…) is
+#                           held by the operator and used by
+#                           `cortex network create --admin-seed`; only the
+#                           PUBLIC key goes here. FAIL-CLOSED: if this secret
+#                           is unset/empty the route returns 503
+#                           admin_not_configured and persists NOTHING — there
+#                           is never an anonymous hub_url write.
+#                             bunx wrangler secret put REGISTRY_ADMIN_PUBKEYS

@@ -91,3 +91,54 @@ export function randomNonce(): string {
   }
   return out;
 }
+
+// =============================================================================
+// #747 — signed-admin network-create test rig
+// =============================================================================
+
+/**
+ * The admin claim shape carried by `POST /networks/:id` (#747). Mirrors
+ * `NetworkCreateClaim` in `../src/validate`.
+ */
+export interface NetworkCreateClaim {
+  network_id: string;
+  hub_url: string;
+  leaf_port: number;
+  admin_pubkey: string;
+  issued_at: string;
+  nonce: string;
+}
+
+/**
+ * Build a signed network-create body for the given admin key. The admin is
+ * just an Ed25519 keypair (the CLI derives it from an nkey seed; here we mint
+ * one directly via `makePrincipalKey`). Tests override fields/signing-key to
+ * exercise forged-signature / wrong-key / replay paths.
+ */
+export async function makeSignedNetworkCreate(
+  networkId: string,
+  adminKey: PrincipalKey,
+  opts: {
+    hubUrl?: string;
+    leafPort?: number;
+    issuedAt?: string;
+    nonce?: string;
+    /** Override the admin_pubkey in the claim — for tampering tests. */
+    adminPubkeyOverride?: string;
+    /** Sign with a DIFFERENT key than the claim declares — forged signature. */
+    signWith?: PrincipalKey;
+  } = {},
+): Promise<{ claim: NetworkCreateClaim; signature: string }> {
+  const claim: NetworkCreateClaim = {
+    network_id: networkId,
+    hub_url: opts.hubUrl ?? "tls://hub.meta-factory.ai:7422",
+    leaf_port: opts.leafPort ?? 7422,
+    admin_pubkey: opts.adminPubkeyOverride ?? adminKey.publicKeyB64,
+    issued_at: opts.issuedAt ?? new Date().toISOString(),
+    nonce: opts.nonce ?? randomNonce(),
+  };
+  const message = new TextEncoder().encode(canonicalJSON(claim));
+  const signer = opts.signWith ?? adminKey;
+  const signature = await signEd25519(signer.privateKeyB64, message);
+  return { claim, signature };
+}

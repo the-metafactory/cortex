@@ -298,6 +298,147 @@ export function validateRegistrationClaim(
   };
 }
 
+// =============================================================================
+// #747 — network-create/update (signed-admin) claim validation
+// =============================================================================
+
+/**
+ * The admin-signed claim carried by `POST /networks/{network_id}` (#747).
+ * An admin proves possession of an allowlisted key by signing
+ * `canonicalJSON(claim)` with `admin_pubkey`; the route verifies the
+ * signature AND checks the pubkey against `REGISTRY_ADMIN_PUBKEYS`. This
+ * is the secure replacement for the descoped anonymous network write
+ * (S2.5 #745 → #747): an unauthenticated write the registry then signs
+ * would let an attacker seed a malicious `hub_url` (descriptor poisoning
+ * → federation MITM), so the write is gated on a signed-admin assertion
+ * and FAILS CLOSED when no admin key is configured.
+ */
+export interface NetworkCreateClaim {
+  /** Must equal the URL path parameter. */
+  network_id: string;
+  /** The hub's leaf-node dial URL (e.g. `tls://hub.meta-factory.ai:7422`). */
+  hub_url: string;
+  /** The hub's leaf-node listen port (1..65535). */
+  leaf_port: number;
+  /** Base64 Ed25519 pubkey of the admin signing this claim. */
+  admin_pubkey: string;
+  /** ISO-8601 UTC timestamp at which the admin signed this claim. */
+  issued_at: string;
+  /** Random nonce to prevent replay. */
+  nonce: string;
+}
+
+/** The on-wire envelope: an admin claim + detached Ed25519 signature. */
+export interface SignedNetworkCreate {
+  claim: NetworkCreateClaim;
+  /** Base64 Ed25519 signature over canonical-JSON(claim). */
+  signature: string;
+}
+
+/**
+ * Validate the full network-create body before signature verification.
+ * Mirrors `validateRegistrationClaim`: cross-field rules first (so a
+ * forged-attribution path-vs-body mismatch is rejected pre-crypto), then
+ * shape checks on every field. The route layer enforces clock-skew on
+ * `issued_at`, signature verification against `admin_pubkey`, the admin
+ * allowlist, and nonce-replay.
+ */
+export function validateNetworkCreateClaim(
+  claim: unknown,
+  expectedNetworkId: string,
+): { ok: true; claim: NetworkCreateClaim } | { ok: false; errors: ValidationError[] } {
+  const errors: ValidationError[] = [];
+
+  if (typeof claim !== "object" || claim === null || Array.isArray(claim)) {
+    return { ok: false, errors: [{ field: "claim", message: "must be an object" }] };
+  }
+  const c = claim as Record<string, unknown>;
+
+  // network_id — grammar + path match (forged-attribution guard).
+  if (typeof c.network_id !== "string" || !isValidNetworkId(c.network_id)) {
+    errors.push({ field: "network_id", message: "must be lowercase alphanumeric + hyphen, letter-prefixed" });
+  } else if (c.network_id !== expectedNetworkId) {
+    errors.push({
+      field: "network_id",
+      message: `body network_id "${c.network_id}" does not match path "${expectedNetworkId}"`,
+    });
+  }
+
+  // hub_url — non-empty string. We do NOT parse/validate the scheme here:
+  // the leaf renderer + descriptor consumer own URL grammar (and the cortex
+  // client's parseDescriptor only requires a non-empty string). Keeping the
+  // check narrow avoids rejecting a legitimate hub URL the registry has no
+  // business interpreting.
+  if (typeof c.hub_url !== "string" || c.hub_url.length === 0) {
+    errors.push({ field: "hub_url", message: "must be a non-empty string" });
+  }
+
+  // leaf_port — integer in 1..65535.
+  if (
+    typeof c.leaf_port !== "number" ||
+    !Number.isInteger(c.leaf_port) ||
+    c.leaf_port < 1 ||
+    c.leaf_port > 65535
+  ) {
+    errors.push({ field: "leaf_port", message: "must be an integer in 1..65535" });
+  }
+
+  // admin_pubkey — base64 Ed25519 pubkey shape (same check as principal_pubkey).
+  if (typeof c.admin_pubkey !== "string" || !isValidPubkey(c.admin_pubkey)) {
+    errors.push({ field: "admin_pubkey", message: "must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)" });
+  }
+
+  // issued_at — ISO-8601 UTC; route enforces the skew window.
+  if (typeof c.issued_at !== "string" || Number.isNaN(Date.parse(c.issued_at))) {
+    errors.push({ field: "issued_at", message: "must be an ISO-8601 timestamp" });
+  }
+
+  // nonce — same bounds as the registration claim.
+  if (typeof c.nonce !== "string" || c.nonce.length < 8 || c.nonce.length > 128) {
+    errors.push({ field: "nonce", message: "must be a string between 8 and 128 chars" });
+  }
+
+  if (errors.length > 0) return { ok: false, errors };
+
+  return {
+    ok: true,
+    claim: {
+      network_id: c.network_id as string,
+      hub_url: c.hub_url as string,
+      leaf_port: c.leaf_port as number,
+      admin_pubkey: c.admin_pubkey as string,
+      issued_at: c.issued_at as string,
+      nonce: c.nonce as string,
+    },
+  };
+}
+
+/**
+ * Validate the signed-network-create envelope ({ claim, signature }).
+ * Mirrors `validateSignedRegistration`.
+ */
+export function validateSignedNetworkCreate(
+  body: unknown,
+): { ok: true; signed: SignedNetworkCreate } | { ok: false; errors: ValidationError[] } {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return { ok: false, errors: [{ field: "body", message: "must be an object" }] };
+  }
+  const b = body as Record<string, unknown>;
+  if (typeof b.signature !== "string" || b.signature.length === 0) {
+    return { ok: false, errors: [{ field: "signature", message: "missing" }] };
+  }
+  if (!BASE64_RE.test(b.signature)) {
+    return { ok: false, errors: [{ field: "signature", message: "must be base64" }] };
+  }
+  if (typeof b.claim !== "object" || b.claim === null) {
+    return { ok: false, errors: [{ field: "claim", message: "missing" }] };
+  }
+  return {
+    ok: true,
+    signed: { claim: b.claim as NetworkCreateClaim, signature: b.signature },
+  };
+}
+
 export function validateSignedRegistration(
   body: unknown,
 ): { ok: true; signed: SignedRegistration } | { ok: false; errors: ValidationError[] } {

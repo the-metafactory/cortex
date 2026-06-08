@@ -41,8 +41,17 @@
  */
 
 import { existsSync } from "fs";
+import { readFile } from "fs/promises";
 
 import { expandTilde, loadConfigWithAgents } from "../../../common/config/loader";
+import { enforceChmod600 } from "../../../common/config/file-permissions";
+import {
+  materialFromSeedString,
+  buildNetworkCreateClaim,
+  postNetworkCreate,
+  type StackIdentityMaterial,
+  type SignedNetworkCreateBody,
+} from "../../../bus/stack-provisioning";
 
 import {
   deriveJoinInputs,
@@ -92,7 +101,10 @@ export { type ExitResult } from "./_shared/exit-result";
 // Grammar
 // =============================================================================
 
-type NetworkSubcommand = "join" | "leave" | "status";
+type NetworkSubcommand = "join" | "leave" | "status" | "create";
+
+/** Default registry URL when neither --registry-url nor config provides one. */
+const DEFAULT_REGISTRY_URL = "https://network.meta-factory.ai";
 
 /**
  * #753 — default cortex.yaml path the config-deriver reads when no `--config`
@@ -165,6 +177,22 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--principal": "value",
         "--stack": "value",
         "--monitor-url": "value",
+      },
+    },
+    // #747 — signed-admin network create/update. Dry-run by DEFAULT (like
+    // join): prints the claim it WOULD POST; `--apply` actually POSTs it to
+    // `<registry-url>/networks/<network_id>`. The admin seed is an nkey seed
+    // (SU…) — the same key shape `provision-stack` uses — so `admin_pubkey`
+    // is consistent with how principal registration derives its pubkey.
+    create: {
+      positionals: ["network"],
+      flags: {
+        "--hub": "value",
+        "--leaf-port": "value",
+        "--admin-seed": "value",
+        "--registry-url": "value",
+        "--apply": "bool",
+        "--dry-run": "bool",
       },
     },
   },
@@ -436,6 +464,147 @@ async function runStatus(
 }
 
 // =============================================================================
+// #747 — signed-admin network create/update
+// =============================================================================
+
+/** Load + re-derive admin material from a seed file (chmod-600 gated). */
+async function adminMaterialFromSeedFile(
+  seedPath: string,
+): Promise<{ ok: true; material: StackIdentityMaterial } | { ok: false; reason: string }> {
+  const expanded = expandTilde(seedPath);
+  if (!existsSync(expanded)) {
+    return { ok: false, reason: `--admin-seed file not found at ${expanded}` };
+  }
+  try {
+    // Refuse to read a group/world-readable secret — same discipline as
+    // loadStackSigningKey / provision-stack.
+    enforceChmod600(expanded);
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+  let seed: string;
+  try {
+    seed = await readFile(expanded, "utf-8");
+  } catch (err) {
+    return { ok: false, reason: `failed to read --admin-seed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  try {
+    return { ok: true, material: materialFromSeedString(seed) };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function runCreate(
+  networkId: string,
+  flags: Record<string, string | true>,
+  json: boolean,
+): Promise<ExitResult> {
+  if (!NETWORK_ID_RE.test(networkId)) {
+    return usageError("create", `network "${networkId}" must be lowercase alphanumeric + hyphen, letter-prefixed`, json);
+  }
+
+  const hubRes = requireValueFlag(flags, "--hub");
+  if (!hubRes.ok) return usageError("create", hubRes.reason, json);
+  const hubUrl = hubRes.value;
+
+  const portRes = requireValueFlag(flags, "--leaf-port");
+  if (!portRes.ok) return usageError("create", portRes.reason, json);
+  const leafPort = Number.parseInt(portRes.value, 10);
+  if (!Number.isInteger(leafPort) || leafPort < 1 || leafPort > 65535) {
+    return usageError("create", `--leaf-port "${portRes.value}" must be an integer in 1..65535`, json);
+  }
+
+  const seedRes = requireValueFlag(flags, "--admin-seed");
+  if (!seedRes.ok) return usageError("create", seedRes.reason, json);
+
+  const applyRes = resolveApply(flags);
+  if (!applyRes.ok) return usageError("create", applyRes.reason, json);
+
+  const registryUrl = optionalValueFlag(flags, "--registry-url") ?? DEFAULT_REGISTRY_URL;
+
+  // Load the admin nkey seed + derive its base64 pubkey (the SAME key shape +
+  // signing path provision-stack uses), then build the signed claim.
+  const matRes = await adminMaterialFromSeedFile(seedRes.value);
+  if (!matRes.ok) return opError("create", matRes.reason, json);
+
+  let body: SignedNetworkCreateBody;
+  try {
+    body = await buildNetworkCreateClaim({
+      networkId,
+      hubUrl,
+      leafPort,
+      material: matRes.material,
+    });
+  } catch (err) {
+    return opError("create", `failed to build network-create claim: ${err instanceof Error ? err.message : String(err)}`, json);
+  }
+
+  // DRY-RUN (default): print the claim that WOULD be POSTed; touch no registry.
+  if (!applyRes.apply) {
+    if (json) {
+      return ok(
+        renderJson(
+          envelopeOk([body as unknown as Record<string, unknown>], {
+            network: networkId,
+            registry_url: registryUrl,
+            applied: "false",
+            admin_fingerprint: matRes.material.fingerprint,
+          }),
+        ),
+      );
+    }
+    const lines = [
+      `cortex network create ${networkId}: dry-run (no registry write; pass --apply to POST)`,
+      `  registry:     ${registryUrl}`,
+      `  hub_url:      ${hubUrl}`,
+      `  leaf_port:    ${leafPort.toString()}`,
+      `  admin_pubkey: ${matRes.material.pubkeyB64}`,
+      `  fingerprint:  ${matRes.material.fingerprint}`,
+      ``,
+      `Would POST ${registryUrl}/networks/${networkId}:`,
+      JSON.stringify(body, null, 2),
+      ``,
+    ];
+    return ok(lines.join("\n"));
+  }
+
+  // APPLY: POST the signed claim. Surface the registry's error JSON verbatim
+  // (admin_not_configured → 503 / admin_not_authorized → 403 / etc.).
+  let result: Awaited<ReturnType<typeof postNetworkCreate>>;
+  try {
+    result = await postNetworkCreate({ registryUrl, networkId, body });
+  } catch (err) {
+    return opError("create", `registry POST failed: ${err instanceof Error ? err.message : String(err)}`, json);
+  }
+  if (!result.ok) {
+    const detail =
+      typeof result.response === "object" && result.response !== null
+        ? JSON.stringify(result.response)
+        : String(result.response);
+    const reason = `registry rejected network create (HTTP ${result.status.toString()}): ${detail}`;
+    return opError("create", reason, json);
+  }
+
+  if (json) {
+    return ok(
+      renderJson(
+        envelopeOk([result.response as Record<string, unknown>], {
+          network: networkId,
+          registry_url: registryUrl,
+          applied: "true",
+          admin_fingerprint: matRes.material.fingerprint,
+        }),
+      ),
+    );
+  }
+  return ok(
+    `cortex network create ${networkId}: created/updated at ${registryUrl} (HTTP ${result.status.toString()})\n` +
+      `  hub_url:   ${hubUrl}\n  leaf_port: ${leafPort.toString()}\n  admin:     ${matRes.material.fingerprint}\n`,
+  );
+}
+
+// =============================================================================
 // S5 (#739) — public-scope opt-in (join/leave public)
 // =============================================================================
 
@@ -673,6 +842,8 @@ export async function dispatchNetwork(
       return runLeave(parsed.positionals.network ?? "", parsed.flags, json, load);
     case "status":
       return runStatus(parsed.flags, json);
+    case "create":
+      return runCreate(parsed.positionals.network ?? "", parsed.flags, json);
   }
 }
 
@@ -687,6 +858,7 @@ Usage:
   cortex network join  <network> [--apply] [--config <p>] [overrides…]
   cortex network leave  <network> [--apply] [--config <p>] [overrides…]
   cortex network status [--principal <id>] [--stack <id>] [--monitor-url <url>] [--json]
+  cortex network create <network> --hub <tls-url> --leaf-port <port> --admin-seed <path> [--registry-url <url>] [--apply]
 
 The one-liner (#753): \`cortex network join <network>\` derives EVERYTHING from
 the loaded cortex.yaml — principal (principal.id), stack (stack.id), signing
@@ -707,6 +879,14 @@ Subcommands:
   status  Show joined networks, peers, accept-subjects, leaf link state + counters.
   leave   Reverse a join cleanly: remove the network + leaf include, drop the
           plist -c arg if no networks remain, restart. Idempotent.
+  create  (#747) Signed-admin create/update of a network's topology record
+          (hub_url + leaf_port) in the registry. Replaces raw-SQL/D1 seeding.
+          Derives admin_pubkey from --admin-seed (an nkey SU… seed, the same
+          key shape as provision-stack), signs the claim, and POSTs it to
+          <registry-url>/networks/<network>. DRY-RUN by default (prints the
+          signed claim it WOULD POST); pass --apply to actually write. The
+          registry FAILS CLOSED if its REGISTRY_ADMIN_PUBKEYS allowlist is
+          unset, and rejects (403) an admin key not on the allowlist.
 
   join public   (S5, #739) Opt into the PUBLIC scope — the open square of the
           Internet of Agentic Work. Announces --capabilities to the registry
@@ -745,6 +925,12 @@ Flags (all OPTIONAL OVERRIDES — derived from cortex.yaml when omitted; #753):
                           sender principals. Empty (default) = inbound DISABLED (OQ1
                           safe). Non-empty = inbound enabled, gated to these ids only.
   --monitor-url <url>     (status) nats-server monitor base URL for leaf telemetry.
+  --hub <tls-url>         (create) the hub's leaf-node dial URL (e.g. tls://hub.meta-factory.ai:7422).
+  --leaf-port <port>      (create) the hub's leaf-node listen port (integer 1..65535).
+  --admin-seed <path>     (create) path to the admin nkey seed (SU…) signing the claim.
+                          admin_pubkey is derived from it; the registry's
+                          REGISTRY_ADMIN_PUBKEYS allowlist must contain that pubkey.
+  --registry-url <url>    (create) registry base URL (default: https://network.meta-factory.ai).
   --apply                 Execute the live mutation (default: dry-run).
   --json                  Emit a { status, items, data, error } envelope.
 `;

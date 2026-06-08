@@ -63,7 +63,35 @@ export interface Env extends RateLimitEnv, StoreEnv {
    * stays synchronous on the hot path.
    */
   REGISTRY_PUBLIC_KEY?: string;
+  /**
+   * #747 — comma-separated allowlist of base64 Ed25519 pubkeys authorised to
+   * create/update network topology records via `POST /networks/{id}`. The
+   * route FAILS CLOSED: when this is unset/empty the write is refused with
+   * 503 `admin_not_configured` and NOTHING is persisted — there is never an
+   * anonymous `hub_url` write (the descoped S2.5 vuln, #745 → #747).
+   * Provisioned at deploy time via `wrangler secret put`; never a real key in
+   * wrangler.toml. Whitespace around each entry is trimmed; empty entries are
+   * ignored.
+   */
+  REGISTRY_ADMIN_PUBKEYS?: string;
   ENVIRONMENT?: string;
+}
+
+/**
+ * #747 — parse `REGISTRY_ADMIN_PUBKEYS` into the set of authorised admin
+ * pubkeys. Returns an EMPTY set when the var is unset/blank/whitespace-only,
+ * which the network-create route treats as "admin not configured" → 503
+ * fail-closed. Entries are trimmed; blank entries dropped.
+ */
+export function parseAdminPubkeys(env: Env): Set<string> {
+  const raw = env.REGISTRY_ADMIN_PUBKEYS;
+  if (typeof raw !== "string" || raw.trim().length === 0) return new Set();
+  return new Set(
+    raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
+  );
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -196,7 +224,14 @@ const readLimited = createMiddleware<{ Bindings: Env }>(async (c, next) => {
 });
 
 app.use("/principals/:principal_id", readLimited);
-app.use("/networks/:network_id", readLimited);
+// #747 — the network descriptor path now serves BOTH GET (read) and POST
+// (signed-admin create/update). Scope the loose READ limit to GET only; the
+// POST has its OWN, stricter `register`-bucket limit enforced inside the
+// handler (rate-limit BEFORE signature verify), exactly like
+// POST /principals/:id/register. Applying both to the POST would mean a single
+// admin write is metered against two buckets — the strict one is the
+// authoritative gate, so the read limit must not also fire on POST.
+app.on("GET", "/networks/:network_id", readLimited);
 app.use("/networks/:network_id/roster", readLimited);
 app.use("/capabilities", readLimited);
 
