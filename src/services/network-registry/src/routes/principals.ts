@@ -159,10 +159,26 @@ export function principalRoutes(): Hono<{ Bindings: Env }> {
       );
     }
 
+    // C-787 — per-stack pubkey backfill. The signature has been verified
+    // against `claim.principal_pubkey` (the ROOT/authority key), so by signing
+    // this claim the principal root ATTESTS every stack_pubkey it carries.
+    // A stack that omits `stack_pubkey` (a producer predating per-stack keys,
+    // or the single-stack first-register case) inherits the root pubkey — so
+    // an existing single-stack principal keeps verifying with no producer
+    // change. A stack that carries its OWN stack_pubkey is taken as-is (the
+    // root signed it, so it is authorized). This is the authorization model:
+    // adding/updating any stack pubkey is gated entirely by the root signature
+    // verified above — a claim signed by a non-root key never reaches here
+    // (it is rejected 409 at the rotation gate or 401 at signature_invalid).
+    const stacksWithPubkeys = claim.stacks.map((s) => ({
+      ...s,
+      stack_pubkey: s.stack_pubkey ?? claim.principal_pubkey,
+    }));
+
     const record = await store.putPrincipal(
       principalId,
       claim.principal_pubkey,
-      claim.stacks,
+      stacksWithPubkeys,
       claim.capabilities,
     );
 

@@ -625,6 +625,26 @@ export function principalFromEnvelope(envelope: Envelope): string {
 }
 
 /**
+ * C-787 — derive the signer peer's `{principal}/{stack}` stack id from
+ * `envelope.source`. The registry keys per-stack pubkeys by `stack_id` in
+ * exactly this `{principal_id}/{stack_slug}` form, so the verify path can
+ * resolve `(principal, stack) → stack_pubkey`.
+ *
+ * `envelope.source` is `{principal}.{stack}.{instance}[...]` (schema-validated
+ * to 3..5 dotted segments), so segment[0] is the principal and segment[1] is
+ * the stack slug. Returns `{seg0}/{seg1}`. When the source has fewer than two
+ * segments (defensive — the schema forbids it) returns `undefined` so the
+ * caller falls back to a root (principal-level) resolve.
+ */
+export function stackFromEnvelope(envelope: Envelope): string | undefined {
+  const segments = envelope.source.split(".");
+  const principal = segments[0];
+  const stack = segments[1];
+  if (!principal || !stack) return undefined;
+  return `${principal}/${stack}`;
+}
+
+/**
  * Subscribe-side `{principal}` resolver. See {@link principalFromEnvelope}
  * for the symmetric publish-side helper and the invariant they jointly
  * preserve.

@@ -161,6 +161,20 @@ export function validateRegistrationClaim(
         return;
       }
       seenIds.add(sObj.stack_id);
+      // C-787 — stack_pubkey is OPTIONAL on the wire (back-compat: a producer
+      // predating per-stack keys omits it and the route backfills from the
+      // root). When PRESENT it must be a well-formed base64 Ed25519 pubkey —
+      // a malformed key would poison the verify path for that stack.
+      if (
+        sObj.stack_pubkey !== undefined &&
+        (typeof sObj.stack_pubkey !== "string" || !isValidPubkey(sObj.stack_pubkey))
+      ) {
+        errors.push({
+          field: `stacks[${i.toString()}].stack_pubkey`,
+          message: "must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars) if provided",
+        });
+        return;
+      }
       // display_name + metadata are optional and free-form; we only
       // type-check them.
       if (sObj.display_name !== undefined && typeof sObj.display_name !== "string") {
@@ -195,6 +209,9 @@ export function validateRegistrationClaim(
       // (the helper builds the claim from spread defaults), so the
       // canonical bytes must match here.
       const stackRecord: StackIdentity = { stack_id: sObj.stack_id };
+      if (typeof sObj.stack_pubkey === "string") {
+        stackRecord.stack_pubkey = sObj.stack_pubkey;
+      }
       if (typeof sObj.display_name === "string") {
         stackRecord.display_name = sObj.display_name;
       }

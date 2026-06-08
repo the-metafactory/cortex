@@ -25,8 +25,16 @@
  *       posting it. For air-gapped / review-before-post workflows.
  *
  *   register <principal-id> --seed-path <path> --registry-url <url> [--stack-id <id>]
+ *            [--principal-seed <path>]
  *       Build the signed claim from an existing seed and POST it to the
  *       registry. The ONLY subcommand that performs network I/O.
+ *
+ *       C-787 — to ADD a 2nd+ stack to an already-registered principal, pass
+ *       `--principal-seed <root-seed>` (the FIRST stack's seed). The add-stack
+ *       claim is then SIGNED BY THE ROOT (the authorization the registry
+ *       requires) while `--seed-path` is the NEW stack's own signing key (its
+ *       pubkey becomes the new stack's `stack_pubkey`). Without
+ *       `--principal-seed`, `--seed-path` is itself the root (first register).
  *
  * Secrets discipline: the NKey SEED is written to disk + held in memory to
  * sign the claim; it is NEVER printed or logged. Output carries the pubkey +
@@ -91,6 +99,12 @@ const SPEC: SubcommandSpec<ProvisionSubcommand> = {
         "--seed-path": "value",
         "--stack-id": "value",
         "--registry-url": "value",
+        // C-787 — the principal ROOT seed (the first stack's seed). Present
+        // ONLY when adding a SECOND+ stack to an already-registered principal:
+        // the add-stack claim must be signed by the root, while `--seed-path`
+        // is the NEW stack's own key. Omit for a first registration (then
+        // `--seed-path` is itself the root, as pre-C-787).
+        "--principal-seed": "value",
       },
     },
   },
@@ -285,7 +299,26 @@ async function runRegister(ctx: HandlerCtx): Promise<ExitResult> {
   const matRes = await materialFromSeedFile(seedPathFlag.value);
   if (!matRes.ok) return opError(matRes.reason, ctx.json);
 
-  const reg = await doRegister(ctx.principalId, matRes.material, stackIdRes.stackId, urlRes.value);
+  // C-787 — optional principal ROOT seed for an add-stack. When present, the
+  // root signs the claim and `--seed-path` (matRes) is the NEW stack's key.
+  let rootMaterial: StackIdentityMaterial | undefined;
+  const principalSeed = ctx.flags["--principal-seed"];
+  if (principalSeed !== undefined) {
+    if (principalSeed === true || typeof principalSeed !== "string") {
+      return usageError("register", "--principal-seed requires a value", ctx.json);
+    }
+    const rootRes = await materialFromSeedFile(principalSeed);
+    if (!rootRes.ok) return opError(`--principal-seed: ${rootRes.reason}`, ctx.json);
+    rootMaterial = rootRes.material;
+  }
+
+  const reg = await doRegister(
+    ctx.principalId,
+    matRes.material,
+    stackIdRes.stackId,
+    urlRes.value,
+    rootMaterial,
+  );
   if (!reg.ok) return opError(reg.reason, ctx.json, { fingerprint: matRes.material.fingerprint });
 
   const data: Record<string, string> = {
@@ -306,12 +339,17 @@ async function doRegister(
   material: StackIdentityMaterial,
   stackId: string,
   registryUrl: string,
+  rootMaterial?: StackIdentityMaterial,
 ): Promise<{ ok: true; note: string } | { ok: false; reason: string }> {
   let body: SignedRegistrationBody;
   try {
     body = await buildRegistrationClaim({
       principalId,
       material,
+      // C-787 — on the add-stack path the root signs; the new stack carries
+      // its own pubkey. On the first-register path rootMaterial is undefined
+      // and `material` both declares + signs (pre-C-787 behaviour).
+      ...(rootMaterial !== undefined && { rootMaterial }),
       stacks: [{ stack_id: stackId }],
     });
   } catch (err) {

@@ -54,6 +54,11 @@ export function resetStores(): void {
 /**
  * Build a signed registration body for the given principal. Default
  * stacks/capabilities are empty; tests override via opts.
+ *
+ * `signWith` (C-787) lets a test sign the claim with a DIFFERENT key than the
+ * one the claim declares in `principal_pubkey` — used to exercise the
+ * add-stack impersonation rejection (a claim attesting the root pubkey but
+ * signed by an attacker's key MUST fail signature verification).
  */
 export async function makeSignedRegistration(
   principalId: string,
@@ -67,6 +72,8 @@ export async function makeSignedRegistration(
     nonce?: string;
     /** Override pubkey in the claim — useful for tampering tests. */
     pubkeyOverride?: string;
+    /** Sign with a DIFFERENT key than `pKey` — forged-signature tests (C-787). */
+    signWith?: PrincipalKey;
   } = {},
 ): Promise<{ claim: RegistrationClaim; signature: string }> {
   const claim: RegistrationClaim = {
@@ -78,7 +85,8 @@ export async function makeSignedRegistration(
     nonce: opts.nonce ?? randomNonce(),
   };
   const message = new TextEncoder().encode(canonicalJSON(claim));
-  const signature = await signEd25519(pKey.privateKeyB64, message);
+  const signer = opts.signWith ?? pKey;
+  const signature = await signEd25519(signer.privateKeyB64, message);
   return { claim, signature };
 }
 

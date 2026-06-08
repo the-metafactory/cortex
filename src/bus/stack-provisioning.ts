@@ -108,7 +108,13 @@ export interface SignedRegistrationBody {
 export interface RegistrationClaimShape {
   principal_id: string;
   principal_pubkey: string;
-  stacks: { stack_id: string; display_name?: string; metadata?: Record<string, string> }[];
+  stacks: {
+    stack_id: string;
+    /** C-787 — per-stack signing pubkey (base64 ed25519). */
+    stack_pubkey?: string;
+    display_name?: string;
+    metadata?: Record<string, string>;
+  }[];
   capabilities: { id: string; description?: string; networks?: string[] }[];
   issued_at: string;
   nonce: string;
@@ -320,13 +326,45 @@ export function materialFromSeedString(seed: string): StackIdentityMaterial {
 export interface BuildRegistrationClaimOptions {
   /** The principal this stack belongs to (`{principal_id}`). */
   readonly principalId: string;
-  /** The stack identity material (carries the seed to sign with). */
+  /**
+   * The stack identity material. Carries the stack's signing key.
+   *
+   * For a FIRST registration (no {@link rootMaterial}) this key is BOTH the
+   * claim's `principal_pubkey` (root) AND the key that signs the claim —
+   * proof-of-possession of the principal root, exactly as pre-C-787.
+   *
+   * For an ADD-STACK (with {@link rootMaterial}) this key is the NEW stack's
+   * per-stack signing key — its base64 pubkey becomes the new stack's
+   * `stack_pubkey`. It does NOT sign the claim; the root does.
+   */
   readonly material: StackIdentityMaterial;
+  /**
+   * C-787 — the principal ROOT/authority material (the FIRST stack's seed),
+   * present ONLY for an ADD-STACK against an already-registered principal.
+   *
+   * When supplied:
+   *   - the claim's `principal_pubkey` is the ROOT pubkey (so the registry's
+   *     rotation gate sees the same root already on record and admits it),
+   *   - the claim is SIGNED by the root key (so signature verification against
+   *     `principal_pubkey` succeeds — the add-stack authorization the registry
+   *     requires), and
+   *   - the joining stack in `stacks[]` carries `material`'s OWN pubkey as its
+   *     `stack_pubkey` (the root ATTESTS that key by signing the claim).
+   *
+   * This is the impersonation defense at the client: only a holder of the
+   * principal root seed can mint a claim the registry will accept for a new
+   * stack. A holder of merely the new stack's key cannot (the registry rejects
+   * a claim whose `principal_pubkey` ≠ the registered root).
+   */
+  readonly rootMaterial?: StackIdentityMaterial;
   /**
    * The stack ids to register. Each MUST be `{principalId}/{slug}` — the
    * registry rejects a prefix mismatch (forged-attribution guard).
+   *
+   * C-787 — a `stack_pubkey` may be set per stack. When omitted on the
+   * add-stack path, the joining stack inherits `material.pubkeyB64`.
    */
-  readonly stacks: { stack_id: string; display_name?: string }[];
+  readonly stacks: { stack_id: string; display_name?: string; stack_pubkey?: string }[];
   /** Capabilities to advertise (optional). */
   readonly capabilities?: { id: string; description?: string; networks?: string[] }[];
   /**
@@ -355,18 +393,35 @@ export interface BuildRegistrationClaimOptions {
 export async function buildRegistrationClaim(
   opts: BuildRegistrationClaimOptions,
 ): Promise<SignedRegistrationBody> {
+  // C-787 — the AUTHORITY key is the root when adding a stack, else the stack's
+  // own key (first-register / single-stack). The claim's `principal_pubkey` is
+  // the authority pubkey, and the claim is SIGNED by the authority — so the
+  // registry verifies the signature against `principal_pubkey` and admits the
+  // claim only from a holder of that authority key.
+  const authority = opts.rootMaterial ?? opts.material;
+
+  // On the add-stack path, the joining stack carries its OWN pubkey (the stack
+  // material's key) as `stack_pubkey` unless the caller set one explicitly. On
+  // the first-register path with no per-stack key set, the stack inherits the
+  // authority pubkey (the registry route also backfills this, but stamping it
+  // here keeps the signed bytes explicit and the wire self-describing).
+  const stacks = opts.stacks.map((s) => ({
+    ...s,
+    stack_pubkey: s.stack_pubkey ?? opts.material.pubkeyB64,
+  }));
+
   const claim: RegistrationClaimShape = {
     principal_id: opts.principalId,
-    principal_pubkey: opts.material.pubkeyB64,
-    stacks: opts.stacks,
+    principal_pubkey: authority.pubkeyB64,
+    stacks,
     capabilities: opts.capabilities ?? [],
     issued_at: opts.issuedAt ?? new Date().toISOString(),
     nonce: opts.nonce ?? randomNonce(),
   };
 
-  // Re-derive the KeyPair from the in-memory seed to sign. We sign over the
-  // SAME canonical-JSON the registry route reconstructs and verifies.
-  const kp = fromSeed(new TextEncoder().encode(opts.material.seed.trim()));
+  // Re-derive the AUTHORITY KeyPair from its in-memory seed to sign. We sign
+  // over the SAME canonical-JSON the registry route reconstructs and verifies.
+  const kp = fromSeed(new TextEncoder().encode(authority.seed.trim()));
   const message = new TextEncoder().encode(canonicalJSON(claim));
   const signature = await signWithNKey(kp, message);
 

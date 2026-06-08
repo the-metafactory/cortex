@@ -224,6 +224,89 @@ describe("proof-of-possession registration (TC-1b #632)", () => {
   });
 });
 
+describe("C-787 — add-stack (multi-stack federation) round-trip against the real route", () => {
+  async function configuredEnv(): Promise<Env> {
+    resetStores();
+    const reg = await makeRegistryKey();
+    return {
+      REGISTRY_SIGNING_KEY: reg.signingKey,
+      REGISTRY_PUBLIC_KEY: reg.publicKey,
+      ENVIRONMENT: "test",
+    };
+  }
+
+  async function postRegister(env: Env, body: unknown): Promise<Response> {
+    return registryApp.fetch(
+      new Request("http://localhost/principals/andreas/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      env,
+    );
+  }
+
+  test("a root-authorized add-stack claim adds a SECOND stack with its OWN pubkey", async () => {
+    const env = await configuredEnv();
+    // First stack establishes the root.
+    const root = generateStackIdentity({ seedPath: join(freshDir(), "mf.nk") });
+    const first = await buildRegistrationClaim({
+      principalId: "andreas",
+      material: root,
+      stacks: [{ stack_id: "andreas/meta-factory" }],
+    });
+    expect((await postRegister(env, first)).status).toBe(201);
+
+    // Add the community stack: its OWN key is `material`, the ROOT seed signs.
+    const community = generateStackIdentity({ seedPath: join(freshDir(), "community.nk") });
+    const addStack = await buildRegistrationClaim({
+      principalId: "andreas",
+      material: community,
+      rootMaterial: root,
+      stacks: [
+        { stack_id: "andreas/meta-factory", stack_pubkey: root.pubkeyB64 },
+        { stack_id: "andreas/community" },
+      ],
+    });
+    // The claim is authorized by the root pubkey (so the rotation gate admits it).
+    expect(addStack.claim.principal_pubkey).toBe(root.pubkeyB64);
+
+    const res = await postRegister(env, addStack);
+    expect(res.status).toBe(201);
+    const json = (await res.json()) as {
+      payload: { stacks: { stack_id: string; stack_pubkey?: string }[] };
+    };
+    const byId = new Map(json.payload.stacks.map((s) => [s.stack_id, s.stack_pubkey]));
+    expect(byId.get("andreas/community")).toBe(community.pubkeyB64);
+    expect(byId.get("andreas/meta-factory")).toBe(root.pubkeyB64);
+  });
+
+  test("IMPERSONATION — an add-stack signed by ONLY the new stack's key is REJECTED", async () => {
+    const env = await configuredEnv();
+    const root = generateStackIdentity({ seedPath: join(freshDir(), "mf.nk") });
+    const first = await buildRegistrationClaim({
+      principalId: "andreas",
+      material: root,
+      stacks: [{ stack_id: "andreas/meta-factory" }],
+    });
+    expect((await postRegister(env, first)).status).toBe(201);
+
+    // Attacker holds ONLY the community key and tries to self-authorize an
+    // add-stack (no rootMaterial → community key both declares + signs).
+    const community = generateStackIdentity({ seedPath: join(freshDir(), "community.nk") });
+    const forged = await buildRegistrationClaim({
+      principalId: "andreas",
+      material: community,
+      stacks: [{ stack_id: "andreas/community" }],
+    });
+    const res = await postRegister(env, forged);
+    // The claim's principal_pubkey (community key) ≠ the registered root, so
+    // the registry's rotation gate rejects it — a non-root key cannot add a
+    // stack under someone else's principal.
+    expect(res.status).toBe(409);
+  });
+});
+
 describe("secrets discipline (TC-1b #632)", () => {
   test("[6] fingerprint is derived from the PUBLIC key only", () => {
     const seedPath = join(freshDir(), "stack.nk");

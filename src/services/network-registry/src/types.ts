@@ -29,6 +29,20 @@
 export interface StackIdentity {
   /** `{principal_id}/{stack_slug}` — slash-delimited. */
   stack_id: string;
+  /**
+   * C-787 — the per-stack Ed25519 signing pubkey (base64, 44 chars w/
+   * padding). Each stack federates with its OWN key so a principal can run
+   * multiple stacks (e.g. `andreas/meta-factory`, `andreas/community`). The
+   * principal's `principal_pubkey` remains the ROOT/authority key that
+   * authorizes ADDING a stack; this field is the key federated envelopes
+   * FROM this stack are verified against.
+   *
+   * OPTIONAL on the wire for back-compat: a producer that predates C-787
+   * omits it, and the registry backfills it from `principal_pubkey` at
+   * register time (so an existing single-stack principal keeps verifying).
+   * After a successful register the stored record always carries it.
+   */
+  stack_pubkey?: string;
   /** Human-readable label for dashboards. */
   display_name?: string;
   /**

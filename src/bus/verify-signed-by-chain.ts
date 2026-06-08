@@ -62,6 +62,7 @@ import { Codec } from "@nats-io/nkeys/lib/codec";
 import {
   getSignedByChain,
   principalFromEnvelope,
+  stackFromEnvelope,
   type Envelope,
   type SignedBy,
 } from "./myelin/envelope-validator";
@@ -284,6 +285,7 @@ export interface VerifySignedByChainOptions {
    */
   resolveFederatedPeer?: (
     peerPrincipal: string,
+    peerStack?: string,
   ) => Promise<FederatedPeerResolution>;
 }
 
@@ -383,7 +385,14 @@ export async function verifySignedByChain(
     envelope.sovereignty.classification === "federated"
   ) {
     const peerPrincipal = principalFromEnvelope(envelope);
-    const peerOutcome = await opts.resolveFederatedPeer(peerPrincipal);
+    // C-787 — resolve the PER-STACK pubkey for the signer's `{principal}/{stack}`
+    // (the stack that actually signed this envelope), not just the principal
+    // root key. The resolver falls back to the root pubkey when the stack is
+    // unknown / unkeyed, so a single-stack or pre-C-787 peer resolves exactly
+    // as before. `stackFromEnvelope` returns undefined only for a malformed
+    // source the schema already forbids — then we resolve root-level.
+    const peerStack = stackFromEnvelope(envelope);
+    const peerOutcome = await opts.resolveFederatedPeer(peerPrincipal, peerStack);
     if (!peerOutcome.resolved) {
       // Peer unverifiable (404 / transient / signature failure / disabled).
       // Reject the inbound envelope — an unresolved peer principal is

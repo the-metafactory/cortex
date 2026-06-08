@@ -59,13 +59,20 @@ function bootIdentity(principalId: string): Identity {
 function makeResolverStub(
   responses: Record<string, ResolveResult>,
   fallback: ResolveResult = { status: "unresolved" },
-): { resolve: (id: string) => Promise<ResolveResult>; calls: string[] } {
+): {
+  resolve: (id: string, stackId?: string) => Promise<ResolveResult>;
+  calls: string[];
+} {
   const calls: string[] = [];
   return {
     calls,
-    resolve(id: string): Promise<ResolveResult> {
+    resolve(id: string, stackId?: string): Promise<ResolveResult> {
+      // C-787 — a stack-aware lookup keys on `"{id} {stack}"` (falling back to
+      // the bare id), mirroring the real per-stack resolver. The bare id is
+      // recorded in `calls` so existing cache-hit assertions are unchanged.
       calls.push(id);
-      return Promise.resolve(responses[id] ?? fallback);
+      const key = stackId === undefined ? id : `${id} ${stackId}`;
+      return Promise.resolve(responses[key] ?? responses[id] ?? fallback);
     },
   };
 }
@@ -408,6 +415,63 @@ describe("DID-collision attack (boot anchor displacement)", () => {
     expect(myelin.resolve("did:mf:andreas-meta-factory")?.public_key).toBe(
       BOOT_PUBKEY,
     );
+  });
+});
+
+// =============================================================================
+// C-787 — per-stack peer resolution
+// =============================================================================
+
+describe("C-787 — per-stack peer resolution", () => {
+  test("resolveFederatedPeer threads the stack and returns that stack's pubkey", async () => {
+    const stub = makeResolverStub({
+      "andreas andreas/community": { status: "resolved", principalPubkey: PEER_PUBKEY_B },
+      "andreas andreas/meta-factory": { status: "resolved", principalPubkey: PEER_PUBKEY_A },
+    });
+    const reg = new MultiPrincipalIdentityRegistry({
+      bootPrincipal: { principalId: "boot", identity: bootIdentity("boot") },
+      resolver: stub,
+    });
+
+    const community = await reg.resolveFederatedPeer("andreas", "andreas/community");
+    expect(community.resolved).toBe(true);
+    if (community.resolved) {
+      expect(community.identity.public_key).toBe(PEER_PUBKEY_B);
+      // Federated stamp DID is principal-level even for a per-stack resolve.
+      expect(community.identity.id).toBe("did:mf:andreas");
+    }
+  });
+
+  test("the same principal's two stacks cache distinct pubkeys (no clobber)", async () => {
+    const stub = makeResolverStub({
+      "andreas andreas/community": { status: "resolved", principalPubkey: PEER_PUBKEY_B },
+      "andreas andreas/meta-factory": { status: "resolved", principalPubkey: PEER_PUBKEY_A },
+    });
+    const reg = new MultiPrincipalIdentityRegistry({
+      bootPrincipal: { principalId: "boot", identity: bootIdentity("boot") },
+      resolver: stub,
+    });
+
+    const mf = await reg.resolveFederatedPeer("andreas", "andreas/meta-factory");
+    const community = await reg.resolveFederatedPeer("andreas", "andreas/community");
+    expect(mf.resolved && mf.identity.public_key).toBe(PEER_PUBKEY_A);
+    expect(community.resolved && community.identity.public_key).toBe(PEER_PUBKEY_B);
+
+    // Both stacks are cached independently under per-stack entry keys.
+    expect(reg.get("andreas andreas/meta-factory")?.identity.public_key).toBe(PEER_PUBKEY_A);
+    expect(reg.get("andreas andreas/community")?.identity.public_key).toBe(PEER_PUBKEY_B);
+  });
+
+  test("resolveFederatedPeer without a stack falls back to the bare-principal resolve", async () => {
+    const stub = makeResolverStub({
+      andreas: { status: "resolved", principalPubkey: PEER_PUBKEY_A },
+    });
+    const reg = new MultiPrincipalIdentityRegistry({
+      bootPrincipal: { principalId: "boot", identity: bootIdentity("boot") },
+      resolver: stub,
+    });
+    const out = await reg.resolveFederatedPeer("andreas");
+    expect(out.resolved && out.identity.public_key).toBe(PEER_PUBKEY_A);
   });
 });
 

@@ -155,6 +155,165 @@ function track(stub: { baseUrl: string; stop: () => void }): string {
   return stub.baseUrl;
 }
 
+// A second structurally-valid base64 Ed25519 pubkey, distinct from PEER_PUBKEY.
+const STACK_PUBKEY = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=";
+
+/** Build a payload with per-stack pubkeys (C-787). */
+function makePerStackPayload(
+  principalId: string,
+  rootPubkey: string,
+  stacks: { stack_id: string; stack_pubkey?: string }[],
+): PrincipalPayload {
+  return {
+    principal_id: principalId,
+    principal_pubkey: rootPubkey,
+    stacks,
+    capabilities: [],
+    updated_at: new Date().toISOString(),
+  };
+}
+
+describe("PrincipalPubkeyResolver — C-787 per-stack resolution", () => {
+  test("resolve(principal, stackId) returns that stack's stack_pubkey", async () => {
+    const reg = await generateKeypair();
+    const baseUrl = track(
+      startStub({
+        principal: async (id) =>
+          json(
+            await signAssertion(
+              reg.privateKey,
+              reg.publicKeyB64,
+              makePerStackPayload(id, PEER_PUBKEY, [
+                { stack_id: `${id}/meta-factory`, stack_pubkey: PEER_PUBKEY },
+                { stack_id: `${id}/community`, stack_pubkey: STACK_PUBKEY },
+              ]),
+            ),
+          ),
+      }),
+    );
+    const resolver = new PrincipalPubkeyResolver({
+      enabled: true,
+      baseUrl,
+      registryPubkey: reg.publicKeyB64,
+      logError: () => {},
+    });
+    const res = await resolver.resolve("andreas", "andreas/community");
+    expect(res.status).toBe("resolved");
+    if (res.status === "resolved") {
+      expect(res.principalPubkey).toBe(STACK_PUBKEY);
+    }
+  });
+
+  test("the SAME principal's two stacks resolve to DIFFERENT pubkeys (no cache clobber)", async () => {
+    const reg = await generateKeypair();
+    const baseUrl = track(
+      startStub({
+        principal: async (id) =>
+          json(
+            await signAssertion(
+              reg.privateKey,
+              reg.publicKeyB64,
+              makePerStackPayload(id, PEER_PUBKEY, [
+                { stack_id: `${id}/meta-factory`, stack_pubkey: PEER_PUBKEY },
+                { stack_id: `${id}/community`, stack_pubkey: STACK_PUBKEY },
+              ]),
+            ),
+          ),
+      }),
+    );
+    const resolver = new PrincipalPubkeyResolver({
+      enabled: true,
+      baseUrl,
+      registryPubkey: reg.publicKeyB64,
+      logError: () => {},
+    });
+    const mf = await resolver.resolve("andreas", "andreas/meta-factory");
+    const community = await resolver.resolve("andreas", "andreas/community");
+    expect(mf.status === "resolved" && mf.principalPubkey).toBe(PEER_PUBKEY);
+    expect(community.status === "resolved" && community.principalPubkey).toBe(STACK_PUBKEY);
+  });
+
+  test("resolve(principal, unknownStack) falls back to the root pubkey", async () => {
+    const reg = await generateKeypair();
+    const baseUrl = track(
+      startStub({
+        principal: async (id) =>
+          json(
+            await signAssertion(
+              reg.privateKey,
+              reg.publicKeyB64,
+              makePerStackPayload(id, PEER_PUBKEY, [
+                { stack_id: `${id}/meta-factory`, stack_pubkey: STACK_PUBKEY },
+              ]),
+            ),
+          ),
+      }),
+    );
+    const resolver = new PrincipalPubkeyResolver({
+      enabled: true,
+      baseUrl,
+      registryPubkey: reg.publicKeyB64,
+      logError: () => {},
+    });
+    const res = await resolver.resolve("andreas", "andreas/does-not-exist");
+    expect(res.status).toBe("resolved");
+    if (res.status === "resolved") {
+      // Falls back to the root principal_pubkey.
+      expect(res.principalPubkey).toBe(PEER_PUBKEY);
+    }
+  });
+
+  test("resolve WITHOUT a stackId returns the root pubkey (pre-C-787 behaviour)", async () => {
+    const reg = await generateKeypair();
+    const baseUrl = track(
+      startStub({
+        principal: async (id) =>
+          json(
+            await signAssertion(
+              reg.privateKey,
+              reg.publicKeyB64,
+              makePerStackPayload(id, PEER_PUBKEY, [
+                { stack_id: `${id}/meta-factory`, stack_pubkey: STACK_PUBKEY },
+              ]),
+            ),
+          ),
+      }),
+    );
+    const resolver = new PrincipalPubkeyResolver({
+      enabled: true,
+      baseUrl,
+      registryPubkey: reg.publicKeyB64,
+      logError: () => {},
+    });
+    const res = await resolver.resolve("andreas");
+    expect(res.status === "resolved" && res.principalPubkey).toBe(PEER_PUBKEY);
+  });
+
+  test("a stack with NO stack_pubkey (back-compat record) falls back to root", async () => {
+    const reg = await generateKeypair();
+    const baseUrl = track(
+      startStub({
+        principal: async (id) =>
+          json(
+            await signAssertion(
+              reg.privateKey,
+              reg.publicKeyB64,
+              makePerStackPayload(id, PEER_PUBKEY, [{ stack_id: `${id}/laptop` }]),
+            ),
+          ),
+      }),
+    );
+    const resolver = new PrincipalPubkeyResolver({
+      enabled: true,
+      baseUrl,
+      registryPubkey: reg.publicKeyB64,
+      logError: () => {},
+    });
+    const res = await resolver.resolve("andreas", "andreas/laptop");
+    expect(res.status === "resolved" && res.principalPubkey).toBe(PEER_PUBKEY);
+  });
+});
+
 describe("PrincipalPubkeyResolver — posture gate (default-OFF)", () => {
   test("disabled resolver is inert: returns 'disabled' with NO network I/O", async () => {
     const counter = { principals: 0, pubkey: 0 };

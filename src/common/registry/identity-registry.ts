@@ -180,6 +180,20 @@ function peerDid(principalId: string): string {
 }
 
 /**
+ * C-787 — `entries` map key for a RESOLVED PEER. The boot principal is keyed
+ * by its bare `principalId` (pinned in the ctor); resolved peers are keyed
+ * per-stack as `"{principalId} {stackId}"` so a principal federating multiple
+ * stacks caches one verified entry per stack (each with that stack's pubkey)
+ * without the second clobbering the first. A space cannot appear in a
+ * principal id or stack id, so the per-stack key space never collides with a
+ * bare-principal key. A peer resolve with no `stackId` keys on the bare
+ * principal id — the pre-C-787 behaviour.
+ */
+function entryKey(principalId: string, stackId?: string): string {
+  return stackId === undefined ? principalId : `${principalId} ${stackId}`;
+}
+
+/**
  * Multi-principal, peer-stamped identity registry. Construct once at boot
  * with the local boot principal pinned + (optionally) the TC-2a resolver,
  * then:
@@ -263,14 +277,27 @@ export class MultiPrincipalIdentityRegistry {
    *
    * NEVER throws.
    */
-  async resolve(principalId: string): Promise<RegistryResolveOutcome> {
+  async resolve(
+    principalId: string,
+    stackId?: string,
+  ): Promise<RegistryResolveOutcome> {
     // Cache-first. The pinned boot principal is ALWAYS in `entries` (set in
     // the ctor, never deleted — there is no eviction API), so a resolve for
     // the boot id short-circuits here and the resolver is NEVER consulted
     // for it. This is the mechanism by which a registry assertion can never
     // displace the out-of-band boot anchor: the resolved-peer write below is
     // unreachable for the boot id.
-    const cached = this.entries.get(principalId);
+    //
+    // C-787 — the boot principal is keyed by its bare `principalId` (it is
+    // pinned, single-stack, never registry-resolved), so a resolve for the
+    // boot id still short-circuits here regardless of `stackId`. A PEER is
+    // keyed per-stack (see `entryKey`) so a principal federating two stacks
+    // caches a distinct verified pubkey per stack and they never clobber.
+    const bootEntry = this.entries.get(principalId);
+    if (bootEntry !== undefined && bootEntry.provenance === "local-boot") {
+      return { resolved: true, entry: bootEntry };
+    }
+    const cached = this.entries.get(entryKey(principalId, stackId));
     if (cached !== undefined) {
       return { resolved: true, entry: cached };
     }
@@ -280,7 +307,7 @@ export class MultiPrincipalIdentityRegistry {
       return { resolved: false, reason: "disabled" };
     }
 
-    const result = await this.resolver.resolve(principalId);
+    const result = await this.resolver.resolve(principalId, stackId);
     switch (result.status) {
       case "disabled":
         // Posture OFF — the resolver did no I/O. Federation verify not engaged.
@@ -320,6 +347,14 @@ export class MultiPrincipalIdentityRegistry {
         const entry: PrincipalEntry = {
           principalId,
           identity: {
+            // The federated stamp DID is principal-level (`did:mf:<peer>` —
+            // see `principalFromEnvelope`), so the materialised identity keeps
+            // that DID even for a per-stack resolve. C-787: `public_key` is the
+            // resolved PER-STACK key (when a stackId was supplied and the stack
+            // carried one) — that is the key the peer's envelope from THAT
+            // stack is signed with. The verifier merges this just-in-time
+            // before the active envelope's crypto pass (verify-signed-by-chain
+            // line ~459), so the correct per-stack key wins for that envelope.
             id: peerDid(principalId),
             display_name: principalId,
             network: this.peerNetwork(principalId),
@@ -332,7 +367,7 @@ export class MultiPrincipalIdentityRegistry {
           },
           provenance: "resolved-registry",
         };
-        this.entries.set(principalId, entry);
+        this.entries.set(entryKey(principalId, stackId), entry);
         return { resolved: true, entry };
       }
     }
@@ -358,8 +393,9 @@ export class MultiPrincipalIdentityRegistry {
    */
   async resolveFederatedPeer(
     peerPrincipal: string,
+    peerStack?: string,
   ): Promise<FederatedPeerResolution> {
-    const outcome = await this.resolve(peerPrincipal);
+    const outcome = await this.resolve(peerPrincipal, peerStack);
     if (outcome.resolved) {
       return { resolved: true, identity: outcome.entry.identity };
     }
