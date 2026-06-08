@@ -98,14 +98,14 @@ policy:
       home_principal: <principal>
       home_stack: <principal>/<slug>
       nkey_pub: <nkey_pub>
-      role: [operator]
+      role: [principal-role]
     - id: <principal>            # the human — the ONLY human principal
       home_principal: <principal>
       home_stack: <principal>/<slug>
-      role: [operator]
+      role: [principal-role]
       platform_ids: { discord: ["<principal-discord-id>"] }
   roles:
-    - id: operator
+    - id: principal-role
       capabilities: [dispatch.<assistant>, keyword.chat, tool.bash, tool.read, tool.glob, tool.grep]
 ```
 
@@ -157,10 +157,10 @@ Federating turns the stack's hard-isolated local bus into a **leaf** of a shared
 
 > A Discord guild ≠ a network. The guild is an **L7 surface**; the network is an **L1–L3 NATS federation**. A stack can be in a guild (Part 1) without being federated, and federate (Part 2) without sharing a guild.
 
-### B0 — Prerequisites (hub-operator / admin)
+### B0 — Prerequisites (hub admin)
 
 - **A reachable NATS leaf hub** (`host:port` + TLS). Reuse an existing endpoint under a NEW network id (e.g. `tls://nats.meta-factory.dev:7422`), or stand one up.
-- **A leaf `.creds` for THIS stack on that hub** — the gating manual artifact (like a VPN cert). Issued by the hub operator (`nsc`: a user under the hub's leaf account → `nsc generate creds`). Drop at `~/.config/nats/<network>.creds`. Note the **account** NKey (`A…`) it belongs to — it goes in `stack.nats_infra.account`. See [`runbook-federation-peering.md`](./runbook-federation-peering.md) for the manual hub side.
+- **A leaf `.creds` for THIS stack on that hub** — the gating manual artifact (like a VPN cert). Issued by the hub admin (`nsc`: a user under the hub's leaf account → `nsc generate creds`). Drop at `~/.config/nats/<network>.creds`. Note the **account** NKey (`A…`) it belongs to — it goes in `stack.nats_infra.account`. See [`runbook-federation-peering.md`](./runbook-federation-peering.md) for the manual hub side.
 
 ### B1 — Seed the network in the registry (admin)
 
