@@ -225,3 +225,124 @@ describe("cortex provision-stack register (TC-1b #632)", () => {
     }
   });
 });
+
+describe("cortex provision-stack register — C-787 add-stack (no data loss)", () => {
+  async function configuredEnv(): Promise<Env> {
+    resetStores();
+    const reg = await makeRegistryKey();
+    return {
+      REGISTRY_SIGNING_KEY: reg.signingKey,
+      REGISTRY_PUBLIC_KEY: reg.publicKey,
+      ENVIRONMENT: "test",
+    };
+  }
+
+  /** Route the CLI's global fetch at the in-memory registry app for `env`. */
+  function routeFetchToRegistry(env: Env): () => void {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = ((input: Request | string | URL, init?: RequestInit) => {
+      const req = input instanceof Request ? input : new Request(input, init);
+      return registryApp.fetch(req, env);
+    }) as typeof globalThis.fetch;
+    return () => {
+      globalThis.fetch = realFetch;
+    };
+  }
+
+  test("adding a 2nd stack via --principal-seed PRESERVES the existing stack (each with its own pubkey)", async () => {
+    const env = await configuredEnv();
+    const dir = freshDir();
+    const rootSeed = join(dir, "meta-factory.nk"); // the principal ROOT (first stack)
+    const communitySeed = join(dir, "community.nk"); // the joining stack's own key
+
+    // Generate both keys locally.
+    await dispatchProvisionStack(["generate", "andreas", "--seed-path", rootSeed]);
+    await dispatchProvisionStack(["generate", "andreas", "--seed-path", communitySeed]);
+
+    const restore = routeFetchToRegistry(env);
+    try {
+      // 1. First registration — establishes andreas/meta-factory + the root.
+      const first = await dispatchProvisionStack([
+        "register",
+        "andreas",
+        "--seed-path",
+        rootSeed,
+        "--stack-id",
+        "andreas/meta-factory",
+        "--registry-url",
+        "http://registry.test",
+      ]);
+      expect(first.exitCode).toBe(0);
+
+      // 2. Add-stack — register andreas/community signed by the ROOT seed.
+      const add = await dispatchProvisionStack([
+        "register",
+        "andreas",
+        "--seed-path",
+        communitySeed,
+        "--stack-id",
+        "andreas/community",
+        "--principal-seed",
+        rootSeed,
+        "--registry-url",
+        "http://registry.test",
+      ]);
+      expect(add.exitCode).toBe(0);
+
+      // 3. Assert the registry now holds BOTH stacks — meta-factory MUST survive
+      //    (this is the federation #787 exists to preserve), each with its own
+      //    stack_pubkey.
+      const getRes = await registryApp.fetch(
+        new Request("http://registry.test/principals/andreas"),
+        env,
+      );
+      expect(getRes.status).toBe(200);
+      const json = (await getRes.json()) as {
+        payload: { stacks: { stack_id: string; stack_pubkey?: string }[] };
+      };
+      const byId = new Map(json.payload.stacks.map((s) => [s.stack_id, s.stack_pubkey]));
+      expect([...byId.keys()].sort()).toEqual([
+        "andreas/community",
+        "andreas/meta-factory",
+      ]);
+      // Each carries a distinct, well-formed per-stack key.
+      expect(byId.get("andreas/meta-factory")).toMatch(/^[A-Za-z0-9+/]{43}=$/);
+      expect(byId.get("andreas/community")).toMatch(/^[A-Za-z0-9+/]{43}=$/);
+      expect(byId.get("andreas/meta-factory")).not.toBe(byId.get("andreas/community"));
+    } finally {
+      restore();
+    }
+  });
+
+  test("first registration (principal absent) still works — fetch+merge degrades to just the new stack", async () => {
+    const env = await configuredEnv();
+    const dir = freshDir();
+    const seed = join(dir, "stack.nk");
+    await dispatchProvisionStack(["generate", "andreas", "--seed-path", seed]);
+
+    const restore = routeFetchToRegistry(env);
+    try {
+      const res = await dispatchProvisionStack([
+        "register",
+        "andreas",
+        "--seed-path",
+        seed,
+        "--stack-id",
+        "andreas/meta-factory",
+        "--registry-url",
+        "http://registry.test",
+      ]);
+      expect(res.exitCode).toBe(0);
+      const getRes = await registryApp.fetch(
+        new Request("http://registry.test/principals/andreas"),
+        env,
+      );
+      const json = (await getRes.json()) as {
+        payload: { stacks: { stack_id: string }[] };
+      };
+      expect(json.payload.stacks.map((s) => s.stack_id)).toEqual(["andreas/meta-factory"]);
+    } finally {
+      restore();
+    }
+  });
+});

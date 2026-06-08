@@ -571,6 +571,121 @@ export async function postNetworkCreate(
   return postSigned(fetchImpl, url, opts.body, opts.timeoutMs);
 }
 
+// =============================================================================
+// C-787 — fetch existing stacks (read side of the add-stack fetch+merge)
+// =============================================================================
+
+/** One element of a principal's registered `stacks[]`. */
+export interface StackEntryShape {
+  readonly stack_id: string;
+  /** Per-stack signing pubkey (base64 ed25519). Always present post-C-787. */
+  readonly stack_pubkey?: string;
+  readonly display_name?: string;
+  readonly metadata?: Record<string, string>;
+}
+
+export interface FetchExistingStacksOptions {
+  /** Registry base URL (no trailing slash needed). */
+  readonly registryUrl: string;
+  /** The principal id (the `:principal_id` path segment). */
+  readonly principalId: string;
+  /** Injected fetch (tests). Defaults to global fetch. @internal */
+  readonly fetchImpl?: typeof globalThis.fetch;
+  /** Request timeout (ms). Default 10s. */
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Outcome of {@link fetchExistingStacks}. Discriminated so the add-stack
+ * caller can branch CORRECTLY rather than guess:
+ *   - `present`  — the principal exists; `stacks` is its current registered set
+ *                  (each entry carries its `stack_pubkey`). The caller MERGES
+ *                  the new stack in and re-attests the COMPLETE set.
+ *   - `absent`   — the registry returned 404 (first registration). The caller
+ *                  proceeds with just the new stack, as pre-C-787.
+ *   - `error`    — the registry was unreachable / returned a non-200/404 / a
+ *                  malformed body. The caller MUST abort with a clear error
+ *                  rather than send a partial set that would DROP existing
+ *                  stacks (the data-loss the C-787 review flagged on #790).
+ */
+export type FetchExistingStacksResult =
+  | { kind: "present"; stacks: StackEntryShape[] }
+  | { kind: "absent" }
+  | { kind: "error"; reason: string };
+
+/**
+ * C-787 — `GET /principals/{principalId}` and extract the registered
+ * `stacks[]`. The READ half of the add-stack fetch+merge: the register route
+ * does a FULL-OVERWRITE upsert of the `stacks` column, so an add-stack claim
+ * MUST carry the complete intended set or it silently drops every stack it
+ * omits. This read lets the caller rebuild that complete set (existing +
+ * new) and have the root re-attest it.
+ *
+ * Distinguishes 404 (`absent` → first registration) from every other failure
+ * (`error`) so the caller never sends a partial set on a transient outage.
+ * The GET payload is a `SignedAssertion<PrincipalRecord>`; we read
+ * `payload.stacks` WITHOUT verifying the registry signature here — this is a
+ * convenience read to AVOID DATA LOSS, not a trust decision: the stacks we
+ * merge are re-attested by the principal ROOT signature on the register POST,
+ * and the registry re-verifies that. (A tampered GET could at worst cause the
+ * root to re-attest a stack it did not intend; the principal running the root
+ * reviews the merged set, and federated VERIFY still resolves per-stack keys from the
+ * registry-signed record. Signature-verifying this read is a possible
+ * hardening follow-up, not required to close the data-loss blocker.)
+ */
+export async function fetchExistingStacks(
+  opts: FetchExistingStacksOptions,
+): Promise<FetchExistingStacksResult> {
+  const fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const url = `${opts.registryUrl.replace(/\/+$/, "")}/principals/${encodeURIComponent(opts.principalId)}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, opts.timeoutMs ?? 10_000);
+  let res: Response;
+  try {
+    res = await fetchImpl(url, { method: "GET", signal: controller.signal });
+  } catch (err) {
+    return {
+      kind: "error",
+      reason: `GET ${url} failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (res.status === 404) return { kind: "absent" };
+  if (!res.ok) {
+    return { kind: "error", reason: `GET ${url} returned HTTP ${res.status.toString()}` };
+  }
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch (err) {
+    return {
+      kind: "error",
+      reason: `GET ${url} returned non-JSON body: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  // Shape: SignedAssertion<PrincipalRecord> → body.payload.stacks[].
+  const payload = (body as { payload?: unknown } | null)?.payload;
+  const stacksRaw = (payload as { stacks?: unknown } | null | undefined)?.stacks;
+  if (!Array.isArray(stacksRaw)) {
+    return {
+      kind: "error",
+      reason: `GET ${url} payload had no stacks[] array (malformed registry response)`,
+    };
+  }
+  // Narrow each entry defensively — only keep well-formed stack records.
+  const stacks: StackEntryShape[] = [];
+  for (const s of stacksRaw) {
+    if (typeof s === "object" && s !== null && typeof (s as { stack_id?: unknown }).stack_id === "string") {
+      stacks.push(s as StackEntryShape);
+    }
+  }
+  return { kind: "present", stacks };
+}
+
 /** Shared POST-JSON-with-timeout used by both register + network-create. */
 async function postSigned(
   fetchImpl: typeof globalThis.fetch,

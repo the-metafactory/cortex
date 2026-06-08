@@ -30,6 +30,7 @@ import {
   generateStackIdentity,
   materialFromSeedString,
   buildRegistrationClaim,
+  fetchExistingStacks,
   fingerprintOf,
 } from "../stack-provisioning";
 import { nkeyToBase64Pubkey } from "../verify-signed-by-chain";
@@ -314,5 +315,79 @@ describe("secrets discipline (TC-1b #632)", () => {
     expect(fingerprintOf(material.pubkeyB64)).toBe(material.fingerprint);
     // The fingerprint must not contain any portion of the seed.
     expect(material.seed).not.toContain(material.fingerprint);
+  });
+});
+
+describe("C-787 — fetchExistingStacks (read side of add-stack merge)", () => {
+  async function configuredEnv(): Promise<Env> {
+    resetStores();
+    const reg = await makeRegistryKey();
+    return {
+      REGISTRY_SIGNING_KEY: reg.signingKey,
+      REGISTRY_PUBLIC_KEY: reg.publicKey,
+      ENVIRONMENT: "test",
+    };
+  }
+
+  /** A fetch impl routed at the in-memory registry app for `env`. */
+  function registryFetch(env: Env): typeof globalThis.fetch {
+    return ((input: Request | string | URL, init?: RequestInit) => {
+      const req = input instanceof Request ? input : new Request(input, init);
+      return registryApp.fetch(req, env);
+    }) as typeof globalThis.fetch;
+  }
+
+  test("present — returns the principal's stacks with their stack_pubkeys", async () => {
+    const env = await configuredEnv();
+    const root = generateStackIdentity({ seedPath: join(freshDir(), "mf.nk") });
+    const body = await buildRegistrationClaim({
+      principalId: "andreas",
+      material: root,
+      stacks: [{ stack_id: "andreas/meta-factory" }],
+    });
+    await registryApp.fetch(
+      new Request("http://registry.test/principals/andreas/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      env,
+    );
+
+    const res = await fetchExistingStacks({
+      registryUrl: "http://registry.test",
+      principalId: "andreas",
+      fetchImpl: registryFetch(env),
+    });
+    expect(res.kind).toBe("present");
+    if (res.kind === "present") {
+      expect(res.stacks).toHaveLength(1);
+      expect(res.stacks[0]!.stack_id).toBe("andreas/meta-factory");
+      expect(res.stacks[0]!.stack_pubkey).toBe(root.pubkeyB64);
+    }
+  });
+
+  test("absent — a 404 maps to absent (first registration, nothing to merge)", async () => {
+    const env = await configuredEnv();
+    const res = await fetchExistingStacks({
+      registryUrl: "http://registry.test",
+      principalId: "nobody",
+      fetchImpl: registryFetch(env),
+    });
+    expect(res.kind).toBe("absent");
+  });
+
+  test("error — a network failure maps to error (caller must abort, not drop stacks)", async () => {
+    const failingFetch = (() =>
+      Promise.reject(new Error("connection refused"))) as unknown as typeof globalThis.fetch;
+    const res = await fetchExistingStacks({
+      registryUrl: "http://registry.test",
+      principalId: "andreas",
+      fetchImpl: failingFetch,
+    });
+    expect(res.kind).toBe("error");
+    if (res.kind === "error") {
+      expect(res.reason).toMatch(/connection refused/);
+    }
   });
 });

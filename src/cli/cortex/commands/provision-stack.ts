@@ -56,8 +56,10 @@ import {
   materialFromSeedString,
   buildRegistrationClaim,
   registerStackIdentity,
+  fetchExistingStacks,
   type StackIdentityMaterial,
   type SignedRegistrationBody,
+  type StackEntryShape,
 } from "../../../bus/stack-provisioning";
 
 import { CliArgsError } from "./_shared/arg-error";
@@ -341,6 +343,22 @@ async function doRegister(
   registryUrl: string,
   rootMaterial?: StackIdentityMaterial,
 ): Promise<{ ok: true; note: string } | { ok: false; reason: string }> {
+  // C-787 — build the COMPLETE intended `stacks[]`. The register route does a
+  // FULL-OVERWRITE upsert of the `stacks` column with no read-merge, so a claim
+  // that carries only the new stack DROPS every stack already on record — the
+  // exact federation #787 exists to preserve (PR #790 data-loss blocker). On
+  // the add-stack path we therefore FETCH the principal's existing stacks and
+  // merge the new one in, so the root re-attests the full set and the route's
+  // overwrite becomes correct.
+  const stacksRes = await resolveMergedStacks(
+    principalId,
+    stackId,
+    material.pubkeyB64,
+    registryUrl,
+    rootMaterial !== undefined,
+  );
+  if (!stacksRes.ok) return { ok: false, reason: stacksRes.reason };
+
   let body: SignedRegistrationBody;
   try {
     body = await buildRegistrationClaim({
@@ -350,7 +368,7 @@ async function doRegister(
       // its own pubkey. On the first-register path rootMaterial is undefined
       // and `material` both declares + signs (pre-C-787 behaviour).
       ...(rootMaterial !== undefined && { rootMaterial }),
-      stacks: [{ stack_id: stackId }],
+      stacks: stacksRes.stacks,
     });
   } catch (err) {
     return { ok: false, reason: `failed to build registration claim: ${err instanceof Error ? err.message : String(err)}` };
@@ -373,6 +391,87 @@ async function doRegister(
     };
   }
   return { ok: true, note: `registered pubkey ${material.fingerprint}… at ${registryUrl} (HTTP ${result.status.toString()})` };
+}
+
+/** A stack entry as carried in the registration claim. */
+interface ClaimStack {
+  stack_id: string;
+  stack_pubkey?: string;
+  display_name?: string;
+  metadata?: Record<string, string>;
+}
+
+/**
+ * C-787 — compute the COMPLETE `stacks[]` for the registration claim.
+ *
+ * First registration (`isAddStack === false`): just the new stack — pre-C-787
+ * behaviour; the route establishes the principal from scratch, nothing to drop.
+ *
+ * Add-stack (`isAddStack === true`): FETCH the principal's existing stacks and
+ * merge the new one in (replace-by-stack_id if it already exists, else append),
+ * each existing entry keeping its own `stack_pubkey`. This is the data-loss
+ * fix: the full-overwrite route then writes the complete intended set instead
+ * of clobbering the existing stacks with only the new one.
+ *
+ * Failure handling:
+ *   - registry returns 404 (`absent`) on the add-stack path → the principal
+ *     isn't registered yet, so there is nothing to merge; proceed with just the
+ *     new stack (equivalent to a first registration).
+ *   - registry unreachable / malformed (`error`) → ABORT with a clear error. We
+ *     do NOT fall back to sending only the new stack: that is precisely the
+ *     silent stack-drop the blocker is about.
+ */
+async function resolveMergedStacks(
+  principalId: string,
+  stackId: string,
+  stackPubkey: string,
+  registryUrl: string,
+  isAddStack: boolean,
+): Promise<{ ok: true; stacks: ClaimStack[] } | { ok: false; reason: string }> {
+  const newStack: ClaimStack = { stack_id: stackId, stack_pubkey: stackPubkey };
+  if (!isAddStack) {
+    return { ok: true, stacks: [newStack] };
+  }
+
+  let existing: Awaited<ReturnType<typeof fetchExistingStacks>>;
+  try {
+    existing = await fetchExistingStacks({ registryUrl, principalId });
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `failed to fetch existing stacks for merge: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  if (existing.kind === "error") {
+    return {
+      ok: false,
+      reason:
+        `cannot add a stack without dropping existing ones: ${existing.reason}. ` +
+        `Refusing to register a partial stack set (would overwrite the principal's stacks). ` +
+        `Verify --registry-url and retry.`,
+    };
+  }
+  if (existing.kind === "absent") {
+    // No record yet — nothing to preserve. Proceed with just the new stack.
+    return { ok: true, stacks: [newStack] };
+  }
+
+  // present — merge: replace-by-stack_id if present, else append.
+  const merged: ClaimStack[] = existing.stacks.map((s: StackEntryShape) => ({
+    stack_id: s.stack_id,
+    ...(s.stack_pubkey !== undefined && { stack_pubkey: s.stack_pubkey }),
+    ...(s.display_name !== undefined && { display_name: s.display_name }),
+    ...(s.metadata !== undefined && { metadata: s.metadata }),
+  }));
+  const idx = merged.findIndex((s) => s.stack_id === stackId);
+  if (idx >= 0) {
+    // Re-keying an existing stack: keep position, swap in the new pubkey.
+    merged[idx] = { ...merged[idx], stack_id: stackId, stack_pubkey: stackPubkey };
+  } else {
+    merged.push(newStack);
+  }
+  return { ok: true, stacks: merged };
 }
 
 // =============================================================================
