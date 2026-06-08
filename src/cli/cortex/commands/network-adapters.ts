@@ -51,6 +51,9 @@ import {
   buildRegistrationClaim,
   materialFromSeedString,
   registerStackIdentity,
+  resolveMergedStacks,
+  isStackRegistered,
+  type StackIdentityMaterial,
 } from "../../../bus/stack-provisioning";
 import type {
   PolicyFederatedNetwork,
@@ -83,6 +86,20 @@ export interface LivePortsConfig {
   registryUrl?: string;
   registryPubkey?: string;
   seedPath?: string;
+  /**
+   * C-791 — the principal ROOT seed path (the FIRST stack's seed), present ONLY
+   * when joining a SECOND+ stack of an already-registered principal. Mirrors
+   * `provision-stack register --principal-seed`: the join's register step then
+   * SIGNS the add-stack claim with the ROOT (the authorization the registry
+   * requires — `principal_pubkey` stays the registered root, so the rotation
+   * gate admits it) while {@link LivePortsConfig.seedPath} is the NEW stack's
+   * own signing key (its pubkey becomes the new stack's `stack_pubkey`). The
+   * existing stacks are fetch+merged so the full-overwrite register route does
+   * not drop them. Omitted → first-stack register (the pre-C-791 path), with an
+   * idempotency skip when the stack is already on record (see
+   * {@link registerWithCapabilities}).
+   */
+  rootSeedPath?: string;
   natsConfigPath?: string;
   /**
    * macOS (launchd) nats-server descriptor — the plist whose `ProgramArguments`
@@ -120,35 +137,110 @@ export interface LivePortsConfig {
 // Registry port — S1 client + provision-stack register (proof-of-possession).
 // =============================================================================
 
+/** Load + re-derive identity material from a seed file. Never throws. */
+function loadSeedMaterial(
+  seedPathRaw: string,
+  label: string,
+): { ok: true; material: StackIdentityMaterial } | { ok: false; reason: string } {
+  const seedFile = expandTilde(seedPathRaw);
+  if (!existsSync(seedFile)) {
+    return { ok: false, reason: `${label} seed file not found at ${seedFile}` };
+  }
+  try {
+    return { ok: true, material: materialFromSeedString(readFileSync(seedFile, "utf-8")) };
+  } catch (err) {
+    return { ok: false, reason: `${label} seed load failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
 /**
  * Shared idempotent proof-of-possession registration (reused by the S4
  * `registerStack` and the S5 public-index announce/deregister). Loads the seed,
  * builds + signs the claim with the supplied `capabilities`, and POSTs it. An
  * EMPTY `capabilities` list de-advertises the stack on the public index
  * (the registry searches over the claim's `capabilities`). Never throws.
+ *
+ * C-791 — multi-stack principals:
+ *
+ *   1. **Idempotency skip.** Before posting, probe whether THIS stack is already
+ *      registered with its current pubkey. If so, the register is a NO-OP (the
+ *      DD-4 "re-running converges" promise) — crucially, this is what lets a
+ *      2nd-stack join succeed even WITHOUT a root seed when the stack was
+ *      already registered out-of-band (e.g. by `provision-stack register
+ *      --principal-seed`), instead of 409-ing at the rotation gate.
+ *   2. **Root-signed add-stack.** When {@link LivePortsConfig.rootSeedPath} is
+ *      set (the principal's root/first-stack seed), the claim is SIGNED BY THE
+ *      ROOT and the principal's existing stacks are fetch+merged in, so the
+ *      registry admits the add-stack (its `principal_pubkey` stays the
+ *      registered root) and the full-overwrite upsert preserves the other
+ *      stacks. This is the #787 root-authorization, NOT relaxed: a non-root key
+ *      still cannot mint an accepted add-stack claim.
  */
 async function registerWithCapabilities(
   cfg: LivePortsConfig,
   capabilities: { id: string; description?: string; networks?: string[] }[],
+  /**
+   * C-791 — enable the idempotency SKIP (federated join only). The public
+   * announce/deregister path re-registers to CHANGE the advertised capability
+   * set with the SAME pubkey, so it must NOT short-circuit on a pubkey match —
+   * the skip is keyed on stack_id+pubkey, not on capabilities. Federated
+   * `registerStack` (where the 409 lives) passes `true`; the public ports pass
+   * the default `false`.
+   */
+  allowIdempotentSkip = false,
 ): Promise<{ ok: true; note: string } | { ok: false; reason: string }> {
   const url = cfg.registryUrl ?? "";
   if (cfg.seedPath === undefined) {
     return { ok: false, reason: "no --seed-path for registration" };
   }
-  const seedFile = expandTilde(cfg.seedPath);
-  if (!existsSync(seedFile)) {
-    return { ok: false, reason: `seed file not found at ${seedFile}` };
+  const matRes = loadSeedMaterial(cfg.seedPath, "--seed-path");
+  if (!matRes.ok) return matRes;
+  const material = matRes.material;
+
+  // (1) Idempotency (federated join): if this stack is ALREADY registered with
+  // its current pubkey, the register is a no-op. Re-running a join, or joining
+  // after a `provision-stack register`, converges WITHOUT a 409 — and without
+  // needing a root seed threaded through. A registry error here is non-fatal:
+  // we fall through to the normal register, which surfaces the registry's own
+  // error. Gated by `allowIdempotentSkip` so the public-index announce path,
+  // which changes capabilities under an unchanged pubkey, never short-circuits.
+  if (allowIdempotentSkip) {
+    const idempotent = await isStackRegistered({
+      registryUrl: url,
+      principalId: cfg.principalId,
+      stackId: cfg.stackId,
+      stackPubkey: material.pubkeyB64,
+    });
+    if (idempotent === "registered") {
+      return { ok: true, note: "already registered (idempotent skip)" };
+    }
   }
-  let material;
-  try {
-    material = materialFromSeedString(readFileSync(seedFile, "utf-8"));
-  } catch (err) {
-    return { ok: false, reason: `seed load failed: ${err instanceof Error ? err.message : String(err)}` };
+
+  // (2) Add-stack: when a root seed is supplied, the ROOT signs the claim and
+  // the existing stacks are fetch+merged so the full-overwrite route preserves
+  // them. Without it, this is a first-stack register (the new stack both
+  // declares + signs — pre-C-791 behaviour).
+  let rootMaterial: StackIdentityMaterial | undefined;
+  if (cfg.rootSeedPath !== undefined) {
+    const rootRes = loadSeedMaterial(cfg.rootSeedPath, "--principal-seed");
+    if (!rootRes.ok) return rootRes;
+    rootMaterial = rootRes.material;
   }
+
+  const stacksRes = await resolveMergedStacks({
+    principalId: cfg.principalId,
+    stackId: cfg.stackId,
+    stackPubkey: material.pubkeyB64,
+    registryUrl: url,
+    isAddStack: rootMaterial !== undefined,
+  });
+  if (!stacksRes.ok) return { ok: false, reason: stacksRes.reason };
+
   const body = await buildRegistrationClaim({
     principalId: cfg.principalId,
     material,
-    stacks: [{ stack_id: cfg.stackId }],
+    ...(rootMaterial !== undefined && { rootMaterial }),
+    stacks: stacksRes.stacks,
     capabilities,
   });
   let result;
@@ -189,7 +281,10 @@ function buildRegistryPort(cfg: LivePortsConfig): NetworkRegistryPort {
         id,
         networks: [cfg.networkId],
       }));
-      return registerWithCapabilities(cfg, announced);
+      // C-791 — federated register: enable the idempotency skip (a re-run or a
+      // join-after-provision-stack-register converges instead of 409-ing) and
+      // honour the optional root seed (root-signed add-stack for a 2nd stack).
+      return registerWithCapabilities(cfg, announced, true);
     },
     fetchVerified(networkId) {
       // S1's fetchAndCache returns { descriptor, roster } on ok and refreshes

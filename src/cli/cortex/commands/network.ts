@@ -136,6 +136,14 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--registry-url": "value",
         "--registry-pubkey": "value",
         "--seed-path": "value",
+        // C-791 — the principal ROOT seed (the FIRST stack's seed). Present ONLY
+        // when joining a SECOND+ stack of an already-registered principal: the
+        // register step then signs the add-stack claim with the root + fetch-
+        // merges the existing stacks (mirrors `provision-stack register
+        // --principal-seed`). Omit for a first-stack join (then `--seed-path` is
+        // itself the root). The flag wins over config; no config field is
+        // derived for it (no natural cortex.yaml field exists — see help).
+        "--principal-seed": "value",
         "--creds": "value",
         "--account": "value",
         "--nats-config": "value",
@@ -734,6 +742,13 @@ function portsConfigFromInputs(
     registryUrl: inputs.registryUrl,
     ...(inputs.registryPubkey !== undefined && { registryPubkey: inputs.registryPubkey }),
     seedPath: inputs.seedPath,
+    // C-791 — optional principal ROOT seed for a 2nd-stack join. Flag-only (no
+    // config field): present ⇒ the register step root-signs the add-stack claim
+    // + fetch-merges existing stacks; absent ⇒ first-stack register (with the
+    // idempotency skip when the stack is already on record).
+    ...(optionalValueFlag(flags, "--principal-seed") !== undefined && {
+      rootSeedPath: optionalValueFlag(flags, "--principal-seed"),
+    }),
     natsConfigPath: inputs.natsConfigPath,
     // #763 — platform-resolved service descriptor: plist on macOS, systemd unit
     // on Linux. The deriver sets exactly one + the platform; thread both through
@@ -875,7 +890,9 @@ Subcommands:
           fallback on registry outage, DD-10) → render the nats-server leaf +
           ensure the plist loads it (DD-6) → write policy.federated.networks[]
           with registry-resolved peers (DD-5) + the stack's OWN accept-subject
-          → restart. Idempotent (re-running converges).
+          → restart. Idempotent (re-running converges). For a principal's
+          SECOND+ stack, pass --principal-seed <root> so the register step
+          root-signs the add-stack claim + preserves existing stacks (#791).
   status  Show joined networks, peers, accept-subjects, leaf link state + counters.
   leave   Reverse a join cleanly: remove the network + leaf include, drop the
           plist -c arg if no networks remain, restart. Idempotent.
@@ -911,6 +928,18 @@ Flags (all OPTIONAL OVERRIDES — derived from cortex.yaml when omitted; #753):
   --registry-url <url>    Override policy.federated.registry.url.
   --registry-pubkey <b64> Override policy.federated.registry.pubkey (DD-9); TOFU if omitted.
   --seed-path <p>         Override stack.nkey_seed_path (proof-of-possession).
+  --principal-seed <p>    (join, #791) The principal ROOT seed (the FIRST stack's
+                          seed). Pass ONLY when joining a SECOND+ stack of an
+                          already-registered principal: the register step then
+                          signs the add-stack claim with the root and fetch-
+                          merges the principal's existing stacks (so other stacks
+                          survive), mirroring \`provision-stack register
+                          --principal-seed\`. Omit for a first-stack join (then
+                          --seed-path is itself the root). A re-run, or a join
+                          after \`provision-stack register\`, is idempotent (the
+                          register no-ops when the stack is already on record),
+                          so --principal-seed is only needed to register a NEW
+                          2nd stack — not to re-run a converged one.
   --creds <p>             Override stack.nats_infra.creds_path (default: ~/.config/nats/<network>.creds).
   --account <nkey-U>      Override stack.nats_infra.account (A… nkey-U the leaf binds to).
   --nats-config <p>       Override stack.nats_infra.config_path (nats-server -c config).

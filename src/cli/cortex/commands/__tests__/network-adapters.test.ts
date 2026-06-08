@@ -36,6 +36,16 @@ import {
   rosterFromPrincipals,
   membersFromPrincipals,
 } from "../../../../services/network-registry/src/store";
+import registryApp from "../../../../services/network-registry/src/index";
+import type { Env } from "../../../../services/network-registry/src/index";
+import {
+  makeRegistryKey,
+  resetStores,
+} from "../../../../services/network-registry/__tests__/helpers";
+import type {
+  SignedAssertion,
+  PrincipalRecord,
+} from "../../../../services/network-registry/src/types";
 
 const tmpDirs: string[] = [];
 function freshDir(): string {
@@ -669,6 +679,190 @@ describe("#762 registerStack announces capabilities into the network", () => {
       await store.putPrincipal(c.principal_id, c.principal_pubkey, c.stacks, c.capabilities);
       const principals = await store.listPrincipals();
       expect(membersFromPrincipals(principals, "metafactory")).toEqual([]);
+    });
+  });
+});
+
+// =============================================================================
+// C-791 — `cortex network join` register step supports multi-stack principals.
+//
+// These tests drive the REAL network-registry Worker route end-to-end (the same
+// route #787's per-stack-pubkeys tests use), so the add-stack authorization +
+// rotation gate run EXACTLY as in production — no re-implemented verifier. We
+// stub `globalThis.fetch` to route the adapter's register/GET calls into
+// `registryApp.fetch(request, env)`.
+// =============================================================================
+
+describe("C-791 — registerStack supports a principal's 2nd+ stack", () => {
+  let env: Env;
+
+  /** Route `globalThis.fetch` into the live registry Worker for the duration of `fn`. */
+  function withLiveRegistry(fn: () => Promise<void>): Promise<void> {
+    const real = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const req = input instanceof Request ? input : new Request(input, init);
+      return registryApp.fetch(req, env);
+    }) as typeof globalThis.fetch;
+    return fn().finally(() => {
+      globalThis.fetch = real;
+    });
+  }
+
+  const REGISTRY_URL = "http://localhost";
+
+  function cfg(overrides: Partial<LivePortsConfig>): LivePortsConfig {
+    return {
+      networkId: "metafactory",
+      principalId: "andreas",
+      stackId: "andreas/meta-factory",
+      registryUrl: REGISTRY_URL,
+      natsConfigPath: "/x/local.conf",
+      plistPath: "/nonexistent/plist",
+      platform: "darwin",
+      announceCapabilities: [],
+      ...overrides,
+    };
+  }
+
+  async function getStacks(principalId: string): Promise<{ stack_id: string; stack_pubkey?: string }[]> {
+    const res = await registryApp.fetch(
+      new Request(`${REGISTRY_URL}/principals/${principalId}`),
+      env,
+    );
+    if (res.status === 404) return [];
+    const json = (await res.json()) as SignedAssertion<PrincipalRecord>;
+    return json.payload.stacks;
+  }
+
+  // Fresh registry + keys per test.
+  async function setup(): Promise<void> {
+    resetStores();
+    const reg = await makeRegistryKey();
+    env = {
+      REGISTRY_SIGNING_KEY: reg.signingKey,
+      REGISTRY_PUBLIC_KEY: reg.publicKey,
+      ENVIRONMENT: "test",
+    };
+  }
+
+  test("first-stack join (no --principal-seed) registers, principal absent ⇒ unchanged", async () => {
+    await setup();
+    const dir = freshDir();
+    const rootSeed = join(dir, "root.nk");
+    generateStackIdentity({ seedPath: rootSeed });
+
+    await withLiveRegistry(async () => {
+      const ports = buildLivePorts(cfg({ stackId: "andreas/meta-factory", seedPath: rootSeed }));
+      const res = await ports.registry.registerStack();
+      expect(res.ok).toBe(true);
+      const stacks = await getStacks("andreas");
+      expect(stacks.map((s) => s.stack_id)).toEqual(["andreas/meta-factory"]);
+    });
+  });
+
+  test("2nd-stack join WITH --principal-seed succeeds (no 409) + preserves the existing stack", async () => {
+    await setup();
+    const dir = freshDir();
+    const rootSeed = join(dir, "root.nk"); // andreas/meta-factory (the root)
+    const communitySeed = join(dir, "community.nk"); // andreas/community (2nd stack)
+    const rootMat = generateStackIdentity({ seedPath: rootSeed });
+    const communityMat = generateStackIdentity({ seedPath: communitySeed });
+
+    await withLiveRegistry(async () => {
+      // Establish the principal via a first-stack join (root signs its own).
+      const first = buildLivePorts(cfg({ stackId: "andreas/meta-factory", seedPath: rootSeed }));
+      expect((await first.registry.registerStack()).ok).toBe(true);
+
+      // 2nd-stack join: the joining stack key (community) ≠ the registered root.
+      // WITHOUT --principal-seed this would 409 at the rotation gate. WITH it,
+      // the root signs the add-stack claim and existing stacks are merged.
+      const second = buildLivePorts(
+        cfg({
+          networkId: "community-net",
+          stackId: "andreas/community",
+          seedPath: communitySeed,
+          rootSeedPath: rootSeed,
+        }),
+      );
+      const res = await second.registry.registerStack();
+      expect(res.ok).toBe(true); // NOT a 409
+
+      // Both stacks survive, each with its own pubkey; root unchanged.
+      const stacks = await getStacks("andreas");
+      const byId = Object.fromEntries(stacks.map((s) => [s.stack_id, s.stack_pubkey]));
+      expect(Object.keys(byId).sort()).toEqual(["andreas/community", "andreas/meta-factory"]);
+      expect(byId["andreas/meta-factory"]).toBe(rootMat.pubkeyB64);
+      expect(byId["andreas/community"]).toBe(communityMat.pubkeyB64);
+    });
+  });
+
+  test("2nd-stack join WITHOUT --principal-seed 409s (no auth relaxation) — root-auth still required", async () => {
+    await setup();
+    const dir = freshDir();
+    const rootSeed = join(dir, "root.nk");
+    const communitySeed = join(dir, "community.nk");
+    generateStackIdentity({ seedPath: rootSeed });
+    generateStackIdentity({ seedPath: communitySeed });
+
+    await withLiveRegistry(async () => {
+      const first = buildLivePorts(cfg({ stackId: "andreas/meta-factory", seedPath: rootSeed }));
+      expect((await first.registry.registerStack()).ok).toBe(true);
+
+      // No --principal-seed: the community key signs + declares itself as
+      // principal_pubkey ≠ registered root → the registry's rotation gate
+      // rejects it (409). This proves #787's root-authorization is NOT relaxed:
+      // a non-root key cannot add a stack via the join path either.
+      const second = buildLivePorts(
+        cfg({ networkId: "community-net", stackId: "andreas/community", seedPath: communitySeed }),
+      );
+      const res = await second.registry.registerStack();
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.reason).toContain("HTTP 409");
+
+      // The community stack was NOT added.
+      const stacks = await getStacks("andreas");
+      expect(stacks.map((s) => s.stack_id)).toEqual(["andreas/meta-factory"]);
+    });
+  });
+
+  test("idempotent: an already-registered stack re-join is a NO-OP skip (no 409), even without --principal-seed", async () => {
+    await setup();
+    const dir = freshDir();
+    const rootSeed = join(dir, "root.nk");
+    const communitySeed = join(dir, "community.nk");
+    generateStackIdentity({ seedPath: rootSeed });
+    generateStackIdentity({ seedPath: communitySeed });
+
+    await withLiveRegistry(async () => {
+      // Establish root + add community out-of-band (the provision-stack path).
+      const first = buildLivePorts(cfg({ stackId: "andreas/meta-factory", seedPath: rootSeed }));
+      expect((await first.registry.registerStack()).ok).toBe(true);
+      const add = buildLivePorts(
+        cfg({
+          networkId: "community-net",
+          stackId: "andreas/community",
+          seedPath: communitySeed,
+          rootSeedPath: rootSeed,
+        }),
+      );
+      expect((await add.registry.registerStack()).ok).toBe(true);
+
+      // Now re-run the community join WITHOUT --principal-seed. The stack is
+      // already on record with this pubkey, so the register skips (no 409,
+      // converges — the DD-4 idempotency promise).
+      const rejoin = buildLivePorts(
+        cfg({ networkId: "community-net", stackId: "andreas/community", seedPath: communitySeed }),
+      );
+      const res = await rejoin.registry.registerStack();
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.note).toContain("idempotent");
+
+      // Still exactly two stacks.
+      const stacks = await getStacks("andreas");
+      expect(stacks.map((s) => s.stack_id).sort()).toEqual([
+        "andreas/community",
+        "andreas/meta-factory",
+      ]);
     });
   });
 });

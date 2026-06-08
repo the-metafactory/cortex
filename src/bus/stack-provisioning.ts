@@ -686,6 +686,165 @@ export async function fetchExistingStacks(
   return { kind: "present", stacks };
 }
 
+// =============================================================================
+// C-787 / C-791 — shared add-stack merge (the fetch+merge half of multi-stack
+// registration). Extracted here so BOTH `cortex provision-stack register` AND
+// `cortex network join` reuse ONE implementation rather than hand-rolling the
+// data-loss-prone merge twice (the C-791 reuse requirement). The register route
+// does a FULL-OVERWRITE upsert of the `stacks` column with no read-merge, so an
+// add-stack claim MUST carry the complete intended set or it silently drops
+// every stack it omits.
+// =============================================================================
+
+/** A stack entry as carried in a registration claim. */
+export interface ClaimStack {
+  stack_id: string;
+  stack_pubkey?: string;
+  display_name?: string;
+  metadata?: Record<string, string>;
+}
+
+export interface ResolveMergedStacksOptions {
+  /** The principal whose stacks are being merged. */
+  readonly principalId: string;
+  /** The stack id being added/updated (`{principalId}/{slug}`). */
+  readonly stackId: string;
+  /** The base64 ed25519 pubkey of the stack being added/updated. */
+  readonly stackPubkey: string;
+  /** Registry base URL (for the existing-stacks fetch on the add-stack path). */
+  readonly registryUrl: string;
+  /**
+   * `true` when adding a 2nd+ stack to an already-registered principal (a
+   * `--principal-seed`/root-signed claim). Triggers the fetch+merge so the
+   * full-overwrite route does not drop the principal's existing stacks. `false`
+   * for a first registration (just the new stack — nothing to preserve).
+   */
+  readonly isAddStack: boolean;
+  /** Injected fetch (tests). Defaults to global fetch. @internal */
+  readonly fetchImpl?: typeof globalThis.fetch;
+}
+
+/**
+ * C-787 — compute the COMPLETE `stacks[]` for a registration claim, merging the
+ * new stack into the principal's existing registered set on the add-stack path.
+ *
+ * First registration (`isAddStack === false`): just the new stack — the route
+ * establishes the principal from scratch, nothing to drop.
+ *
+ * Add-stack (`isAddStack === true`): FETCH the principal's existing stacks and
+ * merge the new one in (replace-by-stack_id if it already exists, else append),
+ * each existing entry keeping its own `stack_pubkey`. The full-overwrite route
+ * then writes the complete intended set instead of clobbering the existing
+ * stacks with only the new one.
+ *
+ * Failure handling:
+ *   - registry returns 404 (`absent`) on the add-stack path → the principal
+ *     isn't registered yet, nothing to merge; proceed with just the new stack.
+ *   - registry unreachable / malformed (`error`) → ABORT with a clear error. We
+ *     do NOT fall back to sending only the new stack: that is precisely the
+ *     silent stack-drop the data-loss blocker is about.
+ */
+export async function resolveMergedStacks(
+  opts: ResolveMergedStacksOptions,
+): Promise<{ ok: true; stacks: ClaimStack[] } | { ok: false; reason: string }> {
+  const newStack: ClaimStack = { stack_id: opts.stackId, stack_pubkey: opts.stackPubkey };
+  if (!opts.isAddStack) {
+    return { ok: true, stacks: [newStack] };
+  }
+
+  let existing: FetchExistingStacksResult;
+  try {
+    existing = await fetchExistingStacks({
+      registryUrl: opts.registryUrl,
+      principalId: opts.principalId,
+      ...(opts.fetchImpl !== undefined && { fetchImpl: opts.fetchImpl }),
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `failed to fetch existing stacks for merge: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  if (existing.kind === "error") {
+    return {
+      ok: false,
+      reason:
+        `cannot add a stack without dropping existing ones: ${existing.reason}. ` +
+        `Refusing to register a partial stack set (would overwrite the principal's stacks). ` +
+        `Verify the registry URL and retry.`,
+    };
+  }
+  if (existing.kind === "absent") {
+    // No record yet — nothing to preserve. Proceed with just the new stack.
+    return { ok: true, stacks: [newStack] };
+  }
+
+  // present — merge: replace-by-stack_id if present, else append.
+  const merged: ClaimStack[] = existing.stacks.map((s: StackEntryShape) => ({
+    stack_id: s.stack_id,
+    ...(s.stack_pubkey !== undefined && { stack_pubkey: s.stack_pubkey }),
+    ...(s.display_name !== undefined && { display_name: s.display_name }),
+    ...(s.metadata !== undefined && { metadata: s.metadata }),
+  }));
+  const idx = merged.findIndex((s) => s.stack_id === opts.stackId);
+  if (idx >= 0) {
+    // Re-keying an existing stack: keep position, swap in the new pubkey.
+    merged[idx] = { ...merged[idx], stack_id: opts.stackId, stack_pubkey: opts.stackPubkey };
+  } else {
+    merged.push(newStack);
+  }
+  return { ok: true, stacks: merged };
+}
+
+/**
+ * C-791 — is the joining stack ALREADY registered with its current pubkey?
+ *
+ * The idempotency probe for `cortex network join`'s register step. When a
+ * principal's stack has already been registered (e.g. via a prior
+ * `provision-stack register --principal-seed`, or a re-run of the same join),
+ * the register POST would either no-op (root re-signs the same set) or 409
+ * (`pubkey_rotation_not_supported`, when the join signs with the stack key but
+ * the principal root is a different key). Detecting the already-registered case
+ * lets the join SKIP the POST entirely so a re-run converges (DD-4 idempotency)
+ * without depending on a root seed being threaded through.
+ *
+ * Returns:
+ *   - `registered` — the stack is on record with EXACTLY `stackPubkey`. The
+ *     caller skips the register POST (idempotent no-op).
+ *   - `not-registered` — the principal is absent, OR the stack is absent, OR the
+ *     stack is on record with a DIFFERENT pubkey (a genuine re-key, which must
+ *     go through the authorized register path — not silently skipped).
+ *   - `error` — the registry was unreachable/malformed. The caller MUST NOT
+ *     assume idempotency (could hide a needed registration); it proceeds to the
+ *     normal register path, which surfaces the registry's own error.
+ */
+export async function isStackRegistered(opts: {
+  registryUrl: string;
+  principalId: string;
+  stackId: string;
+  stackPubkey: string;
+  fetchImpl?: typeof globalThis.fetch;
+}): Promise<"registered" | "not-registered" | "error"> {
+  let existing: FetchExistingStacksResult;
+  try {
+    existing = await fetchExistingStacks({
+      registryUrl: opts.registryUrl,
+      principalId: opts.principalId,
+      ...(opts.fetchImpl !== undefined && { fetchImpl: opts.fetchImpl }),
+    });
+  } catch {
+    return "error";
+  }
+  if (existing.kind === "error") return "error";
+  if (existing.kind === "absent") return "not-registered";
+  const match = existing.stacks.find((s) => s.stack_id === opts.stackId);
+  if (match?.stack_pubkey === opts.stackPubkey) {
+    return "registered";
+  }
+  return "not-registered";
+}
+
 /** Shared POST-JSON-with-timeout used by both register + network-create. */
 async function postSigned(
   fetchImpl: typeof globalThis.fetch,
