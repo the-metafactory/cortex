@@ -161,6 +161,46 @@ describe("planSurfaceOwnership", () => {
     expect([...plan.ownedSurfaceKeys]).toEqual(["discord:juniper"]);
     expect(plan.outboundPrincipalStacks).toEqual([{ principal: "jc", stack: "default" }]);
   });
+
+  test("same Discord token across two stacks keeps separate Gateway ids", () => {
+    const plan = planSurfaceOwnership({
+      surfaces: {
+        discord: [
+          {
+            agent: "juniper",
+            stack: "jc/default",
+            binding: {
+              token: "discord-token",
+              guildId: "1487023327791808592",
+              agentChannelId: "1487023328324616266",
+              logChannelId: "1487023328324616266",
+            },
+          },
+          {
+            agent: "juniper",
+            stack: "jc/research",
+            binding: {
+              token: "discord-token",
+              guildId: "1505549701674700991",
+              agentChannelId: "1513296336739635322",
+              logChannelId: "1513296336739635322",
+            },
+          },
+        ],
+      },
+      gatewayEnabled: true,
+      principal: "jc",
+    });
+
+    expect(plan.gatewayAdapterInstanceIds).toEqual([
+      "discord:1487023327791808592",
+      "discord:1505549701674700991",
+    ]);
+    expect(plan.outboundPrincipalStacks).toEqual([
+      { principal: "jc", stack: "default" },
+      { principal: "jc", stack: "research" },
+    ]);
+  });
 });
 
 describe("gatewayAdapterInstanceCollisions", () => {

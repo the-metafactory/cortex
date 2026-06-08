@@ -174,6 +174,31 @@ const SAME_TOKEN_DISCORD_SURFACES: Surfaces = {
   ],
 };
 
+const SAME_TOKEN_DIFFERENT_STACKS_DISCORD_SURFACES: Surfaces = {
+  discord: [
+    {
+      agent: "juniper",
+      stack: "jc/default",
+      binding: {
+        token: "tok-juniper",
+        guildId: "1487023327791808592",
+        agentChannelId: "1487023328324616266",
+        logChannelId: "1487023328324616266",
+      },
+    },
+    {
+      agent: "juniper",
+      stack: "jc/research",
+      binding: {
+        token: "tok-juniper",
+        guildId: "1505549701674700991",
+        agentChannelId: "1513296336739635322",
+        logChannelId: "1513296336739635322",
+      },
+    },
+  ],
+};
+
 const MULTI_SURFACES: Surfaces = {
   discord: [
     {
@@ -285,6 +310,24 @@ describe("buildGatewayAdapters", () => {
         logChannelId: "1513296336739635322",
       },
     });
+  });
+
+  test("same Discord token across two stacks → separate stack-scoped adapters", () => {
+    const { factory, calls } = makeRecordingFactory();
+    const adapters = buildGatewayAdapters(
+      SAME_TOKEN_DIFFERENT_STACKS_DISCORD_SURFACES,
+      makeDeps(factory),
+    );
+
+    expect(adapters.length).toBe(2);
+    expect(calls.map((call) => call.instanceId)).toEqual([
+      "discord:1487023327791808592",
+      "discord:1505549701674700991",
+    ]);
+    expect(calls.map((call) => call.allowedGuildIds)).toEqual([
+      ["1487023327791808592"],
+      ["1505549701674700991"],
+    ]);
   });
 
   test("mixed surfaces → one adapter per binding, correct platforms", () => {
