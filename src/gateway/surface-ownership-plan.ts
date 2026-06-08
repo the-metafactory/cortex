@@ -11,13 +11,13 @@
 
 import type { PlatformAdapter } from "../adapters/types";
 import type { Surfaces } from "../common/types/surfaces";
-import { createHash } from "node:crypto";
 import {
   crossPrincipalBindings,
   distinctBoundPrincipalStacks,
   distinctBoundStacks,
   type BoundPrincipalStack,
 } from "./binding-resolver";
+import { groupDiscordBindingsByToken } from "./discord-token-groups";
 
 export interface SurfaceOwnershipPlan {
   /** True when `CORTEX_GATEWAY` selected the Gateway path. */
@@ -68,22 +68,8 @@ function ownedKeys(surfaces: Surfaces | undefined): Set<string> {
 function gatewayInstanceIds(surfaces: Surfaces | undefined): string[] {
   const ids: string[] = [];
   if (surfaces === undefined) return ids;
-  const discordByToken = new Map<string, string[]>();
-  for (const entry of surfaces.discord ?? []) {
-    const guilds = discordByToken.get(entry.binding.token);
-    if (guilds) {
-      guilds.push(entry.binding.guildId);
-    } else {
-      discordByToken.set(entry.binding.token, [entry.binding.guildId]);
-    }
-  }
-  for (const [token, guilds] of discordByToken) {
-    const firstGuild = guilds[0];
-    if (guilds.length === 1 && firstGuild !== undefined) {
-      ids.push(`discord:${firstGuild}`);
-    } else {
-      ids.push(`discord:token:${createHash("sha256").update(token).digest("hex").slice(0, 12)}`);
-    }
+  for (const group of groupDiscordBindingsByToken(surfaces.discord ?? [])) {
+    ids.push(group.instanceId);
   }
   for (const entry of surfaces.slack ?? []) {
     ids.push(`slack:${entry.binding.workspaceId}`);

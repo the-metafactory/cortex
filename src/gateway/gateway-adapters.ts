@@ -51,8 +51,6 @@
  * can be threaded through `deps` if needed.
  */
 
-import { createHash } from "node:crypto";
-
 import { DiscordAdapter } from "../adapters/discord";
 import { SlackAdapter } from "../adapters/slack";
 import { MattermostAdapter } from "../adapters/mattermost";
@@ -69,6 +67,7 @@ import {
 } from "../common/types/cortex-config";
 import type { SystemEventSource } from "../bus/system-events";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
+import { groupDiscordBindingsByToken } from "./discord-token-groups";
 // Back-compat re-export for callers that still import the old suppression helper here.
 export { gatewayOwnedSurfaceKeys } from "./surface-ownership-plan";
 
@@ -201,27 +200,6 @@ function gatewaySource(principal: string, instance: string): SystemEventSource {
   return { principal, agent: "gateway", instance };
 }
 
-function discordTokenInstanceId(token: string): string {
-  const digest = createHash("sha256").update(token).digest("hex").slice(0, 12);
-  return `discord:token:${digest}`;
-}
-
-function discordTokenGroups(
-  entries: NonNullable<Surfaces["discord"]>,
-): Map<string, NonNullable<Surfaces["discord"]>> {
-  const groups = new Map<string, NonNullable<Surfaces["discord"]>>();
-  for (const entry of entries) {
-    const token = entry.binding.token;
-    const group = groups.get(token);
-    if (group) {
-      group.push(entry);
-    } else {
-      groups.set(token, [entry]);
-    }
-  }
-  return groups;
-}
-
 /**
  * Construct ONE {@link PlatformAdapter} per surface binding.
  *
@@ -249,18 +227,16 @@ export function buildGatewayAdapters(
   // gateway session. Surface routing remains guild-keyed, but the platform
   // connection is token-keyed so one assistant can serve multiple guilds
   // without opening duplicate sessions for the same bot identity.
-  for (const group of discordTokenGroups(surfaces.discord ?? []).values()) {
-    const presences = group.map((entry) => DiscordPresenceSchema.parse(entry.binding));
+  for (const group of groupDiscordBindingsByToken(surfaces.discord ?? [])) {
+    const presences = group.entries.map((entry) => DiscordPresenceSchema.parse(entry.binding));
     const presence = presences[0];
-    const firstBinding = group[0]?.binding;
+    const firstBinding = group.entries[0]?.binding;
     if (!presence || !firstBinding) continue;
     const allowedGuildIds = new Set(presences.map((p) => p.guildId));
-    const instanceId =
-      presences.length === 1 ? `discord:${presence.guildId}` : discordTokenInstanceId(presence.token);
     adapters.push(
       factory.discord({
-        instanceId,
-        source: gatewaySource(principal, instanceId),
+        instanceId: group.instanceId,
+        source: gatewaySource(principal, group.instanceId),
         binding: firstBinding,
         runtime,
         presence,
