@@ -1,10 +1,12 @@
 #!/usr/bin/env bun
 /**
- * Grove Bash Guard — PreToolUse hook for Bash commands in Grove sessions.
+ * Cortex Bash Guard — PreToolUse hook for Bash commands in cortex sessions.
  *
- * Only activates when GROVE_CHANNEL env var is set (Grove bot session).
+ * Only activates when the surface channel env var is set (cortex bot session):
+ * cc-session sets `CORTEX_CHANNEL`; the legacy `GROVE_CHANNEL` name is retained
+ * as a read-fallback during the GROVE_* → CORTEX_* transition (cortex#767/#774).
  * Enforces a command allowlist with repo restrictions for gh CLI.
- * Non-Grove sessions pass through unchanged.
+ * Non-cortex sessions pass through unchanged.
  *
  * Config via CORTEX_BASH_GUARD env var (JSON):
  *   { "rules": [{ "pattern": "^gh\\s+pr", "repos": ["owner/repo"] }] }
@@ -26,6 +28,8 @@
 import { appendFileSync, mkdirSync, chmodSync, existsSync } from "fs";
 import { join } from "path";
 import { EVENT_TYPES } from "../../taps/cc-events/hooks/lib/event-taxonomy";
+import { resolveSurfaceEnv } from "../../taps/cc-events/hooks/lib/surface-env";
+import { resolvePrincipalEnv } from "../../taps/cc-events/hooks/lib/principal-env";
 
 interface HookInput {
   session_id?: string;
@@ -207,7 +211,7 @@ function rejectsChaining(command: string): boolean {
 // Three decisions, three meanings:
 //   pass()  — pass-through ({"continue": true}). Defer to Claude Code's normal
 //             permission flow. Used by the paths that are out of this guard's
-//             scope (non-Grove / CLI-principal / disabled-guard / non-Bash /
+//             scope (non-cortex / CLI-principal / disabled-guard / non-Bash /
 //             empty command). NOT an approval: in a restricted default-mode
 //             session the normal gate still applies. That is intentional for
 //             these paths — they are either already-permissive or not ours.
@@ -297,17 +301,22 @@ function buildBlockEvent(
     event_type: EVENT_TYPES.BASH_BLOCKED,
     timestamp: new Date().toISOString(),
     session_id: sessionId,
-    grove_channel: process.env.GROVE_CHANNEL,
-    agent_id: process.env.GROVE_AGENT_ID,
-    agent_name: process.env.GROVE_AGENT_NAME,
-    network_id: process.env.GROVE_NETWORK,
+    // G-2a (cortex#779): read CORTEX_* with a GROVE_* fallback via the shared
+    // surface/principal resolvers — same chain the EventLogger hooks use. Since
+    // cc-session now SETS the CORTEX_* names (not GROVE_*), reading GROVE_* only
+    // would emit undefined channel/agent/network metadata on every block event.
+    grove_channel: resolveSurfaceEnv("CHANNEL"),
+    agent_id: resolveSurfaceEnv("AGENT_ID"),
+    agent_name: resolveSurfaceEnv("AGENT_NAME"),
+    network_id: resolveSurfaceEnv("NETWORK"),
     source: { hook: "PreToolUse", tool_name: "Bash" },
     payload: {
       reason,
       command_preview: command.slice(0, 200),
-      project: process.env.GROVE_PROJECT,
-      entity: process.env.GROVE_ENTITY,
-      principal: process.env.GROVE_OPERATOR,
+      project: resolveSurfaceEnv("PROJECT"),
+      entity: resolveSurfaceEnv("ENTITY"),
+      // R9 operator→principal rename: CORTEX_PRINCIPAL → GROVE_OPERATOR fallback.
+      principal: resolvePrincipalEnv(""),
     },
   };
 }
@@ -346,16 +355,25 @@ async function emitBlockEvent(
 }
 
 async function main(): Promise<void> {
-  // Not a Grove session — pass through silently
-  if (!process.env.GROVE_CHANNEL) {
+  // Gate 1 — not a cortex session: pass through silently. cc-session sets
+  // CORTEX_CHANNEL; GROVE_CHANNEL is the deprecated transition read-fallback
+  // (cortex#767/#774). Reading GROVE_ only would mean a real bot session —
+  // which now carries CORTEX_CHANNEL, not GROVE_CHANNEL — fails this gate and
+  // every allowlisted command falls through to Claude Code's approval prompt.
+  if (!resolveSurfaceEnv("CHANNEL")) {
     pass();
     return;
   }
 
-  // CLI principal session (cldyo-live sets GROVE_AGENT_ID) — full trust, bypass guard.
-  // Bot sessions also set GROVE_AGENT_ID but override via CORTEX_BASH_GUARD config,
-  // so they still get guarded by the loadConfig() path below.
-  if (process.env.GROVE_AGENT_ID) {
+  // Gate 2 — CLI-principal bypass (full trust), guarded so it is CLI-only.
+  // cldyo-live (the CLI principal wrapper) sets the agent-id AND disables the
+  // guard via CORTEX_BASH_GUARD='{"disabled":true}'. Bot sessions ALSO set the
+  // agent-id, but they additionally set a NON-disabled CORTEX_BASH_GUARD
+  // (runtime.bashAllowlist). Gating the bypass on the ABSENCE of CORTEX_BASH_GUARD
+  // keeps bot sessions out of this short-circuit so they fall through to
+  // loadConfig() + grant/deny below (cortex#401). A bare CLI session with an
+  // agent-id and no guard config still bypasses, as intended.
+  if (resolveSurfaceEnv("AGENT_ID") && !process.env.CORTEX_BASH_GUARD) {
     pass();
     return;
   }
@@ -432,7 +450,7 @@ async function main(): Promise<void> {
   // so the metacharacter scan must see the original input the shell will run.
   if (rejectsChaining(rawCommand)) {
     const reason =
-      `[Grove Bash Guard] Blocked "${rawCommand.slice(0, 80)}": ` +
+      `[Cortex Bash Guard] Blocked "${rawCommand.slice(0, 80)}": ` +
       `command contains a shell metacharacter (pipe, command substitution, ` +
       `backtick, redirect, background '&', or newline) that could chain a ` +
       `second command. Split it into separate, individually-allowed commands.`;
@@ -460,7 +478,7 @@ async function main(): Promise<void> {
               const repo = extractGhRepo(trimmed);
               if (repo && !repos.includes(repo)) {
                 const reason =
-                  `[Grove Bash Guard] Blocked "${trimmed.slice(0, 80)}": ` +
+                  `[Cortex Bash Guard] Blocked "${trimmed.slice(0, 80)}": ` +
                   `repo "${repo}" is not in the allowed repo list ` +
                   `[${repos.join(", ")}].`;
                 // Write the security decision FIRST — telemetry I/O
@@ -479,7 +497,7 @@ async function main(): Promise<void> {
 
     if (!matched) {
       const reason =
-        `[Grove Bash Guard] Blocked "${trimmed.slice(0, 80)}": ` +
+        `[Cortex Bash Guard] Blocked "${trimmed.slice(0, 80)}": ` +
         `command does not match any rule in the bash allowlist. ` +
         `Ask the principal to widen the allowlist if this command is needed.`;
       // Write the security decision FIRST — telemetry I/O
@@ -495,7 +513,7 @@ async function main(): Promise<void> {
   // allowlisted+safe command runs in async dispatch without a "requires
   // approval" prompt (cortex#777). Every deny-worthy branch returned above.
   grant(
-    "[Grove Bash Guard] Auto-approved: command matches the bash allowlist " +
+    "[Cortex Bash Guard] Auto-approved: command matches the bash allowlist " +
       "and contains no chaining metacharacters.",
   );
 }

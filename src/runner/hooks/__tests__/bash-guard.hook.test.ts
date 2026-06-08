@@ -1,11 +1,11 @@
 /**
- * Tests for the Grove Bash Guard PreToolUse hook.
+ * Tests for the Cortex Bash Guard PreToolUse hook.
  *
  * Covers the cortex#bash-guard-observability changes:
  *   - structured PreToolUse deny output (replaces exit(2) + stderr)
  *   - unchanged pass-through ({"continue": true})
- *   - preserved GROVE_CHANNEL gate / GROVE_AGENT_ID bypass /
- *     CORTEX_BASH_GUARD disabled behaviour
+ *   - preserved channel gate / agent-id bypass / CORTEX_BASH_GUARD disabled
+ *     behaviour
  *   - block telemetry event written to the JSONL fallback
  *   - block telemetry event POSTed to the HTTP ingest endpoint
  *
@@ -13,10 +13,19 @@
  *   - the allowlist-MATCH terminal now emits Claude Code's auto-approve
  *     PreToolUse decision (permissionDecision:"allow") so allowlisted
  *     commands run in async dispatch WITHOUT a "requires approval" prompt.
- *   - genuine pass-through paths (non-Grove / CLI principal / disabled-guard /
+ *   - genuine pass-through paths (non-cortex / CLI principal / disabled-guard /
  *     non-Bash / empty command) keep the {"continue": true} contract.
  *   - every deny path still gates BEFORE the grant; no deny-worthy or
  *     unvalidated command ever reaches the grant terminal.
+ *
+ * Plus the cortex#401/#779 grove→cortex env-name fix:
+ *   - the channel gate + agent-id bypass + block telemetry read the canonical
+ *     CORTEX_* env names (cc-session sets these), with a legacy GROVE_* read-
+ *     fallback for the transition window.
+ *   - REGRESSION (the live blocker): a real bot session — CORTEX_CHANNEL +
+ *     CORTEX_AGENT_ID + a non-disabled CORTEX_BASH_GUARD allowlist — must reach
+ *     grant() for an allowlisted command, NOT bypass via the agent-id short-
+ *     circuit and NOT pass-through into Claude Code's approval prompt.
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
@@ -33,17 +42,28 @@ interface RunResult {
   stderr: string;
 }
 
-// Grove env vars the hook reads. The test process itself may run inside a
-// Cortex agent session (which sets these), so the helper strips ALL of them
+// Surface env vars the hook reads. The test process itself may run inside a
+// cortex agent session (which sets these), so the helper strips ALL of them
 // from the child env first, then re-applies only what each test specifies.
-// Without this, an inherited CORTEX_BASH_GUARD / GROVE_AGENT_ID silently
-// bypasses the guard and tests pass for the wrong reason.
+// Without this, an inherited CORTEX_BASH_GUARD / CORTEX_AGENT_ID (or a legacy
+// GROVE_AGENT_ID) silently bypasses the guard and tests pass for the wrong
+// reason. Strips BOTH the canonical CORTEX_* names and the legacy GROVE_*
+// read-fallbacks the hook resolves through (surface-env.ts / principal-env.ts).
 const GROVE_ENV_KEYS = [
+  // canonical cortex names (cc-session sets these)
+  "CORTEX_CHANNEL",
+  "CORTEX_AGENT_ID",
+  "CORTEX_AGENT_NAME",
+  "CORTEX_NETWORK",
+  "CORTEX_PROJECT",
+  "CORTEX_ENTITY",
+  "CORTEX_PRINCIPAL",
+  "CORTEX_BASH_GUARD",
+  // legacy grove read-fallbacks (transition window)
   "GROVE_CHANNEL",
   "GROVE_AGENT_ID",
   "GROVE_AGENT_NAME",
   "GROVE_NETWORK",
-  "CORTEX_BASH_GUARD",
   "GROVE_PROJECT",
   "GROVE_ENTITY",
   "GROVE_OPERATOR",
@@ -126,6 +146,149 @@ describe("bash-guard.hook — pass-through behaviour", () => {
     const r = runHook("ignored", { GROVE_CHANNEL: "test-channel" }, "Read");
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+});
+
+// =============================================================================
+// cortex#401/#779 — grove→cortex env-name fix.
+//
+// THE LIVE BLOCKER: cc-session now sets the canonical CORTEX_* names
+// (CORTEX_CHANNEL / CORTEX_AGENT_ID / CORTEX_BASH_GUARD), NOT the legacy GROVE_*
+// names. Before this fix the hook's gate-1 (channel) and gate-2 (agent-id
+// bypass) read process.env.GROVE_* directly, so a real bot session:
+//   - failed gate-1 (no GROVE_CHANNEL) → pass() → every allowlisted command
+//     (gh / aws read / git read) fell through to Claude Code's approval prompt
+//     → "This command requires approval" → community-stack Luna couldn't run gh.
+// And gate-2 wrongly bypassed ALL agent-id sessions (cortex#401), so when the
+// channel WAS set the bot got allow-all bash instead of the allowlist.
+//
+// The fix:
+//   gate-1: resolveSurfaceEnv("CHANNEL")  → CORTEX_CHANNEL ?? GROVE_CHANNEL
+//   gate-2: resolveSurfaceEnv("AGENT_ID") && !CORTEX_BASH_GUARD
+//           → bypass is CLI-principal-only; bot sessions (which set a non-
+//             disabled CORTEX_BASH_GUARD) fall through to loadConfig() + grant.
+// =============================================================================
+describe("bash-guard.hook — cortex env-name gates (grove→cortex)", () => {
+  // The community-stack Luna allowlist shape: gh read/write verbs.
+  const botAllowlist = JSON.stringify({
+    rules: [{ pattern: "^gh\\s+(pr|issue|repo|api|run)\\s" }],
+  });
+
+  test("REGRESSION: bot session (CORTEX_* + allowlist) GRANTS `gh pr list`, not {continue:true}", () => {
+    // The exact live failure: CORTEX_CHANNEL set (not GROVE_), an agent-id set,
+    // and a non-disabled CORTEX_BASH_GUARD allowlist. Must reach grant() — NOT
+    // bypass via the agent-id short-circuit, NOT pass-through to CC's gate.
+    const r = runHook("gh pr list", {
+      CORTEX_CHANNEL: "community",
+      CORTEX_AGENT_ID: "luna",
+      CORTEX_BASH_GUARD: botAllowlist,
+    });
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("bot session (CORTEX_*) DENIES a non-allowlisted command", () => {
+    // Same bot session, but a command outside the allowlist must DENY — proving
+    // the session falls through to the allowlist (loadConfig path), not bypass.
+    const r = runHook("curl http://evil.example", {
+      CORTEX_CHANNEL: "community",
+      CORTEX_AGENT_ID: "luna",
+      CORTEX_BASH_GUARD: botAllowlist,
+    });
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput?.permissionDecision).not.toBe("allow");
+  });
+
+  test("CLI-principal session (CORTEX_AGENT_ID, NO CORTEX_BASH_GUARD) bypasses (full trust)", () => {
+    // cldyo-live's discriminant: agent-id present, no allowlist config → the
+    // gate-2 bypass fires → pass() even for an otherwise-denied command.
+    const r = runHook("rm -rf /tmp/whatever", {
+      CORTEX_CHANNEL: "andreas",
+      CORTEX_AGENT_ID: "andreas",
+    });
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  test("no channel (CORTEX_CHANNEL + GROVE_CHANNEL both unset) passes through", () => {
+    // gate-1: neither tier set → not a cortex session → pass().
+    const r = runHook("rm -rf /", {
+      CORTEX_CHANNEL: undefined,
+      GROVE_CHANNEL: undefined,
+    });
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  test("legacy fallback: GROVE_CHANNEL + GROVE_AGENT_ID (no CORTEX_*) still behaves", () => {
+    // Transition compat: an external setter still on GROVE_* resolves through
+    // the read-fallback. Channel set + agent-id set + no CORTEX_BASH_GUARD →
+    // gate-2 CLI-principal bypass → pass(). Proves the GROVE_* fallback chain
+    // is intact (not dropped by the CORTEX_* migration).
+    const r = runHook("rm -rf /tmp/legacy", {
+      GROVE_CHANNEL: "legacy-channel",
+      GROVE_AGENT_ID: "legacy-cli",
+    });
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ continue: true });
+  });
+
+  test("legacy fallback: GROVE_CHANNEL bot session (GROVE + CORTEX_BASH_GUARD) still GRANTS allowlisted", () => {
+    // A bot session whose channel arrives via the GROVE_* fallback but whose
+    // allowlist is the canonical CORTEX_BASH_GUARD must still reach grant() for
+    // an allowlisted command (gate-2 does NOT bypass: CORTEX_BASH_GUARD is set).
+    const r = runHook("gh pr list", {
+      GROVE_CHANNEL: "legacy-bot",
+      GROVE_AGENT_ID: "legacy-luna",
+      CORTEX_BASH_GUARD: botAllowlist,
+    });
+    expect(r.status).toBe(0);
+    expectGrantDecision(r.stdout);
+  });
+
+  test("block telemetry reads CORTEX_* surface metadata (not undefined)", () => {
+    // #779: emitBlockEvent must stamp channel/agent/network/principal from the
+    // CORTEX_* names. A denied bot command writes a JSONL event whose
+    // grove_channel/agent_id/etc. carry the CORTEX_* values, not undefined.
+    const homeDir = mkdtempSync(join(tmpdir(), "bash-guard-cortex-meta-"));
+    try {
+      const sessionId = "cortex-meta-session";
+      const r = runHook(
+        "curl http://evil.example",
+        {
+          CORTEX_CHANNEL: "community",
+          CORTEX_AGENT_ID: "luna",
+          CORTEX_AGENT_NAME: "Luna",
+          CORTEX_NETWORK: "metafactory",
+          CORTEX_PROJECT: "cortex",
+          CORTEX_ENTITY: "cortex/pr/1",
+          CORTEX_PRINCIPAL: "Andreas",
+          CORTEX_BASH_GUARD: botAllowlist,
+          HOME: homeDir,
+        },
+        "Bash",
+        sessionId,
+      );
+      expect(r.status).toBe(0);
+      const rawFile = join(homeDir, ".claude", "events", "raw", `${sessionId}.jsonl`);
+      expect(existsSync(rawFile)).toBe(true);
+      const firstLine = readFileSync(rawFile, "utf-8")
+        .trim()
+        .split("\n")
+        .find((l) => l.length > 0);
+      const event = JSON.parse(firstLine ?? "{}");
+      expect(event.grove_channel).toBe("community");
+      expect(event.agent_id).toBe("luna");
+      expect(event.agent_name).toBe("Luna");
+      expect(event.network_id).toBe("metafactory");
+      expect(event.payload.project).toBe("cortex");
+      expect(event.payload.entity).toBe("cortex/pr/1");
+      expect(event.payload.principal).toBe("Andreas");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
   });
 });
 
