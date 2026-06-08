@@ -58,6 +58,7 @@ import { writeFileSync, existsSync, chmodSync } from "fs";
 import { createUser, fromSeed, type KeyPair } from "nkeys.js";
 
 import { canonicalJSON } from "../common/registry/signing";
+import { verifySignedAssertion } from "../common/registry/verify-assertion";
 import { nkeyToBase64Pubkey } from "./verify-signed-by-chain";
 
 // =============================================================================
@@ -584,11 +585,27 @@ export interface StackEntryShape {
   readonly metadata?: Record<string, string>;
 }
 
+/** One element of a principal's registered `capabilities[]`. */
+export interface CapabilityEntryShape {
+  readonly id: string;
+  readonly description?: string;
+  /** Networks this capability is announced into (the roster-membership key). */
+  readonly networks?: string[];
+}
+
 export interface FetchExistingStacksOptions {
   /** Registry base URL (no trailing slash needed). */
   readonly registryUrl: string;
   /** The principal id (the `:principal_id` path segment). */
   readonly principalId: string;
+  /**
+   * C-791 (security) — the PINNED registry pubkey (base64 ed25519), from
+   * `policy.federated.registry.pubkey`. REQUIRED: the principal-read is the
+   * destructive half of a full-overwrite re-attestation, so the read MUST be
+   * verified against this pin before it can drive the merge. Absent ⇒ the read
+   * FAILS CLOSED (`error`) — we never merge off an unverifiable read.
+   */
+  readonly registryPubkey?: string;
   /** Injected fetch (tests). Defaults to global fetch. @internal */
   readonly fetchImpl?: typeof globalThis.fetch;
   /** Request timeout (ms). Default 10s. */
@@ -599,39 +616,48 @@ export interface FetchExistingStacksOptions {
  * Outcome of {@link fetchExistingStacks}. Discriminated so the add-stack
  * caller can branch CORRECTLY rather than guess:
  *   - `present`  — the principal exists; `stacks` is its current registered set
- *                  (each entry carries its `stack_pubkey`). The caller MERGES
- *                  the new stack in and re-attests the COMPLETE set.
+ *                  (each entry carries its `stack_pubkey`) and `capabilities`
+ *                  its current announced set. Read from a SIGNATURE-VERIFIED
+ *                  registry assertion. The caller MERGES in the new stack +
+ *                  capabilities and re-attests the COMPLETE set.
  *   - `absent`   — the registry returned 404 (first registration). The caller
  *                  proceeds with just the new stack, as pre-C-787.
  *   - `error`    — the registry was unreachable / returned a non-200/404 / a
- *                  malformed body. The caller MUST abort with a clear error
- *                  rather than send a partial set that would DROP existing
- *                  stacks (the data-loss the C-787 review flagged on #790).
+ *                  malformed body / an UNVERIFIED assertion (bad signature, no
+ *                  pinned pubkey, pubkey mismatch, unconfigured registry). The
+ *                  caller MUST abort with a clear error rather than send a
+ *                  partial/forged set that would DROP existing stacks or caps
+ *                  (the data-loss the C-787 review flagged on #790, and the
+ *                  C-791 verified-merge-read security fix).
  */
 export type FetchExistingStacksResult =
-  | { kind: "present"; stacks: StackEntryShape[] }
+  | { kind: "present"; stacks: StackEntryShape[]; capabilities: CapabilityEntryShape[] }
   | { kind: "absent" }
   | { kind: "error"; reason: string };
 
 /**
- * C-787 — `GET /principals/{principalId}` and extract the registered
- * `stacks[]`. The READ half of the add-stack fetch+merge: the register route
- * does a FULL-OVERWRITE upsert of the `stacks` column, so an add-stack claim
- * MUST carry the complete intended set or it silently drops every stack it
- * omits. This read lets the caller rebuild that complete set (existing +
- * new) and have the root re-attest it.
+ * C-787 / C-791 — `GET /principals/{principalId}`, VERIFY the registry's
+ * `SignedAssertion` against the pinned pubkey, then extract the registered
+ * `stacks[]` + `capabilities[]`.
+ *
+ * The READ half of the add-stack fetch+merge: the register route does a
+ * FULL-OVERWRITE upsert of the `stacks` AND `capabilities` columns, so an
+ * add-stack claim MUST carry the complete intended set or it silently drops
+ * every stack/capability it omits. This read lets the caller rebuild that
+ * complete set (existing + new) and have the root re-attest it.
+ *
+ * **C-791 security — the read is signature-verified (fail closed).** This read
+ * is the *destructive* half of a re-attestation: whatever it returns gets
+ * root-signed into a full-overwrite. A malicious/compromised registry or an
+ * attacker-controlled `--registry-url` that OMITS a stack/capability from the
+ * read would otherwise drive a silent drop. So the assertion is verified with
+ * the SAME pin+verify gate (`verifySignedAssertion`) the descriptor/roster
+ * fetch uses (DD-9). A read that does not verify — or that arrives with no
+ * pinned pubkey to verify against — returns `error`; the merge caller aborts
+ * rather than re-attesting a set it could not trust.
  *
  * Distinguishes 404 (`absent` → first registration) from every other failure
  * (`error`) so the caller never sends a partial set on a transient outage.
- * The GET payload is a `SignedAssertion<PrincipalRecord>`; we read
- * `payload.stacks` WITHOUT verifying the registry signature here — this is a
- * convenience read to AVOID DATA LOSS, not a trust decision: the stacks we
- * merge are re-attested by the principal ROOT signature on the register POST,
- * and the registry re-verifies that. (A tampered GET could at worst cause the
- * root to re-attest a stack it did not intend; the principal running the root
- * reviews the merged set, and federated VERIFY still resolves per-stack keys from the
- * registry-signed record. Signature-verifying this read is a possible
- * hardening follow-up, not required to close the data-loss blocker.)
  */
 export async function fetchExistingStacks(
   opts: FetchExistingStacksOptions,
@@ -667,9 +693,38 @@ export async function fetchExistingStacks(
       reason: `GET ${url} returned non-JSON body: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  // Shape: SignedAssertion<PrincipalRecord> → body.payload.stacks[].
-  const payload = (body as { payload?: unknown } | null)?.payload;
-  const stacksRaw = (payload as { stacks?: unknown } | null | undefined)?.stacks;
+
+  // C-791 security — VERIFY the registry's SignedAssertion before trusting its
+  // payload. No pinned pubkey ⇒ nothing to verify against ⇒ fail closed (the
+  // merge that follows is destructive). This is the same gate the S1
+  // descriptor/roster fetch applies (DD-9), now extended to the principal read.
+  if (opts.registryPubkey === undefined || opts.registryPubkey === "") {
+    return {
+      kind: "error",
+      reason:
+        `GET ${url}: no pinned registry pubkey to verify the principal assertion against — ` +
+        `refusing to merge off an unverifiable read (set policy.federated.registry.pubkey / --registry-pubkey)`,
+    };
+  }
+  const verified = await verifySignedAssertion(body, opts.registryPubkey);
+  if (verified.kind !== "ok") {
+    const why =
+      verified.kind === "pubkey_mismatch"
+        ? `registry pubkey mismatch (got ${verified.got.slice(0, 8)}…)`
+        : verified.kind === "malformed"
+          ? `malformed assertion (${verified.detail})`
+          : verified.kind;
+    return {
+      kind: "error",
+      reason: `GET ${url}: registry assertion did not verify (${why}) — refusing to merge off an unverified read`,
+    };
+  }
+
+  // Shape: verified payload is a PrincipalRecord → payload.stacks[] + .capabilities[].
+  const payload = verified.payload as
+    | { stacks?: unknown; capabilities?: unknown }
+    | null;
+  const stacksRaw = payload?.stacks;
   if (!Array.isArray(stacksRaw)) {
     return {
       kind: "error",
@@ -683,7 +738,18 @@ export async function fetchExistingStacks(
       stacks.push(s as StackEntryShape);
     }
   }
-  return { kind: "present", stacks };
+  // Capabilities are optional on the record (empty when none announced). Narrow
+  // each entry to a well-formed capability ({ id: string, … }).
+  const capsRaw = payload?.capabilities;
+  const capabilities: CapabilityEntryShape[] = [];
+  if (Array.isArray(capsRaw)) {
+    for (const cap of capsRaw) {
+      if (typeof cap === "object" && cap !== null && typeof (cap as { id?: unknown }).id === "string") {
+        capabilities.push(cap as CapabilityEntryShape);
+      }
+    }
+  }
+  return { kind: "present", stacks, capabilities };
 }
 
 // =============================================================================
@@ -713,6 +779,12 @@ export interface ResolveMergedStacksOptions {
   readonly stackPubkey: string;
   /** Registry base URL (for the existing-stacks fetch on the add-stack path). */
   readonly registryUrl: string;
+  /**
+   * C-791 (security) — pinned registry pubkey, forwarded to
+   * {@link fetchExistingStacks} so the merge-read is signature-verified before
+   * it can drive the destructive full-overwrite. Absent ⇒ the read fails closed.
+   */
+  readonly registryPubkey?: string;
   /**
    * `true` when adding a 2nd+ stack to an already-registered principal (a
    * `--principal-seed`/root-signed claim). Triggers the fetch+merge so the
@@ -757,6 +829,7 @@ export async function resolveMergedStacks(
     existing = await fetchExistingStacks({
       registryUrl: opts.registryUrl,
       principalId: opts.principalId,
+      ...(opts.registryPubkey !== undefined && { registryPubkey: opts.registryPubkey }),
       ...(opts.fetchImpl !== undefined && { fetchImpl: opts.fetchImpl }),
     });
   } catch (err) {
@@ -797,6 +870,120 @@ export async function resolveMergedStacks(
   return { ok: true, stacks: merged };
 }
 
+/** A capability as carried in a registration claim. */
+export interface ClaimCapability {
+  id: string;
+  description?: string;
+  networks?: string[];
+}
+
+export interface ResolveMergedCapabilitiesOptions {
+  /** The principal whose capabilities are being merged. */
+  readonly principalId: string;
+  /** Registry base URL (for the existing-capabilities fetch). */
+  readonly registryUrl: string;
+  /** C-791 (security) — pinned registry pubkey; the read is verified or fails closed. */
+  readonly registryPubkey?: string;
+  /**
+   * The capabilities this join announces (already tagged with `networks:[id]`).
+   * Unioned into the principal's existing set.
+   */
+  readonly announce: ClaimCapability[];
+  /**
+   * `true` when the principal already exists (add-stack / re-announce). Triggers
+   * the fetch+merge so the full-overwrite route preserves prior-network caps.
+   * `false` for a first registration (nothing on record to preserve).
+   */
+  readonly isAddStack: boolean;
+  /** Injected fetch (tests). Defaults to global fetch. @internal */
+  readonly fetchImpl?: typeof globalThis.fetch;
+}
+
+/** Union two `networks[]` lists, order-preserving, deduped. */
+function unionNetworks(a: string[] | undefined, b: string[] | undefined): string[] {
+  const out: string[] = [];
+  for (const n of [...(a ?? []), ...(b ?? [])]) {
+    if (!out.includes(n)) out.push(n);
+  }
+  return out;
+}
+
+/**
+ * C-791 (MAJOR 2) — compute the COMPLETE `capabilities[]` for a registration
+ * claim, merging this join's announce into the principal's existing announced
+ * set. The capability twin of {@link resolveMergedStacks}: the register route
+ * full-overwrites the `capabilities` column too, so adding `andreas/community`
+ * (caps tagged `networks:[community-net]`) with a claim that carried ONLY those
+ * caps would DROP `andreas/meta-factory`'s caps (`networks:[metafactory]`) and
+ * silently evict meta-factory from the metafactory network roster (roster
+ * membership is implicit via `capability.networks[]`).
+ *
+ * First registration (`isAddStack === false`): just the announce — nothing on
+ * record to preserve.
+ *
+ * Add-stack/re-announce (`isAddStack === true`): FETCH the (verified) existing
+ * capability set and union the announce in: an existing capability id keeps its
+ * description and gains any new `networks[]` (so a cap already announced into
+ * `metafactory` ALSO gains `community-net` if re-announced there); a new id is
+ * appended. The principal's prior-network roster membership therefore survives.
+ *
+ * Failure handling mirrors {@link resolveMergedStacks}: `absent` → just the
+ * announce (no record yet); `error` (unreachable / UNVERIFIED read) → ABORT
+ * (never overwrite the cap set off an untrusted/partial read).
+ */
+export async function resolveMergedCapabilities(
+  opts: ResolveMergedCapabilitiesOptions,
+): Promise<{ ok: true; capabilities: ClaimCapability[] } | { ok: false; reason: string }> {
+  if (!opts.isAddStack) {
+    return { ok: true, capabilities: opts.announce };
+  }
+
+  let existing: FetchExistingStacksResult;
+  try {
+    existing = await fetchExistingStacks({
+      registryUrl: opts.registryUrl,
+      principalId: opts.principalId,
+      ...(opts.registryPubkey !== undefined && { registryPubkey: opts.registryPubkey }),
+      ...(opts.fetchImpl !== undefined && { fetchImpl: opts.fetchImpl }),
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `failed to fetch existing capabilities for merge: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  if (existing.kind === "error") {
+    return {
+      ok: false,
+      reason:
+        `cannot announce a capability without dropping existing ones: ${existing.reason}. ` +
+        `Refusing to overwrite the principal's capability set off a partial/unverified read.`,
+    };
+  }
+  if (existing.kind === "absent") {
+    return { ok: true, capabilities: opts.announce };
+  }
+
+  // present — union the announce into the existing set (by capability id).
+  const merged: ClaimCapability[] = existing.capabilities.map((c) => ({
+    id: c.id,
+    ...(c.description !== undefined && { description: c.description }),
+    ...(c.networks !== undefined && { networks: c.networks }),
+  }));
+  for (const cap of opts.announce) {
+    const existing = merged.find((m) => m.id === cap.id);
+    if (existing !== undefined) {
+      // Existing id — union its networks with the announce's, keep description.
+      existing.networks = unionNetworks(existing.networks, cap.networks);
+      if (cap.description !== undefined) existing.description = cap.description;
+    } else {
+      merged.push(cap);
+    }
+  }
+  return { ok: true, capabilities: merged };
+}
+
 /**
  * C-791 — is the joining stack ALREADY registered with its current pubkey?
  *
@@ -824,6 +1011,17 @@ export async function isStackRegistered(opts: {
   principalId: string;
   stackId: string;
   stackPubkey: string;
+  /** C-791 (security) — pinned registry pubkey; the read is verified or fails to `error`. */
+  registryPubkey?: string;
+  /**
+   * C-791 (MAJOR 1) — the capabilities this join would announce (already tagged
+   * with `networks:[id]`). The skip is "fully converged" ONLY when the stack
+   * pubkey AND every announced capability are already on record. With caps
+   * still to announce, the join must NOT skip — it must proceed so the
+   * principal lands in the network roster (implicit membership via
+   * `capability.networks[]`). Omit/empty ⇒ pubkey match alone is convergence.
+   */
+  announce?: ClaimCapability[];
   fetchImpl?: typeof globalThis.fetch;
 }): Promise<"registered" | "not-registered" | "error"> {
   let existing: FetchExistingStacksResult;
@@ -831,18 +1029,35 @@ export async function isStackRegistered(opts: {
     existing = await fetchExistingStacks({
       registryUrl: opts.registryUrl,
       principalId: opts.principalId,
+      ...(opts.registryPubkey !== undefined && { registryPubkey: opts.registryPubkey }),
       ...(opts.fetchImpl !== undefined && { fetchImpl: opts.fetchImpl }),
     });
-  } catch {
+  } catch (_err) {
+    // fetchExistingStacks already maps I/O failures to a `{ kind: "error" }`
+    // result; a *thrown* error here would be unexpected, but we map it to the
+    // same fail-safe `"error"` outcome (the caller then proceeds to the normal
+    // register path rather than wrongly assuming idempotency).
     return "error";
   }
   if (existing.kind === "error") return "error";
   if (existing.kind === "absent") return "not-registered";
   const match = existing.stacks.find((s) => s.stack_id === opts.stackId);
-  if (match?.stack_pubkey === opts.stackPubkey) {
-    return "registered";
+  if (match?.stack_pubkey !== opts.stackPubkey) {
+    return "not-registered";
   }
-  return "not-registered";
+  // C-791 (MAJOR 1) — the stack pubkey is on record. Only treat the join as
+  // CONVERGED (skip) if every announced capability is ALSO already on record
+  // with this network tagged. Otherwise the announce still has to happen.
+  const announce = opts.announce ?? [];
+  for (const cap of announce) {
+    const onRecord = existing.capabilities.find((c) => c.id === cap.id);
+    const wantNetworks = cap.networks ?? [];
+    const haveNetworks = onRecord?.networks ?? [];
+    if (onRecord === undefined || !wantNetworks.every((n) => haveNetworks.includes(n))) {
+      return "not-registered"; // caps not yet announced → don't skip.
+    }
+  }
+  return "registered";
 }
 
 /** Shared POST-JSON-with-timeout used by both register + network-create. */

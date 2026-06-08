@@ -695,6 +695,7 @@ describe("#762 registerStack announces capabilities into the network", () => {
 
 describe("C-791 — registerStack supports a principal's 2nd+ stack", () => {
   let env: Env;
+  let registryPubkey = "";
 
   /** Route `globalThis.fetch` into the live registry Worker for the duration of `fn`. */
   function withLiveRegistry(fn: () => Promise<void>): Promise<void> {
@@ -716,6 +717,9 @@ describe("C-791 — registerStack supports a principal's 2nd+ stack", () => {
       principalId: "andreas",
       stackId: "andreas/meta-factory",
       registryUrl: REGISTRY_URL,
+      // C-791 — the merge-read is signature-verified, so the live join pins the
+      // registry pubkey (from policy.federated.registry.pubkey in production).
+      registryPubkey,
       natsConfigPath: "/x/local.conf",
       plistPath: "/nonexistent/plist",
       platform: "darwin",
@@ -724,20 +728,35 @@ describe("C-791 — registerStack supports a principal's 2nd+ stack", () => {
     };
   }
 
-  async function getStacks(principalId: string): Promise<{ stack_id: string; stack_pubkey?: string }[]> {
+  async function getRecord(
+    principalId: string,
+  ): Promise<{ stacks: { stack_id: string; stack_pubkey?: string }[]; capabilities: { id: string; networks?: string[] }[] }> {
     const res = await registryApp.fetch(
       new Request(`${REGISTRY_URL}/principals/${principalId}`),
       env,
     );
-    if (res.status === 404) return [];
+    if (res.status === 404) return { stacks: [], capabilities: [] };
     const json = (await res.json()) as SignedAssertion<PrincipalRecord>;
-    return json.payload.stacks;
+    return { stacks: json.payload.stacks, capabilities: json.payload.capabilities };
+  }
+
+  async function getStacks(principalId: string): Promise<{ stack_id: string; stack_pubkey?: string }[]> {
+    return (await getRecord(principalId)).stacks;
+  }
+
+  /** Networks tagged on the principal's `capabilities[]` (the roster-membership key). */
+  async function networksOnRecord(principalId: string): Promise<string[]> {
+    const { capabilities } = await getRecord(principalId);
+    const nets = new Set<string>();
+    for (const c of capabilities) for (const n of c.networks ?? []) nets.add(n);
+    return [...nets].sort();
   }
 
   // Fresh registry + keys per test.
   async function setup(): Promise<void> {
     resetStores();
     const reg = await makeRegistryKey();
+    registryPubkey = reg.publicKey;
     env = {
       REGISTRY_SIGNING_KEY: reg.signingKey,
       REGISTRY_PUBLIC_KEY: reg.publicKey,
@@ -825,7 +844,7 @@ describe("C-791 — registerStack supports a principal's 2nd+ stack", () => {
     });
   });
 
-  test("idempotent: an already-registered stack re-join is a NO-OP skip (no 409), even without --principal-seed", async () => {
+  test("idempotent: a FULLY-CONVERGED re-join (stack + caps on record) is a NO-OP skip", async () => {
     await setup();
     const dir = freshDir();
     const rootSeed = join(dir, "root.nk");
@@ -834,9 +853,161 @@ describe("C-791 — registerStack supports a principal's 2nd+ stack", () => {
     generateStackIdentity({ seedPath: communitySeed });
 
     await withLiveRegistry(async () => {
-      // Establish root + add community out-of-band (the provision-stack path).
       const first = buildLivePorts(cfg({ stackId: "andreas/meta-factory", seedPath: rootSeed }));
       expect((await first.registry.registerStack()).ok).toBe(true);
+      // Add community WITH caps announced into community-net (root-signed).
+      const add = buildLivePorts(
+        cfg({
+          networkId: "community-net",
+          stackId: "andreas/community",
+          seedPath: communitySeed,
+          rootSeedPath: rootSeed,
+          announceCapabilities: ["chat.relay"],
+        }),
+      );
+      expect((await add.registry.registerStack()).ok).toBe(true);
+
+      // Re-run the SAME community join (stack pubkey + caps already on record):
+      // converged ⇒ skip. No 409, even without --principal-seed.
+      const rejoin = buildLivePorts(
+        cfg({
+          networkId: "community-net",
+          stackId: "andreas/community",
+          seedPath: communitySeed,
+          announceCapabilities: ["chat.relay"],
+        }),
+      );
+      const res = await rejoin.registry.registerStack();
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.note).toContain("idempotent");
+
+      const stacks = await getStacks("andreas");
+      expect(stacks.map((s) => s.stack_id).sort()).toEqual([
+        "andreas/community",
+        "andreas/meta-factory",
+      ]);
+    });
+  });
+
+  test("MAJOR 1 — an already-registered stack whose network caps are NOT yet announced STILL announces (lands in roster)", async () => {
+    await setup();
+    const dir = freshDir();
+    const rootSeed = join(dir, "root.nk");
+    const communitySeed = join(dir, "community.nk");
+    generateStackIdentity({ seedPath: rootSeed });
+    generateStackIdentity({ seedPath: communitySeed });
+
+    await withLiveRegistry(async () => {
+      // meta-factory established.
+      const first = buildLivePorts(cfg({ stackId: "andreas/meta-factory", seedPath: rootSeed }));
+      expect((await first.registry.registerStack()).ok).toBe(true);
+
+      // community registered out-of-band (the provision-stack path) WITHOUT any
+      // network caps — the real #791 scenario. Roster for community-net is empty.
+      const provision = buildLivePorts(
+        cfg({
+          networkId: "community-net",
+          stackId: "andreas/community",
+          seedPath: communitySeed,
+          rootSeedPath: rootSeed,
+          announceCapabilities: [], // no caps yet
+        }),
+      );
+      expect((await provision.registry.registerStack()).ok).toBe(true);
+      expect(await networksOnRecord("andreas")).toEqual([]); // NOT in any roster
+
+      // Now `cortex network join community-net` with caps to announce. The stack
+      // pubkey is already on record, but the caps are NOT — so the join must NOT
+      // skip; it must announce so the principal lands in community-net's roster.
+      const joinWithCaps = buildLivePorts(
+        cfg({
+          networkId: "community-net",
+          stackId: "andreas/community",
+          seedPath: communitySeed,
+          rootSeedPath: rootSeed,
+          announceCapabilities: ["chat.relay"],
+        }),
+      );
+      const res = await joinWithCaps.registry.registerStack();
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.note).not.toContain("idempotent"); // did NOT skip
+
+      // The principal is now in community-net's roster (cap tagged with it).
+      expect(await networksOnRecord("andreas")).toContain("community-net");
+    });
+  });
+
+  test("MAJOR 2 — adding a 2nd stack PRESERVES the prior-network capability/roster membership", async () => {
+    await setup();
+    const dir = freshDir();
+    const rootSeed = join(dir, "root.nk");
+    const communitySeed = join(dir, "community.nk");
+    generateStackIdentity({ seedPath: rootSeed });
+    generateStackIdentity({ seedPath: communitySeed });
+
+    await withLiveRegistry(async () => {
+      // meta-factory joins the `metafactory` network WITH a cap → in that roster.
+      const first = buildLivePorts(
+        cfg({
+          networkId: "metafactory",
+          stackId: "andreas/meta-factory",
+          seedPath: rootSeed,
+          announceCapabilities: ["code-review.ts"],
+        }),
+      );
+      expect((await first.registry.registerStack()).ok).toBe(true);
+      expect(await networksOnRecord("andreas")).toEqual(["metafactory"]);
+
+      // Add community into `community-net` WITH its own cap. The full-overwrite
+      // register MUST NOT drop meta-factory's metafactory-tagged cap.
+      const add = buildLivePorts(
+        cfg({
+          networkId: "community-net",
+          stackId: "andreas/community",
+          seedPath: communitySeed,
+          rootSeedPath: rootSeed,
+          announceCapabilities: ["chat.relay"],
+        }),
+      );
+      expect((await add.registry.registerStack()).ok).toBe(true);
+
+      // BOTH networks survive on the capability set → BOTH rosters intact.
+      expect(await networksOnRecord("andreas")).toEqual(["community-net", "metafactory"]);
+    });
+  });
+
+  test("MAJOR 3 SECURITY — a TAMPERED principal-read fails closed (merge aborts, no overwrite)", async () => {
+    await setup();
+    const dir = freshDir();
+    const rootSeed = join(dir, "root.nk");
+    const communitySeed = join(dir, "community.nk");
+    generateStackIdentity({ seedPath: rootSeed });
+    generateStackIdentity({ seedPath: communitySeed });
+
+    await withLiveRegistry(async () => {
+      const first = buildLivePorts(cfg({ stackId: "andreas/meta-factory", seedPath: rootSeed }));
+      expect((await first.registry.registerStack()).ok).toBe(true);
+    });
+
+    // Now route the principal GET through a MALICIOUS proxy that tampers the
+    // payload (drops a stack) while leaving the (now-invalid) signature. The
+    // verified merge-read must REJECT it and the add-stack must abort.
+    const real = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const req = input instanceof Request ? input : new Request(input, init);
+      const res = await registryApp.fetch(req, env);
+      if (req.method === "GET" && req.url.includes("/principals/")) {
+        const json = (await res.json()) as SignedAssertion<PrincipalRecord>;
+        // Tamper: wipe the stacks array but keep the original signature.
+        json.payload = { ...json.payload, stacks: [] };
+        return new Response(JSON.stringify(json), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return res;
+    }) as typeof globalThis.fetch;
+    try {
       const add = buildLivePorts(
         cfg({
           networkId: "community-net",
@@ -845,24 +1016,46 @@ describe("C-791 — registerStack supports a principal's 2nd+ stack", () => {
           rootSeedPath: rootSeed,
         }),
       );
-      expect((await add.registry.registerStack()).ok).toBe(true);
+      const res = await add.registry.registerStack();
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.reason).toMatch(/did not verify|unverified|merge/i);
+    } finally {
+      globalThis.fetch = real;
+    }
 
-      // Now re-run the community join WITHOUT --principal-seed. The stack is
-      // already on record with this pubkey, so the register skips (no 409,
-      // converges — the DD-4 idempotency promise).
-      const rejoin = buildLivePorts(
-        cfg({ networkId: "community-net", stackId: "andreas/community", seedPath: communitySeed }),
+    // The registry still holds only meta-factory (the tampered merge never applied).
+    const stacks = await getStacks("andreas");
+    expect(stacks.map((s) => s.stack_id)).toEqual(["andreas/meta-factory"]);
+  });
+
+  test("MAJOR 3 SECURITY — no pinned registry pubkey fails closed on the add-stack merge-read", async () => {
+    await setup();
+    const dir = freshDir();
+    const rootSeed = join(dir, "root.nk");
+    const communitySeed = join(dir, "community.nk");
+    generateStackIdentity({ seedPath: rootSeed });
+    generateStackIdentity({ seedPath: communitySeed });
+
+    await withLiveRegistry(async () => {
+      const first = buildLivePorts(cfg({ stackId: "andreas/meta-factory", seedPath: rootSeed }));
+      expect((await first.registry.registerStack()).ok).toBe(true);
+
+      // Add-stack with NO registryPubkey pinned → the merge-read can't verify →
+      // fail closed (never re-attest off an unverifiable read).
+      const add = buildLivePorts(
+        cfg({
+          networkId: "community-net",
+          stackId: "andreas/community",
+          seedPath: communitySeed,
+          rootSeedPath: rootSeed,
+          registryPubkey: undefined,
+        }),
       );
-      const res = await rejoin.registry.registerStack();
-      expect(res.ok).toBe(true);
-      if (res.ok) expect(res.note).toContain("idempotent");
-
-      // Still exactly two stacks.
+      const res = await add.registry.registerStack();
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.reason).toMatch(/no pinned registry pubkey|unverif/i);
       const stacks = await getStacks("andreas");
-      expect(stacks.map((s) => s.stack_id).sort()).toEqual([
-        "andreas/community",
-        "andreas/meta-factory",
-      ]);
+      expect(stacks.map((s) => s.stack_id)).toEqual(["andreas/meta-factory"]);
     });
   });
 });

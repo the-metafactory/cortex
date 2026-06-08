@@ -52,8 +52,10 @@ import {
   materialFromSeedString,
   registerStackIdentity,
   resolveMergedStacks,
+  resolveMergedCapabilities,
   isStackRegistered,
   type StackIdentityMaterial,
+  type ClaimCapability,
 } from "../../../bus/stack-provisioning";
 import type {
   PolicyFederatedNetwork,
@@ -178,18 +180,21 @@ function loadSeedMaterial(
  */
 async function registerWithCapabilities(
   cfg: LivePortsConfig,
-  capabilities: { id: string; description?: string; networks?: string[] }[],
+  capabilities: ClaimCapability[],
   /**
    * C-791 — enable the idempotency SKIP (federated join only). The public
    * announce/deregister path re-registers to CHANGE the advertised capability
-   * set with the SAME pubkey, so it must NOT short-circuit on a pubkey match —
-   * the skip is keyed on stack_id+pubkey, not on capabilities. Federated
-   * `registerStack` (where the 409 lives) passes `true`; the public ports pass
-   * the default `false`.
+   * set with the SAME pubkey, so it must NOT short-circuit on a pubkey match.
+   * Federated `registerStack` passes `true`; the public ports pass the default
+   * `false`. NOTE (MAJOR 1): even on the federated path the skip fires ONLY when
+   * the stack pubkey AND the announced capabilities are ALREADY on record — if
+   * caps still need announcing (the principal isn't yet in the network roster),
+   * the join proceeds rather than skipping (see {@link isStackRegistered}).
    */
   allowIdempotentSkip = false,
 ): Promise<{ ok: true; note: string } | { ok: false; reason: string }> {
   const url = cfg.registryUrl ?? "";
+  const registryPubkey = cfg.registryPubkey;
   if (cfg.seedPath === undefined) {
     return { ok: false, reason: "no --seed-path for registration" };
   }
@@ -197,29 +202,12 @@ async function registerWithCapabilities(
   if (!matRes.ok) return matRes;
   const material = matRes.material;
 
-  // (1) Idempotency (federated join): if this stack is ALREADY registered with
-  // its current pubkey, the register is a no-op. Re-running a join, or joining
-  // after a `provision-stack register`, converges WITHOUT a 409 — and without
-  // needing a root seed threaded through. A registry error here is non-fatal:
-  // we fall through to the normal register, which surfaces the registry's own
-  // error. Gated by `allowIdempotentSkip` so the public-index announce path,
-  // which changes capabilities under an unchanged pubkey, never short-circuits.
-  if (allowIdempotentSkip) {
-    const idempotent = await isStackRegistered({
-      registryUrl: url,
-      principalId: cfg.principalId,
-      stackId: cfg.stackId,
-      stackPubkey: material.pubkeyB64,
-    });
-    if (idempotent === "registered") {
-      return { ok: true, note: "already registered (idempotent skip)" };
-    }
-  }
-
-  // (2) Add-stack: when a root seed is supplied, the ROOT signs the claim and
-  // the existing stacks are fetch+merged so the full-overwrite route preserves
-  // them. Without it, this is a first-stack register (the new stack both
-  // declares + signs — pre-C-791 behaviour).
+  // (2) Add-stack root material — load it up front (the skip below needs the
+  // verified merge-read, which root-auth doesn't change, but the cap merge +
+  // claim signing do). When a root seed is supplied, the ROOT signs the claim
+  // and the existing stacks + caps are fetch+merged so the full-overwrite route
+  // preserves them. Without it, this is a first-stack register (the new stack
+  // both declares + signs — pre-C-791 behaviour).
   let rootMaterial: StackIdentityMaterial | undefined;
   if (cfg.rootSeedPath !== undefined) {
     const rootRes = loadSeedMaterial(cfg.rootSeedPath, "--principal-seed");
@@ -227,21 +215,58 @@ async function registerWithCapabilities(
     rootMaterial = rootRes.material;
   }
 
+  // (1) Idempotency (federated join): skip ONLY when fully converged — the
+  // stack pubkey AND the announced capabilities are already on record. This is
+  // the MAJOR 1 fix: an already-registered stack whose network caps are NOT yet
+  // announced must STILL register so the announce lands the principal in the
+  // network roster (0-peers-otherwise). A registry error here is non-fatal: we
+  // fall through to the normal register, which surfaces the registry's own
+  // error. Gated by `allowIdempotentSkip` so the public-index announce path
+  // never short-circuits.
+  if (allowIdempotentSkip) {
+    const idempotent = await isStackRegistered({
+      registryUrl: url,
+      principalId: cfg.principalId,
+      stackId: cfg.stackId,
+      stackPubkey: material.pubkeyB64,
+      ...(registryPubkey !== undefined && { registryPubkey }),
+      announce: capabilities,
+    });
+    if (idempotent === "registered") {
+      return { ok: true, note: "already registered + announced (idempotent skip)" };
+    }
+  }
+
+  const isAddStack = rootMaterial !== undefined;
+
   const stacksRes = await resolveMergedStacks({
     principalId: cfg.principalId,
     stackId: cfg.stackId,
     stackPubkey: material.pubkeyB64,
     registryUrl: url,
-    isAddStack: rootMaterial !== undefined,
+    ...(registryPubkey !== undefined && { registryPubkey }),
+    isAddStack,
   });
   if (!stacksRes.ok) return { ok: false, reason: stacksRes.reason };
+
+  // MAJOR 2 — merge the announced capabilities into the principal's existing
+  // set so the full-overwrite register does not drop prior-network caps (which
+  // would evict those networks from the principal's roster membership).
+  const capsRes = await resolveMergedCapabilities({
+    principalId: cfg.principalId,
+    registryUrl: url,
+    ...(registryPubkey !== undefined && { registryPubkey }),
+    announce: capabilities,
+    isAddStack,
+  });
+  if (!capsRes.ok) return { ok: false, reason: capsRes.reason };
 
   const body = await buildRegistrationClaim({
     principalId: cfg.principalId,
     material,
     ...(rootMaterial !== undefined && { rootMaterial }),
     stacks: stacksRes.stacks,
-    capabilities,
+    capabilities: capsRes.capabilities,
   });
   let result;
   try {

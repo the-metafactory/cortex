@@ -318,10 +318,12 @@ describe("secrets discipline (TC-1b #632)", () => {
   });
 });
 
-describe("C-787 — fetchExistingStacks (read side of add-stack merge)", () => {
+describe("C-787 / C-791 — fetchExistingStacks (verified read side of add-stack merge)", () => {
+  let registryPubkey = "";
   async function configuredEnv(): Promise<Env> {
     resetStores();
     const reg = await makeRegistryKey();
+    registryPubkey = reg.publicKey;
     return {
       REGISTRY_SIGNING_KEY: reg.signingKey,
       REGISTRY_PUBLIC_KEY: reg.publicKey,
@@ -337,8 +339,8 @@ describe("C-787 — fetchExistingStacks (read side of add-stack merge)", () => {
     }) as typeof globalThis.fetch;
   }
 
-  test("present — returns the principal's stacks with their stack_pubkeys", async () => {
-    const env = await configuredEnv();
+  /** Register a principal with one stack so the GET has something to return. */
+  async function seedPrincipal(env: Env): Promise<{ rootPubkey: string }> {
     const root = generateStackIdentity({ seedPath: join(freshDir(), "mf.nk") });
     const body = await buildRegistrationClaim({
       principalId: "andreas",
@@ -353,17 +355,25 @@ describe("C-787 — fetchExistingStacks (read side of add-stack merge)", () => {
       }),
       env,
     );
+    return { rootPubkey: root.pubkeyB64 };
+  }
+
+  test("present — VERIFIED read returns the principal's stacks + capabilities", async () => {
+    const env = await configuredEnv();
+    const { rootPubkey } = await seedPrincipal(env);
 
     const res = await fetchExistingStacks({
       registryUrl: "http://registry.test",
       principalId: "andreas",
+      registryPubkey,
       fetchImpl: registryFetch(env),
     });
     expect(res.kind).toBe("present");
     if (res.kind === "present") {
       expect(res.stacks).toHaveLength(1);
       expect(res.stacks[0]!.stack_id).toBe("andreas/meta-factory");
-      expect(res.stacks[0]!.stack_pubkey).toBe(root.pubkeyB64);
+      expect(res.stacks[0]!.stack_pubkey).toBe(rootPubkey);
+      expect(Array.isArray(res.capabilities)).toBe(true);
     }
   });
 
@@ -372,6 +382,7 @@ describe("C-787 — fetchExistingStacks (read side of add-stack merge)", () => {
     const res = await fetchExistingStacks({
       registryUrl: "http://registry.test",
       principalId: "nobody",
+      registryPubkey,
       fetchImpl: registryFetch(env),
     });
     expect(res.kind).toBe("absent");
@@ -383,11 +394,72 @@ describe("C-787 — fetchExistingStacks (read side of add-stack merge)", () => {
     const res = await fetchExistingStacks({
       registryUrl: "http://registry.test",
       principalId: "andreas",
+      registryPubkey: "anything",
       fetchImpl: failingFetch,
     });
     expect(res.kind).toBe("error");
     if (res.kind === "error") {
       expect(res.reason).toMatch(/connection refused/);
+    }
+  });
+
+  test("C-791 SECURITY — NO pinned pubkey fails closed (refuses to merge off an unverifiable read)", async () => {
+    const env = await configuredEnv();
+    await seedPrincipal(env);
+    const res = await fetchExistingStacks({
+      registryUrl: "http://registry.test",
+      principalId: "andreas",
+      // registryPubkey omitted
+      fetchImpl: registryFetch(env),
+    });
+    expect(res.kind).toBe("error");
+    if (res.kind === "error") {
+      expect(res.reason).toMatch(/no pinned registry pubkey/i);
+    }
+  });
+
+  test("C-791 SECURITY — a TAMPERED principal-read (dropped stack, stale signature) fails closed", async () => {
+    const env = await configuredEnv();
+    await seedPrincipal(env);
+    // Malicious proxy: serve the real assertion but with stacks wiped, keeping
+    // the now-invalid signature. The verify gate must reject it.
+    const tamperingFetch = (async (input: Request | string | URL, init?: RequestInit) => {
+      const req = input instanceof Request ? input : new Request(input, init);
+      const res = await registryApp.fetch(req, env);
+      const json = (await res.json()) as { payload: Record<string, unknown> };
+      json.payload = { ...json.payload, stacks: [] };
+      return new Response(JSON.stringify(json), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof globalThis.fetch;
+
+    const res = await fetchExistingStacks({
+      registryUrl: "http://registry.test",
+      principalId: "andreas",
+      registryPubkey,
+      fetchImpl: tamperingFetch,
+    });
+    expect(res.kind).toBe("error");
+    if (res.kind === "error") {
+      expect(res.reason).toMatch(/did not verify/i);
+    }
+  });
+
+  test("C-791 SECURITY — a pubkey MISMATCH (wrong/spoofed registry) fails closed", async () => {
+    const env = await configuredEnv();
+    await seedPrincipal(env);
+    // Pin a DIFFERENT registry pubkey than the one that signed → mismatch.
+    const otherKey = await makeRegistryKey();
+    const res = await fetchExistingStacks({
+      registryUrl: "http://registry.test",
+      principalId: "andreas",
+      registryPubkey: otherKey.publicKey,
+      fetchImpl: registryFetch(env),
+    });
+    expect(res.kind).toBe("error");
+    if (res.kind === "error") {
+      expect(res.reason).toMatch(/did not verify/i);
     }
   });
 });

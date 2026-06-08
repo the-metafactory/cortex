@@ -227,9 +227,14 @@ describe("cortex provision-stack register (TC-1b #632)", () => {
 });
 
 describe("cortex provision-stack register — C-787 add-stack (no data loss)", () => {
+  // C-791 — the add-stack merge-read is signature-verified, so tests must thread
+  // the registry pubkey. We keep it alongside the env so each test can pass it
+  // via --registry-pubkey.
+  let registryPubkey = "";
   async function configuredEnv(): Promise<Env> {
     resetStores();
     const reg = await makeRegistryKey();
+    registryPubkey = reg.publicKey;
     return {
       REGISTRY_SIGNING_KEY: reg.signingKey,
       REGISTRY_PUBLIC_KEY: reg.publicKey,
@@ -286,6 +291,9 @@ describe("cortex provision-stack register — C-787 add-stack (no data loss)", (
         rootSeed,
         "--registry-url",
         "http://registry.test",
+        // C-791 — pin the registry pubkey so the merge-read verifies.
+        "--registry-pubkey",
+        registryPubkey,
       ]);
       expect(add.exitCode).toBe(0);
 
@@ -340,6 +348,46 @@ describe("cortex provision-stack register — C-787 add-stack (no data loss)", (
       const json = (await getRes.json()) as {
         payload: { stacks: { stack_id: string }[] };
       };
+      expect(json.payload.stacks.map((s) => s.stack_id)).toEqual(["andreas/meta-factory"]);
+    } finally {
+      restore();
+    }
+  });
+
+  test("C-791 SECURITY — add-stack WITHOUT --registry-pubkey fails closed (unverifiable merge-read)", async () => {
+    const env = await configuredEnv();
+    const dir = freshDir();
+    const rootSeed = join(dir, "meta-factory.nk");
+    const communitySeed = join(dir, "community.nk");
+    await dispatchProvisionStack(["generate", "andreas", "--seed-path", rootSeed]);
+    await dispatchProvisionStack(["generate", "andreas", "--seed-path", communitySeed]);
+
+    const restore = routeFetchToRegistry(env);
+    try {
+      // Establish the principal (first register — no merge-read needed).
+      const first = await dispatchProvisionStack([
+        "register", "andreas", "--seed-path", rootSeed,
+        "--stack-id", "andreas/meta-factory", "--registry-url", "http://registry.test",
+        "--registry-pubkey", registryPubkey,
+      ]);
+      expect(first.exitCode).toBe(0);
+
+      // Add-stack WITHOUT --registry-pubkey: the destructive merge-read cannot be
+      // verified, so the command MUST fail closed rather than re-attest off an
+      // unverifiable read. The existing meta-factory stack is preserved.
+      const add = await dispatchProvisionStack([
+        "register", "andreas", "--seed-path", communitySeed,
+        "--stack-id", "andreas/community", "--principal-seed", rootSeed,
+        "--registry-url", "http://registry.test",
+      ]);
+      expect(add.exitCode).toBe(1);
+      expect(add.stderr).toMatch(/no pinned registry pubkey|unverif/i);
+
+      const getRes = await registryApp.fetch(
+        new Request("http://registry.test/principals/andreas"),
+        env,
+      );
+      const json = (await getRes.json()) as { payload: { stacks: { stack_id: string }[] } };
       expect(json.payload.stacks.map((s) => s.stack_id)).toEqual(["andreas/meta-factory"]);
     } finally {
       restore();
