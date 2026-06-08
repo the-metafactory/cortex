@@ -164,18 +164,30 @@ export type CCSessionFactory = ClaudeCodeFactory;
  * **Known asymmetry vs. DispatchRequest / DispatchRuntime (Echo cortex#127 items 2 + 3).**
  *
  * The in-process dispatch contract carries typed knobs that this bus
- * payload intentionally does not yet surface:
+ * payload intentionally does not surface:
  *
  *   - `DispatchRequest.inactivityMs` (top-level, alongside `timeoutMs`) —
  *     no corresponding `inactivity_ms` here.
  *   - `DispatchRuntime.bashAllowlist` / `DispatchRuntime.bashGuardDisabled` —
  *     no corresponding `bash_allowlist` / `bash_guard_disabled` here.
  *
- * Adapter-direct (non-bus) dispatches can populate these in-process
- * fields; bus-mediated dispatches today pick up the harness/dispatch-handler
- * defaults. Plumbing them through is future-facing work — natural fit for
- * the next payload-schema revision (Phase A.5+ stack identity expansion or
- * a dedicated payload-versioning PR).
+ * **cortex#127 — bash allowlist is now plumbed receiving-side, NOT via the
+ * payload.** The fix for the GUILD-only-stack bounce (dispatched sessions
+ * never got `CORTEX_BASH_GUARD` set, so the bash-guard hook fell through to
+ * an unanswerable `claude --print` permission prompt) plumbs
+ * `bashAllowlist` / `bashGuardDisabled` through the LISTENER, sourced from
+ * the EXECUTING stack's `claude.bashAllowlist` config in `cortex.ts` — see
+ * {@link DispatchListenerOptions.bashAllowlist}. The wire payload still has
+ * NO `bash_allowlist` / `bash_guard_disabled` field by design: the receiving
+ * stack's configured allowlist is authoritative, and letting a remote
+ * dispatcher supply one would let it weaken/replace/expand the guard on a
+ * public-facing surface. So the absence here is now intentional and
+ * load-bearing, not a TODO.
+ *
+ * `inactivity_ms` remains genuinely unplumbed; adapter-direct (non-bus)
+ * dispatches can populate it in-process, bus-mediated ones pick up the
+ * harness/dispatch-handler default. Surfacing it is future-facing work
+ * (Phase A.5+ or a dedicated payload-versioning PR).
  */
 export interface DispatchTaskReceivedPayload {
   /** UUID-shaped task identifier (also envelope.correlation_id). */
@@ -450,6 +462,48 @@ export interface DispatchListenerOptions {
    * cortex.yaml can set it from parsed config.
    */
   traceDispatch?: boolean;
+  /**
+   * cortex#127 — **receiving-stack bash allowlist (RECEIVING-STACK-
+   * AUTHORITATIVE).** The EXECUTING stack's own `claude.bashAllowlist`
+   * config, applied to EVERY dispatch this listener runs so the spawned
+   * Claude Code session gets `CORTEX_BASH_GUARD` set (via
+   * `CCSessionOpts.bashAllowlist` → cc-session env serialisation). Without
+   * it, the bash-guard PreToolUse hook treats the session as a non-Grove
+   * session and falls through to Claude Code's permission prompt — which is
+   * unanswerable in async `claude --print`, so every allowlisted command
+   * bounces. That blocked all GUILD-only stacks (`andreas/community`,
+   * `andreas/halden`); meta-factory dodged it only because principal DMs get
+   * full access with no guard.
+   *
+   * **Security — stack config wins, full stop.** This is the receiving
+   * stack's OWN configured value, threaded from `cortex.ts`
+   * (`config.claude.bashAllowlist`). It is NEVER sourced from the wire
+   * payload: `DispatchTaskReceivedPayload` deliberately carries no
+   * `bash_allowlist` field (see the asymmetry docblock above), so a remote
+   * dispatcher cannot supply, weaken, replace, or expand the allowlist. The
+   * listener injects this onto every `DispatchRequest.runtime` regardless of
+   * the inbound envelope. When omitted (no `claude.bashAllowlist` in config),
+   * nothing is injected → the default-deny posture is preserved (the guard
+   * hook denies every Bash command in a Grove session with no allowlist).
+   *
+   * Same shape as `CCSessionOpts.bashAllowlist` /
+   * `DispatchRuntime.bashAllowlist`.
+   */
+  bashAllowlist?: {
+    rules: { pattern: string; repos?: string[] }[];
+    repos: string[];
+  };
+  /**
+   * cortex#127 — receiving-stack bash-guard disable flag. When `true`,
+   * the spawned session runs with the bash guard OFF (the highest-privilege
+   * posture, e.g. principal DMs). Like {@link bashAllowlist} this is the
+   * RECEIVING stack's own configured value — never wire-supplied — and is
+   * injected onto every `DispatchRequest.runtime`. There is no corresponding
+   * config field today (cortex.yaml `claude` has no `bashGuardDisabled`), so
+   * `cortex.ts` does not currently pass it; the option exists so the
+   * plumbing is complete and a future config knob is a one-line wire-up.
+   */
+  bashGuardDisabled?: boolean;
 }
 
 export interface DispatchListener {
@@ -704,6 +758,8 @@ export function createDispatchListener(
     stackNKeyPub,
     resignSigner,
     resolveFederatedPeer,
+    bashAllowlist,
+    bashGuardDisabled,
     adapterId = "runner-dispatch-listener",
   } = opts;
   // v2.0.2 default: structural trust + ed25519 crypto verification.
@@ -783,6 +839,8 @@ export function createDispatchListener(
         resolveFederatedPeer,
         federatedNetworksById,
         traceDispatch,
+        bashAllowlist,
+        bashGuardDisabled,
       });
     } catch (err) {
       process.stderr.write(
@@ -1137,6 +1195,22 @@ interface DispatchHandlerContext {
    * just reads it and passes it to `trace()`.
    */
   traceDispatch: boolean;
+  /**
+   * cortex#127 — RECEIVING-STACK-AUTHORITATIVE bash allowlist. The
+   * executing stack's own `claude.bashAllowlist`, injected onto every
+   * `DispatchRequest.runtime` so the spawned session gets
+   * `CORTEX_BASH_GUARD` set. NEVER sourced from the wire payload — see
+   * {@link DispatchListenerOptions.bashAllowlist}.
+   */
+  bashAllowlist:
+    | { rules: { pattern: string; repos?: string[] }[]; repos: string[] }
+    | undefined;
+  /**
+   * cortex#127 — receiving-stack bash-guard disable flag. Same
+   * receiving-side authority as {@link bashAllowlist}. `undefined` today
+   * (no config knob); injected onto `DispatchRequest.runtime` when set.
+   */
+  bashGuardDisabled: boolean | undefined;
 }
 
 async function handleDispatchEnvelope(
@@ -1162,6 +1236,8 @@ async function handleDispatchEnvelope(
     resolveFederatedPeer,
     federatedNetworksById,
     traceDispatch,
+    bashAllowlist,
+    bashGuardDisabled,
   } = ctx;
   // cortex#492 — pre-parse trace context. Refined to the trusted payload
   // fields (`task_id`, `agent_id`) once the parse succeeds.
@@ -1662,6 +1738,37 @@ async function handleDispatchEnvelope(
   // structurally compatible between `SystemEventSource` and the harness's
   // `DispatchEventSource` (both alias the same shape in `dispatch-events.ts`).
   const req = buildDispatchRequest(payload, gatedPrincipal);
+
+  // cortex#127 — RECEIVING-STACK-AUTHORITATIVE bash guard injection.
+  //
+  // The bus payload carries NO bash allowlist (by design — a remote
+  // dispatcher must not be able to weaken/replace/expand the guard on this
+  // public-facing surface). Instead the EXECUTING stack's own configured
+  // `claude.bashAllowlist` (threaded from `cortex.ts`) is injected onto
+  // EVERY dispatch's `runtime` block here, so the spawned CC session gets
+  // `CORTEX_BASH_GUARD` set (`runtime.bashAllowlist` → the claude-code
+  // harness `buildCCOpts` → `CCSessionOpts.bashAllowlist` → cc-session env
+  // serialisation). Without this the guard hook treated the dispatched
+  // session as a non-Grove session and fell through to an unanswerable
+  // `claude --print` permission prompt, bouncing every allowlisted command
+  // and blocking all GUILD-only stacks (cortex#127).
+  //
+  // Security invariant: this overwrites whatever (if anything) was on
+  // `req.runtime.bashAllowlist` — and since `buildDispatchRequest` never
+  // populates it from the payload, there is nothing wire-supplied to
+  // overwrite. Stack config is the single source of truth. When
+  // `bashAllowlist` is undefined (no `claude.bashAllowlist` in config) we
+  // inject nothing, preserving default-deny (the guard denies every Bash
+  // command in a Grove session that has no allowlist).
+  if (bashAllowlist !== undefined || bashGuardDisabled !== undefined) {
+    const runtime = req.runtime ?? {};
+    if (bashAllowlist !== undefined) runtime.bashAllowlist = bashAllowlist;
+    if (bashGuardDisabled !== undefined) {
+      runtime.bashGuardDisabled = bashGuardDisabled;
+    }
+    req.runtime = runtime;
+  }
+
   const harness: SessionHarness =
     envelope.distribution_mode === "delegate"
       ? new AgentTeamHarness({

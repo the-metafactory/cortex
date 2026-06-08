@@ -2400,6 +2400,19 @@ export async function startCortex(
     // TC-2d (cortex#635) — federated.* peer-pubkey resolution seam.
     // Inert for local.* dispatches; `undefined` under off/permissive.
     ...(resolveFederatedPeer !== undefined && { resolveFederatedPeer }),
+    // cortex#127 — RECEIVING-STACK-AUTHORITATIVE bash allowlist. Thread the
+    // executing stack's OWN `claude.bashAllowlist` config to the listener so
+    // every bus-mediated dispatch's CC session gets `CORTEX_BASH_GUARD` set
+    // (the bus path previously dropped it — the guard hook then fell through
+    // to an unanswerable `claude --print` permission prompt and bounced every
+    // allowlisted command, blocking GUILD-only stacks). Spread-guarded like
+    // the other optional fields so an unconfigured stack stays default-deny.
+    // Never wire-supplied: the payload has no bash_allowlist by design.
+    // (No `claude.bashGuardDisabled` config field exists, so it is not passed
+    // here; the listener option remains available for a future config knob.)
+    ...(config.claude.bashAllowlist !== undefined && {
+      bashAllowlist: config.claude.bashAllowlist,
+    }),
   });
   await dispatchListener.start();
 

@@ -738,6 +738,71 @@ describe("dispatch-listener — success path", () => {
     expect(opts.resumeSessionId).toBe("prior-session");
   });
 
+  // cortex#127 — RECEIVING-STACK-AUTHORITATIVE bash allowlist plumbing.
+  // The bus dispatch path used to drop the stack's bashAllowlist, so the
+  // spawned session never got CORTEX_BASH_GUARD set; the bash-guard hook
+  // then treated it as a non-Grove session and fell through to an
+  // unanswerable `claude --print` permission prompt, bouncing every
+  // allowlisted command and blocking GUILD-only stacks. The fix threads the
+  // EXECUTING stack's own config-supplied allowlist through the listener.
+  test("receiving-stack bashAllowlist reaches CCSessionOpts on a bus dispatch (cortex#127)", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const stackAllowlist = {
+      rules: [{ pattern: "gh api repos/.*", repos: ["community"] }],
+      repos: ["community"],
+    };
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      // The receiving stack's OWN configured allowlist (as cortex.ts threads
+      // `config.claude.bashAllowlist`).
+      bashAllowlist: stackAllowlist,
+    });
+    await listener.start();
+    await router.start();
+
+    // A bare payload — NO bash_allowlist field exists on the wire by design.
+    r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+    await settle(() => r.published);
+
+    expect(optsCaptured).toHaveLength(1);
+    const opts = optsCaptured[0]!;
+    // The stack's allowlist reached the session opts → cc-session will
+    // serialise it into CORTEX_BASH_GUARD → the guard hook auto-approves
+    // allowlisted commands instead of bouncing.
+    expect(opts.bashAllowlist).toEqual(stackAllowlist);
+  });
+
+  // cortex#127 — default-deny posture is preserved when the stack configures
+  // NO allowlist: nothing is injected, so the session runs with the guard's
+  // deny-everything default (a Grove session with no CORTEX_BASH_GUARD
+  // allowlist denies every Bash command — it never silently opens up).
+  test("no bashAllowlist option → CCSessionOpts.bashAllowlist stays undefined (default-deny, cortex#127)", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+      // No bashAllowlist supplied — stack has none configured.
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+    await settle(() => r.published);
+
+    expect(optsCaptured).toHaveLength(1);
+    const opts = optsCaptured[0]!;
+    expect(opts.bashAllowlist).toBeUndefined();
+  });
+
   test("allowed_skills round-trips payload → harness → CCSessionOpts (cortex#710)", async () => {
     // The grant decision rides the payload's `allowed_skills`; the harness
     // turns it into {broad Skill allow + allowedSkills (→ gate hook)} —
