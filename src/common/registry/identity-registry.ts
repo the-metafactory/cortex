@@ -294,7 +294,7 @@ export class MultiPrincipalIdentityRegistry {
     // keyed per-stack (see `entryKey`) so a principal federating two stacks
     // caches a distinct verified pubkey per stack and they never clobber.
     const bootEntry = this.entries.get(principalId);
-    if (bootEntry !== undefined && bootEntry.provenance === "local-boot") {
+    if (bootEntry?.provenance === "local-boot") {
       return { resolved: true, entry: bootEntry };
     }
     const cached = this.entries.get(entryKey(principalId, stackId));
