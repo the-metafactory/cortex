@@ -65,6 +65,14 @@ while IFS= read -r slug; do
   fi
 done < <(discover_stack_slugs "${CONFIG_DIR}")
 
+# ─── 2b. Audit stack-identity drift (cortex#810) ──────────────────
+# stack.id is the canonical slug authority; the config dir/file name and the
+# daemon label must equal its trailing segment. Warn (non-fatal, host-
+# independent) on any drift so a misaligned stack — labelled one identity,
+# federating as another — is surfaced every upgrade instead of shipping
+# silently. Runs before the Darwin guard so Linux/systemd peers see it too.
+warn_stack_identity_drift "${CONFIG_DIR}"
+
 # ─── 3. Re-template launchd plists (shared with postinstall.sh) ──
 if [ "$(uname)" = "Darwin" ]; then
   LAUNCH_DIR="${HOME}/Library/LaunchAgents"

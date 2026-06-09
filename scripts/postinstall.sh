@@ -64,6 +64,10 @@ fi
 # Holly cortex#52 round 1 major: the sed-templating block + awk agent-name
 # extractor lived here AND in postupgrade.sh. Extracted to a shared lib.
 source "${SCRIPT_DIR}/lib/plist-render.sh"
+# Audit stack-identity drift (cortex#810) — warn (non-fatal, host-independent)
+# when a stack's locator slug ≠ its stack.id slug. Before the Darwin guard so
+# Linux/systemd installs see it too.
+warn_stack_identity_drift "${CONFIG_DIR}"
 if [ "$(uname)" = "Darwin" ]; then
   LAUNCH_DIR="${HOME}/Library/LaunchAgents"
   render_cortex_plists "${CORTEX_DIR}" "${LAUNCH_DIR}" "${CONFIG_DIR}"

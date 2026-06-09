@@ -401,6 +401,83 @@ assert_eq "mixed: halden resolves to monolith (no dir)" \
   "${MIXED_DIR}/cortex.halden.yaml" \
   "$(resolve_stack_config_path "${MIXED_DIR}" "halden")"
 
+# ─── Section 10: stack.id slug authority + drift detection (cortex#810) ─
+printf '\n=== extract_stack_id_slug + warn_stack_identity_drift (cortex#810) ===\n'
+
+# extract_stack_id_slug: trailing segment of stack.id, NOT confused by the
+# sibling principal.id / agents[].id keys (both also use `id:`).
+ID_DIR="${TMPBASE}/idslug"
+mkdir -p "${ID_DIR}"
+cat > "${ID_DIR}/aligned.yaml" <<'EOF'
+principal:
+  id: andreas
+stack:
+  id: andreas/community
+  nkey_seed_path: ~/x.nk
+agents:
+  - id: luna
+EOF
+assert_eq "extract_stack_id_slug: andreas/community → community" \
+  "community" "$(extract_stack_id_slug "${ID_DIR}/aligned.yaml")"
+
+# principal.id appears BEFORE stack.id and uses the same `id:` key — must not win.
+cat > "${ID_DIR}/principal-first.yaml" <<'EOF'
+principal:
+  id: jc
+  displayName: JC
+stack:
+  id: jc/default
+agents:
+  - id: fern
+EOF
+assert_eq "extract_stack_id_slug: skips principal.id, reads stack.id" \
+  "default" "$(extract_stack_id_slug "${ID_DIR}/principal-first.yaml")"
+
+# Absent stack.id → non-zero exit (caller falls back to filename locator).
+printf 'agents:\n  - id: m\n' > "${ID_DIR}/no-stack.yaml"
+if extract_stack_id_slug "${ID_DIR}/no-stack.yaml" >/dev/null 2>&1; then
+  fail "extract_stack_id_slug: no stack.id should return non-zero"
+else
+  pass "extract_stack_id_slug: no stack.id returns non-zero"
+fi
+
+# Missing file → non-zero exit.
+if extract_stack_id_slug "${ID_DIR}/does-not-exist.yaml" >/dev/null 2>&1; then
+  fail "extract_stack_id_slug: missing file should return non-zero"
+else
+  pass "extract_stack_id_slug: missing file returns non-zero"
+fi
+
+# warn_stack_identity_drift: SILENT when locator slug == stack.id slug. The
+# SPLIT_DIR fixture (Section 8) has dir <slug> and stack.id andreas/<slug> —
+# perfectly aligned, like Andreas's real stacks.
+ALIGNED_WARN="$(warn_stack_identity_drift "${SPLIT_DIR}" 2>&1 >/dev/null)"
+assert_eq "warn_stack_identity_drift: aligned stacks → no warning" "" "${ALIGNED_WARN}"
+
+# warn_stack_identity_drift: WARNS on drift. Build JC's case — dir 'meta-factory'
+# but stack.id 'jc/default'.
+DRIFT_DIR="${TMPBASE}/drift-config"
+mkdir -p "${DRIFT_DIR}/meta-factory/system" "${DRIFT_DIR}/meta-factory/stacks"
+cat > "${DRIFT_DIR}/meta-factory/system/system.yaml" <<EOF
+nats:
+  url: nats://127.0.0.1:4222
+EOF
+printf '' > "${DRIFT_DIR}/meta-factory/meta-factory.yaml"
+printf 'stack:\n  id: jc/default\nagents:\n  - id: fern\n' \
+  > "${DRIFT_DIR}/meta-factory/stacks/meta-factory.yaml"
+
+DRIFT_WARN="$(warn_stack_identity_drift "${DRIFT_DIR}" 2>&1 >/dev/null)"
+assert_contains "warn_stack_identity_drift: drift names the locator slug" \
+  "meta-factory" "${DRIFT_WARN}"
+assert_contains "warn_stack_identity_drift: drift names the stack.id slug" \
+  "default" "${DRIFT_WARN}"
+assert_contains "warn_stack_identity_drift: drift mentions reconcile" \
+  "Reconcile" "${DRIFT_WARN}"
+# The warning must go to STDERR, never stdout (stdout is the slug stream that
+# discover_stack_slugs' callers consume). Capture stdout only — must be empty.
+DRIFT_STDOUT="$(warn_stack_identity_drift "${DRIFT_DIR}" 2>/dev/null)"
+assert_eq "warn_stack_identity_drift: nothing on stdout (stderr-only)" "" "${DRIFT_STDOUT}"
+
 # ─── Summary ──────────────────────────────────────────────────────
 printf '\n'
 printf 'Results: %d passed, %d failed\n' "${PASS}" "${FAIL}"

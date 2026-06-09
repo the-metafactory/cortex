@@ -60,13 +60,47 @@ extract_agent_name() {
   printf '%s' "${name}"
 }
 
-# Derive the stack slug from a cortex config filename.
+# Extract the CANONICAL stack slug from a cortex config's `stack.id`.
+#
+# `stack.id` is `{principal}/{slug}` (e.g. `andreas/community` → `community`).
+# Per CONTEXT.md §"Stack slug" + ADR-0004, this slug is the ONE authority: the
+# federation subject segment, the launchd/systemd label, the config dir/file
+# name, and the join's write path all derive from it. The filename/dirname the
+# lifecycle scripts use as a *locator* (config_file_to_slug / the dir basename)
+# is COSMETIC and MUST equal it; drift is surfaced by warn_stack_identity_drift.
+#
+# Stays awk-only (no yaml dep at install time), mirroring extract_agent_name.
+# Scans only inside the top-level `stack:` block so the sibling `principal.id`
+# and `agents[].id` keys are never mistaken for `stack.id`. Prints the trailing
+# segment after the last slash. Returns non-zero (prints nothing) when
+# `stack.id` is absent/unparseable — callers fall back to the filename locator.
+extract_stack_id_slug() {
+  local config_file="$1"
+  [ -f "${config_file}" ] || return 1
+  local id
+  id=$(awk '
+    /^stack:[[:space:]]*$/ { instack=1; next }
+    instack && /^[^[:space:]#]/ { instack=0 }        # dedent → left the stack: block
+    instack && /^[[:space:]]+id:[[:space:]]*/ {
+      sub(/.*id:[[:space:]]*/, ""); gsub(/["'\'']/, ""); gsub(/#.*/, ""); print; exit
+    }' "${config_file}" | xargs || true)
+  [ -n "${id}" ] || return 1
+  printf '%s' "${id##*/}"
+}
+
+# Derive the stack slug from a cortex config FILENAME (the cosmetic locator).
 #
 #   cortex.yaml          → meta-factory   (special case — bare name is the default stack)
 #   cortex.{slug}.yaml   → {slug}
 #
-# This is the single authoritative slug mapping used by all lifecycle scripts.
-# cortex#700: centralised here so preupgrade/postupgrade/plist-render all agree.
+# NOTE: this is a *locator* mapping, NOT the identity authority. The canonical
+# slug is `stack.id`'s trailing segment (see extract_stack_id_slug + ADR-0004);
+# this filename/dirname convention MUST equal it. We deliberately do NOT
+# re-derive the locator from stack.id here: the on-disk files (the sentinel,
+# stacks/<slug>.yaml, the dir itself) are keyed on this name, so reconciling a
+# drifted stack is an operator rename, not an automatic rewrite (high blast
+# radius on a live pipeline — see cortex#810). cortex#700: centralised so
+# preupgrade/postupgrade/plist-render all agree on the locator.
 config_file_to_slug() {
   local filename
   filename="$(basename "$1")"
@@ -204,6 +238,44 @@ discover_stack_slugs() {
       printf '%s\n' "${slug}"
     fi
   done < <(find "${config_dir}" -maxdepth 1 -name 'cortex*.yaml' 2>/dev/null | sort)
+}
+
+# Audit every discovered stack for slug↔stack.id drift and warn (cortex#810).
+#
+# `stack.id` ({principal}/{slug}) is the canonical identity (CONTEXT.md
+# §"Stack slug" + ADR-0004). The filesystem LOCATOR — the dir basename, or the
+# cortex.<slug>.yaml filename — and the rendered launchd/systemd label MUST
+# equal its trailing segment. When they drift, the daemon federates as one
+# identity but is labelled another (JC's case: dir/plist say `meta-factory`,
+# stack.id says `jc/default`), so the network roster, the `--config` locator,
+# and the process label disagree. Nothing flagged this before — this is the
+# arc-upgrade-time analog of the code-review ArchitectureDocs lens.
+#
+# WARN, do not fail: a hard error would brick `arc upgrade` for a drifted stack
+# (high blast radius on a live review pipeline — #810). The fix is a one-time
+# operator rename of the dir/file to match stack.id; we surface it loudly every
+# upgrade until reconciled. Emitted to STDERR so it never pollutes the slug list
+# that discover_stack_slugs streams on stdout to its callers.
+#
+# Host-independent (no Darwin guard) so a Linux/systemd peer (e.g. clawbox)
+# sees it too. Call ONCE per lifecycle run, not from the hot discover_ helper.
+#
+# Args:
+#   $1 CONFIG_DIR — cortex config dir
+warn_stack_identity_drift() {
+  local config_dir="$1"
+  local slug stack_cfg id_slug
+  while IFS= read -r slug; do
+    [ -z "${slug}" ] && continue
+    stack_cfg="$(resolve_stack_agent_config_path "${config_dir}" "${slug}")"
+    # stack.id absent/unparseable → nothing to compare against, skip silently
+    # (the filename locator stands; extract_agent_name's own fallback applies).
+    id_slug="$(extract_stack_id_slug "${stack_cfg}")" || continue
+    if [ "${id_slug}" != "${slug}" ]; then
+      echo "  ⚠ stack-identity drift: locator slug '${slug}' (label ai.meta-factory.cortex.${slug}) ≠ stack.id slug '${id_slug}' (federation identity '…/${id_slug}')." >&2
+      echo "    The daemon federates as '…/${id_slug}' but is labelled '${slug}'. Reconcile onto stack.id — rename the config dir/file to '${id_slug}' (calm-day cleanup; see cortex#810 / docs/adr/0004-stack-slug-authority.md)." >&2
+    fi
+  done < <(discover_stack_slugs "${config_dir}")
 }
 
 # Render the plist for a single stack slug into LAUNCH_DIR. Idempotent —
