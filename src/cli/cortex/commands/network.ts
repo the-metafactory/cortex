@@ -310,15 +310,30 @@ const CONFIG_DIR_BASE = "~/.config/cortex";
  * Directory layout takes precedence (same as the shell resolver + #813's
  * discovery). The returned path is fed into `cortexConfigPath` so the post-#813
  * `readNetworks`/`stackConfigPath` read the file the daemon actually loads.
+ *
+ * #814 review (MAJOR) — default-stack mapping. When `--stack` is omitted,
+ * `resolveStackSlug` returns the sentinel slug `"default"`, but the locator
+ * system's canonical bare-name default stack is `"meta-factory"`
+ * (`config_file_to_slug`: `cortex.yaml` → `meta-factory`; `resolve_stack_config_path`
+ * keys off that). So we map `"default"` → the `meta-factory` bare-name default
+ * HERE (status-resolver scope only — NOT in `resolveStackSlug`, which would
+ * ripple into join/leave) so the common no-`--stack` invocation resolves the
+ * REAL default stack: `~/.config/cortex/meta-factory/meta-factory.yaml` under the
+ * config-split layout, else the `~/.config/cortex/cortex.yaml` monolith — matching
+ * the shell locator exactly. Without this, no-`--stack` resolved the nonexistent
+ * `cortex.default.yaml` and falsely reported "no networks joined".
  */
 function resolveStatusConfigPath(slug: string): string {
   const base = expandTilde(CONFIG_DIR_BASE);
-  if (existsSync(join(base, slug, "system", "system.yaml"))) {
+  // The no-`--stack` sentinel `"default"` IS the `meta-factory` bare-name default
+  // in the locator system (scoped to status; see doc comment above).
+  const locatorSlug = slug === "default" ? "meta-factory" : slug;
+  if (existsSync(join(base, locatorSlug, "system", "system.yaml"))) {
     // Config-split — point at the per-stack sentinel.
-    return join(base, slug, `${slug}.yaml`);
+    return join(base, locatorSlug, `${locatorSlug}.yaml`);
   }
   // Legacy monolith. `meta-factory` is the bare-name default-stack special case.
-  const filename = slug === "meta-factory" ? "cortex.yaml" : `cortex.${slug}.yaml`;
+  const filename = locatorSlug === "meta-factory" ? "cortex.yaml" : `cortex.${locatorSlug}.yaml`;
   return join(base, filename);
 }
 
@@ -501,13 +516,15 @@ async function runStatus(
   if (!slugRes.ok) return usageError("status", slugRes.reason, json);
 
   // #814 — point the read at the NAMED stack's actual config. An explicit
-  // `--config` wins (highest precedence; honoured by cortexConfigPathFromFlags
-  // below). When omitted, resolve the config path layout-aware from --principal
-  // + the --stack slug (mirroring resolve_stack_config_path) and thread it in as
-  // `--config`, so the post-#813 readNetworks/stackConfigPath read the file the
-  // stack's daemon actually loads instead of the default monolith. Previously
-  // status fell through to ~/.config/cortex/cortex.yaml and reported a joined
-  // config-split stack as "no networks joined".
+  // `--config` wins (highest precedence): the ternary below injects the resolved
+  // path ONLY when `--config` is undefined, so an explicit `--config` flows
+  // through untouched to cortexConfigPathFromFlags. When omitted, resolve the
+  // config path layout-aware from --principal + the --stack slug (mirroring
+  // resolve_stack_config_path) and thread it in as `--config`, so the post-#813
+  // readNetworks/stackConfigPath read the file the stack's daemon actually loads
+  // instead of the default monolith. Previously status fell through to
+  // ~/.config/cortex/cortex.yaml and reported a joined config-split stack as
+  // "no networks joined".
   const statusFlags: Record<string, string | true> =
     optionalValueFlag(flags, "--config") === undefined
       ? { ...flags, "--config": resolveStatusConfigPath(slugRes.slug) }

@@ -375,18 +375,23 @@ describe("#814 — status resolves the named config-split stack's config", () =>
     expect(res.stdout).toContain("no networks joined");
   });
 
-  test("monolith default-stack: a joined network in cortex.yaml is read", async () => {
+  test("#814 review (MAJOR) — monolith default-stack: no --stack resolves cortex.yaml (meta-factory), NOT cortex.default.yaml", async () => {
     const home = mkdtempSync(join(tmpdir(), "c814-monodef-"));
     tmpDirs.push(home);
     const configDir = join(home, ".config", "cortex");
     mkdirSync(configDir, { recursive: true });
-    // No --stack ⇒ resolveStackSlug defaults to "default" ⇒ monolith
-    // cortex.default.yaml. Write the joined network there.
+    // No --stack ⇒ resolveStackSlug returns "default", which the status resolver
+    // maps to the canonical bare-name default `meta-factory` ⇒ monolith
+    // cortex.yaml (config_file_to_slug: cortex.yaml → meta-factory). The joined
+    // network must be read from cortex.yaml, the REAL default monolith.
     writeFileSync(
-      join(configDir, "cortex.default.yaml"),
-      `policy:\n  federated:\n    networks:\n      - id: metafactory\n        leaf_node: metafactory\n        max_hop: 1\n        peers: []\n        accept_subjects:\n          - federated.andreas.default.>\n        deny_subjects: []\n        announce_capabilities: []\n`,
+      join(configDir, "cortex.yaml"),
+      `policy:\n  federated:\n    networks:\n      - id: metafactory\n        leaf_node: metafactory\n        max_hop: 1\n        peers: []\n        accept_subjects:\n          - federated.andreas.meta-factory.>\n        deny_subjects: []\n        announce_capabilities: []\n`,
       "utf-8",
     );
+    // Belt-and-braces: a stray cortex.default.yaml (the WRONG pre-review target)
+    // must NOT be what status reads. Leave it absent — its absence proves the
+    // assertion below is satisfied only by cortex.yaml.
 
     const res = await withHome(home, () =>
       dispatchNetwork([
@@ -397,6 +402,29 @@ describe("#814 — status resolves the named config-split stack's config", () =>
     );
 
     expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("metafactory");
+  });
+
+  test("#814 review (MAJOR) — config-split default-stack: no --stack reads ~/.config/cortex/meta-factory/meta-factory.yaml", async () => {
+    // The most common invocation on a config-split default deployment: no
+    // --stack. resolveStackSlug → "default" → mapped to `meta-factory` → the
+    // split sentinel meta-factory/meta-factory.yaml (policy in
+    // meta-factory/stacks/meta-factory.yaml). Pre-review this resolved the
+    // nonexistent cortex.default.yaml and falsely reported "no networks joined".
+    const home = mkdtempSync(join(tmpdir(), "c814-splitdef-"));
+    tmpDirs.push(home);
+    scaffoldSplitStack(home, "meta-factory", "metafactory");
+
+    const res = await withHome(home, () =>
+      dispatchNetwork([
+        "status",
+        "--principal", "andreas",
+        "--monitor-url", "http://127.0.0.1:0",
+      ]),
+    );
+
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).not.toContain("no networks joined");
     expect(res.stdout).toContain("metafactory");
   });
 });
