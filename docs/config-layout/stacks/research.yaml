@@ -1,38 +1,164 @@
 # =============================================================================
-# stacks/research.yaml — a per-deployment stack layer (reference example)
+# stacks/research.yaml — a per-deployment stack layer (the file you EDIT daily)
 # =============================================================================
 #
-# The MOST SPECIFIC layer. One stack only — routine per-stack edits land here
-# (capabilities, policy, agents, the assistant prose path). Blast radius is this
-# stack alone, so this is the file you touch for day-to-day work — deliberately
-# NOT the place the dangerous transport knobs (system.yaml) live.
+# The MOST SPECIFIC layer. One stack only. Routine per-stack edits land here —
+# `principal`, `stack` identity, `capabilities`, `policy`, `agents`,
+# `github.repos`. Blast radius is THIS stack alone, which is exactly why the
+# dangerous transport knobs (`nats`, `bus`, `claude`, `execution`, …) do NOT
+# live here — they live in `system/system.yaml`, one layer up, reviewed as a
+# transport change. A stack file never re-declares the `nats.subjects` list;
+# that is the structural fix for the double-message problem (cortex#491).
 #
-# This reference carries the principal block + a single agent so the layout
-# composes to a complete, valid `LoadedConfig`. In a real multi-stack
-# deployment, the principal block can live in any layer (it is most natural in
-# system.yaml when one principal owns every stack on the host); it is kept here
-# to make this example self-contained.
+# This reference is complete + loadable: copy it, replace every <REPLACE_ME>,
+# and it composes (with system/ + surfaces/) into a valid LoadedConfig.
 #
-# Note what is ABSENT: no `nats.subjects`, no `nats` transport block at all, no
-# surface tokens. Transport lives in system.yaml; surface bindings live in
-# surfaces.yaml (CFG.c / GW) and the composer FOLDS them back into this agent's
-# `presence.discord` block at load. A stack file never re-declares the subject
-# list — that is the structural fix for the double-message problem.
-#
-# The agent below declares an EMPTY `presence: {}` — its surface binding (the
-# Discord token + guild + channels) lives in `surfaces/surfaces.yaml`, keyed by
-# this agent's id (`ivy`). Non-binding presence knobs (e.g. `contextDepth`,
-# `surfaceSubjects`) could still be declared here inline; the surfaces.yaml
-# binding merges on top, winning on the credential leaf keys.
+# Two surface-binding styles are shown:
+#   (A) the agent declares an EMPTY `presence: {}` and its Discord binding folds
+#       in from `surfaces/surfaces.yaml` (the CFG.c / shared-gateway path — the
+#       recommended layout; tokens live in ONE file); OR
+#   (B) the agent carries its `presence.discord` block INLINE here (the
+#       transitional fallback the three live single-file stacks take).
+# Style (A) is active below; style (B) is shown commented at the bottom.
 
+# -----------------------------------------------------------------------------
+# principal — who is running this stack (id + Discord identity)
+# -----------------------------------------------------------------------------
+# `id` surfaces as the `{principal}` segment in NATS subjects
+# (`local.{principal}.>`). Lowercase, letter-prefixed: `^[a-z][a-z0-9-]*$`.
+# In a real multi-stack deployment the principal block can live in any layer
+# (most natural in system.yaml when one principal owns every stack on the host);
+# it is kept here to make this example self-contained.
 principal:
-  id: andreas
-  displayName: Andreas
+  id: andreas               # <REPLACE_ME>: your short slug
+  displayName: Andreas      # <REPLACE_ME>
+  discordId: "<REPLACE_ME>" # <REPLACE_ME>: your numeric Discord snowflake
 
+# -----------------------------------------------------------------------------
+# stack — identity of THIS deployment within the principal (signing identity)
+# -----------------------------------------------------------------------------
+# Stack signing is ON by default. Without an `nkey_seed_path` cortex publishes
+# UNSIGNED and peers running signed-chain verification reject the traffic.
+# `arc upgrade Cortex` auto-provisions a seed at `nkey_seed_path` if missing.
+# See docs/sop-stack-identity.md for rotation + threat-model background.
+stack:
+  id: andreas/research                          # <REPLACE_ME>: keep the principal half in sync with principal.id
+  nkey_seed_path: ~/.config/nats/cortex-research.nk   # SU…-prefixed NATS user seed, chmod 600
+  # 56-char base32 NKey public key (U…-prefixed). Pin it so boot catches a
+  # rotated-seed split-brain. Omit on first install; paste from the cortex log
+  # line `stack signing key staged — principal=…` after first boot.
+  nkey_pub: <REPLACE_ME>                        # <REPLACE_ME>: U-prefixed pubkey from the seed
+
+# -----------------------------------------------------------------------------
+# capabilities — STACK CATALOG (source of truth for capability-dispatch)
+# -----------------------------------------------------------------------------
+# Each entry is the canonical declaration the dispatch consumer + network
+# registry consult. Every id an agent lists under `runtime.capabilities[]` MUST
+# also appear here (cross-validated at src/common/types/cortex-config.ts) — an
+# unresolved reference fails config load. `chat` is the baseline keyword
+# capability; add review/skill flavors as your agents provide them.
+capabilities:
+  - id: chat
+    description: Conversational dispatch (no-prefix synchronous chat)
+    provided_by: [ivy]
+
+# -----------------------------------------------------------------------------
+# policy — principal + role registry consumed by the PolicyEngine
+# -----------------------------------------------------------------------------
+# PRINCIPAL-ONLY pattern (CRITICAL for any guild others can join):
+# list ONLY the human principal in `principals[]` with their Discord id via
+# `platform_ids.discord`. A non-principal's @mention resolves to
+# authorIsPrincipal=false (non-spoofable, cortex#729) → hard-blocked silently
+# (a `system.access.denied` audit envelope on the bus, NO channel post). The
+# assistant answers the principal and no one else.
+#
+# The stack's OWN signing identity (the agent `ivy`) is also a principal here so
+# it can sign/dispatch; it carries no platform_ids (it is not a human).
+policy:
+  principals:
+    - id: ivy                      # the stack's own signing identity (the agent)
+      home_principal: andreas      # <REPLACE_ME>: keep in sync with principal.id
+      home_stack: andreas/research # <REPLACE_ME>: keep in sync with stack.id
+      nkey_pub: <REPLACE_ME>       # <REPLACE_ME>: ivy's U-prefixed pubkey (matches agents[].nkey_pub)
+      role:
+        - principal-role
+      trust: []
+      platform_ids: {}
+    - id: andreas                  # <REPLACE_ME>: the human — the ONLY human principal
+      home_principal: andreas      # <REPLACE_ME>
+      home_stack: andreas/research # <REPLACE_ME>
+      role:
+        - principal-role
+      trust: []
+      platform_ids:
+        discord:
+          - "<REPLACE_ME>"         # <REPLACE_ME>: your numeric Discord id
+  roles:
+    - id: principal-role
+      capabilities:
+        - dispatch.ivy             # may dispatch to the ivy agent
+        - keyword.chat             # no-prefix synchronous chat
+        - keyword.async            # async: fire-and-forget
+        - keyword.team             # team: spawn a multi-agent team
+        - tool.bash
+        - tool.read
+        - tool.glob
+        - tool.grep
+
+# -----------------------------------------------------------------------------
+# agents — first-class agents on this stack
+# -----------------------------------------------------------------------------
+# One agent (`ivy`). Style (A): its surface binding (token/guild/channels) lives
+# in surfaces/surfaces.yaml keyed by this agent's id, so `presence` is EMPTY and
+# folds in at load. Non-binding presence knobs (contextDepth, surfaceSubjects)
+# MAY still be declared inline; the surfaces.yaml binding merges on top, winning
+# on the credential leaf keys.
 agents:
   - id: ivy
     displayName: Ivy
     persona: ./personas/ivy.md
+    # OPTIONAL but REQUIRED for NKey-verified bot↔bot dispatch: ivy's Ed25519
+    # public key (U-prefixed) from its NATS creds. Without it a peer signing as
+    # did:mf:ivy is rejected `principal_has_no_nkey_pub` (falls back to
+    # platform-id trust only). Must match the policy principal `ivy` above.
+    nkey_pub: <REPLACE_ME>         # <REPLACE_ME>: ivy's U-prefixed pubkey
     roles: []
     trust: []
+    runtime:
+      substrate: claude-code
+      mode: in-process
+      capabilities:
+        - chat                     # MUST also appear in the top-level capabilities[] catalog
+    # Style (A): EMPTY — the Discord binding folds in from surfaces/surfaces.yaml.
     presence: {}
+
+# -----------------------------------------------------------------------------
+# github — webhook ingestion + which repos this stack is scoped to
+# -----------------------------------------------------------------------------
+# `repos[]` scopes the agent's repo context (Discord channel routing matches a
+# channel name against these short names). Leave `webhookSecret` empty to keep
+# webhooks off; paste the GitHub App HMAC secret once you wire it.
+github:
+  webhookSecret: ""                # <REPLACE_ME> once you wire the GitHub App; empty = webhooks off
+  repos: []                        # <REPLACE_ME>: e.g. [{ short: cortex, full: the-metafactory/cortex }]
+
+# =============================================================================
+# Style (B) — INLINE presence (the transitional fallback; DELETE style (A)'s
+# `presence: {}` above and DELETE surfaces/surfaces.yaml if you use this). Shown
+# commented so the agent reads the full Discord binding shape in one place.
+# =============================================================================
+#
+#   presence:
+#     discord:
+#       enabled: true
+#       dmOwner: false                 # true only if this stack owns the principal's DMs
+#       token: <REPLACE_ME>            # the bot token (chmod 600 the file)
+#       guildId: "<REPLACE_ME>"
+#       agentChannelId: "<REPLACE_ME>" # nominal default; the assistant answers @mentions guild-wide
+#       logChannelId: "<REPLACE_ME>"
+#       contextDepth: 10
+#       # Inbound task envelopes must NOT be surfaced here (would render raw
+#       # envelope JSON to Discord — the cortex#477/#479 leak). Review OUTPUT is
+#       # rendered by the review-sink as deterministic markdown. Leave empty
+#       # unless an agent must surface a non-task subject.
+#       surfaceSubjects: []

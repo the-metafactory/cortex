@@ -1,4 +1,26 @@
-# cortex.yaml — example configuration for a fresh install
+# =============================================================================
+# ⚠️  LEGACY SINGLE-FILE FORM — NOT the standard layout for new installs
+# =============================================================================
+#
+# This is the LEGACY single-file (monolith) `cortex.yaml` example. It still
+# LOADS — the boot composer falls back to single-file parsing when no
+# `system/system.yaml` marker is present (the transitional fallback, migration
+# 0003) — so existing deployments keep working unchanged.
+#
+# But the STANDARD layout is now the CONFIG-SPLIT (multi-file) layout. A fresh
+# install should NOT copy this file; copy the template directory instead:
+#
+#     cp -R docs/config-layout ~/.config/cortex/<your-stack-slug>
+#     # → fill the <REPLACE_ME> markers, point --config at the pointer file
+#
+# See **docs/config-layout/** (the canonical, self-documenting config template)
+# and docs/migrations/0003-config-split-layout.md for why the split exists (it
+# isolates the dangerous transport knobs — `nats.subjects` etc. — from routine
+# per-stack edits). This file is retained as the worked single-file reference
+# and for the single-file fallback path; it is no longer the recommended form.
+#
+# -----------------------------------------------------------------------------
+# cortex.yaml — example configuration (single-file form)
 #
 # Copy this file to one of the locations the cortex CLI scans (default:
 # `~/.config/cortex/cortex.yaml`) and replace every `<REPLACE_ME>` marker

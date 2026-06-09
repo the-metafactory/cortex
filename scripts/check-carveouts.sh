@@ -129,6 +129,13 @@ ALLOWLIST_PATHS=(
   # cutover design doc carry it as a kept role-id string.
   'src/common/policy/'
   'docs/design-policy-cutover.md'
+  # cortex.yaml.example policy roles — the `operator` capability literal in the
+  # principal role's `capabilities[]` is the reserved authz CAPABILITY token the
+  # PolicyEngine checks (`allow("operator")` in src/common/policy/resolve-access.ts,
+  # already allowlisted above), NOT the principal vocabulary. Renaming it would
+  # break the worked example. Same class as the `src/common/policy/` cluster.
+  # RETIRE: with the `operator` policy-capability literal itself.
+  'cortex.yaml.example'
   # User-auth RBAC tier `viewer|operator|admin` — the MC authorization role
   # (CONTEXT.md, #513). A persisted privilege level, never the principal.
   'src/surface/mc/worker/src/user-auth/'

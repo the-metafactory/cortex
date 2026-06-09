@@ -1,0 +1,71 @@
+# =============================================================================
+# network/example-network.yaml — the federation roster layer (IAW CFG)
+# =============================================================================
+#
+# OPTIONAL LAYER. This is the cross-PRINCIPAL layer of the multi-file config
+# layout. A stack that runs purely local (no federation) does not need a
+# `network/` directory at all — the composer skips the layer when it is absent,
+# and the stack rides its own primary NATS link only.
+#
+# Files here carry ONE fragment of `policy.federated` — the federation roster
+# the composer deep-merges into the stack's policy block (sorted by filename, so
+# split your networks across files freely). Blast radius: CROSS-PRINCIPAL — a
+# wrong peer pubkey or accept-subject here lets (or blocks) another principal's
+# traffic, so this layer is reviewed as a federation change.
+#
+# The shape below is the SAME `policy.federated.{registry, networks[]}` the
+# single-file `cortex.yaml` carries inline; here it just lives in its own layer.
+# Federation is the IoAW federation phases (plan §13) — see the network SOPs
+# before enabling anything here:
+#   - docs/sop-network-join.md          (join / multi-stack / status / leave)
+#   - docs/sop-stack-onboarding.md      (stand up + federate a stack; operator-mode bus)
+#   - docs/sop-federation-onboarding.md (peer-principal onboarding + trust)
+#
+# DO NOT enable a network here until you have read those SOPs. A federating
+# stack's bus MUST be operator-mode (an anonymous / hard-isolated bus cannot
+# federate — the leaf remote binds an account the server does not know and
+# nats-server crashes). `cortex network join` fails fast on such a bus (#794).
+#
+# Replace every <REPLACE_ME> before enabling. Until then this file is inert
+# (the whole `policy:` block below is commented out, so the layer composes to a
+# no-op and the stack stays local-only).
+
+# policy:
+#   federated:
+#     # registry — the network-registry endpoint + DD-9 trust pin.
+#     # `cortex network join <network>` (#753) derives its --registry-url /
+#     # --registry-pubkey from here, so the one-liner needs no registry flags.
+#     registry:
+#       url: https://registry.meta-factory.ai
+#       # OPTIONAL pinned Ed25519 pubkey (base64, 44 chars). Omit for TOFU on
+#       # first boot; paste the pinned value here for zero-TOFU.
+#       # pubkey: <REPLACE_ME_REGISTRY_PUBKEY>
+#
+#     networks:
+#       - id: research-collab
+#         # routing label / link-pool de-dup key. Two networks sharing a
+#         # leaf_node name share ONE physical link, so their `nats:` blocks must
+#         # be consistent (byte-identical, or omitted on all but one).
+#         leaf_node: nats-leaf-research
+#         # OPTIONAL — a dedicated leaf-node link for this network (F-3a, #657).
+#         # When ABSENT the network rides the primary link (system/system.yaml
+#         # `nats:`). Only url / credsPath / name are accepted here.
+#         nats:
+#           url: nats://research.example.com:4222
+#           credsPath: ~/.config/cortex/creds/research.creds
+#         # peers — the other principals' stacks in this trust closure.
+#         peers:
+#           - principal_id: <REPLACE_ME_PEER_PRINCIPAL>     # e.g. jcfischer
+#             stack_id: <REPLACE_ME_PEER_STACK>             # e.g. jcfischer/sage-host
+#             principal_pubkey: <REPLACE_ME_PEER_PUBKEY>    # peer stack NKey pub (U…, 56 chars)
+#         # accept_subjects — the federated.* subjects this stack will RECEIVE.
+#         accept_subjects:
+#           - federated.research-collab.>
+#         # deny_subjects — explicit blocks (evaluated before accept).
+#         deny_subjects: []
+#         # announce_capabilities — which of this stack's capabilities[] are
+#         # advertised to the network registry.
+#         announce_capabilities:
+#           - code-review.typescript
+#         # max_hop — federation hop budget (1 = direct peers only).
+#         max_hop: 1

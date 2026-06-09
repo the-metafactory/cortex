@@ -1,0 +1,37 @@
+# =============================================================================
+# research.yaml — the POINTER (sentinel) file (IAW CFG / migration 0003)
+# =============================================================================
+#
+# This is the file your cortex daemon's `--config` flag points at:
+#
+#     cortex start --config ~/.config/cortex/research/research.yaml
+#
+# Its CONTENTS ARE IGNORED. The loader does NOT parse this file for config — it
+# uses only its **dirname** to select the layout. When the composer
+# (`composeRawConfig`, src/common/config/loader.ts) sees the marker file
+# `system/system.yaml` in this directory, it switches to the multi-file layout
+# and deep-merges, in this fixed precedence:
+#
+#     system/system.yaml      (base — substrate / transport)
+#     network/*.yaml          (federation roster, sorted by filename)
+#     surfaces/surfaces.yaml  (shared surface-gateway bindings — CFG.c / GW)
+#     stacks/*.yaml           (per-deployment policy / capabilities / agents)
+#
+# Two things the pointer file's NAME is load-bearing for (migration 0003):
+#
+#  1. It selects the directory, via `dirname(--config)`. Point `--config` here
+#     and the composer reads `system/`, `network/`, `surfaces/`, `stacks/`
+#     beside it.
+#
+#  2. It names the single-instance PID file. cortex derives its PID-file name
+#     from the `--config` BASENAME (`cortex-<basename>.pid`). If you run more
+#     than one stack, each pointer file MUST be named per-stack
+#     (`research.yaml`, `work.yaml`, …) — NOT a uniform `cortex.yaml` — or the
+#     second daemon to start collides on `cortex-cortex.pid` and aborts with
+#     `cortex: already running`. (See docs/migrations/0003-config-split-layout.md
+#     — "The PID-collision landmine".)
+#
+# So: name this file after the stack, keep it next to system/ + stacks/, and
+# leave the body empty (or a one-line note like the marker below). The dirname
+# does the work.
+pointer: true   # cosmetic marker only — the loader never reads this value

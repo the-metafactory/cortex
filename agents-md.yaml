@@ -31,6 +31,8 @@ sections:
     file: docs/agents-md/discord-routing.md
   - position: "after:description"
     file: docs/agents-md/pai-integration.md
+  - position: "after:description"
+    file: docs/agents-md/config-files.md
   - position: "after:critical-rules"
     file: docs/agents-md/critical-rules.md
   - position: "after:sop-table"

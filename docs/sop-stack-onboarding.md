@@ -75,6 +75,16 @@ lsof -nP -iTCP:<port> -sTCP:LISTEN | grep nats   # verify up
 
 ### Step 3 — Write the cortex config (`~/.config/cortex/<slug>/`)
 
+**Start from the canonical template.** [`docs/config-layout/`](config-layout/) is
+the self-documenting config-split template — copy it and fill the `<REPLACE_ME>`
+markers rather than hand-rolling the directory:
+
+```bash
+cp -R docs/config-layout ~/.config/cortex/<slug>
+# rename the pointer file after your slug, then fill the <REPLACE_ME> markers
+mv ~/.config/cortex/<slug>/research.yaml ~/.config/cortex/<slug>/<slug>.yaml
+```
+
 Multi-file layout (`composer` reads `system/` + `stacks/`):
 
 - **`<slug>.yaml`** — pointer (contents ignored; the dirname selects the layout).

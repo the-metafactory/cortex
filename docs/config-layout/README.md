@@ -1,9 +1,40 @@
-# Reference multi-file config layout (IAW CFG)
+# The cortex config template — config-split (multi-file) layout
 
-This directory is a **documented, loadable reference** for the multi-file
-`cortex` config layout introduced by the IAW **CFG** epic
-(`docs/plan-internet-of-agentic-work.md` §13.1). It is an example/fixture, not a
-live deployment — copy it to your config dir and fill in real tokens/keys.
+**This directory IS the canonical, copy-paste-and-go config template that ships
+with cortex.** The multi-file **config-split** layout is the **standard** way to
+configure a cortex stack. The single-file `cortex.yaml` (repo root
+`cortex.yaml.example`) is a **legacy / transitional fallback** — it still loads,
+but new installs should land here.
+
+## Quick start (copy → fill → point)
+
+```bash
+# 1. Copy this directory to your config dir, naming it after your stack slug
+cp -R docs/config-layout ~/.config/cortex/research
+
+# 2. Fill in every <REPLACE_ME> marker across the files below
+#    (secrets/ids: principal id, stack signing keys, Discord token/guild/channels)
+$EDITOR ~/.config/cortex/research/{system/system.yaml,stacks/research.yaml,surfaces/surfaces.yaml}
+
+# 3. Point your daemon at the POINTER (sentinel) file — its dirname selects the layout
+cortex start --config ~/.config/cortex/research/research.yaml
+```
+
+The pointer file [`research.yaml`](./research.yaml) is the file `--config`
+points at; **its contents are ignored** — only its dirname selects the layout,
+and its basename names the single-instance PID file (so per-stack deployments
+MUST give each pointer a per-stack name — see the migration note below).
+
+> **config-split is the standard layout.** The single-file `cortex.yaml` form
+> (`cortex.yaml.example`) still loads via the transitional single-file fallback
+> (no `system/system.yaml` marker present), so existing monolith deployments
+> keep working unchanged — but it is **legacy**, not the form a fresh install
+> should adopt. When in doubt, copy this directory.
+
+This directory is also a **loadable reference/fixture** for the config-split
+layout introduced by the IAW **CFG** epic
+(`docs/plan-internet-of-agentic-work.md` §13.1) — every file parses cleanly out
+of the box with `<REPLACE_ME>` markers standing in for real tokens/keys.
 
 ## Why split the config
 
@@ -91,15 +122,35 @@ present for the same platform, the surfaces.yaml binding **wins on leaf keys**
 agent absent from every stack fails **loudly** rather than silently dropping a
 credential.
 
-## This example
+## The files in this template
 
-- [`system/system.yaml`](./system/system.yaml) — the substrate layer, with the
-  prominently-commented `nats.subjects` block (kept at the safe `[]` default).
-- [`surfaces/surfaces.yaml`](./surfaces/surfaces.yaml) — the surface binding map;
-  binds the `ivy` agent's Discord presence (Slack + Mattermost commented out).
-- [`stacks/research.yaml`](./stacks/research.yaml) — one per-deployment stack
-  (principal + one agent), carrying no transport knobs and an EMPTY
-  `presence: {}` — its Discord binding folds in from `surfaces.yaml`.
+| File | Layer | What to fill in |
+|---|---|---|
+| [`research.yaml`](./research.yaml) | pointer | nothing — rename it after your stack slug; contents ignored, dirname selects the layout, basename names the PID file |
+| [`system/system.yaml`](./system/system.yaml) | substrate / transport | `nats.url` + identity; leave `nats.subjects` at the safe `[]` default |
+| [`network/example-network.yaml`](./network/example-network.yaml) | federation roster (OPTIONAL) | peers, registry, accept-subjects — only if you federate; inert until uncommented |
+| [`surfaces/surfaces.yaml`](./surfaces/surfaces.yaml) | shared surface bindings (OPTIONAL) | Discord/Slack/Mattermost `token` / `guild` / channels for each agent |
+| [`stacks/research.yaml`](./stacks/research.yaml) | per-deployment stack | `principal`, `stack` signing keys, `policy` (principal-only pattern), `agents`, `github.repos` |
 
-`network/` is omitted here — the network roster lands with the federation
-phases; it is an optional layer the composer skips when absent.
+- **`stacks/research.yaml`** is the file you edit daily. It carries the
+  `<REPLACE_ME>` markers for your principal id, stack signing keys, the
+  principal-only `policy` block (the human principal's Discord id under
+  `platform_ids.discord`), the agent, and `github.repos`. Its agent declares an
+  EMPTY `presence: {}` — the Discord binding folds in from `surfaces.yaml`
+  (style A). The inline-presence fallback (style B) is shown commented at the
+  bottom of that file.
+- **`surfaces/surfaces.yaml`** binds the `ivy` agent's Discord presence (Slack +
+  Mattermost commented out) — the credential surface-of-truth.
+- **`network/example-network.yaml`** documents the federation layer
+  (`policy.federated.{registry, networks[]}`). It is OPTIONAL and ships
+  fully commented (inert) — a non-federating stack omits the `network/` dir
+  entirely and the composer skips the layer. Read the network SOPs
+  (`docs/sop-network-join.md`, `docs/sop-federation-onboarding.md`,
+  `docs/sop-stack-onboarding.md`) before enabling anything there.
+
+See [`docs/sop-stack-onboarding.md`](../sop-stack-onboarding.md) for the
+end-to-end stand-up procedure (this template is the config it tells you to copy
+at Step 3), and
+[`docs/migrations/0003-config-split-layout.md`](../migrations/0003-config-split-layout.md)
+for the split rationale, the loader's precedence rules, and the PID-collision
+landmine.
