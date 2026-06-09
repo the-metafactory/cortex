@@ -28,7 +28,7 @@ import {
   rmSync,
   writeFileSync,
 } from "fs";
-import { dirname, join } from "path";
+import { basename, dirname, join } from "path";
 
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
@@ -486,37 +486,70 @@ function buildPlistPort(cfg: LivePortsConfig, mutate: boolean): PlistPort {
 // =============================================================================
 
 /**
- * The stack-scoped config file that carries policy.federated.networks[] (#756).
+ * The config file that carries `policy.federated.networks[]`, resolved from the
+ * daemon's REAL `--config` ({@link LivePortsConfig.cortexConfigPath}) — NOT from
+ * `cfg.stackId` (#805 / #807).
  *
- * Two layouts, resolved the same way the loader's composer resolves its
- * ingestion path (`LAYOUT_MARKER = system/system.yaml`):
+ * The split-brain bug (#805): the join used to derive its write target from the
+ * `stackId` slug + a hardcoded `~/.config/cortex`, ignoring the daemon's actual
+ * `--config`. On JC's single-file deployment (`cortex.yaml`, stack.id
+ * `jc/default`) the join wrote `~/.config/cortex/stacks/default.yaml` while the
+ * daemon read `~/.config/cortex/cortex.yaml` — status said "joined", the leaf
+ * never linked. We now resolve the target from `cortexConfigPath`, the same path
+ * the daemon loads, so the policy block always lands where the daemon reads it.
  *
- *   - **config-split (current, migration 0003 / #714):** per-stack dirs. Each
- *     stack lives at `~/.config/cortex/<slug>/`, with its policy block in
- *     `~/.config/cortex/<slug>/stacks/<slug>.yaml`. This is the file the daemon
- *     actually composes + loads, so the join's `policy.federated.networks[]`
- *     MUST land here. Detected by the per-stack marker
- *     `~/.config/cortex/<slug>/system/system.yaml`.
- *   - **flat (legacy):** `~/.config/cortex/stacks/<slug>.yaml`. The pre-split
- *     path; used only as a fallback when the per-stack dir is absent.
+ * Layout-aware, mirroring `resolve_stack_agent_config_path` in
+ * `scripts/lib/plist-render.sh` (the canonical resolver the plist bakes in —
+ * the daemon and the join MUST agree on which file holds the `policy:` block):
  *
- * Before #756 the join wrote the FLAT path unconditionally, so on a config-split
- * deployment the policy block landed as a stray orphan the daemon never read.
- * We now prefer the split layout whenever its per-stack dir exists.
+ *   - **config-split (migration 0003 / #714):** the dir of `cortexConfigPath`
+ *     contains `system/system.yaml` (the layout marker the loader's composer
+ *     keys on). The `policy:` block lives in `<dir>/stacks/<basename>.yaml`,
+ *     where `<basename>` is the `cortexConfigPath` filename without `.yaml`.
+ *     The slug is the pointer BASENAME, not `cfg.stackId` — that decoupling is
+ *     exactly #807's directory-layout drift corner (dir `meta-factory`,
+ *     stack.id `jc/default` → target keyed off the dir/basename, not `default`).
+ *   - **monolith (single-file, legacy):** no `system/system.yaml` beside it. The
+ *     `policy:` block lives in the monolith file itself = `cortexConfigPath`.
+ *     This is the #805 single-file fix — the daemon reads `cortex.yaml`, so
+ *     policy must land in `cortex.yaml`.
+ *
+ * Read + write both call this, so the change keeps them symmetric. Falls back to
+ * the pre-#805 behaviour (slug + `~/.config/cortex`) only when `cortexConfigPath`
+ * is empty — which in practice never happens, since the CLI always sets it
+ * (defaults to the expanded {@link DEFAULT_CONFIG_PATH} via
+ * `cortexConfigPathFromFlags`).
  */
 function stackConfigPath(cfg: LivePortsConfig): string {
-  const slug = cfg.stackId.split("/")[1] ?? "default";
-  const cortexDir = expandTilde("~/.config/cortex");
-  // Config-split: the per-stack dir is marked by `<slug>/system/system.yaml`
-  // (the same marker the loader's composer keys on). When present, the policy
-  // block belongs in the per-stack `stacks/<slug>.yaml` the daemon composes.
-  const perStackDir = join(cortexDir, slug);
-  const splitMarker = join(perStackDir, "system", "system.yaml");
-  if (existsSync(splitMarker)) {
-    return join(perStackDir, "stacks", `${slug}.yaml`);
+  const cortexConfigPath = cfg.cortexConfigPath;
+  // Pre-#805 fallback: only when no --config is threaded. The CLI always sets
+  // it (default DEFAULT_CONFIG_PATH), so this branch is effectively unreachable
+  // in production — it's a belt-and-braces guard for direct port construction.
+  if (cortexConfigPath === undefined || cortexConfigPath === "") {
+    const slug = cfg.stackId.split("/")[1] ?? "default";
+    const cortexDir = expandTilde("~/.config/cortex");
+    const perStackDir = join(cortexDir, slug);
+    if (existsSync(join(perStackDir, "system", "system.yaml"))) {
+      return join(perStackDir, "stacks", `${slug}.yaml`);
+    }
+    return join(cortexDir, "stacks", `${slug}.yaml`);
   }
-  // Flat (legacy) fallback.
-  return join(cortexDir, "stacks", `${slug}.yaml`);
+
+  // #805/#807 — resolve from the daemon's real --config, layout-aware.
+  const configPath = expandTilde(cortexConfigPath);
+  const configDir = dirname(configPath);
+  // Config-split: the per-stack dir is marked by `<dir>/system/system.yaml`
+  // (the same marker the loader's composer keys on). The `policy:` block belongs
+  // in `<dir>/stacks/<basename>.yaml` — the file the composer reads it from. The
+  // slug is the pointer BASENAME (not cfg.stackId — #807's drift corner).
+  const splitMarker = join(configDir, "system", "system.yaml");
+  if (existsSync(splitMarker)) {
+    const base = basename(configPath).replace(/\.ya?ml$/i, "");
+    return join(configDir, "stacks", `${base}.yaml`);
+  }
+  // Monolith (single-file, legacy) — policy lands in the monolith itself, the
+  // file the daemon reads (#805). No <dir>/system/system.yaml beside it.
+  return configPath;
 }
 
 function buildConfigStorePort(cfg: LivePortsConfig, mutate: boolean): ConfigStorePort {
