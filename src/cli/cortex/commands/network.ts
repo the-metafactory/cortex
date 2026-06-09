@@ -42,6 +42,7 @@
 
 import { existsSync } from "fs";
 import { readFile } from "fs/promises";
+import { join } from "path";
 
 import { expandTilde, loadConfigWithAgents } from "../../../common/config/loader";
 import { enforceChmod600 } from "../../../common/config/file-permissions";
@@ -195,6 +196,13 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--principal": "value",
         "--stack": "value",
         "--monitor-url": "value",
+        // #814 — explicit cortex.yaml override (highest precedence). When
+        // omitted, the status path resolves the NAMED stack's config from
+        // --principal + the --stack slug, layout-aware (see runStatus). Without
+        // this, status fell through to the default monolith ~/.config/cortex/
+        // cortex.yaml and read the wrong file for a config-split stack — so a
+        // joined config-split stack reported "no networks joined".
+        "--config": "value",
       },
     },
     // #747 — signed-admin network create/update. Dry-run by DEFAULT (like
@@ -278,6 +286,40 @@ function resolveStackSlug(
     return { ok: false, reason: `--stack slug "${slug}" must be letter-prefixed lowercase` };
   }
   return { ok: true, slug };
+}
+
+/** Config dir base — the same canonical path the daemon + the rest of the
+ *  network lifecycle use. expandTilde reads $HOME (tests pin it). */
+const CONFIG_DIR_BASE = "~/.config/cortex";
+
+/**
+ * #814 — resolve the cortex config path the `status` read should target for a
+ * NAMED stack, layout-aware. A faithful TS mirror of `resolve_stack_config_path`
+ * (scripts/lib/plist-render.sh) so the CLI status read and the install-time
+ * plist render agree on which file a stack's `policy.federated.networks[]` lives
+ * in:
+ *
+ *   - config-split (migration 0003 / #714): `<base>/<slug>/system/system.yaml`
+ *     marker present ⇒ the per-stack sentinel `<base>/<slug>/<slug>.yaml` (the
+ *     loader resolves configDir = dirname(<sentinel>) and composes the dir; the
+ *     policy block is read from `<base>/<slug>/stacks/<slug>.yaml` by
+ *     `stackConfigPath`, which derives it from THIS sentinel — #813).
+ *   - legacy monolith: no per-stack dir ⇒ the root monolith — `cortex.yaml` for
+ *     the `meta-factory` default-stack slug, `cortex.<slug>.yaml` otherwise.
+ *
+ * Directory layout takes precedence (same as the shell resolver + #813's
+ * discovery). The returned path is fed into `cortexConfigPath` so the post-#813
+ * `readNetworks`/`stackConfigPath` read the file the daemon actually loads.
+ */
+function resolveStatusConfigPath(slug: string): string {
+  const base = expandTilde(CONFIG_DIR_BASE);
+  if (existsSync(join(base, slug, "system", "system.yaml"))) {
+    // Config-split — point at the per-stack sentinel.
+    return join(base, slug, `${slug}.yaml`);
+  }
+  // Legacy monolith. `meta-factory` is the bare-name default-stack special case.
+  const filename = slug === "meta-factory" ? "cortex.yaml" : `cortex.${slug}.yaml`;
+  return join(base, filename);
 }
 
 /**
@@ -458,7 +500,20 @@ async function runStatus(
   const slugRes = resolveStackSlug(principalRes.value, optionalValueFlag(flags, "--stack"));
   if (!slugRes.ok) return usageError("status", slugRes.reason, json);
 
-  const cfg = portsConfig("", principalRes.value, slugRes.slug, flags);
+  // #814 — point the read at the NAMED stack's actual config. An explicit
+  // `--config` wins (highest precedence; honoured by cortexConfigPathFromFlags
+  // below). When omitted, resolve the config path layout-aware from --principal
+  // + the --stack slug (mirroring resolve_stack_config_path) and thread it in as
+  // `--config`, so the post-#813 readNetworks/stackConfigPath read the file the
+  // stack's daemon actually loads instead of the default monolith. Previously
+  // status fell through to ~/.config/cortex/cortex.yaml and reported a joined
+  // config-split stack as "no networks joined".
+  const statusFlags: Record<string, string | true> =
+    optionalValueFlag(flags, "--config") === undefined
+      ? { ...flags, "--config": resolveStatusConfigPath(slugRes.slug) }
+      : flags;
+
+  const cfg = portsConfig("", principalRes.value, slugRes.slug, statusFlags);
   // status is read-only — live ports, but it only ever reads.
   const ports: NetworkPorts = buildLivePorts(cfg);
 
