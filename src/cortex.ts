@@ -117,6 +117,7 @@ import { WorklogManager } from "./runner/worklog-manager";
 // These do NOT boot the daemon — only `start` does.
 import { dispatchNetwork } from "./cli/cortex/commands/network";
 import { dispatchProvisionStack } from "./cli/cortex/commands/provision-stack";
+import { dispatchStack } from "./cli/cortex/commands/stack";
 
 import { CloudPublisher } from "./taps/cc-events/cloud-publisher";
 import {
@@ -3451,6 +3452,23 @@ if (import.meta.main) {
     .helpOption(false)
     .action(async (args: string[]) => {
       const result = await dispatchProvisionStack(args);
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      process.exit(result.exitCode);
+    });
+
+  // C-808 (#808) — born-aligned, unique stack scaffold. Same passthrough shape
+  // as `network` / `provision-stack`: `dispatchStack` owns its own arg parsing,
+  // so commander hands it the raw remaining argv untouched.
+  program
+    .command("stack")
+    .description("Scaffold + inspect cortex stacks (create / list)")
+    .argument("[args...]", "stack subcommand + flags (see `cortex stack --help`)")
+    .allowUnknownOption()
+    .passThroughOptions()
+    .helpOption(false)
+    .action(async (args: string[]) => {
+      const result = await dispatchStack(args);
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);
       process.exit(result.exitCode);

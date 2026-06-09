@@ -1,0 +1,509 @@
+/**
+ * `cortex stack` pure logic (C-808, closes #808) — discovery, the born-aligned
+ * scaffold renderer, and the alignment self-check.
+ *
+ * This is the PREVENT-side complement to v5.3.8's `warn_stack_identity_drift`
+ * (the DETECT side, `scripts/lib/plist-render.sh` + ADR-0004). That detector
+ * warns when a stack's filesystem locator (dir basename / `cortex.<slug>.yaml`
+ * filename) drifts from `stack.id`'s trailing segment. This module makes that
+ * drift STRUCTURALLY IMPOSSIBLE for a stack created via `cortex stack create`:
+ * it derives `stack.id = {principal}/{slug}`, writes the dir as `<slug>`, and
+ * asserts dir == slug == trailing-segment BEFORE writing (`assertAligned`).
+ *
+ * Discovery (`discoverStacks`) is a faithful TS replica of the shell discovery
+ * in `plist-render.sh` (`discover_stack_slugs` + `extract_stack_id_slug` +
+ * `config_file_to_slug`), used for the uniqueness scan and `stack list`. Kept
+ * deliberately dependency-light (no YAML parser) so it matches the install-time
+ * awk extraction byte-for-byte on the `stack.id` it reads.
+ *
+ * No I/O beyond reading for discovery — the actual writes live in `stack.ts`
+ * so this module stays pure + trivially testable (mirrors the network-lib /
+ * network.ts split).
+ */
+
+import { existsSync, readdirSync, readFileSync, statSync } from "fs";
+import { join } from "path";
+
+// =============================================================================
+// Discovery
+// =============================================================================
+
+/** A stack discovered under a config dir, with its alignment verdict. */
+export interface DiscoveredStack {
+  /** The filesystem LOCATOR slug — dir basename, or the cortex.<slug>.yaml
+   *  filename slug (cosmetic; ADR-0004 DA-1). */
+  slugLocator: string;
+  /** `stack.id` (`{principal}/{slug}`) read from the config, or undefined when
+   *  absent/unparseable (a degenerate stack the detector skips). */
+  stackId?: string;
+  /** Layout the stack was found under. */
+  layout: "split" | "monolith";
+  /** Absolute path of the stack's config file that carries `stack.id`. */
+  configPath: string;
+  /** True when the locator slug == `stack.id`'s trailing segment (ADR-0004).
+   *  Undefined `stackId` ⇒ undefined verdict (nothing to compare). */
+  aligned?: boolean;
+}
+
+/**
+ * Replica of `config_file_to_slug` (plist-render.sh): map a `cortex*.yaml`
+ * filename to its locator slug. `cortex.yaml` → `meta-factory` (the single-file
+ * default-stack special case); `cortex.<slug>.yaml` → `<slug>`. Anything else
+ * returns undefined (caller skips the file).
+ */
+function configFileToSlug(filename: string): string | undefined {
+  if (filename === "cortex.yaml") return "meta-factory";
+  const m = /^cortex\.(.+)\.yaml$/.exec(filename);
+  return m?.[1];
+}
+
+/**
+ * Replica of `extract_stack_id_slug` (plist-render.sh) — extract `stack.id`
+ * scoped to the top-level `stack:` block so the sibling `principal.id` /
+ * `agents[].id` keys are never mistaken for it. Returns the full
+ * `{principal}/{slug}` literal, or undefined when absent/unparseable.
+ *
+ * Deliberately a line scan (not a YAML parse) to match the install-time awk
+ * extraction exactly — the SAME bytes the drift detector reads.
+ */
+function extractStackId(configPath: string): string | undefined {
+  let text: string;
+  try {
+    text = readFileSync(configPath, "utf-8");
+  } catch (_err) {
+    // A discovered config that can't be read carries no comparable id — the
+    // shell detector skips it too (the filename locator stands). Safe to ignore.
+    return undefined;
+  }
+  let inStack = false;
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.replace(/\r$/, "");
+    if (/^stack:\s*$/.test(line)) {
+      inStack = true;
+      continue;
+    }
+    // A non-indented, non-comment line dedents out of the `stack:` block.
+    if (inStack && /^[^\s#]/.test(line)) inStack = false;
+    if (inStack) {
+      const m = /^\s+id:\s*(.+)$/.exec(line);
+      if (m?.[1] !== undefined) {
+        // Strip quotes + trailing comment, trim.
+        const value = m[1].replace(/["']/g, "").replace(/#.*$/, "").trim();
+        return value.length > 0 ? value : undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
+/** The trailing `{slug}` segment of a `{principal}/{slug}` stack id. */
+function stackIdTrailingSlug(stackId: string): string {
+  const idx = stackId.lastIndexOf("/");
+  return idx === -1 ? stackId : stackId.slice(idx + 1);
+}
+
+/**
+ * Discover all stacks under `configDir` — split-layout dirs (with the
+ * `system/system.yaml` marker) and legacy `cortex*.yaml` monoliths. Mirrors
+ * `discover_stack_slugs`: the directory layout WINS over a same-slug monolith
+ * (the split retains the root monolith as a rollback anchor, so it must not be
+ * double-discovered). Returns each with its `stack.id` + alignment verdict.
+ */
+export function discoverStacks(configDir: string): DiscoveredStack[] {
+  if (!existsSync(configDir)) return [];
+
+  const found: DiscoveredStack[] = [];
+  const dirSlugs = new Set<string>();
+
+  // Pass 1: split-layout dirs — <configDir>/<slug>/system/system.yaml marker.
+  let entries: string[];
+  try {
+    entries = readdirSync(configDir);
+  } catch (_err) {
+    // Unreadable config dir → nothing to discover; an empty list is the safe,
+    // truthful answer (callers treat it as "no stacks present"). Safe to ignore.
+    return [];
+  }
+  for (const entry of entries.sort()) {
+    const dir = join(configDir, entry);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+    } catch (_err) {
+      // A racing unlink between readdir and stat — skip this entry. Safe to ignore.
+      continue;
+    }
+    if (!existsSync(join(dir, "system", "system.yaml"))) continue;
+    // Agents/stack.id live in stacks/<slug>.yaml under the split layout.
+    const configPath = join(dir, "stacks", `${entry}.yaml`);
+    const stackId = existsSync(configPath) ? extractStackId(configPath) : undefined;
+    dirSlugs.add(entry);
+    found.push(buildDiscovered(entry, stackId, "split", configPath));
+  }
+
+  // Pass 2: legacy monoliths — emit only when no split dir already claimed the
+  // slug (dir wins → dedupe).
+  for (const entry of entries.sort()) {
+    if (!/^cortex.*\.yaml$/.test(entry)) continue;
+    const file = join(configDir, entry);
+    try {
+      if (!statSync(file).isFile()) continue;
+    } catch (_err) {
+      // racing unlink between readdir and stat — skip. Safe to ignore.
+      continue;
+    }
+    const slug = configFileToSlug(entry);
+    if (slug === undefined) continue;
+    if (dirSlugs.has(slug)) continue;
+    const stackId = extractStackId(file);
+    found.push(buildDiscovered(slug, stackId, "monolith", file));
+  }
+
+  return found;
+}
+
+function buildDiscovered(
+  slugLocator: string,
+  stackId: string | undefined,
+  layout: "split" | "monolith",
+  configPath: string,
+): DiscoveredStack {
+  return {
+    slugLocator,
+    ...(stackId !== undefined && { stackId }),
+    layout,
+    configPath,
+    ...(stackId !== undefined && { aligned: stackIdTrailingSlug(stackId) === slugLocator }),
+  };
+}
+
+// =============================================================================
+// Alignment self-check (the #808 structural guarantee)
+// =============================================================================
+
+/**
+ * Assert dir basename == slug == trailing segment of the stack.id about to be
+ * written. The whole point of `cortex stack create` (#808): a stack born this
+ * way CANNOT drift, because we refuse to write unless all three agree. Throws
+ * on a mismatch — a programming error in the command, never a principal input
+ * error (those are validated + rejected upstream as usage errors).
+ */
+export function assertAligned(slug: string, stackId: string): void {
+  const trailing = stackIdTrailingSlug(stackId);
+  if (trailing !== slug) {
+    throw new Error(
+      `alignment self-check failed (#808): stack.id "${stackId}" trailing segment "${trailing}" != slug "${slug}"`,
+    );
+  }
+}
+
+// =============================================================================
+// Scaffold renderer
+// =============================================================================
+
+/** Inputs for the born-aligned scaffold. All resolved + validated upstream. */
+export interface ScaffoldInputs {
+  slug: string;
+  principal: string;
+  stackId: string;
+  agentId: string;
+  displayName: string;
+  /** Conventional seed path (`~/.config/nats/cortex-<slug>.nk`). NOT generated
+   *  here — `arc upgrade Cortex` auto-provisions the seed on first install. */
+  seedPath: string;
+}
+
+/** A scaffold file to write, relative to the new stack's dir. */
+export interface ScaffoldFile {
+  relPath: string;
+  contents: string;
+}
+
+/**
+ * Render the full born-aligned config-split skeleton for a new stack. Derived
+ * from `docs/config-layout/` with the `research`/`andreas`/`ivy` placeholders
+ * substituted for the real slug / principal / agent, keeping `<REPLACE_ME>`
+ * only for true secrets (Discord token/guild/channel ids + the post-first-boot
+ * `nkey_pub`). NEVER emits private key material — the seed is auto-provisioned
+ * later (see `arc upgrade Cortex` / postupgrade.sh §2).
+ */
+export function renderScaffold(inputs: ScaffoldInputs): ScaffoldFile[] {
+  const { slug, principal, stackId, agentId, displayName, seedPath } = inputs;
+  const Display = displayName;
+
+  return [
+    { relPath: "system/system.yaml", contents: systemYaml() },
+    { relPath: "surfaces/surfaces.yaml", contents: surfacesYaml(agentId, stackId) },
+    { relPath: `stacks/${slug}.yaml`, contents: stackYaml(slug, principal, stackId, agentId, Display, seedPath) },
+    { relPath: `${slug}.yaml`, contents: pointerYaml(slug) },
+    { relPath: `personas/${agentId}.md`, contents: personaStub(agentId, Display, stackId) },
+  ];
+}
+
+function systemYaml(): string {
+  // The cross-cutting substrate layer — substituted from
+  // docs/config-layout/system/system.yaml. Identity is left at the safe
+  // conventional default; `arc upgrade Cortex` auto-provisions the seed.
+  return `# =============================================================================
+# system.yaml — the cross-cutting machine / substrate layer (IAW CFG.b)
+# =============================================================================
+# Generated by \`cortex stack create\` (#808). BASE layer of the config-split
+# layout: the dangerous transport knobs (claude / execution / attachments /
+# paths / nats / bus) live HERE, one layer up from the per-stack stacks/*.yaml,
+# reviewed as a transport change. See docs/config-layout/system/system.yaml for
+# the fully-annotated reference.
+
+claude:
+  timeoutMs: 300000
+  asyncTimeoutMs: 900000
+  additionalArgs: []
+  allowedTools: []
+  disallowedTools:
+    - Write
+
+execution:
+  default: local
+  backends: []
+
+attachments:
+  enabled: true
+  maxFileSizeBytes: 10485760
+  maxTotalSizeBytes: 26214400
+  maxAttachmentsPerMessage: 10
+
+paths:
+  publishedEventsDir: ~/.claude/events/published
+  logDir: ~/.config/cortex/logs
+
+# nats — M2 transport. nats.subjects is the SINGLE place subject overrides live
+# (IAW CFG.b.2). KEEP IT EMPTY ([]) unless you know exactly why — a duplicate
+# pattern double-binds the boot subscriber (the double-message problem,
+# cortex#491). The dispatch-listener self-subscribes its own interest at start.
+nats:
+  url: nats://127.0.0.1:4222
+  name: cortex
+  subjects: []
+  # NKey identity for envelope signing. The seedPath is the conventional path
+  # \`arc upgrade Cortex\` auto-provisions on first install; publicKey is pinned
+  # after first boot (paste from the cortex log \`stack signing key staged …\`).
+  identity:
+    seedPath: ~/.config/nats/cortex.nk
+    # Valid-FORMAT placeholder so this file loads; REPLACE after first boot.
+    publicKey: ${NKEY_PUB_PLACEHOLDER}   # <REPLACE_ME>: U-prefixed pubkey
+
+bus:
+  review:
+    stream:
+      name: CODE_REVIEW
+      maxAgeSeconds: 86400
+      maxBytes: 536870912
+    consumer:
+      maxDeliver: 5
+`;
+}
+
+function surfacesYaml(agentId: string, stackId: string): string {
+  // The shared surface-gateway binding map (IAW CFG.c). Substituted from
+  // docs/config-layout/surfaces/surfaces.yaml with the real agent + stack id.
+  // Secrets stay <REPLACE_ME> (Discord token/guild/channel ids).
+  return `# =============================================================================
+# surfaces/surfaces.yaml — the shared surface-gateway binding map (IAW CFG.c)
+# =============================================================================
+# Generated by \`cortex stack create\` (#808). Holds the per-platform surface
+# bindings (Discord/Slack/Mattermost token/guild/channels), folded into the
+# matching agent's presence.{platform} at load. OPTIONAL — per-stack inline
+# presence is always the fallback. See docs/config-layout/surfaces/surfaces.yaml.
+
+surfaces:
+  discord:
+    - agent: ${agentId}
+      stack: ${stackId}
+      binding:
+        token: "<REPLACE_ME>"            # the bot token (chmod 600 the file)
+        guildId: "<REPLACE_ME>"
+        agentChannelId: "<REPLACE_ME>"
+        logChannelId: "<REPLACE_ME>"
+
+  # slack:
+  #   - agent: ${agentId}
+  #     stack: ${stackId}
+  #     binding:
+  #       botToken: xoxb-REPLACE
+  #       appToken: xapp-REPLACE
+  #       workspaceId: T01234567
+
+  # mattermost:
+  #   - agent: ${agentId}
+  #     stack: ${stackId}
+  #     binding:
+  #       apiUrl: https://mattermost.example.com
+  #       apiToken: REPLACE_WITH_MATTERMOST_TOKEN
+`;
+}
+
+/**
+ * Valid-FORMAT NKey public-key placeholder (U-prefixed, 56 chars). The config
+ * schema's `nkey_pub` fields are regex-validated at load (`/^U[A-Z2-7]{55}$/`),
+ * so a bare `<REPLACE_ME>` would FAIL to parse — defeating the "every file
+ * parses cleanly out of the box" guarantee. Matching `docs/config-layout/`'s
+ * own convention, we emit this valid-format all-A placeholder (it parses) with
+ * a REPLACE_ME comment beside it. REPLACE it with the real pubkey after first
+ * boot (paste from the cortex log `stack signing key staged …`).
+ */
+const NKEY_PUB_PLACEHOLDER = "UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+function stackYaml(
+  slug: string,
+  principal: string,
+  stackId: string,
+  agentId: string,
+  displayName: string,
+  seedPath: string,
+): string {
+  // The per-deployment stack layer — substituted from
+  // docs/config-layout/stacks/research.yaml. principal-only policy pattern.
+  return `# =============================================================================
+# stacks/${slug}.yaml — this stack's per-deployment layer (the file you EDIT daily)
+# =============================================================================
+# Generated by \`cortex stack create\` (#808), born aligned: this file lives at
+# <config-dir>/${slug}/stacks/${slug}.yaml and its stack.id trailing segment is
+# "${slug}" — dir == slug == stack.id, so the slug<->stack.id drift the install-
+# time \`warn_stack_identity_drift\` detector (ADR-0004) catches can never form.
+# See docs/config-layout/stacks/research.yaml for the fully-annotated reference.
+
+# -----------------------------------------------------------------------------
+# principal — who is running this stack (id + Discord identity)
+# -----------------------------------------------------------------------------
+principal:
+  id: ${principal}
+  displayName: ${principal}
+  discordId: "<REPLACE_ME>"   # your numeric Discord snowflake
+
+# -----------------------------------------------------------------------------
+# stack — identity of THIS deployment within the principal (signing identity)
+# -----------------------------------------------------------------------------
+# \`arc upgrade Cortex\` auto-provisions the seed at nkey_seed_path on first
+# install if it is missing — do NOT generate it by hand. After first boot, paste
+# the U-prefixed pubkey from the cortex log line \`stack signing key staged …\`
+# into nkey_pub to pin it.
+stack:
+  id: ${stackId}
+  nkey_seed_path: ${seedPath}   # SU…-prefixed NATS user seed, chmod 600 (auto-provisioned)
+  # Valid-FORMAT placeholder so this file loads; REPLACE with the real U-prefixed
+  # pubkey after first boot (cortex log: "stack signing key staged …").
+  nkey_pub: ${NKEY_PUB_PLACEHOLDER}  # <REPLACE_ME>
+
+# -----------------------------------------------------------------------------
+# capabilities — STACK CATALOG (source of truth for capability-dispatch)
+# -----------------------------------------------------------------------------
+capabilities:
+  - id: chat
+    description: Conversational dispatch (no-prefix synchronous chat)
+    provided_by: [${agentId}]
+
+# -----------------------------------------------------------------------------
+# policy — PRINCIPAL-ONLY pattern (CRITICAL for any guild others can join)
+# -----------------------------------------------------------------------------
+# List ONLY the human principal in principals[] with their Discord id. A
+# non-principal's @mention resolves to authorIsPrincipal=false → hard-blocked
+# silently. The assistant answers the principal and no one else.
+policy:
+  principals:
+    - id: ${agentId}                  # the stack's own signing identity (the agent)
+      home_principal: ${principal}
+      home_stack: ${stackId}
+      nkey_pub: ${NKEY_PUB_PLACEHOLDER}  # <REPLACE_ME>: ${agentId}'s U-prefixed pubkey (matches agents[].nkey_pub)
+      role:
+        - principal-role
+      trust: []
+      platform_ids: {}
+    - id: ${principal}                # the human — the ONLY human principal
+      home_principal: ${principal}
+      home_stack: ${stackId}
+      role:
+        - principal-role
+      trust: []
+      platform_ids:
+        discord:
+          - "<REPLACE_ME>"            # your numeric Discord id
+  roles:
+    - id: principal-role
+      capabilities:
+        - dispatch.${agentId}
+        - keyword.chat
+        - keyword.async
+        - keyword.team
+        - tool.bash
+        - tool.read
+        - tool.glob
+        - tool.grep
+
+# -----------------------------------------------------------------------------
+# agents — first-class agents on this stack
+# -----------------------------------------------------------------------------
+agents:
+  - id: ${agentId}
+    displayName: ${displayName}
+    persona: ./personas/${agentId}.md
+    nkey_pub: ${NKEY_PUB_PLACEHOLDER}  # <REPLACE_ME>: ${agentId}'s U-prefixed pubkey
+    roles: []
+    trust: []
+    runtime:
+      substrate: claude-code
+      mode: in-process
+      capabilities:
+        - chat
+    # EMPTY — the Discord binding folds in from surfaces/surfaces.yaml.
+    presence: {}
+
+# -----------------------------------------------------------------------------
+# github — webhook ingestion + which repos this stack is scoped to
+# -----------------------------------------------------------------------------
+github:
+  webhookSecret: ""                   # paste the GitHub App HMAC secret once wired; empty = off
+  repos: []                           # e.g. [{ short: cortex, full: the-metafactory/cortex }]
+`;
+}
+
+function pointerYaml(slug: string): string {
+  // The sentinel pointer — contents ignored; dirname selects the layout, basename
+  // names the per-stack PID file. Per-stack name (not uniform cortex.yaml) avoids
+  // the PID-collision landmine (migration 0003).
+  return `# =============================================================================
+# ${slug}.yaml — the POINTER (sentinel) file (IAW CFG / migration 0003)
+# =============================================================================
+# Generated by \`cortex stack create\` (#808). Point your daemon's --config here:
+#
+#     cortex start --config ~/.config/cortex/${slug}/${slug}.yaml
+#
+# Its CONTENTS ARE IGNORED. The loader uses only its DIRNAME to select the
+# config-split layout (the system/system.yaml marker beside it), and its
+# BASENAME to name the single-instance PID file (cortex-${slug}.pid) — which is
+# why every stack's pointer MUST be per-stack-named, never a uniform
+# cortex.yaml (the PID-collision landmine, migration 0003).
+pointer: true   # cosmetic marker only — the loader never reads this value
+`;
+}
+
+function personaStub(agentId: string, displayName: string, stackId: string): string {
+  return `# ${displayName}
+
+You are **${displayName}** (\`${agentId}\`), the assistant on the \`${stackId}\` cortex stack.
+
+<!-- Generated by \`cortex stack create\` (#808) — a minimal persona stub. -->
+
+## Role
+
+Collaborate with the principal in this stack's Discord guild. Answer questions,
+run tasks, and surface results. You answer the principal and no one else (the
+principal-only policy in \`stacks/${stackId.split("/")[1] ?? agentId}.yaml\`).
+
+## Repo scope
+
+<!-- Append your allowed repo slugs here so you know them without being told,
+     e.g. "You work in the \`cortex\` repo (the-metafactory/cortex)." -->
+
+## Style
+
+Be concise, accurate, and verify before claiming. Read before you describe code.
+`;
+}

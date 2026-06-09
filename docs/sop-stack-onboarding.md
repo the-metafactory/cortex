@@ -5,7 +5,7 @@
 **Audience:** a **principal** standing up a NEW cortex **stack** bound to a Discord guild — on its own **hard-isolated local bus** (the `halden` / `community` pattern), optionally **federated** onto a network afterward (Part 2).
 **Authoritative detail:** [`CONTEXT.md`](../CONTEXT.md) §Principals/stacks/networks · [`sop-stack-identity.md`](./sop-stack-identity.md) (the signing key) · [`sop-network-join.md`](./sop-network-join.md) (federation, Part 2) · [`sop-discord-channel-routing.md`](./sop-discord-channel-routing.md).
 
-> **What this is.** Standing up a Discord-facing stack used to be an undocumented manual recipe (identity → isolated bus → cortex config + Discord binding → plist → load). This SOP captures it so the next one is a checklist — and flags the steps that are candidates for a future one-command `cortex stack add`.
+> **What this is.** Standing up a Discord-facing stack used to be an undocumented manual recipe (identity → isolated bus → cortex config + Discord binding → plist → load). This SOP captures it so the next one is a checklist. The config-write half (Step 3) is now automated by **`cortex stack create`** (#808) — Part 1 leads with it; the manual recipe remains as the fallback + the explanation of what each generated file is.
 
 ---
 
@@ -33,6 +33,38 @@ A **stack** is one cortex deployment under a **principal** — its own signing i
 ---
 
 ## Part 1 — Stand up the local stack
+
+### The fast path — `cortex stack create` (#808)
+
+Most of Part 1 is now one command. `cortex stack create <slug>` scaffolds the
+whole config-split skeleton **born aligned** (dir basename == slug == `stack.id`
+trailing segment, so the slug↔`stack.id` drift [ADR-0004](./adr/0004-stack-slug-authority.md)
+catches can never form) and **unique within the principal** (it refuses a dir
+collision or a duplicate `stack.id`):
+
+```bash
+# Dry-run first (DEFAULT — prints the file set, touches nothing):
+cortex stack create <slug> --principal <principal>
+
+# Write it:
+cortex stack create <slug> --principal <principal> --apply
+```
+
+It writes `system/system.yaml`, `surfaces/surfaces.yaml`, `stacks/<slug>.yaml`,
+the `<slug>.yaml` pointer, and a `personas/<agent>.md` stub — filling your real
+slug / principal / agent and keeping `<REPLACE_ME>` only for true secrets
+(Discord token/guild/channels + the post-first-boot `nkey_pub`). It sets
+`stack.nkey_seed_path` to the conventional `~/.config/nats/cortex-<slug>.nk` and
+does **not** generate the seed — `arc upgrade Cortex` auto-provisions it on first
+install (Step 1 below).
+
+After it writes, the remaining work is: pick a free bus port (Step 2), fill the
+`<REPLACE_ME>` secrets in `stacks/<slug>.yaml` + `surfaces/surfaces.yaml`
+(Steps 2–3), write the plist (Step 4), and verify (Step 5). When the stack
+should join a network afterward, continue to **Part 2** (`cortex network join`).
+
+The remaining Steps 0–5 below are the **manual recipe** — read them to
+understand each generated file, or to stand a stack up without the command.
 
 ### Step 0 — Choose a semantic slug
 

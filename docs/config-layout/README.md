@@ -6,6 +6,33 @@ configure a cortex stack. The single-file `cortex.yaml` (repo root
 `cortex.yaml.example`) is a **legacy / transitional fallback** — it still loads,
 but new installs should land here.
 
+## Even easier: `cortex stack create <slug>`
+
+This whole copy → fill → align dance is what `cortex stack create` automates
+(#808). It scaffolds this exact skeleton **born aligned** — the dir basename,
+the slug, and `stack.id`'s trailing segment are all the same, so the
+slug↔`stack.id` drift the install-time `warn_stack_identity_drift` detector
+catches ([ADR-0004](../adr/0004-stack-slug-authority.md)) can never form — and
+**unique within the principal** (it refuses a dir collision or a duplicate
+`stack.id`):
+
+```bash
+# Dry-run first (DEFAULT — prints the file set it would write, touches nothing):
+cortex stack create research --principal andreas
+
+# Write it for real:
+cortex stack create research --principal andreas --apply
+
+# Then provision the signing seed → point your daemon → (optionally) federate:
+arc upgrade Cortex                                              # auto-provisions ~/.config/nats/cortex-research.nk
+cortex start --config ~/.config/cortex/research/research.yaml
+cortex network join <network>                                  # federate (optional)
+```
+
+It fills in your real `slug` / `principal` / `agent`, keeping `<REPLACE_ME>`
+only for true secrets (Discord token/guild/channels + the post-first-boot
+`nkey_pub`). The manual copy steps below remain the fallback.
+
 ## Quick start (copy → fill → point)
 
 ```bash
