@@ -74,6 +74,8 @@ export async function makeSignedRegistration(
     pubkeyOverride?: string;
     /** Sign with a DIFFERENT key than `pKey` — forged-signature tests (C-787). */
     signWith?: PrincipalKey;
+    /** #825 — optimistic-concurrency CAS token signed into the claim. */
+    expectedUpdatedAt?: string;
   } = {},
 ): Promise<{ claim: RegistrationClaim; signature: string }> {
   const claim: RegistrationClaim = {
@@ -81,6 +83,7 @@ export async function makeSignedRegistration(
     principal_pubkey: opts.pubkeyOverride ?? pKey.publicKeyB64,
     stacks: opts.stacks ?? [],
     capabilities: opts.capabilities ?? [],
+    ...(opts.expectedUpdatedAt !== undefined && { expected_updated_at: opts.expectedUpdatedAt }),
     issued_at: opts.issuedAt ?? new Date().toISOString(),
     nonce: opts.nonce ?? randomNonce(),
   };

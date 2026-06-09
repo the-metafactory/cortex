@@ -85,6 +85,50 @@ describe("POST /principals/:id/register — happy path", () => {
   });
 });
 
+describe("POST /principals/:id/register — optimistic concurrency (#825)", () => {
+  // End-to-end through the SIGNED wire path: the CAS token rides inside the
+  // signed claim, so this also pins that adding `expected_updated_at` doesn't
+  // break signature verification (the validator must preserve it).
+  test("stale expected_updated_at → 409 stale_record with the live current_updated_at", async () => {
+    const v1 = await makeSignedRegistration("andreas", pKey, {
+      stacks: [{ stack_id: "andreas/laptop" }],
+    });
+    const r1 = await post("/principals/andreas/register", v1);
+    expect(r1.status).toBe(201);
+    const live = ((await r1.json()) as SignedAssertion<PrincipalRecord>).payload.updated_at;
+
+    // A second host whose read-merge was based on a now-stale version.
+    const stale = await makeSignedRegistration("andreas", pKey, {
+      stacks: [{ stack_id: "andreas/laptop" }, { stack_id: "andreas/desktop" }],
+      expectedUpdatedAt: "2000-01-01T00:00:00.000Z",
+    });
+    const r2 = await post("/principals/andreas/register", stale);
+    expect(r2.status).toBe(409);
+    const body = (await r2.json()) as { error: string; current_updated_at: string };
+    expect(body.error).toBe("stale_record");
+    expect(body.current_updated_at).toBe(live);
+
+    // The winner's record is intact — the stale write did NOT clobber it.
+    const got = (await (await get("/principals/andreas")).json()) as SignedAssertion<PrincipalRecord>;
+    expect(got.payload.stacks).toHaveLength(1); // desktop was rejected, not added
+  });
+
+  test("matching expected_updated_at → write lands (201)", async () => {
+    const v1 = await makeSignedRegistration("andreas", pKey, {
+      stacks: [{ stack_id: "andreas/laptop" }],
+    });
+    const live = ((await (await post("/principals/andreas/register", v1)).json()) as SignedAssertion<PrincipalRecord>).payload.updated_at;
+
+    const v2 = await makeSignedRegistration("andreas", pKey, {
+      stacks: [{ stack_id: "andreas/laptop" }, { stack_id: "andreas/desktop" }],
+      expectedUpdatedAt: live,
+    });
+    const r2 = await post("/principals/andreas/register", v2);
+    expect(r2.status).toBe(201);
+    expect(((await r2.json()) as SignedAssertion<PrincipalRecord>).payload.stacks).toHaveLength(2);
+  });
+});
+
 describe("POST /principals/:id/register — validation failures", () => {
   test("rejects invalid principal_id in path", async () => {
     const body = await makeSignedRegistration("andreas", pKey);

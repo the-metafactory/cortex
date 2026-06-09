@@ -366,8 +366,9 @@ export class D1RegistryStore implements RegistryStore {
     // mutated the row since this caller's verified read leaves `updated_at`
     // mismatched, the WHERE is false, the UPDATE is a no-op (changes === 0), and
     // we raise StaleRecordError so the loser re-reads + re-merges instead of
-    // silently clobbering the winner. `updated_at` is always a fresh timestamp,
-    // so a matched CAS always reports changes >= 1 (no false conflict on no-op).
+    // silently clobbering the winner. No false-conflict risk: SQLite counts the
+    // conflict-target match, not a value delta, so a matched CAS reports
+    // changes === 1 even for a byte-identical update (verified vs sqlite3 3.41).
     const sql = expectedUpdatedAt === undefined
       ? `INSERT INTO principals (principal_id, principal_pubkey, stacks, capabilities, updated_at)
          VALUES (?, ?, ?, ?, ?)
@@ -393,7 +394,9 @@ export class D1RegistryStore implements RegistryStore {
 
     if (expectedUpdatedAt !== undefined && (res.meta?.changes ?? 0) === 0) {
       // CAS failed: a row existed whose updated_at != expected (a fresh INSERT
-      // would have reported changes === 1). Surface the current row for the 409.
+      // would have reported changes === 1). Re-read the current row for the 409
+      // body — best-effort + non-atomic (a third writer could change it again),
+      // so `current_updated_at` is advisory, not an authoritative retry token.
       const current = await this.getPrincipal(principalId);
       throw new StaleRecordError(current);
     }
