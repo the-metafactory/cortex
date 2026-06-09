@@ -809,7 +809,20 @@ describe("#762 registerStack announces capabilities into the network", () => {
   ): Promise<void> {
     const real = globalThis.fetch;
     const capture: { last?: CapturedClaim } = {};
-    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const method =
+        url instanceof Request ? url.method : (init?.method ?? "GET");
+      // C-820 — registerStack now does a GET merge-read (union the announce into
+      // the principal's existing caps) BEFORE the POST. These tests model a
+      // FIRST registration with nothing on record, so the GET returns 404
+      // (absent) → the union falls back to the announce verbatim, exactly the
+      // shape these tests assert on the captured POST.
+      if (method === "GET") {
+        return new Response(JSON.stringify({ error: "not_found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       // registerStackIdentity always sends a JSON string body — parse it.
       const body = typeof init?.body === "string" ? init.body : "";
       capture.last = JSON.parse(body) as CapturedClaim;

@@ -104,6 +104,13 @@ export interface LeaveResult {
   notJoined?: boolean;
   /** Networks still joined after leave (for plist teardown decision). */
   remaining?: string[];
+  /**
+   * C-820 — non-fatal warnings surfaced during leave. A registry
+   * deregister-from-network failure lands here (and in {@link steps}): the LOCAL
+   * teardown succeeded, but the principal's registry cap tags were not retagged,
+   * so the principal must re-run when the registry is reachable.
+   */
+  warnings?: string[];
 }
 
 export interface StatusResult {
@@ -466,6 +473,30 @@ export async function leaveNetwork(
   }
 
   const remaining = existing.filter((n) => n.id !== networkId);
+  const warnings: string[] = [];
+
+  // C-820 (leave symmetry) — BEFORE the local teardown, remove `networkId` from
+  // each capability's registry `networks[]` (set-difference) so the principal
+  // exits this ONE network's roster while staying in the others. This is the
+  // inverse of join's union: join tags caps with the network on the registry,
+  // leave un-tags them. A registry deregister FAILURE is NON-FATAL — the local
+  // teardown still proceeds (the principal's bus must come down regardless), and
+  // the failure is surfaced as a warning so it can be re-run when the registry
+  // is reachable. The leave still reports `ok` because the local effect (the
+  // one that keeps nats-server / cortex from talking to the left network)
+  // succeeded. A `not-wired` registry port (no registryUrl on leave) skips this.
+  const dereg = await ports.registry.deregisterFromNetwork(networkId);
+  if (dereg.ok) {
+    steps.push(`deregistered capabilities from network "${networkId}" roster (${dereg.note})`);
+  } else {
+    const warn =
+      `registry deregister-from-network for "${networkId}" failed (${dereg.reason}) — ` +
+      `the LOCAL leave completed, but the principal's capability tags were not retagged; ` +
+      `re-run \`cortex network leave ${networkId}\` when the registry is reachable to exit the roster.`;
+    warnings.push(warn);
+    steps.push(`WARN: ${warn}`);
+  }
+
   // The config rewrite, leaf-include delete, and plist edit hit the live
   // filesystem in `--apply`. As in join, a write failure must surface as a
   // `{ ok: false }` per contract, not an uncaught throw — and the step log
@@ -506,6 +537,7 @@ export async function leaveNetwork(
       steps,
       reason: `teardown write failed: ${err instanceof Error ? err.message : String(err)}`,
       remaining: remaining.map((n) => n.id),
+      ...(warnings.length > 0 && { warnings }),
     };
   }
 
@@ -516,11 +548,17 @@ export async function leaveNetwork(
       steps,
       reason: `config reverted but daemon restart failed: ${restart.reason}`,
       remaining: remaining.map((n) => n.id),
+      ...(warnings.length > 0 && { warnings }),
     };
   }
   steps.push("restarted stack daemon");
 
-  return { ok: true, steps, remaining: remaining.map((n) => n.id) };
+  return {
+    ok: true,
+    steps,
+    remaining: remaining.map((n) => n.id),
+    ...(warnings.length > 0 && { warnings }),
+  };
 }
 
 // =============================================================================

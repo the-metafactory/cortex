@@ -32,6 +32,7 @@ import {
   buildRegistrationClaim,
   fetchExistingStacks,
   resolveMergedCapabilities,
+  resolveCapabilitiesAfterLeave,
   fingerprintOf,
 } from "../stack-provisioning";
 import { nkeyToBase64Pubkey } from "../verify-signed-by-chain";
@@ -556,7 +557,7 @@ describe("C-819 — resolveMergedCapabilities preserves caps across re-register"
       registryUrl: "http://registry.test",
       registryPubkey,
       announce: [], // provision-stack register announces no caps
-      isAddStack: true,
+      mergeExisting: true,
       fetchImpl: registryFetch(env),
     });
     expect(caps.ok).toBe(true);
@@ -631,7 +632,7 @@ describe("C-819 — resolveMergedCapabilities preserves caps across re-register"
         { id: "tasks.review", description: "new desc", networks: ["net-c"] },
         { id: "tasks.fresh", networks: ["net-d"] },
       ],
-      isAddStack: true,
+      mergeExisting: true,
       fetchImpl: registryFetch(env),
     });
     expect(caps.ok).toBe(true);
@@ -647,7 +648,7 @@ describe("C-819 — resolveMergedCapabilities preserves caps across re-register"
     expect(byId.get("tasks.fresh")?.networks).toEqual(["net-d"]);
   });
 
-  test("first register (isAddStack=false) — announce passes through unchanged, no fetch", async () => {
+  test("first register (mergeExisting=false) — announce passes through unchanged, no fetch", async () => {
     // On a first register there is nothing on record to preserve; the merge is
     // a pure pass-through and never touches the registry (a failing fetch would
     // throw if it did).
@@ -658,7 +659,7 @@ describe("C-819 — resolveMergedCapabilities preserves caps across re-register"
       registryUrl: "http://registry.test",
       registryPubkey: "unused",
       announce: [{ id: "tasks.x", networks: ["net-z"] }],
-      isAddStack: false,
+      mergeExisting: false,
       fetchImpl: failingFetch,
     });
     expect(caps.ok).toBe(true);
@@ -674,12 +675,232 @@ describe("C-819 — resolveMergedCapabilities preserves caps across re-register"
       registryUrl: "http://registry.test",
       registryPubkey: "anything",
       announce: [],
-      isAddStack: true,
+      mergeExisting: true,
       fetchImpl: failingFetch,
     });
     expect(caps.ok).toBe(false);
     if (!caps.ok) {
       expect(caps.reason).toMatch(/connection refused|without dropping/i);
     }
+  });
+});
+
+describe("C-820 — capability networks[] union on join + set-difference on leave", () => {
+  let registryPubkey = "";
+  async function configuredEnv(): Promise<Env> {
+    resetStores();
+    const reg = await makeRegistryKey();
+    registryPubkey = reg.publicKey;
+    return {
+      REGISTRY_SIGNING_KEY: reg.signingKey,
+      REGISTRY_PUBLIC_KEY: reg.publicKey,
+      ENVIRONMENT: "test",
+    };
+  }
+
+  /** A fetch impl routed at the in-memory registry app for `env`. */
+  function registryFetch(env: Env): typeof globalThis.fetch {
+    return ((input: Request | string | URL, init?: RequestInit) => {
+      const req = input instanceof Request ? input : new Request(input, init);
+      return registryApp.fetch(req, env);
+    }) as typeof globalThis.fetch;
+  }
+
+  /**
+   * Register `jc` with a single capability `chat` already tagged into the
+   * `metafactory` network (the FIRST join's effect) — so the merge/leave helpers
+   * have a verified prior-network state to read.
+   */
+  async function seedJcInMetafactory(env: Env): Promise<{ root: ReturnType<typeof generateStackIdentity> }> {
+    const root = generateStackIdentity({ seedPath: join(freshDir(), "jc.nk") });
+    const body = await buildRegistrationClaim({
+      principalId: "jc",
+      material: root,
+      stacks: [{ stack_id: "jc/clawbox" }],
+      capabilities: [{ id: "chat.message", networks: ["metafactory"] }],
+    });
+    await registryApp.fetch(
+      new Request("http://registry.test/principals/jc/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      env,
+    );
+    return { root };
+  }
+
+  test("JOIN UNION — a second-network announce ADDS to networks[] (metafactory ∪ community), no clobber, no dup", async () => {
+    const env = await configuredEnv();
+    await seedJcInMetafactory(env);
+
+    // The community join announces the SAME cap `chat` tagged community.
+    const res = await resolveMergedCapabilities({
+      principalId: "jc",
+      registryUrl: "http://registry.test",
+      registryPubkey,
+      announce: [{ id: "chat.message", networks: ["community"] }],
+      mergeExisting: true,
+      fetchImpl: registryFetch(env),
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const chat = res.capabilities.find((c) => c.id === "chat.message");
+    expect(chat).toBeDefined();
+    // BOTH networks present — the prior metafactory tag survived the community join.
+    expect(new Set(chat!.networks)).toEqual(new Set(["metafactory", "community"]));
+    // No duplicate network ids.
+    expect(chat!.networks).toHaveLength(2);
+  });
+
+  test("JOIN UNION — re-announcing the SAME network is idempotent (no duplicate id)", async () => {
+    const env = await configuredEnv();
+    await seedJcInMetafactory(env);
+
+    const res = await resolveMergedCapabilities({
+      principalId: "jc",
+      registryUrl: "http://registry.test",
+      registryPubkey,
+      announce: [{ id: "chat.message", networks: ["metafactory"] }],
+      mergeExisting: true,
+      fetchImpl: registryFetch(env),
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const chat = res.capabilities.find((c) => c.id === "chat.message");
+    expect(chat!.networks).toEqual(["metafactory"]);
+  });
+
+  test("JOIN UNION — mergeExisting:false uses the announce verbatim (first-register, nothing on record)", async () => {
+    const res = await resolveMergedCapabilities({
+      principalId: "jc",
+      registryUrl: "http://registry.test",
+      registryPubkey,
+      announce: [{ id: "chat.message", networks: ["community"] }],
+      mergeExisting: false,
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.capabilities).toEqual([{ id: "chat.message", networks: ["community"] }]);
+  });
+
+  test("JOIN UNION — absent principal (404) falls back to the announce (clean first registration)", async () => {
+    const env = await configuredEnv();
+    // nobody registered → 404 → absent → announce verbatim.
+    const res = await resolveMergedCapabilities({
+      principalId: "nobody",
+      registryUrl: "http://registry.test",
+      registryPubkey,
+      announce: [{ id: "chat.message", networks: ["metafactory"] }],
+      mergeExisting: true,
+      fetchImpl: registryFetch(env),
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.capabilities).toEqual([{ id: "chat.message", networks: ["metafactory"] }]);
+  });
+
+  test("JOIN UNION SECURITY — an unverifiable read ABORTS (never clobbers off a partial read)", async () => {
+    const failingFetch = (() =>
+      Promise.reject(new Error("connection refused"))) as unknown as typeof globalThis.fetch;
+    const res = await resolveMergedCapabilities({
+      principalId: "jc",
+      registryUrl: "http://registry.test",
+      registryPubkey: "anything",
+      announce: [{ id: "chat.message", networks: ["community"] }],
+      mergeExisting: true,
+      fetchImpl: failingFetch,
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.reason).toMatch(/connection refused/);
+  });
+
+  test("LEAVE SET-DIFF — leaving community removes ONLY community, metafactory survives", async () => {
+    const env = await configuredEnv();
+    // Seed jc with `chat` tagged into BOTH networks (the post-union state).
+    const root = generateStackIdentity({ seedPath: join(freshDir(), "jc.nk") });
+    const body = await buildRegistrationClaim({
+      principalId: "jc",
+      material: root,
+      stacks: [{ stack_id: "jc/clawbox" }],
+      capabilities: [{ id: "chat.message", networks: ["metafactory", "community"] }],
+    });
+    await registryApp.fetch(
+      new Request("http://registry.test/principals/jc/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      env,
+    );
+
+    const res = await resolveCapabilitiesAfterLeave({
+      principalId: "jc",
+      registryUrl: "http://registry.test",
+      registryPubkey,
+      networkId: "community",
+      fetchImpl: registryFetch(env),
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok || !res.present) {
+      throw new Error("expected present capability set");
+    }
+    const chat = res.capabilities.find((c) => c.id === "chat.message");
+    expect(chat).toBeDefined();
+    // Only community removed; metafactory remains.
+    expect(chat!.networks).toEqual(["metafactory"]);
+  });
+
+  test("LEAVE SET-DIFF — leaving the LAST network drops the now-empty networks[] key (cap kept)", async () => {
+    const env = await configuredEnv();
+    await seedJcInMetafactory(env); // chat tagged metafactory only.
+
+    const res = await resolveCapabilitiesAfterLeave({
+      principalId: "jc",
+      registryUrl: "http://registry.test",
+      registryPubkey,
+      networkId: "metafactory",
+      fetchImpl: registryFetch(env),
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok || !res.present) {
+      throw new Error("expected present capability set");
+    }
+    const chat = res.capabilities.find((c) => c.id === "chat.message");
+    // The capability is KEPT (still announced on the public index), but its
+    // networks[] is gone (no roster membership) — the convention: drop the key.
+    expect(chat).toBeDefined();
+    expect(chat!.networks).toBeUndefined();
+  });
+
+  test("LEAVE SET-DIFF — absent principal is a clean no-op (present:false)", async () => {
+    const env = await configuredEnv();
+    const res = await resolveCapabilitiesAfterLeave({
+      principalId: "nobody",
+      registryUrl: "http://registry.test",
+      registryPubkey,
+      networkId: "community",
+      fetchImpl: registryFetch(env),
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.present).toBe(false);
+  });
+
+  test("LEAVE SET-DIFF SECURITY — an unverifiable read ABORTS (never re-attests off a partial read)", async () => {
+    const failingFetch = (() =>
+      Promise.reject(new Error("connection refused"))) as unknown as typeof globalThis.fetch;
+    const res = await resolveCapabilitiesAfterLeave({
+      principalId: "jc",
+      registryUrl: "http://registry.test",
+      registryPubkey: "anything",
+      networkId: "community",
+      fetchImpl: failingFetch,
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.reason).toMatch(/connection refused/);
   });
 });

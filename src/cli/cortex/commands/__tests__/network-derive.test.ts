@@ -379,7 +379,33 @@ describe("deriveLeaveInputs", () => {
       natsConfigPath: "~/.config/nats/local.conf",
       plistPath: "~/Library/LaunchAgents/nats.plist",
       platform: "darwin",
+      // C-820 — leave now ALSO resolves the registry coordinates + seed so it can
+      // retag the principal's capabilities (the inverse of join's union).
+      registryUrl: "https://registry.meta-factory.ai",
+      registryPubkey: "A".repeat(43) + "=",
+      seedPath: "~/.config/nats/cortex.nk",
     });
+  });
+
+  test("C-820 — registry/seed are OPTIONAL: leave still derives when they're absent", () => {
+    // A config with NO registry block + NO seed: leave's PRIMARY effect (local
+    // teardown) must still derive; the registry retag is simply skipped later.
+    const noRegistry = loaded({
+      principal: { id: "jc" },
+      stack: {
+        id: "jc/clawbox",
+        nats_infra: {
+          config_path: "~/.config/nats/local.conf",
+          plist_path: "~/Library/LaunchAgents/nats.plist",
+        },
+      },
+      policy: { principals: [], roles: [], federated: { networks: [] } },
+    });
+    const res = deriveLeaveInputs({}, "/cfg", reader(noRegistry), "darwin");
+    expect(res.ok).toBe(true);
+    expect(res.inputs?.registryUrl).toBeUndefined();
+    expect(res.inputs?.seedPath).toBeUndefined();
+    expect(res.inputs?.principal).toBe("jc");
   });
 
   test("flag overrides win", () => {

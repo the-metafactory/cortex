@@ -95,6 +95,18 @@ export interface DerivedLeaveInputs {
   unitPath?: string;
   /** #763 — the resolved platform. */
   platform: ServicePlatform;
+  /**
+   * C-820 — registry coordinates for the leave-side cap retag (the inverse of
+   * join's union). All OPTIONAL: leave's PRIMARY effect is the LOCAL teardown,
+   * which must succeed even when the registry can't be resolved (offline / no
+   * registry configured). When all three resolve, `leave` also retags the
+   * principal's registry capabilities to drop this network; when any is missing,
+   * the registry deregister is skipped (the local leave still completes, with a
+   * warning) rather than failing the whole command.
+   */
+  registryUrl?: string;
+  registryPubkey?: string;
+  seedPath?: string;
 }
 
 /** Flag overrides — any field present on the CLI wins over config/convention. */
@@ -383,7 +395,17 @@ export function deriveJoinInputs(
  * include + plist). Same override-then-config-then-convention precedence.
  */
 export function deriveLeaveInputs(
-  overrides: Pick<JoinOverrides, "principal" | "stack" | "natsConfigPath" | "plistPath" | "unitPath">,
+  overrides: Pick<
+    JoinOverrides,
+    | "principal"
+    | "stack"
+    | "natsConfigPath"
+    | "plistPath"
+    | "unitPath"
+    | "registryUrl"
+    | "registryPubkey"
+    | "seedPath"
+  >,
   configPath: string,
   load: ConfigReader,
   platform: ServicePlatform = defaultPlatform(),
@@ -415,6 +437,15 @@ export function deriveLeaveInputs(
   );
   if (!descriptor.ok) return fail(descriptor.reason);
 
+  // C-820 — registry coordinates for the leave-side cap retag, resolved the
+  // SAME way join does (flag wins, else policy.federated.registry / stack seed).
+  // All OPTIONAL: an unresolved registry/seed does NOT fail leave — the local
+  // teardown still runs and the registry retag is skipped with a warning.
+  const registry = cfg.policy?.federated?.registry;
+  const registryUrl = overrides.registryUrl ?? registry?.url;
+  const registryPubkey = overrides.registryPubkey ?? registry?.pubkey;
+  const seedPath = overrides.seedPath ?? cfg.stack?.nkey_seed_path;
+
   return {
     ok: true,
     inputs: {
@@ -424,6 +455,9 @@ export function deriveLeaveInputs(
       ...(descriptor.plistPath !== undefined && { plistPath: descriptor.plistPath }),
       ...(descriptor.unitPath !== undefined && { unitPath: descriptor.unitPath }),
       platform: descriptor.platform,
+      ...(registryUrl !== undefined && registryUrl !== "" && { registryUrl }),
+      ...(registryPubkey !== undefined && registryPubkey !== "" && { registryPubkey }),
+      ...(seedPath !== undefined && seedPath !== "" && { seedPath }),
     },
   };
 }

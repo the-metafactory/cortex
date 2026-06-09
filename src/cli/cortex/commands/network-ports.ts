@@ -106,6 +106,18 @@ export interface NetworkRegistryPort {
   loadCached(
     networkId: string,
   ): { descriptor: NetworkDescriptor; roster: NetworkRosterResult } | undefined;
+  /**
+   * C-820 (leave symmetry) — remove `networkId` from each of the principal's
+   * registered capabilities' `networks[]` (set-difference) and re-attest the
+   * reduced set, so `leave` exits this ONE network's roster while leaving the
+   * principal's OTHER network memberships intact (the inverse of `registerStack`'s
+   * union). A registry CONTROL-PLANE POST, never a `federated.*` wire envelope.
+   * Returns a log-safe note on success, or an error reason. A `note` may also
+   * report a clean no-op (no principal record / nothing to retag).
+   */
+  deregisterFromNetwork(
+    networkId: string,
+  ): Promise<{ ok: true; note: string } | { ok: false; reason: string }>;
 }
 
 /** Inputs to the leaf-include render — the trust boundary in one place. */

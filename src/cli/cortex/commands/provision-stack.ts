@@ -392,16 +392,20 @@ async function doRegister(
   // `cortex network join` is for), so its `announce` is empty: on the add-stack
   // path the fetch+verify+union therefore PRESERVES the principal's existing
   // caps unchanged (empty ∪ existing = existing), and on a first register there
-  // is nothing on record to preserve. Same `isAddStack`/`registryPubkey` gating
-  // as the stacks merge keeps the two consistent (and shares the C-791
-  // fail-closed verified read). A register that genuinely intends to SHRINK
-  // caps is out of scope for this command — it never announces caps at all.
+  // is nothing on record to preserve. `mergeExisting: isAddStack` keeps this
+  // consistent with the stacks merge (and shares the C-791 fail-closed verified
+  // read): merge only when adding to an already-registered principal (C-820
+  // renamed the field from `isAddStack`; here the merge IS gated on add-stack —
+  // provision-stack only preserves caps, it never re-announces network tags, so
+  // unlike the federated join it has no reason to fetch+merge on a first
+  // register). A register that genuinely intends to SHRINK caps is out of scope
+  // for this command — it never announces caps at all.
   const capsRes = await resolveMergedCapabilities({
     principalId,
     registryUrl,
     ...(registryPubkey !== undefined && { registryPubkey }),
     announce: [],
-    isAddStack,
+    mergeExisting: isAddStack,
   });
   if (!capsRes.ok) return { ok: false, reason: capsRes.reason };
 

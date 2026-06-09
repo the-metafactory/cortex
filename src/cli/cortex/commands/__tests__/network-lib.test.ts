@@ -115,12 +115,16 @@ interface Recorder {
   bindChecks: string[];
   /** #799 — bind-mode resolutions: the (account, hasCreds) pairs queried. */
   bindModeChecks: { account: string | undefined; hasCreds: boolean }[];
+  /** C-820 — network ids the leave path asked the registry to deregister from. */
+  deregistered: string[];
 }
 
 function makeFakes(opts: {
   fetch?: NetworkFetchResult<{ descriptor: NetworkDescriptor; roster: NetworkRosterResult }>;
   cached?: { descriptor: NetworkDescriptor; roster: NetworkRosterResult };
   registerOk?: boolean;
+  /** C-820 — outcome of the leave-side registry deregister (default: ok). */
+  deregisterOk?: boolean;
   restartOk?: boolean;
   /** #757 — make the nats-server restart fail (default: ok). */
   natsRestartOk?: boolean;
@@ -153,6 +157,7 @@ function makeFakes(opts: {
     warnings: [],
     bindChecks: [],
     bindModeChecks: [],
+    deregistered: [],
   };
   const storeRef = { networks: opts.initialNetworks ?? [] };
   const leafFilesPresent = new Set<string>(
@@ -176,6 +181,12 @@ function makeFakes(opts: {
     },
     loadCached(_id) {
       return opts.cached;
+    },
+    async deregisterFromNetwork(networkId) {
+      rec.deregistered.push(networkId);
+      return opts.deregisterOk === false
+        ? { ok: false, reason: "registry unreachable for retag" }
+        : { ok: true, note: "retagged" };
     },
   };
 
@@ -862,6 +873,44 @@ describe("leave", () => {
     expect(rec.removes.length).toBe(0);
     expect(rec.restarts).toBe(0);
     expect(storeRef.networks.length).toBe(0);
+    // C-820 — a no-op leave never touches the registry.
+    expect(rec.deregistered.length).toBe(0);
+  });
+
+  test("C-820 — leave deregisters the network from the registry cap roster (symmetry with join's union)", async () => {
+    const { ports, rec, storeRef } = makeFakes({
+      initialNetworks: [joinedNetwork("metafactory"), joinedNetwork("community")],
+    });
+    const res = await leaveNetwork("community", ports);
+
+    expect(res.ok).toBe(true);
+    // Local teardown still happened.
+    expect(storeRef.networks.map((n) => n.id)).toEqual(["metafactory"]);
+    // The registry was asked to deregister EXACTLY the left network.
+    expect(rec.deregistered).toEqual(["community"]);
+    // The step log records the deregister.
+    expect(
+      res.steps.some((s) => s.includes("deregistered capabilities") && s.includes("community")),
+    ).toBe(true);
+    // No warning on the happy path.
+    expect(res.warnings ?? []).toHaveLength(0);
+  });
+
+  test("C-820 — a registry deregister FAILURE is non-fatal: local leave still ok, surfaced as a warning", async () => {
+    const { ports, rec, storeRef } = makeFakes({
+      initialNetworks: [joinedNetwork("community")],
+      deregisterOk: false,
+    });
+    const res = await leaveNetwork("community", ports);
+
+    // The LOCAL leave succeeded despite the registry retag failing.
+    expect(res.ok).toBe(true);
+    expect(storeRef.networks.length).toBe(0);
+    expect(rec.removes).toEqual(["community"]);
+    expect(rec.restarts).toBe(1);
+    // The failure is surfaced as a warning (re-runnable), not a hard failure.
+    expect(rec.deregistered).toEqual(["community"]);
+    expect((res.warnings ?? []).some((w) => w.includes("deregister-from-network") && w.includes("community"))).toBe(true);
   });
 });
 

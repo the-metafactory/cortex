@@ -890,11 +890,19 @@ export interface ResolveMergedCapabilitiesOptions {
    */
   readonly announce: ClaimCapability[];
   /**
-   * `true` when the principal already exists (add-stack / re-announce). Triggers
-   * the fetch+merge so the full-overwrite route preserves prior-network caps.
-   * `false` for a first registration (nothing on record to preserve).
+   * C-820 — `true` when the merge must read the principal's CURRENT registered
+   * capability set and union the announce into it (preserving prior-network
+   * `networks[]` tags). The federated `cortex network join` register step passes
+   * `true` UNCONDITIONALLY — NOT gated on `--principal-seed`/add-stack — because
+   * a plain re-join into a SECOND network (no root seed) must STILL union, or the
+   * full-overwrite register clobbers the first network's tag and evicts the
+   * principal from its roster (the #820 footgun: re-joining `metafactory` then
+   * `community` left caps `community`-only). The `absent` (404) branch handles a
+   * genuine first registration cleanly — there is nothing on record to preserve,
+   * so the announce is used verbatim. `false` skips the read entirely (a first
+   * register that KNOWS it carries the complete intended set).
    */
-  readonly isAddStack: boolean;
+  readonly mergeExisting: boolean;
   /** Injected fetch (tests). Defaults to global fetch. @internal */
   readonly fetchImpl?: typeof globalThis.fetch;
 }
@@ -918,14 +926,16 @@ function unionNetworks(a: string[] | undefined, b: string[] | undefined): string
  * silently evict meta-factory from the metafactory network roster (roster
  * membership is implicit via `capability.networks[]`).
  *
- * First registration (`isAddStack === false`): just the announce — nothing on
- * record to preserve.
+ * No-merge (`mergeExisting === false`): just the announce — the caller knows it
+ * carries the complete intended set, nothing on record to preserve.
  *
- * Add-stack/re-announce (`isAddStack === true`): FETCH the (verified) existing
- * capability set and union the announce in: an existing capability id keeps its
- * description and gains any new `networks[]` (so a cap already announced into
- * `metafactory` ALSO gains `community-net` if re-announced there); a new id is
- * appended. The principal's prior-network roster membership therefore survives.
+ * Merge (`mergeExisting === true`): FETCH the (verified) existing capability set
+ * and union the announce in: an existing capability id keeps its description and
+ * gains any new `networks[]` (so a cap already announced into `metafactory` ALSO
+ * gains `community` if re-announced there — C-820); a new id is appended. The
+ * principal's prior-network roster membership therefore survives. The federated
+ * join sets this UNCONDITIONALLY (not only on `--principal-seed`/add-stack), so
+ * a plain second-network re-join unions rather than clobbers (#820).
  *
  * Failure handling mirrors {@link resolveMergedStacks}: `absent` → just the
  * announce (no record yet); `error` (unreachable / UNVERIFIED read) → ABORT
@@ -934,7 +944,7 @@ function unionNetworks(a: string[] | undefined, b: string[] | undefined): string
 export async function resolveMergedCapabilities(
   opts: ResolveMergedCapabilitiesOptions,
 ): Promise<{ ok: true; capabilities: ClaimCapability[] } | { ok: false; reason: string }> {
-  if (!opts.isAddStack) {
+  if (!opts.mergeExisting) {
     return { ok: true, capabilities: opts.announce };
   }
 
@@ -982,6 +992,91 @@ export async function resolveMergedCapabilities(
     }
   }
   return { ok: true, capabilities: merged };
+}
+
+export interface ResolveCapabilitiesAfterLeaveOptions {
+  /** The principal whose capabilities are being re-tagged on leave. */
+  readonly principalId: string;
+  /** Registry base URL (for the existing-capabilities fetch). */
+  readonly registryUrl: string;
+  /** C-791 (security) — pinned registry pubkey; the read is verified or fails closed. */
+  readonly registryPubkey?: string;
+  /** The network id being left — removed from each capability's `networks[]`. */
+  readonly networkId: string;
+  /** Injected fetch (tests). Defaults to global fetch. @internal */
+  readonly fetchImpl?: typeof globalThis.fetch;
+}
+
+/**
+ * C-820 (leave symmetry) — compute the principal's capability set AFTER leaving
+ * `networkId`: the exact inverse of {@link resolveMergedCapabilities}'s union.
+ *
+ * FETCH the (verified) existing capability set and SET-DIFFERENCE `networkId`
+ * out of each capability's `networks[]`, leaving the OTHER network tags intact
+ * (so `leave community` removes only `community`, `metafactory` survives — the
+ * #820 acceptance criterion). A capability that ends with an EMPTY `networks[]`
+ * keeps its membership dropped only for THIS network: the convention is to drop
+ * the now-empty `networks` key (omitting it, matching how the merge omits an
+ * absent tag) rather than wiping the capability itself — the cap stays announced
+ * on the principal's public index, just no longer rostered in any network.
+ *
+ * The result is the COMPLETE intended capability set, ready to re-attest through
+ * the full-overwrite register route (so this composes with #819's registry
+ * merge-preserve: we carry the whole set, never relying on overwrite-vs-merge).
+ *
+ * Failure handling mirrors {@link resolveMergedCapabilities}:
+ *   - `absent` (404) → the principal has no record / no caps; nothing to retag.
+ *     Returns `{ present: false }` so the caller skips the registry re-attest.
+ *   - `error` (unreachable / UNVERIFIED read) → ABORT. We never re-attest a
+ *     capability set off an untrusted/partial read (that would risk dropping
+ *     unrelated caps — the same data-loss class C-791 guards against).
+ */
+export async function resolveCapabilitiesAfterLeave(
+  opts: ResolveCapabilitiesAfterLeaveOptions,
+): Promise<
+  | { ok: true; present: false }
+  | { ok: true; present: true; capabilities: ClaimCapability[] }
+  | { ok: false; reason: string }
+> {
+  let existing: FetchExistingStacksResult;
+  try {
+    existing = await fetchExistingStacks({
+      registryUrl: opts.registryUrl,
+      principalId: opts.principalId,
+      ...(opts.registryPubkey !== undefined && { registryPubkey: opts.registryPubkey }),
+      ...(opts.fetchImpl !== undefined && { fetchImpl: opts.fetchImpl }),
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `failed to fetch existing capabilities for leave-retag: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  if (existing.kind === "error") {
+    return {
+      ok: false,
+      reason:
+        `cannot retag capabilities on leave without risking dropping existing ones: ${existing.reason}. ` +
+        `Refusing to re-attest the capability set off a partial/unverified read.`,
+    };
+  }
+  if (existing.kind === "absent") {
+    // No record — nothing to retag. The caller skips the registry re-attest.
+    return { ok: true, present: false };
+  }
+
+  // present — drop `networkId` from each capability's `networks[]` (set-diff),
+  // omitting an emptied `networks` key entirely (the merge-side convention).
+  const retagged: ClaimCapability[] = existing.capabilities.map((c) => {
+    const kept = (c.networks ?? []).filter((n) => n !== opts.networkId);
+    return {
+      id: c.id,
+      ...(c.description !== undefined && { description: c.description }),
+      ...(kept.length > 0 && { networks: kept }),
+    };
+  });
+  return { ok: true, present: true, capabilities: retagged };
 }
 
 /**

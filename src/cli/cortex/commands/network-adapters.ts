@@ -59,6 +59,7 @@ import {
   registerStackIdentity,
   resolveMergedStacks,
   resolveMergedCapabilities,
+  resolveCapabilitiesAfterLeave,
   isStackRegistered,
   type StackIdentityMaterial,
   type ClaimCapability,
@@ -221,6 +222,18 @@ async function registerWithCapabilities(
    * the join proceeds rather than skipping (see {@link isStackRegistered}).
    */
   allowIdempotentSkip = false,
+  /**
+   * C-820 — union the announced capabilities into the principal's CURRENT
+   * registered set (preserving prior-network `networks[]` tags) instead of
+   * sending the announce verbatim. The federated `registerStack` passes `true`
+   * UNCONDITIONALLY (decoupled from `--principal-seed`/add-stack): a plain
+   * re-join into a SECOND network must still union or the full-overwrite
+   * register clobbers the first network's tag and evicts the principal from its
+   * roster (#820). The public-index announce/deregister path passes the default
+   * `false` — it intentionally REPLACES the advertised cap set (the whole point
+   * of `deregisterCapabilities` is to shrink it to empty), so it must NOT union.
+   */
+  mergeExistingCaps = false,
 ): Promise<{ ok: true; note: string } | { ok: false; reason: string }> {
   const url = cfg.registryUrl ?? "";
   const registryPubkey = cfg.registryPubkey;
@@ -278,15 +291,18 @@ async function registerWithCapabilities(
   });
   if (!stacksRes.ok) return { ok: false, reason: stacksRes.reason };
 
-  // MAJOR 2 — merge the announced capabilities into the principal's existing
-  // set so the full-overwrite register does not drop prior-network caps (which
-  // would evict those networks from the principal's roster membership).
+  // MAJOR 2 / C-820 — merge the announced capabilities into the principal's
+  // existing set so the full-overwrite register does not drop prior-network caps
+  // (which would evict those networks from the principal's roster membership).
+  // `mergeExistingCaps` is decoupled from `isAddStack`: the federated join always
+  // unions (so a plain second-network re-join accumulates rather than clobbers,
+  // #820), even without a root seed.
   const capsRes = await resolveMergedCapabilities({
     principalId: cfg.principalId,
     registryUrl: url,
     ...(registryPubkey !== undefined && { registryPubkey }),
     announce: capabilities,
-    isAddStack,
+    mergeExisting: mergeExistingCaps,
   });
   if (!capsRes.ok) return { ok: false, reason: capsRes.reason };
 
@@ -338,7 +354,11 @@ function buildRegistryPort(cfg: LivePortsConfig): NetworkRegistryPort {
       // C-791 — federated register: enable the idempotency skip (a re-run or a
       // join-after-provision-stack-register converges instead of 409-ing) and
       // honour the optional root seed (root-signed add-stack for a 2nd stack).
-      return registerWithCapabilities(cfg, announced, true);
+      // C-820 — UNION the announced caps into the principal's existing set
+      // (4th arg `true`), decoupled from the root seed: a plain re-join into a
+      // SECOND network must accumulate `networks[]` (metafactory ∪ community),
+      // not clobber the prior tag and evict the principal from that roster.
+      return registerWithCapabilities(cfg, announced, true, true);
     },
     fetchVerified(networkId) {
       // S1's fetchAndCache returns { descriptor, roster } on ok and refreshes
@@ -347,6 +367,39 @@ function buildRegistryPort(cfg: LivePortsConfig): NetworkRegistryPort {
     },
     loadCached(networkId) {
       return client.loadCached(networkId);
+    },
+    async deregisterFromNetwork(networkId) {
+      // C-820 (leave symmetry) — remove ONLY `networkId` from each capability's
+      // registry `networks[]` (set-difference), re-attesting the reduced set so
+      // the principal exits this ONE network's roster while staying in the
+      // others. A registry control-plane POST, never a `federated.*` wire
+      // envelope (the network name never goes on the bus). Never throws.
+      //
+      // SKIP cleanly (a `note`, not an error/warning) when the registry can't be
+      // signed-to: no registry URL, or no seed to sign the re-attestation. Leave
+      // is a LOCAL teardown first; a stack with no configured registry/seed just
+      // has no registry roster to exit, so this is a no-op, not a failure.
+      if (url === "" || cfg.seedPath === undefined || cfg.seedPath === "") {
+        return {
+          ok: true,
+          note: "no registry url/seed configured — skipped registry cap retag (local leave only)",
+        };
+      }
+      const retag = await resolveCapabilitiesAfterLeave({
+        principalId: cfg.principalId,
+        registryUrl: url,
+        ...(cfg.registryPubkey !== undefined && { registryPubkey: cfg.registryPubkey }),
+        networkId,
+      });
+      if (!retag.ok) return { ok: false, reason: retag.reason };
+      if (!retag.present) {
+        // No principal record / nothing to retag — a clean no-op.
+        return { ok: true, note: "no registry capability record — nothing to retag" };
+      }
+      // Re-attest the COMPLETE reduced set through the full-overwrite register
+      // route. `mergeExistingCaps:false` — we already computed the exact intended
+      // set (the union-then-subtract), so we must NOT re-union it back in.
+      return registerWithCapabilities(cfg, retag.capabilities, true, false);
     },
   };
 }

@@ -505,6 +505,10 @@ async function runLeave(
         ...readOverride(flags, "--nats-config", "natsConfigPath"),
         ...readOverride(flags, "--plist", "plistPath"),
         ...readOverride(flags, "--unit", "unitPath"),
+        // C-820 — registry coordinates for the leave-side cap retag (optional).
+        ...readOverride(flags, "--registry-url", "registryUrl"),
+        ...readOverride(flags, "--registry-pubkey", "registryPubkey"),
+        ...readOverride(flags, "--seed-path", "seedPath"),
       },
       expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH),
       load,
@@ -533,6 +537,12 @@ async function runLeave(
     platform: inputs.platform,
     // #800 — locate the daemon service for the post-leave restart.
     cortexConfigPath: cortexConfigPathFromFlags(flags),
+    // C-820 — registry coordinates for the leave-side cap retag (the inverse of
+    // join's union). All optional: absent ⇒ the registry deregister is skipped
+    // (the local leave still completes, with a warning).
+    ...(inputs.registryUrl !== undefined && { registryUrl: inputs.registryUrl }),
+    ...(inputs.registryPubkey !== undefined && { registryPubkey: inputs.registryPubkey }),
+    ...(inputs.seedPath !== undefined && { seedPath: inputs.seedPath }),
   };
   const ports = applyRes.apply ? buildLivePorts(cfg) : buildDryRunPorts(cfg);
 
