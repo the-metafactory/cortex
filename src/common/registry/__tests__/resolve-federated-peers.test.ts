@@ -17,8 +17,10 @@
  *              (peer kept, no alert).
  *   5. a registry-only peer that is unresolvable AND uncached → typed error +
  *              the peer is NOT admitted (the gate must never hold a keyless peer).
- *   6. back-compat — a fully hand-pinned config resolves offline with no
- *              registry calls at all; output is byte-identical to input.
+ *   6. MAJOR-1 (PR #818) — a fully hand-pinned network is cross-checked against
+ *              the roster when the registry is reachable (a drifted pin → DD-11
+ *              drop), and still survives a total registry outage offline (DD-10).
+ *              Only an empty-peers network makes zero registry calls.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -308,33 +310,92 @@ describe("resolveFederatedPeers — DD-11 mismatch fail-closed", () => {
 // Back-compat — hand-pinned-only configs resolve offline, unchanged
 // =============================================================================
 
-describe("resolveFederatedPeers — back-compat", () => {
-  test("fully hand-pinned config makes NO registry calls and is unchanged", async () => {
+describe("resolveFederatedPeers — fully hand-pinned cross-check (MAJOR-1) + back-compat", () => {
+  test("a fully hand-pinned network IS cross-checked when the registry is reachable; matching pins kept", async () => {
+    // PR #818 review MAJOR-1: a fully hand-pinned network is NO LONGER a
+    // zero-call fast path. When a registry (client) is available, the roster IS
+    // fetched and every hand-pin is cross-checked (DD-11). Matching pins are
+    // honored (no-op); a drifted pin would be dropped (covered below).
     const network = networkWith([
-      {
-        principal_id: "jc",
-        stack_id: "jc/sage-host",
-        principal_pubkey: PEER_NKEY_A,
-      },
-      {
-        principal_id: "mel",
-        stack_id: "mel/host",
-        principal_pubkey: PEER_NKEY_B,
-      },
+      { principal_id: "jc", stack_id: "jc/sage-host", principal_pubkey: PEER_NKEY_A },
+      { principal_id: "mel", stack_id: "mel/host", principal_pubkey: PEER_NKEY_B },
     ]);
-    const provider = stubProvider({});
+    const provider = stubProvider({
+      live: {
+        status: "ok",
+        value: {
+          roster: rosterWith([
+            { principal_id: "jc", principal_pubkey: PEER_B64_A },
+            { principal_id: "mel", principal_pubkey: PEER_B64_B },
+          ]),
+        },
+      },
+    });
     const warnings: string[] = [];
 
     const result = await resolveFederatedPeers([network], provider, {
       warn: (m) => warnings.push(m),
     });
 
-    // Hand-pinned peers always resolve offline — no registry needed.
-    expect(provider.fetched).toEqual([]);
-    expect(provider.loadedCached).toEqual([]);
+    // The roster IS fetched now (the MAJOR-1 fix), and the matching pins are
+    // kept unchanged.
+    expect(provider.fetched).toEqual(["research-collab"]);
     expect(result.errors).toHaveLength(0);
     expect(warnings).toHaveLength(0);
     expect(result.networks[0]!.peers).toEqual(network.peers);
+  });
+
+  test("MAJOR-1 — a fully hand-pinned network with a DRIFTED pin → peer dropped (pin_mismatch)", async () => {
+    // The regression guard: jc is hand-pinned to A, but the registry now serves
+    // B for jc (rotation / tamper). DD-11 must fire even though every peer is
+    // hand-pinned — the peer is DROPPED, not admitted on the stale pin.
+    const network = networkWith([
+      { principal_id: "jc", stack_id: "jc/sage-host", principal_pubkey: PEER_NKEY_A },
+    ]);
+    const provider = stubProvider({
+      live: {
+        status: "ok",
+        value: {
+          roster: rosterWith([{ principal_id: "jc", principal_pubkey: PEER_B64_B }]),
+        },
+      },
+    });
+    const warnings: string[] = [];
+
+    const result = await resolveFederatedPeers([network], provider, {
+      warn: (m) => warnings.push(m),
+    });
+
+    expect(provider.fetched).toEqual(["research-collab"]);
+    expect(result.networks[0]!.peers).toHaveLength(0); // dropped, not kept
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]!.kind).toBe("pin_mismatch");
+  });
+
+  test("MAJOR-1 — a fully hand-pinned network survives a total registry outage (DD-10 offline)", async () => {
+    // The MAJOR-1 fix does NOT break "hand-pins always resolve offline": a fetch
+    // that is unreachable + uncached leaves the roster undefined, and a
+    // hand-pinned peer with no registry value to cross-check is admitted as-is.
+    const network = networkWith([
+      { principal_id: "jc", stack_id: "jc/sage-host", principal_pubkey: PEER_NKEY_A },
+      { principal_id: "mel", stack_id: "mel/host", principal_pubkey: PEER_NKEY_B },
+    ]);
+    const provider = stubProvider({
+      live: { status: "unreachable", reason: "ECONNREFUSED" },
+      cached: undefined,
+    });
+    const warnings: string[] = [];
+
+    const result = await resolveFederatedPeers([network], provider, {
+      warn: (m) => warnings.push(m),
+    });
+
+    // The fetch is attempted (and falls back), but the hand-pins survive.
+    expect(provider.fetched).toEqual(["research-collab"]);
+    expect(result.errors).toHaveLength(0);
+    expect(result.networks[0]!.peers).toEqual(network.peers);
+    // A loud DD-10 warning is emitted (registry unreachable + no cache).
+    expect(warnings.some((w) => w.includes("unreachable"))).toBe(true);
   });
 
   test("a network with no peers is a no-op (no registry calls)", async () => {

@@ -8,7 +8,14 @@
  * creds.ts) used to redeclare this shape inline; now they import.
  */
 export interface ExitResult {
-  exitCode: 0 | 1 | 2;
+  /**
+   * Process exit code. Most subcommands use the classic 0 (success) / 1
+   * (operational failure) / 2 (usage error) trichotomy. `cortex network ping`
+   * (#56) additionally uses 3 (no-responder) / 4 (timeout) / 5 (refused) per
+   * its verdict taxonomy (`docs/design-network-ping.md` §3.3), so this is a
+   * plain `number` rather than the narrow `0 | 1 | 2` union.
+   */
+  exitCode: number;
   stdout: string;
   stderr: string;
 }

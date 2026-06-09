@@ -6,10 +6,26 @@
  * This is the F2 seam: it sits between config parse and the surface-router /
  * crypto-verify federation gate, and fills in each `policy.federated.
  * networks[].peers[].principal_pubkey` that the principal did NOT hand-pin —
- * resolving it from the registry-signed roster (DD-5). It feeds the SAME gate
- * and verify path a hand-pinned key feeds: the resolver's only job is to make
- * every admitted peer carry a key in the config's nkey-U surface, however that
- * key was obtained. There is no separate downstream code path.
+ * resolving it from the registry-signed roster (DD-5).
+ *
+ * ## What this seam actually ENFORCES (PR #818 review MAJOR-2 — scope honestly)
+ *
+ * The load-bearing enforcement this seam delivers is the **fail-closed DROP** of
+ * a peer that cannot be trusted: a registry-only peer whose key is unresolvable
+ * (DD-5 `unresolved`) or a hand-pin that disagrees with the roster (DD-11
+ * `pin_mismatch`) is REMOVED from `peers[]`, so the `principal_id`-keyed
+ * membership gate (`evaluateFederationGate` / `resolveSourceNetwork`) then denies
+ * its traffic as `unknown_network`. THAT is the security property.
+ *
+ * The filled-in `principal_pubkey` value itself is, today, **informational and
+ * NOT yet consumed by the admission gate**: the surface-router gate + the runtime
+ * LinkPool key on `principal_id`, and the crypto-verify path resolves peer
+ * pubkeys from the registry on-demand (`MultiPrincipalIdentityRegistry`), not
+ * from this config field. Wiring the pinned/resolved key into the verify path so
+ * the config surface becomes the trust anchor is a tracked follow-up — see the
+ * PR #818 body. Until then, "no separate downstream code path" means the DROP
+ * flows through the SAME `principal_id` gate a hand-pin's absence would; it does
+ * NOT mean the resolved key is read for admission.
  *
  * ## The three design decisions this implements
  *
@@ -142,10 +158,13 @@ export interface ResolveFederatedPeersOptions {
  * NEVER throws.
  *
  * Resolution is per-network: a network's roster is fetched at most once
- * (`fetchAndCache`), and only when that network has at least one peer that
- * needs the registry (a peer missing a pubkey, or a hand-pinned peer we want to
- * cross-check). A fully hand-pinned network makes ZERO registry calls and is
- * returned byte-identical (back-compat).
+ * (`fetchAndCache`) whenever the network has ANY peer — a pubkey-less peer to
+ * resolve (DD-5) OR a hand-pinned peer to cross-check (DD-11). PR #818 review
+ * MAJOR-1: a fully hand-pinned network is NO LONGER a zero-call fast path — when
+ * a registry is configured (this resolver is only invoked with a `client` then),
+ * its hand-pins are cross-checked against the verified roster so a drifted /
+ * tampered key is caught (DD-11). Only an EMPTY-peers network makes zero calls.
+ * Hand-pins still survive a registry outage (DD-10: down → cached → admit-as-is).
  *
  * @param networks  the parsed `policy.federated.networks[]`
  * @param client    the S1 {@link NetworkRegistryClient} (or a structural stub)
@@ -166,26 +185,31 @@ export async function resolveFederatedPeers(
   const outNetworks: PolicyFederatedNetwork[] = [];
 
   for (const network of networks) {
-    // Does any peer in this network need the registry? Trigger the roster
-    // fetch when at least one peer is pubkey-less (DD-5 needs the registry to
-    // resolve it). Once the roster IS fetched for the network, EVERY peer in
-    // it — including hand-pinned ones — is cross-checked against it (DD-11).
+    // PR #818 review MAJOR-1 fix — fetch the roster for EVERY non-empty network,
+    // not only when a peer is pubkey-less. The resolver is only ever handed a
+    // `client` when a registry is configured (the boot seam constructs/injects
+    // one only then), so a network with ANY peer — hand-pinned or pubkey-less —
+    // must be cross-checked against the verified roster.
     //
-    // The deliberate boundary (back-compat, DD-5 "hand-pin is the offline
-    // fallback"): a network where EVERY peer is hand-pinned makes ZERO
-    // registry calls and is returned byte-identical. Such a network is, by the
-    // principal's choice, fully offline-pinned, so there is no registry key to
-    // drift against — the DD-11 guard only has teeth once the network opts into
-    // registry resolution by leaving at least one peer pubkey-less. This keeps
-    // a hand-pinned-only deployment up across a total registry outage and
-    // matches "hand-pinned peers always resolve offline".
-    const needsRegistry = network.peers.some(
-      (p) => p.principal_pubkey === undefined,
-    );
-
-    if (!needsRegistry || network.peers.length === 0) {
-      // Back-compat fast path: every peer is hand-pinned (or there are none).
-      // No registry call; the network passes through unchanged.
+    // Why this matters (the DD-11 fast-path gap the old `needsRegistry` left
+    // open): a FULLY hand-pinned network used to make ZERO registry calls, so a
+    // hand-pin that had drifted from a rotated/tampered roster key was admitted
+    // on the STALE pin and DD-11 never fired — contradicting the spec's
+    // unconditional "when both a hand-pin AND a registry-resolved key exist they
+    // MUST agree," and silently defeating exactly the stale/compromised-pin case
+    // DD-11 exists to catch. Now the pin↔roster cross-check fires for
+    // hand-pinned-only networks too.
+    //
+    // The extra fetch is safe and does NOT break "hand-pins always resolve
+    // offline" (DD-5): a roster fetch that returns `unreachable` falls back to
+    // the cached roster (DD-10); a fetch that yields no roster at all (down +
+    // uncached, or a definitive negative) leaves `roster === undefined`, and
+    // `resolvePeer` admits a hand-pinned peer as-is when it has no registry value
+    // to cross-check against. So a hand-pinned-only deployment still stays up
+    // across a total registry outage — it just gains the DD-11 guard whenever the
+    // registry IS reachable (or cached).
+    if (network.peers.length === 0) {
+      // No peers ⇒ nothing to resolve or cross-check; pass through unchanged.
       outNetworks.push(network);
       continue;
     }

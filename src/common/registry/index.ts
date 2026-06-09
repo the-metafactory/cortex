@@ -44,6 +44,11 @@ export type {
   ResolveFederatedPeersOptions,
   ResolveFederatedPeersResult,
 } from "./resolve-federated-peers";
+export { resolveBootFederatedPeers } from "./resolve-federated-peers-boot";
+export type {
+  ResolveBootFederatedPeersOptions,
+  ResolveBootFederatedPeersResult,
+} from "./resolve-federated-peers-boot";
 export type {
   PrincipalPubkeyResolverOptions,
   ResolveResult,

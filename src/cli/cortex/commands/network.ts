@@ -45,6 +45,7 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 
 import { expandTilde, loadConfigWithAgents } from "../../../common/config/loader";
+import type { LoadedConfig } from "../../../common/config/loader";
 import { enforceChmod600 } from "../../../common/config/file-permissions";
 import {
   materialFromSeedString,
@@ -95,6 +96,17 @@ import {
   leavePublic,
   type PublicJoinInputs,
 } from "./network-public-lib";
+import {
+  derivePingInputs,
+  pingPeer,
+  type PingResult,
+} from "./network-ping-lib";
+import {
+  createLiveProbeBus,
+  type LiveProbeBus,
+} from "./network-ping-adapters";
+import { buildPingSignerFromConfig } from "./network-ping-signer";
+import type { NetworkPingPorts } from "./network-ping-ports";
 
 export { type ExitResult } from "./_shared/exit-result";
 
@@ -102,7 +114,7 @@ export { type ExitResult } from "./_shared/exit-result";
 // Grammar
 // =============================================================================
 
-type NetworkSubcommand = "join" | "leave" | "status" | "create";
+type NetworkSubcommand = "join" | "leave" | "status" | "create" | "ping";
 
 /** Default registry URL when neither --registry-url nor config provides one. */
 const DEFAULT_REGISTRY_URL = "https://network.meta-factory.ai";
@@ -219,6 +231,31 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--registry-url": "value",
         "--apply": "bool",
         "--dry-run": "bool",
+      },
+    },
+    // signal#113 P-11 (#56) — active federated reachability probe. Fires a
+    // Direct `probe.echo` at <peer>, awaits the built-in echo on our own
+    // `probe.reply.echo`, measures RTT, prints + returns the verdict per the
+    // §3.3 taxonomy + exit codes (0 reachable / 2 not-configured / 3
+    // no-responder / 4 timeout / 5 refused). Derives principal/stack from
+    // cortex.yaml like join (#753).
+    ping: {
+      positionals: ["peer"],
+      flags: {
+        "--config": "value",
+        "--principal": "value",
+        "--stack": "value",
+        // Direct-probe target assistant. Omitted ⇒ the target stack's reserved
+        // DID (`did:mf:{target}-{target-stack}`).
+        "--assistant": "value",
+        // Topology selector ONLY — scopes peer resolution when the peer is
+        // reachable on more than one shared network. NEVER a wire segment
+        // (ADR-0002 §4).
+        "--network": "value",
+        // `ping -c` — number of echo probes. Default 1.
+        "--count": "value",
+        // Per-probe echo wait budget (ms). Default 2000.
+        "--timeout": "value",
       },
     },
   },
@@ -553,6 +590,207 @@ async function runStatus(
     lines.push("");
   }
   return ok(lines.join("\n"));
+}
+
+// =============================================================================
+// signal#113 P-11 (#56) — `cortex network ping`
+// =============================================================================
+
+/** Parse a `<peer>` positional into `{principal, stack}` (stack defaults to `default`). */
+function parsePeerArg(
+  peer: string,
+): { ok: true; principal: string; stack: string } | { ok: false; reason: string } {
+  const parts = peer.split("/");
+  if (parts.length > 2) {
+    return { ok: false, reason: `peer "${peer}" must be {principal} or {principal}/{stack}` };
+  }
+  const principal = parts[0] ?? "";
+  const stack = parts[1] ?? "default";
+  if (!PRINCIPAL_ID_RE.test(principal)) {
+    return { ok: false, reason: `peer principal "${principal}" must be lowercase alphanumeric + hyphen, letter-prefixed` };
+  }
+  if (!/^[a-z][a-z0-9_-]*$/.test(stack)) {
+    return { ok: false, reason: `peer stack "${stack}" must be letter-prefixed lowercase` };
+  }
+  return { ok: true, principal, stack };
+}
+
+/**
+ * Factory for the probe bus port. Production builds a {@link LiveProbeBus} over
+ * the runtime from the loaded config; tests inject a fake. Receives the full
+ * {@link LoadedConfig} so the live factory can build the posture-gated stack
+ * signer (PR #822 MAJOR-1) — the probe REQUEST is signed exactly like every
+ * other federated dispatch under `permissive`/`enforce`. Returns the ports +
+ * a `stop()` to drain the runtime.
+ */
+export type PingBusFactory = (
+  cfg: LoadedConfig,
+) => Promise<{ ports: NetworkPingPorts; stop: () => Promise<void> }>;
+
+/** The production factory — a live NATS-backed probe bus, signed per posture. */
+const DEFAULT_PING_BUS_FACTORY: PingBusFactory = async (cfg) => {
+  // PR #822 MAJOR-1 — feed the plumbed signer so an enforce-posture peer
+  // accepts the probe (signed `signed_by[]` + originator). `undefined` under
+  // `signing: off` (publishes unsigned, byte-identical to pre-#822).
+  const signer = await buildPingSignerFromConfig(cfg);
+  const bus: LiveProbeBus = await createLiveProbeBus(cfg.config, signer);
+  const ports: NetworkPingPorts = {
+    bus,
+    newNonce: () => crypto.randomUUID(),
+    newCorrelationId: () => crypto.randomUUID(),
+  };
+  return { ports, stop: () => bus.stop() };
+};
+
+async function runPing(
+  peerArg: string,
+  flags: Record<string, string | true>,
+  json: boolean,
+  load: ConfigReader,
+  busFactory: PingBusFactory,
+): Promise<ExitResult> {
+  const peerRes = parsePeerArg(peerArg);
+  if (!peerRes.ok) return usageError("ping", peerRes.reason, json);
+
+  // --count (default 1, ≥1) and --timeout (default 2000ms, ≥1).
+  const count = parsePositiveInt(flags, "--count", 1);
+  if (!count.ok) return usageError("ping", count.reason, json);
+  const timeout = parsePositiveInt(flags, "--timeout", 2000);
+  if (!timeout.ok) return usageError("ping", timeout.reason, json);
+
+  // Load config (the #753 seam). A missing/broken config is an op-error.
+  let cfg;
+  try {
+    cfg = load(expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH));
+  } catch (err) {
+    return opError("ping", `config load failed: ${err instanceof Error ? err.message : String(err)}`, json);
+  }
+
+  const derived = derivePingInputs({
+    cfg,
+    targetPrincipal: peerRes.principal,
+    targetStack: peerRes.stack,
+    ...(optionalValueFlag(flags, "--assistant") !== undefined && {
+      assistant: optionalValueFlag(flags, "--assistant"),
+    }),
+    ...(optionalValueFlag(flags, "--network") !== undefined && {
+      network: optionalValueFlag(flags, "--network"),
+    }),
+    count: count.value,
+    timeoutMs: timeout.value,
+    ...(optionalValueFlag(flags, "--principal") !== undefined && {
+      principalOverride: optionalValueFlag(flags, "--principal"),
+    }),
+  });
+  if (!derived.ok || derived.inputs === undefined) {
+    return usageError("ping", derived.reason ?? "could not derive ping inputs", json);
+  }
+  const inputs = derived.inputs;
+
+  // `not-configured` fails closed at OUR boundary — never start the runtime /
+  // emit anything. `pingPeer` short-circuits, so the bus is never built.
+  if (!inputs.isConfiguredPeer) {
+    // `pingPeer` short-circuits on `!isConfiguredPeer` BEFORE touching the bus,
+    // so this port is never invoked — the runtime is never started, nothing is
+    // emitted (the §3.3 `not-configured` fail-closed). The stub just satisfies
+    // the port shape; `fireProbe` returns a resolved promise it never calls.
+    const res = await pingPeer(inputs, {
+      bus: { fireProbe: () => Promise.resolve({ kind: "timeout" }) },
+      newNonce: () => "",
+      newCorrelationId: () => "",
+    });
+    return renderPingResult(res, inputs.targetPrincipal, inputs.targetStack, json);
+  }
+
+  // Build the live (or injected) bus and fire the probe(s). The factory gets
+  // the full LoadedConfig so the live path can build the posture-gated signer.
+  let busHandle;
+  try {
+    busHandle = await busFactory(cfg);
+  } catch (err) {
+    return opError("ping", `failed to start bus: ${err instanceof Error ? err.message : String(err)}`, json);
+  }
+  try {
+    const res = await pingPeer(inputs, busHandle.ports);
+    return renderPingResult(res, inputs.targetPrincipal, inputs.targetStack, json);
+  } finally {
+    await busHandle.stop();
+  }
+}
+
+/** Parse a positive-integer value flag with a default. */
+function parsePositiveInt(
+  flags: Record<string, string | true>,
+  name: string,
+  dflt: number,
+): { ok: true; value: number } | { ok: false; reason: string } {
+  const raw = optionalValueFlag(flags, name);
+  if (raw === undefined) return { ok: true, value: dflt };
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isInteger(n) || n < 1) {
+    return { ok: false, reason: `${name} "${raw}" must be a positive integer` };
+  }
+  return { ok: true, value: n };
+}
+
+/** Render a {@link PingResult} — human table or `--json` envelope + exit code. */
+function renderPingResult(
+  res: PingResult,
+  targetPrincipal: string,
+  targetStack: string,
+  json: boolean,
+): ExitResult {
+  const peer = `${targetPrincipal}/${targetStack}`;
+  if (json) {
+    const env = envelopeOk(
+      res.probes.map((p) => ({
+        seq: p.seq,
+        verdict: p.verdict,
+        ...(p.rttMs !== undefined && { rtt_ms: p.rttMs }),
+      })),
+      {
+        peer,
+        verdict: res.verdict,
+        sent: String(res.stats.sent),
+        received: String(res.stats.received),
+        loss_pct: String(Math.round(res.stats.loss * 100)),
+        ...(res.stats.rttMinMs !== undefined && { rtt_min_ms: String(res.stats.rttMinMs) }),
+        ...(res.stats.rttAvgMs !== undefined && { rtt_avg_ms: res.stats.rttAvgMs.toFixed(1) }),
+        ...(res.stats.rttMaxMs !== undefined && { rtt_max_ms: String(res.stats.rttMaxMs) }),
+        ...(res.detail !== undefined && { detail: res.detail }),
+      },
+    );
+    // JSON goes to stdout regardless of exit code so a verdict is always
+    // machine-readable; the exit code carries the verdict per §3.3.
+    return { exitCode: res.exitCode, stdout: renderJson(env), stderr: "" };
+  }
+
+  const lines: string[] = [`PING ${peer} via federated dispatch:`];
+  for (const p of res.probes) {
+    lines.push(
+      `  seq=${p.seq}  ${p.verdict}` +
+        (p.rttMs !== undefined ? `  rtt=${p.rttMs}ms` : ""),
+    );
+  }
+  lines.push(`--- ${peer} ping statistics ---`);
+  lines.push(
+    `${res.stats.sent} probes sent, ${res.stats.received} echoes received, ` +
+      `${Math.round(res.stats.loss * 100)}% loss`,
+  );
+  if (res.stats.rttMinMs !== undefined && res.stats.rttAvgMs !== undefined && res.stats.rttMaxMs !== undefined) {
+    lines.push(
+      `rtt min/avg/max = ${res.stats.rttMinMs}/${res.stats.rttAvgMs.toFixed(1)}/${res.stats.rttMaxMs} ms`,
+    );
+  }
+  if (res.verdict !== "reachable") {
+    lines.push(`verdict: ${res.verdict}${res.detail !== undefined ? ` — ${res.detail}` : ""}`);
+  }
+  const body = lines.join("\n") + "\n";
+  // Reachable → stdout/exit 0; any failure verdict → stderr + the verdict's
+  // exit code (so scripts branch on `$?` per §3.3).
+  return res.exitCode === 0
+    ? { exitCode: 0, stdout: body, stderr: "" }
+    : { exitCode: res.exitCode, stdout: "", stderr: body };
 }
 
 // =============================================================================
@@ -913,6 +1151,9 @@ export async function dispatchNetwork(
   // config without touching the principal's real `~/.config/cortex/`.
   // Production callers omit it and the real `loadConfigWithAgents` is used.
   load: ConfigReader = DEFAULT_READER,
+  // #56 — injectable probe-bus factory so `ping` CLI tests drive a fake bus
+  // without standing up NATS. Production omits it → the live NATS-backed bus.
+  pingBusFactory: PingBusFactory = DEFAULT_PING_BUS_FACTORY,
 ): Promise<ExitResult> {
   let parsed;
   try {
@@ -946,6 +1187,8 @@ export async function dispatchNetwork(
       return runStatus(parsed.flags, json);
     case "create":
       return runCreate(parsed.positionals.network ?? "", parsed.flags, json);
+    case "ping":
+      return runPing(parsed.positionals.peer ?? "", parsed.flags, json, load, pingBusFactory);
   }
 }
 
@@ -961,6 +1204,7 @@ Usage:
   cortex network leave  <network> [--apply] [--config <p>] [overrides…]
   cortex network status [--principal <id>] [--stack <id>] [--monitor-url <url>] [--json]
   cortex network create <network> --hub <tls-url> --leaf-port <port> --admin-seed <path> [--registry-url <url>] [--apply]
+  cortex network ping   <peer> [--assistant <a>] [--network <id>] [--count N] [--timeout <ms>] [--json]
 
 The one-liner (#753): \`cortex network join <network>\` derives EVERYTHING from
 the loaded cortex.yaml — principal (principal.id), stack (stack.id), signing
@@ -980,6 +1224,16 @@ Subcommands:
           → restart. Idempotent (re-running converges). For a principal's
           SECOND+ stack, pass --principal-seed <root> so the register step
           root-signs the add-stack claim + preserves existing stacks (#791).
+  ping    (signal#113 P-11, #56) Active federated reachability probe — the
+          ICMP of the agent network. Fires a Direct probe.echo at <peer>
+          ({principal} or {principal}/{stack}), awaits the built-in echo on
+          our own probe.reply.echo, measures RTT, and prints + returns the
+          verdict. The peer MUST be in this stack's
+          policy.federated.networks[].peers[] (else not-configured, exit 2,
+          nothing emitted). Exit codes: 0 reachable / 2 not-configured /
+          3 no-responder / 4 timeout / 5 refused. --count for multiple probes
+          (min/avg/max RTT); --assistant for a named Direct target; --network
+          to disambiguate the topology (NEVER a wire segment).
   status  Show joined networks, peers, accept-subjects, leaf link state + counters.
   leave   Reverse a join cleanly: remove the network + leaf include, drop the
           plist -c arg if no networks remain, restart. Idempotent.

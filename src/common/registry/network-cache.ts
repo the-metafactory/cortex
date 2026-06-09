@@ -35,6 +35,17 @@ const DEFAULT_CACHE_DIR = join(homedir(), ".config", "cortex", "network-cache");
 const CACHE_SCHEMA_VERSION = 1 as const;
 
 /**
+ * Base64 raw ed25519 pubkey grammar (44 chars incl. `=` padding) — the SAME
+ * gate `network-client.parseRoster` applies before a roster is trusted. PR #818
+ * review NIT-5 (defense-in-depth): a cache record is only written AFTER
+ * signature verification (DD-9), so a poisoned file implies local-disk tamper —
+ * but the on-disk reader must not be a softer gate than the network reader, lest
+ * a future cache consumer inherit an ungated (malformed/poison) pubkey. We apply
+ * the identical grammar to cached roster members on load.
+ */
+const BASE64_ED25519 = /^[A-Za-z0-9+/]{43}=$/;
+
+/**
  * The on-disk record for one network: the last verified descriptor + roster,
  * plus the time they were cached. Both halves are written together so a reader
  * always gets a consistent pair (descriptor + its matching roster).
@@ -194,6 +205,20 @@ function isCachedNetwork(value: unknown, networkId: string): value is CachedNetw
   if (roster === null || typeof roster !== "object") return false;
   const r = roster as Record<string, unknown>;
   if (r.network_id !== networkId || !Array.isArray(r.members)) return false;
+
+  // PR #818 review NIT-5 — grammar-gate each cached roster member's pubkey with
+  // the SAME `BASE64_ED25519` regex `parseRoster` applies on the network path. A
+  // member with a missing/non-string/malformed `principal_pubkey` taints the
+  // whole record (consistent with parseRoster rejecting the whole roster), so
+  // the cache file is treated as corrupt and ignored rather than serving a
+  // poison key to a future consumer.
+  for (const member of r.members) {
+    if (member === null || typeof member !== "object") return false;
+    const m = member as Record<string, unknown>;
+    if (typeof m.principal_id !== "string") return false;
+    if (typeof m.principal_pubkey !== "string") return false;
+    if (!BASE64_ED25519.test(m.principal_pubkey)) return false;
+  }
 
   return true;
 }

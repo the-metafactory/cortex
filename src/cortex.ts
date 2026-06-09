@@ -109,6 +109,7 @@ import type { Surfaces } from "./common/types/surfaces";
 import type { SurfaceGateway } from "./gateway/surface-gateway";
 
 import { createDispatchListener, type DispatchListener } from "./runner/dispatch-listener";
+import { createProbeResponder, type ProbeResponder } from "./bus/probe-responder";
 import { WorklogManager } from "./runner/worklog-manager";
 
 // #752 — the `network` + `provision-stack` subcommand dispatchers. Registered
@@ -129,6 +130,8 @@ import type {
   RegistryClientReader,
   FederatedPeerResolution,
 } from "./common/registry";
+import { resolveBootFederatedPeers } from "./common/registry/resolve-federated-peers-boot";
+import type { NetworkRosterProvider } from "./common/registry/resolve-federated-peers";
 import { JsonlReader } from "./taps/cc-events/lib/jsonl-reader";
 import { PublishedEventSchema } from "./taps/cc-events/hooks/lib/event-types";
 import { formatEventForDiscord } from "./adapters/discord/event-formatter";
@@ -273,6 +276,27 @@ export interface StartCortexOptions {
    * @internal — not part of the public API; semver does not apply.
    */
   injectRuntime?: MyelinRuntime;
+  /**
+   * S4 (Network Join Control Plane, epic #733) — inject a roster provider for
+   * the boot-path federated-peer resolution instead of building a live
+   * `NetworkRegistryClient` from `policy.federated.registry`. Tests pass a
+   * fixture/stub provider so the DD-5/DD-10/DD-11 boot wiring runs with NO
+   * network I/O and NO `~/.config` cache touch. Production omits this.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  bootFederatedRosterProvider?: NetworkRosterProvider;
+  /**
+   * S4 (Network Join Control Plane, epic #733) — test-only observation hook,
+   * invoked synchronously with the resolved policy view right after the
+   * boot-path federated-peer resolution (DD-5/DD-10/DD-11). Tests use it to
+   * assert what the membership gate will see WITHOUT mutating the caller's
+   * `options` (PR #818 review NIT-6) and without growing the public
+   * `CortexHandle`. Production omits it.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  onBootResolvedPolicy?: (policy: Policy | undefined) => void;
   /**
    * Override the 15s shutdown timeout. Tests use a small value (50–200ms)
    * to exercise the abandoned-set tracking path without holding the test
@@ -640,6 +664,49 @@ export async function startCortex(
     );
   }
 
+  // S4 (Network Join Control Plane, epic #733; DD-5 wiring) — resolve the
+  // federated `peers[]` from the registry roster BEFORE any consumer reads
+  // them. Joining a network names the NETWORK, not each principal: a peer may
+  // declare just `principal_id` + `stack_id` and have its `principal_pubkey`
+  // filled here from the verified registry roster (DD-5). Hand-pins are kept as
+  // the offline fallback; a hand-pin that DISAGREES with the registry-resolved
+  // key fails that peer closed (DD-11); a registry outage falls back to the
+  // cached roster + a loud warn (DD-10). The resolved networks become the local
+  // `resolvedPolicy` that EVERY downstream consumer (the runtime LinkPool below,
+  // the surface-router + dispatch-listener membership gates, the review-consumer
+  // subjects, the public index) reads — DD-5: no separate registry-resolved code
+  // path. NEVER throws; closes the `cortex-config.ts` "WIRING STATUS (S2)" gap.
+  //
+  // PR #818 review NIT-6 — we do NOT mutate the caller's `options.policy`. The
+  // resolved view is a fresh local binding; the caller's object is untouched
+  // (the resolver returns new objects and never mutates its input). All boot
+  // reads below go through `resolvedPolicy`, never `options.policy`.
+  const bootResolve = await resolveBootFederatedPeers(options.policy, {
+    warn: (message) => {
+      // Loud — drops + DD-10 fallback must be visible in the daemon logs.
+      process.stderr.write(`cortex: federated-peer boot resolve — ${message}\n`);
+    },
+    // Test-only seam: inject a fixture roster provider so the boot wiring runs
+    // with NO network I/O and NO `~/.config` cache touch. Production omits this
+    // and a live `NetworkRegistryClient` is built from the registry block.
+    ...(options.bootFederatedRosterProvider !== undefined && {
+      rosterProvider: options.bootFederatedRosterProvider,
+    }),
+  });
+  // The resolved policy view used by every consumer below. When
+  // federation/registry is absent this is the input policy returned unchanged.
+  const resolvedPolicy = bootResolve.policy;
+  // Test-only observation seam (NIT-6): surface the resolved view without
+  // mutating `options`. No-op in production.
+  options.onBootResolvedPolicy?.(resolvedPolicy);
+  if (bootResolve.errors.length > 0) {
+    console.error(
+      `cortex: ${bootResolve.errors.length.toString()} federated peer(s) ` +
+        `failed closed at boot and were dropped from the membership gate ` +
+        `(see stderr warnings above for per-peer detail).`,
+    );
+  }
+
   // Bus runtime (M2-M6) — no-op when `config.nats?` is absent. Tests inject
   // a recording fake via `options.injectRuntime` to assert observable
   // wire-up side-effects without standing up a real NATS server.
@@ -687,8 +754,8 @@ export async function startCortex(
         // the SAME `policy.federated.networks[]` the surface-router gate
         // keys off — NEVER `config.networks[]` (the legacy grove
         // cloud-publish table; design §3.2 NAME-COLLISION).
-        ...(options.policy?.federated?.networks !== undefined && {
-          federatedNetworks: options.policy.federated.networks,
+        ...(resolvedPolicy?.federated?.networks !== undefined && {
+          federatedNetworks: resolvedPolicy.federated.networks,
         }),
         // TC-4d/4e (#627 Phase 4) — transport-mTLS posture for the LinkPool
         // (primary + every federated leaf). Default `off` ⇒ no tls block on
@@ -1007,7 +1074,7 @@ export async function startCortex(
   // policy block: a deployment with no federation declared adds no federated
   // filter/consumer (back-compat — local path byte-for-byte unchanged).
   const federationConfigured =
-    (options.policy?.federated?.networks ?? []).length > 0;
+    (resolvedPolicy?.federated?.networks ?? []).length > 0;
   const reviewFederatedSubjectPattern = `federated.${reviewPrincipalId}.${derivedStack.stack}.tasks.code-review.>`;
   // cortex#725 (ADR 0001/0002 §2) — the FEDERATED **Direct** review pattern.
   // pilot#149's `--reviewer {name}@{principal}/{stack}` Direct dispatch lands
@@ -1246,7 +1313,7 @@ export async function startCortex(
           // application-layer trust boundary on the consumer path.
           ...(federated && {
             federated: true,
-            federatedNetworks: options.policy?.federated?.networks ?? [],
+            federatedNetworks: resolvedPolicy?.federated?.networks ?? [],
           }),
         });
 
@@ -1482,7 +1549,7 @@ export async function startCortex(
   let resolveFederatedPeer:
     | ((peerPrincipal: string) => Promise<FederatedPeerResolution>)
     | undefined;
-  const federationRegistryConfig = options.policy?.federated?.registry;
+  const federationRegistryConfig = resolvedPolicy?.federated?.registry;
   const federationVerifyEnabled = config.security.signing === "enforce";
   if (
     federationVerifyEnabled &&
@@ -1587,12 +1654,12 @@ export async function startCortex(
   // Federation enforcement is opt-in.
   const router: SurfaceRouter = createSurfaceRouter(runtime, {
     systemEventSource,
-    ...(options.policy?.federated !== undefined && { federated: options.policy.federated }),
+    ...(resolvedPolicy?.federated !== undefined && { federated: resolvedPolicy.federated }),
     // IAW S5 (#739) — the public-scope opt-in. Absent ⇒ the router drops all
     // inbound `public.*` (deny-by-default, OQ1 safe). Written by
     // `cortex network join public`; an inbound public sender is admitted only
     // when `enabled: true` AND its source principal is on `allow_principals[]`.
-    ...(options.policy?.public !== undefined && { public: options.policy.public }),
+    ...(resolvedPolicy?.public !== undefined && { public: resolvedPolicy.public }),
     onAdapterError: (adapterId, err) => {
       console.error(`cortex: surface adapter "${adapterId}" render error:`, err.message);
     },
@@ -1619,11 +1686,11 @@ export async function startCortex(
   // `src/common/registry/client.ts` JSDoc for the full failure-mode
   // table.
   let registryClient: RegistryClient | null = null;
-  const registryConfig = options.policy?.federated?.registry;
+  const registryConfig = resolvedPolicy?.federated?.registry;
   if (registryConfig !== undefined) {
     const peerPrincipalIds = Array.from(
       new Set(
-        (options.policy?.federated?.networks ?? []).flatMap((n) =>
+        (resolvedPolicy?.federated?.networks ?? []).flatMap((n) =>
           n.peers.map((p) => p.principal_id),
         ),
       ),
@@ -1666,9 +1733,9 @@ export async function startCortex(
   // adapter loop) so the DispatchHandler can consume the engine for
   // adapter-side platform-id → principal resolution at envelope-publish
   // time. See `dispatch-source-publisher` / CONTEXT.md §Dispatch-source.
-  const adapterPolicyEngine = policyEngineFromConfig(options.policy);
-  const adapterPolicyLookup = buildPlatformPrincipalIndex(options.policy);
-  const adapterPolicyRegistry = buildPrincipalRegistry(options.policy);
+  const adapterPolicyEngine = policyEngineFromConfig(resolvedPolicy);
+  const adapterPolicyLookup = buildPlatformPrincipalIndex(resolvedPolicy);
+  const adapterPolicyRegistry = buildPrincipalRegistry(resolvedPolicy);
 
   // Dispatch-handler — synchronous platform-message → CC pipeline.
   //
@@ -2333,12 +2400,12 @@ export async function startCortex(
   // accepted and fall through to the policy gate; signed chains must
   // verify against the principal's NKey roster. The pre-Phase-B
   // authorization-without-authentication gap is closed.
-  if (options.policy?.principals.length === 0) {
+  if (resolvedPolicy?.principals.length === 0) {
     console.warn(
       `cortex: policy: block declared with empty principals[] — no authorisation gate engages; the dispatch-listener stays on the legacy path.`,
     );
   }
-  const policyEngine = policyEngineFromConfig(options.policy);
+  const policyEngine = policyEngineFromConfig(resolvedPolicy);
   if (policyEngine !== undefined) {
     console.log(
       `cortex: policy-engine active — principals=${policyEngine.principalCount} roles=${policyEngine.roleCount} (signed_by chain verified; empty chains accepted for adapter-originated dispatches)`,
@@ -2416,6 +2483,35 @@ export async function startCortex(
     }),
   });
   await dispatchListener.start();
+
+  // signal#113 P-11 (#56) — federated echo responder. The ICMP-analog of the
+  // agent network: answers a reserved `probe.echo` capability IN THE RUNTIME
+  // (no harness, no `claude`, no Discord, no tools) on our own
+  // `federated.{us}.{stack}.tasks.*.>` subject. Always-on between configured
+  // `peers[]` (the responder only ever answers a mutually-configured, gated
+  // peer; absent/forged originator or a non-peer is dropped fail-closed; the
+  // reply is exactly-one-bounded, keyed to the originator-attributed requester
+  // scope, per-source rate-limited — no amplification). Dormant when no
+  // `policy.federated.networks[]` is declared (no peers ⇒ nothing to answer).
+  const probeResponderNetworks = new Map(
+    (options.policy?.federated?.networks ?? []).map((n) => [n.id, n] as const),
+  );
+  const probeResponder: ProbeResponder = createProbeResponder({
+    runtime,
+    source: systemEventSource,
+    stack: derivedStack.stack,
+    federatedNetworksById: probeResponderNetworks,
+    // PR #822 NIT-2 — stamp OUR residency on the replies we author (not the
+    // requester-supplied inbound one). `undefined` → the responder defaults NZ.
+    ...(systemEventSource.dataResidency !== undefined && {
+      dataResidency: systemEventSource.dataResidency,
+    }),
+  });
+  await probeResponder.start();
+  console.log(
+    `cortex: probe-responder started — subjects=[${probeResponder.subjects.join(", ")}], ` +
+      `peers-networks=${probeResponderNetworks.size}`,
+  );
 
   // cortex#491 — dispatch sink (OUTBOUND). The single delivery path for
   // dispatch lifecycle replies (CONTEXT.md §Dispatch-sink). Subscribes to
@@ -2821,6 +2917,9 @@ export async function startCortex(
         }
       }
       await completeAsync("dispatch-listener stop", dispatchListener.stop());
+      // signal#113 P-11 (#56) — drain the echo responder on the same boundary
+      // as the dispatch listener. `stop()` is idempotent (no-op when dormant).
+      await completeAsync("probe-responder stop", probeResponder.stop());
       // cortex#491 — drain the dispatch sink after the runner stops
       // publishing lifecycle envelopes but before the surface-router /
       // adapters stop, so no late `postResponse` lands after the

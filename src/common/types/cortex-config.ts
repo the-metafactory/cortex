@@ -1433,26 +1433,30 @@ export const PolicyFederatedPeerSchema = z.object({
    * (`src/common/registry/resolve-federated-peers.ts`): it fetches the
    * peer's pubkey from the registry-signed roster, re-encodes it to nkey-U
    * (DD-8), and fills this field. Hand-pinning stays as the offline
-   * fallback (DD-5) — a hand-pinned peer always resolves without the
-   * registry. When BOTH a hand-pin AND a registry-resolved key exist and
-   * they DIFFER, the resolver fails that peer closed (DD-11), dropping the
-   * peer from `peers[]` so the membership gate (`evaluateFederationGate` /
-   * `resolveSourceNetwork`, which key on `stack_id` membership) denies its
-   * federated traffic as `unknown_network`.
+   * fallback (DD-5) — a hand-pinned peer survives a registry outage (DD-10).
+   * When BOTH a hand-pin AND a registry-resolved key exist and they DIFFER,
+   * the resolver fails that peer closed (DD-11), dropping the peer from
+   * `peers[]` so the membership gate (`evaluateFederationGate` /
+   * `resolveSourceNetwork`, which key on `peers[].principal_id` membership)
+   * denies its federated traffic as `unknown_network`.
    *
-   * WIRING STATUS (S2): the resolver is shipped + unit-tested but is not
-   * yet invoked on the boot path — per the epic-#733 slice matrix, wiring
-   * the S1–S3 pieces into `cortex.ts` config-load is **S4's** deliverable
-   * ("PR-4 join/leave/status wiring S1–S3"). Until S4 lands, this field is
-   * forward-declared: no runtime gate reads a config peer's
-   * `principal_pubkey` (the membership gate keys on `stack_id`;
-   * `buildIdentityRegistry` is built from the agent registry + local stack,
-   * and federated peer pubkeys are resolved on demand via the TC-2d
-   * `MultiPrincipalIdentityRegistry` resolver, not from this field). So a
-   * keyless peer admitted by the relaxed schema cannot fail open today —
-   * it simply isn't consumed yet. The S4 wiring MUST feed the resolver's
-   * output into the same gate/verify path a hand-pin would feed (DD-5: no
-   * separate registry-resolved code path).
+   * WIRING STATUS (S4 — WIRED): the resolver is now invoked on the boot path.
+   * `startCortex` calls `resolveBootFederatedPeers`
+   * (`src/common/registry/resolve-federated-peers-boot.ts`) BEFORE any consumer
+   * reads `policy.federated.networks[]`, and threads the resolved set (a fresh
+   * local view; the caller's `options` is NOT mutated) to every consumer.
+   *
+   * WHAT IS ENFORCED (PR #818 review MAJOR-2 — scope honestly): the load-bearing
+   * security property is the fail-closed DROP. A pubkey-less peer that cannot be
+   * resolved (DD-5 `unresolved`) and a hand-pin that disagrees with the roster
+   * (DD-11 `pin_mismatch`, now cross-checked even for fully hand-pinned networks
+   * per MAJOR-1) are REMOVED from `peers[]`; the `principal_id`-keyed gate then
+   * denies them as `unknown_network`. The pubkey VALUE filled into THIS field is
+   * currently informational and is NOT yet read for admission — the gate +
+   * LinkPool key on `principal_id`, and the crypto-verify path resolves peer
+   * pubkeys from the registry on-demand (`MultiPrincipalIdentityRegistry`), not
+   * from this field. Wiring the resolved/pinned key into the verify path so this
+   * field becomes the trust anchor is a tracked follow-up (see the PR #818 body).
    */
   principal_pubkey: z.string().regex(
     NKEY_PUBKEY_REGEX,
