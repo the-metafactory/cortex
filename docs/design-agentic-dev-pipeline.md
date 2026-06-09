@@ -195,7 +195,7 @@ the-metafactory/dev-loop/
 │   ├── dev/                     # type: agent — dev.implement consumer
 │   ├── approver/                # type: agent — merge.approve (five-check gate)
 │   └── release/                 # type: agent — release.cut (gated)
-├── skill/                       # operator surface: kick off / status / pause / resume
+├── skill/                       # principal surface: kick off / status / pause / resume
 └── docs/                        # the SOP set the process encodes
 # depends_on: agent-state (state bundle), pulse (engine), cortex (IoAW substrate ≥ vX)
 ```

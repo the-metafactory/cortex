@@ -1775,6 +1775,282 @@ describe("ReviewConsumer — federated mode (cortex#686, ADR 0002)", () => {
   });
 });
 
+describe("ReviewConsumer — per-message scope gate (cortex#836, ADR 0001)", () => {
+  // The bug: once a stack joins a network, `federated: true` is set for the
+  // WHOLE consumer (cortex.ts wires it when ≥1 network is configured). But the
+  // requester-deny gate must key on the SUBJECT scope, not the coarse mode
+  // flag: ADR 0001 says `local.` never crosses the principal boundary
+  // (same-principal self-dispatch — the requester IS self, so there is
+  // legitimately NO requester in `originator.identity`), while `federated.`
+  // always crosses it (a peer requester MUST be present + on `peers[]`).
+  //
+  // Before the fix, a federated-mode consumer ran the requester-deny gate on
+  // EVERY inbound regardless of subject, so a LOCAL self-dispatch (no
+  // requester) was DENIED + DROPPED — blocking the whole pilot-review-loop on
+  // any federated stack. The fix gates the requester parse + deny block on
+  // `this.federated && subject.startsWith("federated.")`.
+
+  /** A local same-principal self-dispatch subject (`local.{me}.{stack}.…`). */
+  const LOCAL_SELF_SUBJECT =
+    "local.metafactory.meta-factory.tasks.code-review.typescript";
+
+  /** Federated subject targeting us — the cross-principal path. */
+  const FED_SUBJECT =
+    "federated.metafactory.meta-factory.tasks.code-review.typescript";
+
+  /** Federated mode + the `jc`-peer network (mirrors a network-joined stack). */
+  function federatedOpts(
+    overrides: Partial<ReviewConsumerOpts> = {},
+  ): Partial<ReviewConsumerOpts> {
+    return {
+      federated: true,
+      federatedNetworks: [makeNetwork()],
+      ...overrides,
+    };
+  }
+
+  test("1. RED — federated-mode consumer, LOCAL self-dispatch subject, NO originator → ACCEPTED, verdict on LOCAL publish path", async () => {
+    const runtime = createRecordingRuntime();
+    // A plain local self-dispatch: NO originator (the requester IS self).
+    const request = makeRequest("typescript");
+    const verdict = buildVerdictEnvelope(request, "approved");
+
+    let pipelineRan = false;
+    const consumer = new ReviewConsumer(
+      baseOpts(
+        federatedOpts({
+          runtime,
+          pipelineRunner: fixedPipeline((opts) => {
+            pipelineRan = true;
+            // A LOCAL inbound bypasses the requester gate → no requester →
+            // local-scope emission (classification undefined), identical to a
+            // non-federated consumer.
+            expect(opts.classification).toBeUndefined();
+            return { kind: "verdict", envelope: verdict };
+          }),
+        }),
+      ),
+    );
+
+    const decision = await consumer.processEnvelope(
+      request,
+      LOCAL_SELF_SUBJECT,
+      null,
+    );
+
+    // The review RUNS and the verdict is ACKed — not denied/dropped.
+    expect(decision).toEqual({ kind: "ack" });
+    expect(pipelineRan).toBe(true);
+
+    // The verdict + lifecycle route on the LOCAL `publish` path (local scope),
+    // NOT the federated `publishOnSubject` path.
+    expect(runtime.publishedOnSubject).toHaveLength(0);
+    expect(runtime.published.map((e) => e.type)).toEqual([
+      "dispatch.task.started",
+      "review.verdict.approved",
+      "dispatch.task.completed",
+    ]);
+  });
+
+  test("2. fail-closed lock — federated subject, NO/malformed originator → STILL DENIED + DROPPED (term, nothing published)", async () => {
+    const runtime = createRecordingRuntime();
+    // Federated subject but no originator block — un-attributable cross-principal.
+    const request = makeFederatedRequest(NO_ORIGINATOR);
+
+    let pipelineRan = false;
+    const consumer = new ReviewConsumer(
+      baseOpts(
+        federatedOpts({
+          runtime,
+          pipelineRunner: fixedPipeline(() => {
+            pipelineRan = true;
+            throw new Error("reviewer must NOT spawn for an un-attributable federated request");
+          }),
+        }),
+      ),
+    );
+
+    const decision = await consumer.processEnvelope(request, FED_SUBJECT, null);
+    expect(decision.kind).toBe("term");
+    expect(pipelineRan).toBe(false);
+    // Nothing reaches any principal — fail closed on the federated path.
+    expect(runtime.published).toHaveLength(0);
+    expect(runtime.publishedOnSubject).toHaveLength(0);
+  });
+
+  test("3. peers[] lock — federated subject, valid originator but requester NOT a peer → STILL DENIED + DROPPED", async () => {
+    const runtime = createRecordingRuntime();
+    // Well-formed DID for `mallory`, who is in no network's peers[].
+    const request = makeFederatedRequest("did:mf:mallory-host");
+
+    let pipelineRan = false;
+    const consumer = new ReviewConsumer(
+      baseOpts(
+        federatedOpts({
+          runtime,
+          pipelineRunner: fixedPipeline(() => {
+            pipelineRan = true;
+            throw new Error("reviewer must NOT spawn for a non-peer requester");
+          }),
+        }),
+      ),
+    );
+
+    const decision = await consumer.processEnvelope(request, FED_SUBJECT, null);
+    expect(decision.kind).toBe("term");
+    expect(pipelineRan).toBe(false);
+    expect(runtime.published).toHaveLength(0);
+    expect(runtime.publishedOnSubject).toHaveLength(0);
+  });
+
+  test("4. verdict-back lock — federated subject, valid peer requester → ACCEPTED, verdict routes to requester's federated scope", async () => {
+    const runtime = createRecordingRuntime();
+    const request = makeFederatedRequest(); // jc.sage-host — a configured peer
+    const verdict = buildVerdictEnvelope(request, "approved");
+
+    const consumer = new ReviewConsumer(
+      baseOpts(
+        federatedOpts({
+          runtime,
+          pipelineRunner: fixedPipeline((opts) => {
+            // Federated inbound → federated sovereignty stamped.
+            expect(opts.classification).toBe("federated");
+            return { kind: "verdict", envelope: verdict };
+          }),
+        }),
+      ),
+    );
+
+    const decision = await consumer.processEnvelope(request, FED_SUBJECT, null);
+    expect(decision).toEqual({ kind: "ack" });
+
+    // Everything routes to the REQUESTER's federated scope (jc.sage-host),
+    // nothing on the local path — the verdict-back path is intact.
+    expect(runtime.published).toHaveLength(0);
+    const subjects = runtime.publishedOnSubject.map((p) => p.subject);
+    expect(subjects).toEqual([
+      "federated.jc.sage-host.dispatch.task.started",
+      "federated.jc.sage-host.review.verdict.approved",
+      "federated.jc.sage-host.dispatch.task.completed",
+    ]);
+  });
+
+  test("5. baseline — federated:false LOCAL inbound → ACCEPTED (unchanged)", async () => {
+    const runtime = createRecordingRuntime();
+    const request = makeRequest("typescript");
+    const verdict = buildVerdictEnvelope(request, "approved");
+    const consumer = new ReviewConsumer(
+      baseOpts({
+        runtime,
+        // federated NOT set.
+        pipelineRunner: fixedPipeline((opts) => {
+          expect(opts.classification).toBeUndefined();
+          return { kind: "verdict", envelope: verdict };
+        }),
+      }),
+    );
+    const decision = await consumer.processEnvelope(
+      request,
+      LOCAL_SELF_SUBJECT,
+      null,
+    );
+    expect(decision).toEqual({ kind: "ack" });
+    expect(runtime.publishedOnSubject).toHaveLength(0);
+    expect(runtime.published.map((e) => e.type)).toEqual([
+      "dispatch.task.started",
+      "review.verdict.approved",
+      "dispatch.task.completed",
+    ]);
+  });
+
+  test("6. foreign originator on a LOCAL subject is IGNORED → ACCEPTED, local-scope emission (not leaked to federated.mallory.*)", async () => {
+    const runtime = createRecordingRuntime();
+    // A LOCAL self-dispatch subject, but the envelope carries a foreign
+    // `originator.identity` for a non-peer (`mallory`). On the local path the
+    // originator MUST be ignored entirely — the requester gate never runs, so
+    // the foreign identity can neither deny the review NOR redirect the verdict
+    // onto a cross-principal `federated.mallory.*` subject. (Adversarial Attack 4.)
+    const request = makeRequest("typescript");
+    (request as { originator?: unknown }).originator = {
+      identity: "did:mf:mallory-evil",
+      attribution: "federated",
+    };
+    const verdict = buildVerdictEnvelope(request, "approved");
+
+    const consumer = new ReviewConsumer(
+      baseOpts(
+        federatedOpts({
+          runtime,
+          pipelineRunner: fixedPipeline((opts) => {
+            // Local path → the foreign originator is never read → no requester →
+            // local-scope (classification undefined).
+            expect(opts.classification).toBeUndefined();
+            return { kind: "verdict", envelope: verdict };
+          }),
+        }),
+      ),
+    );
+
+    const decision = await consumer.processEnvelope(
+      request,
+      LOCAL_SELF_SUBJECT,
+      null,
+    );
+    expect(decision).toEqual({ kind: "ack" });
+
+    // EVERY emission routes on the LOCAL path; NOTHING on `publishOnSubject` —
+    // the foreign originator was not leaked to a `federated.mallory.*` subject.
+    expect(runtime.publishedOnSubject).toHaveLength(0);
+    expect(runtime.published.map((e) => e.type)).toEqual([
+      "dispatch.task.started",
+      "review.verdict.approved",
+      "dispatch.task.completed",
+    ]);
+  });
+
+  test("7. a public.> (third-scope) subject is treated as local / fail-safe → ACCEPTED, local-scope emission", async () => {
+    const runtime = createRecordingRuntime();
+    // Public scope is a near-future spec (`{scope} ∈ local | federated | public`).
+    // `isFederatedRequest` is false for any non-`federated.` prefix, so a
+    // `public.>` inbound bypasses the cross-principal requester/deny gate and
+    // defaults to the local path — the fail-safe default we lock in now.
+    const PUBLIC_SUBJECT =
+      "public.metafactory.meta-factory.tasks.code-review.typescript";
+    const request = makeRequest("typescript");
+    const verdict = buildVerdictEnvelope(request, "approved");
+
+    let pipelineRan = false;
+    const consumer = new ReviewConsumer(
+      baseOpts(
+        federatedOpts({
+          runtime,
+          pipelineRunner: fixedPipeline((opts) => {
+            pipelineRan = true;
+            // Not the federated deny path: the review RUNS, local-scope.
+            expect(opts.classification).toBeUndefined();
+            return { kind: "verdict", envelope: verdict };
+          }),
+        }),
+      ),
+    );
+
+    const decision = await consumer.processEnvelope(
+      request,
+      PUBLIC_SUBJECT,
+      null,
+    );
+    // Did NOT hit the federated deny path (which would term + publish nothing).
+    expect(decision).toEqual({ kind: "ack" });
+    expect(pipelineRan).toBe(true);
+    expect(runtime.publishedOnSubject).toHaveLength(0);
+    expect(runtime.published.map((e) => e.type)).toEqual([
+      "dispatch.task.started",
+      "review.verdict.approved",
+      "dispatch.task.completed",
+    ]);
+  });
+});
+
 describe("ReviewConsumer — federated DIRECT mode (cortex#725, ADR 0001/0002 §2)", () => {
   // pilot#149 Direct dispatch (`--reviewer echo@jc/sage-host`) lands on this
   // stack's OWN `federated.{me}.{my-stack}.tasks.@{did-encoded-reviewer}.code-review.{flavor}`
