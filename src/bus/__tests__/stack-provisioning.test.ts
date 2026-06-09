@@ -31,6 +31,7 @@ import {
   materialFromSeedString,
   buildRegistrationClaim,
   fetchExistingStacks,
+  resolveMergedCapabilities,
   fingerprintOf,
 } from "../stack-provisioning";
 import { nkeyToBase64Pubkey } from "../verify-signed-by-chain";
@@ -460,6 +461,225 @@ describe("C-787 / C-791 — fetchExistingStacks (verified read side of add-stack
     expect(res.kind).toBe("error");
     if (res.kind === "error") {
       expect(res.reason).toMatch(/did not verify/i);
+    }
+  });
+});
+
+// =============================================================================
+// C-819 — capability merge-preserve (stop silent roster eviction)
+// =============================================================================
+//
+// The register route does a FULL-OVERWRITE upsert of the `capabilities` column
+// (store.ts: `capabilities = excluded.capabilities`), identical to the stacks
+// column. Roster membership is IMPLICIT: a principal is "in" network X iff one
+// of its announced capabilities lists X in `capability.networks[]`. So a bare
+// re-register whose claim carries NO capabilities silently zeroes the set and
+// evicts the principal from every roster. `resolveMergedCapabilities` is the
+// capability twin of `resolveMergedStacks`: on the add-stack path it fetches
+// the (verified) existing set and unions the announce in, so an EMPTY announce
+// preserves the existing caps unchanged. These tests pin both the unit merge
+// semantics AND the end-to-end roster-survival behaviour against the real route.
+describe("C-819 — resolveMergedCapabilities preserves caps across re-register", () => {
+  let registryPubkey = "";
+  async function configuredEnv(): Promise<Env> {
+    resetStores();
+    const reg = await makeRegistryKey();
+    registryPubkey = reg.publicKey;
+    return {
+      REGISTRY_SIGNING_KEY: reg.signingKey,
+      REGISTRY_PUBLIC_KEY: reg.publicKey,
+      ENVIRONMENT: "test",
+    };
+  }
+
+  function registryFetch(env: Env): typeof globalThis.fetch {
+    return ((input: Request | string | URL, init?: RequestInit) => {
+      const req = input instanceof Request ? input : new Request(input, init);
+      return registryApp.fetch(req, env);
+    }) as typeof globalThis.fetch;
+  }
+
+  async function post(env: Env, path: string, body: unknown): Promise<Response> {
+    return registryApp.fetch(
+      new Request(`http://registry.test${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      env,
+    );
+  }
+
+  async function rosterMembers(env: Env, networkId: string): Promise<string[]> {
+    const res = await registryApp.fetch(
+      new Request(`http://registry.test/networks/${networkId}/roster`),
+      env,
+    );
+    const json = (await res.json()) as {
+      payload: { members: { principal_id: string }[] };
+    };
+    return json.payload.members.map((m) => m.principal_id).sort();
+  }
+
+  /**
+   * Seed principal `jc` with a single stack that announces a `community-net`
+   * capability — so JC lands on the `community-net` roster (the live repro:
+   * `metafactory-community` listed `jc`). Returns the root material so a later
+   * re-register can sign as the same root (the rotation gate requires it).
+   */
+  async function seedJcWithCommunityCaps(env: Env) {
+    const root = generateStackIdentity({ seedPath: join(freshDir(), "jc-root.nk") });
+    const body = await buildRegistrationClaim({
+      principalId: "jc",
+      material: root,
+      stacks: [{ stack_id: "jc/meta-factory" }],
+      capabilities: [
+        { id: "tasks.code-review", description: "JC reviews", networks: ["community-net"] },
+      ],
+    });
+    await post(env, "/principals/jc/register", body);
+    return root;
+  }
+
+  test("ACCEPTANCE — a bare add-stack register (empty announce) preserves JC's caps + roster membership", async () => {
+    const env = await configuredEnv();
+    const root = await seedJcWithCommunityCaps(env);
+
+    // Precondition: JC is on the community roster.
+    expect(await rosterMembers(env, "community-net")).toEqual(["jc"]);
+
+    // Now stand up `jc/clawbox` (the live repro). It is a SECOND stack added by
+    // the principal root, announcing NO capabilities of its own. The CLI mirrors
+    // the stacks merge: resolveMergedCapabilities with an EMPTY announce.
+    const caps = await resolveMergedCapabilities({
+      principalId: "jc",
+      registryUrl: "http://registry.test",
+      registryPubkey,
+      announce: [], // provision-stack register announces no caps
+      isAddStack: true,
+      fetchImpl: registryFetch(env),
+    });
+    expect(caps.ok).toBe(true);
+    if (!caps.ok) throw new Error(caps.reason);
+    // Empty ∪ existing = existing — the community cap survives the merge.
+    expect(caps.capabilities.map((cc) => cc.id)).toEqual(["tasks.code-review"]);
+    expect(caps.capabilities[0]!.networks).toEqual(["community-net"]);
+
+    // The new stack (root re-attests the FULL stack set, here just the merged
+    // caps drive the assertion). Build + POST the re-register the CLI would.
+    const newStack = generateStackIdentity({ seedPath: join(freshDir(), "jc-clawbox.nk") });
+    const body = await buildRegistrationClaim({
+      principalId: "jc",
+      material: newStack,
+      rootMaterial: root, // root signs the add-stack
+      stacks: [{ stack_id: "jc/meta-factory" }, { stack_id: "jc/clawbox" }],
+      capabilities: caps.capabilities, // the PRESERVED set
+    });
+    const res = await post(env, "/principals/jc/register", body);
+    expect(res.status).toBe(201);
+
+    // The footgun is closed: JC is STILL on the community roster.
+    expect(await rosterMembers(env, "community-net")).toEqual(["jc"]);
+  });
+
+  test("REGRESSION GUARD — WITHOUT the merge (empty caps claim), the route DOES wipe + evict", async () => {
+    // Proves the merge is load-bearing: the same re-register WITHOUT
+    // resolveMergedCapabilities (empty caps in the claim) zeroes the set and
+    // evicts JC. This is the bug; the test above is the fix.
+    const env = await configuredEnv();
+    const root = await seedJcWithCommunityCaps(env);
+    expect(await rosterMembers(env, "community-net")).toEqual(["jc"]);
+
+    const newStack = generateStackIdentity({ seedPath: join(freshDir(), "jc-clawbox.nk") });
+    const body = await buildRegistrationClaim({
+      principalId: "jc",
+      material: newStack,
+      rootMaterial: root,
+      stacks: [{ stack_id: "jc/meta-factory" }, { stack_id: "jc/clawbox" }],
+      // capabilities omitted → defaults to [] → full-overwrite to empty.
+    });
+    const res = await post(env, "/principals/jc/register", body);
+    expect(res.status).toBe(201);
+    // Roster eviction reproduced (jc → empty).
+    expect(await rosterMembers(env, "community-net")).toEqual([]);
+  });
+
+  test("union — a NEW announce is added, existing unrelated caps are kept (same-id new wins)", async () => {
+    const env = await configuredEnv();
+    const root = generateStackIdentity({ seedPath: join(freshDir(), "p-root.nk") });
+    // Seed with two caps across two networks.
+    await post(
+      env,
+      "/principals/p/register",
+      await buildRegistrationClaim({
+        principalId: "p",
+        material: root,
+        stacks: [{ stack_id: "p/s1" }],
+        capabilities: [
+          { id: "tasks.review", description: "old desc", networks: ["net-a"] },
+          { id: "tasks.deploy", networks: ["net-b"] },
+        ],
+      }),
+    );
+
+    const caps = await resolveMergedCapabilities({
+      principalId: "p",
+      registryUrl: "http://registry.test",
+      registryPubkey,
+      // Re-announce an EXISTING id into a new network + add a brand-new id.
+      announce: [
+        { id: "tasks.review", description: "new desc", networks: ["net-c"] },
+        { id: "tasks.fresh", networks: ["net-d"] },
+      ],
+      isAddStack: true,
+      fetchImpl: registryFetch(env),
+    });
+    expect(caps.ok).toBe(true);
+    if (!caps.ok) throw new Error(caps.reason);
+
+    const byId = new Map(caps.capabilities.map((cc) => [cc.id, cc]));
+    // Unrelated existing cap kept untouched.
+    expect(byId.get("tasks.deploy")?.networks).toEqual(["net-b"]);
+    // Same-id: networks UNIONED, description updated to the new claim's.
+    expect(byId.get("tasks.review")?.networks).toEqual(["net-a", "net-c"]);
+    expect(byId.get("tasks.review")?.description).toBe("new desc");
+    // Brand-new id appended.
+    expect(byId.get("tasks.fresh")?.networks).toEqual(["net-d"]);
+  });
+
+  test("first register (isAddStack=false) — announce passes through unchanged, no fetch", async () => {
+    // On a first register there is nothing on record to preserve; the merge is
+    // a pure pass-through and never touches the registry (a failing fetch would
+    // throw if it did).
+    const failingFetch = (() =>
+      Promise.reject(new Error("must not be called"))) as unknown as typeof globalThis.fetch;
+    const caps = await resolveMergedCapabilities({
+      principalId: "newcomer",
+      registryUrl: "http://registry.test",
+      registryPubkey: "unused",
+      announce: [{ id: "tasks.x", networks: ["net-z"] }],
+      isAddStack: false,
+      fetchImpl: failingFetch,
+    });
+    expect(caps.ok).toBe(true);
+    if (!caps.ok) throw new Error(caps.reason);
+    expect(caps.capabilities).toEqual([{ id: "tasks.x", networks: ["net-z"] }]);
+  });
+
+  test("error — an unverifiable read ABORTS (never overwrites caps off a partial/unverified read)", async () => {
+    const failingFetch = (() =>
+      Promise.reject(new Error("connection refused"))) as unknown as typeof globalThis.fetch;
+    const caps = await resolveMergedCapabilities({
+      principalId: "jc",
+      registryUrl: "http://registry.test",
+      registryPubkey: "anything",
+      announce: [],
+      isAddStack: true,
+      fetchImpl: failingFetch,
+    });
+    expect(caps.ok).toBe(false);
+    if (!caps.ok) {
+      expect(caps.reason).toMatch(/connection refused|without dropping/i);
     }
   });
 });

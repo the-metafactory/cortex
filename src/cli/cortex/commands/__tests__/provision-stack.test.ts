@@ -18,6 +18,14 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { dispatchProvisionStack } from "../provision-stack";
+// C-819 — seed an existing principal that ALREADY announces network caps (the
+// CLI register path announces none), so the add-stack preservation can be
+// asserted end-to-end. Same NKey root the CLI uses, so the rotation gate admits
+// the later add-stack.
+import {
+  buildRegistrationClaim,
+  materialFromSeedString,
+} from "../../../../bus/stack-provisioning";
 
 // Real registry route for the register round-trip.
 import registryApp from "../../../../services/network-registry/src/index";
@@ -389,6 +397,97 @@ describe("cortex provision-stack register — C-787 add-stack (no data loss)", (
       );
       const json = (await getRes.json()) as { payload: { stacks: { stack_id: string }[] } };
       expect(json.payload.stacks.map((s) => s.stack_id)).toEqual(["andreas/meta-factory"]);
+    } finally {
+      restore();
+    }
+  });
+
+  // ===========================================================================
+  // C-819 — add-stack register PRESERVES the principal's capabilities (and thus
+  // their roster membership). Live repro: standing up `jc/clawbox` dropped JC's
+  // community caps → `metafactory-community` roster went `jc → empty`.
+  // ===========================================================================
+  test("C-819 — adding a 2nd stack PRESERVES the principal's caps + roster membership", async () => {
+    const env = await configuredEnv();
+    const dir = freshDir();
+    const rootSeed = join(dir, "jc-root.nk"); // principal ROOT (first stack)
+    const clawboxSeed = join(dir, "jc-clawbox.nk"); // the joining stack's own key
+
+    await dispatchProvisionStack(["generate", "jc", "--seed-path", rootSeed]);
+    await dispatchProvisionStack(["generate", "jc", "--seed-path", clawboxSeed]);
+
+    const restore = routeFetchToRegistry(env);
+    try {
+      // 1. Seed `jc` WITH a community capability so JC lands on the community
+      //    roster. The CLI register announces no caps, so build this first claim
+      //    (with caps) directly using the SAME NKey root the CLI generated.
+      const root = materialFromSeedString(readFileSync(rootSeed, "utf-8"));
+      const seedBody = await buildRegistrationClaim({
+        principalId: "jc",
+        material: root,
+        stacks: [{ stack_id: "jc/meta-factory" }],
+        capabilities: [
+          { id: "tasks.code-review", description: "JC reviews", networks: ["community-net"] },
+        ],
+      });
+      const seedRes = await registryApp.fetch(
+        new Request("http://registry.test/principals/jc/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(seedBody),
+        }),
+        env,
+      );
+      expect(seedRes.status).toBe(201);
+
+      // Precondition: JC is on the community roster.
+      const rosterBefore = await registryApp.fetch(
+        new Request("http://registry.test/networks/community-net/roster"),
+        env,
+      );
+      const before = (await rosterBefore.json()) as {
+        payload: { members: { principal_id: string }[] };
+      };
+      expect(before.payload.members.map((m) => m.principal_id)).toEqual(["jc"]);
+
+      // 2. Stand up `jc/clawbox` via the CLI add-stack path (root-signed). It
+      //    announces NO caps — pre-fix this zeroed JC's cap set.
+      const add = await dispatchProvisionStack([
+        "register", "jc",
+        "--seed-path", clawboxSeed,
+        "--stack-id", "jc/clawbox",
+        "--principal-seed", rootSeed,
+        "--registry-url", "http://registry.test",
+        "--registry-pubkey", registryPubkey,
+      ]);
+      expect(add.exitCode).toBe(0);
+
+      // 3. JC's caps survived → JC is STILL on the community roster (footgun closed).
+      const rosterAfter = await registryApp.fetch(
+        new Request("http://registry.test/networks/community-net/roster"),
+        env,
+      );
+      const after = (await rosterAfter.json()) as {
+        payload: { members: { principal_id: string }[] };
+      };
+      expect(after.payload.members.map((m) => m.principal_id)).toEqual(["jc"]);
+
+      // And both stacks are present (no regression to the C-787 stack merge).
+      const getRes = await registryApp.fetch(
+        new Request("http://registry.test/principals/jc"),
+        env,
+      );
+      const principal = (await getRes.json()) as {
+        payload: {
+          stacks: { stack_id: string }[];
+          capabilities: { id: string; networks?: string[] }[];
+        };
+      };
+      expect(principal.payload.stacks.map((s) => s.stack_id).sort()).toEqual([
+        "jc/clawbox",
+        "jc/meta-factory",
+      ]);
+      expect(principal.payload.capabilities.map((cc) => cc.id)).toEqual(["tasks.code-review"]);
     } finally {
       restore();
     }

@@ -57,6 +57,7 @@ import {
   buildRegistrationClaim,
   registerStackIdentity,
   resolveMergedStacks,
+  resolveMergedCapabilities,
   type StackIdentityMaterial,
   type SignedRegistrationBody,
 } from "../../../bus/stack-provisioning";
@@ -369,15 +370,40 @@ async function doRegister(
   // merge the new one in, so the root re-attests the full set and the route's
   // overwrite becomes correct. C-791 — the merge-read is signature-verified
   // against `registryPubkey` (fail closed on the add-stack path when absent).
+  const isAddStack = rootMaterial !== undefined;
+
   const stacksRes = await resolveMergedStacks({
     principalId,
     stackId,
     stackPubkey: material.pubkeyB64,
     registryUrl,
     ...(registryPubkey !== undefined && { registryPubkey }),
-    isAddStack: rootMaterial !== undefined,
+    isAddStack,
   });
   if (!stacksRes.ok) return { ok: false, reason: stacksRes.reason };
+
+  // C-819 — merge-preserve CAPABILITIES, mirroring the stacks merge above. The
+  // register route does the SAME full-overwrite upsert on the `capabilities`
+  // column (store.ts: `capabilities = excluded.capabilities`), so a claim that
+  // carries no caps zeroes the principal's existing set — silently evicting
+  // them from every network roster (membership is implicit via
+  // `capability.networks[]`). `provision-stack register` announces NO new caps
+  // (it provisions a stack IDENTITY, not a network membership — that is what
+  // `cortex network join` is for), so its `announce` is empty: on the add-stack
+  // path the fetch+verify+union therefore PRESERVES the principal's existing
+  // caps unchanged (empty ∪ existing = existing), and on a first register there
+  // is nothing on record to preserve. Same `isAddStack`/`registryPubkey` gating
+  // as the stacks merge keeps the two consistent (and shares the C-791
+  // fail-closed verified read). A register that genuinely intends to SHRINK
+  // caps is out of scope for this command — it never announces caps at all.
+  const capsRes = await resolveMergedCapabilities({
+    principalId,
+    registryUrl,
+    ...(registryPubkey !== undefined && { registryPubkey }),
+    announce: [],
+    isAddStack,
+  });
+  if (!capsRes.ok) return { ok: false, reason: capsRes.reason };
 
   let body: SignedRegistrationBody;
   try {
@@ -389,6 +415,9 @@ async function doRegister(
       // and `material` both declares + signs (pre-C-787 behaviour).
       ...(rootMaterial !== undefined && { rootMaterial }),
       stacks: stacksRes.stacks,
+      // C-819 — re-attest the merged (preserved) capability set so the route's
+      // full-overwrite writes the complete set instead of clobbering to empty.
+      capabilities: capsRes.capabilities,
     });
   } catch (err) {
     return { ok: false, reason: `failed to build registration claim: ${err instanceof Error ? err.message : String(err)}` };
