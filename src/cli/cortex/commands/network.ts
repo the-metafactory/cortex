@@ -669,9 +669,25 @@ async function runPing(
   if (!timeout.ok) return usageError("ping", timeout.reason, json);
 
   // Load config (the #753 seam). A missing/broken config is an op-error.
+  // #830 — resolve the LOCAL stack's config LAYOUT-AWARE (port of #814's status
+  // resolver) so ping reads the file the daemon composes `peers[]` from on a
+  // config-split stack, instead of the flat default monolith (which made ping
+  // report `not-configured` for a peer that IS in the split policy). Explicit
+  // `--config` wins; otherwise `--stack` selects the slug (none → the
+  // `meta-factory` bare-name default, handled inside resolveStatusConfigPath).
   let cfg;
   try {
-    cfg = load(expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH));
+    const explicitConfig = optionalValueFlag(flags, "--config");
+    const stackFlag = optionalValueFlag(flags, "--stack");
+    const localSlug =
+      stackFlag === undefined
+        ? "default"
+        : stackFlag.includes("/")
+          ? (stackFlag.split("/")[1] ?? "default")
+          : stackFlag;
+    const configPath =
+      explicitConfig !== undefined ? expandTilde(explicitConfig) : resolveStatusConfigPath(localSlug);
+    cfg = load(configPath);
   } catch (err) {
     return opError("ping", `config load failed: ${err instanceof Error ? err.message : String(err)}`, json);
   }

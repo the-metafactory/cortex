@@ -115,6 +115,22 @@ describe("cortex network ping — verdicts + exit codes", () => {
     expect(bus.stopped()).toBe(true);
   });
 
+  test("#830 resolves the LOCAL stack config layout-aware from --stack (not the flat default)", async () => {
+    // The bug: ping ignored --stack/--principal and read the flat
+    // DEFAULT_CONFIG_PATH (~/.config/cortex/cortex.yaml), so a config-split stack's
+    // peers were invisible → false not-configured. The fix ports #814's
+    // resolveStatusConfigPath: --stack selects the slug-specific locator.
+    let seenPath = "";
+    const capturingReader = (path: string): LoadedConfig => {
+      seenPath = path;
+      return readerWithPeer()();
+    };
+    const bus = fakeBusFactory((f) => echoReply(f, 41));
+    await dispatchNetwork(["ping", "jc", "--stack", "andreas/c830slice"], capturingReader, bus.factory);
+    expect(seenPath).toContain("c830slice"); // slug-specific locator, honoured --stack
+    expect(seenPath.endsWith("/cortex.yaml")).toBe(false); // NOT the bare flat default
+  });
+
   test("not-configured — exit 2, bus NEVER built (nothing emitted)", async () => {
     const bus = fakeBusFactory((f) => echoReply(f, 1));
     const res = await dispatchNetwork(

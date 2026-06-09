@@ -903,14 +903,18 @@ export const DEFAULT_HEALTH_PROBE_TIMEOUT_MS = 5000;
  *   3. the upstream default `:8222`.
  * The config read is best-effort (a missing/unreadable file just falls through).
  */
-function resolveMonitorBase(cfg: LivePortsConfig): string {
-  if (cfg.monitorUrl !== undefined && cfg.monitorUrl !== "") return cfg.monitorUrl;
+function resolveMonitorBase(cfg: LivePortsConfig): { url: string; configured: boolean } {
+  // #831 — `configured` says whether THIS bus actually declares a monitor
+  // (explicit `--monitor-url` or an `http_port`/`monitor` in its nats config),
+  // vs falling back to the upstream default `:8222`. The health probe uses it to
+  // treat an absent monitor as INCONCLUSIVE rather than a failure.
+  if (cfg.monitorUrl !== undefined && cfg.monitorUrl !== "") return { url: cfg.monitorUrl, configured: true };
   const configPath = expandTilde(cfg.natsConfigPath ?? "");
   if (configPath.length > 0 && existsSync(configPath)) {
     const derived = natsConfigMonitorUrl(readFileSync(configPath, "utf-8"));
-    if (derived !== undefined) return derived;
+    if (derived !== undefined) return { url: derived, configured: true };
   }
-  return DEFAULT_MONITOR_URL;
+  return { url: DEFAULT_MONITOR_URL, configured: false };
 }
 
 function buildNatsServerPort(cfg: LivePortsConfig, mutate: boolean): NatsServerPort {
@@ -981,7 +985,15 @@ function buildNatsServerPort(cfg: LivePortsConfig, mutate: boolean): NatsServerP
       // join. Precedence: explicit --monitor-url wins; else derive the port from
       // the stack's nats config (`http_port`/`monitor_port`/`http`); else the
       // upstream default.
-      const base = resolveMonitorBase(cfg).replace(/\/+$/, "");
+      const monitor = resolveMonitorBase(cfg);
+      // #831 — when THIS bus declares no monitor, the liveness probe is
+      // INCONCLUSIVE, not a failure. `restart()` already exited 0; without a
+      // monitor we cannot confirm liveness, but we MUST NOT roll back a join
+      // whose policy + peer were already written (the false-FAIL incident: a
+      // single-file `local.conf` with no `http_port` ECONNREFUSED `:8222` and
+      // rolled back a good join). Absent monitor → treat as healthy.
+      if (!monitor.configured) return { healthy: true };
+      const base = monitor.url.replace(/\/+$/, "");
       // #821 MAJOR — BOUND the probe. A monitor that accepts the TCP connection
       // but never responds (hung/deadlocked nats-server — exactly the failure the
       // probe exists to catch) would hang an unbounded `fetch` forever and stall
@@ -1041,7 +1053,7 @@ export function buildLeafStatePort(cfg: LivePortsConfig): LeafStatePort {
   // #821 MAJOR (code-review) — use the SAME monitor-base resolution as the health
   // probe (explicit flag → derived-from-config → default), so status reads the
   // bus's OWN monitor port (community :8224) instead of the wrong default :8222.
-  const base = resolveMonitorBase(cfg).replace(/\/+$/, "");
+  const base = resolveMonitorBase(cfg).url.replace(/\/+$/, "");
   return {
     async linkStates() {
       try {

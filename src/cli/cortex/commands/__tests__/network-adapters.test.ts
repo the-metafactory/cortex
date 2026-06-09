@@ -938,6 +938,24 @@ describe("#821 live leaf-file pre-flight + rollback adapters", () => {
     expect(res.healthy).toBe(true);
   });
 
+  test("#831 isHealthy is INCONCLUSIVE (healthy) when the bus declares no monitor", async () => {
+    // JC's single-file local.conf had no http_port → resolveMonitorBase fell
+    // back to :8222 and the probe ECONNREFUSED-rolled-back a GOOD join. With no
+    // monitor configured the probe is inconclusive, not a failure → healthy:true.
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    writeFileSync(conf, "listen: 127.0.0.1:4222\n", "utf-8"); // no http_port
+    const ports = buildLivePorts(cfgWithConfig(conf)); // no monitorUrl
+    const res = await ports.natsServer!.isHealthy();
+    expect(res.healthy).toBe(true);
+  });
+
+  test("#831 a CONFIGURED-but-down monitor still reports UNhealthy (safety intact)", async () => {
+    const ports = buildLivePorts({ ...cfgWithConfig("/x/local.conf"), monitorUrl: "http://127.0.0.1:1" });
+    const res = await ports.natsServer!.isHealthy();
+    expect(res.healthy).toBe(false);
+  });
+
   test("MAJOR: isHealthy TIMES OUT (healthy:false) when the monitor accepts but never responds", async () => {
     // A nats-server that accepts the monitor TCP connection but HANGS (never
     // sends a response) is exactly the deadlock the probe exists to catch. An
