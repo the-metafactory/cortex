@@ -104,6 +104,30 @@ describe("create validation", () => {
     expect(res.stdout).toContain("andreas/research_2026");
   });
 
+  test("rejects a --display-name with a newline (YAML-injection guard) → exit 2, writes nothing", async () => {
+    const cfg = freshDir();
+    const res = await dispatchStack([
+      "create", "research", "--principal", "andreas", "--config-dir", cfg,
+      "--display-name", "Luna\n    roles:\n      - injected-superuser", "--apply",
+    ]);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain("display-name");
+    expect(existsSync(join(cfg, "research"))).toBe(false);
+  });
+
+  test("--apply with YAML-special chars in --display-name stays born-loadable", async () => {
+    const cfg = freshDir();
+    const res = await dispatchStack([
+      "create", "research", "--principal", "andreas", "--config-dir", cfg,
+      "--display-name", 'Ivy: the #1 "researcher"', "--apply",
+    ]);
+    expect(res.exitCode).toBe(0);
+    // The colon/hash/quotes survive inside a valid YAML scalar (JSON.stringify
+    // quoting), so the scaffold still composes through the real loader.
+    const loaded = loadConfigWithAgents(join(cfg, "research", "research.yaml"));
+    expect(loaded.stack?.id).toBe("andreas/research");
+  });
+
   test("no principal and no existing stack to infer from → exit 2", async () => {
     const cfg = freshDir();
     const res = await dispatchStack(["create", "research", "--config-dir", cfg]);

@@ -64,7 +64,10 @@ function configFileToSlug(filename: string): string | undefined {
  * `{principal}/{slug}` literal, or undefined when absent/unparseable.
  *
  * Deliberately a line scan (not a YAML parse) to match the install-time awk
- * extraction exactly — the SAME bytes the drift detector reads.
+ * extraction on every well-formed config — the same `stack.id` the drift
+ * detector reads. (Both this scan and the awk converge to undefined on the
+ * degenerate cases — flow-style `stack: {id: …}`, an empty `id:` — and the real
+ * loader rejects those configs anyway, so neither is a reachable dup bypass.)
  */
 function extractStackId(configPath: string): string | undefined {
   let text: string;
@@ -442,7 +445,7 @@ policy:
 # -----------------------------------------------------------------------------
 agents:
   - id: ${agentId}
-    displayName: ${displayName}
+    displayName: ${JSON.stringify(displayName)}
     persona: ./personas/${agentId}.md
     nkey_pub: ${NKEY_PUB_PLACEHOLDER}  # <REPLACE_ME>: ${agentId}'s U-prefixed pubkey
     roles: []

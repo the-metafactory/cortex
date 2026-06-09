@@ -33,7 +33,7 @@
  * Exit codes: 0 success · 1 operational failure (conflict / write error) · 2 usage.
  */
 
-import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
 
@@ -209,6 +209,20 @@ function runCreate(
     );
   }
   const displayName = optionalValueFlag(flags, "--display-name") ?? capitalize(agentId);
+  // --display-name is the one free-form input — it gets interpolated into the
+  // generated YAML (stacks/<slug>.yaml `displayName:`) and the persona stub.
+  // Reject control characters (the YAML-injection vector: a newline payload
+  // could inject sibling keys — a forged nkey_pub, extra roles); the YAML emit
+  // also JSON-quotes the scalar as defense-in-depth (stack-lib renderScaffold).
+  // Allow ordinary printable text (spaces, unicode, punctuation), capped.
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(displayName) || displayName.length > 64) {
+    return usageError(
+      "create",
+      `--display-name must be a single line of printable text (≤64 chars, no control characters)`,
+      json,
+    );
+  }
 
   // --- derive the born-aligned stack id ------------------------------------
   const stackId = `${principal}/${slug}`;
@@ -271,9 +285,23 @@ function runCreate(
       writeFileSync(dest, f.contents);
     }
   } catch (err) {
+    // Roll back the partial scaffold so a mid-write failure (ENOSPC, EACCES on
+    // a subpath, …) doesn't leave a half-written, non-loadable dir that the
+    // dir-collision guard (above) would then refuse to re-create. targetDir was
+    // confirmed ABSENT before the scan, so the whole subtree is owned by this
+    // command — safe to remove. force:true swallows already-gone.
+    try {
+      rmSync(targetDir, { recursive: true, force: true });
+    } catch (cleanupErr) {
+      // Best-effort cleanup; surface it so the principal knows a manual rm may
+      // be needed, but the original write error stays the primary failure.
+      process.stderr.write(
+        `  ⚠ stack create: rollback of ${targetDir} failed: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}\n`,
+      );
+    }
     return opError(
       "create",
-      `write failed: ${err instanceof Error ? err.message : String(err)}`,
+      `write failed (partial scaffold rolled back): ${err instanceof Error ? err.message : String(err)}`,
       json,
     );
   }
