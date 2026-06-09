@@ -46,8 +46,9 @@ stack:
   nkey_seed_path: ~/.config/nats/cortex-research.nk   # SU…-prefixed NATS user seed, chmod 600
   # 56-char base32 NKey public key (U…-prefixed). Pin it so boot catches a
   # rotated-seed split-brain. Omit on first install; paste from the cortex log
-  # line `stack signing key staged — principal=…` after first boot.
-  nkey_pub: <REPLACE_ME>                        # <REPLACE_ME>: U-prefixed pubkey from the seed
+  # line `stack signing key staged — principal=…` after first boot. The all-A
+  # value below is a valid-FORMAT placeholder so the example loads — REPLACE it.
+  nkey_pub: UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA  # <REPLACE_ME>: U-prefixed pubkey from the seed
 
 # -----------------------------------------------------------------------------
 # capabilities — STACK CATALOG (source of truth for capability-dispatch)
@@ -79,7 +80,7 @@ policy:
     - id: ivy                      # the stack's own signing identity (the agent)
       home_principal: andreas      # <REPLACE_ME>: keep in sync with principal.id
       home_stack: andreas/research # <REPLACE_ME>: keep in sync with stack.id
-      nkey_pub: <REPLACE_ME>       # <REPLACE_ME>: ivy's U-prefixed pubkey (matches agents[].nkey_pub)
+      nkey_pub: UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA  # <REPLACE_ME>: ivy's U-prefixed pubkey (matches agents[].nkey_pub)
       role:
         - principal-role
       trust: []
@@ -121,7 +122,7 @@ agents:
     # public key (U-prefixed) from its NATS creds. Without it a peer signing as
     # did:mf:ivy is rejected `principal_has_no_nkey_pub` (falls back to
     # platform-id trust only). Must match the policy principal `ivy` above.
-    nkey_pub: <REPLACE_ME>         # <REPLACE_ME>: ivy's U-prefixed pubkey
+    nkey_pub: UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA  # <REPLACE_ME>: ivy's U-prefixed pubkey
     roles: []
     trust: []
     runtime:
