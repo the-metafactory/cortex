@@ -102,6 +102,42 @@ export async function postMessage(
   return { success: true, messageId: data.id };
 }
 
+export interface CreateThreadResult {
+  success: boolean;
+  threadId?: string;
+  error?: string;
+}
+
+/**
+ * Create a public thread from an existing message.
+ * Discord: POST /channels/{channelId}/messages/{messageId}/threads
+ */
+export async function createThreadFromMessage(
+  botToken: string,
+  channelId: string,
+  messageId: string,
+  name: string,
+  autoArchiveMinutes: 60 | 1440 | 4320 | 10080 = 10080
+): Promise<CreateThreadResult> {
+  // Discord caps thread names at 100 characters
+  const res = await fetch(`${DISCORD_API}/channels/${channelId}/messages/${messageId}/threads`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bot ${botToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ name: name.slice(0, 100), auto_archive_duration: autoArchiveMinutes }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    return { success: false, error: `${res.status}: ${text}` };
+  }
+
+  const data = (await res.json()) as { id: string };
+  return { success: true, threadId: data.id };
+}
+
 /**
  * Resolve a channel name to its ID via bot API.
  */

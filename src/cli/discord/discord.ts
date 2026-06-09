@@ -12,7 +12,7 @@ import { loadConfig, saveConfig, getConfigPath } from "./lib/config";
 import { resolveServerContext, registerServerProfile, ServerContextError } from "./lib/server-context";
 import type { ResolvedServerContext, ServerContextOptions } from "./lib/server-context";
 import type { DiscordCliConfig } from "./lib/config";
-import { postMessage, resolveChannelByName, resolveThreadByName, readMessages, listChannels, listThreads } from "./lib/discord";
+import { postMessage, createThreadFromMessage, resolveChannelByName, resolveThreadByName, readMessages, listChannels, listThreads } from "./lib/discord";
 
 // Per-command option shapes. Commander's typing is permissive; pinning each
 // `.action((opts) => …)` to the concrete shape lets the typed-checked preset
@@ -21,6 +21,7 @@ import { postMessage, resolveChannelByName, resolveThreadByName, readMessages, l
 interface PostOptions extends ServerContextOptions {
   channel?: string;
   thread?: string;
+  createThread?: string;
 }
 interface ReadOptions extends ServerContextOptions {
   channel?: string;
@@ -71,12 +72,18 @@ program
   .argument("<message...>", "Message text (multiple words joined)")
   .option("-c, --channel <name>", "Channel name (default: defaultChannel from config)")
   .option("-t, --thread <name-or-id>", "Thread name or ID to post into")
+  .option("-T, --create-thread <name>", "Create a thread from the posted message and print its ID")
   .option("-g, --guild <id>", "Guild ID to resolve channel/thread names against (overrides config)")
   .option("-s, --server <name>", "Named server profile from config (layers guildId + overrides)")
   .action(async (messageParts: string[], opts: PostOptions) => {
     const config = loadConfig();
     const ctx = resolveContextOrExit(config, opts);
     const message = messageParts.join(" ");
+
+    if (opts.thread && opts.createThread) {
+      console.error("--thread and --create-thread are mutually exclusive (a thread cannot contain a thread).");
+      process.exit(1);
+    }
 
     if (!ctx.botToken) {
       console.error("Bot token required. Run: discord config set botToken <token>");
@@ -130,11 +137,24 @@ program
     }
 
     const result = await postMessage(ctx.botToken, targetId, message);
-    if (result.success) {
-      console.log(`Posted to #${channelName}${opts.thread ? ` (thread)` : ""}`);
-    } else {
+    if (!result.success) {
       console.error(`Failed: ${result.error}`);
       process.exit(1);
+    }
+    console.log(`Posted to #${channelName}${opts.thread ? ` (thread)` : ""}`);
+
+    if (opts.createThread) {
+      if (!result.messageId) {
+        console.error("Cannot create thread: Discord did not return a message id.");
+        process.exit(1);
+      }
+      const thread = await createThreadFromMessage(ctx.botToken, targetId, result.messageId, opts.createThread);
+      if (!thread.success) {
+        console.error(`Thread creation failed: ${thread.error}`);
+        process.exit(1);
+      }
+      // Machine-readable last line — callers parse this id to post follow-ups via --thread
+      console.log(`thread:${thread.threadId}`);
     }
   });
 
