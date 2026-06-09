@@ -375,6 +375,27 @@ function resolveStatusConfigPath(slug: string): string {
 }
 
 /**
+ * #830 — resolve the LOCAL stack's config path for a network command, layout-aware:
+ * explicit `--config` wins; otherwise the `--stack` flag (full `{principal}/{slug}`
+ * or a bare slug) selects the slug and {@link resolveStatusConfigPath} maps it to
+ * the split sentinel or the legacy monolith. Shared so `ping` and any future
+ * command resolve identically to `status` and can't drift (the gap that made ping
+ * read the flat default and report `not-configured` for a config-split peer).
+ */
+function resolveLocalStackConfigPath(flags: Record<string, string | true>): string {
+  const explicitConfig = optionalValueFlag(flags, "--config");
+  if (explicitConfig !== undefined) return expandTilde(explicitConfig);
+  const stackFlag = optionalValueFlag(flags, "--stack");
+  const slug =
+    stackFlag === undefined
+      ? "default"
+      : stackFlag.includes("/")
+        ? (stackFlag.split("/")[1] ?? "default")
+        : stackFlag;
+  return resolveStatusConfigPath(slug);
+}
+
+/**
  * `join`/`leave` mutate the live deployment. The DEFAULT is dry-run (safe);
  * `--apply` opts into real mutation. `--dry-run` is accepted explicitly too.
  * `--apply` and `--dry-run` together is a usage error.
@@ -677,17 +698,7 @@ async function runPing(
   // `meta-factory` bare-name default, handled inside resolveStatusConfigPath).
   let cfg;
   try {
-    const explicitConfig = optionalValueFlag(flags, "--config");
-    const stackFlag = optionalValueFlag(flags, "--stack");
-    const localSlug =
-      stackFlag === undefined
-        ? "default"
-        : stackFlag.includes("/")
-          ? (stackFlag.split("/")[1] ?? "default")
-          : stackFlag;
-    const configPath =
-      explicitConfig !== undefined ? expandTilde(explicitConfig) : resolveStatusConfigPath(localSlug);
-    cfg = load(configPath);
+    cfg = load(resolveLocalStackConfigPath(flags));
   } catch (err) {
     return opError("ping", `config load failed: ${err instanceof Error ? err.message : String(err)}`, json);
   }
