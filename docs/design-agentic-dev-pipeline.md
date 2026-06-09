@@ -106,7 +106,7 @@ Gates are **data, not code** — per-repo/per-risk configuration in the process 
 | release/deploy | always-human (prod); auto-allowed for dev-env | deployment SOP |
 | retro→SOP change | always-human (it edits the procedural tier) | DD-P4 |
 | review-cycle cap | 5 per PR → `waiting_human` | spec 0002 |
-| **fleet concurrency cap** | max N concurrent `dev.implement` claims fleet-wide (v1 default: 1 per repo, 3 total) | new |
+| **fleet concurrency cap** | max N concurrent `dev.implement` claims fleet-wide (v1 default: 3) — a **cost** cap, not a serialization rule: parallel claims in one repo are fine (worktree isolation), and overlap is managed at merge time by the staleness/rebase gate *(resolved 2026-06-10)* | new |
 | **cost budget** | per-errand + per-run token/cost budget; hard stop → `waiting_human` | new |
 | **dead-man's switch** | N consecutive failed/aborted slices (default 2) → pause the whole run + escalate | new |
 
@@ -129,6 +129,10 @@ The dev agent writes code and pushes branches — its authority must be explicit
 
 This is what makes "stop running the fleet on my personal machine" and "scale dev agents horizontally" config changes instead of projects.
 
+### 3.6b Session continuity — warm sessions per errand
+
+Cortex's dispatch path today is **single-shot**: every dispatch spawns a fresh CC session, so each fix cycle re-reads the world — the flaw behind the old loop's 270s cache-window fragility. The dev-loop makes session continuity first-class: the dev agent keeps a **warm session per errand** — a fix cycle *resumes* the session that implemented the slice (the session-manager `--resume` pattern chat threads already use, applied to dispatch), and **agent-state durably maps errand → session id** so a restarted agent resumes rather than restarts. Cache economics become a session-reuse policy (prefer resume inside the TTL; rehydrate from the errand's worklog when cold) instead of a sleep-cadence constraint. This fixes a general cortex gap, not just a loop concern: dispatch consumers should be able to declare **session affinity per correlation chain** — an F-2 deliverable with its own cortex slice. *(Resolved 2026-06-10.)*
+
 ### 3.7 Federation — the IoAW payoff
 
 Because every stage is a capability, cross-principal participation is the **same mechanism**, not a feature: a federated Offer (`federated.…tasks.code-review.typescript`) lets JC's Holly claim a review of an Andreas-stack PR — already proven end-to-end by the ADR-0002 cross-principal review loop (cortex#686 + pilot#149). The same generalizes to `dev.implement` later, gated by the PolicyEngine + per-network capability announcement (Phase E.2). The wire grammar never changes.
@@ -138,6 +142,8 @@ Because every stage is a capability, cross-principal participation is the **same
 - Every actor emits lifecycle + worklog envelopes → signal + MC dashboard + Discord threads (deterministic rendering; no LLM tokens on lifecycle paths).
 - Each errand closes with an agent-state **retro**; pulse emits execution traces (P-302) for **miner**; recall captures cross-session observations.
 - Mining output lands as **PRs**: SOP amendments, process-definition tweaks, new carve-outs, new skills (the retrospective SOP's 5-level decomposition decides where each learning belongs). That reviewed-artifact loop *is* the proprietary experience cache — versioned, auditable, and installable by every stack that installs the blueprint.
+
+**Agent memory: agent-state first; recall as consultation, not fabric.** Each agent carries its own state and memory — the Kniberg model agent-state was built on: work items, append-only events, replayable history, per-instance retros. recall is deliberately **not** wired in as an automatic memory layer for agents — that would reintroduce silent context injection (DD-P4) and recall's retrieval side is by design principal-curated. Instead, F-7 exposes recall to agents as a **pull tool at two defined moments**: triage ("have we seen this failure/finding pattern before?") and retro ("what did prior retros conclude?"). If those consultations prove their value, promoting recall to a shared fleet experience-cache is a v2 decision taken deliberately — not a default. *(Resolved 2026-06-10.)*
 
 ## 4. What exists vs. what's new
 
@@ -169,24 +175,69 @@ Because every stage is a capability, cross-principal participation is the **same
 
 Ordering note: F-1→F-3 produce a working bus-native loop on the current single-machine deployment; F-5/F-6 make it scalable and installable. Dogfood from F-1 onward — the loop builds itself.
 
-## 6. Packaging — the `pilot-loop` blueprint (F-6 contract)
+## 6. Packaging — the `dev-loop` blueprint (F-6 contract)
 
-Contents: `dev-loop.process.yaml` (process definition + gate config) · agent packages (pilot, dev, approver, release — manifest + persona + guardrails per the agents-repo contract, state via agent-state) · capability declarations to merge into the stack's `capabilities:` catalog · docs (the SOP set it implements).
+*(Name resolved 2026-06-10: the marketplace artifact is **`dev-loop`**.)*
 
-Known gaps it must drive (all enumerated with owners in the deep-dive): the `type: process` / `type: graph` arc-manifest schemas; config composition (package-declared capabilities/policy merged into the stack config — cortex#83); agent identity provisioning at install (NKey/DID); multi-package install ordering + rollback; secret provisioning. These are meta-factory/arc work items the blueprint legitimizes — and Gate 4 of the release-checklist ("Dogfood Pipeline") is satisfied by this very blueprint.
+### 6.1 The bundle
 
-## 7. Decisions requested
+v1 ships `dev-loop` as an arc **library** (DD-59/60 — the one multi-artifact transport that exists today), each artifact carrying its own `arc-manifest.yaml`:
 
-1. **Loop-driver identity** — evolve **Pilot** (the agent, specs 0001–0003) into the loop-driver, rather than minting a new persona. *(Recommended: yes — the errand store, claim loop, and persona already exist; the old Pilot-agent era is this design's direct ancestor.)*
-2. **Pulse as the process engine** — adopt pulse process definitions as the executable form of the pipeline (vs. encoding the state machine only in pilot code). *(Recommended: yes — pulse#15 already speaks the bus contract; it makes the procedure an installable artifact, which DD-P6 needs anyway.)*
-3. **Doc home + epic** — this doc lives in cortex (IoAW home) with the build tracked as a new epic under #110; pilot/pulse/meta-factory slices tracked in their repos with cross-repo blueprint deps. *(Recommended: yes.)*
-4. **F-1 first** — start with the review-loop closure (smallest, designed, retires the worst failure modes), dogfooding immediately. *(Recommended: yes.)*
-5. **Autonomy defaults** — confirm the gate table (§3.5) as v1 defaults, in particular: merge stays two-of-two, release stays always-human.
+```
+the-metafactory/dev-loop/
+├── arc-manifest.yaml            # type: library, artifacts[] below
+├── process/                     # the pipeline definition (pulse flow YAML + gate
+│   └── …                        #   config). Interim type: component; flips to
+│                                #   type: process when the DD-47 schema lands (F-6d)
+├── agents/
+│   ├── pilot/                   # type: agent — loop-driver (manifest + persona +
+│   │                            #   guardrails + state: {blueprint: AgentState})
+│   ├── dev/                     # type: agent — dev.implement consumer
+│   ├── approver/                # type: agent — merge.approve (five-check gate)
+│   └── release/                 # type: agent — release.cut (gated)
+├── skill/                       # operator surface: kick off / status / pause / resume
+└── docs/                        # the SOP set the process encodes
+# depends_on: agent-state (state bundle), pulse (engine), cortex (IoAW substrate ≥ vX)
+```
+
+v2 wraps the same contents as a single `type: graph` artifact (DD-49) once that schema exists — the library is the transport until then.
+
+### 6.2 Install lifecycle (`arc install dev-loop` on a stack)
+
+1. **Fetch + verify** — R2 content-addressed tarball, SHA-256 verified (the arc#51 model); artifacts installed in `depends_on` order *(gap: library installs lack ordering + atomic rollback — F-6c)*.
+2. **Per agent: identity + state** — provision NKey seed + DID, scaffold instance state via `AgentState/ScaffoldFolders` → `~/.config/cortex/agents/<name>/{state.sqlite,dashboard.md,retros/}`, copy persona *(gap: identity provisioning is manual today — F-6b; precedent: `cortex stack create`'s born-aligned provisioning)*.
+3. **Config composition** — merge each agent's capability declarations + policy entries into the stack's config-split layers (`stacks/*.yaml` capabilities catalog, policy roles) *(gap: no composer API — needs a `cortex config merge` verb or an arc→cortex install hook; F-6a files the tracker)*.
+4. **Service provisioning** — render + bootstrap the launchd/systemd unit for the loop-driver (tick cron + reactor), reusing the cortex plist template pattern; daemon restart/hot-reload registers the new capabilities on the bus.
+5. **Secrets** — prompt for + inject the scoped forge credentials (dev agent's machine-user token, approver token) into per-agent env, never into briefs *(gap: arc secret provisioning — F-6e)*.
+6. **Verify** — `dev-loop status` smoke: capabilities registered, agents announced, a no-op errand round-trips.
+
+### 6.3 Publish + distribution through meta-factory
+
+`arc publish` from the dev-loop repo → manifest validation → tarball (bundle.exclude) → **R2, content-addressed by SHA-256, versions immutable** → meta-factory intake (README-first, steward-published per HL-3/HL-5) → listed on the marketplace as a blueprint. The release-checklist trust gates apply directly: Gate 1 (package verified — SHA pinning) and Gate 2 (publisher known) are mechanical; **Gate 4 ("Dogfood Pipeline") is satisfied by this very blueprint** — the dev-loop is both the product and the pipeline that ships it.
+
+### 6.4 Gap-closure slices
+
+| Slice | Gap | Repo |
+|---|---|---|
+| F-6a | config composition: package-declared capabilities/policy merged into config-split layers (file the tracker; design the `cortex config merge` verb or install hook) | cortex + arc |
+| F-6b | agent identity provisioning at install (NKey/DID + state scaffold) | arc + cortex |
+| F-6c | library install ordering + atomic multi-artifact rollback | arc |
+| F-6d | `type: process` manifest schema (DD-47) — promote the interim component | meta-factory + arc |
+| F-6e | secret provisioning at install | arc |
+
+## 7. Decisions — LOCKED (principal, 2026-06-10)
+
+1. **Loop-driver identity** — ✅ evolve **Pilot** (specs 0001–0003) into the loop-driver.
+2. **Pulse as the process engine** — ✅ pulse process definitions are the executable form of the pipeline.
+3. **Doc home + epic** — ✅ cortex (IoAW home); build tracked as a new epic under #110, cross-repo slices in their repos.
+4. **F-1 first** — ✅ start with the review-loop closure; dogfood immediately.
+5. **Autonomy defaults** — ✅ gate table (§3.5) confirmed: merge stays two-of-two, release stays always-human; runaway caps as specified.
+6. **Dev-agent concurrency** — ✅ parallel claims allowed (worktree isolation); overlap managed at merge time (staleness/rebase gate). The fleet cap is cost-motivated only.
+7. **Warm sessions** — ✅ session continuity per errand is an F-2 deliverable; agent-state owns the errand→session map. Fixes cortex's single-shot dispatch flaw generally.
+8. **Agent memory** — ✅ agent-state (the Kniberg carry-your-own-state model) is the agents' memory for v1; recall is a pull-based consultation tool at triage/retro (F-7), never auto-injected. Fleet-level recall = deliberate v2 decision.
+9. **Name** — ✅ the marketplace artifact is **`dev-loop`**.
 
 ## 8. Open questions
 
-1. Dev-agent concurrency: one `dev.implement` claim per repo at a time (matching the worktree-discipline overlap risk), or per-file-area negotiation later?
-2. Where does the 270s prompt-cache invariant land in a bus-native loop? (Reactor wakes are event-driven, but fix-cycle briefs should still reuse a warm session where possible — likely an F-2 session-manager concern, not a loop concern.)
-3. Does the approver-bot run as Ivy (JC-owned persona) or as a principal-local `merge.approve` consumer with the Ivy persona as one deployment of it?
-4. Mention-dispatch (`@Pilot pause/pick/abort`, spec 0003) — wire in F-1 or F-3?
-5. Blueprint naming: `pilot-loop` vs `dev-loop` as the marketplace artifact name.
+1. Does the approver-bot run as Ivy (JC-owned persona) or as a principal-local `merge.approve` consumer with the Ivy persona as one deployment of it?
+2. Mention-dispatch (`@Pilot pause/pick/abort`, spec 0003) — wire in F-1 or F-3?
