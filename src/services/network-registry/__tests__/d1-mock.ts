@@ -123,13 +123,22 @@ export class MockD1 {
 
     // principals: UPSERT
     if (sql.startsWith("INSERT INTO principals")) {
-      const [principalId, pubkey, stacks, capabilities, updatedAt] = args as [
+      const [principalId, pubkey, stacks, capabilities, updatedAt, expectedUpdatedAt] = args as [
         string,
         string,
         string,
         string,
         string,
+        string | undefined,
       ];
+      // #825 — when the SQL carries the optimistic-concurrency upsert guard
+      // (`... ON CONFLICT DO UPDATE SET ... WHERE principals.updated_at = ?`),
+      // honour it: an existing row whose updated_at != the expected (last bind)
+      // means the conflict-update's WHERE is false → no-op → changes === 0.
+      const existing = this.principals.get(principalId);
+      if (sql.includes("WHERE principals.updated_at = ?") && existing && existing.updated_at !== expectedUpdatedAt) {
+        return { meta: { changes: 0 } };
+      }
       this.principals.set(principalId, {
         principal_id: principalId,
         principal_pubkey: pubkey,

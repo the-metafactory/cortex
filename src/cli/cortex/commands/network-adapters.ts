@@ -296,6 +296,9 @@ async function registerWithCapabilities(
     ...(rootMaterial !== undefined && { rootMaterial }),
     stacks: stacksRes.stacks,
     capabilities: capsRes.capabilities,
+    // #825 — CAS token: the updated_at the merge read. The route 409s on a
+    // concurrent change so two hosts joining/registering can't lost-update.
+    ...(stacksRes.existingUpdatedAt !== undefined && { expectedUpdatedAt: stacksRes.existingUpdatedAt }),
   });
   let result;
   try {

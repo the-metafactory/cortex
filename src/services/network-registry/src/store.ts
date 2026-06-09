@@ -82,17 +82,38 @@ export interface D1PreparedLike {
 // Store interface
 // =============================================================================
 
+/**
+ * Optimistic-concurrency conflict (#825). Thrown by `putPrincipal` when the
+ * caller passed `expectedUpdatedAt` and the stored row's `updated_at` no longer
+ * matches — i.e. another writer (a second host doing a concurrent register/join)
+ * mutated the record between this caller's verified read-merge and its write.
+ * The route maps it to `409 stale_record`; the client re-reads, re-merges, retries.
+ */
+export class StaleRecordError extends Error {
+  constructor(public readonly current: PrincipalRecord | undefined) {
+    super("stale_record: principal record changed since the expected version");
+    this.name = "StaleRecordError";
+  }
+}
+
 export interface RegistryStore {
   /**
    * Upsert a principal record. Returns the post-write view. The
    * `validate` step at the route layer has already enforced grammar
    * + signature; the store only worries about persistence.
+   *
+   * `expectedUpdatedAt` (#825 — optimistic concurrency): when provided, the
+   * write is a compare-and-set — it succeeds only if the stored row's
+   * `updated_at` equals this value (or no row exists yet). On mismatch it
+   * throws `StaleRecordError`. Omit it for the first register / non-merging
+   * writes (unconditional upsert — backward-compatible).
    */
   putPrincipal(
     principalId: string,
     pubkey: string,
     stacks: StackIdentity[],
     capabilities: Capability[],
+    expectedUpdatedAt?: string,
   ): Promise<PrincipalRecord>;
 
   getPrincipal(principalId: string): Promise<PrincipalRecord | undefined>;
@@ -266,7 +287,16 @@ export class InMemoryRegistryStore implements RegistryStore {
     pubkey: string,
     stacks: StackIdentity[],
     capabilities: Capability[],
+    expectedUpdatedAt?: string,
   ): Promise<PrincipalRecord> {
+    if (expectedUpdatedAt !== undefined) {
+      const current = this.principals.get(principalId);
+      // CAS: only enforce against an existing row. If the record is gone, the
+      // merge had nothing to preserve, so a fresh write loses nothing.
+      if (current && current.updated_at !== expectedUpdatedAt) {
+        throw new StaleRecordError(current);
+      }
+    }
     const record: PrincipalRecord = {
       principal_id: principalId,
       principal_pubkey: pubkey,
@@ -319,6 +349,7 @@ export class D1RegistryStore implements RegistryStore {
     pubkey: string,
     stacks: StackIdentity[],
     capabilities: Capability[],
+    expectedUpdatedAt?: string,
   ): Promise<PrincipalRecord> {
     const record: PrincipalRecord = {
       principal_id: principalId,
@@ -327,28 +358,45 @@ export class D1RegistryStore implements RegistryStore {
       capabilities,
       updated_at: new Date().toISOString(),
     };
-    // UPSERT: a re-register replaces the row in place, so the new stacks/
-    // capabilities fully overwrite the old (matches InMemory semantics —
-    // no leftover stacks). Parameterised; the JSON columns hold the
-    // serialised lists.
-    await this.db
-      .prepare(
-        `INSERT INTO principals (principal_id, principal_pubkey, stacks, capabilities, updated_at)
+
+    // UPSERT. Without `expectedUpdatedAt` it is an unconditional overwrite (the
+    // new stacks/capabilities fully replace the old — matches InMemory; this is
+    // the first-register / non-merging path). WITH it (#825), the conflict-update
+    // carries an upsert `WHERE updated_at = ?` guard: a concurrent host that
+    // mutated the row since this caller's verified read leaves `updated_at`
+    // mismatched, the WHERE is false, the UPDATE is a no-op (changes === 0), and
+    // we raise StaleRecordError so the loser re-reads + re-merges instead of
+    // silently clobbering the winner. `updated_at` is always a fresh timestamp,
+    // so a matched CAS always reports changes >= 1 (no false conflict on no-op).
+    const sql = expectedUpdatedAt === undefined
+      ? `INSERT INTO principals (principal_id, principal_pubkey, stacks, capabilities, updated_at)
          VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(principal_id) DO UPDATE SET
            principal_pubkey = excluded.principal_pubkey,
            stacks           = excluded.stacks,
            capabilities     = excluded.capabilities,
-           updated_at       = excluded.updated_at`,
-      )
-      .bind(
-        principalId,
-        pubkey,
-        JSON.stringify(stacks),
-        JSON.stringify(capabilities),
-        record.updated_at,
-      )
-      .run();
+           updated_at       = excluded.updated_at`
+      : `INSERT INTO principals (principal_id, principal_pubkey, stacks, capabilities, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(principal_id) DO UPDATE SET
+           principal_pubkey = excluded.principal_pubkey,
+           stacks           = excluded.stacks,
+           capabilities     = excluded.capabilities,
+           updated_at       = excluded.updated_at
+         WHERE principals.updated_at = ?`;
+
+    const binds = expectedUpdatedAt === undefined
+      ? [principalId, pubkey, JSON.stringify(stacks), JSON.stringify(capabilities), record.updated_at]
+      : [principalId, pubkey, JSON.stringify(stacks), JSON.stringify(capabilities), record.updated_at, expectedUpdatedAt];
+
+    const res = await this.db.prepare(sql).bind(...binds).run();
+
+    if (expectedUpdatedAt !== undefined && (res.meta?.changes ?? 0) === 0) {
+      // CAS failed: a row existed whose updated_at != expected (a fresh INSERT
+      // would have reported changes === 1). Surface the current row for the 409.
+      const current = await this.getPrincipal(principalId);
+      throw new StaleRecordError(current);
+    }
     return record;
   }
 

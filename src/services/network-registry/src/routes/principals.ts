@@ -16,7 +16,7 @@
 import { Hono } from "hono";
 import { getRegistryPublicKey, type Env } from "../index";
 import { signEd25519, verifyEd25519, canonicalJSON } from "../signing";
-import { getNonceCache, getStore } from "../store";
+import { getNonceCache, getStore, StaleRecordError } from "../store";
 import {
   checkRateLimit,
   clientKey,
@@ -175,12 +175,33 @@ export function principalRoutes(): Hono<{ Bindings: Env }> {
       stack_pubkey: s.stack_pubkey ?? claim.principal_pubkey,
     }));
 
-    const record = await store.putPrincipal(
-      principalId,
-      claim.principal_pubkey,
-      stacksWithPubkeys,
-      claim.capabilities,
-    );
+    // #825 — optimistic concurrency. The client read-merged from a record at
+    // `claim.expected_updated_at`; CAS the write so a concurrent host that
+    // mutated the row in between is rejected (409) rather than silently
+    // clobbered. Absent on a first register → unconditional upsert (unchanged).
+    let record: PrincipalRecord;
+    try {
+      record = await store.putPrincipal(
+        principalId,
+        claim.principal_pubkey,
+        stacksWithPubkeys,
+        claim.capabilities,
+        claim.expected_updated_at,
+      );
+    } catch (err) {
+      if (err instanceof StaleRecordError) {
+        return c.json(
+          {
+            error: "stale_record",
+            details:
+              "the principal record changed since your read; re-read, re-merge, and retry",
+            current_updated_at: err.current?.updated_at ?? null,
+          },
+          409,
+        );
+      }
+      throw err;
+    }
 
     // Sign + return the canonical view so the principal gets the same
     // signed assertion shape peers will see.

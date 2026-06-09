@@ -15,6 +15,7 @@ import {
   D1RegistryStore,
   InMemoryRegistryStore,
   InMemoryNonceCache,
+  StaleRecordError,
   NONCE_WINDOW_MS,
   getStore,
   getNonceCache,
@@ -60,6 +61,47 @@ describe("D1RegistryStore", () => {
   test("getPrincipal returns undefined for unknown id", async () => {
     const store = new D1RegistryStore(asD1(new MockD1()));
     expect(await store.getPrincipal("nobody")).toBeUndefined();
+  });
+
+  // #825 — optimistic concurrency: a CAS write only lands if the stored
+  // updated_at still matches the value the caller's read-merge was based on.
+  describe("putPrincipal CAS (#825)", () => {
+    test("matching expectedUpdatedAt → write lands", async () => {
+      const store = new D1RegistryStore(asD1(new MockD1()));
+      const first = await store.putPrincipal("p", "k", [], []);
+      const second = await store.putPrincipal("p", "k", stacks, [], first.updated_at);
+      expect(second.stacks).toEqual(stacks);
+      expect((await store.getPrincipal("p"))!.stacks).toEqual(stacks);
+    });
+
+    test("stale expectedUpdatedAt → StaleRecordError, record unchanged", async () => {
+      const store = new D1RegistryStore(asD1(new MockD1()));
+      const first = await store.putPrincipal("p", "k", stacks, []);
+      let threw: unknown;
+      try {
+        await store.putPrincipal("p", "k", [], [], "1999-01-01T00:00:00.000Z");
+      } catch (e) {
+        threw = e;
+      }
+      expect(threw).toBeInstanceOf(StaleRecordError);
+      // The winner's record is intact — the stale write did NOT clobber it.
+      expect((await store.getPrincipal("p"))!.stacks).toEqual(stacks);
+      expect((await store.getPrincipal("p"))!.updated_at).toBe(first.updated_at);
+    });
+
+    test("no existing record → CAS is a no-op (nothing to clobber)", async () => {
+      const store = new D1RegistryStore(asD1(new MockD1()));
+      const written = await store.putPrincipal("fresh", "k", stacks, [], "1999-01-01T00:00:00.000Z");
+      expect(written.stacks).toEqual(stacks);
+    });
+
+    test("InMemory store enforces the same CAS", async () => {
+      const store = new InMemoryRegistryStore();
+      await store.putPrincipal("p", "k", stacks, []);
+      await expect(
+        store.putPrincipal("p", "k", [], [], "1999-01-01T00:00:00.000Z"),
+      ).rejects.toBeInstanceOf(StaleRecordError);
+    });
   });
 
   test("listPrincipals returns every stored principal", async () => {

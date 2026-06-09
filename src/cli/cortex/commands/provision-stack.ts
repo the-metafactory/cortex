@@ -418,6 +418,9 @@ async function doRegister(
       // C-819 — re-attest the merged (preserved) capability set so the route's
       // full-overwrite writes the complete set instead of clobbering to empty.
       capabilities: capsRes.capabilities,
+      // #825 — CAS token: the updated_at the merge read. The route rejects
+      // (409 stale_record) if a concurrent host changed the row since.
+      ...(stacksRes.existingUpdatedAt !== undefined && { expectedUpdatedAt: stacksRes.existingUpdatedAt }),
     });
   } catch (err) {
     return { ok: false, reason: `failed to build registration claim: ${err instanceof Error ? err.message : String(err)}` };

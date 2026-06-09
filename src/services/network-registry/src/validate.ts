@@ -300,6 +300,14 @@ export function validateRegistrationClaim(
     errors.push({ field: "nonce", message: "must be a string between 8 and 128 chars" });
   }
 
+  // #825 — optional optimistic-concurrency token. Must be a string when present.
+  // CRITICAL: it is part of the SIGNED canonical claim, so it must be PRESERVED
+  // into the reconstructed claim verbatim — silently dropping it would change the
+  // canonical bytes the route verifies and reject every CAS-bearing claim (401).
+  if (c.expected_updated_at !== undefined && typeof c.expected_updated_at !== "string") {
+    errors.push({ field: "expected_updated_at", message: "must be a string when present" });
+  }
+
   if (errors.length > 0) return { ok: false, errors };
 
   return {
@@ -309,6 +317,7 @@ export function validateRegistrationClaim(
       principal_pubkey: c.principal_pubkey as string,
       stacks,
       capabilities,
+      ...(typeof c.expected_updated_at === "string" && { expected_updated_at: c.expected_updated_at }),
       issued_at: c.issued_at as string,
       nonce: c.nonce as string,
     },

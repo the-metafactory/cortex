@@ -87,6 +87,16 @@ export interface RegistrationClaim {
   stacks: StackIdentity[];
   /** Capabilities the principal wants advertised. */
   capabilities: Capability[];
+  /**
+   * #825 — optimistic concurrency. The `updated_at` of the record this claim's
+   * merge was computed from (captured during the client's verified read). The
+   * registry compare-and-sets on it: if the stored row changed since (a
+   * concurrent host's register/join), the write is rejected `409 stale_record`
+   * and the client re-reads + re-merges. Omitted on a first register / when the
+   * client read no existing record (nothing to clobber). Part of the signed
+   * canonical payload — a MITM cannot strip or forge the CAS token.
+   */
+  expected_updated_at?: string;
   /** ISO-8601 UTC timestamp at which the principal signed this claim. */
   issued_at: string;
   /**

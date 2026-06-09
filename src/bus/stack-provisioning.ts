@@ -117,6 +117,8 @@ export interface RegistrationClaimShape {
     metadata?: Record<string, string>;
   }[];
   capabilities: { id: string; description?: string; networks?: string[] }[];
+  /** #825 — optimistic-concurrency CAS token (record `updated_at` the merge read). */
+  expected_updated_at?: string;
   issued_at: string;
   nonce: string;
 }
@@ -379,6 +381,14 @@ export interface BuildRegistrationClaimOptions {
    * @internal
    */
   readonly nonce?: string;
+  /**
+   * #825 — optimistic-concurrency CAS token: the `updated_at` of the record the
+   * merge was computed from (from `resolveMergedStacks().existingUpdatedAt`).
+   * When set, it is signed into the claim as `expected_updated_at`; the registry
+   * CAS-rejects (`409 stale_record`) if the row changed since. Omit on a first
+   * register / when no existing record was read.
+   */
+  readonly expectedUpdatedAt?: string;
 }
 
 /**
@@ -416,6 +426,7 @@ export async function buildRegistrationClaim(
     principal_pubkey: authority.pubkeyB64,
     stacks,
     capabilities: opts.capabilities ?? [],
+    ...(opts.expectedUpdatedAt !== undefined && { expected_updated_at: opts.expectedUpdatedAt }),
     issued_at: opts.issuedAt ?? new Date().toISOString(),
     nonce: opts.nonce ?? randomNonce(),
   };
@@ -631,7 +642,7 @@ export interface FetchExistingStacksOptions {
  *                  C-791 verified-merge-read security fix).
  */
 export type FetchExistingStacksResult =
-  | { kind: "present"; stacks: StackEntryShape[]; capabilities: CapabilityEntryShape[] }
+  | { kind: "present"; stacks: StackEntryShape[]; capabilities: CapabilityEntryShape[]; updated_at?: string }
   | { kind: "absent" }
   | { kind: "error"; reason: string };
 
@@ -722,7 +733,7 @@ export async function fetchExistingStacks(
 
   // Shape: verified payload is a PrincipalRecord → payload.stacks[] + .capabilities[].
   const payload = verified.payload as
-    | { stacks?: unknown; capabilities?: unknown }
+    | { stacks?: unknown; capabilities?: unknown; updated_at?: unknown }
     | null;
   const stacksRaw = payload?.stacks;
   if (!Array.isArray(stacksRaw)) {
@@ -749,7 +760,10 @@ export async function fetchExistingStacks(
       }
     }
   }
-  return { kind: "present", stacks, capabilities };
+  // #825 — surface the record's `updated_at` so the caller can send it as the
+  // claim's `expected_updated_at` (optimistic-concurrency CAS token).
+  const updatedAt = typeof payload?.updated_at === "string" ? payload.updated_at : undefined;
+  return { kind: "present", stacks, capabilities, ...(updatedAt !== undefined && { updated_at: updatedAt }) };
 }
 
 // =============================================================================
@@ -818,7 +832,7 @@ export interface ResolveMergedStacksOptions {
  */
 export async function resolveMergedStacks(
   opts: ResolveMergedStacksOptions,
-): Promise<{ ok: true; stacks: ClaimStack[] } | { ok: false; reason: string }> {
+): Promise<{ ok: true; stacks: ClaimStack[]; existingUpdatedAt?: string } | { ok: false; reason: string }> {
   const newStack: ClaimStack = { stack_id: opts.stackId, stack_pubkey: opts.stackPubkey };
   if (!opts.isAddStack) {
     return { ok: true, stacks: [newStack] };
@@ -867,7 +881,8 @@ export async function resolveMergedStacks(
   } else {
     merged.push(newStack);
   }
-  return { ok: true, stacks: merged };
+  // #825 — carry the read record's updated_at as the CAS token for the claim.
+  return { ok: true, stacks: merged, ...(existing.updated_at !== undefined && { existingUpdatedAt: existing.updated_at }) };
 }
 
 /** A capability as carried in a registration claim. */
