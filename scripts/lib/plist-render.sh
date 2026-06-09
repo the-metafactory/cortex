@@ -79,11 +79,14 @@ extract_stack_id_slug() {
   [ -f "${config_file}" ] || return 1
   local id
   id=$(awk '
-    /^stack:[[:space:]]*$/ { instack=1; next }
+    /^stack:[[:space:]]*\r?$/ { instack=1; next }
     instack && /^[^[:space:]#]/ { instack=0 }        # dedent → left the stack: block
     instack && /^[[:space:]]+id:[[:space:]]*/ {
-      sub(/.*id:[[:space:]]*/, ""); gsub(/["'\'']/, ""); gsub(/#.*/, ""); print; exit
+      sub(/.*id:[[:space:]]*/, ""); gsub(/\r/, ""); gsub(/["'\'']/, ""); gsub(/#.*/, ""); print; exit
     }' "${config_file}" | xargs || true)
+  # xargs only trims surrounding whitespace here (CR is already stripped in-awk
+  # above); a valid slug is [a-zA-Z0-9_-], so there is no quoting/word-split
+  # hazard and the value is never eval'd — it is pure data for the comparison.
   [ -n "${id}" ] || return 1
   printf '%s' "${id##*/}"
 }
@@ -271,6 +274,10 @@ warn_stack_identity_drift() {
     # stack.id absent/unparseable → nothing to compare against, skip silently
     # (the filename locator stands; extract_agent_name's own fallback applies).
     id_slug="$(extract_stack_id_slug "${stack_cfg}")" || continue
+    # Slug-scoped by design: we compare only stack.id's trailing segment to the
+    # locator slug, because the launchd/systemd label is ai.meta-factory.cortex
+    # .{slug} (no principal). The principal half of stack.id is validated on the
+    # wire (the DID + subject), not here — this is the label/locator check.
     if [ "${id_slug}" != "${slug}" ]; then
       echo "  ⚠ stack-identity drift: locator slug '${slug}' (label ai.meta-factory.cortex.${slug}) ≠ stack.id slug '${id_slug}' (federation identity '…/${id_slug}')." >&2
       echo "    The daemon federates as '…/${id_slug}' but is labelled '${slug}'. Reconcile onto stack.id — rename the config dir/file to '${id_slug}' (calm-day cleanup; see cortex#810 / docs/adr/0004-stack-slug-authority.md)." >&2

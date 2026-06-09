@@ -433,6 +433,19 @@ EOF
 assert_eq "extract_stack_id_slug: skips principal.id, reads stack.id" \
   "default" "$(extract_stack_id_slug "${ID_DIR}/principal-first.yaml")"
 
+# CRLF line endings must NOT leave a trailing \r in the slug (#811 review MAJOR:
+# a stray \r makes id_slug != slug on every upgrade → spurious drift warning).
+printf 'principal:\r\n  id: andreas\r\nstack:\r\n  id: andreas/crlf\r\nagents:\r\n  - id: luna\r\n' \
+  > "${ID_DIR}/crlf.yaml"
+assert_eq "extract_stack_id_slug: CRLF config → no trailing CR" \
+  "andreas/crlf-strip-check" \
+  "andreas/$(extract_stack_id_slug "${ID_DIR}/crlf.yaml")-strip-check"
+
+# Quoted + trailing-comment id → unwrapped, comment stripped.
+printf 'stack:\n  id: "andreas/quoted"  # the canonical id\n' > "${ID_DIR}/quoted.yaml"
+assert_eq "extract_stack_id_slug: quoted + comment → quoted" \
+  "quoted" "$(extract_stack_id_slug "${ID_DIR}/quoted.yaml")"
+
 # Absent stack.id → non-zero exit (caller falls back to filename locator).
 printf 'agents:\n  - id: m\n' > "${ID_DIR}/no-stack.yaml"
 if extract_stack_id_slug "${ID_DIR}/no-stack.yaml" >/dev/null 2>&1; then
