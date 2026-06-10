@@ -28,8 +28,11 @@ describe("resolveReviewEngine — explicit engine", () => {
 });
 
 describe("resolveReviewEngine — legacy migration (no engine field)", () => {
-  test("legacy substrate: pi-dev → sage via pi (only value that selected the sage runner before)", () => {
-    expect(resolveReviewEngine({ substrate: "pi-dev" })).toEqual({ engine: "sage", model: "pi" });
+  test("legacy substrate: pi-dev → sage with NO model (runner honors SAGE_SUBSTRATE env — true parity, cortex#920 round 2)", () => {
+    // Must NOT force model:pi — the pre-split `makePiDevPipelineRunner({})`
+    // deferred to SAGE_SUBSTRATE env, so an un-migrated pi-dev config with
+    // SAGE_SUBSTRATE=claude|codex kept that override.
+    expect(resolveReviewEngine({ substrate: "pi-dev" })).toEqual({ engine: "sage" });
   });
 
   test("legacy substrate: claude-code → persona (unchanged)", () => {

@@ -45,7 +45,7 @@ export interface ReviewEngineInput {
  *   1. Explicit `runtime.engine` wins. For sage, `model` is the (already
  *      zod-validated) `runtime.model`; `undefined` defers to the runner default.
  *   2. Legacy (no `engine`): only `substrate === "pi-dev"` selected the sage
- *      runner before, so it maps to `{engine: sage, model: pi}` (its historical
+ *      runner before, so it maps to `{engine: sage}` with NO model (runner uses SAGE_SUBSTRATE env, else pi — true parity); legacy
  *      backend). EVERY other legacy substrate (`claude-code`, `codex`, `cursor`,
  *      `custom`, unset) kept the Claude-Code path → `{engine: persona}`. This
  *      preserves pre-split behaviour byte-for-byte for un-migrated configs.
@@ -63,9 +63,12 @@ export function resolveReviewEngine(runtime?: ReviewEngineInput): ResolvedReview
   if (runtime?.engine === "persona") {
     return { engine: "persona" };
   }
-  // Legacy migration — engine unset.
+  // Legacy migration — engine unset. NO `model`: the runner falls back to
+  // SAGE_SUBSTRATE env (else pi), exactly as pre-split `makePiDevPipelineRunner({})`
+  // did, so an un-migrated `substrate: pi-dev` config keeps honouring a
+  // `SAGE_SUBSTRATE=claude|codex` override (true parity, not forced-pi).
   if (runtime?.substrate === "pi-dev") {
-    return { engine: "sage", model: "pi" };
+    return { engine: "sage" };
   }
   return { engine: "persona" };
 }

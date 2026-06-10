@@ -1446,15 +1446,16 @@ export async function startCortex(
       // subscribe path are retired. Cortex's review-consumer is now the
       // sole receiver for sage-owned review flavors.
       //
-      // cortex#917 — the engine/backend split. `resolveReviewEngine` reads
-      // `runtime.engine` (`sage` | `persona`); the LLM backend is the now-
-      // orthogonal `runtime.substrate`. `engine: sage` wires the sage lens-CLI
-      // runner (forwarding the backend to `sage review --substrate`); `persona`
+      // cortex#917 — the engine/model split. `resolveReviewEngine` reads
+      // `runtime.engine` (`sage` | `persona`); the sage lens LLM is the
+      // orthogonal `runtime.model` (claude|codex|pi), NOT `substrate` (which is
+      // the M6 harness). `engine: sage` wires the sage lens-CLI runner,
+      // forwarding `model` to `sage review --substrate <model>`; `persona`
       // (and the legacy default) leaves `pipelineRunner` undefined so the
       // ReviewConsumer falls through to `runReviewPipeline` → the Claude-Code
       // SKILL.md path (`ccSessionFactory` stays wired for it). The resolver's
-      // legacy shim keeps pre-split configs (`substrate: pi-dev`→sage, else
-      // persona) routing byte-for-byte.
+      // legacy shim keeps pre-split `substrate: pi-dev` configs routing to sage
+      // (no forced model — SAGE_SUBSTRATE env still honoured).
       //
       // The sage runner resolves its binary lazily at first use (see
       // `sage-runner.ts`'s lifetime note), so a missing sage on boot does not
