@@ -324,6 +324,62 @@ describe("ReleaseConsumer — the principal-grant gate (§3.5 ALWAYS-HUMAN)", ()
     const reason = failedReason(envelopesOfType(runtime, "dispatch.task.failed")[0]!);
     expect(reason?.kind).toBe("wont_do");
   });
+
+  // BLOCKER (mellanon review, cortex#874): a whitespace-only `approved_by`
+  // ("   ", length 3 > 0) must NOT pass the gate. The parser trims-before-
+  // non-empty so it never reaches the gate as present, and the gate ALSO trims
+  // (belt-and-suspenders) so a blank grant can never invoke the executor.
+  test("whitespace-only approved_by ('   ') is treated as ABSENT → wont_do + term; executor NEVER runs", async () => {
+    const runtime = createRecordingRuntime();
+    const executor = createRecordingExecutor();
+    const consumer = makeConsumer(buildAgent(), runtime, executor);
+
+    const decision = await consumer.processEnvelope(
+      makeReleaseRequest({ approved_by: "   " }),
+      "local.andreas.work.tasks.release.cut",
+      null,
+    );
+
+    expect(decision.kind).toBe("term");
+    expect((decision as { reason: string }).reason).toContain("release gate is principal-held");
+
+    // Fail-closed: a whitespace-only grant must never reach the executor.
+    expect(executor.calls).toEqual([]);
+
+    // No started; a wont_do failed envelope was published.
+    expect(envelopesOfType(runtime, "dispatch.task.started").length).toBe(0);
+    const reason = failedReason(envelopesOfType(runtime, "dispatch.task.failed")[0]!);
+    expect(reason?.kind).toBe("wont_do");
+  });
+
+  // MAJOR (mellanon review, cortex#874): the trust model is PRESENCE-ONLY, not
+  // authenticated. `approved_by` is whatever the envelope says — any principal
+  // who can publish to the gate's subject can stamp `approved_by: "andreas"`
+  // with no cryptographic proof. Authenticity rests on the NATS account layer
+  // controlling publish rights to `local.{principal}.{stack}.tasks.release.cut`.
+  // This test makes the presence-only model explicit: an UNRELATED principal's
+  // name in `approved_by` is accepted as a grant by the consumer (the consumer
+  // cannot tell — that is the documented v1 assumption; cryptographic proof is
+  // the cortex trust track TC-0/1/2).
+  test("TRUST MODEL is presence-only: any non-blank approved_by is accepted as a grant (NOT cryptographically verified)", async () => {
+    const runtime = createRecordingRuntime();
+    const executor = createRecordingExecutor();
+    const consumer = makeConsumer(buildAgent(), runtime, executor);
+
+    // An attacker-controlled value the consumer has no way to authenticate.
+    const decision = await consumer.processEnvelope(
+      makeReleaseRequest({ approved_by: "not-the-real-principal" }),
+      "local.andreas.work.tasks.release.cut",
+      null,
+    );
+
+    // The gate PASSES on presence alone — the consumer cannot prove authenticity.
+    expect(decision.kind).not.toBe("term");
+    expect(envelopesOfType(runtime, "dispatch.task.started").length).toBe(1);
+    // The executor ran through to the mutating cutRelease — the unauthenticated
+    // grant was accepted because the consumer has no way to verify it.
+    expect(executor.calls).toContain("cutRelease");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -690,6 +746,16 @@ describe("ReleaseConsumer — helper units", () => {
   test("parseReleaseRequestPayload — empty approved_by collapses to absent", () => {
     const p = parseReleaseRequestPayload(makeReleaseRequest({ approved_by: "" }));
     expect(p?.approvedBy).toBeUndefined();
+  });
+
+  // BLOCKER (mellanon review, cortex#874): the parser trims BEFORE the non-empty
+  // test, so a whitespace-only grant ("   ", "\t", "\n") parses as ABSENT and the
+  // §3.5 gate refuses it — it can never reach the executor as a present grant.
+  test("parseReleaseRequestPayload — whitespace-only approved_by collapses to absent", () => {
+    for (const ws of ["   ", "\t", "\n", " \t\n "]) {
+      const p = parseReleaseRequestPayload(makeReleaseRequest({ approved_by: ws }));
+      expect(p?.approvedBy).toBeUndefined();
+    }
   });
 
   test("parseReleaseRequestPayload — bad repo / bad bump → null", () => {

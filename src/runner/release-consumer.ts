@@ -36,6 +36,16 @@
  * override, no "dev-env exception" inside the consumer: the gate is the whole
  * point of the consumer existing as a capability rather than a cron job.
  *
+ * **Trust model (v1 — presence-only, NOT cryptographic).** `approved_by` is a
+ * PRESENCE marker, not a proof of authenticity. The envelope says whatever it
+ * says: any principal who can publish to
+ * `local.{principal}.{stack}.tasks.release.cut` can set `approved_by: "andreas"`
+ * with no cryptographic proof. The grant's authenticity therefore rests ENTIRELY
+ * on the NATS account credentials controlling who may publish to this gate's
+ * subject — this is the documented v1 assumption. The path to a
+ * cryptographically-proven grant is the cortex trust track (signing enforcement
+ * TC-0/1/2); until that lands the consumer trusts the transport's account ACLs.
+ *
  * **Failure-reason → ack/nak/term mapping (mirrors review-consumer's table):**
  *
  * | Outcome                                          | wire envelope          | JetStream control                  |
@@ -449,7 +459,17 @@ export class ReleaseConsumer {
     //    ungranted release cut is a `wont_do` (the agent COULD cut, but policy
     //    says only a principal-granted dispatch may) — permanent `term`, so a
     //    redelivery of the same ungranted envelope never sneaks through.
-    if (payload.approvedBy === undefined || payload.approvedBy.length === 0) {
+    //
+    //    Belt-and-suspenders: the parser already drops whitespace-only grants,
+    //    but the gate ALSO trims so a whitespace-only `approved_by` ("   ")
+    //    can never pass here even if the value reaches the gate by another path.
+    //    A bare `.length === 0` check would let "   " (length 3) through.
+    //
+    //    TRUST MODEL: approved_by is a presence marker, not a cryptographic proof.
+    //    Authenticity of this grant relies on NATS account credentials controlling
+    //    who can publish to this gate's subject. Cross-reference: signing enforcement
+    //    (cortex trust track TC-0/1/2) is the path to a cryptographically-proven grant.
+    if (!payload.approvedBy || payload.approvedBy.trim().length === 0) {
       await this.publishFailed(
         envelope,
         {
@@ -766,9 +786,12 @@ export function parseReleaseRequestPayload(
   };
 
   // The grant marker — accept the wire snake_case `approved_by`. Empty string
-  // is treated as ABSENT (the gate refuses it) so a blank grant can't sneak
-  // past the §3.5 check.
-  if (typeof p.approved_by === "string" && p.approved_by.length > 0) {
+  // AND whitespace-only strings are treated as ABSENT (the gate refuses them)
+  // so a blank or `"   "` grant can't sneak past the §3.5 check. We TRIM before
+  // the non-empty test: `"   ".length === 3 > 0` would otherwise parse as a
+  // present grant, and the gate's empty-string check (`.length === 0`) would
+  // not catch it — a whitespace-only grant must parse as ABSENT, not present.
+  if (typeof p.approved_by === "string" && p.approved_by.trim().length > 0) {
     out.approvedBy = p.approved_by;
   }
 
