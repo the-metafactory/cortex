@@ -66,8 +66,8 @@ import type {
 } from "../runner/review-pipeline";
 import {
   makeSageReviewRunner,
-  type PiDevSpawnFn,
-  type PiDevSpawnResult,
+  type SageSpawnFn,
+  type SageSpawnResult,
 } from "../runner/substrate/sage-runner";
 import type { CCSessionFactory } from "../substrates/claude-code/harness";
 
@@ -763,7 +763,7 @@ describe("cortex#331 Phase 1 — pi-dev substrate dispatch (factory wired into R
     // Stub spawn that returns a canned successful sage subprocess.
     // Mirrors what the unit tests do but here it threads through the
     // real `makeSageReviewRunner` factory.
-    const spawnFake: PiDevSpawnFn = (_argv, _opts): PiDevSpawnResult => ({
+    const spawnFake: SageSpawnFn = (_argv, _opts): SageSpawnResult => ({
       stdout: new Response(stdoutMarkdown).body!,
       stderr: new Response("").body!,
       exited: Promise.resolve(0),

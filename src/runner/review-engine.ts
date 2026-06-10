@@ -1,81 +1,71 @@
 /**
- * Review-engine resolution (cortex#917 follow-up).
+ * Review-engine resolution (cortex#917).
  *
  * Two orthogonal axes were historically conflated in `runtime.substrate`:
  *   - WHICH review ENGINE runs — the standalone sage lens-CLI (deterministic
  *     pipeline: fixed lens registry + pure `decideVerdict`) vs a Claude-Code
  *     PERSONA session that reads the CodeReview SKILL.md and reviews in-session.
- *   - WHICH LLM BACKEND the engine's calls go through (`claude` | `codex` | `pi`).
+ *   - WHICH LLM the sage engine runs its lenses through (`claude` | `codex` | `pi`).
  *
  * `substrate === "pi-dev"` used to mean "use the sage runner", so a sage agent
  * configured `substrate: codex` silently fell through to the persona path —
- * "codex" only names a backend, never the engine. This module splits the axes:
- * `runtime.engine` selects the engine; `runtime.substrate` is purely the
- * backend forwarded to `sage review --substrate <backend>`.
+ * "codex" only names a harness, never the engine. This module splits the axes:
+ * `runtime.engine` selects the engine; `runtime.model` is the LLM the sage CLI
+ * runs lenses through (forwarded to `sage review --substrate <model>`);
+ * `runtime.substrate` stays the M6 harness (CONTEXT.md).
  *
  * Pure + deterministic — unit-tested in `review-engine.test.ts`.
  */
 
 export type ReviewEngine = "sage" | "persona";
+export type SageModel = "claude" | "codex" | "pi";
 
 export interface ResolvedReviewEngine {
   /** sage = standalone lens CLI; persona = Claude-Code session + CodeReview skill. */
   engine: ReviewEngine;
   /**
-   * LLM backend the sage CLI runs its lenses through (`sage review --substrate
-   * <backend>`). Only meaningful when `engine === "sage"`; informational for
-   * persona (the CC session always spawns `claude`).
+   * The LLM the sage CLI runs its lenses through (`sage review --substrate
+   * <model>`). `undefined` ⇒ the sage runner applies its own default
+   * (`SAGE_SUBSTRATE` env, else `pi`). Only meaningful for `engine === "sage"`.
    */
-  backend: "claude" | "codex" | "pi";
+  model?: SageModel;
 }
 
 /** The runtime fields this resolver reads. Structural so it accepts AgentRuntime. */
 export interface ReviewEngineInput {
   engine?: ReviewEngine;
+  model?: SageModel;
   substrate?: string;
 }
 
 /**
- * Normalize a (possibly engine-flavored, legacy) substrate value to a sage
- * backend. `pi-dev`→`pi`, `claude-code`→`claude`, `codex`→`codex`. Anything
- * unrecognized (incl. undefined) → `pi` (sage's own default backend).
- */
-function normalizeBackend(substrate: string | undefined): ResolvedReviewEngine["backend"] {
-  switch (substrate) {
-    case "pi":
-    case "pi-dev":
-      return "pi";
-    case "claude":
-    case "claude-code":
-      return "claude";
-    case "codex":
-      return "codex";
-    default:
-      return "pi";
-  }
-}
-
-/**
- * Resolve `{engine, backend}` from an agent's runtime config.
+ * Resolve `{engine, model}` from an agent's runtime config.
  *
  * Precedence:
- *   1. Explicit `runtime.engine` wins; `backend` = normalized `substrate`.
+ *   1. Explicit `runtime.engine` wins. For sage, `model` is the (already
+ *      zod-validated) `runtime.model`; `undefined` defers to the runner default.
  *   2. Legacy (no `engine`): only `substrate === "pi-dev"` selected the sage
- *      runner before, so it maps to `{engine: sage, backend: pi}`. EVERY other
- *      legacy substrate (`claude-code`, `codex`, `cursor`, `custom`, unset)
- *      kept the Claude-Code path → `{engine: persona, …}`. This preserves
- *      pre-split behaviour byte-for-byte for un-migrated configs.
+ *      runner before, so it maps to `{engine: sage, model: pi}` (its historical
+ *      backend). EVERY other legacy substrate (`claude-code`, `codex`, `cursor`,
+ *      `custom`, unset) kept the Claude-Code path → `{engine: persona}`. This
+ *      preserves pre-split behaviour byte-for-byte for un-migrated configs.
+ *
+ * No coercion of unknown values — `model` is constrained to `SageModel` by the
+ * schema's `z.enum`, so an unsupported LLM is rejected at config load rather
+ * than silently falling open here.
  */
 export function resolveReviewEngine(runtime?: ReviewEngineInput): ResolvedReviewEngine {
   if (runtime?.engine === "sage") {
-    return { engine: "sage", backend: normalizeBackend(runtime.substrate) };
+    return runtime.model !== undefined
+      ? { engine: "sage", model: runtime.model }
+      : { engine: "sage" };
   }
   if (runtime?.engine === "persona") {
-    return { engine: "persona", backend: normalizeBackend(runtime.substrate) };
+    return { engine: "persona" };
   }
   // Legacy migration — engine unset.
   if (runtime?.substrate === "pi-dev") {
-    return { engine: "sage", backend: "pi" };
+    return { engine: "sage", model: "pi" };
   }
-  return { engine: "persona", backend: normalizeBackend(runtime?.substrate) };
+  return { engine: "persona" };
 }

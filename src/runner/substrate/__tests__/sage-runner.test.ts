@@ -30,9 +30,9 @@ import type { ReviewPipelineOpts } from "../../review-pipeline";
 import type { CCSessionFactory } from "../../../substrates/claude-code/harness";
 import {
   makeSageReviewRunner,
-  type PiDevSpawnFn,
-  type PiDevSpawnResult,
-  type PiDevWhichFn,
+  type SageSpawnFn,
+  type SageSpawnResult,
+  type SageWhichFn,
 } from "../sage-runner";
 
 // ---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ function makePipelineOpts(): ReviewPipelineOpts {
 }
 
 /**
- * Build a `PiDevSpawnResult` from a canned stdout, stderr, and exit code.
+ * Build a `SageSpawnResult` from a canned stdout, stderr, and exit code.
  * Uses `Response.body` to turn strings into the same `ReadableStream<Uint8Array>`
  * shape `Bun.spawn` returns — same trick the production runner uses to
  * drain via `new Response(stream).text()`.
@@ -86,7 +86,7 @@ function makeSpawnResult(
   stdout: string,
   stderr: string,
   exitCode: number,
-): PiDevSpawnResult {
+): SageSpawnResult {
   const stdoutStream = new Response(stdout).body!;
   const stderrStream = new Response(stderr).body!;
   return {
@@ -98,14 +98,14 @@ function makeSpawnResult(
 
 /**
  * Make a spawn fake that captures every argv it sees and returns the
- * given `PiDevSpawnResult`. Pins the argv shape the runner builds
+ * given `SageSpawnResult`. Pins the argv shape the runner builds
  * (`sage review owner/repo#N --substrate pi`).
  */
 function makeRecordingSpawn(
-  result: PiDevSpawnResult,
-): { fn: PiDevSpawnFn; calls: string[][] } {
+  result: SageSpawnResult,
+): { fn: SageSpawnFn; calls: string[][] } {
   const calls: string[][] = [];
-  const fn: PiDevSpawnFn = (argv, _opts) => {
+  const fn: SageSpawnFn = (argv, _opts) => {
     calls.push([...argv]);
     return result;
   };
@@ -114,9 +114,9 @@ function makeRecordingSpawn(
 
 /** `which` stub that returns a fixed sage binary path. */
 const FAKE_SAGE_BIN = "/usr/local/bin/sage";
-const whichSuccess: PiDevWhichFn = (cmd) =>
+const whichSuccess: SageWhichFn = (cmd) =>
   cmd === "sage" ? FAKE_SAGE_BIN : undefined;
-const whichMissing: PiDevWhichFn = () => undefined;
+const whichMissing: SageWhichFn = () => undefined;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -222,7 +222,7 @@ describe("cortex#331 Phase 1 — makeSageReviewRunner", () => {
     // No spawn call should happen — the runner must short-circuit before
     // any subprocess work when the binary is missing. We still pass a
     // spawn that would throw if invoked to pin that no-call invariant.
-    const spawnThatMustNotRun: PiDevSpawnFn = () => {
+    const spawnThatMustNotRun: SageSpawnFn = () => {
       throw new Error("pi-dev-runner test: spawn must not be called when sage is missing");
     };
 
@@ -287,7 +287,7 @@ describe("cortex#331 Phase 1 — makeSageReviewRunner", () => {
   });
 
   test("spawn throw (e.g. ENOENT mid-spawn) is caught and surfaces as a failed envelope, not an unhandled rejection", async () => {
-    const spawnThatThrows: PiDevSpawnFn = () => {
+    const spawnThatThrows: SageSpawnFn = () => {
       throw new Error("ENOENT: no such file or directory");
     };
     const runner = makeSageReviewRunner({

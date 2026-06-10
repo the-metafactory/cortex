@@ -1460,9 +1460,11 @@ export async function startCortex(
       // `sage-runner.ts`'s lifetime note), so a missing sage on boot does not
       // crash this loop — review requests surface the failure as
       // `dispatch.task.failed` envelopes instead.
-      const { engine, backend } = resolveReviewEngine(agent.runtime);
+      const { engine, model } = resolveReviewEngine(agent.runtime);
       const pipelineRunner =
-        engine === "sage" ? makeSageReviewRunner({ substrate: backend }) : undefined;
+        engine === "sage"
+          ? makeSageReviewRunner(model !== undefined ? { model } : {})
+          : undefined;
 
       const reviewSessionOpts = buildReviewSessionOpts(config, agent);
 
@@ -1584,11 +1586,11 @@ export async function startCortex(
       // misled principals into chasing phantom misconfigs.
       if (started.subscribed) {
         console.log(
-          `cortex: review consumer ready for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} backend=${backend}`,
+          `cortex: review consumer ready for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"}`,
         );
       } else {
         console.log(
-          `cortex: review consumer DORMANT for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} backend=${backend} — cortex MyelinRuntime subscriptions disabled (G-1111 pending; tasks.code-review.* envelopes will not be claimed by this consumer)`,
+          `cortex: review consumer DORMANT for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"} — cortex MyelinRuntime subscriptions disabled (G-1111 pending; tasks.code-review.* envelopes will not be claimed by this consumer)`,
         );
       }
 
@@ -1646,11 +1648,11 @@ export async function startCortex(
           });
           if (federatedStarted.subscribed) {
             console.log(
-              `cortex: federated review consumer (${mode}) ready for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} backend=${backend} pattern=${pattern}`,
+              `cortex: federated review consumer (${mode}) ready for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"} pattern=${pattern}`,
             );
           } else {
             console.log(
-              `cortex: federated review consumer (${mode}) DORMANT for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} backend=${backend} — cortex MyelinRuntime subscriptions disabled (federated.* code-review envelopes will not be claimed by this consumer)`,
+              `cortex: federated review consumer (${mode}) DORMANT for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"} — cortex MyelinRuntime subscriptions disabled (federated.* code-review envelopes will not be claimed by this consumer)`,
             );
           }
         };
