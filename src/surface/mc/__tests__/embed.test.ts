@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { tmpdir } from "os";
@@ -99,5 +100,35 @@ describe("startMissionControl (embed)", () => {
     });
     expect(handle.port).toBeGreaterThan(0);
     expect((await fetch(`http://127.0.0.1:${handle.port}/health`)).ok).toBe(true);
+  });
+
+  it("rejects on a busy port AND releases the db handle (no partial-boot leak)", async () => {
+    // Occupy a port on loopback so startServer's bind fails (EADDRINUSE).
+    const blocker = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("blocker") });
+    const busyPort = blocker.port;
+    try {
+      const dbPath = join(tmpDir, "data", "mission-control.db");
+      await expect(
+        startMissionControl({ configPath: writeMcYaml(), dbPath, port: busyPort }),
+      ).rejects.toThrow();
+      handle = null; // startMissionControl rejected → nothing to stop in afterEach
+
+      // The db opened during the failed boot must have been closed: the file
+      // exists (initDatabase created it) but no handle is left on it — we can
+      // reopen it and delete it cleanly.
+      expect(existsSync(dbPath)).toBe(true);
+      const reopened = new Database(dbPath, { readwrite: true });
+      expect(() => reopened.query("PRAGMA user_version").get()).not.toThrow();
+      reopened.close();
+      expect(() => rmSync(dbPath, { force: true })).not.toThrow();
+      expect(existsSync(dbPath)).toBe(false);
+
+      // No listener was left behind on the busy port other than the blocker —
+      // it's still the blocker answering, not a leaked MC server.
+      const res = await fetch(`http://127.0.0.1:${busyPort}/`);
+      expect(await res.text()).toBe("blocker");
+    } finally {
+      blocker.stop(true);
+    }
   });
 });

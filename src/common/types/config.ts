@@ -540,7 +540,14 @@ export const AgentConfigSchema = z.object({
     enabled: z.boolean().default(false),
     /** Optional MC yaml supplying hooks/ws/log settings. Empty → MC defaults. */
     configPath: z.string().default(""),
-    /** Absolute (or leading-`~`) db path. Empty → per-slug default at boot. */
+    /**
+     * Absolute (or leading-`~`) db path. Empty → per-slug default at boot.
+     * ONE db per stack is required: the hook cursor lands beside the db
+     * (`mc-hook-cursor.json`), so two stacks pointed at the same explicit
+     * `dbPath` would share — and race — the cursor (and the db itself). The
+     * per-slug default keeps stacks isolated; only override with a path unique
+     * to this stack.
+     */
     dbPath: z.string().default(""),
     /** Listen port. 0 → fall back to the MC yaml's port (default 8767). */
     port: z.number().int().nonnegative().default(0),

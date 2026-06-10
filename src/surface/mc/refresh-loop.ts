@@ -25,8 +25,13 @@ export interface CockpitRefreshLoopOptions {
 }
 
 export interface CockpitRefreshLoop {
-  /** Stop the loop (idempotent). */
-  stop: () => void;
+  /**
+   * Stop the loop (idempotent). Clears the schedule, then awaits any in-flight
+   * tick so a parked `run()` settles before callers tear down shared resources
+   * the run touches (e.g. closing the bun:sqlite handle in cortex.ts's drain).
+   * A tick that rejects still releases the await (error isolation preserved).
+   */
+  stop: () => Promise<void>;
 }
 
 const defaultSchedule = (fn: () => void, ms: number): (() => void) => {
@@ -45,12 +50,26 @@ export function startCockpitRefreshLoop(opts: CockpitRefreshLoopOptions): Cockpi
         `[cockpit-refresh-loop] refresh failed: ${err instanceof Error ? err.message : String(err)}\n`
       ));
 
-  // Each tick is fire-and-forget + self-isolating: a rejected run routes to
-  // onError, never escaping the timer callback.
+  // The currently-running tick, tracked so `stop()` can await an in-flight run
+  // before shared resources (the bun:sqlite handle) are torn down. `null`
+  // between ticks. The tracked promise is the error-isolated one, so awaiting it
+  // in stop() never rejects.
+  let inFlight: Promise<void> | null = null;
+
+  // Each tick is self-isolating: a rejected run routes to onError, never
+  // escaping. The isolated promise is recorded so stop() can join it, and
+  // cleared on settle so we never await a stale run.
   const tick = (): void => {
-    void Promise.resolve()
+    const run = Promise.resolve()
       .then(() => opts.run())
-      .catch(onError);
+      .then(
+        () => undefined,
+        (err: unknown) => { onError(err); },
+      )
+      .finally(() => {
+        if (inFlight === run) inFlight = null;
+      });
+    inFlight = run;
   };
 
   if (opts.runOnStart !== false) tick();
@@ -58,10 +77,14 @@ export function startCockpitRefreshLoop(opts: CockpitRefreshLoopOptions): Cockpi
 
   let stopped = false;
   return {
-    stop: () => {
+    stop: async () => {
       if (stopped) return;
       stopped = true;
       cancel();
+      // Await the in-flight tick (if any) so a parked run settles before the
+      // caller closes resources it touches. The tracked promise is already
+      // error-isolated — it resolves on both success and failure.
+      if (inFlight) await inFlight;
     },
   };
 }

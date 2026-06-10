@@ -56,12 +56,61 @@ describe("startCockpitRefreshLoop (ML.5)", () => {
     expect((errors[0] as Error).message).toBe("boom 1");
   });
 
-  it("stop() cancels the schedule and is idempotent", () => {
+  it("stop() cancels the schedule and is idempotent", async () => {
     const s = fakeScheduler();
     const loop = startCockpitRefreshLoop({ run: async () => {}, intervalMs: 1000, runOnStart: false, schedule: s.schedule });
     expect(s.cancelled).toBe(false);
-    loop.stop();
+    await loop.stop();
     expect(s.cancelled).toBe(true);
-    loop.stop(); // idempotent — no throw
+    await loop.stop(); // idempotent — no throw
+  });
+
+  it("stop() awaits an in-flight tick before resolving", async () => {
+    const s = fakeScheduler();
+    let settled = false;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const loop = startCockpitRefreshLoop({
+      // A run parked on `gate` — mirrors refreshCockpit awaiting ingest/publish.
+      run: async () => { await gate; settled = true; },
+      intervalMs: 1000,
+      runOnStart: true,
+      schedule: s.schedule,
+    });
+    await flush(); // let the runOnStart tick reach its await
+
+    const stopPromise = loop.stop(); // must NOT resolve while the run is parked
+    let stopResolved = false;
+    void stopPromise.then(() => { stopResolved = true; });
+    await flush();
+    expect(s.cancelled).toBe(true); // schedule cleared immediately
+    expect(stopResolved).toBe(false); // but stop is still waiting on the run
+    expect(settled).toBe(false);
+
+    release(); // let the parked run finish
+    await stopPromise; // stop now resolves
+    expect(settled).toBe(true);
+    expect(stopResolved).toBe(true);
+  });
+
+  it("stop() still resolves when the in-flight tick rejects (error isolation)", async () => {
+    const s = fakeScheduler();
+    const errors: unknown[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const loop = startCockpitRefreshLoop({
+      run: async () => { await gate; throw new Error("tick boom"); },
+      intervalMs: 1000,
+      runOnStart: true,
+      onError: (e) => errors.push(e),
+      schedule: s.schedule,
+    });
+    await flush();
+
+    const stopPromise = loop.stop();
+    release();
+    await stopPromise; // resolves (does not reject) despite the run throwing
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as Error).message).toBe("tick boom");
   });
 });

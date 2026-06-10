@@ -31,7 +31,11 @@ export interface MissionControlHandle {
 export interface StartMissionControlOptions {
   /** Optional MC yaml supplying hooks / ws / log settings. Empty/undefined → MC defaults. */
   configPath?: string;
-  /** Absolute db path. cortex owns this; the cursor lands beside it. */
+  /**
+   * Absolute db path. cortex owns this; the hook cursor lands beside it
+   * (`mc-hook-cursor.json`). ONE db per stack is required — two stacks sharing
+   * an explicit `dbPath` would share (and race) both the cursor and the db.
+   */
   dbPath: string;
   /** Listen port. `> 0` overrides the MC yaml's port; otherwise the yaml's port (default 8767) wins. */
   port?: number;
@@ -65,24 +69,40 @@ export async function startMissionControl(
     },
   };
 
+  // Build incrementally so a partial-boot failure tears down exactly what was
+  // acquired, in reverse. The embedding daemon's catch is non-fatal (unlike the
+  // standalone index.ts, which process.exit(1)s and lets the OS reclaim), so an
+  // unhandled throw here would otherwise leak the db handle — and the bound
+  // socket — for the whole daemon lifetime (e.g. EADDRINUSE on a busy fixed port).
   const db = initDatabase(config.db.path);
-  const processManager = new ProcessManager();
-  const serverCtx = startServer(config, db, { processManager });
-  const { server, wsRegistry } = serverCtx;
-  const hookPoller = new HookStreamPoller(db, config.hooks, wsRegistry);
+  let serverCtx: ReturnType<typeof startServer> | null = null;
+  let hookPoller: HookStreamPoller | null = null;
+  try {
+    const processManager = new ProcessManager();
+    serverCtx = startServer(config, db, { processManager });
+    const { server, wsRegistry } = serverCtx;
+    hookPoller = new HookStreamPoller(db, config.hooks, wsRegistry);
+    hookPoller.start();
 
-  hookPoller.start();
+    const startedPoller = hookPoller;
+    const boundCtx = serverCtx;
+    const stop = async (): Promise<void> => {
+      startedPoller.stop();
+      await processManager.closeAll();
+      boundCtx.stop(true);
+      db.close();
+    };
 
-  const stop = async (): Promise<void> => {
-    hookPoller.stop();
-    await processManager.closeAll();
-    serverCtx.stop(true);
+    // The ACTUAL bound port — when `config.port` is 0, Bun.serve assigns one;
+    // callers (the cockpit refresh loop's baseUrl) need the real listen port.
+    // Bun.serve guarantees a numeric `port` once started; the `?? config.port`
+    // coalesce only satisfies the optional type on `Server.port`.
+    return { db, port: server.port ?? config.port, stop };
+  } catch (err) {
+    // Reverse-order teardown of whatever was constructed before the throw.
+    hookPoller?.stop();
+    serverCtx?.stop(true);
     db.close();
-  };
-
-  // The ACTUAL bound port — when `config.port` is 0, Bun.serve assigns one;
-  // callers (the cockpit refresh loop's baseUrl) need the real listen port.
-  // Bun.serve guarantees a numeric `port` once started; the `?? config.port`
-  // coalesce only satisfies the optional type on `Server.port`.
-  return { db, port: server.port ?? config.port, stop };
+    throw err;
+  }
 }

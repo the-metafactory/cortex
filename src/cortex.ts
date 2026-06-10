@@ -2870,6 +2870,7 @@ export async function startCortex(
     const rendererStopNames = renderers.map((r) => `renderer ${r.id} stop`);
     const allSlots: string[] = [
       "config-watcher stop",
+      "cockpit refresh loop stop",
       "mc embed stop",
       "github webhook receiver stop",
       ...adapterCleanup.map((_, i) => `outbound poller stop[${i}]`),
@@ -2912,7 +2913,10 @@ export async function startCortex(
 
     const drain = async (): Promise<void> => {
       completeSync("config-watcher stop", () => configWatcher?.stop());
-      completeSync("cockpit refresh loop stop", () => cockpitLoop?.stop());
+      // Await the cockpit loop's stop BEFORE the embed's stop: stop() now awaits
+      // any in-flight refreshCockpit tick, so the bun:sqlite handle the embed
+      // closes is only released after the last tick settles (no use-after-close).
+      await completeAsync("cockpit refresh loop stop", cockpitLoop?.stop());
       await completeAsync("mc embed stop", mcHandle?.stop());
       completeSync("github webhook receiver stop", () => githubReceiver?.stop());
       for (let i = 0; i < adapterCleanup.length; i++) {
