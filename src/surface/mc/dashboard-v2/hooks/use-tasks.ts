@@ -30,6 +30,7 @@ import {
   serializeHash,
 } from "../lib/task-table-hash";
 import type { WsClient, WsMessage } from "./use-websocket";
+import { useProjectionRefetch } from "./use-projection-refetch";
 import { ITERATION_STATES, type IterationState } from "../../db/iterations";
 import type { TaskListItem } from "../../db/tasks";
 import {
@@ -170,6 +171,13 @@ export function useTasks(ws: WsClient): TasksHookState {
       }
     };
   }, [subscribe, refetch]);
+
+  // C-863 — refresh off the S6 `mc.projection` broadcast: a `dispatch.lifecycle`
+  // projection write can flip a task's aggregate state (any dispatch transition
+  // ranks into the seven-state aggregate), so the task table re-reads on it. Uses
+  // its own (wider) trailing debounce so a dispatch fan-out coalesces into one
+  // refetch; `refetch` is the same stable zero-arg callback the WS effect uses.
+  useProjectionRefetch(ws, "tasks", refetch);
 
   // F-16 — patch the denormalised `iteration` tag on cached task rows
   // when an `iteration.updated` frame arrives. Two reasons NOT to

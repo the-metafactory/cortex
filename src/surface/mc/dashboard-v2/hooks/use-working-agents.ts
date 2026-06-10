@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiFailure, getJson } from "../lib/api";
 import type { WsClient, WsMessage } from "./use-websocket";
+import { useProjectionRefetch } from "./use-projection-refetch";
 
 export interface WorkingAgentTile {
   agent_id: string;
@@ -117,6 +118,15 @@ export function useWorkingAgents(ws: WsClient): WorkingAgentsState {
     }
     return subscribe("state.transition", onTransition);
   }, [subscribe, fetchAgents]);
+
+  // C-863 — also refresh off the S6 `mc.projection` broadcast so bus→MC
+  // projection writes (dispatch-lifecycle transitions, review verdicts, agent
+  // heartbeats) push the working grid live instead of waiting for the next
+  // `state.transition`-driven refetch. Its own (wider) trailing debounce
+  // coalesces projection bursts; the zero-arg `refetch` is stable for the hook
+  // lifetime so the subscription isn't torn down every render.
+  const refetch = useCallback(() => { void fetchAgents(); }, [fetchAgents]);
+  useProjectionRefetch(ws, "working-agents", refetch);
 
   return { agents, loaded, error };
 }
