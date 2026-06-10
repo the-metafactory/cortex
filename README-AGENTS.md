@@ -23,8 +23,10 @@ Verify each before starting:
 | guild id + channel ids | — | Discord client → Developer Mode → copy id. |
 | `arc` (optional) | `arc --version` | metafactory package manager; manages install + launchd lifecycle + signing-seed provisioning. |
 
-Platform: macOS (launchd plists ship in `src/services/`) or Linux (systemd
-user units — same pattern, principal-provided unit files).
+Platform: macOS (launchd plists ship in `src/services/`) or Linux (no systemd
+template ships in-repo — mirror the launchd plists in `src/services/` as a user
+unit: `ExecStart=<path>/cortex start --config <pointer>`, `Restart=always`,
+plus the `CORTEX_CHANNEL` env var and a `PATH` that includes `~/.bun/bin`).
 
 ## 2. Install
 
@@ -34,10 +36,14 @@ user units — same pattern, principal-provided unit files).
 arc upgrade Cortex
 ```
 
-This installs the released package, renders + loads the launchd agents
-(`ai.meta-factory.cortex.*`), and auto-provisions the stack signing seed at the
-conventional path on first install. Note: `arc upgrade` tracks **GitHub
-releases**, not `main`.
+This installs the released package and renders + loads the launchd agents
+(`ai.meta-factory.cortex.*`). Note: `arc upgrade` tracks **GitHub releases**,
+not `main`.
+
+**Ordering:** seed auto-provisioning reads `stack.nkey_seed_path` from the
+stack config — which doesn't exist until §3.1 scaffolds it. On a fresh machine:
+install (this section) → configure (§3) → re-run `arc upgrade Cortex` (or
+provision manually per §3.3) so the seed lands at the declared path.
 
 **Path B — from source:**
 
@@ -212,7 +218,8 @@ in v1 — keep dispatch scope tight on public-facing stacks.
 **Instrument any Claude Code session** onto the Mission Control dashboard:
 
 ```bash
-CORTEX_CHANNEL=<label> CORTEX_AGENT_NAME=<display> CORTEX_AGENT_ID=<id> claude
+CORTEX_CHANNEL=<label> CORTEX_AGENT_NAME=<display> CORTEX_AGENT_ID=<id> \
+  CORTEX_PRINCIPAL=<principal> claude
 ```
 
 `CORTEX_CHANNEL` is the required enabler; `CORTEX_PRINCIPAL` stamps the human
@@ -230,7 +237,8 @@ discord read
 **Dashboard frontend** (only when serving your own): built + deployed
 separately from the daemon —
 `bun run build:dashboard` then
-`bunx wrangler pages deploy dist/dashboard-v2 --project-name grove-dashboard`.
+`bunx wrangler pages deploy dist/dashboard-v2 --project-name <your-cf-project>`
+(your own Cloudflare Pages project; `grove-dashboard` is the metafactory's).
 
 **Bus code review:** publishers send `tasks.code-review.*` envelopes; cortex
 claims via a JetStream durable and emits verdict + lifecycle envelopes. Tune
