@@ -721,6 +721,13 @@ function loadCortexShape(
     // cortex-shape deployment (same failure mode the `security` comment warns of).
     mc: cortexConfig.mc,
     cockpit: cortexConfig.cockpit,
+    // F-11 (fix/c-844) — carry the grove block (Discord push toggle + dashboard
+    // deep-link baseUrl) through to the synthesized AgentConfig. Now on
+    // CortexConfigSchema (shared GroveSchema), so it survives the
+    // strip-by-default parse; without this passthrough `AgentConfigSchema.parse(
+    // merged)` would re-default `grove.baseUrl` to "" and every attention-
+    // notification deep-link on a cortex-shape stack would fall back to localhost.
+    grove: cortexConfig.grove,
     ...(cortexConfig.nats !== undefined && { nats: cortexConfig.nats }),
   };
 

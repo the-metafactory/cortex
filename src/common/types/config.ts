@@ -430,6 +430,49 @@ export const CockpitSchema = z.object({
   /* eslint-enable @typescript-eslint/no-unnecessary-condition */
 }));
 
+/**
+ * F-11: grove platform-level config (cross-cutting, not bound to a single
+ * platform adapter). Extracted as a SHARED const (fix/c-844) so BOTH top-level
+ * config schemas reference the same definition — `AgentConfigSchema` (legacy
+ * bot.yaml) and `CortexConfigSchema` (the modern config-split shape every live
+ * stack loads). Defining it inline on only one schema is exactly how
+ * `grove.baseUrl` got silently stripped for every cortex-shape deployment (the
+ * strip-by-default parse drops unknown keys), leaving dashboard deep-links in
+ * attention notifications pointed at `undefined`/localhost instead of the
+ * configured public host. One definition → the two schemas cannot drift again.
+ * See `docs/design-mc-f11-discord-notifications.md` Decision 6.
+ *
+ * - `notifications.discord` — master toggle for the F-11 Discord push surface.
+ *   Default `false`; explicit off-by-default avoids surprising principals with
+ *   a DM torrent after a fresh install.
+ * - `baseUrl` — used to build dashboard deep links in notification bodies.
+ *   Empty (the default) → callers fall back to `http://localhost:${port}`;
+ *   Tier 2 should set `https://grove.meta-factory.ai`.
+ */
+export const GroveSchema = z.object({
+  notifications: z.object({
+    discord: z.boolean().default(false),
+  }).default(emptyDefault()),
+  baseUrl: z.string().default(""),
+}).default(emptyDefault()).transform((val) => ({
+  // Same `emptyDefault()` quirk documented on the `mc`/`cockpit` blocks:
+  // `.default(emptyDefault())` returns `{}` literally rather than re-parsing the
+  // inner defaults, so `baseUrl` would be `undefined` (not `""`) and
+  // `notifications` would be `undefined` when grove is absent — and `notifications`
+  // `{}` (so `.discord` undefined) when grove is present but notifications isn't.
+  // The deep-link consumers test `config.grove.baseUrl !== ""`, so an `undefined`
+  // baseUrl would render `undefined/…` links; reads of `config.grove.notifications.
+  // discord` would throw when grove is absent. Re-apply the inner defaults so
+  // callers get the populated shape. The `??` chains are load-bearing (not
+  // redundant) for the all-defaults parse path.
+  /* eslint-disable @typescript-eslint/no-unnecessary-condition */
+  notifications: {
+    discord: val.notifications?.discord ?? false,
+  },
+  baseUrl: val.baseUrl ?? "",
+  /* eslint-enable @typescript-eslint/no-unnecessary-condition */
+}));
+
 export const AgentConfigSchema = z.object({
   agent: z.object({
     name: z.string().min(1),
@@ -627,25 +670,12 @@ export const AgentConfigSchema = z.object({
   }).default(emptyDefault()),
 
   /**
-   * F-11: Grove platform-level config (cross-cutting, not bound to a
-   * single platform adapter). See
-   * `docs/design-mc-f11-discord-notifications.md` Decision 6.
-   *
-   * - `notifications.discord` — master toggle for the F-11 Discord push
-   *   surface. Default `false`; explicit off-by-default avoids
-   *   surprising principals with a DM torrent after a fresh install.
-   * - `baseUrl` — used to build dashboard deep links in notification
-   *   bodies. Tier 1 default `http://localhost:8766`; Tier 2 should set
-   *   `https://grove.meta-factory.ai`. When unset on Tier 2, F-11
-   *   renders the deep link as a plain assignment id with a one-line
-   *   warning instead of crashing.
+   * F-11: grove platform-level config (cross-cutting, not bound to a single
+   * platform adapter). SHARED with `CortexConfigSchema` via {@link GroveSchema}
+   * (fix/c-844) so the block survives the cortex-shape strip-by-default parse.
+   * See the schema's own docstring above for per-field semantics.
    */
-  grove: z.object({
-    notifications: z.object({
-      discord: z.boolean().default(false),
-    }).default(emptyDefault()),
-    baseUrl: z.string().default(""),
-  }).default(emptyDefault()),
+  grove: GroveSchema,
 
   /**
    * G-1113 ML.5: Mission Control Cockpit live-refresh. OFF by default (opt-in)

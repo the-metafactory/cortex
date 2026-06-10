@@ -37,6 +37,7 @@ import { z } from "zod/v4";
 import { CapabilitySchema } from "./capability";
 import {
   CockpitSchema,
+  GroveSchema,
   McSchema,
   NetworkClaudeSchema,
   NetworkCloudSchema,
@@ -2190,6 +2191,18 @@ export const CortexConfigSchema = z.object({
    */
   mc: McSchema,
   cockpit: CockpitSchema,
+
+  /**
+   * F-11: grove platform-level config (Discord push toggle + dashboard
+   * `baseUrl` for deep links). SHARED with `AgentConfigSchema` via
+   * {@link GroveSchema} so the block survives the cortex-shape strip-by-default
+   * parse (fix/c-844 — it was defined on the legacy schema only, so
+   * `config.grove.baseUrl` was always `""`/`undefined` on live config-split
+   * stacks and attention-notification deep-links fell back to localhost).
+   * `loadCortexShape` carries it into the synthesized `AgentConfig` (the
+   * `merged` passthrough), same as `mc`/`cockpit`/`security`.
+   */
+  grove: GroveSchema,
 
   /** First-class agents — the canonical list. */
   agents: z.array(AgentSchema).min(1, "at least one agent is required"),

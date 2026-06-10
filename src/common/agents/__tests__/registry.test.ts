@@ -135,6 +135,9 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
       refreshIntervalMs: 300_000,
       attention: { surface: "discord", channel: "" },
     },
+    // fix/c-844 — grove is now on CortexConfigSchema (shared GroveSchema); the
+    // transform fills defaults so the inferred OUTPUT type lists it as required.
+    grove: { notifications: { discord: false }, baseUrl: "" },
   };
 }
 
