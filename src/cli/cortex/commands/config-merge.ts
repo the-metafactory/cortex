@@ -722,9 +722,14 @@ export async function runConfigMerge(argv: string[]): Promise<number> {
   }
 
   // 8. Timestamped backup, then in-place write.
+  // The backup can carry platform tokens (Discord/Slack/Mattermost) lifted
+  // from the original cortex.yaml — write with mode 0o600 atomically so the
+  // file never exists at the default umask between create and chmod. Matches
+  // the cortex.yaml chmod-600 enforcement (#644 / TC-4a) and the cloud.ts
+  // credential-write pattern. Closes #883.
   const backupPath = buildBackupPath(target.filePath);
   try {
-    writeFileSync(backupPath, originalText, "utf-8");
+    writeFileSync(backupPath, originalText, { encoding: "utf-8", mode: 0o600 });
     process.stderr.write(`config ${verb}: backup saved to ${backupPath}\n`);
   } catch (err) {
     process.stderr.write(
