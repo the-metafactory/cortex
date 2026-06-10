@@ -97,14 +97,28 @@ describe("HookStreamPoller", () => {
     expect(count).toBe(0);
   });
 
-  it("skips unregistered sessions", () => {
+  // MC-I1.S5 (ADR-0005 §3) — unregistered sessions are no longer dropped;
+  // they are auto-registered as orphan `local.observed` sessions and their
+  // events ingested. (`count` reflects the ingested hook event; the F-20
+  // dispatched → running auto-transition writes an additional state.transition
+  // event into the DB but is not counted in `count`.)
+  it("auto-registers an orphan for an unregistered session and ingests its event", () => {
     const file = join(rawDir, "unknown-session.jsonl");
     writeFileSync(file, JSON.stringify(makeEvent("e-1", "unknown-session")) + "\n");
 
     const poller = new HookStreamPoller(db, config);
     const count = poller.poll();
 
-    expect(count).toBe(0);
+    expect(count).toBe(1);
+
+    // The orphan session row now exists and is observed.
+    const orphan = db
+      .query(
+        `SELECT endpoint_kind FROM sessions WHERE cc_session_id = 'unknown-session'`
+      )
+      .get() as { endpoint_kind: string } | null;
+    expect(orphan).not.toBeNull();
+    expect(orphan!.endpoint_kind).toBe("local.observed");
   });
 
   it("reads incrementally across multiple polls", () => {
@@ -177,17 +191,23 @@ describe("HookStreamPoller", () => {
   });
 
   it("persists cursor even when no events are ingested (offset-advance case)", () => {
-    // Write events for an UNREGISTERED session — reader advances offsets
-    // but ingestor ingests 0 events.
-    const file = join(rawDir, "some-unknown-session.jsonl");
-    writeFileSync(
-      file,
-      JSON.stringify(makeEvent("e-1", "totally-unknown-session")) + "\n"
-    );
+    // MC-I1.S5 — unregistered sessions now auto-register, so the genuine
+    // "0 events ingested but reader advanced offsets" case is a file whose only
+    // line is malformed JSON: JsonlTailReader skips it (0 parsed events) but
+    // still advances the byte offset. The cursor must persist that advance so
+    // the bad line isn't re-scanned on restart.
+    const file = join(rawDir, "malformed-only.jsonl");
+    writeFileSync(file, "{ this is not valid json\n");
 
     const poller = new HookStreamPoller(db, config);
     const count = poller.poll();
     expect(count).toBe(0);
+
+    // No event ingested, no orphan session created (the line never parsed).
+    const sessions = db.query("SELECT COUNT(*) AS c FROM events").get() as {
+      c: number;
+    };
+    expect(sessions.c).toBe(0);
 
     // Cursor should STILL be persisted so the offset advance survives restart.
     // Previously this was gated by `totalIngested > 0` which lost the advance.

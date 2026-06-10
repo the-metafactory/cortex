@@ -195,3 +195,153 @@ export function createShadowAssignmentAndSession(
     shadowSessionId: ids.sessionId,
   };
 }
+
+// ============================================================================
+// MC-I1.S5 (ADR-0005 §3) — orphan observed-session auto-registration
+// ============================================================================
+//
+// An ORPHAN is a real instrumented CC session (CORTEX_CHANNEL set — e.g. the
+// principal's own `cldyo-live` terminal) that writes raw hook events but was
+// NEVER registered with Mission Control: no dispatch, no `POST /api/sessions`,
+// so no task/assignment/session row exists for its `cc_session_id`. The
+// ingestor used to HARD-DROP these events; ADR-0005 §3 (the catch-all half of
+// Phase 1) says auto-register them so the session lights up on the glass.
+//
+// Storage shape — DECISION (b): synthetic task + per-orphan agent + assignment.
+// We reuse the established F-12b pattern (`ensureShadowAgent` +
+// `createShadowAssignmentAndSession`) rather than relaxing `sessions.assignment_id`
+// to nullable. Rationale:
+//   - EVERY read query joins FROM `agent_task_assignment` outward to sessions
+//     (`mostRecentSessionLeftJoin`, `listWorkingAgents`, `mostActiveAgent`,
+//     the ingestor's own F-20 SELECT). A NULL `assignment_id` with no
+//     assignment row would make the orphan session exist but render NOWHERE —
+//     it is unreachable through every assignment-anchored join. The synthetic
+//     assignment keeps orphans visible through the unchanged join paths.
+//   - Zero schema change → zero blast radius on the 20-table schema, no
+//     REBUILD_MIGRATIONS, no nullable-column audit across N queries.
+//
+// Distinguishability: orphan agents carry the `mc-orphan-` id prefix and the
+// session is `endpoint_kind = 'local.observed'`, so the dashboard can tell
+// them apart from dispatch-spawned controlled sessions. They are PER-orphan
+// (one agent + assignment + session per `cc_session_id`), so each instrumented
+// terminal is its own working-grid tile rather than collapsing into one.
+//
+// Lifecycle: the orphan assignment is born `dispatched` so the ingestor's F-20
+// auto-transitions drive it normally — `dispatched → running` on the first
+// event, `running → completed` on Stop/SessionEnd — exactly like any other
+// observed session. Nothing in F-20 needs to special-case orphans.
+
+export const ORPHAN_AGENT_PREFIX = "mc-orphan-";
+const ORPHAN_TASK_ID = "mc-orphan-task";
+const ORPHAN_TASK_TITLE = "Observed sessions (unregistered)";
+// Synthetic task needs a principal_id + source_system (both NOT NULL). The task
+// is an internal MC bookkeeping row, not a real provider work item.
+const ORPHAN_TASK_PRINCIPAL = "mc-orphan";
+const ORPHAN_TASK_SOURCE_SYSTEM = "internal";
+
+/**
+ * Lazily insert the well-known orphan catch-all task. Idempotent. All orphan
+ * assignments hang off this single task (the task is bookkeeping; the agent +
+ * assignment + session carry the per-session identity).
+ */
+function ensureOrphanTask(db: Database): string {
+  db.query(
+    `INSERT INTO tasks (id, title, priority, principal_id, source_system, status)
+     VALUES (?, ?, 2, ?, ?, 'in_progress')
+     ON CONFLICT(id) DO NOTHING`
+  ).run(ORPHAN_TASK_ID, ORPHAN_TASK_TITLE, ORPHAN_TASK_PRINCIPAL, ORPHAN_TASK_SOURCE_SYSTEM);
+  return ORPHAN_TASK_ID;
+}
+
+/**
+ * Deterministic orphan-agent id for a `cc_session_id`. One agent per orphan
+ * session → one working-grid tile per instrumented terminal. The `mc-orphan-`
+ * prefix makes orphans distinguishable from dispatch-spawned agents.
+ */
+export function orphanAgentId(ccSessionId: string): string {
+  return `${ORPHAN_AGENT_PREFIX}${ccSessionId}`;
+}
+
+/**
+ * Lazily insert the per-orphan agent. `displayName` is taken from the raw
+ * event's `agent_name` when present, otherwise the cc_session_id — applied
+ * only on insert (subsequent events never overwrite a name the principal may
+ * have since edited), matching `ensureNamedAgent`'s semantics.
+ */
+function ensureOrphanAgent(
+  db: Database,
+  ccSessionId: string,
+  displayName: string | undefined
+): string {
+  const id = orphanAgentId(ccSessionId);
+  const name = displayName && displayName.length > 0 ? displayName : ccSessionId;
+  db.query(
+    `INSERT INTO agents (id, name, type, persistent)
+     VALUES (?, ?, 'head', 0)
+     ON CONFLICT(id) DO NOTHING`
+  ).run(id, name);
+  return id;
+}
+
+export interface OrphanSession {
+  agentId: string;
+  assignmentId: string;
+  sessionId: string;
+}
+
+/**
+ * Auto-register an orphan observed session for an unknown `cc_session_id`.
+ *
+ * Idempotent on `cc_session_id`: if a session row already carries this
+ * `cc_session_id` we return null (the caller then proceeds with the existing
+ * session — no duplicate task/agent/assignment/session is created). The first
+ * call lands the synthetic task (shared), a per-orphan agent, an assignment in
+ * `dispatched`, and a `local.observed` session.
+ *
+ * Wrapped in a single transaction so a partial insert can never leave a
+ * dangling agent/assignment without its session.
+ *
+ * @param displayName  Raw event `agent_name`, surfaced as the orphan agent's
+ *                     display name where the schema allows (insert-only).
+ */
+export function registerOrphanSession(
+  db: Database,
+  ccSessionId: string,
+  displayName?: string
+): OrphanSession | null {
+  // Dedupe: any existing session for this cc_session_id (orphan or otherwise)
+  // means we must NOT create a second one. The ingestor's own lookup already
+  // ran and missed, but this guard keeps the helper safe to call directly.
+  const existing = db
+    .query(`SELECT 1 FROM sessions WHERE cc_session_id = ? LIMIT 1`)
+    .get(ccSessionId);
+  if (existing) return null;
+
+  const assignmentId = generateId();
+  const sessionId = generateId();
+
+  const txn = db.transaction(() => {
+    ensureOrphanTask(db);
+    const agentId = ensureOrphanAgent(db, ccSessionId, displayName);
+
+    // Born `dispatched` so the ingestor's F-20 auto-transitions
+    // (dispatched → running on first event, running → completed on
+    // Stop/SessionEnd) drive the orphan exactly like a registered observed
+    // session — no orphan-specific lifecycle code needed.
+    db.query(
+      `INSERT INTO agent_task_assignment (id, agent_id, task_id, state)
+       VALUES (?, ?, ?, 'dispatched')`
+    ).run(assignmentId, agentId, ORPHAN_TASK_ID);
+
+    const now = new Date().toISOString();
+    db.query(
+      `INSERT INTO sessions
+         (id, assignment_id, cc_session_id, endpoint_kind, pid, started_at)
+       VALUES (?, ?, ?, 'local.observed', NULL, ?)`
+    ).run(sessionId, assignmentId, ccSessionId, now);
+
+    return { agentId, assignmentId, sessionId };
+  });
+
+  return txn();
+}

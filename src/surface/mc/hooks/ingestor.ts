@@ -27,6 +27,7 @@ import type { RawHookEvent } from "./types";
 import type { WsClientRegistry } from "../ws/client-registry";
 import { insertEvent } from "../db/events";
 import { applyTransition } from "../db/transitions";
+import { registerOrphanSession } from "../db/sessions";
 import { broadcastTransition, broadcastEvent } from "../notifications";
 
 export interface IngestResult {
@@ -72,12 +73,12 @@ export function ingestEvents(
   let count = 0;
   const inserted: McEvent[] = [];
 
-  for (const [ccSessionId, sessionEvents] of bySession) {
-    // Look up session by cc_session_id — most recent first, regardless of
-    // ended_at status. F-20 widens the SELECT to also pull endpoint_kind
-    // + assignment state so we can drive observed-session auto-transitions
-    // without a second query.
-    const session = db
+  // Reusable lookup: session by cc_session_id — most recent first, regardless
+  // of ended_at status. F-20 widens the SELECT to also pull endpoint_kind +
+  // assignment state so we can drive observed-session auto-transitions without
+  // a second query.
+  const lookupSession = (ccSessionId: string): ObservedSessionRow | null =>
+    db
       .query(
         `SELECT s.id AS id, s.endpoint_kind AS endpoint_kind,
                 s.assignment_id AS assignment_id,
@@ -89,11 +90,42 @@ export function ingestEvents(
       )
       .get(ccSessionId) as ObservedSessionRow | null;
 
+  for (const [ccSessionId, sessionEvents] of bySession) {
+    let session = lookupSession(ccSessionId);
+
     if (!session) {
-      process.stderr.write(
-        `[mission-control] ingestor: dropping ${sessionEvents.length} event(s) for unregistered session '${ccSessionId}'\n`
-      );
-      continue;
+      // MC-I1.S5 (ADR-0005 §3) — auto-register the unknown cc_session_id as an
+      // orphan `local.observed` session instead of dropping its events. Catches
+      // instrumented non-dispatch sessions (e.g. cldyo-live). Idempotent on
+      // cc_session_id: registerOrphanSession dedupes, so subsequent batches for
+      // the same orphan don't duplicate rows. One stderr line per auto-register
+      // (observability) — NOT one per event.
+      //
+      // Capture display metadata from the raw events: prefer the first event's
+      // agent_name so the orphan agent card shows a human label rather than the
+      // raw cc_session_id.
+      const displayName = sessionEvents.find(
+        (e) => e.agent_name !== undefined && e.agent_name.length > 0
+      )?.agent_name;
+      const orphan = registerOrphanSession(db, ccSessionId, displayName);
+      if (orphan) {
+        process.stderr.write(
+          `[mission-control] ingestor: auto-registered orphan observed session '${ccSessionId}' (assignment '${orphan.assignmentId}')\n`
+        );
+      }
+      // Re-read so the rest of the loop (event insert + F-20 transitions) runs
+      // unchanged against the freshly-created (or pre-existing, on a dedup
+      // race) orphan row.
+      session = lookupSession(ccSessionId);
+      if (!session) {
+        // Should be unreachable — registerOrphanSession either created the row
+        // or a concurrent writer did. If the lookup still misses, something is
+        // wrong with the DB; surface it rather than silently dropping.
+        process.stderr.write(
+          `[mission-control] ingestor: orphan auto-register did not yield a session for '${ccSessionId}'; dropping ${sessionEvents.length} event(s)\n`
+        );
+        continue;
+      }
     }
 
     // Insert events first — they're the authoritative record. Then
