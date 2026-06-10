@@ -75,6 +75,7 @@ import {
 import { bootVerifierSelfCheck } from "./bus/verifier-self-check";
 import { CCSession, type CCSessionOpts } from "./runner/cc-session";
 import { makePiDevPipelineRunner } from "./runner/substrate/pi-dev-runner";
+import { buildReviewPrompt } from "./runner/review-prompt";
 
 import { DiscordAdapter } from "./adapters/discord";
 import { createRenderer, type Renderer } from "./renderers";
@@ -1494,17 +1495,14 @@ export async function startCortex(
           ccSessionFactory: (opts) => new CCSession(opts),
           // PR-6 has no policy hook — that's a future PR (sovereignty /
           // compliance gate). Until then the pipeline goes straight to CC.
-          promptBuilder: ({ payload }) =>
-            // Dispatch INTENT, not method. cortex pings the reviewer with the
-            // PR to review; the reviewing agent (e.g. Echo) owns HOW — its
-            // persona routes to its canonical review entry (`/review-pr` →
-            // CodeReview skill → `gh pr review` + the cortex#237 verdict block).
-            // Do NOT send a `/review` slash command here: that hijacks the
-            // session into the generic built-in reviewer (which produces prose
-            // and *asks* before posting — never posting in a non-interactive
-            // dispatch). Capability routing already happened on the subject
-            // (`tasks.code-review.*`); the prompt only carries the intent.
-            `Review PR ${payload.repo}#${payload.pr}`,
+          // cortex#911 — the prompt now carries the verdict-block contract +
+          // post intent explicitly (`buildReviewPrompt`), not just bare intent.
+          // A thin persona used to review in prose and ask "Shall I post?",
+          // leaving the pipeline with no parseable block and nothing on the
+          // forge. Making the contract explicit in the prompt fixes that
+          // independent of persona quality; capability routing still happened
+          // on the subject (`tasks.code-review.*`).
+          promptBuilder: buildReviewPrompt,
           sessionOpts: reviewSessionOpts,
           ...(pipelineRunner !== undefined && { pipelineRunner }),
           ...(signatureVerifier !== undefined && { signatureVerifier }),
