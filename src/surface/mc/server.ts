@@ -39,6 +39,7 @@ import {
   IMAGE_BODY_MAX_BYTES,
 } from "./api/handlers";
 import { handleListGitLinks } from "./api/git-links";
+import { handleListAgents, type AgentPresenceView } from "./api/agents";
 import { handleListRepositories } from "./api/git-repos";
 import { handleListPlans } from "./api/plans";
 import { handleGetPhaseDetail } from "./api/phase-detail";
@@ -151,6 +152,18 @@ export interface StartServerOptions {
    * configure on the upstream `webhook-proxy`.
    */
   githubWebhookSecret?: string;
+  /**
+   * G-1114.B.4 — accessor for the stack-local runtime agent-presence registry
+   * (its `getAgents()` read-only view), serving `GET /api/agents`.
+   *
+   * A GETTER (not the value) because the registry boots AFTER the MC server in
+   * `cortex.ts` — the embed is started, THEN the presence registry self-
+   * subscribes. Resolving lazily at request time lets the server bind before
+   * the registry exists and pick it up once it does, without a boot-ordering
+   * dance. Returns `null` until/unless a registry is wired (MC enabled but no
+   * presence registry → the handler serves an empty list gracefully).
+   */
+  agentPresence?: () => AgentPresenceView | null;
 }
 
 export function startServer(
@@ -226,7 +239,10 @@ export function startServer(
 
       // --- REST API ---
       if (url.pathname.startsWith("/api/")) {
-        return handleApi(req, url, db, apiDeps);
+        // Resolve the agent-presence view lazily per request — the registry
+        // may not have booted when the server started (see StartServerOptions).
+        const agentPresence = options.agentPresence?.() ?? null;
+        return handleApi(req, url, db, apiDeps, agentPresence);
       }
 
       // --- Dashboard static ---
@@ -379,7 +395,8 @@ async function handleApi(
   req: Request,
   url: URL,
   db: Database,
-  deps: ApiDeps | null
+  deps: ApiDeps | null,
+  agentPresence: AgentPresenceView | null
 ): Promise<Response> {
   const { pathname } = url;
 
@@ -529,6 +546,16 @@ async function handleApi(
       return methodNotAllowed(["GET"]);
     }
     return handleListWorkingAgents(db);
+  }
+
+  // G-1114.B.4 — GET /api/agents — stack-local runtime agent-presence snapshot
+  // for the dashboard's agents panel. Registry-derived (not DB), read-only.
+  // `agentPresence === null` (MC enabled but no presence registry) → empty list.
+  if (pathname === "/api/agents") {
+    if (req.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
+    return handleListAgents(db, agentPresence);
   }
 
   // F-17 — principal-driven GitHub iteration import.

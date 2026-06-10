@@ -107,6 +107,22 @@ export type WsServerMessage =
       sessionId?: string;
       assignmentId?: string;
     }
+  // G-1114.B.4 — agent-presence live refresh signal. Broadcast when the
+  // stack-local runtime agent-presence registry mutates a record
+  // (`agent.online` / `agent.heartbeat` / `agent.offline` /
+  // `agent.capabilities-changed`). Like `state.transition` and `mc.projection`
+  // it's a REFRESH SIGNAL, not an authoritative payload: the agents panel
+  // refetches `GET /api/agents` on receipt rather than trusting the frame's
+  // fields, so the wire contract stays minimal. ADDITIVE — older dashboard
+  // clients (whose type-keyed dispatcher has no `agent.presence` handler) ignore
+  // it; no `WS_PROTOCOL_VERSION` bump.
+  | {
+      type: "agent.presence";
+      /** The affected registry key — `{principal}/{stack}/{agent_id}`. */
+      key: string;
+      /** The post-mutation liveness state, for cheap client-side filtering. */
+      state: "online" | "offline";
+    }
   | { type: "pong" }
   | { type: "ping" }
   | {

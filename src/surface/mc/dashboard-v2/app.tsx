@@ -36,6 +36,7 @@ import { useRepositories } from "./hooks/use-repositories";
 import { usePlans } from "./hooks/use-plans";
 import { usePhaseDetail } from "./hooks/use-phase-detail";
 import { useAttention } from "./hooks/use-attention";
+import { useAgents } from "./hooks/use-agents";
 import { useWorkItemDetail } from "./hooks/use-work-item-detail";
 import { useTheme } from "./hooks/use-theme";
 import { useWebSocket } from "./hooks/use-websocket";
@@ -119,6 +120,9 @@ export function App() {
   const workItemDetail = useWorkItemDetail(view === "work-item-detail" ? selectedWorkItemId : null);
   // G-1113.E.3 — attention queue data (fetched only when on the Attention tab).
   const attention = useAttention(ws, softwareMode && view === "attention");
+  // G-1114.B.4 — stack-local agent-presence data (fetched only when on the
+  // Network tab); live-refreshed off the `agent.presence` WS frame.
+  const agents = useAgents(ws, view === "network-preview");
   // If software mode is toggled OFF while on a software-mode view (Repositories
   // / Plans / phase-detail / work-item-detail / attention), the tab + render
   // both gate off — reset to default so the main area isn't left blank.
@@ -524,9 +528,11 @@ export function App() {
         )}
 
         {view === "network-preview" && (
-          /* G-1114.A — Agent Network Topology placeholder. Inert: no producer,
-             no subscriber, no data yet (live panel lands in G-1114.B). */
-          <NetworkPreviewView />
+          /* G-1114.B.4 — live stack-local agents panel (replaced the Phase A
+             stub): agents pop up on boot, drop off when offline, fed by the
+             runtime presence registry via /api/agents + the agent.presence WS
+             frame. The topology graph is Phase D. */
+          <NetworkPreviewView state={agents} />
         )}
 
         {view === "repositories" && softwareMode && (

@@ -104,6 +104,7 @@ import { refreshCockpit, defaultWorkItemSourceFor } from "./surface/mc/refresh";
 import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/refresh-loop";
 // MC-I1.S1 (ADR-0005) — in-process Mission Control embed (supersedes api.*).
 import { startMissionControl, type MissionControlHandle } from "./surface/mc/embed";
+import type { AgentPresenceView } from "./surface/mc/api/agents";
 // MC-I1.S4 (ADR-0005 §4) — bus→MC dispatch-lifecycle projection renderer.
 import { createDispatchProjectionRenderer } from "./surface/mc/projection/dispatch-lifecycle-renderer";
 // MC-I1.S7 (#849) — funnel the event-driven failed_dispatch attention delta
@@ -3060,6 +3061,11 @@ export async function startCortex(
   // `api.enabled` to nudge off — `mc:` is the only embedded-dashboard path.
   let mcHandle: MissionControlHandle | null = null;
   let mcDb: BunDatabase | null = null;
+  // G-1114.B.4 — mutable holder threaded into the MC server as a lazy getter so
+  // `GET /api/agents` can read the stack-local agent-presence registry. The
+  // registry boots AFTER this embed (below), so the getter returns `null` until
+  // we assign it post-registry-start. The MC server resolves it per request.
+  let presenceViewForApi: AgentPresenceView | null = null;
   if (config.mc.enabled && !options.disableDashboard) {
     // Per-slug default keeps each stack's MC db isolated; the cursor lands beside it.
     const defaultDbPath = join(
@@ -3071,6 +3077,7 @@ export async function startCortex(
         configPath: config.mc.configPath || undefined,
         dbPath,
         port: config.mc.port,
+        agentPresence: () => presenceViewForApi,
       });
       mcDb = mcHandle.db;
       console.log(`cortex: Mission Control embed listening on http://localhost:${mcHandle.port} — db ${dbPath}`);
@@ -3155,6 +3162,28 @@ export async function startCortex(
         principal: principalId,
         stack: derivedStack.stack,
       });
+      // G-1114.B.4 — expose the live registry to `GET /api/agents` (the holder
+      // the MC embed's lazy getter reads) AND push live updates to dashboard WS
+      // clients. The `onChange` seam fires after every applied presence mutation;
+      // we broadcast a minimal additive `agent.presence` REFRESH SIGNAL (the
+      // panel refetches `/api/agents` on receipt — the frame is not
+      // authoritative). Reuses the embed's existing `wsRegistry.broadcast`,
+      // matching the S6 `mc.projection` fan-out pattern. Wired here — BEFORE the
+      // producer's own `agent.online` goes out below — so the roundtrip's first
+      // mutations already push live. Only active when the embed is up
+      // (`mcHandle` non-null); on a registry-without-embed boot the holder stays
+      // null and there are no WS clients to notify.
+      presenceViewForApi = presenceRegistryHandle.registry;
+      if (mcHandle !== null) {
+        const broadcastWsRegistry = mcHandle.wsRegistry;
+        presenceRegistryHandle.registry.onChange((key, record) => {
+          broadcastWsRegistry.broadcast({
+            type: "agent.presence",
+            key,
+            state: record.state,
+          });
+        });
+      }
       // Build the per-agent presence descriptors. The stack's own NKey pubkey
       // (captured when the signer was staged) is the fallback identity for any
       // agent that hasn't declared its own `nkey_pub`. Agents with no resolvable

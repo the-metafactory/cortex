@@ -22,6 +22,7 @@ import { ProcessManager } from "./session/process-manager";
 import { HookStreamPoller } from "./hooks/poller";
 import type { Config } from "./types";
 import type { WsClientRegistry } from "./ws/client-registry";
+import type { AgentPresenceView } from "./api/agents";
 
 export interface MissionControlHandle {
   db: Database;
@@ -48,6 +49,14 @@ export interface StartMissionControlOptions {
   dbPath: string;
   /** Listen port. `> 0` overrides the MC yaml's port; otherwise the yaml's port (default 8767) wins. */
   port?: number;
+  /**
+   * G-1114.B.4 — lazy accessor for the stack-local agent-presence registry
+   * view (serves `GET /api/agents`). A GETTER because the registry boots AFTER
+   * the embed in `cortex.ts`; resolving per request lets the server pick the
+   * registry up once it exists. Forwarded verbatim to `startServer`. Omitted →
+   * the route serves an empty list.
+   */
+  agentPresence?: () => AgentPresenceView | null;
 }
 
 /**
@@ -88,7 +97,10 @@ export async function startMissionControl(
   let hookPoller: HookStreamPoller | null = null;
   try {
     const processManager = new ProcessManager();
-    serverCtx = startServer(config, db, { processManager });
+    serverCtx = startServer(config, db, {
+      processManager,
+      ...(opts.agentPresence ? { agentPresence: opts.agentPresence } : {}),
+    });
     const { server, wsRegistry } = serverCtx;
     hookPoller = new HookStreamPoller(db, config.hooks, wsRegistry);
     hookPoller.start();

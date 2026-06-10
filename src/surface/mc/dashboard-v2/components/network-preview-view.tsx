@@ -1,57 +1,98 @@
 /**
- * G-1114.A — Network (preview) tab.
+ * G-1114.B.4 — live agents panel (replaces the Phase A preview stub).
  *
- * A grounding-slice placeholder for the Agent Network Topology view (G-1114).
- * This renders a clear "preview — coming in G-1114.B" card and NO data: there
- * is no producer publishing `agent.*` presence envelopes and no subscriber /
- * runtime registry feeding this surface yet (ADR-0007 — the live producer +
- * subscriber land in Phase B). It exists so the work-in-flight is visible on
- * the dashboard and the tab slot is reserved.
+ * Renders the stack-local runtime agent-presence registry: one row per agent
+ * with its assistant name, agent id, declared capabilities, online/offline
+ * state, and last-heartbeat relative time. Data comes from `GET /api/agents`
+ * via `useAgents`; live updates ride the additive `agent.presence` WS frame, so
+ * agents pop up on boot and drop off when they go offline — the Phase B
+ * operator-value line.
  *
- * When G-1114.B wires the runtime registry, this view is replaced by the real
- * stack-local agents panel; when G-1114.D lands, by the React Flow + ELK graph.
+ * This is the simple PANEL. The rich React Flow + ELK topology graph is Phase D
+ * (G-1114.D); cross-stack federated peers are Phase E. This view is deliberately
+ * stack-local only.
  */
 
-/** The four `agent`-domain presence actions this view will eventually render. */
-const PRESENCE_ACTIONS = [
-  "online",
-  "heartbeat",
-  "offline",
-  "capabilities-changed",
-] as const;
+import { useState } from "react";
+import type { AgentsState } from "../hooks/use-agents";
+import { pickAgentsPanelMode, formatRelativeTime } from "../lib/agents-display";
 
-export function NetworkPreviewView() {
+export interface NetworkPreviewViewProps {
+  state: AgentsState;
+}
+
+export function NetworkPreviewView({ state }: NetworkPreviewViewProps) {
+  // One `now` per render so every row's relative time is computed against the
+  // same instant (no row-to-row drift within a paint).
+  const [now] = useState(() => Date.now());
+  const mode = pickAgentsPanelMode(state);
+
   return (
     <section
-      className="scaffold-section network-preview-view"
-      aria-label="Network topology (preview)"
+      className="scaffold-section agents-panel-view"
+      aria-label="Agents (stack-local presence)"
     >
-      <h2>Network (preview)</h2>
-      <p className="dim">
-        The <strong>Agent Network Topology</strong> view is in flight (G-1114).
-        It will render agent <strong>presence</strong> across stacks — which
-        agents are up and consuming the bus, their declared capabilities, and
-        their liveness — built from the new <code>agent</code>-domain presence
-        protocol on the bus.
+      <h2>Agents</h2>
+      <p className="dim agents-panel-subtitle">
+        Stack-local agent <strong>presence</strong> — which agents are up and
+        consuming the bus, their declared capabilities, and their liveness. The
+        cross-stack topology graph arrives in G-1114.D.
       </p>
-      <p className="dim">
-        Nothing is wired yet: this slice (G-1114.A) lands only the inert
-        protocol types. The live stack-local agents panel arrives in{" "}
-        <strong>G-1114.B</strong>; the graph view in G-1114.D.
-      </p>
-      <ul className="network-preview-actions" aria-label="Presence protocol actions">
-        {PRESENCE_ACTIONS.map((action) => (
-          <li key={action} className="network-preview-action">
-            <code>agent.{action}</code>
-          </li>
-        ))}
-      </ul>
-      <p className="dim network-preview-note">
-        Presence (<code>agent.heartbeat</code>) is distinct from the
-        dispatch-scoped <code>system.agent.heartbeat</code>: an idle agent has
-        presence without running a dispatch. Peer agents show presence and
-        dispatch-lifecycle metadata only — never session interiors.
-      </p>
+
+      {mode === "error" && (
+        <div className="agents-panel-error">⚠ {state.error}</div>
+      )}
+      {mode === "loading" && (
+        <div className="agents-panel-empty">Loading…</div>
+      )}
+      {mode === "empty" && (
+        <div className="agents-panel-empty">No agents observed yet.</div>
+      )}
+      {mode === "list" && (
+        <ul className="agents-panel-list" aria-label="Agents">
+          {state.agents.map((a) => (
+            <li
+              key={a.key}
+              className={`agents-panel-row agents-panel-row-${a.state}`}
+              data-agent-id={a.agent_id}
+              data-state={a.state}
+            >
+              <div className="agents-panel-identity">
+                <span className="agents-panel-name">
+                  {a.assistant_name ?? a.agent_id}
+                </span>
+                <span className="agents-panel-id dim">{a.agent_id}</span>
+              </div>
+              <div className="agents-panel-caps">
+                {a.capabilities.length === 0 ? (
+                  <span className="dim">no capabilities declared</span>
+                ) : (
+                  a.capabilities.map((cap) => (
+                    <span key={cap} className="agents-panel-cap">
+                      {cap}
+                    </span>
+                  ))
+                )}
+              </div>
+              <div className="agents-panel-liveness">
+                <span
+                  className={`agents-panel-state state-${a.state}`}
+                  title={
+                    a.state === "offline" && a.offline_reason
+                      ? `offline: ${a.offline_reason}`
+                      : a.state
+                  }
+                >
+                  {a.state}
+                </span>
+                <span className="agents-panel-heartbeat dim">
+                  {formatRelativeTime(a.last_heartbeat_at, now)}
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
