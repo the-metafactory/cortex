@@ -60,6 +60,10 @@ import {
   type SignatureVerifier,
 } from "./bus/review-consumer";
 import {
+  ReleaseConsumer,
+  type ReleaseConsumerAgent,
+} from "./runner/release-consumer";
+import {
   provisionReviewStream,
   provisionReviewConsumer,
 } from "./bus/jetstream/provision";
@@ -1503,6 +1507,158 @@ export async function startCortex(
     );
   }
 
+  // cortex#835 F-4.1 — release-consumer boot wiring (the `release.cut` gated
+  // capability). Mirrors the review-consumer block above: for each agent that
+  // declares `release.cut` (or the generic `release`) capability, instantiate a
+  // dedicated `ReleaseConsumer` and drive it through `start()` so it subscribes
+  // to the JetStream `local.{principal}.{stack}.tasks.release.cut` pull
+  // consumer.
+  //
+  // **HARD CONTRACT — byte-identical boot when no agent declares the capability.**
+  // The ENTIRE block (filter, array, stream/consumer provisioning, log lines) is
+  // gated behind `releaseCapableAgents.length > 0`. A roster with no
+  // release-capable agent adds ZERO new boot behaviour — no stream provisioned,
+  // no log line, no JSM round-trip — so the release lane is DORMANT-by-default
+  // and a stack that never opts into `release.cut` boots exactly as before this
+  // PR landed. (This differs from review-consumer's always-run "skipped" warning
+  // because release is an opt-in authority, not a default expectation.)
+  //
+  // **Executor seam — F-4.1 ships the consumer WITHOUT a production executor.**
+  // The consumer is constructed with no `executor`, so it operates
+  // dormant-but-present: it claims the capability on the bus + runs the full
+  // grant/precondition gate ladder, but every granted-and-gated claim terminates
+  // `cant_do: no release executor configured` until the real git/gh executor is
+  // wired (a follow-up slice — see the PR's Flags section). This keeps F-4.1 the
+  // gate + lifecycle + capability-declaration slice, with the side-effecting
+  // forge/command seam deferred behind the SAME `ReleaseExecutor` interface the
+  // tests already drive.
+  const releaseConsumers: ReleaseConsumer[] = [];
+  const releaseCapableAgents = mergedAgents.filter((a) => {
+    const caps = a.runtime?.capabilities ?? [];
+    return caps.some((c) => c === "release" || c === "release.cut");
+  });
+  if (releaseCapableAgents.length > 0) {
+    // Durable name convention mirrors the review lane:
+    // `cortex-release-consumer-{principal}-{agent}` — unique per (principal,
+    // agent) so dev + prod instances on the same principal share competing-
+    // consumer semantics and a restart resumes from the same offset.
+    const releaseSubjectPattern = `local.${principalId}.${derivedStack.stack}.tasks.release.cut`;
+    const releaseStream = "RELEASE";
+    // Reuse the review-lane stream defaults: a release-cut request is small +
+    // infrequent; 24h retention + 512MiB is ample and matches the operational
+    // posture principals already understand from CODE_REVIEW.
+    const releaseStreamMaxAgeNs = 86_400 * 1_000_000_000;
+    const releaseStreamMaxBytes = 512 * 1024 * 1024;
+    const releaseConsumerMaxDeliver = 5;
+
+    // Resolve the provisioning JSM once (same contained-failure contract as the
+    // review lane's `resolveReviewProvisioningJsm`): a dormant runtime → null →
+    // provisioning skipped + the consumer stays dormant in lockstep.
+    const releaseJsm = await resolveReviewProvisioningJsm(
+      runtime,
+      releaseCapableAgents,
+    );
+
+    if (releaseJsm !== null) {
+      try {
+        const outcome = await provisionReviewStream({
+          jsm: releaseJsm,
+          name: releaseStream,
+          subjects: [releaseSubjectPattern],
+          maxAgeNs: releaseStreamMaxAgeNs,
+          maxBytes: releaseStreamMaxBytes,
+        });
+        if (outcome === "created") {
+          console.log(
+            `cortex: provisioned JetStream stream "${releaseStream}" (subjects=[${releaseSubjectPattern}])`,
+          );
+        } else if (outcome === "exists") {
+          console.log(
+            `cortex: JetStream stream "${releaseStream}" already present — binding existing config`,
+          );
+        }
+      } catch (err) {
+        process.stderr.write(
+          `cortex: provisionReviewStream failed for "${releaseStream}": ` +
+            `${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
+    }
+
+    for (const agent of releaseCapableAgents) {
+      try {
+        const caps = agent.runtime?.capabilities ?? [];
+        const consumerAgent: ReleaseConsumerAgent = {
+          id: agent.id,
+          capabilities: caps,
+          ...(agent.runtime?.maxConcurrent !== undefined && {
+            maxConcurrent: agent.runtime.maxConcurrent,
+          }),
+        };
+        // F-4.1 — no executor wired yet (see block header). The consumer is
+        // dormant-but-present: capability declared + gate ladder live.
+        const consumer = new ReleaseConsumer({
+          agent: consumerAgent,
+          source: systemEventSource,
+          runtime,
+        });
+        releaseConsumers.push(consumer);
+
+        const durable = `cortex-release-consumer-${principalId}-${agent.id}`;
+        if (releaseJsm !== null) {
+          try {
+            const outcome = await provisionReviewConsumer({
+              jsm: releaseJsm,
+              stream: releaseStream,
+              durable,
+              maxDeliver: releaseConsumerMaxDeliver,
+            });
+            if (outcome === "created") {
+              console.log(
+                `cortex: provisioned JetStream durable "${durable}" on stream "${releaseStream}"`,
+              );
+            } else if (outcome === "updated") {
+              console.log(
+                `cortex: reconciled JetStream durable "${durable}" on stream "${releaseStream}"`,
+              );
+            }
+          } catch (provisionErr) {
+            process.stderr.write(
+              `cortex: provisionReviewConsumer failed for "${durable}": ` +
+                `${provisionErr instanceof Error ? provisionErr.message : String(provisionErr)}\n`,
+            );
+          }
+        }
+
+        const started = await consumer.start({
+          pattern: releaseSubjectPattern,
+          stream: releaseStream,
+          durable,
+        });
+        // F-4.1 — log line flags `executor=none` so a principal grepping boot
+        // can see the lane is declared but the forge seam is not yet wired.
+        if (started.subscribed) {
+          console.log(
+            `cortex: release consumer ready for agent=${agent.id} capability=release.cut executor=none (gated; principal-grant required) — PRINCIPAL-GATED, ALWAYS-HUMAN`,
+          );
+        } else {
+          console.log(
+            `cortex: release consumer DORMANT for agent=${agent.id} capability=release.cut executor=none — cortex MyelinRuntime subscriptions disabled (G-1111 pending; tasks.release.cut envelopes will not be claimed by this consumer)`,
+          );
+        }
+      } catch (err) {
+        // Per CLAUDE.md "no empty catch blocks": a single agent's release
+        // consumer crash does NOT abort boot — siblings still wire. The
+        // consumer stays in `releaseConsumers[]` so the shutdown drain still
+        // calls `.stop()` (idempotent — handles the "never subscribed" case).
+        process.stderr.write(
+          `cortex: release consumer init failed for agent=${agent.id}: ` +
+            `${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
+    }
+  }
+
   // IAW Phase B.2a (refs cortex#114) — inbound peer-dispatch listener.
   // Subscribes via the runtime's onEnvelope fan-out, filters for
   // `dispatch.task.dispatched` envelopes from non-self sources, runs
@@ -2891,6 +3047,7 @@ export async function startCortex(
       "github webhook receiver stop",
       ...adapterCleanup.map((_, i) => `outbound poller stop[${i}]`),
       ...reviewConsumers.map((c, i) => `review-consumer stop[${i}] (agent=${c.agent.id})`),
+      ...releaseConsumers.map((c, i) => `release-consumer stop[${i}] (agent=${c.agent.id})`),
       "dispatch-listener stop",
       "dispatch-sink stop",
       "review-sink stop",
@@ -2949,6 +3106,19 @@ export async function startCortex(
         if (consumer) {
           await completeAsync(
             `review-consumer stop[${i}] (agent=${consumer.agent.id})`,
+            consumer.stop(),
+          );
+        }
+      }
+      // cortex#835 F-4.1 — drain release consumers on the same boundary as the
+      // review consumers (and before the dispatch listener) so any in-flight
+      // release cut publishes its terminal envelope before the runtime closes.
+      // `ReleaseConsumer.stop()` is idempotent (no-op when never subscribed).
+      for (let i = 0; i < releaseConsumers.length; i++) {
+        const consumer = releaseConsumers[i];
+        if (consumer) {
+          await completeAsync(
+            `release-consumer stop[${i}] (agent=${consumer.agent.id})`,
             consumer.stop(),
           );
         }
