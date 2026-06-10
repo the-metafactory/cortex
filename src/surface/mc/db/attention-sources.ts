@@ -37,6 +37,7 @@ import type { Database } from "bun:sqlite";
 import type { AttentionItem, AttentionKind, AttentionSeverity, BlockReason } from "../types";
 import { listFocusArea } from "./assignments";
 import { upsertAttentionItem, listOpenAttention, resolveAttentionItem } from "./attention";
+import type { AttentionDelta } from "../attention-notify";
 
 /** Deterministic id prefixes — let re-runs upsert in place + diff for resolution. */
 const BLOCK_PREFIX = "att:block:";
@@ -75,22 +76,22 @@ export interface ReconcileAttentionOptions {
   /** An open work item untouched longer than this is "stale". Default 7 days. */
   staleAfterMs?: number;
   /**
-   * A non-terminal assignment with no activity (heartbeat or `updated_at`)
-   * within this window is "stale". Default 1 hour — a dispatched session ticks
-   * a heartbeat every ~30 s, so an hour of silence means it's stuck.
+   * A non-terminal assignment whose most-recent HEARTBEATING session has not
+   * ticked a heartbeat within this window is "stale". Default 1 hour — a
+   * dispatched CC session heartbeats every ~30 s, so an hour of silence means
+   * it's stuck. Only sessions that emit heartbeats are judged (see the stale-asg
+   * query) — observed/orphan sessions that never tick are out of scope.
    */
   staleAssignmentAfterMs?: number;
   /** Current time in epoch SECONDS (injectable for deterministic tests). */
   nowEpochSec?: number;
 }
 
-export interface ReconcileResult {
+export interface ReconcileResult extends AttentionDelta {
   /** The full set of items currently open after this reconcile. */
   open: AttentionItem[];
-  /** Items that transitioned absent → open this run (notify "opened"). */
-  opened: AttentionItem[];
-  /** Items that transitioned open → resolved this run (notify "resolved"). */
-  resolved: AttentionItem[];
+  // `opened` / `resolved` come from AttentionDelta (the shared notify shape) —
+  // ReconcileResult is that delta plus the full `open` snapshot.
 }
 
 /** Map a block reason to its attention kind + severity. Exhaustive over BlockReason. */
@@ -117,11 +118,18 @@ export function reconcileAttention(db: Database, opts: ReconcileAttentionOptions
     nowSec - Math.floor((opts.staleAssignmentAfterMs ?? DEFAULT_STALE_ASSIGNMENT_AFTER_MS) / 1000);
 
   // Snapshot the prior NON-resolved set (open + dismissed) BEFORE mutating, to
-  // compute the open/resolve delta (ML.3 — what to notify on) AND to respect
+  // compute the open/resolve delta (ML.3 — what to notify on) and to respect
   // dismiss. A dismissed item is "seen" — re-deriving it must NOT reopen it or
   // re-notify (the principal said "stop showing me this"). Only an item absent
   // from BOTH open and dismissed (i.e. genuinely new, or previously *resolved*
   // and now recurring) counts as newly opened.
+  //
+  // NB (PR #873 review nit 1): a RESOLVED item that re-derives DOES re-notify by
+  // design — a blocker that cleared and genuinely recurred is exactly what the
+  // principal wants surfaced again (the established ML.3 contract, pinned by the
+  // "re-notifies after RESOLVE (not dismiss)" test). The nit's flap concern is
+  // handled at the producer instead: review major 2 scopes stale-assignment to
+  // heartbeating sessions, removing the false-positive flap that motivated it.
   const priorRows = db
     .query(`SELECT id, status FROM attention_items WHERE status IN ('open', 'dismissed')`)
     .all() as { id: string; status: string }[];
@@ -174,19 +182,31 @@ export function reconcileAttention(db: Database, opts: ReconcileAttentionOptions
   }
 
   // 3. Stale ASSIGNMENTS (MC-I1.S7) — a non-terminal, non-blocked assignment
-  //    whose last activity is older than the threshold. Last-activity is the
-  //    GREATER of the assignment's most-recent `system.agent.heartbeat` event
-  //    timestamp (the S6 liveness row, joined via the assignment's sessions) and
-  //    the assignment's own `updated_at`. An assignment that has heartbeated
-  //    recently is alive even if `updated_at` is old (no state churn while
-  //    running); one that never heartbeated falls back to `updated_at`. The
-  //    deep-link target (§7.4) is the assignment's most-recent session; an
-  //    assignment with no session has no drill-down target → skip it (mirrors
-  //    the blocked-assignment producer's no-session skip).
+  //    whose most-recent session HAS heartbeated and has now gone silent past
+  //    the threshold.
   //
-  //    Both timestamps are normalised to epoch SECONDS in SQL (`updated_at` is
-  //    ISO text on agent_task_assignment; `events.timestamp` is ISO text) so the
-  //    comparison is apples-to-apples with `staleAssignmentBeforeSec`.
+  //    SCOPING (PR #873 review major 2): only sessions that emit heartbeats can
+  //    be judged stale by a heartbeat-cadence threshold. `attachHeartbeatToCC-
+  //    Session` is wired ONLY for controlled CC sessions (dispatch-handler +
+  //    review-consumer); `local.observed` + auto-registered orphan sessions
+  //    reach `running` via the ingestor but NEVER tick. Their last-activity
+  //    would fall back to `updated_at`, which the ingestor bumps on every event
+  //    — so a legitimately-quiet observed session (stalled hook stream) crosses
+  //    the 1h heartbeat-tuned threshold with no churn and FLAPS an `opened`
+  //    notification every cycle.
+  //
+  //    We therefore require the most-recent session to carry at least one
+  //    heartbeat liveness row (INNER-join the latest heartbeat per session).
+  //    This is preferred over a hardcoded `endpoint_kind = local.process.con-
+  //    trolled` filter because it self-scopes: it tracks the ACTUAL liveness
+  //    signal, so if a future endpoint_kind starts heartbeating it's covered
+  //    automatically, and a controlled session that somehow never heartbeats
+  //    (spawn raced the attach) is correctly excluded rather than false-flagged.
+  //
+  //    Staleness is then the latest heartbeat's age (NOT MAX'd with `updated_at`
+  //    — for a heartbeating session the heartbeat IS the authoritative liveness
+  //    signal; `updated_at` churn from unrelated ingest would mask a stuck CC).
+  //    The deep-link target (§7.4) is that session.
   const staleStatePlaceholders = [...STALE_ASSIGNMENT_STATES].map(() => "?").join(", ");
   const staleAssignmentRows = db
     .query(
@@ -195,16 +215,16 @@ export function reconcileAttention(db: Database, opts: ReconcileAttentionOptions
        JOIN (
          SELECT se.assignment_id,
                 se.id AS session_id,
-                MAX(COALESCE(unixepoch(ev.timestamp), 0)) AS last_activity_sec,
+                MAX(unixepoch(ev.timestamp)) AS last_heartbeat_sec,
                 ROW_NUMBER() OVER (
                   PARTITION BY se.assignment_id ORDER BY se.started_at DESC, se.id DESC
                 ) AS rn
          FROM sessions se
-         LEFT JOIN events ev ON ev.session_id = se.id AND ev.type = ?
+         JOIN events ev ON ev.session_id = se.id AND ev.type = ?
          GROUP BY se.id
        ) s ON s.assignment_id = a.id AND s.rn = 1
        WHERE a.state IN (${staleStatePlaceholders})
-         AND MAX(unixepoch(a.updated_at), s.last_activity_sec) < ?`,
+         AND s.last_heartbeat_sec < ?`,
     )
     .all(HEARTBEAT_EVENT_TYPE, ...STALE_ASSIGNMENT_STATES, staleAssignmentBeforeSec) as {
     assignment_id: string;

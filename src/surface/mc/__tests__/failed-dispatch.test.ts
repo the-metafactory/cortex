@@ -11,7 +11,12 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { rmSync, existsSync } from "fs";
 import { initDatabase } from "../db/init";
-import { getAttentionItem, listOpenAttention, upsertAttentionItem } from "../db/attention";
+import {
+  getAttentionItem,
+  listOpenAttention,
+  upsertAttentionItem,
+  dismissAttentionItem,
+} from "../db/attention";
 import {
   produceFailedDispatchAttention,
   FAILED_DISPATCH_PREFIX,
@@ -182,6 +187,23 @@ describe("failed_dispatch attention producer (MC-I1.S7)", () => {
     expect(first.opened).toHaveLength(1);
     expect(second.opened).toHaveLength(0); // already open → no re-notify
     expect(listOpenAttention(db).filter((i) => i.id === `${FAILED_DISPATCH_PREFIX}corr-dup`)).toHaveLength(1);
+  });
+
+  it("does NOT resurrect a DISMISSED item on a redelivered failed (no opened delta)", () => {
+    // PR #873 review major 1 — dismiss-resurrection (#621 class). A dismissed
+    // item must stay dismissed across NATS at-least-once redelivery.
+    const db = freshDb();
+    seedAnchor(db, "corr-dismiss");
+    produceFailedDispatchAttention(db, failedEnvelope("corr-dismiss"), { stackId: STACK });
+    // The principal dismisses it.
+    dismissAttentionItem(db, `${FAILED_DISPATCH_PREFIX}corr-dismiss`);
+    expect(getAttentionItem(db, `${FAILED_DISPATCH_PREFIX}corr-dismiss`)?.status).toBe("dismissed");
+
+    // The same failed envelope is redelivered → must NOT flip back to open or notify.
+    const redeliver = produceFailedDispatchAttention(db, failedEnvelope("corr-dismiss"), { stackId: STACK });
+    expect(redeliver.opened).toHaveLength(0);
+    expect(redeliver.resolved).toHaveLength(0);
+    expect(getAttentionItem(db, `${FAILED_DISPATCH_PREFIX}corr-dismiss`)?.status).toBe("dismissed");
   });
 
   it("a resolve of an absent/already-resolved item yields no resolved delta", () => {

@@ -2,11 +2,15 @@
  * MC-I1.S7 (#849) — stale-ASSIGNMENT producer completion (G-1113.E.2 deferral).
  *
  * E.2 shipped `att:stale:{wiId}` for stuck WORK ITEMS. This completes the
- * deferred scope: a non-terminal, non-blocked ASSIGNMENT with no recent
- * activity is "stale" too, deep-linked via its session, under the disjoint
- * `att:stale:asg:` sub-namespace. Last-activity joins the S6 heartbeat liveness
- * row (a recent heartbeat keeps a quiet-`updated_at` session alive; silence past
- * the threshold flags it). Activity (a fresh heartbeat) heals it.
+ * deferred scope: a non-terminal, non-blocked ASSIGNMENT whose most-recent
+ * HEARTBEATING session has gone silent past the threshold is "stale" too,
+ * deep-linked via its session, under the disjoint `att:stale:asg:` sub-namespace.
+ *
+ * SCOPING (PR #873 review major 2): only sessions that EMIT heartbeats are
+ * judged. `attachHeartbeatToCCSession` is controlled-CC-only; observed/orphan
+ * sessions reach `running` via the ingestor but never tick, so a heartbeat-
+ * cadence threshold would flap them. The producer requires ≥1 heartbeat liveness
+ * row on the most-recent session, so observed/orphan sessions are out of scope.
  */
 import { describe, it, expect, afterEach } from "bun:test";
 import { join } from "path";
@@ -36,13 +40,19 @@ describe("reconcileAttention — stale assignments (MC-I1.S7)", () => {
     return initDatabase(p);
   }
 
-  /** Seed an assignment in `state` with a session; updated_at + session started_at at `tsSec`. */
+  /**
+   * Seed an assignment in `state` with a session of `endpointKind`; updated_at +
+   * session started_at at `tsSec`. Pass `heartbeatAtSec` to land a heartbeat
+   * liveness row on the session — only heartbeating sessions are stale-judged.
+   */
   function seedAssignment(
     db: ReturnType<typeof initDatabase>,
     suffix: string,
     state: string,
     updatedAtSec: number,
+    opts: { endpointKind?: string; heartbeatAtSec?: number } = {},
   ) {
+    const endpointKind = opts.endpointKind ?? "local.process.controlled";
     db.query(`INSERT OR IGNORE INTO agents (id, name, type) VALUES ('ag-1', 'Echo', 'head')`).run();
     db.query(
       `INSERT OR IGNORE INTO tasks (id, title, principal_id, source_system, status) VALUES ('tk-1', 'T', 'andreas', 'github', 'in_progress')`,
@@ -51,8 +61,9 @@ describe("reconcileAttention — stale assignments (MC-I1.S7)", () => {
       `INSERT INTO agent_task_assignment (id, agent_id, task_id, state, updated_at) VALUES (?, 'ag-1', 'tk-1', ?, ?)`,
     ).run(`asg-${suffix}`, state, iso(updatedAtSec));
     db.query(
-      `INSERT INTO sessions (id, assignment_id, endpoint_kind, started_at) VALUES (?, ?, 'local.process.controlled', ?)`,
-    ).run(`sess-${suffix}`, `asg-${suffix}`, iso(updatedAtSec));
+      `INSERT INTO sessions (id, assignment_id, endpoint_kind, started_at) VALUES (?, ?, ?, ?)`,
+    ).run(`sess-${suffix}`, `asg-${suffix}`, endpointKind, iso(updatedAtSec));
+    if (opts.heartbeatAtSec !== undefined) heartbeat(db, suffix, opts.heartbeatAtSec);
   }
 
   /** Land a heartbeat event on a session at `tsSec` (the S6 liveness signal). */
@@ -64,9 +75,10 @@ describe("reconcileAttention — stale assignments (MC-I1.S7)", () => {
 
   const opts = { stackId: "laptop", nowEpochSec: NOW };
 
-  it("flags a running assignment that has gone silent past the threshold", () => {
+  it("flags a controlled session whose last heartbeat is past the threshold", () => {
     const db = freshDb();
-    seedAssignment(db, "stuck", "running", NOW - 5 * HOUR); // updated 5h ago, no heartbeat
+    // Heartbeated 3h ago, then went silent → stale.
+    seedAssignment(db, "stuck", "running", NOW - 5 * HOUR, { heartbeatAtSec: NOW - 3 * HOUR });
     reconcileAttention(db, opts);
     const item = getAttentionItem(db, "att:stale:asg:asg-stuck");
     expect(item?.kind).toBe("stale");
@@ -75,25 +87,43 @@ describe("reconcileAttention — stale assignments (MC-I1.S7)", () => {
     expect(item?.workItemId).toBeNull();
   });
 
-  it("does NOT flag an assignment kept alive by a recent heartbeat (quiet updated_at)", () => {
+  it("does NOT flag a session kept alive by a recent heartbeat (quiet updated_at)", () => {
     const db = freshDb();
-    seedAssignment(db, "live", "running", NOW - 5 * HOUR); // updated_at old…
-    heartbeat(db, "live", NOW - 2 * 60); // …but heartbeated 2 min ago → alive
+    // updated_at old, but heartbeated 2 min ago → alive.
+    seedAssignment(db, "live", "running", NOW - 5 * HOUR, { heartbeatAtSec: NOW - 2 * 60 });
     reconcileAttention(db, opts);
     expect(getAttentionItem(db, "att:stale:asg:asg-live")).toBeNull();
   });
 
-  it("flags an assignment whose last heartbeat is itself past the threshold", () => {
+  // --- The scoping fix (PR #873 review major 2) ---
+
+  it("does NOT flag an observed session past the threshold (never heartbeats → out of scope)", () => {
     const db = freshDb();
-    seedAssignment(db, "silent", "running", NOW - 5 * HOUR);
-    heartbeat(db, "silent", NOW - 3 * HOUR); // last heartbeat 3h ago → stale
+    // A long-quiet observed session: updated_at 5h ago, NO heartbeat row. Under
+    // the old updated_at-fallback this flapped; now it's correctly out of scope.
+    seedAssignment(db, "obs", "running", NOW - 5 * HOUR, { endpointKind: "local.observed" });
+    reconcileAttention(db, opts);
+    expect(getAttentionItem(db, "att:stale:asg:asg-obs")).toBeNull();
+  });
+
+  it("does NOT flag a controlled session that never heartbeated (spawn raced attach)", () => {
+    const db = freshDb();
+    // Controlled but NO heartbeat row at all → no liveness signal → out of scope.
+    seedAssignment(db, "nohb", "running", NOW - 5 * HOUR);
+    reconcileAttention(db, opts);
+    expect(getAttentionItem(db, "att:stale:asg:asg-nohb")).toBeNull();
+  });
+
+  it("flags a controlled silent session past the threshold (has heartbeated, now silent)", () => {
+    const db = freshDb();
+    seedAssignment(db, "silent", "running", NOW - 5 * HOUR, { heartbeatAtSec: NOW - 90 * 60 });
     reconcileAttention(db, opts);
     expect(getAttentionItem(db, "att:stale:asg:asg-silent")?.status).toBe("open");
   });
 
   it("a fresh heartbeat heals a previously-stale assignment", () => {
     const db = freshDb();
-    seedAssignment(db, "heal", "running", NOW - 5 * HOUR);
+    seedAssignment(db, "heal", "running", NOW - 5 * HOUR, { heartbeatAtSec: NOW - 3 * HOUR });
     reconcileAttention(db, opts);
     expect(getAttentionItem(db, "att:stale:asg:asg-heal")?.status).toBe("open");
 
@@ -103,34 +133,35 @@ describe("reconcileAttention — stale assignments (MC-I1.S7)", () => {
     expect(getAttentionItem(db, "att:stale:asg:asg-heal")?.status).toBe("resolved");
   });
 
-  it("does NOT flag terminal assignments (completed/failed/cancelled) or blocked", () => {
+  it("does NOT flag terminal assignments (completed/failed/cancelled)", () => {
     const db = freshDb();
-    seedAssignment(db, "done", "completed", NOW - 5 * HOUR);
-    seedAssignment(db, "failed", "failed", NOW - 5 * HOUR);
-    seedAssignment(db, "cancelled", "cancelled", NOW - 5 * HOUR);
+    seedAssignment(db, "done", "completed", NOW - 5 * HOUR, { heartbeatAtSec: NOW - 3 * HOUR });
+    seedAssignment(db, "failed", "failed", NOW - 5 * HOUR, { heartbeatAtSec: NOW - 3 * HOUR });
+    seedAssignment(db, "cancelled", "cancelled", NOW - 5 * HOUR, { heartbeatAtSec: NOW - 3 * HOUR });
     reconcileAttention(db, opts);
     expect(listOpenAttention(db).filter((i) => i.id.startsWith("att:stale:asg:"))).toEqual([]);
   });
 
   it("flags queued and dispatched (not just running) when stuck", () => {
     const db = freshDb();
-    seedAssignment(db, "q", "queued", NOW - 5 * HOUR);
-    seedAssignment(db, "d", "dispatched", NOW - 5 * HOUR);
+    seedAssignment(db, "q", "queued", NOW - 5 * HOUR, { heartbeatAtSec: NOW - 3 * HOUR });
+    seedAssignment(db, "d", "dispatched", NOW - 5 * HOUR, { heartbeatAtSec: NOW - 3 * HOUR });
     reconcileAttention(db, opts);
     expect(getAttentionItem(db, "att:stale:asg:asg-q")?.status).toBe("open");
     expect(getAttentionItem(db, "att:stale:asg:asg-d")?.status).toBe("open");
   });
 
-  it("a fresh assignment (recent updated_at) is not stale yet", () => {
+  it("a recently-heartbeating session is not stale yet", () => {
     const db = freshDb();
-    seedAssignment(db, "fresh", "running", NOW - 5 * 60); // 5 min ago
+    seedAssignment(db, "fresh", "running", NOW - 5 * 60, { heartbeatAtSec: NOW - 5 * 60 });
     reconcileAttention(db, opts);
     expect(getAttentionItem(db, "att:stale:asg:asg-fresh")).toBeNull();
   });
 
   it("honours a custom staleAssignmentAfterMs threshold", () => {
     const db = freshDb();
-    seedAssignment(db, "custom", "running", NOW - 10 * 60); // 10 min ago
+    // Last heartbeat 10 min ago.
+    seedAssignment(db, "custom", "running", NOW - 10 * 60, { heartbeatAtSec: NOW - 10 * 60 });
     // Default (1h) would NOT flag it…
     reconcileAttention(db, opts);
     expect(getAttentionItem(db, "att:stale:asg:asg-custom")).toBeNull();
@@ -141,11 +172,53 @@ describe("reconcileAttention — stale assignments (MC-I1.S7)", () => {
 
   it("resolves a stale assignment once it transitions terminal", () => {
     const db = freshDb();
-    seedAssignment(db, "term", "running", NOW - 5 * HOUR);
+    seedAssignment(db, "term", "running", NOW - 5 * HOUR, { heartbeatAtSec: NOW - 3 * HOUR });
     reconcileAttention(db, opts);
     expect(getAttentionItem(db, "att:stale:asg:asg-term")?.status).toBe("open");
     db.query(`UPDATE agent_task_assignment SET state = 'completed' WHERE id = 'asg-term'`).run();
     reconcileAttention(db, opts);
     expect(getAttentionItem(db, "att:stale:asg:asg-term")?.status).toBe("resolved");
+  });
+
+  // --- Resolve → genuine recurrence (PR #873 review nit 1, resolved) ---
+
+  it("re-notifies on a genuine resolve→recur cycle (ML.3 contract upheld)", () => {
+    // Review nit 1 proposed suppressing the reopen notification, but that would
+    // break the established ML.3 contract that a RESOLVED condition which
+    // genuinely recurs re-notifies (you want to know a cleared blocker came
+    // back). The flap concern is instead handled by review major 2 — stale-asg
+    // is scoped to heartbeating sessions, so the false-positive flap that
+    // motivated the nit can't occur. A real heartbeating session that goes
+    // quiet → active → quiet IS a genuine recurrence and SHOULD re-notify.
+    const db = freshDb();
+    seedAssignment(db, "flap", "running", NOW - 5 * HOUR, { heartbeatAtSec: NOW - 3 * HOUR });
+    const r1 = reconcileAttention(db, opts);
+    expect(r1.opened.map((i) => i.id)).toContain("att:stale:asg:asg-flap");
+
+    // Activity heals it (resolve).
+    heartbeat(db, "flap", NOW - 30);
+    const r2 = reconcileAttention(db, opts);
+    expect(r2.resolved.map((i) => i.id)).toContain("att:stale:asg:asg-flap");
+
+    // It genuinely goes quiet again past threshold — re-derives AND re-notifies.
+    const r3 = reconcileAttention(db, { ...opts, nowEpochSec: NOW + 5 * HOUR });
+    expect(r3.opened.map((i) => i.id)).toContain("att:stale:asg:asg-flap");
+    expect(getAttentionItem(db, "att:stale:asg:asg-flap")?.status).toBe("open");
+  });
+
+  it("never re-notifies a DISMISSED stale-asg item (dismiss beats recurrence)", () => {
+    const db = freshDb();
+    seedAssignment(db, "dism", "running", NOW - 5 * HOUR, { heartbeatAtSec: NOW - 3 * HOUR });
+    const r1 = reconcileAttention(db, opts);
+    expect(r1.opened.map((i) => i.id)).toContain("att:stale:asg:asg-dism");
+
+    // Principal dismisses it.
+    db.query(`UPDATE attention_items SET status = 'dismissed' WHERE id = ?`).run(
+      "att:stale:asg:asg-dism"
+    );
+    // Still stale on the next pass — must NOT reopen or re-notify.
+    const r2 = reconcileAttention(db, opts);
+    expect(r2.opened.map((i) => i.id)).not.toContain("att:stale:asg:asg-dism");
+    expect(getAttentionItem(db, "att:stale:asg:asg-dism")?.status).toBe("dismissed");
   });
 });

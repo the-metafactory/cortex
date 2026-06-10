@@ -57,22 +57,18 @@ import type { Database } from "bun:sqlite";
 import type { AttentionItem, AttentionSeverity } from "../types";
 import { upsertAttentionItem, getAttentionItem, resolveAttentionItem } from "../db/attention";
 import { findAnchorSession } from "./anchor";
+import type { AttentionDelta } from "../attention-notify";
+
+// Re-export the shared notify delta so existing importers of this producer (the
+// renderer, tests) keep one import site; the canonical type lives in
+// attention-notify.ts (the consumer) so the funnel is type-level (PR #873 review).
+export type { AttentionDelta };
 
 /** The failed-dispatch id namespace — disjoint from every other producer's. */
 export const FAILED_DISPATCH_PREFIX = "att:faildis:";
 
 /** The conventional aborted reason that means "the principal cancelled" → no attention. */
 export const PRINCIPAL_CANCEL_REASON = "principal-cancel";
-
-/**
- * A producer delta: items that transitioned absent → open and open → resolved
- * on this envelope. Shaped like the reconciler's delta so the renderer can funnel
- * both through the SAME notify path.
- */
-export interface AttentionDelta {
-  opened: AttentionItem[];
-  resolved: AttentionItem[];
-}
 
 const EMPTY_DELTA: AttentionDelta = { opened: [], resolved: [] };
 
@@ -154,7 +150,8 @@ function nakReasonKind(payload: Record<string, unknown>): NakReasonKind | null {
  *
  * Idempotent: re-opening an already-open item upserts in place (no duplicate
  * "opened" delta); resolving an absent / already-resolved item yields no
- * "resolved" delta. Redelivery is therefore safe.
+ * "resolved" delta; a redelivered failed/aborted for a DISMISSED item is a no-op
+ * (the dismiss is honoured, never resurrected). Redelivery is therefore safe.
  */
 export function produceFailedDispatchAttention(
   db: Database,
@@ -193,6 +190,17 @@ export function produceFailedDispatchAttention(
     return EMPTY_DELTA;
   }
 
+  // Dismiss-resurrection guard (#621 bug class; PR #873 review major 1). NATS is
+  // at-least-once, so a `dispatch.task.failed` is redelivered routinely. If the
+  // principal already DISMISSED this item ("stop showing me this"), a redelivery
+  // must NOT flip it back to open + re-notify. `upsertAttentionItem` writes
+  // `status = excluded.status` unconditionally, so we early-return BEFORE the
+  // upsert when the prior row is dismissed — mirroring how `reconcileAttention`
+  // guards via `dismissedIds`. (Latent until E.4's dismiss action ships, but
+  // fixed now while the producer is fresh.)
+  const prior = getAttentionItem(db, itemId);
+  if (prior !== null && prior.status === "dismissed") return EMPTY_DELTA;
+
   // Open (or re-upsert) the failed-dispatch item. Deep-link via the dispatch
   // anchor's session (the §7.4 drill-down target — "the session that needs
   // action"); null when no anchor was projected (e.g. a terminal that raced its
@@ -213,7 +221,6 @@ export function produceFailedDispatchAttention(
 
   // Only the absent → open transition is a "newly opened" delta to notify on;
   // a re-upsert of an already-open item must not re-notify (idempotent redelivery).
-  const prior = getAttentionItem(db, itemId);
   const wasOpen = prior !== null && prior.status === "open";
   upsertAttentionItem(db, item);
   return wasOpen ? EMPTY_DELTA : { opened: [item], resolved: [] };
