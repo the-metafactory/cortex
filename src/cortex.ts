@@ -267,7 +267,7 @@ export interface StartCortexOptions {
   configPath?: string;
   /** Skip the config-watcher (tests). */
   disableConfigWatcher?: boolean;
-  /** Skip the dashboard API even if config.api.enabled is set (tests). */
+  /** Skip the Mission Control embed even if config.mc.enabled is set (tests). */
   disableDashboard?: boolean;
   /** Skip the JSONL outbound poller (tests). */
   disableOutboundPoller?: boolean;
@@ -1925,8 +1925,6 @@ export async function startCortex(
     CloudPublisher.checkEndpoints(networkResolver, networkIds, cloudMtls).catch((err: unknown) => {
       console.error("cortex: endpoint health check error:", err instanceof Error ? err.message : String(err));
     });
-  } else if (config.api.mode === "cloud") {
-    console.warn("cortex: api.mode is 'cloud' but no network has cloud config. Events will not be published.");
   }
 
   // Adapters (Discord + Mattermost).
@@ -2797,15 +2795,10 @@ export async function startCortex(
   }
 
   // MC-I1.S1 (ADR-0005): in-process Mission Control embed — opt-in via `config.mc.enabled`.
-  // The legacy `api.*` embedded-dashboard path (G-201) is retired: its dynamic
-  // import never migrated from grove-v2 (#712) and threw on every boot. When a
-  // config still sets `api.enabled`, warn once and direct the principal to `mc:`.
-  if (config.api.enabled) {
-    console.warn(
-      "cortex: `api.enabled` (the legacy embedded dashboard) is retired per ADR-0005 — " +
-        "it never migrated from grove-v2 (#712). Use the `mc:` config block instead.",
-    );
-  }
+  // The legacy `api.*` embedded-dashboard path (G-201) was retired per ADR-0005 /
+  // #712 (its dynamic import never migrated from grove-v2 and threw on every
+  // boot) and its schema block was dropped in #882, so there is no longer an
+  // `api.enabled` to nudge off — `mc:` is the only embedded-dashboard path.
   let mcHandle: MissionControlHandle | null = null;
   let mcDb: BunDatabase | null = null;
   if (config.mc.enabled && !options.disableDashboard) {

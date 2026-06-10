@@ -114,7 +114,7 @@ export interface GithubWebhookReceiverOptions {
    * components use:
    *   - Mattermost outgoing-webhook server: configurable via
    *     `mattermost[].callbackPort` (default 8080)
-   *   - Dashboard API: `config.api.port` (default 8766)
+   *   - Mission Control embed: `config.mc.port` (0 → MC yaml port, default 8767)
    *
    * The default 8770 is far enough above mattermost's default that
    * accidental collision is unlikely; principals with another tenant on

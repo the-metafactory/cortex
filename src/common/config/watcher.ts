@@ -60,9 +60,6 @@ const SAFE_FIELDS = new Set([
   "github.repos",
   "github.agentDetection",
 
-  // API config (port changes need reconnect warning)
-  "api.corsOrigin",
-
   // Agent identity
   "agent.displayName",
 ]);
@@ -81,13 +78,6 @@ const RESTART_FIELDS = new Set([
   "mattermost.apiToken",
   "mattermost.webhookUrl",
   "mattermost.webhookToken",
-
-  // API connection
-  "api.enabled",
-  "api.port",
-  "api.mode",
-  "api.endpoint",
-  "api.apiKey",
 
   // Agent core identity
   // cortex#429 PR-C — `agent.operatorId/Discord/Mattermost` retired from
@@ -186,12 +176,10 @@ function compareConfigs(oldConfig: AgentConfig, newConfig: AgentConfig): {
     }
   }
 
-  // API fields
-  if (isDifferent(oldConfig.api, newConfig.api)) {
-    for (const key of Object.keys(newConfig.api)) {
-      checkField(`api.${key}`, pickField(oldConfig.api, key), pickField(newConfig.api, key));
-    }
-  }
+  // (api.* removed in #882 — the embedded-dashboard block was retired per
+  // ADR-0005/#712 and dropped from AgentConfigSchema. Any stray `api:` left in
+  // a config is stripped at parse; if one ever appears in a diff it falls
+  // through to the conservative "unknown field → require restart" default.)
 
   /**
    * Compare old and new instance arrays, detect added/removed/changed instances.

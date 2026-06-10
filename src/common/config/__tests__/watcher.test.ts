@@ -106,17 +106,6 @@ const TEST_CONFIG: AgentConfig = {
       hostname: "127.0.0.1",
     },
   },
-  api: {
-    enabled: false,
-    port: 8766,
-    corsOrigin: "*",
-    mode: "local",
-    endpoint: "",
-    apiKey: "",
-    operatorId: "",
-    cfAccessClientId: "",
-    cfAccessClientSecret: "",
-  },
   grove: {
     notifications: { discord: false },
     baseUrl: "",
@@ -188,14 +177,6 @@ github:
     commentPatterns:
       - "^Starting:"
       - "^Completed:"
-api:
-  enabled: false
-  port: 8766
-  corsOrigin: "*"
-  mode: local
-  endpoint: ""
-  apiKey: ""
-  operatorId: ""
 paths:
   publishedEventsDir: "~/.claude/events/published"
   logDir: "~/.config/grove/logs"
@@ -250,14 +231,6 @@ github:
     commentPatterns:
       - "^Starting:"
       - "^Completed:"
-api:
-  enabled: false
-  port: 8766
-  corsOrigin: "*"
-  mode: local
-  endpoint: ""
-  apiKey: ""
-  operatorId: ""
 paths:
   publishedEventsDir: "~/.claude/events/published"
   logDir: "~/.config/grove/logs"
@@ -322,14 +295,6 @@ github:
     commentPatterns:
       - "^Starting:"
       - "^Completed:"
-api:
-  enabled: false
-  port: 8766
-  corsOrigin: "*"
-  mode: local
-  endpoint: ""
-  apiKey: ""
-  operatorId: ""
 paths:
   publishedEventsDir: "~/.claude/events/published"
   logDir: "~/.config/grove/logs"
@@ -389,14 +354,6 @@ github:
     commentPatterns:
       - "^Starting:"
       - "^Completed:"
-api:
-  enabled: false
-  port: 8766
-  corsOrigin: "*"
-  mode: local
-  endpoint: ""
-  apiKey: ""
-  operatorId: ""
 paths:
   publishedEventsDir: "~/.claude/events/published"
   logDir: "~/.config/grove/logs"
@@ -450,14 +407,6 @@ github:
     commentPatterns:
       - "^Starting:"
       - "^Completed:"
-api:
-  enabled: false
-  port: 8766
-  corsOrigin: "*"
-  mode: local
-  endpoint: ""
-  apiKey: ""
-  operatorId: ""
 paths:
   publishedEventsDir: "~/.claude/events/published"
   logDir: "~/.config/grove/logs"
@@ -526,14 +475,6 @@ github:
     commentPatterns:
       - "^Starting:"
       - "^Completed:"
-api:
-  enabled: false
-  port: 8766
-  corsOrigin: "*"
-  mode: local
-  endpoint: ""
-  apiKey: ""
-  operatorId: ""
 paths:
   publishedEventsDir: "~/.claude/events/published"
   logDir: "~/.config/grove/logs"

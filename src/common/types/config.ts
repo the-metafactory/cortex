@@ -634,23 +634,16 @@ export const AgentConfigSchema = z.object({
     /* eslint-enable @typescript-eslint/no-unnecessary-condition */
   })),
 
-  /** G-201: Dashboard API configuration (local dashboard — cloud fields moved to network files) */
-  api: z.object({
-    enabled: z.boolean().default(false),
-    port: z.number().int().positive().default(8766),
-    corsOrigin: z.string().default("*"),
-    mode: z.enum(["local", "cloud"]).default("local"),
-    // Legacy cloud fields — kept for backward compat, migrated to network files by config-loader.
-    // R2.I (cortex#436): `operatorId` here is the LEGACY flat `api.*` key. It is
-    // intentionally NOT renamed — this block is the backward-compat reader, and
-    // `buildLegacyNetwork` rewrites it to the canonical cloud `principalId` when
-    // synthesising the default network. New configs use per-network `cloud.principalId`.
-    endpoint: z.string().default(""),
-    apiKey: z.string().default(""),
-    operatorId: z.string().default(""),
-    cfAccessClientId: z.string().default(""),
-    cfAccessClientSecret: z.string().default(""),
-  }).default(emptyDefault()),
+  // G-201 `api:` (embedded-dashboard toggle + legacy flat cloud fields) was
+  // RETIRED per ADR-0005 / #712 and dropped from this schema in #882 — it was
+  // the last `AgentConfigSchema`-only block, a pure-diagnostics divergence from
+  // `CortexConfigSchema`. The embedded-dashboard path (`enabled`/`port`/
+  // `corsOrigin`/`mode`) is superseded by `mc:` below; its only readers were
+  // the dead `config.api.enabled` / `config.api.mode` gates in `src/cortex.ts`.
+  // The LEGACY single-file cloud→network migration is unaffected: it reads the
+  // pre-parse `raw.api.*` record (`hasLegacyCloudConfig` / `buildLegacyNetwork`
+  // in config-loader, and `migrate-config-lib`'s own `LegacyBotYaml.api`), not
+  // this parsed block — so dropping the Zod schema does not touch it.
 
   /**
    * MC-I1.S1 (ADR-0005): in-process Mission Control embed. Supersedes the dead
