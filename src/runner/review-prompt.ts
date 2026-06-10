@@ -11,21 +11,24 @@ import type { ReviewRequestPayload } from "../bus/review-events";
  * `extractVerdictBlock` finds no block (→ `dispatch.task.completed`, no
  * verdict) and nothing reaches the forge.
  *
- * This builder makes the contract explicit in the prompt itself, independent of
- * persona quality:
+ * This builder makes the contract explicit in the prompt itself rather than
+ * relying solely on persona routing:
  *   1. ALWAYS instruct the terminal fenced ```json verdict block (the pipeline
  *      parses the LAST such block — `extractVerdictBlock` / `parseVerdictBlock`).
+ *      The embedded example is VALID JSON (a concrete sample) — the allowed
+ *      enum values are stated in prose OUTSIDE the block so a model copying the
+ *      "exact shape" can never emit a type-union literal that fails `JSON.parse`.
  *   2. When `payload.post` is set, instruct a non-interactive `gh pr review`
  *      post (— never "ask first") and report the resulting review id/url back
  *      in the block. Otherwise instruct NOT to post (link-less block).
  *
+ * Prompt text raises the floor on persona quality; it does not guarantee model
+ * compliance. The pipeline still fails closed (no parseable block → no verdict)
+ * if a reviewer ignores it.
+ *
  * Pure + deterministic — unit-tested in `review-prompt.test.ts`.
  */
-export function buildReviewPrompt(input: {
-  agentId: string;
-  payload: ReviewRequestPayload;
-}): string {
-  const { payload } = input;
+export function buildReviewPrompt(payload: ReviewRequestPayload): string {
   const ref = `${payload.repo}#${payload.pr}`;
 
   const postInstruction = payload.post
@@ -45,21 +48,25 @@ export function buildReviewPrompt(input: {
     `Review PR ${ref}.`,
     "",
     "You MUST end your output with a single fenced ```json verdict block as the",
-    "terminal artefact (the cortex review pipeline parses the LAST such block).",
-    "It must match this exact shape:",
+    "terminal artefact (the cortex review pipeline parses the LAST such block",
+    "with JSON.parse, so it MUST be valid JSON). Use this shape, e.g.:",
     "",
     "```json",
     "{",
-    '  "verdict": "approved" | "changes-requested" | "commented",',
+    '  "verdict": "commented",',
     '  "summary": "<one-line summary of the review>",',
-    '  "github_review_id": <integer>,',
-    '  "github_review_url": "<string>",',
-    '  "submitted_at": "<ISO 8601 timestamp>",',
+    '  "github_review_id": 0,',
+    '  "github_review_url": "",',
+    '  "submitted_at": "2026-01-01T00:00:00Z",',
     '  "commit_id": "<PR head commit SHA>",',
-    '  "findings": { "blockers": <int>, "majors": <int>, "nits": <int> },',
-    '  "inline_comments": <integer>',
+    '  "findings": { "blockers": 0, "majors": 0, "nits": 0 },',
+    '  "inline_comments": 0',
     "}",
     "```",
+    "",
+    '`verdict` MUST be exactly one of "approved", "changes-requested", or',
+    '"commented". Replace every sample value above with the real value for this',
+    "review; all fields are required and the integer fields must be integers.",
     "",
     postInstruction,
   ].join("\n");

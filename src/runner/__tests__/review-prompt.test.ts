@@ -11,16 +11,34 @@ function payload(over: Partial<ReviewRequestPayload> = {}): ReviewRequestPayload
   } as ReviewRequestPayload;
 }
 
+/** Pull the LAST fenced ```json block out of the prompt (mirrors the pipeline). */
+function lastJsonBlock(text: string): string | null {
+  const re = /```json\s*\r?\n([\s\S]*?)\r?\n```/gi;
+  const blocks: string[] = [];
+  let m: RegExpExecArray | null = re.exec(text);
+  while (m !== null) {
+    if (m[1] !== undefined) blocks.push(m[1]);
+    m = re.exec(text);
+  }
+  return blocks.length === 0 ? null : (blocks[blocks.length - 1] ?? null);
+}
+
 describe("buildReviewPrompt (cortex#911)", () => {
   test("names the PR to review", () => {
-    const p = buildReviewPrompt({ agentId: "sage", payload: payload() });
-    expect(p).toContain("Review PR the-metafactory/cortex#900");
+    expect(buildReviewPrompt(payload())).toContain("Review PR the-metafactory/cortex#900");
   });
 
-  test("always instructs the terminal fenced json verdict block", () => {
-    const p = buildReviewPrompt({ agentId: "sage", payload: payload() });
-    expect(p).toContain("```json");
-    // every contract field is named so the model emits a parseable block
+  test("the embedded example block is VALID JSON (cortex#917 blocker)", () => {
+    // The prompt tells the model to emit a block parsed with JSON.parse; the
+    // example it shows must therefore itself be valid JSON, or a model copying
+    // the "exact shape" reproduces the no-verdict failure this fixes.
+    const block = lastJsonBlock(buildReviewPrompt(payload()));
+    expect(block).not.toBeNull();
+    expect(() => JSON.parse(block as string)).not.toThrow();
+  });
+
+  test("names every contract field + the allowed enum values in prose", () => {
+    const p = buildReviewPrompt(payload());
     for (const field of [
       "verdict",
       "summary",
@@ -34,29 +52,28 @@ describe("buildReviewPrompt (cortex#911)", () => {
       expect(p).toContain(field);
     }
     expect(p).toContain("LAST such block");
+    // allowed values stated in prose, OUTSIDE the JSON example
+    expect(p).toContain('"approved", "changes-requested", or');
   });
 
   test("post=true → non-interactive gh pr review, no confirmation", () => {
-    const p = buildReviewPrompt({ agentId: "sage", payload: payload({ post: true }) });
+    const p = buildReviewPrompt(payload({ post: true }));
     expect(p).toContain("gh pr review");
     expect(p).toContain("Do NOT ask for confirmation");
     expect(p).toMatch(/report the created review's id and url/i);
   });
 
   test("post falsy → instruct NOT to post + link-less block", () => {
-    const p = buildReviewPrompt({ agentId: "sage", payload: payload({ post: false }) });
+    const p = buildReviewPrompt(payload({ post: false }));
     expect(p).toContain("Do NOT post");
     expect(p).not.toContain("gh pr review");
   });
 
   test("post omitted behaves as no-post", () => {
-    const p = buildReviewPrompt({ agentId: "sage", payload: payload() });
-    expect(p).toContain("Do NOT post");
+    expect(buildReviewPrompt(payload())).toContain("Do NOT post");
   });
 
   test("is pure — identical input yields byte-identical output", () => {
-    const a = buildReviewPrompt({ agentId: "sage", payload: payload({ post: true }) });
-    const b = buildReviewPrompt({ agentId: "sage", payload: payload({ post: true }) });
-    expect(a).toBe(b);
+    expect(buildReviewPrompt(payload({ post: true }))).toBe(buildReviewPrompt(payload({ post: true })));
   });
 });

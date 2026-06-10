@@ -1499,10 +1499,11 @@ export async function startCortex(
           // post intent explicitly (`buildReviewPrompt`), not just bare intent.
           // A thin persona used to review in prose and ask "Shall I post?",
           // leaving the pipeline with no parseable block and nothing on the
-          // forge. Making the contract explicit in the prompt fixes that
-          // independent of persona quality; capability routing still happened
-          // on the subject (`tasks.code-review.*`).
-          promptBuilder: buildReviewPrompt,
+          // forge. Stating the contract in the prompt raises the floor on
+          // persona quality (the pipeline still fails closed on a missing /
+          // malformed block); capability routing still happened on the subject
+          // (`tasks.code-review.*`).
+          promptBuilder: ({ payload }) => buildReviewPrompt(payload),
           sessionOpts: reviewSessionOpts,
           ...(pipelineRunner !== undefined && { pipelineRunner }),
           ...(signatureVerifier !== undefined && { signatureVerifier }),
