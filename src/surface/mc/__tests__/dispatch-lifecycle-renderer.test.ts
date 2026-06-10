@@ -20,13 +20,17 @@ import {
   createDispatchProjectionRenderer,
   DISPATCH_PROJECTION_RENDERER_ID,
   DISPATCH_PROJECTION_SUBJECTS,
+  type FailedDispatchAttentionWiring,
 } from "../projection/dispatch-lifecycle-renderer";
 import { subjectMatches } from "../../../bus/surface-router";
 import {
   createDispatchTaskStartedEvent,
+  createDispatchTaskFailedEvent,
   type DispatchEventSource,
 } from "../../../bus/dispatch-events";
 import type { Envelope } from "../../../bus/myelin/envelope-validator";
+import type { AttentionDelta } from "../projection/failed-dispatch";
+import { getAttentionItem } from "../db/attention";
 
 const SOURCE: DispatchEventSource = {
   principal: "andreas",
@@ -165,5 +169,76 @@ describe("createDispatchProjectionRenderer", () => {
       );
       expect(hit).toBe(false);
     }
+  });
+
+  // --- MC-I1.S7: failed_dispatch attention notify funnel ---
+
+  function failedEnvelope(): Envelope {
+    return createDispatchTaskFailedEvent({
+      source: SOURCE,
+      taskId: TASK_ID,
+      agentId: "cortex",
+      startedAt: new Date("2026-06-10T12:00:00.000Z"),
+      failedAt: new Date("2026-06-10T12:05:00.000Z"),
+      errorSummary: "boom",
+      reason: { kind: "cant_do", detail: "bad output" },
+    });
+  }
+
+  it("opens a failed_dispatch item and funnels the opened delta to publishDelta", async () => {
+    const deltas: AttentionDelta[] = [];
+    const wiring: FailedDispatchAttentionWiring = {
+      stackId: "work",
+      publishDelta: (d) => {
+        deltas.push(d);
+      },
+    };
+    const adapter = createDispatchProjectionRenderer(db, undefined, wiring);
+    await adapter.render(failedEnvelope());
+
+    expect(getAttentionItem(db, `att:faildis:${TASK_ID}`)?.status).toBe("open");
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]?.opened).toHaveLength(1);
+    expect(deltas[0]?.resolved).toHaveLength(0);
+  });
+
+  it("funnels the resolved delta when a redispatch started clears a failed item", async () => {
+    const deltas: AttentionDelta[] = [];
+    const wiring: FailedDispatchAttentionWiring = {
+      stackId: "work",
+      publishDelta: (d) => {
+        deltas.push(d);
+      },
+    };
+    const adapter = createDispatchProjectionRenderer(db, undefined, wiring);
+    await adapter.render(failedEnvelope());
+    // A redispatch started for the same anchor resolves the failed item.
+    await adapter.render(
+      createDispatchTaskStartedEvent({
+        source: SOURCE,
+        taskId: TASK_ID,
+        agentId: "cortex",
+        startedAt: new Date("2026-06-10T12:10:00.000Z"),
+      }),
+    );
+
+    expect(getAttentionItem(db, `att:faildis:${TASK_ID}`)?.status).toBe("resolved");
+    // Two publishDelta calls: one opened, then one resolved.
+    expect(deltas).toHaveLength(2);
+    expect(deltas[1]?.resolved).toHaveLength(1);
+  });
+
+  it("still writes the DB item when no publishDelta is wired (headless)", async () => {
+    // Wiring with stackId but no publisher — the DB write happens, no notify.
+    const adapter = createDispatchProjectionRenderer(db, undefined, { stackId: "work" });
+    await adapter.render(failedEnvelope());
+    expect(getAttentionItem(db, `att:faildis:${TASK_ID}`)?.status).toBe("open");
+  });
+
+  it("produces NO failed_dispatch item when no failedDispatch wiring is supplied (S4 back-compat)", async () => {
+    const adapter = createDispatchProjectionRenderer(db);
+    await adapter.render(failedEnvelope());
+    // The lifecycle projection still ran (assignment failed), but no attention.
+    expect(getAttentionItem(db, `att:faildis:${TASK_ID}`)).toBeNull();
   });
 });

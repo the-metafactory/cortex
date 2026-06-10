@@ -101,6 +101,9 @@ import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/r
 import { startMissionControl, type MissionControlHandle } from "./surface/mc/embed";
 // MC-I1.S4 (ADR-0005 §4) — bus→MC dispatch-lifecycle projection renderer.
 import { createDispatchProjectionRenderer } from "./surface/mc/projection/dispatch-lifecycle-renderer";
+// MC-I1.S7 (#849) — funnel the event-driven failed_dispatch attention delta
+// onto the same system.attention.* bus path the cockpit loop publishes on.
+import { publishReconcileDelta } from "./surface/mc/attention-notify";
 import type { Database as BunDatabase } from "bun:sqlite";
 import { isGatewayEnabled } from "./gateway/gateway-bootstrap";
 import {
@@ -2697,8 +2700,34 @@ export async function startCortex(
       // dashboard clients (S6 — closes the S4 WS fan-out gap). No
       // restart-on-config — like every renderer, the registration is static for
       // the daemon's lifetime.
-      router.register(createDispatchProjectionRenderer(mcDb, mcHandle.wsRegistry));
-      console.log("cortex: Mission Control bus→MC projection renderer registered (dispatch + verdicts + heartbeats + attention + adapter health)");
+      //
+      // MC-I1.S7 (#849) — the event-driven failed_dispatch attention producer
+      // rides this same seam. We stamp it with the stack id and funnel its
+      // open/resolve delta onto the SAME `system.attention.*` bus path the
+      // cockpit loop uses — via the established `publishReconcileDelta` builder
+      // (attention-notify.ts) with the same notifySource the loop uses. This
+      // makes failed_dispatch attention work whenever `mc.enabled`, independent
+      // of `cockpit.enabled` (it's event-driven, not state-derived). The
+      // deep-link for a session-anchored item is the dashboard drill-down route.
+      const mcBaseUrl =
+        config.grove.baseUrl !== "" ? config.grove.baseUrl : `http://localhost:${mcHandle.port}`;
+      router.register(
+        createDispatchProjectionRenderer(mcDb, mcHandle.wsRegistry, {
+          stackId: derivedStack.stack,
+          publishDelta: async (delta) => {
+            await publishReconcileDelta(
+              delta,
+              {
+                source: { principal: principalId, agent: "cortex", instance: "local" },
+                deepLinkFor: (item) =>
+                  item.sessionId !== null ? `${mcBaseUrl}/sessions/${item.sessionId}` : null,
+              },
+              (env) => runtime.publish(env),
+            );
+          },
+        }),
+      );
+      console.log("cortex: Mission Control bus→MC projection renderer registered (dispatch + verdicts + heartbeats + attention + adapter health + failed-dispatch)");
     } catch (err) {
       console.error("cortex: Mission Control embed startup error (non-fatal):", err instanceof Error ? err.message : err);
     }
