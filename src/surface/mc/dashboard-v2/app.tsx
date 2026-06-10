@@ -117,7 +117,7 @@ export function App() {
   // G-1113.D.5 — work-item-detail data (fetched whenever a work item is selected).
   const workItemDetail = useWorkItemDetail(view === "work-item-detail" ? selectedWorkItemId : null);
   // G-1113.E.3 — attention queue data (fetched only when on the Attention tab).
-  const attention = useAttention(softwareMode && view === "attention");
+  const attention = useAttention(ws, softwareMode && view === "attention");
   // If software mode is toggled OFF while on a software-mode view (Repositories
   // / Plans / phase-detail / work-item-detail / attention), the tab + render
   // both gate off — reset to default so the main area isn't left blank.

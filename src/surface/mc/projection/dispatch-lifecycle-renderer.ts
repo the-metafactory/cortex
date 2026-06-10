@@ -52,9 +52,32 @@ import { projectReviewVerdict } from "./review-verdict";
 import { projectHeartbeat } from "./heartbeat";
 import { projectAttention } from "./attention-projection";
 import { projectAdapterLifecycle } from "./adapter-lifecycle";
+import {
+  produceFailedDispatchAttention,
+  type AttentionDelta,
+} from "./failed-dispatch";
 
 /** Stable surface-router id for the MC projection renderer. */
 export const DISPATCH_PROJECTION_RENDERER_ID = "mc-dispatch-projection";
+
+/**
+ * MC-I1.S7 (#849) — the event-driven failed_dispatch producer's notify funnel
+ * + its stamping context. When a `dispatch.task.*` envelope opens or resolves a
+ * `failed_dispatch` attention item, the renderer funnels that delta here so it
+ * reaches the SAME `system.attention.*` bus path the cockpit loop uses.
+ *
+ * `stackId` stamps the produced items (the renderer is the only place that knows
+ * the stack identity at projection time). `publishDelta` is OPTIONAL — when
+ * omitted (headless / test, like `wsRegistry`), the DB item is still written; only
+ * the bus notification is skipped. cortex.ts supplies it, built from the
+ * established `publishAttentionNotifications` builder + the loop's notifySource /
+ * deepLinkFor, so event-driven opens/resolves ride the exact same emitter as the
+ * reconcile-driven ones — NOT a parallel protocol.
+ */
+export interface FailedDispatchAttentionWiring {
+  stackId: string;
+  publishDelta?: (delta: AttentionDelta) => void | Promise<void>;
+}
 
 /**
  * NATS subject patterns the projection renderer subscribes to. Covers the
@@ -127,6 +150,7 @@ export function project(
   envelope: ProjectableEnvelope,
   subject: string | undefined,
   wsRegistry: WsClientRegistry | undefined,
+  failedDispatch?: FailedDispatchAttentionWiring,
 ): void {
   const type = envelope.type;
 
@@ -137,6 +161,33 @@ export function project(
         sessionId: res.sessionId,
         assignmentId: res.assignmentId,
       });
+    }
+    // MC-I1.S7 — the failed_dispatch attention producer rides the SAME seam:
+    // every dispatch.task.* envelope is offered to it. A `failed`/`aborted`
+    // opens an item; a later `started`/`completed` for the same anchor resolves
+    // it. The producer runs AFTER projectDispatchLifecycle so the anchor session
+    // (the deep-link target) exists on a fresh start. It's independent of the
+    // lifecycle's own null-return (a terminal that didn't project a row — bad
+    // payload — still yields no producer delta because the producer reads the
+    // same fields). Any DB mutation (open/resolve) broadcasts the attention WS
+    // signal + funnels the delta to the bus notify path when wired.
+    if (failedDispatch) {
+      const delta = produceFailedDispatchAttention(db, envelope, {
+        stackId: failedDispatch.stackId,
+      });
+      if (delta.opened.length > 0 || delta.resolved.length > 0) {
+        broadcastProjection(wsRegistry, "attention");
+        if (failedDispatch.publishDelta) {
+          // Fire-and-forget: a publish failure must not poison the render path
+          // (the renderer's render() catch is the backstop, but we keep the
+          // promise from escaping unhandled).
+          void Promise.resolve(failedDispatch.publishDelta(delta)).catch((err: unknown) => {
+            process.stderr.write(
+              `[mission-control] failed-dispatch attention notify failed: ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+          });
+        }
+      }
     }
     return;
   }
@@ -189,12 +240,16 @@ export function project(
  * `db` is the in-process Mission Control handle (from the S1 embed —
  * `startMissionControl(...).db`). `wsRegistry` is the embed's live WebSocket
  * registry (S6) — when supplied, projected mutations broadcast to live clients;
- * when omitted (headless / test), the broadcast is a no-op. cortex.ts wires both
- * only when `mc.enabled`.
+ * when omitted (headless / test), the broadcast is a no-op. `failedDispatch`
+ * (S7) carries the `stackId` stamped on event-driven failed_dispatch attention
+ * items + an optional `publishDelta` notify funnel; when omitted the producer
+ * still writes its DB item but skips the bus notification. cortex.ts wires all
+ * three only when `mc.enabled`.
  */
 export function createDispatchProjectionRenderer(
   db: Database,
   wsRegistry?: WsClientRegistry,
+  failedDispatch?: FailedDispatchAttentionWiring,
 ): SurfaceAdapter {
   return {
     id: DISPATCH_PROJECTION_RENDERER_ID,
@@ -206,7 +261,7 @@ export function createDispatchProjectionRenderer(
       subject?: string,
     ): Promise<void> => {
       try {
-        project(db, envelope, subject, wsRegistry);
+        project(db, envelope, subject, wsRegistry, failedDispatch);
       } catch (err) {
         // Renderer contract §2 — never throw out of render(). A projection
         // failure (DB constraint, malformed payload that slipped a type

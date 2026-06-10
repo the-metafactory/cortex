@@ -10,6 +10,25 @@ import type { Action, AssignmentState, BlockReason, McEvent } from "../types";
 import { transition } from "../state-machine";
 import { insertEvent } from "./events";
 
+/**
+ * Terminal assignment states (see state-machine.ts: `completed`/`cancelled`
+ * have no outgoing transitions; `failed` only allows `principal_requeue` back
+ * to `queued`). When a transition lands one of these, the assignment's turn is
+ * over — so we stamp the open session's `ended_at` in the SAME transaction.
+ *
+ * This is the #857 fix: before this, orphan (and any observed) sessions
+ * auto-completed via the ingestor but their `sessions.ended_at` was NEVER set,
+ * so "terminal age" was uncomputable and the retention prune had no anchor.
+ * Stamping here (rather than in the ingestor) keeps "assignment terminal" and
+ * "session ended" consistent across EVERY transition path, not just the
+ * ingestor's auto-complete.
+ */
+const TERMINAL_STATES: ReadonlySet<AssignmentState> = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
 interface AssignmentRow {
   id: string;
   agent_id: string;
@@ -101,6 +120,21 @@ export function applyTransition(
       throw new Error(
         `Concurrent transition: assignment '${assignmentId}' state changed during apply`
       );
+    }
+
+    // #857 — stamp ended_at on the assignment's open session when the
+    // transition lands a terminal state. Guarded on `ended_at IS NULL` so a
+    // session that was already ended (defense-in-depth; terminal states have
+    // no re-entry path through the state machine anyway) is never re-stamped
+    // with a later timestamp. Scoped to the assignment's currently-open
+    // session via the same partial-unique invariant the schema enforces
+    // (`idx_sessions_active_assignment`: at most one open session per
+    // assignment), so this touches exactly the row that just went terminal.
+    if (TERMINAL_STATES.has(result.state)) {
+      db.query(
+        `UPDATE sessions SET ended_at = ?
+         WHERE assignment_id = ? AND ended_at IS NULL`
+      ).run(now, assignmentId);
     }
 
     return insertEvent(db, {

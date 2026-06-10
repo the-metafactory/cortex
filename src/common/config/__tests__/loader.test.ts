@@ -417,6 +417,60 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     expect(principal?.discordId).toBe("285727653603049472");
   });
 
+  // fix/c-844 — the mc:/cockpit: blocks must survive the cortex-shape parse.
+  // They were defined on AgentConfigSchema only; CortexConfigSchema's
+  // strip-by-default parse silently dropped them, so `mc.enabled: true` in a
+  // live config-split stack re-defaulted to false and MC never booted. These
+  // tests pin BOTH directions (present → carried; absent → defaulted) on the
+  // cortex shape specifically — the legacy-schema tests passed all along, which
+  // is exactly why the divergence went unnoticed until the live deploy.
+  test("carries mc + cockpit through the cortex-shape parse when enabled", () => {
+    const cfg = minimalCortex();
+    cfg.mc = { enabled: true, dbPath: "/tmp/mc-test/mission-control.db" };
+    cfg.cockpit = { enabled: true, repo: "the-metafactory/cortex", docsDir: "/tmp/docs" };
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, cfg));
+    expect(config.mc.enabled).toBe(true);
+    expect(config.mc.dbPath).toBe("/tmp/mc-test/mission-control.db");
+    expect(config.cockpit.enabled).toBe(true);
+    expect(config.cockpit.repo).toBe("the-metafactory/cortex");
+  });
+
+  test("defaults mc + cockpit to disabled on the cortex shape when absent", () => {
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, minimalCortex()));
+    expect(config.mc.enabled).toBe(false);
+    expect(config.mc.port).toBe(0);
+    expect(config.cockpit.enabled).toBe(false);
+    // Inner defaults still re-applied via the shared transform.
+    expect(config.cockpit.attention.surface).toBe("discord");
+  });
+
+  // fix/c-844 — the grove: block (F-11 Discord toggle + dashboard deep-link
+  // baseUrl) must survive the cortex-shape parse, for the SAME reason as
+  // mc:/cockpit: above. It was defined on AgentConfigSchema only, so
+  // CortexConfigSchema's strip-by-default parse dropped it — `config.grove.
+  // baseUrl` was always re-defaulted on every live config-split stack and the
+  // attention-notification deep-links (cortex.ts:2713/2745) fell back to
+  // localhost. These pin BOTH directions (present → carried; absent → defaulted)
+  // on the cortex shape specifically.
+  test("carries grove through the cortex-shape parse when configured", () => {
+    const cfg = minimalCortex();
+    cfg.grove = { baseUrl: "https://grove.meta-factory.ai", notifications: { discord: true } };
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, cfg));
+    expect(config.grove.baseUrl).toBe("https://grove.meta-factory.ai");
+    expect(config.grove.notifications.discord).toBe(true);
+  });
+
+  test("defaults grove to empty baseUrl + discord off on the cortex shape when absent", () => {
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, minimalCortex()));
+    // Empty string (not undefined) is load-bearing: cortex.ts deep-link code
+    // tests `config.grove.baseUrl !== ""` to decide the localhost fallback.
+    expect(config.grove.baseUrl).toBe("");
+    // Inner notifications default still re-applied via the shared transform —
+    // `config.grove.notifications` must be defined (a read of `.discord` would
+    // otherwise throw when grove is absent).
+    expect(config.grove.notifications.discord).toBe(false);
+  });
+
   test("flattens agents[*].presence.discord into AgentConfig.discord[]", () => {
     const cfg = minimalCortex();
     (cfg.agents as Record<string, unknown>[]).push({

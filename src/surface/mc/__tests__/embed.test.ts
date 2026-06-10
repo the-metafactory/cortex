@@ -31,21 +31,32 @@ describe("startMissionControl (embed)", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  /** Write a minimal MC yaml that keeps the hook poller hermetic (tmp rawEventsDir). */
+  /**
+   * Write a minimal MC yaml that keeps the hook poller hermetic (tmp
+   * rawEventsDir) AND binds an OS-assigned ephemeral port.
+   *
+   * `port: 0` is load-bearing: the embed maps an absent/zero `opts.port` onto
+   * the yaml's `port`, and a yaml WITHOUT a `port` key falls back to the MC
+   * default 8767 (config.ts DEFAULT_CONFIG) — which collides (EADDRINUSE) with
+   * the live in-process MC pane a cortex daemon now runs on 8767 (cortex#880).
+   * Writing `port: 0` here makes `loaded.port` 0, so Bun.serve assigns a free
+   * port and `handle.port` reports the real bound one. Every test that boots the
+   * embed reads `handle.port` for its assertions, so no fixed port is assumed.
+   */
   function writeMcYaml(): string {
     const cfgPath = join(tmpDir, "mc.yaml");
     const rawEventsDir = join(tmpDir, "events", "raw");
     mkdirSync(rawEventsDir, { recursive: true });
-    writeFileSync(cfgPath, `hooks:\n  rawEventsDir: ${rawEventsDir}\n`);
+    writeFileSync(cfgPath, `port: 0\nhooks:\n  rawEventsDir: ${rawEventsDir}\n`);
     return cfgPath;
   }
 
   it("boots, serves /health, and lands db + cursor beside each other", async () => {
     const dbPath = join(tmpDir, "data", "mission-control.db");
     handle = await startMissionControl({
-      configPath: writeMcYaml(),
+      configPath: writeMcYaml(), // yaml carries `port: 0` → OS-assigned, no 8767 collision
       dbPath,
-      port: 0, // OS-assigned free port — hermetic, no fixed-port collisions
+      // port omitted → the yaml's `port: 0` governs → Bun.serve assigns a free port
     });
 
     // Bun.serve resolves port 0 to an assigned port; the handle exposes the real one.
@@ -78,9 +89,8 @@ describe("startMissionControl (embed)", () => {
 
   it("releases the port on stop()", async () => {
     handle = await startMissionControl({
-      configPath: writeMcYaml(),
+      configPath: writeMcYaml(), // yaml carries `port: 0` → OS-assigned, no 8767 collision
       dbPath: join(tmpDir, "data", "mission-control.db"),
-      port: 0,
     });
     const port = handle.port;
 

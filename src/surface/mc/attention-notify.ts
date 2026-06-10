@@ -29,6 +29,22 @@ import type { AttentionItem } from "./types";
 
 export type AttentionAction = "opened" | "resolved";
 
+/**
+ * The notify delta: items that transitioned absent → open ("opened") and
+ * open → resolved ("resolved") on one producer pass. This is the canonical
+ * shape `publishReconcileDelta` consumes, so it lives HERE (the consumer) and
+ * is reused by every producer that funnels onto the `system.attention.*` path —
+ * the reconciler (`ReconcileResult extends AttentionDelta`) and the event-driven
+ * failed_dispatch producer. Sharing the type makes "they ride the SAME notify
+ * path" a type-level guarantee, not a structural coincidence (PR #873 review).
+ */
+export interface AttentionDelta {
+  /** Items that transitioned absent → open this pass (notify "opened"). */
+  opened: AttentionItem[];
+  /** Items that transitioned open → resolved this pass (notify "resolved"). */
+  resolved: AttentionItem[];
+}
+
 export interface AttentionNotifySource {
   /** Boot-resolved principal slug — first source segment. */
   principal: string;
@@ -128,7 +144,7 @@ export async function publishAttentionNotifications(
  * The thin glue between {@link reconcileAttention}'s delta and E.4's envelopes.
  */
 export async function publishReconcileDelta(
-  delta: { opened: AttentionItem[]; resolved: AttentionItem[] },
+  delta: AttentionDelta,
   opts: AttentionNotifyOptions & { deepLinkFor?: (item: AttentionItem) => string | null },
   publish: EnvelopePublisher,
 ): Promise<{ opened: number; resolved: number }> {

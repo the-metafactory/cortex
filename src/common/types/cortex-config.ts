@@ -36,6 +36,9 @@ import { z } from "zod/v4";
 
 import { CapabilitySchema } from "./capability";
 import {
+  CockpitSchema,
+  GroveSchema,
+  McSchema,
   NetworkClaudeSchema,
   NetworkCloudSchema,
   NetworkFileSchema,
@@ -988,6 +991,55 @@ export const BusReviewConfigSchema = z.object({
 });
 
 /**
+ * Review-lifecycle JetStream provisioning knobs (cortex#835 / pilot#154).
+ * Tune cortex's REVIEW_LIFECYCLE stream — the durable-history stream that
+ * carries the verdict + dispatch-lifecycle envelopes a downstream reactor
+ * (pilot's verdict watch) wants to replay from a durable consumer instead
+ * of racing a transient core-NATS subscription.
+ *
+ * Subjects (derived at boot from the stack identity, NOT configured here):
+ *   - `local.{principal}.{stack}.review.verdict.>`   (the verdict family)
+ *   - `local.{principal}.{stack}.code.pr.review.>`   (sage's `code` domain)
+ *   - `local.{principal}.{stack}.dispatch.task.>`    (dispatch lifecycle)
+ *
+ * These NEVER overlap the CODE_REVIEW stream, which owns the disjoint
+ * `…tasks.code-review.>` namespace (JetStream rejects overlapping subjects
+ * across streams — the two streams partition the subject space cleanly).
+ *
+ * Posture mirrors `BusReviewConfigSchema.stream` EXACTLY (Interest
+ * retention, File storage, 24h max_age, finite 512 MiB max_bytes). There
+ * is intentionally NO `consumer` sub-block: cortex provisions the stream
+ * only; the durable consumers that read it are the DOWNSTREAM reactor's
+ * concern (pilot's durable-consumer upgrade — the cortex#835 follow-up).
+ */
+export const BusLifecycleConfigSchema = z.object({
+  stream: z.object({
+    /**
+     * Stream name that carries the verdict + dispatch.task lifecycle
+     * envelopes. MUST differ from `bus.review.stream.name` (the streams
+     * own disjoint subject spaces; a shared name would clash on add).
+     */
+    name: z.string().min(1).default("REVIEW_LIFECYCLE"),
+    /** How long lifecycle/verdict history remains replayable in JetStream. */
+    maxAgeSeconds: z
+      .number()
+      .int("bus.lifecycle.stream.maxAgeSeconds must be an integer number of seconds")
+      .positive("bus.lifecycle.stream.maxAgeSeconds must be positive")
+      .default(86_400),
+    /** Finite storage cap; avoids account-level reservation failures. */
+    maxBytes: z
+      .number()
+      .int("bus.lifecycle.stream.maxBytes must be an integer number of bytes")
+      .positive("bus.lifecycle.stream.maxBytes must be positive")
+      .default(512 * 1024 * 1024),
+  }).default({
+    name: "REVIEW_LIFECYCLE",
+    maxAgeSeconds: 86_400,
+    maxBytes: 512 * 1024 * 1024,
+  }),
+});
+
+/**
  * dev.implement JetStream provisioning knobs (F-2.2, cortex#835 → cortex#865).
  * Tune cortex's DEV_IMPLEMENT stream — the durable-history stream that carries
  * the `tasks.dev.implement` request envelopes the agentic dev-loop's dev-agent
@@ -1044,6 +1096,13 @@ export const BusConfigSchema = z.object({
     },
     consumer: { maxDeliver: 5 },
   }),
+  lifecycle: BusLifecycleConfigSchema.default({
+    stream: {
+      name: "REVIEW_LIFECYCLE",
+      maxAgeSeconds: 86_400,
+      maxBytes: 512 * 1024 * 1024,
+    },
+  }),
   // F-2.2 (cortex#835 → cortex#865) — DEV_IMPLEMENT stream knobs. Sibling of
   // the REVIEW_LIFECYCLE block (cortex#851); both provision a SECOND durable
   // stream over a disjoint subject space so a downstream durable consumer can
@@ -1060,6 +1119,7 @@ export const BusConfigSchema = z.object({
 
 export type BusConfig = z.infer<typeof BusConfigSchema>;
 export type BusReviewConfig = z.infer<typeof BusReviewConfigSchema>;
+export type BusLifecycleConfig = z.infer<typeof BusLifecycleConfigSchema>;
 export type BusDevImplementConfig = z.infer<typeof BusDevImplementConfigSchema>;
 
 // =============================================================================
@@ -2238,6 +2298,29 @@ export const CortexConfigSchema = z.object({
    * shape even when the block is absent, matching the legacy bot.yaml default.
    */
   security: SecurityPostureSchema,
+
+  /**
+   * MC-I1 (ADR-0005): in-process Mission Control + cockpit live-refresh. SHARED
+   * with `AgentConfigSchema` via {@link McSchema} / {@link CockpitSchema} so the
+   * blocks survive the cortex-shape strip-by-default parse (fix/c-844 — they
+   * were silently dropped for every config-split deployment when defined on the
+   * legacy schema only). `loadCortexShape` carries them into the synthesized
+   * `AgentConfig` (the `merged` passthrough), same as `security`.
+   */
+  mc: McSchema,
+  cockpit: CockpitSchema,
+
+  /**
+   * F-11: grove platform-level config (Discord push toggle + dashboard
+   * `baseUrl` for deep links). SHARED with `AgentConfigSchema` via
+   * {@link GroveSchema} so the block survives the cortex-shape strip-by-default
+   * parse (fix/c-844 — it was defined on the legacy schema only, so
+   * `config.grove.baseUrl` was always `""`/`undefined` on live config-split
+   * stacks and attention-notification deep-links fell back to localhost).
+   * `loadCortexShape` carries it into the synthesized `AgentConfig` (the
+   * `merged` passthrough), same as `mc`/`cockpit`/`security`.
+   */
+  grove: GroveSchema,
 
   /** First-class agents — the canonical list. */
   agents: z.array(AgentSchema).min(1, "at least one agent is required"),
