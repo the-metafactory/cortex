@@ -126,16 +126,17 @@ describe("startCortex — construction", () => {
     await handle.stop();
   });
 
-  test("survives a config where api.enabled is true but disableDashboard is set", async () => {
-    // Sanity check: the dashboard branch is skipped via the test option even
-    // when config.api.enabled is on, so the test doesn't need a real HTTP
-    // server bound to a port.
+  test("survives a config where mc.enabled is true but disableDashboard is set", async () => {
+    // Sanity check: the Mission Control embed is skipped via the test option
+    // even when config.mc.enabled is on, so the test doesn't need a real HTTP
+    // server bound to a port. (Repointed from the retired `api:` block to `mc:`
+    // — ADR-0005/#882; `disableDashboard` gates the mc embed per cortex.ts.)
     const config = minimalConfig({
       // Port 38766 is well outside the typical default range; we never
       // actually bind here because `disableDashboard` short-circuits the
-      // dashboard branch — the value just has to satisfy the Zod schema's
-      // `>0` constraint.
-      api: { enabled: true, port: 38766, mode: "local" },
+      // embed branch — the value just has to satisfy the Zod schema's
+      // nonnegative constraint.
+      mc: { enabled: true, port: 38766 },
     });
     const handle = await startCortex(config, {
       disableConfigWatcher: true,

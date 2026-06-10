@@ -177,9 +177,8 @@ function compareConfigs(oldConfig: AgentConfig, newConfig: AgentConfig): {
   }
 
   // (api.* removed in #882 — the embedded-dashboard block was retired per
-  // ADR-0005/#712 and dropped from AgentConfigSchema. Any stray `api:` left in
-  // a config is stripped at parse; if one ever appears in a diff it falls
-  // through to the conservative "unknown field → require restart" default.)
+  // ADR-0005/#712 and dropped from AgentConfigSchema. A stray `api:` left in a
+  // config is stripped at parse, so it never surfaces as a watched field.)
 
   /**
    * Compare old and new instance arrays, detect added/removed/changed instances.
