@@ -23,8 +23,13 @@ import type { ReviewRequestPayload } from "../bus/review-events";
  *      in the block. Otherwise instruct NOT to post (link-less block).
  *
  * Prompt text raises the floor on persona quality; it does not guarantee model
- * compliance. The pipeline still fails closed (no parseable block → no verdict)
- * if a reviewer ignores it.
+ * compliance. Failure modes are asymmetric: the VERDICT side fails closed (a
+ * missing / malformed block → no `review.verdict.*`, only
+ * `dispatch.task.completed`), but the POST side does NOT — when `payload.post`
+ * is set the reviewer is told to `gh pr review` before emitting the block, so a
+ * forge review can persist even if the block is then absent. That's an
+ * accepted property (a posted review is recoverable; a dropped verdict is
+ * retryable), not a closed failure mode on the forge.
  *
  * Pure + deterministic — unit-tested in `review-prompt.test.ts`.
  */
