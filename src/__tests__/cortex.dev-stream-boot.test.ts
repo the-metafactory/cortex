@@ -285,19 +285,23 @@ describe("startCortex — DEV_IMPLEMENT stream boot wiring (F-2.2, cortex#835 �
       }),
     );
 
-    const byName = new Map(streamAdds.map((c) => [c.name, c]));
-    const codeReview = byName.get("CODE_REVIEW")!.subjects ?? [];
-    const dev = byName.get("DEV_IMPLEMENT")!.subjects ?? [];
-    expect(codeReview.length).toBeGreaterThan(0);
-    expect(dev.length).toBeGreaterThan(0);
-
-    // No cross-stream pair may overlap — JetStream would reject the second
-    // `streams.add` if any did. `tasks.code-review.>` and `tasks.dev.>` diverge
-    // at segment 5 (the token after `tasks.`), so the predicate returns false
-    // for every pair.
-    for (const cr of codeReview) {
-      for (const dv of dev) {
-        expect(subjectsOverlap(cr, dv)).toBe(false);
+    // #875 review nit 1: iterate EVERY cross-stream subject pair across ALL
+    // provisioned streams (N*(N-1)/2), not just CODE_REVIEW×DEV_IMPLEMENT, so
+    // the invariant self-hardens as more streams land (e.g. REVIEW_LIFECYCLE
+    // from cortex#851). JetStream rejects the second `streams.add` if ANY pair
+    // across ANY two streams overlaps.
+    const provisioned = streamAdds.filter((c) => (c.subjects ?? []).length > 0);
+    expect(provisioned.length).toBeGreaterThanOrEqual(2);
+    expect(provisioned.some((c) => c.name === "DEV_IMPLEMENT")).toBe(true);
+    for (let i = 0; i < provisioned.length; i++) {
+      for (let j = i + 1; j < provisioned.length; j++) {
+        const aSubjects = provisioned[i]?.subjects ?? [];
+        const bSubjects = provisioned[j]?.subjects ?? [];
+        for (const a of aSubjects) {
+          for (const b of bSubjects) {
+            expect(subjectsOverlap(a, b)).toBe(false);
+          }
+        }
       }
     }
 

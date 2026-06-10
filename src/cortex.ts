@@ -1221,6 +1221,14 @@ export async function startCortex(
     // this stream is a structural enabler. NOTE: retention is INTEREST — with
     // zero registered consumers the stream retains NOTHING, so replay-from-
     // history begins only once the first durable dev consumer is bound.
+    // KNOWN COUPLING (#875 review nit 2): the gate is `resolveReviewProvisioningJsm`,
+    // which returns null when there are zero REVIEW-capable agents. So a
+    // hypothetical dev-ONLY stack (a dev-capable agent but no code-review agent)
+    // would silently skip provisioning DEV_IMPLEMENT even though its dev consumer
+    // needs it. Not reachable today (every production stack runs a reviewer),
+    // but the proper fix is to gate DEV_IMPLEMENT on dev-capable-agent presence
+    // independently of review agents — tracked as a follow-up (see cortex#835
+    // phase #865). Documented here so a future dev-only operator isn't surprised.
     // (Boundary comment kept loud so the expected #851/#874 merge is trivial.)
     try {
       const devOutcome = await provisionReviewStream({
