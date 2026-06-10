@@ -61,6 +61,7 @@ import {
   type ReviewConsumerAgent,
   type SignatureVerifier,
 } from "./bus/review-consumer";
+import { wireDevConsumers } from "./runner/dev-consumer-boot";
 import {
   provisionReviewStream,
   provisionReviewConsumer,
@@ -1501,6 +1502,54 @@ export async function startCortex(
     );
   }
 
+  // F-2.1 (cortex#835) — dev.implement consumer boot wiring.
+  //
+  // DORMANT BY DEFAULT: `wireDevConsumers` returns an EMPTY array — touching
+  // no filesystem, spawning nothing, reading no token — unless an agent
+  // declares a `dev.implement` (or bare `dev`) capability in
+  // `runtime.capabilities[]`. Every live stack today declares none, so this
+  // block is inert: byte-identical boot. Mirrors the review-consumer
+  // dormancy contract above; runs AFTER it so a principal scanning boot logs
+  // sees the review path first.
+  const devConsumers = wireDevConsumers({
+    agents: mergedAgents,
+    runtime,
+    source: systemEventSource,
+    principalId,
+    stack: derivedStack.stack,
+  });
+  for (const consumer of devConsumers) {
+    try {
+      // Stream provisioning for `tasks.dev.implement` is deliberately a
+      // sibling slice (see dev-consumer-boot.ts header FLAG) — until a
+      // dev-capable agent exists this loop never runs, so the deferral
+      // changes no live behaviour. `start()` stays dormant-safe: a disabled
+      // runtime returns `subscribed: false` and the consumer never binds.
+      const started = await consumer.start({
+        pattern: `local.${principalId}.${derivedStack.stack}.tasks.dev.implement`,
+        stream: "DEV_IMPLEMENT",
+        durable: `cortex-dev-consumer-${principalId}-${consumer.agent.id}`,
+      });
+      if (started.subscribed) {
+        console.log(`cortex: dev.implement consumer ready for agent=${consumer.agent.id}`);
+      } else {
+        console.log(
+          `cortex: dev.implement consumer DORMANT for agent=${consumer.agent.id} — ` +
+            `cortex MyelinRuntime subscriptions disabled (G-1111 pending; tasks.dev.implement ` +
+            `envelopes will not be claimed by this consumer)`,
+        );
+      }
+    } catch (err) {
+      // Per CLAUDE.md: log every error. One agent's consumer crash does NOT
+      // abort boot; siblings still wire and the shutdown drain still calls
+      // `.stop()` (idempotent — handles the "never subscribed" case).
+      process.stderr.write(
+        `cortex: dev consumer init failed for agent=${consumer.agent.id}: ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+  }
+
   // IAW Phase B.2a (refs cortex#114) — inbound peer-dispatch listener.
   // Subscribes via the runtime's onEnvelope fan-out, filters for
   // `dispatch.task.dispatched` envelopes from non-self sources, runs
@@ -2856,6 +2905,7 @@ export async function startCortex(
       "github webhook receiver stop",
       ...adapterCleanup.map((_, i) => `outbound poller stop[${i}]`),
       ...reviewConsumers.map((c, i) => `review-consumer stop[${i}] (agent=${c.agent.id})`),
+      ...devConsumers.map((c, i) => `dev-consumer stop[${i}] (agent=${c.agent.id})`),
       "dispatch-listener stop",
       "dispatch-sink stop",
       "review-sink stop",
@@ -2912,6 +2962,20 @@ export async function startCortex(
         if (consumer) {
           await completeAsync(
             `review-consumer stop[${i}] (agent=${consumer.agent.id})`,
+            consumer.stop(),
+          );
+        }
+      }
+      // F-2.1 (cortex#835) — drain dev consumers on the same boundary so an
+      // in-flight implement (worktree + CC + gates + PR) publishes its
+      // terminal envelope before the runtime closes. `DevConsumer.stop()` is
+      // idempotent and awaits its in-flight set (the "never subscribed" /
+      // dormant case is a no-op). Empty on every default stack.
+      for (let i = 0; i < devConsumers.length; i++) {
+        const consumer = devConsumers[i];
+        if (consumer) {
+          await completeAsync(
+            `dev-consumer stop[${i}] (agent=${consumer.agent.id})`,
             consumer.stop(),
           );
         }
