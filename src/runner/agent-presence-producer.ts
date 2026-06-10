@@ -23,6 +23,26 @@
  *      agent BEFORE the runtime/bus tears down (the boot wiring registers
  *      {@link AgentPresenceProducer.stop} in the cortex.ts shutdown drain ahead
  *      of `runtime stop`).
+ *   4. (G-1114.C.1) on a mid-life capability mutation, publishes ONE
+ *      `agent.capabilities-changed` carrying the FULL new steady-state set —
+ *      {@link AgentPresenceProducer.publishCapabilitiesChanged}. Diff-guarded:
+ *      a no-op when the new set equals the tracked set (order-insensitive), so
+ *      an idempotent reload that re-asserts the same caps emits nothing.
+ *
+ * **The C.1 FINDING — capabilities are RESTART-ONLY at the daemon today.**
+ * Per-agent capabilities live on `Agent.runtime.capabilities[]` (the agents.d/
+ * fragments), NOT on `AgentConfig.agent` (bot.yaml). The only daemon-level
+ * config watcher wired into `cortex.ts` is the `ConfigWatcher`, whose SAFE_FIELDS
+ * / RESTART_FIELDS cover `AgentConfig` only — it never sees a capability change,
+ * and cortex.ts does NOT rebuild `mergedAgents` on reload (see the cortex.ts
+ * capability-registry boot block). The `AgentsDirectoryWatcher` CAN diff per-agent
+ * capability changes (its `agentsChanged`), but it is not instantiated in
+ * cortex.ts. So today a capability change requires a daemon RESTART, and the next
+ * boot's `agent.online` already carries the new set (item 1). This method is the
+ * EMIT side for the moment a capability hot-reload becomes possible: it is wired
+ * defensively into the config-reload onChange handler (cortex.ts) so that IF/WHEN
+ * mergedAgents starts being rebuilt mid-life, the delta flows without restart.
+ * The diff logic is the load-bearing half and is fully exercised regardless.
  *
  * **Mirrors `src/runner/heartbeat-ticker.ts`** — the dispatch HeartbeatTicker's
  * interval-publish + injectable-scheduler + idempotent-stop pattern — but it is
@@ -49,6 +69,7 @@ import {
   createAgentOnlineEvent,
   createAgentHeartbeatEvent,
   createAgentOfflineEvent,
+  createAgentCapabilitiesChangedEvent,
   type AgentPresenceSource,
 } from "../bus/agent-network/builders";
 import type {
@@ -134,6 +155,22 @@ export function presenceAgentFromAgent(
   };
 }
 
+/**
+ * Order-insensitive set equality for capability lists. Capabilities are an
+ * UNORDERED set of ids (ADR-0007 §3) — `["a","b"]` and `["b","a"]` advertise the
+ * same agent, so a reorder must NOT count as a delta. Compares membership only.
+ */
+function capabilitySetsEqual(
+  a: ReadonlySet<string>,
+  b: ReadonlySet<string>,
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const cap of a) {
+    if (!b.has(cap)) return false;
+  }
+  return true;
+}
+
 /** Injectable scheduler — tests pass a controllable fake; production omits. */
 export interface PresenceScheduler {
   setInterval(handler: () => void, ms: number): ReturnType<typeof setInterval>;
@@ -189,6 +226,19 @@ export class AgentPresenceProducer {
   /** Bound the in-flight heartbeat publishes to 1 per agent-batch (backpressure). */
   private heartbeatInFlight = false;
 
+  /**
+   * The producer's view of each agent's CURRENT advertised capability set,
+   * keyed by `agent_id`. Seeded from each {@link PresenceAgent.capabilities}
+   * (the same set stamped on the boot `agent.online`), then advanced by
+   * {@link publishCapabilitiesChanged} on every emitted delta. This is the
+   * baseline the diff compares against — keeping it in sync with what's gone out
+   * on the wire is what makes a re-asserted same-set reload a no-op (G-1114.C.1).
+   */
+  private readonly capabilityBaseline = new Map<string, ReadonlySet<string>>();
+
+  /** `agent_id` → identity/scope, for routing a capabilities-changed emit. */
+  private readonly agentsById = new Map<string, PresenceAgent>();
+
   constructor(opts: AgentPresenceProducerOptions) {
     this.runtime = opts.runtime;
     this.source = opts.source;
@@ -196,6 +246,13 @@ export class AgentPresenceProducer {
     this.intervalMs = opts.intervalMs ?? DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS;
     this.scheduler = opts.scheduler ?? realScheduler;
     this.now = opts.now ?? (() => new Date());
+    for (const agent of this.agents) {
+      this.agentsById.set(agent.identity.agent_id, agent);
+      this.capabilityBaseline.set(
+        agent.identity.agent_id,
+        new Set(agent.capabilities),
+      );
+    }
   }
 
   /**
@@ -246,6 +303,77 @@ export class AgentPresenceProducer {
     await Promise.allSettled(
       this.agents.map((agent) => this.publishOffline(agent, reason)),
     );
+  }
+
+  /**
+   * G-1114.C.1 — emit `agent.capabilities-changed` for `agentId` carrying the
+   * FULL new steady-state capability set (ADR-0007 §3: the subscriber computes
+   * the diff against its current record; we carry the whole set so a subscriber
+   * that missed an earlier delta still converges).
+   *
+   * **Diff-guarded.** Returns `false` WITHOUT emitting when:
+   *   - `agentId` is not a known hosted agent (nothing to announce), or
+   *   - `newCapabilities` equals the producer's tracked baseline for that agent
+   *     (order-insensitive set equality) — an idempotent reload that re-asserts
+   *     the same caps emits nothing.
+   *
+   * On an actual change it publishes one envelope, advances the tracked baseline
+   * to the new set, and returns `true`. Best-effort like the other emits: a
+   * builder/publish fault is logged to stderr and swallowed (the baseline is
+   * still advanced so a transient publish failure doesn't wedge the diff into
+   * re-emitting on every subsequent reload). The caller (the cortex.ts
+   * config-reload onChange handler) treats the return purely as "did a delta
+   * fire" for logging.
+   *
+   * @param agentId the hosted agent whose capabilities changed (`agent_id`).
+   * @param newCapabilities the agent's complete new capability set.
+   * @returns `true` if an envelope was emitted (real delta), else `false`.
+   */
+  publishCapabilitiesChanged(
+    agentId: string,
+    newCapabilities: readonly string[],
+  ): boolean {
+    const agent = this.agentsById.get(agentId);
+    if (agent === undefined) {
+      // Unknown agent — never seen on boot, so there's no presence record to
+      // mutate. Silently ignore (the reload handler iterates only known agents,
+      // so this is a belt-and-braces guard, not an expected path).
+      return false;
+    }
+    const baseline = this.capabilityBaseline.get(agentId) ?? new Set<string>();
+    const next = new Set(newCapabilities);
+    if (capabilitySetsEqual(baseline, next)) {
+      // No actual change — emit nothing.
+      return false;
+    }
+    // Advance the baseline up-front so a publish fault below doesn't leave the
+    // diff re-firing on every subsequent reload (we've decided this IS the new
+    // steady state; the wire emit is best-effort).
+    this.capabilityBaseline.set(agentId, next);
+
+    let envelope;
+    try {
+      envelope = createAgentCapabilitiesChangedEvent({
+        source: this.source,
+        identity: agent.identity,
+        scope: agent.scope,
+        capabilities: [...newCapabilities],
+        sentAt: this.now(),
+      });
+    } catch (err) {
+      process.stderr.write(
+        `agent-presence-producer: createAgentCapabilitiesChangedEvent failed (agent=${agentId}): ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      return true;
+    }
+    void this.runtime.publish(envelope).catch((err: unknown) => {
+      process.stderr.write(
+        `agent-presence-producer: agent.capabilities-changed publish failed (agent=${agentId}): ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    });
+    return true;
   }
 
   private publishOnline(agent: PresenceAgent): void {

@@ -3028,6 +3028,14 @@ export async function startCortex(
   await router.start();
 
   // Config watcher (hot-reload for safe fields).
+  //
+  // G-1114.C.1 — the agent-presence producer is constructed LATER (the
+  // MC-registry block below), but the config-reload onChange handler needs a
+  // reference to emit `agent.capabilities-changed` on a mid-life capability
+  // drift. Forward-declare the holder here and read it lazily inside the
+  // closure (it's still `null` until the registry block assigns it — a reload
+  // that races boot before the producer exists simply skips the emit).
+  let presenceProducerForReload: AgentPresenceProducer | null = null;
   let configWatcher: ConfigWatcher | null = null;
   if (
     !options.disableConfigWatcher
@@ -3035,10 +3043,6 @@ export async function startCortex(
     && existsSync(expandedConfigPath)
   ) {
     configWatcher = new ConfigWatcher(expandedConfigPath, config, (event) => {
-      // cortex#237: capability-registry re-publish lands here once
-      // AgentsDirectoryWatcher is wired — see boot block ~line 540 for
-      // rationale (AgentConfig hot-reload's SAFE_FIELDS doesn't include
-      // capabilities; mergedAgents isn't re-built).
       dispatchHandler.updateConfig(event.config, expandedConfigPath);
       for (const adapter of adapters) adapter.updateConfig?.(event.config);
       if (cloudPublisher) {
@@ -3049,6 +3053,48 @@ export async function startCortex(
       }
       if (event.requiresRestart.length > 0) {
         console.warn(`cortex: ${event.requiresRestart.length} field(s) require restart:`, event.requiresRestart.join(", "));
+      }
+
+      // G-1114.C.1 — capability-delta re-emit (THE FINDING, honest scope).
+      //
+      // Per-agent capabilities live on `Agent.runtime.capabilities[]` (the
+      // agents.d/ fragments), NOT on `AgentConfig` (the `event.config` this
+      // reload carries) — and the ConfigWatcher does not rebuild `mergedAgents`.
+      // So today capabilities are effectively RESTART-ONLY: the only daemon-level
+      // watcher is this one, it fires on the bot.yaml/pointer config (not on a
+      // fragment edit), and a fresh capability set normally arrives via the next
+      // boot's `agent.online`. This block is the defensive EMIT side: when a
+      // reload DOES fire, we re-scan the agents.d/ fragments (the same load boot
+      // does) and ask the producer to diff each known agent's capability set
+      // against its tracked baseline — emitting `agent.capabilities-changed` only
+      // on a real delta. It is a no-op in the common case (no fragment changed,
+      // or no producer yet), and becomes a live hot-reload path the moment a
+      // capability fragment is edited under a watched config dir. Best-effort:
+      // a fragment re-load fault must never break the rest of the reload.
+      const producer = presenceProducerForReload;
+      if (producer !== null) {
+        try {
+          const freshFragments = loadAgentsDirectory(agentsDir);
+          const freshById = new Map(freshFragments.map((a) => [a.id, a]));
+          let emitted = 0;
+          for (const prior of mergedAgents) {
+            const fresh = freshById.get(prior.id);
+            if (fresh === undefined) continue; // removed/renamed — not a cap delta
+            const caps = fresh.runtime?.capabilities ?? [];
+            if (producer.publishCapabilitiesChanged(prior.id, caps)) emitted += 1;
+          }
+          if (emitted > 0) {
+            console.log(
+              `cortex: agent-presence — emitted ${emitted} agent.capabilities-changed on reload`,
+            );
+          }
+        } catch (err) {
+          // FragmentLoadError or any re-scan fault: log + carry on. The producer
+          // keeps its prior baseline; the next clean reload (or restart) reconciles.
+          process.stderr.write(
+            `cortex: capabilities-changed re-scan skipped on reload — ${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        }
       }
     });
     configWatcher.start();
@@ -3225,6 +3271,12 @@ export async function startCortex(
         agents: presenceAgents,
       });
       presenceProducer.start();
+      // G-1114.C.1 — publish the now-started producer to the config-reload
+      // onChange handler so a mid-life capability drift can emit
+      // `agent.capabilities-changed` without restart (see that handler's block
+      // for THE FINDING — restart-only in the common case, this is the
+      // defensive emit side).
+      presenceProducerForReload = presenceProducer;
       console.log(
         `cortex: agent-presence producer + registry started — ${presenceAgents.length} agent(s) announced ` +
           `(stack-local; heartbeat every ${DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS}ms)`,

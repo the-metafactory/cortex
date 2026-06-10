@@ -279,6 +279,171 @@ describe("producer → registry roundtrip", () => {
   });
 });
 
+describe("AgentPresenceProducer.publishCapabilitiesChanged", () => {
+  // G-1114.C.1 — the mid-life capability-mutation emit path. See the producer's
+  // class doc + the FINDING in the PR: capabilities are restart-only at the
+  // daemon today (ConfigWatcher carries no per-agent caps; AgentsDirectoryWatcher
+  // isn't wired into cortex.ts), so this method exists for the moment a capability
+  // hot-reload becomes possible — the diff logic is the load-bearing half.
+
+  test("emits agent.capabilities-changed with the FULL new set + correct subject", () => {
+    const runtime = recordingRuntime();
+    const producer = new AgentPresenceProducer({
+      runtime,
+      source: SOURCE,
+      agents: [AGENT_A, AGENT_B],
+      scheduler: manualScheduler(),
+      now: () => new Date("2026-06-10T10:00:00.000Z"),
+    });
+    producer.start();
+    const emitted = producer.publishCapabilitiesChanged("luna", [
+      "code-review.typescript",
+      "research",
+    ]);
+    expect(emitted).toBe(true);
+    const changes = runtime.published.filter(
+      (e) => e.type === "agent.capabilities-changed",
+    );
+    expect(changes.length).toBe(1);
+    const env = changes[0]!;
+    // FULL new set (not a diff) on the payload.
+    expect((env.payload as { capabilities: string[] }).capabilities).toEqual([
+      "code-review.typescript",
+      "research",
+    ]);
+    // Identity is the agent's, not the other agent's.
+    expect((env.payload as { identity: { agent_id: string } }).identity.agent_id).toBe(
+      "luna",
+    );
+    expect((env.payload as { sent_at: string }).sent_at).toBe(
+      "2026-06-10T10:00:00.000Z",
+    );
+    // Subject derives to the stack-local capabilities-changed subject.
+    expect(deriveNatsSubject(env, "meta-factory")).toBe(
+      "local.andreas.meta-factory.agent.capabilities-changed",
+    );
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("diff: no-op (no emit) when the capability set is unchanged", () => {
+    const runtime = recordingRuntime();
+    const producer = new AgentPresenceProducer({
+      runtime,
+      source: SOURCE,
+      agents: [AGENT_A],
+      scheduler: manualScheduler(),
+    });
+    producer.start();
+    // AGENT_A's caps are exactly ["code-review.typescript"] — same set.
+    const emitted = producer.publishCapabilitiesChanged("luna", [
+      "code-review.typescript",
+    ]);
+    expect(emitted).toBe(false);
+    expect(
+      runtime.published.filter((e) => e.type === "agent.capabilities-changed").length,
+    ).toBe(0);
+  });
+
+  test("diff is order-insensitive: same set in different order is a no-op", () => {
+    const runtime = recordingRuntime();
+    const producer = new AgentPresenceProducer({
+      runtime,
+      source: SOURCE,
+      agents: [
+        {
+          identity: { nkey_public_key: "UAAA", agent_id: "luna", assistant_name: "Luna" },
+          scope: { principal: "andreas", stack: "meta-factory" },
+          capabilities: ["a", "b", "c"],
+        },
+      ],
+      scheduler: manualScheduler(),
+    });
+    producer.start();
+    expect(producer.publishCapabilitiesChanged("luna", ["c", "a", "b"])).toBe(false);
+    expect(
+      runtime.published.filter((e) => e.type === "agent.capabilities-changed").length,
+    ).toBe(0);
+  });
+
+  test("emits on a real delta (added capability) and updates the tracked set", () => {
+    const runtime = recordingRuntime();
+    const producer = new AgentPresenceProducer({
+      runtime,
+      source: SOURCE,
+      agents: [AGENT_A],
+      scheduler: manualScheduler(),
+    });
+    producer.start();
+    // First change: add "research".
+    expect(
+      producer.publishCapabilitiesChanged("luna", [
+        "code-review.typescript",
+        "research",
+      ]),
+    ).toBe(true);
+    // A repeat of the SAME new set is now a no-op — the producer tracks the
+    // post-change set as the new baseline.
+    expect(
+      producer.publishCapabilitiesChanged("luna", [
+        "code-review.typescript",
+        "research",
+      ]),
+    ).toBe(false);
+    expect(
+      runtime.published.filter((e) => e.type === "agent.capabilities-changed").length,
+    ).toBe(1);
+  });
+
+  test("emits when capabilities are fully revoked (new set is empty)", () => {
+    const runtime = recordingRuntime();
+    const producer = new AgentPresenceProducer({
+      runtime,
+      source: SOURCE,
+      agents: [AGENT_A],
+      scheduler: manualScheduler(),
+    });
+    producer.start();
+    expect(producer.publishCapabilitiesChanged("luna", [])).toBe(true);
+    const [env] = runtime.published.filter(
+      (e) => e.type === "agent.capabilities-changed",
+    );
+    expect((env!.payload as { capabilities: string[] }).capabilities).toEqual([]);
+  });
+
+  test("returns false (no emit) for an unknown agent id", () => {
+    const runtime = recordingRuntime();
+    const producer = new AgentPresenceProducer({
+      runtime,
+      source: SOURCE,
+      agents: [AGENT_A],
+      scheduler: manualScheduler(),
+    });
+    producer.start();
+    expect(producer.publishCapabilitiesChanged("nobody", ["x"])).toBe(false);
+    expect(
+      runtime.published.filter((e) => e.type === "agent.capabilities-changed").length,
+    ).toBe(0);
+  });
+
+  test("roundtrip: capabilities-changed folds into the registry as the new set", () => {
+    const runtime = recordingRuntime();
+    const producer = new AgentPresenceProducer({
+      runtime,
+      source: SOURCE,
+      agents: [AGENT_A],
+      scheduler: manualScheduler(),
+    });
+    producer.start();
+    producer.publishCapabilitiesChanged("luna", ["research", "code-review.typescript"]);
+    const registry = new AgentPresenceRegistry();
+    for (const env of runtime.published) registry.apply(env);
+    const [rec] = registry.getAgents();
+    expect(rec?.agentId).toBe("luna");
+    expect(rec?.state).toBe("online");
+    expect(rec?.capabilities).toEqual(["research", "code-review.typescript"]);
+  });
+});
+
 describe("presenceAgentFromAgent", () => {
   const baseAgent = (over: Partial<Agent> = {}): Agent => ({
     id: "luna",
