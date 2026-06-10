@@ -24,6 +24,7 @@ function tile(
   const { agent_id } = over;
   return {
     key: `andreas/research/${agent_id}`,
+    origin: "local",
     assistant_name: null,
     nkey_public_key: `N${agent_id}`,
     principal: "andreas",
@@ -65,44 +66,44 @@ describe("filterAgents — state filter (G-1114.D.5)", () => {
   });
 
   it("'all' state passes online and offline alike", () => {
-    const out = filterAgents(all, { state: "all", capability: null });
+    const out = filterAgents(all, { state: "all", capability: null, scope: "include-federated" });
     expect(out).toHaveLength(3);
   });
 
   it("'online' keeps only online agents", () => {
-    const out = filterAgents(all, { state: "online", capability: null });
+    const out = filterAgents(all, { state: "online", capability: null, scope: "include-federated" });
     expect(out.map((a) => a.agent_id)).toEqual(["luna", "echo"]);
   });
 
   it("'offline' keeps only offline agents", () => {
-    const out = filterAgents(all, { state: "offline", capability: null });
+    const out = filterAgents(all, { state: "offline", capability: null, scope: "include-federated" });
     expect(out.map((a) => a.agent_id)).toEqual(["sage"]);
   });
 
   it("preserves snapshot order (deterministic layout input)", () => {
-    const out = filterAgents([echo, luna, sage], { state: "online", capability: null });
+    const out = filterAgents([echo, luna, sage], { state: "online", capability: null, scope: "include-federated" });
     expect(out.map((a) => a.agent_id)).toEqual(["echo", "luna"]);
   });
 });
 
 describe("filterAgents — capability filter (G-1114.D.5)", () => {
   it("null capability passes every agent", () => {
-    const out = filterAgents(all, { state: "all", capability: null });
+    const out = filterAgents(all, { state: "all", capability: null, scope: "include-federated" });
     expect(out).toHaveLength(3);
   });
 
   it("keeps only agents declaring the chosen capability", () => {
-    const out = filterAgents(all, { state: "all", capability: "review.code" });
+    const out = filterAgents(all, { state: "all", capability: "review.code", scope: "include-federated" });
     expect(out.map((a) => a.agent_id)).toEqual(["luna", "echo"]);
   });
 
   it("returns an empty result when no agent declares the capability", () => {
-    const out = filterAgents(all, { state: "all", capability: "deploy" });
+    const out = filterAgents(all, { state: "all", capability: "deploy", scope: "include-federated" });
     expect(out).toEqual([]);
   });
 
   it("a capability declared by exactly one agent narrows to that agent", () => {
-    const out = filterAgents(all, { state: "all", capability: "moderate" });
+    const out = filterAgents(all, { state: "all", capability: "moderate", scope: "include-federated" });
     expect(out.map((a) => a.agent_id)).toEqual(["sage"]);
   });
 });
@@ -110,30 +111,30 @@ describe("filterAgents — capability filter (G-1114.D.5)", () => {
 describe("filterAgents — combined state + capability (G-1114.D.5)", () => {
   it("applies both filters (AND)", () => {
     // online AND review.code → luna, echo (sage is offline; sage lacks review.code anyway)
-    const out = filterAgents(all, { state: "online", capability: "review.code" });
+    const out = filterAgents(all, { state: "online", capability: "review.code", scope: "include-federated" });
     expect(out.map((a) => a.agent_id)).toEqual(["luna", "echo"]);
   });
 
   it("can produce an empty result from the intersection", () => {
     // offline AND review.code → none (sage is offline but only has 'moderate')
-    const out = filterAgents(all, { state: "offline", capability: "review.code" });
+    const out = filterAgents(all, { state: "offline", capability: "review.code", scope: "include-federated" });
     expect(out).toEqual([]);
   });
 
   it("offline AND moderate → sage", () => {
-    const out = filterAgents(all, { state: "offline", capability: "moderate" });
+    const out = filterAgents(all, { state: "offline", capability: "moderate", scope: "include-federated" });
     expect(out.map((a) => a.agent_id)).toEqual(["sage"]);
   });
 });
 
 describe("filterAgents — edge cases (G-1114.D.5)", () => {
   it("an empty snapshot yields an empty result for any filter", () => {
-    expect(filterAgents([], { state: "online", capability: "review.code" })).toEqual([]);
+    expect(filterAgents([], { state: "online", capability: "review.code", scope: "include-federated" })).toEqual([]);
   });
 
   it("does not mutate the input array", () => {
     const input = [...all];
-    filterAgents(input, { state: "online", capability: null });
+    filterAgents(input, { state: "online", capability: null, scope: "include-federated" });
     expect(input).toEqual(all);
   });
 });
@@ -168,10 +169,10 @@ describe("isFilterActive (G-1114.D.5)", () => {
   });
 
   it("is true when a state filter is set", () => {
-    expect(isFilterActive({ state: "online", capability: null })).toBe(true);
+    expect(isFilterActive({ state: "online", capability: null, scope: "include-federated" })).toBe(true);
   });
 
   it("is true when a capability filter is set", () => {
-    expect(isFilterActive({ state: "all", capability: "review.code" })).toBe(true);
+    expect(isFilterActive({ state: "all", capability: "review.code", scope: "include-federated" })).toBe(true);
   });
 });

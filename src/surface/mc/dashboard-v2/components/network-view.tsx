@@ -42,6 +42,7 @@ import {
   filterAgents,
   type NetworkFilterState,
   type NetworkStateFilter,
+  type NetworkScopeFilter,
 } from "../lib/network-graph-filter";
 import { isSpotlightOpenChord } from "../lib/network-spotlight";
 import { NetworkDetailPanel } from "./network-detail-panel";
@@ -103,6 +104,13 @@ export function NetworkView({
   );
   const onCapabilityChange = useCallback(
     (cap: string | null) => setFilter((f) => ({ ...f, capability: cap })),
+    [],
+  );
+  // E.4 — scope toggle: include-federated (show local + foreign) vs local-only
+  // (hide every foreign peer agent). Threads onto the SAME filter the adapter +
+  // spotlight read, so flipping it cleanly removes/restores foreign agents.
+  const onScopeChange = useCallback(
+    (scope: NetworkScopeFilter) => setFilter((f) => ({ ...f, scope })),
     [],
   );
   const onClearFilters = useCallback(() => setFilter(DEFAULT_NETWORK_FILTER), []);
@@ -211,6 +219,7 @@ export function NetworkView({
             capabilityOptions={capabilityOptions}
             onStateChange={onStateChange}
             onCapabilityChange={onCapabilityChange}
+            onScopeChange={onScopeChange}
             onClear={onClearFilters}
             onOpenSpotlight={openSpotlight}
           />

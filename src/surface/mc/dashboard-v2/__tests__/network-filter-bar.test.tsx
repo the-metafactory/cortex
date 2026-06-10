@@ -21,6 +21,7 @@ function render(over: Partial<NetworkFilterBarProps> = {}): string {
     capabilityOptions: ["moderate", "review.code"],
     onStateChange: () => {},
     onCapabilityChange: () => {},
+    onScopeChange: () => {},
     onClear: () => {},
     onOpenSpotlight: () => {},
     ...over,
@@ -37,7 +38,7 @@ describe("NetworkFilterBar — state toggle (G-1114.D.5)", () => {
   });
 
   it("marks the active state with aria-pressed", () => {
-    const html = render({ filter: { state: "online", capability: null } });
+    const html = render({ filter: { state: "online", capability: null, scope: "include-federated" } });
     // The online button is pressed; all is not.
     expect(html).toContain('aria-pressed="true" data-state-filter="online"');
     expect(html).not.toContain('aria-pressed="true" data-state-filter="all"');
@@ -58,9 +59,46 @@ describe("NetworkFilterBar — capability dropdown (G-1114.D.5)", () => {
   });
 
   it("marks the selected capability", () => {
-    const html = render({ filter: { state: "all", capability: "review.code" } });
+    const html = render({ filter: { state: "all", capability: "review.code", scope: "include-federated" } });
     // react-dom serialises a controlled <select value> via the matching option's selected attr.
     expect(html).toContain('value="review.code" selected');
+  });
+});
+
+describe("NetworkFilterBar — scope toggle (G-1114.E.4)", () => {
+  it("renders both scope options", () => {
+    const html = render();
+    expect(html).toContain('data-scope-filter="include-federated"');
+    expect(html).toContain('data-scope-filter="local-only"');
+  });
+
+  it("marks 'include-federated' pressed by default", () => {
+    const html = render();
+    expect(html).toContain(
+      'aria-pressed="true" data-scope-filter="include-federated"',
+    );
+    expect(html).not.toContain(
+      'aria-pressed="true" data-scope-filter="local-only"',
+    );
+  });
+
+  it("marks 'local-only' pressed when scope is local-only", () => {
+    const html = render({
+      filter: { state: "all", capability: null, scope: "local-only" },
+    });
+    expect(html).toContain(
+      'aria-pressed="true" data-scope-filter="local-only"',
+    );
+    expect(html).not.toContain(
+      'aria-pressed="true" data-scope-filter="include-federated"',
+    );
+  });
+
+  it("shows Clear when scope narrows to local-only", () => {
+    const html = render({
+      filter: { state: "all", capability: null, scope: "local-only" },
+    });
+    expect(html).toContain("network-filter-clear");
   });
 });
 
@@ -71,13 +109,13 @@ describe("NetworkFilterBar — clear affordance (G-1114.D.5)", () => {
   });
 
   it("shows Clear when a state filter is active", () => {
-    const html = render({ filter: { state: "online", capability: null } });
+    const html = render({ filter: { state: "online", capability: null, scope: "include-federated" } });
     expect(html).toContain("network-filter-clear");
     expect(html).toContain("Clear filters");
   });
 
   it("shows Clear when a capability filter is active", () => {
-    const html = render({ filter: { state: "all", capability: "moderate" } });
+    const html = render({ filter: { state: "all", capability: "moderate", scope: "include-federated" } });
     expect(html).toContain("network-filter-clear");
   });
 });

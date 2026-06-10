@@ -427,13 +427,16 @@ html, body {
   font-size: 11px; color: var(--fg-faint);
   text-transform: uppercase; letter-spacing: 0.04em;
 }
-.network-filter-state-btn {
+.network-filter-state-btn,
+.network-filter-scope-btn {
   appearance: none; cursor: pointer; font: inherit; font-size: 12px;
   padding: 3px 9px; border-radius: 6px;
   border: 1px solid var(--line); background: var(--bg); color: var(--fg-faint);
 }
-.network-filter-state-btn:hover { color: var(--fg); }
-.network-filter-state-btn.on {
+.network-filter-state-btn:hover,
+.network-filter-scope-btn:hover { color: var(--fg); }
+.network-filter-state-btn.on,
+.network-filter-scope-btn.on {
   background: var(--accent-soft); color: var(--fg);
   border-color: color-mix(in oklch, var(--accent) 50%, transparent);
 }
@@ -482,6 +485,25 @@ html, body {
 .network-node-ttl-lapse {
   border-color: color-mix(in oklch, var(--warn) 50%, var(--line));
 }
+
+/* E.4 — FOREIGN (federated peer) agents + hubs render distinctly: a dashed
+   border in a cooler accent marks "not your stack", and a provenance badge
+   shows the verified {principal}/{stack} the peer agent actually lives on. */
+.network-node-foreign {
+  border-style: dashed;
+  border-color: color-mix(in oklch, var(--accent) 45%, var(--line));
+  background: color-mix(in oklch, var(--panel) 88%, var(--accent-soft));
+}
+.network-node-hub-foreign {
+  border-style: dashed;
+  border-color: color-mix(in oklch, var(--accent) 55%, transparent);
+}
+.network-node-provenance {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 10px; font-family: var(--mono);
+  color: color-mix(in oklch, var(--accent) 70%, var(--fg-faint));
+}
+.network-node-federated-badge { font-size: 11px; line-height: 1; }
 .network-node-identity { display: flex; flex-direction: column; gap: 1px; }
 .network-node-name { font-size: 12.5px; font-weight: 600; }
 .network-node-id { font-size: 10.5px; font-family: var(--mono); }
@@ -536,6 +558,19 @@ html, body {
 .network-detail-panel.network-detail-ttl-lapse {
   border-color: color-mix(in oklch, var(--warn) 50%, var(--line));
 }
+/* E.4 — FOREIGN peer agent detail: dashed accent border + provenance line +
+   an italic "activity not local" note (the #909 no-local-join surface). */
+.network-detail-panel.network-detail-foreign {
+  border-style: dashed;
+  border-color: color-mix(in oklch, var(--accent) 50%, var(--line));
+}
+.network-detail-provenance {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-family: var(--mono);
+  color: color-mix(in oklch, var(--accent) 70%, var(--fg-faint));
+}
+.network-detail-federated-badge { font-size: 12px; line-height: 1; }
+.network-detail-foreign-activity { font-size: 11.5px; font-style: italic; }
 .network-detail-header {
   display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
 }

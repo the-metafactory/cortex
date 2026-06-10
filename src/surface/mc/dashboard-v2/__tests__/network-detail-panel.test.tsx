@@ -22,6 +22,7 @@ function tile(
   const { agent_id } = over;
   return {
     key: `andreas/research/${agent_id}`,
+    origin: "local",
     assistant_name: null,
     nkey_public_key: `N${agent_id}`,
     principal: "andreas",
