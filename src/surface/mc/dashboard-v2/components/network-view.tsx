@@ -36,7 +36,17 @@ import {
   resolveSelectedAgent,
   selectAgentDispatchActivity,
 } from "../lib/network-detail-display";
+import {
+  DEFAULT_NETWORK_FILTER,
+  collectCapabilityOptions,
+  filterAgents,
+  type NetworkFilterState,
+  type NetworkStateFilter,
+} from "../lib/network-graph-filter";
+import { isSpotlightOpenChord } from "../lib/network-spotlight";
 import { NetworkDetailPanel } from "./network-detail-panel";
+import { NetworkFilterBar } from "./network-filter-bar";
+import { NetworkSpotlight } from "./network-spotlight";
 
 // Lazy: the xyflow + elk engine chunk loads only when this resolves (first
 // entry into the Network tab). Keep this the ONLY dynamic import in the view —
@@ -67,10 +77,35 @@ export function NetworkView({
 }: NetworkViewProps) {
   const mode = pickAgentsPanelMode(state);
 
-  // Pure: snapshot → React-Flow graph (re-derived only when the agents change).
-  // Tiny + engine-free, so it stays in the main bundle; the lazy canvas takes
-  // the built graph and runs ELK over it.
-  const graph = useMemo(() => buildNetworkGraph(state.agents), [state.agents]);
+  // D.5 — filters. The filter state lives here so it feeds BOTH the graph adapter
+  // and the spotlight off ONE filtered snapshot (filter + search stay consistent).
+  // Capability options are derived from the FULL (unfiltered) snapshot so the
+  // dropdown never drops the option that's currently selected as agents come/go.
+  const [filter, setFilter] = useState<NetworkFilterState>(DEFAULT_NETWORK_FILTER);
+  const capabilityOptions = useMemo(
+    () => collectCapabilityOptions(state.agents),
+    [state.agents],
+  );
+  const filteredAgents = useMemo(
+    () => filterAgents(state.agents, filter),
+    [state.agents, filter],
+  );
+
+  // Pure: filtered snapshot → React-Flow graph (re-derived when agents OR the
+  // filter change). Tiny + engine-free, so it stays in the main bundle; the lazy
+  // canvas takes the built graph and runs ELK over it.
+  const graph = useMemo(() => buildNetworkGraph(filteredAgents), [filteredAgents]);
+
+  // Filter callbacks.
+  const onStateChange = useCallback(
+    (s: NetworkStateFilter) => setFilter((f) => ({ ...f, state: s })),
+    [],
+  );
+  const onCapabilityChange = useCallback(
+    (cap: string | null) => setFilter((f) => ({ ...f, capability: cap })),
+    [],
+  );
+  const onClearFilters = useCallback(() => setFilter(DEFAULT_NETWORK_FILTER), []);
 
   // D.4 — node-click selection. The canvas lifts the clicked agent's key here;
   // the panel re-reads the LIVE tile off the snapshot by key, so it reflects
@@ -100,15 +135,51 @@ export function NetworkView({
 
   const closePanel = useCallback(() => setSelectedKey(null), []);
 
-  // Esc dismisses the detail panel (keyboard a11y; button + pane-click also close).
+  // D.5 — Cmd+K spotlight. Open state is local to the Network view (the spotlight
+  // only makes sense here), and selecting a hit reuses D.4's selection path.
+  const [spotlightOpen, setSpotlightOpen] = useState(false);
+  const openSpotlight = useCallback(() => setSpotlightOpen(true), []);
+  const closeSpotlight = useCallback(() => setSpotlightOpen(false), []);
+  const onSpotlightSelect = useCallback((key: string) => {
+    // Reuse D.4's selection: set the key → the live tile resolves → panel opens.
+    setSelectedKey(key);
+  }, []);
+
+  // Cmd+K / Ctrl+K opens the spotlight. Registered on the CAPTURE phase so it
+  // runs BEFORE the app-level global ⌘K palette (a bubble-phase listener) and
+  // `stopPropagation()`s it — on the Network tab, ⌘K opens the agent spotlight,
+  // not the generic command palette. Only armed while the view is mounted (the
+  // tab is active), so it doesn't shadow ⌘K elsewhere.
   useEffect(() => {
-    if (selectedKey === null) return;
+    const onKeyCapture = (e: KeyboardEvent) => {
+      if (isSpotlightOpenChord(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        setSpotlightOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", onKeyCapture, true);
+    return () => window.removeEventListener("keydown", onKeyCapture, true);
+  }, []);
+
+  // Esc precedence (D.5 over D.4): if the spotlight is open, Esc closes IT first
+  // and the detail panel stays; only when the spotlight is closed does Esc
+  // dismiss the panel. The spotlight overlay (CommandPalette) also handles its
+  // own Esc internally, but this guard makes the precedence explicit + covers the
+  // case where focus isn't in the overlay input.
+  useEffect(() => {
+    if (selectedKey === null && !spotlightOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closePanel();
+      if (e.key !== "Escape") return;
+      if (spotlightOpen) {
+        setSpotlightOpen(false);
+        return;
+      }
+      closePanel();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedKey, closePanel]);
+  }, [selectedKey, spotlightOpen, closePanel]);
 
   return (
     <section className="scaffold-section network-view" aria-label="Network (agent topology)">
@@ -129,24 +200,48 @@ export function NetworkView({
         <div className="network-view-empty">No agents observed yet.</div>
       )}
       {mode === "list" && (
-        <div className="network-canvas-wrap">
-          <Suspense
-            fallback={
-              // The graph-engine chunk is downloading on first tab entry.
-              <div className="network-view-empty">Loading network…</div>
-            }
-          >
-            <NetworkCanvas graph={graph} onSelectAgent={setSelectedKey} />
-          </Suspense>
-          {selectedAgent && (
-            <NetworkDetailPanel
-              agent={selectedAgent}
-              dispatch={dispatch}
-              onClose={closePanel}
-              onViewInWorkingGrid={onViewInWorkingGrid}
-            />
-          )}
-        </div>
+        <>
+          <NetworkFilterBar
+            filter={filter}
+            capabilityOptions={capabilityOptions}
+            onStateChange={onStateChange}
+            onCapabilityChange={onCapabilityChange}
+            onClear={onClearFilters}
+            onOpenSpotlight={openSpotlight}
+          />
+          <div className="network-canvas-wrap">
+            {filteredAgents.length === 0 ? (
+              // The snapshot has agents but the active filter excludes them all.
+              // Keep the filter bar above so the principal can clear/relax it.
+              <div className="network-view-empty">
+                No agents match the current filters.
+              </div>
+            ) : (
+              <Suspense
+                fallback={
+                  // The graph-engine chunk is downloading on first tab entry.
+                  <div className="network-view-empty">Loading network…</div>
+                }
+              >
+                <NetworkCanvas graph={graph} onSelectAgent={setSelectedKey} />
+              </Suspense>
+            )}
+            {selectedAgent && (
+              <NetworkDetailPanel
+                agent={selectedAgent}
+                dispatch={dispatch}
+                onClose={closePanel}
+                onViewInWorkingGrid={onViewInWorkingGrid}
+              />
+            )}
+          </div>
+          <NetworkSpotlight
+            open={spotlightOpen}
+            onClose={closeSpotlight}
+            agents={filteredAgents}
+            onSelect={onSpotlightSelect}
+          />
+        </>
       )}
     </section>
   );

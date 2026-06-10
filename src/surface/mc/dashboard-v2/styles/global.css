@@ -416,6 +416,48 @@ html, body {
 }
 .network-view .react-flow { background: var(--bg); }
 
+/* G-1114.D.5 — filter bar (state toggle + capability dropdown + spotlight). */
+.network-filter-bar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  margin: 0 0 10px 0; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+}
+.network-filter-group { display: flex; align-items: center; gap: 6px; }
+.network-filter-label {
+  font-size: 11px; color: var(--fg-faint);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.network-filter-state-btn {
+  appearance: none; cursor: pointer; font: inherit; font-size: 12px;
+  padding: 3px 9px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg-faint);
+}
+.network-filter-state-btn:hover { color: var(--fg); }
+.network-filter-state-btn.on {
+  background: var(--accent-soft); color: var(--fg);
+  border-color: color-mix(in oklch, var(--accent) 50%, transparent);
+}
+.network-filter-select {
+  appearance: auto; font: inherit; font-size: 12px;
+  padding: 3px 6px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+}
+.network-filter-clear {
+  appearance: none; cursor: pointer; font: inherit; font-size: 12px;
+  padding: 3px 9px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg-faint);
+}
+.network-filter-clear:hover { color: var(--fg); }
+.network-filter-spotlight {
+  margin-left: auto;
+  appearance: none; cursor: pointer; font: inherit; font-size: 12px;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+}
+.network-filter-spotlight:hover { background: var(--accent-soft); }
+.network-filter-kbd { display: inline-flex; gap: 2px; margin-left: 2px; }
+
 /* Custom nodes — reuse the agents-panel chrome language so the graph + panel
    read identically. */
 .network-node {

@@ -82,4 +82,20 @@ describe("NetworkView (G-1114.D.1)", () => {
     expect(html).toContain("Network");
     expect(html).toContain("topology");
   });
+
+  it("renders the D.5 filter bar in the list state", () => {
+    const html = render({
+      loaded: true,
+      error: null,
+      agents: [
+        tile({ agent_id: "luna", assistant_name: "Luna", capabilities: ["review.code"] }),
+      ],
+    });
+    // The filter bar + capability option derived from the snapshot.
+    expect(html).toContain("network-filter-bar");
+    expect(html).toContain('data-state-filter="online"');
+    expect(html).toContain("review.code");
+    // The spotlight trigger.
+    expect(html).toContain("network-filter-spotlight");
+  });
 });
