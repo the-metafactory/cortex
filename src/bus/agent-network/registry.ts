@@ -172,17 +172,30 @@ export interface AgentPresenceRecord {
    *     `{principal}/{stack}` so the view (E.3) + detail-join (#909) can group
    *     foreign agents under their origin stack and render them distinctly.
    *
-   * The origin is keyed off the PAYLOAD scope (`AgentPresenceScope`), which for a
-   * foreign record is the SENDER's identity — NOT the receiving stack. Local and
-   * foreign records for the same `agent_id` would have the same map key only if a
-   * peer impersonated our `{principal}/{stack}`; the trust gate (signed_by[] +
-   * accept-list) makes that impossible, so the key space stays partitioned by
-   * real origin.
+   * The origin (and the record's key + principal + stack) is derived from the
+   * CHAIN-VERIFIED `source` of the envelope — NOT the attacker-controlled
+   * `payload.scope` (PR #914 review BLOCKER fix). A foreign record's
+   * `{principal}/{stack}` is the peer's VERIFIED identity, so the key space is
+   * partitioned by real origin: a foreign record can never collide with /
+   * overwrite a local one, and an accept-listed peer can only announce agents
+   * under its OWN verified `{principal}/{stack}` (a `payload.scope` that
+   * disagrees with the source is dropped as a spoof — see {@link
+   * AgentPresenceRegistry.applyForeign}).
    */
   origin: AgentRecordOrigin;
   /** Logical agent id (`luna`, `echo`, …). */
   agentId: string;
-  /** The agent's NKey public key (stable cross-restart identity). */
+  /**
+   * The agent's NKey public key (stable cross-restart identity).
+   *
+   * For a FOREIGN record this is the PEER's declared agent key, namespaced under
+   * the chain-verified `{principal}/{stack}` (which owns the map key). It is the
+   * peer's own agent's key — the peer is authoritative for it within its own
+   * namespace — and it can NOT be used to impersonate a LOCAL agent, because the
+   * record's KEY is source-bound (`{verified-principal}/{verified-stack}/...`),
+   * so a foreign nkey always lands on a foreign-keyed record, never a local one
+   * (PR #914 review BLOCKER fix).
+   */
   nkeyPublicKey: string;
   /** Soma-layer assistant name the agent hosts, or `null` when none. */
   assistantName: string | null;
@@ -321,35 +334,63 @@ export class AgentPresenceRegistry {
    * "this foreign presence is admissible." See
    * {@link startFederatedAgentPresenceSubscriber}.
    *
-   * `origin` carries the SENDER's `{principal}/{stack}` (from the envelope's
-   * payload scope) so the record is distinguishable from a local one. Same
-   * best-effort contract as {@link apply}: a malformed payload is logged +
+   * **SOURCE-BOUND IDENTITY (PR #914 review BLOCKER fix).** `verifiedScope`
+   * carries the `{principal}/{stack}` derived from the envelope's CHAIN-VERIFIED
+   * `source` — the only trustworthy identity. The record's principal, stack, AND
+   * THE MAP KEY are built from THIS, **never** from the attacker-controlled
+   * `payload.scope`. So an accept-listed peer can announce only agents under ITS
+   * OWN verified `{principal}/{stack}` — it can NOT paint a record that claims a
+   * different (e.g. local-looking) principal/stack, and a foreign record can
+   * NEVER collide with / overwrite a local one (the principal/stack segments of
+   * the key differ by construction).
+   *
+   * **Spoof drop.** When `payload.scope` DISAGREES with the verified source
+   * (`payload.scope.principal/stack ≠ verifiedScope`), the envelope is DROPPED
+   * with a logged spoof signal rather than folded — a mismatch is an
+   * impersonation attempt worth surfacing, not silently coercing. The
+   * non-identity payload (capabilities, liveness state) is what the record
+   * carries; identity comes from the source.
+   *
+   * Same best-effort contract as {@link apply}: a malformed payload is logged +
    * dropped, never thrown.
    */
   applyForeign(
     envelope: Envelope,
-    origin: { principal: string; stack: string },
+    verifiedScope: { principal: string; stack: string },
   ): AgentPresenceRecord | null {
-    return this.applyWithOrigin(envelope, {
-      kind: "foreign",
-      principal: origin.principal,
-      stack: origin.stack,
-    });
+    return this.applyWithOrigin(
+      envelope,
+      {
+        kind: "foreign",
+        principal: verifiedScope.principal,
+        stack: verifiedScope.stack,
+      },
+      verifiedScope,
+    );
   }
 
+  /**
+   * @param origin record provenance (local | foreign).
+   * @param verifiedScope — for the FOREIGN path, the chain-verified
+   *   `{principal}/{stack}` that is AUTHORITATIVE for the record's key +
+   *   principal + stack (and against which `payload.scope` is spoof-checked).
+   *   `undefined` for the LOCAL path (the stack folds its own envelopes; payload
+   *   scope IS the identity, no cross-principal trust boundary).
+   */
   private applyWithOrigin(
     envelope: Envelope,
     origin: AgentRecordOrigin,
+    verifiedScope?: { principal: string; stack: string },
   ): AgentPresenceRecord | null {
     switch (envelope.type) {
       case AGENT_ONLINE_TYPE:
-        return this.applyOnline(envelope, origin);
+        return this.applyOnline(envelope, origin, verifiedScope);
       case AGENT_HEARTBEAT_TYPE:
-        return this.applyHeartbeat(envelope, origin);
+        return this.applyHeartbeat(envelope, origin, verifiedScope);
       case AGENT_OFFLINE_TYPE:
-        return this.applyOffline(envelope, origin);
+        return this.applyOffline(envelope, origin, verifiedScope);
       case AGENT_CAPABILITIES_CHANGED_TYPE:
-        return this.applyCapabilitiesChanged(envelope, origin);
+        return this.applyCapabilitiesChanged(envelope, origin, verifiedScope);
       default:
         // Not a presence envelope — the subject filter should have excluded
         // it, but be defensive (the fan-out delivers every matching envelope).
@@ -357,14 +398,58 @@ export class AgentPresenceRegistry {
     }
   }
 
+  /**
+   * BLOCKER fix — resolve the AUTHORITATIVE `{principal}/{stack}` for a record.
+   *
+   * For the FOREIGN path (`verifiedScope` supplied): the chain-verified source
+   * wins. If `payload.scope` disagrees with it, this is a spoof attempt — return
+   * `null` so the caller drops the envelope (logged). Otherwise the verified
+   * scope is authoritative for the key + principal + stack.
+   *
+   * For the LOCAL path (`verifiedScope` undefined): the stack folds its own
+   * envelopes; `payload.scope` is the identity (no cross-principal boundary).
+   *
+   * Returns `null` ONLY on a foreign spoof (scope ≠ source); the caller treats
+   * that exactly like a dropped malformed payload.
+   */
+  private resolveScope(
+    envelope: Envelope,
+    payloadScope: { principal: string; stack: string },
+    verifiedScope: { principal: string; stack: string } | undefined,
+  ): { principal: string; stack: string } | null {
+    if (verifiedScope === undefined) {
+      // Local path — payload scope is the identity.
+      return payloadScope;
+    }
+    // Foreign path — the verified source is authoritative. A payload.scope that
+    // disagrees is an impersonation attempt: DROP + log (never fold a record
+    // whose claimed identity differs from the signed source).
+    if (
+      payloadScope.principal !== verifiedScope.principal ||
+      payloadScope.stack !== verifiedScope.stack
+    ) {
+      process.stderr.write(
+        `agent-presence-registry: DROPPING foreign ${envelope.type} (id=${envelope.id}) — ` +
+          `payload.scope ${payloadScope.principal}/${payloadScope.stack} does not match ` +
+          `chain-verified source ${verifiedScope.principal}/${verifiedScope.stack} ` +
+          `(spoof attempt — identity must come from the verified source)\n`,
+      );
+      return null;
+    }
+    return verifiedScope;
+  }
+
   private applyOnline(
     envelope: Envelope,
     origin: AgentRecordOrigin,
+    verifiedScope?: { principal: string; stack: string },
   ): AgentPresenceRecord | null {
     const parsed = AgentOnlinePayloadSchema.safeParse(envelope.payload);
     if (!parsed.success) return this.dropMalformed(envelope, parsed.error);
     const p = parsed.data;
-    const key = recordKey(p.scope.principal, p.scope.stack, p.identity.agent_id);
+    const scope = this.resolveScope(envelope, p.scope, verifiedScope);
+    if (scope === null) return null; // foreign spoof (scope ≠ verified source)
+    const key = recordKey(scope.principal, scope.stack, p.identity.agent_id);
     const ts = this.now();
     const existing = this.records.get(key);
     const record: AgentPresenceRecord = {
@@ -373,8 +458,8 @@ export class AgentPresenceRegistry {
       agentId: p.identity.agent_id,
       nkeyPublicKey: p.identity.nkey_public_key,
       assistantName: p.identity.assistant_name,
-      principal: p.scope.principal,
-      stack: p.scope.stack,
+      principal: scope.principal,
+      stack: scope.stack,
       capabilities: p.capabilities,
       state: "online",
       startedAt: p.started_at,
@@ -393,11 +478,14 @@ export class AgentPresenceRegistry {
   private applyHeartbeat(
     envelope: Envelope,
     origin: AgentRecordOrigin,
+    verifiedScope?: { principal: string; stack: string },
   ): AgentPresenceRecord | null {
     const parsed = AgentHeartbeatPayloadSchema.safeParse(envelope.payload);
     if (!parsed.success) return this.dropMalformed(envelope, parsed.error);
     const p = parsed.data;
-    const key = recordKey(p.scope.principal, p.scope.stack, p.identity.agent_id);
+    const scope = this.resolveScope(envelope, p.scope, verifiedScope);
+    if (scope === null) return null; // foreign spoof (scope ≠ verified source)
+    const key = recordKey(scope.principal, scope.stack, p.identity.agent_id);
     const ts = this.now();
     const existing = this.records.get(key);
     // An unknown agent's heartbeat is itself a liveness signal — upsert it as
@@ -410,8 +498,8 @@ export class AgentPresenceRegistry {
       agentId: p.identity.agent_id,
       nkeyPublicKey: p.identity.nkey_public_key,
       assistantName: p.identity.assistant_name,
-      principal: p.scope.principal,
-      stack: p.scope.stack,
+      principal: scope.principal,
+      stack: scope.stack,
       capabilities: existing?.capabilities ?? [],
       state: "online",
       ...(existing?.startedAt !== undefined && { startedAt: existing.startedAt }),
@@ -426,11 +514,14 @@ export class AgentPresenceRegistry {
   private applyOffline(
     envelope: Envelope,
     origin: AgentRecordOrigin,
+    verifiedScope?: { principal: string; stack: string },
   ): AgentPresenceRecord | null {
     const parsed = AgentOfflinePayloadSchema.safeParse(envelope.payload);
     if (!parsed.success) return this.dropMalformed(envelope, parsed.error);
     const p = parsed.data;
-    const key = recordKey(p.scope.principal, p.scope.stack, p.identity.agent_id);
+    const scope = this.resolveScope(envelope, p.scope, verifiedScope);
+    if (scope === null) return null; // foreign spoof (scope ≠ verified source)
+    const key = recordKey(scope.principal, scope.stack, p.identity.agent_id);
     const ts = this.now();
     const existing = this.records.get(key);
     const record: AgentPresenceRecord = {
@@ -439,8 +530,8 @@ export class AgentPresenceRegistry {
       agentId: p.identity.agent_id,
       nkeyPublicKey: p.identity.nkey_public_key,
       assistantName: p.identity.assistant_name,
-      principal: p.scope.principal,
-      stack: p.scope.stack,
+      principal: scope.principal,
+      stack: scope.stack,
       capabilities: existing?.capabilities ?? [],
       state: "offline",
       offlineReason: p.reason,
@@ -458,11 +549,14 @@ export class AgentPresenceRegistry {
   private applyCapabilitiesChanged(
     envelope: Envelope,
     origin: AgentRecordOrigin,
+    verifiedScope?: { principal: string; stack: string },
   ): AgentPresenceRecord | null {
     const parsed = AgentCapabilitiesChangedPayloadSchema.safeParse(envelope.payload);
     if (!parsed.success) return this.dropMalformed(envelope, parsed.error);
     const p = parsed.data;
-    const key = recordKey(p.scope.principal, p.scope.stack, p.identity.agent_id);
+    const scope = this.resolveScope(envelope, p.scope, verifiedScope);
+    if (scope === null) return null; // foreign spoof (scope ≠ verified source)
+    const key = recordKey(scope.principal, scope.stack, p.identity.agent_id);
     const ts = this.now();
     const existing = this.records.get(key);
     // B stores the LATEST capability set only. The diff/reconcile (against the
@@ -473,8 +567,8 @@ export class AgentPresenceRegistry {
       agentId: p.identity.agent_id,
       nkeyPublicKey: p.identity.nkey_public_key,
       assistantName: p.identity.assistant_name,
-      principal: p.scope.principal,
-      stack: p.scope.stack,
+      principal: scope.principal,
+      stack: scope.stack,
       capabilities: p.capabilities,
       // capabilities-changed does not assert liveness state; preserve the
       // prior state (default online — an agent emitting it is alive).

@@ -76,6 +76,31 @@ function foreignOnline(opts: { signedBy?: SignedBy[] } = {}): Envelope {
   return env;
 }
 
+/**
+ * BLOCKER repro — a SPOOF envelope: the wire `source` is the verified peer
+ * `joel.research.local`, but the PAYLOAD scope + identity claim a DIFFERENT,
+ * LOCAL-looking agent (`andreas/meta-factory/<agentId>`). Pre-fix this would
+ * paint a fake local-looking record AND overwrite the real local one via the
+ * shared map key. Post-fix the registry must use the SOURCE identity (and the
+ * scope≠source mismatch is a spoof ⇒ dropped).
+ */
+function spoofOnline(claimedAgentId: string): Envelope {
+  return createAgentOnlineEvent({
+    // VERIFIED source — the accept-listed peer.
+    source: PEER_SOURCE,
+    // Attacker-controlled payload claims a LOCAL agent identity.
+    identity: {
+      nkey_public_key: "USPOOF-LOCAL-KEY",
+      agent_id: claimedAgentId,
+      assistant_name: "Luna",
+    },
+    scope: { principal: "andreas", stack: "meta-factory" },
+    capabilities: ["evil.capability"],
+    startedAt: new Date("2026-06-11T09:00:00.000Z"),
+    classification: "federated",
+  });
+}
+
 /** A network that accept-lists joel as a peer + accepts agent presence. */
 function networkWithJoel(): PolicyFederatedNetwork {
   return {
@@ -347,7 +372,7 @@ describe("E.5 — TRUST: signed_by chain verification", () => {
     await handle.stop();
   });
 
-  test("foreign envelope with EMPTY chain ⇒ DROPPED (rejectEmpty default)", async () => {
+  test("ENFORCE posture (rejectEmpty:true): EMPTY-chain foreign ⇒ DROPPED", async () => {
     const runtime = makeFakeRuntime();
     const registry = new AgentPresenceRegistry();
     const handle = await startFederatedAgentPresenceSubscriber({
@@ -359,11 +384,67 @@ describe("E.5 — TRUST: signed_by chain verification", () => {
       receivingAgentId: "luna",
       principalId: "andreas",
       cryptoVerify: false,
-      // rejectEmpty defaults to true for foreign presence.
+      // signing=enforce → rejectEmpty:true → an unsigned foreign envelope is
+      // rejected (must carry a verifiable chain).
+      rejectEmpty: true,
     });
-    // No signed_by[] ⇒ empty chain ⇒ rejected.
+    // No signed_by[] ⇒ empty chain ⇒ rejected under enforce.
     runtime.fire(foreignOnline(), FED_SUBJECT, "primary");
     await flush();
+    expect(registry.getAgents().length).toBe(0);
+    await handle.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4b. POSTURE — signing=off folds accept-list-only-unsigned (matches #484)
+// ---------------------------------------------------------------------------
+
+describe("E.5 — POSTURE: signing=off (rejectEmpty:false, #484-consistent)", () => {
+  test("off-posture: accept-listed EMPTY-chain foreign ⇒ FOLDED (accept-list-only trust)", async () => {
+    const runtime = makeFakeRuntime();
+    const registry = new AgentPresenceRegistry();
+    const handle = await startFederatedAgentPresenceSubscriber({
+      runtime,
+      registry,
+      federated: federatedPolicy([networkWithJoel()]),
+      source: SYSTEM_SOURCE,
+      trustResolver: emptyTrustResolver(),
+      receivingAgentId: "luna",
+      principalId: "andreas",
+      cryptoVerify: false,
+      // signing=off → rejectEmpty:false → accept-list-ONLY trust (the SAME
+      // posture the #484 dispatch-listener uses for federated inbound). Safe
+      // because identity is source-bound (the peer can only announce its own
+      // agents).
+      rejectEmpty: false,
+    });
+    runtime.fire(foreignOnline(), FED_SUBJECT, "primary");
+    await flush();
+    // Accept-listed + unsigned ⇒ folded under off-posture, tagged foreign.
+    const agents = registry.getAgents();
+    expect(agents.length).toBe(1);
+    expect(agents[0]?.origin).toEqual({
+      kind: "foreign",
+      principal: "joel",
+      stack: "research",
+    });
+    await handle.stop();
+  });
+
+  test("off-posture STILL drops a peer NOT on the accept-list (gate is posture-independent)", async () => {
+    const runtime = makeFakeRuntime();
+    const registry = new AgentPresenceRegistry();
+    const handle = await startFederatedAgentPresenceSubscriber({
+      runtime,
+      registry,
+      federated: federatedPolicy([networkWithoutJoel()]),
+      source: SYSTEM_SOURCE,
+      rejectEmpty: false,
+    });
+    runtime.fire(foreignOnline(), FED_SUBJECT, "primary");
+    await flush();
+    // Even under off-posture, a non-accept-listed peer is gate-dropped.
     expect(registry.getAgents().length).toBe(0);
     await handle.stop();
   });
@@ -436,6 +517,97 @@ describe("E.2 — teardown removes foreign agents cleanly", () => {
       source: SYSTEM_SOURCE,
     });
     await handle.stop();
+    await handle.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. BLOCKER — provenance/identity spoofing (PR #914 review)
+// ---------------------------------------------------------------------------
+
+describe("E.5 — BLOCKER: source-bound identity (no provenance spoof)", () => {
+  test("scope≠source spoof ⇒ DROPPED (not folded under the claimed identity)", async () => {
+    const runtime = makeFakeRuntime();
+    const registry = new AgentPresenceRegistry();
+    const handle = await startFederatedAgentPresenceSubscriber({
+      runtime,
+      registry,
+      federated: federatedPolicy([networkWithJoel()]),
+      source: SYSTEM_SOURCE,
+      // off-posture (accept-list-only) so the spoof can't hide behind a chain
+      // failure — the scope≠source check is what must catch it.
+      rejectEmpty: false,
+    });
+    // joel (accept-listed, verified source) signs an envelope whose payload
+    // claims andreas/meta-factory/luna.
+    runtime.fire(spoofOnline("luna"), FED_SUBJECT, "primary");
+    await flush();
+    // The spoof must NOT produce a record claiming the local identity.
+    const fake = registry
+      .getAgents()
+      .find((a) => a.principal === "andreas" && a.stack === "meta-factory");
+    expect(fake).toBeUndefined();
+    // Nothing folded at all (scope≠source ⇒ dropped).
+    expect(registry.getAgents().length).toBe(0);
+    await handle.stop();
+  });
+
+  test("spoof CANNOT overwrite / delete a real local record of the claimed name", async () => {
+    const runtime = makeFakeRuntime();
+    const registry = new AgentPresenceRegistry();
+    // Seed the REAL local luna.
+    registry.apply(
+      createAgentOnlineEvent({
+        source: { principal: "andreas", stack: "meta-factory", instance: "local" },
+        identity: { nkey_public_key: "UREAL-LOCAL-LUNA", agent_id: "luna", assistant_name: "Luna" },
+        scope: { principal: "andreas", stack: "meta-factory" },
+        capabilities: ["code-review.typescript"],
+        startedAt: new Date("2026-06-11T08:00:00.000Z"),
+      }),
+    );
+    const realKey = "andreas/meta-factory/luna";
+    expect(registry.getAgent(realKey)?.nkeyPublicKey).toBe("UREAL-LOCAL-LUNA");
+
+    const handle = await startFederatedAgentPresenceSubscriber({
+      runtime,
+      registry,
+      federated: federatedPolicy([networkWithJoel()]),
+      source: SYSTEM_SOURCE,
+      rejectEmpty: false,
+    });
+    // joel signs a spoof claiming andreas/meta-factory/luna.
+    runtime.fire(spoofOnline("luna"), FED_SUBJECT, "primary");
+    await flush();
+
+    // The real local record is UNTOUCHED — not overwritten by the spoof's
+    // nkey/capabilities, and still origin "local".
+    const real = registry.getAgent(realKey);
+    expect(real).toBeDefined();
+    expect(real?.nkeyPublicKey).toBe("UREAL-LOCAL-LUNA");
+    expect(real?.origin).toBe("local");
+    expect(real?.capabilities).toEqual(["code-review.typescript"]);
+
+    // And teardown of the foreign subscriber must NOT delete the real local one.
+    await handle.stop();
+    expect(registry.getAgent(realKey)?.nkeyPublicKey).toBe("UREAL-LOCAL-LUNA");
+  });
+
+  test("a peer announcing ITS OWN agent (scope==source) is folded normally", async () => {
+    const runtime = makeFakeRuntime();
+    const registry = new AgentPresenceRegistry();
+    const handle = await startFederatedAgentPresenceSubscriber({
+      runtime,
+      registry,
+      federated: federatedPolicy([networkWithJoel()]),
+      source: SYSTEM_SOURCE,
+      rejectEmpty: false,
+    });
+    // scope == source (joel/research) — legitimate self-announce.
+    runtime.fire(foreignOnline(), FED_SUBJECT, "primary");
+    await flush();
+    const rec = registry.getAgent("joel/research/sage");
+    expect(rec).toBeDefined();
+    expect(rec?.origin).toEqual({ kind: "foreign", principal: "joel", stack: "research" });
     await handle.stop();
   });
 });

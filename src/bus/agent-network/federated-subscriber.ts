@@ -46,10 +46,36 @@
  *      to verify (forged bytes, unresolved peer pubkey, stale timestamp) is
  *      DROPPED — never folded.
  *
- * Only an envelope that passes BOTH is folded via {@link
- * AgentPresenceRegistry.applyForeign}, tagged with the peer's `{principal}/{stack}`
- * from the PAYLOAD scope. **This is the security invariant: only accept-listed +
- * chain-verified foreign presence is shown.**
+ * ## Posture (matches the #484 dispatch-listener EXACTLY)
+ *
+ * Empty-chain handling is POSTURE-GATED via `rejectEmpty`, identical to how the
+ * #484 dispatch-listener treats federated inbound (`rejectEmpty:
+ * signingKnobs.rejectEmpty`):
+ *   - `signing: off`        → accept-list-ONLY trust: an unsigned foreign
+ *     envelope that passes the accept-list gate folds. Safe ONLY because of the
+ *     source-bound identity below.
+ *   - `signing: permissive` → accept-list + best-effort crypto-verify of any
+ *     present chain.
+ *   - `signing: enforce`    → require a verifiable `signed_by[]` chain (empty ⇒
+ *     dropped) + registry peer-pubkey resolution.
+ * A `signing: off` stack federates DISPATCH the same way, so presence is
+ * consistent — not laxer.
+ *
+ * ## SOURCE-BOUND IDENTITY (PR #914 review BLOCKER fix)
+ *
+ * The folded record's IDENTITY — principal, stack, and the registry MAP KEY — is
+ * derived from the CHAIN-VERIFIED `source`, NEVER from the attacker-controlled
+ * `payload.scope`. {@link foldForeign} passes the source-derived
+ * `{principal}/{stack}` to {@link AgentPresenceRegistry.applyForeign} as the
+ * authoritative `verifiedScope`; the registry DROPS the envelope if
+ * `payload.scope` disagrees (a spoof). So an accept-listed peer can announce ONLY
+ * agents under its OWN verified `{principal}/{stack}` — it can NOT paint a
+ * local-looking record, and a foreign record can NEVER collide with / overwrite a
+ * local one. This is what makes the `signing: off` accept-list-only posture safe.
+ *
+ * Only an envelope that passes BOTH gates is folded. **Security invariant: only
+ * accept-listed (and, under enforce, chain-verified) foreign presence is shown,
+ * always under its source-bound identity.**
  *
  * ## Sovereignty (ADR-0005 / ADR-0007)
  *
@@ -142,12 +168,27 @@ export interface StartFederatedAgentPresenceSubscriberOptions {
   /** Whether the chain verifier runs ed25519 crypto verification. Default `true`. */
   cryptoVerify?: boolean;
   /**
-   * Whether an empty `signed_by[]` chain is REJECTED. For FOREIGN presence the
-   * default is `true`: an unsigned cross-principal envelope has no
-   * cryptographic attribution and must not be trusted into the view. (Contrast
-   * the dispatch-listener default `false`, which exists for LOCAL
-   * adapter-originated dispatches that legitimately arrive unsigned — foreign
-   * presence has no such legitimate-unsigned path.)
+   * Whether an empty `signed_by[]` chain is REJECTED — POSTURE-GATED, matching
+   * the #484 dispatch-listener for federated inbound EXACTLY (do not invent a
+   * different posture for presence).
+   *
+   * `cortex.ts` passes `signingKnobs.rejectEmpty` — the SAME value the
+   * dispatch-listener / bus-dispatch-listener receive:
+   *   - `signing: off`         → `false` → **accept-list-only trust**: an
+   *     unsigned foreign envelope that PASSES the federation accept-list gate is
+   *     folded. This is SAFE only because the record's identity is SOURCE-BOUND
+   *     (PR #914 BLOCKER fix): an accept-listed peer can announce ONLY agents
+   *     under its OWN `{principal}/{stack}` — never impersonate a local agent —
+   *     so accept-list membership IS the trust boundary under `off`. (A
+   *     `signing: off` stack federates DISPATCH the same way, so presence is
+   *     consistent, not laxer.)
+   *   - `signing: permissive`  → `false` → folds when accept-listed; ALSO crypto-
+   *     verifies any present chain (cheap observability; doesn't reject on its own).
+   *   - `signing: enforce`     → `true`  → an empty chain is REJECTED; foreign
+   *     presence MUST carry a verifiable `signed_by[]` chain.
+   *
+   * Default `false` here (the #484-consistent off-posture) — but production
+   * ALWAYS passes the posture-derived value explicitly.
    */
   rejectEmpty?: boolean;
   /** Receiving stack's signing DID (own-stack short-circuit in the verifier). */
@@ -191,9 +232,12 @@ export async function startFederatedAgentPresenceSubscriber(
     resolveFederatedPeer,
   } = opts;
   const cryptoVerify = opts.cryptoVerify ?? true;
-  // Foreign presence has no legitimate-unsigned path — reject empty chains by
-  // default (the inverse of the dispatch-listener's adapter-friendly default).
-  const rejectEmpty = opts.rejectEmpty ?? true;
+  // POSTURE-GATED, matching the #484 dispatch-listener EXACTLY: production passes
+  // `signingKnobs.rejectEmpty` (off/permissive → false ⇒ accept-list-only trust;
+  // enforce → true ⇒ require a verifiable chain). Default `false` mirrors the
+  // off-posture. Safe under `off` ONLY because identity is source-bound (the
+  // BLOCKER fix): an accept-listed peer can announce only its OWN agents.
+  const rejectEmpty = opts.rejectEmpty ?? false;
 
   // E.1 — OPT-IN gate. No networks ⇒ federation is OFF for this stack: the
   // subscriber binds NOTHING and folds NOTHING. This is the resolved opt-in
@@ -334,12 +378,14 @@ export async function startFederatedAgentPresenceSubscriber(
  * signing identity). `envelope.source` is `{principal}.{stack}.{instance}[...]`,
  * so segment[0] is the bare principal and segment[1] the bare stack slug.
  *
- * Using the SOURCE (not the payload scope) for provenance means a peer can't
- * claim a DIFFERENT origin than the one it signed as: the chain verification
- * above bound `source` to a verified pubkey, so the provenance is as trustworthy
- * as the signature. (The payload `scope` SHOULD equal the source for a
- * well-formed peer; deriving from the authenticated source is the safe choice if
- * they ever diverge.)
+ * The derived `{principal}/{stack}` is the CHAIN-VERIFIED identity (the source
+ * was bound to a verified pubkey by the chain check above). It is passed to
+ * {@link AgentPresenceRegistry.applyForeign} as the `verifiedScope` — the
+ * AUTHORITATIVE identity for the record's key + principal + stack. The registry
+ * cross-checks the envelope's `payload.scope` against it and DROPS the envelope
+ * if they disagree (a spoof attempt), so a peer can paint records ONLY under its
+ * OWN verified identity and can never collide with / overwrite a local record
+ * (PR #914 review BLOCKER fix).
  *
  * A source with fewer than two segments (defensive — the schema forbids it) is
  * dropped rather than folded as an originless record.
