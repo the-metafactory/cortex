@@ -348,6 +348,18 @@ html, body {
 .sources-view .source-state.state-available { color: var(--fg-faint); }
 .sources-view .source-available .provider-label { color: var(--fg-faint); }
 
+/* G-1114.A — Network (preview) stub tab */
+.network-preview-view .network-preview-actions {
+  list-style: none; margin: 8px 0; padding: 0;
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.network-preview-view .network-preview-action code {
+  font-size: 11px; padding: 2px 8px;
+  border: 1px solid var(--line-soft); border-radius: 4px;
+  color: var(--fg-faint);
+}
+.network-preview-view .network-preview-note { margin-top: 8px; }
+
 /* G-1113.C.7 — per-repository panel */
 .repos-view .repo-card {
   border: 1px solid var(--line); border-radius: 8px;

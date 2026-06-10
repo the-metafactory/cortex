@@ -25,6 +25,7 @@ import { PlansView } from "./components/plans-view";
 import { PhaseDetailView } from "./components/phase-detail-view";
 import { WorkItemDetailView } from "./components/work-item-detail-view";
 import { AttentionView } from "./components/attention-view";
+import { NetworkPreviewView } from "./components/network-preview-view";
 import { Toast } from "./components/toast";
 import { useFocusArea } from "./hooks/use-focus-area";
 import { useTasks } from "./hooks/use-tasks";
@@ -58,7 +59,7 @@ import type { Command } from "./components/command-palette";
  * may upgrade to a hash route if deep-linking turns out to be
  * principal-requested; for now the in-memory view is sufficient.
  */
-type DashboardView = "default" | "metrics" | "iterations" | "sources" | "repositories" | "plans" | "phase-detail" | "work-item-detail" | "attention" | "kanban-detail";
+type DashboardView = "default" | "metrics" | "iterations" | "sources" | "repositories" | "plans" | "phase-detail" | "work-item-detail" | "attention" | "kanban-detail" | "network-preview";
 
 export function App() {
   const { theme, toggle: toggleTheme } = useTheme();
@@ -329,6 +330,15 @@ export function App() {
         >
           Sources
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === "network-preview"}
+          className={`tab${view === "network-preview" ? " active" : ""}`}
+          onClick={() => setView("network-preview")}
+        >
+          Network
+        </button>
         {softwareMode && (
           <button
             type="button"
@@ -511,6 +521,12 @@ export function App() {
         {view === "sources" && (
           /* G-1113.B.4 — provider-neutral Sources config view. */
           <SourcesView />
+        )}
+
+        {view === "network-preview" && (
+          /* G-1114.A — Agent Network Topology placeholder. Inert: no producer,
+             no subscriber, no data yet (live panel lands in G-1114.B). */
+          <NetworkPreviewView />
         )}
 
         {view === "repositories" && softwareMode && (

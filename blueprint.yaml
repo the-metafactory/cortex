@@ -370,3 +370,99 @@ features:
       Pilot bus/legacy + mention-dispatch + Discord retirement, concluding
       with pilot v1.0.0. Sub-features on pilot:P-D1..P-D4.
     depends_on: [W3-CUTOVER]
+
+  G-1114:
+    name: Agent Network Topology (umbrella)
+    status: in-progress
+    description: >
+      Bus-driven agent-presence protocol (agent.online/heartbeat/offline/
+      capabilities-changed on the agent domain) + consumer-side runtime
+      registry + Strata-style Network view in Mission Control. Two transports,
+      one envelope: bus federation feeds the local view, the ADR-0006
+      registry-anchored push feeds the hosted pane. Reconciled to ADR-0007.
+      See docs/design-agent-network-topology.md and
+      docs/plan-agent-network-topology.md.
+    children: [G-1114.A, G-1114.B, G-1114.C, G-1114.D, G-1114.E, G-1114.F]
+
+  G-1114.A:
+    name: Phase A — Grounding & Protocol Types
+    status: in-progress
+    description: >
+      Land the reconciled design + plan on main, define the agent.* presence
+      payloads as inert types under src/bus/agent-network/, add a
+      "Network (preview)" stub tab in the dashboard. Zero runtime change.
+    parent: G-1114
+    children: [G-1114.A.1]
+
+  G-1114.A.1:
+    name: Grounding PR — reconciled docs + inert agent.* types + preview tab
+    status: in-progress
+    description: >
+      Single PR landing docs/design-agent-network-topology.md +
+      docs/plan-agent-network-topology.md (reconciled to ADR-0007), inert
+      agent.* payload shapes at src/bus/agent-network/envelopes.ts (no producer
+      / no subscriber), a "Network (preview)" placeholder tab in
+      src/surface/mc/dashboard-v2/, and G-1114 nodes in blueprint.yaml.
+    parent: G-1114.A
+
+  G-1114.B:
+    name: Phase B — Stack-Local Producer + Subscriber
+    status: planned
+    description: >
+      Wire the protocol end-to-end in one stack. Cortex boot emits
+      agent.online; periodic agent.heartbeat; graceful shutdown emits
+      agent.offline (the agent-domain presence heartbeat, distinct from the
+      dispatch-scoped system.agent.heartbeat). Runtime registry subscriber on
+      local.{principal}.{stack}.agent.> maintains the observable store. The
+      preview tab becomes a real agents panel. Dual-emit alongside the existing
+      agents.capabilities.registered during the deprecation window.
+    parent: G-1114
+    depends_on: [G-1114.A]
+
+  G-1114.C:
+    name: Phase C — Capabilities Delta + Liveness FSM
+    status: planned
+    description: >
+      agent.capabilities-changed envelope (producer + subscriber, full new
+      steady-state set). Liveness FSM (single 5-min TTL online<->offline,
+      consuming the new agent.heartbeat — never system.agent.heartbeat). UI:
+      capability badges update live without restart; offline agents render
+      muted with last-seen. Fixture-driven replay tests.
+    parent: G-1114
+    depends_on: [G-1114.B]
+
+  G-1114.D:
+    name: Phase D — Network View (stack-local)
+    status: planned
+    description: >
+      Lift Strata's React Flow + ELK UI primitives (FlowCanvas, ContextMenu,
+      DetailPanel, SpotlightSearch, Legend) into the MC dashboard. Render the
+      stack-local agent network as a graph; click for a detail panel (presence
+      + capabilities + dispatch lifecycle, never session interiors); filters +
+      Cmd+K spotlight search.
+    parent: G-1114
+    depends_on: [G-1114.C]
+
+  G-1114.E:
+    name: Phase E — Federation
+    status: planned
+    description: >
+      Subscribe to peers' federated.{principal}.{stack}.agent.* over the NATS
+      leaf per the federation accept-list (bus-federation transport — the
+      local-view half; the hosted-pane half is ADR-0006). Network membership
+      grouped by the registry roster (ADR-0003), never a wire token. Runtime
+      registry tags foreign agents with {principal}/{stack} provenance. Network
+      view scope toggle. Peer interiors never visible (ADR-0005).
+    parent: G-1114
+    depends_on: [G-1114.D]
+
+  G-1114.F:
+    name: Phase F — Capability-Routing UX
+    status: planned
+    description: >
+      Cross-component highlight: hover task -> matching agents pulse; hover
+      agent -> tasks the agent can pick up highlight. Right-click "Dispatch
+      direct" affordance publishes to
+      local.{principal}.{stack}.tasks.@{assistant}.{capability}.
+    parent: G-1114
+    depends_on: [G-1114.D, G-1114.E]
