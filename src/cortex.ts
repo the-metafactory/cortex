@@ -132,6 +132,11 @@ import {
   startAgentPresenceRegistry,
   type AgentPresenceRegistryHandle,
 } from "./bus/agent-network/registry";
+// G-1114.E.2 + E.5 — trust-verified federated agent-presence subscriber.
+import {
+  startFederatedAgentPresenceSubscriber,
+  type FederatedAgentPresenceSubscriberHandle,
+} from "./bus/agent-network/federated-subscriber";
 import { createProbeResponder, type ProbeResponder } from "./bus/probe-responder";
 import { WorklogManager } from "./runner/worklog-manager";
 
@@ -3212,6 +3217,18 @@ export async function startCortex(
   // separate drain slot is needed.
   let presenceRegistryHandle: AgentPresenceRegistryHandle | null = null;
   let presenceProducer: AgentPresenceProducer | null = null;
+  // G-1114.E.2 — trust-verified federated presence subscriber (folds peers'
+  // agents into the SAME registry, tagged with foreign provenance).
+  let federatedPresenceHandle: FederatedAgentPresenceSubscriberHandle | null = null;
+  // G-1114.E.1 — federate presence ONLY when the stack has opted into
+  // federation (it declares at least one `policy.federated.networks[]`). This is
+  // the SAME opt-in lever the federated subscriber + the dispatch-listener gate
+  // use — a stack with no networks emits local-only presence (default OFF). When
+  // on, the producer dual-emits a `classification: "federated"` copy so peers'
+  // E.2 subscribers can fold it (the existing federated-classification
+  // mechanism, not a new toggle).
+  const federatePresence =
+    (resolvedPolicy?.federated?.networks ?? []).length > 0;
   // The onChange→WS-broadcast subscription handle, captured so shutdown can
   // unsubscribe it explicitly — making teardown order-independent rather than
   // relying on the registry stop severing the envelope feed first (#899 review).
@@ -3280,8 +3297,36 @@ export async function startCortex(
           }),
         },
         agents: presenceAgents,
+        // G-1114.E.1 — opt-in federation dual-emit (default OFF).
+        federate: federatePresence,
       });
       presenceProducer.start();
+
+      // G-1114.E.2 + E.5 — start the trust-verified federated presence
+      // subscriber. INERT (no NATS subscription, no folds) when the stack hasn't
+      // opted into federation. When opted in, it folds peers' accept-listed +
+      // chain-verified presence into the SAME registry, tagged foreign. Reuses
+      // the EXACT trust config the dispatch-listener uses (the federation gate +
+      // `verifySignedByChain` + the `resolveFederatedPeer` seam wired only under
+      // `signing === "enforce"`) — the registry is an Option-D direct consumer,
+      // so it MUST verify foreign presence itself (the surface-router gate does
+      // not cover it). See `federated-subscriber.ts` THE DESIGN QUESTION.
+      federatedPresenceHandle = await startFederatedAgentPresenceSubscriber({
+        runtime,
+        registry: presenceRegistryHandle.registry,
+        federated: resolvedPolicy?.federated,
+        source: systemEventSource,
+        trustResolver,
+        receivingAgentId: mergedAgents[0]?.id,
+        principalId,
+        cryptoVerify: signingKnobs.cryptoVerify,
+        rejectEmpty: signingKnobs.rejectEmpty,
+        ...(signer !== undefined && { stackIdentity: signer.principal }),
+        ...(stackNKeyPubForVerifier !== undefined && {
+          stackNKeyPub: stackNKeyPubForVerifier,
+        }),
+        ...(resolveFederatedPeer !== undefined && { resolveFederatedPeer }),
+      });
       // G-1114.C.1 — publish the now-started producer to the config-reload
       // onChange handler so a mid-life capability drift can emit
       // `agent.capabilities-changed` without restart (see that handler's block
@@ -3546,6 +3591,13 @@ export async function startCortex(
       // window even if the registry stop is reordered) (#899 review).
       completeSync("agent-presence broadcast unsubscribe", () =>
         presenceBroadcastSub?.unsubscribe(),
+      );
+      // G-1114.E.2 — stop the federated subscriber BEFORE the registry stop so
+      // its `removeForeign()` prunes foreign records (disabling federation
+      // cleanly removes foreign agents) while the registry is still live.
+      await completeAsync(
+        "federated agent-presence subscriber stop",
+        federatedPresenceHandle?.stop(),
       );
       await completeAsync(
         "agent-presence registry stop",

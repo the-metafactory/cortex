@@ -65,6 +65,7 @@
  */
 
 import type { MyelinRuntime } from "../bus/myelin/runtime";
+import type { Envelope } from "../bus/myelin/envelope-validator";
 import {
   createAgentOnlineEvent,
   createAgentHeartbeatEvent,
@@ -197,6 +198,34 @@ export interface AgentPresenceProducerOptions {
   scheduler?: PresenceScheduler;
   /** Injectable clock for `started_at` / `sent_at`. Defaults to `() => new Date()`. */
   now?: () => Date;
+  /**
+   * G-1114.E.1 — **federate presence (OPT-IN, default OFF).** When `true`, the
+   * producer publishes a SECOND copy of every presence envelope with
+   * `classification: "federated"` (deriving the `federated.{principal}.{stack}.
+   * agent.*` subject) IN ADDITION to the stack-local `classification: "local"`
+   * copy. This is how a stack opts its agents' presence into peer Network views
+   * over bus federation (the E.2 subscriber on a peer stack folds it).
+   *
+   * Reuses the EXISTING federated-classification mechanism — the SAME
+   * `classification: "federated"` lever that opts `dispatch.task.*` /
+   * `review.verdict.*` into federated emission (IAW Phase A.3). NOT a new
+   * toggle: the presence builders already accept `classification` per
+   * `AgentPresenceCommonOpts`; this flag just makes the producer emit the
+   * federated variant alongside the local one.
+   *
+   * Default `false` — a stack that has NOT opted into federating presence emits
+   * ONLY `local.*`, byte-identical to pre-E behaviour. The boot wiring sets this
+   * `true` only when the stack's `policy.federated` opts presence in (e.g.
+   * `agent.*` reachable via the network's accept/announce config), mirroring how
+   * dispatch/review opt into federated classification.
+   *
+   * **Both copies, not a swap.** A federated stack still wants its OWN agents in
+   * its OWN local Network view (the B.3 local registry folds `local.*`), AND its
+   * peers want them via `federated.*`. So presence is dual-emitted (local +
+   * federated) — the same two-transports-one-envelope shape ADR-0007 §2
+   * describes.
+   */
+  federate?: boolean;
 }
 
 /**
@@ -219,6 +248,8 @@ export class AgentPresenceProducer {
   private readonly intervalMs: number;
   private readonly scheduler: PresenceScheduler;
   private readonly now: () => Date;
+  /** G-1114.E.1 — when true, dual-emit a `classification: "federated"` copy. */
+  private readonly federate: boolean;
 
   private timer: ReturnType<typeof setInterval> | undefined;
   private started = false;
@@ -246,6 +277,7 @@ export class AgentPresenceProducer {
     this.intervalMs = opts.intervalMs ?? DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS;
     this.scheduler = opts.scheduler ?? realScheduler;
     this.now = opts.now ?? (() => new Date());
+    this.federate = opts.federate ?? false;
     for (const agent of this.agents) {
       this.agentsById.set(agent.identity.agent_id, agent);
       this.capabilityBaseline.set(
@@ -351,54 +383,87 @@ export class AgentPresenceProducer {
     // steady state; the wire emit is best-effort).
     this.capabilityBaseline.set(agentId, next);
 
-    let envelope;
-    try {
-      envelope = createAgentCapabilitiesChangedEvent({
-        source: this.source,
-        identity: agent.identity,
-        scope: agent.scope,
-        capabilities: [...newCapabilities],
-        sentAt: this.now(),
-      });
-    } catch (err) {
-      process.stderr.write(
-        `agent-presence-producer: createAgentCapabilitiesChangedEvent failed (agent=${agentId}): ` +
-          `${err instanceof Error ? err.message : String(err)}\n`,
-      );
-      return true;
-    }
-    void this.runtime.publish(envelope).catch((err: unknown) => {
-      process.stderr.write(
-        `agent-presence-producer: agent.capabilities-changed publish failed (agent=${agentId}): ` +
-          `${err instanceof Error ? err.message : String(err)}\n`,
-      );
-    });
+    const sentAt = this.now();
+    // G-1114.E.1 — dual-emit local (+ federated when opted in). `dualEmit`
+    // owns the per-classification build try/catch + best-effort publish.
+    void Promise.allSettled(
+      this.dualEmit("agent.capabilities-changed", agentId, (classification) =>
+        createAgentCapabilitiesChangedEvent({
+          source: this.source,
+          identity: agent.identity,
+          scope: agent.scope,
+          capabilities: [...newCapabilities],
+          sentAt,
+          classification,
+        }),
+      ),
+    );
     return true;
   }
 
-  private publishOnline(agent: PresenceAgent): void {
-    let envelope;
-    try {
-      envelope = createAgentOnlineEvent({
-        source: this.source,
-        identity: agent.identity,
-        scope: agent.scope,
-        capabilities: [...agent.capabilities],
-        startedAt: this.now(),
-      });
-    } catch (err) {
-      process.stderr.write(
-        `agent-presence-producer: createAgentOnlineEvent failed (agent=${agent.identity.agent_id}): ` +
-          `${err instanceof Error ? err.message : String(err)}\n`,
+  /**
+   * G-1114.E.1 — emit one presence envelope at `classification: "local"`, and —
+   * when {@link federate} is on — a SECOND copy at `classification: "federated"`.
+   * `build(classification)` constructs the envelope at that classification via
+   * the existing builders (which thread `classification` through
+   * `AgentPresenceCommonOpts`); the federated copy derives the
+   * `federated.{principal}.{stack}.agent.*` subject on publish.
+   *
+   * Both publishes are best-effort + non-throwing (the existing per-emit
+   * contract). The federated emit reuses the SAME builder/publish path — no new
+   * mechanism, just a second classification. Used by the heartbeat tick which
+   * needs the awaitable promises for backpressure; the fire-and-forget callers
+   * (`publishOnline` / `publishOffline`) ignore the returned promises beyond
+   * their own `.catch`.
+   */
+  private dualEmit(
+    action: string,
+    agentId: string,
+    build: (classification: "local" | "federated") => Envelope,
+  ): Promise<void>[] {
+    const classifications: ("local" | "federated")[] = this.federate
+      ? ["local", "federated"]
+      : ["local"];
+    const publishes: Promise<void>[] = [];
+    for (const classification of classifications) {
+      let envelope: Envelope;
+      try {
+        envelope = build(classification);
+      } catch (err) {
+        process.stderr.write(
+          `agent-presence-producer: ${action} build failed (agent=${agentId}, ` +
+            `classification=${classification}): ` +
+            `${err instanceof Error ? err.message : String(err)}\n`,
+        );
+        continue;
+      }
+      publishes.push(
+        this.runtime.publish(envelope).catch((err: unknown) => {
+          process.stderr.write(
+            `agent-presence-producer: ${action} publish failed (agent=${agentId}, ` +
+              `classification=${classification}): ` +
+              `${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        }),
       );
-      return;
     }
-    void this.runtime.publish(envelope).catch((err: unknown) => {
-      process.stderr.write(
-        `agent-presence-producer: agent.online publish failed (agent=${agent.identity.agent_id}): ` +
-          `${err instanceof Error ? err.message : String(err)}\n`,
-      );
-    });
+    return publishes;
+  }
+
+  private publishOnline(agent: PresenceAgent): void {
+    const startedAt = this.now();
+    void Promise.allSettled(
+      this.dualEmit("agent.online", agent.identity.agent_id, (classification) =>
+        createAgentOnlineEvent({
+          source: this.source,
+          identity: agent.identity,
+          scope: agent.scope,
+          capabilities: [...agent.capabilities],
+          startedAt,
+          classification,
+        }),
+      ),
+    );
   }
 
   private tickHeartbeats(): void {
@@ -413,28 +478,20 @@ export class AgentPresenceProducer {
     const sentAt = this.now();
     const publishes: Promise<void>[] = [];
     for (const agent of this.agents) {
-      let envelope;
-      try {
-        envelope = createAgentHeartbeatEvent({
-          source: this.source,
-          identity: agent.identity,
-          scope: agent.scope,
-          sentAt,
-        });
-      } catch (err) {
-        process.stderr.write(
-          `agent-presence-producer: createAgentHeartbeatEvent failed (agent=${agent.identity.agent_id}): ` +
-            `${err instanceof Error ? err.message : String(err)}\n`,
-        );
-        continue;
-      }
+      // G-1114.E.1 — dual-emit local (+ federated when opted in) heartbeats.
       publishes.push(
-        this.runtime.publish(envelope).catch((err: unknown) => {
-          process.stderr.write(
-            `agent-presence-producer: agent.heartbeat publish failed (agent=${agent.identity.agent_id}): ` +
-              `${err instanceof Error ? err.message : String(err)}\n`,
-          );
-        }),
+        ...this.dualEmit(
+          "agent.heartbeat",
+          agent.identity.agent_id,
+          (classification) =>
+            createAgentHeartbeatEvent({
+              source: this.source,
+              identity: agent.identity,
+              scope: agent.scope,
+              sentAt,
+              classification,
+            }),
+        ),
       );
     }
     this.heartbeatInFlight = true;
@@ -447,29 +504,23 @@ export class AgentPresenceProducer {
     agent: PresenceAgent,
     reason: "shutdown" | "restart" | "error",
   ): Promise<void> {
-    let envelope;
-    try {
-      envelope = createAgentOfflineEvent({
-        source: this.source,
-        identity: agent.identity,
-        scope: agent.scope,
-        reason,
-        sentAt: this.now(),
-      });
-    } catch (err) {
-      process.stderr.write(
-        `agent-presence-producer: createAgentOfflineEvent failed (agent=${agent.identity.agent_id}): ` +
-          `${err instanceof Error ? err.message : String(err)}\n`,
-      );
-      return;
-    }
-    try {
-      await this.runtime.publish(envelope);
-    } catch (err) {
-      process.stderr.write(
-        `agent-presence-producer: agent.offline publish failed (agent=${agent.identity.agent_id}): ` +
-          `${err instanceof Error ? err.message : String(err)}\n`,
-      );
-    }
+    const sentAt = this.now();
+    // G-1114.E.1 — dual-emit local (+ federated when opted in) offline. Awaited
+    // (via Promise.allSettled) so the shutdown drain holds the bus open until
+    // BOTH copies have gone out — a peer's Network view depends on the federated
+    // `agent.offline` to drop the foreign agent promptly rather than waiting for
+    // its TTL reaper.
+    await Promise.allSettled(
+      this.dualEmit("agent.offline", agent.identity.agent_id, (classification) =>
+        createAgentOfflineEvent({
+          source: this.source,
+          identity: agent.identity,
+          scope: agent.scope,
+          reason,
+          sentAt,
+          classification,
+        }),
+      ),
+    );
   }
 }

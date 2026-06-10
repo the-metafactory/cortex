@@ -116,6 +116,29 @@ export const DEFAULT_PRESENCE_REAPER_INTERVAL_MS = 30_000;
 export type PresenceOfflineReason = AgentOfflineReason | "ttl_lapse";
 
 /**
+ * G-1114.E.2 — provenance of a {@link AgentPresenceRecord}. `"local"` for the
+ * stack's own agents (the B.3 path); a `foreign` struct carrying the peer's
+ * `{principal}/{stack}` for a trust-verified federated peer agent (the E.2
+ * path). The view groups + styles foreign agents by this; a downstream consumer
+ * distinguishes "my agent" from "someone else's agent" without re-parsing the
+ * envelope source.
+ */
+export type AgentRecordOrigin =
+  | "local"
+  | { kind: "foreign"; principal: string; stack: string };
+
+/**
+ * True when a record came from a federated peer (not this stack). A thin
+ * type-guard so view code reads `isForeign(record.origin)` rather than
+ * re-checking the discriminant shape.
+ */
+export function isForeignOrigin(
+  origin: AgentRecordOrigin,
+): origin is { kind: "foreign"; principal: string; stack: string } {
+  return origin !== "local";
+}
+
+/**
  * The {@link PresenceOfflineReason} the reaper stamps on a TTL-lapse offline.
  * Exported so downstream renderers (and tests) compare against the constant
  * rather than re-typing the literal.
@@ -136,6 +159,27 @@ export const TTL_LAPSE_OFFLINE_REASON = "ttl_lapse" as const;
 export interface AgentPresenceRecord {
   /** Stable map key — `{principal}/{stack}/{agent_id}`. */
   key: string;
+  /**
+   * G-1114.E.2 — record PROVENANCE: where this presence came from.
+   *
+   *   - `"local"`   — folded from the stack's OWN `local.{principal}.{stack}.agent.*`
+   *     subtree (the B.3 path). The default for every record `apply()` creates,
+   *     so a bare registry that only ever sees local envelopes is byte-identical
+   *     to pre-E behaviour.
+   *   - `{ kind: "foreign"; principal; stack }` — folded from a TRUST-VERIFIED
+   *     peer's `federated.{principal}.{stack}.agent.*` envelope (the E.2 path,
+   *     via {@link AgentPresenceRegistry.applyForeign}). Carries the peer's
+   *     `{principal}/{stack}` so the view (E.3) + detail-join (#909) can group
+   *     foreign agents under their origin stack and render them distinctly.
+   *
+   * The origin is keyed off the PAYLOAD scope (`AgentPresenceScope`), which for a
+   * foreign record is the SENDER's identity — NOT the receiving stack. Local and
+   * foreign records for the same `agent_id` would have the same map key only if a
+   * peer impersonated our `{principal}/{stack}`; the trust gate (signed_by[] +
+   * accept-list) makes that impossible, so the key space stays partitioned by
+   * real origin.
+   */
+  origin: AgentRecordOrigin;
   /** Logical agent id (`luna`, `echo`, …). */
   agentId: string;
   /** The agent's NKey public key (stable cross-restart identity). */
@@ -261,15 +305,51 @@ export class AgentPresenceRegistry {
    * non-presence type).
    */
   apply(envelope: Envelope): AgentPresenceRecord | null {
+    return this.applyWithOrigin(envelope, "local");
+  }
+
+  /**
+   * G-1114.E.2 — fold a TRUST-VERIFIED foreign presence envelope, tagging the
+   * resulting record with its `{principal}/{stack}` provenance.
+   *
+   * **Trust is the CALLER's job, not this method's.** This is the in-memory
+   * fold ONLY — it assumes the envelope has ALREADY passed the federation
+   * accept-list gate AND `signed_by[]` chain verification (the federated
+   * subscriber does both before calling here, mirroring the dispatch-listener's
+   * Option-D gate→verify→handle order). Folding an unverified foreign envelope
+   * here would be a trust hole; the subscriber is the single place that decides
+   * "this foreign presence is admissible." See
+   * {@link startFederatedAgentPresenceSubscriber}.
+   *
+   * `origin` carries the SENDER's `{principal}/{stack}` (from the envelope's
+   * payload scope) so the record is distinguishable from a local one. Same
+   * best-effort contract as {@link apply}: a malformed payload is logged +
+   * dropped, never thrown.
+   */
+  applyForeign(
+    envelope: Envelope,
+    origin: { principal: string; stack: string },
+  ): AgentPresenceRecord | null {
+    return this.applyWithOrigin(envelope, {
+      kind: "foreign",
+      principal: origin.principal,
+      stack: origin.stack,
+    });
+  }
+
+  private applyWithOrigin(
+    envelope: Envelope,
+    origin: AgentRecordOrigin,
+  ): AgentPresenceRecord | null {
     switch (envelope.type) {
       case AGENT_ONLINE_TYPE:
-        return this.applyOnline(envelope);
+        return this.applyOnline(envelope, origin);
       case AGENT_HEARTBEAT_TYPE:
-        return this.applyHeartbeat(envelope);
+        return this.applyHeartbeat(envelope, origin);
       case AGENT_OFFLINE_TYPE:
-        return this.applyOffline(envelope);
+        return this.applyOffline(envelope, origin);
       case AGENT_CAPABILITIES_CHANGED_TYPE:
-        return this.applyCapabilitiesChanged(envelope);
+        return this.applyCapabilitiesChanged(envelope, origin);
       default:
         // Not a presence envelope — the subject filter should have excluded
         // it, but be defensive (the fan-out delivers every matching envelope).
@@ -277,7 +357,10 @@ export class AgentPresenceRegistry {
     }
   }
 
-  private applyOnline(envelope: Envelope): AgentPresenceRecord | null {
+  private applyOnline(
+    envelope: Envelope,
+    origin: AgentRecordOrigin,
+  ): AgentPresenceRecord | null {
     const parsed = AgentOnlinePayloadSchema.safeParse(envelope.payload);
     if (!parsed.success) return this.dropMalformed(envelope, parsed.error);
     const p = parsed.data;
@@ -286,6 +369,7 @@ export class AgentPresenceRegistry {
     const existing = this.records.get(key);
     const record: AgentPresenceRecord = {
       key,
+      origin,
       agentId: p.identity.agent_id,
       nkeyPublicKey: p.identity.nkey_public_key,
       assistantName: p.identity.assistant_name,
@@ -306,7 +390,10 @@ export class AgentPresenceRegistry {
     return record;
   }
 
-  private applyHeartbeat(envelope: Envelope): AgentPresenceRecord | null {
+  private applyHeartbeat(
+    envelope: Envelope,
+    origin: AgentRecordOrigin,
+  ): AgentPresenceRecord | null {
     const parsed = AgentHeartbeatPayloadSchema.safeParse(envelope.payload);
     if (!parsed.success) return this.dropMalformed(envelope, parsed.error);
     const p = parsed.data;
@@ -319,6 +406,7 @@ export class AgentPresenceRegistry {
     // capabilities-changed fills them.
     const record: AgentPresenceRecord = {
       key,
+      origin,
       agentId: p.identity.agent_id,
       nkeyPublicKey: p.identity.nkey_public_key,
       assistantName: p.identity.assistant_name,
@@ -335,7 +423,10 @@ export class AgentPresenceRegistry {
     return record;
   }
 
-  private applyOffline(envelope: Envelope): AgentPresenceRecord | null {
+  private applyOffline(
+    envelope: Envelope,
+    origin: AgentRecordOrigin,
+  ): AgentPresenceRecord | null {
     const parsed = AgentOfflinePayloadSchema.safeParse(envelope.payload);
     if (!parsed.success) return this.dropMalformed(envelope, parsed.error);
     const p = parsed.data;
@@ -344,6 +435,7 @@ export class AgentPresenceRegistry {
     const existing = this.records.get(key);
     const record: AgentPresenceRecord = {
       key,
+      origin,
       agentId: p.identity.agent_id,
       nkeyPublicKey: p.identity.nkey_public_key,
       assistantName: p.identity.assistant_name,
@@ -363,7 +455,10 @@ export class AgentPresenceRegistry {
     return record;
   }
 
-  private applyCapabilitiesChanged(envelope: Envelope): AgentPresenceRecord | null {
+  private applyCapabilitiesChanged(
+    envelope: Envelope,
+    origin: AgentRecordOrigin,
+  ): AgentPresenceRecord | null {
     const parsed = AgentCapabilitiesChangedPayloadSchema.safeParse(envelope.payload);
     if (!parsed.success) return this.dropMalformed(envelope, parsed.error);
     const p = parsed.data;
@@ -374,6 +469,7 @@ export class AgentPresenceRegistry {
     // prior set) is Phase C — here we just converge to the new full set.
     const record: AgentPresenceRecord = {
       key,
+      origin,
       agentId: p.identity.agent_id,
       nkeyPublicKey: p.identity.nkey_public_key,
       assistantName: p.identity.assistant_name,
@@ -524,6 +620,34 @@ export class AgentPresenceRegistry {
       this.emit(key, next);
     }
     return reaped;
+  }
+
+  // --- Foreign-record lifecycle (G-1114.E.2) -------------------------------
+
+  /**
+   * Drop every FOREIGN record (origin `{kind: "foreign"}`), firing `onChange`
+   * for each removal so the view prunes the foreign agents cleanly. Local
+   * records are untouched. Returns the keys removed.
+   *
+   * The acceptance path for "disabling federation cleanly removes foreign
+   * agents" (plan §4.5): when the federated subscriber stops (federation turned
+   * off / reloaded out), it calls this so the registry no longer shows a peer's
+   * agents. A record removal is signalled via `onChange` with a synthesized
+   * snapshot carrying `state: "offline"` + `offlineReason: "shutdown"` — the
+   * view treats a removed-foreign exactly as a gracefully-departed agent, and
+   * since the record is gone from `getAgents()` a subsequent refetch omits it.
+   */
+  removeForeign(): string[] {
+    const removed: string[] = [];
+    for (const [key, rec] of this.records) {
+      if (!isForeignOrigin(rec.origin)) continue;
+      this.records.delete(key);
+      removed.push(key);
+      // Emit a terminal snapshot so a live listener prunes immediately; the
+      // record is already gone from `getAgents()`.
+      this.emit(key, { ...rec, state: "offline", offlineReason: "shutdown" });
+    }
+    return removed;
   }
 }
 

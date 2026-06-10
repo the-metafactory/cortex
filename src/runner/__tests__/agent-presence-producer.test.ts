@@ -496,3 +496,90 @@ describe("presenceAgentFromAgent", () => {
     expect(pa).toBeNull();
   });
 });
+
+// ===========================================================================
+// G-1114.E.1 — federation opt-in (dual-emit local + federated)
+// ===========================================================================
+
+describe("AgentPresenceProducer federation opt-in (E.1)", () => {
+  function classificationsFor(
+    published: Envelope[],
+    type: string,
+  ): string[] {
+    return published
+      .filter((e) => e.type === type)
+      .map((e) => e.sovereignty.classification);
+  }
+
+  test("DEFAULT (federate omitted): online emits ONLY local, never federated", () => {
+    const runtime = recordingRuntime();
+    const producer = new AgentPresenceProducer({
+      runtime,
+      source: SOURCE,
+      agents: [AGENT_A],
+      scheduler: manualScheduler(),
+    });
+    producer.start();
+    const cls = classificationsFor(runtime.published, "agent.online");
+    expect(cls).toEqual(["local"]);
+    // No federated.* presence on the wire when not opted in.
+    expect(
+      runtime.published.some((e) => e.sovereignty.classification === "federated"),
+    ).toBe(false);
+  });
+
+  test("federate:true: online dual-emits BOTH local AND federated", () => {
+    const runtime = recordingRuntime();
+    const producer = new AgentPresenceProducer({
+      runtime,
+      source: SOURCE,
+      agents: [AGENT_A],
+      scheduler: manualScheduler(),
+      federate: true,
+    });
+    producer.start();
+    const cls = classificationsFor(runtime.published, "agent.online").sort();
+    expect(cls).toEqual(["federated", "local"]);
+    // The federated copy derives the federated.* subject.
+    const fed = runtime.published.find(
+      (e) => e.type === "agent.online" && e.sovereignty.classification === "federated",
+    );
+    expect(fed).toBeDefined();
+    expect(deriveNatsSubject(fed!, "meta-factory")).toBe(
+      "federated.andreas.meta-factory.agent.online",
+    );
+    expect(validateEnvelope(fed!).ok).toBe(true);
+  });
+
+  test("federate:true: heartbeat ticks dual-emit local + federated per agent", () => {
+    const runtime = recordingRuntime();
+    const sched = manualScheduler();
+    new AgentPresenceProducer({
+      runtime,
+      source: SOURCE,
+      agents: [AGENT_A, AGENT_B],
+      scheduler: sched,
+      federate: true,
+    }).start();
+    sched.tick();
+    const cls = classificationsFor(runtime.published, "agent.heartbeat");
+    // 2 agents × {local, federated} = 4 heartbeats per tick.
+    expect(cls.filter((c) => c === "local").length).toBe(2);
+    expect(cls.filter((c) => c === "federated").length).toBe(2);
+  });
+
+  test("federate:true: offline dual-emits on shutdown", async () => {
+    const runtime = recordingRuntime();
+    const producer = new AgentPresenceProducer({
+      runtime,
+      source: SOURCE,
+      agents: [AGENT_A],
+      scheduler: manualScheduler(),
+      federate: true,
+    });
+    producer.start();
+    await producer.stop();
+    const cls = classificationsFor(runtime.published, "agent.offline").sort();
+    expect(cls).toEqual(["federated", "local"]);
+  });
+});

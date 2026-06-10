@@ -589,3 +589,56 @@ describe("AgentPresenceRegistry liveness reaper (C.3)", () => {
     expect(byKey.get("echo")).toBe("online");
   });
 });
+
+// --- G-1114.E.2 provenance (local vs foreign origin) -------------------------
+
+describe("AgentPresenceRegistry provenance (E.2)", () => {
+  test("apply() tags records as local origin by default", () => {
+    const reg = new AgentPresenceRegistry();
+    reg.apply(online());
+    expect(reg.getAgents()[0]?.origin).toBe("local");
+  });
+
+  test("applyForeign() tags records with {principal}/{stack} foreign origin", () => {
+    const reg = new AgentPresenceRegistry();
+    const env = createAgentOnlineEvent({
+      source: { principal: "joel", stack: "research", instance: "local" },
+      identity: { nkey_public_key: "UPEER", agent_id: "sage", assistant_name: "Sage" },
+      scope: { principal: "joel", stack: "research" },
+      capabilities: ["research"],
+      startedAt: new Date("2026-06-11T09:00:00.000Z"),
+      classification: "federated",
+    });
+    reg.applyForeign(env, { principal: "joel", stack: "research" });
+    const rec = reg.getAgents()[0];
+    expect(rec?.origin).toEqual({ kind: "foreign", principal: "joel", stack: "research" });
+    expect(rec?.agentId).toBe("sage");
+  });
+
+  test("removeForeign() drops foreign records, keeps local, fires onChange", () => {
+    const reg = new AgentPresenceRegistry();
+    reg.apply(online()); // local luna
+    const env = createAgentOnlineEvent({
+      source: { principal: "joel", stack: "research", instance: "local" },
+      identity: { nkey_public_key: "UPEER", agent_id: "sage", assistant_name: "Sage" },
+      scope: { principal: "joel", stack: "research" },
+      capabilities: [],
+      startedAt: new Date("2026-06-11T09:00:00.000Z"),
+      classification: "federated",
+    });
+    reg.applyForeign(env, { principal: "joel", stack: "research" });
+    expect(reg.getAgents().length).toBe(2);
+
+    const changes: string[] = [];
+    reg.onChange((key) => changes.push(key));
+    const removed = reg.removeForeign();
+
+    expect(removed).toEqual(["joel/research/sage"]);
+    const remaining = reg.getAgents();
+    expect(remaining.length).toBe(1);
+    expect(remaining[0]?.agentId).toBe("luna");
+    expect(remaining[0]?.origin).toBe("local");
+    // onChange fired for the foreign removal (terminal snapshot).
+    expect(changes).toContain("joel/research/sage");
+  });
+});

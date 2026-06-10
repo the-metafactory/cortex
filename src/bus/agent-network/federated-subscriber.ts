@@ -1,0 +1,373 @@
+/**
+ * G-1114.E.2 + E.5 — TRUST-VERIFIED federated agent-presence subscriber.
+ *
+ * The federation half of the agent-presence registry. Where the B.3
+ * {@link startAgentPresenceRegistry} folds the stack's OWN
+ * `local.{principal}.{stack}.agent.>` subtree, THIS module folds TRUST-VERIFIED
+ * FOREIGN presence from peers' `federated.{principal}.{stack}.agent.>` subtree
+ * into the SAME registry, tagging each foreign record with its `{principal}/{stack}`
+ * provenance (`origin: { kind: "foreign", … }`).
+ *
+ * ## THE DESIGN QUESTION (resolved against the existing gate)
+ *
+ * **Does inbound `federated.*.agent.*` ALREADY pass through the surface-router's
+ * `evaluateFederationGate` + signed_by chain verification before reaching a
+ * consumer?**
+ *
+ * **NO — for THIS consumer.** The presence registry is an **Option-D direct
+ * consumer**: it subscribes via `runtime.subscribe(pattern)` + `runtime.onEnvelope`
+ * (see `startAgentPresenceRegistry`), NOT through the surface-router. The
+ * surface-router's `evaluateFederationGate` runs ONLY for envelopes the router
+ * fans to registered `SurfaceAdapter`s via `router.dispatch`. The runtime's
+ * `onEnvelope` fan-out delivers EVERY inbound envelope to EVERY registered
+ * handler RAW — pre-gate, pre-verify. So a registry that simply widened its
+ * subscription to `federated.*.agent.>` would fold UNVERIFIED, UNGATED foreign
+ * presence: a trust hole (any peer — accept-listed or not, signed or not — would
+ * appear in the Network view).
+ *
+ * This is the EXACT situation the **runner dispatch-listener** faced at
+ * cortex#484 ("Option D — executor, not renderer"): once it stopped registering
+ * as a SurfaceAdapter and consumed envelopes directly off the runtime, the
+ * surface-router's federation gate no longer covered it, so it grew its OWN
+ * inline gate (`evaluateFederationGate`) + its own chain verification
+ * (`verifySignedByChain` + `resolveFederatedPeer`). This module MIRRORS that
+ * established trust path — it does NOT invent a parallel mechanism:
+ *
+ *   1. **Federation accept-list gate** — {@link evaluateFederationGate} on the
+ *      wire subject + envelope, against the principal's
+ *      `policy.federated.networks[]` (accept_subjects / deny_subjects / max_hop +
+ *      the F-3d leaf anti-spoof cross-check). A non-allowlisted peer, a denied
+ *      subject, an over-budget hop chain, or a cross-network-spoofed leaf is
+ *      DROPPED before any fold. A `system.access.denied` audit envelope is
+ *      emitted (`emitFederationDenied`) so the drop is observable.
+ *   2. **`signed_by[]` chain verification** — {@link verifySignedByChain} with
+ *      the same `resolveFederatedPeer` seam the dispatch-listener uses (wired
+ *      ONLY under `signing === "enforce"`). A foreign envelope whose chain fails
+ *      to verify (forged bytes, unresolved peer pubkey, stale timestamp) is
+ *      DROPPED — never folded.
+ *
+ * Only an envelope that passes BOTH is folded via {@link
+ * AgentPresenceRegistry.applyForeign}, tagged with the peer's `{principal}/{stack}`
+ * from the PAYLOAD scope. **This is the security invariant: only accept-listed +
+ * chain-verified foreign presence is shown.**
+ *
+ * ## Sovereignty (ADR-0005 / ADR-0007)
+ *
+ * Foreign presence carries presence + lifecycle metadata ONLY — identity,
+ * capabilities, liveness state. The `agent.*` payload schema (the SAME shape a
+ * local envelope uses) has NO interior fields (tool calls, prompts, diffs), so
+ * interior leakage is structurally impossible: the registry stores exactly the
+ * presence descriptor and nothing more. Peers never send interiors; the registry
+ * never stores or exposes them.
+ */
+
+import type { Envelope } from "../myelin/envelope-validator";
+import { getSignedByChain } from "../myelin/envelope-validator";
+import type { MyelinRuntime, EnvelopeHandler } from "../myelin/runtime";
+import type { MyelinSubscriber } from "../myelin/subscriber";
+import type { TrustResolver } from "../../common/agents/trust-resolver";
+import type { FederatedPeerResolution } from "../../common/registry";
+import type {
+  PolicyFederated,
+  PolicyFederatedNetwork,
+} from "../../common/types/cortex-config";
+import type { SystemEventSource } from "../system-events";
+import {
+  emitFederationDenied,
+  evaluateFederationGate,
+  subjectMatches,
+} from "../surface-router";
+import { verifySignedByChain } from "../verify-signed-by-chain";
+import { AgentPresenceRegistry } from "./registry";
+import { AGENT_PRESENCE_TYPES } from "./envelopes";
+
+/**
+ * Subject pattern the FEDERATED subscriber binds — every peer principal/stack's
+ * presence subtree. `federated.*.*.agent.>`: segment[1] (`*`) = any peer
+ * PRINCIPAL, segment[2] (`*`) = any peer STACK, `agent.>` = any presence action.
+ *
+ * Unlike the B.3 stack-local pattern (which pins `{principal}.{stack}` to THIS
+ * stack), the federated pattern is principal-WILDCARD: we want every peer's
+ * presence, and WHICH peers are admissible is decided by the federation
+ * accept-list gate at fold time — NOT by narrowing the subscription. (Narrowing
+ * the subscription per-peer would couple the NATS bind to the peer roster and
+ * miss the gate's deny/hop/anti-spoof checks; the gate is the trust boundary,
+ * the subscription is just the firehose.)
+ */
+export function federatedAgentPresenceSubject(): string {
+  return "federated.*.*.agent.>";
+}
+
+/** Lifecycle handle for the federated subscriber. */
+export interface FederatedAgentPresenceSubscriberHandle {
+  /**
+   * Stop the federated subscriber: unregister the fan-out handler, drain the
+   * push subscriber, AND remove every foreign record from the registry (so
+   * disabling federation cleanly removes foreign agents — plan §4.5). The
+   * registry's LOCAL records survive. Idempotent.
+   */
+  stop(): Promise<void>;
+}
+
+/** Options for {@link startFederatedAgentPresenceSubscriber}. */
+export interface StartFederatedAgentPresenceSubscriberOptions {
+  runtime: MyelinRuntime;
+  /** The SHARED registry — same instance B.3 folds local presence into. */
+  registry: AgentPresenceRegistry;
+  /**
+   * E.1 — federation policy. The OPT-IN switch: when `undefined` or
+   * `networks[]` is empty, the subscriber is INERT — it does NOT subscribe to
+   * `federated.*` at all, and no foreign presence is folded. Federation is
+   * OPT-IN (the resolved plan §4.5 decision); a stack with no
+   * `policy.federated.networks[]` sees zero foreign agents, byte-identical to
+   * pre-E behaviour. Supplying at least one network opts the stack into folding
+   * that network's accept-listed, chain-verified peer presence.
+   */
+  federated: PolicyFederated | undefined;
+  /** Source identity for the `system.access.denied` audit envelopes on a gate drop. */
+  source: SystemEventSource;
+  /**
+   * E.5 — chain-verification trust resolver. Mirrors the dispatch-listener:
+   * when supplied (with `receivingAgentId`), every foreign presence envelope is
+   * run through `verifySignedByChain` before folding. When `undefined`, the
+   * structural+crypto chain check is SKIPPED — but the accept-list gate STILL
+   * runs (the gate alone bounds which peers can appear; the chain check adds
+   * cryptographic attribution under `enforce`). Production wiring supplies it.
+   */
+  trustResolver?: TrustResolver;
+  /** Receiving agent id whose `trust:` list governs admitted signers. */
+  receivingAgentId?: string;
+  /** Principal id — required by the crypto-verify pass (threaded to myelin Principals). */
+  principalId?: string;
+  /** Whether the chain verifier runs ed25519 crypto verification. Default `true`. */
+  cryptoVerify?: boolean;
+  /**
+   * Whether an empty `signed_by[]` chain is REJECTED. For FOREIGN presence the
+   * default is `true`: an unsigned cross-principal envelope has no
+   * cryptographic attribution and must not be trusted into the view. (Contrast
+   * the dispatch-listener default `false`, which exists for LOCAL
+   * adapter-originated dispatches that legitimately arrive unsigned — foreign
+   * presence has no such legitimate-unsigned path.)
+   */
+  rejectEmpty?: boolean;
+  /** Receiving stack's signing DID (own-stack short-circuit in the verifier). */
+  stackIdentity?: string;
+  /** Receiving stack's NKey pubkey (crypto-verify pass for own-stack stamps). */
+  stackNKeyPub?: string;
+  /**
+   * E.5 — federated peer-pubkey resolution seam. The SAME seam the
+   * dispatch-listener uses (wired ONLY under `signing === "enforce"`). When
+   * supplied, a foreign envelope's signer peer principal is resolved to a
+   * verified Ed25519 identity before the crypto pass. `undefined` ⇒ foreign
+   * presence verifies local-only (no registry peer resolution).
+   */
+  resolveFederatedPeer?: (
+    peerPrincipal: string,
+  ) => Promise<FederatedPeerResolution>;
+}
+
+/**
+ * Wire the trust-verified federated presence subscriber into the running
+ * cortex. OPT-IN: when `federated` is absent / has no networks, returns an
+ * INERT handle that subscribed to nothing (no firehose, no folds).
+ *
+ * NON-THROWING / best-effort, matching every other capability-side boot
+ * feature: a subscribe failure logs + leaves the subscriber dormant. When
+ * `runtime.enabled` is false (no NATS) the subscriber stays dormant.
+ */
+export async function startFederatedAgentPresenceSubscriber(
+  opts: StartFederatedAgentPresenceSubscriberOptions,
+): Promise<FederatedAgentPresenceSubscriberHandle> {
+  const {
+    runtime,
+    registry,
+    federated,
+    source,
+    trustResolver,
+    receivingAgentId,
+    principalId,
+    stackIdentity,
+    stackNKeyPub,
+    resolveFederatedPeer,
+  } = opts;
+  const cryptoVerify = opts.cryptoVerify ?? true;
+  // Foreign presence has no legitimate-unsigned path — reject empty chains by
+  // default (the inverse of the dispatch-listener's adapter-friendly default).
+  const rejectEmpty = opts.rejectEmpty ?? true;
+
+  // E.1 — OPT-IN gate. No networks ⇒ federation is OFF for this stack: the
+  // subscriber binds NOTHING and folds NOTHING. This is the resolved opt-in
+  // default (plan §4.5).
+  const networks = federated?.networks ?? [];
+  if (networks.length === 0) {
+    // Inert: nothing subscribed, nothing to fold, nothing to tear down.
+    return { stop: (): Promise<void> => Promise.resolve() };
+  }
+
+  // Index networks by id for the gate (mirrors the surface-router /
+  // dispatch-listener construction). The gate resolves the SOURCE network from
+  // the SOURCE PRINCIPAL's `peers[]` membership — the network is never on the
+  // wire (ADR-0001).
+  const federatedNetworksById = new Map<string, PolicyFederatedNetwork>();
+  for (const network of networks) {
+    federatedNetworksById.set(network.id, network);
+  }
+
+  const pattern = federatedAgentPresenceSubject();
+
+  // The set of valid presence `envelope.type` literals — a fast membership
+  // check so a non-presence envelope that happens to match `agent.>` (none
+  // exist today, but defensive) is ignored without a fold attempt.
+  const presenceTypes = new Set<string>(AGENT_PRESENCE_TYPES);
+
+  const handler: EnvelopeHandler = (envelope, subject, sourceLink) => {
+    // Subject filter — only the federated presence subtree. The runtime fans
+    // EVERY envelope to EVERY handler, so this handler must reject everything
+    // that isn't a `federated.*.*.agent.*` subject (incl. the stack's own
+    // `local.*` presence, which B.3 owns).
+    if (!subjectMatches(pattern, subject)) return;
+    if (!presenceTypes.has(envelope.type)) return;
+
+    // === TRUST GATE 1 — federation accept-list (E.5) ======================
+    // Mirror of the dispatch-listener's Option-D gate (cortex#484). A foreign
+    // presence envelope from a peer NOT in any configured network's `peers[]`,
+    // OR on a denied subject, OR over the hop budget, OR cross-network-spoofed
+    // on the wrong leaf, is DROPPED here — never folded. The audit envelope
+    // makes the drop observable.
+    const decision = evaluateFederationGate(
+      subject,
+      envelope,
+      federatedNetworksById,
+      sourceLink,
+    );
+    if (decision !== "allow") {
+      emitFederationDenied(runtime, source, envelope, subject, decision);
+      return;
+    }
+
+    // === TRUST GATE 2 — signed_by[] chain verification (E.5) ===============
+    // The chain check is async; fold happens in its `.then`. A verification
+    // failure DROPS the envelope (never folds). When no `trustResolver` /
+    // `receivingAgentId` is wired, the chain check is skipped (the gate above
+    // still bounded which peers can appear) and the envelope folds directly.
+    if (trustResolver !== undefined && receivingAgentId !== undefined) {
+      void verifySignedByChain(envelope, {
+        resolver: trustResolver,
+        receivingAgentId,
+        rejectEmpty,
+        cryptoVerify,
+        ...(principalId !== undefined && { principalId }),
+        ...(stackIdentity !== undefined && { stackIdentity }),
+        ...(stackNKeyPub !== undefined && { stackNKeyPub }),
+        ...(resolveFederatedPeer !== undefined && { resolveFederatedPeer }),
+      })
+        .then((result) => {
+          if (!result.valid) {
+            // Chain failed — DROP. A foreign presence envelope that can't be
+            // cryptographically attributed never appears in the view.
+            process.stderr.write(
+              `federated-agent-presence: dropping foreign presence ${envelope.type} ` +
+                `(id=${envelope.id}) — signed_by chain verification failed: ` +
+                `${result.reason.kind}\n`,
+            );
+            return;
+          }
+          foldForeign(registry, envelope);
+        })
+        .catch((err: unknown) => {
+          // A verifier fault must never crash the fan-out — log + drop (fail
+          // closed: an envelope we couldn't verify is not folded).
+          process.stderr.write(
+            `federated-agent-presence: chain verify threw for ${envelope.type} ` +
+              `(id=${envelope.id}) — dropping: ` +
+              `${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        });
+      return;
+    }
+
+    // No chain verifier wired — fold directly (the accept-list gate already
+    // bounded the admissible peers).
+    foldForeign(registry, envelope);
+  };
+
+  const registration = runtime.onEnvelope(handler);
+
+  // Self-subscribe to the federated presence firehose (cortex#477 push-mode
+  // seam). Best-effort: a subscribe failure leaves the subscriber dormant
+  // (still registered as a handler, but no NATS interest declared).
+  let subscriber: MyelinSubscriber | null = null;
+  try {
+    subscriber = (await runtime.subscribe?.(pattern)) ?? null;
+    if (runtime.enabled && subscriber === null) {
+      process.stderr.write(
+        `federated-agent-presence: runtime.subscribe(${pattern}) returned null — ` +
+          `subscriber will only see envelopes from other static subscriptions\n`,
+      );
+    }
+  } catch (err) {
+    process.stderr.write(
+      `federated-agent-presence: subscribe(${pattern}) failed (non-fatal — dormant): ` +
+        `${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  }
+
+  let stopped = false;
+  return {
+    stop: async (): Promise<void> => {
+      if (stopped) return;
+      stopped = true;
+      registration.unregister();
+      if (subscriber) {
+        await subscriber.stop();
+      }
+      // Disabling federation cleanly removes foreign agents (plan §4.5). The
+      // registry's local records survive.
+      registry.removeForeign();
+    },
+  };
+}
+
+/**
+ * Fold a TRUST-VERIFIED foreign presence envelope into the registry, deriving
+ * the provenance `{principal}` + `{stack}` from the envelope's SOURCE (the
+ * signing identity). `envelope.source` is `{principal}.{stack}.{instance}[...]`,
+ * so segment[0] is the bare principal and segment[1] the bare stack slug.
+ *
+ * Using the SOURCE (not the payload scope) for provenance means a peer can't
+ * claim a DIFFERENT origin than the one it signed as: the chain verification
+ * above bound `source` to a verified pubkey, so the provenance is as trustworthy
+ * as the signature. (The payload `scope` SHOULD equal the source for a
+ * well-formed peer; deriving from the authenticated source is the safe choice if
+ * they ever diverge.)
+ *
+ * A source with fewer than two segments (defensive — the schema forbids it) is
+ * dropped rather than folded as an originless record.
+ */
+function foldForeign(registry: AgentPresenceRegistry, envelope: Envelope): void {
+  const segments = envelope.source.split(".");
+  const principal = segments[0];
+  const stack = segments[1];
+  if (
+    principal === undefined ||
+    principal.length === 0 ||
+    stack === undefined ||
+    stack.length === 0
+  ) {
+    process.stderr.write(
+      `federated-agent-presence: dropping foreign presence ${envelope.type} ` +
+        `(id=${envelope.id}) — could not derive {principal}/{stack} provenance from source "${envelope.source}"\n`,
+    );
+    return;
+  }
+  registry.applyForeign(envelope, { principal, stack });
+}
+
+/**
+ * Re-export for the boot wiring's hop-budget sanity: a foreign presence chain
+ * is bounded by `max_hop` inside the gate, but a caller that wants to inspect
+ * the observed hop count (diagnostics) reads it the same way the gate does.
+ */
+export function observedHops(envelope: Envelope): number {
+  return getSignedByChain(envelope).length;
+}
