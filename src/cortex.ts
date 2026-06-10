@@ -3196,9 +3196,14 @@ export async function startCortex(
   // is safe to run without a bus — the producer simply emits into the void and
   // the registry stays empty.
   //
-  // FSM/TTL boundary: the registry records `lastHeartbeatAt` + last explicit
-  // state ONLY. The 5-min liveness-TTL → offline reaper is Phase C (G-1114.C),
-  // not wired here.
+  // Liveness FSM (G-1114.C.3): `startAgentPresenceRegistry` starts the 5-min
+  // TTL reaper by default — an `online` record whose `agent.heartbeat` stops for
+  // longer than PRESENCE_LIVENESS_TTL_MS transitions to `offline`
+  // (reason `ttl_lapse`, distinct from a graceful `agent.offline`), firing
+  // onChange → the WS broadcast below → the live panel. The reaper interval is
+  // owned by the registry handle and stopped by `presenceRegistryHandle.stop()`
+  // in the shutdown drain (the "agent-presence registry stop" slot), so no
+  // separate drain slot is needed.
   let presenceRegistryHandle: AgentPresenceRegistryHandle | null = null;
   let presenceProducer: AgentPresenceProducer | null = null;
   // The onChange→WS-broadcast subscription handle, captured so shutdown can

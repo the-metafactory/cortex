@@ -18,6 +18,9 @@ import {
   AgentPresenceRegistry,
   agentPresenceSubject,
   startAgentPresenceRegistry,
+  PRESENCE_LIVENESS_TTL_MS,
+  TTL_LAPSE_OFFLINE_REASON,
+  type PresenceReaperScheduler,
 } from "../registry";
 import {
   createAgentOnlineEvent,
@@ -171,13 +174,15 @@ describe("AgentPresenceRegistry.apply", () => {
     expect(reg.getAgents()[0]?.state).toBe("online");
   });
 
-  test("B records lastHeartbeatAt but NEVER expires a record (no TTL/FSM)", () => {
+  test("a bare registry (reaper NOT started) NEVER expires a record", () => {
     let clock = 0;
     const reg = new AgentPresenceRegistry({ now: () => clock });
     clock = 100;
     reg.apply(online());
     clock = 100 + 10 * 60_000; // 10 minutes later — well past the 5-min TTL
-    // No reaper in B: the record stays online until an explicit offline.
+    // The reaper is opt-in (G-1114.C.3): without startReaper()/reapStale() the
+    // record stays online until an explicit offline. This preserves the B.3
+    // "records-only, no FSM" contract for fold-only callers.
     expect(reg.getAgents()[0]?.state).toBe("online");
   });
 
@@ -335,5 +340,252 @@ describe("startAgentPresenceRegistry (wiring)", () => {
     // After stop, fan-out is unregistered — new fires are ignored.
     runtime.fire(online(), "local.andreas.meta-factory.agent.online");
     expect(handle.registry.getAgents().length).toBe(0);
+  });
+
+  test("starts the liveness reaper by default; stop() stops it", async () => {
+    const runtime = makeFakeRuntime();
+    const handle = await startAgentPresenceRegistry({
+      runtime,
+      principal: "andreas",
+      stack: "meta-factory",
+    });
+    expect(handle.registry.isReaperRunning()).toBe(true);
+    await handle.stop();
+    expect(handle.registry.isReaperRunning()).toBe(false);
+  });
+
+  test("startReaper: false leaves the reaper dormant (fold-only callers)", async () => {
+    const runtime = makeFakeRuntime();
+    const handle = await startAgentPresenceRegistry({
+      runtime,
+      principal: "andreas",
+      stack: "meta-factory",
+      startReaper: false,
+    });
+    expect(handle.registry.isReaperRunning()).toBe(false);
+    await handle.stop();
+  });
+});
+
+// --- G-1114.C.3 liveness FSM / TTL reaper ------------------------------------
+
+/**
+ * A deterministic interval scheduler: it captures the registered tick callback
+ * and exposes `tick()` so a test drives sweeps explicitly instead of waiting on
+ * wall-clock `setInterval`. `cleared` records that the registry cancelled the
+ * interval on stop.
+ */
+function makeFakeScheduler(): PresenceReaperScheduler & {
+  tick(): void;
+  readonly cleared: boolean;
+  readonly scheduled: boolean;
+} {
+  let fn: (() => void) | null = null;
+  let cleared = false;
+  const handle = {};
+  return {
+    setInterval(cb: () => void) {
+      fn = cb;
+      return handle;
+    },
+    clearInterval(h: unknown) {
+      if (h === handle) {
+        cleared = true;
+        fn = null;
+      }
+    },
+    tick() {
+      if (fn) fn();
+    },
+    get cleared() {
+      return cleared;
+    },
+    get scheduled() {
+      return fn !== null;
+    },
+  };
+}
+
+describe("AgentPresenceRegistry liveness reaper (C.3)", () => {
+  test("TTL constant is 5 minutes", () => {
+    expect(PRESENCE_LIVENESS_TTL_MS).toBe(5 * 60_000);
+  });
+
+  test("online → heartbeats keep online → silence past TTL → offline(ttl_lapse)", () => {
+    let clock = 0;
+    const sched = makeFakeScheduler();
+    const reg = new AgentPresenceRegistry({ now: () => clock, scheduler: sched });
+    reg.startReaper();
+    expect(sched.scheduled).toBe(true);
+
+    const changes: { state: string; reason?: string }[] = [];
+    reg.onChange((_k, rec) => {
+      changes.push({ state: rec.state, reason: rec.offlineReason });
+    });
+
+    // boot
+    clock = 1_000;
+    reg.apply(online());
+    // heartbeat at +1min, +2min, +3min, +4min — each within the 5-min window.
+    for (const t of [60_000, 120_000, 180_000, 240_000]) {
+      clock = 1_000 + t;
+      reg.apply(heartbeat());
+      reg.reapStale(); // a sweep between beats must NOT trip (still fresh)
+      expect(reg.getAgents()[0]?.state).toBe("online");
+    }
+    // Now go silent. A sweep just before the TTL line — still online.
+    clock = 1_000 + 240_000 + PRESENCE_LIVENESS_TTL_MS - 1;
+    sched.tick();
+    expect(reg.getAgents()[0]?.state).toBe("online");
+
+    // Cross the TTL line (last heartbeat was at clock=241_000).
+    clock = 241_000 + PRESENCE_LIVENESS_TTL_MS + 1;
+    sched.tick();
+    const rec = reg.getAgents()[0];
+    expect(rec?.state).toBe("offline");
+    expect(rec?.offlineReason).toBe(TTL_LAPSE_OFFLINE_REASON);
+    // lastHeartbeatAt survives the reap (last-seen liveness preserved).
+    expect(rec?.lastHeartbeatAt).toBe(241_000);
+
+    // onChange fired ONCE for the offline transition (state changed once).
+    const offlineEvents = changes.filter((c) => c.state === "offline");
+    expect(offlineEvents.length).toBe(1);
+    expect(offlineEvents[0]?.reason).toBe(TTL_LAPSE_OFFLINE_REASON);
+  });
+
+  test("graceful agent.offline BEFORE the TTL wins (reason: shutdown, not ttl_lapse)", () => {
+    let clock = 0;
+    const reg = new AgentPresenceRegistry({ now: () => clock });
+    clock = 1_000;
+    reg.apply(online());
+    clock = 60_000;
+    reg.apply(heartbeat());
+    // Graceful offline well before the TTL would lapse.
+    clock = 90_000;
+    reg.apply(offline());
+    expect(reg.getAgents()[0]?.state).toBe("offline");
+    expect(reg.getAgents()[0]?.offlineReason).toBe("shutdown");
+    // A later sweep must NOT re-stamp ttl_lapse over the graceful reason.
+    clock = 90_000 + PRESENCE_LIVENESS_TTL_MS + 1_000;
+    const reaped = reg.reapStale();
+    expect(reaped).toEqual([]);
+    expect(reg.getAgents()[0]?.offlineReason).toBe("shutdown");
+  });
+
+  test("heartbeat AFTER a TTL-lapse offline REVIVES the record to online", () => {
+    let clock = 0;
+    const reg = new AgentPresenceRegistry({ now: () => clock });
+    clock = 1_000;
+    reg.apply(online());
+    // Lapse it.
+    clock = 1_000 + PRESENCE_LIVENESS_TTL_MS + 1;
+    expect(reg.reapStale()).toEqual(["andreas/meta-factory/luna"]);
+    expect(reg.getAgents()[0]?.state).toBe("offline");
+    expect(reg.getAgents()[0]?.offlineReason).toBe(TTL_LAPSE_OFFLINE_REASON);
+    // A fresh heartbeat revives it (applyHeartbeat upserts online).
+    clock = 1_000 + PRESENCE_LIVENESS_TTL_MS + 10_000;
+    reg.apply(heartbeat());
+    const rec = reg.getAgents()[0];
+    expect(rec?.state).toBe("online");
+    expect(rec?.offlineReason).toBeUndefined();
+    expect(rec?.lastHeartbeatAt).toBe(1_000 + PRESENCE_LIVENESS_TTL_MS + 10_000);
+    // And it survives subsequent in-window sweeps.
+    reg.reapStale();
+    expect(reg.getAgents()[0]?.state).toBe("online");
+  });
+
+  test("reaper is idempotent — an already-offline record does not re-emit", () => {
+    let clock = 0;
+    const reg = new AgentPresenceRegistry({ now: () => clock });
+    clock = 1_000;
+    reg.apply(online());
+    const changes: string[] = [];
+    reg.onChange((_k, rec) => changes.push(rec.state));
+    // First sweep past TTL → one offline transition.
+    clock = 1_000 + PRESENCE_LIVENESS_TTL_MS + 1;
+    expect(reg.reapStale()).toEqual(["andreas/meta-factory/luna"]);
+    // Subsequent sweeps at ever-later times reap nothing + emit nothing.
+    clock += 10 * 60_000;
+    expect(reg.reapStale()).toEqual([]);
+    clock += 10 * 60_000;
+    expect(reg.reapStale()).toEqual([]);
+    expect(changes.filter((s) => s === "offline").length).toBe(1);
+  });
+
+  test("an online record that never heartbeated times out against lastSeenAt", () => {
+    let clock = 0;
+    const reg = new AgentPresenceRegistry({ now: () => clock });
+    clock = 1_000;
+    reg.apply(online()); // lastSeenAt = 1_000, no lastHeartbeatAt
+    // Just before the TTL relative to lastSeenAt — still online.
+    clock = 1_000 + PRESENCE_LIVENESS_TTL_MS - 1;
+    expect(reg.reapStale()).toEqual([]);
+    // Past it — reaped.
+    clock = 1_000 + PRESENCE_LIVENESS_TTL_MS + 1;
+    expect(reg.reapStale()).toEqual(["andreas/meta-factory/luna"]);
+    expect(reg.getAgents()[0]?.offlineReason).toBe(TTL_LAPSE_OFFLINE_REASON);
+  });
+
+  test("a reaper tick AFTER stopReaper() is a no-op", () => {
+    let clock = 0;
+    const sched = makeFakeScheduler();
+    const reg = new AgentPresenceRegistry({ now: () => clock, scheduler: sched });
+    reg.startReaper();
+    clock = 1_000;
+    reg.apply(online());
+    reg.stopReaper();
+    expect(sched.cleared).toBe(true);
+    expect(reg.isReaperRunning()).toBe(false);
+    // Even if a stale tick somehow fired, the captured fn is cleared → no-op.
+    clock = 1_000 + PRESENCE_LIVENESS_TTL_MS + 1;
+    sched.tick();
+    expect(reg.getAgents()[0]?.state).toBe("online");
+  });
+
+  test("startReaper() is idempotent — does not stack a second interval", () => {
+    const sched = makeFakeScheduler();
+    const setSpy = mock(sched.setInterval.bind(sched));
+    const reg = new AgentPresenceRegistry({
+      scheduler: { setInterval: setSpy, clearInterval: sched.clearInterval.bind(sched) },
+    });
+    reg.startReaper();
+    reg.startReaper();
+    reg.startReaper();
+    expect(setSpy).toHaveBeenCalledTimes(1);
+    reg.stopReaper();
+  });
+
+  test("stopReaper() is idempotent + safe when never started", () => {
+    const reg = new AgentPresenceRegistry();
+    expect(() => reg.stopReaper()).not.toThrow();
+    reg.startReaper();
+    reg.stopReaper();
+    expect(() => reg.stopReaper()).not.toThrow();
+    expect(reg.isReaperRunning()).toBe(false);
+  });
+
+  test("reaper sweeps multiple agents in one tick; only stale ones flip", () => {
+    let clock = 0;
+    const reg = new AgentPresenceRegistry({ now: () => clock });
+    // luna (the shared IDENTITY) + a second agent echo.
+    clock = 1_000;
+    reg.apply(online());
+    clock = 2_000;
+    reg.apply(
+      createAgentOnlineEvent({
+        source: SOURCE,
+        identity: { ...IDENTITY, agent_id: "echo", nkey_public_key: "UECHO" },
+        scope: SCOPE,
+        capabilities: [],
+        startedAt: new Date("2026-06-10T09:00:00.000Z"),
+      }),
+    );
+    // luna last-seen 1_000, echo last-seen 2_000. Set clock so only luna is stale.
+    clock = 1_000 + PRESENCE_LIVENESS_TTL_MS + 1; // echo still within window (2_000 + TTL > clock)
+    const reaped = reg.reapStale();
+    expect(reaped).toEqual(["andreas/meta-factory/luna"]);
+    const byKey = new Map(reg.getAgents().map((r) => [r.agentId, r.state]));
+    expect(byKey.get("luna")).toBe("offline");
+    expect(byKey.get("echo")).toBe("online");
   });
 });

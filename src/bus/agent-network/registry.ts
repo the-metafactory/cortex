@@ -1,5 +1,6 @@
 /**
  * G-1114.B.3 — stack-local runtime agent-presence registry (subscriber).
+ * G-1114.C.3 — + liveness FSM / 5-min TTL reaper (this module's reaper methods).
  *
  * The consumer half of the Phase B end-to-end wiring. It subscribes to the
  * stack's own `local.{principal}.{stack}.agent.>` subtree (STACK-LOCAL ONLY —
@@ -22,18 +23,29 @@
  *                                    (B records the LATEST set only; the full
  *                                    diff/reconcile handling is Phase C).
  *
- * ## Boundary — what it does NOT do (deferred to Phase C / G-1114.C)
+ * ## Liveness FSM / TTL reaper (G-1114.C.3 — ADDED on top of the B.3 fold)
  *
- *   - **No liveness FSM / TTL expiry.** B records `lastHeartbeatAt` + the last
- *     explicit state only. The 5-minute liveness TTL → `offline` transition
- *     (a record going stale because heartbeats STOPPED, with no `agent.offline`
- *     envelope) is Phase C's reaper. B never times anything out — a record stays
- *     `online` until an explicit `agent.offline` arrives. This is the
- *     deliberate B/C split (ADR-0007 §Consequences: "the liveness FSM … TTL
- *     lapse" is its own line item).
- *   - **No capability diffing.** B stores the latest set; C computes the delta
- *     against the prior record + reconciles.
- *   - **No federation.** B subscribes to `local.` only. The `federated.`
+ *   - The reaper is the OPT-IN second half of the FSM. B.3 records
+ *     `lastHeartbeatAt` + the last explicit state; C.3 adds the
+ *     `online`→`offline` transition when heartbeats STOP (a record going stale
+ *     with no `agent.offline` envelope — there was no agent left to send one).
+ *     {@link AgentPresenceRegistry.startReaper} schedules a periodic
+ *     {@link AgentPresenceRegistry.reapStale} sweep; any `online` record whose
+ *     last heartbeat is older than {@link PRESENCE_LIVENESS_TTL_MS} (5 min)
+ *     transitions to `offline` with reason {@link TTL_LAPSE_OFFLINE_REASON} and
+ *     fires `onChange` (so the WS push → panel update lands on the transition).
+ *   - The reaper stays OPT-IN so a bare registry that only folds envelopes
+ *     (tests, the cap-consistency harness) keeps the pure B.3 "no FSM" behaviour
+ *     until `startReaper()` is called. The wired path calls it.
+ *   - A graceful `agent.offline` before the TTL still wins (already handled by
+ *     `applyOffline`); a heartbeat AFTER a TTL-lapse offline REVIVES the record
+ *     to `online` (already handled by `applyHeartbeat`'s online upsert).
+ *
+ * ## Boundary — what it STILL does NOT do (deferred to later Phase C / E)
+ *
+ *   - **No capability diffing.** B stores the latest set; the delta/reconcile
+ *     (C.2) computes it against the prior record.
+ *   - **No federation.** It subscribes to `local.` only. The `federated.`
  *     subtree is Phase E.
  *
  * ## Observability seam (for B.4 + the MC API)
@@ -73,14 +85,53 @@ import {
 } from "./envelopes";
 
 /**
+ * The liveness TTL — the maximum age (epoch-ms span) a record's
+ * `lastHeartbeatAt` may reach before the Phase C reaper times it out to
+ * `offline`. ADR-0007 §Consequences + design §7: **5 minutes**. The presence
+ * heartbeat fires every 60s (`DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS`), so a
+ * 5-minute window tolerates losing 4 consecutive beats before declaring an
+ * agent stale (the 5th missed beat trips the reaper).
+ */
+export const PRESENCE_LIVENESS_TTL_MS = 5 * 60_000;
+
+/**
+ * Default reaper tick cadence (epoch-ms). The reaper sweeps for stale records
+ * on this interval; it is independent of (and finer than) the TTL so a lapse is
+ * detected within ~one tick of crossing the 5-minute line rather than only on
+ * the next inbound envelope. 30s gives ≤30s detection latency on a 5-min TTL.
+ * Injectable via {@link AgentPresenceRegistryOptions.scheduler} for tests.
+ */
+export const DEFAULT_PRESENCE_REAPER_INTERVAL_MS = 30_000;
+
+/**
+ * Reason an agent is `offline`. A SUPERSET of the on-the-wire
+ * {@link AgentOfflineReason} (`shutdown`/`restart`/`error`, all carried by an
+ * explicit `agent.offline` envelope) plus the subscriber-INFERRED `ttl_lapse` —
+ * the record went stale because heartbeats STOPPED, with no `agent.offline`
+ * envelope (there was no agent left to send one). The distinct value lets the
+ * panel (Phase C.4 / D) render a timed-out agent differently from a gracefully
+ * shut-down one. `ttl_lapse` never rides the wire — it is only ever stamped by
+ * the reaper here.
+ */
+export type PresenceOfflineReason = AgentOfflineReason | "ttl_lapse";
+
+/**
+ * The {@link PresenceOfflineReason} the reaper stamps on a TTL-lapse offline.
+ * Exported so downstream renderers (and tests) compare against the constant
+ * rather than re-typing the literal.
+ */
+export const TTL_LAPSE_OFFLINE_REASON = "ttl_lapse" as const;
+
+/**
  * The observable presence state for one agent. Keyed in the registry by
  * {@link AgentPresenceRecord.key} (`{principal}/{stack}/{agent_id}` — see
  * {@link recordKey}).
  *
- * `state` carries only what B observes from explicit envelopes: an agent is
- * `online` after `agent.online` / `agent.heartbeat`, `offline` after an
- * explicit `agent.offline`. There is deliberately NO `"stale"`/TTL-derived
- * state in B — that transition is Phase C's liveness FSM.
+ * `state` is `online` after `agent.online` / `agent.heartbeat`, and `offline`
+ * after either an explicit `agent.offline` envelope OR a Phase C TTL lapse
+ * (heartbeats stopped for longer than {@link PRESENCE_LIVENESS_TTL_MS}). The
+ * two offline paths are distinguished by {@link AgentPresenceRecord.offlineReason}
+ * (`ttl_lapse` = inferred; `shutdown`/`restart`/`error` = announced).
  */
 export interface AgentPresenceRecord {
   /** Stable map key — `{principal}/{stack}/{agent_id}`. */
@@ -97,10 +148,14 @@ export interface AgentPresenceRecord {
   stack: string;
   /** Latest known declared capability set. */
   capabilities: readonly string[];
-  /** Last explicit liveness state observed from an envelope. */
+  /** Last liveness state — explicit (envelope) or inferred (TTL reaper). */
   state: "online" | "offline";
-  /** Reason from the last `agent.offline`, when `state === "offline"`. */
-  offlineReason?: AgentOfflineReason;
+  /**
+   * Why the record is offline, when `state === "offline"`: an announced
+   * {@link AgentOfflineReason} from the last `agent.offline`, or the
+   * reaper-inferred `ttl_lapse`. Undefined while online.
+   */
+  offlineReason?: PresenceOfflineReason;
   /** Boot time from the last `agent.online` (ISO-8601), when known. */
   startedAt?: string;
   /**
@@ -133,10 +188,45 @@ function recordKey(principal: string, stack: string, agentId: string): string {
   return `${principal}/${stack}/${agentId}`;
 }
 
-/** Optional injection points — tests pass a clock; production omits. */
+/**
+ * Pluggable interval scheduler — the reaper schedules its sweep through this so
+ * tests can drive ticks deterministically (a fake scheduler invokes the
+ * callback on demand) instead of waiting real wall-clock time. Production
+ * defaults to `setInterval`/`clearInterval`. Mirrors the heartbeat-ticker's
+ * injectable-timer pattern.
+ */
+export interface PresenceReaperScheduler {
+  /** Schedule `fn` every `intervalMs`; returns an opaque cancel handle. */
+  setInterval(fn: () => void, intervalMs: number): unknown;
+  /** Cancel a handle from {@link PresenceReaperScheduler.setInterval}. */
+  clearInterval(handle: unknown): void;
+}
+
+const DEFAULT_SCHEDULER: PresenceReaperScheduler = {
+  setInterval: (fn, ms) => setInterval(fn, ms),
+  clearInterval: (handle) => {
+    clearInterval(handle as ReturnType<typeof setInterval>);
+  },
+};
+
+/** Optional injection points — tests pass a clock + scheduler; production omits. */
 export interface AgentPresenceRegistryOptions {
-  /** Receiver clock for `lastHeartbeatAt` / `lastSeenAt`. Defaults to `Date.now`. */
+  /** Receiver clock for `lastHeartbeatAt` / `lastSeenAt` + TTL math. Defaults to `Date.now`. */
   now?: () => number;
+  /**
+   * Liveness TTL in epoch-ms — a record whose `lastHeartbeatAt` is older than
+   * `now() - ttlMs` is reaped to `offline`. Defaults to
+   * {@link PRESENCE_LIVENESS_TTL_MS} (5 min). Injectable for tests.
+   */
+  ttlMs?: number;
+  /** Interval scheduler for the reaper. Defaults to {@link DEFAULT_SCHEDULER}. */
+  scheduler?: PresenceReaperScheduler;
+  /**
+   * Reaper sweep cadence in epoch-ms. Defaults to
+   * {@link DEFAULT_PRESENCE_REAPER_INTERVAL_MS} (30s). Only used once
+   * {@link AgentPresenceRegistry.startReaper} is called.
+   */
+  reaperIntervalMs?: number;
 }
 
 /**
@@ -149,9 +239,18 @@ export class AgentPresenceRegistry {
   private readonly records = new Map<string, AgentPresenceRecord>();
   private readonly listeners = new Set<AgentPresenceChangeListener>();
   private readonly now: () => number;
+  private readonly ttlMs: number;
+  private readonly scheduler: PresenceReaperScheduler;
+  private readonly reaperIntervalMs: number;
+  /** Active reaper interval handle, or `null` when the reaper is not running. */
+  private reaperHandle: unknown = null;
 
   constructor(opts: AgentPresenceRegistryOptions = {}) {
     this.now = opts.now ?? Date.now;
+    this.ttlMs = opts.ttlMs ?? PRESENCE_LIVENESS_TTL_MS;
+    this.scheduler = opts.scheduler ?? DEFAULT_SCHEDULER;
+    this.reaperIntervalMs =
+      opts.reaperIntervalMs ?? DEFAULT_PRESENCE_REAPER_INTERVAL_MS;
   }
 
   /**
@@ -351,6 +450,78 @@ export class AgentPresenceRegistry {
       },
     };
   }
+
+  // --- Liveness FSM / TTL reaper (G-1114.C.3) ------------------------------
+
+  /**
+   * Start the periodic liveness reaper. Schedules {@link reapStale} on the
+   * injected scheduler's interval (default 30s). Idempotent — a second call
+   * while the reaper is running is a no-op (it does NOT stack a second
+   * interval). The reaper is OPT-IN: a bare registry never times anything out
+   * until `startReaper()` is called, preserving the Phase B "records-only,
+   * no FSM" contract for callers that fold envelopes without wiring liveness.
+   */
+  startReaper(): void {
+    if (this.reaperHandle !== null) return;
+    this.reaperHandle = this.scheduler.setInterval(() => {
+      this.reapStale();
+    }, this.reaperIntervalMs);
+  }
+
+  /**
+   * Stop the reaper interval. Idempotent — safe to call when not running, and
+   * safe to call twice (shutdown drain may double-invoke). Clears the handle so
+   * a post-stop tick can never fire (the scheduler cancel + the null-guard in
+   * {@link startReaper} together guarantee no tick-after-stop).
+   */
+  stopReaper(): void {
+    if (this.reaperHandle === null) return;
+    this.scheduler.clearInterval(this.reaperHandle);
+    this.reaperHandle = null;
+  }
+
+  /** True while the reaper interval is scheduled. (Mostly for tests.) */
+  isReaperRunning(): boolean {
+    return this.reaperHandle !== null;
+  }
+
+  /**
+   * Single liveness sweep: for every record currently `online` whose last
+   * heartbeat is older than `now() - ttlMs`, transition it to `offline` with
+   * reason {@link TTL_LAPSE_OFFLINE_REASON} and fire `onChange` (so the WS push
+   * → panel update happens on the transition, not just on the next inbound
+   * envelope). Returns the keys reaped this sweep.
+   *
+   * Idempotency / no repeat-emit: an already-`offline` record is skipped (the
+   * reaper only acts on the `online`→`offline` edge), so a record that lapsed
+   * on a previous tick does NOT re-emit on subsequent ticks. A record with no
+   * `lastHeartbeatAt` yet (online via `agent.online` but never heartbeated) is
+   * timed out against `lastSeenAt` as the liveness floor — an agent that
+   * announced and then went silent without ever heartbeating is just as stale.
+   *
+   * Exposed publicly so tests can drive a deterministic sweep, and so a future
+   * lazy-on-read path could call it; the wired path uses {@link startReaper}.
+   */
+  reapStale(): string[] {
+    const cutoff = this.now() - this.ttlMs;
+    const reaped: string[] = [];
+    for (const [key, rec] of this.records) {
+      if (rec.state !== "online") continue;
+      // Liveness floor: prefer the last heartbeat; fall back to last-seen for a
+      // record that announced online but never heartbeated.
+      const lastLive = rec.lastHeartbeatAt ?? rec.lastSeenAt;
+      if (lastLive > cutoff) continue;
+      const next: AgentPresenceRecord = {
+        ...rec,
+        state: "offline",
+        offlineReason: TTL_LAPSE_OFFLINE_REASON,
+      };
+      this.records.set(key, next);
+      reaped.push(key);
+      this.emit(key, next);
+    }
+    return reaped;
+  }
 }
 
 /**
@@ -386,6 +557,12 @@ export interface StartAgentPresenceRegistryOptions {
   registry?: AgentPresenceRegistry;
   /** Injected clock, forwarded to a freshly-constructed registry (tests). */
   now?: () => number;
+  /**
+   * Whether to start the liveness reaper (G-1114.C.3). Defaults to `true` — the
+   * wired path wants TTL expiry. Tests that supply their own registry + drive
+   * `reapStale` manually pass `false` to avoid a real `setInterval`.
+   */
+  startReaper?: boolean;
 }
 
 /**
@@ -405,6 +582,13 @@ export async function startAgentPresenceRegistry(
     opts.registry ??
     new AgentPresenceRegistry(opts.now !== undefined ? { now: opts.now } : {});
   const pattern = agentPresenceSubject(opts.principal, opts.stack);
+
+  // G-1114.C.3 — start the liveness reaper (TTL expiry). Opt-out for tests that
+  // drive `reapStale` deterministically. `startReaper` is idempotent + the
+  // handle's `stop()` stops it (registered in the cortex.ts shutdown drain).
+  if (opts.startReaper !== false) {
+    registry.startReaper();
+  }
 
   const handler: EnvelopeHandler = (envelope, subject) => {
     if (!subjectMatches(pattern, subject)) return;
@@ -436,6 +620,9 @@ export async function startAgentPresenceRegistry(
     stop: async (): Promise<void> => {
       if (stopped) return;
       stopped = true;
+      // Stop the liveness reaper FIRST so no sweep can fire mid-teardown.
+      // Idempotent + a no-op when the reaper was never started.
+      registry.stopReaper();
       registration.unregister();
       // The runtime tracks `subscribe()` subscribers and drains them on
       // `runtime.stop()`, but we stop ours explicitly so a listener-scoped
