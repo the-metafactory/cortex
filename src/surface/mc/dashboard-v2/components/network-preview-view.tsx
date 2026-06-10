@@ -74,6 +74,9 @@ export function NetworkPreviewView({ state }: NetworkPreviewViewProps) {
                 data-agent-id={a.agent_id}
                 data-state={a.state}
                 data-offline-reason={offline ? (a.offline_reason ?? "") : undefined}
+                aria-label={`${a.assistant_name ?? a.agent_id} — ${
+                  offline ? `offline (${reasonLabel})` : "online"
+                }`}
               >
                 <div className="agents-panel-identity">
                   <span className="agents-panel-name">
@@ -82,13 +85,15 @@ export function NetworkPreviewView({ state }: NetworkPreviewViewProps) {
                   <span className="agents-panel-id dim">{a.agent_id}</span>
                 </div>
                 <div className="agents-panel-caps">
-                  {formatCapabilities(a.capabilities).map((badge) =>
+                  {formatCapabilities(a.capabilities).map((badge, i) =>
                     badge.placeholder ? (
                       <span key="__none__" className="agents-panel-cap-none dim">
                         {badge.label}
                       </span>
                     ) : (
-                      <span key={badge.label} className="agents-panel-cap">
+                      // Key on label+index: the capability schema doesn't enforce
+                      // uniqueness, so a duplicate label must not collide on the key.
+                      <span key={`${badge.label}-${i}`} className="agents-panel-cap">
                         {badge.label}
                       </span>
                     )
