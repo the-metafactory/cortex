@@ -466,6 +466,92 @@ describe("ClaudeCodeHarness — DispatchRequest → CCSessionOpts mapping", () =
 });
 
 // ---------------------------------------------------------------------------
+// cc_session_id stamping (MC-I1.S3 — ADR-0005 §3)
+// ---------------------------------------------------------------------------
+
+describe("ClaudeCodeHarness — cc_session_id stamping (MC-I1.S3)", () => {
+  // Timing: `started` is yielded BEFORE start() spawns CC, so the stream-init
+  // session id is not yet known. The authoritative id rides the TERMINAL
+  // envelope, sourced from CCSessionResult.sessionId. The terminal shares the
+  // started envelope's correlation_id, so MC's session projection (S4) joins
+  // started → terminal on that key and reads cc_session_id off the terminal.
+
+  test("completed envelope carries cc_session_id from result.sessionId", async () => {
+    const cap = captureFactory(makeResult({ sessionId: "cc-sess-xyz" }));
+    const h = new ClaudeCodeHarness({ source: SOURCE, ccSessionFactory: cap.factory });
+
+    const envelopes = await drain(h.dispatch(makeRequest()));
+
+    expect(envelopes[1]?.type).toBe("dispatch.task.completed");
+    expect(envelopes[1]?.payload.cc_session_id).toBe("cc-sess-xyz");
+  });
+
+  test("failed envelope carries cc_session_id from result.sessionId", async () => {
+    const cap = captureFactory(
+      makeResult({ success: false, exitCode: 1, sessionId: "cc-sess-fail" }),
+    );
+    const h = new ClaudeCodeHarness({ source: SOURCE, ccSessionFactory: cap.factory });
+
+    const envelopes = await drain(h.dispatch(makeRequest()));
+
+    expect(envelopes[1]?.type).toBe("dispatch.task.failed");
+    expect(envelopes[1]?.payload.cc_session_id).toBe("cc-sess-fail");
+  });
+
+  test("aborted envelope carries cc_session_id from result.sessionId", async () => {
+    const cap = captureFactory(
+      makeResult({
+        success: false,
+        exitCode: 1,
+        aborted: true,
+        abortReason: "timeout",
+        sessionId: "cc-sess-abort",
+      }),
+    );
+    const h = new ClaudeCodeHarness({ source: SOURCE, ccSessionFactory: cap.factory });
+
+    const envelopes = await drain(h.dispatch(makeRequest()));
+
+    expect(envelopes[1]?.type).toBe("dispatch.task.aborted");
+    expect(envelopes[1]?.payload.cc_session_id).toBe("cc-sess-abort");
+  });
+
+  test("cc_session_id is ABSENT (not empty) on terminal when result has no sessionId", async () => {
+    const cap = captureFactory(makeResult({ sessionId: undefined }));
+    const h = new ClaudeCodeHarness({ source: SOURCE, ccSessionFactory: cap.factory });
+
+    const envelopes = await drain(h.dispatch(makeRequest()));
+
+    expect(envelopes[1]?.type).toBe("dispatch.task.completed");
+    expect("cc_session_id" in (envelopes[1]?.payload ?? {})).toBe(false);
+  });
+
+  test("started carries cc_session_id from the resume id when one is supplied", async () => {
+    // The resume id is the only CC session id the harness knows at started-time
+    // (it's threaded as --resume). Without a resume id, started has no session
+    // id available yet (the stream-init id arrives after start()).
+    const cap = captureFactory(makeResult({ sessionId: "cc-sess-resumed" }));
+    const h = new ClaudeCodeHarness({ source: SOURCE, ccSessionFactory: cap.factory });
+    const req = makeRequest({ runtime: { resumeSessionId: "cc-resume-id" } });
+
+    const envelopes = await drain(h.dispatch(req));
+
+    expect(envelopes[0]?.type).toBe("dispatch.task.started");
+    expect(envelopes[0]?.payload.cc_session_id).toBe("cc-resume-id");
+  });
+
+  test("started has NO cc_session_id when there is no resume id (id not yet known)", async () => {
+    const cap = captureFactory(makeResult({ sessionId: "cc-sess-fresh" }));
+    const h = new ClaudeCodeHarness({ source: SOURCE, ccSessionFactory: cap.factory });
+
+    const envelopes = await drain(h.dispatch(makeRequest()));
+
+    expect(envelopes[0]?.type).toBe("dispatch.task.started");
+    expect("cc_session_id" in (envelopes[0]?.payload ?? {})).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Failure paths
 // ---------------------------------------------------------------------------
 

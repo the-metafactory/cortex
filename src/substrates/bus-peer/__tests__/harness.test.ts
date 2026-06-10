@@ -96,11 +96,9 @@ function fakeRuntime() {
         },
       };
     },
-    // eslint-disable-next-line @typescript-eslint/require-await
     async publish(envelope) {
       published.push(envelope);
     },
-    // eslint-disable-next-line @typescript-eslint/require-await
     async stop() {
       handlers.clear();
     },
@@ -217,6 +215,11 @@ describe("BusPeerHarness — round-trip + verification gate", () => {
     expect(yielded).toHaveLength(2);
     expect(yielded[0]?.type).toBe("dispatch.task.started");
     expect(yielded[1]?.type).toBe("dispatch.task.completed");
+
+    // MC-I1.S3 — the bus-peer harness has no Claude Code session, so
+    // cc_session_id is ABSENT (not empty) on its lifecycle envelopes.
+    expect("cc_session_id" in (yielded[0]?.payload ?? {})).toBe(false);
+    expect("cc_session_id" in (yielded[1]?.payload ?? {})).toBe(false);
   });
 
   test("drops an inbound envelope whose signer is not in receiver's trust list", async () => {

@@ -228,6 +228,25 @@ export interface DispatchTaskCommonOpts {
    * The builder passes whatever it receives through verbatim.
    */
   responseRouting?: AnyResponseRouting;
+  /**
+   * MC-I1.S3 (ADR-0005 §3) — the Claude Code session id this dispatch's
+   * runner learned from the CC stream-init event (cc-session.ts emits a
+   * `session-id` event). Surfaces as `payload.cc_session_id` so Mission
+   * Control — playing the dispatch-sink role — can JOIN `dispatch.task.*`
+   * lifecycle envelopes onto session/assignment rows.
+   *
+   * Optional, and OMITTED from the payload (not an empty string) when the
+   * harness has no CC session — e.g. the bus-peer harness, the agent-team
+   * moderator path, or a claude-code `started` envelope yielded BEFORE the
+   * session id is known (see {@link createDispatchTaskStartedEvent} timing
+   * note). When present, every lifecycle event for one task shares the same
+   * value; surfaces also key on `correlation_id` to stitch the timeline.
+   *
+   * **Payload-only.** This widens the lifecycle payload; the wire grammar
+   * (subject, envelope metadata, sovereignty) is untouched — the myelin
+   * schema already accepts additional payload properties.
+   */
+  ccSessionId?: string;
 }
 
 /**
@@ -260,6 +279,12 @@ function buildBaseEnvelope(
       ...(common.responseRouting !== undefined && {
         response_routing: common.responseRouting,
       }),
+      // MC-I1.S3 — stamp the CC session id when the harness knows it, so MC
+      // can join lifecycle → session rows. Omitted (no field on the wire)
+      // for harnesses without a CC session, same pattern as response_routing.
+      ...(common.ccSessionId !== undefined && {
+        cc_session_id: common.ccSessionId,
+      }),
       ...payloadExtras,
     },
   });
@@ -284,6 +309,15 @@ export interface DispatchTaskStartedOpts extends DispatchTaskCommonOpts {
  * Emitted once when the runner begins executing a task — typically right
  * after spawning the CC session. Pairs with one of `completed`, `failed`,
  * or `aborted` via the shared `correlation_id`.
+ *
+ * **MC-I1.S3 timing note.** The claude-code harness yields this envelope
+ * BEFORE it spawns the CC process, so the stream-init session id is not yet
+ * known — `cc_session_id` is therefore ABSENT here on a fresh dispatch and
+ * is carried instead by the terminal envelope (same `correlation_id`). The
+ * one exception is a RESUME dispatch, where the resume id is the known CC
+ * session id at started-time and the harness stamps it. The field is on
+ * `DispatchTaskCommonOpts` so any caller that DOES know the id early (or a
+ * future early-id substrate) can populate `started` directly.
  */
 export function createDispatchTaskStartedEvent(
   opts: DispatchTaskStartedOpts,

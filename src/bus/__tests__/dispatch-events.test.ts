@@ -365,6 +365,48 @@ describe("dispatch.task.* — correlation_id contract", () => {
   });
 });
 
+describe("dispatch.task.* — cc_session_id parameterisation (MC-I1.S3)", () => {
+  const common = {
+    source: SOURCE,
+    taskId: TASK_ID,
+    agentId: "cortex",
+    startedAt: STARTED_AT,
+  };
+  const CC_SESSION_ID = "b3a1c2d4-0000-4000-8000-aaaaaaaaaaaa";
+
+  test("omitting ccSessionId leaves the field ABSENT (not empty) on every helper", () => {
+    const envs = [
+      createDispatchTaskStartedEvent(common),
+      createDispatchTaskCompletedEvent({ ...common, completedAt: COMPLETED_AT }),
+      createDispatchTaskFailedEvent({ ...common, failedAt: COMPLETED_AT, errorSummary: "x" }),
+      createDispatchTaskAbortedEvent({ ...common, abortedAt: COMPLETED_AT, reason: "timeout" }),
+    ];
+    for (const env of envs) {
+      // Absent, not undefined-valued — same omission contract as response_routing.
+      expect("cc_session_id" in env.payload).toBe(false);
+      expect(validateEnvelope(env).ok).toBe(true);
+    }
+  });
+
+  test("ccSessionId lands in payload.cc_session_id on started and round-trips through schema", () => {
+    const env = createDispatchTaskStartedEvent({ ...common, ccSessionId: CC_SESSION_ID });
+    expect(env.payload.cc_session_id).toBe(CC_SESSION_ID);
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("ccSessionId lands in payload.cc_session_id on every terminal helper", () => {
+    const envs = [
+      createDispatchTaskCompletedEvent({ ...common, completedAt: COMPLETED_AT, ccSessionId: CC_SESSION_ID }),
+      createDispatchTaskFailedEvent({ ...common, failedAt: COMPLETED_AT, errorSummary: "x", ccSessionId: CC_SESSION_ID }),
+      createDispatchTaskAbortedEvent({ ...common, abortedAt: COMPLETED_AT, reason: "timeout", ccSessionId: CC_SESSION_ID }),
+    ];
+    for (const env of envs) {
+      expect(env.payload.cc_session_id).toBe(CC_SESSION_ID);
+      expect(validateEnvelope(env).ok).toBe(true);
+    }
+  });
+});
+
 describe("dispatch.task.* — data_residency parameterisation", () => {
   test("source without dataResidency defaults to NZ", () => {
     const env = createDispatchTaskStartedEvent({

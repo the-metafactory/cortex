@@ -451,17 +451,35 @@ export class ClaudeCodeHarness implements SessionHarness {
     return randomUUID();
   }
 
+  /**
+   * MC-I1.S3 (ADR-0005 §3) — the CC session id known at started-time.
+   *
+   * On a FRESH dispatch this is `undefined`: `started` is yielded before
+   * `start()` spawns CC, so the stream-init session id doesn't exist yet —
+   * the authoritative id rides the terminal envelope instead (see
+   * {@link buildTerminalEnvelope}). On a RESUME dispatch the runtime carries
+   * `resumeSessionId` (the `--resume <id>` target), which IS a CC session id
+   * the harness knows up front, so we stamp it onto `started`.
+   *
+   * Returns the id or `undefined`; the builder omits the field when undefined.
+   */
+  private startedSessionId(req: DispatchRequest): string | undefined {
+    return req.runtime?.resumeSessionId;
+  }
+
   private buildStartedEnvelope(
     req: DispatchRequest,
     startedAt: Date,
     correlationId: string,
   ): Envelope {
+    const ccSessionId = this.startedSessionId(req);
     return createDispatchTaskStartedEvent({
       source: this.source,
       taskId: req.requestId,
       agentId: req.agent.id,
       correlationId,
       startedAt,
+      ...(ccSessionId !== undefined && { ccSessionId }),
     });
   }
 
@@ -472,6 +490,8 @@ export class ClaudeCodeHarness implements SessionHarness {
     completedAt: Date,
     resultSummary?: string,
     chatResponse?: string,
+    // MC-I1.S3 — the authoritative CC session id from CCSessionResult.
+    ccSessionId?: string,
   ): Envelope {
     return createDispatchTaskCompletedEvent({
       source: this.source,
@@ -485,6 +505,8 @@ export class ClaudeCodeHarness implements SessionHarness {
       // sink can post the complete chat round-trip back to the channel.
       // `resultSummary` stays the first-line/1000-char dashboard label.
       ...(chatResponse !== undefined && { chatResponse }),
+      // MC-I1.S3 — stamp the CC session id so MC can join lifecycle → session.
+      ...(ccSessionId !== undefined && { ccSessionId }),
     });
   }
 
@@ -493,6 +515,9 @@ export class ClaudeCodeHarness implements SessionHarness {
     startedAt: Date,
     correlationId: string,
     errorSummary: string,
+    // MC-I1.S3 — present on the result path; undefined on the no-result
+    // paths (shutdown refusal, runtime-error before any CC session existed).
+    ccSessionId?: string,
   ): Envelope {
     return createDispatchTaskFailedEvent({
       source: this.source,
@@ -502,6 +527,7 @@ export class ClaudeCodeHarness implements SessionHarness {
       startedAt,
       failedAt: new Date(),
       errorSummary: truncateDispatchErrorSummary(errorSummary),
+      ...(ccSessionId !== undefined && { ccSessionId }),
     });
   }
 
@@ -510,6 +536,8 @@ export class ClaudeCodeHarness implements SessionHarness {
     startedAt: Date,
     correlationId: string,
     reason: string,
+    // MC-I1.S3 — the CC session id from CCSessionResult, when available.
+    ccSessionId?: string,
   ): Envelope {
     return createDispatchTaskAbortedEvent({
       source: this.source,
@@ -519,6 +547,7 @@ export class ClaudeCodeHarness implements SessionHarness {
       startedAt,
       abortedAt: new Date(),
       reason,
+      ...(ccSessionId !== undefined && { ccSessionId }),
     });
   }
 
@@ -551,6 +580,12 @@ export class ClaudeCodeHarness implements SessionHarness {
       );
     }
 
+    // MC-I1.S3 — the authoritative CC session id rides the terminal envelope.
+    // CCSessionResult.sessionId is populated from the stream-init/result event;
+    // undefined only if CC never emitted one (e.g. it died before init), in
+    // which case the field is omitted (not empty) on the wire.
+    const ccSessionId = result.sessionId;
+
     if (result.success) {
       return this.buildCompletedEnvelope(
         req,
@@ -560,6 +595,7 @@ export class ClaudeCodeHarness implements SessionHarness {
         result.response ? truncateDispatchResultSummary(result.response) : undefined,
         // cortex#491 — full reply, untruncated, for the chat round-trip.
         result.response ? result.response : undefined,
+        ccSessionId,
       );
     }
 
@@ -573,6 +609,7 @@ export class ClaudeCodeHarness implements SessionHarness {
         startedAt,
         correlationId,
         result.abortReason ?? "timeout",
+        ccSessionId,
       );
     }
 
@@ -581,6 +618,7 @@ export class ClaudeCodeHarness implements SessionHarness {
       startedAt,
       correlationId,
       `claude exited ${result.exitCode}`,
+      ccSessionId,
     );
   }
 }
