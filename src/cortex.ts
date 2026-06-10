@@ -119,6 +119,18 @@ import type { Surfaces } from "./common/types/surfaces";
 import type { SurfaceGateway } from "./gateway/surface-gateway";
 
 import { createDispatchListener, type DispatchListener } from "./runner/dispatch-listener";
+// G-1114.B.2 — live agent-presence producer (online/heartbeat/offline) wired
+// into boot. G-1114.B.3 — the runtime registry subscriber it feeds.
+import {
+  AgentPresenceProducer,
+  presenceAgentFromAgent,
+  DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS,
+  type PresenceAgent,
+} from "./runner/agent-presence-producer";
+import {
+  startAgentPresenceRegistry,
+  type AgentPresenceRegistryHandle,
+} from "./bus/agent-network/registry";
 import { createProbeResponder, type ProbeResponder } from "./bus/probe-responder";
 import { WorklogManager } from "./runner/worklog-manager";
 
@@ -3107,6 +3119,91 @@ export async function startCortex(
     }
   }
 
+  // G-1114.B.2 + B.3 — live agent-presence producer + runtime registry
+  // subscriber (STACK-LOCAL ONLY — no federation; that is Phase E).
+  //
+  // Gated on `config.mc.enabled` — presence is the data the B.4 agents panel +
+  // the MC API render, so it only runs when MC is wanted. The producer and
+  // subscriber share this gate so they stay consistent (a stack that records
+  // presence also emits it, and vice-versa). Both are best-effort: a fault
+  // logs + boot continues.
+  //
+  // Independent of `disableDashboard`: the producer + registry are pure bus
+  // wiring (no MC DB / no HTTP port), so they run on the same `mc.enabled`
+  // signal even when the embed itself is skipped (e.g. tests that disable the
+  // HTTP embed but still want the presence roundtrip).
+  //
+  //   - The REGISTRY subscriber starts FIRST so it's listening before the
+  //     producer's own `agent.online` envelopes go out (the roundtrip lands the
+  //     hosted agents in the registry immediately).
+  //   - The PRODUCER then publishes one `agent.online` per hosted agent
+  //     (carrying its capabilities) + starts the heartbeat ticker.
+  //
+  // `runtime.publish` is a no-op when the runtime is dormant (no NATS), so this
+  // is safe to run without a bus — the producer simply emits into the void and
+  // the registry stays empty.
+  //
+  // FSM/TTL boundary: the registry records `lastHeartbeatAt` + last explicit
+  // state ONLY. The 5-min liveness-TTL → offline reaper is Phase C (G-1114.C),
+  // not wired here.
+  let presenceRegistryHandle: AgentPresenceRegistryHandle | null = null;
+  let presenceProducer: AgentPresenceProducer | null = null;
+  if (config.mc.enabled) {
+    try {
+      presenceRegistryHandle = await startAgentPresenceRegistry({
+        runtime,
+        principal: principalId,
+        stack: derivedStack.stack,
+      });
+      // Build the per-agent presence descriptors. The stack's own NKey pubkey
+      // (captured when the signer was staged) is the fallback identity for any
+      // agent that hasn't declared its own `nkey_pub`. Agents with no resolvable
+      // key are skipped (the presence payload requires a non-empty key).
+      const presenceAgents: PresenceAgent[] = [];
+      let skippedNoKey = 0;
+      for (const a of mergedAgents) {
+        const pa = presenceAgentFromAgent(
+          a,
+          { principal: principalId, stack: derivedStack.stack },
+          stackNKeyPubForVerifier,
+        );
+        if (pa === null) {
+          skippedNoKey += 1;
+          continue;
+        }
+        presenceAgents.push(pa);
+      }
+      if (skippedNoKey > 0) {
+        console.warn(
+          `cortex: agent-presence — ${skippedNoKey} agent(s) skipped (no agent.nkey_pub ` +
+            `and no stack NKey to fall back to); they will not appear in the presence registry`,
+        );
+      }
+      presenceProducer = new AgentPresenceProducer({
+        runtime,
+        source: {
+          principal: principalId,
+          stack: derivedStack.stack,
+          instance: "local",
+          ...(config.agent.dataResidency !== undefined && {
+            dataResidency: config.agent.dataResidency,
+          }),
+        },
+        agents: presenceAgents,
+      });
+      presenceProducer.start();
+      console.log(
+        `cortex: agent-presence producer + registry started — ${presenceAgents.length} agent(s) announced ` +
+          `(stack-local; heartbeat every ${DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS}ms)`,
+      );
+    } catch (err) {
+      console.error(
+        "cortex: agent-presence producer/registry startup error (non-fatal):",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   // G-1113 ML.5 — cockpit live-refresh loop. Opt-in via `config.cockpit.enabled`;
   // runs refreshCockpit (ingest → reconcile) on an interval and publishes
   // `system.attention.*` notifications via the bus (the review-sink renders them
@@ -3289,6 +3386,11 @@ export async function startCortex(
     const rendererStopNames = renderers.map((r) => `renderer ${r.id} stop`);
     const allSlots: string[] = [
       "config-watcher stop",
+      // G-1114.B.2 — publish agent.offline for every hosted agent BEFORE the
+      // runtime closes (the offline publish is a no-op once the runtime is
+      // down), then stop the B.3 registry subscriber.
+      "agent-presence producer stop (offline publish)",
+      "agent-presence registry stop",
       "cockpit refresh loop stop",
       "mc embed stop",
       "github webhook receiver stop",
@@ -3334,6 +3436,18 @@ export async function startCortex(
 
     const drain = async (): Promise<void> => {
       completeSync("config-watcher stop", () => configWatcher?.stop());
+      // G-1114.B.2 — publish agent.offline (reason: shutdown) for every hosted
+      // agent FIRST, while the runtime/bus is still up. `stop()` awaits the
+      // offline publishes so they go out before any later step (and well before
+      // `runtime stop`). Then stop the registry subscriber.
+      await completeAsync(
+        "agent-presence producer stop (offline publish)",
+        presenceProducer?.stop("shutdown"),
+      );
+      await completeAsync(
+        "agent-presence registry stop",
+        presenceRegistryHandle?.stop(),
+      );
       // Await the cockpit loop's stop BEFORE the embed's stop: stop() now awaits
       // any in-flight refreshCockpit tick, so the bun:sqlite handle the embed
       // closes is only released after the last tick settles (no use-after-close).
