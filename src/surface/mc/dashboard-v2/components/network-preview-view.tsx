@@ -6,7 +6,7 @@
  * state, and last-heartbeat relative time. Data comes from `GET /api/agents`
  * via `useAgents`; live updates ride the additive `agent.presence` WS frame, so
  * agents pop up on boot and drop off when they go offline — the Phase B
- * operator-value line.
+ * value line.
  *
  * This is the simple PANEL. The rich React Flow + ELK topology graph is Phase D
  * (G-1114.D); cross-stack federated peers are Phase E. This view is deliberately

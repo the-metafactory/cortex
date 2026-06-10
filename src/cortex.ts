@@ -3155,6 +3155,10 @@ export async function startCortex(
   // not wired here.
   let presenceRegistryHandle: AgentPresenceRegistryHandle | null = null;
   let presenceProducer: AgentPresenceProducer | null = null;
+  // The onChange→WS-broadcast subscription handle, captured so shutdown can
+  // unsubscribe it explicitly — making teardown order-independent rather than
+  // relying on the registry stop severing the envelope feed first (#899 review).
+  let presenceBroadcastSub: { unsubscribe: () => void } | null = null;
   if (config.mc.enabled) {
     try {
       presenceRegistryHandle = await startAgentPresenceRegistry({
@@ -3176,7 +3180,7 @@ export async function startCortex(
       presenceViewForApi = presenceRegistryHandle.registry;
       if (mcHandle !== null) {
         const broadcastWsRegistry = mcHandle.wsRegistry;
-        presenceRegistryHandle.registry.onChange((key, record) => {
+        presenceBroadcastSub = presenceRegistryHandle.registry.onChange((key, record) => {
           broadcastWsRegistry.broadcast({
             type: "agent.presence",
             key,
@@ -3419,6 +3423,7 @@ export async function startCortex(
       // runtime closes (the offline publish is a no-op once the runtime is
       // down), then stop the B.3 registry subscriber.
       "agent-presence producer stop (offline publish)",
+      "agent-presence broadcast unsubscribe",
       "agent-presence registry stop",
       "cockpit refresh loop stop",
       "mc embed stop",
@@ -3472,6 +3477,12 @@ export async function startCortex(
       await completeAsync(
         "agent-presence producer stop (offline publish)",
         presenceProducer?.stop("shutdown"),
+      );
+      // Unsubscribe the onChange→WS-broadcast handle BEFORE stopping the
+      // registry, so teardown is order-independent (no broadcast-after-stop
+      // window even if the registry stop is reordered) (#899 review).
+      completeSync("agent-presence broadcast unsubscribe", () =>
+        presenceBroadcastSub?.unsubscribe(),
       );
       await completeAsync(
         "agent-presence registry stop",
