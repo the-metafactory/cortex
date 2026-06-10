@@ -18,9 +18,10 @@ import type { ReviewRequestPayload } from "../bus/review-events";
  *      The embedded example is VALID JSON (a concrete sample) — the allowed
  *      enum values are stated in prose OUTSIDE the block so a model copying the
  *      "exact shape" can never emit a type-union literal that fails `JSON.parse`.
- *   2. When `payload.post` is set, instruct a non-interactive `gh pr review`
- *      post (— never "ask first") and report the resulting review id/url back
- *      in the block. Otherwise instruct NOT to post (link-less block).
+ *   2. When `payload.post` is set, instruct a non-interactive post via the
+ *      forge's review CLI (`gh pr review` for GitHub, `glab` for GitLab) — never
+ *      "ask first" — and record the review id/url in the block when the forge
+ *      returns them. Otherwise instruct NOT to post (link-less block).
  *
  * Prompt text raises the floor on persona quality; it does not guarantee model
  * compliance. Failure modes are asymmetric: the VERDICT side fails closed (a
@@ -56,7 +57,7 @@ export function buildReviewPrompt(payload: ReviewRequestPayload): string {
       ].join(" ");
 
   return [
-    `Review PR ${ref}.`,
+    `Review ${target} ${ref}.`,
     "",
     "You MUST end your output with a single fenced ```json verdict block as the",
     "terminal artefact (the cortex review pipeline parses the LAST such block",
