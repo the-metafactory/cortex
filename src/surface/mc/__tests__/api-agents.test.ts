@@ -145,6 +145,34 @@ describe("GET /api/agents", () => {
     expect(echo.started_at).toBeNull();
   });
 
+  it("surfaces offline_reason for the inferred TTL lapse, and null while online (G-1114.C.4)", async () => {
+    const view: AgentPresenceView = {
+      getAgents: () => [
+        rec({ agentId: "luna", state: "online", lastHeartbeatAt: 9000, lastSeenAt: 9000 }),
+        rec({
+          agentId: "sage",
+          state: "offline",
+          offlineReason: "ttl_lapse",
+          lastHeartbeatAt: 1000,
+          lastSeenAt: 1000,
+        }),
+      ],
+    };
+    c = startWith(() => view);
+    const body = await (await fetch(`${c.baseUrl}/api/agents`)).json();
+
+    const luna = body.agents.find((a: { agent_id: string }) => a.agent_id === "luna");
+    expect(luna.state).toBe("online");
+    // Online agents carry no offline reason.
+    expect(luna.offline_reason).toBeNull();
+
+    const sage = body.agents.find((a: { agent_id: string }) => a.agent_id === "sage");
+    expect(sage.state).toBe("offline");
+    // The reaper-inferred reason rides the DTO so the panel can render it as a
+    // timed-out / "no heartbeat" agent distinct from a graceful shutdown.
+    expect(sage.offline_reason).toBe("ttl_lapse");
+  });
+
   it("resolves the getter lazily per request (registry attaches after boot)", async () => {
     // Holder is empty at boot — mirrors cortex.ts where the registry starts
     // AFTER the MC embed. A later assignment must become visible.

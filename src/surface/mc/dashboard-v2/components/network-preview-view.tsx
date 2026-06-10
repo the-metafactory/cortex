@@ -15,7 +15,13 @@
 
 import { useState } from "react";
 import type { AgentsState } from "../hooks/use-agents";
-import { pickAgentsPanelMode, formatRelativeTime } from "../lib/agents-display";
+import {
+  pickAgentsPanelMode,
+  formatRelativeTime,
+  formatCapabilities,
+  offlineReasonLabel,
+  isTtlLapse,
+} from "../lib/agents-display";
 
 export interface NetworkPreviewViewProps {
   state: AgentsState;
@@ -50,47 +56,71 @@ export function NetworkPreviewView({ state }: NetworkPreviewViewProps) {
       )}
       {mode === "list" && (
         <ul className="agents-panel-list" aria-label="Agents">
-          {state.agents.map((a) => (
-            <li
-              key={a.key}
-              className={`agents-panel-row agents-panel-row-${a.state}`}
-              data-agent-id={a.agent_id}
-              data-state={a.state}
-            >
-              <div className="agents-panel-identity">
-                <span className="agents-panel-name">
-                  {a.assistant_name ?? a.agent_id}
-                </span>
-                <span className="agents-panel-id dim">{a.agent_id}</span>
-              </div>
-              <div className="agents-panel-caps">
-                {a.capabilities.length === 0 ? (
-                  <span className="dim">no capabilities declared</span>
-                ) : (
-                  a.capabilities.map((cap) => (
-                    <span key={cap} className="agents-panel-cap">
-                      {cap}
+          {state.agents.map((a) => {
+            const offline = a.state === "offline";
+            const ttlLapse = offline && isTtlLapse(a.offline_reason);
+            // The offline qualifier shown beside the OFFLINE label: a graceful
+            // reason ("shut down") or the inferred TTL lapse ("no heartbeat").
+            const reasonLabel = offline
+              ? offlineReasonLabel(a.offline_reason)
+              : null;
+            return (
+              <li
+                key={a.key}
+                className={
+                  `agents-panel-row agents-panel-row-${a.state}` +
+                  (ttlLapse ? " agents-panel-row-ttl-lapse" : "")
+                }
+                data-agent-id={a.agent_id}
+                data-state={a.state}
+                data-offline-reason={offline ? (a.offline_reason ?? "") : undefined}
+              >
+                <div className="agents-panel-identity">
+                  <span className="agents-panel-name">
+                    {a.assistant_name ?? a.agent_id}
+                  </span>
+                  <span className="agents-panel-id dim">{a.agent_id}</span>
+                </div>
+                <div className="agents-panel-caps">
+                  {formatCapabilities(a.capabilities).map((badge) =>
+                    badge.placeholder ? (
+                      <span key="__none__" className="agents-panel-cap-none dim">
+                        {badge.label}
+                      </span>
+                    ) : (
+                      <span key={badge.label} className="agents-panel-cap">
+                        {badge.label}
+                      </span>
+                    )
+                  )}
+                </div>
+                <div className="agents-panel-liveness">
+                  <span
+                    className={`agents-panel-state state-${a.state}`}
+                    title={offline ? `offline: ${reasonLabel}` : "online"}
+                  >
+                    {a.state}
+                  </span>
+                  {offline && (
+                    <span
+                      className={
+                        "agents-panel-reason dim" +
+                        (ttlLapse ? " agents-panel-reason-ttl-lapse" : "")
+                      }
+                    >
+                      {reasonLabel}
                     </span>
-                  ))
-                )}
-              </div>
-              <div className="agents-panel-liveness">
-                <span
-                  className={`agents-panel-state state-${a.state}`}
-                  title={
-                    a.state === "offline" && a.offline_reason
-                      ? `offline: ${a.offline_reason}`
-                      : a.state
-                  }
-                >
-                  {a.state}
-                </span>
-                <span className="agents-panel-heartbeat dim">
-                  {formatRelativeTime(a.last_heartbeat_at, now)}
-                </span>
-              </div>
-            </li>
-          ))}
+                  )}
+                  <span className="agents-panel-heartbeat dim">
+                    {/* For a TTL-lapse the last heartbeat is the "last seen"
+                        signal the principal cares about ("last seen 6m ago"). */}
+                    {ttlLapse ? "last seen " : ""}
+                    {formatRelativeTime(a.last_heartbeat_at, now)}
+                  </span>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

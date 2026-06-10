@@ -114,4 +114,105 @@ describe("NetworkPreviewView — live agents panel (G-1114.B.4)", () => {
     const rowCount = (html.match(/agents-panel-row /g) ?? []).length;
     expect(rowCount).toBe(3);
   });
+
+  // --- G-1114.C.4: capability badges + offline-state rendering --------------
+
+  it("renders each capability as a distinct badge chip, not a comma string", () => {
+    const html = render({
+      loaded: true,
+      error: null,
+      agents: [
+        tile({
+          agent_id: "luna",
+          capabilities: ["review.code", "review.design", "moderate"],
+        }),
+      ],
+    });
+    const chipCount = (html.match(/agents-panel-cap"/g) ?? []).length;
+    expect(chipCount).toBe(3);
+    // Not rendered as a single comma-joined blob.
+    expect(html).not.toContain("review.code, review.design");
+  });
+
+  it("renders the empty-capabilities placeholder for an agent with no caps", () => {
+    const html = render({
+      loaded: true,
+      error: null,
+      agents: [tile({ agent_id: "echo", capabilities: [] })],
+    });
+    expect(html).toContain("no capabilities declared");
+    expect(html).toContain("agents-panel-cap-none");
+  });
+
+  it("renders a TTL-lapsed agent as a timed-out 'no heartbeat' / 'last seen' row", () => {
+    const lastBeat = Date.now() - 6 * 60_000; // 6 minutes ago
+    const html = render({
+      loaded: true,
+      error: null,
+      agents: [
+        tile({
+          agent_id: "sage",
+          assistant_name: "Sage",
+          state: "offline",
+          offline_reason: "ttl_lapse",
+          last_heartbeat_at: lastBeat,
+        }),
+      ],
+    });
+    expect(html).toContain('data-state="offline"');
+    expect(html).toContain('data-offline-reason="ttl_lapse"');
+    expect(html).toContain("agents-panel-row-ttl-lapse");
+    expect(html).toContain("no heartbeat");
+    expect(html).toContain("last seen");
+    // The TTL-lapse reason gets the warning treatment, not the graceful one.
+    expect(html).toContain("agents-panel-reason-ttl-lapse");
+  });
+
+  it("renders a gracefully shut-down agent distinctly from a TTL lapse", () => {
+    const html = render({
+      loaded: true,
+      error: null,
+      agents: [
+        tile({
+          agent_id: "echo",
+          assistant_name: "Echo",
+          state: "offline",
+          offline_reason: "shutdown",
+        }),
+      ],
+    });
+    expect(html).toContain('data-state="offline"');
+    expect(html).toContain('data-offline-reason="shutdown"');
+    expect(html).toContain("shut down");
+    // A graceful shutdown is NOT the TTL-lapse warning treatment.
+    expect(html).not.toContain("agents-panel-row-ttl-lapse");
+    expect(html).not.toContain("no heartbeat");
+    expect(html).not.toContain("last seen");
+  });
+
+  it("maps restart and error reasons to their own labels", () => {
+    const restart = render({
+      loaded: true,
+      error: null,
+      agents: [tile({ agent_id: "r", state: "offline", offline_reason: "restart" })],
+    });
+    expect(restart).toContain("restarting");
+
+    const errored = render({
+      loaded: true,
+      error: null,
+      agents: [tile({ agent_id: "e", state: "offline", offline_reason: "error" })],
+    });
+    expect(errored).toContain("errored");
+  });
+
+  it("does not show an offline reason or 'last seen' qualifier for an online agent", () => {
+    const html = render({
+      loaded: true,
+      error: null,
+      agents: [tile({ agent_id: "luna", state: "online", last_heartbeat_at: Date.now() })],
+    });
+    expect(html).not.toContain("agents-panel-reason");
+    expect(html).not.toContain("last seen");
+  });
 });
