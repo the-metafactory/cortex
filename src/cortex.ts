@@ -74,7 +74,8 @@ import {
 } from "./bus/verify-signed-by-chain";
 import { bootVerifierSelfCheck } from "./bus/verifier-self-check";
 import { CCSession, type CCSessionOpts } from "./runner/cc-session";
-import { makePiDevPipelineRunner } from "./runner/substrate/pi-dev-runner";
+import { makeSageReviewRunner } from "./runner/substrate/sage-runner";
+import { resolveReviewEngine } from "./runner/review-engine";
 import { buildReviewPrompt } from "./runner/review-prompt";
 
 import { DiscordAdapter } from "./adapters/discord";
@@ -1444,30 +1445,28 @@ export async function startCortex(
       // **Why this lives in cortex (not sage).** Sage went in-process at
       // sage#41 — its standalone launchd daemon and standalone NATS
       // subscribe path are retired. Cortex's review-consumer is now the
-      // sole receiver for sage-owned review flavors. The cross-repo scope
-      // split (sage#40 / sage#41 / cortex#331) deliberately puts
-      // cortex-side wiring HERE in cortex#331, NOT in sage's Phase 1 —
-      // sage stepped DOWN from owning its own bus subscription, cortex
-      // stepped UP to own substrate dispatch for in-process agents. The
-      // selection below is the substrate-dispatch fork that closes the
-      // round-trip; the adapter itself lives in
-      // `src/runner/substrate/pi-dev-runner.ts`.
+      // sole receiver for sage-owned review flavors.
       //
-      // Agents that declare `runtime.substrate: "pi-dev"` get the sage
-      // adapter wired in via `makePiDevPipelineRunner`. Every other agent
-      // (including those with the substrate field unset, which defaults
-      // to claude-code semantics) gets no `pipelineRunner` opt so the
-      // ReviewConsumer falls through to the existing `runReviewPipeline`
-      // → CC path (`ccSessionFactory` stays wired for that path; we do
-      // NOT remove it — see the issue's "out of scope" list).
+      // cortex#917 — the engine/model split. `resolveReviewEngine` reads
+      // `runtime.engine` (`sage` | `persona`); the sage lens LLM is the
+      // orthogonal `runtime.model` (claude|codex|pi), NOT `substrate` (which is
+      // the M6 harness). `engine: sage` wires the sage lens-CLI runner,
+      // forwarding `model` to `sage review --substrate <model>`; `persona`
+      // (and the legacy default) leaves `pipelineRunner` undefined so the
+      // ReviewConsumer falls through to `runReviewPipeline` → the Claude-Code
+      // SKILL.md path (`ccSessionFactory` stays wired for it). The resolver's
+      // legacy shim keeps pre-split `substrate: pi-dev` configs routing to sage
+      // (no forced model — SAGE_SUBSTRATE env still honoured).
       //
-      // The pi-dev runner resolves its sage binary lazily at first use
-      // (see `pi-dev-runner.ts`'s lifetime note), so a missing sage on
-      // boot does not crash this loop — review requests surface the
-      // failure as `dispatch.task.failed` envelopes instead.
-      const substrate = agent.runtime?.substrate ?? "claude-code";
+      // The sage runner resolves its binary lazily at first use (see
+      // `sage-runner.ts`'s lifetime note), so a missing sage on boot does not
+      // crash this loop — review requests surface the failure as
+      // `dispatch.task.failed` envelopes instead.
+      const { engine, model } = resolveReviewEngine(agent.runtime);
       const pipelineRunner =
-        substrate === "pi-dev" ? makePiDevPipelineRunner({}) : undefined;
+        engine === "sage"
+          ? makeSageReviewRunner(model !== undefined ? { model } : {})
+          : undefined;
 
       const reviewSessionOpts = buildReviewSessionOpts(config, agent);
 
@@ -1589,11 +1588,11 @@ export async function startCortex(
       // misled principals into chasing phantom misconfigs.
       if (started.subscribed) {
         console.log(
-          `cortex: review consumer ready for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} substrate=${substrate}`,
+          `cortex: review consumer ready for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"}`,
         );
       } else {
         console.log(
-          `cortex: review consumer DORMANT for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} substrate=${substrate} — cortex MyelinRuntime subscriptions disabled (G-1111 pending; tasks.code-review.* envelopes will not be claimed by this consumer)`,
+          `cortex: review consumer DORMANT for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"} — cortex MyelinRuntime subscriptions disabled (G-1111 pending; tasks.code-review.* envelopes will not be claimed by this consumer)`,
         );
       }
 
@@ -1651,11 +1650,11 @@ export async function startCortex(
           });
           if (federatedStarted.subscribed) {
             console.log(
-              `cortex: federated review consumer (${mode}) ready for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} substrate=${substrate} pattern=${pattern}`,
+              `cortex: federated review consumer (${mode}) ready for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"} pattern=${pattern}`,
             );
           } else {
             console.log(
-              `cortex: federated review consumer (${mode}) DORMANT for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} substrate=${substrate} — cortex MyelinRuntime subscriptions disabled (federated.* code-review envelopes will not be claimed by this consumer)`,
+              `cortex: federated review consumer (${mode}) DORMANT for agent=${agent.id} flavors=[${flavorSummary}] signed=${signedTag} engine=${engine} model=${model ?? "default"} — cortex MyelinRuntime subscriptions disabled (federated.* code-review envelopes will not be claimed by this consumer)`,
             );
           }
         };

@@ -10,11 +10,37 @@
 
 import { describe, it, expect } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { createElement } from "react";
+import { createElement, isValidElement, type ReactElement } from "react";
 import { NetworkDetailPanel } from "../components/network-detail-panel";
 import type { NetworkDetailPanelProps } from "../components/network-detail-panel";
+import { DispatchButton } from "../components/dispatch-button";
 import type { AgentPresenceTile } from "../hooks/use-agents";
 import type { AgentDispatchActivity } from "../lib/network-detail-display";
+
+/**
+ * Render the panel to its element tree (no DOM) and walk it to find the reused
+ * F-19 `DispatchButton` child, so we can exercise the panel's `onConfirm`
+ * wiring (the seam where F.3 reuses the existing dispatch action) without a DOM
+ * harness. Returns the DispatchButton element, or null when none is rendered.
+ */
+function findDispatchButton(root: ReactElement): ReactElement | null {
+  // Render the function component one level to get its returned tree.
+  const Comp = root.type as (props: unknown) => ReactElement;
+  const tree = Comp(root.props);
+  const found: ReactElement[] = [];
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+    if (!isValidElement(node)) return;
+    if (node.type === DispatchButton) found.push(node);
+    const kids = (node.props as { children?: unknown }).children;
+    if (kids !== undefined) visit(kids);
+  };
+  visit(tree);
+  return found[0] ?? null;
+}
 
 function tile(
   over: Partial<AgentPresenceTile> & { agent_id: string },
@@ -22,6 +48,7 @@ function tile(
   const { agent_id } = over;
   return {
     key: `andreas/research/${agent_id}`,
+    origin: "local",
     assistant_name: null,
     nkey_public_key: `N${agent_id}`,
     principal: "andreas",
@@ -217,5 +244,98 @@ describe("NetworkDetailPanel — ADR-0007 boundary (G-1114.D.4)", () => {
     const html = render({ agent: tile({ agent_id: "luna" }) });
     expect(html).toContain("network-detail-close");
     expect(html).toContain("Close detail panel");
+  });
+});
+
+const FOREIGN_ORIGIN = { principal: "jc", stack: "research" } as const;
+
+describe("NetworkDetailPanel — F.3 dispatch-direct affordance", () => {
+  it("omits the dispatch section when no onDispatchDirect is provided", () => {
+    const html = render({ agent: tile({ agent_id: "luna" }) });
+    expect(html).not.toContain("network-detail-dispatch-direct");
+  });
+
+  it("renders the confirm-gated Dispatch button for a LOCAL agent", () => {
+    const html = render({
+      agent: tile({ agent_id: "luna", assistant_name: "Luna", origin: "local" }),
+      onDispatchDirect: () => {},
+    });
+    expect(html).toContain("network-detail-dispatch-direct");
+    // The reused F-19 DispatchButton (carries the Cancel/Confirm popover gate).
+    expect(html).toContain("network-detail-dispatch-direct-btn");
+    expect(html).toContain("Dispatch");
+    // The agent label flows through to the (closed) popover prompt wiring.
+    expect(html).not.toContain("foreign-disabled");
+  });
+
+  it("invokes onDispatchDirect with the agent when the DispatchButton confirms", () => {
+    // The panel wires `onConfirm={() => onDispatchDirect(agent)}` onto the
+    // reused DispatchButton. Exercise that wiring directly: build the panel
+    // element, pull the DispatchButton child, fire its onConfirm.
+    const agent = tile({ agent_id: "luna", assistant_name: "Luna", origin: "local" });
+    const calls: AgentPresenceTile[] = [];
+    const el = createElement(NetworkDetailPanel, {
+      agent,
+      dispatch: null,
+      onClose: () => {},
+      onDispatchDirect: (a) => {
+        calls.push(a);
+      },
+    });
+    const btn = findDispatchButton(el);
+    expect(btn).not.toBeNull();
+    // Fire the button's onConfirm — the panel's wiring should call back with the
+    // agent, REUSING the existing dispatch action (no new path invented).
+    (btn!.props as { onConfirm: () => void }).onConfirm();
+    expect(calls).toEqual([agent]);
+  });
+
+  it("shows a disabled FUTURE-STATE (no live button) for a FOREIGN peer agent", () => {
+    const html = render({
+      agent: tile({
+        agent_id: "echo",
+        assistant_name: "Echo",
+        origin: FOREIGN_ORIGIN,
+      }),
+      onDispatchDirect: () => {},
+    });
+    expect(html).toContain("network-detail-dispatch-direct");
+    expect(html).toContain("foreign-disabled");
+    expect(html).toContain("Federated peer");
+    expect(html).toContain("jc/research");
+    // No live DispatchButton for a foreign peer — the local-only dispatch path
+    // must not be wired to a cross-principal target.
+    expect(html).not.toContain("network-detail-dispatch-direct-btn");
+  });
+
+  it("marks the button busy while a dispatch-direct is in flight", () => {
+    const html = render({
+      agent: tile({ agent_id: "luna", origin: "local" }),
+      onDispatchDirect: () => {},
+      dispatchBusy: true,
+    });
+    // F-19 DispatchButton renders "…" + a disabled button while busy.
+    expect(html).toContain("disabled");
+  });
+});
+
+describe("NetworkDetailPanel — F.2 capability hover", () => {
+  it("marks each real capability badge with its data-capability for hover", () => {
+    const html = render({
+      agent: tile({ agent_id: "luna", capabilities: ["review.code", "design"] }),
+      onHoverCapability: () => {},
+    });
+    expect(html).toContain('data-capability="review.code"');
+    expect(html).toContain('data-capability="design"');
+  });
+
+  it("lights a capability badge that is in highlightedCapabilities", () => {
+    const html = render({
+      agent: tile({ agent_id: "luna", capabilities: ["review.code", "design"] }),
+      highlightedCapabilities: new Set(["design"]),
+    });
+    // Exactly the lit badge gets the highlighted modifier.
+    const lit = (html.match(/network-detail-cap-highlighted/g) ?? []).length;
+    expect(lit).toBe(1);
   });
 });

@@ -37,6 +37,7 @@ import { usePlans } from "./hooks/use-plans";
 import { usePhaseDetail } from "./hooks/use-phase-detail";
 import { useAttention } from "./hooks/use-attention";
 import { useAgents } from "./hooks/use-agents";
+import type { AgentPresenceTile } from "./hooks/use-agents";
 import { useWorkItemDetail } from "./hooks/use-work-item-detail";
 import { useTheme } from "./hooks/use-theme";
 import { useWebSocket } from "./hooks/use-websocket";
@@ -190,6 +191,13 @@ export function App() {
   const [dispatchingTaskIds, setDispatchingTaskIds] = useState<ReadonlySet<string>>(
     () => new Set()
   );
+
+  // G-1114.F.3 — agent KEYS with an in-flight dispatch-direct (Network detail
+  // panel). Keyed by registry key so a busy state on one agent doesn't disable
+  // another. Same two-click protection idea as F-19's task-keyed set.
+  const [dispatchingAgentKeys, setDispatchingAgentKeys] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
 
   const showToast = useCallback((message: string, tone?: "ok" | "error" | "info") => {
     setToast({ message, tone });
@@ -537,6 +545,50 @@ export function App() {
             state={agents}
             workingAgents={working.agents}
             onViewInWorkingGrid={() => setView("default")}
+            // G-1114.F.3 — dispatch-direct to a LOCAL agent, REUSING the
+            // existing dispatch path (`POST /api/sessions` with `agentId`). The
+            // panel only invokes this for a local agent (foreign peers get a
+            // disabled future-state). No taskId → the handler mints a fresh
+            // internal task assigned to that agent, exactly as the task-row
+            // Dispatch does without a taskId. The DispatchButton's confirm
+            // popover gates the call, so no confirmation is bypassed.
+            dispatchingAgentKeys={dispatchingAgentKeys}
+            onDispatchDirect={async (agent: AgentPresenceTile) => {
+              setDispatchingAgentKeys((prev) => {
+                const next = new Set(prev);
+                next.add(agent.key);
+                return next;
+              });
+              const label = agent.assistant_name ?? agent.agent_id;
+              try {
+                await postJson<
+                  { agentId: string; agentName: string; title: string },
+                  unknown
+                >("/api/sessions", {
+                  agentId: agent.agent_id,
+                  agentName: label,
+                  title: `Direct dispatch to ${label}`,
+                });
+                showToast(`Dispatched to ${label}`, "ok");
+                // The working-agents grid + the agent-presence panel both
+                // refresh live off the WS `state.transition` / `agent.presence`
+                // frames the new assignment emits — no explicit refetch needed.
+              } catch (e) {
+                const msg =
+                  e instanceof ApiFailure
+                    ? e.info.message
+                    : e instanceof Error
+                      ? e.message
+                      : String(e);
+                showToast(`Failed to dispatch: ${msg}`, "error");
+              } finally {
+                setDispatchingAgentKeys((prev) => {
+                  const next = new Set(prev);
+                  next.delete(agent.key);
+                  return next;
+                });
+              }
+            }}
           />
         )}
 

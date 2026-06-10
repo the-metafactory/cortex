@@ -20,12 +20,19 @@ import {
   isFilterActive,
   type NetworkFilterState,
   type NetworkStateFilter,
+  type NetworkScopeFilter,
 } from "../lib/network-graph-filter";
 
 const STATE_OPTIONS: readonly { value: NetworkStateFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "online", label: "Online" },
   { value: "offline", label: "Offline" },
+];
+
+// E.4 — the scope toggle: show federated peers, or focus on this stack only.
+const SCOPE_OPTIONS: readonly { value: NetworkScopeFilter; label: string }[] = [
+  { value: "include-federated", label: "All stacks" },
+  { value: "local-only", label: "This stack" },
 ];
 
 export interface NetworkFilterBarProps {
@@ -35,6 +42,8 @@ export interface NetworkFilterBarProps {
   onStateChange: (state: NetworkStateFilter) => void;
   /** `null` clears the capability filter (the "Any capability" option). */
   onCapabilityChange: (capability: string | null) => void;
+  /** E.4 — flip federation scope (include foreign peers vs this stack only). */
+  onScopeChange: (scope: NetworkScopeFilter) => void;
   onClear: () => void;
   /** Open the Cmd+K spotlight (the hint button is also a click target). */
   onOpenSpotlight: () => void;
@@ -45,6 +54,7 @@ export function NetworkFilterBar({
   capabilityOptions,
   onStateChange,
   onCapabilityChange,
+  onScopeChange,
   onClear,
   onOpenSpotlight,
 }: NetworkFilterBarProps) {
@@ -63,6 +73,25 @@ export function NetworkFilterBar({
               aria-pressed={on}
               data-state-filter={opt.value}
               onClick={() => onStateChange(opt.value)}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="network-filter-group" role="group" aria-label="Federation scope filter">
+        <span className="network-filter-label">Scope</span>
+        {SCOPE_OPTIONS.map((opt) => {
+          const on = filter.scope === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              className={`network-filter-scope-btn${on ? " on" : ""}`}
+              aria-pressed={on}
+              data-scope-filter={opt.value}
+              onClick={() => onScopeChange(opt.value)}
             >
               {opt.label}
             </button>

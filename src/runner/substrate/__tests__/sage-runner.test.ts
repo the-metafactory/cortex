@@ -29,11 +29,11 @@ import {
 import type { ReviewPipelineOpts } from "../../review-pipeline";
 import type { CCSessionFactory } from "../../../substrates/claude-code/harness";
 import {
-  makePiDevPipelineRunner,
-  type PiDevSpawnFn,
-  type PiDevSpawnResult,
-  type PiDevWhichFn,
-} from "../pi-dev-runner";
+  makeSageReviewRunner,
+  type SageSpawnFn,
+  type SageSpawnResult,
+  type SageWhichFn,
+} from "../sage-runner";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -77,7 +77,7 @@ function makePipelineOpts(): ReviewPipelineOpts {
 }
 
 /**
- * Build a `PiDevSpawnResult` from a canned stdout, stderr, and exit code.
+ * Build a `SageSpawnResult` from a canned stdout, stderr, and exit code.
  * Uses `Response.body` to turn strings into the same `ReadableStream<Uint8Array>`
  * shape `Bun.spawn` returns — same trick the production runner uses to
  * drain via `new Response(stream).text()`.
@@ -86,7 +86,7 @@ function makeSpawnResult(
   stdout: string,
   stderr: string,
   exitCode: number,
-): PiDevSpawnResult {
+): SageSpawnResult {
   const stdoutStream = new Response(stdout).body!;
   const stderrStream = new Response(stderr).body!;
   return {
@@ -98,14 +98,14 @@ function makeSpawnResult(
 
 /**
  * Make a spawn fake that captures every argv it sees and returns the
- * given `PiDevSpawnResult`. Pins the argv shape the runner builds
+ * given `SageSpawnResult`. Pins the argv shape the runner builds
  * (`sage review owner/repo#N --substrate pi`).
  */
 function makeRecordingSpawn(
-  result: PiDevSpawnResult,
-): { fn: PiDevSpawnFn; calls: string[][] } {
+  result: SageSpawnResult,
+): { fn: SageSpawnFn; calls: string[][] } {
   const calls: string[][] = [];
-  const fn: PiDevSpawnFn = (argv, _opts) => {
+  const fn: SageSpawnFn = (argv, _opts) => {
     calls.push([...argv]);
     return result;
   };
@@ -114,15 +114,15 @@ function makeRecordingSpawn(
 
 /** `which` stub that returns a fixed sage binary path. */
 const FAKE_SAGE_BIN = "/usr/local/bin/sage";
-const whichSuccess: PiDevWhichFn = (cmd) =>
+const whichSuccess: SageWhichFn = (cmd) =>
   cmd === "sage" ? FAKE_SAGE_BIN : undefined;
-const whichMissing: PiDevWhichFn = () => undefined;
+const whichMissing: SageWhichFn = () => undefined;
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
+describe("cortex#331 Phase 1 — makeSageReviewRunner", () => {
   test("happy path: sage exit 0 + stdout → verdict envelope with summary=stdout, correlation_id=requestEnvelope.id", async () => {
     // cortex#402 — guard the argv pin against an ambient SAGE_SUBSTRATE
     // env value. Before #402 the env var was inert; after #402 a
@@ -136,7 +136,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
     try {
       const stdout = "## review body\n\nverdict: commented";
       const spawn = makeRecordingSpawn(makeSpawnResult(stdout, "", 0));
-      const runner = makePiDevPipelineRunner({
+      const runner = makeSageReviewRunner({
         spawn: spawn.fn,
         which: whichSuccess,
       });
@@ -190,7 +190,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
   test("failure path: sage exit != 0 + stderr → failed envelope with reason.kind=cant_do carrying stderr in detail", async () => {
     const stderr = "sage: PR not found";
     const spawn = makeRecordingSpawn(makeSpawnResult("", stderr, 2));
-    const runner = makePiDevPipelineRunner({
+    const runner = makeSageReviewRunner({
       spawn: spawn.fn,
       which: whichSuccess,
     });
@@ -222,7 +222,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
     // No spawn call should happen — the runner must short-circuit before
     // any subprocess work when the binary is missing. We still pass a
     // spawn that would throw if invoked to pin that no-call invariant.
-    const spawnThatMustNotRun: PiDevSpawnFn = () => {
+    const spawnThatMustNotRun: SageSpawnFn = () => {
       throw new Error("pi-dev-runner test: spawn must not be called when sage is missing");
     };
 
@@ -231,7 +231,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
     const previousSageBin = process.env.SAGE_BIN;
     delete process.env.SAGE_BIN;
     try {
-      const runner = makePiDevPipelineRunner({
+      const runner = makeSageReviewRunner({
         spawn: spawnThatMustNotRun,
         which: whichMissing,
       });
@@ -268,7 +268,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
     const previousSageBin = process.env.SAGE_BIN;
     process.env.SAGE_BIN = "/different/env/sage";
     try {
-      const runner = makePiDevPipelineRunner({
+      const runner = makeSageReviewRunner({
         sageBin: explicitBin,
         spawn: spawn.fn,
         which: whichSuccess, // returns yet another path — also overridden
@@ -287,10 +287,10 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
   });
 
   test("spawn throw (e.g. ENOENT mid-spawn) is caught and surfaces as a failed envelope, not an unhandled rejection", async () => {
-    const spawnThatThrows: PiDevSpawnFn = () => {
+    const spawnThatThrows: SageSpawnFn = () => {
       throw new Error("ENOENT: no such file or directory");
     };
-    const runner = makePiDevPipelineRunner({
+    const runner = makeSageReviewRunner({
       spawn: spawnThatThrows,
       which: whichSuccess,
     });
@@ -320,7 +320,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
     process.env.SAGE_SUBSTRATE = "claude";
     try {
       const spawn = makeRecordingSpawn(makeSpawnResult("## review\n", "", 0));
-      const runner = makePiDevPipelineRunner({
+      const runner = makeSageReviewRunner({
         spawn: spawn.fn,
         which: whichSuccess,
       });
@@ -339,7 +339,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
     delete process.env.SAGE_SUBSTRATE;
     try {
       const spawn = makeRecordingSpawn(makeSpawnResult("## review\n", "", 0));
-      const runner = makePiDevPipelineRunner({
+      const runner = makeSageReviewRunner({
         spawn: spawn.fn,
         which: whichSuccess,
       });
@@ -365,7 +365,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
       const spawn = makeRecordingSpawn(
         makeSpawnResult(stdout, "[sage] verdict: changes-requested", 1),
       );
-      const runner = makePiDevPipelineRunner({
+      const runner = makeSageReviewRunner({
         spawn: spawn.fn,
         which: whichSuccess,
       });
@@ -387,7 +387,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
 
   test("cortex#409 — sage exit -1 (killed) → failed (not a verdict)", async () => {
     const spawn = makeRecordingSpawn(makeSpawnResult("", "killed", -1));
-    const runner = makePiDevPipelineRunner({
+    const runner = makeSageReviewRunner({
       spawn: spawn.fn,
       which: whichSuccess,
     });
@@ -409,7 +409,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
     delete process.env.SAGE_SUBSTRATE;
     try {
       const spawn = makeRecordingSpawn(makeSpawnResult("## review\n", "", 0));
-      const runner = makePiDevPipelineRunner({
+      const runner = makeSageReviewRunner({
         spawn: spawn.fn,
         which: whichSuccess,
       });
@@ -438,7 +438,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
     process.env.SAGE_SUBSTRATE = "codex";
     try {
       const spawn = makeRecordingSpawn(makeSpawnResult("## review\n", "", 0));
-      const runner = makePiDevPipelineRunner({
+      const runner = makeSageReviewRunner({
         spawn: spawn.fn,
         which: whichSuccess,
       });
@@ -478,7 +478,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
     delete process.env.SAGE_SUBSTRATE;
     try {
       const spawn = makeRecordingSpawn(makeSpawnResult("## review\n", "", 0));
-      const runner = makePiDevPipelineRunner({
+      const runner = makeSageReviewRunner({
         spawn: spawn.fn,
         which: whichSuccess,
       });
@@ -518,7 +518,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
   test("cortex#888 — exit 0 + block verdict=approved → review.verdict.approved (recovers approved)", async () => {
     const stdout = withBlock("## Sage code review — approved", SAMPLE_BLOCK);
     const spawn = makeRecordingSpawn(makeSpawnResult(stdout, "", 0));
-    const runner = makePiDevPipelineRunner({ spawn: spawn.fn, which: whichSuccess });
+    const runner = makeSageReviewRunner({ spawn: spawn.fn, which: whichSuccess });
     const opts = makePipelineOpts();
     const result = await runner(opts);
 
@@ -551,7 +551,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
     // Exit 1 AND block both say changes-requested — they agree here; the
     // point is the findings counts come from the block.
     const spawn = makeRecordingSpawn(makeSpawnResult(stdout, "", 1));
-    const runner = makePiDevPipelineRunner({ spawn: spawn.fn, which: whichSuccess });
+    const runner = makeSageReviewRunner({ spawn: spawn.fn, which: whichSuccess });
     const result = await runner(makePipelineOpts());
 
     expect(result.kind).toBe("verdict");
@@ -572,7 +572,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
       findings: { blockers: 1, majors: 0, nits: 0 },
     });
     const spawn = makeRecordingSpawn(makeSpawnResult(stdout, "", 0));
-    const runner = makePiDevPipelineRunner({ spawn: spawn.fn, which: whichSuccess });
+    const runner = makeSageReviewRunner({ spawn: spawn.fn, which: whichSuccess });
     const result = await runner(makePipelineOpts());
 
     expect(result.kind).toBe("verdict");
@@ -583,7 +583,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
   test("cortex#888 — malformed block falls back to exit-code mapping (exit 0 → commented)", async () => {
     const stdout = "## Sage code review — commented\n\n```json\n{ not valid json\n```";
     const spawn = makeRecordingSpawn(makeSpawnResult(stdout, "", 0));
-    const runner = makePiDevPipelineRunner({ spawn: spawn.fn, which: whichSuccess });
+    const runner = makeSageReviewRunner({ spawn: spawn.fn, which: whichSuccess });
     const result = await runner(makePipelineOpts());
 
     expect(result.kind).toBe("verdict");
@@ -597,7 +597,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
   test("cortex#888 — no block (older sage) falls back to exit-code mapping (exit 1 → changes-requested)", async () => {
     const stdout = "## Sage code review — changes-requested\n\n(no json block)";
     const spawn = makeRecordingSpawn(makeSpawnResult(stdout, "", 1));
-    const runner = makePiDevPipelineRunner({ spawn: spawn.fn, which: whichSuccess });
+    const runner = makeSageReviewRunner({ spawn: spawn.fn, which: whichSuccess });
     const result = await runner(makePipelineOpts());
 
     expect(result.kind).toBe("verdict");

@@ -28,7 +28,7 @@
  */
 
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
-import type { AgentsState } from "../hooks/use-agents";
+import type { AgentPresenceTile, AgentsState } from "../hooks/use-agents";
 import type { WorkingAgentTile } from "../hooks/use-working-agents";
 import { pickAgentsPanelMode } from "../lib/agents-display";
 import { buildNetworkGraph } from "../lib/network-graph-adapter";
@@ -37,11 +37,21 @@ import {
   selectAgentDispatchActivity,
 } from "../lib/network-detail-display";
 import {
+  buildCapabilityMatchIndex,
+  type MatchTask,
+} from "../lib/capability-match";
+import {
+  computeHighlight,
+  type HoverTarget,
+} from "../lib/capability-highlight";
+import type { NetworkHoverContextValue } from "../lib/network-hover-context";
+import {
   DEFAULT_NETWORK_FILTER,
   collectCapabilityOptions,
   filterAgents,
   type NetworkFilterState,
   type NetworkStateFilter,
+  type NetworkScopeFilter,
 } from "../lib/network-graph-filter";
 import { isSpotlightOpenChord } from "../lib/network-spotlight";
 import { NetworkDetailPanel } from "./network-detail-panel";
@@ -68,12 +78,34 @@ export interface NetworkViewProps {
    * lifecycle in full.
    */
   onViewInWorkingGrid?: () => void;
+  /**
+   * G-1114.F.3 — dispatch a task DIRECTLY to a LOCAL agent. The caller wires
+   * this to the EXISTING dispatch path (`POST /api/sessions` with `agentId`) —
+   * F.3 reuses that path, it does not invent a new one. Only ever invoked for a
+   * LOCAL agent; the panel disables the affordance for a foreign peer (the
+   * dispatch path is local-only). Omitted → no dispatch-direct affordance.
+   */
+  onDispatchDirect?: (agent: AgentPresenceTile) => void;
+  /** G-1114.F.3 — agent keys with an in-flight dispatch-direct request. */
+  dispatchingAgentKeys?: ReadonlySet<string>;
+  /**
+   * G-1114.F.1/F.2 — the tasks (each with a required capability, or `null`) to
+   * feed the capability-match index. The MC task model doesn't carry a
+   * required-capability column yet, so the default is empty — the hover
+   * highlight still works fully off the agents' declared capabilities (hover a
+   * capability → matching agents glow). When tasks gain a capability field the
+   * caller projects them here and the index lights up task↔agent matches.
+   */
+  matchTasks?: readonly MatchTask[];
 }
 
 export function NetworkView({
   state,
   workingAgents = [],
   onViewInWorkingGrid,
+  onDispatchDirect,
+  dispatchingAgentKeys,
+  matchTasks = [],
 }: NetworkViewProps) {
   const mode = pickAgentsPanelMode(state);
 
@@ -96,6 +128,37 @@ export function NetworkView({
   // canvas takes the built graph and runs ELK over it.
   const graph = useMemo(() => buildNetworkGraph(filteredAgents), [filteredAgents]);
 
+  // F.1 — the capability-match index, built off the FULL snapshot (not the
+  // filtered one) so a hovered capability lights every declaring agent
+  // consistently regardless of the active filter. Origin-blind: foreign agents
+  // match purely on declared capabilities, exactly like local ones.
+  const matchIndex = useMemo(
+    () =>
+      buildCapabilityMatchIndex(
+        state.agents.map((a) => ({
+          key: a.key,
+          capabilities: a.capabilities,
+          origin: a.origin,
+        })),
+        matchTasks,
+      ),
+    [state.agents, matchTasks],
+  );
+
+  // F.2 — the cross-component hover target + the derived highlight set. The
+  // hover state lives HERE (the view owns the snapshot + index) and is broadcast
+  // into the graph node tree via `NetworkHoverContext` (through the lazy canvas)
+  // AND read by the detail panel directly.
+  const [hoverTarget, setHoverTarget] = useState<HoverTarget>(null);
+  const highlight = useMemo(
+    () => computeHighlight(hoverTarget, matchIndex),
+    [hoverTarget, matchIndex],
+  );
+  const hover = useMemo<NetworkHoverContextValue>(
+    () => ({ highlight, setHoverTarget }),
+    [highlight],
+  );
+
   // Filter callbacks.
   const onStateChange = useCallback(
     (s: NetworkStateFilter) => setFilter((f) => ({ ...f, state: s })),
@@ -103,6 +166,13 @@ export function NetworkView({
   );
   const onCapabilityChange = useCallback(
     (cap: string | null) => setFilter((f) => ({ ...f, capability: cap })),
+    [],
+  );
+  // E.4 — scope toggle: include-federated (show local + foreign) vs local-only
+  // (hide every foreign peer agent). Threads onto the SAME filter the adapter +
+  // spotlight read, so flipping it cleanly removes/restores foreign agents.
+  const onScopeChange = useCallback(
+    (scope: NetworkScopeFilter) => setFilter((f) => ({ ...f, scope })),
     [],
   );
   const onClearFilters = useCallback(() => setFilter(DEFAULT_NETWORK_FILTER), []);
@@ -125,9 +195,14 @@ export function NetworkView({
     }
   }, [selectedKey, selectedAgent]);
 
+  // D.4 + #909: join the LOCAL working-agents projection ONLY for a LOCAL agent.
+  // A foreign peer agent's dispatch activity lives on ITS stack, not ours — the
+  // working-agents projection is this stack's, so joining it for a foreign agent
+  // would be wrong (and could false-match a same-named local agent_id). Foreign →
+  // null; the detail panel renders "federated peer — activity not local".
   const dispatch = useMemo(
     () =>
-      selectedAgent
+      selectedAgent && selectedAgent.origin === "local"
         ? selectAgentDispatchActivity(workingAgents, selectedAgent.agent_id)
         : null,
     [workingAgents, selectedAgent],
@@ -185,9 +260,9 @@ export function NetworkView({
     <section className="scaffold-section network-view" aria-label="Network (agent topology)">
       <h2>Network</h2>
       <p className="dim network-view-subtitle">
-        Stack-local agent <strong>topology</strong> — the agents on this stack,
-        their declared capabilities, and their liveness, laid out around the
-        stack hub. Cross-stack federated peers arrive in G-1114.E.
+        Agent <strong>topology</strong> — the agents on this stack and any
+        federated peers, their declared capabilities, and their liveness, laid
+        out around each stack&rsquo;s hub. Filter by scope to focus on this stack.
       </p>
 
       {mode === "error" && (
@@ -206,6 +281,7 @@ export function NetworkView({
             capabilityOptions={capabilityOptions}
             onStateChange={onStateChange}
             onCapabilityChange={onCapabilityChange}
+            onScopeChange={onScopeChange}
             onClear={onClearFilters}
             onOpenSpotlight={openSpotlight}
           />
@@ -223,7 +299,11 @@ export function NetworkView({
                   <div className="network-view-empty">Loading network…</div>
                 }
               >
-                <NetworkCanvas graph={graph} onSelectAgent={setSelectedKey} />
+                <NetworkCanvas
+                  graph={graph}
+                  onSelectAgent={setSelectedKey}
+                  hover={hover}
+                />
               </Suspense>
             )}
             {selectedAgent && (
@@ -232,6 +312,18 @@ export function NetworkView({
                 dispatch={dispatch}
                 onClose={closePanel}
                 onViewInWorkingGrid={onViewInWorkingGrid}
+                {...(onDispatchDirect ? { onDispatchDirect } : {})}
+                dispatchBusy={
+                  dispatchingAgentKeys?.has(selectedAgent.key) ?? false
+                }
+                highlightedCapabilities={highlight.capabilities}
+                onHoverCapability={(cap) =>
+                  setHoverTarget(
+                    cap === null
+                      ? null
+                      : { kind: "capability", capability: cap },
+                  )
+                }
               />
             )}
           </div>

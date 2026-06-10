@@ -65,10 +65,10 @@ import type {
   ReviewPipelineResult,
 } from "../runner/review-pipeline";
 import {
-  makePiDevPipelineRunner,
-  type PiDevSpawnFn,
-  type PiDevSpawnResult,
-} from "../runner/substrate/pi-dev-runner";
+  makeSageReviewRunner,
+  type SageSpawnFn,
+  type SageSpawnResult,
+} from "../runner/substrate/sage-runner";
 import type { CCSessionFactory } from "../substrates/claude-code/harness";
 
 // =============================================================================
@@ -736,7 +736,7 @@ describe("cortex#327 — signature verification gate", () => {
 //
 // Pins the cortex-side end-to-end round-trip for the `pi-dev` substrate
 // (sage). Uses the same in-process bus harness as the unsigned and signed
-// round-trips above, but injects `makePiDevPipelineRunner` (with a stubbed
+// round-trips above, but injects `makeSageReviewRunner` (with a stubbed
 // subprocess spawn) instead of the test-only inline stub. This proves the
 // production factory wires into a real `ReviewConsumer` cleanly — same
 // shape that `src/cortex.ts:807` boots when an agent declares
@@ -762,14 +762,14 @@ describe("cortex#331 Phase 1 — pi-dev substrate dispatch (factory wired into R
 
     // Stub spawn that returns a canned successful sage subprocess.
     // Mirrors what the unit tests do but here it threads through the
-    // real `makePiDevPipelineRunner` factory.
-    const spawnFake: PiDevSpawnFn = (_argv, _opts): PiDevSpawnResult => ({
+    // real `makeSageReviewRunner` factory.
+    const spawnFake: SageSpawnFn = (_argv, _opts): SageSpawnResult => ({
       stdout: new Response(stdoutMarkdown).body!,
       stderr: new Response("").body!,
       exited: Promise.resolve(0),
     });
 
-    const pipelineRunner = makePiDevPipelineRunner({
+    const pipelineRunner = makeSageReviewRunner({
       sageBin: "/usr/local/bin/sage",
       spawn: spawnFake,
     });

@@ -34,9 +34,12 @@ import {
   formatCapabilities,
   offlineReasonLabel,
   isTtlLapse,
+  isForeignOrigin,
+  originProvenanceLabel,
 } from "../lib/agents-display";
 import type { AgentPresenceTile } from "../hooks/use-agents";
 import type { AgentDispatchActivity } from "../lib/network-detail-display";
+import { DispatchButton } from "./dispatch-button";
 
 /** Match the working-grid priority label (P0–P3, P? out-of-range). */
 function priorityLabel(p: number): string {
@@ -60,6 +63,30 @@ export interface NetworkDetailPanelProps {
    * Optional — when omitted, the "view in working grid" affordance is hidden.
    */
   onViewInWorkingGrid?: () => void;
+  /**
+   * G-1114.F.3 — "dispatch direct" affordance. When provided AND the agent is
+   * LOCAL, the panel renders a confirm-gated "Dispatch to {agent}" button that
+   * calls this back; the caller wires it to the EXISTING dispatch path
+   * (`POST /api/sessions` with `agentId`) — F.3 reuses that path, it does not
+   * invent a new one. Omitted → no dispatch affordance.
+   *
+   * A FOREIGN (federated peer) agent NEVER gets the live button: the dispatch
+   * path writes to the LOCAL stack's DB + spawns a LOCAL subprocess, so it
+   * cannot target a peer principal's agent. The panel shows a disabled
+   * "federated peer — direct dispatch via its stack" future-state instead.
+   */
+  onDispatchDirect?: (agent: AgentPresenceTile) => void;
+  /** True while a dispatch-direct request is in flight (disables the button). */
+  dispatchBusy?: boolean;
+  /**
+   * G-1114.F.2 — cross-component hover. The panel reports the hovered target
+   * (a capability badge → `{kind:"capability"}`, the agent identity →
+   * `{kind:"agent"}`, mouse-leave → `null`) so the view can highlight matching
+   * agent nodes in the graph. Optional — omitted disables hover reporting.
+   */
+  onHoverCapability?: (capability: string | null) => void;
+  /** G-1114.F.2 — capabilities to render as HIGHLIGHTED (lit by the active hover). */
+  highlightedCapabilities?: ReadonlySet<string>;
   /** Injectable clock for deterministic relative-time tests. */
   now?: number;
 }
@@ -73,6 +100,10 @@ export function NetworkDetailPanel({
   dispatch,
   onClose,
   onViewInWorkingGrid,
+  onDispatchDirect,
+  dispatchBusy = false,
+  onHoverCapability,
+  highlightedCapabilities,
   now = Date.now(),
 }: NetworkDetailPanelProps) {
   const offline = agent.state === "offline";
@@ -80,20 +111,35 @@ export function NetworkDetailPanel({
   const reasonLabel = offline ? offlineReasonLabel(agent.offline_reason) : null;
   const name = agent.assistant_name ?? agent.agent_id;
   const caps = formatCapabilities(agent.capabilities);
+  // E.4: a FOREIGN (federated peer) agent shows its origin + a "activity not
+  // local" note instead of a dispatch join (#909 — working-agents is local-only).
+  const foreign = isForeignOrigin(agent.origin);
+  const provenance = originProvenanceLabel(agent.origin);
 
   return (
     <aside
       className={
-        "network-detail-panel" + (ttlLapse ? " network-detail-ttl-lapse" : "")
+        "network-detail-panel" +
+        (ttlLapse ? " network-detail-ttl-lapse" : "") +
+        (foreign ? " network-detail-foreign" : "")
       }
       data-agent-id={agent.agent_id}
       data-state={agent.state}
+      data-agent-origin={foreign ? "foreign" : "local"}
       aria-label={`Agent detail — ${name}`}
     >
       <header className="network-detail-header">
         <div className="network-detail-identity">
           <span className="network-detail-name">{name}</span>
           <span className="network-detail-id dim">{agent.agent_id}</span>
+          {foreign && provenance && (
+            <span className="network-detail-provenance" title={`federated peer — ${provenance}`}>
+              <span className="network-detail-federated-badge" aria-hidden="true">
+                ⇄
+              </span>
+              federated peer · {provenance}
+            </span>
+          )}
         </div>
         <button
           type="button"
@@ -142,9 +188,28 @@ export function NetworkDetailPanel({
                 {badge.label}
               </span>
             ) : (
+              // F.2 — each real capability badge is a hover target: entering it
+              // reports the capability up so the view lights every agent node
+              // that declares it; leaving clears. `highlightedCapabilities`
+              // marks a badge lit when a sibling hover (e.g. an agent-node
+              // hover) selected this capability.
               <span
                 key={`${badge.label}-${i}`}
-                className="network-detail-cap"
+                className={
+                  "network-detail-cap" +
+                  (highlightedCapabilities?.has(badge.label)
+                    ? " network-detail-cap-highlighted"
+                    : "")
+                }
+                data-capability={badge.label}
+                onMouseEnter={
+                  onHoverCapability
+                    ? () => onHoverCapability(badge.label)
+                    : undefined
+                }
+                onMouseLeave={
+                  onHoverCapability ? () => onHoverCapability(null) : undefined
+                }
               >
                 {badge.label}
               </span>
@@ -153,10 +218,18 @@ export function NetworkDetailPanel({
         </div>
       </section>
 
-      {/* Dispatch lifecycle (LIGHT — pointer only, never interiors) --------- */}
+      {/* Dispatch lifecycle (LIGHT — pointer only, never interiors) ---------
+          E.4 / #909: a FOREIGN peer agent shows NO local dispatch activity —
+          working-agents is the LOCAL stack's projection, never joined for a
+          foreign agent. The principal sees that the activity simply isn't local,
+          not an empty "idle" that would misrepresent a busy peer. */}
       <section className="network-detail-section network-detail-activity">
         <span className="network-detail-section-label dim">recent activity</span>
-        {dispatch ? (
+        {foreign ? (
+          <span className="network-detail-foreign-activity dim">
+            Federated peer — activity not local.
+          </span>
+        ) : dispatch ? (
           <div className="network-detail-dispatch">
             <div className="network-detail-dispatch-line">
               <span
@@ -185,7 +258,9 @@ export function NetworkDetailPanel({
             No active dispatch.
           </span>
         )}
-        {onViewInWorkingGrid && (
+        {/* The working grid is the LOCAL stack's dispatch surface — the pointer
+            is meaningless for a foreign peer agent (#909), so it's hidden. */}
+        {!foreign && onViewInWorkingGrid && (
           <button
             type="button"
             className="network-detail-grid-link"
@@ -195,6 +270,36 @@ export function NetworkDetailPanel({
           </button>
         )}
       </section>
+
+      {/* Dispatch direct (F.3) ---------------------------------------------
+          A LOCAL agent gets a confirm-gated "Dispatch to {agent}" button that
+          REUSES the existing dispatch path (`POST /api/sessions` with
+          `agentId`) — the same confirmation popover the task-row Dispatch uses,
+          so no auth/confirm step is bypassed. A FOREIGN peer agent CANNOT be
+          dispatched to from here (the dispatch path is LOCAL-only — it writes
+          this stack's DB + spawns a local subprocess), so it shows a disabled
+          future-state rather than a half-working cross-principal dispatch. */}
+      {onDispatchDirect && (
+        <section className="network-detail-section network-detail-dispatch-direct">
+          <span className="network-detail-section-label dim">dispatch</span>
+          {foreign ? (
+            <span
+              className="network-detail-dispatch-direct-foreign dim"
+              data-dispatch-direct="foreign-disabled"
+            >
+              Federated peer — direct dispatch happens on its own stack
+              {provenance ? ` (${provenance})` : ""}.
+            </span>
+          ) : (
+            <DispatchButton
+              className="network-detail-dispatch-direct-btn"
+              agentLabel={name}
+              busy={dispatchBusy}
+              onConfirm={() => onDispatchDirect(agent)}
+            />
+          )}
+        </section>
+      )}
 
       {/*
         ADR-0007 boundary: this panel intentionally stops here. It shows

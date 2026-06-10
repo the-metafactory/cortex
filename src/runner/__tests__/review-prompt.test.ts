@@ -8,7 +8,7 @@ function payload(over: Partial<ReviewRequestPayload> = {}): ReviewRequestPayload
     pr: 900,
     reviewer: "sage",
     ...over,
-  } as ReviewRequestPayload;
+  };
 }
 
 /** Pull the LAST fenced ```json block out of the prompt (mirrors the pipeline). */
@@ -34,7 +34,7 @@ describe("buildReviewPrompt (cortex#911)", () => {
     // the "exact shape" reproduces the no-verdict failure this fixes.
     const block = lastJsonBlock(buildReviewPrompt(payload()));
     expect(block).not.toBeNull();
-    expect(() => JSON.parse(block as string)).not.toThrow();
+    expect(() => JSON.parse(block!)).not.toThrow();
   });
 
   test("names every contract field + the allowed enum values in prose", () => {

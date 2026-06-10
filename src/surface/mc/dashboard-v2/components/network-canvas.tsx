@@ -39,6 +39,10 @@ import { agentKeyFromClickedNode } from "../lib/network-detail-display";
 import { layoutNetworkGraph } from "../lib/network-graph-layout";
 import { AgentNode, StackHubNode } from "./network-nodes";
 import { NetworkLegend } from "./network-legend";
+import {
+  NetworkHoverContext,
+  type NetworkHoverContextValue,
+} from "../lib/network-hover-context";
 
 // Registered once at module scope — React Flow warns if `nodeTypes` is a fresh
 // object each render.
@@ -66,6 +70,14 @@ export interface NetworkCanvasProps {
    * selected key and renders the detail panel.
    */
   onSelectAgent?: (key: string | null) => void;
+  /**
+   * G-1114.F.2 — the cross-component hover-highlight value (the active highlight
+   * set + the setter), provided into the node tree via `NetworkHoverContext` so
+   * agent nodes light up + report hovers. The hover STATE lives in the view
+   * (which has the snapshot + match index); the canvas just bridges it into the
+   * xyflow node renderer. Omitted → the inert default (no highlight).
+   */
+  hover?: NetworkHoverContextValue;
 }
 
 /** The React Flow canvas — rendered once ELK has positioned the nodes. */
@@ -147,6 +159,7 @@ function FlowCanvas({
 export default function NetworkCanvas({
   graph,
   onSelectAgent,
+  hover,
 }: NetworkCanvasProps) {
   const [positioned, setPositioned] = useState<NetworkGraphNode[]>([]);
   const genRef = useRef(0);
@@ -185,9 +198,19 @@ export default function NetworkCanvas({
     return <div className="network-view-empty">Laying out topology…</div>;
   }
 
-  return (
+  const canvas = (
     <ReactFlowProvider>
       <FlowCanvas nodes={positioned} onSelectAgent={onSelectAgent} />
     </ReactFlowProvider>
+  );
+
+  // F.2 — bridge the view's hover-highlight into the node tree. When no hover
+  // value is supplied, the context's inert default applies (no highlight).
+  return hover ? (
+    <NetworkHoverContext.Provider value={hover}>
+      {canvas}
+    </NetworkHoverContext.Provider>
+  ) : (
+    canvas
   );
 }

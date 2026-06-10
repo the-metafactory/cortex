@@ -31,7 +31,20 @@ import type { AgentPresenceTile } from "../hooks/use-agents";
 /** The state-axis options offered in the filter bar. */
 export type NetworkStateFilter = "all" | "online" | "offline";
 
-/** The two-axis filter the Network view holds and threads through the pipeline. */
+/**
+ * G-1114.E.4 — the SCOPE-axis options: whether to show federated peer agents.
+ *   - `"include-federated"` — show local AND foreign agents (federation visible).
+ *   - `"local-only"`        — hide every foreign agent (focus on YOUR stack).
+ *
+ * The DEFAULT is `"include-federated"`: federation is opt-in at the bus layer
+ * (E.1), so once a peer's agents are actually in the snapshot the principal opted
+ * in — showing them by default makes that federation visible (the whole point of
+ * Phase E). `"local-only"` is the deliberate focus filter that cleanly removes
+ * foreign agents from the view (the §4.5 acceptance criterion).
+ */
+export type NetworkScopeFilter = "include-federated" | "local-only";
+
+/** The filter the Network view holds and threads through the pipeline. */
 export interface NetworkFilterState {
   /** Liveness filter; `all` passes both online and offline agents. */
   state: NetworkStateFilter;
@@ -40,12 +53,18 @@ export interface NetworkFilterState {
    * that DECLARE this capability id.
    */
   capability: string | null;
+  /**
+   * Federation scope; `include-federated` passes local + foreign, `local-only`
+   * drops every foreign agent. Defaults to `include-federated`.
+   */
+  scope: NetworkScopeFilter;
 }
 
 /** The no-op filter: every agent passes. The view's initial filter state. */
 export const DEFAULT_NETWORK_FILTER: NetworkFilterState = {
   state: "all",
   capability: null,
+  scope: "include-federated",
 };
 
 /**
@@ -65,6 +84,10 @@ export function filterAgents(
     if (filter.capability !== null && !a.capabilities.includes(filter.capability)) {
       return false;
     }
+    // E.4 scope: `local-only` drops every foreign agent (cleanly removing the
+    // federation from the view — the §4.5 acceptance criterion). A foreign agent
+    // is one whose origin is not the `"local"` string.
+    if (filter.scope === "local-only" && a.origin !== "local") return false;
     return true;
   });
 }
@@ -89,9 +112,14 @@ export function collectCapabilityOptions(
 }
 
 /**
- * True when the filter narrows anything (i.e. it isn't the default all/any).
- * Drives the filter bar's "Clear" affordance + an "active filter" badge.
+ * True when the filter narrows anything (i.e. it isn't the default
+ * all/any/include-federated). Drives the filter bar's "Clear" affordance + an
+ * "active filter" badge.
  */
 export function isFilterActive(filter: NetworkFilterState): boolean {
-  return filter.state !== "all" || filter.capability !== null;
+  return (
+    filter.state !== "all" ||
+    filter.capability !== null ||
+    filter.scope !== "include-federated"
+  );
 }

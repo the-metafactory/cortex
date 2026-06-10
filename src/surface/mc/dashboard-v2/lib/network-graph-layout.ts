@@ -1,11 +1,21 @@
 /**
  * G-1114.D.3 — ELK layout for the Network graph.
+ * G-1114.E.3 — + multi-cluster (one star per stack-hub) layout.
  *
  * Positions the stack-hub + agent nodes (from {@link buildNetworkGraph}) using
- * elkjs. The topology is a star — one hub with every agent as a spoke — so ELK's
- * **radial** algorithm is the natural fit: it places the root (the hub) at the
- * centre and fans the agents around it on a ring. That reads as "the agents on
- * this stack" far better than a left-to-right layered DAG would.
+ * elkjs.
+ *
+ * Phase D's topology was a SINGLE star — one hub with every agent as a spoke —
+ * for which ELK's `radial` (root-centred concentric placement) was the natural
+ * fit. Phase E adds federated peer stacks, so the graph is now potentially
+ * SEVERAL disconnected star-clusters (the local hub + one per foreign
+ * `{principal}/{stack}`). `radial` is single-rooted and would have to pick ONE
+ * root, scattering the other clusters; the **force** (stress) algorithm instead
+ * lays disconnected components out as separate, internally-clustered groups —
+ * each hub-and-its-agents stays together, and the clusters separate cleanly.
+ * That reads as "your stack here, each peer stack as its own cluster". A
+ * single-cluster (local-only) graph still lays out as one tidy group, so the
+ * Phase-D experience is preserved.
  *
  * ELK runs asynchronously (`elk.layout` returns a promise), so the view computes
  * the layout in an effect and stores the positioned nodes in state (see
@@ -21,17 +31,22 @@ export const HUB_NODE_SIZE = { width: 180, height: 64 } as const;
 export const AGENT_NODE_SIZE = { width: 200, height: 96 } as const;
 
 /**
- * ELK layout options for the radial star. Tuned for a hub-and-spoke:
- *   - `algorithm: radial` — root-centred concentric placement.
- *   - a generous `radius` so agent cards (≤200px) don't overlap on the ring.
- *   - `spacing.nodeNode` keeps siblings apart when the ring gets crowded.
+ * ELK layout options for the multi-cluster star layout. Tuned for one-or-more
+ * hub-and-spoke groups:
+ *   - `algorithm: force` (stress) — keeps each hub's agents clustered around it
+ *     AND lays disconnected stack-clusters out as separate groups (the local
+ *     stack + each federated peer stack), rather than forcing a single root.
+ *   - `spacing.nodeNode` keeps agent cards (≤200px) from overlapping.
+ *   - `separateConnectedComponents` packs the per-stack clusters side-by-side
+ *     instead of overlapping them.
  */
 export const NETWORK_ELK_OPTIONS: Record<string, string> = {
-  "elk.algorithm": "org.eclipse.elk.radial",
-  "elk.radial.radius": "220",
-  "elk.spacing.nodeNode": "60",
-  // Centre the hub (the layout root) at the origin so the agents fan around it.
-  "elk.radial.centerOnRoot": "true",
+  "elk.algorithm": "org.eclipse.elk.force",
+  "elk.spacing.nodeNode": "80",
+  "elk.force.repulsion": "5.0",
+  // Pack each disconnected stack-cluster as its own group (local + each peer).
+  "elk.separateConnectedComponents": "true",
+  "elk.spacing.componentComponent": "120",
 };
 
 /** One ELK input node (subset of the elkjs node shape we set). */

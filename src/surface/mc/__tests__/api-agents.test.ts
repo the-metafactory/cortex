@@ -38,6 +38,7 @@ function rec(
   const { agentId } = over;
   return {
     key: `andreas/research/${agentId}`,
+    origin: "local",
     nkeyPublicKey: `N${agentId.toUpperCase()}`,
     assistantName: null,
     principal: "andreas",
@@ -143,6 +144,35 @@ describe("GET /api/agents", () => {
     expect(echo.offline_reason).toBe("graceful-shutdown");
     expect(echo.last_heartbeat_at).toBeNull();
     expect(echo.started_at).toBeNull();
+  });
+
+  it("exposes origin: a local agent as \"local\", a foreign agent as {principal,stack} (G-1114.E.4)", async () => {
+    const view: AgentPresenceView = {
+      getAgents: () => [
+        rec({ agentId: "luna", origin: "local" }),
+        rec({
+          // A federated peer agent: keyed + scoped under the peer's VERIFIED
+          // {principal}/{stack} (#914 source-bound identity).
+          agentId: "sage",
+          key: "jc/research/sage",
+          principal: "jc",
+          stack: "research",
+          origin: { kind: "foreign", principal: "jc", stack: "research" },
+        }),
+      ],
+    };
+    c = startWith(() => view);
+    const body = await (await fetch(`${c.baseUrl}/api/agents`)).json();
+
+    const luna = body.agents.find((a: { agent_id: string }) => a.agent_id === "luna");
+    // A local agent surfaces the bare "local" string (object-vs-string is the
+    // foreign discriminant on the wire).
+    expect(luna.origin).toBe("local");
+
+    const sage = body.agents.find((a: { agent_id: string }) => a.agent_id === "sage");
+    // A foreign agent flattens to {principal, stack} — the `kind` discriminant is
+    // dropped (object shape already discriminates foreign from local).
+    expect(sage.origin).toEqual({ principal: "jc", stack: "research" });
   });
 
   it("surfaces offline_reason for the inferred TTL lapse, and null while online (G-1114.C.4)", async () => {

@@ -6,7 +6,7 @@ import type { ReviewVerdictKind } from "../bus/review-events";
  * The reviewing skill / substrate emits a structured verdict block as the
  * terminal artefact of its stdout (a fenced ```json block, §4.5). Two runners
  * consume it: the Claude-Code substrate path (`review-pipeline.ts`) and the
- * `pi-dev` substrate path (`substrate/pi-dev-runner.ts`, where sage's
+ * sage-runner path (`substrate/sage-runner.ts`, where sage's
  * `--emit-verdict-block` output lands). Extracted here so both parse the SAME
  * contract — a single field-validation table, one place to evolve.
  */

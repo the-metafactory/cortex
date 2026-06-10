@@ -22,6 +22,7 @@ import type { AgentPresenceTile } from "../hooks/use-agents";
 function tile(): AgentPresenceTile {
   return {
     key: "andreas/research/luna",
+    origin: "local",
     agent_id: "luna",
     assistant_name: "Luna",
     nkey_public_key: "NLUNA",

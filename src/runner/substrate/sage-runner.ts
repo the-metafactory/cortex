@@ -114,7 +114,7 @@ import type {
 // breaking callers.
 
 /** The handle the runner needs from `Bun.spawn`. */
-export interface PiDevSpawnResult {
+export interface SageSpawnResult {
   stdout: ReadableStream<Uint8Array>;
   stderr: ReadableStream<Uint8Array>;
   exited: Promise<number>;
@@ -128,24 +128,24 @@ export interface PiDevSpawnResult {
  * `review <pr-ref> --substrate <pi|claude|codex>` arguments (substrate
  * value resolved from `SAGE_SUBSTRATE` env, defaults to `pi`).
  */
-export type PiDevSpawnFn = (
+export type SageSpawnFn = (
   argv: string[],
   opts: { stdout: "pipe"; stderr: "pipe" },
-) => PiDevSpawnResult;
+) => SageSpawnResult;
 
 /**
  * Binary resolver — returns the absolute path to the sage CLI, or
  * `undefined` if no binary is found. Production wires `Bun.which`; tests
  * stub this to simulate missing-binary cases.
  */
-export type PiDevWhichFn = (cmd: string) => string | undefined;
+export type SageWhichFn = (cmd: string) => string | undefined;
 
 // ---------------------------------------------------------------------------
 // Public factory
 // ---------------------------------------------------------------------------
 
 /**
- * Options for {@link makePiDevPipelineRunner}.
+ * Options for {@link makeSageReviewRunner}.
  *
  * All fields are optional; the default behaviour is:
  *
@@ -154,7 +154,14 @@ export type PiDevWhichFn = (cmd: string) => string | undefined;
  *   - Use the current process env (no scrubbing — sage piggybacks on the
  *     principal's `gh` auth and `GITHUB_TOKEN` via inherited env).
  */
-export interface MakePiDevRunnerOpts {
+export interface MakeSageRunnerOpts {
+  /**
+   * The LLM forwarded to `sage review --substrate <model>` (`claude`|`codex`|
+   * `pi`). cortex#917 — passed from the agent's resolved `runtime.model` so a
+   * sage agent runs its lenses through the configured LLM. Falls back to
+   * `SAGE_SUBSTRATE` env, then `pi`.
+   */
+  model?: string;
   /**
    * Explicit sage binary path. Highest-priority resolution (skips env +
    * PATH lookup). Primarily a test seam; production callers typically
@@ -163,14 +170,14 @@ export interface MakePiDevRunnerOpts {
   sageBin?: string;
   /**
    * Spawn function — defaults to `Bun.spawn`. Tests inject a fake that
-   * yields a canned `PiDevSpawnResult`.
+   * yields a canned `SageSpawnResult`.
    */
-  spawn?: PiDevSpawnFn;
+  spawn?: SageSpawnFn;
   /**
    * `which`-style lookup — defaults to `Bun.which`. Tests stub this to
    * simulate the binary-not-found path without touching `$PATH`.
    */
-  which?: PiDevWhichFn;
+  which?: SageWhichFn;
 }
 
 /**
@@ -194,8 +201,8 @@ export interface MakePiDevRunnerOpts {
  * **No side effects at construction.** The factory just closes over
  * `opts`; no spawn, no I/O. Safe to call at boot time.
  */
-export function makePiDevPipelineRunner(
-  opts: MakePiDevRunnerOpts = {},
+export function makeSageReviewRunner(
+  opts: MakeSageRunnerOpts = {},
 ): (pipeline: ReviewPipelineOpts) => Promise<ReviewPipelineResult> {
   const spawn = opts.spawn ?? defaultSpawn;
   const which = opts.which ?? defaultWhich;
@@ -235,7 +242,7 @@ export function makePiDevPipelineRunner(
     // `sage review --help`; values outside that set surface as a sage-
     // side `--substrate` parse error (which the failure-mapping table
     // below maps to `cant_do`).
-    const substrate = process.env.SAGE_SUBSTRATE ?? "pi";
+    const substrate = opts.model ?? process.env.SAGE_SUBSTRATE ?? "pi";
     // cortex#888 — ask sage to append the structured verdict block as the
     // terminal stdout artefact (sage#83 `--emit-verdict-block`). We parse it
     // below to recover the REAL decision (`approved` is invisible to the
@@ -256,7 +263,7 @@ export function makePiDevPipelineRunner(
       argv.push("--forge", forge);
     }
 
-    let proc: PiDevSpawnResult;
+    let proc: SageSpawnResult;
     try {
       proc = spawn(argv, { stdout: "pipe", stderr: "pipe" });
     } catch (err) {
@@ -345,7 +352,7 @@ export function makePiDevPipelineRunner(
 function defaultSpawn(
   argv: string[],
   opts: { stdout: "pipe"; stderr: "pipe" },
-): PiDevSpawnResult {
+): SageSpawnResult {
   const proc = Bun.spawn(argv, {
     stdout: opts.stdout,
     stderr: opts.stderr,
