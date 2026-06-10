@@ -46,6 +46,10 @@ _Avoid_: bot, persona, daemon (as the domain term)
 A short-lived task spawned via Claude Code's `Agent` tool — e.g. the Engineer or Explore sub-agents the pilot loop uses. Not an **agent**: no bus identity, no persistence. Always carries the `sub-` qualifier; never bare `agent`.
 _Avoid_: agent (bare), worker, helper
 
+**Agent presence**:
+Whether an **agent** process is up and consuming the bus — *independent of any dispatch*. Carried on the **`agent` domain** (`agent.{online|heartbeat|offline|capabilities-changed}`, G-1114), with a liveness FSM (online while heartbeats arrive within TTL → offline on graceful `offline` or TTL lapse). An idle agent has presence; it is not running a dispatch. Presence is what the Mission Control **Network view** renders across stacks. **Cross-principal, only presence + dispatch *lifecycle* metadata is visible** — never the **session interior** (ADR-0005): clicking a peer's agent shows identity, online state, capabilities, and any federated `dispatch.task.*` lifecycle, but never their tool calls/prompts/diffs (those never leave the peer's stack). Supersedes the observability-only `agents.capabilities.registered` envelope (folded into `agent.online` + `agent.capabilities-changed`; dual-emit then retire — routing is unaffected, it is subject/consumer-filter based, not registry-lookup based). (Resolved 2026-06-10, G-1114 grilling.)
+_Avoid_: liveness (that is the FSM, not the concept), availability; conflating presence with dispatch progress (`system.agent.heartbeat`)
+
 ### The bus
 
 **Subject**:
@@ -60,7 +64,9 @@ _Avoid_: reach, visibility, tier, level (when naming the prefix; "onboarding tie
 
 **Domain**:
 The functional-domain segment of a **subject** — groups related signals. Values: `tasks`, `agent`, `system`, `code`, `review`, `dispatch`. Always the segment ("the tasks domain"). The `tasks` and `dispatch` domains are distinct and coexist: **`tasks.{capability}.{subcapability}`** is the work-request namespace (where Offer-mode work is published, capability-routed); **`dispatch.task.{action}`** is the task-lifecycle namespace (events about an active dispatch — `received`, `dispatched`, `started`, `completed`, `failed`, `aborted`). Not a rename in flight.
-_Avoid_: channel, category — and never use `domain` for the DDD bounded-context sense (that is always written **bounded context**).
+
+The **`agent` domain** carries **agent presence** — `agent.{online|heartbeat|offline|capabilities-changed}` (G-1114, the cross-stack topology view): "this agent process is up and consuming, idle or not." It is **distinct from `system.agent.heartbeat`** (cortex#361), which is **dispatch-scoped** liveness — fired only *while a dispatch is in flight*, keyed by `correlation_id` ("this task is still progressing"). Two differently-scoped heartbeats by design: `agent.heartbeat` answers *is this agent alive*, `system.agent.heartbeat` answers *is this task progressing*. An idle agent emits the former, never the latter. (Resolved 2026-06-10, G-1114 grilling.)
+_Avoid_: channel, category — and never use `domain` for the DDD bounded-context sense (that is always written **bounded context**); never read `system.agent.heartbeat` as an agent-presence signal (it is dispatch liveness).
 
 **Envelope**:
 The signed wrapper that travels on a **subject** — metadata (`sovereignty`, `signed_by[]`, `correlation_id`, `source`, `type`) around a **payload**. Every bus message is an envelope.

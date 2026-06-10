@@ -59,6 +59,7 @@ import {
   type ReviewConsumerAgent,
   type SignatureVerifier,
 } from "./bus/review-consumer";
+import { wireDevConsumers } from "./runner/dev-consumer-boot";
 import {
   ReleaseConsumer,
   type ReleaseConsumerAgent,
@@ -105,6 +106,9 @@ import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/r
 import { startMissionControl, type MissionControlHandle } from "./surface/mc/embed";
 // MC-I1.S4 (ADR-0005 §4) — bus→MC dispatch-lifecycle projection renderer.
 import { createDispatchProjectionRenderer } from "./surface/mc/projection/dispatch-lifecycle-renderer";
+// MC-I1.S7 (#849) — funnel the event-driven failed_dispatch attention delta
+// onto the same system.attention.* bus path the cockpit loop publishes on.
+import { publishReconcileDelta } from "./surface/mc/attention-notify";
 import type { Database as BunDatabase } from "bun:sqlite";
 import { isGatewayEnabled } from "./gateway/gateway-bootstrap";
 import {
@@ -1107,6 +1111,24 @@ export async function startCortex(
     reviewConfig?.stream.maxBytes ?? 512 * 1024 * 1024;
   const reviewConsumerMaxDeliver = reviewConfig?.consumer.maxDeliver ?? 5;
 
+  // cortex#835 / pilot#154 — the REVIEW_LIFECYCLE stream. A SECOND JetStream
+  // stream that carries the verdict + dispatch-lifecycle envelopes so a
+  // downstream reactor (pilot's verdict watch) can later bind a DURABLE
+  // consumer and REPLAY history instead of racing a transient core-NATS
+  // subscription. cortex provisions the stream only — the durable consumers
+  // that read it are the downstream reactor's concern (the cortex#835
+  // follow-up). Config posture mirrors CODE_REVIEW exactly. NOTE (#851
+  // review): retention is INTEREST — with zero registered consumers the
+  // stream retains NOTHING, so until pilot's durable consumer exists this
+  // is a structural enabler, not history. Replay-from-history begins only
+  // once the first durable consumer is bound.
+  const lifecycleConfig = options.bus?.lifecycle;
+  const lifecycleStream = lifecycleConfig?.stream.name ?? "REVIEW_LIFECYCLE";
+  const lifecycleStreamMaxAgeNs =
+    (lifecycleConfig?.stream.maxAgeSeconds ?? 86_400) * 1_000_000_000;
+  const lifecycleStreamMaxBytes =
+    lifecycleConfig?.stream.maxBytes ?? 512 * 1024 * 1024;
+
   // cortex#338 — resolve the provisioning JSM and provision the
   // CODE_REVIEW stream up-front so the per-agent `ReviewConsumer.start`
   // calls below can bind without hitting "stream not found" against a
@@ -1139,6 +1161,34 @@ export async function startCortex(
       ]
     : [reviewSubjectPattern];
 
+  // cortex#835 / pilot#154 — REVIEW_LIFECYCLE subject set. Covers the THREE
+  // local lifecycle families a downstream verdict-reactor races for (the
+  // exact set pilot's `subscribe-verdict.ts` listens on, plus the dispatch
+  // lifecycle the task brief names):
+  //   - `…review.verdict.>`   — the verdict envelopes (approved / changes /
+  //                             commented) the review consumer publishes
+  //   - `…code.pr.review.>`   — sage's `code` domain verdict family (pilot
+  //                             subscribes both verdict families explicitly)
+  //   - `…dispatch.task.>`    — dispatch lifecycle (received / dispatched /
+  //                             completed / failed / aborted)
+  //
+  // OVERLAP ANALYSIS (JetStream rejects overlapping subjects across streams):
+  // CODE_REVIEW owns `…tasks.code-review.>` (+ federated `tasks.*.code-review`).
+  // Those live under the `tasks.` token at segment 4; the three families here
+  // live under disjoint tokens (`review.`, `code.`, `dispatch.`) at segment 4.
+  // No prefix of any subject here is a prefix of (or prefixed by) any
+  // CODE_REVIEW subject — the two streams partition the subject space cleanly.
+  // Federated verdict/lifecycle traffic is intentionally NOT mirrored here:
+  // the durable-history need is local-reactor-scoped (pilot watches its OWN
+  // `local.{principal}.{stack}.…` scope); a federated-history follow-up can
+  // extend this set the same way `reviewStreamSubjects` extends under
+  // `federationConfigured` if/when a cross-principal reactor needs replay.
+  const lifecycleStreamSubjects = [
+    `local.${reviewPrincipalId}.${derivedStack.stack}.review.verdict.>`,
+    `local.${reviewPrincipalId}.${derivedStack.stack}.code.pr.review.>`,
+    `local.${reviewPrincipalId}.${derivedStack.stack}.dispatch.task.>`,
+  ];
+
   if (reviewJsm !== null) {
     try {
       const outcome = await provisionReviewStream({
@@ -1165,6 +1215,39 @@ export async function startCortex(
       // We log here so principals see provisioning was even attempted.
       process.stderr.write(
         `cortex: provisionReviewStream failed for "${reviewStream}": ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+
+    // cortex#835 / pilot#154 — provision the REVIEW_LIFECYCLE stream in the
+    // SAME `reviewJsm !== null` gate so it inherits the identical config
+    // posture as CODE_REVIEW: created iff a JSM resolved (review-capable
+    // agents present AND `runtime.jetstreamManager` available), skipped
+    // entirely when the runtime is dormant. Reuses the generic
+    // `provisionReviewStream` helper (idempotent ensure, Interest retention,
+    // File storage, drift-warning) — only the name / subjects / limits
+    // differ. A failure here does NOT abort boot, identical to CODE_REVIEW.
+    try {
+      const lifecycleOutcome = await provisionReviewStream({
+        jsm: reviewJsm,
+        name: lifecycleStream,
+        subjects: lifecycleStreamSubjects,
+        maxAgeNs: lifecycleStreamMaxAgeNs,
+        maxBytes: lifecycleStreamMaxBytes,
+      });
+      if (lifecycleOutcome === "created") {
+        console.log(
+          `cortex: provisioned JetStream stream "${lifecycleStream}" (subjects=[${lifecycleStreamSubjects.join(", ")}])`,
+        );
+      } else if (lifecycleOutcome === "exists") {
+        console.log(
+          `cortex: JetStream stream "${lifecycleStream}" already present — binding existing config`,
+        );
+      }
+      // config-drift-warning is already logged by the helper.
+    } catch (err) {
+      process.stderr.write(
+        `cortex: provisionReviewStream failed for "${lifecycleStream}": ` +
           `${err instanceof Error ? err.message : String(err)}\n`,
       );
     }
@@ -1656,6 +1739,60 @@ export async function startCortex(
             `${err instanceof Error ? err.message : String(err)}\n`,
         );
       }
+    }
+  }
+
+  // F-2.1 (cortex#835) — dev.implement consumer boot wiring.
+  //
+  // DORMANT BY DEFAULT: `wireDevConsumers` returns an EMPTY array — touching
+  // no filesystem, spawning nothing, reading no token — unless an agent
+  // declares a `dev.implement` (or bare `dev`) capability in
+  // `runtime.capabilities[]`. Every live stack today declares none, so this
+  // block is inert: byte-identical boot. Mirrors the review-consumer
+  // dormancy contract above; runs AFTER it so a principal scanning boot logs
+  // sees the review path first.
+  const devConsumers = wireDevConsumers({
+    agents: mergedAgents,
+    runtime,
+    source: systemEventSource,
+    principalId,
+    stack: derivedStack.stack,
+    // §3.5b — thread the same guardrail config the review path uses
+    // (`config.claude`: bashAllowlist + allowedTools/Dirs + async timeout) so
+    // the higher-authority dev push session is never LESS-guarded than the
+    // review session. `buildDevSessionOpts` also sets the bash-guard Gate-1
+    // channel + a conservative allowlist default when the config declares none.
+    guardrails: config.claude,
+  });
+  for (const consumer of devConsumers) {
+    try {
+      // Stream provisioning for `tasks.dev.implement` is deliberately a
+      // sibling slice (see dev-consumer-boot.ts header FLAG) — until a
+      // dev-capable agent exists this loop never runs, so the deferral
+      // changes no live behaviour. `start()` stays dormant-safe: a disabled
+      // runtime returns `subscribed: false` and the consumer never binds.
+      const started = await consumer.start({
+        pattern: `local.${principalId}.${derivedStack.stack}.tasks.dev.implement`,
+        stream: "DEV_IMPLEMENT",
+        durable: `cortex-dev-consumer-${principalId}-${consumer.agent.id}`,
+      });
+      if (started.subscribed) {
+        console.log(`cortex: dev.implement consumer ready for agent=${consumer.agent.id}`);
+      } else {
+        console.log(
+          `cortex: dev.implement consumer DORMANT for agent=${consumer.agent.id} — ` +
+            `cortex MyelinRuntime subscriptions disabled (G-1111 pending; tasks.dev.implement ` +
+            `envelopes will not be claimed by this consumer)`,
+        );
+      }
+    } catch (err) {
+      // Per CLAUDE.md: log every error. One agent's consumer crash does NOT
+      // abort boot; siblings still wire and the shutdown drain still calls
+      // `.stop()` (idempotent — handles the "never subscribed" case).
+      process.stderr.write(
+        `cortex: dev consumer init failed for agent=${consumer.agent.id}: ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
     }
   }
 
@@ -2853,8 +2990,34 @@ export async function startCortex(
       // dashboard clients (S6 — closes the S4 WS fan-out gap). No
       // restart-on-config — like every renderer, the registration is static for
       // the daemon's lifetime.
-      router.register(createDispatchProjectionRenderer(mcDb, mcHandle.wsRegistry));
-      console.log("cortex: Mission Control bus→MC projection renderer registered (dispatch + verdicts + heartbeats + attention + adapter health)");
+      //
+      // MC-I1.S7 (#849) — the event-driven failed_dispatch attention producer
+      // rides this same seam. We stamp it with the stack id and funnel its
+      // open/resolve delta onto the SAME `system.attention.*` bus path the
+      // cockpit loop uses — via the established `publishReconcileDelta` builder
+      // (attention-notify.ts) with the same notifySource the loop uses. This
+      // makes failed_dispatch attention work whenever `mc.enabled`, independent
+      // of `cockpit.enabled` (it's event-driven, not state-derived). The
+      // deep-link for a session-anchored item is the dashboard drill-down route.
+      const mcBaseUrl =
+        config.grove.baseUrl !== "" ? config.grove.baseUrl : `http://localhost:${mcHandle.port}`;
+      router.register(
+        createDispatchProjectionRenderer(mcDb, mcHandle.wsRegistry, {
+          stackId: derivedStack.stack,
+          publishDelta: async (delta) => {
+            await publishReconcileDelta(
+              delta,
+              {
+                source: { principal: principalId, agent: "cortex", instance: "local" },
+                deepLinkFor: (item) =>
+                  item.sessionId !== null ? `${mcBaseUrl}/sessions/${item.sessionId}` : null,
+              },
+              (env) => runtime.publish(env),
+            );
+          },
+        }),
+      );
+      console.log("cortex: Mission Control bus→MC projection renderer registered (dispatch + verdicts + heartbeats + attention + adapter health + failed-dispatch)");
     } catch (err) {
       console.error("cortex: Mission Control embed startup error (non-fatal):", err instanceof Error ? err.message : err);
     }
@@ -3048,6 +3211,7 @@ export async function startCortex(
       ...adapterCleanup.map((_, i) => `outbound poller stop[${i}]`),
       ...reviewConsumers.map((c, i) => `review-consumer stop[${i}] (agent=${c.agent.id})`),
       ...releaseConsumers.map((c, i) => `release-consumer stop[${i}] (agent=${c.agent.id})`),
+      ...devConsumers.map((c, i) => `dev-consumer stop[${i}] (agent=${c.agent.id})`),
       "dispatch-listener stop",
       "dispatch-sink stop",
       "review-sink stop",
@@ -3119,6 +3283,20 @@ export async function startCortex(
         if (consumer) {
           await completeAsync(
             `release-consumer stop[${i}] (agent=${consumer.agent.id})`,
+            consumer.stop(),
+          );
+        }
+      }
+      // F-2.1 (cortex#835) — drain dev consumers on the same boundary so an
+      // in-flight implement (worktree + CC + gates + PR) publishes its
+      // terminal envelope before the runtime closes. `DevConsumer.stop()` is
+      // idempotent and awaits its in-flight set (the "never subscribed" /
+      // dormant case is a no-op). Empty on every default stack.
+      for (let i = 0; i < devConsumers.length; i++) {
+        const consumer = devConsumers[i];
+        if (consumer) {
+          await completeAsync(
+            `dev-consumer stop[${i}] (agent=${consumer.agent.id})`,
             consumer.stop(),
           );
         }

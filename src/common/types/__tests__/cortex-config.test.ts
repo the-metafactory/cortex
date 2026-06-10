@@ -19,6 +19,7 @@ import {
   AgentDetectionSchema,
   AgentSchema,
   AttachmentsConfigSchema,
+  BusConfigSchema,
   ClaudeConfigSchema,
   CortexConfigSchema,
   DashboardRendererSchema,
@@ -700,6 +701,44 @@ describe("Cross-cutting schemas — defaults populated by emptyDefault helper", 
     const parsed = AgentDetectionSchema.parse({});
     expect(parsed.branchPatterns).toEqual(["^feat/(g|f|i)-\\d+"]);
     expect(parsed.commentPatterns).toEqual(["^Starting:", "^Completed:"]);
+  });
+
+  test("BusConfigSchema applies review + lifecycle stream defaults (cortex#835)", () => {
+    const parsed = BusConfigSchema.parse({});
+    // Existing CODE_REVIEW posture — unchanged.
+    expect(parsed.review.stream.name).toBe("CODE_REVIEW");
+    expect(parsed.review.stream.maxAgeSeconds).toBe(86_400);
+    expect(parsed.review.stream.maxBytes).toBe(512 * 1024 * 1024);
+    expect(parsed.review.consumer.maxDeliver).toBe(5);
+    // New REVIEW_LIFECYCLE stream — mirrors CODE_REVIEW's stream posture
+    // exactly, and intentionally carries NO consumer sub-block (cortex
+    // provisions the stream; the durable consumers are the downstream
+    // reactor's concern — the cortex#835 follow-up).
+    expect(parsed.lifecycle.stream.name).toBe("REVIEW_LIFECYCLE");
+    expect(parsed.lifecycle.stream.maxAgeSeconds).toBe(86_400);
+    expect(parsed.lifecycle.stream.maxBytes).toBe(512 * 1024 * 1024);
+    expect("consumer" in parsed.lifecycle).toBe(false);
+    // The two stream names MUST differ — they own disjoint subject spaces,
+    // and a shared name would clash on `streams.add`.
+    expect(parsed.lifecycle.stream.name).not.toBe(parsed.review.stream.name);
+  });
+
+  test("BusConfigSchema honors explicit lifecycle overrides", () => {
+    const parsed = BusConfigSchema.parse({
+      lifecycle: { stream: { name: "MY_LIFECYCLE", maxAgeSeconds: 3600, maxBytes: 1024 } },
+    });
+    expect(parsed.lifecycle.stream.name).toBe("MY_LIFECYCLE");
+    expect(parsed.lifecycle.stream.maxAgeSeconds).toBe(3600);
+    expect(parsed.lifecycle.stream.maxBytes).toBe(1024);
+  });
+
+  test("BusConfigSchema rejects non-positive lifecycle stream limits", () => {
+    expect(() =>
+      BusConfigSchema.parse({ lifecycle: { stream: { maxAgeSeconds: 0 } } }),
+    ).toThrow();
+    expect(() =>
+      BusConfigSchema.parse({ lifecycle: { stream: { maxBytes: -1 } } }),
+    ).toThrow();
   });
 });
 

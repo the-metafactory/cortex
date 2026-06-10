@@ -14,10 +14,19 @@ import { JsonlTailReader } from "./jsonl-reader";
 import { CursorStore } from "./cursor-store";
 import { ingestEvents } from "./ingestor";
 import { broadcastEvent } from "../notifications";
+import { ThrottledPrune, pruneRetention } from "../db/retention";
+
+/**
+ * How often the retention prune (#857 orphan rows, #864 events) runs. The
+ * poller ticks every ~2s; the prune is a full-table sweep, so we throttle it
+ * down to once an hour. Module constant (no config knob) — minimal scope.
+ */
+const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 
 export class HookStreamPoller {
   private readonly reader: JsonlTailReader;
   private readonly cursorStore: CursorStore;
+  private readonly prune: ThrottledPrune;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
@@ -27,6 +36,22 @@ export class HookStreamPoller {
   ) {
     this.reader = new JsonlTailReader();
     this.cursorStore = new CursorStore(config.cursorPath);
+
+    // Retention prune hung off the always-on poll tick (NOT the opt-in cockpit
+    // refresh loop) so it runs in every MC-enabled stack. Throttled to once an
+    // hour and best-effort — a prune failure routes to onError and never
+    // escapes the poll cycle. See db/retention.ts for the prune design.
+    this.prune = new ThrottledPrune({
+      intervalMs: PRUNE_INTERVAL_MS,
+      run: () => {
+        const summary = pruneRetention(this.db);
+        if (!summary.ok) {
+          process.stderr.write(
+            `[mission-control] hook-poller: retention prune failed: ${summary.error}\n`
+          );
+        }
+      },
+    });
 
     // Restore cursor state from disk
     const offsets = this.cursorStore.load();
@@ -105,6 +130,12 @@ export class HookStreamPoller {
     // this, those offset advances are lost on restart and the same bytes
     // would be re-read on next startup (F-4 review finding #4).
     this.cursorStore.save(this.reader.exportOffsets());
+
+    // Retention prune (#857/#864), throttled to once an hour. maybeRun() is
+    // best-effort and NEVER throws, so it can't break the poll cycle. Runs
+    // AFTER the cursor save so a (hypothetical) slow prune can't delay cursor
+    // persistence. The prune touches the events TABLE, never the hook cursor.
+    this.prune.maybeRun();
 
     return totalIngested;
   }

@@ -72,6 +72,13 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
         },
         consumer: { maxDeliver: 5 },
       },
+      lifecycle: {
+        stream: {
+          name: "REVIEW_LIFECYCLE",
+          maxAgeSeconds: 86_400,
+          maxBytes: 512 * 1024 * 1024,
+        },
+      },
     },
     agents,
     renderers: [],
@@ -127,6 +134,17 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
       encryption: { payload: "off", at_rest: "off" },
       transport: { mtls: "off" },
     },
+    mc: { enabled: false, configPath: "", dbPath: "", port: 0 },
+    cockpit: {
+      enabled: false,
+      docsDir: "docs",
+      repo: "",
+      refreshIntervalMs: 300_000,
+      attention: { surface: "discord", channel: "" },
+    },
+    // fix/c-844 — grove is now on CortexConfigSchema (shared GroveSchema); the
+    // transform fills defaults so the inferred OUTPUT type lists it as required.
+    grove: { notifications: { discord: false }, baseUrl: "" },
   };
 }
 
