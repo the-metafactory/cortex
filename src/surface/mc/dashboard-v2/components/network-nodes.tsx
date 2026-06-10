@@ -28,6 +28,8 @@ import {
   formatCapabilities,
   offlineReasonLabel,
   isTtlLapse,
+  isForeignOrigin,
+  originProvenanceLabel,
 } from "../lib/agents-display";
 import type {
   AgentNodeData,
@@ -46,9 +48,21 @@ export function StackHubCard({ data }: StackHubCardProps) {
     data.principal && data.stack
       ? `${data.principal}/${data.stack}`
       : (data.stack ?? data.principal ?? "stack");
+  // E.4: a FOREIGN (federated peer) hub renders distinctly from YOUR local hub —
+  // a "federated" eyebrow + a dimmer/bordered treatment via the modifier class.
+  const foreign = isForeignOrigin(data.origin);
   return (
-    <div className="network-node network-node-hub" data-node-kind="stack-hub">
-      <span className="network-hub-eyebrow dim">stack</span>
+    <div
+      className={
+        "network-node network-node-hub" +
+        (foreign ? " network-node-hub-foreign" : " network-node-hub-local")
+      }
+      data-node-kind="stack-hub"
+      data-hub-origin={foreign ? "foreign" : "local"}
+    >
+      <span className="network-hub-eyebrow dim">
+        {foreign ? "federated stack" : "stack"}
+      </span>
       <span className="network-hub-label">{label}</span>
       <span className="network-hub-count dim">
         {data.agentCount} agent{data.agentCount === 1 ? "" : "s"}
@@ -85,22 +99,40 @@ export function AgentNodeCard({ data, now = Date.now() }: AgentNodeCardProps) {
   const ttlLapse = offline && isTtlLapse(data.offlineReason);
   const reasonLabel = offline ? offlineReasonLabel(data.offlineReason) : null;
   const name = data.assistantName ?? data.agentId;
+  // E.4: a FOREIGN agent renders distinctly — a "federated" border/dimmer
+  // treatment (modifier class) + a provenance badge (`jc/research`) showing where
+  // the peer agent actually lives.
+  const foreign = isForeignOrigin(data.origin);
+  const provenance = originProvenanceLabel(data.origin);
 
   return (
     <div
       className={
         `network-node network-node-agent network-node-${data.state}` +
-        (ttlLapse ? " network-node-ttl-lapse" : "")
+        (ttlLapse ? " network-node-ttl-lapse" : "") +
+        (foreign ? " network-node-foreign" : "")
       }
       data-node-kind="agent"
       data-agent-id={data.agentId}
       data-state={data.state}
+      data-agent-origin={foreign ? "foreign" : "local"}
       data-offline-reason={offline ? (data.offlineReason ?? "") : undefined}
-      aria-label={`${name} — ${offline ? `offline (${reasonLabel})` : "online"}`}
+      aria-label={
+        `${name} — ${offline ? `offline (${reasonLabel})` : "online"}` +
+        (provenance ? ` — federated peer ${provenance}` : "")
+      }
     >
       <div className="network-node-identity">
         <span className="network-node-name">{name}</span>
         <span className="network-node-id dim">{data.agentId}</span>
+        {foreign && provenance && (
+          <span className="network-node-provenance" title={`federated peer — ${provenance}`}>
+            <span className="network-node-federated-badge" aria-hidden="true">
+              ⇄
+            </span>
+            {provenance}
+          </span>
+        )}
       </div>
 
       <div className="network-node-caps">

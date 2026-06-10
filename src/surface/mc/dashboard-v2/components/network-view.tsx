@@ -125,9 +125,14 @@ export function NetworkView({
     }
   }, [selectedKey, selectedAgent]);
 
+  // D.4 + #909: join the LOCAL working-agents projection ONLY for a LOCAL agent.
+  // A foreign peer agent's dispatch activity lives on ITS stack, not ours — the
+  // working-agents projection is this stack's, so joining it for a foreign agent
+  // would be wrong (and could false-match a same-named local agent_id). Foreign →
+  // null; the detail panel renders "federated peer — activity not local".
   const dispatch = useMemo(
     () =>
-      selectedAgent
+      selectedAgent && selectedAgent.origin === "local"
         ? selectAgentDispatchActivity(workingAgents, selectedAgent.agent_id)
         : null,
     [workingAgents, selectedAgent],

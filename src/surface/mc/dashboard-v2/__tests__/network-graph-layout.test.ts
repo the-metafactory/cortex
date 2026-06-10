@@ -29,6 +29,7 @@ function tile(
   const { agent_id } = over;
   return {
     key: `andreas/research/${agent_id}`,
+    origin: "local",
     assistant_name: null,
     nkey_public_key: `N${agent_id}`,
     principal: "andreas",
@@ -41,6 +42,24 @@ function tile(
     last_seen_at: 1000,
     ...over,
   };
+}
+
+/** A FOREIGN tile under a peer's verified {principal}/{stack}. */
+function foreignTile(
+  over: Partial<AgentPresenceTile> & {
+    agent_id: string;
+    principal: string;
+    stack: string;
+  },
+): AgentPresenceTile {
+  const { agent_id, principal, stack } = over;
+  return tile({
+    ...over,
+    key: `${principal}/${stack}/${agent_id}`,
+    principal,
+    stack,
+    origin: { principal, stack },
+  });
 }
 
 describe("toElkGraph (G-1114.D.3)", () => {
@@ -72,8 +91,27 @@ describe("toElkGraph (G-1114.D.3)", () => {
     }
   });
 
-  it("uses the radial algorithm (star around the hub)", () => {
-    expect(NETWORK_ELK_OPTIONS["elk.algorithm"]).toContain("radial");
+  it("uses the force algorithm with component separation (multi-cluster stars)", () => {
+    // E.3: several disconnected stack-clusters (local + each peer) — force +
+    // separateConnectedComponents lays each out as its own group rather than
+    // forcing a single radial root.
+    expect(NETWORK_ELK_OPTIONS["elk.algorithm"]).toContain("force");
+    expect(NETWORK_ELK_OPTIONS["elk.separateConnectedComponents"]).toBe("true");
+  });
+
+  it("maps a multi-stack graph into ELK children + per-cluster edges (E.3)", () => {
+    const graph = buildNetworkGraph([
+      tile({ agent_id: "luna" }),
+      foreignTile({ agent_id: "sage", principal: "jc", stack: "research" }),
+    ]);
+    const elk = toElkGraph(graph);
+    // 2 hubs (local + jc/research) + 2 agents = 4 children
+    expect(elk.children).toHaveLength(4);
+    // 2 edges, each sourced from its own cluster's hub (disconnected components)
+    expect(elk.edges).toHaveLength(2);
+    const sources = elk.edges.flatMap((e) => e.sources).sort();
+    expect(sources).toContain(STACK_HUB_NODE_ID);
+    expect(sources).toContain("__stack__:jc/research");
   });
 });
 

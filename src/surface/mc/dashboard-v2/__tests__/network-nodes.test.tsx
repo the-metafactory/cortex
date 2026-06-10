@@ -29,6 +29,7 @@ function agentData(over: Partial<AgentNodeData> = {}): AgentNodeData {
   return {
     kind: "agent",
     key: "andreas/research/luna",
+    origin: "local",
     agentId: "luna",
     assistantName: "Luna",
     capabilities: [],
@@ -134,6 +135,7 @@ describe("StackHubCard (G-1114.D.1)", () => {
   it("renders the principal/stack label and agent count", () => {
     const html = renderHub({
       kind: "stack-hub",
+      origin: "local",
       principal: "andreas",
       stack: "research",
       agentCount: 3,
@@ -146,6 +148,7 @@ describe("StackHubCard (G-1114.D.1)", () => {
   it("singularises the agent count for a single agent", () => {
     const html = renderHub({
       kind: "stack-hub",
+      origin: "local",
       principal: "andreas",
       stack: "research",
       agentCount: 1,
@@ -157,11 +160,67 @@ describe("StackHubCard (G-1114.D.1)", () => {
   it("degrades to a 'stack' label when principal/stack are unknown", () => {
     const html = renderHub({
       kind: "stack-hub",
+      origin: "local",
       principal: null,
       stack: null,
       agentCount: 0,
     });
     expect(html).toContain("stack");
+  });
+
+  it("marks the LOCAL hub distinctly from a federated hub (E.4)", () => {
+    const html = renderHub({
+      kind: "stack-hub",
+      origin: "local",
+      principal: "andreas",
+      stack: "research",
+      agentCount: 2,
+    });
+    expect(html).toContain('data-hub-origin="local"');
+    expect(html).toContain("network-node-hub-local");
+    expect(html).not.toContain("network-node-hub-foreign");
+    // a local hub's eyebrow is plain "stack", not "federated stack"
+    expect(html).not.toContain("federated stack");
+  });
+
+  it("renders a FOREIGN hub with the federated eyebrow + distinct treatment (E.4)", () => {
+    const html = renderHub({
+      kind: "stack-hub",
+      origin: { principal: "jc", stack: "research" },
+      principal: "jc",
+      stack: "research",
+      agentCount: 1,
+    });
+    expect(html).toContain('data-hub-origin="foreign"');
+    expect(html).toContain("network-node-hub-foreign");
+    expect(html).toContain("federated stack");
+    expect(html).toContain("jc/research");
+  });
+});
+
+describe("AgentNodeCard — federated provenance (G-1114.E.4)", () => {
+  it("renders a local agent with no provenance badge + a local origin marker", () => {
+    const html = renderAgent(agentData({ origin: "local" }));
+    expect(html).toContain('data-agent-origin="local"');
+    expect(html).not.toContain("network-node-foreign");
+    expect(html).not.toContain("network-node-provenance");
+  });
+
+  it("renders a FOREIGN agent distinctly with a `{principal}/{stack}` provenance badge", () => {
+    const html = renderAgent(
+      agentData({
+        key: "jc/research/sage",
+        agentId: "sage",
+        assistantName: "Sage",
+        origin: { principal: "jc", stack: "research" },
+      }),
+    );
+    expect(html).toContain('data-agent-origin="foreign"');
+    expect(html).toContain("network-node-foreign");
+    expect(html).toContain("network-node-provenance");
+    expect(html).toContain("jc/research");
+    // accessible label names it a federated peer
+    expect(html).toContain("federated peer jc/research");
   });
 });
 

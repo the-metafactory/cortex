@@ -46,6 +46,13 @@ export interface AgentPresenceView {
  */
 export interface AgentPresenceSnapshotRecord {
   key: string;
+  /**
+   * G-1114.E.2 — record PROVENANCE. `"local"` for a stack-own agent (the B.3
+   * path); a `{kind:"foreign", principal, stack}` struct for a trust-verified
+   * federated peer agent (the E.2 path). The registry's `AgentRecordOrigin`
+   * assigns to this structurally — the surface layer never imports the bus type.
+   */
+  origin: "local" | { kind: "foreign"; principal: string; stack: string };
   agentId: string;
   nkeyPublicKey: string;
   assistantName: string | null;
@@ -59,10 +66,28 @@ export interface AgentPresenceSnapshotRecord {
   lastSeenAt: number;
 }
 
+/**
+ * G-1114.E.4 — an agent's federation provenance, snake_case for the DTO.
+ *
+ *   - `"local"` — a stack-own agent (the default; byte-identical to pre-E DTOs).
+ *   - `{ principal, stack }` — a trust-verified FOREIGN peer agent, carrying the
+ *     peer's chain-verified `{principal}/{stack}`. The object form IS the
+ *     "foreign" discriminant — a consumer reads `origin === "local"` vs an
+ *     object. The `{principal}/{stack}` here is the VERIFIED source identity
+ *     (PR #914), safe to render as provenance + group by.
+ */
+export type AgentOrigin = "local" | { principal: string; stack: string };
+
 /** One agent row in the `GET /api/agents` response. */
 export interface AgentPresenceTile {
   /** Stable registry key — `{principal}/{stack}/{agent_id}`. */
   key: string;
+  /**
+   * G-1114.E.4 — federation provenance: `"local"` for a stack-own agent, or the
+   * foreign peer's `{principal, stack}`. The Network view groups agents under
+   * their origin stack-hub and renders foreign agents distinctly off this.
+   */
+  origin: AgentOrigin;
   /** Logical agent id (`luna`, `echo`, …). */
   agent_id: string;
   /** Soma-layer assistant name the agent hosts, or `null`. */
@@ -92,10 +117,23 @@ export interface ListAgentsResponse {
   agents: AgentPresenceTile[];
 }
 
+/**
+ * Flatten the registry's `AgentRecordOrigin` (`"local"` |
+ * `{kind:"foreign",principal,stack}`) into the DTO `AgentOrigin` (`"local"` |
+ * `{principal,stack}`). The `kind` discriminant is dropped — the object-vs-string
+ * shape already discriminates foreign from local on the wire.
+ */
+function toOrigin(origin: AgentPresenceSnapshotRecord["origin"]): AgentOrigin {
+  return origin === "local"
+    ? "local"
+    : { principal: origin.principal, stack: origin.stack };
+}
+
 /** Project one registry record into the snake_case API DTO. */
 function toTile(r: AgentPresenceSnapshotRecord): AgentPresenceTile {
   return {
     key: r.key,
+    origin: toOrigin(r.origin),
     agent_id: r.agentId,
     assistant_name: r.assistantName,
     nkey_public_key: r.nkeyPublicKey,

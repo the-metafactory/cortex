@@ -34,6 +34,8 @@ import {
   formatCapabilities,
   offlineReasonLabel,
   isTtlLapse,
+  isForeignOrigin,
+  originProvenanceLabel,
 } from "../lib/agents-display";
 import type { AgentPresenceTile } from "../hooks/use-agents";
 import type { AgentDispatchActivity } from "../lib/network-detail-display";
@@ -80,20 +82,35 @@ export function NetworkDetailPanel({
   const reasonLabel = offline ? offlineReasonLabel(agent.offline_reason) : null;
   const name = agent.assistant_name ?? agent.agent_id;
   const caps = formatCapabilities(agent.capabilities);
+  // E.4: a FOREIGN (federated peer) agent shows its origin + a "activity not
+  // local" note instead of a dispatch join (#909 — working-agents is local-only).
+  const foreign = isForeignOrigin(agent.origin);
+  const provenance = originProvenanceLabel(agent.origin);
 
   return (
     <aside
       className={
-        "network-detail-panel" + (ttlLapse ? " network-detail-ttl-lapse" : "")
+        "network-detail-panel" +
+        (ttlLapse ? " network-detail-ttl-lapse" : "") +
+        (foreign ? " network-detail-foreign" : "")
       }
       data-agent-id={agent.agent_id}
       data-state={agent.state}
+      data-agent-origin={foreign ? "foreign" : "local"}
       aria-label={`Agent detail — ${name}`}
     >
       <header className="network-detail-header">
         <div className="network-detail-identity">
           <span className="network-detail-name">{name}</span>
           <span className="network-detail-id dim">{agent.agent_id}</span>
+          {foreign && provenance && (
+            <span className="network-detail-provenance" title={`federated peer — ${provenance}`}>
+              <span className="network-detail-federated-badge" aria-hidden="true">
+                ⇄
+              </span>
+              federated peer · {provenance}
+            </span>
+          )}
         </div>
         <button
           type="button"
@@ -153,10 +170,18 @@ export function NetworkDetailPanel({
         </div>
       </section>
 
-      {/* Dispatch lifecycle (LIGHT — pointer only, never interiors) --------- */}
+      {/* Dispatch lifecycle (LIGHT — pointer only, never interiors) ---------
+          E.4 / #909: a FOREIGN peer agent shows NO local dispatch activity —
+          working-agents is the LOCAL stack's projection, never joined for a
+          foreign agent. The principal sees that the activity simply isn't local,
+          not an empty "idle" that would misrepresent a busy peer. */}
       <section className="network-detail-section network-detail-activity">
         <span className="network-detail-section-label dim">recent activity</span>
-        {dispatch ? (
+        {foreign ? (
+          <span className="network-detail-foreign-activity dim">
+            Federated peer — activity not local.
+          </span>
+        ) : dispatch ? (
           <div className="network-detail-dispatch">
             <div className="network-detail-dispatch-line">
               <span
@@ -185,7 +210,9 @@ export function NetworkDetailPanel({
             No active dispatch.
           </span>
         )}
-        {onViewInWorkingGrid && (
+        {/* The working grid is the LOCAL stack's dispatch surface — the pointer
+            is meaningless for a foreign peer agent (#909), so it's hidden. */}
+        {!foreign && onViewInWorkingGrid && (
           <button
             type="button"
             className="network-detail-grid-link"

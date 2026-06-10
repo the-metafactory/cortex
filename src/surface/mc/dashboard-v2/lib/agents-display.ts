@@ -5,7 +5,29 @@
  * selection) is unit-testable without a DOM, mirroring `working-grid-display.ts`.
  */
 
-import type { AgentPresenceTile } from "../hooks/use-agents";
+import type { AgentPresenceTile, AgentOrigin } from "../hooks/use-agents";
+
+/**
+ * G-1114.E.4 — true when an origin is a FOREIGN (federated peer) provenance.
+ * A thin guard so view code reads `isForeignOrigin(origin)` rather than
+ * re-checking the `"local"`-string-vs-object discriminant. Mirrors the bus-side
+ * `isForeignOrigin`, re-declared here so the surface layer stays bus-free.
+ */
+export function isForeignOrigin(
+  origin: AgentOrigin,
+): origin is { principal: string; stack: string } {
+  return origin !== "local";
+}
+
+/**
+ * G-1114.E.4 — the provenance label for a foreign agent / hub: `{principal}/{stack}`
+ * (e.g. `jc/research`). `null` for a local origin (local nodes carry no foreign
+ * provenance badge). Used by the node cards + the detail panel to render where a
+ * federated peer agent actually lives.
+ */
+export function originProvenanceLabel(origin: AgentOrigin): string | null {
+  return origin === "local" ? null : `${origin.principal}/${origin.stack}`;
+}
 
 /** Panel render mode, selected from load/error/data state. */
 export type AgentsPanelMode = "error" | "loading" | "empty" | "list";

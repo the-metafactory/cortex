@@ -26,7 +26,7 @@ import { ApiFailure, getJson } from "../lib/api";
 import type { AgentPresenceTile, ListAgentsResponse } from "../../api/agents";
 import type { WsClient, WsMessage } from "./use-websocket";
 
-export type { AgentPresenceTile } from "../../api/agents";
+export type { AgentPresenceTile, AgentOrigin } from "../../api/agents";
 
 export interface AgentsState {
   agents: AgentPresenceTile[];
