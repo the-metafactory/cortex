@@ -538,6 +538,11 @@ describe("ClaudeCodeHarness — cc_session_id stamping (MC-I1.S3)", () => {
 
     expect(envelopes[0]?.type).toBe("dispatch.task.started");
     expect(envelopes[0]?.payload.cc_session_id).toBe("cc-resume-id");
+
+    // Pin the divergence contract: the terminal envelope carries the
+    // AUTHORITATIVE post-resume id, which differs from started's resume id.
+    expect(envelopes[1]?.type).toBe("dispatch.task.completed");
+    expect(envelopes[1]?.payload.cc_session_id).toBe("cc-sess-resumed");
   });
 
   test("started has NO cc_session_id when there is no resume id (id not yet known)", async () => {

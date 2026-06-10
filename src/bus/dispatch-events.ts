@@ -239,8 +239,13 @@ export interface DispatchTaskCommonOpts {
    * harness has no CC session — e.g. the bus-peer harness, the agent-team
    * moderator path, or a claude-code `started` envelope yielded BEFORE the
    * session id is known (see {@link createDispatchTaskStartedEvent} timing
-   * note). When present, every lifecycle event for one task shares the same
-   * value; surfaces also key on `correlation_id` to stitch the timeline.
+   * note). On a RESUME dispatch the values can DIVERGE across one task's
+   * lifecycle: `started` carries the prior session's id (the `--resume`
+   * argument — the only id known at started-time), while the terminal
+   * envelope carries the authoritative id from the CC result event, which
+   * may differ post-resume. Consumers MUST stitch the timeline on
+   * `correlation_id` and treat the terminal envelope's id as authoritative
+   * (ADR-0005 §3; the S4 projection keys rows this way).
    *
    * **Payload-only.** This widens the lifecycle payload; the wire grammar
    * (subject, envelope metadata, sovereignty) is untouched — the myelin
