@@ -1500,8 +1500,10 @@ export async function startCortex(
           // A thin persona used to review in prose and ask "Shall I post?",
           // leaving the pipeline with no parseable block and nothing on the
           // forge. Stating the contract in the prompt raises the floor on
-          // persona quality (the pipeline still fails closed on a missing /
-          // malformed block); capability routing still happened on the subject
+          // persona quality. Failure is asymmetric: a missing/malformed block
+          // drops only the verdict envelope (retryable), but a forge review,
+          // once posted, persists — see `buildReviewPrompt`'s docstring.
+          // Capability routing still happened on the subject
           // (`tasks.code-review.*`).
           promptBuilder: ({ payload }) => buildReviewPrompt(payload),
           sessionOpts: reviewSessionOpts,

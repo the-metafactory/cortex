@@ -36,16 +36,23 @@ import type { ReviewRequestPayload } from "../bus/review-events";
 export function buildReviewPrompt(payload: ReviewRequestPayload): string {
   const ref = `${payload.repo}#${payload.pr}`;
 
+  // The forge CLI to post through. `payload.forge` omitted ⇒ GitHub
+  // (pre-sage#43 back-compat). GitLab MRs post via `glab`, not `gh`.
+  const forge = payload.forge ?? "github";
+  const postCli =
+    forge === "gitlab"
+      ? "`glab mr note` (and `glab mr approve` / `glab mr revoke` as the verdict warrants)"
+      : "`gh pr review` (use `--comment` if GitHub blocks a self-approve / self-request-changes)";
+
   const postInstruction = payload.post
     ? [
-        `When your review is ready, POST it to the PR non-interactively with`,
-        "`gh pr review` (use `--comment` if GitHub blocks a self-approve /",
-        "self-request-changes). Do NOT ask for confirmation — post it, then",
-        "report the created review's id and url in the verdict block's",
+        `When your review is ready, POST it to the ${forge === "gitlab" ? "MR" : "PR"}`,
+        `non-interactively with ${postCli}. Do NOT ask for confirmation — post it,`,
+        "then report the created review's id and url in the verdict block's",
         "`github_review_id` / `github_review_url` fields.",
       ].join(" ")
     : [
-        `Do NOT post this review to the PR. Leave the verdict block's`,
+        `Do NOT post this review. Leave the verdict block's`,
         '`github_review_id` as `0` and `github_review_url` as `""`.',
       ].join(" ");
 

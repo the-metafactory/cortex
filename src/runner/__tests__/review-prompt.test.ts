@@ -56,17 +56,25 @@ describe("buildReviewPrompt (cortex#911)", () => {
     expect(p).toContain('"approved", "changes-requested", or');
   });
 
-  test("post=true → non-interactive gh pr review, no confirmation", () => {
-    const p = buildReviewPrompt(payload({ post: true }));
+  test("post=true on GitHub → non-interactive gh pr review, no confirmation", () => {
+    const p = buildReviewPrompt(payload({ post: true })); // forge omitted ⇒ github
     expect(p).toContain("gh pr review");
+    expect(p).not.toContain("glab");
     expect(p).toContain("Do NOT ask for confirmation");
     expect(p).toMatch(/report the created review's id and url/i);
   });
 
-  test("post falsy → instruct NOT to post + link-less block", () => {
+  test("post=true on GitLab → glab, not gh (cortex#917 round 3)", () => {
+    const p = buildReviewPrompt(payload({ post: true, forge: "gitlab" }));
+    expect(p).toContain("glab mr");
+    expect(p).not.toContain("gh pr review");
+  });
+
+  test("post falsy → instruct NOT to post + no post CLI", () => {
     const p = buildReviewPrompt(payload({ post: false }));
     expect(p).toContain("Do NOT post");
     expect(p).not.toContain("gh pr review");
+    expect(p).not.toContain("glab");
   });
 
   test("post omitted behaves as no-post", () => {
