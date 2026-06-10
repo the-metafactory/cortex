@@ -478,6 +478,72 @@ html, body {
 .network-legend-swatch.swatch-offline { background: var(--fg-faint); }
 .network-legend-swatch.swatch-ttl-lapse { background: var(--warn); }
 
+/* G-1114.D.4 — node detail panel (slides in on the right of the canvas).
+   Presence + capabilities + a LIGHT dispatch pointer — never session
+   interiors (ADR-0007). */
+.network-detail-panel {
+  position: absolute; top: 10px; right: 10px; bottom: 10px; z-index: 6;
+  width: 280px; max-width: calc(100% - 20px);
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 14px 16px; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); color: var(--fg);
+  box-shadow: -4px 0 18px color-mix(in oklch, var(--bg) 60%, transparent);
+  font-family: var(--sans);
+}
+.network-detail-panel.network-detail-ttl-lapse {
+  border-color: color-mix(in oklch, var(--warn) 50%, var(--line));
+}
+.network-detail-header {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
+}
+.network-detail-identity { display: flex; flex-direction: column; gap: 2px; }
+.network-detail-name { font-size: 14px; font-weight: 700; }
+.network-detail-id { font-size: 11px; font-family: var(--mono); }
+.network-detail-close {
+  background: none; border: none; cursor: pointer;
+  color: var(--fg-faint); font-size: 13px; line-height: 1; padding: 2px 4px;
+}
+.network-detail-close:hover { color: var(--fg); }
+.network-detail-section { display: flex; flex-direction: column; gap: 5px; }
+.network-detail-section-label {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em;
+}
+.network-detail-liveness { display: flex; align-items: center; gap: 8px; }
+.network-detail-state {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;
+}
+.network-detail-state.state-online { color: var(--ok); }
+.network-detail-state.state-offline { color: var(--fg-faint); }
+.network-detail-reason { font-size: 11px; }
+.network-detail-reason-ttl-lapse { color: var(--warn); }
+.network-detail-heartbeat { font-size: 11px; }
+.network-detail-caps { display: flex; flex-wrap: wrap; gap: 5px; }
+.network-detail-cap {
+  font-size: 10px; padding: 2px 7px;
+  border: 1px solid var(--line); border-radius: 4px; color: var(--fg-faint);
+}
+.network-detail-cap-none { font-size: 11px; font-style: italic; }
+.network-detail-dispatch { display: flex; flex-direction: column; gap: 4px; }
+.network-detail-dispatch-line {
+  display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
+}
+.network-detail-dispatch-state {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;
+  color: var(--accent);
+}
+.network-detail-dispatch-priority { font-size: 10px; font-family: var(--mono); }
+.network-detail-dispatch-task { font-size: 12px; }
+.network-detail-dispatch-more,
+.network-detail-dispatch-updated { font-size: 10.5px; }
+.network-detail-dispatch-idle { font-size: 11.5px; font-style: italic; }
+.network-detail-grid-link {
+  align-self: flex-start; margin-top: 4px;
+  background: none; border: none; cursor: pointer; padding: 0;
+  color: var(--accent); font-size: 11.5px;
+}
+.network-detail-grid-link:hover { text-decoration: underline; }
+
 /* G-1113.C.7 — per-repository panel */
 .repos-view .repo-card {
   border: 1px solid var(--line); border-radius: 8px;

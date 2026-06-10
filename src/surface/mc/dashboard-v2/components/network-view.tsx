@@ -27,10 +27,16 @@
  * ADR-0007: nodes carry presence + lifecycle only — never session interiors.
  */
 
-import { Suspense, lazy, useMemo } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import type { AgentsState } from "../hooks/use-agents";
+import type { WorkingAgentTile } from "../hooks/use-working-agents";
 import { pickAgentsPanelMode } from "../lib/agents-display";
 import { buildNetworkGraph } from "../lib/network-graph-adapter";
+import {
+  resolveSelectedAgent,
+  selectAgentDispatchActivity,
+} from "../lib/network-detail-display";
+import { NetworkDetailPanel } from "./network-detail-panel";
 
 // Lazy: the xyflow + elk engine chunk loads only when this resolves (first
 // entry into the Network tab). Keep this the ONLY dynamic import in the view —
@@ -39,15 +45,60 @@ const NetworkCanvas = lazy(() => import("./network-canvas"));
 
 export interface NetworkViewProps {
   state: AgentsState;
+  /**
+   * The working-agents snapshot (already fetched at app scope for the working
+   * grid). D.4 joins it by `agent_id` to surface a LIGHT dispatch-activity
+   * pointer in the detail panel — never session interiors (ADR-0007). Defaults
+   * to empty (the panel renders "no active dispatch" without it).
+   */
+  workingAgents?: readonly WorkingAgentTile[];
+  /**
+   * Jump to the working grid (the dashboard's default view). When provided, the
+   * detail panel shows a "view in working grid" pointer for the dispatch
+   * lifecycle in full.
+   */
+  onViewInWorkingGrid?: () => void;
 }
 
-export function NetworkView({ state }: NetworkViewProps) {
+export function NetworkView({
+  state,
+  workingAgents = [],
+  onViewInWorkingGrid,
+}: NetworkViewProps) {
   const mode = pickAgentsPanelMode(state);
 
   // Pure: snapshot → React-Flow graph (re-derived only when the agents change).
   // Tiny + engine-free, so it stays in the main bundle; the lazy canvas takes
   // the built graph and runs ELK over it.
   const graph = useMemo(() => buildNetworkGraph(state.agents), [state.agents]);
+
+  // D.4 — node-click selection. The canvas lifts the clicked agent's key here;
+  // the panel re-reads the LIVE tile off the snapshot by key, so it reflects
+  // presence updates and auto-closes if the agent disappears.
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const selectedAgent = useMemo(
+    () => resolveSelectedAgent(state.agents, selectedKey),
+    [state.agents, selectedKey],
+  );
+
+  // Auto-close: if the selected agent dropped out of the snapshot (went away),
+  // clear the stale key so we don't hold a dead selection. `selectedAgent` is
+  // already null for the render; this resets the key for the next click.
+  useEffect(() => {
+    if (selectedKey !== null && selectedAgent === null) {
+      setSelectedKey(null);
+    }
+  }, [selectedKey, selectedAgent]);
+
+  const dispatch = useMemo(
+    () =>
+      selectedAgent
+        ? selectAgentDispatchActivity(workingAgents, selectedAgent.agent_id)
+        : null,
+    [workingAgents, selectedAgent],
+  );
+
+  const closePanel = useCallback(() => setSelectedKey(null), []);
 
   return (
     <section className="scaffold-section network-view" aria-label="Network (agent topology)">
@@ -75,8 +126,16 @@ export function NetworkView({ state }: NetworkViewProps) {
               <div className="network-view-empty">Loading network…</div>
             }
           >
-            <NetworkCanvas graph={graph} />
+            <NetworkCanvas graph={graph} onSelectAgent={setSelectedKey} />
           </Suspense>
+          {selectedAgent && (
+            <NetworkDetailPanel
+              agent={selectedAgent}
+              dispatch={dispatch}
+              onClose={closePanel}
+              onViewInWorkingGrid={onViewInWorkingGrid}
+            />
+          )}
         </div>
       )}
     </section>

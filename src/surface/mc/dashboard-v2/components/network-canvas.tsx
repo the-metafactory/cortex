@@ -18,7 +18,7 @@
  * ADR-0007: nodes carry presence + lifecycle only — never session interiors.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -35,6 +35,7 @@ import {
   type NetworkGraph,
   type NetworkGraphNode,
 } from "../lib/network-graph-adapter";
+import { agentKeyFromClickedNode } from "../lib/network-detail-display";
 import { layoutNetworkGraph } from "../lib/network-graph-layout";
 import { AgentNode, StackHubNode } from "./network-nodes";
 import { NetworkLegend } from "./network-legend";
@@ -59,10 +60,22 @@ function getElk(): InstanceType<typeof ELK> {
 export interface NetworkCanvasProps {
   /** The pre-built (un-positioned) graph from the main-bundle adapter. */
   graph: NetworkGraph;
+  /**
+   * Lift a node selection up to the view (D.4): an agent node → its key, the
+   * stack-hub node or empty canvas → `null` (deselect). The view holds the
+   * selected key and renders the detail panel.
+   */
+  onSelectAgent?: (key: string | null) => void;
 }
 
 /** The React Flow canvas — rendered once ELK has positioned the nodes. */
-function FlowCanvas({ nodes }: { nodes: NetworkGraphNode[] }) {
+function FlowCanvas({
+  nodes,
+  onSelectAgent,
+}: {
+  nodes: NetworkGraphNode[];
+  onSelectAgent?: (key: string | null) => void;
+}) {
   // React Flow's node `data` is typed `Record<string, unknown>`; our discriminated
   // `NetworkNodeData` is structurally compatible but lacks the index signature, so
   // we cast at this single boundary rather than polluting the adapter's data type.
@@ -84,6 +97,25 @@ function FlowCanvas({ nodes }: { nodes: NetworkGraphNode[] }) {
     [nodes],
   );
 
+  // Node click → lift the agent key up (D.4). The pure
+  // `agentKeyFromClickedNode` resolves agent-node→key / hub→null, so this
+  // handler is a thin delegation (the click→lift logic itself is unit-tested
+  // off the helper, since xyflow can't mount in `bun test`).
+  const onNodeClick = useCallback(
+    (_evt: unknown, node: RfNode) => {
+      if (!onSelectAgent) return;
+      onSelectAgent(
+        agentKeyFromClickedNode(node as unknown as NetworkGraphNode),
+      );
+    },
+    [onSelectAgent],
+  );
+
+  // Click on empty canvas → deselect (close the panel).
+  const onPaneClick = useCallback(() => {
+    onSelectAgent?.(null);
+  }, [onSelectAgent]);
+
   return (
     <ReactFlow
       nodes={rfNodes}
@@ -94,6 +126,8 @@ function FlowCanvas({ nodes }: { nodes: NetworkGraphNode[] }) {
       maxZoom={2}
       nodesDraggable={false}
       nodesConnectable={false}
+      onNodeClick={onNodeClick}
+      onPaneClick={onPaneClick}
       proOptions={{ hideAttribution: true }}
     >
       <Background gap={20} size={1} />
@@ -110,7 +144,10 @@ function FlowCanvas({ nodes }: { nodes: NetworkGraphNode[] }) {
  *
  * Default export so `React.lazy(() => import("./network-canvas"))` resolves it.
  */
-export default function NetworkCanvas({ graph }: NetworkCanvasProps) {
+export default function NetworkCanvas({
+  graph,
+  onSelectAgent,
+}: NetworkCanvasProps) {
   const [positioned, setPositioned] = useState<NetworkGraphNode[]>([]);
   const genRef = useRef(0);
 
@@ -150,7 +187,7 @@ export default function NetworkCanvas({ graph }: NetworkCanvasProps) {
 
   return (
     <ReactFlowProvider>
-      <FlowCanvas nodes={positioned} />
+      <FlowCanvas nodes={positioned} onSelectAgent={onSelectAgent} />
     </ReactFlowProvider>
   );
 }

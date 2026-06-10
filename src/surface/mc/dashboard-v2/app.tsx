@@ -533,7 +533,11 @@ export function App() {
              presence registry via /api/agents + the agent.presence WS frame.
              Replaced the G-1114.B.4 simple agents panel. Presence + lifecycle
              only (ADR-0007) — never session interiors. */
-          <NetworkView state={agents} />
+          <NetworkView
+            state={agents}
+            workingAgents={working.agents}
+            onViewInWorkingGrid={() => setView("default")}
+          />
         )}
 
         {view === "repositories" && softwareMode && (
