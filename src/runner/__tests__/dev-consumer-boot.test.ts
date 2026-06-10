@@ -13,9 +13,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   wireDevConsumers,
+  buildDevSessionOpts,
   devSubjectPattern,
   devDurableName,
+  DEFAULT_DEV_BASH_ALLOWLIST,
   type DevBootAgent,
+  type DevGuardrailConfig,
   type WireDevConsumersOpts,
 } from "../dev-consumer-boot";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
@@ -170,6 +173,71 @@ describe("wireDevConsumers — §3.5b authority warning", () => {
       log: { info: (m) => logs.info.push(m), warn: (m) => logs.warn.push(m) },
     });
     expect(logs.warn).toHaveLength(0);
+  });
+});
+
+describe("buildDevSessionOpts — §3.5b guardrail parity", () => {
+  const agent: DevBootAgent = {
+    id: "forge",
+    displayName: "Forge",
+    runtime: { capabilities: ["dev.implement"] },
+  };
+
+  test("ALWAYS sets groveChannel — bash-guard Gate-1 engagement precondition", () => {
+    // Without a channel, cc-session never sets CORTEX_CHANNEL and the guard
+    // disengages (pass-through). The channel MUST be present on both the
+    // no-config and the with-config paths.
+    expect(buildDevSessionOpts(agent, undefined).groveChannel).toBe("forge");
+    expect(buildDevSessionOpts(agent, { allowedTools: ["Bash"] }).groveChannel).toBe("forge");
+  });
+
+  test("ALWAYS sets bashAllowlist — conservative default when config declares none", () => {
+    const opts = buildDevSessionOpts(agent, undefined);
+    expect(opts.bashAllowlist).toBe(DEFAULT_DEV_BASH_ALLOWLIST);
+    // Setting bashAllowlist is what keeps the session OUT of bash-guard's
+    // Gate-2 CLI-bypass (AGENT_ID && !CORTEX_BASH_GUARD). It must be present.
+    expect(opts.bashAllowlist).toBeDefined();
+    // And the guard is NOT disabled on the higher-authority push session.
+    expect((opts as { bashGuardDisabled?: boolean }).bashGuardDisabled).toBeUndefined();
+  });
+
+  test("config bashAllowlist wins over the default", () => {
+    const custom = { rules: [{ pattern: "^git push" }], repos: ["the-metafactory/cortex"] };
+    const opts = buildDevSessionOpts(agent, { bashAllowlist: custom });
+    expect(opts.bashAllowlist).toBe(custom);
+  });
+
+  test("threads allowedTools / disallowedTools / allowedDirs / timeout from config", () => {
+    const g: DevGuardrailConfig = {
+      allowedTools: ["Bash", "Read", "Edit", "Write"],
+      disallowedTools: ["WebFetch"],
+      allowedDirs: ["/repo", "/shared-cache"],
+      asyncTimeoutMs: 1_800_000,
+      additionalArgs: ["--verbose"],
+    };
+    const opts = buildDevSessionOpts(agent, g);
+    expect(opts.allowedTools).toEqual(["Bash", "Read", "Edit", "Write"]);
+    expect(opts.disallowedTools).toEqual(["WebFetch"]);
+    expect(opts.allowedDirs).toEqual(["/repo", "/shared-cache"]);
+    expect(opts.timeoutMs).toBe(1_800_000);
+    expect(opts.additionalArgs).toEqual(["--verbose"]);
+  });
+
+  test("absent allowedDirs is NOT set here (consumer defaults it to the worktree)", () => {
+    // The worktree path isn't known at boot, so an absent allowedDirs is left
+    // unset in the boot opts; DevConsumer fills it with the worktree per-task.
+    const opts = buildDevSessionOpts(agent, undefined);
+    expect(opts.allowedDirs).toBeUndefined();
+  });
+
+  test("wired consumers carry the guardrails end-to-end", () => {
+    const g: DevGuardrailConfig = { allowedTools: ["Bash"], asyncTimeoutMs: 1_000_000 };
+    const consumers = wireDevConsumers(baseOpts([agent], { guardrails: g }));
+    expect(consumers).toHaveLength(1);
+    // The consumer doesn't expose sessionOpts publicly; the contract is proven
+    // by buildDevSessionOpts above + the consumer's worktree-allowedDir test in
+    // dev-consumer.test.ts. Here we just confirm wiring doesn't throw.
+    expect(consumers[0]!.agent.id).toBe("forge");
   });
 });
 

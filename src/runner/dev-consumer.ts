@@ -412,6 +412,17 @@ export class DevConsumer {
     }
 
     // 4. Concurrency gate — at the cap → nak `not_now`.
+    //
+    // TOCTOU parity note (review-consumer posture): the size-check and the
+    // later `inFlight.add` are not atomic, so two near-simultaneous
+    // deliveries could both observe `size < cap` and over-admit by one. This
+    // is the SAME window `ReviewConsumer`'s maxConcurrent gate carries, and it
+    // is benign for the same reason: JetStream delivers to a durable pull
+    // consumer SERIALLY (one in-flight `onEnvelope` at a time per the pull
+    // batch), so the two callers don't actually race on this path in
+    // production. If a future push-mode or parallel-batch delivery ever makes
+    // the race real, BOTH consumers harden together (a single shared
+    // admit-token primitive) — they must not drift.
     if (this.inFlight.size >= this.maxConcurrent) {
       const retryAfterMs = 5000;
       await this.publishFailed(
@@ -539,11 +550,24 @@ export class DevConsumer {
 
       // 7b. CC session — warm-resume when the chain has a stored session id.
       const resumeId = await this.sessionStore.get(chainId);
+      // Guardrail default (review parity, §3.5b): when the boot wiring did
+      // NOT declare an `allowedDirs` scope, default it to the WORKTREE only —
+      // the one directory this session legitimately writes to. The worktree
+      // path is per-task (not known at boot), so the narrow default is set
+      // HERE rather than in the boot opts. A boot-supplied `allowedDirs`
+      // (e.g. the repo root + shared caches) wins; we only fill the empty
+      // case so the higher-authority push session is never unrestricted.
+      const bootDirs = this.sessionOpts?.allowedDirs;
+      const allowedDirs =
+        bootDirs !== undefined && bootDirs.length > 0 ? bootDirs : [worktreePath];
       const ccOpts: CCSessionOpts = {
         prompt: this.promptBuilder({ agentId: this.agent.id, payload }),
         agentId: this.agent.id,
         cwd: worktreePath,
         ...(this.sessionOpts ?? {}),
+        // After the spread so the worktree-default (or boot value) is the
+        // effective scope — never dropped by an empty `sessionOpts.allowedDirs`.
+        allowedDirs,
         ...(resumeId !== undefined && { resumeSessionId: resumeId }),
       };
 

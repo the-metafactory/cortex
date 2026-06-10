@@ -182,12 +182,15 @@ export function createDevImplementRequestEvent(
 
 // `owner/name` — same grammar as `review-events.ts`'s OWNER_REPO_RE.
 const OWNER_REPO_RE = /^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/;
-// A git branch / ref name — conservative: no whitespace, no `..`, no leading
-// `-`, no control chars. Not the full `git check-ref-format` grammar (that is
-// the forge seam's job to honour); this is the cheap structural gate so a
-// blank or obviously-malformed branch fails fast as `cant_do` rather than
-// reaching `git worktree add`.
-const BRANCH_RE = /^[A-Za-z0-9][\w./-]*$/;
+// A git branch / ref name — conservative: no whitespace, no `..` segment, no
+// leading `-`, no control chars. Not the full `git check-ref-format` grammar
+// (that is the forge seam's job to honour); this is the cheap structural gate
+// so a blank or obviously-malformed branch fails fast as `cant_do` rather than
+// reaching `git worktree add`. The `(?!.*\.\.)` lookahead enforces the stated
+// "no `..`" intent (a `..` in a ref is both a git-illegal sequence AND a
+// path-traversal shape) — defense-in-depth even though the worktree/forge
+// seams would also reject it downstream.
+const BRANCH_RE = /^(?!.*\.\.)[A-Za-z0-9][\w./-]*$/;
 
 /**
  * Parse a `tasks.dev.implement` envelope's payload into the canonical

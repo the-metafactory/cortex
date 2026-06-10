@@ -23,6 +23,19 @@
  * is the residual risk F-5b's sandboxing retires. The warning is the honest
  * F-2 caveat made visible at boot, not buried.
  *
+ * **Session guardrails — REVIEW PARITY (§3.5b "guardrails from the agent
+ * manifest").** The dev CC session is the HIGHER-authority path (it writes
+ * code + pushes), so it MUST be at least as guarded as the review session.
+ * `buildDevSessionOpts` threads the same `config.claude` guardrails the review
+ * path uses (`bashAllowlist` + `allowedTools` + `allowedDirs` + async timeout),
+ * and — critically — sets `groveChannel`, the env var (`CORTEX_CHANNEL`) that
+ * is `bash-guard.hook.ts`'s Gate-1 ENGAGEMENT precondition. Without a channel
+ * the guard `pass()`-es through on every Bash command; the original wiring
+ * omitted it, so the guard disengaged on the push path (the review BLOCKER this
+ * fixes). When the agent declares no allowlist, a conservative repo-shaped
+ * default ({@link DEFAULT_DEV_BASH_ALLOWLIST}) applies — the session is STILL
+ * guarded, never unrestricted.
+ *
  * **Stream provisioning — FLAGGED for the PR body.** The review path
  * provisions a `CODE_REVIEW` JetStream stream + per-agent durable up-front
  * (`bus/jetstream/provision.ts`). The dev path needs the equivalent for
@@ -72,6 +85,33 @@ export interface DevBootAgent {
   };
 }
 
+/**
+ * §3.5b guardrail source — the narrow projection of `AgentConfig.claude` the
+ * dev session needs to reach review-path PARITY. Kept structural (not the full
+ * Zod config) so `cortex.ts` passes `config.claude` directly and the boot test
+ * builds a fixture cheaply. Every field optional: an absent block means "apply
+ * the conservative defaults" (worktree-only `allowedDirs`, a repo-conventional
+ * bash allowlist) so the higher-authority push session is NEVER less-guarded
+ * than the review session.
+ */
+export interface DevGuardrailConfig {
+  /** Bash command allowlist (`bash-guard.hook.ts` shape). */
+  bashAllowlist?: {
+    rules: { pattern: string; repos?: string[] }[];
+    repos: string[];
+  };
+  /** Tools the session may use (e.g. Bash/Read/Edit/Write/gh). */
+  allowedTools?: string[];
+  /** Tools to deny (applied on top of `allowedTools`). */
+  disallowedTools?: string[];
+  /** Read+write dirs. Empty/absent → the consumer defaults to the worktree. */
+  allowedDirs?: string[];
+  /** Async-task timeout (dev work is long-running). */
+  asyncTimeoutMs?: number;
+  /** Extra args threaded to `claude`. */
+  additionalArgs?: string[];
+}
+
 /** Inputs `cortex.ts` threads into the boot wiring. */
 export interface WireDevConsumersOpts {
   agents: readonly DevBootAgent[];
@@ -81,6 +121,11 @@ export interface WireDevConsumersOpts {
   principalId: string;
   /** `{stack}` subject segment — for the subscribe pattern. */
   stack: string;
+  /**
+   * §3.5b guardrail config (review parity). `cortex.ts` passes `config.claude`;
+   * the boot test passes a fixture. Omitted → conservative defaults only.
+   */
+  guardrails?: DevGuardrailConfig;
   /** Repo-root worktrees are cut from; defaults to `process.cwd()`. */
   repoRoot?: string;
   /**
@@ -175,11 +220,7 @@ export function wireDevConsumers(opts: WireDevConsumersOpts): DevConsumer[] {
         maxConcurrent: agent.runtime.maxConcurrent,
       }),
     };
-    const sessionOpts: Partial<Omit<CCSessionOpts, "prompt" | "cwd" | "resumeSessionId">> =
-      {
-        agentId: agent.id,
-        ...(agent.displayName !== undefined && { agentName: agent.displayName }),
-      };
+    const sessionOpts = buildDevSessionOpts(agent, opts.guardrails);
     consumers.push(
       new DevConsumer({
         agent: consumerAgent,
@@ -201,6 +242,85 @@ export function wireDevConsumers(opts: WireDevConsumersOpts): DevConsumer[] {
     );
   }
   return consumers;
+}
+
+/**
+ * The conservative repo-shaped bash allowlist applied when the agent's config
+ * declares none. Mirrors the shape `bash-guard.hook.ts` enforces: read-only +
+ * dev-loop commands (git, gh, bun, tsc/eslint/test gates) are matched; anything
+ * else is denied. NOT permissive — a dev session with no declared allowlist is
+ * STILL guarded (the security-first default), it just gets a sensible baseline
+ * instead of an empty one (which would deny everything and stall the session).
+ *
+ * `repos: []` means the gh-repo restriction is "any repo the push target names"
+ * — the dev agent legitimately pushes to whatever repo the task addressed; the
+ * forge identity (scoped token, §3.5b) is the authority bound, not this list.
+ */
+export const DEFAULT_DEV_BASH_ALLOWLIST: {
+  rules: { pattern: string; repos?: string[] }[];
+  repos: string[];
+} = {
+  rules: [
+    { pattern: "^git( |$)" },
+    { pattern: "^gh( |$)" },
+    { pattern: "^bun( |x)?( |$)" },
+    { pattern: "^(npx |)tsc( |$)" },
+    { pattern: "^(npx |bunx |)eslint( |$)" },
+    { pattern: "^(ls|cat|head|tail|rg|grep|find|pwd|echo|test|true|mkdir|cd)( |$)" },
+  ],
+  repos: [],
+};
+
+/**
+ * Build the dev CC session opts at REVIEW PARITY (§3.5b — guardrails from the
+ * agent manifest). Exported so `__tests__/dev-consumer-boot.test.ts` can assert
+ * the guardrails are wired without standing up `startCortex`.
+ *
+ * **The load-bearing field is `groveChannel`.** `cc-session.ts` maps it to the
+ * `CORTEX_CHANNEL` env var, which is `bash-guard.hook.ts`'s Gate-1 ENGAGEMENT
+ * precondition: without it the guard `pass()`-es through on every Bash command
+ * (the disengagement the review found). We set it to the agent id so the guard
+ * actually runs on this higher-authority push session.
+ *
+ * **`bashAllowlist` is always set** — to the config value when present, else
+ * {@link DEFAULT_DEV_BASH_ALLOWLIST}. This is double-duty: it gives the guard
+ * its rules AND it sets `CORTEX_BASH_GUARD`, which keeps the session OUT of
+ * bash-guard Gate-2's CLI-bypass (`AGENT_ID && !CORTEX_BASH_GUARD` → pass).
+ * We MUST NOT set `bashGuardDisabled`.
+ *
+ * `allowedDirs` is left to the config (when declared); when absent the CONSUMER
+ * defaults it to the per-task worktree (the worktree path isn't known at boot).
+ */
+export function buildDevSessionOpts(
+  agent: DevBootAgent,
+  guardrails: DevGuardrailConfig | undefined,
+): Partial<Omit<CCSessionOpts, "prompt" | "cwd" | "resumeSessionId">> {
+  const g = guardrails ?? {};
+  const opts: Partial<Omit<CCSessionOpts, "prompt" | "cwd" | "resumeSessionId">> = {
+    agentId: agent.id,
+    // bash-guard Gate-1 engagement precondition — without a channel the guard
+    // disengages. The agent id is a stable, non-PII channel label for the
+    // headless dev session (it has no Discord/Mattermost surface).
+    groveChannel: agent.id,
+    // Always guarded: config allowlist or the conservative repo-shaped default.
+    // Setting this ALSO keeps the session out of the Gate-2 CLI-bypass.
+    bashAllowlist: g.bashAllowlist ?? DEFAULT_DEV_BASH_ALLOWLIST,
+    ...(agent.displayName !== undefined && { agentName: agent.displayName }),
+    ...(g.allowedTools !== undefined && g.allowedTools.length > 0 && {
+      allowedTools: g.allowedTools,
+    }),
+    ...(g.disallowedTools !== undefined && g.disallowedTools.length > 0 && {
+      disallowedTools: g.disallowedTools,
+    }),
+    ...(g.allowedDirs !== undefined && g.allowedDirs.length > 0 && {
+      allowedDirs: g.allowedDirs,
+    }),
+    ...(g.asyncTimeoutMs !== undefined && { timeoutMs: g.asyncTimeoutMs }),
+    ...(g.additionalArgs !== undefined && g.additionalArgs.length > 0 && {
+      additionalArgs: g.additionalArgs,
+    }),
+  };
+  return opts;
 }
 
 /** Subscribe pattern for a dev consumer: `local.{principal}.{stack}.tasks.dev.implement`. */

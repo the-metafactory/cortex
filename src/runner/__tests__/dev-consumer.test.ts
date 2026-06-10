@@ -516,6 +516,52 @@ describe("DevConsumer.processEnvelope — F-2.1", () => {
     expect(runner.ran).toHaveLength(0);
     expect(forge.calls).toHaveLength(1);
   });
+
+  test("§3.5b guardrails — CC session is scoped to the worktree when boot supplies no allowedDirs", async () => {
+    const seen = { opts: [] as CCSessionOpts[] };
+    const cc = fakeCcFactory(okCcResult(), seen);
+    // No sessionOpts.allowedDirs → the consumer must default to the worktree.
+    const consumer = new DevConsumer(baseOpts({ ccSessionFactory: cc }));
+    await consumer.processEnvelope(makeRequest(), LOCAL_SUBJECT, null);
+
+    expect(seen.opts).toHaveLength(1);
+    // cwd IS the worktree; allowedDirs is scoped to ONLY the worktree (the one
+    // dir this higher-authority push session legitimately writes to) — never
+    // unrestricted.
+    expect(seen.opts[0]!.cwd).toBe("/tmp/Cortex-c-300");
+    expect(seen.opts[0]!.allowedDirs).toEqual(["/tmp/Cortex-c-300"]);
+    expect(seen.opts[0]!.bashGuardDisabled).toBeUndefined();
+  });
+
+  test("§3.5b guardrails — boot-supplied allowedDirs + channel + bashAllowlist flow into the CC session", async () => {
+    const seen = { opts: [] as CCSessionOpts[] };
+    const cc = fakeCcFactory(okCcResult(), seen);
+    const bashAllowlist = { rules: [{ pattern: "^git" }], repos: [] };
+    const consumer = new DevConsumer(
+      baseOpts({
+        ccSessionFactory: cc,
+        sessionOpts: {
+          agentId: "forge",
+          // The bash-guard Gate-1 engagement precondition.
+          groveChannel: "forge",
+          bashAllowlist,
+          allowedTools: ["Bash", "Read"],
+          allowedDirs: ["/repo"],
+        },
+      }),
+    );
+    await consumer.processEnvelope(makeRequest(), LOCAL_SUBJECT, null);
+
+    const o = seen.opts[0]!;
+    // Channel present → bash-guard engages (not pass-through).
+    expect(o.groveChannel).toBe("forge");
+    // bashAllowlist present → guard has rules AND the session avoids the
+    // CLI-bypass (CORTEX_BASH_GUARD set).
+    expect(o.bashAllowlist).toEqual(bashAllowlist);
+    expect(o.allowedTools).toEqual(["Bash", "Read"]);
+    // Boot-supplied allowedDirs wins over the worktree default.
+    expect(o.allowedDirs).toEqual(["/repo"]);
+  });
 });
 
 describe("DevConsumer.stop — drain", () => {

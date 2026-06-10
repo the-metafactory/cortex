@@ -1517,6 +1517,12 @@ export async function startCortex(
     source: systemEventSource,
     principalId,
     stack: derivedStack.stack,
+    // §3.5b — thread the same guardrail config the review path uses
+    // (`config.claude`: bashAllowlist + allowedTools/Dirs + async timeout) so
+    // the higher-authority dev push session is never LESS-guarded than the
+    // review session. `buildDevSessionOpts` also sets the bash-guard Gate-1
+    // channel + a conservative allowlist default when the config declares none.
+    guardrails: config.claude,
   });
   for (const consumer of devConsumers) {
     try {

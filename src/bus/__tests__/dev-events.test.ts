@@ -88,6 +88,8 @@ describe("parseDevImplementPayload", () => {
     ["blank brief", { repo: "o/r", branch: "feat/x", base: "main", brief: "   " }],
     ["missing branch", { repo: "o/r", base: "main", brief: "b" }],
     ["bad branch (space)", { repo: "o/r", branch: "a b", base: "main", brief: "b" }],
+    ["branch with .. (traversal)", { repo: "o/r", branch: "feat/x..y", base: "main", brief: "b" }],
+    ["base with .. (traversal)", { repo: "o/r", branch: "feat/x", base: "..", brief: "b" }],
     ["non-int issue", { repo: "o/r", branch: "x", base: "main", brief: "b", issue: 1.5 }],
     ["negative issue", { repo: "o/r", branch: "x", base: "main", brief: "b", issue: -1 }],
     ["gates not array", { repo: "o/r", branch: "x", base: "main", brief: "b", gates: "tsc" }],
