@@ -68,7 +68,7 @@ import {
   makeSageReviewRunner,
   type SageSpawnFn,
   type SageSpawnResult,
-} from "../runner/substrate/sage-runner";
+} from "../runner/sage-runner";
 import type { CCSessionFactory } from "../substrates/claude-code/harness";
 
 // =============================================================================

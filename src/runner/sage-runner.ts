@@ -1,51 +1,40 @@
 /**
- * cortex#331 Phase 1 — `pi-dev` substrate pipeline runner.
+ * Sage review-engine runner (cortex#331, #888, #920).
  *
- * **Cross-repo scope split (sage#40 / sage#41 / cortex#331).** Sage's local
- * ISA referred to "zero cortex changes" within the SAGE repo's Phase 1 —
- * that scope is preserved: no cortex edits land in sage#41 (sage's
- * in-process migration). cortex#331 is the separate, parallel issue that
- * owns the cortex-side wiring; this file implements its Phase 1.
+ * The `ReviewPipelineRunner` for `engine: sage` agents — the standalone sage
+ * lens-CLI, NOT an M6 substrate harness (hence this file lives at
+ * `src/runner/`, alongside the CC-path `review-pipeline.ts`, not under
+ * `substrate/` — cortex#922).
  *
  * **Architectural shift.** Sage went in-process (sage#41) — its standalone
- * launchd daemon and standalone NATS subscribe path are retired. Cortex's
- * review-consumer is now the sole receiver for sage-owned review flavors.
- * That is the load-bearing change: sage stepped DOWN from owning its own
- * bus subscription; cortex stepped UP to own substrate dispatch for
- * in-process agents. This runner is the cortex-side adapter that closes
- * the round-trip.
+ * launchd daemon and NATS subscribe path are retired. Cortex's review-consumer
+ * is the sole receiver for sage-owned review flavors; this runner is the
+ * cortex-side adapter that shells the sage CLI and closes the round-trip.
  *
- * **Topology after sage#41 + cortex#331 ship:**
+ * **Topology.**
  *
  *   pilot publishes `tasks.code-review.<flavor>` envelope
  *     → cortex's `ReviewConsumer` for sage receives + verifies signature (cortex#330)
- *     → this runner spawns `sage review <pr-ref> --substrate <pi|claude|codex>` subprocess
- *       (substrate value from `SAGE_SUBSTRATE` env, defaults to `pi`)
- *     → captures sage stdout, builds `review.verdict.commented` envelope
- *     → cortex publishes verdict back to bus
- *     → pilot's `--wait` catches it
+ *     → this runner spawns `sage review <pr-ref> --substrate <model> --emit-verdict-block`
+ *       (model from the agent's resolved `runtime.model`, else `SAGE_SUBSTRATE`
+ *       env, else `pi`)
+ *     → parses the structured verdict block from sage's stdout (cortex#888) →
+ *       builds a `review.verdict.{approved|changes-requested|commented}` envelope
+ *       (falls back to exit-code mapping when no block is present)
+ *     → cortex publishes the verdict back to the bus → pilot's `--wait` catches it
  *
- * **What this module is.** A `ReviewPipelineRunner` factory that targets
- * sage's `pi-dev` substrate. Returns an async function with the same
- * signature `runReviewPipeline` exposes (see `src/runner/review-pipeline.ts`),
- * so it slots into `ReviewConsumerOpts.pipelineRunner` without any consumer
- * code changes. The boot wire in `src/cortex.ts` picks this factory for
- * agents that declare `runtime.substrate: "pi-dev"`; everything else
- * continues to fall through to the default CC pipeline.
+ * **What this module is.** A `ReviewPipelineRunner` factory with the same
+ * signature `runReviewPipeline` exposes (`src/runner/review-pipeline.ts`), so it
+ * slots into `ReviewConsumerOpts.pipelineRunner`. The boot wire in
+ * `src/cortex.ts` selects it via `resolveReviewEngine` when `engine === "sage"`;
+ * `persona` (and the legacy default) falls through to the CC pipeline.
  *
- * **What this module does NOT do (Phase 1 scope per issue #331).**
+ * **What this module does NOT do.**
  *
- *   - NO structured JSON verdict parsing — sage's `sage review` emits
- *     markdown today. We pass the markdown through as `payload.summary`
- *     and hardcode `verdict: "commented"` so pilot's verdict-subscriber
- *     still sees a correlated envelope. Phase 2 swaps to `--format json`
- *     and parses approved/changes-requested/commented from the verdict
- *     block.
  *   - NO library import of sage modules — we shell out via `sage review`.
- *     Phase 2 considers `import { runSageReview } from "@the-metafactory/sage"`
+ *     A future option is `import { runSageReview } from "@the-metafactory/sage"`
  *     once sage's `package.json` declares `exports`.
- *   - NO Claude Code substrate path — that stays at `runReviewPipeline`
- *     in `src/runner/review-pipeline.ts`. Phase 1 is purely additive.
+ *   - NO Claude Code path — that stays at `runReviewPipeline` (persona engine).
  *
  * **Binary resolution.** Sage's CLI is looked up in this order:
  *
@@ -84,29 +73,29 @@
  * pipe buffer (same pattern as `src/surface/mc/adapters/github/fetch.ts`).
  */
 
-import type { Envelope } from "../../bus/myelin/envelope-validator";
+import type { Envelope } from "../bus/myelin/envelope-validator";
 import {
   createReviewTaskFailedEvent,
   createReviewVerdictEvent,
-} from "../../bus/review-events";
-import type { ReviewVerdictKind } from "../../bus/review-events";
+} from "../bus/review-events";
+import type { ReviewVerdictKind } from "../bus/review-events";
 import {
   extractVerdictBlock,
   parseVerdictBlock,
   type VerdictBlock,
-} from "../verdict-block";
+} from "./verdict-block";
 import type {
   ReviewPipelineOpts,
   ReviewPipelineResult,
-} from "../review-pipeline";
+} from "./review-pipeline";
 
 // ---------------------------------------------------------------------------
 // Spawn-injection types — narrowed surface of `Bun.spawn`
 // ---------------------------------------------------------------------------
 //
 // We don't take `typeof Bun.spawn` directly because that type is wide
-// (overloads + many options) and brittle across Bun versions. The
-// `pi-dev-runner` only needs three handles per child process — stdout,
+// (overloads + many options) and brittle across Bun versions. The narrowed
+// runner only needs three handles per child process — stdout,
 // stderr, and `exited` — plus the option bag we pass on the spawn call.
 // Narrowing the type makes the test seam trivial to satisfy (the unit
 // tests build a fake that returns three Response-shaped readables and a
@@ -122,7 +111,7 @@ export interface SageSpawnResult {
 
 /**
  * Spawn function signature. Production wires `Bun.spawn`; tests inject a
- * deterministic fake (see `pi-dev-runner.test.ts`).
+ * deterministic fake (see `sage-runner.test.ts`).
  *
  * `argv[0]` is the resolved sage binary path; subsequent entries are the
  * `review <pr-ref> --substrate <pi|claude|codex>` arguments (substrate
@@ -181,7 +170,7 @@ export interface MakeSageRunnerOpts {
 }
 
 /**
- * Build a pipeline runner that dispatches to sage's `pi-dev` substrate.
+ * Build a pipeline runner that dispatches to the sage lens CLI.
  *
  * The returned function has the exact signature
  * `(opts: ReviewPipelineOpts) => Promise<ReviewPipelineResult>` —
@@ -332,7 +321,7 @@ export function makeSageReviewRunner(
       }
       // Block present but malformed — log + fall through to exit-code mapping.
       console.error(
-        `[pi-dev] verdict block malformed (${parsed.detail}); falling back to exit-code mapping`,
+        `[sage] verdict block malformed (${parsed.detail}); falling back to exit-code mapping`,
       );
     }
 

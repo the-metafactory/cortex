@@ -20,14 +20,14 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { Envelope } from "../../../bus/myelin/envelope-validator";
+import type { Envelope } from "../../bus/myelin/envelope-validator";
 import {
   createReviewRequestEvent,
   type ReviewEventSource,
   type ReviewRequestPayload,
-} from "../../../bus/review-events";
-import type { ReviewPipelineOpts } from "../../review-pipeline";
-import type { CCSessionFactory } from "../../../substrates/claude-code/harness";
+} from "../../bus/review-events";
+import type { ReviewPipelineOpts } from "../review-pipeline";
+import type { CCSessionFactory } from "../../substrates/claude-code/harness";
 import {
   makeSageReviewRunner,
   type SageSpawnFn,

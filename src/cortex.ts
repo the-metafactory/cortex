@@ -74,7 +74,7 @@ import {
 } from "./bus/verify-signed-by-chain";
 import { bootVerifierSelfCheck } from "./bus/verifier-self-check";
 import { CCSession, type CCSessionOpts } from "./runner/cc-session";
-import { makeSageReviewRunner } from "./runner/substrate/sage-runner";
+import { makeSageReviewRunner } from "./runner/sage-runner";
 import { resolveReviewEngine } from "./runner/review-engine";
 import { buildReviewPrompt } from "./runner/review-prompt";
 
