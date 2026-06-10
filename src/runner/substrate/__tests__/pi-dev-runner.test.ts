@@ -169,8 +169,10 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
       expect(payload.reviewer).toBe("sage");
       expect(payload.verdict).toBe("commented");
 
-      // Argv pin — `sage review owner/repo#N --substrate pi`, with the
-      // resolved binary path as argv[0].
+      // Argv pin — `sage review owner/repo#N --substrate pi
+      // --emit-verdict-block`, with the resolved binary path as argv[0].
+      // cortex#888 — the verdict-block flag is always passed so sage emits
+      // the structured block we parse back into the verdict envelope.
       expect(spawn.calls.length).toBe(1);
       expect(spawn.calls[0]).toEqual([
         FAKE_SAGE_BIN,
@@ -178,6 +180,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
         `${VALID_PAYLOAD.repo}#${VALID_PAYLOAD.pr}`,
         "--substrate",
         "pi",
+        "--emit-verdict-block",
       ]);
     } finally {
       if (prior !== undefined) process.env.SAGE_SUBSTRATE = prior;
@@ -324,7 +327,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
       const result = await runner(makePipelineOpts());
       expect(result.kind).toBe("verdict");
       expect(spawn.calls.length).toBe(1);
-      expect(spawn.calls[0]!.slice(-2)).toEqual(["--substrate", "claude"]);
+      expect(spawn.calls[0]!.slice(-3)).toEqual(["--substrate", "claude", "--emit-verdict-block"]);
     } finally {
       if (prior === undefined) delete process.env.SAGE_SUBSTRATE;
       else process.env.SAGE_SUBSTRATE = prior;
@@ -341,7 +344,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
         which: whichSuccess,
       });
       await runner(makePipelineOpts());
-      expect(spawn.calls[0]!.slice(-2)).toEqual(["--substrate", "pi"]);
+      expect(spawn.calls[0]!.slice(-3)).toEqual(["--substrate", "pi", "--emit-verdict-block"]);
     } finally {
       if (prior !== undefined) process.env.SAGE_SUBSTRATE = prior;
     }
@@ -422,6 +425,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
         `${VALID_PAYLOAD.repo}#${VALID_PAYLOAD.pr}`,
         "--substrate",
         "pi",
+        "--emit-verdict-block",
         "--post",
       ]);
     } finally {
@@ -458,6 +462,7 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
         "saca/secacademy#62",
         "--substrate",
         "codex",
+        "--emit-verdict-block",
         "--post",
         "--forge",
         "gitlab",
@@ -482,5 +487,121 @@ describe("cortex#331 Phase 1 — makePiDevPipelineRunner", () => {
     } finally {
       if (prior !== undefined) process.env.SAGE_SUBSTRATE = prior;
     }
+  });
+
+  // cortex#888 — structured verdict-block recovery
+  // ---------------------------------------------------------------------
+  // sage appends a fenced ```json verdict block under --emit-verdict-block
+  // (sage#83). The runner parses it to recover the REAL decision (incl.
+  // `approved`, which the exit-code-only fallback cannot express) and the
+  // findings counts. A missing / malformed block falls back to exit-code
+  // mapping so a parse hiccup never drops an otherwise-valid review.
+
+  function withBlock(
+    body: string,
+    block: Record<string, unknown>,
+  ): string {
+    return `${body}\n\n\`\`\`json\n${JSON.stringify(block, null, 2)}\n\`\`\``;
+  }
+
+  const SAMPLE_BLOCK = {
+    verdict: "approved",
+    summary: "No findings. Sage approves.",
+    github_review_id: 999,
+    github_review_url: "https://github.com/o/r/pull/1#pullrequestreview-999",
+    submitted_at: "2026-06-10T09:11:36Z",
+    commit_id: "abc1234deadbeef",
+    findings: { blockers: 0, majors: 0, nits: 0 },
+    inline_comments: 0,
+  };
+
+  test("cortex#888 — exit 0 + block verdict=approved → review.verdict.approved (recovers approved)", async () => {
+    const stdout = withBlock("## Sage code review — approved", SAMPLE_BLOCK);
+    const spawn = makeRecordingSpawn(makeSpawnResult(stdout, "", 0));
+    const runner = makePiDevPipelineRunner({ spawn: spawn.fn, which: whichSuccess });
+    const opts = makePipelineOpts();
+    const result = await runner(opts);
+
+    expect(result.kind).toBe("verdict");
+    if (result.kind !== "verdict") return;
+    const envelope: Envelope = result.envelope;
+    // Exit code alone would yield `commented`; the block recovers `approved`.
+    expect(envelope.type).toBe("review.verdict.approved");
+    const payload = envelope.payload as {
+      verdict: string;
+      github_review_id: number;
+      commit_id: string;
+      findings: { blockers: number; majors: number; nits: number };
+      summary: string;
+    };
+    expect(payload.verdict).toBe("approved");
+    expect(payload.github_review_id).toBe(999);
+    expect(payload.commit_id).toBe("abc1234deadbeef");
+    expect(payload.findings).toEqual({ blockers: 0, majors: 0, nits: 0 });
+    // Full markdown stdout (block included) is preserved as the summary.
+    expect(payload.summary).toBe(stdout);
+  });
+
+  test("cortex#888 — block findings counts flow into the verdict payload", async () => {
+    const stdout = withBlock("## Sage code review — changes-requested", {
+      ...SAMPLE_BLOCK,
+      verdict: "changes-requested",
+      findings: { blockers: 1, majors: 2, nits: 3 },
+    });
+    // Exit 1 AND block both say changes-requested — they agree here; the
+    // point is the findings counts come from the block.
+    const spawn = makeRecordingSpawn(makeSpawnResult(stdout, "", 1));
+    const runner = makePiDevPipelineRunner({ spawn: spawn.fn, which: whichSuccess });
+    const result = await runner(makePipelineOpts());
+
+    expect(result.kind).toBe("verdict");
+    if (result.kind !== "verdict") return;
+    expect(result.envelope.type).toBe("review.verdict.changes-requested");
+    const payload = result.envelope.payload as {
+      findings: { blockers: number; majors: number; nits: number };
+    };
+    expect(payload.findings).toEqual({ blockers: 1, majors: 2, nits: 3 });
+  });
+
+  test("cortex#888 — block decision OVERRIDES exit code (exit 0 but block changes-requested)", async () => {
+    // Defensive: if sage's exit code and block ever disagree, the structured
+    // block is authoritative (it carries the calibrated decision).
+    const stdout = withBlock("## Sage code review — changes-requested", {
+      ...SAMPLE_BLOCK,
+      verdict: "changes-requested",
+      findings: { blockers: 1, majors: 0, nits: 0 },
+    });
+    const spawn = makeRecordingSpawn(makeSpawnResult(stdout, "", 0));
+    const runner = makePiDevPipelineRunner({ spawn: spawn.fn, which: whichSuccess });
+    const result = await runner(makePipelineOpts());
+
+    expect(result.kind).toBe("verdict");
+    if (result.kind !== "verdict") return;
+    expect(result.envelope.type).toBe("review.verdict.changes-requested");
+  });
+
+  test("cortex#888 — malformed block falls back to exit-code mapping (exit 0 → commented)", async () => {
+    const stdout = "## Sage code review — commented\n\n```json\n{ not valid json\n```";
+    const spawn = makeRecordingSpawn(makeSpawnResult(stdout, "", 0));
+    const runner = makePiDevPipelineRunner({ spawn: spawn.fn, which: whichSuccess });
+    const result = await runner(makePipelineOpts());
+
+    expect(result.kind).toBe("verdict");
+    if (result.kind !== "verdict") return;
+    expect(result.envelope.type).toBe("review.verdict.commented");
+    // Fallback path → placeholder structured fields.
+    const payload = result.envelope.payload as { github_review_id: number };
+    expect(payload.github_review_id).toBe(0);
+  });
+
+  test("cortex#888 — no block (older sage) falls back to exit-code mapping (exit 1 → changes-requested)", async () => {
+    const stdout = "## Sage code review — changes-requested\n\n(no json block)";
+    const spawn = makeRecordingSpawn(makeSpawnResult(stdout, "", 1));
+    const runner = makePiDevPipelineRunner({ spawn: spawn.fn, which: whichSuccess });
+    const result = await runner(makePipelineOpts());
+
+    expect(result.kind).toBe("verdict");
+    if (result.kind !== "verdict") return;
+    expect(result.envelope.type).toBe("review.verdict.changes-requested");
   });
 });

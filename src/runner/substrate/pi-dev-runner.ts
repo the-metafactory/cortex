@@ -90,6 +90,11 @@ import {
   createReviewVerdictEvent,
 } from "../../bus/review-events";
 import type { ReviewVerdictKind } from "../../bus/review-events";
+import {
+  extractVerdictBlock,
+  parseVerdictBlock,
+  type VerdictBlock,
+} from "../verdict-block";
 import type {
   ReviewPipelineOpts,
   ReviewPipelineResult,
@@ -231,7 +236,14 @@ export function makePiDevPipelineRunner(
     // side `--substrate` parse error (which the failure-mapping table
     // below maps to `cant_do`).
     const substrate = process.env.SAGE_SUBSTRATE ?? "pi";
-    const argv = [sageBin, "review", prRef, "--substrate", substrate];
+    // cortex#888 — ask sage to append the structured verdict block as the
+    // terminal stdout artefact (sage#83 `--emit-verdict-block`). We parse it
+    // below to recover the REAL decision (`approved` is invisible to the
+    // exit-code-only fallback) + findings counts. Older sage builds that
+    // don't know the flag would error on it — but the flag shipped in
+    // lockstep (sage#83) and the bundled sage is pinned, so this is safe;
+    // if the block is absent for any reason we fall back to exit-code mapping.
+    const argv = [sageBin, "review", prRef, "--substrate", substrate, "--emit-verdict-block"];
     // Propagate the dispatch's `--post` intent. `sage dispatch --post`
     // stamps `payload.post: true` (sage#8) and the review-consumer carries
     // it through; without this the verdict is computed but never posted to
@@ -298,10 +310,27 @@ export function makePiDevPipelineRunner(
       );
     }
 
-    // Map the exit code to the verdict decision. Exit 1 ⇒ changes-requested.
-    // Exit 0 stays `commented` because sage doesn't distinguish approved
-    // from commented via exit code — Phase 2 (sage `--format json`, sage#TBD)
-    // parses the structured verdict block to recover approved/findings.
+    // cortex#888 (Phase 2) — recover the real verdict from sage's structured
+    // block. sage emits it as the terminal ```json fence under
+    // `--emit-verdict-block` (sage#83). The block carries the true decision
+    // (incl. `approved`, invisible to the exit code) + findings counts +
+    // commit_id. A present, well-formed block wins; anything else
+    // (older sage, malformed JSON, missing block) falls back to the
+    // exit-code mapping below so a parse hiccup never drops a valid review.
+    const rawBlock = extractVerdictBlock(stdout);
+    if (rawBlock !== null) {
+      const parsed = parseVerdictBlock(rawBlock);
+      if (parsed.ok) {
+        return verdict(pipeline, correlationId, stdout, parsed.value.verdict, parsed.value);
+      }
+      // Block present but malformed — log + fall through to exit-code mapping.
+      console.error(
+        `[pi-dev] verdict block malformed (${parsed.detail}); falling back to exit-code mapping`,
+      );
+    }
+
+    // Fallback: exit 1 ⇒ changes-requested; exit 0 ⇒ commented (sage can't
+    // distinguish approved from commented via exit code alone).
     const decision: ReviewVerdictKind =
       exitCode === 1 ? "changes-requested" : "commented";
     return verdict(pipeline, correlationId, stdout, decision);
@@ -361,16 +390,22 @@ function failed(
 
 /**
  * Build a `review.verdict.{decision}` envelope carrying sage's markdown
- * stdout as `payload.summary`. `decision` is derived from sage's exit code
- * (changes-requested vs commented). `reviewer` is hardcoded to `sage`;
- * Phase 2 (sage `--format json`) derives reviewer + findings from the
- * structured verdict block.
+ * stdout as `payload.summary`.
+ *
+ * When `block` is supplied (cortex#888 — sage emitted a well-formed
+ * `--emit-verdict-block` artefact), the structured fields (findings counts,
+ * github review id/url, commit_id, submitted_at, inline_comments) come from
+ * it. Without a block (fallback path: older sage, malformed JSON), those
+ * fields surface as zeros / empty strings — pilot still sees a well-formed
+ * envelope and principals can grep the markdown summary for the values.
+ * `reviewer` stays `sage` (the substrate doing the review).
  */
 function verdict(
   pipeline: ReviewPipelineOpts,
   correlationId: string,
   stdout: string,
   decision: ReviewVerdictKind,
+  block?: VerdictBlock,
 ): ReviewPipelineResult {
   const payload = pipeline.payload;
   const source = pipeline.source;
@@ -381,24 +416,15 @@ function verdict(
     payload: {
       repo: payload.repo,
       pr: payload.pr,
-      // Phase 1 default — sage is the substrate doing the review.
-      // Phase 2 reads the reviewer agent identity from sage's
-      // structured verdict block.
       reviewer: "sage",
       verdict: decision,
       summary: stdout,
-      // Placeholder fields Phase 1 doesn't have access to without a
-      // structured verdict block. The verdict envelope schema requires
-      // these fields; we surface zeros / empty strings so pilot's
-      // subscriber still sees a well-formed envelope and principals can
-      // grep the markdown summary for the actual values. Phase 2
-      // populates these from sage's `--format json` block.
-      github_review_id: 0,
-      github_review_url: "",
-      submitted_at: new Date().toISOString(),
-      commit_id: "",
-      findings: { blockers: 0, majors: 0, nits: 0 },
-      inline_comments: 0,
+      github_review_id: block?.github_review_id ?? 0,
+      github_review_url: block?.github_review_url ?? "",
+      submitted_at: block?.submitted_at ?? new Date().toISOString(),
+      commit_id: block?.commit_id ?? "",
+      findings: block?.findings ?? { blockers: 0, majors: 0, nits: 0 },
+      inline_comments: block?.inline_comments ?? 0,
     },
   });
   return { kind: "verdict", envelope };
