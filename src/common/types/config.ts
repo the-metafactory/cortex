@@ -526,6 +526,38 @@ export const AgentConfigSchema = z.object({
     cfAccessClientSecret: z.string().default(""),
   }).default(emptyDefault()),
 
+  /**
+   * MC-I1.S1 (ADR-0005): in-process Mission Control embed. Supersedes the dead
+   * `api.*` embedded-dashboard path (#712). OFF by default (opt-in) so existing
+   * deployments are unchanged. When `enabled`, `startCortex` boots the MC v3
+   * server in-process (see `src/surface/mc/embed.ts`).
+   *
+   * Embedded mode deliberately overrides db + cursor + port; an MC yaml at
+   * `configPath` governs only hooks / ws / log (ADR-0005 §2). Empty `dbPath` /
+   * `port` resolve to the per-slug default / the MC yaml's port at boot.
+   */
+  mc: z.object({
+    enabled: z.boolean().default(false),
+    /** Optional MC yaml supplying hooks/ws/log settings. Empty → MC defaults. */
+    configPath: z.string().default(""),
+    /** Absolute (or leading-`~`) db path. Empty → per-slug default at boot. */
+    dbPath: z.string().default(""),
+    /** Listen port. 0 → fall back to the MC yaml's port (default 8767). */
+    port: z.number().int().nonnegative().default(0),
+  }).default(emptyDefault()).transform((val) => ({
+    // Same `emptyDefault()` quirk documented on the `cockpit` block below:
+    // `.default(emptyDefault())` returns `{}` literally rather than re-parsing
+    // the inner defaults, so the fields would be undefined. Re-apply the inner
+    // defaults so callers get the populated shape. The `??` chains are
+    // load-bearing (not redundant) for the all-defaults parse path.
+    /* eslint-disable @typescript-eslint/no-unnecessary-condition */
+    enabled: val.enabled ?? false,
+    configPath: val.configPath ?? "",
+    dbPath: val.dbPath ?? "",
+    port: val.port ?? 0,
+    /* eslint-enable @typescript-eslint/no-unnecessary-condition */
+  })),
+
   paths: z.object({
     publishedEventsDir: z.string().default("~/.claude/events/published"),
     logDir: z.string().default("~/.config/grove/logs"),

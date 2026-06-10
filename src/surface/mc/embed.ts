@@ -1,0 +1,88 @@
+/**
+ * MC-I1.S1 (ADR-0005) — in-process Mission Control embed.
+ *
+ * Boots the Mission Control v3 server inside the cortex daemon process,
+ * mirroring the standalone entrypoint's composition (`src/surface/mc/index.ts`)
+ * exactly: loadConfig → initDatabase → ProcessManager → startServer →
+ * HookStreamPoller.start(). `stop()` reverses index.ts's shutdown ordering.
+ *
+ * Embedded mode deliberately OVERRIDES `db.path`, `hooks.cursorPath`, and
+ * `port`: cortex owns the per-stack db location and listen port, so the MC
+ * yaml at `configPath` governs only hooks / ws / log (ADR-0005 §2). The cursor
+ * lives beside the db so per-stack DBs never share a hook cursor.
+ */
+
+import type { Database } from "bun:sqlite";
+import { dirname, join } from "path";
+
+import { loadConfig } from "./config";
+import { initDatabase } from "./db/init";
+import { startServer } from "./server";
+import { ProcessManager } from "./session/process-manager";
+import { HookStreamPoller } from "./hooks/poller";
+import type { Config } from "./types";
+
+export interface MissionControlHandle {
+  db: Database;
+  port: number;
+  stop(): Promise<void>;
+}
+
+export interface StartMissionControlOptions {
+  /** Optional MC yaml supplying hooks / ws / log settings. Empty/undefined → MC defaults. */
+  configPath?: string;
+  /** Absolute db path. cortex owns this; the cursor lands beside it. */
+  dbPath: string;
+  /** Listen port. `> 0` overrides the MC yaml's port; otherwise the yaml's port (default 8767) wins. */
+  port?: number;
+}
+
+/**
+ * Boot the in-process Mission Control server. Returns a handle exposing the
+ * bun:sqlite db (the cockpit refresh loop needs it), the effective listen port,
+ * and an async `stop()`.
+ */
+// The composition (loadConfig → initDatabase → startServer) is synchronous;
+// `async` is the public contract (callers `await startMissionControl(...)` and
+// the returned handle's `stop()` is async). require-await has nothing to flag.
+// eslint-disable-next-line @typescript-eslint/require-await
+export async function startMissionControl(
+  opts: StartMissionControlOptions,
+): Promise<MissionControlHandle> {
+  // `||` (not `??`) is intentional: an empty `configPath` must collapse to
+  // `undefined` so loadConfig uses its own default-path lookup, not `""`.
+  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+  const loaded = loadConfig(opts.configPath || undefined);
+
+  // cortex owns db + cursor + port; the MC yaml governs hooks/ws/log only.
+  const config: Config = {
+    ...loaded,
+    port: opts.port && opts.port > 0 ? opts.port : loaded.port,
+    db: { path: opts.dbPath },
+    hooks: {
+      ...loaded.hooks,
+      cursorPath: join(dirname(opts.dbPath), "mc-hook-cursor.json"),
+    },
+  };
+
+  const db = initDatabase(config.db.path);
+  const processManager = new ProcessManager();
+  const serverCtx = startServer(config, db, { processManager });
+  const { server, wsRegistry } = serverCtx;
+  const hookPoller = new HookStreamPoller(db, config.hooks, wsRegistry);
+
+  hookPoller.start();
+
+  const stop = async (): Promise<void> => {
+    hookPoller.stop();
+    await processManager.closeAll();
+    serverCtx.stop(true);
+    db.close();
+  };
+
+  // The ACTUAL bound port — when `config.port` is 0, Bun.serve assigns one;
+  // callers (the cockpit refresh loop's baseUrl) need the real listen port.
+  // Bun.serve guarantees a numeric `port` once started; the `?? config.port`
+  // coalesce only satisfies the optional type on `Server.port`.
+  return { db, port: server.port ?? config.port, stop };
+}

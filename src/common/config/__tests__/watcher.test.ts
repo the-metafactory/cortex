@@ -132,6 +132,12 @@ const TEST_CONFIG: AgentConfig = {
     refreshIntervalMs: 300_000,
     attention: { surface: "discord", channel: "" },
   },
+  mc: {
+    enabled: false,
+    configPath: "",
+    dbPath: "",
+    port: 0,
+  },
   networksDir: "./networks",
   networks: [],
 };

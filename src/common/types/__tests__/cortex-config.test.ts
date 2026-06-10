@@ -563,6 +563,71 @@ describe("AgentConfigSchema.nats.accountSigningKeyPath (MIRROR)", () => {
   });
 });
 
+describe("AgentConfigSchema.mc (MC-I1.S1)", () => {
+  /** Minimal AgentConfig shell; `mc` override is spread in when provided. */
+  function minAgentConfig(mc?: Record<string, unknown>) {
+    return {
+      agent: { name: "test", displayName: "Test" },
+      discord: [],
+      mattermost: [],
+      claude: { timeoutMs: 1000 },
+      paths: { publishedEventsDir: "/tmp/x" },
+      ...(mc !== undefined && { mc }),
+    };
+  }
+
+  test("absent mc block → enabled false, all fields populated by the transform", () => {
+    // The `.default(emptyDefault())` quirk: without the transform re-applying
+    // inner defaults, these fields would be undefined. Assert the populated shape.
+    const parsed = AgentConfigSchema.parse(minAgentConfig());
+    expect(parsed.mc).toEqual({
+      enabled: false,
+      configPath: "",
+      dbPath: "",
+      port: 0,
+    });
+  });
+
+  test("empty mc block ({}) → same populated defaults", () => {
+    const parsed = AgentConfigSchema.parse(minAgentConfig({}));
+    expect(parsed.mc.enabled).toBe(false);
+    expect(parsed.mc.configPath).toBe("");
+    expect(parsed.mc.dbPath).toBe("");
+    expect(parsed.mc.port).toBe(0);
+  });
+
+  test("explicit values are honored", () => {
+    const parsed = AgentConfigSchema.parse(
+      minAgentConfig({
+        enabled: true,
+        configPath: "~/.config/cortex/mc.yaml",
+        dbPath: "~/.local/share/cortex/mc/meta-factory/mission-control.db",
+        port: 8767,
+      }),
+    );
+    expect(parsed.mc.enabled).toBe(true);
+    expect(parsed.mc.configPath).toBe("~/.config/cortex/mc.yaml");
+    expect(parsed.mc.dbPath).toBe("~/.local/share/cortex/mc/meta-factory/mission-control.db");
+    expect(parsed.mc.port).toBe(8767);
+  });
+
+  test("partial mc block fills the rest from defaults", () => {
+    const parsed = AgentConfigSchema.parse(minAgentConfig({ enabled: true }));
+    expect(parsed.mc.enabled).toBe(true);
+    expect(parsed.mc.configPath).toBe("");
+    expect(parsed.mc.dbPath).toBe("");
+    expect(parsed.mc.port).toBe(0);
+  });
+
+  test("port rejects a negative value (nonnegative int)", () => {
+    expect(() => AgentConfigSchema.parse(minAgentConfig({ port: -1 }))).toThrow();
+  });
+
+  test("port rejects a non-integer value", () => {
+    expect(() => AgentConfigSchema.parse(minAgentConfig({ port: 8767.5 }))).toThrow();
+  });
+});
+
 // =============================================================================
 // Renderer URL validation
 // =============================================================================

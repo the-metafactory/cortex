@@ -20,23 +20,21 @@ import "./bootstrap/ws-transport";
 import { Command } from "commander";
 import { existsSync, writeFileSync, readFileSync, unlinkSync, mkdirSync, readdirSync } from "fs";
 import { basename, join, dirname, isAbsolute } from "path";
+import { homedir } from "os";
 import { parse as parseYaml } from "yaml";
 import type { TextChannel } from "discord.js";
 
 import { loadConfigWithAgents, loadAgentsDirectory, expandTilde, FragmentLoadError } from "./common/config/loader";
 import { ConfigWatcher } from "./common/config/watcher";
-import { type AgentConfig, getAllRepos } from "./common/types/config";
+import { type AgentConfig } from "./common/types/config";
 import { resolveSigningKnobs } from "./common/security-posture";
 import { buildHttpsMtlsMaterial } from "./common/config/transport-mtls";
-import { fetchWithTimeout } from "./common/timeout";
-import { UsageMonitor } from "./common/usage/monitor";
 import { AgentRegistry } from "./common/agents/registry";
 import { TrustResolver } from "./common/agents/trust-resolver";
 // cortex#79 — creds minting moved to `arc nats … --json` (shelled out from
 // `src/cli/cortex/commands/creds.ts`). No daemon-side RPC handler in
 // cortex; the account-signature verifier in TrustResolver keeps using
 // `loadAccountSigningKey` independently.
-import type { UsageStats } from "./runner/stream-parser";
 
 import { buildSecurityPreamble } from "./runner/security-preamble";
 import { DispatchHandler } from "./bus/dispatch-handler";
@@ -99,6 +97,8 @@ import { startGatewayIfEnabled } from "./gateway/start-gateway";
 // G-1113 ML.5 — cockpit live-refresh loop (opt-in via config.cockpit).
 import { refreshCockpit, defaultWorkItemSourceFor } from "./surface/mc/refresh";
 import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/refresh-loop";
+// MC-I1.S1 (ADR-0005) — in-process Mission Control embed (supersedes api.*).
+import { startMissionControl, type MissionControlHandle } from "./surface/mc/embed";
 import type { Database as BunDatabase } from "bun:sqlite";
 import { isGatewayEnabled } from "./gateway/gateway-bootstrap";
 import {
@@ -2657,15 +2657,34 @@ export async function startCortex(
     configWatcher.start();
   }
 
-  // Dashboard API + usage monitor (G-201 / G-206) — opt-in.
-  let dashboardApi: { stop?: () => void } | null = null;
-  let usageMonitor: UsageMonitor | null = null;
+  // MC-I1.S1 (ADR-0005): in-process Mission Control embed — opt-in via `config.mc.enabled`.
+  // The legacy `api.*` embedded-dashboard path (G-201) is retired: its dynamic
+  // import never migrated from grove-v2 (#712) and threw on every boot. When a
+  // config still sets `api.enabled`, warn once and direct the principal to `mc:`.
+  if (config.api.enabled) {
+    console.warn(
+      "cortex: `api.enabled` (the legacy embedded dashboard) is retired per ADR-0005 — " +
+        "it never migrated from grove-v2 (#712). Use the `mc:` config block instead.",
+    );
+  }
+  let mcHandle: MissionControlHandle | null = null;
   let mcDb: BunDatabase | null = null;
-  if (config.api.enabled && !options.disableDashboard) {
+  if (config.mc.enabled && !options.disableDashboard) {
+    // Per-slug default keeps each stack's MC db isolated; the cursor lands beside it.
+    const defaultDbPath = join(
+      homedir(), ".local", "share", "cortex", "mc", derivedStack.stack, "mission-control.db",
+    );
+    const dbPath = config.mc.dbPath !== "" ? expandTilde(config.mc.dbPath) : defaultDbPath;
     try {
-      ({ api: dashboardApi, usageMonitor, mcDb } = await setupDashboard(config, principalId, options.principal?.displayName, dispatchHandler, cloudPublisher));
+      mcHandle = await startMissionControl({
+        configPath: config.mc.configPath || undefined,
+        dbPath,
+        port: config.mc.port,
+      });
+      mcDb = mcHandle.db;
+      console.log(`cortex: Mission Control embed listening on http://localhost:${mcHandle.port} — db ${dbPath}`);
     } catch (err) {
-      console.error("cortex: dashboard API startup error (non-fatal):", err instanceof Error ? err.message : err);
+      console.error("cortex: Mission Control embed startup error (non-fatal):", err instanceof Error ? err.message : err);
     }
   }
 
@@ -2678,7 +2697,7 @@ export async function startCortex(
     const cockpitDb = mcDb;
     const [repoOwner, repoName] = config.cockpit.repo.split("/");
     const defaultRepo = repoOwner && repoName ? { owner: repoOwner, repo: repoName } : undefined;
-    const baseUrl = config.grove.baseUrl !== "" ? config.grove.baseUrl : `http://localhost:${config.api.port}`;
+    const baseUrl = config.grove.baseUrl !== "" ? config.grove.baseUrl : `http://localhost:${mcHandle?.port ?? 8767}`;
     // Resolve docsDir to an absolute path so the ingest doesn't depend on the
     // launchd plist's CWD (which isn't guaranteed to be the repo root). Warn
     // once at startup if it's missing rather than only failing every tick.
@@ -2704,7 +2723,7 @@ export async function startCortex(
     });
     console.log(`cortex: cockpit refresh loop started — every ${config.cockpit.refreshIntervalMs}ms, docs=${docsDir}`);
   } else if (config.cockpit.enabled && mcDb === null) {
-    console.warn(`cortex: cockpit.enabled but dashboard DB unavailable (api.enabled=${config.api.enabled}, disableDashboard=${!!options.disableDashboard}) — refresh loop not started`);
+    console.warn(`cortex: cockpit.enabled but Mission Control DB unavailable (mc.enabled=${config.mc.enabled}, disableDashboard=${!!options.disableDashboard}) — refresh loop not started`);
   }
 
   // MIG-5.6 (C-106): GitHub webhook receiver — opt-in via `github.receiver.enabled`
@@ -2851,8 +2870,7 @@ export async function startCortex(
     const rendererStopNames = renderers.map((r) => `renderer ${r.id} stop`);
     const allSlots: string[] = [
       "config-watcher stop",
-      "usage-monitor stop",
-      "dashboard stop",
+      "mc embed stop",
       "github webhook receiver stop",
       ...adapterCleanup.map((_, i) => `outbound poller stop[${i}]`),
       ...reviewConsumers.map((c, i) => `review-consumer stop[${i}] (agent=${c.agent.id})`),
@@ -2894,9 +2912,8 @@ export async function startCortex(
 
     const drain = async (): Promise<void> => {
       completeSync("config-watcher stop", () => configWatcher?.stop());
-      completeSync("usage-monitor stop", () => usageMonitor?.stop());
       completeSync("cockpit refresh loop stop", () => cockpitLoop?.stop());
-      completeSync("dashboard stop", () => dashboardApi?.stop?.());
+      await completeAsync("mc embed stop", mcHandle?.stop());
       completeSync("github webhook receiver stop", () => githubReceiver?.stop());
       for (let i = 0; i < adapterCleanup.length; i++) {
         const cleanup = adapterCleanup[i];
@@ -3016,19 +3033,6 @@ export async function startCortex(
 }
 
 /**
- * G-201 / G-206 dashboard wiring. Dynamic import: surface/mc uses bun-only
- * globals tsc can't see, so we keep this off the type-check path. Tests
- * pass `disableDashboard` and never enter here.
- *
- * The `await import("./surface/mc/api/index" as string)` deliberately
- * sidesteps TS module resolution to keep the bun-only surface out of
- * `tsc --noEmit`. Every downstream interaction with `DashboardApi` is
- * therefore `any`-typed at lint time, even though the runtime contract is
- * well-defined. Suppressing the unsafe-* family inside this function is
- * the boundary; production callers see the typed return signature.
- */
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unnecessary-type-assertion */
-/**
  * cortex#338 — resolve the JetStreamManager-shaped provisioning
  * capability needed by the review-stream + per-agent durable boot
  * wiring. Returns `null` when the runtime is dormant (no NATS / connect
@@ -3059,76 +3063,6 @@ async function resolveReviewProvisioningJsm(
     return null;
   }
 }
-
-async function setupDashboard(
-  config: AgentConfig,
-  principalId: string,
-  principalDisplayName: string | undefined,
-  dispatchHandler: DispatchHandler,
-  cloudPublisher: CloudPublisher | null,
-): Promise<{ api: { stop?: () => void }; usageMonitor: UsageMonitor; mcDb: BunDatabase | null }> {
-  const { DashboardApi } = await import("./surface/mc/api/index" as string);
-  const dbPath = join(STATE_DIR, "dashboard.db");
-  const cortexRoot = join(dirname(import.meta.dir), ".");
-  const dashboardDir = join(cortexRoot, "dist", "dashboard");
-  const api = new DashboardApi({
-    port: config.api.port,
-    corsOrigin: config.api.corsOrigin,
-    dbPath,
-    github: { ...config.github, repos: getAllRepos(config) },
-    apiMode: config.api.mode,
-    // cortex#427 — dashboard reads the shared `principalId` so the
-    // principal-id column matches the `{principal}` segment of incoming
-    // envelopes. cortex#429 PR-C retired the legacy `agent.operatorName`
-    // field; the dashboard display name now flows in via
-    // `principalDisplayName` (sourced from
-    // `LoadedConfig.principal.displayName`) and falls back to
-    // `principalId` when the principal omitted the display name on
-    // cortex.yaml. R2.D renamed the options-bag keys to `principalId` /
-    // `principalName`; the underlying D1 column is already `principal_id`.
-    principalId: principalId,
-    principalName: principalDisplayName ?? principalId,
-    dashboardDir,
-  });
-  console.log(`cortex: dashboard DB at ${dbPath}`);
-
-  const publishedDir = config.paths.publishedEventsDir.replace(/^~/, process.env.HOME ?? "~");
-  const replayed = api.getState().rehydrate(publishedDir);
-  if (replayed > 0) console.log(`cortex: rehydrated dashboard with ${replayed} events from disk`);
-  api.start();
-
-  const cloudNetworks = config.networks.filter((n) => n.cloud);
-  if (cloudNetworks.length > 0) {
-    runStartupCloudSync(cloudNetworks, api).catch((err: unknown) => {
-      console.error("cortex: cloud sync error:", err instanceof Error ? err.message : String(err));
-    });
-  } else {
-    api.runStartupSync();
-  }
-  if (cloudPublisher) {
-    api.setCloudPublisher((event: unknown) => {
-      cloudPublisher.publish(event as never);
-    });
-  }
-
-  const usageMonitor = new UsageMonitor((usage, snapshot) => {
-    api.getState().setAccountUsage(usage);
-    api.getDb()?.insertUsageSnapshot(snapshot);
-    api.notifyStateChanged();
-  });
-  api.setUsageMonitor(usageMonitor);
-  usageMonitor.start();
-
-  dispatchHandler.on("session-usage", (sessionId: string, usage: UsageStats) => {
-    const changed = api.getState().updateSessionUsage(sessionId, usage);
-    if (changed) api.notifyStateChanged();
-  });
-  // ML.5 — expose the MC DB handle so the bot can run the cockpit refresh loop
-  // (it has `runtime.publish` in scope; the dashboard owns the DB).
-  const mcDb = (api.getDb() ?? null) as BunDatabase | null;
-  return { api, usageMonitor, mcDb };
-}
-/* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unnecessary-type-assertion */
 
 /** Subscribe a Discord adapter to the published-events JSONL stream so legacy
  *  `#agent-log` and per-task worklog threads keep working. Mirrors grove-bot's
@@ -3226,45 +3160,6 @@ function setupOutboundLog(
       pollInterval = null;
     }
   };
-}
-
-/** G-204a + G-500: Issue startup `/api/sync` POST against each cloud-capable
- *  network; fall back to a local sync for any network that errors. */
-async function runStartupCloudSync(
-  cloudNetworks: AgentConfig["networks"],
-  api: { runStartupSync: () => unknown },
-): Promise<void> {
-  let anyFailed = false;
-  for (const network of cloudNetworks) {
-    if (!network.cloud) continue;
-    const { endpoint, apiKey, cfAccessClientId, cfAccessClientSecret } = network.cloud;
-    try {
-      const syncUrl = `${endpoint.replace(/\/+$/, "")}/api/sync`;
-      const headers: Record<string, string> = {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      };
-      if (cfAccessClientId && cfAccessClientSecret) {
-        headers["CF-Access-Client-Id"] = cfAccessClientId;
-        headers["CF-Access-Client-Secret"] = cfAccessClientSecret;
-      }
-      const res = await fetchWithTimeout("startup_sync", 15_000, syncUrl, {
-        method: "POST",
-        headers,
-      });
-      if (res.ok) {
-        const result = (await res.json()) as { repos?: number; issues?: number; prs?: number };
-        console.log(`cortex: cloud sync [${network.id}] — ${result.repos ?? 0} repo(s), ${result.issues ?? 0} issues, ${result.prs ?? 0} PRs`);
-      } else {
-        console.error(`cortex: cloud sync [${network.id}] failed: HTTP ${res.status}`);
-        anyFailed = true;
-      }
-    } catch (err) {
-      console.error(`cortex: cloud sync [${network.id}] error:`, err instanceof Error ? err.message : err);
-      anyFailed = true;
-    }
-  }
-  if (anyFailed) await api.runStartupSync();
 }
 
 // CLI
