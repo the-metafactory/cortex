@@ -274,6 +274,9 @@ function ensureOrphanAgent(
   displayName: string | undefined
 ): string {
   const id = orphanAgentId(ccSessionId);
+  // Deliberate double-guard with the ingestor's pick (which already skips
+  // empty agent_name values): this fallback must hold for ANY caller, not
+  // just the ingestor path.
   const name = displayName && displayName.length > 0 ? displayName : ccSessionId;
   db.query(
     `INSERT INTO agents (id, name, type, persistent)
