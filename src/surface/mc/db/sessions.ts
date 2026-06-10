@@ -233,7 +233,10 @@ export function createShadowAssignmentAndSession(
 // observed session. Nothing in F-20 needs to special-case orphans.
 
 export const ORPHAN_AGENT_PREFIX = "mc-orphan-";
-const ORPHAN_TASK_ID = "mc-orphan-task";
+// Exported so the retention prune anchors on the SAME id (it's a DELETE
+// anchor — a silent drift between two copies would break the prune's
+// real-row safety guarantee). See db/retention.ts.
+export const ORPHAN_TASK_ID = "mc-orphan-task";
 const ORPHAN_TASK_TITLE = "Observed sessions (unregistered)";
 // Synthetic task needs a principal_id + source_system (both NOT NULL). The task
 // is an internal MC bookkeeping row, not a real provider work item.

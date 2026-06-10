@@ -42,7 +42,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { ORPHAN_AGENT_PREFIX } from "./sessions";
+import { ORPHAN_AGENT_PREFIX, ORPHAN_TASK_ID } from "./sessions";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -64,8 +64,9 @@ export const ORPHAN_RETENTION_MS = 7 * DAY_MS;
  */
 export const EVENTS_RETENTION_MS = 14 * DAY_MS;
 
-/** The shared orphan anchor task — preserved by the prune (only its children go). */
-const ORPHAN_TASK_ID = "mc-orphan-task";
+// ORPHAN_TASK_ID is imported from ./sessions — the shared orphan anchor task,
+// preserved by the prune (only its children go). Single source of truth so the
+// DELETE anchor can't drift from the registration site.
 
 export interface OrphanPruneResult {
   prunedSessions: number;
