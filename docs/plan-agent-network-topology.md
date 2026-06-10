@@ -124,8 +124,24 @@ producer publishes, no subscriber consumes, no live data.
 - [ ] **G-1114.B.3** — Runtime registry subscriber on
   `local.{principal}.{stack}.agent.>`; observable store; 5-min reaper.
 - [ ] **G-1114.B.4** — Agents panel UI (replaces the Phase A placeholder).
-- [ ] **G-1114.B.5** — Dual-emit with `agents.capabilities.registered` during
-  the deprecation window.
+- [x] **G-1114.B.5** — Dual-emit with `agents.capabilities.registered` during
+  the deprecation window. **Finding:** the dual-emit was ALREADY in force the
+  moment B.2 wired the presence producer — both `publishCapabilityRegistry()`
+  (legacy `agents.capabilities.registered`) and `AgentPresenceProducer.start()`
+  (superseding `agent.online`) fire at boot, independently, both reading the
+  SAME `agent.runtime.capabilities[]` field. So B.5's work was NOT new wiring
+  but (a) marking `agents.capabilities.registered` / `publishCapabilityRegistry`
+  / `buildCapabilityRegisteredEnvelope` / `CAPABILITY_REGISTERED_EVENT_TYPE`
+  `@deprecated` (citing ADR-0007 decision 3); (b) pinning the
+  capability-consistency invariant with a regression test
+  (`src/bus/__tests__/capability-registry-presence-consistency.test.ts`); and
+  (c) documenting the retirement path. **Retirement path (later step — NOT B.5):**
+  once `agent.online` is confirmed the sole source of truth and any external
+  consumer has cut over, remove (1) `publishCapabilityRegistry()` +
+  `buildCapabilityRegisteredEnvelope()` + the `CAPABILITY_REGISTERED_EVENT_TYPE`
+  constant; (2) the cortex#237 PR-7 boot block in `src/cortex.ts`; (3) the file
+  once nothing imports it. Capability dispatch (cortex#237) is untouched by both
+  deprecation and retirement — it never routed on this envelope.
 
 **Acceptance criteria:** boot a fresh cortex process → its agent appears within
 ~5 s; stop it → drops within 5 min (or instantly on graceful shutdown); no

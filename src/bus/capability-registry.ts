@@ -1,4 +1,45 @@
 /**
+ * @deprecated (G-1114.B.5, ADR-0007 decision 3) — superseded by `agent.online`.
+ *
+ * **Why deprecated.** `agents.capabilities.registered` is the legacy boot-time
+ * capability-announce envelope. ADR-0007 (decision 3) establishes that it has
+ * **zero routing consumers**: Offer-mode dispatch (cortex#237) routes on the
+ * `tasks.{capability}` subject via JetStream consumer filters, NOT on a registry
+ * lookup of this envelope. It is therefore **observability-only**. The
+ * G-1114 agent-presence protocol's `agent.online` (carrying the initial
+ * capability set) + `agent.capabilities-changed` (carrying deltas) **subsume
+ * it** — `agent.online` is now the source of truth for "what does this agent
+ * claim to do".
+ *
+ * **Dual-emit window (this is where B.5 lives).** Both signals fire at boot
+ * already and independently:
+ *   - `publishCapabilityRegistry()` (this module) → `agents.capabilities.registered`,
+ *     one envelope per agent×non-empty-capability-set, wired at `src/cortex.ts`
+ *     (the cortex#237 PR-7 block).
+ *   - `AgentPresenceProducer.start()` (`src/runner/agent-presence-producer.ts`,
+ *     G-1114.B.2) → `agent.online`, one per agent, wired at `src/cortex.ts`.
+ * Both derive their capability set from the **same** field —
+ * `agent.runtime.capabilities[]` (the dispatch-routing caps). So the
+ * "dual-emit during the deprecation window" mandated by ADR-0007 is ALREADY
+ * in force the moment both producers are wired; B.5 marks the deprecation and
+ * pins the capability-consistency invariant rather than adding new wiring. The
+ * consistency invariant is regression-tested in
+ * `src/bus/__tests__/capability-registry-presence-consistency.test.ts`.
+ *
+ * **Retirement path (NOT this PR — a later step, ADR-0007 "dual-emit then
+ * retire").** Once `agent.online` is confirmed as the sole source of truth and
+ * any remaining external consumer of `agents.capabilities.registered` has cut
+ * over to the presence feed, the retirement step removes:
+ *   1. `publishCapabilityRegistry()` + `buildCapabilityRegisteredEnvelope()` +
+ *      the `CAPABILITY_REGISTERED_EVENT_TYPE` constant from this module;
+ *   2. the cortex#237 PR-7 boot block in `src/cortex.ts` that calls it;
+ *   3. this whole file once nothing imports it.
+ * Capability dispatch (cortex#237) is **untouched** by both the deprecation and
+ * the eventual retirement — it never routed on this envelope (that is exactly
+ * why retirement is safe).
+ *
+ * ---
+ *
  * cortex#237 PR-3 — capability-registry publisher.
  *
  * Per `docs/design-capability-dispatch-review-consumer.md` §3 +
@@ -202,6 +243,7 @@ export interface PublishCapabilityRegistryOptions {
  * stringly-typed literals; pilot's deferred bucket reader (§13.1) does
  * the same.
  */
+/** @deprecated (G-1114.B.5, ADR-0007 decision 3) — superseded by the `agent.online` capability set; retire after the dual-emit window. */
 export const CAPABILITY_REGISTERED_EVENT_TYPE = "agents.capabilities.registered" as const;
 
 // ---------------------------------------------------------------------------
@@ -278,11 +320,17 @@ export interface BuildCapabilityRegisteredEnvelopeOpts {
  * once the schema can carry them. Adding placeholder fields here would
  * be schema-drift in the other direction (advertising capacity we don't
  * have).
+ *
+ * @deprecated (G-1114.B.5, ADR-0007 decision 3) — superseded by
+ * `createAgentOnlineEvent` (`src/bus/agent-network/builders.ts`); both carry
+ * the same `agent.runtime.capabilities[]` set. Retire after the dual-emit
+ * window once `agent.online` is the sole source of truth.
  */
 export function buildCapabilityRegisteredEnvelope(
   opts: BuildCapabilityRegisteredEnvelopeOpts,
 ): Envelope {
   return buildBaseEnvelope({
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- intra-module reference inside the deprecated producer itself (B.5 dual-emit window); the whole module retires together.
     type: CAPABILITY_REGISTERED_EVENT_TYPE,
     source: buildSource(opts.source),
     sovereignty: defaultRegistrySovereignty(opts.source, opts.classification),
@@ -338,6 +386,23 @@ export function buildCapabilityRegisteredEnvelope(
  * Returns the array of envelopes that were published, in emission
  * order. Useful for boot-path logging ("registered N capabilities for
  * M agents") without re-deriving the count from the publish mock.
+ *
+ * **DEPRECATED (G-1114.B.5, ADR-0007 decision 3)** — observability-only with
+ * zero routing consumers; superseded by `AgentPresenceProducer.start()`'s
+ * `agent.online` emission (`src/runner/agent-presence-producer.ts`). Both run
+ * at boot and derive capabilities from the same `agent.runtime.capabilities[]`
+ * field, so this is the legacy half of the ADR-0007 dual-emit window. Retire
+ * (remove this function + its `src/cortex.ts` boot block) after the window;
+ * capability dispatch is untouched by the removal.
+ *
+ * NOTE: this entry point uses a `DEPRECATED:` prose marker rather than the
+ * machine `@deprecated` tag (which the constant + envelope-builder DO carry)
+ * deliberately — its sole production call site lives in `src/cortex.ts`, owned
+ * by a parallel work-stream during this window; emitting the `@deprecated`
+ * lint signal there would force a cross-stream edit. The prose marker keeps the
+ * deprecation explicit + greppable without that coupling. When the retirement
+ * step removes the `src/cortex.ts` boot block, promote this back to `@deprecated`
+ * (or just delete the function).
  */
 export async function publishCapabilityRegistry(
   opts: PublishCapabilityRegistryOptions,
@@ -356,6 +421,7 @@ export async function publishCapabilityRegistry(
       continue;
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- intra-module reference inside the deprecated producer (B.5 dual-emit window); the whole module retires together.
     const envelope = buildCapabilityRegisteredEnvelope({
       source: opts.source,
       agentId: entry.agentId,

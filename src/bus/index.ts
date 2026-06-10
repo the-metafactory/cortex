@@ -82,6 +82,13 @@ export {
 // PR-7 will additionally export the verdict + pull-subscriber types
 // alongside these; until then the capability-registry surface lands
 // here on its own per PR-3's brief.
+// The three VALUE re-exports below (`CAPABILITY_REGISTERED_EVENT_TYPE`,
+// `buildCapabilityRegisteredEnvelope`, `publishCapabilityRegistry`) are
+// `@deprecated` (G-1114.B.5, ADR-0007 decision 3 — superseded by `agent.online`).
+// They stay re-exported through the dual-emit window so the existing boot site
+// (`src/cortex.ts`) and any external consumer keep resolving them from one
+// place; the whole surface retires together (see capability-registry.ts header).
+/* eslint-disable @typescript-eslint/no-deprecated */
 export {
   CAPABILITY_REGISTERED_EVENT_TYPE,
   buildCapabilityRegisteredEnvelope,
@@ -92,3 +99,4 @@ export {
   type PublishCapabilityRegistryOptions,
   type PublishFn,
 } from "./capability-registry";
+/* eslint-enable @typescript-eslint/no-deprecated */

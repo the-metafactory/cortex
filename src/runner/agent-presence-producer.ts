@@ -8,7 +8,14 @@
  *   1. publishes ONE `agent.online` on boot — carrying the agent's identity
  *      (`agent_id` + assistant name + NKey pubkey) and its declared
  *      CAPABILITIES (the same `runtime.capabilities[]` used for dispatch
- *      routing, ADR-0007 §3);
+ *      routing, ADR-0007 §3). This capability set **supersedes** the legacy
+ *      observability-only `agents.capabilities.registered` envelope
+ *      (`src/bus/capability-registry.ts`, now `@deprecated`): both fire at boot
+ *      and read the SAME `agent.runtime.capabilities[]` field, so during the
+ *      ADR-0007 dual-emit window `agent.online` IS the source of truth and the
+ *      legacy envelope is redundant. The capability-consistency invariant is
+ *      pinned by `src/bus/__tests__/capability-registry-presence-consistency.test.ts`;
+ *      the legacy envelope retires (removed) after the window;
  *   2. starts a presence HEARTBEAT ticker — publishes `agent.heartbeat` per
  *      agent on a fixed interval ({@link DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS},
  *      well under the ADR-0007 5-minute liveness TTL);
