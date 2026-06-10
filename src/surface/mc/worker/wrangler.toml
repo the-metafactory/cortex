@@ -8,7 +8,7 @@ workers_dev = false
 
 # Base vars for local dev (wrangler dev)
 [vars]
-CORS_ORIGIN = "http://localhost:8766,http://localhost:8765"
+CORS_ORIGIN = "http://localhost:8767,http://localhost:8765"
 
 # Base bindings for local dev (wrangler dev uses these defaults)
 [[d1_databases]]
@@ -56,7 +56,7 @@ name = "DASHBOARD_SOCKET"
 class_name = "DashboardSocket"
 
 [env.dev.vars]
-CORS_ORIGIN = "https://cortex-dev.meta-factory.ai,https://cortex-dev.meta-factory.dev,https://cortex-dev.meta-factory.io,http://localhost:8766,http://localhost:8765"
+CORS_ORIGIN = "https://cortex-dev.meta-factory.ai,https://cortex-dev.meta-factory.dev,https://cortex-dev.meta-factory.io,http://localhost:8767,http://localhost:8765"
 ENVIRONMENT = "development"
 
 # Dev D1 (cortex-events-dev, provisioned 2026-06-04, region OC)
