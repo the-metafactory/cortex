@@ -36,6 +36,8 @@ import { z } from "zod/v4";
 
 import { CapabilitySchema } from "./capability";
 import {
+  CockpitSchema,
+  McSchema,
   NetworkClaudeSchema,
   NetworkCloudSchema,
   NetworkFileSchema,
@@ -2177,6 +2179,17 @@ export const CortexConfigSchema = z.object({
    * shape even when the block is absent, matching the legacy bot.yaml default.
    */
   security: SecurityPostureSchema,
+
+  /**
+   * MC-I1 (ADR-0005): in-process Mission Control + cockpit live-refresh. SHARED
+   * with `AgentConfigSchema` via {@link McSchema} / {@link CockpitSchema} so the
+   * blocks survive the cortex-shape strip-by-default parse (fix/c-844 — they
+   * were silently dropped for every config-split deployment when defined on the
+   * legacy schema only). `loadCortexShape` carries them into the synthesized
+   * `AgentConfig` (the `merged` passthrough), same as `security`.
+   */
+  mc: McSchema,
+  cockpit: CockpitSchema,
 
   /** First-class agents — the canonical list. */
   agents: z.array(AgentSchema).min(1, "at least one agent is required"),

@@ -417,6 +417,33 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     expect(principal?.discordId).toBe("285727653603049472");
   });
 
+  // fix/c-844 — the mc:/cockpit: blocks must survive the cortex-shape parse.
+  // They were defined on AgentConfigSchema only; CortexConfigSchema's
+  // strip-by-default parse silently dropped them, so `mc.enabled: true` in a
+  // live config-split stack re-defaulted to false and MC never booted. These
+  // tests pin BOTH directions (present → carried; absent → defaulted) on the
+  // cortex shape specifically — the legacy-schema tests passed all along, which
+  // is exactly why the divergence went unnoticed until the live deploy.
+  test("carries mc + cockpit through the cortex-shape parse when enabled", () => {
+    const cfg = minimalCortex();
+    cfg.mc = { enabled: true, dbPath: "/tmp/mc-test/mission-control.db" };
+    cfg.cockpit = { enabled: true, repo: "the-metafactory/cortex", docsDir: "/tmp/docs" };
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, cfg));
+    expect(config.mc.enabled).toBe(true);
+    expect(config.mc.dbPath).toBe("/tmp/mc-test/mission-control.db");
+    expect(config.cockpit.enabled).toBe(true);
+    expect(config.cockpit.repo).toBe("the-metafactory/cortex");
+  });
+
+  test("defaults mc + cockpit to disabled on the cortex shape when absent", () => {
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, minimalCortex()));
+    expect(config.mc.enabled).toBe(false);
+    expect(config.mc.port).toBe(0);
+    expect(config.cockpit.enabled).toBe(false);
+    // Inner defaults still re-applied via the shared transform.
+    expect(config.cockpit.attention.surface).toBe("discord");
+  });
+
   test("flattens agents[*].presence.discord into AgentConfig.discord[]", () => {
     const cfg = minimalCortex();
     (cfg.agents as Record<string, unknown>[]).push({

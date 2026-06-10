@@ -347,6 +347,89 @@ export type NetworkFile = z.infer<typeof NetworkFileSchema>;
 // Main config schema
 // =============================================================================
 
+/**
+ * MC-I1.S1 (ADR-0005): in-process Mission Control embed schema. Extracted as a
+ * SHARED const (fix/c-844) so BOTH top-level config schemas reference the same
+ * definition — `AgentConfigSchema` (legacy bot.yaml) and `CortexConfigSchema`
+ * (the modern config-split shape every live stack loads). Defining it inline on
+ * only one schema is exactly how `mc.enabled: true` got silently stripped for
+ * every cortex-shape deployment (the strip-by-default parse drops unknown keys).
+ * One definition → the two schemas cannot drift again.
+ *
+ * Embedded mode deliberately overrides db + cursor + port; an MC yaml at
+ * `configPath` governs only hooks / ws / log (ADR-0005 §2). Empty `dbPath` /
+ * `port` resolve to the per-slug default / the MC yaml's port at boot.
+ */
+export const McSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** Optional MC yaml supplying hooks/ws/log settings. Empty → MC defaults. */
+  configPath: z.string().default(""),
+  /**
+   * Absolute (or leading-`~`) db path. Empty → per-slug default at boot.
+   * ONE db per stack is required: the hook cursor lands beside the db
+   * (`mc-hook-cursor.json`), so two stacks pointed at the same explicit
+   * `dbPath` would share — and race — the cursor (and the db itself). The
+   * per-slug default keeps stacks isolated; only override with a path unique
+   * to this stack.
+   */
+  dbPath: z.string().default(""),
+  /** Listen port. 0 → fall back to the MC yaml's port (default 8767). */
+  port: z.number().int().nonnegative().default(0),
+}).default(emptyDefault()).transform((val) => ({
+  // `.default(emptyDefault())` returns `{}` literally rather than re-parsing
+  // the inner defaults, so the fields would be undefined. Re-apply the inner
+  // defaults so callers get the populated shape. The `??` chains are
+  // load-bearing (not redundant) for the all-defaults parse path.
+  /* eslint-disable @typescript-eslint/no-unnecessary-condition */
+  enabled: val.enabled ?? false,
+  configPath: val.configPath ?? "",
+  dbPath: val.dbPath ?? "",
+  port: val.port ?? 0,
+  /* eslint-enable @typescript-eslint/no-unnecessary-condition */
+}));
+
+/**
+ * G-1113 ML.5: Mission Control Cockpit live-refresh schema. SHARED const
+ * (fix/c-844) for the same reason as {@link McSchema} — referenced by both
+ * `AgentConfigSchema` and `CortexConfigSchema` so the cockpit block survives
+ * the cortex-shape parse. When `enabled`, the bot runs `refreshCockpit` on
+ * `refreshIntervalMs` (plan-doc ingestion → work-item ingestion → attention
+ * reconcile) and publishes `system.attention.*` notifications; `attention.
+ * channel` is the review-sink destination those render to (empty → notifications
+ * stay on the bus but aren't routed).
+ */
+export const CockpitSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** Path to the plan/iteration docs dir (relative to cwd or absolute). */
+  docsDir: z.string().default("docs"),
+  /** Default repo ("owner/name") for short umbrella refs + doc URLs. */
+  repo: z.string().default(""),
+  /** Refresh interval in ms (default 5 min). */
+  refreshIntervalMs: z.number().int().positive().default(300_000),
+  /** Attention notification destination (the review-sink's attentionRouting). */
+  attention: z.object({
+    surface: z.string().default("discord"),
+    channel: z.string().default(""),
+    thread: z.string().optional(),
+  }).default(emptyDefault()),
+}).default(emptyDefault()).transform((val) => ({
+  // `.default(emptyDefault())` returns `{}` literally rather than re-parsing
+  // the inner defaults, so `cockpit.attention` would be undefined. Re-apply the
+  // inner defaults so callers get the populated shape. The `??` chains are
+  // load-bearing (not redundant) for the all-defaults parse path.
+  /* eslint-disable @typescript-eslint/no-unnecessary-condition */
+  enabled: val.enabled ?? false,
+  docsDir: val.docsDir ?? "docs",
+  repo: val.repo ?? "",
+  refreshIntervalMs: val.refreshIntervalMs ?? 300_000,
+  attention: {
+    surface: val.attention?.surface ?? "discord",
+    channel: val.attention?.channel ?? "",
+    ...(val.attention?.thread !== undefined && { thread: val.attention.thread }),
+  },
+  /* eslint-enable @typescript-eslint/no-unnecessary-condition */
+}));
+
 export const AgentConfigSchema = z.object({
   agent: z.object({
     name: z.string().min(1),
@@ -536,34 +619,7 @@ export const AgentConfigSchema = z.object({
    * `configPath` governs only hooks / ws / log (ADR-0005 §2). Empty `dbPath` /
    * `port` resolve to the per-slug default / the MC yaml's port at boot.
    */
-  mc: z.object({
-    enabled: z.boolean().default(false),
-    /** Optional MC yaml supplying hooks/ws/log settings. Empty → MC defaults. */
-    configPath: z.string().default(""),
-    /**
-     * Absolute (or leading-`~`) db path. Empty → per-slug default at boot.
-     * ONE db per stack is required: the hook cursor lands beside the db
-     * (`mc-hook-cursor.json`), so two stacks pointed at the same explicit
-     * `dbPath` would share — and race — the cursor (and the db itself). The
-     * per-slug default keeps stacks isolated; only override with a path unique
-     * to this stack.
-     */
-    dbPath: z.string().default(""),
-    /** Listen port. 0 → fall back to the MC yaml's port (default 8767). */
-    port: z.number().int().nonnegative().default(0),
-  }).default(emptyDefault()).transform((val) => ({
-    // Same `emptyDefault()` quirk documented on the `cockpit` block below:
-    // `.default(emptyDefault())` returns `{}` literally rather than re-parsing
-    // the inner defaults, so the fields would be undefined. Re-apply the inner
-    // defaults so callers get the populated shape. The `??` chains are
-    // load-bearing (not redundant) for the all-defaults parse path.
-    /* eslint-disable @typescript-eslint/no-unnecessary-condition */
-    enabled: val.enabled ?? false,
-    configPath: val.configPath ?? "",
-    dbPath: val.dbPath ?? "",
-    port: val.port ?? 0,
-    /* eslint-enable @typescript-eslint/no-unnecessary-condition */
-  })),
+  mc: McSchema,
 
   paths: z.object({
     publishedEventsDir: z.string().default("~/.claude/events/published"),
@@ -599,38 +655,7 @@ export const AgentConfigSchema = z.object({
    * notifications; `attention.channel` is the review-sink destination those
    * render to (empty → notifications stay on the bus but aren't routed).
    */
-  cockpit: z.object({
-    enabled: z.boolean().default(false),
-    /** Path to the plan/iteration docs dir (relative to cwd or absolute). */
-    docsDir: z.string().default("docs"),
-    /** Default repo ("owner/name") for short umbrella refs + doc URLs. */
-    repo: z.string().default(""),
-    /** Refresh interval in ms (default 5 min). */
-    refreshIntervalMs: z.number().int().positive().default(300_000),
-    /** Attention notification destination (the review-sink's attentionRouting). */
-    attention: z.object({
-      surface: z.string().default("discord"),
-      channel: z.string().default(""),
-      thread: z.string().optional(),
-    }).default(emptyDefault()),
-  }).default(emptyDefault()).transform((val) => ({
-    // Same `emptyDefault()` quirk documented on the `github` block above:
-    // `.default(emptyDefault())` returns `{}` literally rather than re-parsing
-    // the inner defaults, so `config.cockpit.attention` would be undefined.
-    // Re-apply the inner defaults so callers get the populated shape. The `??`
-    // chains are load-bearing (not redundant) for the all-defaults parse path.
-    /* eslint-disable @typescript-eslint/no-unnecessary-condition */
-    enabled: val.enabled ?? false,
-    docsDir: val.docsDir ?? "docs",
-    repo: val.repo ?? "",
-    refreshIntervalMs: val.refreshIntervalMs ?? 300_000,
-    attention: {
-      surface: val.attention?.surface ?? "discord",
-      channel: val.attention?.channel ?? "",
-      ...(val.attention?.thread !== undefined && { thread: val.attention.thread }),
-    },
-    /* eslint-enable @typescript-eslint/no-unnecessary-condition */
-  })),
+  cockpit: CockpitSchema,
 
   /**
    * TC-0 (Trust & Confidentiality, #628): unified security posture toggles.

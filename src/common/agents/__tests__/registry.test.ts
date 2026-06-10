@@ -127,6 +127,14 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
       encryption: { payload: "off", at_rest: "off" },
       transport: { mtls: "off" },
     },
+    mc: { enabled: false, configPath: "", dbPath: "", port: 0 },
+    cockpit: {
+      enabled: false,
+      docsDir: "docs",
+      repo: "",
+      refreshIntervalMs: 300_000,
+      attention: { surface: "discord", channel: "" },
+    },
   };
 }
 

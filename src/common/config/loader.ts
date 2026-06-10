@@ -713,6 +713,14 @@ function loadCortexShape(
     // defaults), so this is a plain passthrough — omitting it would silently
     // default the posture to `off` for every cortex-shape deployment.
     security: cortexConfig.security,
+    // MC-I1 (ADR-0005, fix/c-844) — carry the cockpit + in-process MC config
+    // through to the synthesized AgentConfig. Both are now on CortexConfigSchema
+    // (shared McSchema/CockpitSchema), so they survive the strip-by-default
+    // parse; without these passthroughs `AgentConfigSchema.parse(merged)` would
+    // re-default them to `enabled: false` and MC would never boot on any
+    // cortex-shape deployment (same failure mode the `security` comment warns of).
+    mc: cortexConfig.mc,
+    cockpit: cortexConfig.cockpit,
     ...(cortexConfig.nats !== undefined && { nats: cortexConfig.nats }),
   };
 
