@@ -524,7 +524,7 @@ export const AgentRuntimeSchema = z.object({
     .positive("agent.runtime.maxConcurrent must be a positive integer (omit the field for unbounded concurrency)")
     .optional(),
   /**
-   * cortex#xxx (governance Stage 1b) — the kind of model this agent actually
+   * cortex#906 (governance Stage 1b) — the kind of model this agent actually
    * runs, used by the consumer-side sovereignty gate to refuse a task whose
    * envelope demands a local model (`model_class: local-only` or
    * `frontier_ok: false`) when this agent is frontier-capable.

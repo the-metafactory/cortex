@@ -17,7 +17,15 @@
  * guards the requester). It composes alongside both.
  */
 
-/** Sovereignty requirement carried on the inbound envelope. */
+/**
+ * Sovereignty requirement carried on the inbound envelope.
+ *
+ * Both fields are OPTIONAL here, deliberately looser than the canonical
+ * `Envelope["sovereignty"]` (where both are required): the gate is a pure
+ * function callable from outside the envelope pipeline (tests, future bus
+ * sources that haven't stamped a full block). The fail-closed logic below
+ * treats a missing field conservatively, so the loosening never opens a hole.
+ */
 export interface EnvelopeSovereignty {
   model_class?: "local-only" | "frontier" | "any";
   frontier_ok?: boolean;
@@ -36,10 +44,14 @@ export interface SovereigntyDecision {
  * `sovereignty`. Fail-closed: a missing/unknown agent class, or a missing
  * sovereignty block, denies.
  *
- * The breach guarded: a task that demands a local model (model_class
- * "local-only" OR frontier_ok === false) must NOT be executed by a
- * frontier-capable agent (class "frontier" or "any"). Everything the demand
- * permits is allowed.
+ * The breach guarded: a task that demands a local model must NOT be executed
+ * by a frontier-capable agent (class "frontier" or "any"). A task "demands
+ * local" when model_class is "local-only" OR frontier_ok is anything other
+ * than an explicit `true` — i.e. a MISSING frontier_ok is treated as "not
+ * cleared for frontier" (fail closed), not "frontier is fine". On a real
+ * Envelope frontier_ok is required so this only bites callers outside the
+ * pipeline; the conservative default keeps the gate safe for them too.
+ * Everything the demand explicitly permits is allowed.
  */
 export function evaluateSovereignty(
   sovereignty: EnvelopeSovereignty | null | undefined,
@@ -54,7 +66,9 @@ export function evaluateSovereignty(
     return { decision: "deny", reason: "envelope carries no sovereignty block — failing closed" };
   }
 
-  const demandsLocal = sovereignty.model_class === "local-only" || sovereignty.frontier_ok === false;
+  // frontier_ok !== true (not just === false) so a MISSING frontier_ok also
+  // demands local — fail closed for callers that omit the field.
+  const demandsLocal = sovereignty.model_class === "local-only" || sovereignty.frontier_ok !== true;
 
   if (demandsLocal && (agentClass === "frontier" || agentClass === "any")) {
     return {

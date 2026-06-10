@@ -21,7 +21,16 @@ describe("evaluateSovereignty — the breach is guarded", () => {
   });
 
   it("denies on frontier_ok:false even when model_class is 'any'", () => {
+    // model_class 'any' does not itself demand local — frontier_ok:false does.
     expect(evaluateSovereignty({ model_class: "any", frontier_ok: false }, "frontier").decision).toBe("deny");
+  });
+
+  it("denies a frontier agent when frontier_ok is MISSING (fail closed, not 'frontier is fine')", () => {
+    // A missing frontier_ok is treated as "not cleared for frontier".
+    expect(evaluateSovereignty({ model_class: "any" }, "frontier").decision).toBe("deny");
+    expect(evaluateSovereignty({ model_class: "any" }, "any").decision).toBe("deny");
+    // A local-only agent is still fine — it cannot leak to a frontier model.
+    expect(evaluateSovereignty({ model_class: "any" }, "local-only").decision).toBe("allow");
   });
 
   it("allows a local-only agent a local-only task", () => {
