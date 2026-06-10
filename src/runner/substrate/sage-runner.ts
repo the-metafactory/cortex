@@ -154,7 +154,14 @@ export type PiDevWhichFn = (cmd: string) => string | undefined;
  *   - Use the current process env (no scrubbing — sage piggybacks on the
  *     principal's `gh` auth and `GITHUB_TOKEN` via inherited env).
  */
-export interface MakePiDevRunnerOpts {
+export interface MakeSageRunnerOpts {
+  /**
+   * LLM backend forwarded to `sage review --substrate <backend>`
+   * (`claude`|`codex`|`pi`). cortex#917 — passed from the agent's resolved
+   * `runtime.substrate` so a sage agent runs its lenses through the configured
+   * backend. Falls back to `SAGE_SUBSTRATE` env, then `pi`.
+   */
+  substrate?: string;
   /**
    * Explicit sage binary path. Highest-priority resolution (skips env +
    * PATH lookup). Primarily a test seam; production callers typically
@@ -194,8 +201,8 @@ export interface MakePiDevRunnerOpts {
  * **No side effects at construction.** The factory just closes over
  * `opts`; no spawn, no I/O. Safe to call at boot time.
  */
-export function makePiDevPipelineRunner(
-  opts: MakePiDevRunnerOpts = {},
+export function makeSageReviewRunner(
+  opts: MakeSageRunnerOpts = {},
 ): (pipeline: ReviewPipelineOpts) => Promise<ReviewPipelineResult> {
   const spawn = opts.spawn ?? defaultSpawn;
   const which = opts.which ?? defaultWhich;
@@ -235,7 +242,7 @@ export function makePiDevPipelineRunner(
     // `sage review --help`; values outside that set surface as a sage-
     // side `--substrate` parse error (which the failure-mapping table
     // below maps to `cant_do`).
-    const substrate = process.env.SAGE_SUBSTRATE ?? "pi";
+    const substrate = opts.substrate ?? process.env.SAGE_SUBSTRATE ?? "pi";
     // cortex#888 — ask sage to append the structured verdict block as the
     // terminal stdout artefact (sage#83 `--emit-verdict-block`). We parse it
     // below to recover the REAL decision (`approved` is invisible to the

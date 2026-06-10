@@ -464,9 +464,25 @@ export type Presence = z.infer<typeof PresenceSchema>;
  * dropped under `agents.d/` SHOULD declare it for dashboard provenance.
  */
 export const AgentRuntimeSchema = z.object({
-  /** Execution substrate. Claude Code is the in-cortex default; other
-   *  substrates run as standalone arc-installed daemons. */
-  substrate: z.enum(["claude-code", "codex", "pi-dev", "cursor", "custom"]),
+  /**
+   * cortex#917 — review ENGINE: which reviewer cortex's ReviewConsumer runs.
+   *   - `sage`    — the standalone sage lens-CLI (deterministic pipeline:
+   *                 fixed lens registry + pure `decideVerdict`). Run via the
+   *                 sage runner; the LLM backend is `substrate` (claude|codex|pi).
+   *   - `persona` — a Claude-Code session that reads the CodeReview SKILL.md +
+   *                 the agent persona and reviews in-session (Echo/Luna/Holly).
+   *
+   * Orthogonal to `substrate` (the LLM backend). **Optional** for back-compat:
+   * when unset, `resolveReviewEngine` derives it from the legacy `substrate`
+   * value (`pi-dev` → sage; everything else → persona), preserving pre-split
+   * routing byte-for-byte. New configs SHOULD set it explicitly.
+   */
+  engine: z.enum(["sage", "persona"]).optional(),
+  /** Execution substrate / LLM backend. For `engine: sage` this is the backend
+   *  forwarded to `sage review --substrate` (`claude`|`codex`|`pi`). The legacy
+   *  engine-flavored values (`claude-code`, `pi-dev`) are still accepted and
+   *  normalized by `resolveReviewEngine` for back-compat. */
+  substrate: z.enum(["claude-code", "codex", "pi-dev", "cursor", "custom", "claude", "pi"]),
   /** Dispatch mode. `in-process` = cortex's runner spawns the substrate;
    *  `standalone` = arc-installed daemon connects to the bus directly. */
   mode: z.enum(["in-process", "standalone"]),
