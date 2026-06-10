@@ -510,7 +510,10 @@ export class AgentPresenceRegistry {
       // Liveness floor: prefer the last heartbeat; fall back to last-seen for a
       // record that announced online but never heartbeated.
       const lastLive = rec.lastHeartbeatAt ?? rec.lastSeenAt;
-      if (lastLive > cutoff) continue;
+      // Strict: reap only when STRICTLY older than the TTL (now - lastLive > ttl),
+      // matching the design's "older than" wording. At exactly the TTL the agent
+      // is still live; the next 30s sweep reaps it (immaterial at sweep grain).
+      if (lastLive >= cutoff) continue;
       const next: AgentPresenceRecord = {
         ...rec,
         state: "offline",
