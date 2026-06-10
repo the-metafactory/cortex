@@ -2,18 +2,19 @@
  * G-1114.D.1 — NetworkView render tests (non-canvas states).
  *
  * `renderToStaticMarkup` runs the component body + `useMemo` but NOT effects, so
- * the ELK layout never runs here and `positioned` stays empty. That lets us
- * assert every state that renders WITHOUT mounting xyflow:
+ * the lazy canvas chunk never resolves here. That lets us assert every state the
+ * MAIN-bundle view renders WITHOUT the heavy canvas:
  *   - error / loading / empty (chosen by `pickAgentsPanelMode`); and
- *   - the `list`-but-not-yet-laid-out "Laying out topology…" transitional state
- *     (agents present, ELK still pending) — the smoke test that the view mounts
- *     without crashing even with agents.
+ *   - the `list` state's Suspense fallback ("Loading network…") — agents present
+ *     but the lazy graph-engine chunk pending — the smoke test that the view
+ *     body + adapter `useMemo` don't crash with agents and the canvas stays
+ *     behind Suspense.
  *
- * The xyflow CANVAS itself can't render under `renderToStaticMarkup` (it needs
- * the zustand provider + a sized DOM). Its node markup is covered by
- * network-nodes.test (the pure card inners); the live canvas is validated by the
- * `build:dashboard` gate + a manual dashboard rebuild. This limitation is the
- * same one the working-grid / panel tests note.
+ * The xyflow CANVAS itself (now in the lazy `network-canvas` chunk) can't render
+ * under `renderToStaticMarkup` (it needs the zustand provider + a sized DOM). Its
+ * node markup is covered by network-nodes.test (the pure card inners); the live
+ * canvas is validated by the `build:dashboard` gate + a manual dashboard rebuild.
+ * This limitation is the same one the working-grid / panel tests note.
  */
 
 import { describe, it, expect } from "bun:test";
@@ -63,9 +64,11 @@ describe("NetworkView (G-1114.D.1)", () => {
   });
 
   it("mounts without crashing when agents are present (canvas deferred to layout)", () => {
-    // Effects don't run under static markup, so this renders the "laying out"
-    // transitional state rather than the xyflow canvas — but it proves the view
-    // body + adapter `useMemo` don't throw on a populated snapshot.
+    // The canvas is now a `React.lazy` chunk (PR #905 code-split), so under
+    // static markup the Suspense fallback ("Loading network…") renders rather
+    // than the xyflow canvas — proving the view body + adapter `useMemo` don't
+    // throw on a populated snapshot, and that the heavy chunk is gated behind
+    // Suspense (it never resolves synchronously here).
     const html = render({
       loaded: true,
       error: null,
@@ -74,7 +77,7 @@ describe("NetworkView (G-1114.D.1)", () => {
         tile({ agent_id: "echo", state: "offline", offline_reason: "ttl_lapse" }),
       ],
     });
-    expect(html).toContain("Laying out topology");
+    expect(html).toContain("Loading network");
     // The view chrome renders regardless of layout state.
     expect(html).toContain("Network");
     expect(html).toContain("topology");

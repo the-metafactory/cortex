@@ -7,145 +7,47 @@
  * + the `agent.presence` WS frame — so the graph pops agents in on boot and
  * drops them off when they go offline, live.
  *
- * ## Async layout
+ * ## Code-split (PR #905 review)
  *
- * ELK runs asynchronously. The view derives the React-Flow graph from the agents
- * snapshot (pure adapter), then runs ELK in an effect and stores the positioned
- * nodes in state. A generation guard drops a stale layout if the snapshot changed
- * while ELK was mid-flight (e.g. a presence frame landed during layout).
+ * This module stays in the MAIN bundle: it's the chrome (heading + subtitle +
+ * empty/loading/error states) plus the PURE `buildNetworkGraph` adapter — all
+ * tiny and engine-free. The heavy half — `@xyflow/react` + `elkjs` (the
+ * GWT-compiled ELK engine, +0.62 MB gzip) + the async layout effect — lives in
+ * `./network-canvas`, which this view `React.lazy`-imports so the engine chunk
+ * downloads ONLY when the principal first opens the Network tab. The dashboard's
+ * default view is the working grid, so the common load path never pays for the
+ * graph engine. This is the dashboard's first code-split.
  *
  * ## State precedence
  *
  * The empty / loading / error states are chosen by the SAME `pickAgentsPanelMode`
- * the panel used, and they render WITHOUT mounting xyflow — so they're
- * server-renderable and the heavy canvas only mounts when there are agents.
+ * the panel used, and they render WITHOUT the lazy canvas — so they stay
+ * server-renderable and the heavy chunk only loads when there are agents.
  *
  * ADR-0007: nodes carry presence + lifecycle only — never session interiors.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  ReactFlow,
-  Background,
-  Controls,
-  ReactFlowProvider,
-  type Node as RfNode,
-  type Edge as RfEdge,
-  type NodeTypes,
-} from "@xyflow/react";
-import "@xyflow/react/dist/style.css";
-import ELK from "elkjs/lib/elk.bundled.js";
+import { Suspense, lazy, useMemo } from "react";
 import type { AgentsState } from "../hooks/use-agents";
 import { pickAgentsPanelMode } from "../lib/agents-display";
-import {
-  buildNetworkGraph,
-  STACK_HUB_NODE_ID,
-  type NetworkGraphNode,
-} from "../lib/network-graph-adapter";
-import { layoutNetworkGraph } from "../lib/network-graph-layout";
-import { AgentNode, StackHubNode } from "./network-nodes";
-import { NetworkLegend } from "./network-legend";
+import { buildNetworkGraph } from "../lib/network-graph-adapter";
 
-// Registered once at module scope — React Flow warns if `nodeTypes` is a fresh
-// object each render.
-const nodeTypes: NodeTypes = {
-  stackHub: StackHubNode,
-  agent: AgentNode,
-};
-
-// One ELK engine for the view's lifetime, instantiated lazily on first layout.
-// Module-scope `new ELK()` spins up a Web Worker, which is unavailable in the
-// (DOM-less) unit-test env — deferring it keeps `import`ing this module safe in
-// tests while the browser bundle still gets a single shared engine.
-let elkSingleton: InstanceType<typeof ELK> | null = null;
-function getElk(): InstanceType<typeof ELK> {
-  if (!elkSingleton) elkSingleton = new ELK();
-  return elkSingleton;
-}
+// Lazy: the xyflow + elk engine chunk loads only when this resolves (first
+// entry into the Network tab). Keep this the ONLY dynamic import in the view —
+// the other dashboard views stay statically bundled.
+const NetworkCanvas = lazy(() => import("./network-canvas"));
 
 export interface NetworkViewProps {
   state: AgentsState;
-}
-
-/** The xyflow canvas — only mounted when there are positioned nodes. */
-function NetworkCanvas({ nodes }: { nodes: NetworkGraphNode[] }) {
-  // React Flow's node `data` is typed `Record<string, unknown>`; our discriminated
-  // `NetworkNodeData` is structurally compatible but lacks the index signature, so
-  // we cast at this single boundary rather than polluting the adapter's data type.
-  const rfNodes = nodes as unknown as RfNode[];
-
-  // The hub→agent edges are derivable, but for the star render we don't need
-  // visible connectors to read the grouping; the radial placement carries it.
-  // We still pass edges so the layout's parent/child relationship is honoured by
-  // React Flow's node ordering. Edges are rebuilt here from node ids.
-  const edges = useMemo<RfEdge[]>(
-    () =>
-      nodes
-        .filter((n) => n.type === "agent")
-        .map((n) => ({
-          id: `hub-${n.id}`,
-          source: STACK_HUB_NODE_ID,
-          target: n.id,
-        })),
-    [nodes],
-  );
-
-  return (
-    <ReactFlow
-      nodes={rfNodes}
-      edges={edges}
-      nodeTypes={nodeTypes}
-      fitView
-      minZoom={0.2}
-      maxZoom={2}
-      nodesDraggable={false}
-      nodesConnectable={false}
-      proOptions={{ hideAttribution: true }}
-    >
-      <Background gap={20} size={1} />
-      <Controls position="bottom-left" showInteractive={false} />
-      <NetworkLegend />
-    </ReactFlow>
-  );
 }
 
 export function NetworkView({ state }: NetworkViewProps) {
   const mode = pickAgentsPanelMode(state);
 
   // Pure: snapshot → React-Flow graph (re-derived only when the agents change).
+  // Tiny + engine-free, so it stays in the main bundle; the lazy canvas takes
+  // the built graph and runs ELK over it.
   const graph = useMemo(() => buildNetworkGraph(state.agents), [state.agents]);
-
-  const [positioned, setPositioned] = useState<NetworkGraphNode[]>([]);
-  const genRef = useRef(0);
-
-  useEffect(() => {
-    const myGen = ++genRef.current;
-    if (graph.nodes.length === 0) {
-      setPositioned([]);
-      return;
-    }
-    let cancelled = false;
-    void layoutNetworkGraph(getElk(), graph)
-      .then((nodes) => {
-        // Drop a stale layout: the snapshot changed (new gen) or the effect was
-        // torn down while ELK was mid-flight.
-        if (cancelled || genRef.current !== myGen) return;
-        setPositioned(nodes);
-      })
-      .catch((err: unknown) => {
-        if (cancelled || genRef.current !== myGen) return;
-        // Layout failure shouldn't blank the tab — log and leave the last-good
-        // graph. `console.warn` is the only emit path in the bundle.
-        // eslint-disable-next-line no-console
-        console.warn(
-          "[network-view] ELK layout failed:",
-          err instanceof Error ? err.message : String(err),
-        );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [graph]);
 
   return (
     <section className="scaffold-section network-view" aria-label="Network (agent topology)">
@@ -167,14 +69,14 @@ export function NetworkView({ state }: NetworkViewProps) {
       )}
       {mode === "list" && (
         <div className="network-canvas-wrap">
-          {positioned.length > 0 ? (
-            <ReactFlowProvider>
-              <NetworkCanvas nodes={positioned} />
-            </ReactFlowProvider>
-          ) : (
-            // Agents loaded, ELK still computing the first layout.
-            <div className="network-view-empty">Laying out topology…</div>
-          )}
+          <Suspense
+            fallback={
+              // The graph-engine chunk is downloading on first tab entry.
+              <div className="network-view-empty">Loading network…</div>
+            }
+          >
+            <NetworkCanvas graph={graph} />
+          </Suspense>
         </div>
       )}
     </section>

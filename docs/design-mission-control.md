@@ -317,7 +317,7 @@ Dispatch and Requeue are fire-and-forget; Handoff and Abandon open an inline con
 
 ## 8. Dashboard layout
 
-The dashboard is a React + TypeScript SPA under `src/surface/mc/dashboard-v2/`, built with `bun build src/surface/mc/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser` (the MIG-6 cutover deleted the legacy monolithic inline-HTML dashboard; the React tree is now the only dashboard). Entry is `index.html → main.tsx → app.tsx`. There is no router; view switching is `useState<DashboardView>` over `"default" | "metrics" | "iterations" | "kanban-detail"`. The visual reference is the vendored design handoff under `docs/design-artifacts/`.
+The dashboard is a React + TypeScript SPA under `src/surface/mc/dashboard-v2/`, built with `bun build src/surface/mc/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser --splitting` (the MIG-6 cutover deleted the legacy monolithic inline-HTML dashboard; the React tree is now the only dashboard; `--splitting` lands the G-1114.D Network graph engine in a lazily-loaded chunk). Entry is `index.html → main.tsx → app.tsx`. There is no router; view switching is `useState<DashboardView>` over `"default" | "metrics" | "iterations" | "kanban-detail"`. The visual reference is the vendored design handoff under `docs/design-artifacts/`.
 
 ### 8.1 The default view
 

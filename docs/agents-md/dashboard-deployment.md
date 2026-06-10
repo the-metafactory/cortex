@@ -8,13 +8,15 @@ The dashboard frontend (`src/surface/mc/dashboard-v2/`) is a React app deployed 
 
 ```bash
 # 1. Build the frontend (from repo root)
-bun build src/surface/mc/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser
+bun build src/surface/mc/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser --splitting
 
 # 2. Deploy to CF Pages
 bunx wrangler pages deploy dist/dashboard-v2 --project-name grove-dashboard
 ```
 
-The `build:dashboard` + `watch:dashboard` scripts in `package.json` codify steps 1.
+The `build:dashboard` + `watch:dashboard` scripts in `package.json` codify step 1.
+
+**`--splitting` is load-bearing** (G-1114.D): the Network graph view `React.lazy`-imports the heavy `@xyflow/react` + `elkjs` engine, and code-splitting is what lands that engine in a separate, lazily-loaded `network-canvas-*.js` chunk instead of the entry bundle. Without the flag bun inlines the dynamic import back into the single entry bundle (every principal then downloads the +0.62 MB-gzip graph engine for a tab they may never open). When deploying, ensure the build emits the `network-canvas-*` chunk alongside the entry — that confirms the split held.
 
 **When to deploy:**
 - After any change to `src/surface/mc/dashboard-v2/` files (app.tsx, types.ts, hooks, etc.)
