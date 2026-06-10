@@ -100,6 +100,16 @@ export function NetworkView({
 
   const closePanel = useCallback(() => setSelectedKey(null), []);
 
+  // Esc dismisses the detail panel (keyboard a11y; button + pane-click also close).
+  useEffect(() => {
+    if (selectedKey === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closePanel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedKey, closePanel]);
+
   return (
     <section className="scaffold-section network-view" aria-label="Network (agent topology)">
       <h2>Network</h2>
