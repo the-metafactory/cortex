@@ -61,13 +61,15 @@ describe("buildReviewPrompt (cortex#911)", () => {
     expect(p).toContain("gh pr review");
     expect(p).not.toContain("glab");
     expect(p).toContain("Do NOT ask for confirmation");
-    expect(p).toMatch(/report the created review's id and url/i);
+    // id/url is conditional ("if the forge returns…") — honest for note-only forges
+    expect(p).toMatch(/if the forge returns a review\/note id and url/i);
   });
 
   test("post=true on GitLab → glab, not gh (cortex#917 round 3)", () => {
     const p = buildReviewPrompt(payload({ post: true, forge: "gitlab" }));
-    expect(p).toContain("glab mr");
+    expect(p).toContain("glab");
     expect(p).not.toContain("gh pr review");
+    expect(p).toContain("MR"); // GitLab vocabulary, not "PR"
   });
 
   test("post falsy → instruct NOT to post + no post CLI", () => {

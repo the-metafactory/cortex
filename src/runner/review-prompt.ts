@@ -39,17 +39,16 @@ export function buildReviewPrompt(payload: ReviewRequestPayload): string {
   // The forge CLI to post through. `payload.forge` omitted ⇒ GitHub
   // (pre-sage#43 back-compat). GitLab MRs post via `glab`, not `gh`.
   const forge = payload.forge ?? "github";
-  const postCli =
-    forge === "gitlab"
-      ? "`glab mr note` (and `glab mr approve` / `glab mr revoke` as the verdict warrants)"
-      : "`gh pr review` (use `--comment` if GitHub blocks a self-approve / self-request-changes)";
+  const target = forge === "gitlab" ? "MR" : "PR";
+  const postCli = forge === "gitlab" ? "`glab`" : "`gh pr review`";
 
   const postInstruction = payload.post
     ? [
-        `When your review is ready, POST it to the ${forge === "gitlab" ? "MR" : "PR"}`,
-        `non-interactively with ${postCli}. Do NOT ask for confirmation — post it,`,
-        "then report the created review's id and url in the verdict block's",
-        "`github_review_id` / `github_review_url` fields.",
+        `When your review is ready, POST it to the ${target} non-interactively`,
+        `via the forge's review CLI (${postCli}; use a comment-level post if the`,
+        "forge blocks a self-approve). Do NOT ask for confirmation. If the forge",
+        "returns a review/note id and url, record them in `github_review_id` /",
+        '`github_review_url`; otherwise leave them `0` / `""`.',
       ].join(" ")
     : [
         `Do NOT post this review. Leave the verdict block's`,
