@@ -1107,7 +1107,11 @@ export async function startCortex(
   // consumer and REPLAY history instead of racing a transient core-NATS
   // subscription. cortex provisions the stream only — the durable consumers
   // that read it are the downstream reactor's concern (the cortex#835
-  // follow-up). Config posture mirrors CODE_REVIEW exactly.
+  // follow-up). Config posture mirrors CODE_REVIEW exactly. NOTE (#851
+  // review): retention is INTEREST — with zero registered consumers the
+  // stream retains NOTHING, so until pilot's durable consumer exists this
+  // is a structural enabler, not history. Replay-from-history begins only
+  // once the first durable consumer is bound.
   const lifecycleConfig = options.bus?.lifecycle;
   const lifecycleStream = lifecycleConfig?.stream.name ?? "REVIEW_LIFECYCLE";
   const lifecycleStreamMaxAgeNs =
