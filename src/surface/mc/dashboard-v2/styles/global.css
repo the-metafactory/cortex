@@ -396,6 +396,88 @@ html, body {
 .agents-panel-view .agents-panel-reason-ttl-lapse { color: var(--warn, #b58900); }
 .agents-panel-view .agents-panel-heartbeat { font-size: 11px; }
 
+/* G-1114.D.1-3 — Network graph view (React Flow + ELK topology) ------------- */
+.network-view .network-view-subtitle { margin: 4px 0 12px 0; }
+.network-view .network-view-empty,
+.network-view .network-view-error {
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); color: var(--fg-faint); font-size: 12px;
+}
+.network-view .network-view-error {
+  color: var(--bad);
+  border-color: color-mix(in oklch, var(--bad) 40%, transparent);
+}
+/* The canvas needs an explicit height — React Flow measures its container. */
+.network-view .network-canvas-wrap {
+  position: relative;
+  height: 600px; min-height: 360px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); overflow: hidden;
+}
+.network-view .react-flow { background: var(--bg); }
+
+/* Custom nodes — reuse the agents-panel chrome language so the graph + panel
+   read identically. */
+.network-node {
+  display: flex; flex-direction: column; gap: 4px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); padding: 8px 12px;
+  font-family: var(--sans);
+}
+.network-node-hub {
+  align-items: center; text-align: center;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.network-hub-eyebrow {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em;
+}
+.network-hub-label { font-size: 13px; font-weight: 700; font-family: var(--mono); }
+.network-hub-count { font-size: 10.5px; }
+
+.network-node-agent { width: 200px; }
+.network-node-offline { opacity: 0.62; }
+.network-node-ttl-lapse {
+  border-color: color-mix(in oklch, var(--warn) 50%, var(--line));
+}
+.network-node-identity { display: flex; flex-direction: column; gap: 1px; }
+.network-node-name { font-size: 12.5px; font-weight: 600; }
+.network-node-id { font-size: 10.5px; font-family: var(--mono); }
+.network-node-caps { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0; }
+.network-node-cap {
+  font-size: 9.5px; padding: 1px 6px;
+  border: 1px solid var(--line); border-radius: 4px; color: var(--fg-faint);
+}
+.network-node-cap-none { font-size: 10.5px; font-style: italic; }
+.network-node-liveness {
+  display: flex; align-items: center; gap: 8px;
+}
+.network-node-state {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;
+}
+.network-node-state.state-online { color: var(--ok); }
+.network-node-state.state-offline { color: var(--fg-faint); }
+.network-node-reason { font-size: 10px; }
+.network-node-reason-ttl-lapse { color: var(--warn); }
+.network-node-heartbeat { font-size: 10px; margin-left: auto; }
+
+/* Legend overlay (bottom-right of the canvas). */
+.network-legend {
+  position: absolute; right: 10px; bottom: 10px; z-index: 5;
+  display: flex; gap: 12px;
+  padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: color-mix(in oklch, var(--panel) 88%, transparent);
+  font-size: 10.5px; color: var(--fg-dim);
+}
+.network-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.network-legend-swatch {
+  width: 9px; height: 9px; border-radius: 50%;
+  border: 1px solid var(--line);
+}
+.network-legend-swatch.swatch-online { background: var(--ok); }
+.network-legend-swatch.swatch-offline { background: var(--fg-faint); }
+.network-legend-swatch.swatch-ttl-lapse { background: var(--warn); }
+
 /* G-1113.C.7 — per-repository panel */
 .repos-view .repo-card {
   border: 1px solid var(--line); border-radius: 8px;

@@ -25,7 +25,7 @@ import { PlansView } from "./components/plans-view";
 import { PhaseDetailView } from "./components/phase-detail-view";
 import { WorkItemDetailView } from "./components/work-item-detail-view";
 import { AttentionView } from "./components/attention-view";
-import { NetworkPreviewView } from "./components/network-preview-view";
+import { NetworkView } from "./components/network-view";
 import { Toast } from "./components/toast";
 import { useFocusArea } from "./hooks/use-focus-area";
 import { useTasks } from "./hooks/use-tasks";
@@ -60,7 +60,7 @@ import type { Command } from "./components/command-palette";
  * may upgrade to a hash route if deep-linking turns out to be
  * principal-requested; for now the in-memory view is sufficient.
  */
-type DashboardView = "default" | "metrics" | "iterations" | "sources" | "repositories" | "plans" | "phase-detail" | "work-item-detail" | "attention" | "kanban-detail" | "network-preview";
+type DashboardView = "default" | "metrics" | "iterations" | "sources" | "repositories" | "plans" | "phase-detail" | "work-item-detail" | "attention" | "kanban-detail" | "network";
 
 export function App() {
   const { theme, toggle: toggleTheme } = useTheme();
@@ -122,7 +122,7 @@ export function App() {
   const attention = useAttention(ws, softwareMode && view === "attention");
   // G-1114.B.4 — stack-local agent-presence data (fetched only when on the
   // Network tab); live-refreshed off the `agent.presence` WS frame.
-  const agents = useAgents(ws, view === "network-preview");
+  const agents = useAgents(ws, view === "network");
   // If software mode is toggled OFF while on a software-mode view (Repositories
   // / Plans / phase-detail / work-item-detail / attention), the tab + render
   // both gate off — reset to default so the main area isn't left blank.
@@ -337,9 +337,9 @@ export function App() {
         <button
           type="button"
           role="tab"
-          aria-selected={view === "network-preview"}
-          className={`tab${view === "network-preview" ? " active" : ""}`}
-          onClick={() => setView("network-preview")}
+          aria-selected={view === "network"}
+          className={`tab${view === "network" ? " active" : ""}`}
+          onClick={() => setView("network")}
         >
           Network
         </button>
@@ -527,12 +527,13 @@ export function App() {
           <SourcesView />
         )}
 
-        {view === "network-preview" && (
-          /* G-1114.B.4 — live stack-local agents panel (replaced the Phase A
-             stub): agents pop up on boot, drop off when offline, fed by the
-             runtime presence registry via /api/agents + the agent.presence WS
-             frame. The topology graph is Phase D. */
-          <NetworkPreviewView state={agents} />
+        {view === "network" && (
+          /* G-1114.D.1-3 — Network graph view (React Flow + ELK): the stack as a
+             hub, agents fanned around it (radial layout), fed by the runtime
+             presence registry via /api/agents + the agent.presence WS frame.
+             Replaced the G-1114.B.4 simple agents panel. Presence + lifecycle
+             only (ADR-0007) — never session interiors. */
+          <NetworkView state={agents} />
         )}
 
         {view === "repositories" && softwareMode && (

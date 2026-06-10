@@ -176,10 +176,14 @@ dashboard.
 
 **Sub-features (sketched):**
 
-- [ ] **G-1114.D.1** — lift Strata UI primitives (`FlowCanvas`, `ContextMenu`,
-  `DetailPanel`, `SpotlightSearch`, `Legend`).
-- [ ] **G-1114.D.2** — graph data adapter (registry → React Flow nodes/edges).
-- [ ] **G-1114.D.3** — ELK layout config.
+- [~] **G-1114.D.1** — lift Strata UI primitives. **Foundation done** (combined
+  D.1+D.2+D.3 PR): `FlowCanvas` (`network-view.tsx` + custom `network-nodes.tsx`)
+  and `Legend` (`network-legend.tsx`) shipped, replacing the B.4 preview panel.
+  `ContextMenu` / `DetailPanel` / `SpotlightSearch` remain for D.4 / D.5.
+- [x] **G-1114.D.2** — graph data adapter (`lib/network-graph-adapter.ts`:
+  snapshot → React Flow nodes/edges; stack-hub + agent nodes, hub→agent edges).
+- [x] **G-1114.D.3** — ELK layout config (`lib/network-graph-layout.ts`: radial
+  star around the stack hub, async, injectable engine).
 - [ ] **G-1114.D.4** — detail panel (presence + capabilities + dispatch
   lifecycle; **never** session interiors).
 - [ ] **G-1114.D.5** — filters + spotlight search.
