@@ -987,6 +987,54 @@ export const BusReviewConfigSchema = z.object({
   }).default({ maxDeliver: 5 }),
 });
 
+/**
+ * dev.implement JetStream provisioning knobs (F-2.2, cortex#835 → cortex#865).
+ * Tune cortex's DEV_IMPLEMENT stream — the durable-history stream that carries
+ * the `tasks.dev.implement` request envelopes the agentic dev-loop's dev-agent
+ * consumer (F-2.1, cortex#853) binds a DURABLE pull consumer against, instead
+ * of racing a transient core-NATS subscription against a virgin broker.
+ *
+ * Subjects (derived at boot from the stack identity, NOT configured here):
+ *   - `local.{principal}.{stack}.tasks.dev.>`   (the dev task family)
+ *
+ * This NEVER overlaps the CODE_REVIEW stream (`…tasks.code-review.>`) NOR the
+ * REVIEW_LIFECYCLE stream (`…review.verdict.>` / `…code.pr.review.>` /
+ * `…dispatch.task.>`): JetStream rejects overlapping subjects across streams,
+ * and `tasks.dev.` and `tasks.code-review.` diverge at segment 5 (the token
+ * after `tasks.`), so no subject of one is a prefix of any subject of another.
+ *
+ * Posture mirrors `BusReviewConfigSchema.stream` EXACTLY (Interest retention,
+ * File storage, 24h max_age, finite 512 MiB max_bytes). There is intentionally
+ * NO `consumer` sub-block: cortex provisions the stream only; the durable
+ * consumer that reads it is the dev-agent's concern (F-2.1, cortex#853).
+ */
+export const BusDevImplementConfigSchema = z.object({
+  stream: z.object({
+    /**
+     * Stream name that carries the `tasks.dev.implement` request envelopes.
+     * MUST differ from `bus.review.stream.name` (the streams own disjoint
+     * subject spaces; a shared name would clash on `streams.add`).
+     */
+    name: z.string().min(1).default("DEV_IMPLEMENT"),
+    /** How long unclaimed dev-task messages remain replayable in JetStream. */
+    maxAgeSeconds: z
+      .number()
+      .int("bus.devImplement.stream.maxAgeSeconds must be an integer number of seconds")
+      .positive("bus.devImplement.stream.maxAgeSeconds must be positive")
+      .default(86_400),
+    /** Finite storage cap; avoids account-level reservation failures. */
+    maxBytes: z
+      .number()
+      .int("bus.devImplement.stream.maxBytes must be an integer number of bytes")
+      .positive("bus.devImplement.stream.maxBytes must be positive")
+      .default(512 * 1024 * 1024),
+  }).default({
+    name: "DEV_IMPLEMENT",
+    maxAgeSeconds: 86_400,
+    maxBytes: 512 * 1024 * 1024,
+  }),
+});
+
 export const BusConfigSchema = z.object({
   review: BusReviewConfigSchema.default({
     stream: {
@@ -996,10 +1044,23 @@ export const BusConfigSchema = z.object({
     },
     consumer: { maxDeliver: 5 },
   }),
+  // F-2.2 (cortex#835 → cortex#865) — DEV_IMPLEMENT stream knobs. Sibling of
+  // the REVIEW_LIFECYCLE block (cortex#851); both provision a SECOND durable
+  // stream over a disjoint subject space so a downstream durable consumer can
+  // replay history. Stream-only (no consumer sub-block) — the dev-agent's
+  // durable consumer (F-2.1, cortex#853) owns the consumer side.
+  devImplement: BusDevImplementConfigSchema.default({
+    stream: {
+      name: "DEV_IMPLEMENT",
+      maxAgeSeconds: 86_400,
+      maxBytes: 512 * 1024 * 1024,
+    },
+  }),
 });
 
 export type BusConfig = z.infer<typeof BusConfigSchema>;
 export type BusReviewConfig = z.infer<typeof BusReviewConfigSchema>;
+export type BusDevImplementConfig = z.infer<typeof BusDevImplementConfigSchema>;
 
 // =============================================================================
 // Cross-cutting infra blocks — carried forward in same shape as AgentConfig

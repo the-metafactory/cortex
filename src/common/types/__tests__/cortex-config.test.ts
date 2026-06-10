@@ -19,6 +19,8 @@ import {
   AgentDetectionSchema,
   AgentSchema,
   AttachmentsConfigSchema,
+  BusConfigSchema,
+  BusDevImplementConfigSchema,
   ClaudeConfigSchema,
   CortexConfigSchema,
   DashboardRendererSchema,
@@ -700,6 +702,46 @@ describe("Cross-cutting schemas — defaults populated by emptyDefault helper", 
     const parsed = AgentDetectionSchema.parse({});
     expect(parsed.branchPatterns).toEqual(["^feat/(g|f|i)-\\d+"]);
     expect(parsed.commentPatterns).toEqual(["^Starting:", "^Completed:"]);
+  });
+
+  test("BusConfigSchema applies review + devImplement stream defaults (F-2.2, cortex#835)", () => {
+    const parsed = BusConfigSchema.parse({});
+    // Existing CODE_REVIEW posture — unchanged.
+    expect(parsed.review.stream.name).toBe("CODE_REVIEW");
+    expect(parsed.review.stream.maxAgeSeconds).toBe(86_400);
+    expect(parsed.review.stream.maxBytes).toBe(512 * 1024 * 1024);
+    expect(parsed.review.consumer.maxDeliver).toBe(5);
+    // New DEV_IMPLEMENT stream — mirrors CODE_REVIEW's stream posture exactly,
+    // and intentionally carries NO consumer sub-block (cortex provisions the
+    // stream; the dev-agent's durable consumer is F-2.1's concern, cortex#853).
+    expect(parsed.devImplement.stream.name).toBe("DEV_IMPLEMENT");
+    expect(parsed.devImplement.stream.maxAgeSeconds).toBe(86_400);
+    expect(parsed.devImplement.stream.maxBytes).toBe(512 * 1024 * 1024);
+    expect("consumer" in parsed.devImplement).toBe(false);
+    // The two stream names MUST differ — they own disjoint subject spaces, and
+    // a shared name would clash on `streams.add`.
+    expect(parsed.devImplement.stream.name).not.toBe(parsed.review.stream.name);
+  });
+
+  test("BusDevImplementConfigSchema honors explicit overrides", () => {
+    const parsed = BusDevImplementConfigSchema.parse({
+      stream: { name: "MY_DEV", maxAgeSeconds: 3600, maxBytes: 1024 },
+    });
+    expect(parsed.stream.name).toBe("MY_DEV");
+    expect(parsed.stream.maxAgeSeconds).toBe(3600);
+    expect(parsed.stream.maxBytes).toBe(1024);
+  });
+
+  test("BusDevImplementConfigSchema rejects non-positive stream limits", () => {
+    expect(() =>
+      BusDevImplementConfigSchema.parse({ stream: { maxAgeSeconds: 0 } }),
+    ).toThrow();
+    expect(() =>
+      BusDevImplementConfigSchema.parse({ stream: { maxBytes: -1 } }),
+    ).toThrow();
+    expect(() =>
+      BusDevImplementConfigSchema.parse({ stream: { name: "" } }),
+    ).toThrow();
   });
 });
 

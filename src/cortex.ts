@@ -1103,6 +1103,20 @@ export async function startCortex(
     reviewConfig?.stream.maxBytes ?? 512 * 1024 * 1024;
   const reviewConsumerMaxDeliver = reviewConfig?.consumer.maxDeliver ?? 5;
 
+  // ── F-2.2 (cortex#835 → cortex#865) DEV_IMPLEMENT config ──────────────────
+  // Resolve the DEV_IMPLEMENT stream knobs alongside the review knobs. Sibling
+  // of the REVIEW_LIFECYCLE block (cortex#851). The actual provisioning rides
+  // the SAME `reviewJsm !== null` gate below so it inherits byte-identical
+  // dormant behaviour when the bus/JetStream is unconfigured. (Boundary comment
+  // kept loud so the expected #851/#874 boot-section merge conflict is trivial.)
+  const devImplementConfig = options.bus?.devImplement;
+  const devImplementStream = devImplementConfig?.stream.name ?? "DEV_IMPLEMENT";
+  const devImplementStreamMaxAgeNs =
+    (devImplementConfig?.stream.maxAgeSeconds ?? 86_400) * 1_000_000_000;
+  const devImplementStreamMaxBytes =
+    devImplementConfig?.stream.maxBytes ?? 512 * 1024 * 1024;
+  // ── /F-2.2 DEV_IMPLEMENT config ───────────────────────────────────────────
+
   // cortex#338 — resolve the provisioning JSM and provision the
   // CODE_REVIEW stream up-front so the per-agent `ReviewConsumer.start`
   // calls below can bind without hitting "stream not found" against a
@@ -1135,6 +1149,34 @@ export async function startCortex(
       ]
     : [reviewSubjectPattern];
 
+  // ── F-2.2 (cortex#835 → cortex#865) DEV_IMPLEMENT subject set ─────────────
+  // The dev-loop's dev-agent consumer (F-2.1, cortex#853) subscribes on
+  // `local.{principal}.{stack}.tasks.dev.implement` and binds the durable on
+  // stream `DEV_IMPLEMENT`. The stream filter covers the whole `tasks.dev.>`
+  // family (the exact subject the consumer subscribes, plus room for future
+  // `tasks.dev.*` capabilities) so the consumer's `consumers.get(stream, …)`
+  // never hits "stream not found" against a virgin broker.
+  //
+  // OVERLAP ANALYSIS (JetStream rejects overlapping subjects across streams):
+  //   CODE_REVIEW       owns `…tasks.code-review.>`
+  //   REVIEW_LIFECYCLE  owns `…review.verdict.>` / `…code.pr.review.>` /
+  //                          `…dispatch.task.>`   (cortex#851, sibling stream)
+  //   DEV_IMPLEMENT     owns `…tasks.dev.>`        (THIS stream)
+  // `tasks.dev.` and `tasks.code-review.` diverge at segment 5 (the token after
+  // `tasks.`): neither is a prefix of the other, so no subject of DEV_IMPLEMENT
+  // is a prefix of (or prefixed by) any CODE_REVIEW / REVIEW_LIFECYCLE subject.
+  // The three streams partition the subject space cleanly. The overlap-invariant
+  // test (cortex.dev-stream-boot.test.ts) is the codified guard at boot.
+  //
+  // Federated dev traffic is intentionally NOT mirrored here — the dev-loop is
+  // principal-local (F-5 federation is a later slice); a federated-history
+  // follow-up can extend this set under `federationConfigured` the same way
+  // `reviewStreamSubjects` does, when a cross-principal dev consumer needs it.
+  const devImplementStreamSubjects = [
+    `local.${reviewPrincipalId}.${derivedStack.stack}.tasks.dev.>`,
+  ];
+  // ── /F-2.2 DEV_IMPLEMENT subject set ──────────────────────────────────────
+
   if (reviewJsm !== null) {
     try {
       const outcome = await provisionReviewStream({
@@ -1164,6 +1206,47 @@ export async function startCortex(
           `${err instanceof Error ? err.message : String(err)}\n`,
       );
     }
+
+    // ── F-2.2 (cortex#835 → cortex#865) provision DEV_IMPLEMENT ─────────────
+    // Provision the DEV_IMPLEMENT stream in the SAME `reviewJsm !== null` gate
+    // so it inherits the identical config posture as CODE_REVIEW: created iff a
+    // JSM resolved (review-capable agents present AND `runtime.jetstreamManager`
+    // available), skipped entirely when the runtime is dormant — byte-identical
+    // boot when the bus/JetStream is unconfigured. Reuses the generic
+    // `provisionReviewStream` helper (idempotent ensure, Interest retention,
+    // File storage, drift-warning) — only name / subjects / limits differ.
+    // A failure here does NOT abort boot, identical to CODE_REVIEW. The
+    // dev-agent consumer (F-2.1, cortex#853) binds its durable against this
+    // stream; until a dev-capable agent exists that consumer never wires, so
+    // this stream is a structural enabler. NOTE: retention is INTEREST — with
+    // zero registered consumers the stream retains NOTHING, so replay-from-
+    // history begins only once the first durable dev consumer is bound.
+    // (Boundary comment kept loud so the expected #851/#874 merge is trivial.)
+    try {
+      const devOutcome = await provisionReviewStream({
+        jsm: reviewJsm,
+        name: devImplementStream,
+        subjects: devImplementStreamSubjects,
+        maxAgeNs: devImplementStreamMaxAgeNs,
+        maxBytes: devImplementStreamMaxBytes,
+      });
+      if (devOutcome === "created") {
+        console.log(
+          `cortex: provisioned JetStream stream "${devImplementStream}" (subjects=[${devImplementStreamSubjects.join(", ")}])`,
+        );
+      } else if (devOutcome === "exists") {
+        console.log(
+          `cortex: JetStream stream "${devImplementStream}" already present — binding existing config`,
+        );
+      }
+      // config-drift-warning is already logged by the helper.
+    } catch (err) {
+      process.stderr.write(
+        `cortex: provisionReviewStream failed for "${devImplementStream}": ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+    // ── /F-2.2 provision DEV_IMPLEMENT ──────────────────────────────────────
   }
 
   for (const agent of reviewCapableAgents) {

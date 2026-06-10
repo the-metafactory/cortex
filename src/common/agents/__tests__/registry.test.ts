@@ -72,6 +72,13 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
         },
         consumer: { maxDeliver: 5 },
       },
+      devImplement: {
+        stream: {
+          name: "DEV_IMPLEMENT",
+          maxAgeSeconds: 86_400,
+          maxBytes: 512 * 1024 * 1024,
+        },
+      },
     },
     agents,
     renderers: [],
