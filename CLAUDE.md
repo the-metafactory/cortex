@@ -456,7 +456,7 @@ The `build:dashboard` + `watch:dashboard` scripts in `package.json` codify steps
 - The backend (`cortex` bot via `arc upgrade Cortex`) and the frontend (CF Pages via `wrangler`) are deployed independently.
 
 **Architecture:**
-- `cortex` serves the REST API + WebSocket at `localhost:8766` locally, or via the CF Worker at `grove.meta-factory.ai/api/*` in production (`src/surface/mc/worker/`).
+- `cortex` serves the REST API + WebSocket at `localhost:8767` locally, or via the CF Worker at `grove.meta-factory.ai/api/*` in production (`src/surface/mc/worker/`).
 - The dashboard frontend is static HTML/JS hosted on CF Pages.
 - Frontend connects to the API via URL params (`?api=`) or auto-detection.
 - CF Access cookies cover dashboard + API on each TLD (`.ai`, `.dev`, `.io`) — no cross-origin cookie issue, no bypass-everyone policies (see Critical Rules).

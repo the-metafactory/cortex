@@ -79,7 +79,7 @@ and rename the pointer file to `<slug>.yaml`.
 |---|---|---|
 | `<slug>.yaml` | pointer | Nothing. Contents ignored; dirname selects the layout; **basename names the PID file** — must be per-stack, never a uniform `cortex.yaml`, or a second daemon collides on the PID file. |
 | `system/system.yaml` | substrate/transport | `nats.url` + identity block. **Leave `nats.subjects: []`** unless you know you need push-mode fan-out — see §3.4. |
-| `stacks/<slug>.yaml` | per-deployment | Fill `<REPLACE_ME>`: principal id + Discord id, `stack.id` (`<principal>/<slug>`), `nkey_seed_path`, post-first-boot `nkey_pub`, `policy` block, agents, `github.repos`. **`chmod 600`** (carries the bot token if inline). |
+| `stacks/<slug>.yaml` | per-deployment | Fill `<REPLACE_ME>`: principal id + Discord id, `stack.id` (`<principal>/<slug>`), `nkey_seed_path`, `policy` block, agents, `github.repos`. Set `nkey_pub` only after §3.3 prints the `U…` key. **`chmod 600`** (carries the bot token if inline). |
 | `surfaces/surfaces.yaml` | surface bindings (optional) | Discord `token` / `guildId` / `agentChannelId` / `logChannelId` per agent. Credential surface-of-truth; folds into the matching agent's `presence` block at load. |
 | `network/*.yaml` | federation (optional) | Leave absent/commented unless federating (§6). |
 | `personas/<assistant>.md` | persona | The assistant's persona; append a repo-scope note listing allowed repo slugs. |

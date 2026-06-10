@@ -63,7 +63,7 @@ M5  DISCOVERY     myelin — capability registry
 M4  IDENTITY      myelin — verifiable sender per envelope
 M3  ENVELOPE      myelin — message format + sovereignty metadata
 M2  TRANSPORT     myelin — abstract bus (NATS underneath)
-M1  CONNECTIVITY  NATS leaf nodes / federation
+M1  CONNECTIVITY  TCP/TLS · federation topology (NATS leaf nodes)
 ```
 
 cortex consumes the contracts of M2–M6 and owns none of them. That separation
@@ -108,7 +108,7 @@ cortex start --config ~/.config/cortex/mystack/mystack.yaml
 ```
 
 Then @mention your assistant in the bound Discord guild and watch it answer.
-The Mission Control dashboard runs at `localhost:8766` locally (hosted
+The Mission Control dashboard runs at `localhost:8767` locally (hosted
 deployments serve it via Cloudflare).
 
 You will need: [Bun](https://bun.sh), a local
