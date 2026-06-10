@@ -72,6 +72,13 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
         },
         consumer: { maxDeliver: 5 },
       },
+      lifecycle: {
+        stream: {
+          name: "REVIEW_LIFECYCLE",
+          maxAgeSeconds: 86_400,
+          maxBytes: 512 * 1024 * 1024,
+        },
+      },
     },
     agents,
     renderers: [],

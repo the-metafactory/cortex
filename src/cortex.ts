@@ -1101,6 +1101,20 @@ export async function startCortex(
     reviewConfig?.stream.maxBytes ?? 512 * 1024 * 1024;
   const reviewConsumerMaxDeliver = reviewConfig?.consumer.maxDeliver ?? 5;
 
+  // cortex#835 / pilot#154 — the REVIEW_LIFECYCLE stream. A SECOND JetStream
+  // stream that carries the verdict + dispatch-lifecycle envelopes so a
+  // downstream reactor (pilot's verdict watch) can later bind a DURABLE
+  // consumer and REPLAY history instead of racing a transient core-NATS
+  // subscription. cortex provisions the stream only — the durable consumers
+  // that read it are the downstream reactor's concern (the cortex#835
+  // follow-up). Config posture mirrors CODE_REVIEW exactly.
+  const lifecycleConfig = options.bus?.lifecycle;
+  const lifecycleStream = lifecycleConfig?.stream.name ?? "REVIEW_LIFECYCLE";
+  const lifecycleStreamMaxAgeNs =
+    (lifecycleConfig?.stream.maxAgeSeconds ?? 86_400) * 1_000_000_000;
+  const lifecycleStreamMaxBytes =
+    lifecycleConfig?.stream.maxBytes ?? 512 * 1024 * 1024;
+
   // cortex#338 — resolve the provisioning JSM and provision the
   // CODE_REVIEW stream up-front so the per-agent `ReviewConsumer.start`
   // calls below can bind without hitting "stream not found" against a
@@ -1133,6 +1147,34 @@ export async function startCortex(
       ]
     : [reviewSubjectPattern];
 
+  // cortex#835 / pilot#154 — REVIEW_LIFECYCLE subject set. Covers the THREE
+  // local lifecycle families a downstream verdict-reactor races for (the
+  // exact set pilot's `subscribe-verdict.ts` listens on, plus the dispatch
+  // lifecycle the task brief names):
+  //   - `…review.verdict.>`   — the verdict envelopes (approved / changes /
+  //                             commented) the review consumer publishes
+  //   - `…code.pr.review.>`   — sage's `code` domain verdict family (pilot
+  //                             subscribes both verdict families explicitly)
+  //   - `…dispatch.task.>`    — dispatch lifecycle (received / dispatched /
+  //                             completed / failed / aborted)
+  //
+  // OVERLAP ANALYSIS (JetStream rejects overlapping subjects across streams):
+  // CODE_REVIEW owns `…tasks.code-review.>` (+ federated `tasks.*.code-review`).
+  // Those live under the `tasks.` token at segment 4; the three families here
+  // live under disjoint tokens (`review.`, `code.`, `dispatch.`) at segment 4.
+  // No prefix of any subject here is a prefix of (or prefixed by) any
+  // CODE_REVIEW subject — the two streams partition the subject space cleanly.
+  // Federated verdict/lifecycle traffic is intentionally NOT mirrored here:
+  // the durable-history need is local-reactor-scoped (pilot watches its OWN
+  // `local.{principal}.{stack}.…` scope); a federated-history follow-up can
+  // extend this set the same way `reviewStreamSubjects` extends under
+  // `federationConfigured` if/when a cross-principal reactor needs replay.
+  const lifecycleStreamSubjects = [
+    `local.${reviewPrincipalId}.${derivedStack.stack}.review.verdict.>`,
+    `local.${reviewPrincipalId}.${derivedStack.stack}.code.pr.review.>`,
+    `local.${reviewPrincipalId}.${derivedStack.stack}.dispatch.task.>`,
+  ];
+
   if (reviewJsm !== null) {
     try {
       const outcome = await provisionReviewStream({
@@ -1159,6 +1201,39 @@ export async function startCortex(
       // We log here so principals see provisioning was even attempted.
       process.stderr.write(
         `cortex: provisionReviewStream failed for "${reviewStream}": ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+
+    // cortex#835 / pilot#154 — provision the REVIEW_LIFECYCLE stream in the
+    // SAME `reviewJsm !== null` gate so it inherits the identical config
+    // posture as CODE_REVIEW: created iff a JSM resolved (review-capable
+    // agents present AND `runtime.jetstreamManager` available), skipped
+    // entirely when the runtime is dormant. Reuses the generic
+    // `provisionReviewStream` helper (idempotent ensure, Interest retention,
+    // File storage, drift-warning) — only the name / subjects / limits
+    // differ. A failure here does NOT abort boot, identical to CODE_REVIEW.
+    try {
+      const lifecycleOutcome = await provisionReviewStream({
+        jsm: reviewJsm,
+        name: lifecycleStream,
+        subjects: lifecycleStreamSubjects,
+        maxAgeNs: lifecycleStreamMaxAgeNs,
+        maxBytes: lifecycleStreamMaxBytes,
+      });
+      if (lifecycleOutcome === "created") {
+        console.log(
+          `cortex: provisioned JetStream stream "${lifecycleStream}" (subjects=[${lifecycleStreamSubjects.join(", ")}])`,
+        );
+      } else if (lifecycleOutcome === "exists") {
+        console.log(
+          `cortex: JetStream stream "${lifecycleStream}" already present — binding existing config`,
+        );
+      }
+      // config-drift-warning is already logged by the helper.
+    } catch (err) {
+      process.stderr.write(
+        `cortex: provisionReviewStream failed for "${lifecycleStream}": ` +
           `${err instanceof Error ? err.message : String(err)}\n`,
       );
     }
