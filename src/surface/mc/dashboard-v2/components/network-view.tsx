@@ -198,9 +198,9 @@ export function NetworkView({
     <section className="scaffold-section network-view" aria-label="Network (agent topology)">
       <h2>Network</h2>
       <p className="dim network-view-subtitle">
-        Stack-local agent <strong>topology</strong> — the agents on this stack,
-        their declared capabilities, and their liveness, laid out around the
-        stack hub. Cross-stack federated peers arrive in G-1114.E.
+        Agent <strong>topology</strong> — the agents on this stack and any
+        federated peers, their declared capabilities, and their liveness, laid
+        out around each stack&rsquo;s hub. Filter by scope to focus on this stack.
       </p>
 
       {mode === "error" && (
