@@ -523,6 +523,29 @@ export const AgentRuntimeSchema = z.object({
     .int("agent.runtime.maxConcurrent must be an integer (got a fractional number)")
     .positive("agent.runtime.maxConcurrent must be a positive integer (omit the field for unbounded concurrency)")
     .optional(),
+  /**
+   * cortex#xxx (governance Stage 1b) — the kind of model this agent actually
+   * runs, used by the consumer-side sovereignty gate to refuse a task whose
+   * envelope demands a local model (`model_class: local-only` or
+   * `frontier_ok: false`) when this agent is frontier-capable.
+   *
+   *   - `local-only` — runs a local model exclusively (Ollama, on-box); may
+   *                    execute any task (it cannot leak to a frontier model).
+   *   - `frontier`   — runs a frontier (cloud) model; refused local-only tasks.
+   *   - `any`        — may run either; treated as frontier-capable by the gate.
+   *
+   * **Optional.** When unset the sovereignty gate fails closed for tasks that
+   * demand a local model (an agent that cannot prove its class cannot prove
+   * compliance); tasks that permit any model are unaffected. Mirrors the
+   * `model_class` axis of the myelin envelope so the agent-side declaration
+   * and the envelope-side requirement share one taxonomy.
+   *
+   * NOTE: a self-declared class is honest-but-spoofable. The hard-deny posture
+   * ties trust in this value to the signing identity (cortex#327 audit→enforce);
+   * until that lands the gate runs in audit-parity (logs the verdict, does not
+   * drop).
+   */
+  modelClass: z.enum(["local-only", "frontier", "any"]).optional(),
 }).refine(
   // Echo M2 on cortex#62 — a `standalone` agent with zero capabilities parses
   // fine but routes zero work. The daemon connects to NATS, publishes nothing

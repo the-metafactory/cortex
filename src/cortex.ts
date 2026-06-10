@@ -1366,6 +1366,12 @@ export async function startCortex(
         ...(agent.runtime?.maxConcurrent !== undefined && {
           maxConcurrent: agent.runtime.maxConcurrent,
         }),
+        // Governance Stage 1b — the agent's declared model class feeds the
+        // consumer-side sovereignty gate. Absent → the gate fails closed for
+        // local-only tasks.
+        ...(agent.runtime?.modelClass !== undefined && {
+          modelClass: agent.runtime.modelClass,
+        }),
       };
       // cortex#327 follow-up (D1) — build the per-agent signature verifier
       // closure when this agent declares a non-empty `trust:[]` list.

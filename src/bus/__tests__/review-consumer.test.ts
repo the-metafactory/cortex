@@ -2196,3 +2196,122 @@ describe("ReviewConsumer — federated DIRECT mode (cortex#725, ADR 0001/0002 §
     expect(runtime.publishedOnSubject).toHaveLength(0);
   });
 });
+
+describe("ReviewConsumer.processEnvelope — consumer-side sovereignty gate (Stage 1b)", () => {
+  // makeRequest() defaults to model_class=local-only / frontier_ok=false, so a
+  // frontier-class agent claiming it is a sovereignty violation.
+
+  test("enforce: frontier agent + local-only task → term wont_do, reviewer never spawns", async () => {
+    const runtime = createRecordingRuntime();
+    const request = makeRequest("typescript");
+    let pipelineRan = false;
+
+    const consumer = new ReviewConsumer(
+      baseOpts({
+        runtime,
+        agent: buildAgent({ modelClass: "frontier" }),
+        sovereigntyEnforce: true,
+        pipelineRunner: fixedPipeline(() => {
+          pipelineRan = true;
+          throw new Error("reviewer must NOT spawn on a sovereignty-denied task");
+        }),
+      }),
+    );
+
+    const decision = await consumer.processEnvelope(
+      request,
+      `local.metafactory.tasks.code-review.typescript`,
+      null,
+    );
+
+    expect(decision.kind).toBe("term");
+    if (decision.kind === "term") expect(decision.reason).toContain("wont_do");
+    expect(pipelineRan).toBe(false);
+    // A dispatch.task.failed (wont_do) is published back to the requester.
+    const failed = runtime.published.find((e) => e.type === "dispatch.task.failed");
+    expect(failed).toBeDefined();
+  });
+
+  test("audit-parity (default): frontier agent + local-only task → still runs", async () => {
+    const runtime = createRecordingRuntime();
+    const request = makeRequest("typescript");
+    const verdict = buildVerdictEnvelope(request, "approved");
+    let pipelineRan = false;
+
+    const consumer = new ReviewConsumer(
+      baseOpts({
+        runtime,
+        agent: buildAgent({ modelClass: "frontier" }),
+        // sovereigntyEnforce omitted → audit-parity
+        pipelineRunner: fixedPipeline(() => {
+          pipelineRan = true;
+          return { kind: "verdict", envelope: verdict };
+        }),
+      }),
+    );
+
+    const decision = await consumer.processEnvelope(
+      request,
+      `local.metafactory.tasks.code-review.typescript`,
+      null,
+    );
+
+    expect(decision).toEqual({ kind: "ack" });
+    expect(pipelineRan).toBe(true);
+  });
+
+  test("enforce: local-only agent + local-only task → runs (no violation)", async () => {
+    const runtime = createRecordingRuntime();
+    const request = makeRequest("typescript");
+    const verdict = buildVerdictEnvelope(request, "approved");
+    let pipelineRan = false;
+
+    const consumer = new ReviewConsumer(
+      baseOpts({
+        runtime,
+        agent: buildAgent({ modelClass: "local-only" }),
+        sovereigntyEnforce: true,
+        pipelineRunner: fixedPipeline(() => {
+          pipelineRan = true;
+          return { kind: "verdict", envelope: verdict };
+        }),
+      }),
+    );
+
+    const decision = await consumer.processEnvelope(
+      request,
+      `local.metafactory.tasks.code-review.typescript`,
+      null,
+    );
+
+    expect(decision).toEqual({ kind: "ack" });
+    expect(pipelineRan).toBe(true);
+  });
+
+  test("enforce: agent with no declared modelClass + local-only task → fail closed (term)", async () => {
+    const runtime = createRecordingRuntime();
+    const request = makeRequest("typescript");
+    let pipelineRan = false;
+
+    const consumer = new ReviewConsumer(
+      baseOpts({
+        runtime,
+        agent: buildAgent({}), // no modelClass
+        sovereigntyEnforce: true,
+        pipelineRunner: fixedPipeline(() => {
+          pipelineRan = true;
+          throw new Error("must not spawn");
+        }),
+      }),
+    );
+
+    const decision = await consumer.processEnvelope(
+      request,
+      `local.metafactory.tasks.code-review.typescript`,
+      null,
+    );
+
+    expect(decision.kind).toBe("term");
+    expect(pipelineRan).toBe(false);
+  });
+});

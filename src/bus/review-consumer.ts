@@ -70,6 +70,7 @@ import type { MyelinRuntime } from "./myelin/runtime";
 import type { Envelope } from "./myelin/envelope-validator";
 import { getActorPrincipal } from "./myelin/envelope-validator";
 import { resolveSourceNetwork } from "./surface-router";
+import { evaluateSovereignty, type AgentModelClass } from "./sovereignty-gate";
 import type { PolicyFederatedNetwork } from "../common/types/cortex-config";
 import type { MyelinSubscriber } from "./myelin/subscriber";
 import type { AckDecision } from "./myelin/subscriber";
@@ -120,6 +121,14 @@ export interface ReviewConsumerAgent {
    * undefined, the agent is treated as unbounded — see §7.3.
    */
   maxConcurrent?: number;
+  /**
+   * Governance Stage 1b — the kind of model this agent runs (`local-only`
+   * | `frontier` | `any`). Consumed by the consumer-side sovereignty gate
+   * to refuse a task whose envelope demands a local model when this agent
+   * is frontier-capable. Absent → the gate fails closed for local-only
+   * tasks (see {@link evaluateSovereignty}).
+   */
+  modelClass?: AgentModelClass;
 }
 
 /**
@@ -278,6 +287,19 @@ export interface ReviewConsumerOpts {
    */
   federatedNetworks?: readonly PolicyFederatedNetwork[];
   /**
+   * Governance Stage 1b — when `true`, the consumer-side sovereignty gate
+   * HARD-DENIES (term + `dispatch.task.failed` `wont_do`) a claim whose
+   * envelope demands a local model while this agent is frontier-capable.
+   * When `false`/absent the gate runs in **audit-parity**: it evaluates and
+   * logs the verdict to stderr but lets the work proceed.
+   *
+   * Default `false` because a self-declared `modelClass` is honest-but-
+   * spoofable; the hard-deny posture should wait until model class is bound
+   * to the signing identity (cortex#327 audit→enforce). Audit-parity ships
+   * the evaluation now so the denial rate is observable before it bites.
+   */
+  sovereigntyEnforce?: boolean;
+  /**
    * Test seam — clock. Defaults to `() => new Date()`. Tests inject a
    * fixed clock so emitted `startedAt`/`completedAt` are deterministic.
    */
@@ -393,6 +415,8 @@ export class ReviewConsumer {
    * are configured.
    */
   private readonly federatedNetworksById: Map<string, PolicyFederatedNetwork>;
+  /** Governance Stage 1b — hard-deny on sovereignty mismatch vs. audit-parity. */
+  private readonly sovereigntyEnforce: boolean;
   private readonly clock: () => Date;
 
   /** Promises for in-flight pipelines so `stop()` can drain. */
@@ -426,6 +450,7 @@ export class ReviewConsumer {
     for (const network of opts.federatedNetworks ?? []) {
       this.federatedNetworksById.set(network.id, network);
     }
+    this.sovereigntyEnforce = opts.sovereigntyEnforce ?? false;
     this.clock = opts.clock ?? (() => new Date());
 
     this.flavors = deriveFlavors(opts.agent.capabilities);
@@ -714,6 +739,40 @@ export class ReviewConsumer {
         requester,
       );
       return { kind: "term", reason: "no capability match" };
+    }
+
+    // 3b. Consumer-side sovereignty gate (governance Stage 1b). The envelope
+    //     DECLARES model_class / frontier_ok; this is where the consumer
+    //     refuses to run a task whose sovereignty its own model class would
+    //     violate — confidential payload must not reach a frontier model. The
+    //     manifest declares; this gate bites.
+    //
+    //     Audit-parity by default: evaluate + log, but proceed (a self-declared
+    //     modelClass is spoofable until bound to the signing identity,
+    //     cortex#327). With sovereigntyEnforce, deny → term + wont_do.
+    {
+      const sov = evaluateSovereignty(envelope.sovereignty, this.agent.modelClass);
+      if (sov.decision === "deny") {
+        if (this.sovereigntyEnforce) {
+          process.stderr.write(
+            `cortex/review-consumer: sovereignty DENIED (enforce) for ` +
+              `agent="${this.agent.id}" subject=${subject} envelope=${envelope.id} — ${sov.reason}\n`,
+          );
+          await this.publishFailed(
+            envelope,
+            { kind: "wont_do", detail: sov.reason },
+            `sovereignty refusal for ${subject}`,
+            responseRouting,
+            requester,
+          );
+          return { kind: "term", reason: `wont_do: ${sov.reason}` };
+        }
+        // Audit-parity: the denial is observable but does not yet bite.
+        process.stderr.write(
+          `cortex/review-consumer: sovereignty would DENY (audit-parity) for ` +
+            `agent="${this.agent.id}" subject=${subject} envelope=${envelope.id} — ${sov.reason}\n`,
+        );
+      }
     }
 
     // 4. Concurrency gate (§7.3) — over maxConcurrent → nak `not_now`.

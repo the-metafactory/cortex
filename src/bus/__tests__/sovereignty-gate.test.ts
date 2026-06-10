@@ -1,0 +1,58 @@
+/**
+ * Consumer-side sovereignty gate tests (governance Stage 1b).
+ *
+ * The fail-closed invariants are the spec: an agent that cannot prove its
+ * model class is compliant is denied, never waved through. The breach
+ * guarded is confidential payload reaching a frontier model.
+ */
+
+import { describe, expect, it } from "bun:test";
+import { evaluateSovereignty } from "../sovereignty-gate";
+
+describe("evaluateSovereignty — the breach is guarded", () => {
+  it("denies a frontier agent a local-only task", () => {
+    const d = evaluateSovereignty({ model_class: "local-only", frontier_ok: false }, "frontier");
+    expect(d.decision).toBe("deny");
+    expect(d.reason).toContain("sovereignty violation");
+  });
+
+  it("denies an 'any' agent a local-only task (any includes frontier)", () => {
+    expect(evaluateSovereignty({ model_class: "local-only" }, "any").decision).toBe("deny");
+  });
+
+  it("denies on frontier_ok:false even when model_class is 'any'", () => {
+    expect(evaluateSovereignty({ model_class: "any", frontier_ok: false }, "frontier").decision).toBe("deny");
+  });
+
+  it("allows a local-only agent a local-only task", () => {
+    expect(evaluateSovereignty({ model_class: "local-only", frontier_ok: false }, "local-only").decision).toBe("allow");
+  });
+
+  it("allows a frontier agent a frontier-ok task", () => {
+    expect(evaluateSovereignty({ model_class: "any", frontier_ok: true }, "frontier").decision).toBe("allow");
+  });
+
+  it("allows a local-only agent any task (it cannot leak to frontier)", () => {
+    expect(evaluateSovereignty({ model_class: "frontier", frontier_ok: true }, "local-only").decision).toBe("allow");
+    expect(evaluateSovereignty({ model_class: "any" }, "local-only").decision).toBe("allow");
+  });
+});
+
+describe("evaluateSovereignty — fail-closed invariants", () => {
+  it("denies when the agent class is missing", () => {
+    expect(evaluateSovereignty({ model_class: "any", frontier_ok: true }, undefined).decision).toBe("deny");
+  });
+
+  it("denies when the agent class is unknown", () => {
+    expect(evaluateSovereignty({ model_class: "any" }, "gpu" as never).decision).toBe("deny");
+  });
+
+  it("denies when the envelope has no sovereignty block", () => {
+    expect(evaluateSovereignty(null, "local-only").decision).toBe("deny");
+    expect(evaluateSovereignty(undefined, "frontier").decision).toBe("deny");
+  });
+
+  it("a local-only task with no agent class denies (cannot prove compliance)", () => {
+    expect(evaluateSovereignty({ model_class: "local-only" }, undefined).decision).toBe("deny");
+  });
+});
