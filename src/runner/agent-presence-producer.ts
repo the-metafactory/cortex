@@ -115,6 +115,11 @@ export function presenceAgentFromAgent(
     identity: {
       nkey_public_key: nkey,
       agent_id: agent.id,
+      // assistant_name is the human-facing named being (Luna/Echo) — AgentSchema
+      // has no dedicated assistant field, and `displayName` is `.min(1)` required,
+      // so this is always non-empty. The wire schema permits `assistant_name:
+      // string | null`; this direct map relies on the canonical Agent schema's
+      // required displayName, so there's no null/empty path here.
       assistant_name: agent.displayName,
     },
     scope: { principal: scope.principal, stack: scope.stack },
