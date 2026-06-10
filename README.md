@@ -1,204 +1,162 @@
 # cortex
 
-The metafactory ecosystem's **layer-7 collaboration surface** — the M7
-application that consumes the Myelin stack (M2–M6) and presents collaboration,
-dispatch, and observability to operators across Discord, Mattermost, and the
-Mission Control dashboard.
+**Talk to your AI agents from Discord. Watch them work on a dashboard. Let them
+collaborate across machines — and across people.**
 
-## What cortex is
+cortex is the collaboration surface of the [metafactory](https://github.com/the-metafactory)
+ecosystem. It runs named AI assistants (powered by Claude Code and other
+substrates), connects them to the chat platforms you already use, routes work to
+them over a message bus, and makes everything they do visible in one place.
 
-Cortex is the conscious processing surface of the metafactory stack. It is one
-M7 application among siblings (alongside pilot, signal, future apps); it does
-not own M1–M6, it consumes their contracts.
+## What can you do with it?
 
-In one sentence: cortex is what operators talk to when they ask an AI agent to
-do work, and it is where that work becomes visible.
+- **Chat-dispatch work.** Mention an assistant in a Discord (or Mattermost,
+  or Slack) channel — "fix the failing test in #cortex", "review PR 54" — and
+  cortex spawns a Claude Code session, streams its progress back to the thread,
+  and posts the result. Prefix with `async:` for fire-and-forget tasks or
+  `team:` to spawn a multi-agent team.
+- **Watch everything on Mission Control.** A web dashboard shows every running
+  session, task queue, attention items needing your input, and GitHub activity
+  (issues, PRs, checks) — so chat doesn't have to choose between "flood the
+  channel with tool calls" and "go silent for ten minutes".
+- **Route code reviews over the bus.** Publish a review request; any agent
+  declaring the `code-review` capability claims it, runs the review, and posts
+  the verdict — no point-to-point wiring between requester and reviewer.
+- **Instrument your own terminal sessions.** Set one environment variable and
+  your local Claude Code session's events appear live on the dashboard.
+- **Federate with other people.** Your stack and a collaborator's stack can
+  join the same network: their assistant can answer in a shared channel, claim
+  work you offer, and reply to yours — each side keeping its own keys, policy,
+  and data.
 
-Concretely, cortex provides:
+## How it works, in one paragraph
 
-- **Platform adapters** — Discord and Mattermost presence per agent. Inbound
-  messages route to a workflow runner; outbound replies + lifecycle events
-  render back to the surface.
-- **Workflow runner** — spawns and supervises Claude Code sessions per
-  conversation, with per-thread session persistence, attachment handling,
-  multi-agent teams, async tasks, and a content-policy filter.
-- **Myelin bus client** — NATS-backed M2–M6 transport with vendored envelope
-  schema validation, subject-pattern subscriptions, and reconnect-aware
-  subscription lifecycle.
-- **Mission Control dashboard** — React surface at `grove.meta-factory.ai` for
-  task observation, dispatch, and principal input.
-- **GitHub taps** — webhook proxy + in-bot handlers for issues/PRs/checks
-  visibility into Discord threads.
-- **CC event pipeline** — Claude Code hook events flow through a relay (with
-  declarative policy filtering) into the bus and onward to renderers.
+You (the **principal** — the human who owns the deployment) run one or more
+**stacks**: cortex deployments with their own config, signing identity, and
+message-bus namespace. A stack hosts **assistants** — named beings like Luna,
+Echo, or Ivy with a persona and a Discord identity. All communication is
+**envelopes on a NATS message bus**: a Discord mention becomes a signed dispatch
+envelope, an assistant's runtime picks it up, executes it on a substrate
+(usually a Claude Code session), and emits lifecycle events that the chat
+adapter and the dashboard both render. Because the bus — not Discord — is the
+medium, the same work can be dispatched from chat, from the dashboard, from a
+GitHub webhook, or from another agent entirely.
 
-## Status
+Work reaches an assistant in one of three **dispatch modes**:
 
-**MIG-7 complete; v1.0.0 cutover candidate.**
+| Mode | How the recipient is chosen |
+|---|---|
+| **Direct** | You name the assistant (`@echo`); it does the task, one shot. |
+| **Offer** | You publish to a capability (`code-review.typescript`); exactly one capable assistant claims it. |
+| **Delegate** | You name an assistant that orchestrates a multi-step outcome via a multi-agent team. |
 
-Cortex is the destination of the `the-metafactory/grove-v2` → `cortex`
-migration. MIG-7 lands the entrypoint, agent registry, trust resolver, presence
-adapters, renderers, config migration helper, and arc-manifest cutover. The
-next principal-facing milestones:
+## Where cortex sits
 
-- **MIG-7.9** — principal config rename (`~/.config/grove/bot.yaml` →
-  `~/.config/cortex/cortex.yaml`) via the `migrate-config` helper.
-- **MIG-7.13** — final integration test (all adapters connect, dashboard
-  renders, NATS+myelin operational, fixture inbound round-trips).
-- **MIG-7.14** — version bump to **v1.0.0** (per plan §6.3 lean).
-- **MIG-8** — archive `the-metafactory/grove` (legacy v0.29.0) and
-  `the-metafactory/grove-v2` on GitHub.
+cortex is the top layer (M7) of the **Myelin layer model** — an OSI-style stack
+where the protocol layers below are owned by the sibling
+[myelin](https://github.com/the-metafactory/myelin) project:
 
-Until MIG-7.14 lands the version stays at v0.1.0 / v0.2.0. See
-[`docs/plan-cortex-migration.md`](docs/plan-cortex-migration.md) for the
-authoritative phase-by-phase tracker.
+```
+M7  SURFACES      cortex (this repo) · pilot · signal · future apps
+M6  COMPOSITION   myelin — interaction patterns
+M5  DISCOVERY     myelin — capability registry
+M4  IDENTITY      myelin — verifiable sender per envelope
+M3  ENVELOPE      myelin — message format + sovereignty metadata
+M2  TRANSPORT     myelin — abstract bus (NATS underneath)
+M1  CONNECTIVITY  NATS leaf nodes / federation
+```
 
-## Install
+cortex consumes the contracts of M2–M6 and owns none of them. That separation
+is what lets several M7 applications (cortex for collaboration, signal for
+telemetry, pilot for review loops) share one bus without sharing code.
 
-Cortex installs via the metafactory package manager (`arc`):
+The full picture — event architecture, visibility tiers, the agent/assistant
+model, internal componentisation — lives in
+[`docs/architecture.md`](docs/architecture.md). The precise domain vocabulary
+(what exactly a *stack*, *capability*, or *dispatch sink* is) lives in
+[`CONTEXT.md`](CONTEXT.md).
+
+## A small glossary
+
+| Term | Meaning |
+|---|---|
+| **Principal** | The human who owns and runs stacks; root of trust and policy. |
+| **Stack** | One cortex deployment under a principal — own config, signing key, bus namespace. |
+| **Assistant** | The named being (Luna, Echo, Ivy…) with a persona; what you `@mention`. |
+| **Agent** | The long-lived runtime that hosts an assistant on the bus. |
+| **Capability** | A bus-routable ability an assistant declares (`chat`, `code-review.typescript`). |
+| **Envelope** | The signed wrapper every bus message travels in. |
+| **Network** | A federation of principals whose stacks interconnect at the NATS layer. |
+| **Mission Control** | The principal-facing dashboard surface. |
+
+## Getting started
+
+The short version (full procedure in
+[`README-AGENTS.md`](README-AGENTS.md) and
+[`docs/sop-stack-onboarding.md`](docs/sop-stack-onboarding.md)):
 
 ```bash
-arc upgrade Cortex
+# Scaffold a stack config (dry-run by default; --apply writes it)
+cortex stack create mystack --principal yourname --apply
+
+# Fill in the <REPLACE_ME> secrets (Discord token, guild + channel ids)
+$EDITOR ~/.config/cortex/mystack/stacks/mystack.yaml
+
+# Validate, then start
+cortex start --config ~/.config/cortex/mystack/mystack.yaml --dry-run
+cortex start --config ~/.config/cortex/mystack/mystack.yaml
 ```
 
-This is the single command that performs the full cutover from legacy grove
-(if present): it kills any lingering `~/bin/grove-bot` / `~/bin/grove-relay`
-PIDs, unloads + removes the legacy `com.grove.{bot,relay}.plist` launchd
-agents, renders cortex's `ai.meta-factory.cortex.{bot,relay}.plist` into
-`~/Library/LaunchAgents/`, and loads them. See plan §4 MIG-7.7 / MIG-7.8 for
-the lifecycle-script detail.
+Then @mention your assistant in the bound Discord guild and watch it answer.
+The Mission Control dashboard runs at `localhost:8766` locally (hosted
+deployments serve it via Cloudflare).
 
-**Pre-flight (recommended, no longer load-bearing):**
+You will need: [Bun](https://bun.sh), a local
+[NATS server](https://nats.io) with JetStream, a Discord bot token (or
+Mattermost/Slack credentials), and an Anthropic-authenticated Claude Code
+install for the default execution substrate.
 
-```bash
-arc uninstall Grove          # remove legacy if installed
-```
+## What's in this repo
 
-**Verify:**
+| Path | What it is |
+|---|---|
+| `src/cortex.ts` | Top-level entrypoint — wires bus + adapters + runner + taps + renderers. |
+| `src/bus/` | Bus client: NATS connection, envelope validation, subscriptions, routing. |
+| `src/adapters/` | Platform adapters — Discord, Mattermost, Slack presence per assistant. |
+| `src/runner/` | Workflow runner — spawns and supervises Claude Code sessions per conversation. |
+| `src/surface/mc/` | Mission Control — REST/WebSocket API, state DB, React dashboard, CF Worker. |
+| `src/taps/` | Publishers onto the bus — Claude Code hook events, GitHub webhooks. |
+| `src/cli/` | CLIs — `cortex` (stack + network management), `discord` (post/read from terminal). |
+| `src/renderers/` | Dispatch sinks — dashboard renderer, PagerDuty fail-safe. |
+| `docs/` | Architecture spec, design docs, SOPs, ADRs, the config template (`docs/config-layout/`). |
 
-```bash
-launchctl list | grep ai.meta-factory.cortex   # two entries (bot + relay)
-pgrep -f "${HOME}/bin/cortex start"            # non-empty PID
-```
+## Documentation map
 
-## Quick start
+- [`docs/architecture.md`](docs/architecture.md) — canonical architecture reference
+- [`CONTEXT.md`](CONTEXT.md) — domain glossary (one canonical term per concept)
+- [`README-AGENTS.md`](README-AGENTS.md) — install + configure guide for AI agents (and impatient humans)
+- [`docs/config-layout/`](docs/config-layout/) — the copy-and-fill config template
+- [`docs/sop-stack-onboarding.md`](docs/sop-stack-onboarding.md) — stand up a new stack, end to end
+- [`docs/sop-network-join.md`](docs/sop-network-join.md) — federate a stack onto a network
+- [`docs/sop-bus-review.md`](docs/sop-bus-review.md) — the bus code-review path
+- [`docs/design-collaboration-surface.md`](docs/design-collaboration-surface.md) — why a collaboration surface, the framing
 
-```bash
-# Migrate your config from grove-v2 if you had one
-mkdir -p ~/.config/cortex/
-bun src/cli/cortex/commands/migrate-config.ts \
-    ~/.config/grove/bot.yaml > ~/.config/cortex/cortex.yaml
+## Provenance
 
-# Dry-run validates schema + agent registry resolution
-cortex start --config ~/.config/cortex/cortex.yaml --dry-run
-
-# Start cortex (launchd handles this automatically post-install)
-cortex start --config ~/.config/cortex/cortex.yaml
-```
-
-The Mission Control dashboard is at **https://grove.meta-factory.ai** (the
-domain name stays during the cortex cutover for principal continuity; it can be
-renamed post-MIG-8).
-
-From Discord, mention any configured agent in a configured channel and cortex
-routes the message through the workflow runner to a Claude Code session.
-
-From any terminal, post to Discord:
-
-```bash
-discord post "deploy notes here"            # default channel
-discord post --channel tasks "shipping"     # specific channel
-```
-
-From any Claude Code session, instrument events into the dashboard:
-
-```bash
-CORTEX_CHANNEL=andreas CORTEX_AGENT_NAME=Andreas claude
-```
-
-(The `cldyo-live` wrapper at `~/.local/bin/` does this for you.)
-
-## Bus Review Path
-
-Cortex owns the code-review bus consumer. Pilot or sage-shaped publishers send
-`tasks.code-review.*` envelopes to `local.{principal}.{stack}.tasks.code-review.*`;
-Cortex claims them through a JetStream durable, runs the configured review
-substrate, and emits `dispatch.task.started`, `review.verdict.*`, and
-`dispatch.task.completed` with `correlation_id` set to the request envelope id.
-
-Principal checks:
-
-```bash
-arc nats provision-streams --network <principal> --agent <agent>
-nats stream info CODE_REVIEW
-nats consumer info CODE_REVIEW cortex-review-consumer-<principal>-<agent>
-```
-
-Use `bus.review` in `cortex.yaml` to tune stream retention/storage and durable
-redelivery. Keep `nats.subjects: []` for pull-only capability dispatch unless
-you also need broad push-mode fan-out. See
-[`docs/sop-bus-review.md`](docs/sop-bus-review.md).
-
-## Architecture
-
-The canonical architecture spec is
-**[`docs/architecture.md`](docs/architecture.md)** — M1–M7 stack model, agent +
-presence/renderer model, M7 application architecture, agent task routing,
-three-tier visibility, internal componentisation.
-
-cortex is one M7 application among siblings:
-
-```
-M7  cortex (this repo) · pilot · signal · future apps
-M6  Composition (myelin)
-M5  Discovery (myelin)
-M4  Identity (myelin — MY-400)
-M3  Envelope (myelin — schema + namespace)
-M2  Transport (myelin — NATS abstraction)
-M1  Connectivity (NATS)
-```
-
-See `docs/architecture.md` §2 for the layered model and §5 for sibling-app
-context.
-
-Selected design references inside `docs/`:
-
-- `design-collaboration-surface.md` — layer-7 framing + flybridge-cockpit + event architecture
-- `design-mission-control.md` — the mc-v3 dashboard architecture
-- `iteration-collaboration-surface.md` — G-1100..G-1110 ladder retro
-- `design-agent-visibility.md` + `design-github-visibility.md` — visibility tiers
-
-The full `design-*.md` and `iteration-*.md` set is lifted from grove-v2 at
-MIG-7.11.
-
-## Migration provenance
-
-This repo is the destination of the grove-v2 → cortex migration. While the
-migration is in flight (MIG-0 through MIG-8), the migration plan is itself
-load-bearing:
-
-- **[`docs/plan-cortex-migration.md`](docs/plan-cortex-migration.md)** — phase
-  plan, per-file inventory, checklist per phase, acceptance criteria, open
-  questions. Retires when MIG-8 closes.
-
-Once MIG-8 closes (legacy + grove-v2 archived), the migration plan becomes
-historical reference rather than active tracker.
+cortex is the destination of a migration from `the-metafactory/grove-v2` (and
+before that, `grove`), completed through the phased plan in
+[`docs/plan-cortex-migration.md`](docs/plan-cortex-migration.md). You may still
+see `grove` in a few hostnames (the dashboard at `grove.meta-factory.ai`) and
+historical docs; the product is cortex.
 
 ## Contributing
 
-Cortex follows the metafactory ecosystem SOPs maintained in
-[`the-metafactory/compass`](https://github.com/the-metafactory/compass). The
-ones most often activated here:
-
-- `compass/sops/dev-pipeline.md` — branches, PRs, merge flow
-- `compass/sops/worktree-discipline.md` — multi-agent worktree pattern
-- `compass/sops/versioning.md` — version bumps, releases
-- `compass/sops/design-process.md` — specs, design docs, research docs
-- `compass/sops/pr-review.md` — PR review checklist
-- `compass/sops/retrospective-and-process-mining.md` — post-work retros
-
-`CLAUDE.md` at the repo root captures the project-specific rules and is
-**fully generated** by `arc upgrade compass` — never hand-edit.
+cortex follows the metafactory ecosystem SOPs maintained in
+[`the-metafactory/compass`](https://github.com/the-metafactory/compass) —
+branching, PR review, versioning, worktree discipline, design process.
+`CLAUDE.md` at the repo root carries the project rules for AI agents working
+*on* this codebase and is fully generated (`arc upgrade compass`) — never
+hand-edit it.
 
 ## Authors
 
@@ -207,8 +165,8 @@ ones most often activated here:
 
 ## License
 
-[AGPL-3.0-only](LICENSE). cortex is the M7 **reference implementation** of the
+[AGPL-3.0-only](LICENSE). cortex is the M7 reference implementation of the
 metafactory stack; the AGPL's network-use copyleft (§13) keeps modifications
 shared when cortex is run as a service. See
-[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) for upstream patterns +
-code incorporated into cortex.
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) for incorporated upstream
+patterns and code.
