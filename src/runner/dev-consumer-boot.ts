@@ -64,6 +64,7 @@ import {
   type DevOfferAdmissionGate,
 } from "./dev-consumer";
 import { FileDevSessionStore, type DevSessionStore } from "./dev-session-store";
+import { readCommitSignatures, type CommitSigningIO } from "./commit-signing";
 
 export { DevConsumer } from "./dev-consumer";
 
@@ -458,6 +459,32 @@ function buildShellSeams(opts: ShellSeamsOpts): BuiltSeams {
       if (opts.scopedToken !== undefined && opts.scopedToken.length > 0) {
         childEnv.GH_TOKEN = opts.scopedToken;
       }
+
+      // W5.0 (cortex#924) — signed-commit enforcement, fail-closed at the push
+      // boundary. Every commit on the branch about to be pushed MUST carry a
+      // good, fully-trusted signature (`%G? == G`). An unsigned/bad commit
+      // refuses the push (throws → consumer maps to `cant_do`), so the loop
+      // NEVER lands an unsigned commit. NEVER `--no-gpg-sign`.
+      const signingIO: CommitSigningIO = {
+        gitSignatureLog: async (logCwd, range) => {
+          const r = await run("git", ["log", "--format=%G?", range], {
+            cwd: logCwd,
+            env: childEnv,
+          });
+          return r.stdout;
+        },
+      };
+      const verify = await readCommitSignatures(
+        signingIO,
+        cwd,
+        `origin/${base}..${branch}`,
+      );
+      if (!verify.ok) {
+        throw new Error(
+          `refusing to push ${branch}: commit-signing check failed — ${verify.reason}`,
+        );
+      }
+
       await run("git", ["push", "-u", "origin", branch], { cwd, env: childEnv });
       const body = issue !== undefined ? `${brief}\n\nCloses #${issue}` : brief;
       const args = [
