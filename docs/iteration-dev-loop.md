@@ -38,14 +38,14 @@ in and the loop runs end-to-end with no human conductor.
 | Slice | What | Issue | State |
 |---|---|---|---|
 | **W5.0** | merge policy ('review-loop-passed + CI-green → auto-approve & merge') + approver identity + signed commits | [#924](https://github.com/the-metafactory/cortex/issues/924) | ⬜ |
-| **W5.1** | stack enablement — opt a stack into the dev-loop (capabilities + streams + approver wiring) | [#925](https://github.com/the-metafactory/cortex/issues/925) | ⬜ *(bridge to true autonomous dev)* |
+| **W5.1** | stack enablement — opt a stack into the dev-loop. **Re-pointed onto the capability-offering model (CO-6, [#945](https://github.com/the-metafactory/cortex/issues/945)):** enabling = declaring the dev-loop capabilities as `local` offerings (`cortex offer dev.implement/release.cut/code-review.* --scope local`), not a bespoke capabilities+streams+approver recipe. The offering mechanism (CO-1/2/3) already ships; W5.1 is now the documented SOP ([`docs/sop-enable-dev-loop.md`](sop-enable-dev-loop.md)). | [#925](https://github.com/the-metafactory/cortex/issues/925) → [#945](https://github.com/the-metafactory/cortex/issues/945) | ⬜ *(bridge to true autonomous dev; mechanism via CO-6)* |
 | **W5.2** | F-4.2 production ReleaseExecutor (real git/gh seam behind release.cut) | [#926](https://github.com/the-metafactory/cortex/issues/926) | ⬜ |
 | **W5.3** | F-5a ExecutionBackend wiring (local; sandbox-ready seam) | [#927](https://github.com/the-metafactory/cortex/issues/927) | ⬜ |
 | **W5.4** | assemble the installable `dev-loop` blueprint (`arc install dev-loop`) | [#928](https://github.com/the-metafactory/cortex/issues/928) | ⬜ |
 | **W5.5** | first live dogfood run — the loop drives a real PR with no human conductor | [#929](https://github.com/the-metafactory/cortex/issues/929) | ⬜ |
 
 **Two learnings from the v5.6.0 drive that shaped wave-5:**
-1. *Dormant-by-default is safe but inert* → W5.1 makes enabling a stack first-class.
+1. *Dormant-by-default is safe but inert* → W5.1 makes enabling a stack first-class. **Re-pointed (CO-6):** dormant-by-default is the *correct* default of the capability-offering model (default-deny → `local`); enabling = `cortex offer … --scope local` (`docs/sop-enable-dev-loop.md`), a clean instance of the general model rather than a bespoke dev-loop path.
 2. *"Review-loop-passed is sufficient to merge"* (principal's call landing v5.6.0) → W5.0 encodes that as the autonomous merge gate, with signed commits + a resolved approver-identity trust model. The admin-bypass used to land v5.6.0 was principal-authorized + one-off; the autonomous loop must never self-approve as author.
 
 ## Cross-cutting

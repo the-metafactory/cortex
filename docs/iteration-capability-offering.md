@@ -24,13 +24,13 @@ assistants).
 
 | Slice | What | Issue | State | Depends on |
 |---|---|---|---|---|
-| **CO-1** | offering policy model + `policy.offerings[]` config (default-local; byte-identical boot) | [#940](https://github.com/the-metafactory/cortex/issues/940) | ⬜ | — |
-| **CO-2** | consumer wiring reads offer-scope (binds on admitted scope prefixes) | [#941](https://github.com/the-metafactory/cortex/issues/941) | ⬜ | CO-1 |
-| **CO-3** | `cortex offer` CLI (set/list/revoke) + offering→federation-config generation | [#942](https://github.com/the-metafactory/cortex/issues/942) | ⬜ | CO-1 |
-| **CO-4** | gate posture per offer-scope (public ⇒ enforce + compliance + rate-limit + bounded accept) | [#943](https://github.com/the-metafactory/cortex/issues/943) | ⬜ | CO-1 |
+| **CO-1** | offering policy model + `policy.offerings[]` config (default-local; byte-identical boot) | [#940](https://github.com/the-metafactory/cortex/issues/940) | ✅ (#962) | — |
+| **CO-2** | consumer wiring reads offer-scope (binds on admitted scope prefixes) | [#941](https://github.com/the-metafactory/cortex/issues/941) | ✅ (#969) | CO-1 |
+| **CO-3** | `cortex offer` CLI (set/list/revoke) + offering→federation-config generation | [#942](https://github.com/the-metafactory/cortex/issues/942) | ✅ (#967) | CO-1 |
+| **CO-4** | gate posture per offer-scope (public ⇒ enforce + compliance + rate-limit + bounded accept) | [#943](https://github.com/the-metafactory/cortex/issues/943) | ✅ (#968) | CO-1 |
 | **CO-7** | untrusted-content & prompt-injection hardening (M1–M6) — **GATES CO-5** | [#947](https://github.com/the-metafactory/cortex/issues/947) | ⬜ | CO-2, CO-4 |
 | **CO-5** | the public PR-review marketplace (the dogfood) | [#944](https://github.com/the-metafactory/cortex/issues/944) | ⬜ | CO-1..4, **CO-7** |
-| **CO-6** | dev-loop integration — enable = `cortex offer …--scope local` (re-points W5.1 / [#925](https://github.com/the-metafactory/cortex/issues/925)) | [#945](https://github.com/the-metafactory/cortex/issues/945) | ⬜ | CO-1..3 |
+| **CO-6** | dev-loop integration — enable = `cortex offer …--scope local` (re-points W5.1 / [#925](https://github.com/the-metafactory/cortex/issues/925); SOP [`sop-enable-dev-loop.md`](sop-enable-dev-loop.md)) | [#945](https://github.com/the-metafactory/cortex/issues/945) | 🔄 in-progress | CO-1..3 |
 
 ## Decisions locked (grill, 2026-06-11)
 
@@ -42,7 +42,7 @@ assistants).
 
 ## Build order
 
-CO-1 (model) → CO-2 (wiring) + CO-3 (CLI) + CO-4 (gates) in parallel → CO-7 (hardening) → **CO-5** (public marketplace — needs CO-1..4 + CO-7). **CO-6** (dev-loop = `local` offerings) can land any time after CO-1..3 — it needs no public hardening.
+CO-1 (model) → CO-2 (wiring) + CO-3 (CLI) + CO-4 (gates) in parallel → CO-7 (hardening) → **CO-5** (public marketplace — needs CO-1..4 + CO-7). **CO-6** (dev-loop = `local` offerings) can land any time after CO-1..3 — it needs no public hardening. **CO-6 is doc/re-point only:** CO-1..3 already deliver the whole mechanism (model + consumer wiring + `cortex offer` CLI), so "enable the dev-loop" needs no new runtime code — just the SOP ([`sop-enable-dev-loop.md`](sop-enable-dev-loop.md)) and the W5.1 re-point ([`iteration-dev-loop.md`](iteration-dev-loop.md)).
 
 ## Open questions (design §10 — deferred, non-blocking)
 
