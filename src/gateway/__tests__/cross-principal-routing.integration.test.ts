@@ -201,13 +201,18 @@ function inbound(overrides: Partial<InboundMessage>): InboundMessage {
 }
 
 /** A `dispatch.task.completed` lifecycle envelope echoing a response routing. */
+// cortex#987 — unique id per fixture envelope: the dispatch sink dedupes
+// renders by `envelope.id`, so a shared hardcoded id would make distinct
+// replies look like duplicate deliveries of one envelope.
+let completedSeq = 0;
 function completedEnvelope(routing: {
   adapter_instance: string;
   channel_id: string;
   thread_id?: string;
 }, chatResponse: string): Envelope {
+  completedSeq += 1;
   return {
-    id: "00000000-0000-4000-8000-0000000000aa",
+    id: `00000000-0000-4000-8000-${String(completedSeq).padStart(10, "0")}aa`,
     source: "any.runner.local",
     type: "dispatch.task.completed",
     timestamp: "2026-06-03T00:01:00Z",

@@ -61,6 +61,7 @@ import {
   formatReviewVerdict,
 } from "./envelope-renderer";
 import {
+  createRenderDedupe,
   deliverRoutedResponse,
   LIFECYCLE_TYPE_PREFIX,
   readLogicalRouting,
@@ -221,25 +222,9 @@ export function createReviewSink(opts: ReviewSinkOptions): ReviewSink {
   let subscribers: MyelinSubscriber[] = [];
 
   // cortex#491 belt-and-braces — render idempotency keyed by `envelope.id`.
-  // The runtime-level subscribe dedupe (cortex#491 in `runtime.ts`) is the
-  // primary defence against double-delivery; this second layer guarantees
-  // that even an accidental double-delivery from a misconfig (or a future
-  // overlapping-pattern path) cannot produce TWO GitHub/Discord renders for
-  // one envelope. Bounded so a long-lived sink can't leak: oldest ids evict
-  // once the window fills (envelopes arrive in roughly-temporal order, so a
-  // genuine duplicate lands well within the window).
-  const seenIds = new Set<string>();
-  const SEEN_WINDOW = 4096;
-  function alreadyRendered(id: string): boolean {
-    if (seenIds.has(id)) return true;
-    seenIds.add(id);
-    if (seenIds.size > SEEN_WINDOW) {
-      // Evict the oldest entry (insertion order — Set preserves it).
-      const oldest = seenIds.values().next().value;
-      if (oldest !== undefined) seenIds.delete(oldest);
-    }
-    return false;
-  }
+  // Shared with the dispatch sink since cortex#987 (which hit the
+  // overlapping-pattern double-delivery this guards against, live).
+  const alreadyRendered = createRenderDedupe();
 
   /**
    * Resolve a native target for the logical address, PREFERRING the reviewing

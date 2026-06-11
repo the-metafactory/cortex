@@ -38,6 +38,7 @@ import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { MyelinSubscriber } from "../bus/myelin/subscriber";
 import { formatDispatchLifecycle } from "./envelope-renderer";
 import {
+  createRenderDedupe,
   deliverRoutedResponse,
   LIFECYCLE_TYPE_PREFIX,
   readResponseRouting,
@@ -205,6 +206,14 @@ export function createDispatchSink(opts: DispatchSinkOptions): DispatchSink {
   let registration: { unregister: () => void } | null = null;
   let subscribers: MyelinSubscriber[] = [];
 
+  // cortex#987 — at-most-once render per envelope.id. `onEnvelope` is a
+  // global per-delivery fan-out: an external overlapping subscription (a
+  // `nats.subjects[]` wildcard that also matches `dispatch.task.>`) delivers
+  // the same envelope twice and this handler runs twice — observed live as
+  // every chat reply posting twice. Same belt-and-braces the review sink
+  // carries.
+  const alreadyRendered = createRenderDedupe();
+
   /**
    * Deliver one lifecycle envelope. Pure routing + render + post; never
    * throws (the runtime `onEnvelope` fan-out must not see a throw, and a
@@ -225,6 +234,11 @@ export function createDispatchSink(opts: DispatchSinkOptions): DispatchSink {
 
     const text = formatDispatchLifecycle(envelope);
     if (text === null || text.length === 0) return;
+
+    // Mark seen only once we know this envelope WOULD post (routing present,
+    // instance matched, text non-empty) so non-actionable envelopes don't
+    // consume window slots. A second delivery of the same id is a no-op.
+    if (alreadyRendered(envelope.id)) return;
 
     const target: ResponseTarget = {
       instanceId: routing.adapter_instance,

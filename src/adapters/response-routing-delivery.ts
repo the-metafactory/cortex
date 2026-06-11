@@ -76,6 +76,34 @@ export function dispatchCorrelationKey(envelope: Envelope): string | undefined {
   return undefined;
 }
 
+
+/**
+ * cortex#987 — bounded at-most-once render guard, shared by the dispatch and
+ * review sinks. The runtime-level subscribe dedupe (cortex#491 in
+ * `runtime.ts`) deduplicates each consumer's OWN patterns, but `onEnvelope`
+ * is a global per-delivery fan-out: any EXTERNAL overlapping subscription
+ * (e.g. a `nats.subjects[]` wildcard in `system/system.yaml` that also
+ * matches `dispatch.task.>`) makes the runtime receive the envelope twice and
+ * invoke every handler twice. This guard makes a sink idempotent per
+ * `envelope.id` regardless of how many deliveries occur. Bounded so a
+ * long-lived sink can't leak: oldest ids evict once the window fills
+ * (envelopes arrive in roughly-temporal order, so a genuine duplicate lands
+ * well within the window).
+ */
+export function createRenderDedupe(window = 4096): (id: string) => boolean {
+  const seenIds = new Set<string>();
+  return function alreadyRendered(id: string): boolean {
+    if (seenIds.has(id)) return true;
+    seenIds.add(id);
+    if (seenIds.size > window) {
+      // Evict the oldest entry (insertion order — Set preserves it).
+      const oldest = seenIds.values().next().value;
+      if (oldest !== undefined) seenIds.delete(oldest);
+    }
+    return false;
+  };
+}
+
 interface ReplyAdapter {
   sendProgress: (target: ResponseTarget, text: string) => Promise<void>;
   clearProgress: (target: ResponseTarget) => Promise<void>;
