@@ -1,7 +1,7 @@
 /**
  * #1008 — direct sibling MC-DB read aggregation (the pane-of-glass mechanism).
  *
- * The operator-chosen PRIMARY way the localhost Mission Control shows ALL of a
+ * The principal-chosen PRIMARY way the localhost Mission Control shows ALL of a
  * principal's LOCAL stacks. Every stack already runs an MC with a COMPLETE local
  * picture in its OWN `mission-control.db` (sessions + agents). The serving daemon
  * (the one with `mc.enabled`) reads each SIBLING stack's db READ-ONLY and MERGES

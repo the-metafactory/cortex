@@ -429,7 +429,7 @@ export const McSchema = z.object({
        * shows ALL local stacks as hubs with their session TREES (the full local
        * picture: sessions AND agents), with NO bus / NO presence-publish.
        *
-       * This is the operator-chosen PRIMARY mechanism for LOCAL siblings and
+       * This is the principal-chosen PRIMARY mechanism for LOCAL siblings and
        * SUPERSEDES the bus-presence path (#989) for them: when `dbRead` is on,
        * the #989 sibling-PRESENCE bus aggregator is gated OFF for LOCAL siblings
        * to avoid double-counting (DB-read owns local; the bus path stays for
