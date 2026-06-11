@@ -2,7 +2,9 @@
  * B-0 (cortex#1021) — effective capability catalog derivation tests.
  *
  * Covers `deriveEffectiveCapabilityCatalog`:
- *   - explicit entries augmented with derived providers (union, stable order)
+ *   - explicit entries are AUTHORITATIVE — passed through unchanged; a fragment
+ *     declaring a catalogued capability does NOT self-grant into provided_by[]
+ *     (Sage cortex#1027 authorization fix)
  *   - declaration-only capabilities synthesized (id + providers, empty desc)
  *   - backwards compat: a complete catalog derives byte-identically (no-op)
  *   - dedup of repeated providers; multi-agent providers ordered by declaration
@@ -72,9 +74,12 @@ describe("deriveEffectiveCapabilityCatalog", () => {
     ]);
   });
 
-  test("explicit entry is augmented with a derived provider not already listed", () => {
-    // Explicit entry lists luna; echo ALSO declares the capability → echo is
-    // appended to provided_by (union, explicit first).
+  test("SECURITY (Sage cortex#1027) — a fragment declaring a catalogued capability does NOT self-grant into provided_by[]", () => {
+    // Explicit entry lists ONLY luna as an authorized provider. echo declares
+    // the same capability in its runtime.capabilities[] — but the explicit
+    // catalog is an authoritative allow-list, so echo MUST NOT appear. Letting
+    // it would be a capability-authorization bypass: any agents.d fragment could
+    // self-grant a restricted capability by merely declaring it.
     const explicit = [cap("code-review.typescript", ["luna"])];
     const agents = [
       agentFixture("luna", ["code-review.typescript"]),
@@ -83,22 +88,33 @@ describe("deriveEffectiveCapabilityCatalog", () => {
     const result = deriveEffectiveCapabilityCatalog(explicit, agents);
     expect(result).toHaveLength(1);
     expect(result[0]?.id).toBe("code-review.typescript");
-    expect(result[0]?.provided_by).toEqual(["luna", "echo"]);
+    // echo is REJECTED — only the explicitly-granted luna provides it.
+    expect(result[0]?.provided_by).toEqual(["luna"]);
+    // The explicit entry is passed through unchanged (reference-equal).
+    expect(result[0]).toBe(explicit[0]);
     // Description/tags from the explicit entry are preserved.
     expect(result[0]?.description).toBe("explicit");
+  });
+
+  test("explicit entry is authoritative — passed through unchanged even when no agent declares it", () => {
+    // An explicit grant stands on its own; derivation never rewrites it.
+    const explicit = [cap("code-review.typescript", ["luna", "echo"])];
+    const agents = [agentFixture("luna", ["code-review.typescript"])];
+    const result = deriveEffectiveCapabilityCatalog(explicit, agents);
+    expect(result).toEqual(explicit);
+    expect(result[0]).toBe(explicit[0]);
   });
 
   test("backwards compat — a catalog that already lists every provider derives identically (no-op)", () => {
     const explicit = [cap("code-review.typescript", ["luna"])];
     const agents = [agentFixture("luna", ["code-review.typescript"])];
     const result = deriveEffectiveCapabilityCatalog(explicit, agents);
-    // Same shape; the entry object is returned unchanged (reference-equal) when
-    // the provider list didn't grow.
+    // Same shape; the entry object is returned unchanged (reference-equal).
     expect(result).toEqual(explicit);
     expect(result[0]).toBe(explicit[0]);
   });
 
-  test("mixed: explicit (augmented) + declaration-only (synthesized) in stable order", () => {
+  test("mixed: explicit (authoritative) + declaration-only (synthesized) in stable order", () => {
     const explicit = [cap("code-review.typescript", ["luna"], "review TS")];
     const agents = [
       agentFixture("luna", ["code-review.typescript", "deploy.k8s"]),
@@ -110,10 +126,12 @@ describe("deriveEffectiveCapabilityCatalog", () => {
       "code-review.typescript",
       "deploy.k8s",
     ]);
-    // code-review.typescript: explicit luna, no new derived (luna already there)
+    // code-review.typescript: explicit and authoritative — luna only, unchanged.
     expect(result[0]?.provided_by).toEqual(["luna"]);
     expect(result[0]?.description).toBe("review TS");
-    // deploy.k8s: synthesized; providers in agent-declaration order (luna, echo)
+    // deploy.k8s: UNCATALOGUED → synthesized; providers in agent-declaration
+    // order (luna, echo). Derivation only adds providers where there is no
+    // explicit grant to honor.
     expect(result[1]?.provided_by).toEqual(["luna", "echo"]);
     expect(result[1]?.description).toBe("");
   });

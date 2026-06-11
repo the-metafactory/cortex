@@ -158,6 +158,29 @@ function capRegAgentIds(published: Envelope[]): string[] {
     .map((e) => (e.payload as { agent_id?: string }).agent_id ?? "?");
 }
 
+// Capability registrations as (agent_id, capability-count) pairs — lets a test
+// tell a real registration (caps > 0) apart from a TOMBSTONE (caps === 0).
+function capRegEvents(
+  published: Envelope[],
+): Array<{ agentId: string; capCount: number }> {
+  return published
+    .filter((e) => e.type === "agents.capabilities.registered")
+    .map((e) => {
+      const p = e.payload as { agent_id?: string; capabilities?: unknown[] };
+      return {
+        agentId: p.agent_id ?? "?",
+        capCount: Array.isArray(p.capabilities) ? p.capabilities.length : -1,
+      };
+    });
+}
+
+// Tombstones are capability registrations with an EMPTY capabilities array.
+function tombstonedAgentIds(published: Envelope[]): string[] {
+  return capRegEvents(published)
+    .filter((e) => e.capCount === 0)
+    .map((e) => e.agentId);
+}
+
 // ---------------------------------------------------------------------------
 // Tests — handle.reloadAgents() (deterministic)
 // ---------------------------------------------------------------------------
@@ -244,6 +267,70 @@ describe("startCortex — agents.d/ hot reload (B-0, cortex#1021)", () => {
 
     // Re-publish fired: luna now appears among the capability registrations.
     expect(capRegAgentIds(runtime.published)).toContain("luna");
+  });
+
+  test("REMOVE a fragment → capability registration is TOMBSTONED (Sage cortex#1027)", async () => {
+    const runtime = createRecordingRuntime();
+    writeFragment("echo", ["code-review.typescript"]);
+    writeFragment("luna", ["code-review.security"]);
+    const handle = await bootWatcherless(runtime);
+    const before = runtime.published.length;
+
+    removeFragment("luna");
+    await handle.reloadAgents("cli");
+
+    // A tombstone (empty-capability registration) was published for luna so its
+    // prior registration is OVERWRITTEN — it no longer registers as a provider.
+    const tombstoned = tombstonedAgentIds(runtime.published.slice(before));
+    expect(tombstoned).toContain("luna");
+    // echo, unchanged, is NOT tombstoned.
+    expect(tombstoned).not.toContain("echo");
+  });
+
+  test("diff-only republish — an unchanged agent is NOT re-published on an unrelated add (Sage cortex#1027)", async () => {
+    const runtime = createRecordingRuntime();
+    writeFragment("echo", ["code-review.typescript"]);
+    const handle = await bootWatcherless(runtime);
+    const before = runtime.published.length;
+
+    // Add luna; echo is untouched.
+    writeFragment("luna", ["code-review.security"]);
+    await handle.reloadAgents("cli");
+
+    const reloadRegs = capRegEvents(runtime.published.slice(before));
+    // luna (the added agent) is republished…
+    expect(reloadRegs.some((e) => e.agentId === "luna" && e.capCount > 0)).toBe(true);
+    // …but echo (unchanged) is NOT re-published (no O(total agents) churn).
+    expect(reloadRegs.some((e) => e.agentId === "echo")).toBe(false);
+  });
+
+  test("CHANGE an agent to zero capabilities → tombstoned (Sage cortex#1027)", async () => {
+    const runtime = createRecordingRuntime();
+    writeFragment("echo", ["code-review.typescript"]);
+    // nova starts WITH a (non-review) capability so it's a registered provider.
+    writeFragment("nova", ["deploy.k8s"]);
+    const handle = await bootWatcherless(runtime);
+    const before = runtime.published.length;
+
+    // Rewrite nova with an empty capability set.
+    const personaPath = join(tmpPersonasDir, "nova.md");
+    writeFileSync(personaPath, "# nova persona\n");
+    writeFileSync(
+      join(tmpAgentsDir, "nova.yaml"),
+      `id: nova
+displayName: Nova
+persona: "${personaPath}"
+presence: {}
+runtime:
+  substrate: claude-code
+  mode: in-process
+  capabilities: []
+`,
+    );
+    await handle.reloadAgents("cli");
+
+    // nova dropped to zero caps → tombstoned so its stale registration clears.
+    expect(tombstonedAgentIds(runtime.published.slice(before))).toContain("nova");
   });
 
   test("derived provided_by — a declaration-only capability needs no catalog edit", async () => {

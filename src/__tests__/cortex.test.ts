@@ -23,9 +23,9 @@
  *     option) keep the test deterministic and avoid filesystem churn.
  */
 
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync, chmodSync } from "fs";
-import { join } from "path";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync, rmSync, chmodSync, symlinkSync } from "fs";
+import { join, basename } from "path";
 import { tmpdir } from "os";
 import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
 import type { Agent } from "../common/types/cortex-config";
@@ -889,5 +889,53 @@ describe("pidFileFor — per-config PID file derivation", () => {
     const rel = pidFileFor("./cortex.work.yaml");
     const abs = pidFileFor("/Users/andreas/.config/cortex/cortex.work.yaml");
     expect(rel).toBe(abs);
+  });
+
+  // Sage cortex#1027 — different SPELLINGS of the same on-disk config must
+  // resolve to one PID identity (otherwise `cortex agents reload` signals the
+  // wrong/no daemon). These probes use a real tmp file + a symlink so
+  // realpathSync actually canonicalizes.
+  describe("spelling stability (Sage cortex#1027)", () => {
+    let dir: string;
+    let configPath: string;
+
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "cortex-pidfile-spelling-"));
+      configPath = join(dir, "stack.yaml");
+      writeFileSync(configPath, "agent:\n  name: x\n");
+    });
+
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    test("trailing slash + plain spelling resolve to the same PID file", () => {
+      expect(pidFileFor(`${configPath}/`)).toBe(pidFileFor(configPath));
+    });
+
+    test("'.' / '..' detour resolves to the same PID file", () => {
+      const detour = join(dir, ".", "..", basename(dir), "stack.yaml");
+      expect(pidFileFor(detour)).toBe(pidFileFor(configPath));
+    });
+
+    test("symlink to the config resolves to the same PID file as the target", () => {
+      const link = join(dir, "alias.yaml");
+      symlinkSync(configPath, link);
+      // Without canonicalization these would key two daemons (stack.pid vs
+      // alias.pid); realpathSync collapses the symlink onto its target.
+      expect(pidFileFor(link)).toBe(pidFileFor(configPath));
+    });
+
+    test("non-existent config still derives a stable basename PID (fallback path)", () => {
+      const ghost = join(dir, "never-created.yaml");
+      const expected = join(
+        process.env.HOME ?? "~",
+        ".config",
+        "grove",
+        "state",
+        "cortex-never-created.pid",
+      );
+      expect(pidFileFor(ghost)).toBe(expected);
+    });
   });
 });

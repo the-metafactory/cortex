@@ -56,6 +56,7 @@ import { createNetworkResolver } from "./bus/network-resolver";
 import type { SystemEventSource } from "./bus/system-events";
 import {
   publishCapabilityRegistry,
+  buildCapabilityRegisteredEnvelope,
   type CapabilityRegistryEntry,
 } from "./bus";
 import {
@@ -1156,6 +1157,51 @@ export async function startCortex(
       );
     }
     return entries.length;
+  };
+
+  // B-0 (Sage cortex#1027) — capability TOMBSTONE publish for REMOVED agents.
+  //
+  // The bucket consumer keys on `agent_id` and overwrites; an agent that is
+  // removed on reload must have its prior registration OVERWRITTEN, not merely
+  // omitted from the next republish (omission leaves the stale registration
+  // live — the agent stays a "provider" of capabilities it no longer hosts).
+  // `publishCapabilityRegistry` deliberately SKIPS empty-capability entries
+  // (spec §3.4), so we cannot tombstone through it. We build the empty-capability
+  // envelope directly: same `agents.capabilities.registered` type + `agent_id`,
+  // `capabilities: []` — which a keyed consumer interprets as "this agent now
+  // provides nothing", i.e. an unregister. Errors are trapped per-envelope so one
+  // failure doesn't abort the reload.
+  const publishCapabilityTombstones = async (
+    removedAgentIds: readonly string[],
+  ): Promise<number> => {
+    if (removedAgentIds.length === 0) return 0;
+    let tombstoned = 0;
+    for (const agentId of removedAgentIds) {
+      try {
+        const envelope = buildCapabilityRegisteredEnvelope({
+          source: systemEventSource,
+          agentId,
+          capabilities: [],
+          registeredAt: new Date(),
+          instance: systemEventSource.instance,
+        });
+        await runtime.publish(envelope);
+        tombstoned++;
+      } catch (err) {
+        // Per CLAUDE.md "no empty catch blocks": log, continue. stderr (not the
+        // system-events pipeline) for the same reason as publishCapabilitiesFor.
+        process.stderr.write(
+          `cortex: capability-registry tombstone publish failed for agent_id=${agentId}: ` +
+            `${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
+    }
+    if (tombstoned > 0) {
+      console.log(
+        `cortex: published ${tombstoned} capability tombstone(s) for removed agent(s) (reload)`,
+      );
+    }
+    return tombstoned;
   };
 
   const capabilityEntryCount = mergedAgents.filter(
@@ -3713,8 +3759,11 @@ export async function startCortex(
   //      same `startReviewConsumersForAgent` boot uses; a REMOVED agent's
   //      consumers DRAIN (`.stop()` lets in-flight finish) and leave
   //      `reviewConsumers[]`; a CHANGED agent is remove-then-add;
-  //   4. re-publishes the capability registry (`publishCapabilitiesFor`), which
-  //      is idempotent (keyed on agent_id);
+  //   4. reconciles the capability registry (Sage cortex#1027): re-publishes
+  //      registrations for ADDED + CHANGED agents only (diff-only, not the whole
+  //      roster), and TOMBSTONES removed agents (and changed-to-empty agents) with
+  //      an empty-capability registration so a removed agent stops being a
+  //      registered provider — both keyed on agent_id;
   //   5. an invalid fragment is REJECTED without killing the daemon — the old
   //      generation is retained and a warning is logged.
   //
@@ -3751,16 +3800,20 @@ export async function startCortex(
     // Iterate a snapshot of the indices to remove (consumers can appear more
     // than once per agent: local + offer-scope + federated offer/direct).
     const toStop = reviewConsumers.filter((c) => c.agent.id === agentId);
-    for (const consumer of toStop) {
-      try {
-        await consumer.stop();
-      } catch (err) {
+    // Sage cortex#1027 — drain this agent's consumers CONCURRENTLY. Each
+    // `stop()` drains in-flight work; serializing them made one agent's reload
+    // latency the SUM of its consumers' drains. `allSettled` so one failing
+    // stop doesn't abort the siblings; we log each rejection by index.
+    const outcomes = await Promise.allSettled(toStop.map((c) => c.stop()));
+    outcomes.forEach((outcome, i) => {
+      if (outcome.status === "rejected") {
+        const err = outcome.reason;
         process.stderr.write(
-          `cortex: agents-reload — review-consumer drain failed for agent=${agentId}: ` +
-            `${err instanceof Error ? err.message : String(err)}\n`,
+          `cortex: agents-reload — review-consumer drain failed for agent=${agentId} ` +
+            `(consumer ${i}): ${err instanceof Error ? err.message : String(err)}\n`,
         );
       }
-    }
+    });
     // Compact `reviewConsumers[]` in place, preserving order of survivors.
     for (let i = reviewConsumers.length - 1; i >= 0; i--) {
       if (reviewConsumers[i]?.agent.id === agentId) {
@@ -3842,9 +3895,13 @@ export async function startCortex(
     }
 
     // ── Drain consumers for removed + changed (old definition) agents first ──
-    for (const id of [...removed, ...changed]) {
-      await drainConsumersForAgent(id);
-    }
+    //    Sage cortex#1027 — drain all affected agents CONCURRENTLY; each
+    //    `drainConsumersForAgent` already settles its own consumers in parallel
+    //    and logs failures, so the whole drain is one parallel wave rather than
+    //    a per-agent serial chain.
+    await Promise.all(
+      [...removed, ...changed].map((id) => drainConsumersForAgent(id)),
+    );
 
     // ── Swap the registry + bump the generation BEFORE starting new consumers,
     //    so a started consumer reads the new registry generation. ──
@@ -3862,8 +3919,29 @@ export async function startCortex(
       }
     }
 
-    // ── Re-publish the capability registry (deliverable 3 — idempotent). ──
-    await publishCapabilitiesFor(freshMerged, "reload");
+    // ── Re-publish the capability registry (deliverable 3). ──
+    //    Sage cortex#1027:
+    //    (a) DIFF-ONLY republish — only re-emit registrations for added + changed
+    //        agents. Unchanged agents' registrations are already live and keyed by
+    //        agent_id; re-emitting all of them made a one-fragment edit cost
+    //        O(total agents) bus publishes. We republish O(changed agents).
+    //    (b) TOMBSTONE removed agents — a removed agent must have its prior
+    //        registration OVERWRITTEN with an empty-capability registration, else
+    //        it stays registered as a provider of capabilities it no longer hosts.
+    const republishIds = new Set([...added, ...changed]);
+    const republishAgents = freshMerged.filter((a) => republishIds.has(a.id));
+    if (republishAgents.length > 0) {
+      await publishCapabilitiesFor(republishAgents, "reload");
+    }
+    // Tombstone every agent whose registration must be CLEARED: removed agents,
+    // plus CHANGED agents that dropped to zero capabilities (publishCapabilities-
+    // For skips empty-capability entries, so without an explicit tombstone such an
+    // agent would keep its stale prior registration).
+    const changedToEmpty = changed.filter((id) => {
+      const a = freshById.get(id);
+      return (a?.runtime?.capabilities?.length ?? 0) === 0;
+    });
+    await publishCapabilityTombstones([...removed, ...changedToEmpty]);
 
     // ── Honest-scope: presence-adapter changes are restart-only. Warn when a
     //    reload added/removed an agent that declares a presence binding (the

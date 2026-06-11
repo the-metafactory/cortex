@@ -14,19 +14,30 @@
  *   2. the per-agent `runtime.capabilities[]` declarations (each declaring
  *      its owning agent as a provider of that capability id).
  *
- * The derivation:
- *   - augments each explicit entry's `provided_by[]` with every agent that
- *     declares the capability (union, dedup, stable order: explicit providers
- *     first in their declared order, then newly-derived providers in agent
- *     declaration order);
+ * The derivation (Sage cortex#1027 — explicit `provided_by[]` is AUTHORITATIVE):
+ *   - an EXPLICIT catalog entry's `provided_by[]` is the authoritative grant
+ *     list and is passed through UNCHANGED. A config that catalogues a
+ *     capability has deliberately scoped who may provide it; an agents.d
+ *     fragment MUST NOT self-grant itself into that list by merely declaring
+ *     `runtime.capabilities: [X]`. Letting it would turn `provided_by[]` from an
+ *     explicit allow-list into a self-asserted union before dispatch selects a
+ *     provider — a capability-authorization bypass. So derivation only ever
+ *     ADDS providers where the principal expressed NO explicit grant list:
  *   - synthesizes a catalog entry for any capability id that ONLY exists via
- *     agent declaration (no explicit entry) — id + derived `provided_by[]` +
- *     empty description + empty tags, no rate/cost.
+ *     agent declaration (NO explicit entry) — id + derived `provided_by[]` +
+ *     empty description + empty tags, no rate/cost. This is the "step 3"
+ *     convenience: a brand-new capability nobody catalogued is provided by the
+ *     agents that declare it, because there is no explicit grant to honor.
+ *
+ * Conservative rule, stated once: explicit entry present → derived agents are
+ * IGNORED for that capability (the catalog wins, full stop). Explicit entry
+ * absent → derived agents synthesize the entry. There is no middle "augment an
+ * explicit entry" path — that was the bypass.
  *
  * Backwards compatibility: a config whose explicit `capabilities[]` already
- * lists every provider derives an IDENTICAL catalog (the derived providers are
- * already present, so the union is a no-op). Existing configs stay valid and
- * equivalent.
+ * lists every provider derives an IDENTICAL catalog (explicit entries pass
+ * through unchanged; only declaration-only capabilities synthesize). Existing
+ * configs stay valid and equivalent.
  *
  * This is pure derivation over already-parsed structures — it performs NO
  * validation. The cross-validator on `CortexConfigSchema` still rejects an
@@ -45,9 +56,10 @@ import type { Capability } from "../types/capability";
  * @param explicit  the top-level `capabilities[]` block (may be empty).
  * @param agents    the merged agent set (inline + fragments).
  * @returns a new array; inputs are not mutated. Order: explicit entries first
- *          (in their declared order, each with an augmented `provided_by[]`),
- *          then synthesized entries for capabilities that exist only via agent
- *          declaration (in first-seen agent-declaration order).
+ *          (in their declared order, each with its authoritative `provided_by[]`
+ *          passed through UNCHANGED — Sage cortex#1027), then synthesized
+ *          entries for capabilities that exist only via agent declaration (in
+ *          first-seen agent-declaration order).
  */
 export function deriveEffectiveCapabilityCatalog(
   explicit: readonly Capability[],
@@ -77,17 +89,14 @@ export function deriveEffectiveCapabilityCatalog(
 
   const explicitIds = new Set(explicit.map((c) => c.id));
 
-  // 1. Augment each explicit entry with derived providers (union, stable).
-  const augmented: Capability[] = explicit.map((cap) => {
-    const derived = derivedProvidersByCap.get(cap.id) ?? [];
-    const merged = unionPreserveOrder(cap.provided_by, derived);
-    // Only allocate a new object when the provider list actually changed —
-    // keeps the no-op (already-complete) config byte-identical.
-    if (merged.length === cap.provided_by.length) {
-      return cap;
-    }
-    return { ...cap, provided_by: merged };
-  });
+  // 1. Explicit entries pass through UNCHANGED (Sage cortex#1027 — authorization
+  //    fix). An explicit `provided_by[]` is the principal's authoritative grant
+  //    list; an agents.d fragment must NOT self-grant into it by declaring the
+  //    capability. We deliberately do NOT union derived providers here — doing so
+  //    let a fragment widen an explicit allow-list it was never granted into.
+  //    The explicit catalog is the source of truth for catalogued capabilities;
+  //    derivation only synthesizes entries for UNCATALOGUED ones (step 2 below).
+  const authoritative: Capability[] = [...explicit];
 
   // 2. Synthesize entries for declaration-only capabilities.
   const synthesized: Capability[] = [];
@@ -106,31 +115,5 @@ export function deriveEffectiveCapabilityCatalog(
     });
   }
 
-  return [...augmented, ...synthesized];
-}
-
-/**
- * Union two ordered string lists, preserving order: every element of `first`
- * in its order, then every element of `second` not already present, in its
- * order. De-duplicates within and across both lists.
- */
-function unionPreserveOrder(
-  first: readonly string[],
-  second: readonly string[],
-): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const x of first) {
-    if (!seen.has(x)) {
-      seen.add(x);
-      out.push(x);
-    }
-  }
-  for (const x of second) {
-    if (!seen.has(x)) {
-      seen.add(x);
-      out.push(x);
-    }
-  }
-  return out;
+  return [...authoritative, ...synthesized];
 }
