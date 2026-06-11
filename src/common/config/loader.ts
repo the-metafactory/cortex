@@ -660,13 +660,18 @@ export function applySeedAwareSigningDefault(
 
   const security = raw.security;
   // Sage review on #1020 — only an ABSENT key or a PLAIN RECORD is mergeable.
-  // A malformed `security:` (array, string, number, bare null key, …) must
-  // reach the schema parse UNTOUCHED so it fails with the schema's own
-  // error; rewriting it here would mask the malformation into a
-  // valid-looking object and silently accept a config that should be
-  // rejected.
-  const isPlainRecord =
-    typeof security === "object" && security !== null && !Array.isArray(security);
+  // A malformed `security:` (array, string, number, bare null key, Date or
+  // other non-plain object, …) must reach the schema parse UNTOUCHED so it
+  // fails with the schema's own error; rewriting it here would mask the
+  // malformation into a valid-looking object and silently accept a config
+  // that should be rejected. Plain-record = prototype is Object.prototype
+  // or null (some parsers emit null-prototype mappings) — excludes Date,
+  // Map, class instances (sage round 2).
+  const proto =
+    typeof security === "object" && security !== null
+      ? (Object.getPrototypeOf(security) as object | null)
+      : undefined;
+  const isPlainRecord = proto === Object.prototype || proto === null;
   if (security !== undefined && !isPlainRecord) return false;
   const securityObj = isPlainRecord
     ? (security as Record<string, unknown>)

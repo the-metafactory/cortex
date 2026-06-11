@@ -356,7 +356,7 @@ describe("error reporting", () => {
 // returns the rich agents[] alongside via `inlineAgents` so `startCortex`
 // can route per-instance identity correctly.
 
-import { loadConfigWithAgents } from "../loader";
+import { applySeedAwareSigningDefault, loadConfigWithAgents } from "../loader";
 
 describe("MIG-7.2e — cortex-shape detection + transform", () => {
   function writeCortexConfig(dir: string, config: Record<string, unknown>): string {
@@ -635,6 +635,29 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     };
     cfg.security = null;
     expect(() => loadConfigWithAgents(writeCortexConfig(testDir, cfg))).toThrow();
+  });
+
+  // Sage round 2 on #1020 — non-plain objects (Date, Map, class instances)
+  // must not be treated as mergeable records either. These can't round-trip
+  // through the YAML fixture (the parser emits plain mappings), so the
+  // exported helper is exercised directly.
+  test("cortex#1000: applySeedAwareSigningDefault leaves non-plain security objects untouched", () => {
+    const seed = { stack: { nkey_seed_path: "~/x.nk" } };
+    for (const malformed of [new Date(0), new Map(), new URL("https://example.com")]) {
+      const raw: Record<string, unknown> = { ...seed, security: malformed };
+      expect(applySeedAwareSigningDefault(raw)).toBe(false);
+      expect(raw.security).toBe(malformed); // untouched, schema will reject
+    }
+  });
+
+  test("cortex#1000: applySeedAwareSigningDefault accepts a null-prototype record", () => {
+    const securityRec = Object.create(null) as Record<string, unknown>;
+    const raw: Record<string, unknown> = {
+      stack: { nkey_seed_path: "~/x.nk" },
+      security: securityRec,
+    };
+    expect(applySeedAwareSigningDefault(raw)).toBe(true);
+    expect((raw.security as Record<string, unknown>).signing).toBe("permissive");
   });
 
   test("passes bus.review provisioning knobs through with defaults applied", () => {
