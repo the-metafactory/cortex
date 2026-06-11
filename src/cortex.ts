@@ -147,6 +147,7 @@ import { WorklogManager } from "./runner/worklog-manager";
 // `cortex provision-stack register …` work directly (no `bun src/...` prefix).
 // These do NOT boot the daemon — only `start` does.
 import { dispatchNetwork } from "./cli/cortex/commands/network";
+import { dispatchOffer } from "./cli/cortex/commands/offer";
 import { dispatchProvisionStack } from "./cli/cortex/commands/provision-stack";
 import { dispatchStack } from "./cli/cortex/commands/stack";
 
@@ -4184,6 +4185,25 @@ if (import.meta.main) {
     .helpOption(false)
     .action(async (args: string[]) => {
       const result = await dispatchStack(args);
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      process.exit(result.exitCode);
+    });
+
+  // CO-3 (#942) — the third control-plane leg (DD-CO-5): set/list/revoke
+  // capability offerings + generate the federation-config projections. Same
+  // passthrough shape as `network` / `stack`: `dispatchOffer` owns its own arg
+  // parsing (incl. the bare-positional `offer <capability>` set form), so
+  // commander hands it the raw remaining argv untouched.
+  program
+    .command("offer")
+    .description("Set/list/revoke capability offerings (the provider-side exposure policy)")
+    .argument("[args...]", "offer subcommand + flags (see `cortex offer --help`)")
+    .allowUnknownOption()
+    .passThroughOptions()
+    .helpOption(false)
+    .action(async (args: string[]) => {
+      const result = await dispatchOffer(args);
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);
       process.exit(result.exitCode);
