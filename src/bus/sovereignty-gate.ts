@@ -41,8 +41,9 @@ export interface SovereigntyDecision {
 
 /**
  * Decide whether an agent of `agentClass` may execute a task carrying
- * `sovereignty`. Fail-closed: a missing/unknown agent class, or a missing
- * sovereignty block, denies.
+ * `sovereignty`. Fail-closed where the BREACH is possible: a missing
+ * sovereignty block denies; a missing/unknown agent class denies WHEN the
+ * task demands a local model.
  *
  * The breach guarded: a task that demands a local model must NOT be executed
  * by a frontier-capable agent (class "frontier" or "any"). A task "demands
@@ -52,15 +53,23 @@ export interface SovereigntyDecision {
  * Envelope frontier_ok is required so this only bites callers outside the
  * pipeline; the conservative default keeps the gate safe for them too.
  * Everything the demand explicitly permits is allowed.
+ *
+ * cortex#1023 — DEMAND-FIRST evaluation. The agent class is examined only
+ * when the task demands a local model. A task whose sovereignty explicitly
+ * permits frontier (`frontier_ok: true`) carries nothing to protect from a
+ * frontier model — the agent's class is irrelevant to the breach, so a
+ * class-less agent is allowed. This matches the `modelClass` schema contract
+ * ("When unset the sovereignty gate fails closed for tasks that demand a
+ * local model ... tasks that permit any model are unaffected") which the
+ * pre-#1023 implementation violated by denying class-less agents
+ * unconditionally — under the audit→enforce flip (#906/#327) that would
+ * have DoS'd every dispatch to a class-less agent regardless of the task's
+ * sovereignty demand.
  */
 export function evaluateSovereignty(
   sovereignty: EnvelopeSovereignty | null | undefined,
   agentClass: AgentModelClass | undefined,
 ): SovereigntyDecision {
-  // Fail closed: an agent that can't prove its class can't prove compliance.
-  if (agentClass !== "local-only" && agentClass !== "frontier" && agentClass !== "any") {
-    return { decision: "deny", reason: `agent model class missing or unknown (got ${String(agentClass)}) — failing closed` };
-  }
   // Fail closed: an envelope with no sovereignty block carries no permission to read.
   if (!sovereignty || typeof sovereignty !== "object") {
     return { decision: "deny", reason: "envelope carries no sovereignty block — failing closed" };
@@ -70,7 +79,24 @@ export function evaluateSovereignty(
   // demands local — fail closed for callers that omit the field.
   const demandsLocal = sovereignty.model_class === "local-only" || sovereignty.frontier_ok !== true;
 
-  if (demandsLocal && (agentClass === "frontier" || agentClass === "any")) {
+  // cortex#1023 — the task explicitly permits frontier: no confidential
+  // payload to protect from a frontier model, agent class irrelevant.
+  if (!demandsLocal) {
+    return { decision: "allow", reason: "task sovereignty permits any model class" };
+  }
+
+  // The task demands a local model — fail closed: an agent that can't prove
+  // its class can't prove compliance with the demand.
+  if (agentClass !== "local-only" && agentClass !== "frontier" && agentClass !== "any") {
+    return {
+      decision: "deny",
+      reason:
+        `task requires a local model but agent model class missing or unknown ` +
+        `(got ${String(agentClass)}) — failing closed`,
+    };
+  }
+
+  if (agentClass === "frontier" || agentClass === "any") {
     return {
       decision: "deny",
       reason:
@@ -80,7 +106,6 @@ export function evaluateSovereignty(
     };
   }
 
-  // A local-only agent may always execute (it cannot leak to a frontier model);
-  // a frontier/any agent may execute anything the demand does not restrict.
+  // A local-only agent may always execute (it cannot leak to a frontier model).
   return { decision: "allow", reason: "agent model class satisfies the task sovereignty demand" };
 }
