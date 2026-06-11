@@ -2560,45 +2560,31 @@ export const CortexConfigSchema = z.object({
       }
     }
   })
-  .superRefine((config, ctx) => {
-    const catalogIds = new Set(config.capabilities.map((c) => c.id));
-    const declaredCatalog = [...catalogIds].sort().join(", ") || "(none)";
-    for (let agentIdx = 0; agentIdx < config.agents.length; agentIdx++) {
-      const agent = config.agents[agentIdx];
-      if (!agent) continue;
-      const claimed = agent.runtime?.capabilities ?? [];
-      for (let claimIdx = 0; claimIdx < claimed.length; claimIdx++) {
-        const capId = claimed[claimIdx];
-        if (capId !== undefined && !catalogIds.has(capId)) {
-          // cortex#314 — reworded for first-install safety. The previous
-          // "Either add ... or remove ..." framing implied symmetric
-          // choice; in practice (especially for code-review.* flavors)
-          // the right fix is almost always to add the capability to the
-          // top-level catalog. The catalog is the source of truth that
-          // the dispatch consumer + future network registry consult;
-          // the agent's runtime.capabilities[] is the agent's
-          // declaration of intent. Spell that asymmetry out so a fresh
-          // principal hitting this error knows which surface to edit.
-          ctx.addIssue({
-            code: "custom",
-            message:
-              `agent "${agent.id}" claims capability "${capId}" in runtime.capabilities[], ` +
-              `but no matching entry exists in the top-level capabilities[] catalog ` +
-              `(declared capability ids: ${declaredCatalog}).\n\n` +
-              `Fix: add a "${capId}" entry to capabilities[] at the top level of cortex.yaml. ` +
-              `The top-level capabilities[] is the source of truth that the dispatch consumer ` +
-              `consults; the agent's runtime.capabilities[] is the agent's declaration of intent.\n\n` +
-              `Example minimal entry:\n` +
-              `  - id: ${capId}\n` +
-              `    description: <one-line description>\n` +
-              `    provided_by: [${agent.id}]\n\n` +
-              `(Only remove from agent "${agent.id}" runtime.capabilities[] if the agent should NOT ` +
-              `actually provide that capability.)`,
-            path: ["agents", agentIdx, "runtime", "capabilities", claimIdx],
-          });
-        }
-      }
-    }
+  // B-0 (cortex#1021, design-bot-packs §7 + §11) — the per-agent
+  // capability-reference check (formerly check #3) is RETIRED.
+  //
+  // It used to require every `agents[].runtime.capabilities[]` entry to exist
+  // in the top-level `capabilities[]` catalog, forcing a principal who adds an
+  // agent to ALSO hand-edit the catalog. That manual cross-edit is exactly the
+  // step the bot-packs design removes: an agent declaring `runtime.capabilities:
+  // [X]` IS, by declaration, a provider of X, and
+  // `deriveEffectiveCapabilityCatalog` (`src/common/agents/capability-catalog.ts`)
+  // synthesizes a catalog entry for a declaration-only capability at boot/reload.
+  //
+  // What is INTENTIONALLY preserved (checks #1 + #2 above, untouched):
+  //   - top-level capability ids stay unique;
+  //   - an EXPLICIT `provided_by[]` entry that names a nonexistent agent is
+  //     still rejected (the typo guard) — derived providers can only ever be
+  //     real agent ids because they come from the agent list itself.
+  //
+  // Backwards compatibility: a config whose catalog already lists every
+  // declared capability validates EXACTLY as before (the derivation is a no-op
+  // for it). Only the previously-rejected "declared but uncatalogued" shape
+  // changes — it now validates and derives.
+  .superRefine(() => {
+    // No-op: see the B-0 rationale block above. Retained as an explicit
+    // refine so the removal is auditable in `git blame` rather than a silent
+    // deletion, and so re-tightening (if ever needed) has an obvious home.
   })
   // ADR 0001 (supersedes cortex#661) — federated accept/deny subject scope.
   //
