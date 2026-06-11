@@ -1,0 +1,125 @@
+/* P-14 U4.2 (#938) — Observability aggregate-metrics panels + >14d history.
+ *
+ * Layers on metrics-panel.css (shared F-18 tokens: .metrics-section,
+ * .metrics-bignums, .metrics-window, .metrics-empty, .metrics-loading). This
+ * file adds only the obs-specific rules: the header, the rate/history tables,
+ * the honest "unavailable" line, and the 3-up latency grid override.
+ */
+
+.obs-metrics-panels {
+  gap: 14px;
+}
+
+.obs-metrics-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.obs-metrics-header h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+
+/* 3-up latency grid (override the F-18 4-up default). */
+.metrics-bignums-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+/* ---- Rate + history tables ---- */
+.obs-metrics-rates,
+.obs-metrics-history {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  margin-top: 10px;
+}
+.obs-metrics-rates th,
+.obs-metrics-history th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.obs-metrics-rates td,
+.obs-metrics-history td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+.obs-metrics-rates tr:last-child td,
+.obs-metrics-history tr:last-child td {
+  border-bottom: 0;
+}
+.obs-metrics-rates .num,
+.obs-metrics-history .num {
+  text-align: right;
+}
+.obs-metrics-rates .mono,
+.obs-metrics-history .mono {
+  font-family: var(--mono, ui-monospace, monospace);
+}
+.obs-metrics-history .dim {
+  color: var(--fg-dim);
+}
+
+/* ---- Honest "interior capture not available" line ---- */
+.obs-metrics-unavailable {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--fg-faint);
+  font-size: 12px;
+  font-style: italic;
+  padding: 8px 0;
+}
+.obs-metrics-unavailable a {
+  color: var(--accent, #4f8cff);
+  font-style: normal;
+  text-decoration: none;
+}
+.obs-metrics-unavailable a:hover {
+  text-decoration: underline;
+}
+
+/* ---- History note + controls ---- */
+.obs-metrics-note {
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+.obs-metrics-note code {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10.5px;
+}
+
+.obs-metrics-refresh,
+.obs-metrics-open-history {
+  appearance: none;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+.obs-metrics-refresh:hover,
+.obs-metrics-open-history:hover {
+  color: var(--fg);
+}
+
+.obs-metrics-history-cta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}

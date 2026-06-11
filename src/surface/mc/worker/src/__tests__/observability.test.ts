@@ -42,4 +42,27 @@ describe("cloud worker /api/observability/* — local-only parity", () => {
     const body = await res.json();
     expect(body.deep_link).toBeUndefined();
   });
+
+  // P-14 U4.2 (#938) — the v2 reads (/metrics/summary, /search) wrap the SAME
+  // loopback-only daemon (VictoriaMetrics / VictoriaLogs), so the cloud worker
+  // is just as unable to reach them; the catch-all returns the honest
+  // not-available shape for these too (no fabricated aggregate panels on cloud).
+  it("returns the SAME shape for /metrics/summary (v2 aggregate panels)", async () => {
+    const res = await observabilityRoutes.request(
+      "http://x/api/observability/metrics/summary?window=5m",
+    );
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.code).toBe("backend_unavailable");
+    expect(body.message).toContain("local-only");
+    expect(body.deep_link).toBeUndefined();
+  });
+
+  it("returns the SAME shape for /search (v2 >14d history)", async () => {
+    const res = await observabilityRoutes.request(
+      "http://x/api/observability/search?since=30d",
+    );
+    expect(res.status).toBe(503);
+    expect((await res.json()).code).toBe("backend_unavailable");
+  });
 });

@@ -41,6 +41,7 @@ import { useAttention } from "./hooks/use-attention";
 import { useAgents } from "./hooks/use-agents";
 import { useGovernance } from "./hooks/use-governance";
 import { useObservability } from "./hooks/use-observability";
+import { useObsMetrics } from "./hooks/use-obs-metrics";
 import type { AgentPresenceTile } from "./hooks/use-agents";
 import { useWorkItemDetail } from "./hooks/use-work-item-detail";
 import { useTheme } from "./hooks/use-theme";
@@ -134,6 +135,11 @@ export function App() {
   // fetched only when the Observability tab is visible; live-refreshed off the
   // `observability` mc.projection family.
   const observability = useObservability(ws, view === "observability");
+  // P-14 U4.2 (#938) — aggregate metrics panels (tool/spawn/event rates +
+  // hook-latency percentiles via the sideband /metrics/summary) and the >14d
+  // history view (events past MC's 14-day local prune, sourced from signal's
+  // VictoriaLogs via /search). Fetched only when the Observability tab is open.
+  const obsMetrics = useObsMetrics(view === "observability");
   // If software mode is toggled OFF while on a software-mode view (Repositories
   // / Plans / phase-detail / work-item-detail / attention), the tab + render
   // both gate off — reset to default so the main area isn't left blank.
@@ -574,7 +580,7 @@ export function App() {
              signal health / federation / transport. Federation + transport are
              hub-emitted; a non-hub stack shows an honest explanatory empty
              state (roster arrives via U3.3), never synthesized data. */
-          <ObservabilityView state={observability} />
+          <ObservabilityView state={observability} metrics={obsMetrics} />
         )}
 
         {view === "network" && (
