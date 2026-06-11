@@ -23,6 +23,7 @@ The scope dimension already exists on the *transport* (the subject prefix; ADR-0
 4. **Offer-scope raises the gate floor** (orthogonal to, but a minimum on, the signing-posture knob): `public` ⇒ signing-enforce for bus peers + compliance + rate-limit + bounded accept-policy; `federated` ⇒ registry-trust; `local` ⇒ home-bus.
 5. **Public consumers reach offered capabilities through surfaces, not stacks.** A public requester (e.g. a GitHub contributor) has no bus identity; the surface (HMAC-validated webhook) is the trust anchor, the Offer's `originator` is the surface identity, and the accept-policy bounds the request to the offered capability.
 6. **`cortex offer` is the third control-plane leg** — `stack` (exists) → `network` (federated) → `offer` (exposed).
+7. **Untrusted-content treatment scales with offer-scope (DD-CO-6).** Work dispatched to a `federated`/`public` offering carries attacker-controlled content (a PR's diff/description/comments) — handled as **data, never instructions**. A `public` offering MUST ship with all of: untrusted-content boundary (M1), least-privilege session (M2), **sandbox isolation** (M3 — requires a non-local `ExecutionBackend`, i.e. F-5b), output egress/leakage control (M4), persona hardening + `prompt-injection` red-team acceptance gate (M5), rate/cost caps (M6). Signing/scope prove *who*, never *that the content is safe* — injection defense is a separate, mandatory layer. The public marketplace (CO-5) is gated on this hardening (CO-7). *(See `docs/design-capability-offering.md` §6.)*
 
 ## Consequences
 
