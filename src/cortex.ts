@@ -3625,26 +3625,38 @@ export async function startCortex(
   // G-1114.B.2 + B.3 — live agent-presence producer + runtime registry
   // subscriber (STACK-LOCAL ONLY — no federation; that is Phase E).
   //
-  // Gated on `config.mc.enabled` — presence is the data the B.4 agents panel +
-  // the MC API render, so it only runs when MC is wanted. The producer and
-  // subscriber share this gate so they stay consistent (a stack that records
-  // presence also emits it, and vice-versa). Both are best-effort: a fault
-  // logs + boot continues.
+  // #1003 — the PRODUCER (publish side) is DECOUPLED from `config.mc.enabled`;
+  // the consuming REGISTRY (+ federated/sibling subscribers + WS broadcast) stay
+  // MC-gated. The split follows ADR-0007: presence is a BUS concern — "this
+  // agent process is up and consuming" — independent of whether this stack ALSO
+  // serves an MC dashboard. So:
   //
-  // Independent of `disableDashboard`: the producer + registry are pure bus
-  // wiring (no MC DB / no HTTP port), so they run on the same `mc.enabled`
-  // signal even when the embed itself is skipped (e.g. tests that disable the
-  // HTTP embed but still want the presence roundtrip).
+  //   - The PRODUCER runs whenever the stack hosts ≥1 agent on the bus,
+  //     REGARDLESS of `mc.enabled`. A non-dashboard stack (work/halden) must
+  //     still PUBLISH `local.{principal}.{stack}.agent.{online,heartbeat,offline}`
+  //     so #989's multi-bus aggregator (running on the dashboard stack) has
+  //     something to render. The producer's only deps are the bus runtime
+  //     (`runtime.publish`) + the hosted-agent roster + heartbeat config — NOT
+  //     the MC db / dashboard / registry. (No agents ⇒ no producer: nothing to
+  //     announce, so an empty roster constructs nothing.)
+  //   - The REGISTRY + federated/sibling subscribers + the WS broadcast stay
+  //     gated on `config.mc.enabled`: they CONSUME presence to render the B.4
+  //     agents panel + Network view. A non-dashboard stack only needs to PUBLISH
+  //     its own presence, not CONSUME others' — so it does not subscribe.
   //
-  //   - The REGISTRY subscriber starts FIRST so it's listening before the
-  //     producer's own `agent.online` envelopes go out (the roundtrip lands the
-  //     hosted agents in the registry immediately).
-  //   - The PRODUCER then publishes one `agent.online` per hosted agent
-  //     (carrying its capabilities) + starts the heartbeat ticker.
+  // Both halves are best-effort: a fault logs + boot continues. Independent of
+  // `disableDashboard`: the registry is pure bus wiring (no MC DB / no HTTP
+  // port), so the MC-gated consumer half runs on `mc.enabled` even when the HTTP
+  // embed is skipped (tests that disable the embed but still want the roundtrip).
+  //
+  // Ordering when MC is on: the REGISTRY subscriber starts FIRST (in the MC
+  // block) so it's listening before the producer's `agent.online` envelopes go
+  // out below — the roundtrip lands the hosted agents in the registry
+  // immediately. With MC off, the producer simply publishes onto the bus with no
+  // local consumer.
   //
   // `runtime.publish` is a no-op when the runtime is dormant (no NATS), so this
-  // is safe to run without a bus — the producer simply emits into the void and
-  // the registry stays empty.
+  // is safe to run without a bus — the producer emits into the void.
   //
   // Liveness FSM (G-1114.C.3): `startAgentPresenceRegistry` starts the 5-min
   // TTL reaper by default — an `online` record whose `agent.heartbeat` stops for
@@ -3676,6 +3688,41 @@ export async function startCortex(
   // unsubscribe it explicitly — making teardown order-independent rather than
   // relying on the registry stop severing the envelope feed first (#899 review).
   let presenceBroadcastSub: { unsubscribe: () => void } | null = null;
+
+  // #1003 — build the per-agent presence descriptors ONCE, BEFORE both the
+  // MC-gated consumer block and the unconditional producer block, so the
+  // producer is constructed exactly once (no double-construct across the two
+  // paths). The stack's own NKey pubkey (captured when the signer was staged) is
+  // the fallback identity for any agent that hasn't declared its own `nkey_pub`.
+  // Agents with no resolvable key are skipped (the presence payload requires a
+  // non-empty key).
+  const presenceAgents: PresenceAgent[] = [];
+  {
+    let skippedNoKey = 0;
+    for (const a of mergedAgents) {
+      const pa = presenceAgentFromAgent(
+        a,
+        { principal: principalId, stack: derivedStack.stack },
+        stackNKeyPubForVerifier,
+      );
+      if (pa === null) {
+        skippedNoKey += 1;
+        continue;
+      }
+      presenceAgents.push(pa);
+    }
+    if (skippedNoKey > 0) {
+      console.warn(
+        `cortex: agent-presence — ${skippedNoKey} agent(s) skipped (no agent.nkey_pub ` +
+          `and no stack NKey to fall back to); they will not appear in the presence registry`,
+      );
+    }
+  }
+
+  // MC-gated CONSUMER half — the registry subscriber + WS broadcast. Starts
+  // FIRST (before the producer below) so it's listening before the producer's
+  // own `agent.online` envelopes go out, landing the hosted agents in the
+  // registry immediately on the local roundtrip.
   if (config.mc.enabled) {
     try {
       presenceRegistryHandle = await startAgentPresenceRegistry({
@@ -3705,30 +3752,24 @@ export async function startCortex(
           });
         });
       }
-      // Build the per-agent presence descriptors. The stack's own NKey pubkey
-      // (captured when the signer was staged) is the fallback identity for any
-      // agent that hasn't declared its own `nkey_pub`. Agents with no resolvable
-      // key are skipped (the presence payload requires a non-empty key).
-      const presenceAgents: PresenceAgent[] = [];
-      let skippedNoKey = 0;
-      for (const a of mergedAgents) {
-        const pa = presenceAgentFromAgent(
-          a,
-          { principal: principalId, stack: derivedStack.stack },
-          stackNKeyPubForVerifier,
-        );
-        if (pa === null) {
-          skippedNoKey += 1;
-          continue;
-        }
-        presenceAgents.push(pa);
-      }
-      if (skippedNoKey > 0) {
-        console.warn(
-          `cortex: agent-presence — ${skippedNoKey} agent(s) skipped (no agent.nkey_pub ` +
-            `and no stack NKey to fall back to); they will not appear in the presence registry`,
-        );
-      }
+    } catch (err) {
+      console.error(
+        "cortex: agent-presence registry/WS startup error (non-fatal):",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  // #1003 — PRODUCER half — DECOUPLED from `config.mc.enabled`. Constructed +
+  // started whenever the stack hosts ≥1 agent on the bus, so a non-dashboard
+  // stack (work/halden) still publishes `agent.{online,heartbeat,offline}` for
+  // #989's aggregator to render. Its only deps are the bus runtime + the agent
+  // roster + heartbeat config — NOT the MC db/dashboard/registry (see
+  // agent-presence-producer.ts: "safe to run unconditionally"). Constructed ONCE
+  // here (the roster was built above), never in the MC block — no
+  // double-construct. No agents ⇒ no producer (nothing to announce).
+  if (presenceAgents.length > 0) {
+    try {
       presenceProducer = new AgentPresenceProducer({
         runtime,
         source: {
@@ -3744,7 +3785,33 @@ export async function startCortex(
         federate: federatePresence,
       });
       presenceProducer.start();
+      // G-1114.C.1 — publish the now-started producer to the config-reload
+      // onChange handler so a mid-life capability drift can emit
+      // `agent.capabilities-changed` without restart (see that handler's block
+      // for THE FINDING — restart-only in the common case, this is the
+      // defensive emit side). Wired regardless of `mc.enabled` so capability
+      // hot-reload tracks presence even on a non-dashboard stack.
+      presenceProducerForReload = presenceProducer;
+      console.log(
+        `cortex: agent-presence producer started — ${presenceAgents.length} agent(s) announced ` +
+          `(stack-local${config.mc.enabled ? " + local registry" : ", mc disabled"}; ` +
+          `heartbeat every ${DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS}ms)`,
+      );
+    } catch (err) {
+      console.error(
+        "cortex: agent-presence producer startup error (non-fatal):",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
 
+  // MC-gated CONSUMER half (cont.) — federated + sibling presence subscribers
+  // fold OTHER stacks' agents into the local registry that backs the Network
+  // view. A non-dashboard stack has no registry to fold into and does not
+  // consume others' presence, so these stay gated on `mc.enabled` and require
+  // the registry the MC block above started.
+  if (config.mc.enabled && presenceRegistryHandle !== null) {
+    try {
       // G-1114.E.2 + E.5 — start the trust-verified federated presence
       // subscriber. INERT (no NATS subscription, no folds) when the stack hasn't
       // opted into federation. When opted in, it folds peers' accept-listed +
@@ -3770,16 +3837,6 @@ export async function startCortex(
         }),
         ...(resolveFederatedPeer !== undefined && { resolveFederatedPeer }),
       });
-      // G-1114.C.1 — publish the now-started producer to the config-reload
-      // onChange handler so a mid-life capability drift can emit
-      // `agent.capabilities-changed` without restart (see that handler's block
-      // for THE FINDING — restart-only in the common case, this is the
-      // defensive emit side).
-      presenceProducerForReload = presenceProducer;
-      console.log(
-        `cortex: agent-presence producer + registry started — ${presenceAgents.length} agent(s) announced ` +
-          `(stack-local; heartbeat every ${DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS}ms)`,
-      );
 
       // #989 part-1 — LOCAL same-principal sibling-stack presence aggregation.
       // When enabled (default ON), auto-discover the principal's OTHER local
@@ -3845,7 +3902,7 @@ export async function startCortex(
       }
     } catch (err) {
       console.error(
-        "cortex: agent-presence producer/registry startup error (non-fatal):",
+        "cortex: federated/sibling agent-presence startup error (non-fatal):",
         err instanceof Error ? err.message : err,
       );
     }

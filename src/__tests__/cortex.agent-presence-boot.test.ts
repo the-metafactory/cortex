@@ -3,13 +3,21 @@
  *
  * Asserts the boot lifecycle integration in `startCortex`:
  *
- *   1. Gated ON (`config.mc.enabled: true`) → one `agent.online` per hosted
+ *   1. MC ON (`config.mc.enabled: true`) → one `agent.online` per hosted
  *      agent goes out on boot, carrying that agent's capabilities; the registry
  *      subscriber self-subscribes to the stack-local `agent.>` pattern.
- *   2. Gated OFF (`config.mc.enabled: false`) → NO `agent.*` envelopes.
- *   3. Shutdown → `agent.offline` (reason: shutdown) publishes for every agent
+ *   2. (#1003) MC OFF (`config.mc.enabled: false`) WITH agents → the presence
+ *      PRODUCER still announces (`agent.online` per agent + `agent.offline` on
+ *      shutdown), because presence is a BUS concern independent of the MC
+ *      dashboard (ADR-0007). But the consuming REGISTRY stays MC-gated: a
+ *      non-dashboard stack only PUBLISHES its own presence, it does not CONSUME
+ *      others' — so it does NOT subscribe to `agent.>`.
+ *   3. No agents (empty roster) → NO producer, NO `agent.*` envelopes, even with
+ *      a bus — nothing to announce.
+ *   4. Shutdown → `agent.offline` (reason: shutdown) publishes for every agent
  *      BEFORE the runtime closes (ordering: offline lands while the recording
- *      runtime is still accepting publishes, i.e. before `runtime.stop`).
+ *      runtime is still accepting publishes, i.e. before `runtime.stop`) — and
+ *      this holds whether or not MC is enabled.
  *
  * Mirrors the `cortex.capability-boot.test.ts` harness (NATS-absent recording
  * runtime, inline agents, headless presence). The recording runtime records the
@@ -140,7 +148,7 @@ describe("startCortex — agent-presence boot/shutdown (G-1114.B.2+B.3)", () => 
     await handle.stop();
   });
 
-  test("gated OFF: no agent.* envelopes when mc.enabled is false", async () => {
+  test("#1003 MC OFF with agents: producer STILL announces agent.online per agent (presence is a bus concern)", async () => {
     const runtime = createRecordingRuntime();
     const tmp = mkdtempSync(join(tmpdir(), "cortex-presence-off-"));
     const handle = await startCortex(
@@ -151,13 +159,92 @@ describe("startCortex — agent-presence boot/shutdown (G-1114.B.2+B.3)", () => 
         disableOutboundPoller: true,
         agentsDir: tmp,
         injectRuntime: runtime,
-        inlineAgents: [makeAgent("luna", ["code-review.typescript"])],
+        inlineAgents: [
+          makeAgent("luna", ["code-review.typescript"]),
+          makeAgent("echo", ["research"]),
+        ],
         principal: { id: "andreas" },
       },
     );
-    expect(presenceTypes(runtime.published)).toEqual([]);
-    expect(runtime.subscribedPatterns).not.toContain("local.andreas.default.agent.>");
+
+    // The PRODUCER runs regardless of mc.enabled — the core #1003 fix. Each
+    // hosted agent announces presence on the stack-local bus so #989's
+    // multi-bus aggregator has something to render.
+    const onlines = runtime.published.filter((e) => e.type === "agent.online");
+    expect(onlines.length).toBe(2);
+    const luna = onlines.find(
+      (e) => (e.payload as { identity: { agent_id: string } }).identity.agent_id === "luna",
+    );
+    expect((luna!.payload as { capabilities: string[] }).capabilities).toEqual([
+      "code-review.typescript",
+    ]);
+    expect(luna!.sovereignty.classification).toBe("local");
+
+    // The CONSUMING registry stays MC-gated: a non-dashboard stack publishes its
+    // own presence but does not consume others' — so NO `agent.>` subscription.
+    expect(runtime.subscribedPatterns).not.toContain(
+      "local.andreas.default.agent.>",
+    );
+
     await handle.stop();
+  });
+
+  test("#1003 MC OFF: agent.offline still publishes on shutdown for every agent", async () => {
+    const runtime = createRecordingRuntime();
+    const tmp = mkdtempSync(join(tmpdir(), "cortex-presence-off-shutdown-"));
+    const handle = await startCortex(
+      minimalConfig({ mc: { enabled: false, configPath: "", dbPath: "", port: 0 } }),
+      {
+        disableConfigWatcher: true,
+        disableDashboard: true,
+        disableOutboundPoller: true,
+        agentsDir: tmp,
+        injectRuntime: runtime,
+        inlineAgents: [
+          makeAgent("luna", ["code-review.typescript"]),
+          makeAgent("echo", ["research"]),
+        ],
+        principal: { id: "andreas" },
+      },
+    );
+
+    await handle.stop();
+
+    const offlines = runtime.published.filter((e) => e.type === "agent.offline");
+    expect(offlines.length).toBe(2);
+    for (const off of offlines) {
+      expect((off.payload as { reason: string }).reason).toBe("shutdown");
+    }
+    // Still ordered before the runtime close even on the MC-off path.
+    expect(runtime.publishedAfterStop).not.toContain("agent.offline");
+  });
+
+  test("#1003 no agents: no producer, no agent.* envelopes (even with a bus)", async () => {
+    const runtime = createRecordingRuntime();
+    const tmp = mkdtempSync(join(tmpdir(), "cortex-presence-no-agents-"));
+    const handle = await startCortex(
+      // mc.enabled true to prove the gate is "has agents", not "mc off": even
+      // with MC on, an empty roster announces nothing.
+      minimalConfig({ mc: { enabled: true, configPath: "", dbPath: "", port: 0 } }),
+      {
+        disableConfigWatcher: true,
+        disableDashboard: true,
+        disableOutboundPoller: true,
+        agentsDir: tmp,
+        injectRuntime: runtime,
+        inlineAgents: [],
+        principal: { id: "andreas" },
+      },
+    );
+    // No hosted agents ⇒ no presence producer ⇒ no agent.online/heartbeat.
+    expect(runtime.published.filter((e) => e.type === "agent.online")).toEqual(
+      [],
+    );
+    await handle.stop();
+    // …and none on shutdown either.
+    expect(runtime.published.filter((e) => e.type === "agent.offline")).toEqual(
+      [],
+    );
   });
 
   test("shutdown: agent.offline publishes for every agent BEFORE runtime close", async () => {
