@@ -25,7 +25,11 @@ import { parse as parseYaml } from "yaml";
 import type { TextChannel } from "discord.js";
 
 import { loadConfigWithAgents, loadAgentsDirectory, expandTilde, FragmentLoadError } from "./common/config/loader";
-import { ConfigWatcher } from "./common/config/watcher";
+import {
+  ConfigWatcher,
+  AgentsDirectoryWatcher,
+  type AgentsChangeEvent,
+} from "./common/config/watcher";
 import { type AgentConfig } from "./common/types/config";
 import { resolveSigningKnobs } from "./common/security-posture";
 import { buildHttpsMtlsMaterial } from "./common/config/transport-mtls";
@@ -223,9 +227,11 @@ import {
 
 // MIG-7.9 (deferred) flips these to `~/.config/cortex/`. Keeping grove-shaped
 // paths for now so the principal's existing `bot.yaml` continues to work.
-const STATE_DIR = join(process.env.HOME ?? "~", ".config", "grove", "state");
-const PID_FILE = join(STATE_DIR, "cortex.pid");
-const DEFAULT_CONFIG = join(process.env.HOME ?? "~", ".config", "grove", "bot.yaml");
+// B-0 (cortex#1021) — the PID-file resolution moved to `./common/pidfile` so
+// the lightweight `cortex agents reload` CLI can resolve the running daemon's
+// PID (to signal a reload) without importing this whole module graph. Re-import
+// here so cortex.ts's lifecycle paths stay on the single source of truth.
+import { STATE_DIR, PID_FILE, DEFAULT_CONFIG, pidFileFor } from "./common/pidfile";
 
 /**
  * Resolve the PID file path for a given `--config` value.
@@ -249,14 +255,11 @@ const DEFAULT_CONFIG = join(process.env.HOME ?? "~", ".config", "grove", "bot.ya
  * to the same PID file — moving a config doesn't accidentally orphan
  * the prior PID file.
  */
-export function pidFileFor(configPath: string | undefined): string {
-  if (configPath === undefined || configPath === DEFAULT_CONFIG) {
-    return PID_FILE;
-  }
-  const base = basename(configPath).replace(/\.ya?ml$/i, "");
-  if (base.length === 0) return PID_FILE;
-  return join(STATE_DIR, `cortex-${base}.pid`);
-}
+// B-0 (cortex#1021) — `pidFileFor` is imported from `./common/pidfile` (single
+// source of truth shared with the `cortex agents reload` daemon-signal path)
+// and re-exported here so existing importers of `pidFileFor` from `cortex.ts`
+// (tests, the lifecycle commands below) are unaffected.
+export { pidFileFor };
 
 /**
  * cortex#400 — derive the per-agent CC session opts handed to the
@@ -328,6 +331,24 @@ export interface CortexHandle {
    */
   readonly agentRegistry: AgentRegistry;
   /**
+   * B-0 (cortex#1021) — the live agent-registry generation. 0 at boot; each
+   * successful agents.d/ reload that CHANGES the agent set increments it. A
+   * no-op reload (no add/remove/change) does not advance it. Read it after a
+   * `reloadAgents()` (or a fs.watch-driven reload) to confirm a swap happened.
+   */
+  readonly agentGeneration: number;
+  /**
+   * B-0 (cortex#1021) — trigger an agents.d/ reload on the SAME path the
+   * fs.watch callback uses: revalidate fragments, rebuild the merged set
+   * (inline cortex.yaml agents still win on id conflict), swap the registry,
+   * reconcile review consumers (add → start, remove → drain, change →
+   * remove+add), and re-publish the capability registry. `cortex agents
+   * reload` and SIGHUP route here. `source` tags the reload's origin for
+   * logging/observation. Resolves once the reconcile completes (consumers
+   * drained/started). A no-op when no `agents.d/` directory is in play.
+   */
+  reloadAgents(source?: "cli" | "sighup"): Promise<void>;
+  /**
    * IAW Phase D.4.3 — registry-resolved peer pubkey reader. Exposed
    * read-only so D.6 integration tests + future consumers can verify
    * that the federation roster gets populated from the registry.
@@ -397,6 +418,34 @@ export interface StartCortexOptions {
    * @internal — not part of the public API; semver does not apply.
    */
   agentsDir?: string;
+  /**
+   * B-0 (cortex#1021) — skip the daemon-level `agents.d/` fragment watcher
+   * (tests that don't want a live fs.watch, or that drive reloads through the
+   * handle's `reloadAgents()` directly). Production omits this; the watcher
+   * starts whenever `agentsDir` exists.
+   */
+  disableAgentsWatcher?: boolean;
+  /**
+   * B-0 (cortex#1021) — override the `agents.d/` watcher debounce (tests use a
+   * short window to keep fs.watch assertions fast). Defaults to the watcher's
+   * own 200ms — the same window the main ConfigWatcher uses.
+   */
+  agentsWatcherDebounceMs?: number;
+  /**
+   * B-0 (cortex#1021) — test-only observation hook fired after EVERY
+   * agents.d/ reload attempt (watcher-, cli-, or sighup-sourced), including
+   * failed ones. Surfaces the post-reload generation + the add/remove/change
+   * sets so tests can assert reconcile behaviour without scraping logs.
+   */
+  onAgentsReloaded?: (info: {
+    generation: number;
+    source: AgentsChangeEvent["source"];
+    failed: boolean;
+    added: string[];
+    removed: string[];
+    changed: string[];
+    consumerAgentIds: string[];
+  }) => void;
   /**
    * Inline `Agent[]` to merge with the fragment-loaded list when building
    * the registry. Mirrors the cortex.yaml `agents[]` block (design §6.1):
@@ -921,7 +970,19 @@ export async function startCortex(
     ...inlineAgents,
     ...fragmentAgents.filter((a) => !inlineIds.has(a.id)),
   ];
-  const agentRegistry = AgentRegistry.fromAgents(mergedAgents);
+  // B-0 (cortex#1021) — `agentRegistry` is the live, swappable snapshot. The
+  // agents.d/ hot-reload path (below) rebuilds the merged set and reassigns
+  // this binding under a bumped generation counter; the handle's
+  // `agentRegistry` getter reads the live binding so callers always see the
+  // current generation. `mergedAgents` stays the BOOT snapshot (it is consumed
+  // structurally by the boot-time adapter / presence / dispatch wiring); the
+  // reload path tracks its own current view in `liveFragmentAgents` below.
+  let agentRegistry = AgentRegistry.fromAgents(mergedAgents);
+  // The registry generation. Starts at 0 (boot); each successful agents.d/
+  // reload that changes the agent set increments it. Surfaced for tests +
+  // observability — a generation that doesn't advance on a no-op reload is the
+  // signal that nothing structurally changed.
+  let agentGeneration = 0;
   if (mergedAgents.length > 0) {
     console.log(
       `cortex: agent registry assembled — ${mergedAgents.length} agent(s) `
@@ -1018,24 +1079,38 @@ export async function startCortex(
   //
   // **Scope (per §10.1 PR-7).** Publish-only. No subscriber wiring here —
   // the consumer is principal-dashboard side and lands in a future PR.
-  const capabilityEntries: CapabilityRegistryEntry[] = mergedAgents
-    .filter((a): a is Agent & { runtime: { capabilities: readonly string[] } } =>
-      (a.runtime?.capabilities.length ?? 0) > 0,
-    )
-    .map((a) => ({
-      agentId: a.id,
-      capabilities: a.runtime.capabilities,
-    }));
-  if (capabilityEntries.length > 0) {
+  // B-0 (cortex#1021) — the idempotent capability-registry publish, lifted into
+  // a reusable closure so the agents.d/ hot-reload path (below) re-publishes
+  // through the SAME code at boot. This CLOSES the long-standing TODO in this
+  // block's preamble ("we do NOT wire a re-publish into the hot-reload path …
+  // when [a fragment watcher] is wired, the re-publish belongs in its
+  // callback"): the watcher's reload callback now calls `publishCapabilitiesFor`
+  // after swapping the registry. The publisher keys the bucket on `agent_id`
+  // and overwrites, so a re-publish reconciles a changed/added agent's caps and
+  // is a harmless no-op for unchanged ones. Returns the number of agents whose
+  // registrations were attempted (0 when no agent declares capabilities).
+  const publishCapabilitiesFor = async (
+    agents: readonly Agent[],
+    context: "boot" | "reload",
+  ): Promise<number> => {
+    const entries: CapabilityRegistryEntry[] = agents
+      .filter((a): a is Agent & { runtime: { capabilities: readonly string[] } } =>
+        (a.runtime?.capabilities.length ?? 0) > 0,
+      )
+      .map((a) => ({
+        agentId: a.id,
+        capabilities: a.runtime.capabilities,
+      }));
+    if (entries.length === 0) return 0;
     // cortex#288 follow-up — closure-scoped success/failure counters.
     //
     // `publishCapabilityRegistry`'s contract is "I called publish() for each
     // envelope" — it pushes to its returned `published[]` *after* awaiting
-    // publish(), regardless of whether the boot site swallows the rejection.
+    // publish(), regardless of whether the call site swallows the rejection.
     // Our `wrappedPublish` below DOES swallow per-envelope failures (so one
     // bad publish doesn't abort the loop), which means `published.length` is
     // really "publishes that returned without throwing into the publisher",
-    // not "publishes that actually landed on the wire". The boot log should
+    // not "publishes that actually landed on the wire". The log should
     // report wire-side reality. We count outcomes locally here; the publisher
     // contract stays correct and unchanged.
     let successfulPublishes = 0;
@@ -1061,25 +1136,33 @@ export async function startCortex(
     try {
       await publishCapabilityRegistry({
         source: systemEventSource,
-        entries: capabilityEntries,
+        entries,
         publish: wrappedPublish,
       });
       const failureSuffix = failedPublishes > 0 ? ` (${failedPublishes} failure(s))` : "";
       console.log(
         `cortex: published ${successfulPublishes} capability registration(s)${failureSuffix} ` +
-          `for ${capabilityEntries.length} agent(s)`,
+          `for ${entries.length} agent(s) (${context})`,
       );
     } catch (err) {
       // Defensive — `publishCapabilityRegistry` is pure orchestration and
       // shouldn't throw once `wrappedPublish` traps per-envelope failures,
       // but a `clock()` or `buildBaseEnvelope` throw would still surface
-      // here. Boot continues; the bucket simply stays unpopulated until
-      // the next restart.
+      // here. Boot/reload continues; the bucket simply stays unpopulated
+      // until the next publish.
       console.error(
-        "cortex: capability-registry boot wiring failed (non-fatal — boot continues):",
+        `cortex: capability-registry ${context} wiring failed (non-fatal — continues):`,
         err instanceof Error ? err.message : String(err),
       );
     }
+    return entries.length;
+  };
+
+  const capabilityEntryCount = mergedAgents.filter(
+    (a) => (a.runtime?.capabilities.length ?? 0) > 0,
+  ).length;
+  if (capabilityEntryCount > 0) {
+    await publishCapabilitiesFor(mergedAgents, "boot");
   } else {
     // cortex#314 — promote skipped notice to stderr WARNING with
     // principal-actionable text. The capability-dispatch consumer rejects
@@ -1601,7 +1684,17 @@ export async function startCortex(
     // ── /F-2.2 provision DEV_IMPLEMENT ──────────────────────────────────────
   }
 
-  for (const agent of reviewCapableAgents) {
+  // B-0 (cortex#1021) — the per-agent review-consumer construction, lifted out
+  // of the boot loop into a reusable closure so the agents.d/ hot-reload path
+  // (below) can START a newly-ADDED agent's consumers through the SAME
+  // construction it uses at boot — no duplicated wiring. It captures every
+  // boot-scoped dependency it needs (trustResolver, signingKnobs, signer,
+  // resolvedPolicy, derivedStack, reviewJsm, the offering/federation patterns,
+  // systemEventSource, the reviewConsumers array, …) by closure; nothing new is
+  // threaded as a parameter. Pushes the consumers it creates onto
+  // `reviewConsumers[]` (the same array the shutdown drain walks), so a
+  // hot-added agent's consumers drain on shutdown identically to a boot agent's.
+  const startReviewConsumersForAgent = async (agent: Agent): Promise<void> => {
     try {
       const caps = agent.runtime?.capabilities ?? [];
       const consumerAgent: ReviewConsumerAgent = {
@@ -2055,6 +2148,12 @@ export async function startCortex(
           `${err instanceof Error ? err.message : String(err)}\n`,
       );
     }
+  };
+
+  // Boot: start review consumers for every code-review-capable agent. Same
+  // closure the hot-reload path calls for a newly-added agent.
+  for (const agent of reviewCapableAgents) {
+    await startReviewConsumersForAgent(agent);
   }
   if (reviewConsumers.length === 0) {
     // cortex#314 — same first-install-safety promotion as the
@@ -3595,6 +3694,304 @@ export async function startCortex(
     configWatcher.start();
   }
 
+  // ===========================================================================
+  // B-0 (cortex#1021, design-bot-packs §7 + §11) — daemon-level agents.d/
+  // fragment watcher + hot reload.
+  // ===========================================================================
+  //
+  // This wires the in-tree `AgentsDirectoryWatcher` (cortex#60 A.1, which until
+  // now was unit-tested but UNWIRED at the daemon level — see the historical
+  // TODO this section closes) into the running daemon, EXTENDING the existing
+  // reload machinery (the ConfigWatcher above) rather than inventing a parallel
+  // one. On a fragment add/change/remove (debounced), or an explicit
+  // `cortex agents reload` / SIGHUP, it:
+  //
+  //   1. revalidates fragments + rebuilds the merged agent set (inline
+  //      cortex.yaml agents still WIN on id conflict — design §6.1);
+  //   2. swaps `agentRegistry` under a bumped `agentGeneration`;
+  //   3. reconciles REVIEW CONSUMERS — an ADDED agent's consumers START via the
+  //      same `startReviewConsumersForAgent` boot uses; a REMOVED agent's
+  //      consumers DRAIN (`.stop()` lets in-flight finish) and leave
+  //      `reviewConsumers[]`; a CHANGED agent is remove-then-add;
+  //   4. re-publishes the capability registry (`publishCapabilitiesFor`), which
+  //      is idempotent (keyed on agent_id);
+  //   5. an invalid fragment is REJECTED without killing the daemon — the old
+  //      generation is retained and a warning is logged.
+  //
+  // HONEST SCOPE — PRESENCE ADAPTERS ARE RESTART-ONLY (documented limitation).
+  // Live presence-adapter (Discord/Mattermost/Slack) start/stop on reload is
+  // deeply entangled with boot: the two-pass cross-adapter trust resolution
+  // (cortex#98 part B) and the surface-router registration both run once over
+  // the full roster at boot. Hot-swapping a single adapter would have to
+  // re-run those shared passes safely mid-flight. Per the task's honest-scope
+  // rule we DO NOT half-implement that — the registry + review-consumer +
+  // capability hot path is fully live; presence changes for a hot-added/removed
+  // agent require a daemon restart. The reconcile logs a warning and
+  // `reloadAgents()` callers (the CLI) surface the same notice.
+  //
+  // The reconcile is SERIALIZED behind `reloadInFlight` so overlapping triggers
+  // (a fast double fs.watch event, or a CLI reload racing a watcher reload)
+  // don't interleave consumer start/stop. Each trigger awaits the prior one.
+  let liveFragmentAgents: Agent[] = fragmentAgents;
+  let liveMergedAgents: Agent[] = mergedAgents;
+  let reloadInFlight: Promise<void> = Promise.resolve();
+
+  // Predicate mirrors the boot-time `reviewCapableAgents` filter so a
+  // hot-added agent is started iff it would have been started at boot.
+  const isReviewCapable = (a: Agent): boolean => {
+    const caps = a.runtime?.capabilities ?? [];
+    return caps.some((c) => c === "code-review" || c.startsWith("code-review."));
+  };
+
+  // Drain + remove every review consumer owned by `agentId` from
+  // `reviewConsumers[]`. `ReviewConsumer.stop()` is idempotent and awaits the
+  // in-flight set per its own drain contract (cortex#237 PR-6), so a removed
+  // agent's in-flight reviews publish their terminal envelope before teardown.
+  const drainConsumersForAgent = async (agentId: string): Promise<void> => {
+    // Iterate a snapshot of the indices to remove (consumers can appear more
+    // than once per agent: local + offer-scope + federated offer/direct).
+    const toStop = reviewConsumers.filter((c) => c.agent.id === agentId);
+    for (const consumer of toStop) {
+      try {
+        await consumer.stop();
+      } catch (err) {
+        process.stderr.write(
+          `cortex: agents-reload — review-consumer drain failed for agent=${agentId}: ` +
+            `${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
+    }
+    // Compact `reviewConsumers[]` in place, preserving order of survivors.
+    for (let i = reviewConsumers.length - 1; i >= 0; i--) {
+      if (reviewConsumers[i]?.agent.id === agentId) {
+        reviewConsumers.splice(i, 1);
+      }
+    }
+  };
+
+  // The single reconcile path. Both the fs.watch callback and the handle's
+  // `reloadAgents()` route here through `runReconcile`. Computes the merged
+  // diff (inline wins), drains removed/changed-old consumers, starts
+  // added/changed-new consumers, swaps the registry, re-publishes caps.
+  const reconcileFromEvent = async (event: AgentsChangeEvent): Promise<void> => {
+    if (event.failed) {
+      // Invalid fragment mid-run: keep the old generation alive. The watcher
+      // already retained the prior valid agent set; we don't swap anything.
+      console.warn(
+        `cortex: agents-reload (${event.source}) REJECTED — invalid fragment ${event.error?.file ?? "?"}: ` +
+          `${event.error?.reason ?? "unknown"} — keeping generation ${agentGeneration}`,
+      );
+      options.onAgentsReloaded?.({
+        generation: agentGeneration,
+        source: event.source,
+        failed: true,
+        added: [],
+        removed: [],
+        changed: [],
+        consumerAgentIds: reviewConsumers.map((c) => c.agent.id),
+      });
+      return;
+    }
+
+    // `event.agents` is the fresh FRAGMENT set. Re-apply the inline-wins merge
+    // (design §6.1) so an inline cortex.yaml agent still shadows a fragment of
+    // the same id after the reload.
+    const freshFragments = event.agents;
+    const freshMerged: Agent[] = [
+      ...inlineAgents,
+      ...freshFragments.filter((a) => !inlineIds.has(a.id)),
+    ];
+
+    // Diff the MERGED view (not the raw fragment view) so a fragment change to
+    // an inline-shadowed id is a no-op, and removing a fragment that an inline
+    // entry shadows does not tear down the inline agent's consumers.
+    const priorById = new Map(liveMergedAgents.map((a) => [a.id, a]));
+    const freshById = new Map(freshMerged.map((a) => [a.id, a]));
+    const added: string[] = [];
+    const removed: string[] = [];
+    const changed: string[] = [];
+    for (const [id, fresh] of freshById) {
+      const prior = priorById.get(id);
+      if (prior === undefined) added.push(id);
+      else if (!agentsEqual(prior, fresh)) changed.push(id);
+    }
+    for (const id of priorById.keys()) {
+      if (!freshById.has(id)) removed.push(id);
+    }
+    added.sort();
+    removed.sort();
+    changed.sort();
+
+    if (added.length === 0 && removed.length === 0 && changed.length === 0) {
+      // Nothing structurally changed in the merged view — do not bump the
+      // generation, do not churn consumers. (e.g. a fragment touched but its
+      // content is byte-identical, or only inline-shadowed ids moved.)
+      console.log(
+        `cortex: agents-reload (${event.source}) — no effective change (generation ${agentGeneration})`,
+      );
+      options.onAgentsReloaded?.({
+        generation: agentGeneration,
+        source: event.source,
+        failed: false,
+        added: [],
+        removed: [],
+        changed: [],
+        consumerAgentIds: reviewConsumers.map((c) => c.agent.id),
+      });
+      return;
+    }
+
+    // ── Drain consumers for removed + changed (old definition) agents first ──
+    for (const id of [...removed, ...changed]) {
+      await drainConsumersForAgent(id);
+    }
+
+    // ── Swap the registry + bump the generation BEFORE starting new consumers,
+    //    so a started consumer reads the new registry generation. ──
+    liveFragmentAgents = [...freshFragments];
+    liveMergedAgents = freshMerged;
+    agentRegistry = AgentRegistry.fromAgents(freshMerged);
+    agentGeneration += 1;
+
+    // ── Start consumers for added + changed (new definition) review-capable
+    //    agents via the SAME construction path boot uses. ──
+    for (const id of [...added, ...changed]) {
+      const agent = freshById.get(id);
+      if (agent !== undefined && isReviewCapable(agent)) {
+        await startReviewConsumersForAgent(agent);
+      }
+    }
+
+    // ── Re-publish the capability registry (deliverable 3 — idempotent). ──
+    await publishCapabilitiesFor(freshMerged, "reload");
+
+    // ── Honest-scope: presence-adapter changes are restart-only. Warn when a
+    //    reload added/removed an agent that declares a presence binding (the
+    //    case where a restart is actually needed to (dis)connect a bot). ──
+    const presenceAffected = [...added, ...removed, ...changed].filter((id) => {
+      const a = freshById.get(id) ?? priorById.get(id);
+      return (
+        a?.presence.discord !== undefined ||
+        a?.presence.mattermost !== undefined ||
+        a?.presence.slack !== undefined
+      );
+    });
+    if (presenceAffected.length > 0) {
+      process.stderr.write(
+        `cortex: agents-reload (${event.source}) — presence changes for ${presenceAffected.join(", ")} ` +
+          `require a daemon restart (registry + review consumers + capabilities updated live; ` +
+          `presence adapters are restart-only — see B-0 honest-scope note).\n`,
+      );
+    }
+
+    console.log(
+      `cortex: agents-reload (${event.source}) — generation ${agentGeneration} ` +
+        `(added: [${added.join(",")}], removed: [${removed.join(",")}], changed: [${changed.join(",")}])`,
+    );
+    options.onAgentsReloaded?.({
+      generation: agentGeneration,
+      source: event.source,
+      failed: false,
+      added,
+      removed,
+      changed,
+      consumerAgentIds: reviewConsumers.map((c) => c.agent.id),
+    });
+  };
+
+  // Serialize every reconcile behind `reloadInFlight` so triggers can't
+  // interleave consumer start/stop. Returns the chained promise so callers
+  // (the CLI handle path) can await completion.
+  const runReconcile = (event: AgentsChangeEvent): Promise<void> => {
+    const next = reloadInFlight.then(() => reconcileFromEvent(event));
+    // Swallow the rejection on the CHAIN (not on `next`) so one failed
+    // reconcile doesn't poison every subsequent trigger; the per-reconcile
+    // body already logs its own errors.
+    reloadInFlight = next.catch((err) => {
+      process.stderr.write(
+        `cortex: agents-reload reconcile error (non-fatal): ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    });
+    return next;
+  };
+
+  // The watcher itself. Constructed with the BOOT fragment set as its baseline
+  // so the first fs.watch diff is computed against what boot actually loaded.
+  // `null` when disabled (tests) or when the daemon has no agents.d/ in play.
+  let agentsWatcher: AgentsDirectoryWatcher | null = null;
+  if (!options.disableAgentsWatcher) {
+    agentsWatcher = new AgentsDirectoryWatcher(
+      agentsDir,
+      fragmentAgents,
+      (event) => {
+        void runReconcile(event);
+      },
+      {
+        ...(options.agentsWatcherDebounceMs !== undefined && {
+          debounceMs: options.agentsWatcherDebounceMs,
+        }),
+      },
+    );
+    agentsWatcher.start();
+  }
+
+  // `reloadAgents()` (handle) + SIGHUP both call this. When the watcher exists
+  // we route through its `triggerReload` (which loads the dir + emits the same
+  // AgentsChangeEvent the fs.watch path emits) so there is ONE reconcile path.
+  // When the watcher is disabled, we load the directory directly and synthesize
+  // the event so the CLI/SIGHUP still works in watcher-less deployments/tests.
+  const reloadAgentsViaTrigger = async (
+    source: "cli" | "sighup",
+  ): Promise<void> => {
+    if (agentsWatcher !== null) {
+      // Capture the reconcile promise: triggerReload fires the handler
+      // synchronously (no debounce for explicit triggers), which calls
+      // runReconcile and assigns reloadInFlight. Await that.
+      agentsWatcher.triggerReload(source);
+      await reloadInFlight;
+      return;
+    }
+    // Watcher-less path: load + reconcile directly.
+    let event: AgentsChangeEvent;
+    try {
+      const fresh = loadAgentsDirectory(agentsDir);
+      event = {
+        source,
+        failed: false,
+        agents: fresh,
+        // The diff sets are recomputed inside reconcileFromEvent against the
+        // live merged view; these fragment-level sets are unused there.
+        agentsAdded: [],
+        agentsRemoved: [],
+        agentsChanged: [],
+      };
+    } catch (err) {
+      const isFragErr = err instanceof FragmentLoadError;
+      event = {
+        source,
+        failed: true,
+        error: {
+          file: isFragErr ? err.file : agentsDir,
+          reason: err instanceof Error ? err.message : String(err),
+        },
+        agents: liveFragmentAgents,
+        agentsAdded: [],
+        agentsRemoved: [],
+        agentsChanged: [],
+      };
+    }
+    await runReconcile(event);
+  };
+
+  // SIGHUP → agents reload, on the SAME path the watcher + CLI use. Registered
+  // once; harmless when the watcher is disabled (the trigger still revalidates
+  // + reconciles by reloading the dir directly). Deregistered in `drain()`.
+  const sighupHandler = (): void => {
+    void reloadAgentsViaTrigger("sighup");
+  };
+  process.on("SIGHUP", sighupHandler);
+
   // MC-I1.S1 (ADR-0005): in-process Mission Control embed — opt-in via `config.mc.enabled`.
   // The legacy `api.*` embedded-dashboard path (G-201) was retired per ADR-0005 /
   // #712 (its dynamic import never migrated from grove-v2 and threw on every
@@ -4363,6 +4760,16 @@ export async function startCortex(
 
     const drain = async (): Promise<void> => {
       completeSync("config-watcher stop", () => configWatcher?.stop());
+      // B-0 (cortex#1021) — stop the agents.d/ watcher + deregister the SIGHUP
+      // handler so no reload fires mid-shutdown. Await any in-flight reconcile
+      // first so a reload racing shutdown finishes its consumer start/stop
+      // before the runtime closes (the started consumers then drain below with
+      // the rest of `reviewConsumers[]`).
+      completeSync("agents-watcher stop", () => agentsWatcher?.stop());
+      completeSync("agents-sighup deregister", () =>
+        process.removeListener("SIGHUP", sighupHandler),
+      );
+      await completeAsync("agents-reload in-flight drain", reloadInFlight);
       // G-1114.B.2 — publish agent.offline (reason: shutdown) for every hosted
       // agent FIRST, while the runtime/bus is still up. `stop()` awaits the
       // offline publishes so they go out before any later step (and well before
@@ -4551,10 +4958,63 @@ export async function startCortex(
     get agentRegistry() {
       return agentRegistry;
     },
+    get agentGeneration() {
+      return agentGeneration;
+    },
+    // B-0 (cortex#1021) — manual reload entrypoint. `cortex agents reload`
+    // (via the CLI's daemon-signal path) and SIGHUP both reach the same
+    // reconcile through here.
+    reloadAgents(source: "cli" | "sighup" = "cli") {
+      return reloadAgentsViaTrigger(source);
+    },
     get registryClient() {
       return registryClient;
     },
   };
+}
+
+/**
+ * B-0 (cortex#1021) — order-independent structural equality for two `Agent`
+ * shapes, used by the agents.d/ hot-reload diff to decide whether an agent
+ * CHANGED (vs. an untouched fragment touch that produced a byte-identical
+ * reload). Mirrors the watcher's private `deepEqual` (it can't be imported
+ * without widening the watcher's public surface) but is scoped to the Agent
+ * shapes the reconcile actually compares: plain objects, arrays, scalars.
+ * No Date/Map/Set handling — Agent values don't inhabit those.
+ */
+function agentsEqual(a: Agent, b: Agent): boolean {
+  return structuralEqual(a, b);
+}
+
+function structuralEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return a === b;
+  if (typeof a !== typeof b) return false;
+  if (typeof a !== "object") return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b)) return false;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!structuralEqual(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  if (Array.isArray(b)) return false;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b as object);
+  if (aKeys.length !== bKeys.length) return false;
+  for (const key of aKeys) {
+    if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+    if (
+      !structuralEqual(
+        (a as Record<string, unknown>)[key],
+        (b as Record<string, unknown>)[key],
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
