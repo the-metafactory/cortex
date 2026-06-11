@@ -52,7 +52,31 @@ export interface ToolUseRow extends RowBase {
   toolUseId?: string;
   /** Paired tool_result, if found (same event chain). */
   result?: ToolResultRow;
+  /**
+   * Wall-clock duration in ms, when the source carries it. Controlled
+   * stream-json doesn't (it's on `stream-json.result`), but observed hook
+   * events (`duration_ms`) and sideband spans (`tool.duration_ms`) do —
+   * U1.1 surfaces it inline on the tool row.
+   */
+  durationMs?: number;
+  /**
+   * U1.1 — when the row was reconstructed from a lower-fidelity source than
+   * controlled stream-json (observed hook event, or sideband span), the
+   * renderer can badge it honestly. `undefined` ⇒ full-fidelity controlled.
+   */
+  fidelity?: RowFidelity;
+  /**
+   * U1.1 — sideband spans carry an OTel `statusCode`; a `2` (ERROR) marks the
+   * tool call as failed so the renderer can show an ok/fail affordance.
+   */
+  failed?: boolean;
 }
+
+/**
+ * U1.1 fidelity provenance for a reconstructed row. Drives the honest
+ * "preview-grade" badge — full-fidelity controlled rows carry no badge.
+ */
+export type RowFidelity = "observed" | "sideband";
 
 export interface ToolResultRow extends RowBase {
   kind: "tool_result";
@@ -130,9 +154,39 @@ export function eventToRows(ev: McEvent): LogRow[] {
       return [resultRow(ev)];
     case "stream-json.system":
       return [systemRow(ev)];
+    // --- U1.1 item 1: observed-session hook events → the SAME row grammar ---
+    // These come off the cc-events tap (EventLogger.hook.ts) for sessions cortex
+    // OBSERVES but did not dispatch. The data (tool_input, tool_output,
+    // duration_ms, prompt_preview) is already in the events table; we just need
+    // to render it into tool_use / principal.input rows instead of RawRow crumbs.
+    case "agent.task.started":
+      return [observedTaskStartedRow(ev)];
     default:
+      if (isObservedToolEvent(ev.type)) {
+        return [observedToolRow(ev)];
+      }
       return [rawRow(ev)];
   }
+}
+
+/**
+ * True for the cc-events observed-tool taxonomy — `tool.bash.executed`,
+ * `tool.file.changed`, `tool.file.read`, `tool.agent.spawned`,
+ * `tool.todo.updated`, and the generic `tool.{name}.used` fallthrough. Kept as
+ * a prefix/suffix test (not an enum) so a new `tool.*` event type renders as a
+ * tool row automatically rather than regressing to a RawRow.
+ */
+function isObservedToolEvent(type: string): boolean {
+  if (!type.startsWith("tool.")) return false;
+  return (
+    type === "tool.bash.executed" ||
+    type === "tool.bash.blocked" ||
+    type === "tool.file.changed" ||
+    type === "tool.file.read" ||
+    type === "tool.agent.spawned" ||
+    type === "tool.todo.updated" ||
+    type.endsWith(".used")
+  );
 }
 
 /**
@@ -234,6 +288,84 @@ function userToRows(ev: McEvent): LogRow[] {
     // (principal.input is the authoritative H-source).
   }
   return out;
+}
+
+/**
+ * U1.1 — map an observed tool hook event to a `tool_use` row identical in
+ * shape to the controlled stream-json path, so the renderer treats them the
+ * same (name + expandable args + paired output + duration). The hook's
+ * `tool_output`, when present, is folded into a nested tool_result so the
+ * expand-toggle shows input AND output, matching the controlled feel.
+ */
+function observedToolRow(ev: McEvent): ToolUseRow {
+  const p = ev.payload as Record<string, unknown>;
+  const name = observedToolName(ev.type, p);
+  // Prefer the structured tool_input; fall back to the preview crumbs so a
+  // bash event with only `command_preview` still renders its command in args.
+  let input: unknown = p["tool_input"];
+  if (input === undefined || input === null) {
+    const synth: Record<string, unknown> = {};
+    if (typeof p["command_preview"] === "string") synth["command"] = p["command_preview"];
+    if (typeof p["path"] === "string") synth["file_path"] = p["path"];
+    if (typeof p["agent_description"] === "string") synth["description"] = p["agent_description"];
+    input = Object.keys(synth).length > 0 ? synth : undefined;
+  }
+  const row: ToolUseRow = {
+    id: ev.id, ts: ev.timestamp, color: "d", weight: "secondary",
+    kind: "tool_use", name,
+    input: input ?? null,
+    fidelity: "observed",
+  };
+  if (typeof p["duration_ms"] === "number") row.durationMs = p["duration_ms"] as number;
+  const output = observedToolOutput(p);
+  if (output !== null) {
+    const text = output.slice(0, PREVIEW_BYTES * 4);
+    row.result = {
+      id: `${ev.id}:result`, ts: ev.timestamp, color: "d", weight: "secondary",
+      kind: "tool_result", text, byteSize: byteLength(text),
+    };
+  }
+  return row;
+}
+
+/** Resolve a display tool name for an observed event. */
+function observedToolName(type: string, p: Record<string, unknown>): string {
+  if (typeof p["tool_name"] === "string" && p["tool_name"]) return p["tool_name"] as string;
+  // tool.{name}.used / tool.{name}.executed / tool.file.{changed,read} →
+  // pull the middle segment (e.g. "grep", "bash", "file").
+  const segs = type.split(".");
+  const seg = segs[1] ?? "tool";
+  return seg.charAt(0).toUpperCase() + seg.slice(1);
+}
+
+/** Flatten an observed event's `tool_output` to text, or null when absent. */
+function observedToolOutput(p: Record<string, unknown>): string | null {
+  const out = p["tool_output"];
+  if (typeof out === "string") return out;
+  if (out !== undefined && out !== null) {
+    try { return JSON.stringify(out, null, 2); } catch { return String(out); }
+  }
+  // `summary` is the Stop-hook completion text — surface it as output when
+  // there's no tool_output (e.g. a task-completion observed event).
+  if (typeof p["summary"] === "string") return p["summary"] as string;
+  return null;
+}
+
+/**
+ * U1.1 — an observed `agent.task.started` is the user's prompt for that turn.
+ * Render it as a principal.input row (the same H-source row controlled
+ * sessions use) so the observed transcript opens with the prompt, not a crumb.
+ */
+function observedTaskStartedRow(ev: McEvent): LogRow {
+  const p = ev.payload as Record<string, unknown>;
+  const text = typeof p["prompt_preview"] === "string"
+    ? (p["prompt_preview"] as string)
+    : (typeof p["summary"] === "string" ? (p["summary"] as string) : "");
+  if (!text) return rawRow(ev);
+  return {
+    id: ev.id, ts: ev.timestamp, color: "h", weight: "primary",
+    kind: "principal.input", text,
+  };
 }
 
 function principalInputRow(ev: McEvent): PrincipalInputRow {

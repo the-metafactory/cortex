@@ -9,15 +9,22 @@
  * passes the selected `assignmentId`; null hides the overlay.
  */
 
-import { useEffect, useRef } from "react";
+import { Suspense, lazy, useEffect, useRef } from "react";
 import "./drill-down.css";
 import { CurationToolbar } from "./curation-toolbar";
 import { DrillHeader } from "./drill-header";
 import { DrillLog } from "./drill-log";
 import { DrillInput } from "./drill-input";
 import { useDrillEvents } from "../hooks/use-drill-events";
+import { selectTranscriptSource, type TranscriptSessionMeta } from "../lib/source-merge";
 import type { WsClient } from "../hooks/use-websocket";
 import type { AssignmentListItem } from "../../db/assignments";
+
+// U1.1 item 4 — lazy: the sideband fetch path + `timelineToRows` mapper load
+// ONLY when a session actually resolves to the sideband source (remote /
+// historical). Mirrors the network-canvas chunk precedent so the entry bundle
+// stays lean — this is the ONLY dynamic import in the drill-down.
+const SidebandSource = lazy(() => import("./sideband-source"));
 
 export interface DrillDownProps {
   /** When null, the overlay is closed and renders nothing. */
@@ -40,6 +47,14 @@ export interface DrillDownProps {
    * owner navigates to the kanban-detail view for that iteration id.
    */
   onOpenIteration?: (iterationId: string) => void;
+  /**
+   * U1.1 — best-available-source metadata for the opened session. When
+   * supplied, the source-merge policy (`selectTranscriptSource`) decides whether
+   * to render the local event stream (controlled / observed — the default path)
+   * or the lazy SIDEBAND source (remote / historical). Omitted ⇒ the legacy
+   * local event path (the existing blocked-assignment drill-down), unchanged.
+   */
+  sessionMeta?: TranscriptSessionMeta;
 }
 
 export function DrillDown({
@@ -53,9 +68,15 @@ export function DrillDown({
   onToggleFocusMode,
   onSendInput,
   onOpenIteration,
+  sessionMeta,
 }: DrillDownProps) {
   const drillEvents = useDrillEvents(ws, assignmentId);
   const overlayRef = useRef<HTMLDivElement | null>(null);
+
+  // U1.1 source-merge: only divert to the lazy sideband path when the policy
+  // resolves a session to it. Controlled + observed local sessions stay on the
+  // existing event stream (now observed-aware via item 1). No meta ⇒ legacy path.
+  const source = sessionMeta ? selectTranscriptSource(sessionMeta) : null;
 
   // Global keyboard. Esc closes; `]`/`[` cycle; `f` focus-mode (when
   // textarea not focused). Always runs in capture phase so Esc here
@@ -108,13 +129,23 @@ export function DrillDown({
           onToggleFocusMode={onToggleFocusMode}
           {...(onOpenIteration ? { onOpenIteration } : {})}
         />
-        <DrillLog
-          events={drillEvents.events}
-          loaded={drillEvents.loaded}
-          hasMore={drillEvents.hasMore}
-          error={drillEvents.error}
-          onLoadOlder={drillEvents.loadOlder}
-        />
+        {source && source.kind === "sideband" ? (
+          <Suspense fallback={<div className="drill-log-wrap"><div className="drill-log-empty">Loading interior…</div></div>}>
+            <SidebandSource correlationId={source.correlationId} />
+          </Suspense>
+        ) : source && source.kind === "unavailable" ? (
+          <div className="drill-log-wrap" role="log" aria-live="polite">
+            <div className="drill-log-empty">Interior capture not available for this session.</div>
+          </div>
+        ) : (
+          <DrillLog
+            events={drillEvents.events}
+            loaded={drillEvents.loaded}
+            hasMore={drillEvents.hasMore}
+            error={drillEvents.error}
+            onLoadOlder={drillEvents.loadOlder}
+          />
+        )}
         {/*
           F-12 curation toolbar — Decision 2 places it between the log
           and the input. Verb enablement is a pure function of

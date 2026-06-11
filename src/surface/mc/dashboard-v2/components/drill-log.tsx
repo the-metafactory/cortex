@@ -10,6 +10,7 @@
 import { useMemo, useState } from "react";
 import "../components/drill-down.css";
 import { eventsToRows, type LogRow, type ToolResultRow, type ToolUseRow } from "../lib/event-rows";
+export type { LogRow } from "../lib/event-rows";
 import { renderMarkdown } from "../lib/markdown";
 import { formatBytes, trimToBytes, byteSize } from "../lib/drill-input";
 import { ImageLightbox } from "./image-lightbox";
@@ -25,6 +26,46 @@ export interface DrillLogProps {
 
 export function DrillLog({ events, loaded, hasMore, error, onLoadOlder }: DrillLogProps) {
   const rows = useMemo(() => eventsToRows(events), [events]);
+
+  return (
+    <DrillRowList
+      rows={rows}
+      loaded={loaded}
+      hasMore={hasMore}
+      error={error}
+      onLoadOlder={onLoadOlder}
+      emptyText="No events yet."
+      isInitiallyEmpty={events.length === 0}
+    />
+  );
+}
+
+export interface DrillRowListProps {
+  /** Already-expanded render rows (from `eventsToRows` or `timelineToRows`). */
+  rows: LogRow[];
+  loaded: boolean;
+  hasMore: boolean;
+  error: string | null;
+  onLoadOlder?: () => void;
+  /** Copy for the loaded-but-empty state. */
+  emptyText?: string;
+  /** Whether the underlying source is still empty (drives the "Loading…" state). */
+  isInitiallyEmpty: boolean;
+  /**
+   * U1.1 — an optional honest banner above the rows (e.g. "preview-grade — full
+   * interior on this session's home stack"). Rendered when present.
+   */
+  fidelityBanner?: string | null;
+}
+
+/**
+ * Shared row-list renderer — the SAME components + CSS for the controlled,
+ * observed, and sideband sources (U1.1). Owns the expand/lightbox state so the
+ * sideband-source lazy chunk reuses it rather than duplicating the row grammar.
+ */
+export function DrillRowList({
+  rows, loaded, hasMore, error, onLoadOlder, emptyText, isInitiallyEmpty, fidelityBanner,
+}: DrillRowListProps) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
 
@@ -38,17 +79,18 @@ export function DrillLog({ events, loaded, hasMore, error, onLoadOlder }: DrillL
 
   return (
     <div className="drill-log-wrap" role="log" aria-live="polite">
-      {hasMore && (
+      {fidelityBanner && <div className="drill-log-fidelity">◷ {fidelityBanner}</div>}
+      {hasMore && onLoadOlder && (
         <button type="button" className="drill-log-load-older" onClick={onLoadOlder}>
           Load older events
         </button>
       )}
       {error && <div className="drill-log-error">⚠ {error}</div>}
-      {!loaded && events.length === 0 && (
+      {!loaded && isInitiallyEmpty && (
         <div className="drill-log-empty">Loading…</div>
       )}
       {loaded && rows.length === 0 && !error && (
-        <div className="drill-log-empty">No events yet.</div>
+        <div className="drill-log-empty">{emptyText ?? "No events yet."}</div>
       )}
       {rows.map((row) => (
         <DrillRow
@@ -228,6 +270,22 @@ function ToolUseBlock({ row, isExpanded, onToggle }: { row: ToolUseRow; isExpand
       <div>
         <span className="tool-pair-name">{row.name}</span>
         {argSummary && <span style={{ color: "var(--fg-faint)" }}> · {argSummary}</span>}
+        {row.durationMs != null && (
+          <span style={{ color: "var(--fg-faint)" }}> · {(row.durationMs / 1000).toFixed(1)}s</span>
+        )}
+        {row.fidelity && (
+          <span
+            className="tool-pair-fidelity"
+            title={
+              row.fidelity === "observed"
+                ? "Reconstructed from observed hook events — full interior on this session's home stack"
+                : "Preview-grade — full interior on this session's home stack"
+            }
+            style={{ color: "var(--fg-faint)", marginLeft: 6, fontSize: 10 }}
+          >
+            ◷ preview
+          </span>
+        )}
         {(row.input || row.result) && (
           <button
             type="button"

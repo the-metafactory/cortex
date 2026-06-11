@@ -124,6 +124,13 @@
 .drill-log-load-older:hover { color: var(--fg); border-color: var(--accent); }
 .drill-log-empty { color: var(--fg-faint); font-size: 12px; padding: 12px; text-align: center; }
 .drill-log-error { color: var(--bad); font-size: 12px; padding: 8px; }
+/* U1.1 — honest preview-grade banner above a reconstructed transcript. */
+.drill-log-fidelity { color: var(--fg-faint); font-size: 11px; padding: 6px 8px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+/* U1.1 — deep-link exit when the sideband can't serve locally. */
+.drill-log-deeplink { display: inline-block; color: var(--accent); font-size: 12px; padding: 8px; text-decoration: none; }
+.drill-log-deeplink:hover { text-decoration: underline; }
+/* U1.1 — per-tool preview badge for observed/sideband-reconstructed rows. */
+.drill-row .tool-pair-fidelity { color: var(--fg-faint); }
 
 .drill-row {
   display: grid;
