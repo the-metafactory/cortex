@@ -266,6 +266,7 @@ What cortex depends on, what cortex must not do, and what to read in each upstre
 | Status | Design landed. Implementation depends on grove#320 (NATS AAA) and grove#321 (manifest identity), both migrating to cortex-side equivalents. |
 | Cortex's dependency | `nats.identity` config block per JC's E2E NATS work. Each agent's presence adapter authenticates with its own NATS user (one bot = one user) and signs envelopes with its agent's keypair. |
 | Cortex's contract | Cortex publishes envelopes with `signed_by` populated per the M4 spec. Cortex verifies inbound `signed_by` via the M4 verification rules before processing. Cortex tolerates pre-M4 envelopes during the rollout window. |
+| Security posture | `security.signing: off \| permissive \| enforce` (TC-0, #628). **Under `off`, `signed_by` is structural metadata only — it is NOT a trust gate; the trust boundary in that mode is bus-layer auth (NATS leaf-node/user auth).** Do not deploy `signing: off` to a multi-tenant or open-bus environment expecting stamp verification (cortex#1000). Default is seed-aware: a stack with `stack.nkey_seed_path` configured and `signing` unset boots `permissive`; only an explicit `signing: off` disables signing on a seed-configured stack. Only `enforce` rejects unsigned/invalid chains. |
 | Reading order | `myelin/.specify/specs/f-018-my-400/spec.md`. |
 
 ### 4.5 M5 — Discovery

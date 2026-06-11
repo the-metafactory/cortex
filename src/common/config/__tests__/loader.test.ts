@@ -544,6 +544,66 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     });
   });
 
+  // cortex#1000 — seed-aware secure default. A configured stack signing seed
+  // with NO explicit `security.signing` must boot `permissive`, not the
+  // schema's `off` (the forged-stamp-injection defaults gap). Explicit values
+  // — including `off` — always win; seedless stacks keep the all-off default
+  // (pinned by the backward-compat test above).
+  test("cortex#1000: signing seed + security.signing unset → defaults to permissive", () => {
+    const cfg = minimalCortex();
+    cfg.stack = {
+      id: "jc/research",
+      nkey_seed_path: "~/.config/nats/cortex-research.nk",
+    };
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, cfg));
+    expect(config.security.signing).toBe("permissive");
+    // Only the signing toggle bumps — the other posture layers keep `off`.
+    expect(config.security.encryption.payload).toBe("off");
+    expect(config.security.encryption.at_rest).toBe("off");
+    expect(config.security.transport.mtls).toBe("off");
+  });
+
+  test("cortex#1000: signing seed + EXPLICIT security.signing: off stays off", () => {
+    const cfg = minimalCortex();
+    cfg.stack = {
+      id: "jc/research",
+      nkey_seed_path: "~/.config/nats/cortex-research.nk",
+    };
+    cfg.security = { signing: "off" };
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, cfg));
+    expect(config.security.signing).toBe("off");
+  });
+
+  test("cortex#1000: signing seed + security block WITHOUT a signing key → permissive, siblings preserved", () => {
+    const cfg = minimalCortex();
+    cfg.stack = {
+      id: "jc/research",
+      nkey_seed_path: "~/.config/nats/cortex-research.nk",
+    };
+    cfg.security = { encryption: { payload: "opt-in" } };
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, cfg));
+    expect(config.security.signing).toBe("permissive");
+    expect(config.security.encryption.payload).toBe("opt-in");
+  });
+
+  test("cortex#1000: signing seed + explicit enforce untouched by the seed-aware default", () => {
+    const cfg = minimalCortex();
+    cfg.stack = {
+      id: "jc/research",
+      nkey_seed_path: "~/.config/nats/cortex-research.nk",
+    };
+    cfg.security = { signing: "enforce" };
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, cfg));
+    expect(config.security.signing).toBe("enforce");
+  });
+
+  test("cortex#1000: stack block without nkey_seed_path keeps the off default", () => {
+    const cfg = minimalCortex();
+    cfg.stack = { id: "jc/research" };
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, cfg));
+    expect(config.security.signing).toBe("off");
+  });
+
   test("passes bus.review provisioning knobs through with defaults applied", () => {
     const cfg = minimalCortex();
     cfg.bus = {

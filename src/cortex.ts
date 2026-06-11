@@ -634,10 +634,11 @@ export async function startCortex(
   let stackNKeyPubForVerifier: string | undefined;
   if (options.stack?.nkey_seed_path && !signingKnobs.attachSigner) {
     // TC-0 (#628) — a stack seed is configured, but `security.signing` is
-    // `off` (the schema default). Posture wins: do NOT attach the signer;
-    // publish unsigned. This is the DECISION-FOR-REVIEW behaviour change vs
-    // pre-TC-0 (which signed whenever a seed was present). Seed-configured
-    // stacks must set `signing: permissive` (or `enforce`) to retain signing.
+    // `off`. Posture wins: do NOT attach the signer; publish unsigned.
+    // Since cortex#1000 a seed-configured stack only reaches this branch via
+    // an EXPLICIT `signing: off` — the loader's seed-aware default
+    // (`applySeedAwareSigningDefault`) bumps an UNSET toggle to `permissive`
+    // before the schema parse. Keep the warning for the explicit-off case.
     console.log(
       "cortex: stack signing key present but security.signing=off — " +
         "NOT attaching signer; outbound envelopes will be unsigned " +

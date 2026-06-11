@@ -12,13 +12,15 @@
  * this is the dominant install state. The invariant guarantees the TC-0
  * default does not silently start rejecting their traffic.
  *
- * Also pins the DECISION-FOR-REVIEW behaviour change (surfaced in the PR
- * for Andreas to ratify):
+ * Also pins the EXPLICIT-OFF behaviour:
  *
- *   A stack that DOES have a seed but leaves `signing` at the default `off`
- *   STOPS attaching the signer (publishes unsigned) — a change vs pre-TC-0
- *   (which signed whenever a seed was present). `permissive`/`enforce`
- *   retain signing.
+ *   A stack that DOES have a seed but runs `signing: off` does NOT attach
+ *   the signer (publishes unsigned). Since cortex#1000 a seed-configured
+ *   stack only reaches this state via an EXPLICIT `signing: off` — the
+ *   loader's seed-aware default (`applySeedAwareSigningDefault`) bumps an
+ *   UNSET toggle to `permissive` before the schema parse. These tests feed
+ *   `startCortex` a pre-parsed AgentConfig (loader bypassed), which models
+ *   the explicit-off case. `permissive`/`enforce` retain signing.
  *
  * Modelled on `cortex.stack-signing-boot.test.ts` (same recording-runtime +
  * stderr/console capture pattern).
@@ -82,15 +84,15 @@ function createRecordingRuntime(): RecordingRuntime {
   return {
     enabled: false,
     published,
-    // eslint-disable-next-line @typescript-eslint/no-empty-function
+     
     onEnvelope(_handler: EnvelopeHandler) {
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
+       
       return { unregister: () => {} };
     },
     publish: async (envelope: Envelope) => {
       published.push(envelope);
     },
-    // eslint-disable-next-line @typescript-eslint/no-empty-function
+     
     stop: async () => {},
   };
 }
@@ -156,7 +158,7 @@ describe("startCortex — TC-0 security posture wiring (#628)", () => {
     await handle.stop();
   });
 
-  test("DECISION-FOR-REVIEW: seed present but signing=off (default) → signer NOT attached, publishes unsigned", async () => {
+  test("EXPLICIT-OFF (cortex#1000): seed present but signing=off → signer NOT attached, publishes unsigned", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "cortex-posture-off-seed-"));
     const seedPath = join(tmp, "stack.nk");
     writeFileSync(seedPath, new TextDecoder().decode(createUser().getSeed()));
@@ -172,7 +174,7 @@ describe("startCortex — TC-0 security posture wiring (#628)", () => {
         }),
       );
 
-      // Posture default `off` → attachSigner=false even though a seed loads.
+      // Explicit `off` posture → attachSigner=false even though a seed loads.
       const postureLines = logs.filter((l) =>
         l.includes("cortex: security posture — signing=off"),
       );

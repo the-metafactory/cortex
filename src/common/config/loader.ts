@@ -622,6 +622,56 @@ function detectLegacyAuthorisationFields(raw: Record<string, unknown>): string[]
   return offenders;
 }
 
+/**
+ * cortex#1000 — seed-aware secure default for the `security.signing` toggle.
+ *
+ * Under the TC-0 (#628) posture model the schema defaults `signing` to `off`,
+ * which on a seed-configured stack meant: publish unsigned AND never reject —
+ * the out-of-box posture accepted envelopes whose `signed_by` stamps are
+ * cryptographically meaningless (forged-stamp injection, cortex#1000). A
+ * principal who went to the trouble of provisioning a signing identity almost
+ * certainly wants it USED; only an explicit opt-out should disable it.
+ *
+ * Rule: when the raw composed config declares a non-empty
+ * `stack.nkey_seed_path` AND `security.signing` is NOT explicitly set, bump
+ * the raw config to `signing: "permissive"` (sign outbound + verify inbound,
+ * never reject — the next-tighter mode that cannot break a working stack).
+ * Every other case is untouched:
+ *
+ *   - no seed configured            → schema default `off` (unsigned dev
+ *     stack, backward-compat invariant in `security-posture.ts`)
+ *   - explicit `signing: off`       → respected (boot warns, as before)
+ *   - explicit `permissive`/`enforce` → respected
+ *
+ * Mutates `raw.security` in place and MUST run BEFORE the Zod parse — the
+ * schema's `.default("off")` makes an explicit `off` indistinguishable from
+ * an unset toggle afterwards. Exported for direct unit-testing; the loader
+ * call site logs the boot line when this returns `true`.
+ */
+export function applySeedAwareSigningDefault(
+  raw: Record<string, unknown>,
+): boolean {
+  const stack = raw.stack;
+  const seedPath =
+    stack !== null && typeof stack === "object"
+      ? (stack as Record<string, unknown>).nkey_seed_path
+      : undefined;
+  if (typeof seedPath !== "string" || seedPath.length === 0) return false;
+
+  const security = raw.security;
+  const securityObj =
+    security !== null && typeof security === "object"
+      ? (security as Record<string, unknown>)
+      : undefined;
+  // Any explicitly-set value (including `off`, including an invalid value
+  // that the schema parse will reject with its own error) wins over the
+  // seed-aware default.
+  if (securityObj !== undefined && "signing" in securityObj) return false;
+
+  raw.security = { ...securityObj, signing: "permissive" };
+  return true;
+}
+
 function loadCortexShape(
   raw: Record<string, unknown>,
   networks: NetworkFile[],
@@ -648,6 +698,21 @@ function loadCortexShape(
         `See docs/design-policy-cutover.md §16 for the schema delta.`,
     );
   }
+  // cortex#1000 — secure-by-default signing posture. A stack that configures
+  // a signing seed (`stack.nkey_seed_path`) but never sets `security.signing`
+  // gets `permissive` (sign outbound + verify, never reject), not the schema's
+  // `off`. An EXPLICIT `signing: off` is respected — the boot path keeps
+  // warning on the explicit seed-present-but-off combination. This MUST run on
+  // the RAW object: after `CortexConfigSchema.parse` the schema default makes
+  // an explicit `off` indistinguishable from an unset toggle.
+  if (applySeedAwareSigningDefault(normalised)) {
+    console.log(
+      "cortex: stack signing seed configured and security.signing unset — " +
+        "defaulting to signing=permissive (secure-by-default, cortex#1000); " +
+        "set security.signing: off explicitly to publish unsigned",
+    );
+  }
+
   // Schema-strict parse. Any legacy field at the top level fails here with
   // the principal-friendly migration message baked into CortexConfigSchema.
   const cortexConfig: CortexConfig = CortexConfigSchema.parse(normalised);

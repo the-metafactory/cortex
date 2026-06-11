@@ -54,6 +54,12 @@ function emptyDefault<T>(): T {
 // ramps independently `off → permissive → enforce`.
 // See docs/design-trust-confidentiality.md §Phase 0 (part of #627).
 //
+// cortex#1000 EXCEPTION — the `signing` default is seed-aware: when the raw
+// config declares `stack.nkey_seed_path` and `signing` is unset, the loader
+// (`applySeedAwareSigningDefault` in `src/common/config/loader.ts`) bumps the
+// RAW config to `permissive` BEFORE this schema parses. The schema default
+// here only lands on seedless stacks (or an explicit value passes through).
+//
 // - `signing`: off = no signer · permissive = sign + verify but NEVER reject
 //   (cryptoVerify:true, rejectEmpty:false, signFailureMode:"fallback") ·
 //   enforce = reject unsigned/invalid (rejectEmpty:true, signFailureMode:"drop").

@@ -33,12 +33,16 @@
  * (`rejectEmpty: false`, `signFailureMode: "fallback"`). The
  * `__tests__/security-posture.test.ts` backward-compat case pins this.
  *
- * ## DECISION FOR REVIEW (surfaced in the TC-0 PR, ratification pending)
+ * ## Seed-aware default (cortex#1000)
  *
- * For a stack that DOES have a seed configured, `signing: off` (the default)
- * stops attaching the signer — a behaviour change vs today (which signs
- * whenever a seed is present). Seed-configured stacks must set
- * `signing: permissive` (or `enforce`) to retain signing.
+ * The TC-0 decision-for-review ("seed-configured stacks must OPT IN to
+ * signing") was revised by the cortex#1000 forged-stamp finding: a stack that
+ * configures `stack.nkey_seed_path` but never sets `security.signing` now
+ * DEFAULTS to `permissive` — the loader (`applySeedAwareSigningDefault`,
+ * `src/common/config/loader.ts`) bumps the raw config before the Zod parse.
+ * An EXPLICIT `signing: off` is still respected (boot warns on the
+ * seed-present-but-off combination). This resolver is unchanged by that —
+ * it still maps whatever mode arrives to the same knobs.
  */
 
 import type { AgentConfig } from "./types/config";
