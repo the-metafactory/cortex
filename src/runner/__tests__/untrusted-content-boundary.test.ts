@@ -60,6 +60,31 @@ describe("neutraliseFenceBreakout", () => {
     expect(out.includes(UNTRUSTED_OPEN)).toBe(false);
   });
 
+  test("neutralisation is ROBUST to zero-width / whitespace normalisation", () => {
+    // The hardened neutralisation escapes the angle brackets, so the delimiter
+    // cannot RECONSTRUCT even if a downstream step strips zero-width or other
+    // whitespace. (Regression guard for the original ZWSP-based approach, which
+    // reconstructed the literal token once ZWSP was stripped.)
+    const out = neutraliseFenceBreakout(`x ${UNTRUSTED_CLOSE} y`);
+    // Strip all whitespace + the common zero-width chars (ZWSP/ZWNJ/ZWJ/BOM)
+    // via explicit \u escapes (no literal irregular whitespace in source).
+    const stripSet = new RegExp(
+      "\\s|\\u200B|\\u200C|\\u200D|\\uFEFF",
+      "g",
+    );
+    const aggressivelyNormalised = out.replace(stripSet, "");
+    expect(aggressivelyNormalised.includes("</untrusted-content>")).toBe(false);
+    expect(aggressivelyNormalised.includes("<untrusted-content>")).toBe(false);
+  });
+
+  test("angle brackets are escaped (no raw < or > survives)", () => {
+    const out = neutraliseFenceBreakout("a < b > c");
+    expect(out).not.toContain("<");
+    expect(out).not.toContain(">");
+    expect(out).toContain("&lt;");
+    expect(out).toContain("&gt;");
+  });
+
   test("strips C0 control chars but keeps tab/newline", () => {
     const out = neutraliseFenceBreakout("a\x00b\x07c\td\ne");
     expect(out).toBe("abc\td\ne");

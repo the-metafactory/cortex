@@ -80,8 +80,15 @@ export type EgressScanResult =
 // Detectors
 // ---------------------------------------------------------------------------
 
-/** Boundary / system-prompt leakage markers — phrases that should only ever
- *  appear in the reviewer's INPUT (the M1 preamble), never echoed to output. */
+/**
+ * Boundary / system-prompt leakage markers — phrases that should only ever
+ * appear in the reviewer's INPUT (the M1 preamble), never echoed to output.
+ * Matched CASE-INSENSITIVELY (see {@link scanEgress}): an attacker who coaxes
+ * the model into printing "System Prompt" / "SYSTEM PROMPT" must not slip past a
+ * case-sensitive marker (self-review hardening — the phrase markers carry no
+ * case meaning; the secret/config regexes below stay case-specific where the
+ * token shape demands it).
+ */
 const BOUNDARY_MARKERS: readonly string[] = [
   "SECURITY BOUNDARY — UNTRUSTED EXTERNAL REVIEW",
   "You are reviewing a pull request submitted by an EXTERNAL",
@@ -102,9 +109,13 @@ const SECRET_PATTERNS: readonly { reason: string; re: RegExp }[] = [
   { reason: "slack token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/ },
   { reason: "openai-style key", re: /\bsk-[A-Za-z0-9]{20,}\b/ },
   { reason: "private key block", re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/ },
-  // NATS/nkey seed shape — `S` + role char + 56 base32 chars (the stack signing
-  // seed `stack.nkey_seed_path` points at). High specificity.
-  { reason: "nkey seed", re: /\bS[A-Z]A[A-Z2-7]{50,}\b/ },
+  // NATS/nkey SEED shape — a seed is `S` + an entity-role char (U/A/O/N/C/X)
+  // + a base32 body, ~56 base32 chars total. Anchored on the leading `S` +
+  // role char (NOT a fixed 3rd char — the old `S[A-Z]A…` form missed seeds whose
+  // 3rd char isn't `A`) followed by a long base32 run. The stack signing seed
+  // (`stack.nkey_seed_path`) is exactly this shape; a public review must never
+  // echo it.
+  { reason: "nkey seed", re: /\bS[UAONCX][A-Z2-7]{48,}\b/ },
 ];
 
 /** Config / principal-path leakage detectors. */
@@ -124,8 +135,12 @@ const CONFIG_PATTERNS: readonly { reason: string; re: RegExp }[] = [
 export function scanEgress(text: string): EgressScanResult {
   const findings: EgressFinding[] = [];
 
+  // Boundary markers are phrase-based and carry no case meaning, so match
+  // CASE-INSENSITIVELY — a model coaxed into printing "System Prompt" must not
+  // slip past. Lower-cased once; the markers are also compared lower-cased.
+  const lowerText = text.toLowerCase();
   for (const marker of BOUNDARY_MARKERS) {
-    if (text.includes(marker)) {
+    if (lowerText.includes(marker.toLowerCase())) {
       findings.push({
         kind: "boundary-leak",
         reason: `output echoes a boundary/system-prompt marker ("${marker.slice(0, 32)}…")`,

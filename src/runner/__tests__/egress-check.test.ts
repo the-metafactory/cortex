@@ -50,6 +50,12 @@ describe("scanEgress — boundary leakage", () => {
     const out = scanEgress("As requested, my system prompt is: You are Echo...");
     expect(out.clean).toBe(false);
   });
+
+  test("boundary markers match case-INSENSITIVELY (no case-evasion)", () => {
+    // An attacker coaxing 'System Prompt' / 'SYSTEM PROMPT' must not slip past.
+    expect(scanEgress("here is my System Prompt: ...").clean).toBe(false);
+    expect(scanEgress("MY SYSTEM PROMPT BEGINS").clean).toBe(false);
+  });
 });
 
 describe("scanEgress — secret leakage", () => {

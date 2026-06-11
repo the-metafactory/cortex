@@ -101,26 +101,46 @@ export const UNTRUSTED_CONTENT_PREAMBLE = [
 ].join("\n");
 
 /**
- * Neutralise any literal occurrence of the closing fence inside requester
- * content so an attacker cannot terminate the untrusted block early and have
- * subsequent text read as trusted. We insert a zero-width-free visible marker
- * by breaking the delimiter with a space inside the angle bracket — the
- * sequence is no longer a literal `</untrusted-content>` token but stays
- * human-legible in the rendered prompt. Idempotent enough for our purpose: the
- * goal is that no INTACT closing delimiter survives inside the data region.
+ * Neutralise any attempt to forge the fence delimiter inside requester content
+ * so an attacker cannot terminate (or open) the untrusted block early and have
+ * subsequent text read as trusted (the classic delimiter-injection escape).
  *
- * Also strips NUL and other C0 control chars that could be used to confuse a
- * downstream renderer, except tab/newline/carriage-return which are legitimate
- * in a PR title/note.
+ * The neutralisation is **robust against normalisation**: rather than breaking
+ * the delimiter with an invisible (zero-width) character — which reconstructs
+ * the literal token the moment any downstream step strips zero-width chars — we
+ * escape the ANGLE BRACKETS themselves to their HTML-entity form (`<`→`&lt;`,
+ * `>`→`&gt;`). The result can never be the literal `<untrusted-content>` /
+ * `</untrusted-content>` token under any whitespace/zero-width normalisation,
+ * because the `<`/`>` characters that DEFINE the delimiter are gone. It stays
+ * fully legible to a human and to the model (which is told the fence is the
+ * literal angle-bracket form), so a forged `&lt;/untrusted-content&gt;` reads as
+ * inert escaped text, not a structural delimiter.
+ *
+ * Because EVERY `<`/`>` in requester content is escaped, this also incidentally
+ * neutralises any other angle-bracket pseudo-tag an attacker might use to mimic
+ * a system marker. Requester `title`/`note` are short free-text fields where
+ * literal angle brackets are rare and escaping them is harmless.
+ *
+ * Also strips NUL and other C0 control chars that could confuse a downstream
+ * renderer, except tab/newline/carriage-return which are legitimate in a PR
+ * title/note.
+ *
+ * Idempotency note: `&lt;`/`&gt;` contain no `<`/`>`, so a second pass is a
+ * no-op — escaping never compounds.
  */
 export function neutraliseFenceBreakout(value: string): string {
-  return value
-    // Break any literal close/open delimiter so it can't end/begin the fence.
-    .replaceAll(UNTRUSTED_CLOSE, "<​/untrusted-content>")
-    .replaceAll(UNTRUSTED_OPEN, "<​untrusted-content>")
-    // Strip C0 controls except \t (\x09) \n (\x0A) \r (\x0D).
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
+  return (
+    value
+      // Strip C0 controls FIRST (except \t \n \r) so a control char can't be
+      // used to split a delimiter past the bracket-escape.
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "")
+      // Escape the angle brackets that DEFINE any fence/pseudo-tag delimiter.
+      // No `<`/`>` survives ⇒ no literal `<untrusted-content>`/`</…>` can form,
+      // regardless of any later zero-width / whitespace normalisation.
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+  );
 }
 
 /**
