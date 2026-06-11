@@ -387,6 +387,51 @@ function buildVerdictEnvelope(
   });
 }
 
+/**
+ * Assert the audit-parity `system.access.denied` emission that the consumer's
+ * Stage-1b sovereignty gate (cortex#932 / P-14 U0.2) fires on these round-trips.
+ *
+ * Every agent in this file is constructed WITHOUT a `modelClass`, so
+ * `evaluateSovereignty(envelope.sovereignty, undefined)` fails closed and
+ * returns `decision: "deny"` (reason: "agent model class missing or unknown …").
+ * Because none of these consumers set `sovereigntyEnforce`, the default
+ * audit-parity posture (`enforced: false`) applies: the pipeline still RUNS, but
+ * U0.2 correctly emits a `system.access.denied` governance signal — the stream
+ * the audit→enforce flip (#906) and the U3.1 governance pane read. The gate
+ * emits it (fire-and-forget) before `dispatch.task.started`, so it lands first
+ * in publish order.
+ *
+ * This guards the EMISSION SET (not just the count): the 4th envelope is the
+ * audit-parity denial with the exact would-deny reason, never a stray
+ * over-emit on a clean accept. If a future change made the agent prove its
+ * model class (so the would-deny vanishes), `expect(denial).toBeDefined()`
+ * fails loudly — the assertion is a real guard, not a number bump.
+ */
+function assertAuditParityDenial(
+  emitted: readonly Envelope[],
+  expectedSubject: string,
+): void {
+  const denial = emitted.find((e) => e.type === "system.access.denied");
+  expect(denial).toBeDefined();
+  // Emitted before the pipeline lifecycle (gate Stage 1b precedes started).
+  expect(emitted[0]!.type).toBe("system.access.denied");
+  const payload = denial!.payload as {
+    capability: string;
+    envelope_subject: string;
+    reason: { kind: string; enforced?: boolean; reason?: string };
+    intent_sovereignty: { model_class: string; frontier_ok: boolean };
+  };
+  expect(payload.reason.kind).toBe("sovereignty_model_class");
+  // Audit-parity: the denial is observable but does not bite (pipeline ran).
+  expect(payload.reason.enforced).toBe(false);
+  // The would-deny condition these agents actually hit (no declared modelClass).
+  expect(payload.reason.reason).toContain("agent model class missing or unknown");
+  expect(payload.envelope_subject).toBe(expectedSubject);
+  // The intent the gate refused: a local-only task an unproven agent can't run.
+  expect(payload.intent_sovereignty.model_class).toBe("local-only");
+  expect(payload.intent_sovereignty.frontier_ok).toBe(false);
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -467,17 +512,24 @@ describe("cortex#237 PR-9 — review-consumer end-to-end round-trip (§11.1 Laye
     expect(decisions.length).toBe(1);
     expect(decisions[0]).toEqual({ kind: "ack" });
 
-    // Three envelopes emitted in §8.2 order: started → verdict → completed.
+    // Four envelopes in publish order: the audit-parity sovereignty denial
+    // (cortex#932 / U0.2 — the agent declares no modelClass, so the Stage-1b
+    // gate fails closed and emits a `system.access.denied` with
+    // `enforced: false` BEFORE the pipeline runs), then §8.2 order
+    // started → verdict → completed.
     const emitted = runtime.published.slice(publishedBefore);
-    expect(emitted.length).toBe(3);
-    expect(emitted[0]!.type).toBe("dispatch.task.started");
-    expect(emitted[1]!.type).toBe("review.verdict.approved");
-    expect(emitted[2]!.type).toBe("dispatch.task.completed");
+    expect(emitted.length).toBe(4);
+    assertAuditParityDenial(emitted, requestSubject);
+    expect(emitted[1]!.type).toBe("dispatch.task.started");
+    expect(emitted[2]!.type).toBe("review.verdict.approved");
+    expect(emitted[3]!.type).toBe("dispatch.task.completed");
 
     // **THE HEADLINE CONTRACT** (design §5.1): every emitted envelope's
     // correlation_id MUST equal the request envelope's id. Pilot's
     // `subscribe-verdict` filter joins on exactly this value; if it
-    // ever drifts pilot would silently miss the verdict.
+    // ever drifts pilot would silently miss the verdict. (The denial
+    // envelope joins too: its correlation_id falls back to the request id
+    // when the request carries no correlation_id, as here.)
     for (const env of emitted) {
       expect(env.correlation_id).toBe(request.id);
     }
@@ -485,7 +537,7 @@ describe("cortex#237 PR-9 — review-consumer end-to-end round-trip (§11.1 Laye
     // Verdict envelope shape spot-check — payload echoes the request,
     // discriminator-alignment guard (§6.3) didn't fire (builder would
     // have thrown).
-    const verdict = emitted[1]!;
+    const verdict = emitted[2]!;
     const payload = verdict.payload as {
       repo: string;
       pr: number;
@@ -640,12 +692,20 @@ describe("cortex#327 — signature verification gate", () => {
     expect(verifyCalls).toHaveLength(1);
     expect(verifyCalls[0]!.envelopeId).toBe(request.id);
 
-    // Full pipeline runs — started + verdict + completed emissions, ack on JsMsg.
+    // Full pipeline runs — the audit-parity sovereignty denial
+    // (cortex#932 / U0.2: this agent declares no modelClass → Stage-1b gate
+    // fails closed, emits `system.access.denied` with `enforced: false` and
+    // proceeds), then started + verdict + completed, ack on JsMsg. The
+    // signature gate (the subject of THIS test) is upstream of the
+    // sovereignty gate, so a valid signature still reaches the would-deny.
     expect(handlersCalled).toBe(1);
     expect(decisions[0]).toEqual({ kind: "ack" });
     const emitted = runtime.published.slice(publishedBefore);
-    expect(emitted.length).toBe(3);
-    expect(emitted[1]!.type).toBe("review.verdict.approved");
+    expect(emitted.length).toBe(4);
+    assertAuditParityDenial(emitted, requestSubject);
+    expect(emitted[1]!.type).toBe("dispatch.task.started");
+    expect(emitted[2]!.type).toBe("review.verdict.approved");
+    expect(emitted[3]!.type).toBe("dispatch.task.completed");
 
     const sub = runtime.subscriptions[0]!;
     expect(sub.msgs.length).toBe(subBefore + 1);
@@ -812,18 +872,22 @@ describe("cortex#331 Phase 1 — pi-dev substrate dispatch (factory wired into R
     expect(handlersCalled).toBe(1);
     expect(decisions[0]).toEqual({ kind: "ack" });
 
-    // started + verdict + completed, in §8.2 order.
+    // The audit-parity sovereignty denial (cortex#932 / U0.2: the sage agent
+    // declares no modelClass → Stage-1b gate fails closed, emits
+    // `system.access.denied` with `enforced: false` and proceeds), then
+    // started + verdict + completed in §8.2 order.
     const emitted = runtime.published.slice(publishedBefore);
-    expect(emitted.length).toBe(3);
-    expect(emitted[0]!.type).toBe("dispatch.task.started");
-    expect(emitted[1]!.type).toBe("review.verdict.commented");
-    expect(emitted[2]!.type).toBe("dispatch.task.completed");
+    expect(emitted.length).toBe(4);
+    assertAuditParityDenial(emitted, requestSubject);
+    expect(emitted[1]!.type).toBe("dispatch.task.started");
+    expect(emitted[2]!.type).toBe("review.verdict.commented");
+    expect(emitted[3]!.type).toBe("dispatch.task.completed");
 
     // **THE HEADLINE CONTRACT** — verdict envelope's correlation_id is
     // the request envelope's id (design §5.1). Phase 1's pi-dev runner
     // preserves this; if a future refactor breaks it pilot's --wait
     // would silently miss every sage verdict.
-    const verdict = emitted[1]!;
+    const verdict = emitted[2]!;
     expect(verdict.correlation_id).toBe(request.id);
 
     // Summary carries sage's stdout verbatim — Phase 2 will parse this

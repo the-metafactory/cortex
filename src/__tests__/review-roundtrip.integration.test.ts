@@ -321,7 +321,13 @@ maybeDescribe("cortex#339 — live JetStream review round-trip", () => {
         return (
           types.includes("dispatch.task.started") &&
           types.includes("dispatch.task.completed") &&
-          types.includes("review.verdict.approved")
+          types.includes("review.verdict.approved") &&
+          // cortex#932 / U0.2: the echo agent declares no modelClass, so the
+          // Stage-1b sovereignty gate fails closed and emits an audit-parity
+          // `system.access.denied` (enforced:false) alongside the lifecycle.
+          // Wait for it too so the assertions below don't race the
+          // fire-and-forget emit over the JetStream wire.
+          types.includes("system.access.denied")
         );
       },
       () =>
@@ -334,7 +340,34 @@ maybeDescribe("cortex#339 — live JetStream review round-trip", () => {
     );
 
     const emitted = observed.filter((e) => e.correlation_id === request.id);
-    expect(emitted.map((e) => e.type)).toEqual([
+
+    // cortex#932 / P-14 U0.2 — the audit-parity sovereignty denial. The agent
+    // declares no modelClass, so `evaluateSovereignty` fails closed and the
+    // gate emits a `system.access.denied` governance signal (the stream the
+    // audit→enforce flip #906 reads). Because `sovereigntyEnforce` is unset,
+    // the pipeline still runs (`enforced:false`) — the denial is observable but
+    // does not bite. Asserted explicitly so the test guards the EMISSION (its
+    // reason + audit posture), never a bare count.
+    const denial = emitted.find((e) => e.type === "system.access.denied");
+    expect(denial).toBeDefined();
+    expect(denial!.payload).toMatchObject({
+      reason: {
+        kind: "sovereignty_model_class",
+        enforced: false,
+      },
+      envelope_subject: "local.test-op.default.tasks.code-review.typescript",
+    });
+    expect(
+      (denial!.payload as { reason: { reason: string } }).reason.reason,
+    ).toContain("agent model class missing or unknown");
+
+    // The §8.2 lifecycle sequence (denial excluded — it's an out-of-band
+    // governance signal, not part of the dispatch lifecycle). Over a real
+    // JetStream wire the lifecycle envelopes keep their relative order; the
+    // denial's wire position is best-effort (fire-and-forget) so it is matched
+    // by membership above, not pinned to an index here.
+    const lifecycle = emitted.filter((e) => e.type !== "system.access.denied");
+    expect(lifecycle.map((e) => e.type)).toEqual([
       "dispatch.task.started",
       "review.verdict.approved",
       "dispatch.task.completed",
