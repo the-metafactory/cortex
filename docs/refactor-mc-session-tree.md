@@ -1,6 +1,6 @@
 # Refactor: Mission Control Session-Tree Domain Model
 
-**Status:** Planned · **Resolved:** 2026-06-11 (MC session-tree grilling) · **Tracking:** TBD (umbrella issue) · **Schema convergence:** [ADR-0008](adr/0008-unified-mc-session-schema.md)
+**Status:** Planned · **Resolved:** 2026-06-11 (MC session-tree grilling) · **Tracking:** TBD (umbrella issue) · **Schema convergence:** [ADR-0011](adr/0011-unified-mc-session-schema.md)
 
 This is the deterministic refactoring map for moving Mission Control + the dev-loop from
 the *"every Claude Code session is an `agents` row"* model to the substrate-agnostic
@@ -41,9 +41,9 @@ agent          the bus runtime identity (NKey + consumer); ~1 per assistant×sta
 - The working grid renders **agent → its session tree**; sub-agents nest under their parent
   session.
 
-**Canonical schema (ADR-0008).** The MC backend is dual-substrate (local bun:sqlite + cloud
+**Canonical schema (ADR-0011).** The MC backend is dual-substrate (local bun:sqlite + cloud
 D1), and the two `sessions` schemas had **diverged** (normalized-local vs denormalized-cloud,
-no shared source). Per [ADR-0008](adr/0008-unified-mc-session-schema.md), they converge onto
+no shared source). Per [ADR-0011](adr/0011-unified-mc-session-schema.md), they converge onto
 **one identical canonical session schema** from a **single shared source + a CI parity
 test** — local **denormalizes** its `sessions` row to the flat canonical shape
 (`agent_name`/`principal_id`/`status`/`substrate`/`parent_session_id`/sovereignty as
@@ -95,7 +95,7 @@ session-tree fields land in the canonical schema, not bolted onto two diverged o
 
 Phases are dependency-ordered. Each maps to a slice issue under the umbrella.
 
-### Phase 0 — Schema convergence + canonical session model (foundation) — see [ADR-0008](adr/0008-unified-mc-session-schema.md)
+### Phase 0 — Schema convergence + canonical session model (foundation) — see [ADR-0011](adr/0011-unified-mc-session-schema.md)
 Converge local + cloud onto **one identical canonical session schema** from a single shared
 source (DDL for both substrates + TS types generated from it; CI **parity test**). Local
 **denormalizes** its `sessions` row to the flat canonical columns (keeping `tasks`/
