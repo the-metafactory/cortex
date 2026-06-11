@@ -33,18 +33,27 @@
  *   5. task_id correlation: any effect whose `task_id` ≠ the spawned task's id
  *      is refused with `effect_rejected` (`wont_do`) and DROPPED (§5
  *      "task_id correlation is enforced host-side").
- *   6. Termination: process stays until `result`. At `timeoutMs` → SIGTERM;
- *      +5 s grace → SIGKILL (§5/§7 escalation). Brain exit WITHOUT a `result`
- *      → synthesize `result: failed (cant_do, "brain exited without result")`
- *      with the captured stderr tail in `reason.detail`.
+ *   6. Scratch confinement: a `post` attachment `path` must resolve within the
+ *      task's realpath'd scratch dir; an escape is refused with
+ *      `effect_rejected` (`wont_do`, "attachment path outside scratch dir") and
+ *      the post DROPPED. The host owns the filesystem boundary, not the brain.
+ *   7. Termination: `result` is TERMINAL — on a schema-valid `result` for the
+ *      owned task the run RESOLVES immediately. Process reaping then happens
+ *      fire-and-forget AFTER resolution (close stdin → `resultGraceMs` self-exit
+ *      grace → SIGTERM → +`killGraceMs` SIGKILL) and can never delay or reject
+ *      the resolved promise. A `timeoutMs` with no result → SIGTERM → grace →
+ *      SIGKILL. Brain exit WITHOUT a `result` → synthesize
+ *      `result: failed (cant_do, "brain exited without result")` with the
+ *      captured (bounded) stderr tail in `reason.detail`.
  *
  * The runner returns the final `result` plus the collected log lines and the
- * stderr tail.
+ * bounded stderr tail.
  */
 
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, realpathSync } from "fs";
+import { rm } from "fs/promises";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, resolve as resolvePath, sep } from "path";
 import {
   encodeBrainEvent,
   parseBrainEffect,
@@ -58,6 +67,13 @@ import {
   type GateVerdictValue,
   type BrainReason,
 } from "./protocol";
+
+/**
+ * Max stderr we retain in memory. A chatty brain must not grow the runner's
+ * heap without bound, so we keep only the last {@link STDERR_TAIL_CAP} bytes as
+ * a ring (older bytes are dropped, a truncation marker is prepended once).
+ */
+const STDERR_TAIL_CAP = 8 * 1024;
 
 // ---------------------------------------------------------------------------
 // Spawn-injection types — narrowed surface of `Bun.spawn`
@@ -181,6 +197,13 @@ export interface MakeExecBrainRunnerOpts {
    */
   killGraceMs?: number;
   /**
+   * Grace period AFTER a terminal `result` is received: how long to let the
+   * brain exit on its own (post stdin-close) before SIGTERM. The run has
+   * ALREADY resolved by this point — this only bounds background reaping.
+   * Defaults to 2_000 (finding 1).
+   */
+  resultGraceMs?: number;
+  /**
    * Spawn function — defaults to {@link defaultSpawn} (`Bun.spawn`). Tests
    * inject a fake.
    */
@@ -231,6 +254,7 @@ export function makeExecBrainRunner(
   const makeScratchDir = opts.makeScratchDir ?? defaultMakeScratchDir;
   const timeoutMs = opts.timeoutMs ?? 120_000;
   const killGraceMs = opts.killGraceMs ?? 5_000;
+  const resultGraceMs = opts.resultGraceMs ?? 2_000;
   const secrets = opts.secrets ?? {};
 
   return async (
@@ -242,32 +266,41 @@ export function makeExecBrainRunner(
     const env = buildEnv(scratchDir, secrets);
 
     const logs: string[] = [];
-    // We collect stderr to a single string (drained in parallel below). It
-    // feeds the synthesized-failure reason.detail when the brain exits
-    // without a result.
-    let stderrTail = "";
+    // We collect stderr into a bounded ring (drained in parallel below). It
+    // feeds the synthesized-failure reason.detail when the brain exits without
+    // a result, and is returned to the caller. A chatty brain cannot grow this
+    // past STDERR_TAIL_CAP — see {@link StderrRing}.
+    const stderrRing = new StderrRing(STDERR_TAIL_CAP);
 
-    // The terminal result. Resolved either by the brain's `result` effect or
-    // by the exit/timeout fallback. We use a manual promise so the stdout
-    // pump can settle it from inside the read loop.
-    let resolveResult!: (r: ResultEffect) => void;
-    const resultPromise = new Promise<ResultEffect>((res) => {
-      resolveResult = res;
+    // Resolve the scratch dir's REAL path once (mkdtemp may hand back a path
+    // through a symlinked temp root, e.g. /var → /private/var on macOS). All
+    // scratch-path confinement checks compare against this realpath prefix.
+    let scratchReal: string;
+    try {
+      scratchReal = realpathSync(scratchDir);
+    } catch {
+      // If realpath fails (dir vanished), fall back to the resolved literal;
+      // confinement still rejects anything outside it.
+      scratchReal = resolvePath(scratchDir);
+    }
+
+    // The terminal run result. The run is RESOLVED on the FIRST of: a
+    // schema-valid `result` effect for the owned task, or process exit without
+    // one. A manual promise lets the stdout pump settle it mid-read-loop. Once
+    // resolved, cleanup (kill escalation + scratch removal) is fire-and-forget
+    // and can never reject this promise (finding 1: `result` is terminal).
+    let resolveRun!: (r: BrainTaskRunResult) => void;
+    const runPromise = new Promise<BrainTaskRunResult>((res) => {
+      resolveRun = res;
     });
-    let resultSeen = false;
-    const settleResult = (r: ResultEffect): void => {
-      if (!resultSeen) {
-        resultSeen = true;
-        resolveResult(r);
-      }
-    };
+    let runSettled = false;
 
     let proc: BrainSpawnResult;
     try {
       proc = spawn(argv, { env, cwd: scratchDir });
     } catch (err) {
       // Spawn throw (bad argv, sandbox/env bug). Synthesize a cant_do.
-      cleanupScratch(scratchDir);
+      void cleanupScratch(scratchDir);
       const detail = err instanceof Error ? err.message : String(err);
       return {
         result: synthFailed(task.task_id, `brain spawn failed: ${detail}`),
@@ -285,8 +318,13 @@ export function makeExecBrainRunner(
       if (killTimer !== undefined) clearTimeout(killTimer);
       if (graceTimer !== undefined) clearTimeout(graceTimer);
     };
-    killTimer = setTimeout(() => {
-      timedOut = true;
+
+    /**
+     * Fire-and-forget kill escalation: SIGTERM now, SIGKILL after the grace.
+     * Used by BOTH the timeout path and the post-`result` cleanup. Wrapped in
+     * try/catch because a process that already exited makes `kill` throw.
+     */
+    const escalateKill = (): void => {
       try {
         proc.kill("SIGTERM");
       } catch (err) {
@@ -305,7 +343,75 @@ export function makeExecBrainRunner(
           );
         }
       }, killGraceMs);
+    };
+
+    killTimer = setTimeout(() => {
+      timedOut = true;
+      escalateKill();
     }, timeoutMs);
+
+    /**
+     * Resolve the run with the brain's terminal `result`, THEN run cleanup
+     * fire-and-forget (finding 1: `result` is terminal — the run returns
+     * promptly; the process is reaped afterward and cannot delay or reject the
+     * resolved promise).
+     *
+     * Cleanup sequence (all AFTER resolution):
+     *   1. close stdin (EOF — most brains exit on it);
+     *   2. give the process `resultGraceMs` to exit on its own;
+     *   3. SIGTERM, then SIGKILL after `killGraceMs`;
+     *   4. remove the scratch dir (async).
+     */
+    const settleWithResult = (result: ResultEffect): void => {
+      if (runSettled) return;
+      runSettled = true;
+      clearTimers();
+      resolveRun({
+        result,
+        logs,
+        stderrTail: stderrRing.value(),
+        // The process has not necessarily exited yet; exit code is unknown at
+        // resolution time. Callers that need the code use the no-result path
+        // (which awaits exit). A terminal result is the brain's own verdict.
+        exitCode: null,
+      });
+      // --- fire-and-forget cleanup (cannot reject the resolved run) --------
+      void reapAfterResult();
+    };
+
+    /**
+     * Best-effort reaping after a terminal result: close stdin, grace, escalate
+     * kill, drop scratch. Every step is guarded; a throw here never surfaces
+     * (the run promise is already resolved).
+     */
+    const reapAfterResult = async (): Promise<void> => {
+      try {
+        proc.stdin.end();
+      } catch (err) {
+        console.warn(
+          "exec-brain-runner: stdin.end() after result failed:",
+          err instanceof Error ? err.message : err,
+        );
+      }
+      // Race the process's own exit against the result grace.
+      const exitedOnOwn = await Promise.race([
+        proc.exited.then(() => true).catch(() => true),
+        new Promise<boolean>((res) =>
+          setTimeout(() => res(false), resultGraceMs),
+        ),
+      ]);
+      if (!exitedOnOwn) {
+        escalateKill();
+        // Let the kill escalation complete in the background, then clear the
+        // grace timer once the process is gone.
+        proc.exited
+          .catch(() => undefined)
+          .finally(() => {
+            if (graceTimer !== undefined) clearTimeout(graceTimer);
+          });
+      }
+      await cleanupScratch(scratchDir);
+    };
 
     // --- write the task event to stdin ------------------------------------
     try {
@@ -315,9 +421,9 @@ export function makeExecBrainRunner(
       // stdin closed before we could write — treat as a brain that refused
       // the task. Let the exit fallback below synthesize the failure, but
       // record why.
-      stderrTail +=
-        (stderrTail ? "\n" : "") +
-        `[runner] stdin write failed: ${err instanceof Error ? err.message : String(err)}`;
+      stderrRing.append(
+        `[runner] stdin write failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     /**
@@ -343,25 +449,34 @@ export function makeExecBrainRunner(
       }
     };
 
+    /**
+     * Send an `effect_rejected` back to the brain and DROP the effect. Shared
+     * by the foreign-task_id and scratch-confinement refusals. `kind` is a
+     * brain-kind (`wont_do`) — a host policy refusal in v1.
+     */
+    const rejectEffect = async (
+      effectType: string,
+      detail: string,
+    ): Promise<void> => {
+      await sendEvent(
+        encodeBrainEvent({
+          v: 1,
+          type: "effect_rejected",
+          task_id: task.task_id,
+          effect: effectType,
+          reason: { kind: "wont_do", detail },
+        }),
+      );
+    };
+
     // --- route one validated, correlation-checked effect ------------------
     const routeEffect = async (
-      effect: ReturnType<typeof parseBrainEffect>,
+      parsed: ReturnType<typeof parseBrainEffect>,
     ): Promise<void> => {
-      if (effect.kind === "invalid") {
-        // Malformed line / failed validation (e.g. oversized attachment).
-        // Drop-and-log; never throws the pump.
-        logs.push(`[runner] dropped invalid effect: ${effect.detail}`);
-        return;
-      }
-      if (effect.kind === "unknown") {
-        // Forward-compat: unknown effect type — drop and log (§5).
-        logs.push(
-          `[runner] dropped unknown effect type: ${String(effect.raw["type"])}`,
-        );
-        return;
-      }
-
-      const e = effect.effect;
+      // Drop-and-log invalid/unknown lines (§5 forward-compat). The type guard
+      // narrows `parsed` to the `ok` variant when it returns false.
+      if (!isOkEffect(parsed, logs)) return;
+      const e = parsed.effect;
 
       // `log` is task-agnostic — it carries no `task_id` and is a pure
       // diagnostic, so it bypasses correlation entirely (running it through
@@ -376,28 +491,40 @@ export function makeExecBrainRunner(
       // ask_principal, dispatch, result) must carry THIS brain's task id; a
       // foreign or absent id is refused with effect_rejected (wont_do) and the
       // effect is DROPPED (§5 "task_id correlation is enforced host-side").
+      // Echo OUR task id, not the foreign one, so the brain correlates the
+      // rejection to the task it actually owns.
       if (e.task_id !== task.task_id) {
-        await sendEvent(
-          encodeBrainEvent({
-            v: 1,
-            type: "effect_rejected",
-            // Echo OUR task id, not the (possibly undefined) foreign one — the
-            // brain correlates the rejection to the task it actually owns.
-            task_id: task.task_id,
-            effect: e.type,
-            reason: {
-              kind: "wont_do",
-              detail: `foreign task_id ${String(e.task_id)} (this brain owns ${task.task_id})`,
-            },
-          }),
+        await rejectEffect(
+          e.type,
+          `foreign task_id ${String(e.task_id)} (this brain owns ${task.task_id})`,
         );
         return;
       }
 
       switch (e.type) {
-        case "post":
+        case "post": {
+          // Scratch-path confinement (finding 3): a `path` attachment must
+          // resolve to WITHIN this task's realpath'd scratch dir. An escape
+          // (`..`, an absolute path elsewhere) is refused with effect_rejected
+          // and the post is DROPPED — the host owns the filesystem boundary,
+          // not the brain. Symlink-escape detection is out of scope for v1; we
+          // normalize and prefix-check.
+          if (e.attachment !== undefined && "path" in e.attachment) {
+            const confined = confineScratchPath(
+              scratchReal,
+              e.attachment.path,
+            );
+            if (!confined.ok) {
+              await rejectEffect(
+                "post",
+                "attachment path outside scratch dir",
+              );
+              return;
+            }
+          }
           await hooks.onPost(e);
           return;
+        }
         case "ask_principal": {
           const verdict = await hooks.onAskPrincipal(e);
           await sendEvent(
@@ -435,7 +562,9 @@ export function makeExecBrainRunner(
           return;
         }
         case "result":
-          settleResult(e);
+          // Terminal: resolve the run NOW, reap the process afterward
+          // (finding 1).
+          settleWithResult(e);
           return;
         default: {
           // Exhaustiveness guard — a new effect type added to the union but
@@ -448,6 +577,9 @@ export function makeExecBrainRunner(
     };
 
     // --- stdout pump: stream-parse effects --------------------------------
+    // Returns nothing; a stream error is CAPTURED (folded into the stderr
+    // ring + logs), never thrown out of the pump (finding 6). An unhandled
+    // rejection here would otherwise escape the resolved run.
     const pumpStdout = async (): Promise<void> => {
       const decoder = new JsonlDecoder();
       const reader = proc.stdout.getReader();
@@ -465,6 +597,10 @@ export function makeExecBrainRunner(
         for (const line of decoder.flush()) {
           await routeEffect(parseBrainEffect(line));
         }
+      } catch (err) {
+        const msg = `[runner] stdout pump error: ${err instanceof Error ? err.message : String(err)}`;
+        logs.push(msg);
+        stderrRing.append(msg);
       } finally {
         reader.releaseLock();
       }
@@ -473,38 +609,57 @@ export function makeExecBrainRunner(
     // --- stderr drain (parallel, so a big blob can't deadlock the pipe) ----
     const pumpStderr = async (): Promise<void> => {
       try {
-        stderrTail += await new Response(proc.stderr).text();
+        const reader = proc.stderr.getReader();
+        const dec = new TextDecoder("utf-8");
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value !== undefined) {
+              stderrRing.append(dec.decode(value, { stream: true }));
+            }
+          }
+          const trailing = dec.decode();
+          if (trailing.length > 0) stderrRing.append(trailing);
+        } finally {
+          reader.releaseLock();
+        }
       } catch (err) {
         // Stream error — record it but don't fail the task on stderr alone.
-        stderrTail +=
-          (stderrTail ? "\n" : "") +
-          `[runner] stderr stream error: ${err instanceof Error ? err.message : String(err)}`;
+        stderrRing.append(
+          `[runner] stderr stream error: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     };
 
-    // Run stdout pump, stderr drain, and the exit wait concurrently. The
-    // stdout pump completing (stream closed) and `exited` resolving both bound
-    // the task; we await all so logs/stderr are fully collected.
+    // Pumps run concurrently with the exit watch. Their rejections are already
+    // captured inside; we still keep their promises so the no-result fallback
+    // can await a full drain before synthesizing the failure detail.
     const stdoutDone = pumpStdout();
     const stderrDone = pumpStderr();
 
-    let exitCode: number | null = null;
-    try {
-      exitCode = await proc.exited;
-    } catch (err) {
-      console.warn(
-        "exec-brain-runner: `exited` rejected:",
-        err instanceof Error ? err.message : err,
-      );
-      exitCode = null;
-    }
-
-    // The process has exited — drain the remaining stdout/stderr then resolve.
-    await Promise.allSettled([stdoutDone, stderrDone]);
-    clearTimers();
-
-    // If the brain exited without emitting a `result`, synthesize one.
-    if (!resultSeen) {
+    // --- exit watcher: the no-result fallback -----------------------------
+    // If the process exits before a terminal `result` settles the run, drain
+    // the pumps and synthesize a failed result. This runs concurrently with
+    // the routeEffect loop; whichever settles the run first wins (settleWith*
+    // is idempotent via runSettled).
+    void (async (): Promise<void> => {
+      let exitCode: number | null = null;
+      try {
+        exitCode = await proc.exited;
+      } catch (err) {
+        console.warn(
+          "exec-brain-runner: `exited` rejected:",
+          err instanceof Error ? err.message : err,
+        );
+        exitCode = null;
+      }
+      // Drain the remaining stdout/stderr — a late `result` on the final chunk
+      // can still settle the run inside routeEffect.
+      await Promise.allSettled([stdoutDone, stderrDone]);
+      if (runSettled) return;
+      clearTimers();
+      const stderrTail = stderrRing.value();
       const reasonDetail = timedOut
         ? `brain timed out after ${timeoutMs}ms${
             stderrTail.trim() ? `; stderr: ${tail(stderrTail)}` : ""
@@ -512,13 +667,17 @@ export function makeExecBrainRunner(
         : `brain exited without result${
             stderrTail.trim() ? `; stderr: ${tail(stderrTail)}` : ""
           }`;
-      settleResult(synthFailed(task.task_id, reasonDetail));
-    }
+      runSettled = true;
+      resolveRun({
+        result: synthFailed(task.task_id, reasonDetail),
+        logs,
+        stderrTail,
+        exitCode,
+      });
+      await cleanupScratch(scratchDir);
+    })();
 
-    const result = await resultPromise;
-    cleanupScratch(scratchDir);
-
-    return { result, logs, stderrTail, exitCode };
+    return runPromise;
   };
 }
 
@@ -593,10 +752,14 @@ function defaultMakeScratchDir(): string {
   return mkdtempSync(join(tmpdir(), "cortex-brain-"));
 }
 
-/** Best-effort scratch-dir removal. A leftover temp dir is non-fatal. */
-function cleanupScratch(dir: string): void {
+/**
+ * Best-effort scratch-dir removal, ASYNC + non-blocking (finding 8). A leftover
+ * temp dir is non-fatal. Never throws — a failed cleanup is logged, not
+ * surfaced (the run is already resolved by the time this is called).
+ */
+async function cleanupScratch(dir: string): Promise<void> {
   try {
-    rmSync(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true });
   } catch (err) {
     // Non-fatal: a leftover scratch dir under the OS temp dir is cleaned by
     // the OS eventually; we log rather than fail the task on cleanup.
@@ -604,6 +767,117 @@ function cleanupScratch(dir: string): void {
       "exec-brain-runner: scratch-dir cleanup failed:",
       err instanceof Error ? err.message : err,
     );
+  }
+}
+
+/**
+ * Drop-and-log invalid/unknown parse results (§5 forward-compat), and act as a
+ * type guard that narrows to the `ok` variant. Single tolerant-parse handler
+ * shared by every parse site (finding 8 — was duplicated inline).
+ *
+ * Returns `true` (narrowing `parsed` to `{ kind: "ok"; effect }`) when the line
+ * is a well-formed known effect; `false` when it was dropped.
+ */
+function isOkEffect(
+  parsed: ReturnType<typeof parseBrainEffect>,
+  logs: string[],
+): parsed is Extract<ReturnType<typeof parseBrainEffect>, { kind: "ok" }> {
+  if (parsed.kind === "invalid") {
+    // Malformed line / failed validation (e.g. oversized attachment).
+    logs.push(`[runner] dropped invalid effect: ${parsed.detail}`);
+    return false;
+  }
+  if (parsed.kind === "unknown") {
+    // Forward-compat: unknown effect type — drop and log (§5).
+    logs.push(
+      `[runner] dropped unknown effect type: ${String(parsed.raw["type"])}`,
+    );
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Host-side scratch confinement (finding 3). A brain's `path` attachment must
+ * resolve to WITHIN `scratchReal` (the realpath'd per-task scratch dir).
+ *
+ *   - `scratchReal` is already realpath'd by the caller (canonical, symlink-
+ *     free root on the SCRATCH side).
+ *   - The candidate is `path.resolve`d against the scratch root, normalizing
+ *     `..` segments and binding a relative path to the scratch dir.
+ *   - The resolved candidate's NEAREST EXISTING ANCESTOR is realpath'd so the
+ *     comparison is symlink-canonical on both sides — this is what makes a
+ *     legitimate file under a symlinked temp root (macOS `/var` →
+ *     `/private/var`) compare equal instead of false-rejecting. We realpath the
+ *     ancestor (not the file) because the attachment file may not exist yet.
+ *   - A prefix check (`resolved === root || resolved.startsWith(root + sep)`)
+ *     then rejects any path that climbed out, or an absolute path elsewhere.
+ *
+ * Symlink ESCAPES on the candidate side (a real file the brain placed inside
+ * scratch that itself symlinks out, then references by that inner path) are
+ * explicitly out of scope for v1 — we canonicalize the ANCESTOR for the
+ * temp-root case, not chase a maliciously-planted leaf symlink.
+ */
+export function confineScratchPath(
+  scratchReal: string,
+  candidate: string,
+): { ok: true; resolved: string } | { ok: false } {
+  const root = resolvePath(scratchReal);
+  // resolve() binds a relative candidate to the scratch root and collapses
+  // `..`; an absolute candidate is resolved as-is.
+  const resolved = resolvePath(root, candidate);
+  // Canonicalize via the nearest existing ancestor so a symlinked temp root
+  // doesn't cause a false reject. realpathSync throws on a missing leaf, so we
+  // walk up to the first ancestor that exists.
+  const canonical = realpathNearestAncestor(resolved);
+  if (canonical === root || canonical.startsWith(root + sep)) {
+    return { ok: true, resolved };
+  }
+  return { ok: false };
+}
+
+/**
+ * realpath the nearest existing ancestor of `p`, re-appending the non-existent
+ * tail. Lets confinement canonicalize a path whose leaf file does not exist
+ * yet (the common case — the brain is about to write it).
+ */
+function realpathNearestAncestor(p: string): string {
+  let dir = p;
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync(dir);
+      return tail.length === 0 ? real : join(real, ...tail.reverse());
+    } catch {
+      const idx = dir.lastIndexOf(sep);
+      if (idx <= 0) return p; // reached the root without a hit; use as-is
+      tail.push(dir.slice(idx + 1));
+      dir = dir.slice(0, idx);
+    }
+  }
+}
+
+/**
+ * Bounded stderr ring (finding 7). Retains at most `cap` bytes; older content
+ * is dropped and a one-time truncation marker is prepended so the caller knows
+ * the tail is partial. Keeps a chatty brain from growing the runner heap.
+ */
+class StderrRing {
+  private buf = "";
+  private truncated = false;
+  constructor(private readonly cap: number) {}
+
+  append(chunk: string): void {
+    if (chunk.length === 0) return;
+    this.buf += chunk;
+    if (this.buf.length > this.cap) {
+      this.buf = this.buf.slice(this.buf.length - this.cap);
+      this.truncated = true;
+    }
+  }
+
+  value(): string {
+    return this.truncated ? `…[stderr truncated]…${this.buf}` : this.buf;
   }
 }
 

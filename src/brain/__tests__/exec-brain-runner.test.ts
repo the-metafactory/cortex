@@ -184,7 +184,9 @@ done({ v: 1, type: "result", task_id: task.task_id, status: "complete", summary:
     expect(hooks.posts).toHaveLength(1);
     expect(hooks.posts[0]?.text).toBe("hello from brain");
     expect(out.logs).toContain("did the thing");
-    expect(out.exitCode).toBe(0);
+    // `result` is terminal: the run resolves on the result, BEFORE the process
+    // is reaped, so exitCode is unknown (null) at resolution time (finding 1).
+    expect(out.exitCode).toBeNull();
   });
 });
 
@@ -346,8 +348,182 @@ done({ v: 1, type: "result", task_id: task.task_id, status: "failed", reason: { 
       expect(out.result.reason.kind).toBe("not_now");
       expect(out.result.reason.detail).toContain("retry later");
     }
-    // A typed refusal is a CLEAN exit, not a crash.
-    expect(out.exitCode).toBe(0);
+    // A typed `result: failed` is terminal like any result — the run resolves
+    // on it before the process is reaped, so exitCode is null (finding 1). The
+    // refusal is a clean *result*, not a synthesized crash.
+    expect(out.exitCode).toBeNull();
+  });
+});
+
+describe("exec-brain-runner — result is terminal (finding 1)", () => {
+  test("brain emits result then sleeps forever → runner returns promptly, process reaped", async () => {
+    const fx = writeFixture(
+      "result-then-sleep.ts",
+      `${READ_FIRST_LINE}
+const task = await firstLine();
+emit({ v: 1, type: "result", task_id: task.task_id, status: "complete", summary: "fast" });
+// Do NOT exit — sleep forever. The runner must resolve on the result above and
+// reap us in the background, NOT block waiting for our exit.
+await new Promise(() => {});
+`,
+    );
+    const hooks = makeHooks();
+    // A long timeout (10s): if the runner were (incorrectly) waiting for exit,
+    // it would only return at SIGKILL ~ resultGrace+killGrace. We assert it
+    // returns FAR sooner than that.
+    const start = Date.now();
+    const out = await makeExecBrainRunner({
+      run: `bun ${fx}`,
+      packDir: fixtureDir,
+      timeoutMs: 10_000,
+      resultGraceMs: 500,
+      killGraceMs: 500,
+    })(makeTask(), hooks);
+    const elapsed = Date.now() - start;
+
+    expect(out.result.status).toBe("complete");
+    if (out.result.status === "complete") {
+      expect(out.result.summary).toBe("fast");
+    }
+    // Returned promptly — well under the 10s timeout (and under the 2s the
+    // finding cites). bun cold-start dominates; 2s is ample headroom.
+    expect(elapsed).toBeLessThan(2_000);
+    // exitCode is unknown at resolution (the process is reaped afterward).
+    expect(out.exitCode).toBeNull();
+  }, 15_000);
+});
+
+describe("exec-brain-runner — scratch-path confinement (finding 3)", () => {
+  // An inside-scratch path attachment is accepted (reaches the onPost hook).
+  test("post with a path inside scratch is accepted", async () => {
+    const fx = writeFixture(
+      "scratch-inside.ts",
+      `${READ_FIRST_LINE}
+const task = await firstLine();
+// TMPDIR is the scoped scratch dir; a child file is inside it.
+const inside = (process.env.TMPDIR ?? ".") + "/out.png";
+emit({ v: 1, type: "post", task_id: task.task_id, text: "inside", attachment: { filename: "out.png", path: inside } });
+done({ v: 1, type: "result", task_id: task.task_id, status: "complete", summary: "ok" });
+`,
+    );
+    const hooks = makeHooks();
+    const out = await runner(fx)(makeTask(), hooks);
+    expect(hooks.posts).toHaveLength(1);
+    expect(hooks.posts[0]?.text).toBe("inside");
+    expect(out.result.status).toBe("complete");
+  });
+
+  // A `..` escape is refused with effect_rejected and the post is DROPPED.
+  test("post with a ../escape path is rejected, post dropped", async () => {
+    const fx = writeFixture(
+      "scratch-escape.ts",
+      `${LINE_ITER}
+const it = lines();
+const task = (await it.next()).value;
+const escape = (process.env.TMPDIR ?? ".") + "/../../../etc/passwd";
+emit({ v: 1, type: "post", task_id: task.task_id, text: "escape", attachment: { filename: "passwd", path: escape } });
+for await (const ev of it) {
+  if (ev.type === "effect_rejected") {
+    done({ v: 1, type: "result", task_id: task.task_id, status: "complete", summary: "rejected:" + ev.effect + ":" + ev.reason.detail });
+  }
+}
+`,
+    );
+    const hooks = makeHooks();
+    const out = await runner(fx)(makeTask(), hooks);
+    // The escaping post never reached the hook.
+    expect(hooks.posts).toHaveLength(0);
+    expect(out.result.status).toBe("complete");
+    if (out.result.status === "complete") {
+      expect(out.result.summary).toContain("rejected:post:");
+      expect(out.result.summary).toContain("outside scratch dir");
+    }
+  });
+
+  // An absolute path elsewhere is refused too.
+  test("post with an absolute path outside scratch is rejected", async () => {
+    const fx = writeFixture(
+      "scratch-abs.ts",
+      `${LINE_ITER}
+const it = lines();
+const task = (await it.next()).value;
+emit({ v: 1, type: "post", task_id: task.task_id, text: "abs", attachment: { filename: "passwd", path: "/etc/passwd" } });
+for await (const ev of it) {
+  if (ev.type === "effect_rejected") {
+    done({ v: 1, type: "result", task_id: task.task_id, status: "complete", summary: "rejected" });
+  }
+}
+`,
+    );
+    const hooks = makeHooks();
+    const out = await runner(fx)(makeTask(), hooks);
+    expect(hooks.posts).toHaveLength(0);
+    expect(out.result.status).toBe("complete");
+  });
+});
+
+describe("exec-brain-runner — bounded stderr tail (finding 7)", () => {
+  test("a chatty brain's stderr is capped, with a truncation marker", async () => {
+    const fx = writeFixture(
+      "chatty-stderr.ts",
+      `${READ_FIRST_LINE}
+await firstLine();
+// Write ~64 KiB of stderr — far past the 8 KiB cap — then exit WITHOUT a result.
+const blob = "X".repeat(64 * 1024);
+process.stderr.write(blob + "\\nTAIL_SENTINEL\\n");
+process.exit(7);
+`,
+    );
+    const hooks = makeHooks();
+    const out = await runner(fx)(makeTask(), hooks);
+    expect(out.result.status).toBe("failed");
+    // The retained tail is bounded (8 KiB cap + a short truncation marker),
+    // NOT the full 64 KiB the brain emitted.
+    expect(out.stderrTail.length).toBeLessThan(9 * 1024);
+    // The MOST RECENT bytes are kept (ring drops the oldest).
+    expect(out.stderrTail).toContain("TAIL_SENTINEL");
+    expect(out.stderrTail).toContain("stderr truncated");
+  });
+});
+
+describe("exec-brain-runner — pump errors captured (finding 6)", () => {
+  // A stdout stream that throws mid-read must NOT escape the runner; it is
+  // captured (folded into logs + stderr) and the no-result fallback synthesizes
+  // a failed result rather than rejecting.
+  test("a throwing stdout stream is captured, run still resolves failed", async () => {
+    const throwingStdout = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"v":1,"type":"log","level":"info","text":"hi"}\n'));
+        controller.error(new Error("stdout exploded"));
+      },
+    });
+    const emptyStderr = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.close();
+      },
+    });
+    const fakeSpawn = () => ({
+      stdin: { write: () => 0, flush: () => 0, end: () => {} },
+      stdout: throwingStdout,
+      stderr: emptyStderr,
+      exited: Promise.resolve(9),
+      kill: () => {},
+    });
+    // A throwaway scratch dir the runner may delete in cleanup — NOT the
+    // shared fixtureDir (cleanupScratch rm -rf's its argument).
+    const throwawayScratch = mkdtempSync(join(tmpdir(), "brain-pump-scratch-"));
+    const run = makeExecBrainRunner({
+      run: "irrelevant",
+      packDir: fixtureDir,
+      spawn: fakeSpawn,
+      makeScratchDir: () => throwawayScratch,
+    });
+    const hooks = makeHooks();
+    const out = await run(makeTask(), hooks);
+    // Did not throw; synthesized a failed result.
+    expect(out.result.status).toBe("failed");
+    // The captured pump error is visible in the logs.
+    expect(out.logs.some((l) => l.includes("stdout pump error"))).toBe(true);
   });
 });
 
