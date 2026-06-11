@@ -178,7 +178,7 @@ export function useObsMetrics(enabled: boolean): ObsMetricsState {
     void fetchSummary(window);
   }, [enabled, window, fetchSummary]);
 
-  // History is lazy: only fetch once the operator opens the >14d view, and
+  // History is lazy: only fetch once the >14d view is opened, and
   // refetch on enable thereafter (so reopening the tab re-reads it).
   useEffect(() => {
     if (!enabled || !historyRequestedRef.current) return;
