@@ -38,6 +38,7 @@ import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { MyelinSubscriber } from "../bus/myelin/subscriber";
 import { formatDispatchLifecycle } from "./envelope-renderer";
 import {
+  createRenderDedupe,
   deliverRoutedResponse,
   LIFECYCLE_TYPE_PREFIX,
   readResponseRouting,
@@ -205,6 +206,15 @@ export function createDispatchSink(opts: DispatchSinkOptions): DispatchSink {
   let registration: { unregister: () => void } | null = null;
   let subscribers: MyelinSubscriber[] = [];
 
+  // cortex#987 — at-most-once render per envelope.id. `onEnvelope` is a
+  // global per-delivery fan-out: an external overlapping subscription (a
+  // `nats.subjects[]` wildcard that also matches `dispatch.task.>`) delivers
+  // the same envelope twice and this handler runs twice — observed live as
+  // every chat reply posting twice. Same belt-and-braces the review sink
+  // carries. Claimed BEFORE the post (duplicate deliveries land in the same
+  // tick); RELEASED on a failed post so redelivery can retry.
+  const dedupe = createRenderDedupe();
+
   /**
    * Deliver one lifecycle envelope. Pure routing + render + post; never
    * throws (the runtime `onEnvelope` fan-out must not see a throw, and a
@@ -226,6 +236,11 @@ export function createDispatchSink(opts: DispatchSinkOptions): DispatchSink {
     const text = formatDispatchLifecycle(envelope);
     if (text === null || text.length === 0) return;
 
+    // Claim only once we know this envelope WOULD post (routing present,
+    // instance matched, text non-empty) so non-actionable envelopes don't
+    // consume window slots. A second delivery of the same id is a no-op.
+    if (!dedupe.claim(envelope.id)) return;
+
     const target: ResponseTarget = {
       instanceId: routing.adapter_instance,
       channelId: routing.channel_id,
@@ -241,7 +256,11 @@ export function createDispatchSink(opts: DispatchSinkOptions): DispatchSink {
         // A platform post failure must not crash the fan-out. Log to
         // stderr (per CLAUDE.md no-empty-catch rule) and move on; the
         // dispatch already completed on the bus, only the surface delivery
-        // failed (rate limit, deleted channel, etc.).
+        // failed (rate limit, deleted channel, etc.). Release the dedupe
+        // claim so a redelivery of this envelope can retry the render
+        // (sage finding on cortex#988 — a claim that produced no render
+        // must not suppress the retry).
+        dedupe.release(envelope.id);
         process.stderr.write(
           `cortex: dispatch-sink postResponse failed (instance=${routing.adapter_instance}, ` +
             `channel=${routing.channel_id}, type=${envelope.type}): ` +

@@ -76,6 +76,57 @@ export function dispatchCorrelationKey(envelope: Envelope): string | undefined {
   return undefined;
 }
 
+
+/**
+ * cortex#987 — bounded at-most-once render guard, shared by the dispatch and
+ * review sinks. The runtime-level subscribe dedupe (cortex#491 in
+ * `runtime.ts`) deduplicates each consumer's OWN patterns, but `onEnvelope`
+ * is a global per-delivery fan-out: any EXTERNAL overlapping subscription
+ * (e.g. a `nats.subjects[]` wildcard in `system/system.yaml` that also
+ * matches `dispatch.task.>`) makes the runtime receive the envelope twice and
+ * invoke every handler twice. This guard makes a sink idempotent per
+ * `envelope.id` regardless of how many deliveries occur. Bounded so a
+ * long-lived sink can't leak: oldest ids evict once the window fills
+ * (envelopes arrive in roughly-temporal order, so a genuine duplicate lands
+ * well within the window).
+ */
+export interface RenderDedupe {
+  /**
+   * Atomically claim `id`. Returns `true` when this caller owns the render
+   * (first claim); `false` when the id was already claimed (duplicate
+   * delivery — skip). Claiming BEFORE the async post (rather than marking
+   * after success) is load-bearing: duplicate deliveries arrive in the same
+   * fan-out tick, so a check-then-mark-after-await pattern would let both
+   * pass the check before either marks.
+   */
+  claim(id: string): boolean;
+  /**
+   * Release a claimed id after a FAILED delivery, so a later redelivery of
+   * the same envelope can retry instead of being suppressed by a claim that
+   * never produced a render (sage finding on cortex#988).
+   */
+  release(id: string): void;
+}
+
+export function createRenderDedupe(window = 4096): RenderDedupe {
+  const seenIds = new Set<string>();
+  return {
+    claim(id: string): boolean {
+      if (seenIds.has(id)) return false;
+      seenIds.add(id);
+      if (seenIds.size > window) {
+        // Evict the oldest entry (insertion order — Set preserves it).
+        const oldest = seenIds.values().next().value;
+        if (oldest !== undefined) seenIds.delete(oldest);
+      }
+      return true;
+    },
+    release(id: string): void {
+      seenIds.delete(id);
+    },
+  };
+}
+
 interface ReplyAdapter {
   sendProgress: (target: ResponseTarget, text: string) => Promise<void>;
   clearProgress: (target: ResponseTarget) => Promise<void>;

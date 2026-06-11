@@ -105,10 +105,10 @@ export type WsServerMessage =
       family:
         | "dispatch.lifecycle"
         | "review.verdict"
+        | "governance.verdict"
         | "agent.heartbeat"
         | "attention"
-        | "adapter.health"
-        | "governance.verdict";
+        | "adapter.health";
       sessionId?: string;
       assignmentId?: string;
     }

@@ -61,6 +61,7 @@ import {
   formatReviewVerdict,
 } from "./envelope-renderer";
 import {
+  createRenderDedupe,
   deliverRoutedResponse,
   LIFECYCLE_TYPE_PREFIX,
   readLogicalRouting,
@@ -221,25 +222,9 @@ export function createReviewSink(opts: ReviewSinkOptions): ReviewSink {
   let subscribers: MyelinSubscriber[] = [];
 
   // cortex#491 belt-and-braces — render idempotency keyed by `envelope.id`.
-  // The runtime-level subscribe dedupe (cortex#491 in `runtime.ts`) is the
-  // primary defence against double-delivery; this second layer guarantees
-  // that even an accidental double-delivery from a misconfig (or a future
-  // overlapping-pattern path) cannot produce TWO GitHub/Discord renders for
-  // one envelope. Bounded so a long-lived sink can't leak: oldest ids evict
-  // once the window fills (envelopes arrive in roughly-temporal order, so a
-  // genuine duplicate lands well within the window).
-  const seenIds = new Set<string>();
-  const SEEN_WINDOW = 4096;
-  function alreadyRendered(id: string): boolean {
-    if (seenIds.has(id)) return true;
-    seenIds.add(id);
-    if (seenIds.size > SEEN_WINDOW) {
-      // Evict the oldest entry (insertion order — Set preserves it).
-      const oldest = seenIds.values().next().value;
-      if (oldest !== undefined) seenIds.delete(oldest);
-    }
-    return false;
-  }
+  // Shared with the dispatch sink since cortex#987 (which hit the
+  // overlapping-pattern double-delivery this guards against, live).
+  const dedupe = createRenderDedupe();
 
   /**
    * Resolve a native target for the logical address, PREFERRING the reviewing
@@ -301,14 +286,16 @@ export function createReviewSink(opts: ReviewSinkOptions): ReviewSink {
     // mark seen only once we know this envelope WOULD post (routing present,
     // text non-empty) so a non-actionable envelope doesn't consume a window
     // slot. A second delivery of the same id is a silent no-op.
-    if (alreadyRendered(envelope.id)) return;
+    if (!dedupe.claim(envelope.id)) return;
 
     let target: ResponseTarget | null;
     try {
       target = await resolveTarget(routing, reviewingAgentId(envelope));
     } catch (err) {
       // A resolve failure (e.g. a thread-create API error) must not crash
-      // the fan-out. Log and drop this delivery.
+      // the fan-out. Log and drop this delivery — releasing the dedupe
+      // claim so a redelivery can retry (no render happened).
+      dedupe.release(envelope.id);
       process.stderr.write(
         `cortex: review-sink resolveLogicalTarget failed (surface=${routing.surface}, ` +
           `channel=${routing.channel}, type=${envelope.type}): ` +
@@ -333,7 +320,9 @@ export function createReviewSink(opts: ReviewSinkOptions): ReviewSink {
         // no-empty-catch rule). The review already completed on the bus;
         // only the surface delivery failed (rate limit, deleted channel,
         // etc.). The authoritative verdict still reached pilot via
-        // correlation_id.
+        // correlation_id. Release the dedupe claim so a redelivery can
+        // retry the render (sage finding on cortex#988).
+        dedupe.release(envelope.id);
         process.stderr.write(
           `cortex: review-sink postResponse failed (surface=${routing.surface}, ` +
             `channel=${routing.channel}, type=${envelope.type}): ` +

@@ -61,13 +61,18 @@ function fakeRuntime(): {
   };
 }
 
+// cortex#987 — unique id per fixture envelope: the sink now dedupes renders by
+// `envelope.id`, so a shared hardcoded id would make distinct test envelopes
+// look like duplicate deliveries of one envelope.
+let envelopeSeq = 0;
 function lifecycleEnvelope(
   type: string,
   payload: Record<string, unknown>,
   correlationId = "task-1",
 ): Envelope {
+  envelopeSeq += 1;
   return {
-    id: "00000000-0000-4000-8000-000000000099",
+    id: `00000000-0000-4000-8000-${String(envelopeSeq).padStart(12, "0")}`,
     source: "metafactory.runner.local",
     type,
     timestamp: "2026-05-09T12:00:00Z",
@@ -493,6 +498,91 @@ describe("dispatch-sink — no-routing and non-lifecycle envelopes", () => {
 
     // The sink is the ONLY thing posting — never doubles a single envelope.
     expect(adapter.sentMessages).toHaveLength(1);
+  });
+
+  test("cortex#987 — double-delivery of the SAME envelope posts exactly once", async () => {
+    // `onEnvelope` is a global per-delivery fan-out: an EXTERNAL overlapping
+    // subscription (e.g. a `nats.subjects[]` wildcard that also matches
+    // `dispatch.task.>`) makes the runtime receive the envelope twice and
+    // invoke the sink's handler twice. Observed live as every chat reply
+    // posting twice. The render-dedupe guard makes the second delivery a
+    // no-op.
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = new MockAdapter("sage-mattermost");
+    const sink = createDispatchSink({ runtime, adapters: [adapter], principal: "jc", stack: "switch" });
+    await sink.start();
+
+    const env = lifecycleEnvelope("dispatch.task.completed", {
+      agent_id: "sage",
+      chat_response: "Hello! I'm Sage.",
+      response_routing: routing("sage-mattermost", "C123"),
+    });
+    trigger(env);
+    trigger(env); // second delivery of the SAME envelope (same id)
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(adapter.sentMessages).toHaveLength(1);
+  });
+
+  test("cortex#988 — a FAILED post releases the claim so redelivery retries", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = new MockAdapter("sage-mattermost");
+    // First post attempt throws (rate limit etc.); subsequent attempts succeed.
+    const realPost = adapter.postResponse.bind(adapter);
+    let failures = 1;
+    adapter.postResponse = async (target, text, files) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error("rate limited");
+      }
+      return realPost(target, text, files);
+    };
+    const sink = createDispatchSink({ runtime, adapters: [adapter], principal: "jc", stack: "switch" });
+    await sink.start();
+
+    const env = lifecycleEnvelope("dispatch.task.completed", {
+      agent_id: "sage",
+      chat_response: "retry me",
+      response_routing: routing("sage-mattermost", "C123"),
+    });
+    trigger(env); // fails — claim must be released
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(adapter.sentMessages).toHaveLength(0);
+
+    trigger(env); // redelivery of the SAME envelope — retries and succeeds
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(adapter.sentMessages).toHaveLength(1);
+    expect(adapter.sentMessages[0]!.text).toBe("retry me");
+  });
+
+  test("cortex#987 — distinct envelopes still post independently after dedupe", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = new MockAdapter("sage-mattermost");
+    const sink = createDispatchSink({ runtime, adapters: [adapter], principal: "jc", stack: "switch" });
+    await sink.start();
+
+    const a = lifecycleEnvelope("dispatch.task.completed", {
+      agent_id: "sage",
+      chat_response: "first",
+      response_routing: routing("sage-mattermost", "C123"),
+    });
+    const b = {
+      ...lifecycleEnvelope("dispatch.task.completed", {
+        agent_id: "sage",
+        chat_response: "second",
+        response_routing: routing("sage-mattermost", "C123"),
+      }),
+      id: "00000000-0000-4000-8000-0000000000aa",
+    };
+    trigger(a);
+    trigger(b);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(adapter.sentMessages).toHaveLength(2);
   });
 });
 

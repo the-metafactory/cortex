@@ -261,6 +261,26 @@ export interface ReleaseExecutor {
   }): Promise<ReleaseCutResult>;
 }
 
+// W5.0 (cortex#924) — SIGNED-COMMIT CONTRACT for any production `ReleaseExecutor`.
+//
+// The `release.cut` bump commit MUST be signed; signing is NEVER disabled.
+// The production executor (deferred — F-4.1 ships dormant, no executor) MUST,
+// before pushing the default branch:
+//   1. `assertSigningConfig(...)` over the release env/git-config — refuse if
+//      `commit.gpgsign != true`, no `user.signingkey`, or (ssh signer) no
+//      `SSH_AUTH_SOCK` (the `ssh-add --apple-load-keychain` step must have run).
+//   2. create the bump commit WITHOUT `--no-gpg-sign` (never disable signing),
+//      then `readCommitSignatures(...)` over the pushed range and refuse the
+//      push on any commit whose `%G?` trust is not `G`.
+// Both verbs live in `./commit-signing.ts` so the dev-loop forge and the
+// release executor enforce signing from ONE source. See
+// `docs/design-merge-policy-w5.0.md` (pilot) §4 for the cross-repo rationale.
+//
+// This is a contract note, not a runtime hook, because F-4.1 has no production
+// executor to instrument yet; the dev.implement forge enforces the SAME policy
+// today (`dev-consumer-boot.ts`). The follow-up that wires the real executor
+// wires these two calls.
+
 /**
  * Construction options. Every dependency is injected — no module-scope
  * singletons, no env-derived defaults (mirrors `ReviewConsumerOpts`).
