@@ -170,6 +170,19 @@ describe("gateFloorForScope — federated scope", () => {
     if (!d.admit) expect(d.refusal.kind).toBe("policy_denied");
   });
 
+  // #968 review nit: a principals accept with an ABSENT peer identity must
+  // refuse (default-to-refuse) — an unidentified peer is never "named".
+  test("principals accept — refuses an absent peer identity (peerPrincipal undefined)", () => {
+    const d = gateFloorForScope(
+      "federated",
+      principalsAccept,
+      "permissive",
+      ctx({ peerPrincipal: undefined }),
+    );
+    expect(d.admit).toBe(false);
+    if (!d.admit) expect(d.refusal.kind).toBe("policy_denied");
+  });
+
   test("REFUSES policy_denied when a federated offering carries no accept (default-deny)", () => {
     const d = gateFloorForScope("federated", undefined, "permissive", ctx());
     expect(d.admit).toBe(false);
