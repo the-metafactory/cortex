@@ -160,6 +160,13 @@ import {
   startFederatedAgentPresenceSubscriber,
   type FederatedAgentPresenceSubscriberHandle,
 } from "./bus/agent-network/federated-subscriber";
+// #989 part-1 — LOCAL same-principal multi-bus presence aggregation.
+import { discoverSiblingStacks } from "./surface/mc/local-aggregation/sibling-discovery";
+import {
+  startSiblingPresenceAggregator,
+  type SiblingPresenceAggregatorHandle,
+} from "./surface/mc/local-aggregation/sibling-presence-subscriber";
+import { natsSiblingBusConnector } from "./surface/mc/local-aggregation/nats-sibling-connector";
 import { createProbeResponder, type ProbeResponder } from "./bus/probe-responder";
 import { WorklogManager } from "./runner/worklog-manager";
 
@@ -3652,6 +3659,10 @@ export async function startCortex(
   // G-1114.E.2 — trust-verified federated presence subscriber (folds peers'
   // agents into the SAME registry, tagged with foreign provenance).
   let federatedPresenceHandle: FederatedAgentPresenceSubscriberHandle | null = null;
+  // #989 part-1 — LOCAL same-principal sibling-stack presence aggregator (folds
+  // the principal's OTHER local stacks' agents into the SAME registry, tagged by
+  // sibling origin, so the Network view shows every local stack as its own hub).
+  let siblingPresenceHandle: SiblingPresenceAggregatorHandle | null = null;
   // G-1114.E.1 — federate presence ONLY when the stack has opted into
   // federation (it declares at least one `policy.federated.networks[]`). This is
   // the SAME opt-in lever the federated subscriber + the dispatch-listener gate
@@ -3769,6 +3780,69 @@ export async function startCortex(
         `cortex: agent-presence producer + registry started — ${presenceAgents.length} agent(s) announced ` +
           `(stack-local; heartbeat every ${DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS}ms)`,
       );
+
+      // #989 part-1 — LOCAL same-principal sibling-stack presence aggregation.
+      // When enabled (default ON), auto-discover the principal's OTHER local
+      // stacks (sibling config-split dirs under the config root), open a
+      // READ-ONLY subscriber to each one's loopback bus using ITS OWN creds, and
+      // fold its `agent.*` presence into the SAME registry tagged with the
+      // sibling's origin — so the Network view renders every local stack as its
+      // own hub (not just this serving stack). NO federation, NO cross-principal
+      // trust: every bus is the principal's own loopback bus (ADR-0005). Any
+      // sibling that can't be reached / authed degrades to absent — it never
+      // blocks this boot or perturbs the serving stack's own presence.
+      const aggCfg = config.mc.aggregateLocalStacks;
+      if (aggCfg.enabled) {
+        try {
+          // Precedence: explicit `stacks[]` overrides discovery. Empty ⇒ scan
+          // the config root (default = the serving config dir's parent, the
+          // conventional `~/.config/cortex`).
+          const configRoot =
+            aggCfg.configRoot !== ""
+              ? expandTilde(aggCfg.configRoot)
+              : dirname(configDir);
+          const explicit =
+            aggCfg.stacks.length > 0
+              ? aggCfg.stacks.map((s) => ({
+                  stack: s.stack,
+                  principal: s.principal,
+                  url: s.url,
+                  credential: {
+                    kind: "creds" as const,
+                    credsPath: s.credsPath,
+                  },
+                }))
+              : undefined;
+          const siblings = discoverSiblingStacks({
+            configRoot,
+            selfPrincipal: principalId,
+            selfStack: derivedStack.stack,
+            ...(explicit !== undefined && { explicit }),
+          });
+          siblingPresenceHandle = await startSiblingPresenceAggregator({
+            registry: presenceRegistryHandle.registry,
+            siblings,
+            connect: natsSiblingBusConnector,
+          });
+          const aggregated = siblings.length - siblingPresenceHandle.degraded.length;
+          console.log(
+            `cortex: local-stack presence aggregation — ${aggregated}/${siblings.length} sibling stack(s) ` +
+              `aggregated` +
+              (siblingPresenceHandle.degraded.length > 0
+                ? ` (degraded: ${siblingPresenceHandle.degraded
+                    .map((d) => d.stack)
+                    .join(", ")})`
+                : ""),
+          );
+        } catch (err) {
+          // Aggregation is additive + best-effort: a fault here must never crash
+          // the serving daemon's boot or its own presence path.
+          console.error(
+            "cortex: local-stack presence aggregation startup error (non-fatal):",
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
     } catch (err) {
       console.error(
         "cortex: agent-presence producer/registry startup error (non-fatal):",
@@ -4061,6 +4135,16 @@ export async function startCortex(
       await completeAsync(
         "federated agent-presence subscriber stop",
         federatedPresenceHandle?.stop(),
+      );
+      // #989 part-1 — stop the LOCAL sibling-stack aggregator alongside the
+      // federated one (both before the registry stop). It closes every sibling
+      // read-only link + prunes the sibling foreign records. Both stops call
+      // `removeForeign()` (idempotent); ordering relative to the federated stop
+      // doesn't matter — by the time the registry stops, all foreign records are
+      // gone.
+      await completeAsync(
+        "local-stack presence aggregator stop",
+        siblingPresenceHandle?.stop(),
       );
       await completeAsync(
         "agent-presence registry stop",

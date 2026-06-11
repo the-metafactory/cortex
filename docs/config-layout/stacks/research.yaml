@@ -184,6 +184,27 @@ mc:
   # IP, a hostname) is REFUSED at config-parse time — the daemon won't boot.
   # Override only to change the port or front it with a same-host reverse proxy.
   sideband: "http://127.0.0.1:9092"
+  # #989 part-1 — LOCAL same-principal stack aggregation on the Network view.
+  # When enabled (DEFAULT ON), the dashboard-serving daemon auto-discovers the
+  # principal's OTHER local stacks (sibling config-split dirs under the config
+  # root), opens a READ-ONLY subscriber to each one's loopback NATS bus using
+  # ITS OWN credential, and folds its agent presence into this pane — so the
+  # Network view shows ALL your local stacks as distinct stack-hubs, not just
+  # this one. NO federation, NO cross-principal trust (every bus is YOUR own
+  # loopback bus). A sibling that can't be reached/authed degrades to absent
+  # (its hub just doesn't appear) — it never blocks boot or perturbs this stack.
+  # A single-stack box is unaffected (discovery finds no siblings = no-op).
+  aggregateLocalStacks:
+    enabled: true                  # false = pin the pane to THIS stack only
+    configRoot: ""                 # empty = the serving config dir's parent (~/.config/cortex)
+    # Explicit roster OVERRIDES auto-discovery when non-empty (precedence:
+    # explicit > discovery). Use it to add a bus the scan can't see, or to
+    # narrow the set. Each entry needs a connectable creds file.
+    stacks: []
+    #  - stack: work
+    #    principal: andreas
+    #    url: "nats://127.0.0.1:4222"
+    #    credsPath: "~/.config/nats/cortex-work.creds"
 
 # -----------------------------------------------------------------------------
 # cockpit — G-1113 live-refresh loop (plan ingest → reconcile → attention).

@@ -392,6 +392,54 @@ export const McSchema = z.object({
    * at the proxy request boundary too.
    */
   sideband: z.string().default(DEFAULT_SIDEBAND_URL),
+  /**
+   * #989 part-1 — LOCAL same-principal stack aggregation on the Network view.
+   *
+   * When `enabled`, the dashboard-serving daemon auto-discovers the principal's
+   * OTHER local stacks (by scanning the config root for sibling config-split
+   * dirs), opens a READ-ONLY subscriber to each one's local loopback NATS bus
+   * using that stack's own credential, and folds its `agent.*` presence into the
+   * shared presence registry — so the Network view shows ALL of a principal's
+   * local stacks as distinct stack-hubs, not just the serving one. This is a
+   * LOCAL read-only multi-subscription (same principal, loopback buses the
+   * principal owns); NO federation, NO cross-principal trust.
+   *
+   * **Default ON.** The operator runs several stacks on one machine and expects
+   * the localhost pane to be the one-pane-over-all-my-stacks surface (#989); a
+   * single-stack deployment is unaffected because discovery simply finds no
+   * siblings (an empty config root ⇒ a no-op). The cost is bounded (one extra
+   * read-only loopback NATS connection per discovered sibling), and any
+   * unreachable sibling degrades to absent rather than affecting the serving
+   * stack. Set `enabled: false` to pin the pane to the serving stack only.
+   *
+   * **`stacks[]` (explicit override).** When non-empty, this EXACT list is the
+   * sibling roster and auto-discovery is skipped (precedence: explicit >
+   * discovery). Each entry pins a sibling's `{stack}`, `{principal}`, bus `url`,
+   * and `credsPath`. Use it to add a bus the scan can't see or to narrow the
+   * roster. Empty (the default) ⇒ auto-discover.
+   */
+  aggregateLocalStacks: z
+    .object({
+      enabled: z.boolean().default(true),
+      /**
+       * Config root to scan for sibling stacks. Empty ⇒ the serving stack's own
+       * config dir's parent (the conventional `~/.config/cortex`). Leading `~`
+       * is expanded at boot.
+       */
+      configRoot: z.string().default(""),
+      /** Explicit sibling roster — OVERRIDES discovery when non-empty. */
+      stacks: z
+        .array(
+          z.object({
+            stack: z.string().min(1),
+            principal: z.string().min(1),
+            url: z.string().min(1),
+            credsPath: z.string().min(1),
+          }),
+        )
+        .default([]),
+    })
+    .default(emptyDefault()),
 }).default(emptyDefault()).superRefine((val, ctx) => {
   // Loopback enforcement (§8: "Cortex MUST refuse to set a non-loopback host").
   // Only check when a value is present; the `.default()` supplies a loopback
@@ -418,6 +466,14 @@ export const McSchema = z.object({
   dbPath: val.dbPath ?? "",
   port: val.port ?? 0,
   sideband: val.sideband ?? DEFAULT_SIDEBAND_URL,
+  // #989 — re-apply the nested default ({} from `.default(emptyDefault())`
+  // would otherwise leave the inner fields undefined). The `??` chain is
+  // load-bearing for the all-defaults parse path, same as the leaves above.
+  aggregateLocalStacks: {
+    enabled: val.aggregateLocalStacks?.enabled ?? true,
+    configRoot: val.aggregateLocalStacks?.configRoot ?? "",
+    stacks: val.aggregateLocalStacks?.stacks ?? [],
+  },
   /* eslint-enable @typescript-eslint/no-unnecessary-condition */
 }));
 

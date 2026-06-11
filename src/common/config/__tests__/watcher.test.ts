@@ -127,6 +127,7 @@ const TEST_CONFIG: AgentConfig = {
     dbPath: "",
     port: 0,
     sideband: "http://127.0.0.1:9092",
+    aggregateLocalStacks: { enabled: true, configRoot: "", stacks: [] },
   },
   networksDir: "./networks",
   networks: [],

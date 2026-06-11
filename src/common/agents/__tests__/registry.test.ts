@@ -141,7 +141,7 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
       encryption: { payload: "off", at_rest: "off" },
       transport: { mtls: "off" },
     },
-    mc: { enabled: false, configPath: "", dbPath: "", port: 0, sideband: "http://127.0.0.1:9092" },
+    mc: { enabled: false, configPath: "", dbPath: "", port: 0, sideband: "http://127.0.0.1:9092", aggregateLocalStacks: { enabled: true, configRoot: "", stacks: [] } },
     cockpit: {
       enabled: false,
       docsDir: "docs",

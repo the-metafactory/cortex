@@ -590,6 +590,9 @@ describe("AgentConfigSchema.mc (MC-I1.S1)", () => {
       port: 0,
       // P-14 U0.1 — sideband defaults to the contract loopback bind.
       sideband: "http://127.0.0.1:9092",
+      // #989 — local-stack aggregation defaults ON; discovery is a no-op on a
+      // single-stack box (finds no siblings).
+      aggregateLocalStacks: { enabled: true, configRoot: "", stacks: [] },
     });
   });
 
@@ -726,6 +729,43 @@ describe("mc.sideband (P-14 U0.1)", () => {
       expect(
         CortexConfigSchema.parse({ ...minConfig(), mc: { sideband: good } }).mc.sideband,
       ).toBe(good);
+    });
+
+    // #989 — mc.aggregateLocalStacks is on the SHARED McSchema, so BOTH config
+    // shapes must parse it identically (the #877/#879 lesson).
+    test("BOTH schemas default mc.aggregateLocalStacks ON with empty roster", () => {
+      const fromAgent = AgentConfigSchema.parse(minAgentConfig()).mc
+        .aggregateLocalStacks;
+      const fromCortex = CortexConfigSchema.parse(minConfig()).mc
+        .aggregateLocalStacks;
+      const expected = { enabled: true, configRoot: "", stacks: [] };
+      expect(fromAgent).toEqual(expected);
+      expect(fromCortex).toEqual(expected);
+    });
+
+    test("BOTH schemas parse an explicit aggregateLocalStacks roster identically", () => {
+      const block = {
+        enabled: true,
+        configRoot: "~/.config/cortex",
+        stacks: [
+          {
+            stack: "work",
+            principal: "andreas",
+            url: "nats://127.0.0.1:4222",
+            credsPath: "~/.config/nats/cortex-work.creds",
+          },
+        ],
+      };
+      const agentParsed = AgentConfigSchema.parse({
+        ...minAgentConfig(),
+        mc: { aggregateLocalStacks: block },
+      }).mc.aggregateLocalStacks;
+      const cortexParsed = CortexConfigSchema.parse({
+        ...minConfig(),
+        mc: { aggregateLocalStacks: block },
+      }).mc.aggregateLocalStacks;
+      expect(agentParsed).toEqual(block);
+      expect(cortexParsed).toEqual(block);
     });
   });
 });
