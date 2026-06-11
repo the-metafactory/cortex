@@ -107,11 +107,13 @@ export async function postMessage(
  *  pure function (testable without fs or a token). */
 export interface AttachmentInput {
   filename: string;
-  bytes: Uint8Array;
+  /** ArrayBuffer-backed (not Shared) so it appends to a Blob without a copy. */
+  bytes: Uint8Array<ArrayBuffer>;
 }
 
 /**
- * Build the `multipart/form-data` body for an attachment post (Discord v10).
+ * Build the `multipart/form-data` body for an attachment post (Discord v10:
+ * https://discord.com/developers/docs/reference#uploading-files).
  *
  * Pure — no I/O. The form carries a `payload_json` part (message fields plus an
  * `attachments` array that references each file by index) and one `files[n]`
@@ -127,7 +129,8 @@ export function buildAttachmentForm(content: string, files: AttachmentInput[]): 
   };
   form.append("payload_json", JSON.stringify(payload));
   files.forEach((f, i) => {
-    form.append(`files[${i}]`, new Blob([f.bytes.slice().buffer]), f.filename);
+    // Blob accepts the Uint8Array view directly — no copy (sage cortex#1031).
+    form.append(`files[${i}]`, new Blob([f.bytes]), f.filename);
   });
   return form;
 }
