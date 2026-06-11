@@ -349,6 +349,37 @@ describe("superRefineOfferings — coherence", () => {
     ]);
     expect(issues.length).toBe(2);
   });
+
+  // #962 review nit 3: CONTEXT.md endorses a capability offered at SEVERAL
+  // scopes at once. local+federated (local needs no accept, federated names a
+  // network) is valid — lock it so a future refactor can't silently reject it.
+  test("a local+federated multi-scope offering is valid", () => {
+    const issues = superRefineOfferings([
+      offering({
+        capability: "code-review.typescript",
+        scopes: ["local", "federated"],
+        accept: { kind: "network", network: "metafactory-net" },
+      }),
+    ]);
+    expect(issues).toEqual([]);
+  });
+
+  // #962 review nit 2: the top-level network? and the {kind:'network'} accept's
+  // own network are dual-source; the accept's network is authoritative. A
+  // divergence is a config error, not a value to merge.
+  test("top-level network disagreeing with the accept network is rejected", () => {
+    const issues = superRefineOfferings([
+      offering({
+        capability: "code-review.typescript",
+        scopes: ["federated"],
+        network: "wrong-net",
+        accept: { kind: "network", network: "metafactory-net" },
+      }),
+    ]);
+    expect(issues.length).toBe(1);
+    expect(issues[0]?.message).toContain("disagrees with its accept network");
+    expect(issues[0]?.path).toEqual([0, "network"]);
+  });
 });
 
 // =============================================================================

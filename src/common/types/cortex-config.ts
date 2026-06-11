@@ -1997,7 +1997,7 @@ export const PolicySchema = z.object({
    * shared `offerings/` layer — each stack fully describes what *it* exposes.
    *
    * **Default-defaulted ⇒ byte-identical boot (the CO-1 contract).** OPTIONAL
-   * and fully-defaulted: absent ⇒ `[]` ⇒ every capability resolves `local`-only
+   * and fully-defaulted: absent ⇒ `undefined` ⇒ every capability resolves `local`-only
    * via `resolveOffering` (`./offering.ts`) — exactly today's behaviour. No
    * consumer wiring reads this in CO-1 (that's CO-2); no federation-config
    * generation (CO-3). This is the source-of-truth shape those slices project.

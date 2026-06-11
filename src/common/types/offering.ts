@@ -17,7 +17,7 @@
  *     `announce_capabilities` / `accept_subjects` / registry registration is
  *     CO-3; this is the source-of-truth shape those projections will read.
  *   - **Byte-identical boot (the CO-1 contract).** `policy.offerings` is
- *     OPTIONAL and fully-defaulted; absent ⇒ empty ⇒ every capability resolves
+ *     OPTIONAL and fully-defaulted; absent ⇒ `undefined` ⇒ every capability resolves
  *     to `local`-only via {@link resolveOffering} — exactly today's behaviour.
  *
  * ## The model (design §2, ADR-0008 DD-CO-1)
@@ -495,6 +495,20 @@ export function superRefineOfferings(
         issues.push({
           message: `offering "${o.capability}" is offered at 'federated' scope but its accept-policy is {kind:'${acceptKind}'} — federated scope requires a federated accept ({kind:'network'} or {kind:'principals'})`,
           path: [i, "accept", "kind"],
+        });
+      } else if (
+        o.accept.kind === "network" &&
+        o.network !== undefined &&
+        o.network !== o.accept.network
+      ) {
+        // #962 review nit: the top-level `network?` and the {kind:'network'}
+        // accept's own `network` are dual-source. The accept's network is
+        // AUTHORITATIVE (routing uses it); the top-level field is design-parity
+        // documentation only. Reject divergence rather than silently pick one —
+        // a mismatch is a config error, not a value to merge.
+        issues.push({
+          message: `offering "${o.capability}" has a top-level network "${o.network}" that disagrees with its accept network "${o.accept.network}" — the accept-policy's network is authoritative; remove the top-level network or make them match`,
+          path: [i, "network"],
         });
       }
       return;
