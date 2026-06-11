@@ -471,16 +471,16 @@ export const AgentRuntimeSchema = z.object({
    *   - `sage`    — the standalone sage lens-CLI (deterministic pipeline:
    *                 fixed lens registry + pure `decideVerdict`). Run via the
    *                 sage runner; the LLM it runs lenses through is `model`.
-   *   - `persona` — a Claude-Code session that reads the CodeReview SKILL.md +
-   *                 the agent persona and reviews in-session (Echo/Luna/Holly).
+   *   - `assistant` — a Claude-Code session that reads the CodeReview SKILL.md
+   *                 + the agent persona and reviews in-session (Echo/Luna/Holly).
    *
    * Distinct from `substrate` (the M6 execution harness) and `model` (sage's
    * lens LLM). **Optional** for back-compat: when unset, `resolveReviewEngine`
    * derives it from the legacy `substrate` value (`pi-dev` → sage; everything
-   * else → persona), preserving pre-split routing byte-for-byte. New configs
+   * else → assistant), preserving pre-split routing byte-for-byte. New configs
    * SHOULD set it explicitly.
    */
-  engine: z.enum(["sage", "persona"]).optional(),
+  engine: z.enum(["sage", "assistant"]).optional(),
   /**
    * cortex#917 — the LLM `engine: sage` runs its lenses through, forwarded to
    * `sage review --substrate <model>`. Closed enum so an unsupported value is
@@ -491,7 +491,7 @@ export const AgentRuntimeSchema = z.object({
    */
   model: z.enum(["claude", "codex", "pi"]).optional(),
   /** Execution substrate — the M6 harness (cortex#113 `HarnessId`). For
-   *  `engine: persona` this is the in-session harness (`claude-code`). Optional:
+   *  `engine: assistant` this is the in-session harness (`claude-code`). Optional:
    *  `engine: sage` agents run through the sage CLI (no HarnessId) and omit it;
    *  the legacy `pi-dev` value is the back-compat shim that `resolveReviewEngine`
    *  maps to `engine: sage`. */

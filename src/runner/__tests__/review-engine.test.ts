@@ -20,9 +20,9 @@ describe("resolveReviewEngine — explicit engine", () => {
     expect(resolveReviewEngine({ engine: "sage" })).toEqual({ engine: "sage" });
   });
 
-  test("engine: persona → persona, no model regardless of any model field", () => {
-    expect(resolveReviewEngine({ engine: "persona", model: "codex" })).toEqual({
-      engine: "persona",
+  test("engine: assistant → assistant, no model regardless of any model field", () => {
+    expect(resolveReviewEngine({ engine: "assistant", model: "codex" })).toEqual({
+      engine: "assistant",
     });
   });
 });
@@ -35,17 +35,17 @@ describe("resolveReviewEngine — legacy migration (no engine field)", () => {
     expect(resolveReviewEngine({ substrate: "pi-dev" })).toEqual({ engine: "sage" });
   });
 
-  test("legacy substrate: claude-code → persona (unchanged)", () => {
-    expect(resolveReviewEngine({ substrate: "claude-code" })).toEqual({ engine: "persona" });
+  test("legacy substrate: claude-code → assistant (unchanged)", () => {
+    expect(resolveReviewEngine({ substrate: "claude-code" })).toEqual({ engine: "assistant" });
   });
 
-  test("legacy substrate: codex → persona (unchanged — this was the silent-fallthrough bug)", () => {
-    expect(resolveReviewEngine({ substrate: "codex" })).toEqual({ engine: "persona" });
+  test("legacy substrate: codex → assistant (unchanged — this was the silent-fallthrough bug)", () => {
+    expect(resolveReviewEngine({ substrate: "codex" })).toEqual({ engine: "assistant" });
   });
 
-  test("no runtime → persona (the default CC path)", () => {
-    expect(resolveReviewEngine(undefined)).toEqual({ engine: "persona" });
-    expect(resolveReviewEngine({})).toEqual({ engine: "persona" });
+  test("no runtime → assistant (the default CC path)", () => {
+    expect(resolveReviewEngine(undefined)).toEqual({ engine: "assistant" });
+    expect(resolveReviewEngine({})).toEqual({ engine: "assistant" });
   });
 });
 

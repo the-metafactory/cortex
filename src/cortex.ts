@@ -1630,10 +1630,10 @@ export async function startCortex(
       // sole receiver for sage-owned review flavors.
       //
       // cortex#917 — the engine/model split. `resolveReviewEngine` reads
-      // `runtime.engine` (`sage` | `persona`); the sage lens LLM is the
+      // `runtime.engine` (`sage` | `assistant`); the sage lens LLM is the
       // orthogonal `runtime.model` (claude|codex|pi), NOT `substrate` (which is
       // the M6 harness). `engine: sage` wires the sage lens-CLI runner,
-      // forwarding `model` to `sage review --substrate <model>`; `persona`
+      // forwarding `model` to `sage review --substrate <model>`; `assistant`
       // (and the legacy default) leaves `pipelineRunner` undefined so the
       // ReviewConsumer falls through to `runReviewPipeline` → the Claude-Code
       // SKILL.md path (`ccSessionFactory` stays wired for it). The resolver's

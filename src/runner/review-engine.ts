@@ -8,7 +8,7 @@
  *   - WHICH LLM the sage engine runs its lenses through (`claude` | `codex` | `pi`).
  *
  * `substrate === "pi-dev"` used to mean "use the sage runner", so a sage agent
- * configured `substrate: codex` silently fell through to the persona path —
+ * configured `substrate: codex` silently fell through to the assistant path —
  * "codex" only names a harness, never the engine. This module splits the axes:
  * `runtime.engine` selects the engine; `runtime.model` is the LLM the sage CLI
  * runs lenses through (forwarded to `sage review --substrate <model>`);
@@ -17,11 +17,11 @@
  * Pure + deterministic — unit-tested in `review-engine.test.ts`.
  */
 
-export type ReviewEngine = "sage" | "persona";
+export type ReviewEngine = "sage" | "assistant";
 export type SageModel = "claude" | "codex" | "pi";
 
 export interface ResolvedReviewEngine {
-  /** sage = standalone lens CLI; persona = Claude-Code session + CodeReview skill. */
+  /** sage = standalone lens CLI; assistant = Claude-Code session + CodeReview skill. */
   engine: ReviewEngine;
   /**
    * The LLM the sage CLI runs its lenses through (`sage review --substrate
@@ -47,7 +47,7 @@ export interface ReviewEngineInput {
  *   2. Legacy (no `engine`): only `substrate === "pi-dev"` selected the sage
  *      runner before, so it maps to `{engine: sage}` with NO model (runner uses SAGE_SUBSTRATE env, else pi — true parity); legacy
  *      backend). EVERY other legacy substrate (`claude-code`, `codex`, `cursor`,
- *      `custom`, unset) kept the Claude-Code path → `{engine: persona}`. This
+ *      `custom`, unset) kept the Claude-Code path → `{engine: assistant}`. This
  *      preserves pre-split behaviour byte-for-byte for un-migrated configs.
  *
  * No coercion of unknown values — `model` is constrained to `SageModel` by the
@@ -60,8 +60,8 @@ export function resolveReviewEngine(runtime?: ReviewEngineInput): ResolvedReview
       ? { engine: "sage", model: runtime.model }
       : { engine: "sage" };
   }
-  if (runtime?.engine === "persona") {
-    return { engine: "persona" };
+  if (runtime?.engine === "assistant") {
+    return { engine: "assistant" };
   }
   // Legacy migration — engine unset. NO `model`: the runner falls back to
   // SAGE_SUBSTRATE env (else pi), exactly as pre-split `makePiDevPipelineRunner({})`
@@ -70,5 +70,5 @@ export function resolveReviewEngine(runtime?: ReviewEngineInput): ResolvedReview
   if (runtime?.substrate === "pi-dev") {
     return { engine: "sage" };
   }
-  return { engine: "persona" };
+  return { engine: "assistant" };
 }
