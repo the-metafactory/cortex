@@ -197,7 +197,8 @@ export type ProjectionFamily =
   | "review.verdict"
   | "agent.heartbeat"
   | "attention"
-  | "adapter.health";
+  | "adapter.health"
+  | "governance.verdict";
 
 /**
  * MC-I1.S6 (#848) — broadcast an `mc.projection` refresh signal to all connected

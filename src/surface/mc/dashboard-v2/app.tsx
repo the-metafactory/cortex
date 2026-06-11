@@ -26,6 +26,7 @@ import { PhaseDetailView } from "./components/phase-detail-view";
 import { WorkItemDetailView } from "./components/work-item-detail-view";
 import { AttentionView } from "./components/attention-view";
 import { NetworkView } from "./components/network-view";
+import { GovernanceView } from "./components/governance-view";
 import { Toast } from "./components/toast";
 import { useFocusArea } from "./hooks/use-focus-area";
 import { useTasks } from "./hooks/use-tasks";
@@ -37,6 +38,7 @@ import { usePlans } from "./hooks/use-plans";
 import { usePhaseDetail } from "./hooks/use-phase-detail";
 import { useAttention } from "./hooks/use-attention";
 import { useAgents } from "./hooks/use-agents";
+import { useGovernance } from "./hooks/use-governance";
 import type { AgentPresenceTile } from "./hooks/use-agents";
 import { useWorkItemDetail } from "./hooks/use-work-item-detail";
 import { useTheme } from "./hooks/use-theme";
@@ -61,7 +63,7 @@ import type { Command } from "./components/command-palette";
  * may upgrade to a hash route if deep-linking turns out to be
  * principal-requested; for now the in-memory view is sufficient.
  */
-type DashboardView = "default" | "metrics" | "iterations" | "sources" | "repositories" | "plans" | "phase-detail" | "work-item-detail" | "attention" | "kanban-detail" | "network";
+type DashboardView = "default" | "metrics" | "iterations" | "sources" | "repositories" | "plans" | "phase-detail" | "work-item-detail" | "attention" | "kanban-detail" | "network" | "governance";
 
 export function App() {
   const { theme, toggle: toggleTheme } = useTheme();
@@ -124,6 +126,8 @@ export function App() {
   // G-1114.B.4 — stack-local agent-presence data (fetched only when on the
   // Network tab); live-refreshed off the `agent.presence` WS frame.
   const agents = useAgents(ws, view === "network");
+  // G-1115 — governance verdicts, fetched only when the tab is visible.
+  const governance = useGovernance(ws, view === "governance");
   // If software mode is toggled OFF while on a software-mode view (Repositories
   // / Plans / phase-detail / work-item-detail / attention), the tab + render
   // both gate off — reset to default so the main area isn't left blank.
@@ -351,6 +355,15 @@ export function App() {
         >
           Network
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === "governance"}
+          className={`tab${view === "governance" ? " active" : ""}`}
+          onClick={() => setView("governance")}
+        >
+          Governance
+        </button>
         {softwareMode && (
           <button
             type="button"
@@ -533,6 +546,12 @@ export function App() {
         {view === "sources" && (
           /* G-1113.B.4 — provider-neutral Sources config view. */
           <SourcesView />
+        )}
+
+        {view === "governance" && (
+          /* G-1115 — read-only governance audit surface: verdicts from the
+             governed-action stack (pulse P-702) read back off the bus. */
+          <GovernanceView state={governance} />
         )}
 
         {view === "network" && (

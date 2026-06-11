@@ -52,6 +52,7 @@ import { projectReviewVerdict } from "./review-verdict";
 import { projectHeartbeat } from "./heartbeat";
 import { projectAttention } from "./attention-projection";
 import { projectAdapterLifecycle } from "./adapter-lifecycle";
+import { projectGovernanceVerdict } from "./governance-verdict";
 import {
   produceFailedDispatchAttention,
   type AttentionDelta,
@@ -125,6 +126,10 @@ export const DISPATCH_PROJECTION_SUBJECTS: string[] = [
   "local.*.system.adapter.*",
   "local.*.*.system.adapter.*",
   "federated.*.*.system.adapter.*",
+  // governance verdicts (G-1115, governance upgrade Stage 5)
+  "local.*.governance.verdict.*",
+  "local.*.*.governance.verdict.*",
+  "federated.*.*.governance.verdict.*",
 ];
 
 /** A structural view of an envelope the projections read (kept loose so any
@@ -224,6 +229,16 @@ export function project(
     const res = projectAdapterLifecycle(db, envelope);
     if (res !== null) {
       broadcastProjection(wsRegistry, "adapter.health");
+    }
+    return;
+  }
+
+  // governance verdicts (G-1115 — governance upgrade Stage 5)
+  if (type.startsWith("governance.verdict.")) {
+    const res = projectGovernanceVerdict(db, envelope, subject);
+    if (res !== null) {
+      // Refresh signal only (the attention pattern) — the tab re-reads the API.
+      broadcastProjection(wsRegistry, "governance.verdict");
     }
     return;
   }

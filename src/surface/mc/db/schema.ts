@@ -516,6 +516,32 @@ export const SCHEMA_SQL: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_attention_status_severity
      ON attention_items(status, severity)`,
   `CREATE INDEX IF NOT EXISTS idx_attention_work_item ON attention_items(work_item_id)`,
+
+  // G-1115 — governance verdicts (governance upgrade Stage 5). Pipeline-level
+  // audit records projected from `governance.verdict.{l0,tribunal,gate,resolved}`
+  // envelopes (pulse's governed: stack, P-702). NOT session-joined: the
+  // Governance tab queries time windows + counts, not session feeds. Append-only
+  // from the projection's perspective; `envelope_id` UNIQUE makes redelivery
+  // idempotent.
+  `CREATE TABLE IF NOT EXISTS governance_verdicts (
+    id TEXT PRIMARY KEY,
+    envelope_id TEXT NOT NULL UNIQUE,
+    layer TEXT NOT NULL
+      CHECK(layer IN ('l0','tribunal','gate','resolved')),
+    decision TEXT NOT NULL,
+    name TEXT NOT NULL,
+    tool TEXT,
+    reason TEXT,
+    resolved_by TEXT,
+    source TEXT,
+    subject TEXT,
+    principal TEXT,
+    stack TEXT,
+    payload TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_governance_created ON governance_verdicts(created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_governance_decision ON governance_verdicts(decision, created_at)`,
 ];
 
 /**

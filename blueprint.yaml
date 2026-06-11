@@ -466,3 +466,18 @@ features:
       local.{principal}.{stack}.tasks.@{assistant}.{capability}.
     parent: G-1114
     depends_on: [G-1114.D, G-1114.E]
+
+  G-1115:
+    name: Governance verdict observability (governance upgrade Stage 5)
+    status: in-progress
+    description: >
+      Read-only MC Governance tab over the governed-action stack's bus
+      verdicts (pulse P-702 publishes governance.verdict.{l0,tribunal,gate,
+      resolved}). Projection extends the MC-I1.S6 dispatcher seam into a new
+      governance_verdicts table (idempotent on envelope id); GET
+      /api/governance serves a 30d window + summary + deterministic alarm
+      tier (denials/24h: 0 none, 1-4 elevated, >=5 high); the tab renders an
+      alarm banner, summary, verdict list, and an honest empty state (no
+      verdicts means nothing was evaluated, not an all-clear). RavenClaude's
+      Heimdall/Vidarr concept, reading the bus. See pulse
+      docs/governance-upgrade-plan.md Stage 5.

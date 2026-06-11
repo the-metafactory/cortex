@@ -45,6 +45,7 @@ import { handleListPlans } from "./api/plans";
 import { handleGetPhaseDetail } from "./api/phase-detail";
 import { handleGetWorkItemDetail } from "./api/work-item-detail";
 import { handleListAttention } from "./api/attention";
+import { handleGetGovernance } from "./api/governance";
 import type { ProcessManager } from "./session/process-manager";
 import type { SpawnFn } from "./session/endpoint-resolver";
 import { join, dirname } from "path";
@@ -480,6 +481,14 @@ async function handleApi(
       return methodNotAllowed(["GET"]);
     }
     return handleListAttention(db);
+  }
+
+  // G-1115 — GET /api/governance — governance verdicts + summary + alarm tier.
+  if (pathname === "/api/governance") {
+    if (req.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
+    return handleGetGovernance(db);
   }
 
   if (pathname === "/api/tasks") {
