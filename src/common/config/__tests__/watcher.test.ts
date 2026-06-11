@@ -126,6 +126,7 @@ const TEST_CONFIG: AgentConfig = {
     configPath: "",
     dbPath: "",
     port: 0,
+    sideband: "http://127.0.0.1:9092",
   },
   networksDir: "./networks",
   networks: [],

@@ -588,6 +588,8 @@ describe("AgentConfigSchema.mc (MC-I1.S1)", () => {
       configPath: "",
       dbPath: "",
       port: 0,
+      // P-14 U0.1 — sideband defaults to the contract loopback bind.
+      sideband: "http://127.0.0.1:9092",
     });
   });
 
@@ -628,6 +630,103 @@ describe("AgentConfigSchema.mc (MC-I1.S1)", () => {
 
   test("port rejects a non-integer value", () => {
     expect(() => AgentConfigSchema.parse(minAgentConfig({ port: 8767.5 }))).toThrow();
+  });
+});
+
+// =============================================================================
+// P-14 U0.1 — mc.sideband loopback enforcement + shared-schema parity
+// (signal cortex-sideband.md §3/§8; the #877/#879 shared-McSchema lesson)
+// =============================================================================
+
+describe("mc.sideband (P-14 U0.1)", () => {
+  /** Minimal AgentConfig shell with an mc override. */
+  function minAgentConfig(mc?: Record<string, unknown>) {
+    return {
+      agent: { name: "test", displayName: "Test" },
+      discord: [],
+      mattermost: [],
+      claude: { timeoutMs: 1000 },
+      paths: { publishedEventsDir: "/tmp/x" },
+      ...(mc !== undefined && { mc }),
+    };
+  }
+
+  test("absent mc block → sideband defaults to the contract loopback bind", () => {
+    const parsed = AgentConfigSchema.parse(minAgentConfig());
+    expect(parsed.mc.sideband).toBe("http://127.0.0.1:9092");
+  });
+
+  test("empty mc block ({}) → sideband default", () => {
+    const parsed = AgentConfigSchema.parse(minAgentConfig({}));
+    expect(parsed.mc.sideband).toBe("http://127.0.0.1:9092");
+  });
+
+  test("accepts an explicit loopback override (custom port / localhost / IPv6)", () => {
+    for (const sideband of [
+      "http://127.0.0.1:19092",
+      "http://localhost:9092",
+      "http://[::1]:9092",
+    ]) {
+      const parsed = AgentConfigSchema.parse(minAgentConfig({ sideband }));
+      expect(parsed.mc.sideband).toBe(sideband);
+    }
+  });
+
+  test("REJECTS a non-loopback sideband (fail-closed, §8)", () => {
+    for (const sideband of [
+      "http://0.0.0.0:9092",
+      "http://192.168.1.5:9092",
+      "http://10.0.0.9:9092",
+      "http://sideband.evil.com:9092",
+      "ws://127.0.0.1:9092",
+    ]) {
+      expect(() => AgentConfigSchema.parse(minAgentConfig({ sideband }))).toThrow(/mc\.sideband/);
+    }
+  });
+
+  // ---- Shared-schema parity: BOTH config schemas must see mc.sideband ----
+  // The #877/#879 lesson: any new mc.* key MUST live on the SHARED McSchema so
+  // AgentConfigSchema (legacy bot.yaml) AND CortexConfigSchema (config-split)
+  // both parse it. A field defined on only one schema gets silently stripped
+  // for the other shape's deployments.
+
+  describe("shared-schema parity", () => {
+    test("CortexConfigSchema parses mc.sideband (default)", () => {
+      const parsed = CortexConfigSchema.parse(minConfig());
+      expect(parsed.mc.sideband).toBe("http://127.0.0.1:9092");
+    });
+
+    test("CortexConfigSchema accepts a loopback override", () => {
+      const parsed = CortexConfigSchema.parse({
+        ...minConfig(),
+        mc: { enabled: true, sideband: "http://localhost:19092" },
+      });
+      expect(parsed.mc.sideband).toBe("http://localhost:19092");
+    });
+
+    test("CortexConfigSchema REJECTS a non-loopback sideband (parity with AgentConfigSchema)", () => {
+      expect(() =>
+        CortexConfigSchema.parse({
+          ...minConfig(),
+          mc: { enabled: true, sideband: "http://192.168.1.5:9092" },
+        }),
+      ).toThrow(/mc\.sideband/);
+    });
+
+    test("BOTH schemas reject the SAME non-loopback value and accept the SAME loopback value", () => {
+      const bad = "http://0.0.0.0:9092";
+      const good = "http://127.0.0.2:9092";
+      // Agent shape
+      expect(() => AgentConfigSchema.parse(minAgentConfig({ sideband: bad }))).toThrow();
+      expect(AgentConfigSchema.parse(minAgentConfig({ sideband: good })).mc.sideband).toBe(good);
+      // Cortex shape
+      expect(() =>
+        CortexConfigSchema.parse({ ...minConfig(), mc: { sideband: bad } }),
+      ).toThrow();
+      expect(
+        CortexConfigSchema.parse({ ...minConfig(), mc: { sideband: good } }).mc.sideband,
+      ).toBe(good);
+    });
   });
 });
 

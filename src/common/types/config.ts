@@ -9,6 +9,7 @@
 import { z } from "zod/v4";
 import { NKEY_PUBKEY_REGEX } from "./nkey";
 import { NatsSubjectsSchema } from "./nats-subjects";
+import { checkLoopbackSideband, DEFAULT_SIDEBAND_URL } from "../sideband/loopback";
 
 // =============================================================================
 // Helper: typed empty default for nested Zod object schemas.
@@ -375,7 +376,38 @@ export const McSchema = z.object({
   dbPath: z.string().default(""),
   /** Listen port. 0 → fall back to the MC yaml's port (default 8767). */
   port: z.number().int().nonnegative().default(0),
-}).default(emptyDefault()).transform((val) => ({
+  /**
+   * P-14 U0.1 — Tier-3 sideband endpoint (signal cortex-sideband.md §2/§3/§8).
+   * MC proxies `/api/observability/*` to this base URL server-side; the
+   * browser only ever talks to MC. Default = the sideband's loopback bind on
+   * its default port.
+   *
+   * LOOPBACK-ENFORCED (§3/§8): the sideband is a local-only daemon (it binds
+   * `127.0.0.1`, carries no token; the security boundary is the host process
+   * boundary). A non-loopback value is REFUSED at parse time — `superRefine`
+   * fails the whole config load fail-closed, so the daemon never boots
+   * pointed at a non-loopback sideband. The accept set (127.0.0.0/8,
+   * `localhost`, `[::1]`, IPv4-mapped loopback) lives in
+   * `src/common/sideband/loopback.ts`, the single source of truth re-checked
+   * at the proxy request boundary too.
+   */
+  sideband: z.string().default(DEFAULT_SIDEBAND_URL),
+}).default(emptyDefault()).superRefine((val, ctx) => {
+  // Loopback enforcement (§8: "Cortex MUST refuse to set a non-loopback host").
+  // Only check when a value is present; the `.default()` supplies a loopback
+  // URL so the all-defaults path is always valid.
+  const raw = val.sideband;
+  if (typeof raw === "string" && raw !== "") {
+    const check = checkLoopbackSideband(raw);
+    if (!check.ok) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["sideband"],
+        message: `mc.sideband: ${check.reason}`,
+      });
+    }
+  }
+}).transform((val) => ({
   // `.default(emptyDefault())` returns `{}` literally rather than re-parsing
   // the inner defaults, so the fields would be undefined. Re-apply the inner
   // defaults so callers get the populated shape. The `??` chains are
@@ -385,6 +417,7 @@ export const McSchema = z.object({
   configPath: val.configPath ?? "",
   dbPath: val.dbPath ?? "",
   port: val.port ?? 0,
+  sideband: val.sideband ?? DEFAULT_SIDEBAND_URL,
   /* eslint-enable @typescript-eslint/no-unnecessary-condition */
 }));
 

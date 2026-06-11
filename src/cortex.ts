@@ -3564,6 +3564,9 @@ export async function startCortex(
         dbPath,
         port: config.mc.port,
         agentPresence: () => presenceViewForApi,
+        // P-14 U0.1 — Tier-3 sideband proxy. Loopback-enforced at config-parse
+        // time; the embed wires it onto the `/api/observability/*` proxy.
+        sidebandUrl: config.mc.sideband,
       });
       mcDb = mcHandle.db;
       console.log(`cortex: Mission Control embed listening on http://localhost:${mcHandle.port} — db ${dbPath}`);
