@@ -8,9 +8,10 @@
  * authoritative state — the tab always re-reads the API (same discipline as
  * `use-agents` / `use-attention`).
  *
- * Only fetches when `enabled` (the Governance tab is visible). A frame
- * arriving while the tab is closed short-circuits, but the subscription stays
- * attached so re-entering the tab is current.
+ * Only fetches when `enabled` (the Governance tab is visible). Frames
+ * arriving while the tab is closed are discarded, so every tab OPEN refetches
+ * (audit data must not present stale) — and a failed boot fetch retries on
+ * the next open rather than wedging the tab on its error.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -55,6 +56,7 @@ export function useGovernance(ws: WsClient, enabled: boolean): GovernanceState {
     try {
       const res = await getJson<GovernanceResponse>("/api/governance");
       if (!aliveRef.current || gen !== genRef.current) return;
+      bootedRef.current = true; // freshness achieved — frame refetches engage
       setData(res);
       setLoaded(true);
       setError(null);
@@ -69,11 +71,12 @@ export function useGovernance(ws: WsClient, enabled: boolean): GovernanceState {
     }
   }, []);
 
-  // Boot fetch when the tab first becomes visible.
+  // Fetch on EVERY tab open (closed-tab frames are discarded, so reopening
+  // must re-read — stale audit data is worse than a refetch). The first
+  // successful fetch flips bootedRef so frame-driven refetches engage.
   useEffect(() => {
-    if (!enabled || bootedRef.current) return;
-    bootedRef.current = true;
-    void fetchGovernance(true);
+    if (!enabled) return;
+    void fetchGovernance(!bootedRef.current);
   }, [enabled, fetchGovernance]);
 
   // Live refresh on projected verdicts.

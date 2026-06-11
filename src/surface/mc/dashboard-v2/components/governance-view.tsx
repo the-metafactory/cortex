@@ -55,8 +55,9 @@ export function GovernanceView({ state }: GovernanceViewProps) {
         <p className="dim">Could not load governance verdicts: {error}</p>
       ) : !data || data.summary.total === 0 ? (
         <p className="dim">
-          No governance verdicts recorded in the last {data?.windowDays ?? 30} days — no governed
-          pipelines have run. This is not an all-clear: nothing was evaluated.
+          No governance verdicts recorded in the last {data?.windowDays ?? 30} days. Either no
+          governed pipelines ran, or their verdicts never reached this stack&apos;s projection
+          (bus, validation, or retention). Absence of records is not an all-clear.
         </p>
       ) : (
         <>
