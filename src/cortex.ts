@@ -723,6 +723,32 @@ export async function startCortex(
     );
   }
 
+  // #1006 — presence-scoped stack pubkey, resolved INDEPENDENT of the signing
+  // posture.
+  //
+  // `stackNKeyPubForVerifier` (above) is only populated inside the
+  // signing-ENABLED boot branch — it is the key the chain-verifier loads from
+  // the seed when `attachSigner` is true. With `security.signing: off` (the
+  // schema default that the live work/halden config-split stacks run) that
+  // branch is skipped, so the verifier key stays `undefined` even though the
+  // stack pubkey IS declared in config (`stack.nkey_pub`).
+  //
+  // Presence is a BUS identity concern, NOT a signing concern (ADR-0007): the
+  // agent-presence producer stamps the stack's NKey pubkey as the fallback
+  // identity for any hosted agent that hasn't declared its own `nkey_pub`
+  // (the work/halden shape — per-agent keys live on `policy.principals[]`,
+  // not on the canonical `agents[]` entry). A stack whose pubkey is declared
+  // MUST announce its agents whether or not it signs outbound envelopes.
+  //
+  // Resolution order: prefer the seed-loaded verifier key (already validated
+  // against `stack.nkey_pub` for the rotation split-brain check above when
+  // signing is on), else the declared `stack.nkey_pub`. Both pass the same
+  // NKEY_PUBKEY_REGEX at the schema layer, so they are interchangeable as the
+  // presence identity. Stays `undefined` only when the stack declares neither
+  // — the genuine no-key case, where skipping is still correct.
+  const stackNKeyPubForPresence: string | undefined =
+    stackNKeyPubForVerifier ?? options.stack?.nkey_pub;
+
   // S4 (Network Join Control Plane, epic #733; DD-5 wiring) — resolve the
   // federated `peers[]` from the registry roster BEFORE any consumer reads
   // them. Joining a network names the NETWORK, not each principal: a peer may
@@ -3692,10 +3718,13 @@ export async function startCortex(
   // #1003 — build the per-agent presence descriptors ONCE, BEFORE both the
   // MC-gated consumer block and the unconditional producer block, so the
   // producer is constructed exactly once (no double-construct across the two
-  // paths). The stack's own NKey pubkey (captured when the signer was staged) is
-  // the fallback identity for any agent that hasn't declared its own `nkey_pub`.
-  // Agents with no resolvable key are skipped (the presence payload requires a
-  // non-empty key).
+  // paths). The stack's own NKey pubkey is the fallback identity for any agent
+  // that hasn't declared its own `nkey_pub`. #1006: this uses
+  // `stackNKeyPubForPresence` (declared `stack.nkey_pub` OR the seed-loaded
+  // key) rather than `stackNKeyPubForVerifier` (set only when signing is on),
+  // so a `signing: off` stack still announces its keyless agents. Agents with
+  // no resolvable key are skipped (the presence payload requires a non-empty
+  // key).
   const presenceAgents: PresenceAgent[] = [];
   {
     let skippedNoKey = 0;
@@ -3703,7 +3732,7 @@ export async function startCortex(
       const pa = presenceAgentFromAgent(
         a,
         { principal: principalId, stack: derivedStack.stack },
-        stackNKeyPubForVerifier,
+        stackNKeyPubForPresence,
       );
       if (pa === null) {
         skippedNoKey += 1;
