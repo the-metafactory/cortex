@@ -477,8 +477,9 @@ export const AgentRuntimeSchema = z.object({
    * Distinct from `substrate` (the M6 execution harness) and `model` (sage's
    * lens LLM). **Optional** for back-compat: when unset, `resolveReviewEngine`
    * derives it from the legacy `substrate` value (`pi-dev` → sage; everything
-   * else → assistant), preserving pre-split routing byte-for-byte. New configs
-   * SHOULD set it explicitly.
+   * else → assistant), preserving pre-split routing (the engine value was
+   * renamed `persona`→`assistant` in cortex#921 — routing-equivalent). New
+   * configs SHOULD set it explicitly.
    */
   engine: z.enum(["sage", "assistant"]).optional(),
   /**

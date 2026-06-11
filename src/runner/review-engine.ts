@@ -48,7 +48,9 @@ export interface ReviewEngineInput {
  *      runner before, so it maps to `{engine: sage}` with NO model (runner uses SAGE_SUBSTRATE env, else pi — true parity); legacy
  *      backend). EVERY other legacy substrate (`claude-code`, `codex`, `cursor`,
  *      `custom`, unset) kept the Claude-Code path → `{engine: assistant}`. This
- *      preserves pre-split behaviour byte-for-byte for un-migrated configs.
+ *      preserves pre-split ROUTING for un-migrated configs — the resolved
+ *      engine string is `assistant` (renamed from `persona` in cortex#921), so
+ *      it is routing-equivalent, not byte-identical, to the pre-split value.
  *
  * No coercion of unknown values — `model` is constrained to `SageModel` by the
  * schema's `z.enum`, so an unsupported LLM is rejected at config load rather
