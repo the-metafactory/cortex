@@ -525,6 +525,39 @@ describe("dispatch-sink — no-routing and non-lifecycle envelopes", () => {
     expect(adapter.sentMessages).toHaveLength(1);
   });
 
+  test("cortex#988 — a FAILED post releases the claim so redelivery retries", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = new MockAdapter("sage-mattermost");
+    // First post attempt throws (rate limit etc.); subsequent attempts succeed.
+    const realPost = adapter.postResponse.bind(adapter);
+    let failures = 1;
+    adapter.postResponse = async (target, text, files) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error("rate limited");
+      }
+      return realPost(target, text, files);
+    };
+    const sink = createDispatchSink({ runtime, adapters: [adapter], principal: "jc", stack: "switch" });
+    await sink.start();
+
+    const env = lifecycleEnvelope("dispatch.task.completed", {
+      agent_id: "sage",
+      chat_response: "retry me",
+      response_routing: routing("sage-mattermost", "C123"),
+    });
+    trigger(env); // fails — claim must be released
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(adapter.sentMessages).toHaveLength(0);
+
+    trigger(env); // redelivery of the SAME envelope — retries and succeeds
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(adapter.sentMessages).toHaveLength(1);
+    expect(adapter.sentMessages[0]!.text).toBe("retry me");
+  });
+
   test("cortex#987 — distinct envelopes still post independently after dedupe", async () => {
     const { runtime, trigger } = fakeRuntime();
     const adapter = new MockAdapter("sage-mattermost");

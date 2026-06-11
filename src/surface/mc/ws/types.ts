@@ -98,6 +98,10 @@ export type WsServerMessage =
   // "projection writes bypass WS fan-out" gap.
   | {
       type: "mc.projection";
+      // This union MIRRORS `ProjectionFamily` in `surface/mc/notifications.ts`
+      // (whose doc comment declares the mirror); keep the two in sync.
+      // `governance.verdict` added here because the family gained it while the
+      // frame didn't — the drift tsc caught on cortex#988.
       family:
         | "dispatch.lifecycle"
         | "review.verdict"

@@ -224,7 +224,7 @@ export function createReviewSink(opts: ReviewSinkOptions): ReviewSink {
   // cortex#491 belt-and-braces — render idempotency keyed by `envelope.id`.
   // Shared with the dispatch sink since cortex#987 (which hit the
   // overlapping-pattern double-delivery this guards against, live).
-  const alreadyRendered = createRenderDedupe();
+  const dedupe = createRenderDedupe();
 
   /**
    * Resolve a native target for the logical address, PREFERRING the reviewing
@@ -286,14 +286,16 @@ export function createReviewSink(opts: ReviewSinkOptions): ReviewSink {
     // mark seen only once we know this envelope WOULD post (routing present,
     // text non-empty) so a non-actionable envelope doesn't consume a window
     // slot. A second delivery of the same id is a silent no-op.
-    if (alreadyRendered(envelope.id)) return;
+    if (!dedupe.claim(envelope.id)) return;
 
     let target: ResponseTarget | null;
     try {
       target = await resolveTarget(routing, reviewingAgentId(envelope));
     } catch (err) {
       // A resolve failure (e.g. a thread-create API error) must not crash
-      // the fan-out. Log and drop this delivery.
+      // the fan-out. Log and drop this delivery — releasing the dedupe
+      // claim so a redelivery can retry (no render happened).
+      dedupe.release(envelope.id);
       process.stderr.write(
         `cortex: review-sink resolveLogicalTarget failed (surface=${routing.surface}, ` +
           `channel=${routing.channel}, type=${envelope.type}): ` +
@@ -318,7 +320,9 @@ export function createReviewSink(opts: ReviewSinkOptions): ReviewSink {
         // no-empty-catch rule). The review already completed on the bus;
         // only the surface delivery failed (rate limit, deleted channel,
         // etc.). The authoritative verdict still reached pilot via
-        // correlation_id.
+        // correlation_id. Release the dedupe claim so a redelivery can
+        // retry the render (sage finding on cortex#988).
+        dedupe.release(envelope.id);
         process.stderr.write(
           `cortex: review-sink postResponse failed (surface=${routing.surface}, ` +
             `channel=${routing.channel}, type=${envelope.type}): ` +

@@ -90,17 +90,40 @@ export function dispatchCorrelationKey(envelope: Envelope): string | undefined {
  * (envelopes arrive in roughly-temporal order, so a genuine duplicate lands
  * well within the window).
  */
-export function createRenderDedupe(window = 4096): (id: string) => boolean {
+export interface RenderDedupe {
+  /**
+   * Atomically claim `id`. Returns `true` when this caller owns the render
+   * (first claim); `false` when the id was already claimed (duplicate
+   * delivery — skip). Claiming BEFORE the async post (rather than marking
+   * after success) is load-bearing: duplicate deliveries arrive in the same
+   * fan-out tick, so a check-then-mark-after-await pattern would let both
+   * pass the check before either marks.
+   */
+  claim(id: string): boolean;
+  /**
+   * Release a claimed id after a FAILED delivery, so a later redelivery of
+   * the same envelope can retry instead of being suppressed by a claim that
+   * never produced a render (sage finding on cortex#988).
+   */
+  release(id: string): void;
+}
+
+export function createRenderDedupe(window = 4096): RenderDedupe {
   const seenIds = new Set<string>();
-  return function alreadyRendered(id: string): boolean {
-    if (seenIds.has(id)) return true;
-    seenIds.add(id);
-    if (seenIds.size > window) {
-      // Evict the oldest entry (insertion order — Set preserves it).
-      const oldest = seenIds.values().next().value;
-      if (oldest !== undefined) seenIds.delete(oldest);
-    }
-    return false;
+  return {
+    claim(id: string): boolean {
+      if (seenIds.has(id)) return false;
+      seenIds.add(id);
+      if (seenIds.size > window) {
+        // Evict the oldest entry (insertion order — Set preserves it).
+        const oldest = seenIds.values().next().value;
+        if (oldest !== undefined) seenIds.delete(oldest);
+      }
+      return true;
+    },
+    release(id: string): void {
+      seenIds.delete(id);
+    },
   };
 }
 
