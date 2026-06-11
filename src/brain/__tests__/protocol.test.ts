@@ -617,3 +617,31 @@ describe("JsonlDecoder", () => {
     expect(parsed[1]?.kind === "ok" && parsed[1].effect.type).toBe("result");
   });
 });
+
+// --- sage round 3 probes ---------------------------------------------------
+
+import { parseBrainEffect as _parseR3 } from "../protocol";
+
+describe("round-3: tolerant attachment extras, strict XOR, complete-reason", () => {
+  const base = { v: 1, type: "post", task_id: "t1", text: "x" };
+
+  test("unknown extra fields on a known attachment are tolerated (stripped)", () => {
+    const r = _parseR3(JSON.stringify({ ...base, attachment: { filename: "a.png", b64: "aGk=", width: 800 } }));
+    expect(r.kind).toBe("ok");
+  });
+
+  test("both b64 and path still rejected (XOR survives tolerance)", () => {
+    const r = _parseR3(JSON.stringify({ ...base, attachment: { filename: "a", b64: "aGk=", path: "x" } }));
+    expect(r.kind).toBe("invalid");
+  });
+
+  test("neither b64 nor path rejected", () => {
+    const r = _parseR3(JSON.stringify({ ...base, attachment: { filename: "a" } }));
+    expect(r.kind).toBe("invalid");
+  });
+
+  test("complete result carrying a reason is rejected, not stripped", () => {
+    const r = _parseR3(JSON.stringify({ v: 1, type: "result", task_id: "t1", status: "complete", reason: { kind: "cant_do", detail: "x" } }));
+    expect(r.kind).toBe("invalid");
+  });
+});

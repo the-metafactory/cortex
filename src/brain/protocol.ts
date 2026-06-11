@@ -343,14 +343,17 @@ export const BRAIN_EFFECT_LOG = "log" as const;
  *     SHAPE; the runner owns the filesystem boundary (see
  *     `exec-brain-runner.ts` `confineScratchPath`).
  *
- * Modeled as a GENUINELY EXCLUSIVE two-member union: each branch rejects the
- * other variant's discriminating key. A payload carrying BOTH `b64` and
- * `path` matches neither branch and fails validation (rather than silently
- * binding to the b64 branch and stripping `path`). A payload carrying neither
- * also fails.
+ * EXCLUSIVE on the discriminating keys, TOLERANT on everything else: exactly
+ * one of `b64` / `path` must be present — both (or neither) fails validation,
+ * never silent stripping of the loser. Unknown EXTRA fields (future
+ * attachment metadata) are ignored per the codec's tolerant-ingest rule —
+ * which is why these are NOT strict objects.
  */
-export const PostAttachmentSchema = z.union([
-  z.strictObject({
+const attachmentXor = (a: { b64?: unknown; path?: unknown }) =>
+  (a.b64 !== undefined) !== (a.path !== undefined);
+
+export const PostAttachmentSchema = z
+  .object({
     filename: z.string().min(1),
     b64: z
       .string()
@@ -359,13 +362,13 @@ export const PostAttachmentSchema = z.union([
         {
           message: `inline attachment b64 exceeds ${MAX_ATTACHMENT_B64_BYTES} bytes (256 KiB); write it to the scratch dir and use { filename, path } instead`,
         },
-      ),
-  }),
-  z.strictObject({
-    filename: z.string().min(1),
-    path: z.string().min(1),
-  }),
-]);
+      )
+      .optional(),
+    path: z.string().min(1).optional(),
+  })
+  .refine(attachmentXor, {
+    message: "attachment must carry exactly one of `b64` or `path`",
+  });
 export type PostAttachment = z.infer<typeof PostAttachmentSchema>;
 
 /**
@@ -425,6 +428,9 @@ export const ResultEffectSchema = z.discriminatedUnion("status", [
     task_id: z.string().min(1),
     status: z.literal("complete"),
     summary: z.string().optional(),
+    // A `complete` result carrying a `reason` is ambiguous, not tolerable —
+    // reject it instead of silently stripping (sage round 3).
+    reason: z.undefined().optional(),
   }),
   z.object({
     v: z.literal(BRAIN_PROTOCOL_VERSION),

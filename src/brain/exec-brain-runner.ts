@@ -509,7 +509,7 @@ export function makeExecBrainRunner(
           // and the post is DROPPED — the host owns the filesystem boundary,
           // not the brain. Symlink-escape detection is out of scope for v1; we
           // normalize and prefix-check.
-          if (e.attachment !== undefined && "path" in e.attachment) {
+          if (e.attachment?.path !== undefined) {
             const confined = confineScratchPath(
               scratchReal,
               e.attachment.path,
@@ -703,12 +703,16 @@ export function buildArgv(run: string, packDir: string): string[] {
   return argv;
 }
 
+/** Env keys the runner owns — a secret may never replace them (sage: a
+ * pack-declared secret named PATH/TMPDIR could steer executable lookup or
+ * temp-file behavior outside the sandbox). */
+const RUNNER_OWNED_ENV_KEYS = new Set(["PATH", "HOME", "LANG", "TMPDIR"]);
+
 /**
  * Build the minimal brain env (§8): PATH, HOME, LANG, the scoped TMPDIR, plus
- * the explicit secrets verbatim. NO ambient fleet credentials. The secrets map
- * is spread LAST but env keys it shares with the minimal set would be a
- * manifest author's explicit choice — secrets win, which is the documented
- * "injected verbatim" behavior.
+ * the explicit secrets. NO ambient fleet credentials. Secret names that
+ * collide with the runner-owned baseline are REJECTED (throw) — fail closed
+ * rather than let a manifest redefine the sandbox.
  */
 export function buildEnv(
   scratchDir: string,
@@ -721,6 +725,11 @@ export function buildEnv(
     TMPDIR: scratchDir,
   };
   for (const [k, v] of Object.entries(secrets)) {
+    if (RUNNER_OWNED_ENV_KEYS.has(k.toUpperCase())) {
+      throw new Error(
+        `brain secret "${k}" collides with a runner-owned env key — rename the secret`,
+      );
+    }
     env[k] = v;
   }
   return env;

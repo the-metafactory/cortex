@@ -560,3 +560,21 @@ done({ v: 1, type: "result", task_id: task.task_id, status: "complete", summary:
     }
   });
 });
+
+// --- sage round 3: runner-owned env keys -----------------------------------
+
+import { buildEnv as _buildEnvR3 } from "../exec-brain-runner";
+
+describe("round-3: secrets cannot override the sandbox env", () => {
+  test("rejects secret names colliding with runner-owned keys (any case)", () => {
+    for (const k of ["PATH", "TMPDIR", "home", "Lang"]) {
+      expect(() => _buildEnvR3("/tmp/scratch", { [k]: "evil" })).toThrow(/runner-owned/);
+    }
+  });
+
+  test("non-colliding secrets injected verbatim alongside the baseline", () => {
+    const env = _buildEnvR3("/tmp/scratch", { VT_API_KEY: "k" });
+    expect(env.VT_API_KEY).toBe("k");
+    expect(env.TMPDIR).toBe("/tmp/scratch");
+  });
+});
