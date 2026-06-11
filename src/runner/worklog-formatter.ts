@@ -4,7 +4,7 @@
  *
  * Design goals:
  * - User-facing prompts shown as clean quoted text, not raw system prompts
- * - Sub-agent / moderator / participant prompts suppressed from channel-level
+ * - Spawned-session / moderator / participant prompts suppressed from channel-level
  * - Completion messages show duration and meaningful summary
  * - Thread names are human-scannable at a glance
  */
@@ -23,16 +23,17 @@ function asString(v: unknown): string {
 }
 
 /**
- * Detect whether an event is from a sub-agent (moderator, participant, internal).
- * These should be grouped under the parent task, not shown as top-level entries.
+ * Detect whether an event is from a spawned session (moderator, participant,
+ * Agent-tool child CC session). These should be grouped under the parent task,
+ * not shown as top-level entries.
  */
-export function isSubAgentEvent(event: PublishedEvent): boolean {
+export function isSpawnedSessionEvent(event: PublishedEvent): boolean {
   const preview = asString(event.payload.prompt_preview);
   // Moderator and participant system prompts from agent-team.ts
   if (/^You are a moderator coordinating/i.test(preview)) return true;
   if (/^You are "[^"]+", a specialist participant/i.test(preview)) return true;
   if (/^All participants have responded/i.test(preview)) return true;
-  // Internal sub-agent prompts (Agent tool spawns)
+  // Internal spawned-session prompts (Agent-tool child CC sessions)
   if (/^(Explore|Search|Research|Analyze|Check|Verify|Find|Look)\s/i.test(preview) && preview.length < 80) return true;
   return false;
 }

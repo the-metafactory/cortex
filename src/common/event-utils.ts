@@ -82,7 +82,7 @@ export function extractActivityEntry(event: IngestEvent): SessionActivity | null
       const desc = asString(event.payload.agent_description) || asString(event.payload.summary);
       if (!desc) return null;
       const detail = desc.length > 100 ? desc.slice(0, 97) + "..." : desc;
-      return { timestamp: event.timestamp, icon: "\u{1F916}", label: "subagent", detail };
+      return { timestamp: event.timestamp, icon: "\u{1F916}", label: "spawned-session", detail };
     }
     case "tool.todo.updated": {
       const summary = event.payload.todo_summary as { total?: number; completed?: number } | undefined;

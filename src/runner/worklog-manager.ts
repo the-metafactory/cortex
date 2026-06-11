@@ -16,7 +16,7 @@ import {
   formatChannelStart,
   formatChannelCompletion,
   formatDispatchEnvelopeForThread,
-  isSubAgentEvent,
+  isSpawnedSessionEvent,
   extractTaskDescription,
 } from "./worklog-formatter";
 import { detectProject, extractGitHubIssue } from "./event-utils";
@@ -70,7 +70,7 @@ export class WorklogManager {
   /**
    * Handle a published event — route to the correct worklog thread.
    * Creates a thread if this is the first event for a session.
-   * Sub-agent events are routed to parent thread only (not channel-level).
+   * Spawned-session (child session) events are routed to parent thread only (not channel-level).
    */
   async handleEvent(event: PublishedEvent): Promise<void> {
     const sessionId = event.session_id;
@@ -78,13 +78,13 @@ export class WorklogManager {
 
     this.sessionLastSeen.set(sessionId, Date.now());
 
-    // Sub-agent events (moderator, participant prompts) — skip channel-level posts.
+    // Spawned-session (child session) events (moderator, participant prompts) — skip channel-level posts.
     // They'll still appear inside their parent's thread as progress events.
-    if (isSubAgentEvent(event)) {
+    if (isSpawnedSessionEvent(event)) {
       if (event.event_type === "agent.task.started" || event.event_type === "agent.task.completed" || event.event_type === "agent.task.failed") {
-        return; // Don't create threads or post start/complete for sub-agents
+        return; // Don't create threads or post start/complete for child sessions
       }
-      // Progress events from sub-agents can still go to parent thread
+      // Progress events from child sessions can still go to parent thread
       await this.handleProgressEvent(event);
       return;
     }

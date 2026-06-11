@@ -22,7 +22,7 @@ const EVENT_LABELS: Record<string, string> = {
   "agent.task.completed": "\u2705 completed",     // ✅
   "agent.task.failed": "\u274C failed",           // ❌
   "tool.file.changed": "\u{1F4DD} file changed",  // 📝
-  "tool.agent.spawned": "\u{1F916} subagent",    // 🤖
+  "tool.agent.spawned": "\u{1F916} spawned session",    // 🤖
   "tool.todo.updated": "\u{1F4CB} progress",     // 📋
 };
 

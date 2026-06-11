@@ -1,5 +1,5 @@
 /**
- * Sub-agent team orchestration adapted from Maestro's Group Chat pattern.
+ * Child-session (moderator + participant) team orchestration adapted from Maestro's Group Chat pattern.
  *
  * A team has a moderator CCSession that coordinates participant sessions.
  * The moderator decides what to delegate, participants do the work,

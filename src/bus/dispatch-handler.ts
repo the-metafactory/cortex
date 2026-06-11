@@ -187,7 +187,7 @@ function formatToolProgress(toolName: string, input: Record<string, unknown>): s
     case "WebFetch":
       return `Fetching \`${asString(input.url).slice(0, 60)}\`...`;
     case "Agent":
-      return `Spawning sub-agent: ${asString(input.description) || asString(input.subagent_type) || "working"}...`;
+      return `Spawning session: ${asString(input.description) || asString(input.subagent_type) || "working"}...`;
     case "Skill":
       return `Using skill: \`${asString(input.skill)}\`...`;
     default:
@@ -1464,7 +1464,7 @@ export class DispatchHandler extends EventEmitter {
       "Live dashboard at `grove.meta-factory.ai`. Shows active sessions with real-time activity, recent completions per repo, GitHub events, and session detail views. Sessions stay visible after completion. CLI sessions via `cldyo-live` also appear on the dashboard.",
       "",
       "**Worklog**",
-      "Activity is logged to #worklog with threaded updates per task — file changes, commands, subagents, and progress.",
+      "Activity is logged to #worklog with threaded updates per task — file changes, commands, spawned sessions, and progress.",
       "",
       "**Tips**",
       "- Long tasks? Use `async:` to avoid waiting",

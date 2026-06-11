@@ -325,7 +325,7 @@ export class CCSession extends EventEmitter {
       this.timeoutId = null;
     }
     if (!this.proc) return;
-    // Give CC a chance to clean up sub-agents
+    // Give CC a chance to clean up child sessions
     this.proc.kill("SIGINT");
     const proc = this.proc;
     setTimeout(() => {
