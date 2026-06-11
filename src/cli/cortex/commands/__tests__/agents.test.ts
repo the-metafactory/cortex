@@ -320,6 +320,22 @@ presence:
     }
   });
 
+  test("round-2: partial-numeric PID file is malformed — never signals PID prefix", () => {
+    // parseInt("123abc") === 123 would SIGHUP an unintended process; the
+    // full-string check must classify the file as malformed instead.
+    const { configPath, restore } = seedConfigWithPidFile(1);
+    try {
+      writeFileSync(pidFileFor(configPath), "123abc\n");
+      const r = runAgentsReload(
+        parseAgentsArgs(["reload", "--config", configPath]),
+      );
+      expect(r.exitCode).toBe(1);
+      expect(r.stdout).toContain("malformed");
+    } finally {
+      restore();
+    }
+  });
+
   test("Sage cortex#1027: a FAILED signal (stale PID) exits non-zero and reports the failure", () => {
     // A PID that is (almost certainly) not a live process → process.kill throws
     // ESRCH → attempted-but-failed → non-zero exit.

@@ -3911,13 +3911,16 @@ export async function startCortex(
     agentGeneration += 1;
 
     // ── Start consumers for added + changed (new definition) review-capable
-    //    agents via the SAME construction path boot uses. ──
-    for (const id of [...added, ...changed]) {
-      const agent = freshById.get(id);
-      if (agent !== undefined && isReviewCapable(agent)) {
-        await startReviewConsumersForAgent(agent);
-      }
-    }
+    //    agents via the SAME construction path boot uses — concurrently
+    //    (sage round 2), mirroring the parallel drain wave above. ──
+    await Promise.all(
+      [...added, ...changed].map(async (id) => {
+        const agent = freshById.get(id);
+        if (agent !== undefined && isReviewCapable(agent)) {
+          await startReviewConsumersForAgent(agent);
+        }
+      }),
+    );
 
     // ── Re-publish the capability registry (deliverable 3). ──
     //    Sage cortex#1027:

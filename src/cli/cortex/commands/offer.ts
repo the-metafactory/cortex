@@ -81,6 +81,7 @@ import { homedir } from "os";
 import YAML from "yaml";
 
 import { composeRawConfig } from "../../../common/config/loader";
+import { deriveEffectiveCapabilityCatalog } from "../../../common/agents/capability-catalog";
 import {
   type AcceptPolicy,
   type Offering,
@@ -1336,8 +1337,15 @@ function runList(
     return opError("list", `config failed CortexConfigSchema — cannot list offerings.\n  ${parsed.error.message}`, json);
   }
   const cfg = parsed.data;
+  // EFFECTIVE catalog: explicit entries pass through authoritative; agents
+  // declaring capabilities nobody catalogued get synthesized entries
+  // (cortex#1021 B-0 — kills the manual capabilities[] cross-edit).
+  const effectiveCatalog = deriveEffectiveCapabilityCatalog(
+    cfg.capabilities,
+    cfg.agents ?? [],
+  );
   const rows = buildListRows(
-    cfg.capabilities.map((c) => ({ id: c.id, provided_by: c.provided_by })),
+    effectiveCatalog.map((c) => ({ id: c.id, provided_by: c.provided_by })),
     cfg.policy?.offerings,
   );
 

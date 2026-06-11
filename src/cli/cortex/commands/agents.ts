@@ -270,8 +270,18 @@ function signalDaemonReload(configPath: string | undefined): SignalOutcome {
       reason: `could not read PID file ${pidFile}: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  const pid = Number.parseInt(raw, 10);
-  if (!Number.isInteger(pid) || pid <= 0) {
+  // Full-string numeric check (sage round 2): parseInt("123abc") === 123
+  // would SIGHUP an unintended process instead of flagging the file.
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return {
+      signalled: false,
+      benign: false,
+      reason: `PID file ${pidFile} is malformed ("${raw}")`,
+    };
+  }
+  const pid = Number(trimmed);
+  if (pid <= 0) {
     return {
       signalled: false,
       benign: false,

@@ -107,8 +107,7 @@ export function deriveEffectiveCapabilityCatalog(
       id: capId,
       // Synthesized entries carry an empty description (design §11 B-0). The
       // catalog is still queryable by id + providers; a principal who wants a
-      // human-readable description authors an explicit entry, which then wins
-      // for description/tags while still being augmented with derived providers.
+      // human-readable description authors an explicit entry,       // for description/tags while still being augmented with derived providers.
       description: "",
       tags: [],
       provided_by: providers,

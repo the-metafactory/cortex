@@ -1,10 +1,10 @@
 /**
  * Daemon PID-file path resolution — single source of truth shared by the
  * `cortex start/stop/status` lifecycle (in `cortex.ts`) and the
- * `cortex agents reload` daemon-signal path (in `cli/cortex/commands/agents.ts`).
+ * `cortex agents reload` runtime-signal path (in `cli/cortex/commands/agents.ts`).
  *
  * Lives in its own tiny module (no heavy import graph) so the lightweight
- * `agents` CLI can resolve the running daemon's PID without pulling the whole
+ * `agents` CLI can resolve the running runtime's PID without pulling the whole
  * `cortex.ts` module graph in just for `pidFileFor`.
  *
  * MIG-7.9 (deferred) flips these to `~/.config/cortex/`. Keeping grove-shaped
