@@ -133,7 +133,12 @@ import { createDispatchProjectionRenderer } from "./surface/mc/projection/dispat
 // P-14 U2.1 (#934) — bus→MC observability projection renderer (signal's four
 // system.* families). Own renderer, own subjects; registered beside the dispatch
 // renderer, no edit to surface-router.ts.
-import { createObservabilityProjectionRenderer } from "./surface/mc/projection/observability-renderer";
+// P-14 U3.3 (#937) — projectForeignObservability: the foreign-origin projection
+// entry the federated observability fold's callback writes through.
+import {
+  createObservabilityProjectionRenderer,
+  projectForeignObservability,
+} from "./surface/mc/projection/observability-renderer";
 // MC-I1.S7 (#849) — funnel the event-driven failed_dispatch attention delta
 // onto the same system.attention.* bus path the cockpit loop publishes on.
 import { publishReconcileDelta } from "./surface/mc/attention-notify";
@@ -164,6 +169,13 @@ import {
   startFederatedAgentPresenceSubscriber,
   type FederatedAgentPresenceSubscriberHandle,
 } from "./bus/agent-network/federated-subscriber";
+// P-14 U3.3 (#937) — trust-verified federated OBSERVABILITY fold (the
+// observability sibling of the presence subscriber; same Option-D trust path +
+// the curation gate, origin-badged).
+import {
+  startFederatedObservabilityFold,
+  type FederatedObservabilityFoldHandle,
+} from "./bus/agent-network/federated-observability-fold";
 // #989 part-1 — LOCAL same-principal multi-bus presence aggregation.
 import { discoverSiblingStacks } from "./surface/mc/local-aggregation/sibling-discovery";
 import {
@@ -3775,6 +3787,10 @@ export async function startCortex(
   // G-1114.E.2 — trust-verified federated presence subscriber (folds peers'
   // agents into the SAME registry, tagged with foreign provenance).
   let federatedPresenceHandle: FederatedAgentPresenceSubscriberHandle | null = null;
+  // P-14 U3.3 (#937) — trust-verified federated OBSERVABILITY fold (folds peers'
+  // curated+signed system.{transport,federation}.* into the observability
+  // projection, ORIGIN-BADGED — the Option-D sibling of the presence subscriber).
+  let federatedObservabilityHandle: FederatedObservabilityFoldHandle | null = null;
   // #989 part-1 — LOCAL same-principal sibling-stack presence aggregator (folds
   // the principal's OTHER local stacks' agents into the SAME registry, tagged by
   // sibling origin, so the Network view shows every local stack as its own hub).
@@ -3944,6 +3960,61 @@ export async function startCortex(
         }),
         ...(resolveFederatedPeer !== undefined && { resolveFederatedPeer }),
       });
+
+      // P-14 U3.3 (#937) — the trust-verified federated OBSERVABILITY fold, the
+      // observability sibling of the presence subscriber above. Reuses the EXACT
+      // same trust config (federation gate + `verifySignedByChain` + the
+      // `resolveFederatedPeer` seam) PLUS cortex's curation gate (ALLOW
+      // system.{transport,federation}.>; DENY trace/metric/log/session/
+      // system.signal — signal#141). Folds peers' curated+signed substrate
+      // observability into the SAME observability projection the U2.1 renderer
+      // writes, but ORIGIN-BADGED foreign (chain-verified `{principal}/{stack}`),
+      // and NEVER opening a local attention item. The U2.1 renderer was narrowed
+      // to `local.*` at U3.3, so the federated path is exclusively this verified
+      // fold — no double-fold. INERT when federation isn't opted into. Needs
+      // `mcDb` (the projection target); on the mc.enabled boot it is non-null.
+      if (mcDb !== null) {
+        const observabilityFoldDb = mcDb;
+        const observabilityFoldWs = mcHandle?.wsRegistry;
+        federatedObservabilityHandle = await startFederatedObservabilityFold({
+          runtime,
+          // The injected projection write — bus/ never imports surface/mc/, so
+          // the DB write is wired here. Non-throwing: projectForeignObservability
+          // never throws on a valid envelope; a defensive guard keeps a poison
+          // peer envelope from perturbing the verify fan-out.
+          foldObservability: ({ envelope, peer }) => {
+            try {
+              projectForeignObservability(
+                observabilityFoldDb,
+                { id: envelope.id, type: envelope.type, payload: envelope.payload },
+                peer,
+                observabilityFoldWs,
+              );
+            } catch (err) {
+              process.stderr.write(
+                `cortex: federated observability fold projection error (non-fatal) ` +
+                  `for ${envelope.type} (id=${envelope.id}): ` +
+                  `${err instanceof Error ? err.message : String(err)}\n`,
+              );
+            }
+          },
+          federated: resolvedPolicy?.federated,
+          source: systemEventSource,
+          trustResolver,
+          receivingAgentId: mergedAgents[0]?.id,
+          principalId,
+          cryptoVerify: signingKnobs.cryptoVerify,
+          rejectEmpty: signingKnobs.rejectEmpty,
+          ...(signer !== undefined && { stackIdentity: signer.principal }),
+          ...(stackNKeyPubForVerifier !== undefined && {
+            stackNKeyPub: stackNKeyPubForVerifier,
+          }),
+          ...(resolveFederatedPeer !== undefined && { resolveFederatedPeer }),
+        });
+        console.log(
+          "cortex: federated observability fold started (Option-D trust path: curation gate + accept-list + chain-verify; origin-badged)",
+        );
+      }
 
       // #989 part-1 — LOCAL same-principal sibling-stack presence aggregation.
       // When enabled (default ON), auto-discover the principal's OTHER local
@@ -4312,6 +4383,15 @@ export async function startCortex(
       await completeAsync(
         "federated agent-presence subscriber stop",
         federatedPresenceHandle?.stop(),
+      );
+      // P-14 U3.3 — stop the federated observability fold (drains its push
+      // subscriber + unregisters its fan-out handler). Projected observability
+      // ROWS are append-only history retained by db/retention.ts — stopping the
+      // fold stops NEW peer rows; it does not retro-delete (identical to local
+      // rows). Order-independent vs. the registry/db teardown.
+      await completeAsync(
+        "federated observability fold stop",
+        federatedObservabilityHandle?.stop(),
       );
       // #989 part-1 — stop the LOCAL sibling-stack aggregator alongside the
       // federated one (both before the registry stop). It closes every sibling

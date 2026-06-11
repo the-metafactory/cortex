@@ -65,6 +65,8 @@ function driftRow(principal: string, stack: string, to: string): TransportRoster
       reason: "x",
       attributes: { peer: `${principal}/${stack}`, principal, stack, from: null, to },
     },
+    // P-14 U3.3 — local origin (these are this stack's own hub fixtures).
+    origin: "local",
   };
 }
 
@@ -79,6 +81,7 @@ function connectRow(principal: string, stack: string, rtt: number): TransportRos
       network: "net",
       leaf: { principal, stack, network: "net", rtt_ms: rtt, frames: { in_msgs: 0, out_msgs: 0, in_bytes: 0, out_bytes: 0 } },
     },
+    origin: "local",
   };
 }
 

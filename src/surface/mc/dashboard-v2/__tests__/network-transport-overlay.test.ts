@@ -32,6 +32,9 @@ function row(over: Partial<TransportRosterEventRow> & { type: string }): Transpo
     stackId: NET,
     timestamp: "2026-06-12T00:00:00.000Z",
     payload: {},
+    // P-14 U3.3 — default to a LOCAL origin (these U2.3 fixtures predate the
+    // federated fold). Foreign-origin fixtures pass `origin` explicitly.
+    origin: "local",
     ...over,
   };
 }
@@ -323,5 +326,58 @@ describe("formatRtt + isTransportVerdict (U2.3)", () => {
     expect(isTransportVerdict("unregistered-present")).toBe(true);
     expect(isTransportVerdict("flapping")).toBe(false);
     expect(isTransportVerdict(null)).toBe(false);
+  });
+});
+
+describe("buildTransportOverlay — ORIGIN BADGE (P-14 U3.3)", () => {
+  it("carries a local row's origin through to the overlay (default)", () => {
+    const o = buildTransportOverlay([drift("jc", "default", "connected")]);
+    expect(overlayForStack(o, "jc", "default")!.origin).toBe("local");
+  });
+
+  it("carries a FOREIGN peer's origin badge through to the overlay", () => {
+    const o = buildTransportOverlay([
+      drift("joel", "research", "connected", { origin: { kind: "foreign", peer: "joel/research" } }),
+      leafConnect("joel", "research", 11.2, { origin: { kind: "foreign", peer: "joel/research" } }),
+    ]);
+    const joel = overlayForStack(o, "joel", "research")!;
+    expect(joel.origin).toEqual({ kind: "foreign", peer: "joel/research" });
+    // The verdict + RTT still fold normally — origin is additive attribution.
+    expect(joel.verdict).toBe("connected");
+    expect(joel.rttMs).toBe(11.2);
+  });
+
+  it("a foreign verdict is NEVER downgraded to local (foreign badge is monotonic)", () => {
+    // Defensive: even if a local-origin candidate for the same key arrived after
+    // a foreign one (subject-disjoint paths make this unreachable in prod), the
+    // overlay must keep the foreign attribution — a peer verdict shown as local
+    // substrate health is the exact failure the badge exists to prevent.
+    const o = buildTransportOverlay([
+      // newest-first: foreign drift, then an older same-key local connect
+      drift("joel", "research", "connected", {
+        origin: { kind: "foreign", peer: "joel/research" },
+        timestamp: "2026-06-12T00:00:02.000Z",
+      }),
+      leafConnect("joel", "research", 9.0, {
+        origin: "local",
+        timestamp: "2026-06-12T00:00:01.000Z",
+      }),
+    ]);
+    expect(overlayForStack(o, "joel", "research")!.origin).toEqual({
+      kind: "foreign",
+      peer: "joel/research",
+    });
+  });
+
+  it("local and foreign peers in the same roster keep distinct badges", () => {
+    const o = buildTransportOverlay([
+      drift("andreas", "meta-factory", "connected", { origin: "local" }),
+      drift("joel", "research", "connected", { origin: { kind: "foreign", peer: "joel/research" } }),
+    ]);
+    expect(overlayForStack(o, "andreas", "meta-factory")!.origin).toBe("local");
+    expect(overlayForStack(o, "joel", "research")!.origin).toEqual({
+      kind: "foreign",
+      peer: "joel/research",
+    });
   });
 });

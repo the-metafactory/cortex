@@ -26,6 +26,24 @@ export const OBSERVABILITY_FAMILIES: readonly ObservabilityFamily[] = [
   "transport",
 ] as const;
 
+/**
+ * P-14 U3.3 (#937) — the ORIGIN-BADGE for a projected observability row.
+ *
+ *   - `"local"` — this principal's own (or local-sibling) row, the U2.1 default.
+ *   - `{ kind: "foreign"; peer }` — a TRUST-VERIFIED federated peer's row, where
+ *     `peer` is the CHAIN-VERIFIED `{principal}/{stack}` derived from the
+ *     envelope SOURCE (never from the attacker-controlled payload). Mirrors the
+ *     agent-presence registry's `AgentRecordOrigin` vocabulary so the Network
+ *     view badges peer observability the same way it badges peer agents.
+ *
+ * A foreign row can NEVER be stored as local: the fold path supplies the
+ * source-bound `peer` and this module persists `origin_kind = 'foreign'` +
+ * `origin_peer = peer`. The negative-control's identity half.
+ */
+export type ObservabilityOrigin =
+  | "local"
+  | { kind: "foreign"; peer: string };
+
 export interface ObservabilityEventInsert {
   envelopeId: string;
   family: ObservabilityFamily;
@@ -36,6 +54,12 @@ export interface ObservabilityEventInsert {
   /** A short human-readable line for the row (optional). */
   summary?: string | null;
   payload: Record<string, unknown>;
+  /**
+   * P-14 U3.3 — origin badge. Defaults to `"local"` (the U2.1 contract: every
+   * caller that doesn't set it is folding a local row). The federated fold path
+   * passes `{ kind: "foreign"; peer }` with the chain-verified `{principal}/{stack}`.
+   */
+  origin?: ObservabilityOrigin;
   /** ISO-8601; defaults to now when omitted. */
   timestamp?: string;
 }
@@ -47,7 +71,22 @@ export interface ObservabilityEventRow {
   type: string;
   stackId: string | null;
   summary: string | null;
+  /** P-14 U3.3 — the row's origin badge (`"local"` or a foreign peer). */
+  origin: ObservabilityOrigin;
   timestamp: string;
+}
+
+/**
+ * Re-hydrate the `origin_kind`/`origin_peer` columns into an
+ * {@link ObservabilityOrigin}. A `foreign` row with a missing/empty `origin_peer`
+ * (defensive — the writer always pairs them) degrades to `local` rather than an
+ * originless foreign badge, so the view never shows an un-attributed peer.
+ */
+function rowOrigin(originKind: unknown, originPeer: unknown): ObservabilityOrigin {
+  if (originKind === "foreign" && typeof originPeer === "string" && originPeer.length > 0) {
+    return { kind: "foreign", peer: originPeer };
+  }
+  return "local";
 }
 
 /**
@@ -59,11 +98,14 @@ export function insertObservabilityEvent(
   e: ObservabilityEventInsert,
 ): string | null {
   const id = crypto.randomUUID();
+  const origin = e.origin ?? "local";
+  const originKind = origin === "local" ? "local" : "foreign";
+  const originPeer = origin === "local" ? null : origin.peer;
   const res = db
     .query(
       `INSERT INTO observability_events
-         (id, envelope_id, family, type, stack_id, summary, payload, timestamp)
-       VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
+         (id, envelope_id, family, type, stack_id, summary, payload, origin_kind, origin_peer, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
        ON CONFLICT(envelope_id) DO NOTHING`,
     )
     .run(
@@ -74,6 +116,8 @@ export function insertObservabilityEvent(
       e.stackId ?? null,
       e.summary ?? null,
       JSON.stringify(e.payload),
+      originKind,
+      originPeer,
       e.timestamp ?? null,
     );
   return res.changes > 0 ? id : null;
@@ -92,7 +136,7 @@ export function listObservabilityEvents(
     family === undefined
       ? db
           .query(
-            `SELECT id, envelope_id, family, type, stack_id, summary, timestamp
+            `SELECT id, envelope_id, family, type, stack_id, summary, origin_kind, origin_peer, timestamp
              FROM observability_events
              ORDER BY timestamp DESC, id DESC
              LIMIT ?`,
@@ -100,7 +144,7 @@ export function listObservabilityEvents(
           .all(limit)
       : db
           .query(
-            `SELECT id, envelope_id, family, type, stack_id, summary, timestamp
+            `SELECT id, envelope_id, family, type, stack_id, summary, origin_kind, origin_peer, timestamp
              FROM observability_events
              WHERE family = ?
              ORDER BY timestamp DESC, id DESC
@@ -115,6 +159,7 @@ export function listObservabilityEvents(
     type: r.type as string,
     stackId: (r.stack_id as string | null) ?? null,
     summary: (r.summary as string | null) ?? null,
+    origin: rowOrigin(r.origin_kind, r.origin_peer),
     timestamp: r.timestamp as string,
   }));
 }
@@ -138,6 +183,14 @@ export interface TransportRosterEventRow {
   stackId: string | null;
   /** The parsed envelope BODY signal published (`{ action, network, leaf?, leaves?, attributes? }`). */
   payload: Record<string, unknown>;
+  /**
+   * P-14 U3.3 (#937) — origin badge. `"local"` for this principal's own hub
+   * transport rows; `{ kind: "foreign"; peer }` for a TRUST-VERIFIED federated
+   * peer's. The Network-view overlay carries this onto each peer-stack so a
+   * folded foreign verdict is visually attributed to its peer, never shown as
+   * local substrate health.
+   */
+  origin: ObservabilityOrigin;
   timestamp: string;
 }
 
@@ -155,7 +208,7 @@ export function listTransportRosterEvents(
 ): TransportRosterEventRow[] {
   const rows = db
     .query(
-      `SELECT id, type, stack_id, payload, timestamp
+      `SELECT id, type, stack_id, payload, origin_kind, origin_peer, timestamp
        FROM observability_events
        WHERE family = 'transport'
        ORDER BY timestamp DESC, id DESC
@@ -181,6 +234,7 @@ export function listTransportRosterEvents(
       type: r.type as string,
       stackId: (r.stack_id as string | null) ?? null,
       payload,
+      origin: rowOrigin(r.origin_kind, r.origin_peer),
       timestamp: r.timestamp as string,
     };
   });

@@ -154,3 +154,56 @@ describe("listTransportRosterEvents (P-14 U2.3) — payload-bearing transport re
     expect(listTransportRosterEvents(db, 10)).toEqual([]);
   });
 });
+
+describe("observability origin badge (P-14 U3.3)", () => {
+  let db: Database;
+  beforeEach(() => (db = setupDb()));
+  afterEach(() => db.close());
+
+  it("defaults a row's origin to local when no origin is supplied (U2.1 contract)", () => {
+    insertObservabilityEvent(db, {
+      envelopeId: "local-1", family: "transport", type: "system.transport.leaf_connect", payload: {},
+    });
+    expect(listObservabilityEvents(db, 10, "transport")[0]?.origin).toBe("local");
+    expect(listTransportRosterEvents(db, 10)[0]?.origin).toBe("local");
+  });
+
+  it("persists + round-trips a FOREIGN origin badge (chain-verified peer)", () => {
+    insertObservabilityEvent(db, {
+      envelopeId: "fed-1",
+      family: "transport",
+      type: "system.transport.liveness_drift",
+      payload: { action: "liveness_drift", network: "net", attributes: { peer: "joel/research", to: "connected" } },
+      origin: { kind: "foreign", peer: "joel/research" },
+    });
+    const tabRow = listObservabilityEvents(db, 10, "transport")[0];
+    expect(tabRow?.origin).toEqual({ kind: "foreign", peer: "joel/research" });
+    const rosterRow = listTransportRosterEvents(db, 10)[0];
+    expect(rosterRow?.origin).toEqual({ kind: "foreign", peer: "joel/research" });
+  });
+
+  it("a foreign row with a missing peer degrades to local (never an originless foreign badge)", () => {
+    // Defensive: a writer always pairs origin_kind=foreign with a non-empty
+    // origin_peer; an inconsistent row must not surface an un-attributed foreign.
+    db.query(
+      `INSERT INTO observability_events (id, envelope_id, family, type, payload, origin_kind, origin_peer, timestamp)
+       VALUES (?, ?, 'transport', 'system.transport.leaf_connect', '{}', 'foreign', NULL, datetime('now'))`,
+    ).run(crypto.randomUUID(), "broken-foreign");
+    expect(listObservabilityEvents(db, 10, "transport")[0]?.origin).toBe("local");
+  });
+
+  it("local and foreign rows coexist, each carrying its own badge", () => {
+    insertObservabilityEvent(db, {
+      envelopeId: "loc", family: "transport", type: "system.transport.leaf_connect",
+      payload: {}, origin: "local", timestamp: "2026-06-01T00:00:00.000Z",
+    });
+    insertObservabilityEvent(db, {
+      envelopeId: "fed", family: "transport", type: "system.transport.leaf_connect",
+      payload: {}, origin: { kind: "foreign", peer: "joel/research" }, timestamp: "2026-06-02T00:00:00.000Z",
+    });
+    const rows = listTransportRosterEvents(db, 10);
+    expect(rows.find((r) => r.id && (r.payload, true) && r.origin !== "local")).toBeDefined();
+    const byOrigin = rows.map((r) => (r.origin === "local" ? "local" : r.origin.peer));
+    expect(byOrigin.sort()).toEqual(["joel/research", "local"]);
+  });
+});

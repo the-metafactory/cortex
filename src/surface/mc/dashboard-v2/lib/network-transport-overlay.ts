@@ -39,6 +39,7 @@
  */
 
 import type { TransportRosterEventRow } from "../../api/observability-tab";
+import type { ObservabilityOrigin } from "../../db/observability";
 
 /**
  * The three deterministic liveness verdicts — signal's P-13.B vocabulary,
@@ -79,6 +80,16 @@ export interface TransportPeerOverlay {
   present: boolean;
   /** Round-trip time in ms from signal's leaf roster, or null when absent/unreported. */
   rttMs: number | null;
+  /**
+   * P-14 U3.3 (#937) — the ORIGIN BADGE for this peer-stack's transport
+   * observation. `"local"` when folded from this principal's own hub rows;
+   * `{ kind: "foreign"; peer }` when folded from a TRUST-VERIFIED federated
+   * peer's curated transport observability. The Network view badges a foreign
+   * observation distinctly so a peer's substrate verdict is NEVER shown as local
+   * substrate health. Derived from the row's chain-verified origin, never the
+   * payload.
+   */
+  origin: ObservabilityOrigin;
 }
 
 /**
@@ -130,6 +141,8 @@ interface Candidate {
   rttMs: number | null;
   /** `liveness_drift` is authoritative; edges/snapshots only seed when no drift seen. */
   authoritative: boolean;
+  /** P-14 U3.3 — the row's origin badge, carried through to the overlay. */
+  origin: ObservabilityOrigin;
 }
 
 /** Extract the leaf liveness/RTT off a `leaf` / `leaves[]` entry body. */
@@ -143,6 +156,8 @@ function leafLiveness(leaf: Record<string, unknown>): { present: boolean; rttMs:
 function candidatesForRow(row: TransportRosterEventRow): Candidate[] {
   const payload = row.payload;
   const network = asString(payload.network) ?? asString(row.stackId);
+  // P-14 U3.3 — the row's origin badge rides every candidate it contributes.
+  const origin = row.origin;
 
   switch (row.type) {
     case "system.transport.liveness_drift": {
@@ -179,6 +194,7 @@ function candidatesForRow(row: TransportRosterEventRow): Candidate[] {
           present: to === "connected" || to === "unregistered-present",
           rttMs: null,
           authoritative: true,
+          origin,
         },
       ];
     }
@@ -203,6 +219,7 @@ function candidatesForRow(row: TransportRosterEventRow): Candidate[] {
           present: connect ? live.present : false,
           rttMs: connect ? live.rttMs : null,
           authoritative: false,
+          origin,
         },
       ];
     }
@@ -226,6 +243,7 @@ function candidatesForRow(row: TransportRosterEventRow): Candidate[] {
           present: live.present,
           rttMs: live.rttMs,
           authoritative: false,
+          origin,
         });
       }
       return out;
@@ -281,6 +299,7 @@ export function buildTransportOverlay(
           verdict: c.verdict,
           present: c.present,
           rttMs: c.rttMs,
+          origin: c.origin,
         });
         if (c.authoritative) lockedByDrift.add(c.key);
         // If the NEWEST event for this key asserts absence (a `registered-absent`
@@ -311,6 +330,16 @@ export function buildTransportOverlay(
         }
       }
       if (existing.network === null && c.network !== null) existing.network = c.network;
+      // P-14 U3.3 — origin is source-bound (a key is one `{principal}/{stack}`),
+      // so every candidate for a key SHOULD agree. Defensively, a FOREIGN badge
+      // wins: once any row for a key is peer-attributed, the overlay never
+      // downgrades it to `local` (a foreign verdict must never be shown as local
+      // substrate health). A foreign-then-local mix for one key shouldn't occur
+      // — the two fold paths are subject-disjoint — but the guard makes the
+      // origin badge monotonic toward attribution regardless of row order.
+      if (existing.origin === "local" && c.origin !== "local") {
+        existing.origin = c.origin;
+      }
     }
   }
 

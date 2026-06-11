@@ -583,6 +583,15 @@ export const SCHEMA_SQL: string[] = [
   // `type` is the full `domain.entity.action`. Hub-scope (federation/transport)
   // is a DATA property — non-hub stacks simply have zero rows of those families,
   // which the tab renders as an honest empty state (never synthesized).
+  // P-14 U3.3 (#937) — `origin_kind` / `origin_peer` carry the ORIGIN-BADGE.
+  //   - `origin_kind` is `'local'` (this principal's own / sibling-stack rows,
+  //     the U2.1 default) or `'foreign'` (a TRUST-VERIFIED federated peer's row,
+  //     folded via the Option-D `federated-observability-fold.ts` path).
+  //   - `origin_peer` is the CHAIN-VERIFIED `{principal}/{stack}` for a foreign
+  //     row (NULL for local). It is derived from the verified envelope SOURCE,
+  //     never from the attacker-controlled payload — so a peer row can NEVER be
+  //     shown as local (the negative control's identity half).
+  // Fresh DBs get them here; existing DBs backfill via COLUMN_ADD_MIGRATIONS.
   `CREATE TABLE IF NOT EXISTS observability_events (
     id TEXT PRIMARY KEY,
     envelope_id TEXT NOT NULL UNIQUE,
@@ -592,10 +601,14 @@ export const SCHEMA_SQL: string[] = [
     stack_id TEXT,
     summary TEXT,
     payload TEXT NOT NULL DEFAULT '{}',
+    origin_kind TEXT NOT NULL DEFAULT 'local'
+      CHECK(origin_kind IN ('local','foreign')),
+    origin_peer TEXT,
     timestamp TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_observability_timestamp ON observability_events(timestamp)`,
   `CREATE INDEX IF NOT EXISTS idx_observability_family ON observability_events(family, timestamp DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_observability_origin ON observability_events(origin_kind, origin_peer)`,
 ];
 
 /**
@@ -674,6 +687,31 @@ export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
   { table: "sessions", column: "classification", ddl: `ALTER TABLE sessions ADD COLUMN classification TEXT` },
   { table: "sessions", column: "data_residency", ddl: `ALTER TABLE sessions ADD COLUMN data_residency TEXT` },
   { table: "sessions", column: "home_principal", ddl: `ALTER TABLE sessions ADD COLUMN home_principal TEXT` },
+
+  // P-14 U3.3 (#937) — origin-badge columns for EXISTING observability DBs.
+  // Fresh DBs get these from the observability_events CREATE TABLE above; an
+  // already-initialised DB (the running U2.1 stacks) backfills them here.
+  // `origin_kind` is NOT NULL with a constant DEFAULT 'local' (SQLite ALTER ADD
+  // requires a constant default for NOT NULL) — so every pre-U3.3 row reads as
+  // `local`, exactly its true origin (U2.1 only ever folded local rows safely;
+  // the federated path is what U3.3 adds). `origin_peer` is nullable (NULL for
+  // local). The partner index is idempotent via CREATE INDEX IF NOT EXISTS.
+  {
+    table: "observability_events",
+    column: "origin_kind",
+    ddl: `ALTER TABLE observability_events ADD COLUMN origin_kind TEXT NOT NULL DEFAULT 'local'`,
+    post: [
+      `CREATE INDEX IF NOT EXISTS idx_observability_origin ON observability_events(origin_kind, origin_peer)`,
+    ],
+  },
+  {
+    table: "observability_events",
+    column: "origin_peer",
+    ddl: `ALTER TABLE observability_events ADD COLUMN origin_peer TEXT`,
+    post: [
+      `CREATE INDEX IF NOT EXISTS idx_observability_origin ON observability_events(origin_kind, origin_peer)`,
+    ],
+  },
 ];
 
 /**
