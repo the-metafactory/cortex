@@ -586,6 +586,32 @@ function failed(
  *   - `changes-requested` → 🔴 "Changes requested"
  *   - `commented`         → 💬 "Commented"
  */
+/**
+ * CO-7 M4 — extract the FREE-TEXT egress of a `review.verdict.<kind>` envelope:
+ * the agent-authored `summary` plus the code-stamped `presentation` markdown.
+ * These are the strings a surface renders to the (wider-scope) public/federated
+ * thread, so they are what the M4 egress guard scans for leakage. The structured
+ * counts / verdict kind are NOT free text and are excluded.
+ *
+ * Returns the concatenation of whichever of `presentation` / `summary` are
+ * present (presentation already embeds the summary in the verdict path, but both
+ * are read defensively in case a future builder diverges). An envelope with no
+ * such fields returns the empty string (nothing to guard).
+ *
+ * Pure; reads only the envelope payload.
+ */
+export function extractVerdictPresentation(envelope: Envelope): string {
+  const p = envelope.payload as
+    | { summary?: unknown; presentation?: unknown }
+    | undefined;
+  const parts: string[] = [];
+  if (p !== undefined) {
+    if (typeof p.presentation === "string") parts.push(p.presentation);
+    if (typeof p.summary === "string") parts.push(p.summary);
+  }
+  return parts.join("\n");
+}
+
 export function buildPresentationMarkdown(block: VerdictBlock): string {
   let emoji: string;
   let label: string;

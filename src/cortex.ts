@@ -76,7 +76,7 @@ import { bootVerifierSelfCheck } from "./bus/verifier-self-check";
 import { CCSession, type CCSessionOpts } from "./runner/cc-session";
 import { makeSageReviewRunner } from "./runner/sage-runner";
 import { resolveReviewEngine } from "./runner/review-engine";
-import { buildReviewPrompt } from "./runner/review-prompt";
+import { runReviewPipeline } from "./runner/review-pipeline";
 import {
   resolveOffering,
   offeringSubjectPatterns,
@@ -84,6 +84,16 @@ import {
 } from "./common/types/offering";
 import { admitOfferedDispatch } from "./bus/admit-offered-dispatch";
 import type { GateFloorContext, GateFloorDecision } from "./bus/gate-floor";
+// CO-7 (epic cortex#939) — untrusted-content & prompt-injection hardening
+// (M1/M2/M4/M6). Composed per offer-scope by `co7-review-hardening`; every
+// helper short-circuits to the pre-CO-7 behaviour on `local` scope, so a stack
+// with no `policy.offerings` wires byte-identically to today.
+import {
+  reviewPromptForScope,
+  reviewSessionOptsForScope,
+  resolveComplianceOk,
+} from "./runner/co7-review-hardening";
+import { withCo7EgressGuard } from "./runner/co7-egress-pipeline";
 import {
   getSignedByChain,
   type Envelope,
@@ -1157,6 +1167,27 @@ export async function startCortex(
           : "local";
       const chain = getSignedByChain(envelope);
       const signed = chain.length > 0;
+      // CO-7 M6 — resolve the capability's offering so the budget/cost gate can
+      // read its `public` accept-policy `limits`. `complianceOk` is now the M6
+      // BudgetCheck verdict (fail-closed for public: a public offering with no
+      // declared cost authority refuses `compliance_block`), composed with the
+      // prior secure default. For `local`/`federated` the budget gate does not
+      // apply, so `complianceOk` stays the secure prior default and the floor's
+      // structural gates do the work.
+      const resolvedOfferingForCap = resolveOffering(
+        capability,
+        resolvedPolicy?.offerings,
+      );
+      const compliance = resolveComplianceOk({
+        scope: arrivedScope,
+        accept: resolvedOfferingForCap.accept,
+        // Prior default stays secure: until the CO-5 Stage-1 tap wires a real
+        // compliance hook, public's prior compliance is `false` (refuse), so the
+        // floor refuses public regardless of budget — the public marketplace
+        // (CO-5) is itself gated on this CO-7 hardening landing first. M6
+        // composes (ANDs) with this; it can only tighten.
+        priorComplianceOk: arrivedScope === "public" ? false : true,
+      });
       const ctx: GateFloorContext = {
         signed,
         // `peerPrincipal` is intentionally left undefined here: the signed
@@ -1173,8 +1204,9 @@ export async function startCortex(
         // CO-5 seam — not yet computed ⇒ secure default (public refuses).
         surfaceVerified: false,
         surfacePredicatePassed: false,
-        // CO-7 seam — not yet computed ⇒ secure default (public refuses).
-        complianceOk: false,
+        // CO-7 M6 — the BudgetCheck-composed compliance verdict (fail-closed
+        // public). Public still also refuses on `surfaceVerified` until CO-5.
+        complianceOk: compliance.complianceOk,
         // No limiter wired yet; structural floors gate public before rate.
         rateOk: true,
       };
@@ -1626,8 +1658,42 @@ export async function startCortex(
       // (which flips verdict routing to the requester) and the subscription
       // pattern/durable. Factored into a closure so the two consumers can't
       // drift on the heavy CC-session / verifier / prompt wiring.
-      const makeConsumer = (federated: boolean): ReviewConsumer =>
-        new ReviewConsumer({
+      //
+      // CO-7 (epic cortex#939) — the closure is now SCOPE-AWARE. The `scope`
+      // argument (`local`/`federated`/`public`, derived from the bound subject
+      // prefix) selects the hardened M1 prompt + M2 least-privilege session +
+      // M4 egress-guarded pipeline for wider scopes. On `local` every helper
+      // short-circuits to the pre-CO-7 path (plain prompt, baseline opts, no
+      // egress wrap), so the local consumer is byte-identical to today.
+      const makeConsumer = (scope: OfferScope): ReviewConsumer => {
+        const federated = scope === "federated" || scope === "public";
+        // M1 — untrusted-content boundary prompt for wider scope; plain for local.
+        const scopedPromptBuilder = reviewPromptForScope(scope);
+        // M2 — least-privilege session lockdown for wider scope; baseline for local.
+        // `scratchDir` is left undefined here: the lockdown then fails CLOSED to
+        // "no dirs granted" (empty allowedDirs) for a wider-scope review rather
+        // than ever granting the principal's cwd to untrusted work. A per-review
+        // scratch dir is the F-5b follow-up's concern (the non-local backend
+        // owns the sandbox filesystem). For local, baseline opts (with their cwd)
+        // pass through unchanged.
+        const scopedSessionOpts = reviewSessionOptsForScope({
+          baseline: reviewSessionOpts,
+          scope,
+          agentId: agent.id,
+        });
+        // M4 — wrap the pipeline runner so a wider-scope review's free-text
+        // egress is leakage-scanned and a leak becomes `compliance_block`
+        // (the review is never posted). `local` returns the inner runner
+        // unchanged. The inner runner is the sage runner (if selected) or the
+        // default `runReviewPipeline` (passed `undefined` ⇒ the consumer's own
+        // default); we only override `pipelineRunner` when there is something to
+        // wrap (a non-local scope OR an explicit sage runner).
+        const baseRunner = pipelineRunner ?? runReviewPipeline;
+        const scopedPipelineRunner =
+          scope === "local"
+            ? pipelineRunner // undefined ⇒ consumer default; or the sage runner
+            : withCo7EgressGuard(scope, baseRunner);
+        return new ReviewConsumer({
           agent: consumerAgent,
           source: systemEventSource,
           runtime,
@@ -1654,9 +1720,17 @@ export async function startCortex(
           // once posted, persists — see `buildReviewPrompt`'s docstring.
           // Capability routing still happened on the subject
           // (`tasks.code-review.*`).
-          promptBuilder: ({ payload }) => buildReviewPrompt(payload),
-          sessionOpts: reviewSessionOpts,
-          ...(pipelineRunner !== undefined && { pipelineRunner }),
+          // CO-7 M1 — scope-aware prompt builder (untrusted-content boundary for
+          // federated/public; plain trusted prompt for local — byte-identical).
+          promptBuilder: ({ payload }) => scopedPromptBuilder(payload),
+          // CO-7 M2 — scope-aware session opts (least-privilege lockdown for
+          // wider scope; baseline for local — byte-identical).
+          sessionOpts: scopedSessionOpts,
+          // CO-7 M4 — scope-aware pipeline runner (egress-guarded for wider
+          // scope; the sage runner or consumer default for local).
+          ...(scopedPipelineRunner !== undefined && {
+            pipelineRunner: scopedPipelineRunner,
+          }),
           ...(signatureVerifier !== undefined && { signatureVerifier }),
           // CO-2/CO-4 — the per-offer-scope admission gate. Inert on `local.`
           // (byte-identical); gates the `federated.`/`public.` subjects this
@@ -1674,8 +1748,9 @@ export async function startCortex(
             federatedNetworks: resolvedPolicy?.federated?.networks ?? [],
           }),
         });
+      };
 
-      const consumer = makeConsumer(false);
+      const consumer = makeConsumer("local");
       reviewConsumers.push(consumer);
       // Subscribe via the runtime's subscribePull helper. When the
       // runtime is disabled the helper returns null inside start() and
@@ -1779,9 +1854,17 @@ export async function startCortex(
         // runs. (`public` shares the federated verdict-routing path: a public
         // requester reaches us through a surface but the verdict still routes to
         // the relaying identity in `originator`, not self.)
-        const offerConsumer = makeConsumer(
-          scopeToken === "federated" || scopeToken === "public",
-        );
+        // CO-7 — pass the actual offer-scope (not just a federated bool) so the
+        // consumer wires the scope-appropriate M1/M2/M4 hardening. A non-scope
+        // token (defensive) falls back to `public` — the STRICTEST hardening —
+        // never silently to local.
+        const offerScope: OfferScope =
+          scopeToken === "federated"
+            ? "federated"
+            : scopeToken === "public"
+              ? "public"
+              : "public";
+        const offerConsumer = makeConsumer(offerScope);
         reviewConsumers.push(offerConsumer);
         const offerDurable = `cortex-review-consumer-offer-${scopeToken}-${reviewPrincipalId}-${agent.id}`;
         if (reviewJsm !== null) {
@@ -1845,7 +1928,11 @@ export async function startCortex(
           pattern: string,
           durable: string,
         ): Promise<void> => {
-          const federatedConsumer = makeConsumer(true);
+          // CO-7 — the cortex#686/#725 federated-policy consumers bind on
+          // `federated.` subjects, so they wire the `federated`-scope M1/M2/M4
+          // hardening (untrusted-content boundary + least-privilege + egress
+          // guard) for cross-principal review requests.
+          const federatedConsumer = makeConsumer("federated");
           reviewConsumers.push(federatedConsumer);
           if (reviewJsm !== null) {
             try {

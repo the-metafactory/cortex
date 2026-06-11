@@ -48,6 +48,7 @@ import { NKEY_PUBKEY_REGEX } from "./nkey";
 import { NatsSubjectsSchema } from "./nats-subjects";
 import { LETTER_PREFIX_ID_REGEX } from "./id";
 import { OfferingSchema, superRefineOfferings } from "./offering";
+import { checkPublicOfferingBackendGate } from "./public-offering-backend-gate";
 import { StackConfigSchema, deriveStackId } from "./stack";
 
 // =============================================================================
@@ -2699,6 +2700,32 @@ export const CortexConfigSchema = z.object({
         });
       }
     });
+  })
+  // CO-7 M3 (epic cortex#939) — the PUBLIC-OFFERING ⇒ NON-LOCAL-BACKEND
+  // fail-closed gate (design §6 M3, ADR-0008 DD-CO-6). A capability offered at
+  // `public` scope runs UNTRUSTED, attacker-controlled PR content; it MUST be
+  // isolated on a non-local ExecutionBackend (the F-5b sandbox — cortex#927) so
+  // PR code never executes on the principal's host. The backend itself is
+  // DEFERRED infra, so CO-7 ships the GATE: a config that offers public while
+  // `execution.default` resolves to `local` (the only backend implemented today,
+  // and the default) is REJECTED here at config-validation, BEFORE any public
+  // consumer is bound. When F-5b lands and the stack points `execution.default`
+  // at a declared non-local backend, the gate passes. Lives at the top level
+  // (not `PolicySchema.superRefine`) because `execution` is a top-level block the
+  // policy sub-schema does not see — same reason as the capability-existence
+  // check above. Batch-emits all violations in one pass.
+  .superRefine((config, ctx) => {
+    const violations = checkPublicOfferingBackendGate(
+      config.policy?.offerings,
+      { default: config.execution.default, backends: config.execution.backends },
+    );
+    for (const v of violations) {
+      ctx.addIssue({
+        code: "custom",
+        message: v.message,
+        path: ["policy", "offerings", v.offeringIndex, "scopes"],
+      });
+    }
   });
 
 export type CortexConfig = z.infer<typeof CortexConfigSchema>;

@@ -869,6 +869,97 @@ describe("CortexConfigSchema", () => {
           provided_by: ["luna"],
         },
       ],
+      // CO-7 M3: a `public` offering requires a non-local execution backend
+      // (the fail-closed gate below), so this happy-path config declares one.
+      execution: {
+        default: "cf-sandbox",
+        backends: [{ name: "cf-sandbox", type: "cloudflare", endpoint: "https://sb" }],
+      },
+      policy: {
+        offerings: [
+          {
+            capability: "code-review.typescript",
+            scopes: ["public"],
+            accept: {
+              kind: "surface",
+              surface: "github",
+              predicate: { kind: "repo-membership", repos: ["the-metafactory/*"] },
+            },
+          },
+        ],
+      },
+    });
+    expect(parsed.policy?.offerings).toHaveLength(1);
+  });
+
+  // CO-7 M3 (epic cortex#939) — the public-offering ⇒ non-local-backend
+  // FAIL-CLOSED gate. A `public` offering on a local (or unset) execution
+  // backend is REJECTED at config-validation so untrusted PR code never runs
+  // on the principal's host (design §6 M3, ADR-0008 DD-CO-6). The backend
+  // itself is deferred infra (cortex#978); CO-7 ships the prevent-side gate.
+  test("CO-7 M3: REJECTS a public offering on the default (local) backend", () => {
+    expect(() =>
+      CortexConfigSchema.parse({
+        ...minConfig(),
+        capabilities: [
+          {
+            id: "code-review.typescript",
+            description: "Reviews TypeScript PRs",
+            provided_by: ["luna"],
+          },
+        ],
+        // execution omitted ⇒ default `local`.
+        policy: {
+          offerings: [
+            {
+              capability: "code-review.typescript",
+              scopes: ["public"],
+              accept: {
+                kind: "surface",
+                surface: "github",
+                predicate: { kind: "repo-membership", repos: ["the-metafactory/*"] },
+              },
+            },
+          ],
+        },
+      }),
+    ).toThrow(/non-local ExecutionBackend/);
+  });
+
+  test("CO-7 M3: a LOCAL/FEDERATED offering is NOT gated by the backend rule", () => {
+    // A federated offering on a local backend is fine — the M3 gate is public-only.
+    const parsed = CortexConfigSchema.parse({
+      ...minConfig(),
+      capabilities: [
+        { id: "chat", description: "chat", provided_by: ["luna"] },
+      ],
+      policy: {
+        offerings: [
+          {
+            capability: "chat",
+            scopes: ["federated"],
+            accept: { kind: "network", network: "mf-net" },
+          },
+        ],
+      },
+    });
+    expect(parsed.policy?.offerings).toHaveLength(1);
+  });
+
+  test("CO-7 M3: a public offering on a NON-LOCAL backend passes the gate", () => {
+    const parsed = CortexConfigSchema.parse({
+      ...minConfig(),
+      capabilities: [
+        {
+          id: "code-review.typescript",
+          description: "Reviews TypeScript PRs",
+          provided_by: ["luna"],
+        },
+      ],
+      execution: {
+        default: "e2b-sandbox",
+        backends: [{ name: "e2b-sandbox", type: "e2b", endpoint: "https://e2b" }],
+      },
       policy: {
         offerings: [
           {
