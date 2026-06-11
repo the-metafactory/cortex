@@ -58,6 +58,19 @@ export interface NetworkFilterState {
    * drops every foreign agent. Defaults to `include-federated`.
    */
   scope: NetworkScopeFilter;
+  /**
+   * P-14 U2.3 (#935) — TRANSPORT OVERLAY toggle. When true, the view folds
+   * signal's projected `system.transport.*` verdicts + leaf liveness/RTT onto the
+   * graph (hub verdict badges + agent leaf liveness/RTT). Off by default — the
+   * overlay is an opt-in lens, not the graph's baseline. This is a RENDER toggle,
+   * not an agent predicate: unlike `state`/`capability`/`scope` it never filters
+   * the agent set (see {@link isFilterActive} — it doesn't count it as "active").
+   *
+   * OPTIONAL (additive over the pre-U2.3 shape): `undefined` reads as "off", so a
+   * partial filter literal (e.g. a pre-existing test fixture) is still valid and
+   * the overlay simply stays off. `DEFAULT_NETWORK_FILTER` sets it explicitly.
+   */
+  transportOverlay?: boolean;
 }
 
 /** The no-op filter: every agent passes. The view's initial filter state. */
@@ -65,6 +78,7 @@ export const DEFAULT_NETWORK_FILTER: NetworkFilterState = {
   state: "all",
   capability: null,
   scope: "include-federated",
+  transportOverlay: false,
 };
 
 /**

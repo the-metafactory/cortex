@@ -44,6 +44,8 @@ export interface NetworkFilterBarProps {
   onCapabilityChange: (capability: string | null) => void;
   /** E.4 — flip federation scope (include foreign peers vs this stack only). */
   onScopeChange: (scope: NetworkScopeFilter) => void;
+  /** U2.3 — flip the transport overlay (signal's verdicts + leaf liveness/RTT). */
+  onTransportOverlayChange: (on: boolean) => void;
   onClear: () => void;
   /** Open the Cmd+K spotlight (the hint button is also a click target). */
   onOpenSpotlight: () => void;
@@ -55,6 +57,7 @@ export function NetworkFilterBar({
   onStateChange,
   onCapabilityChange,
   onScopeChange,
+  onTransportOverlayChange,
   onClear,
   onOpenSpotlight,
 }: NetworkFilterBarProps) {
@@ -97,6 +100,20 @@ export function NetworkFilterBar({
             </button>
           );
         })}
+      </div>
+
+      <div className="network-filter-group" role="group" aria-label="Transport overlay toggle">
+        <span className="network-filter-label">Transport</span>
+        <button
+          type="button"
+          className={`network-filter-transport-btn${filter.transportOverlay ? " on" : ""}`}
+          aria-pressed={filter.transportOverlay}
+          data-transport-overlay={filter.transportOverlay ? "on" : "off"}
+          title="Overlay signal's transport verdicts + leaf liveness/RTT onto the graph"
+          onClick={() => onTransportOverlayChange(!filter.transportOverlay)}
+        >
+          {filter.transportOverlay ? "Overlay on" : "Overlay off"}
+        </button>
       </div>
 
       <div className="network-filter-group">

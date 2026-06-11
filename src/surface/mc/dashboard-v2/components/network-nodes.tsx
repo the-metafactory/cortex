@@ -37,6 +37,7 @@ import type {
 } from "../lib/network-graph-adapter";
 import { isAgentHighlighted } from "../lib/capability-highlight";
 import { useNetworkHover } from "../lib/network-hover-context";
+import { verdictBadge, formatRtt } from "../lib/network-transport-overlay";
 
 // --- Stack hub -------------------------------------------------------------
 
@@ -53,6 +54,10 @@ export function StackHubCard({ data }: StackHubCardProps) {
   // E.4: a FOREIGN (federated peer) hub renders distinctly from YOUR local hub —
   // a "federated" eyebrow + a dimmer/bordered treatment via the modifier class.
   const foreign = isForeignOrigin(data.origin);
+  // U2.3 — signal's intent⋈reality verdict for this stack (present only when the
+  // transport overlay is on AND signal observed it). Taken verbatim from signal.
+  const badge =
+    data.transportVerdict !== undefined ? verdictBadge(data.transportVerdict) : null;
   return (
     <div
       className={
@@ -61,11 +66,22 @@ export function StackHubCard({ data }: StackHubCardProps) {
       }
       data-node-kind="stack-hub"
       data-hub-origin={foreign ? "foreign" : "local"}
+      data-transport-verdict={data.transportVerdict ?? undefined}
     >
       <span className="network-hub-eyebrow dim">
         {foreign ? "federated stack" : "stack"}
       </span>
       <span className="network-hub-label">{label}</span>
+      {badge && (
+        <span
+          className={badge.className}
+          data-verdict={badge.verdict}
+          data-severity={badge.severity}
+          title={badge.title}
+        >
+          {badge.label}
+        </span>
+      )}
       <span className="network-hub-count dim">
         {data.agentCount} agent{data.agentCount === 1 ? "" : "s"}
       </span>
@@ -223,6 +239,29 @@ export function AgentNodeCard({
           {ttlLapse ? "last seen " : ""}
           {formatRelativeTime(data.lastHeartbeatAt, now)}
         </span>
+        {/* U2.3 — leaf liveness + RTT from signal's transport roster (overlay on
+            + signal observed this stack). Sourced from signal, never re-derived. */}
+        {data.transportLeaf !== undefined && (
+          <span
+            className={
+              "network-node-leaf" +
+              (data.transportLeaf.present
+                ? " network-node-leaf-present"
+                : " network-node-leaf-absent")
+            }
+            data-leaf-present={data.transportLeaf.present ? "true" : "false"}
+            data-leaf-rtt={data.transportLeaf.rttMs ?? undefined}
+            title={
+              data.transportLeaf.present
+                ? `leaf live — RTT ${formatRtt(data.transportLeaf.rttMs)}`
+                : "leaf not present"
+            }
+          >
+            {data.transportLeaf.present
+              ? `leaf ${formatRtt(data.transportLeaf.rttMs)}`
+              : "no leaf"}
+          </span>
+        )}
       </div>
     </div>
   );

@@ -132,9 +132,15 @@ export function App() {
   // G-1115 — governance verdicts, fetched only when the tab is visible.
   const governance = useGovernance(ws, view === "governance");
   // P-14 U2.1 (#934) — observability events (signal's four system.* families),
-  // fetched only when the Observability tab is visible; live-refreshed off the
+  // fetched when the Observability tab is visible; live-refreshed off the
   // `observability` mc.projection family.
-  const observability = useObservability(ws, view === "observability");
+  // P-14 U2.3 (#935) — ALSO fetched on the Network tab: its transport overlay
+  // folds signal's `transportRoster` (the verdict-bearing transport family) onto
+  // the graph, so the same projection feeds both tabs.
+  const observability = useObservability(
+    ws,
+    view === "observability" || view === "network",
+  );
   // P-14 U4.2 (#938) — aggregate metrics panels (tool/spawn/event rates +
   // hook-latency percentiles via the sideband /metrics/summary) and the >14d
   // history view (events past MC's 14-day local prune, sourced from signal's
@@ -592,6 +598,10 @@ export function App() {
           <NetworkView
             state={agents}
             workingAgents={working.agents}
+            // U2.3 — signal's projected transport roster (verdict-bearing) feeds
+            // the Network view's transport overlay. Empty until the obs fetch
+            // lands / on a non-hub stack; the overlay paints nothing then.
+            transportRoster={observability.data?.transportRoster ?? []}
             onViewInWorkingGrid={() => setView("default")}
             // G-1114.F.3 — dispatch-direct to a LOCAL agent, REUSING the
             // existing dispatch path (`POST /api/sessions` with `agentId`). The

@@ -119,6 +119,73 @@ export function listObservabilityEvents(
   }));
 }
 
+/**
+ * P-14 U2.3 (#935) — a transport-family row WITH its parsed `payload`.
+ *
+ * The generic {@link listObservabilityEvents} read deliberately strips `payload`
+ * (the tab only needs `type`/`summary`/`stackId`). The Network-view transport
+ * overlay, by contrast, needs the per-leaf verdict + RTT that signal stamps into
+ * the envelope BODY (`system.transport.*` payload — `leaf`/`leaves`/`attributes`,
+ * see signal P-13.B reconciler). This narrow read returns those rows WITH the
+ * payload re-parsed, so the overlay folds signal's OWN verdicts onto the graph
+ * (CONTEXT.md §Sourced-from-signal — cortex never re-derives substrate health).
+ *
+ * Additive: a new query alongside the existing reads; nothing else changes.
+ */
+export interface TransportRosterEventRow {
+  id: string;
+  type: string;
+  stackId: string | null;
+  /** The parsed envelope BODY signal published (`{ action, network, leaf?, leaves?, attributes? }`). */
+  payload: Record<string, unknown>;
+  timestamp: string;
+}
+
+/**
+ * Recent `transport`-family rows (newest first, capped at `limit`) WITH their
+ * stored `payload` parsed back to an object. Malformed/empty payloads parse to
+ * `{}` (never throws — a poison row degrades to an empty body, not a crash).
+ *
+ * Sourced verbatim from the projected `system.transport.*` envelopes signal
+ * emitted; this read does no reconciliation of its own.
+ */
+export function listTransportRosterEvents(
+  db: Database,
+  limit: number,
+): TransportRosterEventRow[] {
+  const rows = db
+    .query(
+      `SELECT id, type, stack_id, payload, timestamp
+       FROM observability_events
+       WHERE family = 'transport'
+       ORDER BY timestamp DESC, id DESC
+       LIMIT ?`,
+    )
+    .all(limit) as Record<string, unknown>[];
+  return rows.map((r) => {
+    let payload: Record<string, unknown> = {};
+    const raw = r.payload;
+    if (typeof raw === "string" && raw.length > 0) {
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        if (typeof parsed === "object" && parsed !== null) {
+          payload = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // A poison payload degrades to {} — the overlay folder skips a body it
+        // can't read rather than failing the whole roster read.
+      }
+    }
+    return {
+      id: r.id as string,
+      type: r.type as string,
+      stackId: (r.stack_id as string | null) ?? null,
+      payload,
+      timestamp: r.timestamp as string,
+    };
+  });
+}
+
 /** Per-family row counts. A family with zero rows is absent from the result map. */
 export type ObservabilityCounts = Partial<Record<ObservabilityFamily, number>>;
 

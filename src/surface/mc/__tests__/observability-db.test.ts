@@ -16,6 +16,7 @@ import { SCHEMA_SQL } from "../db/schema";
 import {
   insertObservabilityEvent,
   listObservabilityEvents,
+  listTransportRosterEvents,
   countObservabilityByFamily,
 } from "../db/observability";
 import {
@@ -104,5 +105,52 @@ describe("pruneOldObservability — age-based retention", () => {
     const summary = pruneRetention(db);
     expect(summary.ok).toBe(true);
     expect(summary.prunedObservability).toBe(1);
+  });
+});
+
+describe("listTransportRosterEvents (P-14 U2.3) — payload-bearing transport read", () => {
+  let db: Database;
+  beforeEach(() => (db = setupDb()));
+  afterEach(() => db.close());
+
+  it("returns ONLY transport-family rows, newest first, WITH parsed payload", () => {
+    insertObservabilityEvent(db, {
+      envelopeId: "sig", family: "signal", type: "system.signal.received",
+      payload: { n: 1 }, timestamp: "2026-06-01T00:00:00.000Z",
+    });
+    insertObservabilityEvent(db, {
+      envelopeId: "t1", family: "transport", type: "system.transport.liveness_drift",
+      payload: { action: "liveness_drift", network: "net", attributes: { peer: "jc/default", to: "connected" } },
+      timestamp: "2026-06-02T00:00:00.000Z",
+    });
+    insertObservabilityEvent(db, {
+      envelopeId: "t2", family: "transport", type: "system.transport.leaf_connect",
+      payload: { action: "leaf_connect", network: "net", leaf: { principal: "jc", stack: "default", network: "net", rtt_ms: 8.4 } },
+      timestamp: "2026-06-03T00:00:00.000Z",
+    });
+
+    const rows = listTransportRosterEvents(db, 50);
+    expect(rows.length).toBe(2); // signal row excluded
+    expect(rows[0]!.type).toBe("system.transport.leaf_connect"); // newest first
+    // The payload round-trips back to an object (NOT stripped like the tab read).
+    expect((rows[0]!.payload.leaf as Record<string, unknown>).rtt_ms).toBe(8.4);
+    expect((rows[1]!.payload.attributes as Record<string, unknown>).to).toBe("connected");
+  });
+
+  it("degrades a poison payload to {} without throwing", () => {
+    // Force a non-JSON payload directly (the insert path always JSON-stringifies,
+    // so write a raw bad value to exercise the parse guard).
+    db.query(
+      `INSERT INTO observability_events (id, envelope_id, family, type, payload, timestamp)
+       VALUES (?, ?, 'transport', 'system.transport.roster_snapshot', '{not json', datetime('now'))`,
+    ).run(crypto.randomUUID(), "poison");
+    const rows = listTransportRosterEvents(db, 10);
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.payload).toEqual({});
+  });
+
+  it("is empty on a non-hub stack (no transport rows)", () => {
+    insertObservabilityEvent(db, { envelopeId: "sig", family: "signal", type: "system.signal.received", payload: {} });
+    expect(listTransportRosterEvents(db, 10)).toEqual([]);
   });
 });

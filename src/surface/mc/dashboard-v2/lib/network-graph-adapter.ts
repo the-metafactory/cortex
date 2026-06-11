@@ -38,6 +38,11 @@
  */
 
 import type { AgentPresenceTile, AgentOrigin } from "../hooks/use-agents";
+import type {
+  TransportOverlay,
+  TransportVerdict,
+} from "./network-transport-overlay";
+import { overlayForStack } from "./network-transport-overlay";
 
 /** Reserved id for the synthetic LOCAL stack-root hub node (never a valid agent key). */
 export const STACK_HUB_NODE_ID = "__stack__";
@@ -72,6 +77,13 @@ export interface StackHubNodeData {
   stack: string | null;
   /** Count of agents attached to this hub. */
   agentCount: number;
+  /**
+   * P-14 U2.3 (#935) — signal's intent⋈reality VERDICT for this stack, when the
+   * transport overlay is on AND signal observed this `{principal}/{stack}`.
+   * Undefined → no overlay / no observation (the hub renders no verdict badge).
+   * SOURCED FROM SIGNAL — never re-derived (the badge mapping keys off this).
+   */
+  transportVerdict?: TransportVerdict;
 }
 
 /** React Flow node `data` payload for one agent. */
@@ -98,6 +110,13 @@ export interface AgentNodeData {
   offlineReason: string | null;
   /** Epoch-ms of the last `agent.heartbeat` observed, or `null`. */
   lastHeartbeatAt: number | null;
+  /**
+   * P-14 U2.3 (#935) — leaf LIVENESS for this agent's stack, when the transport
+   * overlay is on AND signal observed the stack. `present` is the live-link flag,
+   * `rttMs` the round-trip from signal's leaf roster (null when unreported).
+   * Undefined → no overlay / no observation. SOURCED FROM SIGNAL — never re-derived.
+   */
+  transportLeaf?: { present: boolean; rttMs: number | null };
 }
 
 /** Discriminated union of every node `data` shape in the graph. */
@@ -112,11 +131,36 @@ export interface NetworkGraphNode {
   position: { x: number; y: number };
 }
 
-/** A React-Flow-shaped edge (hub → agent for the stack-local cut). */
+/**
+ * P-14 U2.3 (#935) — transport health/lag an edge can carry when the Network
+ * view's transport overlay is on. SOURCED FROM SIGNAL (the projected
+ * `system.transport.*` family — signal's P-13.B verdicts), never re-derived
+ * here. Additive + optional, so a graph built without the overlay is
+ * byte-identical to the pre-U2.3 shape.
+ */
+export interface NetworkEdgeTransportData {
+  /** Signal's intent⋈reality verdict for the target leaf's stack. */
+  verdict: "connected" | "registered-absent" | "unregistered-present";
+  /** Leaf liveness (true when signal reports the leaf present). */
+  present: boolean;
+  /** Round-trip time (ms) from signal's leaf roster, or null when unreported. */
+  rttMs: number | null;
+}
+
+/**
+ * A React-Flow-shaped edge (hub → agent for the stack-local cut).
+ *
+ * G-1114.E.3 grew this to federated multi-hub edges; U2.3 widens it additively
+ * with an OPTIONAL `data.transport` health/lag payload (present only when the
+ * transport overlay is on AND signal observed the target's stack). The base
+ * `{id,source,target}` is unchanged — a no-overlay build never sets `data`.
+ */
 export interface NetworkGraphEdge {
   id: string;
   source: string;
   target: string;
+  /** U2.3 — optional transport overlay payload (health/lag), sourced from signal. */
+  data?: { transport?: NetworkEdgeTransportData };
 }
 
 /** The adapter's output: nodes + edges, pre-layout. */
@@ -237,6 +281,78 @@ export function buildNetworkGraph(
       });
     }
   }
+
+  return { nodes, edges };
+}
+
+/**
+ * P-14 U2.3 (#935) — overlay signal's transport health onto a built graph.
+ *
+ * A PURE, additive widening: returns a NEW graph whose stack-hub nodes carry the
+ * `transportVerdict`, agent nodes carry `transportLeaf` liveness/RTT, and
+ * hub→agent edges carry `data.transport` — all keyed by `{principal}/{stack}` and
+ * taken VERBATIM from the {@link TransportOverlay} (signal's projected verdicts;
+ * never re-derived here). A node/edge whose stack signal did not observe is
+ * returned UNCHANGED (no `transport*` fields), so a non-hub stack — or any leaf
+ * signal didn't report — reads exactly as the un-overlaid graph.
+ *
+ * Kept separate from {@link buildNetworkGraph} so the base projection stays
+ * overlay-free + byte-identical to pre-U2.3, and the fold is independently
+ * unit-testable against fixtures.
+ */
+export function applyTransportOverlay(
+  graph: NetworkGraph,
+  overlay: TransportOverlay,
+): NetworkGraph {
+  const nodes = graph.nodes.map((node): NetworkGraphNode => {
+    if (node.data.kind === "stack-hub") {
+      const peer = overlayForStack(overlay, node.data.principal, node.data.stack);
+      if (peer === null) return node;
+      return {
+        ...node,
+        data: { ...node.data, transportVerdict: peer.verdict },
+      };
+    }
+    // An agent node's leaf liveness keys on the agent's ORIGIN stack (a foreign
+    // peer's leaf lives on ITS stack, exactly like its hub grouping). originScope
+    // resolves a foreign origin's {principal,stack}; a local agent's own.
+    const origin = node.data.origin;
+    const principal = origin === "local" ? node.data.key.split("/")[0]! : origin.principal;
+    const stack = origin === "local" ? node.data.key.split("/")[1]! : origin.stack;
+    const peer = overlayForStack(overlay, principal, stack);
+    if (peer === null) return node;
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        transportLeaf: { present: peer.present, rttMs: peer.rttMs },
+      },
+    };
+  });
+
+  const edges = graph.edges.map((edge): NetworkGraphEdge => {
+    // The edge target is the agent key (`{principal}/{stack}/{agent_id}`); the
+    // overlay keys on `{principal}/{stack}`. Resolve via the target node's data.
+    const targetNode = graph.nodes.find((n) => n.id === edge.target);
+    if (targetNode === undefined || targetNode.data.kind !== "agent") return edge;
+    const origin = targetNode.data.origin;
+    const principal =
+      origin === "local" ? targetNode.data.key.split("/")[0]! : origin.principal;
+    const stack =
+      origin === "local" ? targetNode.data.key.split("/")[1]! : origin.stack;
+    const peer = overlayForStack(overlay, principal, stack);
+    if (peer === null) return edge;
+    return {
+      ...edge,
+      data: {
+        transport: {
+          verdict: peer.verdict,
+          present: peer.present,
+          rttMs: peer.rttMs,
+        },
+      },
+    };
+  });
 
   return { nodes, edges };
 }

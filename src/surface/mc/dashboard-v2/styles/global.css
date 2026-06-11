@@ -428,15 +428,18 @@ html, body {
   text-transform: uppercase; letter-spacing: 0.04em;
 }
 .network-filter-state-btn,
-.network-filter-scope-btn {
+.network-filter-scope-btn,
+.network-filter-transport-btn {
   appearance: none; cursor: pointer; font: inherit; font-size: 12px;
   padding: 3px 9px; border-radius: 6px;
   border: 1px solid var(--line); background: var(--bg); color: var(--fg-faint);
 }
 .network-filter-state-btn:hover,
-.network-filter-scope-btn:hover { color: var(--fg); }
+.network-filter-scope-btn:hover,
+.network-filter-transport-btn:hover { color: var(--fg); }
 .network-filter-state-btn.on,
-.network-filter-scope-btn.on {
+.network-filter-scope-btn.on,
+.network-filter-transport-btn.on {
   background: var(--accent-soft); color: var(--fg);
   border-color: color-mix(in oklch, var(--accent) 50%, transparent);
 }
@@ -524,6 +527,43 @@ html, body {
 .network-node-reason { font-size: 10px; }
 .network-node-reason-ttl-lapse { color: var(--warn); }
 .network-node-heartbeat { font-size: 10px; margin-left: auto; }
+
+/* P-14 U2.3 — transport overlay: hub verdict badge + agent leaf liveness/RTT.
+   Sourced from signal's projected transport family; severity keys the colour. */
+.network-verdict-badge {
+  font-size: 9px; font-weight: 600; font-family: var(--mono);
+  text-transform: uppercase; letter-spacing: 0.03em;
+  padding: 1px 6px; border-radius: 4px;
+  border: 1px solid var(--line);
+}
+.network-verdict-connected {
+  color: var(--ok);
+  border-color: color-mix(in oklch, var(--ok) 55%, transparent);
+  background: color-mix(in oklch, var(--ok) 14%, transparent);
+}
+.network-verdict-registered-absent {
+  color: var(--warn);
+  border-color: color-mix(in oklch, var(--warn) 55%, transparent);
+  background: color-mix(in oklch, var(--warn) 14%, transparent);
+}
+.network-verdict-unregistered-present {
+  color: var(--danger, var(--warn));
+  border-color: color-mix(in oklch, var(--danger, var(--warn)) 60%, transparent);
+  background: color-mix(in oklch, var(--danger, var(--warn)) 16%, transparent);
+  font-weight: 700;
+}
+.network-node-leaf {
+  font-size: 9.5px; font-family: var(--mono);
+  padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line);
+}
+.network-node-leaf-present {
+  color: var(--ok);
+  border-color: color-mix(in oklch, var(--ok) 45%, transparent);
+}
+.network-node-leaf-absent {
+  color: var(--fg-faint);
+  border-style: dashed;
+}
 
 /* Legend overlay (bottom-right of the canvas). */
 .network-legend {

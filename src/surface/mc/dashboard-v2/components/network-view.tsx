@@ -31,7 +31,15 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react
 import type { AgentPresenceTile, AgentsState } from "../hooks/use-agents";
 import type { WorkingAgentTile } from "../hooks/use-working-agents";
 import { pickAgentsPanelMode } from "../lib/agents-display";
-import { buildNetworkGraph } from "../lib/network-graph-adapter";
+import {
+  buildNetworkGraph,
+  applyTransportOverlay,
+} from "../lib/network-graph-adapter";
+import {
+  buildTransportOverlay,
+  EMPTY_TRANSPORT_OVERLAY,
+} from "../lib/network-transport-overlay";
+import type { TransportRosterEventRow } from "../../api/observability-tab";
 import {
   resolveSelectedAgent,
   selectAgentDispatchActivity,
@@ -97,6 +105,15 @@ export interface NetworkViewProps {
    * caller projects them here and the index lights up task↔agent matches.
    */
   matchTasks?: readonly MatchTask[];
+  /**
+   * P-14 U2.3 (#935) — signal's projected `system.transport.*` roster (the
+   * payload-bearing `transportRoster` from `/api/observability-events`, via
+   * `useObservability`). When the principal flips the transport-overlay toggle,
+   * the view folds these into per-stack verdict badges + leaf liveness/RTT. Empty
+   * default → the overlay has nothing to paint (a non-hub stack, or signal not
+   * emitting yet). SOURCED FROM SIGNAL — the view never re-derives substrate health.
+   */
+  transportRoster?: readonly TransportRosterEventRow[];
 }
 
 export function NetworkView({
@@ -106,6 +123,7 @@ export function NetworkView({
   onDispatchDirect,
   dispatchingAgentKeys,
   matchTasks = [],
+  transportRoster = [],
 }: NetworkViewProps) {
   const mode = pickAgentsPanelMode(state);
 
@@ -126,7 +144,29 @@ export function NetworkView({
   // Pure: filtered snapshot → React-Flow graph (re-derived when agents OR the
   // filter change). Tiny + engine-free, so it stays in the main bundle; the lazy
   // canvas takes the built graph and runs ELK over it.
-  const graph = useMemo(() => buildNetworkGraph(filteredAgents), [filteredAgents]);
+  const baseGraph = useMemo(() => buildNetworkGraph(filteredAgents), [filteredAgents]);
+
+  // U2.3 — fold signal's transport verdicts + leaf liveness/RTT into the overlay
+  // model, then onto the base graph WHEN the overlay toggle is on. Built off the
+  // FULL roster (the verdict for a stack is the verdict regardless of agent
+  // filters), but applied to the SCOPE-FILTERED graph — so `local-only` cleanly
+  // hides foreign verdicts (those hubs/nodes aren't in the graph to paint onto).
+  // SOURCED FROM SIGNAL: `buildTransportOverlay` carries signal's verdict strings
+  // verbatim; cortex never re-derives them.
+  const transportOverlay = useMemo(
+    () =>
+      filter.transportOverlay
+        ? buildTransportOverlay(transportRoster)
+        : EMPTY_TRANSPORT_OVERLAY,
+    [filter.transportOverlay, transportRoster],
+  );
+  const graph = useMemo(
+    () =>
+      filter.transportOverlay
+        ? applyTransportOverlay(baseGraph, transportOverlay)
+        : baseGraph,
+    [baseGraph, transportOverlay, filter.transportOverlay],
+  );
 
   // F.1 — the capability-match index, built off the FULL snapshot (not the
   // filtered one) so a hovered capability lights every declaring agent
@@ -173,6 +213,11 @@ export function NetworkView({
   // spotlight read, so flipping it cleanly removes/restores foreign agents.
   const onScopeChange = useCallback(
     (scope: NetworkScopeFilter) => setFilter((f) => ({ ...f, scope })),
+    [],
+  );
+  // U2.3 — flip the transport overlay (a render lens, not an agent predicate).
+  const onTransportOverlayChange = useCallback(
+    (on: boolean) => setFilter((f) => ({ ...f, transportOverlay: on })),
     [],
   );
   const onClearFilters = useCallback(() => setFilter(DEFAULT_NETWORK_FILTER), []);
@@ -282,6 +327,7 @@ export function NetworkView({
             onStateChange={onStateChange}
             onCapabilityChange={onCapabilityChange}
             onScopeChange={onScopeChange}
+            onTransportOverlayChange={onTransportOverlayChange}
             onClear={onClearFilters}
             onOpenSpotlight={openSpotlight}
           />
