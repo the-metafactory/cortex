@@ -610,6 +610,25 @@ export interface SystemAccessDeniedReason {
    * Discriminator — `"unknown_principal"` | `"insufficient_role"`
    * | `"sovereignty_mismatch"` today. Future kinds append per
    * G-1111 §3.1 (no wire break).
+   *
+   * cortex#932 (P-14 U0.2) — the consumer-side fail-closed drop sites
+   * emit on this same open record. Their kinds (no wire break — the
+   * field is `string`):
+   *   - `"sovereignty_model_class"` — the consumer-side sovereignty gate
+   *     (review-consumer Stage 1b) refused a task whose model-class demand
+   *     its own class would violate. Rides `reason` (free-form, from
+   *     `evaluateSovereignty`) + `enforced` (bool — `true` when the deny
+   *     bit, `false` on the audit-parity would-deny).
+   *   - `"chain_verify_failed"` — a foreign `federated.*` presence envelope
+   *     FAILED `signed_by[]` chain verification and was dropped (never
+   *     folded). Rides `verify_reason` (the verifier's `result.reason.kind`).
+   *   - `"chain_verify_fault"` — the chain verifier itself THREW; the
+   *     envelope is dropped fail-closed (an envelope we couldn't verify is
+   *     never folded). Rides `fault` (the thrown error's message).
+   *   - `"originator_denied"` — a cross-principal (`federated.*`) review
+   *     request whose requester (decoded from `originator.identity`) is not
+   *     a configured `peers[]` member, or is unresolvable, was denied and
+   *     dropped (the #908 fail-closed class). Rides `detail` (free-form).
    */
   kind: string;
   /**
@@ -617,6 +636,10 @@ export interface SystemAccessDeniedReason {
    *   - `principal_id` (always present today)
    *   - `missing_capability` (insufficient_role)
    *   - `reason` (sovereignty_mismatch — free-form text)
+   *   - `enforced` (sovereignty_model_class — bool)
+   *   - `verify_reason` (chain_verify_failed — the verifier reason kind)
+   *   - `fault` (chain_verify_fault — the thrown error message)
+   *   - `detail` (originator_denied — free-form text)
    */
   [k: string]: unknown;
 }

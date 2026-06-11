@@ -141,6 +141,13 @@ function buildAgent(
   return {
     id: "echo",
     capabilities: ["code-review.typescript"],
+    // cortex#932 — declare a local-only model class by default so the
+    // consumer-side sovereignty gate (Stage 1b) ALLOWS the default local-only
+    // task without firing the new `system.access.denied` audit telemetry. A
+    // missing class fails closed (audit-parity would-deny), which would add an
+    // audit envelope to every count-based assertion below. The sovereignty
+    // tests override this with `frontier` / `{}` to exercise the deny paths.
+    modelClass: "local-only",
     ...overrides,
   };
 }
@@ -2230,6 +2237,14 @@ describe("ReviewConsumer.processEnvelope — consumer-side sovereignty gate (Sta
     // A dispatch.task.failed (wont_do) is published back to the requester.
     const failed = runtime.published.find((e) => e.type === "dispatch.task.failed");
     expect(failed).toBeDefined();
+    // cortex#932 — the enforce deny ALSO emits a system.access.denied audit
+    // envelope (reason sovereignty_model_class, enforced:true) for governance.
+    const denied = runtime.published.find((e) => e.type === "system.access.denied");
+    expect(denied).toBeDefined();
+    const reason = (denied!.payload as { reason: { kind: string; enforced: boolean } })
+      .reason;
+    expect(reason.kind).toBe("sovereignty_model_class");
+    expect(reason.enforced).toBe(true);
   });
 
   test("audit-parity (default): frontier agent + local-only task → still runs", async () => {
@@ -2258,6 +2273,15 @@ describe("ReviewConsumer.processEnvelope — consumer-side sovereignty gate (Sta
 
     expect(decision).toEqual({ kind: "ack" });
     expect(pipelineRan).toBe(true);
+    // cortex#932 — audit-parity STILL emits the would-deny telemetry (the
+    // governance pane sees the refusal even when the gate doesn't yet bite),
+    // with enforced:false to distinguish it from a hard deny.
+    const denied = runtime.published.find((e) => e.type === "system.access.denied");
+    expect(denied).toBeDefined();
+    const reason = (denied!.payload as { reason: { kind: string; enforced: boolean } })
+      .reason;
+    expect(reason.kind).toBe("sovereignty_model_class");
+    expect(reason.enforced).toBe(false);
   });
 
   test("enforce: local-only agent + local-only task → runs (no violation)", async () => {
@@ -2296,7 +2320,7 @@ describe("ReviewConsumer.processEnvelope — consumer-side sovereignty gate (Sta
     const consumer = new ReviewConsumer(
       baseOpts({
         runtime,
-        agent: buildAgent({}), // no modelClass
+        agent: buildAgent({ modelClass: undefined }), // no modelClass → fail closed
         sovereigntyEnforce: true,
         pipelineRunner: fixedPipeline(() => {
           pipelineRan = true;

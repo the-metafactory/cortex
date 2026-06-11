@@ -369,6 +369,54 @@ describe("E.5 — TRUST: signed_by chain verification", () => {
     runtime.fire(signed, FED_SUBJECT, "primary");
     await flush();
     expect(registry.getAgents().length).toBe(0);
+    // cortex#932 — the chain-verify rejection is no longer silent: it emits a
+    // system.access.denied audit envelope with reason kind chain_verify_failed.
+    const denied = runtime.published.find(
+      (e) => e.type === "system.access.denied",
+    );
+    expect(denied).toBeDefined();
+    expect(
+      (denied!.payload as { reason: { kind: string } }).reason.kind,
+    ).toBe("chain_verify_failed");
+    await handle.stop();
+  });
+
+  test("verifier THREW ⇒ DROPPED + system.access.denied chain_verify_fault (cortex#932)", async () => {
+    const runtime = makeFakeRuntime();
+    const registry = new AgentPresenceRegistry();
+    // Force the verify promise to REJECT by making the federated-peer
+    // resolution seam throw. `verifySignedByChain` engages this seam only with
+    // cryptoVerify:true + a federated-classification envelope (both true here),
+    // and the seam is contractually "must never throw" — so a throw drops into
+    // the subscriber's .catch() fault path (the cortex#932 chain_verify_fault).
+    const handle = await startFederatedAgentPresenceSubscriber({
+      runtime,
+      registry,
+      federated: federatedPolicy([networkWithJoel()]),
+      source: SYSTEM_SOURCE,
+      trustResolver: emptyTrustResolver(),
+      receivingAgentId: "luna",
+      principalId: "andreas",
+      cryptoVerify: true,
+      resolveFederatedPeer: () => {
+        throw new Error("resolver exploded");
+      },
+    });
+    const signed = foreignOnline({
+      signedBy: [
+        { method: "ed25519", identity: "did:mf:stranger", signature: "x", timestamp: "t" } as unknown as SignedBy,
+      ],
+    });
+    runtime.fire(signed, FED_SUBJECT, "primary");
+    await flush();
+    expect(registry.getAgents().length).toBe(0);
+    const denied = runtime.published.find(
+      (e) => e.type === "system.access.denied",
+    );
+    expect(denied).toBeDefined();
+    expect(
+      (denied!.payload as { reason: { kind: string } }).reason.kind,
+    ).toBe("chain_verify_fault");
     await handle.stop();
   });
 

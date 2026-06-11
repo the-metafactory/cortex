@@ -71,6 +71,7 @@ import type { Envelope } from "./myelin/envelope-validator";
 import { getActorPrincipal } from "./myelin/envelope-validator";
 import { resolveSourceNetwork } from "./surface-router";
 import { evaluateSovereignty, type AgentModelClass } from "./sovereignty-gate";
+import { emitSystemAccessDenied } from "./emit-system-access-denied";
 import type { GateFloorDecision } from "./gate-floor";
 import type { PolicyFederatedNetwork } from "../common/types/cortex-config";
 import type { MyelinSubscriber } from "./myelin/subscriber";
@@ -662,6 +663,13 @@ export class ReviewConsumer {
           `cortex/review-consumer: federated request DENIED (dropped) for ` +
             `agent="${this.agent.id}" subject=${subject} envelope=${envelope.id} — ${denyReason}\n`,
         );
+        // cortex#932 — this `originator_denied` fail-closed drop is the #908
+        // pain and #908 OWNS this exact site; the `originator_denied` reason
+        // kind is reserved in `SystemAccessDeniedReason` for #908 to wire its
+        // emit without a wire-shape change. Deliberately NOT emitting here to
+        // avoid colliding with #908's in-flight fix (issue #932: "must not
+        // collide with #908 fixes"). The drop stays observable via stderr +
+        // the `term` ack until #908 lands.
         // Term so JetStream removes the message (permanent — a non-peer
         // requester won't become a peer on redelivery) WITHOUT emitting any
         // verdict/lifecycle envelope to a principal we don't trust.
@@ -829,6 +837,22 @@ export class ReviewConsumer {
     {
       const sov = evaluateSovereignty(envelope.sovereignty, this.agent.modelClass);
       if (sov.decision === "deny") {
+        // cortex#932 — emit `system.access.denied` for BOTH the enforce deny
+        // and the audit-parity would-deny, so the governance pane sees the
+        // sovereignty refusal regardless of posture (the audit→enforce flip,
+        // #906, reads exactly this stream). `enforced` distinguishes the bit
+        // that bit from the would-deny. Emitted before the term ack on the
+        // enforce path — best-effort, never blocks the decision.
+        emitSystemAccessDenied(this.runtime, this.source, envelope, {
+          envelopeSubject: subject,
+          principalId: requester?.principal ?? getActorPrincipal(envelope) ?? "",
+          capability: envelope.type,
+          reason: {
+            kind: "sovereignty_model_class",
+            reason: sov.reason,
+            enforced: this.sovereigntyEnforce,
+          },
+        });
         if (this.sovereigntyEnforce) {
           process.stderr.write(
             `cortex/review-consumer: sovereignty DENIED (enforce) for ` +

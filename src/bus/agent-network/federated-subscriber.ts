@@ -103,6 +103,7 @@ import {
   evaluateFederationGate,
   subjectMatches,
 } from "../surface-router";
+import { emitSystemAccessDenied } from "../emit-system-access-denied";
 import { verifySignedByChain } from "../verify-signed-by-chain";
 import { AgentPresenceRegistry } from "./registry";
 import { AGENT_PRESENCE_TYPES } from "./envelopes";
@@ -314,6 +315,18 @@ export async function startFederatedAgentPresenceSubscriber(
                 `(id=${envelope.id}) — signed_by chain verification failed: ` +
                 `${result.reason.kind}\n`,
             );
+            // cortex#932 — the drop was stderr-only; emit a queryable
+            // `system.access.denied` on our local audit stream so governance
+            // sees the chain-verify rejection. Carries signed_by[] verbatim.
+            emitSystemAccessDenied(runtime, source, envelope, {
+              envelopeSubject: subject,
+              principalId: envelope.source.split(".")[0] ?? envelope.source,
+              capability: envelope.type,
+              reason: {
+                kind: "chain_verify_failed",
+                verify_reason: result.reason.kind,
+              },
+            });
             return;
           }
           foldForeign(registry, envelope);
@@ -321,11 +334,22 @@ export async function startFederatedAgentPresenceSubscriber(
         .catch((err: unknown) => {
           // A verifier fault must never crash the fan-out — log + drop (fail
           // closed: an envelope we couldn't verify is not folded).
+          const faultMessage = err instanceof Error ? err.message : String(err);
           process.stderr.write(
             `federated-agent-presence: chain verify threw for ${envelope.type} ` +
               `(id=${envelope.id}) — dropping: ` +
-              `${err instanceof Error ? err.message : String(err)}\n`,
+              `${faultMessage}\n`,
           );
+          // cortex#932 — a verifier FAULT is also a fail-closed drop; make it
+          // observable on the local audit stream (distinct reason kind from a
+          // clean chain rejection so governance can tell "verifier broke" from
+          // "signature didn't verify").
+          emitSystemAccessDenied(runtime, source, envelope, {
+            envelopeSubject: subject,
+            principalId: envelope.source.split(".")[0] ?? envelope.source,
+            capability: envelope.type,
+            reason: { kind: "chain_verify_fault", fault: faultMessage },
+          });
         });
       return;
     }

@@ -12,17 +12,23 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import type { Envelope } from "../myelin/envelope-validator";
 import { validateEnvelope } from "../myelin/envelope-validator";
 import {
   adapterCorrelationKey,
   createAgentHeartbeatEvent,
+  createSystemAccessDeniedEvent,
   createSystemAccessFilteredEvent,
   createSystemAdapterDegradedEvent,
   createSystemAdapterDisconnectedEvent,
   createSystemAdapterRecoveredEvent,
   createSystemDispatchStageEvent,
   createSystemInboundAbortedEvent,
+  type SystemEventSource,
 } from "../system-events";
+import { emitSystemAccessDenied } from "../emit-system-access-denied";
+import { createAgentOnlineEvent } from "../agent-network/builders";
+import type { MyelinRuntime } from "../myelin/runtime";
 
 describe("adapterCorrelationKey", () => {
   test("formats `adapter:{id}:{iso}` per G-1111 §3.5.6", () => {
@@ -761,5 +767,155 @@ describe("createSystemDispatchStageEvent", () => {
       outcome: "info",
     });
     expect(a.id).not.toBe(b.id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cortex#932 (P-14 U0.2) — createSystemAccessDeniedEvent + emitSystemAccessDenied
+// ---------------------------------------------------------------------------
+
+describe("createSystemAccessDeniedEvent — open reason record (cortex#932 kinds)", () => {
+  const SOURCE: SystemEventSource = {
+    principal: "metafactory",
+    agent: "cortex",
+    instance: "local",
+  };
+
+  test("carries the structured reason verbatim and passes schema validation", () => {
+    const env = createSystemAccessDeniedEvent({
+      source: SOURCE,
+      principalId: "joel",
+      capability: "agent.online",
+      reason: { kind: "chain_verify_failed", verify_reason: "unknown_agent" },
+      sovereignty: {
+        classification: "federated",
+        data_residency: "NZ",
+        max_hop: 1,
+        frontier_ok: false,
+        model_class: "local-only",
+      },
+      correlationId: "00000000-0000-4000-8000-000000000001",
+      envelopeId: "00000000-0000-4000-8000-000000000002",
+      envelopeSubject: "federated.joel.research.agent.online",
+      signedBy: [],
+    });
+    expect(env.type).toBe("system.access.denied");
+    const payload = env.payload as { reason: { kind: string; verify_reason?: string } };
+    expect(payload.reason.kind).toBe("chain_verify_failed");
+    expect(payload.reason.verify_reason).toBe("unknown_agent");
+    expect(validateEnvelope(env).ok).toBe(true);
+  });
+
+  test("all four cortex#932 reason kinds produce schema-valid denied envelopes", () => {
+    const reasons = [
+      { kind: "sovereignty_model_class", reason: "x", enforced: true },
+      { kind: "chain_verify_failed", verify_reason: "unknown_agent" },
+      { kind: "chain_verify_fault", fault: "boom" },
+      { kind: "originator_denied", detail: "not a peer" },
+    ];
+    for (const reason of reasons) {
+      const env = createSystemAccessDeniedEvent({
+        source: SOURCE,
+        principalId: "joel",
+        capability: "agent.online",
+        reason,
+        sovereignty: {
+          classification: "local",
+          data_residency: "NZ",
+          max_hop: 0,
+          frontier_ok: false,
+          model_class: "local-only",
+        },
+        correlationId: "00000000-0000-4000-8000-000000000003",
+        envelopeId: "00000000-0000-4000-8000-000000000004",
+        envelopeSubject: "local.metafactory.x.y.z",
+        signedBy: [],
+      });
+      expect((env.payload as { reason: { kind: string } }).reason.kind).toBe(
+        reason.kind,
+      );
+      expect(validateEnvelope(env).ok).toBe(true);
+    }
+  });
+});
+
+describe("emitSystemAccessDenied — drop-site emit helper (cortex#932)", () => {
+  const SOURCE: SystemEventSource = {
+    principal: "metafactory",
+    agent: "cortex",
+    instance: "local",
+  };
+
+  /** A fake runtime that records every published envelope. */
+  function recordingRuntime(): { published: Envelope[]; runtime: MyelinRuntime } {
+    const published: Envelope[] = [];
+    const runtime = {
+      enabled: true,
+      publish: (env: Envelope) => {
+        published.push(env);
+        return Promise.resolve();
+      },
+    } as unknown as MyelinRuntime;
+    return { published, runtime };
+  }
+
+  /** A foreign federated presence envelope to feed the helper. */
+  function inbound(): Envelope {
+    return createAgentOnlineEvent({
+      source: { principal: "joel", stack: "research", instance: "local" },
+      identity: {
+        nkey_public_key: "UPEER1234567890",
+        agent_id: "sage",
+        assistant_name: "Sage",
+      },
+      scope: { principal: "joel", stack: "research" },
+      capabilities: ["code-review.typescript"],
+      startedAt: new Date("2026-06-11T09:00:00.000Z"),
+      classification: "federated",
+    });
+  }
+
+  test("publishes a system.access.denied envelope carrying the reason kind", () => {
+    const { published, runtime } = recordingRuntime();
+    emitSystemAccessDenied(runtime, SOURCE, inbound(), {
+      envelopeSubject: "federated.joel.research.agent.online",
+      principalId: "joel",
+      capability: "agent.online",
+      reason: { kind: "chain_verify_failed", verify_reason: "unknown_agent" },
+    });
+    expect(published.length).toBe(1);
+    expect(published[0]!.type).toBe("system.access.denied");
+    const reason = (published[0]!.payload as { reason: { kind: string } }).reason;
+    expect(reason.kind).toBe("chain_verify_failed");
+  });
+
+  test("derives correlation + envelope_id from the dropped envelope", () => {
+    const { published, runtime } = recordingRuntime();
+    const env = inbound();
+    emitSystemAccessDenied(runtime, SOURCE, env, {
+      envelopeSubject: "federated.joel.research.agent.online",
+      principalId: "joel",
+      capability: "agent.online",
+      reason: { kind: "chain_verify_fault", fault: "boom" },
+    });
+    const payload = published[0]!.payload as {
+      envelope_id: string;
+      envelope_subject: string;
+    };
+    expect(payload.envelope_id).toBe(env.id);
+    expect(payload.envelope_subject).toBe("federated.joel.research.agent.online");
+  });
+
+  test("source-undefined guard: NO-OP, publishes nothing, does not throw", () => {
+    const { published, runtime } = recordingRuntime();
+    expect(() =>
+      emitSystemAccessDenied(runtime, undefined, inbound(), {
+        envelopeSubject: "federated.joel.research.agent.online",
+        principalId: "joel",
+        capability: "agent.online",
+        reason: { kind: "chain_verify_failed", verify_reason: "unknown_agent" },
+      }),
+    ).not.toThrow();
+    expect(published.length).toBe(0);
   });
 });
