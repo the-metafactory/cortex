@@ -21,7 +21,9 @@ import {
   PublicLimitsSchema,
   superRefineOfferings,
   resolveOffering,
+  offeringSubjectPatterns,
   type Offering,
+  type OfferScope,
 } from "../offering";
 
 // =============================================================================
@@ -441,5 +443,195 @@ describe("resolveOffering — default-deny (ADR-0008 DD-CO-1)", () => {
     const r = resolveOffering("chat", [off]);
     r.scopes.push("public");
     expect(off.scopes).toEqual(["federated"]);
+  });
+});
+
+// =============================================================================
+// offeringSubjectPatterns — the CO-2 scope→subject-prefix projection
+// =============================================================================
+//
+// The testable core of CO-2 (cortex#941): given a resolved offering and the
+// task-portion of a subject (e.g. `tasks.code-review.>`), produce the set of
+// scope-prefixed subject patterns a capability's JetStream consumer binds on.
+//
+// The headline contract is BYTE-IDENTICAL BOOT: a `local`-only resolution (the
+// CO-1 default for every capability) yields EXACTLY the single
+// `local.{principal}.{stack}.{taskSuffix}` pattern — character-for-character
+// what each consumer builds today. Widening (federated/public) ADDS prefixes;
+// it never alters the local one.
+
+describe("offeringSubjectPatterns", () => {
+  const PRINCIPAL = "andreas";
+  const STACK = "work";
+
+  // The three real task-suffixes the cortex.ts consumers build today, so the
+  // byte-identical proof is anchored on the ACTUAL strings in the boot path:
+  //   - review:  `tasks.code-review.>` (wildcard family)
+  //   - release: `tasks.release.cut`   (exact subject, no wildcard)
+  //   - dev:     `tasks.dev.implement` (exact subject, no wildcard)
+  const REVIEW_SUFFIX = "tasks.code-review.>";
+  const RELEASE_SUFFIX = "tasks.release.cut";
+  const DEV_SUFFIX = "tasks.dev.implement";
+
+  describe("local-only (CO-1 default) → byte-identical single pattern", () => {
+    test("review suffix → exactly today's local review pattern", () => {
+      const resolved = resolveOffering("code-review", undefined);
+      expect(
+        offeringSubjectPatterns(REVIEW_SUFFIX, PRINCIPAL, STACK, resolved),
+      ).toEqual([`local.${PRINCIPAL}.${STACK}.tasks.code-review.>`]);
+    });
+
+    test("release suffix (exact, no wildcard) → exactly today's local release pattern", () => {
+      const resolved = resolveOffering("release.cut", undefined);
+      expect(
+        offeringSubjectPatterns(RELEASE_SUFFIX, PRINCIPAL, STACK, resolved),
+      ).toEqual([`local.${PRINCIPAL}.${STACK}.tasks.release.cut`]);
+    });
+
+    test("dev suffix (exact, no wildcard) → exactly today's local dev pattern", () => {
+      const resolved = resolveOffering("dev.implement", undefined);
+      expect(
+        offeringSubjectPatterns(DEV_SUFFIX, PRINCIPAL, STACK, resolved),
+      ).toEqual([`local.${PRINCIPAL}.${STACK}.tasks.dev.implement`]);
+    });
+
+    test("an explicitly-local offering resolves the same single local pattern", () => {
+      // Resolving a capability whose offering names scopes:['local'] is the same
+      // byte-identical result as the default-deny (undefined offerings) path.
+      const resolved = resolveOffering("code-review", [
+        offering({ capability: "code-review", scopes: ["local"] }),
+      ]);
+      expect(
+        offeringSubjectPatterns(REVIEW_SUFFIX, PRINCIPAL, STACK, resolved),
+      ).toEqual([`local.${PRINCIPAL}.${STACK}.tasks.code-review.>`]);
+    });
+
+    test("returns a single-element array (length is exactly 1 for local-only)", () => {
+      const resolved = resolveOffering("code-review", undefined);
+      const patterns = offeringSubjectPatterns(
+        REVIEW_SUFFIX,
+        PRINCIPAL,
+        STACK,
+        resolved,
+      );
+      expect(patterns).toHaveLength(1);
+    });
+  });
+
+  describe("federated widening → +federated prefix", () => {
+    test("local+federated → the local pattern PLUS the federated pattern", () => {
+      const resolved = resolveOffering("code-review", [
+        offering({
+          capability: "code-review",
+          scopes: ["local", "federated"],
+          accept: { kind: "network", network: "mf-net" },
+        }),
+      ]);
+      expect(
+        offeringSubjectPatterns(REVIEW_SUFFIX, PRINCIPAL, STACK, resolved),
+      ).toEqual([
+        `local.${PRINCIPAL}.${STACK}.tasks.code-review.>`,
+        `federated.${PRINCIPAL}.${STACK}.tasks.code-review.>`,
+      ]);
+    });
+
+    test("federated-only offering → ONLY the federated pattern (no local)", () => {
+      // A capability offered federated-only binds federated, NOT local — the
+      // scopes[] is authoritative; the helper never silently adds local.
+      const resolved = resolveOffering("code-review", [
+        offering({
+          capability: "code-review",
+          scopes: ["federated"],
+          accept: { kind: "principals", principals: ["jcfischer"] },
+        }),
+      ]);
+      expect(
+        offeringSubjectPatterns(REVIEW_SUFFIX, PRINCIPAL, STACK, resolved),
+      ).toEqual([`federated.${PRINCIPAL}.${STACK}.tasks.code-review.>`]);
+    });
+  });
+
+  describe("public widening → +public prefix", () => {
+    test("local+public → the local pattern PLUS the public pattern", () => {
+      const resolved = resolveOffering("code-review", [
+        offering({
+          capability: "code-review",
+          scopes: ["local", "public"],
+          accept: {
+            kind: "surface",
+            surface: "github",
+            predicate: { kind: "repo-membership", repos: ["the-metafactory/*"] },
+          },
+        }),
+      ]);
+      expect(
+        offeringSubjectPatterns(REVIEW_SUFFIX, PRINCIPAL, STACK, resolved),
+      ).toEqual([
+        `local.${PRINCIPAL}.${STACK}.tasks.code-review.>`,
+        `public.${PRINCIPAL}.${STACK}.tasks.code-review.>`,
+      ]);
+    });
+  });
+
+  describe("scope→prefix mapping is correct + ordered", () => {
+    test("prefixes are emitted in canonical order local → federated → public", () => {
+      // Even if scopes[] arrives in a different order, the output is the
+      // canonical trust-ascending order so the bound-subject set is stable
+      // (deterministic boot — no order-dependent diff between restarts).
+      const resolved = {
+        capability: "code-review",
+        scopes: ["public", "local", "federated"] as const,
+      };
+      expect(
+        offeringSubjectPatterns(REVIEW_SUFFIX, PRINCIPAL, STACK, {
+          capability: resolved.capability,
+          scopes: [...resolved.scopes],
+        }),
+      ).toEqual([
+        `local.${PRINCIPAL}.${STACK}.tasks.code-review.>`,
+        `federated.${PRINCIPAL}.${STACK}.tasks.code-review.>`,
+        `public.${PRINCIPAL}.${STACK}.tasks.code-review.>`,
+      ]);
+    });
+
+    test("each scope maps to its own prefix with the SAME tail (suffix untouched)", () => {
+      const resolved = {
+        capability: "release.cut",
+        scopes: ["local", "federated"] as OfferScope[],
+      };
+      const patterns = offeringSubjectPatterns(
+        RELEASE_SUFFIX,
+        PRINCIPAL,
+        STACK,
+        resolved,
+      );
+      // Tail is identical across scopes — only the prefix token differs.
+      for (const p of patterns) {
+        expect(p.endsWith(`.${PRINCIPAL}.${STACK}.tasks.release.cut`)).toBe(true);
+      }
+      expect(patterns[0]!.startsWith("local.")).toBe(true);
+      expect(patterns[1]!.startsWith("federated.")).toBe(true);
+    });
+  });
+
+  describe("dedup + defensiveness", () => {
+    test("a duplicate scope in scopes[] produces no duplicate pattern", () => {
+      const resolved = {
+        capability: "code-review",
+        scopes: ["local", "local"] as OfferScope[],
+      };
+      expect(
+        offeringSubjectPatterns(REVIEW_SUFFIX, PRINCIPAL, STACK, resolved),
+      ).toEqual([`local.${PRINCIPAL}.${STACK}.tasks.code-review.>`]);
+    });
+
+    test("an empty scopes[] (defensive) yields no patterns", () => {
+      // The resolver never returns empty scopes (defaults to ['local']); this
+      // guards a programmatic caller that hands a degenerate resolved view.
+      const resolved = { capability: "code-review", scopes: [] as OfferScope[] };
+      expect(
+        offeringSubjectPatterns(REVIEW_SUFFIX, PRINCIPAL, STACK, resolved),
+      ).toEqual([]);
+    });
   });
 });

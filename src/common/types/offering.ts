@@ -588,3 +588,71 @@ export function resolveOffering(
     ...(match.accept !== undefined ? { accept: match.accept } : {}),
   };
 }
+
+// =============================================================================
+// offeringSubjectPatterns — scope → subject-prefix projection (the CO-2 core)
+// =============================================================================
+
+/**
+ * The canonical trust-ascending order the offer-scope prefixes are emitted in.
+ * Binding-subject order is made deterministic (independent of `scopes[]` input
+ * order) so a stack's bound-subject set is identical across restarts — a diff
+ * between two boots of the same config is a real change, never an ordering
+ * artefact. `local` first preserves the byte-identical contract: when only
+ * `local` is admitted, the single emitted pattern is exactly today's.
+ */
+const OFFER_SCOPE_ORDER: readonly OfferScope[] = ["local", "federated", "public"];
+
+/**
+ * Project a resolved offering onto the **subject patterns a capability's
+ * JetStream consumer binds on** — the testable core of CO-2 (cortex#941).
+ *
+ * The wire already carries scope as the leading subject token
+ * (`local.`/`federated.`/`public.` — CONTEXT.md §Capability offering, design
+ * §2). An offering decides WHICH of those prefixes a capability is reachable
+ * at; this helper turns that decision into the concrete bound-subject set.
+ *
+ * For each admitted offer-scope (in canonical {@link OFFER_SCOPE_ORDER}) it
+ * emits `{scope}.{principal}.{stack}.{taskSuffix}`. The `taskSuffix` is the
+ * task-portion of the subject the consumer already builds today — passed
+ * verbatim so the helper is agnostic to whether it is a wildcard family
+ * (`tasks.code-review.>`) or an exact subject (`tasks.release.cut`,
+ * `tasks.dev.implement`). The helper ONLY varies the leading scope token; the
+ * `{principal}.{stack}.{taskSuffix}` tail is byte-identical across scopes.
+ *
+ * ## Byte-identical boot (THE CO-2 CONTRACT)
+ *
+ * A `local`-only resolution — the CO-1 default for EVERY capability when
+ * `policy.offerings` is absent — yields EXACTLY the single pattern
+ * `local.{principal}.{stack}.{taskSuffix}`: character-for-character what each
+ * consumer-boot in `src/cortex.ts` builds today. Widening to `federated` /
+ * `public` ADDS prefixes; it never mutates the local one. So a stack with no
+ * offerings binds today's exact subjects, and the boot smoke is unchanged.
+ *
+ * Pure + total: no I/O, no throw. Duplicate scopes collapse (a degenerate
+ * `scopes: ['local','local']` binds the local pattern once); an empty
+ * `scopes[]` (which the resolver never produces — it defaults to `['local']`)
+ * yields no patterns rather than throwing, defending a programmatic caller.
+ *
+ * @param taskSuffix  the task-portion of the subject (e.g. `tasks.code-review.>`,
+ *                    `tasks.release.cut`) — exactly what the consumer binds today.
+ * @param principal   the receiving stack's principal id.
+ * @param stack       the receiving stack's stack segment.
+ * @param resolved    the {@link ResolvedOffering} from {@link resolveOffering}.
+ * @returns the scope-prefixed subject patterns, in canonical scope order.
+ */
+export function offeringSubjectPatterns(
+  taskSuffix: string,
+  principal: string,
+  stack: string,
+  resolved: ResolvedOffering,
+): string[] {
+  const admitted = new Set(resolved.scopes);
+  const patterns: string[] = [];
+  for (const scope of OFFER_SCOPE_ORDER) {
+    if (admitted.has(scope)) {
+      patterns.push(`${scope}.${principal}.${stack}.${taskSuffix}`);
+    }
+  }
+  return patterns;
+}
