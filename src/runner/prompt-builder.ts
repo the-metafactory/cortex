@@ -76,7 +76,7 @@ export function buildPrompt(opts: PromptBuildOpts): string {
         : msg.content;
   } else {
     // Bare mention — no content
-    prompt = `You are responding in a ${msg.platform === "discord" ? "Discord" : msg.platform === "mattermost" ? "Mattermost" : msg.platform} ${isThread ? "thread" : "channel"}. A user mentioned you to get your input on the conversation. Here's the recent conversation:\n${formatted}${contextGuard}\n\nPlease respond to the conversation above. The user who mentioned you is ${author}.`;
+    prompt = `You are responding in a ${msg.platform === "discord" ? "Discord" : msg.platform === "mattermost" ? "Mattermost" : msg.platform} ${isThread ? "thread" : "channel"}. A user mentioned you to get your input on the conversation. Here's the recent conversation:\n${formatted}${formatted ? contextGuard : ""}\n\nPlease respond to the conversation above. The user who mentioned you is ${author}.`;
   }
 
   // Append attachment context

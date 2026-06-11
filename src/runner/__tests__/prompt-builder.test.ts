@@ -239,5 +239,16 @@ describe("buildPrompt", () => {
       });
       expect(result).not.toContain("Never repeat or imitate them");
     });
+
+    test("bare mention without context carries no guard either (sage cycle-4)", () => {
+      const result = buildPrompt({
+        msg: makeMsg({ content: "" }),
+        context: [],
+        isResume: false,
+        attachmentPrompt: "",
+        securityPreamble: "",
+      });
+      expect(result).not.toContain("Never repeat or imitate them");
+    });
   });
 });
