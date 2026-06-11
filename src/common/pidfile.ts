@@ -11,6 +11,7 @@
  * paths for now so the principal's existing `bot.yaml` continues to work.
  */
 
+import { homedir } from "node:os";
 import { join, basename } from "path";
 import { realpathSync } from "fs";
 
@@ -38,14 +39,16 @@ export const DEFAULT_CONFIG = join(
  *     the `.yaml`/`.yml` extension). Two stacks with different `--config`
  *     paths get distinct PID files.
  *
- * Sage cortex#1027 — **stable against config-path spelling.** The PID file is a
- * lifecycle identity: `cortex start --config X` (writer) and `cortex agents
- * reload --config X` / `cortex stop --config X` (readers) MUST resolve the same
- * file even when `X` is spelled differently (trailing slash, `./`, `..`,
- * symlink, relative vs absolute). We `realpathSync` the config path first so two
- * spellings of the SAME file canonicalize to one identity before we take the
- * basename — otherwise `~/.config/cortex/work.yaml` and a symlink to it would
- * key two different daemons and a reload would signal the wrong (or no) process.
+ * Sage cortex#1027 — **canonicalized against config-path spelling.** The PID
+ * file is a lifecycle identity: `cortex start --config X` (writer) and
+ * `cortex agents reload --config X` / `cortex stop --config X` (readers) must
+ * resolve the same file across spellings. Covered: trailing slash, `./`/`..`
+ * detours, symlinks, relative-vs-absolute, and `~` (expanded here) — for
+ * configs that EXIST on disk, via `realpathSync`. Honest limit: when the path
+ * does not resolve (file missing/unreadable) we fall back to the trimmed
+ * literal, so two never-on-disk spellings of the same intended file can still
+ * derive different PID files — callers get convergence for real configs, not
+ * for hypothetical ones.
  *
  * Keying on `stack.id` would be stricter still (the slug is the real authority
  * per CONTEXT.md §"Stack slug"), but parsing the config here would pull the full
@@ -75,7 +78,12 @@ export function pidFileFor(configPath: string | undefined): string {
  * of a file path does not skew the basename.
  */
 function canonicalizeConfigPath(configPath: string): string {
-  const trimmed = configPath.replace(/\/+$/, "");
+  let trimmed = configPath.replace(/\/+$/, "");
+  // `~` never reaches realpath (shells expand it, but config values passed
+  // programmatically may carry it verbatim).
+  if (trimmed === "~" || trimmed.startsWith("~/")) {
+    trimmed = join(homedir(), trimmed.slice(1));
+  }
   try {
     return realpathSync(trimmed);
   } catch {

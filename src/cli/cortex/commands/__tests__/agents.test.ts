@@ -588,3 +588,19 @@ function seedConfigWithPidFile(pid: number): {
     },
   };
 }
+
+// sage round 3 — tilde spelling converges for on-disk configs
+describe("round-3: pidFileFor tilde expansion", () => {
+  test("~ and absolute spellings of the same existing config derive one PID file", () => {
+    const home = process.env.HOME!;
+    const dir = mkdtempSync(join(home, ".pidfile-tilde-test-"));
+    try {
+      const abs = join(dir, "stack.yaml");
+      writeFileSync(abs, "x: 1\n");
+      const viaTilde = `~/${abs.slice(home.length + 1)}`;
+      expect(pidFileFor(viaTilde)).toBe(pidFileFor(abs));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

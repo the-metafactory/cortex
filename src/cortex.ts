@@ -3946,6 +3946,29 @@ export async function startCortex(
     });
     await publishCapabilityTombstones([...removed, ...changedToEmpty]);
 
+    // ── Canonical presence envelope (sage round 3): the legacy registry write
+    //    above is the migration-period dual-emit; `agent.capabilities-changed`
+    //    is the canonical signal presence consumers follow (CONTEXT.md §Agent
+    //    presence). Diff-based: the producer only emits on a real delta.
+    const presenceProducer = presenceProducerForReload;
+    if (presenceProducer !== null) {
+      let emitted = 0;
+      for (const id of [...added, ...changed]) {
+        const fresh = freshById.get(id);
+        if (fresh === undefined) continue;
+        const caps = fresh.runtime?.capabilities ?? [];
+        if (presenceProducer.publishCapabilitiesChanged(id, caps)) emitted += 1;
+      }
+      for (const id of removed) {
+        if (presenceProducer.publishCapabilitiesChanged(id, [])) emitted += 1;
+      }
+      if (emitted > 0) {
+        console.log(
+          `cortex: agents-reload — emitted ${emitted} agent.capabilities-changed`,
+        );
+      }
+    }
+
     // ── Honest-scope: presence-adapter changes are restart-only. Warn when a
     //    reload added/removed an agent that declares a presence binding (the
     //    case where a restart is actually needed to (dis)connect a bot). ──

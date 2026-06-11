@@ -535,9 +535,9 @@ function jsonOk(agents: Agent[], data?: Record<string, string>): string {
 /**
  * Sage cortex#1027 — success-side `data` describing the runtime-signal outcome,
  * so JSON consumers can tell apart "reload signal delivered" from "no runtime to
- * signal" from "validation-only". Returns undefined for `--validate-only` (no
- * signal attempted), keeping the envelope free of signal fields when there was
- * nothing to report.
+ * signal" from "validation-only". For `--validate-only` (signal === null, no
+ * signal attempted) returns `{ signalled: "false", reason: "validate-only" }`
+ * so the JSON contract always carries an explicit signal outcome.
  */
 function signalData(
   signal: SignalOutcome | null,
