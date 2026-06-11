@@ -1,11 +1,13 @@
 # Design: Capability Offering & Visibility — the third leg of the control plane
 
-**Status:** Draft
-**Stage:** design spec (+ ADR-0008)
+**Status:** Accepted (hardened via `grill-with-docs`, 2026-06-11 — see ADR-0008/0009/0010 + the §Capability offering glossary entry)
+**Stage:** design spec (+ ADR-0008/0009/0010)
 **Author:** Andreas + Luna
 **Date:** 2026-06-11
 **Epic:** [cortex#939](https://github.com/the-metafactory/cortex/issues/939)
-**Refs:** CONTEXT.md §Capability / §Scope / §Dispatch · `docs/adr/0003-network-join-control-plane.md` · `docs/sop-federation-onboarding.md` · `docs/design-agentic-dev-pipeline.md` (the dev-loop — first customer, wave-5 #887/#925) · `docs/design-capability-dispatch-review-consumer.md`
+**Refs:** CONTEXT.md §Capability offering / §Scope / §Dispatch · `docs/adr/0008-capability-offering-scope.md` · `docs/adr/0009-offerings-per-stack-no-shared-layer.md` · `docs/adr/0010-public-accept-gate-two-stage.md` · `docs/adr/0003-network-join-control-plane.md` · `docs/sop-federation-onboarding.md` · `docs/design-agentic-dev-pipeline.md` (the dev-loop — first customer, wave-5 #887/#925) · `docs/design-capability-dispatch-review-consumer.md`
+
+> **Grill outcomes (2026-06-11).** Hardened against CONTEXT.md: (1) **"offering" (provider) vs "Offer mode" (consumer)** are the two sides of one handshake — disambiguated, not renamed. (2) **offer-scope = trust tier, accept-policy = who-within-tier**; `local` = the **offering stack only** (multiple stacks = multiple locals), `federated` = **other principals'** stacks on a network, `public` = open square. (3) Accept-policy is a **closed per-scope named set**, not a DSL; default-deny requires naming for `federated`. (4) **Offerings are per-stack runtime config; no shared `offerings/` layer** — fleet intent is a provisioning-tooling concern (ADR-0009). (5) **Public admission is a two-stage gate** — deterministic, metadata-only, pre-LLM at the tap; content-dependent accept-predicates forbidden (ADR-0010). The canonical statements live in the ADRs + the glossary; this spec is the narrative.
 
 ---
 
@@ -89,7 +91,7 @@ The further out you offer, the more the gates matter. Offer-scope *raises the tr
 
 | Offer-scope | Trust anchor | Minimum gates |
 |---|---|---|
-| **local** | the home bus (your own stacks) | none beyond the bus |
+| **local** | the offering stack itself (multiple stacks = multiple locals) | none beyond the bus |
 | **federated** | the registry (pinned), peer pubkeys | signing ≥ permissive; accept-policy = network roster |
 | **public** | the *surface* (e.g. GitHub identity) + rate limit | signing enforce (for bus peers); compliance gate; rate-limit; accept-policy bounds *what* may be asked (the offered capability only, never a sibling) |
 
@@ -140,6 +142,8 @@ New config (stack layer): `policy.offerings: [{ capability, scopes: [...], accep
 - **DD-CO-4 — Public consumers reach offered capabilities through surfaces, not stacks.** The marketplace is *consumer-via-surface, provider-via-stack*; the surface (GitHub) is the public consumer's trust anchor; the accept-policy bounds the request to the offered capability.
 - **DD-CO-5 — `cortex offer` is the third control-plane leg** (stack → network → offer), with the offering policy declarative in the config-split.
 - **DD-CO-6 — Untrusted-content treatment scales with offer-scope; public offerings REQUIRE M1–M6.** Content from a federated/public offering is untrusted input handled as data, never instructions (M1); public-scope work runs least-privilege (M2) + sandbox-isolated (M3) + egress-controlled (M4) + injection-red-teamed (M5) + cost/rate-capped (M6). A public capability MUST NOT ship without them. *(§6.)*
+- **DD-CO-7 — Offerings are per-stack runtime config; no shared `offerings/` layer; fleet intent is a provisioning-tooling concern.** A shared config layer ⟺ membership of a co-owned entity (a network); an offering is per-stack policy, not an entity, so it stays per-stack and the fleet view is the tooling's job, not a composed runtime layer. *(ADR-0009.)*
+- **DD-CO-8 — Public admission is a two-stage gate: deterministic, metadata-only, pre-LLM at the tap.** Whether to claim a public Offer is decided in code from surface-asserted trustworthy metadata (HMAC origin, repo, sender identity, rate) — never on attacker content, never via an LLM. Content-dependent accept-predicates are forbidden; the public requester's identity is the surface-asserted (HMAC-validated) identity, not a bus pubkey. Content reaches the (sandboxed, least-privileged) reviewer only after the gate passes. *(ADR-0010.)*
 
 ## 9. Feature breakdown (the epic slices)
 
