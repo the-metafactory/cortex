@@ -136,6 +136,11 @@ export function processEvent(
     event_type: raw.event_type,
     timestamp: raw.timestamp,
     session_id: raw.session_id,
+    // ST-P1 (cortex#964) — carry the session-tree fields through unredacted.
+    // They are structural linkage, not payload content; omitted when absent so
+    // a root/non-CC event stays clean.
+    ...(raw.parent_session_id !== undefined && { parent_session_id: raw.parent_session_id }),
+    ...(raw.substrate !== undefined && { substrate: raw.substrate }),
     // cortex#774: read CORTEX_CHANNEL first, fall back to legacy GROVE_CHANNEL.
     grove_channel: raw.grove_channel ?? resolveSurfaceEnv("CHANNEL"),
     agent_id: raw.agent_id,

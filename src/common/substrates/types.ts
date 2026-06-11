@@ -289,6 +289,15 @@ export interface DispatchRuntime {
    * runner only sets this on thread continuations.
    */
   resumeSessionId?: string;
+  /**
+   * ST-P1 (cortex#964, refs #952) — the parent session id for the substrate
+   * spawn (session-tree linkage, CONTEXT.md §Session tree). The claude-code
+   * harness threads this onto `CCSessionOpts.parentSessionId`, which stamps
+   * `CORTEX_PARENT_SESSION_ID` on the child env so the child's EventLogger
+   * parents its events. Carried via env, not a CLI arg. Optional everywhere —
+   * absent for an agent-rooted dispatch.
+   */
+  parentSessionId?: string;
 }
 
 // ---------------------------------------------------------------------------

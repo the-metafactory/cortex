@@ -133,6 +133,15 @@ export interface AgentTeamOpts {
   entity?: string;
   principal?: string;
   /**
+   * ST-P1 (cortex#964, refs #952) — the DISPATCH-level parent session id. The
+   * team's moderator is stamped as a child of this (the dispatch that spawned
+   * the team). Participants and the synthesis session are NOT parented to this
+   * — they are parented to the MODERATOR's live session id once it is known
+   * (see `start()` / `spawnParticipant` / `triggerSynthesis`). Unset when the
+   * team is itself agent-rooted.
+   */
+  parentSessionId?: string;
+  /**
    * IAW Phase B.2b (cortex#114) — bus-peer dependencies. Required
    * when ANY participant has `kind: "bus-peer"`; the constructor
    * throws if a participant declares bus-peer routing without these
@@ -294,6 +303,9 @@ export class AgentTeamHarness implements SessionHarness {
       ...(req.tools.allow.length > 0 && { allowedTools: [...req.tools.allow] }),
       ...(req.tools.deny !== undefined && { disallowedTools: [...req.tools.deny] }),
       ...(req.runtime?.allowedDirs !== undefined && { allowedDirs: req.runtime.allowedDirs }),
+      // ST-P1 (cortex#964) — thread the dispatch-level parent session id onto
+      // the team so the moderator session is parented to the dispatch.
+      ...(req.runtime?.parentSessionId !== undefined && { parentSessionId: req.runtime.parentSessionId }),
       ...(req.timeoutMs !== undefined && { timeoutMs: req.timeoutMs }),
       ...(env.project !== undefined && { project: env.project }),
       ...(env.entity !== undefined && { entity: env.entity }),
@@ -570,6 +582,9 @@ export class AgentTeam extends EventEmitter {
       prompt: moderatorPrompt,
       groveChannel: this.opts.groveChannel,
       groveNetwork: this.opts.groveNetwork,
+      // ST-P1 (cortex#964) — the moderator is a child of the DISPATCH-level
+      // parent (the dispatch that spawned this team), if any.
+      ...(this.opts.parentSessionId !== undefined && { parentSessionId: this.opts.parentSessionId }),
       additionalArgs: this.opts.additionalArgs,
       allowedTools: this.opts.allowedTools,
       disallowedTools: this.opts.disallowedTools,
@@ -676,10 +691,21 @@ export class AgentTeam extends EventEmitter {
       "Start with a 1-3 sentence plain-text overview, then provide details.",
     ].join("\n");
 
+    // ST-P1 (cortex#964) — a participant is a CHILD of the moderator session.
+    // `spawnParticipant` runs from `handleModeratorResponse`, which fires on the
+    // moderator's `result` event — strictly AFTER its `init` event populated
+    // `this.moderator.sessionId` (see cc-session.ts processLine). So the
+    // moderator's live cc_session_id is reliably known here; prefer it. Fall
+    // back to the dispatch-level parent only in the (not-expected) case the id
+    // is still unset, so the participant is never left unparented.
+    const participantParent =
+      this.moderator?.sessionId ?? this.opts.parentSessionId;
+
     const session = new CCSession({
       prompt: participantPrompt,
       groveChannel: this.opts.groveChannel,
       groveNetwork: this.opts.groveNetwork,
+      ...(participantParent !== undefined && { parentSessionId: participantParent }),
       additionalArgs: this.opts.additionalArgs,
       allowedTools: config.allowedTools ?? this.opts.allowedTools,
       disallowedTools: config.disallowedTools ?? this.opts.disallowedTools,
@@ -850,9 +876,16 @@ export class AgentTeam extends EventEmitter {
     // Spawn a new moderator session for synthesis
     const synthesisPrompt = buildSynthesisPrompt(this.opts.prompt, participantResults);
 
+    // ST-P1 (cortex#964) — synthesis is a CHILD of the moderator session, same
+    // as participants. `triggerSynthesis` runs after every participant has
+    // responded, well after the moderator's `init`, so its session id is known.
+    const synthesisParent =
+      this.moderator?.sessionId ?? this.opts.parentSessionId;
+
     const synthSession = new CCSession({
       prompt: synthesisPrompt,
       groveChannel: this.opts.groveChannel,
+      ...(synthesisParent !== undefined && { parentSessionId: synthesisParent }),
       additionalArgs: this.opts.additionalArgs,
       allowedTools: this.opts.allowedTools,
       disallowedTools: this.opts.disallowedTools,

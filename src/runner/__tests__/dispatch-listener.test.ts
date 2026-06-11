@@ -738,6 +738,58 @@ describe("dispatch-listener — success path", () => {
     expect(opts.resumeSessionId).toBe("prior-session");
   });
 
+  // ST-P1 (cortex#964, refs #952) — parent_session_id threads from the
+  // received payload through DispatchRuntime into CCSessionOpts.parentSessionId
+  // so the spawned child stamps CORTEX_PARENT_SESSION_ID for the EventLogger.
+  test("ST-P1: parent_session_id threads payload → CCSessionOpts.parentSessionId", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(
+      makeReceivedEnvelope({
+        prompt: "child work",
+        parent_session_id: "parent-session-abc",
+      }),
+      CANONICAL_CORTEX_CHAT_SUBJECT,
+    );
+    await settle(() => r.published);
+
+    expect(optsCaptured).toHaveLength(1);
+    expect(optsCaptured[0]!.parentSessionId).toBe("parent-session-abc");
+  });
+
+  test("ST-P1: parentSessionId is undefined when the payload omits parent_session_id", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(
+      makeReceivedEnvelope({ prompt: "root work" }),
+      CANONICAL_CORTEX_CHAT_SUBJECT,
+    );
+    await settle(() => r.published);
+
+    expect(optsCaptured).toHaveLength(1);
+    expect(optsCaptured[0]!.parentSessionId).toBeUndefined();
+  });
+
   // cortex#127 — RECEIVING-STACK-AUTHORITATIVE bash allowlist plumbing.
   // The bus dispatch path used to drop the stack's bashAllowlist, so the
   // spawned session never got CORTEX_BASH_GUARD set; the bash-guard hook

@@ -203,6 +203,11 @@ export function createCcEventEnvelope(
       // directly without re-parsing the envelope type.
       event_id: event.event_id,
       session_id: event.session_id,
+      // ST-P1 (cortex#964, refs #952) — carry the session-tree linkage onto the
+      // payload so both ingest paths (local relay → ingestor; cloud publisher →
+      // /api/ingest) can parent the session. Omitted when absent (root/non-CC).
+      ...(event.parent_session_id !== undefined && { parent_session_id: event.parent_session_id }),
+      ...(event.substrate !== undefined && { substrate: event.substrate }),
       ...(event.grove_channel !== undefined && { grove_channel: event.grove_channel }),
       ...(event.agent_id !== undefined && { agent_id: event.agent_id }),
       ...(event.agent_name !== undefined && { agent_name: event.agent_name }),

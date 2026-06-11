@@ -196,4 +196,24 @@ describe("processEvent", () => {
     const result = processEvent(event, basePolicy);
     expect(result!.grove_channel).toBe("luna");
   });
+
+  // ST-P1 (cortex#964, refs #952) — the relay must carry the session-tree
+  // fields through Raw → Published so the cc-events envelope can place them
+  // on the payload for both ingest paths.
+  test("propagates parent_session_id + substrate from raw to published", () => {
+    const event = makeRawEvent({
+      parent_session_id: "moderator-session",
+      substrate: "claude-code",
+    });
+    const result = processEvent(event, basePolicy);
+    expect(result!.parent_session_id).toBe("moderator-session");
+    expect(result!.substrate).toBe("claude-code");
+  });
+
+  test("omits parent_session_id + substrate when the raw event has none", () => {
+    const event = makeRawEvent();
+    const result = processEvent(event, basePolicy);
+    expect(result!.parent_session_id).toBeUndefined();
+    expect(result!.substrate).toBeUndefined();
+  });
 });
