@@ -399,6 +399,9 @@ export class ClaudeCodeHarness implements SessionHarness {
       if (runtime.groveChannel !== undefined) opts.groveChannel = runtime.groveChannel;
       if (runtime.groveNetwork !== undefined) opts.groveNetwork = runtime.groveNetwork;
       if (runtime.resumeSessionId !== undefined) opts.resumeSessionId = runtime.resumeSessionId;
+      // ST-P1 (cortex#964) — thread the session-tree parent so the spawned
+      // child stamps CORTEX_PARENT_SESSION_ID (cc-session.ts buildSessionEnv).
+      if (runtime.parentSessionId !== undefined) opts.parentSessionId = runtime.parentSessionId;
     }
 
     // Surface env context kinds the substrate understands. Unknown kinds

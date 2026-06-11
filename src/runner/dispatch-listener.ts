@@ -201,6 +201,13 @@ export interface DispatchTaskReceivedPayload {
   grove_network?: string;
   agent_name?: string;
   resume_session_id?: string;
+  /**
+   * ST-P1 (cortex#964, refs #952) — the parent session id for this dispatch
+   * (session-tree linkage). `buildDispatchRequest` maps it onto
+   * `req.runtime.parentSessionId`; the claude-code harness then stamps it onto
+   * `CCSessionOpts.parentSessionId`. Name PINNED for the ST-P2 producer.
+   */
+  parent_session_id?: string;
   allowed_tools?: string[];
   disallowed_tools?: string[];
   /**
@@ -1087,6 +1094,8 @@ function buildDispatchRequest(
   if (payload.grove_channel !== undefined) runtime.groveChannel = payload.grove_channel;
   if (payload.grove_network !== undefined) runtime.groveNetwork = payload.grove_network;
   if (payload.resume_session_id !== undefined) runtime.resumeSessionId = payload.resume_session_id;
+  // ST-P1 (cortex#964) — map the session-tree parent onto the runtime block.
+  if (payload.parent_session_id !== undefined) runtime.parentSessionId = payload.parent_session_id;
   const hasRuntime = Object.keys(runtime).length > 0;
 
   // Env-kind context block carries principal/entity/project labels.

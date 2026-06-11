@@ -29,6 +29,14 @@ export interface ClaudeInvocationOpts {
   additionalArgs?: string[];
   /** If set, resume an existing CC session (for threaded conversations) */
   resumeSessionId?: string;
+  /**
+   * ST-P1 (cortex#964, refs #952) — the parent session id for this spawn.
+   * Carried to the child via the `CORTEX_PARENT_SESSION_ID` env var (stamped in
+   * `cc-session.ts` `buildSessionEnv`), NOT as a CLI arg — `buildClaudeArgs`
+   * never emits a flag for it. Present on the opts for symmetry with
+   * `CCSessionOpts` and so non-CCSession invokers can thread it through env.
+   */
+  parentSessionId?: string;
   /** Tools to allow (passed as --allowedTools) */
   allowedTools?: string[];
   /** Tools to deny (passed as --disallowedTools) */

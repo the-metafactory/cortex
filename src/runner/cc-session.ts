@@ -27,6 +27,13 @@ export interface CCSessionOpts {
   agentName?: string;
   agentId?: string;
   resumeSessionId?: string;
+  /**
+   * ST-P1 (cortex#964, refs #952) — the parent session id for this spawn. When
+   * set, `buildSessionEnv` stamps `CORTEX_PARENT_SESSION_ID` on the child's env
+   * so the child's EventLogger links its events to the parent session
+   * (CONTEXT.md §Session tree). Unset for an agent-rooted session.
+   */
+  parentSessionId?: string;
   allowedTools?: string[];
   disallowedTools?: string[];
   allowedDirs?: string[];
@@ -138,6 +145,7 @@ export function buildSessionEnv(
     | "project"
     | "entity"
     | "principal"
+    | "parentSessionId"
   >,
 ): Record<string, string> {
   return {
@@ -149,6 +157,9 @@ export function buildSessionEnv(
     ...(opts.project && { CORTEX_PROJECT: opts.project }),
     ...(opts.entity && { CORTEX_ENTITY: opts.entity }),
     ...(opts.principal && { CORTEX_PRINCIPAL: opts.principal }),
+    // ST-P1 (cortex#964) — child-session linkage. The spawned child's
+    // EventLogger reads CORTEX_PARENT_SESSION_ID to parent its events.
+    ...(opts.parentSessionId && { CORTEX_PARENT_SESSION_ID: opts.parentSessionId }),
   };
 }
 

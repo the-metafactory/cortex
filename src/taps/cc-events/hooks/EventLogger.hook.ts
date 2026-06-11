@@ -49,6 +49,11 @@ interface HookInput {
   summary?: string;
   duration_ms?: number;
   session_id?: string;
+  // ST-P1 (cortex#964) — Claude Code does NOT natively surface a parent
+  // session id on the hook input today; this is the forward door for if/when
+  // it does. The load-bearing source is the `CORTEX_PARENT_SESSION_ID` env var
+  // stamped by the runner on a spawned child (see the read site in main()).
+  parent_session_id?: string;
 }
 
 interface UsageCache {
@@ -170,6 +175,16 @@ async function main() {
     const sessionId: string =
       hookInput.session_id ?? process.env.CLAUDE_SESSION_ID ?? "unknown";
 
+    // ST-P1 (cortex#964, refs #952) — session-tree linkage. The runner stamps
+    // `CORTEX_PARENT_SESSION_ID` on a spawned child session's env (see
+    // cc-session.ts `buildSessionEnv`); read it (preferring a native hook field
+    // if CC ever surfaces one). This hook IS the claude-code tap, so the
+    // substrate is always `claude-code`. Env read only — the hook stays
+    // non-blocking (CLAUDE.md: never call out from inside a hook).
+    const parentSessionId: string | undefined =
+      hookInput.parent_session_id ?? process.env.CORTEX_PARENT_SESSION_ID ?? undefined;
+    const substrate = "claude-code";
+
     if (hookType === "unknown" || !isHookEventName(hookType)) {
       // Unrecognised hook shape — write nothing, exit silently.
       process.exit(0);
@@ -246,6 +261,8 @@ async function main() {
 
     const event = createRawEvent(eventType, hookType, payload, {
       sessionId,
+      ...(parentSessionId !== undefined && { parentSessionId }),
+      substrate,
       toolName,
       networkId: groveNetwork,
     });
@@ -261,7 +278,12 @@ async function main() {
         EVENT_TYPES.SESSION_HEARTBEAT,
         hookType,
         { project: groveProject, entity: groveEntity, principal },
-        { sessionId, networkId: groveNetwork }
+        {
+          sessionId,
+          ...(parentSessionId !== undefined && { parentSessionId }),
+          substrate,
+          networkId: groveNetwork,
+        }
       );
       await postEvent(heartbeat);
       writeToJsonl(filePath, heartbeat);
