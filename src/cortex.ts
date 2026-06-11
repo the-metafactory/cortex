@@ -3829,6 +3829,37 @@ export async function startCortex(
         hostname: config.github.receiver.hostname,
         source: systemEventSource,
         publish: (env) => runtime.publish(env),
+        // CO-5 (epic cortex#939) — the public PR-review marketplace Stage-1 tap.
+        // When the stack OFFERS `code-review` at `public` scope AND a validated
+        // PR-opened delivery's surface metadata clears the accept-predicate, the
+        // receiver publishes a `public.{principal}.{stack}.tasks.code-review.…`
+        // Offer that the CO-2-bound public consumer (above) claims and the
+        // CO-7-hardened pipeline reviews.
+        //
+        // SHIPS DARK / gated on #978: a public `code-review` offering cannot
+        // boot on a `local` execution backend — the M3 gate
+        // (`checkPublicOfferingBackendGate`, wired into `CortexConfigSchema`)
+        // REJECTS that config at validation. So on every live stack today the
+        // offerings resolve `local`-only, `translatePrOpenedToOffer` returns
+        // `{admit:false}`, and this tap publishes NOTHING — provingly inert.
+        // The tap is wired unconditionally (cheap, pure on the inert path) so
+        // the seam exists the moment a non-local backend (#978) unblocks a
+        // public offering.
+        //
+        // `publishOnSubject` is the explicit-subject escape hatch (the public
+        // subject is not derivable from `envelope.type`); `undefined` when the
+        // runtime is dormant (no NATS) — the tap then logs + skips, identical to
+        // the generic-event no-op on a dormant runtime.
+        publicOfferTap: {
+          principal: principalId,
+          stack: derivedStack.stack,
+          offerings: resolvedPolicy?.offerings,
+          // `?.bind(runtime)` rather than a `!`-asserted closure: optional-chain
+          // yields `undefined` when the runtime is dormant (no explicit-subject
+          // publish), and `.bind` preserves the method's `this` binding to
+          // `runtime` (a plain captured reference would call it unbound).
+          publishOnSubject: runtime.publishOnSubject?.bind(runtime),
+        },
       });
     } catch (err) {
       console.error(

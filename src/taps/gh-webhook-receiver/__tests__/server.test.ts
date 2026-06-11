@@ -21,6 +21,7 @@ import {
   type GithubWebhookReceiverHandle,
 } from "../server";
 import { validateEnvelope, type Envelope } from "../../../bus/myelin/envelope-validator";
+import type { Offering } from "../../../common/types/offering";
 
 const TEST_SECRET = "test-secret-for-receiver-tests";
 const TEST_SOURCE = {
@@ -392,6 +393,160 @@ describe("startGithubWebhookReceiver — happy path", () => {
     expect(capturedOpts!.sender).toBe("mellanon");
     expect(capturedOpts!.source).toEqual(TEST_SOURCE);
     expect(published[0]).toBe(fakeEnv);
+  });
+});
+
+describe("startGithubWebhookReceiver — CO-5 public-offer tap (the integration seam)", () => {
+  // A public `code-review` offering admitting any the-metafactory/* repo. This
+  // is the config that, on a real stack, CO-7's M3 backend gate would REJECT on
+  // a local execution backend (#978) — here it is supplied directly to the tap
+  // to exercise the seam that goes live once the dark switch flips.
+  const publicCodeReviewOffering: Offering = {
+    capability: "code-review",
+    scopes: ["public"],
+    accept: {
+      kind: "surface",
+      surface: "github",
+      predicate: { kind: "repo-membership", repos: ["the-metafactory/*"] },
+    },
+  };
+
+  function prOpenedBody(repo: string, pr: number, sender: string, title = "add a feature"): string {
+    return JSON.stringify({
+      action: "opened",
+      number: pr,
+      pull_request: { number: pr, title, head: { sha: "deadbeefcafe" } },
+      repository: { full_name: repo },
+      sender: { login: sender },
+    });
+  }
+
+  interface OfferPublish { env: Envelope; subject: string }
+
+  function startWithTap(
+    offerings: readonly Offering[] | undefined,
+    publishOnSubject?: (env: Envelope, subject: string) => Promise<void>,
+    tapHasPublisher = true,
+  ): { handle: GithubWebhookReceiverHandle; published: Envelope[]; offered: OfferPublish[] } {
+    const offered: OfferPublish[] = [];
+    const defaultPublisher = async (env: Envelope, subject: string): Promise<void> => {
+      offered.push({ env, subject });
+    };
+    const { handle, published } = start({
+      publicOfferTap: {
+        principal: "andreas",
+        stack: "research",
+        offerings,
+        publishOnSubject: tapHasPublisher ? (publishOnSubject ?? defaultPublisher) : undefined,
+      },
+    });
+    return { handle, published, offered };
+  }
+
+  test("admits a matching public PR → publishes the Offer on the provider's public subject", async () => {
+    const { handle, published, offered } = startWithTap([publicCodeReviewOffering]);
+    const body = prOpenedBody("the-metafactory/cortex", 944, "octocat", "feat: marketplace");
+    const res = await postWebhook(handle, body, { event: "pull_request" });
+    expect(res.status).toBe(200);
+
+    // The generic github event STILL flows (the tap is additive).
+    expect(published).toHaveLength(1);
+    expect(published[0]!.type).toBe("github.pull-request.opened");
+
+    // AND the public Offer was published on the provider stack's own subject.
+    expect(offered).toHaveLength(1);
+    expect(offered[0]!.subject).toBe("public.andreas.research.tasks.code-review.typescript");
+    const env = offered[0]!.env;
+    expect(env.type).toBe("tasks.code-review.typescript");
+    expect(env.sovereignty.classification).toBe("public");
+    expect(env.originator?.identity).toBe("did:mf:github");
+    expect(env.payload).toMatchObject({
+      repo: "the-metafactory/cortex",
+      pr: 944,
+      surface_verified: true,
+      surface_predicate_passed: true,
+    });
+    expect((env.payload.github as Record<string, unknown>).login).toBe("octocat");
+    expect((env.payload.github as Record<string, unknown>).pr_url).toBe(
+      "https://github.com/the-metafactory/cortex/pull/944",
+    );
+    // The requester-controlled title rode through as data (quarantined
+    // downstream by CO-7 M1) — carried, never gated on.
+    expect(env.payload.title).toBe("feat: marketplace");
+  });
+
+  test("default-deny: no offerings → no Offer published (generic event still flows)", async () => {
+    const { handle, published, offered } = startWithTap(undefined);
+    const res = await postWebhook(handle, prOpenedBody("the-metafactory/cortex", 1, "octocat"), {
+      event: "pull_request",
+    });
+    expect(res.status).toBe(200);
+    expect(published).toHaveLength(1); // generic event
+    expect(offered).toHaveLength(0); // provingly inert
+  });
+
+  test("predicate refuses an out-of-scope repo → no Offer published", async () => {
+    const { handle, offered } = startWithTap([publicCodeReviewOffering]);
+    const res = await postWebhook(handle, prOpenedBody("evil/repo", 1, "octocat"), {
+      event: "pull_request",
+    });
+    expect(res.status).toBe(200);
+    expect(offered).toHaveLength(0);
+  });
+
+  test("a non-opened PR action (synchronize) is not translated", async () => {
+    const { handle, offered } = startWithTap([publicCodeReviewOffering]);
+    const body = JSON.stringify({
+      action: "synchronize",
+      number: 5,
+      pull_request: { number: 5 },
+      repository: { full_name: "the-metafactory/cortex" },
+      sender: { login: "octocat" },
+    });
+    const res = await postWebhook(handle, body, { event: "pull_request" });
+    expect(res.status).toBe(200);
+    expect(offered).toHaveLength(0);
+  });
+
+  test("dormant runtime (no explicit-subject publisher) skips the Offer but still acks + emits the generic event", async () => {
+    const errors: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      errors.push(args.map(String).join(" "));
+    };
+    try {
+      // tapHasPublisher=false ⇒ publishOnSubject undefined (dormant).
+      const { handle, published } = startWithTap([publicCodeReviewOffering], undefined, false);
+      const res = await postWebhook(handle, prOpenedBody("the-metafactory/cortex", 7, "octocat"), {
+        event: "pull_request",
+      });
+      expect(res.status).toBe(200);
+      expect(published).toHaveLength(1); // generic event still flows
+      expect(errors.some((e) => e.includes("cannot publish on explicit subjects"))).toBe(true);
+    } finally {
+      console.log = originalLog;
+    }
+  });
+
+  test("a throwing Offer publisher is swallowed (response still 200, error logged)", async () => {
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args.map(String).join(" "));
+    };
+    try {
+      const { handle } = startWithTap([publicCodeReviewOffering], async () => {
+        throw new Error("bus is down");
+      });
+      const res = await postWebhook(handle, prOpenedBody("the-metafactory/cortex", 9, "octocat"), {
+        event: "pull_request",
+      });
+      // The tap failure must not change the 200 the forwarder sees.
+      expect(res.status).toBe(200);
+      expect(errors.some((e) => e.includes("public-offer tap failed"))).toBe(true);
+    } finally {
+      console.error = originalError;
+    }
   });
 });
 

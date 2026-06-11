@@ -74,6 +74,11 @@ import {
   createGithubEventEnvelope,
   type GithubEventSource,
 } from "../../bus/github-events";
+import type { Offering } from "../../common/types/offering";
+import {
+  translatePrOpenedToOffer,
+  type PrOpenedMetadata,
+} from "../public-offer-translation";
 
 /**
  * Lifecycle handle returned by `startGithubWebhookReceiver`. Mirrors the
@@ -159,6 +164,60 @@ export interface GithubWebhookReceiverOptions {
    * @internal
    */
   buildEnvelope?: typeof createGithubEventEnvelope;
+  /**
+   * CO-5 (epic cortex#939) — the **public PR-review marketplace** Stage-1 tap.
+   *
+   * When provided, a validated `pull_request` `opened`/`reopened` delivery is —
+   * in ADDITION to the generic `github.pull_request.opened` event published
+   * above — run through the metadata-only Stage-1 admission gate
+   * ({@link translatePrOpenedToOffer}, ADR-0010 DD-CO-8): if the stack OFFERS
+   * `code-review` at `public` scope AND the surface-asserted metadata clears the
+   * accept-predicate, a `public.{principal}.{stack}.tasks.code-review.{flavor}`
+   * Offer envelope is published on its explicit subject via
+   * {@link PublicOfferTap.publishOnSubject}. No Offer is published for a request
+   * that fails Stage-1.
+   *
+   * **HMAC is the trust anchor:** this hook runs ONLY after the receiver has
+   * re-verified the webhook HMAC (the surface trust anchor — ADR-0010). The
+   * admission decision reads SURFACE-asserted metadata only (repo, sender),
+   * never the PR's attacker-controlled content.
+   *
+   * **SHIPS DARK:** absent on every live stack today (no public `code-review`
+   * offering ⇒ the M3 backend gate blocks the config from booting until #978),
+   * so this hook is `undefined` and the receiver behaves exactly as pre-CO-5.
+   * Even when wired, {@link translatePrOpenedToOffer} returns `{admit:false}`
+   * (publishes nothing) for the default-deny `local`-only resolution.
+   *
+   * **Errors are swallowed + logged**, identical to the generic publish path:
+   * a failure to publish the public Offer must not change the HTTP response to
+   * the forwarder (GitHub never retries on 2xx).
+   */
+  publicOfferTap?: PublicOfferTap;
+}
+
+/**
+ * CO-5 — the injected dependencies the receiver needs to run the public-offer
+ * Stage-1 tap. The receiver stays passive: cortex.ts (the wiring site) injects
+ * the offering stack's identity, its offerings list, and the explicit-subject
+ * publisher. Kept narrow so the receiver is unit-testable with an in-memory fake.
+ */
+export interface PublicOfferTap {
+  /** The OFFERING stack's principal id (the provider / cryptographic signer). */
+  readonly principal: string;
+  /** The OFFERING stack's stack segment. */
+  readonly stack: string;
+  /** The stack's offerings list (`config.policy.offerings`); `undefined` ⇒ none. */
+  readonly offerings: readonly Offering[] | undefined;
+  /**
+   * Publish an envelope on an EXPLICIT subject (`runtime.publishOnSubject`).
+   * The public Offer subject (`public.{principal}.{stack}.tasks.code-review.…`)
+   * is not derivable from `envelope.type` alone, so the explicit-subject path is
+   * required. `undefined` ⇒ the runtime cannot publish on explicit subjects
+   * (dormant / stub): the tap is skipped (logged), the generic event still flows.
+   */
+  readonly publishOnSubject:
+    | ((envelope: Envelope, subject: string) => Promise<void>)
+    | undefined;
 }
 
 /**
@@ -305,6 +364,23 @@ export function startGithubWebhookReceiver(
         );
       }
 
+      // 7. CO-5 — the public PR-review marketplace Stage-1 tap. Runs ONLY after
+      //    HMAC has been re-verified above (the surface trust anchor, ADR-0010).
+      //    Additive: the generic `github.pull_request.opened` event already
+      //    flowed; this ADDITIONALLY emits a public `code-review` Offer when the
+      //    stack offers it public AND the metadata-only predicate admits. A
+      //    failure here never changes the 200 returned to the forwarder.
+      if (opts.publicOfferTap !== undefined) {
+        await runPublicOfferTap(opts.publicOfferTap, opts.source, {
+          event,
+          action,
+          repo,
+          sender,
+          payload,
+          deliveryId,
+        });
+      }
+
       return new Response("ok", { status: 200 });
     },
   });
@@ -357,4 +433,123 @@ function extractSenderLogin(payload: Record<string, unknown>): string | undefine
     if (typeof login === "string" && login.length > 0) return login;
   }
   return undefined;
+}
+
+/**
+ * CO-5 — best-effort PR number extraction from a `pull_request` payload.
+ * GitHub puts it at both `payload.number` and `payload.pull_request.number`;
+ * we prefer the latter (canonical for PR events) and fall back. Returns
+ * `undefined` for a non-PR payload — the translation gate then refuses.
+ */
+function extractPrNumber(payload: Record<string, unknown>): number | undefined {
+  const pull = payload.pull_request;
+  if (pull && typeof pull === "object" && !Array.isArray(pull)) {
+    const n = (pull as Record<string, unknown>).number;
+    if (typeof n === "number" && Number.isInteger(n)) return n;
+  }
+  const top = payload.number;
+  if (typeof top === "number" && Number.isInteger(top)) return top;
+  return undefined;
+}
+
+/**
+ * CO-5 — best-effort PR title + head-SHA extraction. The title is
+ * REQUESTER-controlled content (carried through to the review payload where
+ * CO-7 M1 quarantines it; NEVER used in admission). The head SHA is the diff
+ * ref the reviewer fetches. Both undefined-safe.
+ */
+function extractPrTitleAndDiffRef(
+  payload: Record<string, unknown>,
+): { title?: string; diffRef?: string } {
+  const pull = payload.pull_request;
+  if (!pull || typeof pull !== "object" || Array.isArray(pull)) return {};
+  const p = pull as Record<string, unknown>;
+  const out: { title?: string; diffRef?: string } = {};
+  if (typeof p.title === "string" && p.title.length > 0) out.title = p.title;
+  const head = p.head;
+  if (head && typeof head === "object" && !Array.isArray(head)) {
+    const sha = (head as Record<string, unknown>).sha;
+    if (typeof sha === "string" && sha.length > 0) out.diffRef = sha;
+  }
+  return out;
+}
+
+/**
+ * CO-5 — run the public-offer Stage-1 tap for one validated delivery. Extracts
+ * the PR-specific surface metadata, runs {@link translatePrOpenedToOffer}, and
+ * — when Stage-1 ADMITS — publishes the public Offer on its explicit subject.
+ *
+ * Posture (mirrors the generic publish path):
+ *   - errors are swallowed + logged (never alter the HTTP response);
+ *   - a `{admit:false}` outcome is the common, expected case (not a PR-opened,
+ *     not offered public, predicate refused) — logged at debug granularity only
+ *     for the cases worth seeing, silent for the default-deny no-op;
+ *   - a missing `publishOnSubject` (dormant runtime / stub) skips publish with a
+ *     single log line — the generic event already flowed, so the bus is not
+ *     wholly silent.
+ */
+async function runPublicOfferTap(
+  tap: PublicOfferTap,
+  source: GithubEventSource,
+  delivery: {
+    event: string;
+    action: string | undefined;
+    repo: string | undefined;
+    sender: string | undefined;
+    payload: Record<string, unknown>;
+    deliveryId: string;
+  },
+): Promise<void> {
+  try {
+    const metadata: PrOpenedMetadata = {
+      event: delivery.event,
+      action: delivery.action,
+      repo: delivery.repo,
+      pr: extractPrNumber(delivery.payload),
+      sender: delivery.sender,
+      ...extractPrTitleAndDiffRef(delivery.payload),
+    };
+    const result = translatePrOpenedToOffer({
+      principal: tap.principal,
+      stack: tap.stack,
+      offerings: tap.offerings,
+      source,
+      metadata,
+      deliveryId: delivery.deliveryId,
+    });
+    if (!result.admit) {
+      // The common case (not a PR-open, not offered public, predicate refused).
+      // Only the predicate-refusal is interesting enough to surface — it means a
+      // public offering IS live and a request fell outside it. The rest is the
+      // provingly-inert default-deny path; stay quiet to avoid log spam.
+      if (result.reason === "accept_predicate_refused") {
+        console.log(
+          `github-webhook-receiver: public-offer Stage-1 refused ` +
+            `(reason=${result.reason} repo=${delivery.repo ?? "?"} delivery=${delivery.deliveryId})`,
+        );
+      }
+      return;
+    }
+    if (tap.publishOnSubject === undefined) {
+      console.log(
+        `github-webhook-receiver: public-offer Stage-1 admitted but runtime ` +
+          `cannot publish on explicit subjects (dormant) — Offer not published ` +
+          `(subject=${result.subject} delivery=${delivery.deliveryId})`,
+      );
+      return;
+    }
+    await tap.publishOnSubject(result.envelope, result.subject);
+    console.log(
+      `github-webhook-receiver: published public code-review Offer ` +
+        `(subject=${result.subject} pr=${(result.envelope.payload as { pr?: number }).pr ?? "?"} ` +
+        `delivery=${delivery.deliveryId})`,
+    );
+  } catch (err) {
+    // Swallow + log — identical posture to the generic publish path. A public
+    // Offer publish failure must not break the receiver or change the HTTP 200.
+    console.error(
+      `github-webhook-receiver: public-offer tap failed for delivery=${delivery.deliveryId}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
