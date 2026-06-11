@@ -61,6 +61,7 @@ import {
   type DevCommandResult,
   type DevForge,
   type DevPrRef,
+  type DevOfferAdmissionGate,
 } from "./dev-consumer";
 import { FileDevSessionStore, type DevSessionStore } from "./dev-session-store";
 
@@ -139,6 +140,22 @@ export interface WireDevConsumersOpts {
   /** Test seam — env lookup. Defaults to `process.env`. */
   env?: Record<string, string | undefined>;
   /**
+   * CO-2 (cortex#941) — the offer-scope subject patterns each dev agent's
+   * consumer should bind on, for the `dev.implement` capability. ONE entry per
+   * admitted offer-scope (local → federated → public). Omitted/empty → the
+   * caller falls back to the single local pattern it builds itself (the
+   * byte-identical default). When >1 (a `federated`/`public` offering), this
+   * function returns ONE DevConsumer PER (agent × pattern) — a NEW instance per
+   * scope (one filter per JetStream pull consumer), never one instance bound
+   * twice.
+   */
+  offeringPatterns?: readonly string[];
+  /**
+   * CO-2/CO-4 (cortex#939) — the per-offer-scope admission gate wired onto every
+   * dev consumer built here. Omitted → no gate (byte-identical to pre-CO-2).
+   */
+  offerAdmission?: DevOfferAdmissionGate;
+  /**
    * Test seam — fully override the seams so the boot test asserts wiring +
    * dormancy WITHOUT real git/gh/CC. Production omits this; the shell-backed
    * seams below are used.
@@ -162,12 +179,32 @@ function claimsDevImplement(agent: DevBootAgent): boolean {
 }
 
 /**
+ * A wired dev consumer paired with the SUBJECT PATTERN it should bind on. CO-2
+ * (cortex#941): one entry per (agent × admitted offer-scope) so a multi-scope
+ * `dev.implement` offering yields a SEPARATE consumer instance per scope (one
+ * filter per JetStream pull consumer) — never one instance `.start()`-ed twice
+ * (which would silently drop the second filter). For the byte-identical default
+ * (no offering / local-only) there is exactly one entry per agent, bound on the
+ * single local pattern.
+ */
+export interface WiredDevConsumer {
+  consumer: DevConsumer;
+  /** The subject pattern this consumer binds — `{scope}.{principal}.{stack}.tasks.dev.implement`. */
+  pattern: string;
+}
+
+/**
  * Build (but do NOT start) the dev consumers for every dev-implement-capable
  * agent. Returns an EMPTY array — touching nothing — when none qualify (the
- * dormancy contract). The caller (`cortex.ts`) then `start()`s each and lands
- * them in the shutdown-drain list.
+ * dormancy contract). The caller (`cortex.ts`) then `start()`s each on its
+ * paired `pattern` and lands them in the shutdown-drain list.
+ *
+ * CO-2 (cortex#941): emits one {@link WiredDevConsumer} per (agent × admitted
+ * offer-scope) from `opts.offeringPatterns` (default-deny ⇒ the single local
+ * pattern). Each scope gets its OWN DevConsumer instance (the NIT-fix: never
+ * `.start()` the same instance twice).
  */
-export function wireDevConsumers(opts: WireDevConsumersOpts): DevConsumer[] {
+export function wireDevConsumers(opts: WireDevConsumersOpts): WiredDevConsumer[] {
   const log = opts.log ?? console;
   const capable = opts.agents.filter(claimsDevImplement);
   if (capable.length === 0) {
@@ -211,7 +248,14 @@ export function wireDevConsumers(opts: WireDevConsumersOpts): DevConsumer[] {
       env,
     });
 
-  const consumers: DevConsumer[] = [];
+  // CO-2 — the offer-scope patterns to bind. Default-deny / omitted ⇒ the
+  // single local pattern (byte-identical). One entry per admitted scope.
+  const patterns =
+    opts.offeringPatterns !== undefined && opts.offeringPatterns.length > 0
+      ? opts.offeringPatterns
+      : [`local.${opts.principalId}.${opts.stack}.tasks.dev.implement`];
+
+  const wired: WiredDevConsumer[] = [];
   for (const agent of capable) {
     const consumerAgent: DevConsumerAgent = {
       id: agent.id,
@@ -221,27 +265,36 @@ export function wireDevConsumers(opts: WireDevConsumersOpts): DevConsumer[] {
       }),
     };
     const sessionOpts = buildDevSessionOpts(agent, opts.guardrails);
-    consumers.push(
-      new DevConsumer({
-        agent: consumerAgent,
-        source: opts.source,
-        runtime: opts.runtime,
-        // Real CC session — spawns `claude` in the worktree. Only reached when
-        // a `dev.implement` task actually arrives for this agent.
-        ccSessionFactory: (o) => new CCSession(o),
-        promptBuilder: ({ payload }) =>
-          // Dispatch INTENT, not method (DD-P3): hand the brief; the agent's
-          // persona owns HOW. The brief already carries the issue/design refs.
-          payload.brief,
-        workspace: seams.workspace,
-        commandRunner: seams.commandRunner,
-        forge: seams.forge,
-        sessionStore: seams.sessionStore,
-        sessionOpts,
-      }),
-    );
+    // NIT-fix (review): a NEW DevConsumer instance PER (agent × scope) so each
+    // bound subject is its own pull consumer — never one instance `.start()`-ed
+    // twice (the second `.start()` would silently drop the extra filter).
+    for (const pattern of patterns) {
+      wired.push({
+        pattern,
+        consumer: new DevConsumer({
+          agent: consumerAgent,
+          source: opts.source,
+          runtime: opts.runtime,
+          // Real CC session — spawns `claude` in the worktree. Only reached when
+          // a `dev.implement` task actually arrives for this agent.
+          ccSessionFactory: (o) => new CCSession(o),
+          promptBuilder: ({ payload }) =>
+            // Dispatch INTENT, not method (DD-P3): hand the brief; the agent's
+            // persona owns HOW. The brief already carries the issue/design refs.
+            payload.brief,
+          workspace: seams.workspace,
+          commandRunner: seams.commandRunner,
+          forge: seams.forge,
+          sessionStore: seams.sessionStore,
+          sessionOpts,
+          ...(opts.offerAdmission !== undefined && {
+            offerAdmission: opts.offerAdmission,
+          }),
+        }),
+      });
+    }
   }
-  return consumers;
+  return wired;
 }
 
 /**

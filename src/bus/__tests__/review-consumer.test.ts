@@ -2315,3 +2315,148 @@ describe("ReviewConsumer.processEnvelope — consumer-side sovereignty gate (Sta
     expect(pipelineRan).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// CO-2/CO-4 (epic cortex#939) — the per-offer-scope admission gate
+// ---------------------------------------------------------------------------
+
+describe("ReviewConsumer.processEnvelope — CO-2/CO-4 offer-scope admission gate", () => {
+  const LOCAL_SUBJECT = "local.metafactory.tasks.code-review.typescript";
+  const PUBLIC_SUBJECT =
+    "public.metafactory.meta-factory.tasks.code-review.typescript";
+  // The federated subject addressing US (the target); the requester lives in
+  // `originator.identity` (same shape as the cortex#686 federated test block).
+  const FED_SUBJECT =
+    "federated.metafactory.meta-factory.tasks.code-review.typescript";
+
+  test("no offerAdmission gate → pipeline runs (byte-identical to pre-CO-2)", async () => {
+    const runtime = createRecordingRuntime();
+    let pipelineRan = false;
+    const consumer = new ReviewConsumer(
+      baseOpts({
+        runtime,
+        pipelineRunner: fixedPipeline(() => {
+          pipelineRan = true;
+          return {
+            kind: "verdict",
+            envelope: buildVerdictEnvelope(makeRequest(), "approved"),
+          };
+        }),
+      }),
+    );
+    const decision = await consumer.processEnvelope(makeRequest(), LOCAL_SUBJECT, null);
+    expect(decision).toEqual({ kind: "ack" });
+    expect(pipelineRan).toBe(true);
+  });
+
+  test("gate that ADMITS (local) → pipeline runs; gate called with envelope+subject", async () => {
+    const runtime = createRecordingRuntime();
+    let pipelineRan = false;
+    const seen: { subject: string }[] = [];
+    const consumer = new ReviewConsumer(
+      baseOpts({
+        runtime,
+        offerAdmission: (_env, subject) => {
+          seen.push({ subject });
+          return { admit: true };
+        },
+        pipelineRunner: fixedPipeline(() => {
+          pipelineRan = true;
+          return {
+            kind: "verdict",
+            envelope: buildVerdictEnvelope(makeRequest(), "approved"),
+          };
+        }),
+      }),
+    );
+    const decision = await consumer.processEnvelope(makeRequest(), LOCAL_SUBJECT, null);
+    expect(decision).toEqual({ kind: "ack" });
+    expect(pipelineRan).toBe(true);
+    expect(seen).toEqual([{ subject: LOCAL_SUBJECT }]);
+  });
+
+  test("gate that DENIES (policy_denied) → term + failed envelope, pipeline NEVER runs", async () => {
+    const runtime = createRecordingRuntime();
+    let pipelineRan = false;
+    const refusal: DispatchTaskFailedReason = {
+      kind: "policy_denied",
+      deny: { floor: "public", requirement: "signing==enforce" },
+    };
+    const consumer = new ReviewConsumer(
+      baseOpts({
+        runtime,
+        offerAdmission: () => ({ admit: false, refusal }),
+        pipelineRunner: fixedPipeline(() => {
+          pipelineRan = true;
+          throw new Error("pipeline must not run when admission is denied");
+        }),
+      }),
+    );
+    const decision = await consumer.processEnvelope(makeRequest(), PUBLIC_SUBJECT, null);
+    // policy_denied → term (permanent — a redelivery won't clear the floor).
+    expect(decision.kind).toBe("term");
+    expect(pipelineRan).toBe(false);
+    // A dispatch.task.failed carrying the refusal was emitted on the LOCAL path
+    // (the request had no federated originator, so it routes locally).
+    const failed = runtime.published.find(
+      (e) => e.type === "dispatch.task.failed",
+    );
+    expect(failed).toBeDefined();
+  });
+
+  test("gate DENY (not_now) → nak with the retry hint (transient backpressure)", async () => {
+    const runtime = createRecordingRuntime();
+    const refusal: DispatchTaskFailedReason = {
+      kind: "not_now",
+      detail: "rate-limited",
+      retry_after_ms: 4242,
+    };
+    const consumer = new ReviewConsumer(
+      baseOpts({
+        runtime,
+        offerAdmission: () => ({ admit: false, refusal }),
+        pipelineRunner: fixedPipeline(() => {
+          throw new Error("pipeline must not run");
+        }),
+      }),
+    );
+    const decision = await consumer.processEnvelope(makeRequest(), PUBLIC_SUBJECT, null);
+    expect(decision.kind).toBe("nak");
+    if (decision.kind === "nak") {
+      expect(decision.delayMs).toBe(4242);
+    }
+  });
+
+  test("DENY on a FEDERATED request → failed envelope routes to the REQUESTER (cross-principal), not self", async () => {
+    // The MAJOR-1 contract, end-to-end: a federated-mode consumer whose offer
+    // gate denies still routes the refusal back to the requester's identity
+    // (decoded from `originator.identity`), NEVER to self.
+    const runtime = createRecordingRuntime();
+    const request = makeFederatedRequest();
+    const refusal: DispatchTaskFailedReason = {
+      kind: "policy_denied",
+      deny: { floor: "federated", requirement: "network_roster" },
+    };
+    const consumer = new ReviewConsumer(
+      baseOpts({
+        federated: true,
+        federatedNetworks: [makeNetwork()],
+        runtime,
+        offerAdmission: () => ({ admit: false, refusal }),
+        pipelineRunner: fixedPipeline(() => {
+          throw new Error("pipeline must not run");
+        }),
+      }),
+    );
+    const decision = await consumer.processEnvelope(request, FED_SUBJECT, null);
+    expect(decision.kind).toBe("term");
+    // Nothing on the local `publish` path; the failed envelope routes to the
+    // requester via `publishOnSubject` on `federated.jc.sage-host.…`.
+    expect(runtime.published).toHaveLength(0);
+    const failed = runtime.publishedOnSubject.find(
+      (p) => p.envelope.type === "dispatch.task.failed",
+    );
+    expect(failed).toBeDefined();
+    expect(failed!.subject.startsWith("federated.jc.sage-host.")).toBe(true);
+  });
+});

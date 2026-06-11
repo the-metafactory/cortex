@@ -48,6 +48,7 @@ import {
   type DevCommandResult,
   type DevForge,
   type DevPrRef,
+  type DevOfferAdmissionGate,
 } from "../dev-consumer";
 import { MemoryDevSessionStore, type DevSessionStore } from "../dev-session-store";
 import type { CCSessionFactory, CCSessionLike } from "../../substrates/claude-code/harness";
@@ -656,5 +657,71 @@ describe("failedReasonToAckDecision", () => {
       kind: "term",
       reason: "v1 does not handle compliance_block",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CO-2/CO-4 — per-offer-scope admission gate (dev lane)
+// ---------------------------------------------------------------------------
+
+describe("DevConsumer.processEnvelope — CO-2/CO-4 offer-scope admission gate", () => {
+  test("no gate → normal flow (byte-identical to pre-CO-2)", async () => {
+    const runtime = createRecordingRuntime();
+    const consumer = new DevConsumer(baseOpts({ runtime }));
+    const decision = await consumer.processEnvelope(makeRequest(), LOCAL_SUBJECT, null);
+    expect(decision).toEqual({ kind: "ack" });
+  });
+
+  test("gate ADMITS → flow proceeds; gate called with envelope+subject", async () => {
+    const runtime = createRecordingRuntime();
+    const seen: string[] = [];
+    const gate: DevOfferAdmissionGate = (_e, subject) => {
+      seen.push(subject);
+      return { admit: true };
+    };
+    const consumer = new DevConsumer(baseOpts({ runtime, offerAdmission: gate }));
+    const decision = await consumer.processEnvelope(makeRequest(), LOCAL_SUBJECT, null);
+    expect(decision).toEqual({ kind: "ack" });
+    expect(seen).toEqual([LOCAL_SUBJECT]);
+  });
+
+  test("gate DENIES (policy_denied) → term + failed envelope, CC session NEVER spawned", async () => {
+    const runtime = createRecordingRuntime();
+    const seen = { opts: [] as CCSessionOpts[] };
+    const gate: DevOfferAdmissionGate = () => ({
+      admit: false,
+      refusal: { kind: "policy_denied", deny: { floor: "public", requirement: "signing==enforce" } },
+    });
+    const consumer = new DevConsumer(
+      baseOpts({
+        runtime,
+        offerAdmission: gate,
+        ccSessionFactory: fakeCcFactory(okCcResult(), seen),
+      }),
+    );
+    const decision = await consumer.processEnvelope(
+      makeRequest(),
+      "public.andreas.work.tasks.dev.implement",
+      null,
+    );
+    expect(decision.kind).toBe("term");
+    // The CC session factory was never invoked — admission denied pre-pipeline.
+    expect(seen.opts).toEqual([]);
+    expect(runtime.published.some((e) => e.type === "dispatch.task.failed")).toBe(true);
+  });
+
+  test("gate DENIES (not_now) → nak with the retry hint", async () => {
+    const runtime = createRecordingRuntime();
+    const gate: DevOfferAdmissionGate = () => ({
+      admit: false,
+      refusal: { kind: "not_now", detail: "rate", retry_after_ms: 999 },
+    });
+    const consumer = new DevConsumer(baseOpts({ runtime, offerAdmission: gate }));
+    const decision = await consumer.processEnvelope(
+      makeRequest(),
+      "public.andreas.work.tasks.dev.implement",
+      null,
+    );
+    expect(decision).toEqual({ kind: "nak", delayMs: 999 });
   });
 });

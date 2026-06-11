@@ -43,6 +43,7 @@ import {
   releaseFailedReasonToAckDecision,
   type ReleaseConsumerAgent,
   type ReleaseExecutor,
+  type ReleaseOfferAdmissionGate,
   type DefaultBranchStatus,
   type ChecksStatus,
   type VersionManifest,
@@ -181,12 +182,14 @@ function makeConsumer(
   agent: ReleaseConsumerAgent,
   runtime: RecordingRuntime,
   executor?: ReleaseExecutor,
+  offerAdmission?: ReleaseOfferAdmissionGate,
 ): ReleaseConsumer {
   return new ReleaseConsumer({
     agent,
     source: SOURCE,
     runtime,
     ...(executor !== undefined && { executor }),
+    ...(offerAdmission !== undefined && { offerAdmission }),
     clock: FIXED_CLOCK,
   });
 }
@@ -784,5 +787,77 @@ describe("ReleaseConsumer — helper units", () => {
       reason: "policy_denied: a",
     });
     expect(releaseFailedReasonToAckDecision(undefined)).toEqual({ kind: "ack" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CO-2/CO-4 — per-offer-scope admission gate (release lane)
+// ---------------------------------------------------------------------------
+
+describe("ReleaseConsumer — CO-2/CO-4 offer-scope admission gate", () => {
+  test("no gate → normal flow (byte-identical to pre-CO-2)", async () => {
+    const runtime = createRecordingRuntime();
+    const executor = createRecordingExecutor();
+    const consumer = makeConsumer(buildAgent(), runtime, executor);
+    const decision = await consumer.processEnvelope(
+      makeReleaseRequest(GRANTED),
+      "local.andreas.work.tasks.release.cut",
+      null,
+    );
+    expect(decision).toEqual({ kind: "ack" });
+    expect(executor.calls.length).toBeGreaterThan(0);
+  });
+
+  test("gate ADMITS → flow proceeds; gate called with envelope+subject", async () => {
+    const runtime = createRecordingRuntime();
+    const executor = createRecordingExecutor();
+    const seen: string[] = [];
+    const gate: ReleaseOfferAdmissionGate = (_e, subject) => {
+      seen.push(subject);
+      return { admit: true };
+    };
+    const consumer = makeConsumer(buildAgent(), runtime, executor, gate);
+    const decision = await consumer.processEnvelope(
+      makeReleaseRequest(GRANTED),
+      "local.andreas.work.tasks.release.cut",
+      null,
+    );
+    expect(decision).toEqual({ kind: "ack" });
+    expect(seen).toEqual(["local.andreas.work.tasks.release.cut"]);
+  });
+
+  test("gate DENIES (policy_denied) → term + failed envelope, executor NEVER called", async () => {
+    const runtime = createRecordingRuntime();
+    const executor = createRecordingExecutor();
+    const gate: ReleaseOfferAdmissionGate = () => ({
+      admit: false,
+      refusal: { kind: "policy_denied", deny: { floor: "public", requirement: "signing==enforce" } },
+    });
+    const consumer = makeConsumer(buildAgent(), runtime, executor, gate);
+    const decision = await consumer.processEnvelope(
+      makeReleaseRequest(GRANTED),
+      "public.andreas.work.tasks.release.cut",
+      null,
+    );
+    expect(decision.kind).toBe("term");
+    expect(executor.calls).toEqual([]);
+    expect(envelopesOfType(runtime, "dispatch.task.failed").length).toBeGreaterThan(0);
+  });
+
+  test("gate DENIES (not_now) → nak with the retry hint", async () => {
+    const runtime = createRecordingRuntime();
+    const executor = createRecordingExecutor();
+    const gate: ReleaseOfferAdmissionGate = () => ({
+      admit: false,
+      refusal: { kind: "not_now", detail: "rate", retry_after_ms: 1234 },
+    });
+    const consumer = makeConsumer(buildAgent(), runtime, executor, gate);
+    const decision = await consumer.processEnvelope(
+      makeReleaseRequest(GRANTED),
+      "public.andreas.work.tasks.release.cut",
+      null,
+    );
+    expect(decision).toEqual({ kind: "nak", delayMs: 1234 });
+    expect(executor.calls).toEqual([]);
   });
 });

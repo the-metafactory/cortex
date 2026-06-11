@@ -104,7 +104,7 @@ describe("wireDevConsumers — dormancy", () => {
       baseOpts([{ id: "forge", displayName: "Forge", runtime: { capabilities: ["dev.implement"] } }]),
     );
     expect(consumers).toHaveLength(1);
-    expect(consumers[0]!.agent.id).toBe("forge");
+    expect(consumers[0]!.consumer.agent.id).toBe("forge");
   });
 
   test("bare `dev` capability also qualifies", () => {
@@ -120,7 +120,7 @@ describe("wireDevConsumers — dormancy", () => {
         { id: "forge", runtime: { capabilities: ["dev.implement"], maxConcurrent: 3 } },
       ]),
     );
-    expect(consumers[0]!.agent.maxConcurrent).toBe(3);
+    expect(consumers[0]!.consumer.agent.maxConcurrent).toBe(3);
   });
 });
 
@@ -237,7 +237,7 @@ describe("buildDevSessionOpts — §3.5b guardrail parity", () => {
     // The consumer doesn't expose sessionOpts publicly; the contract is proven
     // by buildDevSessionOpts above + the consumer's worktree-allowedDir test in
     // dev-consumer.test.ts. Here we just confirm wiring doesn't throw.
-    expect(consumers[0]!.agent.id).toBe("forge");
+    expect(consumers[0]!.consumer.agent.id).toBe("forge");
   });
 });
 

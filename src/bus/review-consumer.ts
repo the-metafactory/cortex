@@ -71,6 +71,7 @@ import type { Envelope } from "./myelin/envelope-validator";
 import { getActorPrincipal } from "./myelin/envelope-validator";
 import { resolveSourceNetwork } from "./surface-router";
 import { evaluateSovereignty, type AgentModelClass } from "./sovereignty-gate";
+import type { GateFloorDecision } from "./gate-floor";
 import type { PolicyFederatedNetwork } from "../common/types/cortex-config";
 import type { MyelinSubscriber } from "./myelin/subscriber";
 import type { AckDecision } from "./myelin/subscriber";
@@ -191,6 +192,39 @@ export type SignatureVerifierResult =
 export type SignatureVerifier = (envelope: Envelope) => Promise<SignatureVerifierResult>;
 
 /**
+ * CO-2/CO-4 (epic cortex#939) — the per-offer-scope ADMISSION GATE seam.
+ *
+ * An injected closure that, given an inbound envelope + the subject it arrived
+ * on, returns the {@link GateFloorDecision} for the offer-scope that subject's
+ * prefix denotes (`local.`/`federated.`/`public.`). Production wires this to
+ * `admitOfferedDispatch` (CO-4) closed over the stack's `policy.offerings` +
+ * signing posture; it derives `arrivedScope` from the subject prefix, resolves
+ * the capability's offering, and evaluates the scope's gate floor.
+ *
+ * Runs AFTER signature verification but BEFORE the capability gate: an
+ * offered-wider (`federated.`/`public.`) dispatch must clear its scope's floor
+ * (signing ≥ posture, signed peer / verified surface, accept-policy roster,
+ * compliance, rate) before any reviewer work. An `{admit:false}` is published as
+ * `dispatch.task.failed` carrying the refusal and term/nak'd per
+ * {@link failedReasonToAckDecision} (`policy_denied`/`compliance_block` → term;
+ * `not_now` → nak with retry hint).
+ *
+ * **Byte-identical-local (the contract).** For a `local.` subject — the ONLY
+ * scope any consumer binds today (no `policy.offerings`) — `admitOfferedDispatch`
+ * resolves `local`-only and `gateFloorForScope('local', …)` admits
+ * UNCONDITIONALLY, so the gate is a provingly-inert `{admit:true}` and the
+ * pipeline is unchanged. When OMITTED entirely (the default — tests, and a boot
+ * that didn't wire offerings) the consumer skips the gate, identical to today.
+ * The gate only bites once a capability is offered wider (CO-3) AND the consumer
+ * is bound on the wider subject (CO-2) — i.e. on the very `federated.`/`public.`
+ * envelopes this PR newly binds.
+ */
+export type OfferAdmissionGate = (
+  envelope: Envelope,
+  subject: string,
+) => GateFloorDecision;
+
+/**
  * Construction options. Every dependency is injected — no module-scope
  * singletons, no environment-derived defaults. Production callers wire
  * the real `runtime` + `ccSessionFactory`; tests inject doubles.
@@ -239,6 +273,12 @@ export interface ReviewConsumerOpts {
    * `TrustResolver` import.
    */
   signatureVerifier?: SignatureVerifier;
+  /**
+   * CO-2/CO-4 (epic cortex#939) — the per-offer-scope admission gate. Runs
+   * after signature verification, before the capability gate. Omit to disable
+   * (the default — byte-identical to pre-CO-2). See {@link OfferAdmissionGate}.
+   */
+  offerAdmission?: OfferAdmissionGate;
   /**
    * cortex#686 (ADR 0002) — FEDERATED routing mode. When `true`, the consumer
    * treats every inbound envelope as a cross-principal (federated) review
@@ -407,6 +447,8 @@ export class ReviewConsumer {
   ) => Promise<ReviewPipelineResult>;
   /** Optional inbound signature verifier (cortex#327). Undefined disables the gate. */
   private readonly signatureVerifier: SignatureVerifier | undefined;
+  /** CO-2/CO-4 — per-offer-scope admission gate. Undefined disables the gate. */
+  private readonly offerAdmission: OfferAdmissionGate | undefined;
   /** cortex#686 — federated routing mode (verdict back to the requester). */
   private readonly federated: boolean;
   /**
@@ -442,6 +484,7 @@ export class ReviewConsumer {
     }
     this.pipelineRunner = opts.pipelineRunner ?? runReviewPipeline;
     this.signatureVerifier = opts.signatureVerifier;
+    this.offerAdmission = opts.offerAdmission;
     this.federated = opts.federated ?? false;
     // cortex#686 (ADR 0002 §5) — index the peer topology by network id once at
     // construction so the consumer-path gate is O(networks) per envelope. Built
@@ -721,6 +764,39 @@ export class ReviewConsumer {
           requester,
         );
         return { kind: "term", reason: failureDetail };
+      }
+    }
+
+    // 2.7. CO-2/CO-4 — per-offer-scope ADMISSION GATE. Runs after signature
+    //      verification (the requester's identity is proven) but BEFORE the
+    //      capability gate: a dispatch that arrived at a WIDER scope
+    //      (`federated.`/`public.`) must clear that scope's gate floor (signing
+    //      posture, signed peer / verified surface, accept-policy roster,
+    //      compliance, rate) before any reviewer work runs. The gate is the
+    //      injected `admitOfferedDispatch` closure (CO-4), keyed off the subject
+    //      prefix. BYTE-IDENTICAL: a `local.` subject — the only scope bound
+    //      with no `policy.offerings` — admits unconditionally, so this block is
+    //      inert today; it bites only on the `federated.`/`public.` subjects
+    //      CO-2 newly binds. Omitted entirely (tests / no-offerings boot) ⇒
+    //      skipped. A refusal is published as `dispatch.task.failed` and term/
+    //      nak'd per `failedReasonToAckDecision` (policy_denied/compliance_block
+    //      → term; not_now → nak with retry hint), the same shape as every other
+    //      pre-pipeline refusal above.
+    if (this.offerAdmission !== undefined) {
+      const decision = this.offerAdmission(envelope, subject);
+      if (!decision.admit) {
+        process.stderr.write(
+          `cortex/review-consumer: offer-scope admission DENIED for ` +
+            `agent="${this.agent.id}" subject=${subject} envelope=${envelope.id} — ${decision.refusal.kind}\n`,
+        );
+        await this.publishFailed(
+          envelope,
+          decision.refusal,
+          `offer-scope admission denied for ${subject}`,
+          responseRouting,
+          requester,
+        );
+        return failedReasonToAckDecision(decision.refusal);
       }
     }
 

@@ -36,7 +36,12 @@ import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
-import type { Agent, AgentRuntime } from "../common/types/cortex-config";
+import type {
+  Agent,
+  AgentRuntime,
+  Policy,
+  PolicyFederatedNetwork,
+} from "../common/types/cortex-config";
 import { startCortex } from "../cortex";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type {
@@ -266,6 +271,99 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
       expect(call.stream).toBe("CODE_REVIEW");
     }
 
+    await handle.stop();
+    rmSync(tmpAgentsDir, { recursive: true, force: true });
+  });
+
+  test("CO-2: no policy.offerings → byte-identical single local binding per agent", async () => {
+    // The byte-identical-boot contract: with no offerings every capability
+    // resolves local-only, so the ONLY bound pattern is today's local one — no
+    // federated/public extra-scope consumer, no extra durable.
+    const runtime = createRecordingRuntime();
+    const tmpAgentsDir = mkdtempSync(join(tmpdir(), "cortex-revboot-co2-local-"));
+    const { result: handle } = await withCapturedConsoleLog(() =>
+      startCortex(minimalConfig(), {
+        disableConfigWatcher: true,
+        disableDashboard: true,
+        disableOutboundPoller: true,
+        agentsDir: tmpAgentsDir,
+        injectRuntime: runtime,
+        inlineAgents: [makeAgent("echo", ["code-review.typescript"])],
+        principal: { id: "test-op" },
+      }),
+    );
+    // Exactly one subscribePull — the single local binding. No offer-scope
+    // extra consumer (the `.slice(1)` loop is empty).
+    expect(runtime.subscribePullCalls.length).toBe(1);
+    expect(runtime.subscribePullCalls[0]!.pattern).toBe(
+      "local.test-op.default.tasks.code-review.>",
+    );
+    expect(runtime.subscribePullCalls[0]!.durable).toBe(
+      "cortex-review-consumer-test-op-echo",
+    );
+    await handle.stop();
+    rmSync(tmpAgentsDir, { recursive: true, force: true });
+  });
+
+  test("CO-2: code-review offered at federated scope → BOTH local + federated patterns bound (MAJOR-1: federated extra-scope consumer wired)", async () => {
+    // Widening `code-review` to `federated` binds the local pattern PLUS a
+    // `federated.…tasks.code-review.>` offer-scope consumer. The MAJOR-1 fix is
+    // that this extra-scope consumer is constructed with `federated: true`
+    // (verdict routes cross-principal, proven at the unit level in
+    // review-consumer.test.ts); here we assert the BINDING exists.
+    const runtime = createRecordingRuntime();
+    const tmpAgentsDir = mkdtempSync(join(tmpdir(), "cortex-revboot-co2-fed-"));
+    const network: PolicyFederatedNetwork = {
+      id: "metafactory-net",
+      leaf_node: "primary",
+      peers: [
+        { principal_id: "jcfischer", stack_id: "jcfischer/sage-host" },
+      ],
+      accept_subjects: ["federated.test-op.default.>"],
+      deny_subjects: [],
+      announce_capabilities: [],
+      max_hop: 3,
+    };
+    // `resolvedPolicy` (incl. offerings) is read from `options.policy`, NOT the
+    // config object (AgentConfigSchema strips `policy`). Pass it through options
+    // — the same path the federated-peer-boot test uses.
+    const policy: Policy = {
+      principals: [],
+      roles: [],
+      federated: {
+        networks: [network],
+        registry: { url: "https://network.meta-factory.ai" },
+      },
+      offerings: [
+        {
+          capability: "code-review",
+          scopes: ["local", "federated"],
+          accept: { kind: "network", network: "metafactory-net" },
+        },
+      ],
+    };
+    const { result: handle } = await withCapturedConsoleLog(() =>
+      startCortex(minimalConfig(), {
+        disableConfigWatcher: true,
+        disableDashboard: true,
+        disableOutboundPoller: true,
+        agentsDir: tmpAgentsDir,
+        injectRuntime: runtime,
+        inlineAgents: [makeAgent("echo", ["code-review.typescript"])],
+        principal: { id: "test-op" },
+        policy,
+      }),
+    );
+    const patterns = runtime.subscribePullCalls.map((c) => c.pattern);
+    // The local binding is still present (byte-identical local), PLUS the
+    // offering-driven federated binding.
+    expect(patterns).toContain("local.test-op.default.tasks.code-review.>");
+    expect(patterns).toContain("federated.test-op.default.tasks.code-review.>");
+    // The federated offer-scope consumer binds on its own scope-named durable.
+    const durables = runtime.subscribePullCalls.map((c) => c.durable);
+    expect(
+      durables.some((d) => d.includes("offer-federated")),
+    ).toBe(true);
     await handle.stop();
     rmSync(tmpAgentsDir, { recursive: true, force: true });
   });

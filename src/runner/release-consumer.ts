@@ -89,10 +89,27 @@ import {
   type DispatchEventSource,
   type DispatchTaskFailedReason,
 } from "../bus/dispatch-events";
+import type { GateFloorDecision } from "../bus/gate-floor";
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
+
+/**
+ * CO-2/CO-4 (epic cortex#939) — the per-offer-scope ADMISSION GATE seam for the
+ * release lane (the structural twin of `bus/review-consumer.ts`'s
+ * `OfferAdmissionGate`). Given an inbound envelope + the subject it arrived on,
+ * returns the gate-floor decision for the offer-scope that subject's prefix
+ * denotes. Production wires `admitOfferedDispatch` (CO-4); omit to disable.
+ *
+ * BYTE-IDENTICAL: a `local.` subject (the only scope bound with no
+ * `policy.offerings`) admits unconditionally, so the gate is inert today; it
+ * bites only on the `federated.`/`public.` subjects CO-2 newly binds.
+ */
+export type ReleaseOfferAdmissionGate = (
+  envelope: Envelope,
+  subject: string,
+) => GateFloorDecision;
 
 /**
  * Minimal snapshot of the cortex.yaml `agents[]` data the consumer needs —
@@ -262,6 +279,13 @@ export interface ReleaseConsumerOpts {
    * runtime is disabled. Production wires a real executor.
    */
   executor?: ReleaseExecutor;
+  /**
+   * CO-2/CO-4 (epic cortex#939) — the per-offer-scope admission gate. Runs
+   * after the redelivery/subject/payload checks, before the capability gate.
+   * Omit to disable (the default — byte-identical to pre-CO-2). See
+   * {@link ReleaseOfferAdmissionGate}.
+   */
+  offerAdmission?: ReleaseOfferAdmissionGate;
   /** Test seam — clock. Defaults to `() => new Date()`. */
   clock?: () => Date;
 }
@@ -318,6 +342,8 @@ export class ReleaseConsumer {
   private readonly source: DispatchEventSource;
   private readonly runtime: MyelinRuntime;
   private readonly executor: ReleaseExecutor | undefined;
+  /** CO-2/CO-4 — per-offer-scope admission gate. Undefined disables the gate. */
+  private readonly offerAdmission: ReleaseOfferAdmissionGate | undefined;
   private readonly clock: () => Date;
 
   /** Promises for in-flight cuts so `stop()` can drain. */
@@ -332,6 +358,7 @@ export class ReleaseConsumer {
     this.source = opts.source;
     this.runtime = opts.runtime;
     this.executor = opts.executor;
+    this.offerAdmission = opts.offerAdmission;
     this.clock = opts.clock ?? (() => new Date());
     // Release lane is serialised by default — `maxConcurrent` falls back to 1
     // even when the agent config omits it (see ReleaseConsumerAgent doc).
@@ -437,6 +464,30 @@ export class ReleaseConsumer {
         `bad payload for ${subject}`,
       );
       return { kind: "term", reason: "payload validation failed" };
+    }
+
+    // 2.7. CO-2/CO-4 — per-offer-scope ADMISSION GATE. A dispatch that arrived
+    //      at a WIDER scope (`federated.`/`public.`) must clear that scope's
+    //      gate floor before the always-human grant gate runs. BYTE-IDENTICAL:
+    //      a `local.` subject admits unconditionally, so this is inert today;
+    //      it bites only on the `federated.`/`public.` subjects CO-2 newly
+    //      binds. Omitted (no-offerings boot / tests) ⇒ skipped. A refusal is
+    //      published as `dispatch.task.failed` and term/nak'd per the lane's
+    //      `releaseFailedReasonToAckDecision`.
+    if (this.offerAdmission !== undefined) {
+      const decision = this.offerAdmission(envelope, subject);
+      if (!decision.admit) {
+        process.stderr.write(
+          `cortex/release-consumer: offer-scope admission DENIED for ` +
+            `agent="${this.agent.id}" subject=${subject} envelope=${envelope.id} — ${decision.refusal.kind}\n`,
+        );
+        await this.publishFailed(
+          envelope,
+          decision.refusal,
+          `offer-scope admission denied for ${subject}`,
+        );
+        return releaseFailedReasonToAckDecision(decision.refusal);
+      }
     }
 
     // 3. Capability routing — does THIS agent claim release.cut?
