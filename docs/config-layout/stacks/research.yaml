@@ -177,6 +177,13 @@ mc:
   dbPath: ""                       # empty = per-slug default; set explicitly to adopt an existing db
   port: 0                          # 0 = MC default (8767); set when running panes for several stacks
   configPath: ""                   # optional MC yaml for hooks/ws/log tuning (db/port ignored when embedded)
+  # P-14 U0.1 — Tier-3 sideband endpoint (signal cortex-sideband.md §2/§3/§8).
+  # MC proxies /api/observability/* to this base URL SERVER-SIDE; the browser
+  # only ever talks to MC. LOOPBACK-ENFORCED: the sideband is a local-only
+  # daemon (binds 127.0.0.1, tokenless). A non-loopback value (0.0.0.0, a LAN
+  # IP, a hostname) is REFUSED at config-parse time — the daemon won't boot.
+  # Override only to change the port or front it with a same-host reverse proxy.
+  sideband: "http://127.0.0.1:9092"
 
 # -----------------------------------------------------------------------------
 # cockpit — G-1113 live-refresh loop (plan ingest → reconcile → attention).

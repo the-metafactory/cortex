@@ -226,6 +226,16 @@ export interface ApiDeps {
    * if ever needed.
    */
   githubWebhookSecret?: string;
+  /**
+   * P-14 U0.1 — Tier-3 sideband base URL (`mc.sideband`). When present, the
+   * `/api/observability/*` routes proxy to it server-side (the browser only
+   * ever talks to MC; no CORS opening on the loopback-only sideband). Already
+   * loopback-enforced at config-parse time; the proxy re-checks at the request
+   * boundary (fail-closed). When absent, the observability routes return a
+   * structured "interior capture not available" error so the frontend (#933)
+   * renders honestly. See `src/common/sideband/`.
+   */
+  sidebandUrl?: string;
 }
 
 const DEFAULT_AGENT_ID = "mc-default-agent";

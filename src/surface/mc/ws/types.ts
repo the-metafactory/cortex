@@ -98,10 +98,10 @@ export type WsServerMessage =
   // "projection writes bypass WS fan-out" gap.
   | {
       type: "mc.projection";
-      // This union MIRRORS `ProjectionFamily` in `surface/mc/notifications.ts`
-      // (whose doc comment declares the mirror); keep the two in sync.
-      // `governance.verdict` added here because the family gained it while the
-      // frame didn't — the drift tsc caught on cortex#988.
+      // MUST stay in sync with `ProjectionFamily` (notifications.ts). When that
+      // type gains a member and this union doesn't, `broadcastProjection` fails
+      // tsc (TS2322) — which is how main went red after `governance.verdict`
+      // landed. Drift-dedup follow-up: reference ProjectionFamily directly.
       family:
         | "dispatch.lifecycle"
         | "review.verdict"

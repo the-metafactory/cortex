@@ -16,6 +16,7 @@ import { githubRoutes } from "./routes/github";
 import { adminRoutes } from "./routes/admin";
 import { syncRoutes } from "./routes/sync";
 import { dashboardRoutes } from "./routes/dashboard";
+import { observabilityRoutes } from "./routes/observability";
 import { DashboardSocket } from "./dashboard-socket";
 
 export interface Env extends AuthBindings {
@@ -126,6 +127,7 @@ app.route("/", githubRoutes);
 app.route("/", adminRoutes);
 app.route("/", syncRoutes);
 app.route("/", dashboardRoutes);
+app.route("/", observabilityRoutes);
 app.route("/", authRoutes);
 
 // ---------------------------------------------------------------------------

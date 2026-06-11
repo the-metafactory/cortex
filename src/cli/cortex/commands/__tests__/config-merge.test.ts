@@ -28,7 +28,7 @@
  */
 
 import { describe, expect, test, beforeEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, statSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import YAML from "yaml";
@@ -339,6 +339,22 @@ describe("runConfigMerge — CLI", () => {
 
     const backups = readdirSync(join(dir, "stacks")).filter((f) => f.includes(".pre-config-merge-"));
     expect(backups.length).toBe(1);
+  });
+
+  test("#883 backup file is created with mode 0o600 (secret-at-rest)", async () => {
+    // The backup can carry platform tokens (Discord/Slack/Mattermost) from
+    // the source cortex.yaml. It must not be world-readable. Mirrors the
+    // chmod-600 enforcement on cortex.yaml itself (#644 / TC-4a).
+    const dir = makeSplitDir({ research: stackLayer() });
+    const frag = writeFragment("frag.yaml", { capabilities: [CAP_DEV] });
+
+    const code = await runConfigMerge(["--config", dir, "--fragment", frag]);
+    expect(code).toBe(0);
+
+    const backups = readdirSync(join(dir, "stacks")).filter((f) => f.includes(".pre-config-merge-"));
+    expect(backups.length).toBe(1);
+    const backupPath = join(dir, "stacks", backups[0]!);
+    expect(statSync(backupPath).mode & 0o777).toBe(0o600);
   });
 
   test("idempotent — second run writes nothing (no second backup)", async () => {

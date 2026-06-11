@@ -46,6 +46,7 @@ import { handleGetPhaseDetail } from "./api/phase-detail";
 import { handleGetWorkItemDetail } from "./api/work-item-detail";
 import { handleListAttention } from "./api/attention";
 import { handleGetGovernance } from "./api/governance";
+import { proxySideband } from "../../common/sideband/proxy";
 import type { ProcessManager } from "./session/process-manager";
 import type { SpawnFn } from "./session/endpoint-resolver";
 import { join, dirname } from "path";
@@ -165,6 +166,14 @@ export interface StartServerOptions {
    * presence registry → the handler serves an empty list gracefully).
    */
   agentPresence?: () => AgentPresenceView | null;
+  /**
+   * P-14 U0.1 — Tier-3 sideband base URL (`mc.sideband`). When present, the
+   * `/api/observability/*` routes proxy to it server-side. Loopback-enforced
+   * at config-parse time; the proxy re-checks at the request boundary.
+   * Forwarded to `ApiDeps.sidebandUrl`. Omitted → the observability routes
+   * return a structured not-available error.
+   */
+  sidebandUrl?: string;
 }
 
 export function startServer(
@@ -191,6 +200,7 @@ export function startServer(
         ...(options.githubWebhookSecret
           ? { githubWebhookSecret: options.githubWebhookSecret }
           : {}),
+        ...(options.sidebandUrl ? { sidebandUrl: options.sidebandUrl } : {}),
       }
     : null;
 
@@ -489,6 +499,33 @@ async function handleApi(
       return methodNotAllowed(["GET"]);
     }
     return handleGetGovernance(db);
+  }
+
+  // P-14 U0.1 — GET /api/observability/* — Tier-3 sideband drill-down proxy.
+  // MC proxies to the loopback-only sideband server-side (the browser only ever
+  // talks to MC; no CORS opening). The proxy allowlists the contract's read
+  // surface (/traces, /logs, /traces/{id}/timeline, /healthz), re-checks the
+  // loopback invariant, bounds the request, and maps every failure to a
+  // structured SidebandError (with deep_link) — never a 500 splat. See
+  // `src/common/sideband/`.
+  if (pathname.startsWith("/api/observability/")) {
+    // When no sideband is configured (e.g. cloud worker parity, or MC booted
+    // without the dep), return the structured not-available error so the
+    // frontend (#933) renders "interior capture not available" honestly.
+    if (!deps?.sidebandUrl) {
+      return new Response(
+        JSON.stringify({
+          code: "backend_unavailable",
+          message:
+            "interior capture not available — no sideband endpoint configured for this Mission Control",
+        }),
+        { status: 503, headers: { "content-type": "application/json" } },
+      );
+    }
+    const suffix = pathname.slice("/api/observability".length);
+    return proxySideband(req.method, suffix, url.search.replace(/^\?/, ""), {
+      baseUrl: deps.sidebandUrl,
+    });
   }
 
   if (pathname === "/api/tasks") {

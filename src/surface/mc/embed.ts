@@ -57,6 +57,14 @@ export interface StartMissionControlOptions {
    * the route serves an empty list.
    */
   agentPresence?: () => AgentPresenceView | null;
+  /**
+   * P-14 U0.1 — Tier-3 sideband base URL (`config.mc.sideband`). Loopback-
+   * enforced at config-parse time; forwarded verbatim to `startServer`, which
+   * wires it onto `ApiDeps.sidebandUrl` so the `/api/observability/*` proxy can
+   * reach the local sideband daemon. Omitted → the observability routes return
+   * a structured not-available error.
+   */
+  sidebandUrl?: string;
 }
 
 /**
@@ -100,6 +108,7 @@ export async function startMissionControl(
     serverCtx = startServer(config, db, {
       processManager,
       ...(opts.agentPresence ? { agentPresence: opts.agentPresence } : {}),
+      ...(opts.sidebandUrl ? { sidebandUrl: opts.sidebandUrl } : {}),
     });
     const { server, wsRegistry } = serverCtx;
     hookPoller = new HookStreamPoller(db, config.hooks, wsRegistry);
