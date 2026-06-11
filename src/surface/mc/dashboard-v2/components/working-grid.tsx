@@ -1,10 +1,19 @@
 /**
- * F-9 working-agent grid (MIG-5 port).
+ * F-9 working-agent grid (MIG-5 port) + ST-P5 session-tree render.
  *
  * Renders one tile per agent with at least one active-non-blocked
  * assignment, server-sorted by `primary_state_rank ASC, updated_at DESC`.
  * Tile click opens the F-7 drill-down on the primary assignment;
  * `+N` badge is inert per Decision 6.
+ *
+ * ST-P5 (refactor §7): each tile now also renders the owning agent's SESSION
+ * TREE beneath its (unchanged) primary_assignment/state header — root sessions
+ * listed, child sessions nested with an indent + an expander. Per D5 the tree is
+ * DEFAULT-COLLAPSED: a node's children appear only when its expander is toggled
+ * (chevron + child-count badge while collapsed). Each session's display word is
+ * the DERIVED substrate-projection label (`substrateLabel` — "sub-agent" appears
+ * ONLY here, as the Claude-Code lens for a child session; the model says child
+ * session). Empty/absent `sessions` ⇒ the tile renders exactly as pre-ST-P5.
  *
  * Empty-state behaviour (Decision 7):
  *   - section hidden when focus row has entries AND grid is empty
@@ -13,14 +22,24 @@
  *
  * Keyboard: arrow keys navigate tiles when one is focused, Enter opens
  * the drill-down. Gated on the drill-down being closed (mirrors F-8 /
- * legacy F-9 listener discipline).
+ * legacy F-9 listener discipline). Session-tree expanders are native
+ * <button>s — Enter/Space toggle them for free (G-1114.F a11y bar).
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./working-grid.css";
 import { priorityBorderClass } from "../lib/block-reason";
 import { pickWorkingGridMode, priorityLabel } from "../lib/working-grid-display";
-import type { WorkingAgentTile } from "../hooks/use-working-agents";
+import {
+  flattenSessionTree,
+  toggleExpanded,
+  type SessionTreeRow,
+} from "../lib/session-tree-rows";
+import { substrateLabel } from "../lib/substrate-label";
+import type {
+  WorkingAgentTile,
+  SessionTreeNode,
+} from "../hooks/use-working-agents";
 
 export interface WorkingGridProps {
   agents: WorkingAgentTile[];
@@ -47,6 +66,15 @@ export function WorkingGrid({
 }: WorkingGridProps) {
   const [focusedIdx, setFocusedIdx] = useState(-1);
   const tileRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  // ST-P5 (D5) — expansion state local to the grid, keyed by session_id. Because
+  // the key is the stable session_id, expansion SURVIVES poll refreshes: a
+  // refetch that re-supplies the same session keeps its row expanded (the Set is
+  // never reset on data change).
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const onToggleExpand = useCallback((sessionId: string) => {
+    setExpanded((prev) => toggleExpanded(prev, sessionId));
+  }, []);
 
   // Clamp the focused index when the grid shrinks underneath us.
   useEffect(() => {
@@ -98,33 +126,40 @@ export function WorkingGrid({
       {mode === "tiles" && (
         <div className="working-grid">
           {agents.map((a, idx) => (
-            <button
-              key={a.agent_id}
-              ref={(el) => { tileRefs.current[idx] = el; }}
-              type="button"
-              className={`working-tile ${priorityBorderClass(a.primary_assignment.task_priority)}${idx === focusedIdx ? " focused" : ""}`}
-              onClick={() => onOpen(a.primary_assignment.id)}
-              onKeyDown={(e) => onTileKeyDown(e, idx)}
-              onFocus={() => setFocusedIdx(idx)}
-              data-agent-id={a.agent_id}
-            >
-              <div className="agent">{a.agent_name}</div>
-              <div className="task">{a.primary_assignment.task_title}</div>
-              <div className="meta">
-                {priorityLabel(a.primary_assignment.task_priority)}
-                {" · "}
-                <span className={`state-${a.primary_state}`}>{a.primary_state}</span>
-              </div>
-              {a.additional_active_count > 0 && (
-                <div
-                  className="badge"
-                  title={`${a.additional_active_count} additional active assignment(s)`}
-                  aria-hidden="true"
-                >
-                  +{a.additional_active_count}
+            <div className="working-tile-wrap" key={a.agent_id}>
+              <button
+                ref={(el) => { tileRefs.current[idx] = el; }}
+                type="button"
+                className={`working-tile ${priorityBorderClass(a.primary_assignment.task_priority)}${idx === focusedIdx ? " focused" : ""}`}
+                onClick={() => onOpen(a.primary_assignment.id)}
+                onKeyDown={(e) => onTileKeyDown(e, idx)}
+                onFocus={() => setFocusedIdx(idx)}
+                data-agent-id={a.agent_id}
+              >
+                <div className="agent">{a.agent_name}</div>
+                <div className="task">{a.primary_assignment.task_title}</div>
+                <div className="meta">
+                  {priorityLabel(a.primary_assignment.task_priority)}
+                  {" · "}
+                  <span className={`state-${a.primary_state}`}>{a.primary_state}</span>
                 </div>
-              )}
-            </button>
+                {a.additional_active_count > 0 && (
+                  <div
+                    className="badge"
+                    title={`${a.additional_active_count} additional active assignment(s)`}
+                    aria-hidden="true"
+                  >
+                    +{a.additional_active_count}
+                  </div>
+                )}
+              </button>
+              <SessionTree
+                sessions={a.sessions}
+                agentName={a.agent_name}
+                expanded={expanded}
+                onToggleExpand={onToggleExpand}
+              />
+            </div>
           ))}
         </div>
       )}
@@ -132,3 +167,100 @@ export function WorkingGrid({
   );
 }
 
+interface SessionTreeProps {
+  sessions: SessionTreeNode[];
+  agentName: string;
+  expanded: ReadonlySet<string>;
+  onToggleExpand: (sessionId: string) => void;
+}
+
+/**
+ * The per-agent session tree, rendered as a flat indented list (a nested list
+ * with expander buttons — the simplest correct ARIA per the task's a11y note,
+ * preferred over a full tree-grid role). Absent/empty ⇒ renders nothing so the
+ * tile is byte-identical to pre-ST-P5.
+ */
+function SessionTree({
+  sessions,
+  agentName,
+  expanded,
+  onToggleExpand,
+}: SessionTreeProps) {
+  // Empty/compat: no tree chrome at all when the agent has no open sessions.
+  if (!sessions || sessions.length === 0) return null;
+
+  const rows = flattenSessionTree(sessions, expanded);
+
+  return (
+    <ul
+      className="session-tree"
+      role="group"
+      aria-label={`Sessions for ${agentName}`}
+    >
+      {rows.map((row) => (
+        <SessionTreeItem
+          key={row.node.session_id}
+          row={row}
+          onToggleExpand={onToggleExpand}
+        />
+      ))}
+    </ul>
+  );
+}
+
+interface SessionTreeItemProps {
+  row: SessionTreeRow;
+  onToggleExpand: (sessionId: string) => void;
+}
+
+function SessionTreeItem({ row, onToggleExpand }: SessionTreeItemProps) {
+  const { node, depth, hasChildren, isExpanded, childCount } = row;
+  // The derived substrate-projection label — the ONLY place "sub-agent" appears.
+  const label = substrateLabel(node.substrate, node.parent_session_id !== null);
+  // Indent by depth. Inline style is the only depth-driven value; everything
+  // else is class-based (the indent is data, not a fixed set of CSS classes).
+  const indentStyle = { ["--depth" as string]: String(depth) };
+
+  return (
+    <li
+      className="session-row"
+      style={indentStyle}
+      data-session-id={node.session_id}
+      data-depth={depth}
+    >
+      {hasChildren ? (
+        // Native <button>: Enter/Space toggle for free (no hover-only
+        // affordance). aria-expanded announces the state to AT.
+        <button
+          type="button"
+          className="session-expander"
+          aria-expanded={isExpanded}
+          onClick={() => onToggleExpand(node.session_id)}
+        >
+          <span className="chevron" aria-hidden="true">
+            {isExpanded ? "▾" : "▸"}
+          </span>
+          <span className="session-label">{label}</span>
+          {!isExpanded && (
+            <span className="session-child-badge">
+              {/* Accessible text, not color-only: AT reads the count + noun. */}
+              <span className="sr-only">
+                {childCount} child {childCount === 1 ? "session" : "sessions"}
+              </span>
+              <span aria-hidden="true">{childCount}</span>
+            </span>
+          )}
+        </button>
+      ) : (
+        // Leaf: no expander. A non-interactive labelled row.
+        <span className="session-leaf">
+          <span className="chevron-spacer" aria-hidden="true" />
+          <span className="session-label">{label}</span>
+        </span>
+      )}
+      {node.state && (
+        <span className={`session-state state-${node.state}`}>{node.state}</span>
+      )}
+    </li>
+  );
+}

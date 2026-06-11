@@ -82,3 +82,103 @@
 .working-grid-error {
   color: var(--bad); font-size: 12px; padding: 8px 0;
 }
+
+/* ── ST-P5 session tree ──────────────────────────────────────────────────────
+ * The per-agent session tree sits below the tile in a wrapping cell so the tile
+ * keeps its fixed-height card look and the tree flows beneath it.
+ */
+.working-tile-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.session-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-row {
+  /* Indent driven by --depth (set inline per row). */
+  padding-left: calc(var(--depth, 0) * 14px);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  min-height: 18px;
+}
+
+.session-expander,
+.session-leaf {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 1px 2px;
+  margin: 0;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg-dim);
+  cursor: pointer;
+  text-align: left;
+  border-radius: 4px;
+}
+.session-leaf { cursor: default; }
+
+.session-expander:hover { color: var(--fg); }
+.session-expander:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--accent);
+  color: var(--fg);
+}
+
+.session-expander .chevron,
+.session-leaf .chevron-spacer {
+  display: inline-block;
+  width: 10px;
+  color: var(--fg-faint);
+}
+
+.session-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100px;
+}
+
+.session-child-badge {
+  display: inline-flex;
+  align-items: center;
+  min-width: 14px;
+  padding: 0 5px;
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 12%, transparent);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+
+.session-state {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-faint);
+}
+.session-state.state-running { color: var(--accent); }
+
+/* Visually-hidden but available to assistive tech (label-not-color-only). */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

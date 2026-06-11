@@ -19,6 +19,33 @@ import { ApiFailure, getJson } from "../lib/api";
 import type { WsClient, WsMessage } from "./use-websocket";
 import { useProjectionRefetch } from "./use-projection-refetch";
 
+/**
+ * ST-P5 — one node in an agent's session tree, mirroring the server shape
+ * (`src/surface/mc/lib/session-tree.ts` → `SessionTreeNode`). Lifecycle
+ * metadata only (ADR-0005 — no session interiors). `children` is the recursive
+ * forest of child sessions (the `initiated-by` edge: a child names its
+ * `parent_session_id`; an agent-rooted session has none).
+ */
+export interface SessionTreeNode {
+  session_id: string;
+  /** Self-ref to the spawning session; null ⇒ agent-rooted (a tree root). */
+  parent_session_id: string | null;
+  /** The substrate this session runs on (claude-code | codex | …). */
+  substrate: string;
+  /** Lifecycle state — a display string the renderer derives badges from. */
+  state: string;
+  /** Session start (ISO-8601). */
+  started_at: string;
+  /** Terminal timestamp (ISO-8601), or null while the session is open. */
+  ended_at: string | null;
+  /** Owning agent display name, when known (a session is NOT an agent). */
+  agent_name?: string | null;
+  /** Title of the work the session is doing, when known. */
+  task_title?: string | null;
+  /** Child sessions (recursive). Empty array for a leaf. */
+  children: SessionTreeNode[];
+}
+
 export interface WorkingAgentTile {
   agent_id: string;
   agent_name: string;
@@ -33,6 +60,14 @@ export interface WorkingAgentTile {
     updated_at: string;
   };
   additional_active_count: number;
+  /**
+   * ST-P5 — the owning agent's session tree (refactor §7), mirroring the server
+   * projection's `sessions` field. ADDITIVE: every field above is byte-compatible
+   * with the pre-ST-P5 DTO. Absent/empty ⇒ the tile renders exactly as before
+   * (the working grid shows no tree). Defaulted to `[]` at the fetch boundary so
+   * older responses (or a dispatch-only agent with no open sessions) are safe.
+   */
+  sessions: SessionTreeNode[];
 }
 
 interface ListWorkingAgentsResponse {
@@ -75,7 +110,11 @@ export function useWorkingAgents(ws: WsClient): WorkingAgentsState {
         signal ? { signal } : undefined
       );
       if (!aliveRef.current || genRef.current !== myGen) return;
-      setAgents(body.agents ?? []);
+      // Normalize `sessions` to [] per tile so a pre-ST-P5 response (no
+      // `sessions` field) renders exactly as before — empty/compat path.
+      setAgents(
+        (body.agents ?? []).map((a) => ({ ...a, sessions: a.sessions ?? [] }))
+      );
       setError(null);
       bootedRef.current = true;
     } catch (e) {

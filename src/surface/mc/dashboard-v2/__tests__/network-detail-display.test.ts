@@ -54,6 +54,7 @@ function workingTile(
       updated_at: "2026-06-11T00:00:00.000Z",
     },
     additional_active_count: 0,
+    sessions: [],
     ...over,
   };
 }

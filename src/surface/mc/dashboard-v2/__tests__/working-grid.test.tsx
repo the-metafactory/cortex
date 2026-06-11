@@ -9,11 +9,17 @@
  */
 
 import { describe, it, expect } from "bun:test";
+import { renderToStaticMarkup } from "react-dom/server";
+import { createElement } from "react";
 import {
   pickWorkingGridMode,
   priorityLabel,
 } from "../lib/working-grid-display";
-import type { WorkingAgentTile } from "../hooks/use-working-agents";
+import { WorkingGrid } from "../components/working-grid";
+import type {
+  WorkingAgentTile,
+  SessionTreeNode,
+} from "../hooks/use-working-agents";
 
 function tile(over: Partial<WorkingAgentTile> = {}): WorkingAgentTile {
   return {
@@ -30,8 +36,41 @@ function tile(over: Partial<WorkingAgentTile> = {}): WorkingAgentTile {
       updated_at: "2026-04-26T00:00:00.000Z",
     },
     additional_active_count: 0,
+    sessions: [],
     ...over,
   };
+}
+
+function sessionNode(
+  id: string,
+  children: SessionTreeNode[] = [],
+  over: Partial<SessionTreeNode> = {}
+): SessionTreeNode {
+  return {
+    session_id: id,
+    parent_session_id: null,
+    substrate: "claude-code",
+    state: "running",
+    started_at: "2026-06-11T00:00:00.000Z",
+    ended_at: null,
+    agent_name: "Luna",
+    task_title: `work ${id}`,
+    children,
+    ...over,
+  };
+}
+
+function renderGrid(over: Partial<WorkingAgentTile> = {}): string {
+  return renderToStaticMarkup(
+    createElement(WorkingGrid, {
+      agents: [tile(over)],
+      loaded: true,
+      error: null,
+      focusItemCount: 0,
+      drillOpen: false,
+      onOpen: () => {},
+    })
+  );
 }
 
 describe("pickWorkingGridMode — F-9 Decision 7 branching", () => {
@@ -98,5 +137,102 @@ describe("priorityLabel — legacy parity", () => {
     expect(priorityLabel(99)).toBe("P?");
     expect(priorityLabel(1.5)).toBe("P?");
     expect(priorityLabel(NaN)).toBe("P?");
+  });
+});
+
+describe("WorkingGrid — ST-P5 session-tree render (static markup)", () => {
+  it("absent sessions → no tree chrome (pre-ST-P5 compat snapshot)", () => {
+    const html = renderGrid({ sessions: [] });
+    // The tile header is intact …
+    expect(html).toContain('data-agent-id="ag-1"');
+    expect(html).toContain("Implement focus area");
+    // … and NO session-tree markup is emitted at all.
+    expect(html).not.toContain("session-tree");
+    expect(html).not.toContain("session-row");
+    expect(html).not.toContain("aria-expanded");
+  });
+
+  it("keeps the primary_assignment / state header untouched when a tree is present", () => {
+    const html = renderGrid({
+      sessions: [sessionNode("root", [sessionNode("c1", [], { parent_session_id: "root" })])],
+    });
+    expect(html).toContain('data-agent-id="ag-1"');
+    expect(html).toContain("Implement focus area");
+    expect(html).toContain('class="agent"');
+    expect(html).toContain('class="task"');
+  });
+
+  it("default-collapsed: a parent renders an expander but NOT its children (D5)", () => {
+    const html = renderGrid({
+      sessions: [
+        sessionNode("root", [
+          sessionNode("child-1", [], { parent_session_id: "root", task_title: "deep work" }),
+        ]),
+      ],
+    });
+    // The root row exists with a COLLAPSED expander …
+    expect(html).toContain('data-session-id="root"');
+    expect(html).toContain('aria-expanded="false"');
+    // … the chevron points right (collapsed) …
+    expect(html).toContain("▸");
+    // … and the child row is NOT in the markup (hidden while collapsed).
+    expect(html).not.toContain('data-session-id="child-1"');
+  });
+
+  it("collapsed parent shows a child-count badge with accessible text (not color-only)", () => {
+    const html = renderGrid({
+      sessions: [
+        sessionNode("root", [
+          sessionNode("c1", [], { parent_session_id: "root" }),
+          sessionNode("c2", [], { parent_session_id: "root" }),
+        ]),
+      ],
+    });
+    expect(html).toContain("session-child-badge");
+    // Accessible text spells out the count + noun for AT.
+    expect(html).toContain("2 child sessions");
+  });
+
+  it("singular child-count badge text reads 'child session'", () => {
+    const html = renderGrid({
+      sessions: [
+        sessionNode("root", [sessionNode("only", [], { parent_session_id: "root" })]),
+      ],
+    });
+    expect(html).toContain("1 child session");
+    expect(html).not.toContain("1 child sessions");
+  });
+
+  it("derives the substrate-projection label: claude-code child → 'sub-agent'", () => {
+    const html = renderGrid({
+      sessions: [
+        sessionNode("root", [], { substrate: "claude-code" }),
+      ],
+    });
+    // A root claude-code session is labelled "session" (NOT sub-agent).
+    expect(html).toContain('class="session-label">session<');
+    // "sub-agent" must NOT appear for a root.
+    expect(html).not.toContain("sub-agent");
+  });
+
+  it("non-claude substrate root renders '<substrate> session', never 'sub-agent'", () => {
+    const html = renderGrid({
+      sessions: [sessionNode("root", [], { substrate: "codex" })],
+    });
+    expect(html).toContain("codex session");
+    expect(html).not.toContain("sub-agent");
+  });
+
+  it("leaf sessions render no expander (nothing to expand)", () => {
+    const html = renderGrid({ sessions: [sessionNode("leaf")] });
+    expect(html).toContain('data-session-id="leaf"');
+    expect(html).toContain("session-leaf");
+    expect(html).not.toContain("aria-expanded");
+  });
+
+  it("the tree group has an accessible label naming the agent", () => {
+    const html = renderGrid({ sessions: [sessionNode("s1")] });
+    expect(html).toContain('role="group"');
+    expect(html).toContain("Sessions for Luna");
   });
 });
