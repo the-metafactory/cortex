@@ -105,6 +105,20 @@ export interface CreateSessionRequest {
    * this id via `--session-id <uuid>`.
    */
   ccSessionId?: string;
+  /**
+   * ST-P2 — substrate the session runs on (claude-code | codex | …). Additive +
+   * optional; defaults to 'claude-code' (DEFAULT_SUBSTRATE) when omitted, so no
+   * existing caller changes behavior. An attribute of the SESSION (refactor D4).
+   */
+  substrate?: string;
+  /**
+   * ST-P2 — the session that spawned this one (the session-tree edge). Additive
+   * + optional; NULL/omitted ⇒ an agent-rooted session. Threaded onto the
+   * created `sessions` row so the tree can be assembled by the API projection
+   * (Phase 4). For runner-spawned children this is the env-stamped parent
+   * (Phase 1); the observed/orphan path correlates it in the ingestor (D1b).
+   */
+  parentSessionId?: string | null;
 }
 
 export interface CreateSessionResponse {

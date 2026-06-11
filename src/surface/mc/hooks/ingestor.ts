@@ -28,6 +28,7 @@ import type { WsClientRegistry } from "../ws/client-registry";
 import { insertEvent } from "../db/events";
 import { applyTransition } from "../db/transitions";
 import { registerOrphanSession } from "../db/sessions";
+import { correlateParentSession } from "./parent-correlation";
 import { broadcastTransition, broadcastEvent } from "../notifications";
 
 export interface IngestResult {
@@ -53,6 +54,23 @@ interface ObservedSessionRow {
   endpoint_kind: string;
   assignment_id: string;
   ata_state: AssignmentState;
+}
+
+/**
+ * Pick the first non-empty string value of `key` from a batch's event payloads.
+ * Used to lift the ST-P1 wire fields (`substrate`, `parent_session_id`) off the
+ * event payload when present. Returns undefined when no event carries it (the
+ * P1 contract is additive + optional — P1 may merge after ST-P2).
+ */
+function pickPayloadString(
+  events: RawHookEvent[],
+  key: string
+): string | undefined {
+  for (const e of events) {
+    const v = e.payload[key];
+    if (typeof v === "string" && v.length > 0) return v;
+  }
+  return undefined;
 }
 
 export function ingestEvents(
@@ -94,23 +112,40 @@ export function ingestEvents(
     let session = lookupSession(ccSessionId);
 
     if (!session) {
-      // MC-I1.S5 (ADR-0005 §3) — auto-register the unknown cc_session_id as an
-      // orphan `local.observed` session instead of dropping its events. Catches
-      // instrumented non-dispatch sessions (e.g. cldyo-live). Idempotent on
-      // cc_session_id: registerOrphanSession dedupes, so subsequent batches for
-      // the same orphan don't duplicate rows. One stderr line per auto-register
-      // (observability) — NOT one per event.
+      // ST-P2 (ADR-0005 §3, refactor D2) — auto-register the unknown
+      // cc_session_id as a `local.observed` SESSION attached to its REAL owning
+      // agent, instead of dropping its events OR minting a per-session agent
+      // (the 1,044-tile bug). Catches instrumented non-dispatch sessions (e.g.
+      // cldyo-live, Agent-tool children). Idempotent on cc_session_id:
+      // registerOrphanSession dedupes, so subsequent batches for the same
+      // observed session don't duplicate rows. One stderr line per
+      // auto-register (observability) — NOT one per event.
       //
-      // Capture display metadata from the raw events: prefer the first event's
-      // agent_name so the orphan agent card shows a human label rather than the
-      // raw cc_session_id.
-      const displayName = sessionEvents.find(
+      // Capture identity + tree metadata from the raw events:
+      //   - agent_id / agent_name  → resolve the OWNING agent (wrapper identity)
+      //   - payload.substrate      → the session's substrate (P1 contract)
+      //   - payload.parent_session_id → explicit parent edge (P1 contract); when
+      //     absent, fall back to spawn-prompt correlation (refactor D1b).
+      // Tolerate the ABSENCE of the P1 fields (P1 may merge after this).
+      const named = sessionEvents.find(
         (e) => e.agent_name !== undefined && e.agent_name.length > 0
-      )?.agent_name;
-      const orphan = registerOrphanSession(db, ccSessionId, displayName);
+      );
+      const withAgentId = sessionEvents.find(
+        (e) => e.agent_id !== undefined && e.agent_id.length > 0
+      );
+      const substrate = pickPayloadString(sessionEvents, "substrate");
+      const explicitParent = pickPayloadString(sessionEvents, "parent_session_id");
+      const parentSessionId =
+        explicitParent ?? correlateParentSession(db, sessionEvents);
+      const orphan = registerOrphanSession(db, ccSessionId, {
+        agentId: withAgentId?.agent_id,
+        displayName: named?.agent_name,
+        ...(substrate !== undefined ? { substrate } : {}),
+        parentSessionId,
+      });
       if (orphan) {
         process.stderr.write(
-          `[mission-control] ingestor: auto-registered orphan observed session '${ccSessionId}' (assignment '${orphan.assignmentId}')\n`
+          `[mission-control] ingestor: auto-registered observed session '${ccSessionId}' → agent '${orphan.agentId}' (assignment '${orphan.assignmentId}'${parentSessionId ? `, parent '${parentSessionId}'` : ""})\n`
         );
       }
       // Re-read so the rest of the loop (event insert + F-20 transitions) runs

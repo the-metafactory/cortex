@@ -180,7 +180,7 @@ describe("ingestEvents", () => {
 
       expect(result.count).toBe(3);
       const autoRegLines = written.filter((s) =>
-        s.includes("auto-registered orphan")
+        s.includes("auto-registered observed session")
       );
       expect(autoRegLines).toHaveLength(1);
       expect(autoRegLines[0]).toContain("totally-unknown-session");
@@ -312,40 +312,50 @@ describe("ingestEvents", () => {
     expect(assignments).toHaveLength(1);
   });
 
-  it("captures agent_name from the raw event onto the orphan agent display name", () => {
+  // ST-P2: the observed session attaches to the REAL owning agent (resolved
+  // from agent_id), and the display name lands on the SESSION's agent_name
+  // column — not on a per-session agent. makeRawEvent sets agent_id='luna'.
+  it("attaches the observed session to the real owning agent and stores the display name on the session", () => {
     const ev = makeRawEvent("e-1", "orphan-named", "tool.bash");
-    ev.agent_name = "Andreas";
+    ev.agent_id = "luna";
+    ev.agent_name = "Luna";
     ingestEvents(db, [ev]);
 
-    const agent = db
+    const owning = db
       .query(
-        `SELECT ag.name AS name
+        `SELECT ag.id AS id, ag.name AS name, ag.type AS type, ag.persistent AS persistent
          FROM agents ag
          JOIN agent_task_assignment a ON a.agent_id = ag.id
          JOIN sessions s ON s.assignment_id = a.id
          WHERE s.cc_session_id = 'orphan-named'`
       )
-      .get() as { name: string } | null;
-    expect(agent).not.toBeNull();
-    expect(agent!.name).toBe("Andreas");
+      .get() as { id: string; name: string; type: string; persistent: number } | null;
+    expect(owning).not.toBeNull();
+    expect(owning!.id).toBe("luna"); // the REAL identity, not mc-orphan-{cc}
+    expect(owning!.name).toBe("Luna");
+
+    // Display name + owning agent are denormalized onto the session row.
+    const sess = db
+      .query(
+        `SELECT agent_id, agent_name, substrate FROM sessions WHERE cc_session_id = 'orphan-named'`
+      )
+      .get() as { agent_id: string; agent_name: string; substrate: string };
+    expect(sess.agent_id).toBe("luna");
+    expect(sess.agent_name).toBe("Luna");
+    expect(sess.substrate).toBe("claude-code"); // default when payload carries none
   });
 
-  it("falls back to the cc_session_id as the orphan agent name when agent_name is absent", () => {
-    const ev = makeRawEvent("e-1", "orphan-nameless", "tool.bash");
-    delete (ev as { agent_name?: string }).agent_name;
+  it("resolves an observed: identity from agent_name when no agent_id is present", () => {
+    const ev = makeRawEvent("e-1", "orphan-nameonly", "tool.bash");
+    delete (ev as { agent_id?: string }).agent_id;
+    ev.agent_name = "Sage";
     ingestEvents(db, [ev]);
 
-    const agent = db
-      .query(
-        `SELECT ag.name AS name
-         FROM agents ag
-         JOIN agent_task_assignment a ON a.agent_id = ag.id
-         JOIN sessions s ON s.assignment_id = a.id
-         WHERE s.cc_session_id = 'orphan-nameless'`
-      )
-      .get() as { name: string } | null;
-    expect(agent).not.toBeNull();
-    expect(agent!.name).toBe("orphan-nameless");
+    const sess = db
+      .query(`SELECT agent_id, agent_name FROM sessions WHERE cc_session_id = 'orphan-nameonly'`)
+      .get() as { agent_id: string; agent_name: string };
+    expect(sess.agent_id).toBe("observed:sage");
+    expect(sess.agent_name).toBe("Sage");
   });
 
   it("orphan assignment is born 'dispatched' and auto-transitions to 'running' on first event", () => {
@@ -412,24 +422,161 @@ describe("ingestEvents", () => {
       | null;
     expect(joined).not.toBeNull();
     expect(joined!.endpoint_kind).toBe("local.observed");
-    // Distinguishable: the orphan agent carries the mc-orphan- prefix.
-    expect(joined!.agent_id.startsWith("mc-orphan-")).toBe(true);
+    // ST-P2: the session attaches to the REAL owning agent (makeRawEvent's
+    // agent_id='luna'), NOT a per-session mc-orphan- agent.
+    expect(joined!.agent_id).toBe("luna");
+    expect(joined!.agent_id.startsWith("mc-orphan-")).toBe(false);
   });
 
-  it("does not duplicate the orphan task across multiple distinct orphan sessions", () => {
-    ingestEvents(db, [makeRawEvent("e-1", "orphan-a", "tool.bash")]);
-    ingestEvents(db, [makeRawEvent("e-2", "orphan-b", "tool.bash")]);
+  // ST-P2 — the 1,044-tile fix: many observed sessions for the SAME owning
+  // identity collapse onto ONE agent, NOT one agent per cc_session_id.
+  it("does NOT mint a new agent per observed session — sessions of one identity share one agent", () => {
+    const agentsBefore = (
+      db.query(`SELECT COUNT(*) AS n FROM agents`).get() as { n: number }
+    ).n;
 
-    // Two distinct orphan sessions → two agents + two assignments …
-    const agents = db
-      .query(`SELECT id FROM agents WHERE id LIKE 'mc-orphan-%'`)
-      .all();
-    expect(agents.length).toBeGreaterThanOrEqual(2);
+    // Three distinct cc_session_ids, all the same wrapper identity (luna).
+    for (const cc of ["sess-a", "sess-b", "sess-c"]) {
+      const ev = makeRawEvent(`e-${cc}`, cc, "tool.bash");
+      ev.agent_id = "luna";
+      ev.agent_name = "Luna";
+      ingestEvents(db, [ev]);
+    }
 
-    // … but they share the SINGLE catch-all orphan task.
-    const tasks = db
-      .query(`SELECT id FROM tasks WHERE id = 'mc-orphan-task'`)
+    // Three SESSIONS exist …
+    const sessions = db
+      .query(`SELECT id FROM sessions WHERE cc_session_id IN ('sess-a','sess-b','sess-c')`)
       .all();
+    expect(sessions).toHaveLength(3);
+
+    // … but exactly ONE new agent ('luna') was created for all of them.
+    const lunaAgents = db.query(`SELECT id FROM agents WHERE id = 'luna'`).all();
+    expect(lunaAgents).toHaveLength(1);
+    const agentsAfter = (
+      db.query(`SELECT COUNT(*) AS n FROM agents`).get() as { n: number }
+    ).n;
+    expect(agentsAfter).toBe(agentsBefore + 1); // exactly one new agent, not three
+
+    // No legacy per-session mc-orphan- agents anywhere.
+    expect(db.query(`SELECT 1 FROM agents WHERE id LIKE 'mc-orphan-%'`).get()).toBeNull();
+  });
+
+  it("distinct identities get distinct owning agents, sharing the single orphan task", () => {
+    const evA = makeRawEvent("e-1", "orphan-a", "tool.bash");
+    evA.agent_id = "luna"; evA.agent_name = "Luna";
+    const evB = makeRawEvent("e-2", "orphan-b", "tool.bash");
+    evB.agent_id = "echo"; evB.agent_name = "Echo";
+    ingestEvents(db, [evA]);
+    ingestEvents(db, [evB]);
+
+    expect(db.query(`SELECT 1 FROM agents WHERE id = 'luna'`).get()).toBeTruthy();
+    expect(db.query(`SELECT 1 FROM agents WHERE id = 'echo'`).get()).toBeTruthy();
+
+    // … but they share the SINGLE catch-all orphan task (bookkeeping anchor).
+    const tasks = db.query(`SELECT id FROM tasks WHERE id = 'mc-orphan-task'`).all();
     expect(tasks).toHaveLength(1);
+  });
+
+  // ==========================================================================
+  // ST-P2 — parent_session_id capture: explicit wire field + prompt-correlation.
+  // ==========================================================================
+
+  it("sets parent_session_id + substrate from the event payload when present (P1 wire contract)", () => {
+    // The parent must exist as a real session for the self-FK to hold.
+    const parentEv = makeRawEvent("e-parent", "cc-session-abc", "tool.bash");
+    ingestEvents(db, [parentEv]); // 'cc-session-abc' is the seeded session 's-obs'
+    const parentSessionId = "s-obs";
+
+    const childEv = makeRawEvent("e-child", "child-cc", "tool.bash");
+    childEv.agent_id = "luna"; childEv.agent_name = "Luna";
+    childEv.payload = { ...childEv.payload, parent_session_id: parentSessionId, substrate: "codex" };
+    ingestEvents(db, [childEv]);
+
+    const sess = db
+      .query(`SELECT parent_session_id, substrate FROM sessions WHERE cc_session_id = 'child-cc'`)
+      .get() as { parent_session_id: string | null; substrate: string };
+    expect(sess.parent_session_id).toBe(parentSessionId);
+    expect(sess.substrate).toBe("codex");
+  });
+
+  it("tolerates absent P1 fields — parent stays NULL, substrate defaults", () => {
+    const ev = makeRawEvent("e-1", "child-noparent", "tool.bash");
+    ev.agent_id = "luna"; ev.agent_name = "Luna";
+    // payload carries no parent_session_id / substrate (P1 may merge later).
+    ingestEvents(db, [ev]);
+    const sess = db
+      .query(`SELECT parent_session_id, substrate FROM sessions WHERE cc_session_id = 'child-noparent'`)
+      .get() as { parent_session_id: string | null; substrate: string };
+    expect(sess.parent_session_id).toBeNull();
+    expect(sess.substrate).toBe("claude-code");
+  });
+
+  it("correlates parent via a recent spawn prompt when no explicit parent field (D1b happy path)", () => {
+    // Parent (the seeded 's-obs' / cc-session-abc) emits a tool.agent.spawned
+    // carrying the prompt it handed the child.
+    const spawnEv = makeRawEvent("e-spawn", "cc-session-abc", "tool.agent.spawned");
+    spawnEv.payload = {
+      ...spawnEv.payload,
+      tool_input: { prompt: "Investigate the flaky retention test and fix it" },
+    };
+    ingestEvents(db, [spawnEv]);
+
+    // Child's FIRST prompt (agent.task.started → prompt_preview) matches.
+    const childStart = makeRawEvent("e-cstart", "child-correlated", "agent.task.started");
+    childStart.agent_id = "luna"; childStart.agent_name = "Luna";
+    childStart.payload = {
+      ...childStart.payload,
+      prompt_preview: "Investigate the flaky retention test and fix it",
+    };
+    ingestEvents(db, [childStart]);
+
+    const sess = db
+      .query(`SELECT parent_session_id FROM sessions WHERE cc_session_id = 'child-correlated'`)
+      .get() as { parent_session_id: string | null };
+    expect(sess.parent_session_id).toBe("s-obs"); // correlated to the parent session
+  });
+
+  it("does NOT correlate when two distinct spawns share the same prompt (D1b ambiguity → skip)", () => {
+    // Seed a second real session to host the ambiguous second spawn.
+    db.exec(`INSERT INTO agent_task_assignment (id, agent_id, task_id, state) VALUES ('ata-2', 'a-1', 't-1', 'running')`);
+    db.exec(`INSERT INTO sessions (id, assignment_id, cc_session_id, endpoint_kind, started_at) VALUES ('s-obs2', 'ata-2', 'cc-session-2', 'local.observed', datetime('now'))`);
+
+    const prompt = "Run the full suite and report failures verbatim";
+    const spawn1 = makeRawEvent("e-sp1", "cc-session-abc", "tool.agent.spawned");
+    spawn1.payload = { ...spawn1.payload, tool_input: { prompt } };
+    const spawn2 = makeRawEvent("e-sp2", "cc-session-2", "tool.agent.spawned");
+    spawn2.payload = { ...spawn2.payload, tool_input: { prompt } };
+    ingestEvents(db, [spawn1]);
+    ingestEvents(db, [spawn2]);
+
+    const childStart = makeRawEvent("e-amb", "child-ambiguous", "agent.task.started");
+    childStart.agent_id = "luna"; childStart.agent_name = "Luna";
+    childStart.payload = { ...childStart.payload, prompt_preview: prompt };
+    ingestEvents(db, [childStart]);
+
+    const sess = db
+      .query(`SELECT parent_session_id FROM sessions WHERE cc_session_id = 'child-ambiguous'`)
+      .get() as { parent_session_id: string | null };
+    expect(sess.parent_session_id).toBeNull(); // ambiguous → left agent-rooted
+  });
+
+  it("does NOT correlate when the only matching spawn is outside the time window (D1b timeout)", () => {
+    const prompt = "Refactor the ingestor correlation into its own module please";
+    const spawnEv = makeRawEvent("e-old-spawn", "cc-session-abc", "tool.agent.spawned");
+    spawnEv.payload = { ...spawnEv.payload, tool_input: { prompt } };
+    ingestEvents(db, [spawnEv]);
+    // Backdate the spawn event well past the 10-min correlation window.
+    db.query(`UPDATE events SET timestamp = ? WHERE type = 'tool.agent.spawned'`)
+      .run(new Date(Date.now() - 60 * 60 * 1000).toISOString());
+
+    const childStart = makeRawEvent("e-late", "child-timeout", "agent.task.started");
+    childStart.agent_id = "luna"; childStart.agent_name = "Luna";
+    childStart.payload = { ...childStart.payload, prompt_preview: prompt };
+    ingestEvents(db, [childStart]);
+
+    const sess = db
+      .query(`SELECT parent_session_id FROM sessions WHERE cc_session_id = 'child-timeout'`)
+      .get() as { parent_session_id: string | null };
+    expect(sess.parent_session_id).toBeNull(); // stale spawn → no edge
   });
 });

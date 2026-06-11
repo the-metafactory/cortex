@@ -40,6 +40,28 @@ function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
+/**
+ * ST-P2 — lift the canonical session-tree fields (`parent_session_id`,
+ * `substrate`) off an ingest event payload into the `SessionUpsertData` shape
+ * the cloud D1 writer persists. Both are optional (additive ST-P1 wire
+ * contract): when absent we return `undefined`/`null` so the worker leaves
+ * `parent_session_id` NULL and `substrate` at its column default. Never invents
+ * data — only reflects what arrived (mirrors `extractSovereignty`).
+ */
+function extractSessionTree(event: IngestEvent): {
+  parentSessionId: string | null;
+  substrate: string | null;
+} {
+  const p = event.payload;
+  const parent = typeof p.parent_session_id === "string" && p.parent_session_id.length > 0
+    ? p.parent_session_id
+    : null;
+  const substrate = typeof p.substrate === "string" && p.substrate.length > 0
+    ? p.substrate
+    : null;
+  return { parentSessionId: parent, substrate };
+}
+
 /** Light cleanup — only strip CC internal noise that would never be meaningful to a human reader */
 function sanitizeDescription(raw: string): string {
   return raw
@@ -100,6 +122,7 @@ function processTaskStarted(
   const githubIssue = extractGitHubIssue(description);
   const eventPrincipal = typeof event.payload.operator_id === "string" ? event.payload.operator_id : null;
 
+  const tree = extractSessionTree(event);
   return {
     type: "task_started",
     session: {
@@ -117,6 +140,8 @@ function processTaskStarted(
       progressCompleted: null,
       progressTotal: null,
       sovereignty: extractSovereignty(event),
+      parentSessionId: tree.parentSessionId,
+      substrate: tree.substrate,
     },
   };
 }
@@ -140,6 +165,7 @@ function processTaskCompleted(
   const githubIssue = extractGitHubIssue(description);
   const eventPrincipal = typeof event.payload.operator_id === "string" ? event.payload.operator_id : null;
 
+  const tree = extractSessionTree(event);
   return {
     type: "task_completed",
     sessionId: event.session_id,
@@ -164,6 +190,8 @@ function processTaskCompleted(
       progressCompleted: null,
       progressTotal: null,
       sovereignty: extractSovereignty(event),
+      parentSessionId: tree.parentSessionId,
+      substrate: tree.substrate,
     },
   };
 }
@@ -222,6 +250,7 @@ function processProgressEvent(
   const project = detectProjectFromIngestEvent(event);
   const githubIssue = extractGitHubIssue(description);
   const eventPrincipal = typeof event.payload.operator_id === "string" ? event.payload.operator_id : null;
+  const tree = extractSessionTree(event);
 
   return {
     type: "progress",
@@ -245,6 +274,8 @@ function processProgressEvent(
       progressCompleted: progress?.completed ?? null,
       progressTotal: progress?.total ?? null,
       sovereignty: extractSovereignty(event),
+      parentSessionId: tree.parentSessionId,
+      substrate: tree.substrate,
     },
   };
 }

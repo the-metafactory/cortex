@@ -81,8 +81,18 @@ ingestRoutes.post("/api/ingest", requireApiKey, async (c) => {
 
       ingested++;
       broadcastable.push(event);
-    } catch {
-      // INSERT OR IGNORE handles duplicates; other errors are skipped
+    } catch (_err) {
+      // #960 (no-empty-catch): the common, EXPECTED case here is a duplicate
+      // event — `persistProcessedEvent` uses INSERT OR IGNORE / dedup, so a
+      // re-delivered event is benign and simply counted as skipped (not an
+      // error worth logging on the hot path). Any OTHER failure (e.g. a D1
+      // write error) is also counted as skipped so one bad event never aborts
+      // the batch; we surface it to the worker log for observability rather
+      // than swallowing it silently.
+      console.error(
+        `[ingest] skipped event ${event.event_id}:`,
+        _err instanceof Error ? _err.message : String(_err),
+      );
       skipped++;
     }
   }
@@ -134,7 +144,13 @@ async function broadcastIngestedEvents(env: Env, events: IngestEvent[]): Promise
 // D1 persistence — maps ProcessedSessionEvent variants to D1 SQL
 // ---------------------------------------------------------------------------
 
-async function persistProcessedEvent(db: D1Database, processed: ProcessedSessionEvent): Promise<void> {
+/**
+ * Persist a classified session event to D1. Exported for the column-write tests
+ * (ST-P2 session-tree fields) — driving the real INSERT/ON CONFLICT SQL against
+ * a D1-shaped DB is the only way to pin the actual bound columns, not just the
+ * upstream `processSessionEvent` shape.
+ */
+export async function persistProcessedEvent(db: D1Database, processed: ProcessedSessionEvent): Promise<void> {
   switch (processed.type) {
     case "task_started":
       await upsertSession(db, processed.session);
@@ -168,12 +184,19 @@ async function upsertSession(db: D1Database, session: SessionUpsertData): Promis
   // for the same session can backfill (e.g. task_started without envelope,
   // then a progress event from a federated source carries sovereignty).
   const sov = session.sovereignty;
+  // ST-P2 — parent_session_id / substrate are canonical session-tree columns
+  // (0005 migration). COALESCE on conflict so a later event carrying the fields
+  // backfills an earlier NULL (e.g. task_started without them, then a progress
+  // event from the env-stamped child). `substrate` has a column DEFAULT of
+  // 'claude-code'; we pass the event value when present and let COALESCE keep an
+  // already-set value otherwise.
   await db.prepare(`
     INSERT INTO sessions
     (session_id, principal_id, agent_id, agent_name, project, description, github_issue,
      started_at, status, events_count, last_event, last_event_at,
-     classification, data_residency, home_principal)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 1, ?, ?, ?, ?, ?)
+     classification, data_residency, home_principal,
+     parent_session_id, substrate)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 1, ?, ?, ?, ?, ?, ?, COALESCE(?, 'claude-code'))
     ON CONFLICT(session_id) DO UPDATE SET
       status = 'active',
       principal_id = COALESCE(excluded.principal_id, principal_id),
@@ -186,7 +209,14 @@ async function upsertSession(db: D1Database, session: SessionUpsertData): Promis
       events_count = events_count + 1,
       classification = COALESCE(excluded.classification, classification),
       data_residency = COALESCE(excluded.data_residency, data_residency),
-      home_principal = COALESCE(excluded.home_principal, home_principal)
+      home_principal = COALESCE(excluded.home_principal, home_principal),
+      parent_session_id = COALESCE(excluded.parent_session_id, parent_session_id),
+      -- excluded.substrate is COALESCE(?, 'claude-code') so it is never NULL.
+      -- Only overwrite when the incoming event carried a NON-default substrate,
+      -- otherwise keep the stored value — a later substrate-less event must not
+      -- reset a previously-observed 'codex' back to the generic default.
+      substrate = CASE WHEN excluded.substrate <> 'claude-code'
+                       THEN excluded.substrate ELSE substrate END
   `).bind(
     session.sessionId,
     session.principalId ?? null,
@@ -201,6 +231,8 @@ async function upsertSession(db: D1Database, session: SessionUpsertData): Promis
     sov?.classification ?? null,
     sov?.dataResidency ?? null,
     sov?.homePrincipal ?? null,
+    session.parentSessionId ?? null,
+    session.substrate ?? null,
   ).run();
 }
 
@@ -240,12 +272,16 @@ async function insertSessionDirect(
   // so we insert sovereignty straight (no COALESCE needed; there's nothing
   // to merge with).
   const sov = session.sovereignty;
+  // ST-P2 — same canonical session-tree fields on the fresh-row late-join path.
+  // No COALESCE needed (INSERT OR IGNORE on a brand-new row); substrate falls
+  // back to the column default 'claude-code' when the event carried none.
   await db.prepare(`
     INSERT OR IGNORE INTO sessions
     (session_id, principal_id, agent_id, agent_name, project, description, github_issue,
      started_at, completed_at, duration_ms, pr_url, status, last_event, last_event_at,
-     classification, data_residency, home_principal)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     classification, data_residency, home_principal,
+     parent_session_id, substrate)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 'claude-code'))
   `).bind(
     session.sessionId,
     session.principalId ?? null,
@@ -264,6 +300,8 @@ async function insertSessionDirect(
     sov?.classification ?? null,
     sov?.dataResidency ?? null,
     sov?.homePrincipal ?? null,
+    session.parentSessionId ?? null,
+    session.substrate ?? null,
   ).run();
 }
 
