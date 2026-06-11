@@ -544,6 +544,35 @@ export const SCHEMA_SQL: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_governance_created ON governance_verdicts(created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_governance_decision ON governance_verdicts(decision, created_at)`,
 
+  // P-14 U3.1 (#936) — governance access denials. Pipeline-level access-decision
+  // rows projected from U0.2's (#932) `system.access.{denied,filtered}` envelopes
+  // — the access-gate dimension of the governance pane, sibling to
+  // `governance_verdicts` (the governed-action dimension). `kind` distinguishes
+  // a hard access deny from a renderer visibility filter; `reason_kind` carries
+  // the deny/filter discriminator (`sovereignty_model_class`, `chain_verify_failed`,
+  // `chain_verify_fault`, `residency_blocked`, …) — the sovereignty subset is the
+  // pane's REFUSALS. Append-only; `envelope_id` UNIQUE makes redelivery idempotent;
+  // retention ages rows past 30d (db/retention.ts).
+  `CREATE TABLE IF NOT EXISTS governance_denials (
+    id TEXT PRIMARY KEY,
+    envelope_id TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL
+      CHECK(kind IN ('denied','filtered')),
+    reason_kind TEXT NOT NULL,
+    principal_id TEXT,
+    capability TEXT,
+    envelope_subject TEXT,
+    detail TEXT,
+    source TEXT,
+    subject TEXT,
+    principal TEXT,
+    stack TEXT,
+    payload TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_governance_denials_created ON governance_denials(created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_governance_denials_reason ON governance_denials(reason_kind, created_at)`,
+
   // P-14 U2.1 (#934) — Observability events. Append-only projection rows from
   // signal's four `system.*` envelope families (`system.signal.*`,
   // `system.signal.collector.*`, `system.federation.*`, `system.transport.*`),

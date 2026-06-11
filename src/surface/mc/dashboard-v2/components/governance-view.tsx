@@ -1,17 +1,26 @@
 /**
- * G-1115 — Governance tab (governance upgrade Stage 5).
+ * G-1115 / P-14 U3.1 (#936) — Governance tab (governance upgrade Stage 5).
  *
- * Read-only audit surface over the governed-action stack's bus verdicts
- * (`governance.verdict.{l0,tribunal,gate,resolved}` — pulse P-702): alarm
- * banner (deterministic tier on 24h denials), window summary, and the 30d
- * verdict list. RavenClaude's Heimdall/Víðarr concept, reading the bus.
+ * Read-only audit surface with TWO dimensions over a 30-day window:
+ *   1. VERDICTS — the governed-action stack's bus verdicts
+ *      (`governance.verdict.{l0,tribunal,gate,resolved}` — pulse P-702).
+ *   2. DENIALS / REFUSALS (#936) — U0.2's access-gate decisions
+ *      (`system.access.{denied,filtered}`). A REFUSAL is the sovereignty subset
+ *      (`sovereignty_model_class` / residency / model-class / classification);
+ *      everything else (authz, chain-verify, originator) is a generic denial.
+ * Plus a deterministic alarm banner (tier on combined 24h denials) + window
+ * summaries. RavenClaude's Heimdall/Víðarr concept, reading the bus.
  *
- * Honest empty state: "no verdicts recorded" means no governed pipelines have
- * run in the window — it is NOT an all-clear, and the copy says so.
+ * Honest empty states: "no verdicts recorded" / "no access denials recorded"
+ * mean nothing reached this stack's projection in the window — NOT an all-clear,
+ * and the copy says so.
  */
 
 import type { GovernanceState } from "../hooks/use-governance";
-import type { GovernanceVerdictRow } from "../../db/governance";
+import type {
+  GovernanceVerdictRow,
+  GovernanceDenialRow,
+} from "../../db/governance";
 
 const LAYER_LABEL: Record<string, string> = {
   l0: "L0 policy",
@@ -38,13 +47,16 @@ export interface GovernanceViewProps {
 export function GovernanceView({ state }: GovernanceViewProps) {
   const { data, loaded, error } = state;
 
+  const hasAnyData =
+    data !== null && (data.summary.total > 0 || data.denialSummary.total > 0);
+
   return (
     <section className="scaffold-section governance-view" aria-label="Governance">
       <h2>
         Governance{" "}
-        {loaded && data && data.summary.total > 0 ? (
+        {loaded && hasAnyData && data ? (
           <span className="dim">
-            ({data.summary.total} verdicts / {data.windowDays}d)
+            ({data.summary.total} verdicts · {data.denialSummary.total} denials / {data.windowDays}d)
           </span>
         ) : null}
       </h2>
@@ -52,29 +64,48 @@ export function GovernanceView({ state }: GovernanceViewProps) {
       {!loaded ? (
         <p className="dim">Loading…</p>
       ) : error ? (
-        <p className="dim">Could not load governance verdicts: {error}</p>
-      ) : !data || data.summary.total === 0 ? (
+        <p className="dim">Could not load governance data: {error}</p>
+      ) : !data ? (
+        <p className="dim">No governance data available.</p>
+      ) : (
+        <>
+          {hasAnyData ? (
+            <p
+              className={`governance-alarm alarm-${data.alarm.tier}`}
+              role={data.alarm.tier === "high" ? "alert" : undefined}
+            >
+              <strong>
+                {data.alarm.tier === "none"
+                  ? "No active alarm"
+                  : data.alarm.tier === "elevated"
+                    ? "Elevated"
+                    : "High"}
+              </strong>{" "}
+              — {data.alarm.note}
+            </p>
+          ) : null}
+
+          <VerdictsSection data={data} />
+          <DenialsSection data={data} />
+        </>
+      )}
+    </section>
+  );
+}
+
+/** Governed-action verdicts (governance.verdict.*) — 30d window. */
+function VerdictsSection({ data }: { data: NonNullable<GovernanceState["data"]> }) {
+  return (
+    <div className="governance-subsection governance-verdicts" aria-label="Verdicts">
+      <h3>Verdicts</h3>
+      {data.summary.total === 0 ? (
         <p className="dim">
-          No governance verdicts recorded in the last {data?.windowDays ?? 30} days. Either no
-          governed pipelines ran, or their verdicts never reached this stack&apos;s projection
-          (bus, validation, or retention). Absence of records is not an all-clear.
+          No governance verdicts recorded in the last {data.windowDays} days. Either no governed
+          pipelines ran, or their verdicts never reached this stack&apos;s projection (bus,
+          validation, or retention). Absence of records is not an all-clear.
         </p>
       ) : (
         <>
-          <p
-            className={`governance-alarm alarm-${data.alarm.tier}`}
-            role={data.alarm.tier === "high" ? "alert" : undefined}
-          >
-            <strong>
-              {data.alarm.tier === "none"
-                ? "No active alarm"
-                : data.alarm.tier === "elevated"
-                  ? "Elevated"
-                  : "High"}
-            </strong>{" "}
-            — {data.alarm.note}
-          </p>
-
           <p className="governance-summary dim">
             outcomes: {data.summary.allows} allow · {data.summary.denials} deny ·{" "}
             {data.summary.defers} defer&ensp;|&ensp;layers: {data.summary.byLayer.l0} L0 ·{" "}
@@ -121,6 +152,72 @@ export function GovernanceView({ state }: GovernanceViewProps) {
           </table>
         </>
       )}
-    </section>
+    </div>
+  );
+}
+
+/**
+ * P-14 U3.1 (#936) — access denials / refusals (U0.2's system.access.*), 30d.
+ * Refusals (sovereignty subset) are badged distinctly from generic denials.
+ */
+function DenialsSection({ data }: { data: NonNullable<GovernanceState["data"]> }) {
+  const s = data.denialSummary;
+  return (
+    <div className="governance-subsection governance-denials" aria-label="Denials and refusals">
+      <h3>Denials &amp; refusals</h3>
+      {s.total === 0 ? (
+        <p className="dim">
+          No access denials recorded in the last {data.windowDays} days. Either nothing was denied
+          or refused, or U0.2&apos;s <code>system.access.*</code> envelopes never reached this
+          stack&apos;s projection (bus, validation, or retention). Absence of records is not an
+          all-clear.
+        </p>
+      ) : (
+        <>
+          <p className="governance-summary dim">
+            {s.refusals} sovereignty refusal{s.refusals === 1 ? "" : "s"} · {s.otherDenials} other
+            denial{s.otherDenials === 1 ? "" : "s"}
+            {data.denials.length < s.total
+              ? ` | showing newest ${data.denials.length} of ${s.total}`
+              : ""}
+          </p>
+
+          <table className="governance-table">
+            <thead>
+              <tr>
+                <th>when (UTC)</th>
+                <th>type</th>
+                <th>reason</th>
+                <th>principal</th>
+                <th>capability</th>
+                <th>origin</th>
+                <th>detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.denials.map((d: GovernanceDenialRow) => (
+                <tr key={d.id} className={d.isRefusal ? "verdict-defer" : "verdict-deny"}>
+                  <td className="dim">{when(d.createdAt)}</td>
+                  <td>
+                    <span className={`badge ${d.isRefusal ? "decision-defer" : "decision-deny"}`}>
+                      {d.isRefusal ? "refusal" : "denial"}
+                      {d.kind === "filtered" ? <span className="dim"> (filtered)</span> : null}
+                    </span>
+                  </td>
+                  <td className="governance-reason">{d.reasonKind}</td>
+                  <td className="dim">{d.principalId ?? "—"}</td>
+                  <td className="dim">{d.capability ?? "—"}</td>
+                  <td className="dim">
+                    {d.principal ?? "?"}
+                    {d.stack ? `/${d.stack}` : ""}
+                  </td>
+                  <td className="dim governance-reason">{d.detail ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
   );
 }

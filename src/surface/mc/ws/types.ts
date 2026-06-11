@@ -106,6 +106,8 @@ export type WsServerMessage =
         | "dispatch.lifecycle"
         | "review.verdict"
         | "governance.verdict"
+        // P-14 U3.1 (#936) — governance pane denials/refresh family. Additive.
+        | "governance.denial"
         | "agent.heartbeat"
         | "attention"
         | "adapter.health"

@@ -117,6 +117,25 @@ export const STUCK_RUNNING_TTL_MS = 30 * MINUTE_MS;
  */
 export const OBSERVABILITY_RETENTION_MS = 14 * DAY_MS;
 
+/**
+ * Governance-denials retention window (P-14 U3.1, #936). The `governance_denials`
+ * table is an append-only projection of U0.2's `system.access.{denied,filtered}`
+ * envelopes — no session FK to CASCADE off, so like `events` / `observability_events`
+ * it needs its own age-based prune or it grows unbounded.
+ *
+ * The governance pane queries a **30-day** window (`GOVERNANCE_WINDOW_DAYS`). The
+ * retention window MUST outlive that query window or the pane would show a
+ * truncated 30d — so this is 35 days (the 30d pane window + a 5-day buffer),
+ * mirroring how {@link EVENTS_RETENTION_MS} (14d) outlives {@link
+ * ORPHAN_RETENTION_MS} (7d). Served by `idx_governance_denials_created`.
+ *
+ * NOTE: `governance_verdicts` is intentionally NOT pruned here — its volume is
+ * pipeline-bounded (one per governed action) and its retention was deferred at
+ * inception (db/governance.ts header). Denials/refusals can be high-volume under
+ * an attack or a misconfig, so they get the bound. Module constant, no config.
+ */
+export const GOVERNANCE_DENIAL_RETENTION_MS = 35 * DAY_MS;
+
 // ORPHAN_TASK_ID is imported from ./sessions — the shared orphan anchor task,
 // preserved by the prune (only its children go). Single source of truth so the
 // DELETE anchor can't drift from the registration site.
@@ -135,6 +154,10 @@ export interface ObservabilityPruneResult {
   prunedObservability: number;
 }
 
+export interface GovernanceDenialPruneResult {
+  prunedGovernanceDenials: number;
+}
+
 export interface StuckReapResult {
   /** Orphan assignments transitioned to terminal by the liveness reaper. */
   reaped: number;
@@ -144,6 +167,7 @@ export interface RetentionSummary
   extends OrphanPruneResult,
     EventsPruneResult,
     ObservabilityPruneResult,
+    GovernanceDenialPruneResult,
     StuckReapResult {
   /** false when the prune failed (e.g. closed db) — best-effort, never throws. */
   ok: boolean;
@@ -426,8 +450,23 @@ export function pruneOldObservability(db: Database): ObservabilityPruneResult {
 }
 
 /**
+ * Prune `governance_denials` older than {@link GOVERNANCE_DENIAL_RETENTION_MS}
+ * (P-14 U3.1, #936). Age-based, mirroring {@link pruneOldObservability} but on
+ * the integer `created_at` (unix seconds) column — a single indexed DELETE
+ * (served by `idx_governance_denials_created`); idempotent. The table has no
+ * session FK, so this prune is its sole growth bound. The 35-day window outlives
+ * the pane's 30-day query window so the pane never shows a truncated 30d.
+ */
+export function pruneOldGovernanceDenials(db: Database): GovernanceDenialPruneResult {
+  const cutoffSec = Math.floor((Date.now() - GOVERNANCE_DENIAL_RETENTION_MS) / 1000);
+  const res = db.query(`DELETE FROM governance_denials WHERE created_at < ?`).run(cutoffSec);
+  return { prunedGovernanceDenials: res.changes };
+}
+
+/**
  * Run the full retention sweep: stuck-running reap → orphan terminal-row prune
- * → events age prune → observability-events age prune (#934).
+ * → events age prune → observability-events age prune (#934) →
+ * governance-denials age prune (#936).
  *
  * Ordering is load-bearing: the reaper (ST-P3) runs FIRST so zombie orphans
  * that have gone quiet past the liveness TTL are driven terminal (stamping
@@ -449,7 +488,8 @@ export function pruneRetention(db: Database): RetentionSummary {
     const orphans = pruneOrphanSessions(db);
     const events = pruneOldEvents(db);
     const observability = pruneOldObservability(db);
-    return { ok: true, ...stuck, ...orphans, ...events, ...observability };
+    const governanceDenials = pruneOldGovernanceDenials(db);
+    return { ok: true, ...stuck, ...orphans, ...events, ...observability, ...governanceDenials };
   } catch (err) {
     return {
       ok: false,
@@ -460,6 +500,7 @@ export function pruneRetention(db: Database): RetentionSummary {
       prunedAgents: 0,
       prunedEvents: 0,
       prunedObservability: 0,
+      prunedGovernanceDenials: 0,
     };
   }
 }

@@ -1,10 +1,11 @@
 /**
  * G-1115 — governance verdicts hook (governance upgrade Stage 5).
  *
- * Fetches `GET /api/governance` (30d verdicts + summary + alarm tier) and
- * keeps it fresh by subscribing to the `mc.projection` WS frame with family
- * `governance.verdict`: every projected verdict broadcasts a refresh signal,
- * which triggers a debounced refetch. The frame is a REFRESH SIGNAL, not
+ * Fetches `GET /api/governance` (30d verdicts + denials/refusals + summary +
+ * alarm tier) and keeps it fresh by subscribing to the `mc.projection` WS frame
+ * with family `governance.verdict` OR `governance.denial` (P-14 U3.1, #936):
+ * every projected verdict or access-denial broadcasts a refresh signal, which
+ * triggers a debounced refetch. The frame is a REFRESH SIGNAL, not
  * authoritative state — the tab always re-reads the API (same discipline as
  * `use-agents` / `use-attention`).
  *
@@ -84,7 +85,9 @@ export function useGovernance(ws: WsClient, enabled: boolean): GovernanceState {
   useEffect(() => {
     function onProjection(msg: WsMessage) {
       const family = (msg as { family?: string }).family;
-      if (family !== "governance.verdict") return;
+      // P-14 U3.1 (#936) — both the verdict and the access-denial projections
+      // refresh this pane (verdicts + denials/refusals share one API + tab).
+      if (family !== "governance.verdict" && family !== "governance.denial") return;
       if (!enabledRef.current || !bootedRef.current) return;
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => {
