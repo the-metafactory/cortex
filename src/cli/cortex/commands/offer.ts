@@ -117,8 +117,20 @@ type OfferSubcommand = "list" | "revoke";
  */
 const DEFAULT_CONFIG_DIR = "~/.config/cortex";
 
-/** Capability id grammar — mirrors CO-1's `OfferingCapabilityIdSchema`. */
+/** Capability id grammar — mirrors CO-1's `OfferingCapabilityIdSchema` (the
+ *  `*` quantifier admits SINGLE-segment ids like `chat`). */
 const CAPABILITY_ID_RE = /^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/;
+
+/**
+ * The DOTTED-capability grammar `announce_capabilities[]` requires (the `+`
+ * quantifier — at LEAST one dot), mirrored from `cortex-config.ts`. CO-1's
+ * offering grammar is WIDER (it admits single-segment ids), so a single-segment
+ * capability offered at federated/public scope would project a value the
+ * `announce_capabilities[]` schema rejects with an opaque error at
+ * validate-composed time. `buildOffering` pre-flights against this so the
+ * principal gets a CLEAR message instead. (PR #967 review BLOCKER 2.)
+ */
+const ANNOUNCEABLE_CAPABILITY_ID_RE = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/;
 
 /** Network / principal id grammar — letter-prefixed lowercase + hyphen. */
 const LETTER_PREFIX_RE = /^[a-z][a-z0-9-]*$/;
@@ -420,24 +432,33 @@ export function applyRevoke(
       result: { offerings: out, note: { capability, action: "absent", scopes: [] } },
     };
   }
+
+  // If the requested scope was never on this offering, the revoke is a no-op:
+  // nothing to narrow. Report `absent` and leave the offering untouched (NOT a
+  // splice — `--scope public` on a `["federated"]` offering must not silently
+  // remove the federated offering). (PR #967 review MAJOR — the action note must
+  // reflect the actual outcome, and an absent scope is a no-op, not a removal.)
+  const scopeWasPresent = target.scopes.includes(scope);
+  if (!scopeWasPresent) {
+    return {
+      ok: true,
+      result: { offerings: out, note: { capability, action: "absent", scopes: target.scopes } },
+    };
+  }
+
   const remaining = target.scopes.filter((s) => s !== scope);
 
-  // Dropping the only widened scope (or all scopes) → remove the offering so
-  // the capability resolves default-deny `local` (no stranded local-only entry,
-  // no orphan accept).
+  // The scope WAS present and we dropped it → this is a genuine `narrowed`. If
+  // dropping it leaves no widened tier, remove the whole offering so the
+  // capability resolves default-deny `local` (no stranded local-only entry, no
+  // orphan accept) — still reported `narrowed` (the user dropped a present
+  // scope; the entry-removal is the consequence, not an absence).
   const widenedRemaining = remaining.filter((s) => s !== "local");
   if (widenedRemaining.length === 0) {
     out.splice(idx, 1);
     return {
       ok: true,
-      result: {
-        offerings: out,
-        note: {
-          capability,
-          action: scope === (target.scopes.find((s) => s === scope)) ? "narrowed" : "absent",
-          scopes: [],
-        },
-      },
+      result: { offerings: out, note: { capability, action: "narrowed", scopes: [] } },
     };
   }
 
@@ -489,6 +510,26 @@ export function buildOffering(input: {
   if (!CAPABILITY_ID_RE.test(capability)) {
     errors.push(
       `capability "${capability}" must be a capability id — dot-separated lowercase segments (e.g. 'code-review.typescript')`,
+    );
+  }
+
+  // Pre-flight (PR #967 review BLOCKER 2): a SINGLE-segment capability id (e.g.
+  // `chat`) is valid in CO-1's offering grammar (`*` quantifier) but the
+  // `announce_capabilities[]` schema this offering PROJECTS onto requires at
+  // least one dot (`+` quantifier). Offering a single-segment capability at
+  // federated/public would therefore project a value the composed-config schema
+  // rejects with an opaque error. Catch it here with a CLEAR message; local-only
+  // single-segment offerings are unaffected (they never reach announce_capabilities).
+  if (
+    (scope === "federated" || scope === "public") &&
+    CAPABILITY_ID_RE.test(capability) &&
+    !ANNOUNCEABLE_CAPABILITY_ID_RE.test(capability)
+  ) {
+    errors.push(
+      `capability "${capability}" is single-segment, but a ${scope} offering projects onto announce_capabilities[], ` +
+        `which requires a dotted (>=2-segment) capability id (e.g. 'work.chat', 'code-review.typescript'). ` +
+        `Rename the capability to a dotted id, or offer it --scope local. ` +
+        `(If single-segment federated offerings should be supported, that is a CO-1/announce-schema grammar mismatch to reconcile.)`,
     );
   }
 
@@ -785,12 +826,28 @@ export function reconcileLayer(
 ): { layer: Record<string, unknown>; dangling: string[] } {
   const out: Record<string, unknown> = structuredClone(layer);
 
-  // Resolve the receiving stack's wire identity ({principal}.{stack}) exactly
-  // as the runtime derives it at boot — the accept_subjects scope prefix.
-  const derived = deriveStackId({
-    principal: isPlainObject(out.principal) && typeof out.principal.id === "string" ? { id: out.principal.id } : undefined,
-    stack: isPlainObject(out.stack) && typeof out.stack.id === "string" ? { id: out.stack.id } : undefined,
-  });
+  // Resolve the receiving stack's wire identity ({principal}.{stack}) for the
+  // accept_subjects scope prefix. The PRINCIPAL segment MUST come from
+  // `config.principal.id` — that is the value the runtime stamps onto the wire
+  // (`MyelinRuntimeOptions.principal` → `federated.{principal}.{stack}.>`), and
+  // it is exactly the source `CortexConfigSchema.superRefine` validates the
+  // accept-list prefix against. We deliberately do NOT take the principal from
+  // `deriveStackId().principal`: for the documented cross-principal override
+  // (`principal.id: andreas` running `stack.id: jcfischer/sage-host`),
+  // `deriveStackId().principal` is `jcfischer` while the runtime still subscribes
+  // on `federated.andreas.…` — projecting `jcfischer` would generate accept_subjects
+  // that never match the live subscription (and the schema would then reject the
+  // write with an opaque error). The STACK segment is the `/{stack}` tail of
+  // `stack.id` (what `deriveStackId().stack` also resolves), or `default` when no
+  // `stack:` block is present.  (PR #967 review BLOCKER 1.)
+  const wirePrincipal =
+    isPlainObject(out.principal) && typeof out.principal.id === "string"
+      ? out.principal.id
+      : "default";
+  const wireStack =
+    isPlainObject(out.stack) && typeof out.stack.id === "string"
+      ? deriveStackId({ stack: { id: out.stack.id } }).stack
+      : "default";
 
   const policy: Record<string, unknown> = isPlainObject(out.policy)
     ? structuredClone(out.policy)
@@ -820,8 +877,8 @@ export function reconcileLayer(
     const projections = projectFederationConfig(
       offerings,
       networkIds,
-      derived.principal,
-      derived.stack,
+      wirePrincipal,
+      wireStack,
     );
     const byId = new Map(projections.map((p) => [p.networkId, p]));
     for (const network of networks) {

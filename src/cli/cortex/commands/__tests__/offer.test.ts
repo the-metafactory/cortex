@@ -21,31 +21,24 @@
  *    12. buildOffering — public surface/repo predicate
  *    13. buildOffering — public content-dependent predicate → rejected (ADR-0010)
  *    14. buildOffering — local scope + --accept → error
+ *   Pure — buildOffering single-segment pre-flight (PR #967 BLOCKER 2)
+ *     - single-segment OK for local; REJECTED for federated/public (clear msg)
  *   Pure — applySet / applyRevoke
- *    15. applySet — add new offering
- *    16. applySet — widen (replace) existing
- *    17. applySet — idempotent (unchanged)
- *    18. applyRevoke — whole offering removed → default-deny
- *    19. applyRevoke — absent capability → no-op
- *    20. applyRevoke — drop one scope, keep widened tier
- *   Pure — buildListRows
- *    21. buildListRows — default-deny local for unoffered capability
- *    22. buildListRows — resolved offering with accept + providers
+ *     applySet — add / widen / idempotent / no-mutate
+ *     applyRevoke — whole-offering removed; absent capability no-op; drop the
+ *       only widened scope (reported narrowed); revoke an ABSENT scope = no-op,
+ *       offering UNTOUCHED, action 'absent' (PR #967 MAJOR)
+ *   Pure — buildListRows (default-deny local; resolved offering + providers)
  *   Pure — reconcileLayer
- *    23. reconcileLayer — writes offerings + regenerates network projection
- *    24. reconcileLayer — empty offerings → deletes offerings key
- *   CLI (file I/O)
- *    25. --help exits 0
- *    26. no args → exit 2 (usage)
- *    27. set local --scope, dry-run by default (no write)
- *    28. set federated --apply writes + backup + generates projection
- *    29. set federated with no accept → exit 2 (usage)
- *    30. --apply + --dry-run → exit 2
- *    31. revoke removes the offering (idempotent second run = no-op)
- *    32. list shows capabilities × resolved offering
- *    33. --stack required when >1 stack file
- *    34. set that breaks schema (unknown capability) → exit 1, no write
- *    35. dispatchOffer set --json envelope
+ *     writes offerings + regenerates network projection; empty → deletes key;
+ *     cross-principal stack.id override uses principal.id for the wire prefix,
+ *     NOT stack.id's principal half (PR #967 BLOCKER 1)
+ *   CLI (file I/O) — help/usage, dry-run-by-default, --apply writes + backup +
+ *     generates projection, --apply+--dry-run usage error, revoke idempotent,
+ *     list, --stack ambiguity, unknown-capability exit 1, --json envelope,
+ *     single-segment federated → exit 2 clear msg + dotted federated happy path
+ *     (PR #967 BLOCKER 2)
+ *   resolveTarget — single-file + ambiguity
  */
 
 import { describe, expect, test, beforeEach } from "bun:test";
@@ -81,8 +74,11 @@ const OFFER_FED_NET: Offering = {
   accept: { kind: "network", network: "metafactory-net" },
   network: "metafactory-net",
 };
+// Dotted capability id (PR #967 NIT 2): announce_capabilities[] requires >=2
+// segments, so the projection fixtures use dotted ids — single-segment ids are
+// rejected for federated/public at buildOffering (see the BLOCKER-2 tests).
 const OFFER_FED_PRINCIPALS: Offering = {
-  capability: "research",
+  capability: "research.medline",
   scopes: ["federated"],
   accept: { kind: "principals", principals: ["jcfischer"] },
 };
@@ -134,8 +130,8 @@ describe("projectFederationConfig", () => {
 
   test("principals accept with no network reaches every declared network", () => {
     const proj = projectFederationConfig([OFFER_FED_PRINCIPALS], ["net-a", "net-b"], "andreas", "work");
-    expect(proj.find((p) => p.networkId === "net-a")?.announce_capabilities).toEqual(["research"]);
-    expect(proj.find((p) => p.networkId === "net-b")?.announce_capabilities).toEqual(["research"]);
+    expect(proj.find((p) => p.networkId === "net-a")?.announce_capabilities).toEqual(["research.medline"]);
+    expect(proj.find((p) => p.networkId === "net-b")?.announce_capabilities).toEqual(["research.medline"]);
   });
 
   test("public offering reaches every declared network too", () => {
@@ -183,7 +179,7 @@ describe("buildOffering", () => {
   });
 
   test("federated --network shorthand → {kind:'network'}", () => {
-    const r = buildOffering({ capability: "code-review", scope: "federated", network: "metafactory-net" });
+    const r = buildOffering({ capability: "code-review.typescript", scope: "federated", network: "metafactory-net" });
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.offering.accept).toEqual({ kind: "network", network: "metafactory-net" });
@@ -192,18 +188,18 @@ describe("buildOffering", () => {
   });
 
   test("federated principals accept", () => {
-    const r = buildOffering({ capability: "research", scope: "federated", accept: "principals:jcfischer,holly" });
+    const r = buildOffering({ capability: "research.medline", scope: "federated", accept: "principals:jcfischer,holly" });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.offering.accept).toEqual({ kind: "principals", principals: ["jcfischer", "holly"] });
   });
 
   test("federated with no accept → error (default-deny)", () => {
-    const r = buildOffering({ capability: "research", scope: "federated" });
+    const r = buildOffering({ capability: "research.medline", scope: "federated" });
     expect(r.ok).toBe(false);
   });
 
   test("public surface/repo predicate", () => {
-    const r = buildOffering({ capability: "code-review", scope: "public", accept: "surface:github/repo:the-metafactory/*" });
+    const r = buildOffering({ capability: "code-review.public", scope: "public", accept: "surface:github/repo:the-metafactory/*" });
     expect(r.ok).toBe(true);
     if (r.ok && r.offering.accept?.kind === "surface") {
       expect(r.offering.accept.surface).toBe("github");
@@ -212,13 +208,30 @@ describe("buildOffering", () => {
   });
 
   test("public content-dependent predicate → rejected (ADR-0010)", () => {
-    const r = buildOffering({ capability: "code-review", scope: "public", accept: "surface:github/description-contains:urgent" });
+    const r = buildOffering({ capability: "code-review.public", scope: "public", accept: "surface:github/description-contains:urgent" });
     expect(r.ok).toBe(false);
   });
 
   test("local scope + --accept → error", () => {
     const r = buildOffering({ capability: "chat", scope: "local", accept: "network:x" });
     expect(r.ok).toBe(false);
+  });
+
+  test("single-segment capability is fine for local scope", () => {
+    const r = buildOffering({ capability: "chat", scope: "local" });
+    expect(r.ok).toBe(true);
+  });
+
+  test("single-segment capability rejected for federated scope with clear message (PR #967 BLOCKER 2)", () => {
+    const r = buildOffering({ capability: "chat", scope: "federated", network: "metafactory-net" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join(" ")).toContain("single-segment");
+  });
+
+  test("single-segment capability rejected for public scope (PR #967 BLOCKER 2)", () => {
+    const r = buildOffering({ capability: "research", scope: "public", accept: "surface:github/repo:the-metafactory/*" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join(" ")).toContain("announce_capabilities");
   });
 });
 
@@ -274,10 +287,27 @@ describe("applyRevoke", () => {
     if (r.ok) expect(r.result.note.action).toBe("absent");
   });
 
-  test("dropping the only widened scope removes the offering", () => {
+  test("dropping the only widened scope removes the offering, reported narrowed", () => {
     const r = applyRevoke([OFFER_FED_NET], "code-review.typescript", "federated");
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.result.offerings).toHaveLength(0);
+    if (r.ok) {
+      expect(r.result.offerings).toHaveLength(0);
+      // The scope WAS present → narrowed (the entry-removal is the consequence).
+      expect(r.result.note.action).toBe("narrowed");
+    }
+  });
+
+  test("revoking a scope NOT on the offering is a no-op (action: absent), offering untouched (PR #967 MAJOR)", () => {
+    // OFFER_FED_NET has scopes ["federated"]. Revoking --scope public must NOT
+    // splice it out and must NOT report narrowed — it reports absent + leaves
+    // the federated offering intact.
+    const r = applyRevoke([OFFER_FED_NET], "code-review.typescript", "public");
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.result.note.action).toBe("absent");
+      expect(r.result.offerings).toHaveLength(1);
+      expect(r.result.offerings[0]?.scopes).toEqual(["federated"]);
+    }
   });
 });
 
@@ -336,6 +366,30 @@ describe("reconcileLayer", () => {
     expect(policy.offerings).toBeUndefined();
     const net = (policy.federated as Rec).networks as Rec[];
     expect(net[0]?.announce_capabilities).toEqual([]);
+  });
+
+  test("cross-principal stack.id override: accept_subjects use principal.id (wire source), not stack.id's principal half (PR #967 BLOCKER 1)", () => {
+    // principal.id: andreas running stack.id: jcfischer/sage-host. The runtime
+    // subscribes on federated.ANDREAS.sage-host.* (principal.id is the wire
+    // source), so the generated accept_subjects MUST carry `andreas`, not the
+    // `jcfischer` half of stack.id (which deriveStackId().principal would yield).
+    const layer: Rec = {
+      principal: { id: "andreas" },
+      stack: { id: "jcfischer/sage-host" },
+      policy: {
+        federated: {
+          networks: [{ id: "metafactory-net", leaf_node: "leaf", max_hop: 1, peers: [] }],
+          registry: { url: "https://registry.example" },
+        },
+      },
+    };
+    const { layer: out } = reconcileLayer(layer, [OFFER_FED_NET]);
+    const net = ((out.policy as Rec).federated as Rec).networks as Rec[];
+    expect(net[0]?.accept_subjects).toEqual([
+      "federated.andreas.sage-host.tasks.code-review.typescript.>",
+    ]);
+    // Defensive: the stack.id principal half must NOT leak onto the wire.
+    expect((net[0]?.accept_subjects as string[])[0]).not.toContain("jcfischer");
   });
 });
 
@@ -527,6 +581,46 @@ describe("dispatchOffer — CLI", () => {
     const env = JSON.parse(r.stdout) as Rec;
     expect(env.status).toBe("ok");
     expect((env.items as Rec[])[0]?.capability).toBe("chat");
+  });
+
+  test("set single-segment capability federated → exit 2 (usage) with clear message, no write (PR #967 BLOCKER 2)", async () => {
+    // `chat` is a single-segment capability in the catalog. Offering it
+    // federated must fail at the buildOffering pre-flight (usage error, exit 2)
+    // with a CLEAR message — NOT an opaque validateComposed schema failure.
+    const dir = makeSplitDir({
+      work: stackLayer({
+        policy: {
+          federated: {
+            networks: [{ id: "metafactory-net", leaf_node: "leaf", max_hop: 1, peers: [] }],
+            registry: { url: "https://registry.example" },
+          },
+        },
+      }),
+    });
+    const before = readFileSync(join(dir, "stacks", "work.yaml"), "utf-8");
+    const r = await run(["chat", "--scope", "federated", "--network", "metafactory-net", "--config", dir, "--apply"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("single-segment");
+    const after = readFileSync(join(dir, "stacks", "work.yaml"), "utf-8");
+    expect(after).toBe(before); // disk untouched
+  });
+
+  test("set dotted capability federated --apply succeeds (the BLOCKER-2 happy path)", async () => {
+    const dir = makeSplitDir({
+      work: stackLayer({
+        policy: {
+          federated: {
+            networks: [{ id: "metafactory-net", leaf_node: "leaf", max_hop: 1, peers: [] }],
+            registry: { url: "https://registry.example" },
+          },
+        },
+      }),
+    });
+    const r = await run(["code-review.typescript", "--scope", "federated", "--network", "metafactory-net", "--config", dir, "--apply"]);
+    expect(r.code).toBe(0);
+    const written = YAML.parse(readFileSync(join(dir, "stacks", "work.yaml"), "utf-8")) as Rec;
+    const net = ((written.policy as Rec).federated as Rec).networks as Rec[];
+    expect(net[0]?.announce_capabilities).toEqual(["code-review.typescript"]);
   });
 });
 
