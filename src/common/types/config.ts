@@ -404,7 +404,7 @@ export const McSchema = z.object({
    * LOCAL read-only multi-subscription (same principal, loopback buses the
    * principal owns); NO federation, NO cross-principal trust.
    *
-   * **Default ON.** The operator runs several stacks on one machine and expects
+   * **Default ON.** The principal runs several stacks on one machine and expects
    * the localhost pane to be the one-pane-over-all-my-stacks surface (#989); a
    * single-stack deployment is unaffected because discovery simply finds no
    * siblings (an empty config root ⇒ a no-op). The cost is bounded (one extra

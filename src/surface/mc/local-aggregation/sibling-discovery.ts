@@ -29,16 +29,16 @@
  * ## Credential resolution
  *
  * Per-bus auth varies (#989 probe findings on the live machine):
- *   - meta-factory / work → a `nats.credsPath` (operator-mode `.creds`) →
+ *   - meta-factory / work → a `nats.credsPath` (operator-account `.creds`) →
  *     `credential.kind: "creds"`.
- *   - halden → an OPEN bus (`nats-server -js`, no operator/account config) that
+ *   - halden → an OPEN bus (`nats-server -js`, no operator-account config) that
  *     accepts an unauthenticated connection. Its `system.yaml` declares only an
  *     account-signing NKey seed (no `credsPath`), so config alone can't tell it
  *     apart from a locked NSC bus. We surface no-credsPath as
  *     `credential.kind: "noauth"` (try connecting with no credential) — and let
  *     the BUS decide: an open bus connects, a locked one fails the connect and
  *     the aggregator degrades that sibling to absent.
- *   - community → a true NSC-operator bus that REQUIRES a minted user. With only
+ *   - community → a true operator-account (NSC) bus that REQUIRES a minted user. With only
  *     an account-signing NKey (not a connectable user), the `noauth` attempt
  *     fails with an Authorization Violation, so the aggregator degrades it to
  *     absent. Minting a read-only observer user for it is a #989 follow-up.
