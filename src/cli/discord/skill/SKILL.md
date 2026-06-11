@@ -85,3 +85,7 @@ servers:
 ```
 
 Config stored at `~/.config/grove/cli.yaml`.
+
+## Attachments
+
+`discord post --file <path>` attaches a local file (repeatable); the message text is optional when a file is present. Files are read + existence-checked before the post, so a bad path posts nothing.
