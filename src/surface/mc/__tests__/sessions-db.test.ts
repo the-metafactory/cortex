@@ -62,7 +62,7 @@ describe("createSession", () => {
     expect(row.pid).toBe(99);
   });
 
-  // --- ST-P0 / ADR-0008 canonical session columns ---
+  // --- ST-P0 / ADR-0011 canonical session columns ---
 
   it("defaults substrate to 'claude-code' when not provided", () => {
     const session = createSession(db, {

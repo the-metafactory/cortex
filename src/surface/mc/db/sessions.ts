@@ -21,7 +21,7 @@ export function createSession(
     endpointKind: EndpointKind;
     ccSessionId?: string;
     pid?: number;
-    // --- ST-P0 / ADR-0008 canonical session columns (all optional this phase;
+    // --- ST-P0 / ADR-0011 canonical session columns (all optional this phase;
     // no existing caller passes them — defaults apply and behavior is unchanged). ---
     /** Self-ref to the spawning session; omit for an agent-rooted session. */
     parentSessionId?: string | null;
@@ -120,7 +120,7 @@ interface SessionRow {
 /**
  * Single source of truth for mapping a `sessions` row → {@link Session}. Keeps
  * the SELECT column list and the object shape in lockstep as the canonical
- * columns grow (ST-P0 / ADR-0008). Callers that SELECT a partial row must pass a
+ * columns grow (ST-P0 / ADR-0011). Callers that SELECT a partial row must pass a
  * full row through here, so prefer {@link SESSION_SELECT_COLUMNS}.
  */
 export function rowToSession(row: SessionRow): Session {

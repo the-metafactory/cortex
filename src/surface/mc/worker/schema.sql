@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   classification TEXT,        -- 'local' | 'federated' | 'public' | NULL
   data_residency TEXT,        -- e.g. 'nz', 'eu', NULL
   home_principal TEXT,         -- principal.home_principal (post-`did:mf:` strip)
-  -- ST-P0 / ADR-0008 canonical session-tree fields. Defined ONCE in
+  -- ST-P0 / ADR-0011 canonical session-tree fields. Defined ONCE in
   -- ../db/canonical-session.ts (CANONICAL_SESSION_COLUMNS) and asserted against
   -- this DDL + ../db/schema.ts by ../__tests__/session-schema-parity.test.ts.
   -- The cloud sessions row was already flat (agent_id/agent_name/principal_id/
@@ -147,7 +147,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_completed ON sessions(completed_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_principal ON sessions(principal_id);
 -- IAW D.5 — slicing the dashboard snapshot by home_principal on every poll
 CREATE INDEX IF NOT EXISTS idx_sessions_home_principal ON sessions(home_principal) WHERE home_principal IS NOT NULL;
--- ST-P0 / ADR-0008 — session-tree lookups (children of a session; sessions per
+-- ST-P0 / ADR-0011 — session-tree lookups (children of a session; sessions per
 -- substrate). Mirror of the local indices; names are the canonical contract
 -- (CANONICAL_SESSION_INDICES) the parity test pins on both substrates.
 CREATE INDEX IF NOT EXISTS idx_sessions_parent_session_id ON sessions(parent_session_id);

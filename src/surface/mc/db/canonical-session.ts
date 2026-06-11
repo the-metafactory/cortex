@@ -1,7 +1,7 @@
 /**
  * Canonical Mission Control session schema — the SINGLE shared source.
  *
- * ADR-0008 ("Unified Mission Control session schema across local + cloud"):
+ * ADR-0011 ("Unified Mission Control session schema across local + cloud"):
  * the MC backend is dual-substrate — a local **bun:sqlite** DB (`db/schema.ts`,
  * served at `:8767`) and a cloud **Cloudflare D1** DB (`worker/schema.sql`,
  * served at `grove.meta-factory.ai/api/*`). The two `sessions` schemas had
@@ -11,7 +11,7 @@
  * schemas are derived/validated from this list by a CI **parity test**
  * (`__tests__/session-schema-parity.test.ts`) that fails on drift.
  *
- * The canonical shape is the **flat (denormalized) session-view** per ADR-0008
+ * The canonical shape is the **flat (denormalized) session-view** per ADR-0011
  * decision 1: `agent_id`, `agent_name`, `principal_id`, `parent_session_id`,
  * `substrate`, `status`, started/ended, metrics, and the sovereignty columns
  * live directly on the `sessions` row. Local keeps `tasks`/`agent_task_assignment`
@@ -23,9 +23,9 @@
  * means), so it is deliberately NOT part of this canonical session row.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * NAMING RECONCILIATION (ADR-0008 — "identical schemas", prefer D1 names)
+ * NAMING RECONCILIATION (ADR-0011 — "identical schemas", prefer D1 names)
  * ─────────────────────────────────────────────────────────────────────────────
- * Two columns historically differ in name between the substrates. ADR-0008 says
+ * Two columns historically differ in name between the substrates. ADR-0011 says
  * prefer the D1 names (cloud is closer to the target), BUT Phase 0 is a
  * NO-BEHAVIOR-CHANGE foundation: renaming the local PK or the local
  * terminal-timestamp would cascade through FK columns (`events.session_id`,
@@ -45,7 +45,7 @@
  * {@link CanonicalSessionColumn.phase2Rename} TODO marker. The parity test reads
  * these so it asserts the RIGHT physical name per substrate (not a false drift).
  *
- * TODO(Phase 2, ADR-0008): converge the two split columns to a single physical
+ * TODO(Phase 2, ADR-0011): converge the two split columns to a single physical
  * name (`session_id`, `completed_at`) on the local side once the PK/timestamp
  * rename can be done with its FK + index + query cascade in one deliberate
  * migration. Until then `localName !== d1Name` is the *intended* state, gated by
@@ -62,7 +62,7 @@ export type CanonicalSqliteType = "TEXT" | "INTEGER" | "REAL";
  *   (c) the TS `Session` field (`types.ts`).
  */
 export interface CanonicalSessionColumn {
-  /** Canonical/logical name (D1-preferred per ADR-0008). */
+  /** Canonical/logical name (D1-preferred per ADR-0011). */
   d1Name: string;
   /**
    * Physical column name on the LOCAL bun:sqlite `sessions` table. Equals
@@ -77,7 +77,7 @@ export interface CanonicalSessionColumn {
   default: string | null;
   /**
    * Set when {@link localName} !== {@link d1Name} as a DELIBERATE Phase-2-deferred
-   * rename (ADR-0008). The parity test reads this to avoid flagging the split as
+   * rename (ADR-0011). The parity test reads this to avoid flagging the split as
    * accidental drift; the string is the rationale surfaced in the TODO.
    */
   phase2Rename?: string;
@@ -86,7 +86,7 @@ export interface CanonicalSessionColumn {
 }
 
 /**
- * THE canonical session column set (ADR-0008). Order matters only for readable
+ * THE canonical session column set (ADR-0011). Order matters only for readable
  * DDL output; the parity test compares as a set keyed by name.
  *
  * New canonical columns added beyond the pre-existing local `sessions` columns
@@ -94,7 +94,7 @@ export interface CanonicalSessionColumn {
  * `ended_at`) are nullable where the data does not exist yet on the local side
  * (`agent_id`, `agent_name`, `principal_id`, `status`, metrics, sovereignty) —
  * Phase 2 populates them on write. The two session-tree fields land NOT-NULL-ish
- * per ADR-0008: `parent_session_id` nullable (self-ref; agent-rooted sessions
+ * per ADR-0011: `parent_session_id` nullable (self-ref; agent-rooted sessions
  * have none), `substrate` NOT NULL DEFAULT 'claude-code'.
  */
 export const CANONICAL_SESSION_COLUMNS: CanonicalSessionColumn[] = [
@@ -106,10 +106,10 @@ export const CANONICAL_SESSION_COLUMNS: CanonicalSessionColumn[] = [
     notNull: true,
     default: null,
     phase2Rename:
-      "local PK is `id`; renaming to `session_id` cascades through events.session_id / attention_items.session_id FKs, the partial unique indices, and every read query — deferred to Phase 2 (ADR-0008).",
+      "local PK is `id`; renaming to `session_id` cascades through events.session_id / attention_items.session_id FKs, the partial unique indices, and every read query — deferred to Phase 2 (ADR-0011).",
     note: "Session identity (PK). Canonical name session_id; local physical PK stays `id` until the Phase-2 rename.",
   },
-  // --- ownership / attribution (denormalized onto the row, ADR-0008 decision 1) ---
+  // --- ownership / attribution (denormalized onto the row, ADR-0011 decision 1) ---
   {
     d1Name: "agent_id",
     localName: "agent_id",
@@ -134,7 +134,7 @@ export const CANONICAL_SESSION_COLUMNS: CanonicalSessionColumn[] = [
     default: null,
     note: "Principal the session belongs to. NULL on local until Phase 2 syncs it off tasks.principal_id.",
   },
-  // --- session tree (ADR-0008: canonical from the start) ---
+  // --- session tree (ADR-0011: canonical from the start) ---
   {
     d1Name: "parent_session_id",
     localName: "parent_session_id",
@@ -175,7 +175,7 @@ export const CANONICAL_SESSION_COLUMNS: CanonicalSessionColumn[] = [
     notNull: false,
     default: null,
     phase2Rename:
-      "local terminal timestamp is `ended_at`; renaming to `completed_at` touches the partial unique indices, transitions.ts terminal-stamping, and retention.ts reaping — deferred to Phase 2 (ADR-0008).",
+      "local terminal timestamp is `ended_at`; renaming to `completed_at` touches the partial unique indices, transitions.ts terminal-stamping, and retention.ts reaping — deferred to Phase 2 (ADR-0011).",
     note: "Terminal timestamp. Canonical name completed_at; local physical column stays `ended_at` until the Phase-2 rename.",
   },
   // --- metrics ---

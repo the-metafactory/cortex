@@ -1,4 +1,4 @@
--- ST-P0 / ADR-0008 — session-tree convergence on the D1 (cloud) snapshot.
+-- ST-P0 / ADR-0011 — session-tree convergence on the D1 (cloud) snapshot.
 --
 -- Adds the two canonical session-tree fields to the deployed D1 `sessions`
 -- table so the cloud schema matches the local bun:sqlite schema and the shared

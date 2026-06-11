@@ -61,7 +61,7 @@ describe("mission-control types", () => {
   });
 
   it("Session type accepts both controlled and observed kinds", () => {
-    // ST-P0 / ADR-0008 canonical session columns (denormalized fields nullable
+    // ST-P0 / ADR-0011 canonical session columns (denormalized fields nullable
     // this phase; substrate NOT NULL with a default; parent_session_id self-ref).
     const canonicalDefaults = {
       parent_session_id: null,

@@ -430,7 +430,7 @@ export interface Task {
  * consumer), ~1 per assistant×stack. This is **NOT a session**: the recurring
  * 1,044-tile bug (refactor §1) is exactly the conflation of a CC session with an
  * agent row. A session belongs to an agent and is modelled by {@link Session}
- * (with `agent_id`/`agent_name` as session columns per ADR-0008) — never as its
+ * (with `agent_id`/`agent_name` as session columns per ADR-0011) — never as its
  * own agent row. See CONTEXT.md §Sessions.
  */
 export interface Agent {
@@ -455,7 +455,7 @@ export interface AgentTaskAssignment {
  * One run of a substrate (CONTEXT.md §Sessions) — belongs to one agent, runs on
  * one substrate, and may be a child of another session.
  *
- * ST-P0 / ADR-0008: the canonical (flat/denormalized) session columns are the
+ * ST-P0 / ADR-0011: the canonical (flat/denormalized) session columns are the
  * shared shape across the local bun:sqlite and cloud D1 substrates — defined
  * once in `db/canonical-session.ts` and pinned to both physical schemas by the
  * parity test. The denormalized attribution/lifecycle/metric/sovereignty fields
@@ -464,7 +464,7 @@ export interface AgentTaskAssignment {
  *   - `parent_session_id` — self-ref; NULL ⇒ agent-rooted session.
  *   - `substrate`         — NOT NULL, defaults to 'claude-code'.
  *
- * NAMING (ADR-0008): canonical names prefer the D1 spelling, but the local
+ * NAMING (ADR-0011): canonical names prefer the D1 spelling, but the local
  * physical PK stays `id` and the terminal timestamp stays `ended_at` — the
  * `id→session_id` / `ended_at→completed_at` rename cascades through FKs, the
  * partial unique indices, transitions.ts and retention.ts, so it is a deliberate
@@ -480,7 +480,7 @@ export interface Session {
   started_at: string;
   /** Terminal timestamp. Canonical name `completed_at`; local stays `ended_at` (Phase-2 rename). */
   ended_at: string | null;
-  // --- ST-P0 / ADR-0008 canonical session columns ---
+  // --- ST-P0 / ADR-0011 canonical session columns ---
   /** Self-ref to the spawning session; NULL ⇒ agent-rooted. */
   parent_session_id: string | null;
   /** The substrate this session runs on (claude-code | codex | …). */

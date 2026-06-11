@@ -86,7 +86,7 @@ export const SCHEMA_SQL: string[] = [
   // FK policy: CASCADE off assignment — sessions are detail rows of an
   // assignment; archiving an assignment should sweep its sessions with it.
   //
-  // ST-P0 / ADR-0008: the canonical (denormalized) session columns
+  // ST-P0 / ADR-0011: the canonical (denormalized) session columns
   // (agent_id/agent_name/principal_id/status/metrics/sovereignty) +
   // session-tree fields (parent_session_id/substrate) are defined ONCE in
   // db/canonical-session.ts (CANONICAL_SESSION_COLUMNS) and asserted against
@@ -94,7 +94,7 @@ export const SCHEMA_SQL: string[] = [
   // mirrored verbatim here (the DDL is the physical artifact; the shared source
   // is the contract the parity test enforces).
   //
-  // NAMING NOTE (ADR-0008): the canonical names prefer the D1 spelling, but the
+  // NAMING NOTE (ADR-0011): the canonical names prefer the D1 spelling, but the
   // local PK stays `id` and the terminal timestamp stays `ended_at` this phase
   // — renaming them to session_id/completed_at cascades through the
   // events/attention FKs, the partial unique indices, transitions.ts and
@@ -111,7 +111,7 @@ export const SCHEMA_SQL: string[] = [
     pid INTEGER,
     started_at TEXT NOT NULL DEFAULT (datetime('now')),
     ended_at TEXT,
-    -- ST-P0 / ADR-0008 canonical session columns (see canonical-session.ts) --
+    -- ST-P0 / ADR-0011 canonical session columns (see canonical-session.ts) --
     parent_session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
     substrate TEXT NOT NULL DEFAULT 'claude-code',
     agent_id TEXT,
@@ -159,11 +159,18 @@ export const SCHEMA_SQL: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_ata_task_id ON agent_task_assignment(task_id)`,
   `CREATE INDEX IF NOT EXISTS idx_ata_state ON agent_task_assignment(state)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_assignment_id ON sessions(assignment_id)`,
-  // ST-P0 / ADR-0008 — session-tree lookups: children of a session, and
-  // sessions of a given substrate. Names are part of the canonical contract
-  // (CANONICAL_SESSION_INDICES) the parity test asserts on both substrates.
-  `CREATE INDEX IF NOT EXISTS idx_sessions_parent_session_id ON sessions(parent_session_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sessions_substrate ON sessions(substrate)`,
+  // ST-P0 / ADR-0011 — the session-tree lookup indices (children of a session;
+  // sessions of a given substrate) are DELIBERATELY NOT declared here. They
+  // index parent_session_id / substrate, columns that an existing pre-P0 DB does
+  // not yet carry when init.ts runs this SCHEMA_SQL loop (which precedes the
+  // COLUMN_ADD_MIGRATIONS loop). Declaring them here crashes initDatabase on
+  // those DBs with `no such column: parent_session_id`. They are created instead
+  // by the parent_session_id / substrate COLUMN_ADD_MIGRATIONS `post[]` arrays
+  // below — which run AFTER the column ALTERs AND unconditionally (init.ts always
+  // runs `post[]`, even when the ALTER is skipped on a fresh DB whose columns
+  // came from CREATE TABLE). Their names are part of the canonical contract
+  // (CANONICAL_SESSION_INDICES) the parity test asserts on both substrates; the
+  // parity test scans SCHEMA_SQL + the COLUMN_ADD_MIGRATIONS post[] strings.
   // F-20.F sweep — composite index for the "most-recent session per
   // assignment" subquery used by both `db/tasks.ts` (F-20.F denorm)
   // and `db/assignments.ts` (focus-area / drill-down). The
@@ -545,7 +552,7 @@ export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
     ],
   },
 
-  // ST-P0 / ADR-0008 — canonical session columns for EXISTING DBs. Fresh DBs
+  // ST-P0 / ADR-0011 — canonical session columns for EXISTING DBs. Fresh DBs
   // get these from the sessions CREATE TABLE above; an already-initialised DB
   // (the running stacks) backfills them here via the same pragma_table_info
   // gate the F-13/#857/#864 column-adds use. Names/types mirror

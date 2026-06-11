@@ -1,5 +1,5 @@
 /**
- * ST-P0 / ADR-0008 — canonical session schema PARITY test (the load-bearing
+ * ST-P0 / ADR-0011 — canonical session schema PARITY test (the load-bearing
  * deliverable). Loads the single shared source
  * ({@link CANONICAL_SESSION_COLUMNS}) and asserts BOTH physical schemas —
  * the local bun:sqlite `sessions` DDL in `db/schema.ts` and the cloud D1
@@ -8,7 +8,7 @@
  *
  * Drift (a canonical column missing from one physical schema, or present under a
  * name the canonical source did not sanction) FAILS CI. This is the structural
- * closure of the recurring schema-divergence bug class (#877/#879) that ADR-0008
+ * closure of the recurring schema-divergence bug class (#877/#879) that ADR-0011
  * decision 5 mandates.
  *
  * Column extraction is intentionally string-level (parse the `CREATE TABLE
@@ -23,7 +23,7 @@ import {
   CANONICAL_SESSION_COLUMNS,
   CANONICAL_SESSION_INDICES,
 } from "../db/canonical-session";
-import { SCHEMA_SQL } from "../db/schema";
+import { SCHEMA_SQL, COLUMN_ADD_MIGRATIONS } from "../db/schema";
 
 const MC_DIR = join(import.meta.dir, "..");
 const WORKER_SCHEMA = join(MC_DIR, "worker", "schema.sql");
@@ -100,7 +100,7 @@ function d1SessionsDdl(): string {
   return m[0];
 }
 
-describe("canonical session schema parity (ADR-0008)", () => {
+describe("canonical session schema parity (ADR-0011)", () => {
   const localCols = new Set(extractSessionColumns(localSessionsDdl()));
   const d1Cols = new Set(extractSessionColumns(d1SessionsDdl()));
 
@@ -142,7 +142,13 @@ describe("canonical session schema parity (ADR-0008)", () => {
   });
 
   test("both schemas declare the canonical session indices", () => {
-    const localSql = SCHEMA_SQL.join("\n");
+    // The two session-tree indices live in the COLUMN_ADD_MIGRATIONS post[]
+    // arrays (NOT in SCHEMA_SQL — see schema.ts: declaring them in SCHEMA_SQL
+    // crashes initDatabase on a pre-P0 DB whose columns the SCHEMA_SQL loop
+    // precedes). Scan BOTH sources so the canonical-contract assertion still
+    // holds after that move.
+    const postIndexSql = COLUMN_ADD_MIGRATIONS.flatMap((m) => m.post ?? []).join("\n");
+    const localSql = [...SCHEMA_SQL, postIndexSql].join("\n");
     const d1Sql = readFileSync(WORKER_SCHEMA, "utf8");
     for (const idx of CANONICAL_SESSION_INDICES) {
       expect(localSql.includes(idx), `local missing index ${idx}`).toBe(true);
