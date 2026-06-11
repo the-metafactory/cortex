@@ -17,9 +17,15 @@ import { broadcastEvent } from "../notifications";
 import { ThrottledPrune, pruneRetention } from "../db/retention";
 
 /**
- * How often the retention prune (#857 orphan rows, #864 events) runs. The
- * poller ticks every ~2s; the prune is a full-table sweep, so we throttle it
- * down to once an hour. Module constant (no config knob) — minimal scope.
+ * How often the retention sweep (#857 orphan rows, #864 events, #955
+ * stuck-running reap) runs. The poller ticks every ~2s; the sweep is a
+ * full-table pass (reap → prune), so we throttle it down to once an hour.
+ * Module constant (no config knob) — minimal scope.
+ *
+ * NOTE: the stuck-running reap shares this interval. A zombie orphan is caught
+ * within at most ~1h of crossing {@link STUCK_RUNNING_TTL_MS} (30min), so worst
+ * case a dead session lingers ~90min before it is driven terminal — acceptable
+ * for a glass-cleanup sweep, and far better than the prior "forever".
  */
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 

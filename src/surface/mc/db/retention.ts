@@ -1,5 +1,6 @@
 /**
- * Mission Control retention / prune (#857 orphan rows, #864 events table).
+ * Mission Control retention / prune (#857 orphan rows, #864 events table,
+ * #955 stuck-running reap).
  *
  * The live MC pane accretes two row families with no server-side retention:
  *
@@ -37,14 +38,27 @@
  *     the complement that reaps old events whose session is RETAINED (e.g. a
  *     long-lived observed session that keeps emitting).
  *
+ *   - **Stuck-running reap (#955)** is the prevent-side complement to the
+ *     terminal-age prune. The terminal-age prune only deletes rows that are
+ *     ALREADY terminal (`ended_at` set); orphan sessions whose Stop/SessionEnd
+ *     never arrived sit non-terminal forever and the prune never sees them (the
+ *     1,044-zombie-tile class). The reaper drives those stuck rows terminal via
+ *     `applyTransition` (so `ended_at` is stamped and invariants hold), after
+ *     which the existing prune sweeps them on its normal cycle. Liveness is the
+ *     latest event timestamp for the session (falling back to `started_at`);
+ *     a row quiet past {@link STUCK_RUNNING_TTL_MS} is reaped. `pruneRetention`
+ *     runs the reaper FIRST so reap → prune compose in a single sweep.
+ *
  *   - **Windows are module constants, not config.** Minimal blast radius: no
  *     new schema on AgentConfigSchema/CortexConfigSchema. Tune here if needed.
  */
 
 import type { Database } from "bun:sqlite";
 import { ORPHAN_AGENT_PREFIX, ORPHAN_TASK_ID } from "./sessions";
+import { applyTransition } from "./transitions";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
 
 /**
  * Orphan terminal-row retention window. Orphan agent/assignment/session rows
@@ -64,6 +78,24 @@ export const ORPHAN_RETENTION_MS = 7 * DAY_MS;
  */
 export const EVENTS_RETENTION_MS = 14 * DAY_MS;
 
+/**
+ * Stuck-running liveness TTL (ST-P3, #955). An orphan observed session that has
+ * been in a NON-terminal state (`dispatched`/`running`/`blocked`) with NO event
+ * activity for longer than this is presumed dead — its Stop/SessionEnd never
+ * arrived, so the F-20 ingestor never auto-completed it and it would sit
+ * `running` forever (the 1,044-zombie-tile class).
+ *
+ * 30 minutes is comfortably above any real heartbeat cadence: an instrumented
+ * CC session emits hook events (PreToolUse/PostToolUse/Stop/…) far more often
+ * than once every half hour, so 30min of total silence reliably means the
+ * process is gone, not merely idle mid-turn. Tune here if a long-running
+ * human-paced observed session ever trips it (none observed at 30min).
+ *
+ * Module constant, mirroring {@link ORPHAN_RETENTION_MS} / {@link
+ * EVENTS_RETENTION_MS} — no new config schema, minimal blast radius.
+ */
+export const STUCK_RUNNING_TTL_MS = 30 * MINUTE_MS;
+
 // ORPHAN_TASK_ID is imported from ./sessions — the shared orphan anchor task,
 // preserved by the prune (only its children go). Single source of truth so the
 // DELETE anchor can't drift from the registration site.
@@ -78,7 +110,15 @@ export interface EventsPruneResult {
   prunedEvents: number;
 }
 
-export interface RetentionSummary extends OrphanPruneResult, EventsPruneResult {
+export interface StuckReapResult {
+  /** Orphan assignments transitioned to terminal by the liveness reaper. */
+  reaped: number;
+}
+
+export interface RetentionSummary
+  extends OrphanPruneResult,
+    EventsPruneResult,
+    StuckReapResult {
   /** false when the prune failed (e.g. closed db) — best-effort, never throws. */
   ok: boolean;
   /** Present when `ok` is false. */
@@ -119,6 +159,103 @@ function selectPrunableOrphanAssignments(db: Database, cutoffIso: string): strin
     )
     .all(ORPHAN_TASK_ID, ORPHAN_AGENT_PREFIX, cutoffIso) as { id: string }[];
   return rows.map((r) => r.id);
+}
+
+/**
+ * A stuck orphan: a non-terminal orphan assignment whose only open session has
+ * gone quiet past the liveness TTL. `lastActivityIso` is the best available
+ * "last seen" signal on the CURRENT schema — the latest event timestamp for the
+ * session, falling back to the session's `started_at` when it has emitted no
+ * events at all.
+ */
+interface StuckOrphan {
+  assignmentId: string;
+  sessionId: string;
+}
+
+/**
+ * Select orphan assignments that are STUCK: in a non-terminal state
+ * (`dispatched`/`running`/`blocked`), anchored on the orphan prefix AND the
+ * shared orphan task (the same double-anchor the terminal-age prune uses, so a
+ * real dispatch assignment can NEVER be selected), with exactly one OPEN
+ * session (`ended_at IS NULL`) whose last activity is older than the cutoff.
+ *
+ * "Last activity" is `MAX(events.timestamp)` for the session, or — when the
+ * session has emitted no events — its `started_at`. A session with ANY event
+ * newer than the cutoff is alive and excluded. The open-session join means we
+ * never reap an assignment whose session already ended (defense-in-depth: a
+ * terminal assignment has no open session anyway).
+ */
+function selectStuckOrphans(db: Database, cutoffIso: string): StuckOrphan[] {
+  const rows = db
+    .query(
+      `SELECT ata.id AS assignmentId, s.id AS sessionId
+         FROM agent_task_assignment ata
+         JOIN agents ag ON ag.id = ata.agent_id
+         JOIN sessions s ON s.assignment_id = ata.id AND s.ended_at IS NULL
+        WHERE ata.task_id = ?
+          AND ag.id LIKE ? || '%'
+          AND ata.state IN ('dispatched', 'running', 'blocked')
+          AND COALESCE(
+                (SELECT MAX(e.timestamp) FROM events e WHERE e.session_id = s.id),
+                s.started_at
+              ) < ?`
+    )
+    .all(ORPHAN_TASK_ID, ORPHAN_AGENT_PREFIX, cutoffIso) as StuckOrphan[];
+  return rows;
+}
+
+/**
+ * Reap stuck-running orphan sessions (ST-P3, #955) — the zombie-tile fix.
+ *
+ * Orphan observed sessions are born `dispatched` and rely on the F-20 ingestor
+ * to auto-complete them on Stop/SessionEnd. When those terminal events never
+ * arrive (the process died, the hook stream was lost), the assignment sits in a
+ * non-terminal state FOREVER and the existing terminal-age prune — which only
+ * reaps rows with `ended_at` set — can never touch it. They accreted into 1,044
+ * zombie tiles and regrow as the event backlog drains.
+ *
+ * This reaper closes the gap: any orphan assignment quiet past
+ * {@link STUCK_RUNNING_TTL_MS} is driven terminal via the EXISTING transition
+ * machinery (`applyTransition` with `{ type: "cancel" }` → `cancelled`), which
+ * stamps `sessions.ended_at` in the same transaction. We deliberately choose
+ * `cancel`/`cancelled` (not `fail`/`failed`):
+ *   - `cancel` is the F-20 convention for ABANDONED work and is valid from
+ *     EVERY non-terminal state (queued/dispatched/running/blocked), so one
+ *     action covers every stuck row uniformly.
+ *   - `cancelled` is terminal-final (no re-entry), whereas `failed` implies an
+ *     error occurred and allows `principal_requeue` back to `queued` — wrong
+ *     semantics for "the process just vanished".
+ * Going through `applyTransition` (rather than a raw UPDATE) keeps the state
+ * machine, the `ended_at` stamp, and the `state.transition` event all
+ * consistent, so the row is then a normal terminal orphan that the existing
+ * terminal-age prune sweeps on its next cycle.
+ *
+ * Each reap is its own `applyTransition` transaction (concurrency-guarded by the
+ * state-in-WHERE check there). Idempotent: once cancelled, a row is no longer
+ * selected. Never touches real dispatch assignments (double-anchored on the
+ * orphan prefix + orphan task) nor a session with a recent event.
+ */
+export function reapStuckRunningOrphans(db: Database): StuckReapResult {
+  const cutoffIso = new Date(Date.now() - STUCK_RUNNING_TTL_MS).toISOString();
+  const stuck = selectStuckOrphans(db, cutoffIso);
+
+  let reaped = 0;
+  for (const { assignmentId, sessionId } of stuck) {
+    const res = applyTransition(db, assignmentId, sessionId, { type: "cancel" });
+    if (res.ok) {
+      reaped += 1;
+    } else {
+      // A concurrent transition (e.g. a late Stop event landing the same row
+      // terminal between our SELECT and our cancel) is benign — the row is
+      // terminal either way. Log for visibility; never throw out of the sweep.
+      process.stderr.write(
+        `[mc-retention] reap skipped assignment '${assignmentId}': ${res.error}\n`
+      );
+    }
+  }
+
+  return { reaped };
 }
 
 /**
@@ -226,24 +363,34 @@ export function pruneOldEvents(db: Database): EventsPruneResult {
 }
 
 /**
- * Run the full retention sweep: orphan terminal-row prune + events age prune.
+ * Run the full retention sweep: stuck-running reap → orphan terminal-row prune
+ * → events age prune.
+ *
+ * Ordering is load-bearing: the reaper (ST-P3) runs FIRST so zombie orphans
+ * that have gone quiet past the liveness TTL are driven terminal (stamping
+ * `ended_at`) before the terminal-age prune runs. A row reaped THIS cycle has
+ * `ended_at = now`, so it is not yet old enough to prune — it is swept on a
+ * later cycle once it ages past {@link ORPHAN_RETENTION_MS}. (The reaper fixes
+ * the stuck state; the prune does the eventual deletion. Two phases, composed.)
  *
  * Best-effort: any failure (e.g. a closed db handle, a locked table) is caught
  * and reported as `ok: false` rather than thrown, so a prune failure can NEVER
- * break the host loop that calls it (the hook poller — see embed.ts wiring).
- * Each sub-prune is independently transactional; the combined call is NOT
- * wrapped in an outer transaction (the two are unrelated row families, and the
- * events prune should still run even if the orphan prune is a no-op).
+ * break the host loop that calls it (the hook poller — see poller.ts wiring).
+ * Each sub-step is independently transactional; the combined call is NOT
+ * wrapped in an outer transaction (the steps are independent, and the events
+ * prune should still run even if the reaper/orphan prune are no-ops).
  */
 export function pruneRetention(db: Database): RetentionSummary {
   try {
+    const stuck = reapStuckRunningOrphans(db);
     const orphans = pruneOrphanSessions(db);
     const events = pruneOldEvents(db);
-    return { ok: true, ...orphans, ...events };
+    return { ok: true, ...stuck, ...orphans, ...events };
   } catch (err) {
     return {
       ok: false,
       error: err instanceof Error ? err.message : String(err),
+      reaped: 0,
       prunedSessions: 0,
       prunedAssignments: 0,
       prunedAgents: 0,

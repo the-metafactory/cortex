@@ -22,8 +22,10 @@ import {
   pruneOrphanSessions,
   pruneOldEvents,
   pruneRetention,
+  reapStuckRunningOrphans,
   ORPHAN_RETENTION_MS,
   EVENTS_RETENTION_MS,
+  STUCK_RUNNING_TTL_MS,
   ThrottledPrune,
 } from "../db/retention";
 
@@ -294,6 +296,174 @@ describe("pruneRetention (combined, transactional, best-effort)", () => {
     })();
     expect(threw).toBe(false);
     expect(summary?.ok).toBe(false);
+  });
+});
+
+describe("reapStuckRunningOrphans (ST-P3 zombie fix)", () => {
+  let db: Database;
+  beforeEach(() => { db = setupDb(); });
+  afterEach(() => { db.close(); });
+
+  /**
+   * Backdate a session's last-activity to N ms before now: its `started_at` AND
+   * every event row already attached to it (the `state.transition` rows
+   * `applyTransition` writes are real events; in production a stuck session's
+   * most-recent event — raw hook OR transition — is what "last activity" reads).
+   * Models a session that has been fully silent for `msAgo`.
+   */
+  function silenceSession(sessionId: string, msAgo: number): void {
+    const iso = new Date(Date.now() - msAgo).toISOString();
+    db.query(`UPDATE sessions SET started_at = ? WHERE id = ?`).run(iso, sessionId);
+    db.query(`UPDATE events SET timestamp = ? WHERE session_id = ?`).run(iso, sessionId);
+  }
+
+  it("reaps a stuck-running orphan past the TTL → terminal + ended_at stamped", () => {
+    const orphan = registerOrphanSession(db, "cc-stuck-1")!;
+    applyTransition(db, orphan.assignmentId, orphan.sessionId, { type: "start" }); // → running
+    // No events; backdate started_at past the TTL so "last activity" is stale.
+    silenceSession(orphan.sessionId, STUCK_RUNNING_TTL_MS + 60_000);
+
+    const result = reapStuckRunningOrphans(db);
+    expect(result.reaped).toBe(1);
+
+    const ata = db.query(`SELECT state FROM agent_task_assignment WHERE id = ?`)
+      .get(orphan.assignmentId) as { state: string };
+    expect(ata.state).toBe("cancelled"); // terminal — abandoned-work convention
+
+    const sess = db.query(`SELECT ended_at FROM sessions WHERE id = ?`)
+      .get(orphan.sessionId) as { ended_at: string | null };
+    expect(sess.ended_at).toBeTruthy(); // stamped via applyTransition
+  });
+
+  it("reaps a stuck orphan whose LAST EVENT is past the TTL (events drive last activity)", () => {
+    const orphan = registerOrphanSession(db, "cc-stuck-ev")!;
+    applyTransition(db, orphan.assignmentId, orphan.sessionId, { type: "start" });
+    insertEvent(db, { sessionId: orphan.sessionId, type: "stream-json", payload: {} });
+    // Fully silence: started_at AND all events stale past the TTL.
+    silenceSession(orphan.sessionId, STUCK_RUNNING_TTL_MS + 60_000);
+
+    const result = reapStuckRunningOrphans(db);
+    expect(result.reaped).toBe(1);
+    const ata = db.query(`SELECT state FROM agent_task_assignment WHERE id = ?`)
+      .get(orphan.assignmentId) as { state: string };
+    expect(ata.state).toBe("cancelled");
+  });
+
+  it("does NOT reap an orphan with a RECENT event (still alive)", () => {
+    const orphan = registerOrphanSession(db, "cc-alive")!;
+    applyTransition(db, orphan.assignmentId, orphan.sessionId, { type: "start" });
+    // Push the start + started_at far into the past...
+    silenceSession(orphan.sessionId, 90 * DAY);
+    // ...then a heartbeat event 1 min ago: MAX(events.timestamp) is fresh.
+    const ev = insertEvent(db, { sessionId: orphan.sessionId, type: "stream-json", payload: {} });
+    backdateEvent(db, ev.id, 60_000);
+
+    const result = reapStuckRunningOrphans(db);
+    expect(result.reaped).toBe(0);
+    const ata = db.query(`SELECT state FROM agent_task_assignment WHERE id = ?`)
+      .get(orphan.assignmentId) as { state: string };
+    expect(ata.state).toBe("running"); // untouched
+  });
+
+  it("does NOT reap a freshly-started orphan within the TTL", () => {
+    const orphan = registerOrphanSession(db, "cc-fresh-run")!;
+    applyTransition(db, orphan.assignmentId, orphan.sessionId, { type: "start" });
+    // started just now, no events → last activity = started_at, within TTL
+    const result = reapStuckRunningOrphans(db);
+    expect(result.reaped).toBe(0);
+    const ata = db.query(`SELECT state FROM agent_task_assignment WHERE id = ?`)
+      .get(orphan.assignmentId) as { state: string };
+    expect(ata.state).toBe("running");
+  });
+
+  it("reaps a stuck orphan still in 'dispatched' (never even started) past the TTL", () => {
+    const orphan = registerOrphanSession(db, "cc-stuck-disp")!;
+    // born dispatched; no start event ever arrived
+    silenceSession(orphan.sessionId, STUCK_RUNNING_TTL_MS + 60_000);
+    const result = reapStuckRunningOrphans(db);
+    expect(result.reaped).toBe(1);
+    const ata = db.query(`SELECT state FROM agent_task_assignment WHERE id = ?`)
+      .get(orphan.assignmentId) as { state: string };
+    expect(ata.state).toBe("cancelled");
+  });
+
+  it("reaps a stuck orphan in 'blocked' past the TTL", () => {
+    const orphan = registerOrphanSession(db, "cc-stuck-blocked")!;
+    applyTransition(db, orphan.assignmentId, orphan.sessionId, { type: "start" });
+    applyTransition(db, orphan.assignmentId, orphan.sessionId, {
+      type: "block",
+      reason: { kind: "review.checkpoint", payload: { description: "stuck" } },
+    });
+    silenceSession(orphan.sessionId, STUCK_RUNNING_TTL_MS + 60_000);
+    const result = reapStuckRunningOrphans(db);
+    expect(result.reaped).toBe(1);
+    const ata = db.query(`SELECT state FROM agent_task_assignment WHERE id = ?`)
+      .get(orphan.assignmentId) as { state: string };
+    expect(ata.state).toBe("cancelled");
+  });
+
+  it("NEVER reaps a real (non-orphan) stuck-running assignment, even when ancient", () => {
+    db.exec(`INSERT INTO tasks (id, title, priority, principal_id, source_system, status) VALUES ('real-task', 'Real', 2, 'andreas', 'github', 'in_progress')`);
+    db.exec(`INSERT INTO agents (id, name, type, persistent) VALUES ('real-agent', 'Echo', 'head', 1)`);
+    db.exec(`INSERT INTO agent_task_assignment (id, agent_id, task_id, state) VALUES ('real-ata', 'real-agent', 'real-task', 'running')`);
+    const sid = "real-session";
+    db.query(`INSERT INTO sessions (id, assignment_id, cc_session_id, endpoint_kind, started_at) VALUES (?, 'real-ata', 'cc-real', 'local.process.controlled', ?)`)
+      .run(sid, new Date(Date.now() - 90 * DAY).toISOString());
+
+    const result = reapStuckRunningOrphans(db);
+    expect(result.reaped).toBe(0);
+    const ata = db.query(`SELECT state FROM agent_task_assignment WHERE id = 'real-ata'`).get() as { state: string };
+    expect(ata.state).toBe("running"); // real dispatch never touched
+  });
+
+  it("does NOT touch an already-terminal orphan", () => {
+    const orphan = registerOrphanSession(db, "cc-already-term")!;
+    applyTransition(db, orphan.assignmentId, orphan.sessionId, { type: "start" });
+    applyTransition(db, orphan.assignmentId, orphan.sessionId, { type: "complete" });
+    silenceSession(orphan.sessionId, STUCK_RUNNING_TTL_MS + 60_000);
+    const result = reapStuckRunningOrphans(db);
+    expect(result.reaped).toBe(0);
+    const ata = db.query(`SELECT state FROM agent_task_assignment WHERE id = ?`)
+      .get(orphan.assignmentId) as { state: string };
+    expect(ata.state).toBe("completed"); // unchanged
+  });
+
+  it("is idempotent — a second reap over the same state is a no-op", () => {
+    const orphan = registerOrphanSession(db, "cc-reap-idem")!;
+    applyTransition(db, orphan.assignmentId, orphan.sessionId, { type: "start" });
+    silenceSession(orphan.sessionId, STUCK_RUNNING_TTL_MS + 60_000);
+    expect(reapStuckRunningOrphans(db).reaped).toBe(1);
+    expect(reapStuckRunningOrphans(db).reaped).toBe(0);
+  });
+
+  it("composes with the terminal-age prune: reaped row becomes prunable", () => {
+    // A zombie running orphan past TTL → reaped → cancelled + ended_at stamped.
+    const orphan = registerOrphanSession(db, "cc-reap-then-prune")!;
+    applyTransition(db, orphan.assignmentId, orphan.sessionId, { type: "start" });
+    silenceSession(orphan.sessionId, STUCK_RUNNING_TTL_MS + 60_000);
+    expect(reapStuckRunningOrphans(db).reaped).toBe(1);
+
+    // Immediately after reaping, ended_at is "now" → within the terminal window,
+    // so the prune retains it. Backdate ended_at past the window to simulate a
+    // later prune cycle, then verify the prune sweeps the reaped row.
+    backdateEndedAt(db, orphan.sessionId, ORPHAN_RETENTION_MS + DAY);
+    const pruned = pruneOrphanSessions(db);
+    expect(pruned.prunedSessions).toBe(1);
+    expect(db.query(`SELECT 1 FROM sessions WHERE id = ?`).get(orphan.sessionId)).toBeNull();
+  });
+
+  it("pruneRetention runs the reaper before the prune (reap → prune in one sweep)", () => {
+    const orphan = registerOrphanSession(db, "cc-full-sweep")!;
+    applyTransition(db, orphan.assignmentId, orphan.sessionId, { type: "start" });
+    silenceSession(orphan.sessionId, STUCK_RUNNING_TTL_MS + 60_000);
+
+    const summary = pruneRetention(db);
+    expect(summary.ok).toBe(true);
+    expect(summary.reaped).toBe(1);
+    // Reaped this cycle → ended_at is "now" → not yet prunable by terminal age.
+    const ata = db.query(`SELECT state FROM agent_task_assignment WHERE id = ?`)
+      .get(orphan.assignmentId) as { state: string };
+    expect(ata.state).toBe("cancelled");
   });
 });
 
