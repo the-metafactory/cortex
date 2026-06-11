@@ -604,6 +604,39 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     expect(config.security.signing).toBe("off");
   });
 
+  // Sage review on #1020 — a MALFORMED `security:` block must reach the
+  // schema parse untouched and fail with the schema's own error; the
+  // seed-aware default must never rewrite it into a valid-looking object.
+  test("cortex#1000: malformed security (array) is NOT masked by the seed-aware default", () => {
+    const cfg = minimalCortex();
+    cfg.stack = {
+      id: "jc/research",
+      nkey_seed_path: "~/.config/nats/cortex-research.nk",
+    };
+    cfg.security = ["off"];
+    expect(() => loadConfigWithAgents(writeCortexConfig(testDir, cfg))).toThrow();
+  });
+
+  test("cortex#1000: malformed security (string) is NOT masked by the seed-aware default", () => {
+    const cfg = minimalCortex();
+    cfg.stack = {
+      id: "jc/research",
+      nkey_seed_path: "~/.config/nats/cortex-research.nk",
+    };
+    cfg.security = "off";
+    expect(() => loadConfigWithAgents(writeCortexConfig(testDir, cfg))).toThrow();
+  });
+
+  test("cortex#1000: bare null security key is NOT masked by the seed-aware default", () => {
+    const cfg = minimalCortex();
+    cfg.stack = {
+      id: "jc/research",
+      nkey_seed_path: "~/.config/nats/cortex-research.nk",
+    };
+    cfg.security = null;
+    expect(() => loadConfigWithAgents(writeCortexConfig(testDir, cfg))).toThrow();
+  });
+
   test("passes bus.review provisioning knobs through with defaults applied", () => {
     const cfg = minimalCortex();
     cfg.bus = {

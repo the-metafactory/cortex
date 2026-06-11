@@ -41,9 +41,10 @@ principal:
 # and `security.signing` unset, the stack boots `signing: permissive` (signs
 # outbound, verifies inbound, never rejects). Without an `nkey_seed_path`
 # cortex publishes UNSIGNED and peers running signed-chain verification reject
-# the traffic. Under `security.signing: off` the `signed_by` field is
-# structural metadata only — bus-layer auth (NATS leaf-node/user auth) is the
-# trust boundary in that mode; only set `off` explicitly on a hardened bus.
+# the traffic. Below `enforce`, UNSIGNED (empty-chain) envelopes are accepted
+# — so `signed_by` cannot be relied on as a trust gate; bus-layer auth (NATS
+# leaf-node/user auth) is the effective trust boundary under `off`. Only set
+# `off` explicitly on a hardened bus.
 # `arc upgrade Cortex` auto-provisions a seed at `nkey_seed_path` if missing.
 # See docs/sop-stack-identity.md for rotation + threat-model background.
 stack:

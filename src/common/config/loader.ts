@@ -659,10 +659,18 @@ export function applySeedAwareSigningDefault(
   if (typeof seedPath !== "string" || seedPath.length === 0) return false;
 
   const security = raw.security;
-  const securityObj =
-    security !== null && typeof security === "object"
-      ? (security as Record<string, unknown>)
-      : undefined;
+  // Sage review on #1020 — only an ABSENT key or a PLAIN RECORD is mergeable.
+  // A malformed `security:` (array, string, number, bare null key, …) must
+  // reach the schema parse UNTOUCHED so it fails with the schema's own
+  // error; rewriting it here would mask the malformation into a
+  // valid-looking object and silently accept a config that should be
+  // rejected.
+  const isPlainRecord =
+    typeof security === "object" && security !== null && !Array.isArray(security);
+  if (security !== undefined && !isPlainRecord) return false;
+  const securityObj = isPlainRecord
+    ? (security as Record<string, unknown>)
+    : undefined;
   // Any explicitly-set value (including `off`, including an invalid value
   // that the schema parse will reject with its own error) wins over the
   // seed-aware default.
