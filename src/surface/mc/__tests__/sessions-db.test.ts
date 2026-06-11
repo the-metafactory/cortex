@@ -61,6 +61,100 @@ describe("createSession", () => {
     expect(row).toBeTruthy();
     expect(row.pid).toBe(99);
   });
+
+  // --- ST-P0 / ADR-0008 canonical session columns ---
+
+  it("defaults substrate to 'claude-code' when not provided", () => {
+    const session = createSession(db, {
+      assignmentId: "ata-1",
+      endpointKind: "local.observed",
+    });
+    expect(session.substrate).toBe("claude-code");
+    expect(session.parent_session_id).toBeNull();
+
+    const row = db.query("SELECT substrate, parent_session_id FROM sessions WHERE id = ?").get(session.id) as any;
+    expect(row.substrate).toBe("claude-code");
+    expect(row.parent_session_id).toBeNull();
+  });
+
+  it("writes parentSessionId and substrate when provided", () => {
+    const parent = createSession(db, {
+      assignmentId: "ata-1",
+      endpointKind: "local.observed",
+    });
+    // End the parent so the partial unique index idx_sessions_active_assignment
+    // (one open session per assignment) permits the child on the same assignment.
+    endSession(db, parent.id);
+    const child = createSession(db, {
+      assignmentId: "ata-1",
+      endpointKind: "local.observed",
+      parentSessionId: parent.id,
+      substrate: "codex",
+    });
+
+    expect(child.parent_session_id).toBe(parent.id);
+    expect(child.substrate).toBe("codex");
+
+    const row = db
+      .query("SELECT substrate, parent_session_id FROM sessions WHERE id = ?")
+      .get(child.id) as any;
+    expect(row.substrate).toBe("codex");
+    expect(row.parent_session_id).toBe(parent.id);
+  });
+
+  it("writes the denormalized canonical columns when provided", () => {
+    const session = createSession(db, {
+      assignmentId: "ata-1",
+      endpointKind: "local.observed",
+      agentId: "luna",
+      agentName: "Luna",
+      principalId: "andreas",
+      status: "running",
+    });
+
+    expect(session.agent_id).toBe("luna");
+    expect(session.agent_name).toBe("Luna");
+    expect(session.principal_id).toBe("andreas");
+    expect(session.status).toBe("running");
+
+    const row = db
+      .query("SELECT agent_id, agent_name, principal_id, status FROM sessions WHERE id = ?")
+      .get(session.id) as any;
+    expect(row.agent_id).toBe("luna");
+    expect(row.agent_name).toBe("Luna");
+    expect(row.principal_id).toBe("andreas");
+    expect(row.status).toBe("running");
+  });
+
+  it("leaves new canonical columns NULL when not provided (no behavior change for existing callers)", () => {
+    const session = createSession(db, {
+      assignmentId: "ata-1",
+      endpointKind: "local.process.controlled",
+    });
+    expect(session.agent_id).toBeNull();
+    expect(session.agent_name).toBeNull();
+    expect(session.principal_id).toBeNull();
+    expect(session.status).toBeNull();
+    expect(session.parent_session_id).toBeNull();
+
+    const row = db
+      .query("SELECT agent_id, agent_name, principal_id, status FROM sessions WHERE id = ?")
+      .get(session.id) as any;
+    expect(row.agent_id).toBeNull();
+    expect(row.agent_name).toBeNull();
+    expect(row.principal_id).toBeNull();
+    expect(row.status).toBeNull();
+  });
+
+  it("enforces the parent_session_id self-FK", () => {
+    expect(() => {
+      createSession(db, {
+        assignmentId: "ata-1",
+        endpointKind: "local.observed",
+        parentSessionId: "ghost-session",
+      });
+    }).toThrow();
+  });
 });
 
 describe("findActiveSession", () => {

@@ -7,6 +7,13 @@ import type { EndpointKind, Session } from "../types";
 import { generateId } from "./events";
 import { ensureAgentRow } from "./agents";
 
+/**
+ * The default substrate for a session whose harness is unknown — observed CC
+ * hook sessions and any pre-ST-P0 caller. Matches the schema column default and
+ * refactor §3 D4 ('claude-code').
+ */
+export const DEFAULT_SUBSTRATE = "claude-code";
+
 export function createSession(
   db: Database,
   params: {
@@ -14,21 +21,49 @@ export function createSession(
     endpointKind: EndpointKind;
     ccSessionId?: string;
     pid?: number;
+    // --- ST-P0 / ADR-0008 canonical session columns (all optional this phase;
+    // no existing caller passes them — defaults apply and behavior is unchanged). ---
+    /** Self-ref to the spawning session; omit for an agent-rooted session. */
+    parentSessionId?: string | null;
+    /** The substrate; defaults to {@link DEFAULT_SUBSTRATE} ('claude-code'). */
+    substrate?: string;
+    /** Owning agent id (denormalized). */
+    agentId?: string | null;
+    /** Owning agent display name (a session is NOT an agent). */
+    agentName?: string | null;
+    /** Principal the session belongs to (denormalized). */
+    principalId?: string | null;
+    /** Denormalized lifecycle status. */
+    status?: string | null;
   }
 ): Session {
   const id = generateId();
   const now = new Date().toISOString();
+  const substrate = params.substrate ?? DEFAULT_SUBSTRATE;
+  const parentSessionId = params.parentSessionId ?? null;
+  const agentId = params.agentId ?? null;
+  const agentName = params.agentName ?? null;
+  const principalId = params.principalId ?? null;
+  const status = params.status ?? null;
 
   db.query(
-    `INSERT INTO sessions (id, assignment_id, cc_session_id, endpoint_kind, pid, started_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
+    `INSERT INTO sessions
+       (id, assignment_id, cc_session_id, endpoint_kind, pid, started_at,
+        parent_session_id, substrate, agent_id, agent_name, principal_id, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     params.assignmentId,
     params.ccSessionId ?? null,
     params.endpointKind,
     params.pid ?? null,
-    now
+    now,
+    parentSessionId,
+    substrate,
+    agentId,
+    agentName,
+    principalId,
+    status
   );
 
   return {
@@ -39,6 +74,21 @@ export function createSession(
     pid: params.pid ?? null,
     started_at: now,
     ended_at: null,
+    parent_session_id: parentSessionId,
+    substrate,
+    agent_id: agentId,
+    agent_name: agentName,
+    principal_id: principalId,
+    status,
+    duration_ms: null,
+    events_count: null,
+    input_tokens: null,
+    output_tokens: null,
+    cache_read_tokens: null,
+    cost_usd: null,
+    classification: null,
+    data_residency: null,
+    home_principal: null,
   };
 }
 
@@ -50,7 +100,61 @@ interface SessionRow {
   pid: number | null;
   started_at: string;
   ended_at: string | null;
+  parent_session_id: string | null;
+  substrate: string;
+  agent_id: string | null;
+  agent_name: string | null;
+  principal_id: string | null;
+  status: string | null;
+  duration_ms: number | null;
+  events_count: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cost_usd: number | null;
+  classification: string | null;
+  data_residency: string | null;
+  home_principal: string | null;
 }
+
+/**
+ * Single source of truth for mapping a `sessions` row → {@link Session}. Keeps
+ * the SELECT column list and the object shape in lockstep as the canonical
+ * columns grow (ST-P0 / ADR-0008). Callers that SELECT a partial row must pass a
+ * full row through here, so prefer {@link SESSION_SELECT_COLUMNS}.
+ */
+export function rowToSession(row: SessionRow): Session {
+  return {
+    id: row.id,
+    assignment_id: row.assignment_id,
+    cc_session_id: row.cc_session_id,
+    endpoint_kind: row.endpoint_kind,
+    pid: row.pid,
+    started_at: row.started_at,
+    ended_at: row.ended_at,
+    parent_session_id: row.parent_session_id,
+    substrate: row.substrate,
+    agent_id: row.agent_id,
+    agent_name: row.agent_name,
+    principal_id: row.principal_id,
+    status: row.status,
+    duration_ms: row.duration_ms,
+    events_count: row.events_count,
+    input_tokens: row.input_tokens,
+    output_tokens: row.output_tokens,
+    cache_read_tokens: row.cache_read_tokens,
+    cost_usd: row.cost_usd,
+    classification: row.classification,
+    data_residency: row.data_residency,
+    home_principal: row.home_principal,
+  };
+}
+
+/** Canonical SELECT column list for a full {@link Session} row mapping. */
+export const SESSION_SELECT_COLUMNS = `id, assignment_id, cc_session_id, endpoint_kind, pid,
+        started_at, ended_at, parent_session_id, substrate, agent_id, agent_name,
+        principal_id, status, duration_ms, events_count, input_tokens, output_tokens,
+        cache_read_tokens, cost_usd, classification, data_residency, home_principal`;
 
 /**
  * Shared lookup for the most-recent session of an assignment. `activeOnly`
@@ -71,8 +175,7 @@ function findSession(
     : `WHERE assignment_id = ?`;
   const row = db
     .query(
-      `SELECT id, assignment_id, cc_session_id, endpoint_kind, pid,
-              started_at, ended_at
+      `SELECT ${SESSION_SELECT_COLUMNS}
        FROM sessions
        ${whereClause}
        ORDER BY started_at DESC
@@ -82,15 +185,7 @@ function findSession(
 
   if (!row) return null;
 
-  return {
-    id: row.id,
-    assignment_id: row.assignment_id,
-    cc_session_id: row.cc_session_id,
-    endpoint_kind: row.endpoint_kind,
-    pid: row.pid,
-    started_at: row.started_at,
-    ended_at: row.ended_at,
-  };
+  return rowToSession(row);
 }
 
 export function findActiveSession(

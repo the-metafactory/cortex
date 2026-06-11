@@ -85,6 +85,23 @@ export const SCHEMA_SQL: string[] = [
   // --- sessions ---
   // FK policy: CASCADE off assignment — sessions are detail rows of an
   // assignment; archiving an assignment should sweep its sessions with it.
+  //
+  // ST-P0 / ADR-0008: the canonical (denormalized) session columns
+  // (agent_id/agent_name/principal_id/status/metrics/sovereignty) +
+  // session-tree fields (parent_session_id/substrate) are defined ONCE in
+  // db/canonical-session.ts (CANONICAL_SESSION_COLUMNS) and asserted against
+  // both physical schemas by __tests__/session-schema-parity.test.ts. They are
+  // mirrored verbatim here (the DDL is the physical artifact; the shared source
+  // is the contract the parity test enforces).
+  //
+  // NAMING NOTE (ADR-0008): the canonical names prefer the D1 spelling, but the
+  // local PK stays `id` and the terminal timestamp stays `ended_at` this phase
+  // — renaming them to session_id/completed_at cascades through the
+  // events/attention FKs, the partial unique indices, transitions.ts and
+  // retention.ts; that rename is a deliberate Phase-2 TODO (canonical-session.ts
+  // CanonicalSessionColumn.phase2Rename). The new denormalized columns are
+  // NULLABLE on local until Phase 2 syncs them on write; substrate is NOT NULL
+  // DEFAULT 'claude-code', parent_session_id is a nullable self-ref.
   `CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     assignment_id TEXT NOT NULL REFERENCES agent_task_assignment(id) ON DELETE CASCADE,
@@ -93,7 +110,23 @@ export const SCHEMA_SQL: string[] = [
       CHECK(endpoint_kind IN ('local.process.controlled','local.observed','local.process.autonomous')),
     pid INTEGER,
     started_at TEXT NOT NULL DEFAULT (datetime('now')),
-    ended_at TEXT
+    ended_at TEXT,
+    -- ST-P0 / ADR-0008 canonical session columns (see canonical-session.ts) --
+    parent_session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+    substrate TEXT NOT NULL DEFAULT 'claude-code',
+    agent_id TEXT,
+    agent_name TEXT,
+    principal_id TEXT,
+    status TEXT,
+    duration_ms INTEGER,
+    events_count INTEGER,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    cost_usd REAL,
+    classification TEXT,
+    data_residency TEXT,
+    home_principal TEXT
   )`,
 
   // --- events ---
@@ -126,6 +159,11 @@ export const SCHEMA_SQL: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_ata_task_id ON agent_task_assignment(task_id)`,
   `CREATE INDEX IF NOT EXISTS idx_ata_state ON agent_task_assignment(state)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_assignment_id ON sessions(assignment_id)`,
+  // ST-P0 / ADR-0008 — session-tree lookups: children of a session, and
+  // sessions of a given substrate. Names are part of the canonical contract
+  // (CANONICAL_SESSION_INDICES) the parity test asserts on both substrates.
+  `CREATE INDEX IF NOT EXISTS idx_sessions_parent_session_id ON sessions(parent_session_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sessions_substrate ON sessions(substrate)`,
   // F-20.F sweep — composite index for the "most-recent session per
   // assignment" subquery used by both `db/tasks.ts` (F-20.F denorm)
   // and `db/assignments.ts` (focus-area / drill-down). The
@@ -506,6 +544,49 @@ export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
       `CREATE INDEX IF NOT EXISTS idx_tasks_iteration ON tasks(iteration_id)`,
     ],
   },
+
+  // ST-P0 / ADR-0008 — canonical session columns for EXISTING DBs. Fresh DBs
+  // get these from the sessions CREATE TABLE above; an already-initialised DB
+  // (the running stacks) backfills them here via the same pragma_table_info
+  // gate the F-13/#857/#864 column-adds use. Names/types mirror
+  // canonical-session.ts CANONICAL_SESSION_COLUMNS (localName) verbatim — the
+  // parity test pins them.
+  //
+  // SQLite ALTER ADD COLUMN caveat: a NOT NULL column needs a constant DEFAULT
+  // (substrate qualifies). A self-referential FK cannot be added via ALTER on a
+  // table that already has rows in some SQLite builds, BUT bun:sqlite permits
+  // `ADD COLUMN x REFERENCES sessions(id)` with foreign_keys ON (the FK is only
+  // checked on write); existing rows have NULL parent_session_id which satisfies
+  // the FK. The session-tree CASCADE applies going forward.
+  {
+    table: "sessions",
+    column: "parent_session_id",
+    ddl: `ALTER TABLE sessions ADD COLUMN parent_session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE`,
+    post: [
+      `CREATE INDEX IF NOT EXISTS idx_sessions_parent_session_id ON sessions(parent_session_id)`,
+    ],
+  },
+  {
+    table: "sessions",
+    column: "substrate",
+    ddl: `ALTER TABLE sessions ADD COLUMN substrate TEXT NOT NULL DEFAULT 'claude-code'`,
+    post: [
+      `CREATE INDEX IF NOT EXISTS idx_sessions_substrate ON sessions(substrate)`,
+    ],
+  },
+  { table: "sessions", column: "agent_id", ddl: `ALTER TABLE sessions ADD COLUMN agent_id TEXT` },
+  { table: "sessions", column: "agent_name", ddl: `ALTER TABLE sessions ADD COLUMN agent_name TEXT` },
+  { table: "sessions", column: "principal_id", ddl: `ALTER TABLE sessions ADD COLUMN principal_id TEXT` },
+  { table: "sessions", column: "status", ddl: `ALTER TABLE sessions ADD COLUMN status TEXT` },
+  { table: "sessions", column: "duration_ms", ddl: `ALTER TABLE sessions ADD COLUMN duration_ms INTEGER` },
+  { table: "sessions", column: "events_count", ddl: `ALTER TABLE sessions ADD COLUMN events_count INTEGER` },
+  { table: "sessions", column: "input_tokens", ddl: `ALTER TABLE sessions ADD COLUMN input_tokens INTEGER` },
+  { table: "sessions", column: "output_tokens", ddl: `ALTER TABLE sessions ADD COLUMN output_tokens INTEGER` },
+  { table: "sessions", column: "cache_read_tokens", ddl: `ALTER TABLE sessions ADD COLUMN cache_read_tokens INTEGER` },
+  { table: "sessions", column: "cost_usd", ddl: `ALTER TABLE sessions ADD COLUMN cost_usd REAL` },
+  { table: "sessions", column: "classification", ddl: `ALTER TABLE sessions ADD COLUMN classification TEXT` },
+  { table: "sessions", column: "data_residency", ddl: `ALTER TABLE sessions ADD COLUMN data_residency TEXT` },
+  { table: "sessions", column: "home_principal", ddl: `ALTER TABLE sessions ADD COLUMN home_principal TEXT` },
 ];
 
 /**

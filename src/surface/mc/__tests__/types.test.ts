@@ -61,6 +61,25 @@ describe("mission-control types", () => {
   });
 
   it("Session type accepts both controlled and observed kinds", () => {
+    // ST-P0 / ADR-0008 canonical session columns (denormalized fields nullable
+    // this phase; substrate NOT NULL with a default; parent_session_id self-ref).
+    const canonicalDefaults = {
+      parent_session_id: null,
+      substrate: "claude-code",
+      agent_id: null,
+      agent_name: null,
+      principal_id: null,
+      status: null,
+      duration_ms: null,
+      events_count: null,
+      input_tokens: null,
+      output_tokens: null,
+      cache_read_tokens: null,
+      cost_usd: null,
+      classification: null,
+      data_residency: null,
+      home_principal: null,
+    };
     const controlled: Session = {
       id: "s-1",
       assignment_id: "ata-1",
@@ -69,6 +88,7 @@ describe("mission-control types", () => {
       pid: 12345,
       started_at: "2026-04-17T00:00:00Z",
       ended_at: null,
+      ...canonicalDefaults,
     };
     const observed: Session = {
       id: "s-2",
@@ -78,9 +98,16 @@ describe("mission-control types", () => {
       pid: null,
       started_at: "2026-04-17T00:00:00Z",
       ended_at: null,
+      ...canonicalDefaults,
+      // a child session on a non-default substrate exercises the new fields
+      parent_session_id: "s-1",
+      substrate: "codex",
     };
     expect(controlled.endpoint_kind).toBe("local.process.controlled");
     expect(observed.endpoint_kind).toBe("local.observed");
+    expect(controlled.substrate).toBe("claude-code");
+    expect(observed.parent_session_id).toBe("s-1");
+    expect(observed.substrate).toBe("codex");
   });
 
   it("McEvent type accepts valid shape", () => {

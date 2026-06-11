@@ -33,7 +33,15 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- All three are NULL for pre-IAW publishers. See migrations/0003_sovereignty.sql.
   classification TEXT,        -- 'local' | 'federated' | 'public' | NULL
   data_residency TEXT,        -- e.g. 'nz', 'eu', NULL
-  home_principal TEXT          -- principal.home_principal (post-`did:mf:` strip)
+  home_principal TEXT,         -- principal.home_principal (post-`did:mf:` strip)
+  -- ST-P0 / ADR-0008 canonical session-tree fields. Defined ONCE in
+  -- ../db/canonical-session.ts (CANONICAL_SESSION_COLUMNS) and asserted against
+  -- this DDL + ../db/schema.ts by ../__tests__/session-schema-parity.test.ts.
+  -- The cloud sessions row was already flat (agent_id/agent_name/principal_id/
+  -- status/metrics/sovereignty are columns above) — these two close the gap.
+  -- Added to deployed D1 via migrations/0005_session_tree.sql.
+  parent_session_id TEXT,                   -- self-ref to the spawning session; NULL ⇒ agent-rooted
+  substrate TEXT NOT NULL DEFAULT 'claude-code'  -- claude-code | codex | … (attribute of a session)
 );
 
 CREATE TABLE IF NOT EXISTS github_events (
@@ -139,6 +147,11 @@ CREATE INDEX IF NOT EXISTS idx_sessions_completed ON sessions(completed_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_principal ON sessions(principal_id);
 -- IAW D.5 — slicing the dashboard snapshot by home_principal on every poll
 CREATE INDEX IF NOT EXISTS idx_sessions_home_principal ON sessions(home_principal) WHERE home_principal IS NOT NULL;
+-- ST-P0 / ADR-0008 — session-tree lookups (children of a session; sessions per
+-- substrate). Mirror of the local indices; names are the canonical contract
+-- (CANONICAL_SESSION_INDICES) the parity test pins on both substrates.
+CREATE INDEX IF NOT EXISTS idx_sessions_parent_session_id ON sessions(parent_session_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_substrate ON sessions(substrate);
 CREATE INDEX IF NOT EXISTS idx_github_repo ON github_events(repo, created_at);
 CREATE INDEX IF NOT EXISTS idx_github_agent ON github_events(agent_authored, created_at);
 CREATE INDEX IF NOT EXISTS idx_github_principal ON github_events(principal_id);

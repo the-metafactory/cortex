@@ -425,6 +425,14 @@ export interface Task {
   updated_at: number;
 }
 
+/**
+ * A dispatch/runtime agent — the bus runtime identity (NKey + JetStream
+ * consumer), ~1 per assistant×stack. This is **NOT a session**: the recurring
+ * 1,044-tile bug (refactor §1) is exactly the conflation of a CC session with an
+ * agent row. A session belongs to an agent and is modelled by {@link Session}
+ * (with `agent_id`/`agent_name` as session columns per ADR-0008) — never as its
+ * own agent row. See CONTEXT.md §Sessions.
+ */
 export interface Agent {
   id: string;
   name: string;
@@ -443,6 +451,26 @@ export interface AgentTaskAssignment {
   updated_at: string;
 }
 
+/**
+ * One run of a substrate (CONTEXT.md §Sessions) — belongs to one agent, runs on
+ * one substrate, and may be a child of another session.
+ *
+ * ST-P0 / ADR-0008: the canonical (flat/denormalized) session columns are the
+ * shared shape across the local bun:sqlite and cloud D1 substrates — defined
+ * once in `db/canonical-session.ts` and pinned to both physical schemas by the
+ * parity test. The denormalized attribution/lifecycle/metric/sovereignty fields
+ * are nullable on the local side until Phase 2 syncs them on write (this phase
+ * is foundation-only). The session-tree fields land now:
+ *   - `parent_session_id` — self-ref; NULL ⇒ agent-rooted session.
+ *   - `substrate`         — NOT NULL, defaults to 'claude-code'.
+ *
+ * NAMING (ADR-0008): canonical names prefer the D1 spelling, but the local
+ * physical PK stays `id` and the terminal timestamp stays `ended_at` — the
+ * `id→session_id` / `ended_at→completed_at` rename cascades through FKs, the
+ * partial unique indices, transitions.ts and retention.ts, so it is a deliberate
+ * Phase-2 TODO. This interface uses the local physical names (it backs the local
+ * row + helpers); the cloud projection maps to `session_id`/`completed_at`.
+ */
 export interface Session {
   id: string;
   assignment_id: string;
@@ -450,7 +478,33 @@ export interface Session {
   endpoint_kind: EndpointKind;
   pid: number | null;
   started_at: string;
+  /** Terminal timestamp. Canonical name `completed_at`; local stays `ended_at` (Phase-2 rename). */
   ended_at: string | null;
+  // --- ST-P0 / ADR-0008 canonical session columns ---
+  /** Self-ref to the spawning session; NULL ⇒ agent-rooted. */
+  parent_session_id: string | null;
+  /** The substrate this session runs on (claude-code | codex | …). */
+  substrate: string;
+  /** Owning agent id (denormalized). NULL until Phase 2 syncs it. */
+  agent_id: string | null;
+  /** Owning agent display name (a session is NOT an agent). NULL until Phase 2. */
+  agent_name: string | null;
+  /** Principal the session belongs to (denormalized). NULL until Phase 2. */
+  principal_id: string | null;
+  /** Denormalized lifecycle status. NULL until Phase 2 syncs it off the assignment. */
+  status: string | null;
+  /** Wall-clock duration in ms. NULL until known. */
+  duration_ms: number | null;
+  /** Events observed for the session. NULL until known. */
+  events_count: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cost_usd: number | null;
+  /** Sovereignty (IAW D.5): 'local' | 'federated' | 'public' | NULL. */
+  classification: string | null;
+  data_residency: string | null;
+  home_principal: string | null;
 }
 
 export interface McEvent {
