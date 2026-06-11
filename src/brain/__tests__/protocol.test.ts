@@ -311,6 +311,19 @@ describe("256 KiB inline-attachment cap", () => {
     });
     expect(parseBrainEffect(line).kind).toBe("invalid");
   });
+
+  // Finding 2: the XOR must be genuine — both keys present must FAIL, not
+  // silently bind to the b64 branch and strip `path`.
+  test("an attachment with BOTH b64 and path is invalid (genuine XOR)", () => {
+    const line = JSON.stringify({
+      v: 1,
+      type: "post",
+      task_id: "t1",
+      text: "both",
+      attachment: { filename: "f.png", b64: "aGk=", path: "/scratch/f.png" },
+    });
+    expect(parseBrainEffect(line).kind).toBe("invalid");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -350,6 +363,112 @@ describe("result status discrimination", () => {
       });
       expect(parseBrainEffect(line).kind).toBe("ok");
     }
+  });
+
+  // Finding 4: brain-emitted result.failed stays the 3-kind taxonomy — the
+  // host-only kinds must NOT be accepted from a brain.
+  test("brain result.failed rejects host-only kinds (policy_denied, compliance_block)", () => {
+    for (const kind of ["policy_denied", "compliance_block"]) {
+      const line = JSON.stringify({
+        v: 1,
+        type: "result",
+        task_id: "t1",
+        status: "failed",
+        reason: { kind, detail: "x" },
+      });
+      expect(parseBrainEffect(line).kind).toBe("invalid");
+    }
+  });
+
+  // Finding 4: not_now may carry an optional retry_after_ms hint.
+  test("not_now result.failed may carry retry_after_ms", () => {
+    const line = JSON.stringify({
+      v: 1,
+      type: "result",
+      task_id: "t1",
+      status: "failed",
+      reason: { kind: "not_now", detail: "busy", retry_after_ms: 5000 },
+    });
+    const parsed = parseBrainEffect(line);
+    expect(parsed.kind).toBe("ok");
+    if (parsed.kind === "ok" && parsed.effect.type === "result" && parsed.effect.status === "failed") {
+      expect(parsed.effect.reason.retry_after_ms).toBe(5000);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// effect_rejected host taxonomy (finding 4)
+// ---------------------------------------------------------------------------
+
+describe("effect_rejected host taxonomy", () => {
+  // The HOST may emit the brain's 3 kinds PLUS policy_denied / compliance_block,
+  // passed through verbatim (never flattened into a brain kind).
+  test("host effect_rejected accepts all five kinds", () => {
+    for (const kind of [
+      "cant_do",
+      "not_now",
+      "wont_do",
+      "policy_denied",
+      "compliance_block",
+    ]) {
+      const line = JSON.stringify({
+        v: 1,
+        type: "effect_rejected",
+        task_id: "t1",
+        effect: "dispatch",
+        reason: { kind, detail: "host refused" },
+      });
+      expect(parseBrainEvent(line).kind).toBe("ok");
+    }
+  });
+
+  test("a compliance_block reason round-trips verbatim (not flattened)", () => {
+    const ev = {
+      v: 1,
+      type: "effect_rejected",
+      task_id: "t1",
+      effect: "post",
+      reason: { kind: "compliance_block", detail: "PII redaction required" },
+    } as const;
+    const parsed = parseBrainEvent(encodeBrainEvent(ev));
+    expect(parsed.kind).toBe("ok");
+    if (parsed.kind === "ok" && parsed.event.type === "effect_rejected") {
+      expect(parsed.event.reason.kind).toBe("compliance_block");
+      expect(parsed.event.reason.detail).toBe("PII redaction required");
+    }
+  });
+
+  test("an unknown effect_rejected kind is invalid", () => {
+    const line = JSON.stringify({
+      v: 1,
+      type: "effect_rejected",
+      task_id: "t1",
+      effect: "post",
+      reason: { kind: "exploded", detail: "x" },
+    });
+    expect(parseBrainEvent(line).kind).toBe("invalid");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hello identity is host-authoritative (finding 5)
+// ---------------------------------------------------------------------------
+
+describe("hello identity direction", () => {
+  // `hello` lives in the cortex→brain EVENT union, never the brain→cortex
+  // EFFECT union. A brain emitting `hello` on its stdout (trying to assert its
+  // own agent name) is therefore an UNKNOWN effect — dropped, never trusted.
+  test("a brain-emitted hello is an unknown effect (host owns identity)", () => {
+    const line = JSON.stringify({
+      v: 1,
+      type: "hello",
+      persona: "I am whoever I say",
+      agent: "impersonator",
+      protocol: "cortex-brain/v1",
+    });
+    const parsed = parseBrainEffect(line);
+    expect(parsed.kind).toBe("unknown");
   });
 });
 
@@ -432,9 +551,6 @@ describe("JsonlDecoder", () => {
     // "café" — the é is two UTF-8 bytes; split between them.
     const payload = '{"t":"café"}\n';
     const bytes = enc(payload);
-    // Find the é bytes and split mid-codepoint.
-    const splitAt = payload.indexOf("é") + 1; // byte index differs but close enough; do real byte split:
-    void splitAt;
     // Real byte-level split: cut the buffer exactly between the two é bytes.
     const eIdx = bytes.findIndex((b) => b === 0xc3); // first byte of é
     const first = bytes.slice(0, eIdx + 1);

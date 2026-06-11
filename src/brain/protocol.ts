@@ -45,11 +45,21 @@
  *
  * Gate/effect names use *principal* (`ask_principal`, `principal-ack`) per
  * vocabulary migration 0002 R1/R2. `gate_verdict.verdict` reuses the existing
- * gate vocabulary (`pass | fail`). The `result.failed` / `effect_rejected`
- * `reason.kind` taxonomy (`cant_do | not_now | wont_do`) is the
- * brain-protocol subset of the dispatch nak taxonomy
- * (`src/bus/dispatch-events.ts` `DispatchTaskFailedReason`) — the protocol
- * deliberately does NOT re-flatten the three kinds into one (§5 property 5).
+ * gate vocabulary (`pass | fail`).
+ *
+ * The refusal taxonomy is DIRECTION-ASYMMETRIC, not a 1:1 mirror of the
+ * dispatch nak taxonomy (§5 property 5):
+ *
+ *   - **Brains emit 3 kinds** (`result.failed.reason.kind`):
+ *     `cant_do | not_now | wont_do`. `not_now` may carry `retry_after_ms`.
+ *   - **The host may emit 5 kinds** (`effect_rejected.reason.kind`): those 3
+ *     plus `policy_denied | compliance_block`, which only the host can decide.
+ *
+ * Compliance/policy refusals never silently flatten into a brain kind — the
+ * host passes them through `effect_rejected` verbatim. The brain-side three are
+ * the subset shared with the dispatch nak taxonomy
+ * (`src/bus/dispatch-events.ts` `DispatchTaskFailedReason`); the protocol
+ * deliberately does NOT re-flatten the kinds into one.
  */
 
 import { z } from "zod/v4";
@@ -78,23 +88,65 @@ export const MAX_ATTACHMENT_B64_BYTES = 256 * 1024;
 // ---------------------------------------------------------------------------
 
 /**
- * The typed refusal taxonomy shared by `result.failed` and `effect_rejected`.
- * Mirrors the dispatch nak taxonomy 1:1 (a brain refusal maps straight onto
- * the dispatch failure taxonomy — §5 property 5):
+ * The typed refusal taxonomy. The mapping onto the dispatch nak taxonomy is
+ * NOT 1:1 — it is direction-asymmetric (§5 property 5):
  *
- *   - `cant_do` — the brain is structurally unable (missing skill / capability).
- *   - `not_now` — transient; the same request might succeed later (backpressure).
- *   - `wont_do` — policy / will refusal; will not succeed on retry.
+ *   - **Brains emit 3 kinds** (`result.failed.reason.kind`): a brain can only
+ *     describe its OWN inability or unwillingness.
+ *       - `cant_do` — structurally unable (missing skill / capability).
+ *       - `not_now` — transient; the same request might succeed later
+ *         (backpressure). May carry `retry_after_ms` as a hint.
+ *       - `wont_do` — the brain's own will refusal; will not succeed on retry.
+ *   - **The HOST may emit 5 kinds** (`effect_rejected.reason.kind`): the host
+ *     refuses an effect for the 3 brain reasons PLUS two it alone can decide.
+ *       - `policy_denied` — a policy / sovereignty rule refused the effect.
+ *       - `compliance_block` — a compliance gate blocked the effect.
+ *
+ * Compliance/policy refusals NEVER silently flatten into the brain's 3 kinds:
+ * the host passes them through `effect_rejected` verbatim with their own kind,
+ * so the brain can distinguish "I won't" from "the host's policy won't".
  */
+
+/** Brain-emitted refusal kinds (`result.failed`) — the brain's own 3. */
 export const BrainReasonKindSchema = z.enum(["cant_do", "not_now", "wont_do"]);
 export type BrainReasonKind = z.infer<typeof BrainReasonKindSchema>;
 
-/** A typed refusal reason: `{ kind, detail }`. */
+/**
+ * Host-emitted refusal kinds (`effect_rejected`) — the brain's 3 plus the two
+ * only the host can decide (`policy_denied`, `compliance_block`).
+ */
+export const HostReasonKindSchema = z.enum([
+  "cant_do",
+  "not_now",
+  "wont_do",
+  "policy_denied",
+  "compliance_block",
+]);
+export type HostReasonKind = z.infer<typeof HostReasonKindSchema>;
+
+/**
+ * A brain-emitted refusal reason: `{ kind, detail }`, with an optional
+ * `retry_after_ms` hint that is only meaningful when `kind === "not_now"`.
+ */
 export const BrainReasonSchema = z.object({
   kind: BrainReasonKindSchema,
   detail: z.string(),
+  /** Retry hint (ms); only meaningful for `not_now`. */
+  retry_after_ms: z.number().int().nonnegative().optional(),
 });
 export type BrainReason = z.infer<typeof BrainReasonSchema>;
+
+/**
+ * A host-emitted refusal reason (`effect_rejected`): the wider 5-kind taxonomy.
+ * `retry_after_ms` is likewise only meaningful for `not_now`.
+ */
+export const HostReasonSchema = z.object({
+  kind: HostReasonKindSchema,
+  detail: z.string(),
+  /** Retry hint (ms); only meaningful for `not_now`. */
+  retry_after_ms: z.number().int().nonnegative().optional(),
+});
+export type HostReason = z.infer<typeof HostReasonSchema>;
 
 /**
  * Gate verdict vocabulary — reuses the existing gate vocabulary (`pass | fail`)
@@ -212,9 +264,12 @@ export type ShutdownEvent = z.infer<typeof ShutdownEventSchema>;
 
 /**
  * `effect_rejected` — cortex refused one of the brain's effects (e.g. a
- * `dispatch` for a capability outside the manifest, or a foreign `task_id`).
- * The brain decides how to degrade. Carries the same `reason.kind` taxonomy
- * as `result.failed` (§5 property 5).
+ * `dispatch` for a capability outside the manifest, a foreign `task_id`, or a
+ * scratch-path escape). The brain decides how to degrade. Carries the WIDER
+ * HOST taxonomy ({@link HostReasonSchema}): the brain's 3 kinds plus
+ * `policy_denied | compliance_block`, which only the host can decide (§5
+ * property 5). A policy/compliance refusal is passed through verbatim, never
+ * flattened into a brain kind.
  */
 export const EffectRejectedEventSchema = z.object({
   v: z.literal(BRAIN_PROTOCOL_VERSION),
@@ -222,7 +277,7 @@ export const EffectRejectedEventSchema = z.object({
   task_id: z.string().min(1),
   /** The effect type cortex refused (e.g. `"dispatch"`, `"post"`). */
   effect: z.string().min(1),
-  reason: BrainReasonSchema,
+  reason: HostReasonSchema,
 });
 export type EffectRejectedEvent = z.infer<typeof EffectRejectedEventSchema>;
 
@@ -231,6 +286,14 @@ export type EffectRejectedEvent = z.infer<typeof EffectRejectedEventSchema>;
  * (daemon brains do not get it per-task) plus the agent id and protocol
  * version. (§5 "Persona delivery"; daemon path is B-2 but the shape is fixed
  * here so the codec is complete.)
+ *
+ * **Agent identity is HOST-AUTHORITATIVE.** `hello` is a cortex → brain event:
+ * the host TELLS the brain which agent identity it has been spawned as. It is
+ * NOT a brain-asserted name. The brain never emits `hello` (it lives in the
+ * EVENT union cortex encodes, never the EFFECT union the brain emits), so there
+ * is no codec path by which a brain could assert its own `agent` and have the
+ * host trust it. The identity source is host config, full stop; this field is
+ * informational, host → brain.
  */
 export const HelloEventSchema = z.object({
   v: z.literal(BRAIN_PROTOCOL_VERSION),
@@ -269,18 +332,25 @@ export const BRAIN_EFFECT_RESULT = "result" as const;
 export const BRAIN_EFFECT_LOG = "log" as const;
 
 /**
- * `post` attachment — inline base64 OR a scratch-dir path, never both.
+ * `post` attachment — inline base64 XOR a scratch-dir path, never both.
  *
  *   - `{ filename, b64 }` — inline, capped at {@link MAX_ATTACHMENT_B64_BYTES}
  *     (256 KiB) enforced at parse time.
  *   - `{ filename, path }` — a path in the brain's scratch dir; cortex reads
- *     and uploads it. The over-256-KiB escape hatch.
+ *     and uploads it. The over-256-KiB escape hatch. Host-side scratch
+ *     confinement (the resolved path must stay within THIS task's scratch
+ *     dir) is enforced by the runner, NOT here — the codec only validates
+ *     SHAPE; the runner owns the filesystem boundary (see
+ *     `exec-brain-runner.ts` `confineScratchPath`).
  *
- * Modeled as a two-member union so a payload carrying neither (or both
- * required keys of opposite variants) fails validation.
+ * Modeled as a GENUINELY EXCLUSIVE two-member union: each branch rejects the
+ * other variant's discriminating key. A payload carrying BOTH `b64` and
+ * `path` matches neither branch and fails validation (rather than silently
+ * binding to the b64 branch and stripping `path`). A payload carrying neither
+ * also fails.
  */
 export const PostAttachmentSchema = z.union([
-  z.object({
+  z.strictObject({
     filename: z.string().min(1),
     b64: z
       .string()
@@ -291,7 +361,7 @@ export const PostAttachmentSchema = z.union([
         },
       ),
   }),
-  z.object({
+  z.strictObject({
     filename: z.string().min(1),
     path: z.string().min(1),
   }),
