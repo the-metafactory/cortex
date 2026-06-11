@@ -47,6 +47,7 @@ import {
 import { NKEY_PUBKEY_REGEX } from "./nkey";
 import { NatsSubjectsSchema } from "./nats-subjects";
 import { LETTER_PREFIX_ID_REGEX } from "./id";
+import { OfferingSchema, superRefineOfferings } from "./offering";
 import { StackConfigSchema, deriveStackId } from "./stack";
 
 // =============================================================================
@@ -1985,6 +1986,37 @@ export const PolicySchema = z.object({
   roles: z.array(PolicyRoleSchema).default([]),
   federated: PolicyFederatedSchema.optional(),
   public: PolicyPublicSchema.optional(),
+  /**
+   * CO-1 (epic cortex#939) — the capability **offering** policy block: the
+   * provider-side `(capability, offer-scope, accept-policy)` triples that
+   * elevate a flat `runtime.capabilities[]` tag into *exposed work* (design
+   * `docs/design-capability-offering.md` §2/§9, ADR-0008 DD-CO-1).
+   *
+   * **Per-stack runtime config (DD-CO-7, ADR-0009).** Offerings live
+   * self-contained on the stack layer; the boot composer never composes a
+   * shared `offerings/` layer — each stack fully describes what *it* exposes.
+   *
+   * **Default-defaulted ⇒ byte-identical boot (the CO-1 contract).** OPTIONAL
+   * and fully-defaulted: absent ⇒ `[]` ⇒ every capability resolves `local`-only
+   * via `resolveOffering` (`./offering.ts`) — exactly today's behaviour. No
+   * consumer wiring reads this in CO-1 (that's CO-2); no federation-config
+   * generation (CO-3). This is the source-of-truth shape those slices project.
+   *
+   * The structural per-entry schema is `OfferingSchema`; the cross-offering
+   * coherence rules (no-duplicate-capability, federated-requires-naming,
+   * scope↔accept agreement) run in `superRefineOfferings` (invoked in the
+   * superRefine below). The "offered capability must EXIST in the stack's
+   * declared capabilities" cross-block check lives on `CortexConfigSchema`
+   * (where `capabilities[]` + `agents[]` are in scope).
+   *
+   * **`.optional()`, not `.default([])`** — mirrors the sibling widening blocks
+   * `federated` / `public`, which are also `.optional()`: an absent `offerings`
+   * is the default-deny baseline (every capability resolves `local`-only via
+   * `resolveOffering`, which treats `undefined` exactly like `[]`), so a
+   * `Policy`-typed literal need not name it. The resolver — not a schema
+   * default — is the single source of the default-deny semantics.
+   */
+  offerings: z.array(OfferingSchema).optional(),
   // v2.0.0 cutover (cortex#297) — `parallel_mode_enabled` retired with
   // the parallel-mode plumbing in adapters. PolicyEngine is the sole
   // authorisation gate; legacy role-resolver is gone.
@@ -2218,6 +2250,22 @@ export const PolicySchema = z.object({
           }
         }
       });
+    });
+  }
+
+  // CO-1 (epic cortex#939) — cross-offering coherence. `superRefineOfferings`
+  // (`./offering.ts`) returns per-offender issues with paths RELATIVE to the
+  // offerings array; we prepend `["offerings", ...]` so the YAML-aware loader
+  // renders each inline at the bad token — same per-offender pattern as the
+  // principal/role/network rules above. Enforces: no duplicate capability;
+  // federated scope requires a named accept (DEFAULT-DENY, ADR-0008 DD-CO-1);
+  // public scope requires a {kind:'surface'} accept; accept-kind must agree
+  // with the offered scope; a local-only offering carries no accept.
+  for (const issue of superRefineOfferings(policy.offerings ?? [])) {
+    ctx.addIssue({
+      code: "custom",
+      message: issue.message,
+      path: ["offerings", ...issue.path],
     });
   }
 });
@@ -2617,6 +2665,40 @@ export const CortexConfigSchema = z.object({
       validateSubjectScope(network.accept_subjects, "accept_subjects");
       validateSubjectScope(network.deny_subjects, "deny_subjects");
     });
+  })
+  // CO-1 (epic cortex#939) — offered capability must EXIST in the stack.
+  //
+  // An offering names a capability by id; that id MUST resolve to a declared
+  // top-level `capabilities[]` entry (the same catalog the agent-side
+  // `runtime.capabilities[]` references). Offering a capability the stack does
+  // not provide is a config error — you'd be exposing a capability no agent
+  // here fulfills, so a consumer that claimed the Offer would dead-letter.
+  //
+  // This is an ERROR (not a warn) for parity with the existing capability
+  // dangling-reference checks above, all of which error — the offering policy
+  // is only meaningful relative to a real, provided capability. The check
+  // lives here (not in `PolicySchema.superRefine`) because `capabilities[]` is
+  // a top-level block the policy sub-schema does not see. Batch-emit so a
+  // config with several phantom offerings surfaces all of them in one pass.
+  .superRefine((config, ctx) => {
+    const offerings = config.policy?.offerings;
+    if (offerings === undefined || offerings.length === 0) return;
+    const catalogIds = new Set(config.capabilities.map((c) => c.id));
+    const declaredCatalog = [...catalogIds].sort().join(", ") || "(none)";
+    offerings.forEach((offering, offeringIdx) => {
+      if (!catalogIds.has(offering.capability)) {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            `policy.offerings[${offeringIdx}] offers capability "${offering.capability}", ` +
+            `but no matching entry exists in the top-level capabilities[] catalog ` +
+            `(declared capability ids: ${declaredCatalog}). ` +
+            `An offering exposes a capability the stack PROVIDES; declare "${offering.capability}" ` +
+            `in capabilities[] (with a provided_by[] agent) before offering it.`,
+          path: ["policy", "offerings", offeringIdx, "capability"],
+        });
+      }
+    });
   });
 
 export type CortexConfig = z.infer<typeof CortexConfigSchema>;
@@ -2648,3 +2730,31 @@ export type { StackConfig, DerivedStackId, DeriveStackIdInput } from "./stack";
  */
 export { CapabilitySchema } from "./capability";
 export type { Capability, CapabilityRate, CapabilityCost } from "./capability";
+
+/**
+ * CO-1 (epic cortex#939) re-exports — the capability **offering** policy model
+ * ships in its own module (`./offering.ts`); downstream code pulling from this
+ * file shouldn't need a second import path. Mirrors the `CapabilitySchema`
+ * re-export above. `resolveOffering` is the default-deny resolver CO-2
+ * consumes; `OfferScopeSchema`/`AcceptPolicySchema` are the model's public
+ * surface.
+ */
+export {
+  OfferingSchema,
+  OfferScopeSchema,
+  AcceptPolicySchema,
+  PublicPredicateSchema,
+  PublicPredicateKindSchema,
+  resolveOffering,
+} from "./offering";
+export type {
+  Offering,
+  OfferScope,
+  AcceptPolicy,
+  FederatedAccept,
+  PublicAccept,
+  PublicPredicate,
+  PublicPredicateKind,
+  PublicLimits,
+  ResolvedOffering,
+} from "./offering";

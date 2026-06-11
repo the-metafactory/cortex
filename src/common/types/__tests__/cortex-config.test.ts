@@ -34,6 +34,7 @@ import {
   PolicyFederatedRegistrySchema,
   PolicyFederatedSchema,
   PolicyPublicSchema,
+  PolicySchema,
   RendererSchema,
 } from "../cortex-config";
 
@@ -849,6 +850,54 @@ describe("CortexConfigSchema", () => {
     expect(parsed.agents[0]?.trust).toEqual(["echo", "ghost-agent-that-doesnt-exist"]);
   });
 
+  // CO-1 (epic cortex#939) — cross-block: an offered capability must EXIST in
+  // the stack's declared capabilities[]. This check lives on CortexConfigSchema
+  // (not PolicySchema) because it needs the top-level capabilities[] catalog.
+  test("CO-1: byte-identical — minConfig (no offerings) parses with policy absent", () => {
+    const parsed = CortexConfigSchema.parse(minConfig());
+    // No policy block ⇒ no offerings ⇒ every capability resolves local-only.
+    expect(parsed.policy).toBeUndefined();
+  });
+
+  test("CO-1: a config WITH a declared+provided capability may offer it", () => {
+    const parsed = CortexConfigSchema.parse({
+      ...minConfig(),
+      capabilities: [
+        {
+          id: "code-review.typescript",
+          description: "Reviews TypeScript PRs",
+          provided_by: ["luna"],
+        },
+      ],
+      policy: {
+        offerings: [
+          {
+            capability: "code-review.typescript",
+            scopes: ["public"],
+            accept: {
+              kind: "surface",
+              surface: "github",
+              predicate: { kind: "repo-membership", repos: ["the-metafactory/*"] },
+            },
+          },
+        ],
+      },
+    });
+    expect(parsed.policy?.offerings).toHaveLength(1);
+  });
+
+  test("CO-1: REJECTS offering a capability the stack does not declare", () => {
+    expect(() =>
+      CortexConfigSchema.parse({
+        ...minConfig(),
+        // capabilities[] omitted ⇒ catalog is empty
+        policy: {
+          offerings: [{ capability: "phantom.capability", scopes: ["local"] }],
+        },
+      }),
+    ).toThrow(/no matching entry exists in the top-level capabilities\[\] catalog/);
+  });
+
   test("defaults are applied for optional top-level blocks (Holly W2 — emptyDefault closes Zod quirk)", () => {
     // Before MIG-7.2 rev 2: outer `.default({} as any)` did NOT re-parse the
     // default through the inner schema, so omitting `attachments` gave `{}`
@@ -1032,6 +1081,106 @@ describe("PolicyPublicSchema — IAW S5 (#739) public-scope opt-in (OQ1 safe def
     expect(() =>
       PolicyPublicSchema.parse({ announce_capabilities: ["nodot"] }),
     ).toThrow();
+  });
+});
+
+describe("PolicySchema — CO-1 offerings (epic cortex#939)", () => {
+  test("defaults: offerings is absent (undefined) ⇒ default-deny baseline (byte-identical)", () => {
+    // Mirrors the sibling federated/public widening blocks: absent, not [].
+    // `resolveOffering(undefined)` is the single source of default-deny.
+    const parsed = PolicySchema.parse({});
+    expect(parsed.offerings).toBeUndefined();
+  });
+
+  test("accepts a valid local-only offering", () => {
+    const parsed = PolicySchema.parse({
+      offerings: [{ capability: "chat", scopes: ["local"] }],
+    });
+    expect(parsed.offerings).toHaveLength(1);
+    expect(parsed.offerings?.[0]?.capability).toBe("chat");
+  });
+
+  test("accepts a federated offering with a named network accept", () => {
+    const parsed = PolicySchema.parse({
+      offerings: [
+        {
+          capability: "chat",
+          scopes: ["federated"],
+          accept: { kind: "network", network: "mf-net" },
+        },
+      ],
+    });
+    expect(parsed.offerings?.[0]?.accept?.kind).toBe("network");
+  });
+
+  test("accepts a public offering with a metadata-only surface accept", () => {
+    const parsed = PolicySchema.parse({
+      offerings: [
+        {
+          capability: "code-review.typescript",
+          scopes: ["public"],
+          accept: {
+            kind: "surface",
+            surface: "github",
+            predicate: { kind: "repo-membership", repos: ["the-metafactory/*"] },
+            limits: { per_day: 100 },
+          },
+        },
+      ],
+    });
+    expect(parsed.offerings?.[0]?.accept?.kind).toBe("surface");
+  });
+
+  test("REJECTS a federated offering with no accept (default-deny)", () => {
+    expect(() =>
+      PolicySchema.parse({
+        offerings: [{ capability: "chat", scopes: ["federated"] }],
+      }),
+    ).toThrow(/DEFAULT-DENY/);
+  });
+
+  test("REJECTS a public offering with a content-dependent predicate", () => {
+    expect(() =>
+      PolicySchema.parse({
+        offerings: [
+          {
+            capability: "code-review.typescript",
+            scopes: ["public"],
+            accept: {
+              kind: "surface",
+              surface: "github",
+              // content-dependent predicate — no such `kind` in the closed set
+              predicate: { kind: "description-contains", value: "review me" },
+            },
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+
+  test("REJECTS duplicate capability offerings", () => {
+    expect(() =>
+      PolicySchema.parse({
+        offerings: [
+          { capability: "chat", scopes: ["local"] },
+          { capability: "chat", scopes: ["local"] },
+        ],
+      }),
+    ).toThrow(/already declared at offerings\[0\]/);
+  });
+
+  test("REJECTS a local-only offering carrying an accept", () => {
+    expect(() =>
+      PolicySchema.parse({
+        offerings: [
+          {
+            capability: "chat",
+            scopes: ["local"],
+            accept: { kind: "network", network: "mf-net" },
+          },
+        ],
+      }),
+    ).toThrow(/local-only but carries an accept-policy/);
   });
 });
 
