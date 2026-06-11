@@ -2,13 +2,17 @@
 /**
  * F-3 — `cortex agents <subcommand>` CLI.
  *
- * Validation-only CLI for inspecting and validating `agents.d/` fragments
- * against the cortex schema. Wraps F-2's `loadAgentsDirectory()`. Does NOT
- * talk to a running cortex daemon in v1 — daemon-IPC is a follow-up that
- * waits for cortex.ts integration of `AgentsDirectoryWatcher`.
+ * Inspects + validates `agents.d/` fragments against the cortex schema (wraps
+ * F-2's `loadAgentsDirectory()`), and — B-0 (cortex#1021) — SIGNALS the running
+ * daemon to reload after a successful validation. `reload` resolves the daemon
+ * PID file from `--config` and sends SIGHUP, which the daemon routes to the
+ * same agents.d/ reconcile its fs.watch watcher uses (registry swap + review-
+ * consumer reconcile + capability re-publish). `--validate-only` keeps the
+ * legacy validation-only behaviour; `--fragment` (single-file) is always
+ * validation-only. Presence adapters are restart-only (documented limitation).
  *
  * Usage:
- *   bun src/cli/cortex/commands/agents.ts reload [--config <path>] [--fragment <path>] [--json]
+ *   bun src/cli/cortex/commands/agents.ts reload [--config <path>] [--fragment <path>] [--validate-only] [--json]
  *   bun src/cli/cortex/commands/agents.ts list   [--config <path>] [--json]
  *   bun src/cli/cortex/commands/agents.ts --help
  *
@@ -18,9 +22,10 @@
  *   2  — usage error (bad flags, missing files, unknown subcommand)
  */
 
-import { existsSync, statSync } from "fs";
+import { existsSync, statSync, readFileSync } from "fs";
 import { dirname } from "path";
 
+import { pidFileFor } from "../../../common/pidfile";
 import { CliArgsError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { type ExitResult } from "./_shared/exit-result";
@@ -45,6 +50,14 @@ export interface ParsedAgentsArgs {
   fragment: string | undefined;
   json: boolean;
   help: boolean;
+  /**
+   * B-0 (cortex#1021) — when set, `reload` only VALIDATES the fragments and
+   * does NOT signal the running daemon. Default behaviour now validates AND
+   * sends SIGHUP to the daemon (resolved from the `--config` PID file) so the
+   * live registry / review consumers / capability registry reload — the same
+   * path the daemon's fs.watch + `reloadAgents()` use.
+   */
+  validateOnly: boolean;
 }
 
 // ExitResult moved to `_shared/exit-result.ts` (cortex#65). Importing
@@ -71,7 +84,13 @@ export const AgentsArgsError = CliArgsError;
 const AGENTS_SPEC: SubcommandSpec<"reload" | "list"> = {
   cliName: "agents",
   subcommands: {
-    reload: { flags: { "--config": "value", "--fragment": "value" } },
+    reload: {
+      flags: {
+        "--config": "value",
+        "--fragment": "value",
+        "--validate-only": "bool",
+      },
+    },
     list: { flags: { "--config": "value" } },
   },
   universal: { "--help": "bool", "-h": "bool", "--json": "bool" },
@@ -97,6 +116,7 @@ export function parseAgentsArgs(argv: string[]): ParsedAgentsArgs {
     fragment: valueFlag(parsed.flags, "--fragment"),
     json: boolFlag(parsed.flags, "--json"),
     help: parsed.help,
+    validateOnly: boolFlag(parsed.flags, "--validate-only"),
   };
 }
 
@@ -121,20 +141,27 @@ export function runAgentsReload(args: ParsedAgentsArgs): ExitResult {
 
   try {
     const agents = loadAgentsDirectory(agentsDir);
+    // B-0 (cortex#1021) — validation succeeded. Unless `--validate-only`, signal
+    // the running daemon (SIGHUP) so it reloads the live registry / review
+    // consumers / capability registry via the SAME reconcile path its fs.watch
+    // and `reloadAgents()` use. A missing PID file means no daemon is running —
+    // we report that but keep exit 0 (validation passed; nothing to signal).
+    const signal = args.validateOnly ? null : signalDaemonReload(args.config);
+
     if (args.json) {
       return { exitCode: 0, stdout: jsonOk(agents), stderr: "" };
     }
+    const footer = reloadFooter(agents.length, signal);
     if (agents.length === 0) {
       return {
         exitCode: 0,
-        stdout: `0 fragments in ${agentsDir} — nothing to load (OK)\n\n${VALIDATION_ONLY_NOTE}\n`,
+        stdout: `0 fragments in ${agentsDir} — nothing to load (OK)\n\n${footer}\n`,
         stderr: "",
       };
     }
     return {
       exitCode: 0,
-      stdout:
-        agents.map(formatAgentLine).join("\n") + "\n\n" + successFooter(agents.length),
+      stdout: agents.map(formatAgentLine).join("\n") + "\n\n" + footer + "\n",
       stderr: "",
     };
   } catch (err) {
@@ -147,6 +174,65 @@ export function runAgentsReload(args: ParsedAgentsArgs): ExitResult {
       stderr: `cortex agents reload: unexpected error: ${err instanceof Error ? err.message : String(err)}\n`,
     };
   }
+}
+
+/**
+ * B-0 (cortex#1021) — outcome of attempting to signal the running daemon.
+ *   - `{ signalled: true, pid }`   — SIGHUP delivered; the daemon will reload.
+ *   - `{ signalled: false, reason }`— no daemon (missing/stale PID file) or the
+ *                                     signal failed; validation still passed.
+ */
+type SignalOutcome =
+  | { signalled: true; pid: number }
+  | { signalled: false; reason: string };
+
+/**
+ * Resolve the daemon PID file for `configPath` and send SIGHUP, which the
+ * daemon routes to its agents.d/ reload reconcile. The agents CLI's default
+ * config is `~/.config/cortex/cortex.yaml` (NOT the legacy grove default
+ * `pidFileFor` collapses to), so when `--config` is absent we resolve the PID
+ * file against the explicit cortex default path rather than the unspecified
+ * branch — this keeps the CLI pointed at the cortex-shaped daemon.
+ */
+function signalDaemonReload(configPath: string | undefined): SignalOutcome {
+  const resolvedConfig = expandTilde(configPath ?? DEFAULT_CONFIG_PATH);
+  const pidFile = pidFileFor(resolvedConfig);
+  if (!existsSync(pidFile)) {
+    return { signalled: false, reason: `no running daemon (no PID file at ${pidFile})` };
+  }
+  const raw = readFileSync(pidFile, "utf-8").trim();
+  const pid = Number.parseInt(raw, 10);
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return { signalled: false, reason: `PID file ${pidFile} is malformed ("${raw}")` };
+  }
+  try {
+    process.kill(pid, "SIGHUP");
+    return { signalled: true, pid };
+  } catch (err) {
+    // ESRCH (process gone) or EPERM — surface but don't fail the validation.
+    return {
+      signalled: false,
+      reason: `could not signal PID ${pid}: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/** Compose the reload footer reflecting validation + the daemon-signal result. */
+function reloadFooter(n: number, signal: SignalOutcome | null): string {
+  const summary = `${n} fragment${n === 1 ? "" : "s"} loaded OK`;
+  if (signal === null) {
+    // --validate-only
+    return `${summary}\n${VALIDATION_ONLY_NOTE}`;
+  }
+  if (signal.signalled) {
+    return (
+      `${summary}\n` +
+      `signalled running daemon (PID ${signal.pid}, SIGHUP) — registry, review consumers, ` +
+      `and capability registry reload live.\n` +
+      `note: presence (Discord/Mattermost/Slack) changes for added/removed agents require a daemon restart.`
+    );
+  }
+  return `${summary}\nvalidation OK; daemon NOT signalled — ${signal.reason}`;
 }
 
 /**
@@ -314,12 +400,12 @@ export function dispatchAgents(argv: string[]): ExitResult {
 // =============================================================================
 
 /**
- * Validation-only caveat appended to success output so arc lifecycle scripts
- * (and principals reading stdout) don't infer "the running daemon reloaded."
- * Echo M3 on cortex#63.
+ * Validation-only caveat appended to success output for paths that do NOT
+ * signal the daemon — `--validate-only` and the single-file `--fragment`
+ * check. The default `reload` path DOES signal (SIGHUP) and uses `reloadFooter`.
  */
 const VALIDATION_ONLY_NOTE =
-  "note: validation-only — this CLI does NOT signal a running cortex daemon to reload (v1).";
+  "note: validation-only — the running cortex daemon was NOT signalled to reload.";
 
 function successFooter(n: number): string {
   const summary = `${n} fragment${n === 1 ? "" : "s"} loaded OK`;
@@ -451,20 +537,26 @@ Exit codes:
 }
 
 function reloadHelp(): string {
-  return `cortex agents reload — validate agents.d/ fragments
+  return `cortex agents reload — validate agents.d/ fragments + reload the daemon
 
 Usage:
-  cortex agents reload [--config <path>] [--fragment <path>] [--json]
+  cortex agents reload [--config <path>] [--fragment <path>] [--validate-only] [--json]
 
 Options:
   --config <path>      cortex.yaml path (default: ~/.config/cortex/cortex.yaml)
-                       The agents.d/ directory next to this file is loaded.
-  --fragment <path>    Validate a single fragment file (overrides --config dir mode)
+                       The agents.d/ directory next to this file is loaded; the
+                       daemon's PID file is resolved from the same path.
+  --fragment <path>    Validate a single fragment file (overrides --config dir mode).
+                       Validation-only — does not signal the daemon.
+  --validate-only      Validate the agents.d/ directory but do NOT signal the daemon.
   --json               Emit structured JSON
 
-In v1, this command is validation-only. It does NOT signal a running cortex
-daemon to reload — that wiring lands when cortex.ts integrates the
-AgentsDirectoryWatcher (separate follow-up).
+By default this validates the agents.d/ fragments and then sends SIGHUP to the
+running cortex daemon (resolved from the --config PID file), which reloads the
+live agent registry, review consumers, and capability registry via the same
+reconcile path the daemon's fs.watch + 'reloadAgents()' use. Presence adapter
+(Discord/Mattermost/Slack) changes for added/removed agents require a daemon
+restart (registry + review + capabilities reload live; presence is restart-only).
 `;
 }
 

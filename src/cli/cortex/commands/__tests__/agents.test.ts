@@ -266,14 +266,34 @@ presence:
     expect(r.stderr).toMatch(/displayName/i);
   });
 
-  test("success text includes the validation-only caveat (Echo M3)", () => {
+  test("B-0: --validate-only keeps the validation-only caveat (no daemon signal)", () => {
     const cfg = mkdtempSync(join(tmpdir(), "f3-validation-note-"));
+    seedConfigDir(cfg, VALID_DIR);
+    const r = runAgentsReload(
+      parseAgentsArgs([
+        "reload",
+        "--validate-only",
+        "--config",
+        join(cfg, "cortex.yaml"),
+      ]),
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("validation-only");
+    // No daemon-signal language on the validate-only path.
+    expect(r.stdout).not.toContain("signalled running daemon");
+  });
+
+  test("B-0: default reload reports 'daemon NOT signalled' when no daemon is running", () => {
+    const cfg = mkdtempSync(join(tmpdir(), "f3-no-daemon-"));
     seedConfigDir(cfg, VALID_DIR);
     const r = runAgentsReload(
       parseAgentsArgs(["reload", "--config", join(cfg, "cortex.yaml")]),
     );
+    // Validation passed; with no PID file the daemon is not signalled, but the
+    // command still exits 0 (validation is the failure surface, not liveness).
     expect(r.exitCode).toBe(0);
-    expect(r.stdout).toContain("validation-only");
+    expect(r.stdout).toContain("daemon NOT signalled");
+    expect(r.stdout).toContain("no running daemon");
   });
 
   test("--fragment 1 MiB cap applies (Echo M2 hardening parity)", () => {
