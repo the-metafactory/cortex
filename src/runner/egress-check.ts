@@ -32,10 +32,17 @@
  *     `ghp_`/`gho_`/`ghs_`/`github_pat_`, AWS `AKIA…`, generic
  *     `xoxb-`/`sk-`/`-----BEGIN … PRIVATE KEY-----`), and an `nkey` seed shape
  *     (the stack signing seed — `S` + 55 base32 chars).
- *   - **config / path leakage** — absolute paths into the principal's config
- *     tree (`~/.config/cortex`, `/Users/…/.config/cortex`, `cortex.yaml`,
- *     `nkey_seed_path`) — the reviewer's config must never appear in a public
- *     comment.
+ *   - **config / path leakage** — VALUE/PATH-shaped references into the
+ *     principal's config: the config tree (`~/.config/cortex`,
+ *     `/Users/…/.config/cortex`), a home-anchored path to a `cortex.yaml`,
+ *     or an `nkey_seed_path:` ASSIGNMENT carrying a path value. Bare KEY-NAME
+ *     tokens (`nkey_seed_path`, `cortex.yaml` in prose) are deliberately NOT
+ *     flagged (cortex#1022): those names are public repo content (source,
+ *     docs, config templates), so a review of a PR that touches signing
+ *     config must be able to name them — blocking the name was an operational
+ *     DoS on exactly the PRs that most need review (observed live on
+ *     cortex#1020). The secret stays guarded by the VALUE detectors: the
+ *     nkey SEED shape above, and the path patterns here.
  *
  * The detector set is intentionally a HIGH-PRECISION allow-leak-through-on-doubt
  * design for the SECRET classes (a false positive blocks a legitimate review,
@@ -118,11 +125,32 @@ const SECRET_PATTERNS: readonly { reason: string; re: RegExp }[] = [
   { reason: "nkey seed", re: /\bS[UAONCX][A-Z2-7]{48,}\b/ },
 ];
 
-/** Config / principal-path leakage detectors. */
+/**
+ * Config / principal-path leakage detectors.
+ *
+ * cortex#1022 — VALUE/PATH-shaped only, never bare key-name tokens. The key
+ * names (`nkey_seed_path`, `cortex.yaml`) are public repo content; a review
+ * of a PR about signing config must be able to name them. What must NOT
+ * egress is the principal's concrete filesystem detail: paths into the
+ * config tree, home-anchored paths to a config file, or a config-dump line
+ * assigning `nkey_seed_path` an actual path value.
+ */
 const CONFIG_PATTERNS: readonly { reason: string; re: RegExp }[] = [
   { reason: "cortex config path", re: /(?:~|\/[^\s]*)\/\.config\/cortex\b/ },
-  { reason: "cortex config file", re: /\bcortex\.ya?ml\b/ },
-  { reason: "nkey_seed_path reference", re: /\bnkey_seed_path\b/ },
+  // A home-anchored path TO a cortex.yaml (`~/…/cortex.yaml`,
+  // `/Users/…/cortex.yaml`, `/home/…/cortex.yaml`) is principal filesystem
+  // detail; the bare file name in prose is not.
+  {
+    reason: "cortex config file path",
+    re: /(?:~|\/(?:Users|home)\/[^\s"'`]+)\/[^\s"'`]*cortex\.ya?ml\b/,
+  },
+  // An ASSIGNMENT carrying a path-shaped value (`nkey_seed_path: ~/…`,
+  // `nkey_seed_path = "/…"`, `nkey_seed_path: $HOME/…`) is a config-dump
+  // leak; the bare key name in prose is not.
+  {
+    reason: "nkey_seed_path assignment",
+    re: /\bnkey_seed_path\b\s*[:=]\s*["'`]?[~/.$]/,
+  },
 ];
 
 /**
