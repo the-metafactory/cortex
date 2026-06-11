@@ -552,7 +552,7 @@ export const SCHEMA_SQL: string[] = [
   // the deny/filter discriminator (`sovereignty_model_class`, `chain_verify_failed`,
   // `chain_verify_fault`, `residency_blocked`, …) — the sovereignty subset is the
   // pane's REFUSALS. Append-only; `envelope_id` UNIQUE makes redelivery idempotent;
-  // retention ages rows past 30d (db/retention.ts).
+  // retention ages rows past 35d, outliving the 30d query window (db/retention.ts).
   `CREATE TABLE IF NOT EXISTS governance_denials (
     id TEXT PRIMARY KEY,
     envelope_id TEXT NOT NULL UNIQUE,
