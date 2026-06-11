@@ -2581,11 +2581,14 @@ export const CortexConfigSchema = z.object({
   // declared capability validates EXACTLY as before (the derivation is a no-op
   // for it). Only the previously-rejected "declared but uncatalogued" shape
   // changes — it now validates and derives.
-  .superRefine(() => {
-    // No-op: see the B-0 rationale block above. Retained as an explicit
-    // refine so the removal is auditable in `git blame` rather than a silent
-    // deletion, and so re-tightening (if ever needed) has an obvious home.
-  })
+  //
+  // Sage cortex#1027 — the retired check #3 left an empty `.superRefine(() => {})`
+  // in the chain as a "where re-tightening would go" marker. That is dead code
+  // that runs on every parse and an attractive-but-misleading home for future
+  // validation logic, so it is removed. If the per-agent capability-reference
+  // check ever needs re-introducing, it belongs as a NEW named `.superRefine`
+  // here with its own rationale — not resurrected from a no-op stub.
+  //
   // ADR 0001 (supersedes cortex#661) — federated accept/deny subject scope.
   //
   // Every `policy.federated.networks[].accept_subjects[]` / `deny_subjects[]`
