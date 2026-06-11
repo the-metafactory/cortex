@@ -23,6 +23,7 @@ import { HookStreamPoller } from "./hooks/poller";
 import type { Config } from "./types";
 import type { WsClientRegistry } from "./ws/client-registry";
 import type { AgentPresenceView } from "./api/agents";
+import type { LocalAggregationProvider } from "./local-aggregation/sibling-db-reader";
 
 export interface MissionControlHandle {
   db: Database;
@@ -57,6 +58,14 @@ export interface StartMissionControlOptions {
    * the route serves an empty list.
    */
   agentPresence?: () => AgentPresenceView | null;
+  /**
+   * #1008 — lazy accessor for the local-stack DB-read aggregation context.
+   * Forwarded verbatim to `startServer` so `/api/working-agents` + `/api/agents`
+   * aggregate across the principal's LOCAL sibling stacks' MC dbs. Omitted →
+   * single-db feeds. A GETTER because the sibling context is built at boot
+   * AFTER the embed starts.
+   */
+  localAggregation?: LocalAggregationProvider;
   /**
    * P-14 U0.1 — Tier-3 sideband base URL (`config.mc.sideband`). Loopback-
    * enforced at config-parse time; forwarded verbatim to `startServer`, which
@@ -108,6 +117,7 @@ export async function startMissionControl(
     serverCtx = startServer(config, db, {
       processManager,
       ...(opts.agentPresence ? { agentPresence: opts.agentPresence } : {}),
+      ...(opts.localAggregation ? { localAggregation: opts.localAggregation } : {}),
       ...(opts.sidebandUrl ? { sidebandUrl: opts.sidebandUrl } : {}),
     });
     const { server, wsRegistry } = serverCtx;

@@ -40,6 +40,10 @@ import {
 } from "./api/handlers";
 import { handleListGitLinks } from "./api/git-links";
 import { handleListAgents, type AgentPresenceView } from "./api/agents";
+import type {
+  LocalAggregationContext,
+  LocalAggregationProvider,
+} from "./local-aggregation/sibling-db-reader";
 import { handleListRepositories } from "./api/git-repos";
 import { handleListPlans } from "./api/plans";
 import { handleGetPhaseDetail } from "./api/phase-detail";
@@ -168,6 +172,16 @@ export interface StartServerOptions {
    */
   agentPresence?: () => AgentPresenceView | null;
   /**
+   * #1008 — lazy accessor for the local-stack DB-read aggregation context (the
+   * pane-of-glass mechanism). When it resolves to a context, `/api/working-agents`
+   * and `/api/agents` return the origin-tagged UNION across the local db + each
+   * readable LOCAL sibling stack's `mission-control.db`. A GETTER (like
+   * `agentPresence`) because the discovered-sibling context is built at boot,
+   * after the embed starts; resolved per request. Returns `null` ⇒ DB-read
+   * aggregation OFF (single-db feed, byte-identical to pre-#1008).
+   */
+  localAggregation?: LocalAggregationProvider;
+  /**
    * P-14 U0.1 — Tier-3 sideband base URL (`mc.sideband`). When present, the
    * `/api/observability/*` routes proxy to it server-side. Loopback-enforced
    * at config-parse time; the proxy re-checks at the request boundary.
@@ -254,7 +268,10 @@ export function startServer(
         // Resolve the agent-presence view lazily per request — the registry
         // may not have booted when the server started (see StartServerOptions).
         const agentPresence = options.agentPresence?.() ?? null;
-        return handleApi(req, url, db, apiDeps, agentPresence);
+        // #1008 — resolve the DB-read aggregation context lazily too; null ⇒
+        // single-db feeds (the pre-#1008 path).
+        const localAggregation = options.localAggregation?.() ?? null;
+        return handleApi(req, url, db, apiDeps, agentPresence, localAggregation);
       }
 
       // --- Dashboard static ---
@@ -408,7 +425,8 @@ async function handleApi(
   url: URL,
   db: Database,
   deps: ApiDeps | null,
-  agentPresence: AgentPresenceView | null
+  agentPresence: AgentPresenceView | null,
+  localAggregation: LocalAggregationContext | null
 ): Promise<Response> {
   const { pathname } = url;
 
@@ -605,7 +623,7 @@ async function handleApi(
     if (req.method !== "GET") {
       return methodNotAllowed(["GET"]);
     }
-    return handleListWorkingAgents(db);
+    return handleListWorkingAgents(db, localAggregation);
   }
 
   // G-1114.B.4 — GET /api/agents — stack-local runtime agent-presence snapshot
@@ -615,7 +633,7 @@ async function handleApi(
     if (req.method !== "GET") {
       return methodNotAllowed(["GET"]);
     }
-    return handleListAgents(db, agentPresence);
+    return handleListAgents(db, agentPresence, localAggregation);
   }
 
   // F-17 — principal-driven GitHub iteration import.

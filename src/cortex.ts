@@ -171,6 +171,12 @@ import {
   type SiblingPresenceAggregatorHandle,
 } from "./surface/mc/local-aggregation/sibling-presence-subscriber";
 import { natsSiblingBusConnector } from "./surface/mc/local-aggregation/nats-sibling-connector";
+// #1008 — direct sibling MC-DB read aggregation (the pane-of-glass mechanism).
+import type {
+  LocalAggregationContext,
+  SiblingDbResolveOptions,
+} from "./surface/mc/local-aggregation/sibling-db-reader";
+import type { SiblingStackDescriptor } from "./surface/mc/local-aggregation/sibling-discovery";
 import { createProbeResponder, type ProbeResponder } from "./bus/probe-responder";
 import { WorklogManager } from "./runner/worklog-manager";
 
@@ -3589,18 +3595,76 @@ export async function startCortex(
   // registry boots AFTER this embed (below), so the getter returns `null` until
   // we assign it post-registry-start. The MC server resolves it per request.
   let presenceViewForApi: AgentPresenceView | null = null;
+  // #1008 — discovered LOCAL sibling stacks, computed ONCE here and shared by
+  // BOTH the DB-read pane-of-glass aggregation (the embed's `localAggregation`
+  // getter, below) AND the #989 bus sibling-presence aggregator (later) — so the
+  // two paths agree on the same roster and the dbRead-supersedes-bus gate is
+  // coherent. Empty until the aggregation block computes it; the getter reads
+  // this holder lazily (the embed starts before discovery runs).
+  const aggCfg = config.mc.aggregateLocalStacks;
+  let discoveredSiblings: readonly SiblingStackDescriptor[] = [];
+  let siblingResolveOpts: SiblingDbResolveOptions | null = null;
   if (config.mc.enabled && !options.disableDashboard) {
     // Per-slug default keeps each stack's MC db isolated; the cursor lands beside it.
     const defaultDbPath = join(
       homedir(), ".local", "share", "cortex", "mc", derivedStack.stack, "mission-control.db",
     );
     const dbPath = config.mc.dbPath !== "" ? expandTilde(config.mc.dbPath) : defaultDbPath;
+
+    // #1008 — discover the principal's LOCAL sibling stacks (reusing #989's
+    // `discoverSiblingStacks` for the stack LIST; the DB-read path needs the
+    // roster, not the bus part). The DB-read aggregation context resolves each
+    // sibling's `mission-control.db` per-request and excludes THIS stack's own
+    // db (`selfDbPath = dbPath`). Built only when `aggregateLocalStacks.enabled`
+    // AND `dbRead` are both on; otherwise the context getter returns null and
+    // the feeds stay single-db.
+    if (aggCfg.enabled && aggCfg.dbRead) {
+      try {
+        const configRoot =
+          aggCfg.configRoot !== ""
+            ? expandTilde(aggCfg.configRoot)
+            : dirname(configDir);
+        const explicit =
+          aggCfg.stacks.length > 0
+            ? aggCfg.stacks.map((s) => ({
+                stack: s.stack,
+                principal: s.principal,
+                url: s.url,
+                credential: { kind: "creds" as const, credsPath: s.credsPath },
+              }))
+            : undefined;
+        discoveredSiblings = discoverSiblingStacks({
+          configRoot,
+          selfPrincipal: principalId,
+          selfStack: derivedStack.stack,
+          ...(explicit !== undefined && { explicit }),
+        });
+        siblingResolveOpts = { configRoot, selfDbPath: dbPath };
+        console.log(
+          `cortex: pane-of-glass DB-read aggregation ON — ${discoveredSiblings.length} local sibling stack(s) ` +
+            `(${discoveredSiblings.map((s) => s.stack).join(", ") || "none"})`,
+        );
+      } catch (err) {
+        // Discovery failure must never block the embed boot — degrade to single-db.
+        console.error(
+          "cortex: pane-of-glass sibling discovery error (non-fatal, single-db feed):",
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
     try {
       mcHandle = await startMissionControl({
         configPath: config.mc.configPath || undefined,
         dbPath,
         port: config.mc.port,
         agentPresence: () => presenceViewForApi,
+        // #1008 — DB-read pane-of-glass aggregation. The getter returns a context
+        // only when discovery produced a resolve-opts (dbRead on); otherwise null
+        // ⇒ single-db feeds. Lazy so the roster can be (re)read consistently.
+        localAggregation: (): LocalAggregationContext | null =>
+          siblingResolveOpts === null
+            ? null
+            : { siblings: discoveredSiblings, resolve: siblingResolveOpts },
         // P-14 U0.1 — Tier-3 sideband proxy. Loopback-enforced at config-parse
         // time; the embed wires it onto the `/api/observability/*` proxy.
         sidebandUrl: config.mc.sideband,
@@ -3891,8 +3955,21 @@ export async function startCortex(
       // trust: every bus is the principal's own loopback bus (ADR-0005). Any
       // sibling that can't be reached / authed degrades to absent — it never
       // blocks this boot or perturbs the serving stack's own presence.
-      const aggCfg = config.mc.aggregateLocalStacks;
-      if (aggCfg.enabled) {
+      //
+      // #1008 RECONCILIATION (DB-read OWNS local siblings): when `dbRead` is on
+      // (default), the DB-read pane-of-glass aggregation already merges every
+      // LOCAL sibling's agents (+ session trees) straight off its db into the
+      // /api/agents + /api/working-agents feeds. Running this BUS sibling-presence
+      // aggregator too would DOUBLE-COUNT the same local agents (db + bus). So the
+      // bus path is gated OFF for local siblings whenever DB-read aggregation is
+      // on. The bus sibling path remains the mechanism for FEDERATED / cross-
+      // principal peers (whose dbs live on another machine/principal and cannot be
+      // read here) — that is the separate `startFederatedAgentPresenceSubscriber`
+      // above, NOT this local-sibling aggregator. Clean reach/depth split: DB-read
+      // = my own local stacks; bus = remote peers. Set `dbRead: false` to restore
+      // the bus path for local siblings (agents only, no session trees).
+      const runBusSiblingPresence = aggCfg.enabled && !aggCfg.dbRead;
+      if (runBusSiblingPresence) {
         try {
           // Precedence: explicit `stacks[]` overrides discovery. Empty ⇒ scan
           // the config root (default = the serving config dir's parent, the

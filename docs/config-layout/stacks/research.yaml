@@ -196,6 +196,19 @@ mc:
   # A single-stack box is unaffected (discovery finds no siblings = no-op).
   aggregateLocalStacks:
     enabled: true                  # false = pin the pane to THIS stack only
+    # #1008 — DB-read pane-of-glass: the PRIMARY mechanism for LOCAL siblings.
+    # When ON (default), the serving daemon reads each local sibling stack's OWN
+    # mission-control.db READ-ONLY and merges its sessions+agents into the
+    # /api/working-agents + /api/agents feeds, origin-tagged — so the pane shows
+    # ALL local stacks as hubs with their full session TREES (sessions AND
+    # agents), with NO bus / NO presence-publish. It SUPERSEDES the #989 bus-
+    # presence path for local siblings (when dbRead is on, the bus sibling path is
+    # gated OFF for local stacks to avoid double-counting; it stays for FEDERATED
+    # cross-principal peers whose dbs live on another machine). Reads are cheap
+    # (per-request read-only SQLite open of YOUR OWN dbs on YOUR OWN box); a
+    # sibling db that's missing/locked/too-old degrades to absent, never crashing
+    # the feed. Set false to fall back to the #989 bus path (agents only, no trees).
+    dbRead: true
     configRoot: ""                 # empty = the serving config dir's parent (~/.config/cortex)
     # Explicit roster OVERRIDES auto-discovery when non-empty (precedence:
     # explicit > discovery). Use it to add a bus the scan can't see, or to

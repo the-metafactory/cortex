@@ -592,7 +592,8 @@ describe("AgentConfigSchema.mc (MC-I1.S1)", () => {
       sideband: "http://127.0.0.1:9092",
       // #989 — local-stack aggregation defaults ON; discovery is a no-op on a
       // single-stack box (finds no siblings).
-      aggregateLocalStacks: { enabled: true, configRoot: "", stacks: [] },
+      // #1008 — dbRead pane-of-glass aggregation defaults ON alongside `enabled`.
+      aggregateLocalStacks: { enabled: true, dbRead: true, configRoot: "", stacks: [] },
     });
   });
 
@@ -738,7 +739,7 @@ describe("mc.sideband (P-14 U0.1)", () => {
         .aggregateLocalStacks;
       const fromCortex = CortexConfigSchema.parse(minConfig()).mc
         .aggregateLocalStacks;
-      const expected = { enabled: true, configRoot: "", stacks: [] };
+      const expected = { enabled: true, dbRead: true, configRoot: "", stacks: [] };
       expect(fromAgent).toEqual(expected);
       expect(fromCortex).toEqual(expected);
     });
@@ -746,6 +747,7 @@ describe("mc.sideband (P-14 U0.1)", () => {
     test("BOTH schemas parse an explicit aggregateLocalStacks roster identically", () => {
       const block = {
         enabled: true,
+        dbRead: true,
         configRoot: "~/.config/cortex",
         stacks: [
           {

@@ -422,6 +422,27 @@ export const McSchema = z.object({
     .object({
       enabled: z.boolean().default(true),
       /**
+       * #1008 — DB-read pane-of-glass aggregation. When ON (default), the
+       * dashboard-serving daemon reads each discovered LOCAL sibling stack's own
+       * `mission-control.db` READ-ONLY and merges its sessions+agents into the
+       * `/api/working-agents` + `/api/agents` feeds, origin-tagged — so the pane
+       * shows ALL local stacks as hubs with their session TREES (the full local
+       * picture: sessions AND agents), with NO bus / NO presence-publish.
+       *
+       * This is the operator-chosen PRIMARY mechanism for LOCAL siblings and
+       * SUPERSEDES the bus-presence path (#989) for them: when `dbRead` is on,
+       * the #989 sibling-PRESENCE bus aggregator is gated OFF for LOCAL siblings
+       * to avoid double-counting (DB-read owns local; the bus path stays for
+       * FEDERATED/cross-principal peers whose dbs live on another machine). Set
+       * `dbRead: false` to fall back to the #989 bus-presence path for local
+       * siblings (agents only, no session trees).
+       *
+       * Default ON. Cheap (per-request read-only SQLite open of the principal's
+       * OWN dbs on their OWN machine — ADR-0005 satisfied); a sibling db that is
+       * missing/locked/too-old degrades to absent, never crashing the feed.
+       */
+      dbRead: z.boolean().default(true),
+      /**
        * Config root to scan for sibling stacks. Empty ⇒ the serving stack's own
        * config dir's parent (the conventional `~/.config/cortex`). Leading `~`
        * is expanded at boot.
@@ -471,6 +492,7 @@ export const McSchema = z.object({
   // load-bearing for the all-defaults parse path, same as the leaves above.
   aggregateLocalStacks: {
     enabled: val.aggregateLocalStacks?.enabled ?? true,
+    dbRead: val.aggregateLocalStacks?.dbRead ?? true,
     configRoot: val.aggregateLocalStacks?.configRoot ?? "",
     stacks: val.aggregateLocalStacks?.stacks ?? [],
   },
