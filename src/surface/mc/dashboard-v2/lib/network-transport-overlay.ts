@@ -243,7 +243,11 @@ function candidatesForRow(row: TransportRosterEventRow): Candidate[] {
  *   2. otherwise the FIRST (newest) edge/snapshot seeds it;
  *   3. leaf liveness/RTT is taken from the first row for the key that carries a
  *      leaf body (drifts carry none), so a `connected` verdict still shows RTT
- *      from its accompanying connect/snapshot row.
+ *      from its accompanying connect/snapshot row — UNLESS the key's newest
+ *      authoritative event already resolved presence ABSENT (a `registered-absent`
+ *      drift or a `leaf_disconnect`), in which case an older connect/snapshot
+ *      row must NOT resurrect presence/RTT (the just-disconnected peer's stale
+ *      connect row is still in the 200-row window; newest authoritative wins).
  *
  * Empty / unreadable input → {@link EMPTY_TRANSPORT_OVERLAY} (shape-compatible).
  */
@@ -255,6 +259,13 @@ export function buildTransportOverlay(
   const byKey = new Map<string, TransportPeerOverlay>();
   /** Track whether a key's verdict was set by an authoritative drift (locks it). */
   const lockedByDrift = new Set<string>();
+  /**
+   * Keys whose presence was RESOLVED-ABSENT by their newest authoritative event
+   * (a `registered-absent` drift, or a `leaf_disconnect`). Once a key is in here,
+   * an OLDER leaf-bearing row (connect / snapshot) must NOT resurrect presence or
+   * backfill RTT — the newest authoritative event wins, so the absence stands.
+   */
+  const presenceResolved = new Set<string>();
   const networks = new Set<string>();
 
   for (const row of rows) {
@@ -272,6 +283,10 @@ export function buildTransportOverlay(
           rttMs: c.rttMs,
         });
         if (c.authoritative) lockedByDrift.add(c.key);
+        // If the NEWEST event for this key asserts absence (a `registered-absent`
+        // drift or a `leaf_disconnect` — the only candidates with present:false),
+        // lock presence absent: a later (older) connect/snapshot must not flip it.
+        if (!c.present) presenceResolved.add(c.key);
         continue;
       }
       // Verdict precedence: a drift locks the key (newest drift already won, since
@@ -282,13 +297,18 @@ export function buildTransportOverlay(
         lockedByDrift.add(c.key);
         if (existing.network === null) existing.network = c.network;
       }
-      // Leaf liveness/RTT: backfill from the first row carrying a real leaf body,
-      // regardless of which row set the verdict (a drift has no leaf body).
-      if (existing.rttMs === null && c.rttMs !== null) existing.rttMs = c.rttMs;
-      if (!existing.present && c.present && c.rttMs !== null) {
-        // Only let a leaf-bearing row flip presence on (a connect/snapshot),
-        // never a verdict-only drift that asserted absence.
-        existing.present = true;
+      // Leaf liveness/RTT: backfill from the first row carrying a real leaf body —
+      // UNLESS the key's newest authoritative event already resolved it absent, in
+      // which case an older connect/snapshot must NOT resurrect presence or RTT
+      // (newest authoritative event wins; the stale connect row just hasn't aged
+      // out of the 200-row window yet).
+      if (!presenceResolved.has(c.key)) {
+        if (existing.rttMs === null && c.rttMs !== null) existing.rttMs = c.rttMs;
+        if (!existing.present && c.present && c.rttMs !== null) {
+          // A leaf-bearing row (connect / snapshot) flips presence on; this only
+          // runs for keys NOT resolved-absent by a newer drift / disconnect.
+          existing.present = true;
+        }
       }
       if (existing.network === null && c.network !== null) existing.network = c.network;
     }

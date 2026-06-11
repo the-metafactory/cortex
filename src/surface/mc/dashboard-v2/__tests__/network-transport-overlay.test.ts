@@ -73,6 +73,23 @@ function leafConnect(
   });
 }
 
+/** A `leaf_disconnect` row (a leaf vanished — carries no live RTT). */
+function leafDisconnect(
+  principal: string,
+  stack: string,
+  over: Partial<TransportRosterEventRow> = {},
+): TransportRosterEventRow {
+  return row({
+    type: "system.transport.leaf_disconnect",
+    payload: {
+      action: "leaf_disconnect",
+      network: NET,
+      leaf: { principal, stack, network: NET, rtt_ms: null, frames: { in_msgs: 0, out_msgs: 0, in_bytes: 0, out_bytes: 0 } },
+    },
+    ...over,
+  });
+}
+
 // ---------------------------------------------------------------------------
 
 describe("buildTransportOverlay — fold (U2.3)", () => {
@@ -125,6 +142,74 @@ describe("buildTransportOverlay — fold (U2.3)", () => {
     const jc = overlayForStack(o, "jc", "default");
     // Drift (authoritative) holds registered-absent despite a connect row existing.
     expect(jc!.verdict).toBe("registered-absent");
+  });
+
+  it("newest registered-absent drift suppresses an older connect's leaf (no resurrection)", () => {
+    // A peer just drifted registered-absent; its prior leaf_connect row is still
+    // in the 200-row window. The stale connect must NOT flip presence back on or
+    // backfill RTT — the newest authoritative event (the drift) wins.
+    const o = buildTransportOverlay([
+      drift("jc", "default", "registered-absent", { timestamp: "2026-06-12T00:00:02.000Z" }),
+      leafConnect("jc", "default", 5.0, { timestamp: "2026-06-12T00:00:01.000Z" }),
+    ]);
+    const jc = overlayForStack(o, "jc", "default")!;
+    expect(jc.verdict).toBe("registered-absent");
+    expect(jc.present).toBe(false);
+    expect(jc.rttMs).toBeNull();
+  });
+
+  it("newest leaf_disconnect suppresses an older connect's leaf (no resurrection)", () => {
+    // A leaf vanished (disconnect newest); its earlier connect row lingers in the
+    // window. Presence stays false and RTT stays null — the disconnect wins.
+    const o = buildTransportOverlay([
+      leafDisconnect("jc", "default", { timestamp: "2026-06-12T00:00:02.000Z" }),
+      leafConnect("jc", "default", 5.0, { timestamp: "2026-06-12T00:00:01.000Z" }),
+    ]);
+    const jc = overlayForStack(o, "jc", "default")!;
+    expect(jc.verdict).toBe("registered-absent");
+    expect(jc.present).toBe(false);
+    expect(jc.rttMs).toBeNull();
+  });
+
+  it("newest registered-absent drift + empty roster_snapshot still suppresses a stale connect", () => {
+    // Drift newest, then an empty snapshot (peer not listed), then a stale connect.
+    // The connect must still not resurrect presence/RTT.
+    const o = buildTransportOverlay([
+      drift("jc", "default", "registered-absent", { timestamp: "2026-06-12T00:00:03.000Z" }),
+      row({
+        type: "system.transport.roster_snapshot",
+        timestamp: "2026-06-12T00:00:02.000Z",
+        payload: { action: "roster_snapshot", network: NET, leaves: [] },
+      }),
+      leafConnect("jc", "default", 7.2, { timestamp: "2026-06-12T00:00:01.000Z" }),
+    ]);
+    const jc = overlayForStack(o, "jc", "default")!;
+    expect(jc.verdict).toBe("registered-absent");
+    expect(jc.present).toBe(false);
+    expect(jc.rttMs).toBeNull();
+  });
+
+  it("a genuine newest leaf_connect still shows present + RTT (not over-suppressed)", () => {
+    // No absent verdict is newer; the live connect must keep present:true + its RTT.
+    const o = buildTransportOverlay([
+      leafConnect("jc", "default", 6.1, { timestamp: "2026-06-12T00:00:02.000Z" }),
+    ]);
+    const jc = overlayForStack(o, "jc", "default")!;
+    expect(jc.present).toBe(true);
+    expect(jc.rttMs).toBe(6.1);
+  });
+
+  it("a newest connected drift still backfills RTT from its older connect row", () => {
+    // The connected verdict is present:true; its accompanying (older) connect row
+    // must still backfill the live RTT — presence-resolution only locks ABSENCE.
+    const o = buildTransportOverlay([
+      drift("jc", "default", "connected", { timestamp: "2026-06-12T00:00:02.000Z" }),
+      leafConnect("jc", "default", 8.4, { timestamp: "2026-06-12T00:00:01.000Z" }),
+    ]);
+    const jc = overlayForStack(o, "jc", "default")!;
+    expect(jc.verdict).toBe("connected");
+    expect(jc.present).toBe(true);
+    expect(jc.rttMs).toBe(8.4);
   });
 
   it("newest drift wins over an older drift for the same key (newest-first pass)", () => {
