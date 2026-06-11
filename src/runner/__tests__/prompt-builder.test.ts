@@ -184,6 +184,28 @@ describe("buildPrompt", () => {
       expect(result).toContain("[Message from admin-test (your principal — already authorized by the policy gate)]");
     });
 
+    test("principal attribution applies on the context-less new-conversation path too", () => {
+      const result = buildPrompt({
+        msg: makeMsg({ authorName: "admin-test", authorIsPrincipal: true, content: "hello" }),
+        context: [],
+        isResume: false,
+        attachmentPrompt: "",
+        securityPreamble: "",
+      });
+      expect(result).toContain("[Message from admin-test (your principal — already authorized by the policy gate)]: hello");
+    });
+
+    test("non-principal context-less messages stay bare content", () => {
+      const result = buildPrompt({
+        msg: makeMsg({ authorName: "stranger", content: "hi there" }),
+        context: [],
+        isResume: false,
+        attachmentPrompt: "",
+        securityPreamble: "",
+      });
+      expect(result).toBe("hi there");
+    });
+
     test("non-principal authors keep the bare author name", () => {
       const result = buildPrompt({
         msg: makeMsg({ authorName: "stranger", content: "hi" }),

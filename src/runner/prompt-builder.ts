@@ -65,10 +65,15 @@ export function buildPrompt(opts: PromptBuildOpts): string {
       ? `[Message from ${author}]: ${msg.content}`
       : `The user ${author} mentioned you again in this thread. Please respond to the latest messages.`;
   } else if (msg.content) {
-    // New conversation with content
+    // New conversation with content. Without context the prompt stays close
+    // to the bare content, but a principal's message still carries the
+    // attribution (cortex#987 — the trust signal must reach EVERY path, not
+    // only the context-bearing branch).
     prompt = formatted
       ? `You are responding in a ${msg.platform === "discord" ? "Discord" : msg.platform === "mattermost" ? "Mattermost" : msg.platform} ${isThread ? "thread" : "channel"}. Here's the recent conversation:\n${formatted}${contextGuard}\n\nLatest message from ${author}:\n${msg.content}`
-      : msg.content;
+      : msg.authorIsPrincipal === true
+        ? `[Message from ${author}]: ${msg.content}`
+        : msg.content;
   } else {
     // Bare mention — no content
     prompt = `You are responding in a ${msg.platform === "discord" ? "Discord" : msg.platform === "mattermost" ? "Mattermost" : msg.platform} ${isThread ? "thread" : "channel"}. A user mentioned you to get your input on the conversation. Here's the recent conversation:\n${formatted}${contextGuard}\n\nPlease respond to the conversation above. The user who mentioned you is ${author}.`;
