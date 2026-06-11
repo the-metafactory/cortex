@@ -1589,6 +1589,64 @@ describe("GET /api/working-agents", () => {
     expect(body.agents[0].additional_active_count).toBe(2);
   });
 
+  // ST-P4 — the endpoint projects the per-agent session tree (additive).
+  function seedSession(
+    sessionId: string,
+    assignmentId: string,
+    parentSessionId: string | null = null
+  ): void {
+    t.db
+      .query(
+        `INSERT INTO sessions
+           (id, assignment_id, cc_session_id, endpoint_kind, started_at,
+            parent_session_id, substrate)
+         VALUES (?, ?, NULL, 'local.observed', datetime('now'), ?, 'claude-code')`
+      )
+      .run(sessionId, assignmentId, parentSessionId);
+  }
+
+  it("ST-P4: returns a nested session tree on each tile (additive `sessions`)", async () => {
+    seedAgent("ag-tree", "Luna");
+    seedTask("t-1");
+    seedAssignment("ag-tree", "a-root", "t-1", "running");
+    seedAssignment("ag-tree", "a-child", "t-1", "running");
+    seedSession("s-root", "a-root");
+    seedSession("s-child", "a-child", "s-root");
+
+    const res = await fetch(`${t.baseUrl}/api/working-agents`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const tile = body.agents.find((x: { agent_id: string }) => x.agent_id === "ag-tree");
+    expect(tile).toBeDefined();
+    expect(tile.sessions).toHaveLength(1);
+    expect(tile.sessions[0].session_id).toBe("s-root");
+    expect(tile.sessions[0].children.map((c: { session_id: string }) => c.session_id)).toEqual([
+      "s-child",
+    ]);
+  });
+
+  it("ST-P4: existing DTO fields are unchanged byte-for-byte (additivity)", async () => {
+    seedAgent("ag-add", "Echo");
+    seedTask("t-add", 1);
+    seedAssignment("ag-add", "a-add", "t-add", "running");
+    const res = await fetch(`${t.baseUrl}/api/working-agents`);
+    const body = await res.json();
+    const tile = body.agents.find((x: { agent_id: string }) => x.agent_id === "ag-add");
+    // Pre-ST-P4 field surface, verbatim.
+    expect(tile.agent_id).toBe("ag-add");
+    expect(tile.agent_name).toBe("Echo");
+    expect(tile.agent_type).toBe("hands");
+    expect(tile.primary_state).toBe("running");
+    expect(tile.primary_state_rank).toBe(1);
+    expect(tile.primary_assignment.id).toBe("a-add");
+    expect(tile.primary_assignment.task_id).toBe("t-add");
+    expect(tile.primary_assignment.task_title).toBe("Task t-add");
+    expect(tile.primary_assignment.task_priority).toBe(1);
+    expect(tile.additional_active_count).toBe(0);
+    // New field present and well-typed (empty: no open sessions seeded).
+    expect(tile.sessions).toEqual([]);
+  });
+
   it("405s on POST", async () => {
     const res = await fetch(`${t.baseUrl}/api/working-agents`, {
       method: "POST",

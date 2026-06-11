@@ -13,6 +13,9 @@
 import type { Database } from "bun:sqlite";
 import { normalizeSqliteDatetime } from "./assignments";
 import { SHADOW_AGENT_ID } from "./sessions";
+import { assembleSessionTree, type SessionTreeNode } from "../lib/session-tree";
+
+export type { SessionTreeNode } from "../lib/session-tree";
 
 /** The three states that qualify an agent as "working" per Decision 2. */
 export type WorkingState = "running" | "dispatched" | "queued";
@@ -40,6 +43,17 @@ export interface WorkingAgentTile {
   };
   /** Count of additional active-non-blocked assignments beyond the primary. */
   additional_active_count: number;
+  /**
+   * ST-P4 — the agent's session tree (refactor §5/§7). The owning agent's
+   * non-terminal sessions, folded into the `initiated-by` forest
+   * (`parent_session_id`). ADDITIVE: every field above is byte-compatible with
+   * the pre-ST-P4 DTO; the frontend ignores `sessions` until P5 lands.
+   *
+   * Lifecycle metadata only (ADR-0005 — no session interiors). Empty array when
+   * the agent has no open sessions (a dispatch-only agent whose sessions have
+   * all ended still appears as a tile via its non-terminal assignment).
+   */
+  sessions: SessionTreeNode[];
 }
 
 /**
@@ -76,6 +90,99 @@ interface JoinedRow {
 interface CountRow {
   agent_id: string;
   cnt: number;
+}
+
+/** A flat session row for one owning agent, before the tree fold. */
+interface AgentSessionRow {
+  owning_agent_id: string;
+  session_id: string;
+  parent_session_id: string | null;
+  substrate: string;
+  state: string;
+  started_at: string;
+  ended_at: string | null;
+  agent_name: string | null;
+  task_title: string | null;
+}
+
+/**
+ * ST-P4 — fetch the OPEN (non-terminal) sessions for a set of owning agents and
+ * fold each agent's flat rows into a {@link SessionTreeNode} forest.
+ *
+ * "Non-terminal" matches the grid's current filter exactly: a session is
+ * included iff `sessions.ended_at IS NULL` (the session itself is open) AND its
+ * owning assignment is in one of the three working states
+ * (`running`/`dispatched`/`queued`) — the same partition `listWorkingAgents`
+ * qualifies a tile on. Recently-terminal sessions are deliberately NOT fetched
+ * (the refactor's scope note: non-terminal only).
+ *
+ * Owning-agent attribution uses the assignment's `agent_id` (the existing
+ * agent↔session link the grid already keys on), so a session shows under the
+ * same agent its tile represents. The session-tree edge is the row's
+ * `parent_session_id` regardless of which agent the PARENT belongs to — a child
+ * whose parent is terminal/under-another-agent becomes a root in this agent's
+ * forest (the assembler's orphaned-parent rule), never dropped.
+ *
+ * Returned as a Map keyed by owning agent id → that agent's forest. Agents with
+ * no open sessions are absent (caller defaults to `[]`).
+ */
+export function listAgentSessionTrees(
+  db: Database,
+  agentIds: string[]
+): Map<string, SessionTreeNode[]> {
+  const result = new Map<string, SessionTreeNode[]>();
+  if (agentIds.length === 0) return result;
+
+  const placeholders = agentIds.map(() => "?").join(",");
+  const rows = db
+    .query(
+      `SELECT
+         a.agent_id AS owning_agent_id,
+         s.id       AS session_id,
+         s.parent_session_id AS parent_session_id,
+         s.substrate AS substrate,
+         a.state    AS state,
+         s.started_at AS started_at,
+         s.ended_at AS ended_at,
+         s.agent_name AS agent_name,
+         t.title    AS task_title
+       FROM sessions s
+       JOIN agent_task_assignment a ON a.id = s.assignment_id
+       JOIN tasks t ON t.id = a.task_id
+       WHERE s.ended_at IS NULL
+         AND a.state IN ('running','dispatched','queued')
+         AND a.agent_id IN (${placeholders})
+       ORDER BY s.started_at ASC, s.id ASC`
+    )
+    .all(...agentIds) as AgentSessionRow[];
+
+  // Group flat rows by owning agent, then fold each group into a tree.
+  const flatByAgent = new Map<string, AgentSessionRow[]>();
+  for (const row of rows) {
+    const list = flatByAgent.get(row.owning_agent_id);
+    if (list) list.push(row);
+    else flatByAgent.set(row.owning_agent_id, [row]);
+  }
+
+  for (const [agentId, flat] of flatByAgent) {
+    result.set(
+      agentId,
+      assembleSessionTree(
+        flat.map((r) => ({
+          session_id: r.session_id,
+          parent_session_id: r.parent_session_id,
+          substrate: r.substrate,
+          state: r.state,
+          started_at: normalizeSqliteDatetime(r.started_at),
+          ended_at: r.ended_at === null ? null : normalizeSqliteDatetime(r.ended_at),
+          agent_name: r.agent_name,
+          task_title: r.task_title,
+        }))
+      )
+    );
+  }
+
+  return result;
 }
 
 /**
@@ -164,6 +271,11 @@ export function listWorkingAgents(db: Database): WorkingAgentTile[] {
   const countByAgent = new Map<string, number>();
   for (const c of counts) countByAgent.set(c.agent_id, c.cnt);
 
+  // ST-P4 — one batched fetch of every qualifying agent's open-session forest,
+  // folded into trees keyed by owning agent. Attached per tile below; an agent
+  // with no open sessions defaults to `[]`.
+  const treesByAgent = listAgentSessionTrees(db, agentIds);
+
   return rows.map((r) => ({
     agent_id: r.agent_id,
     agent_name: r.agent_name,
@@ -178,5 +290,6 @@ export function listWorkingAgents(db: Database): WorkingAgentTile[] {
       updated_at: normalizeSqliteDatetime(r.updated_at),
     },
     additional_active_count: Math.max(0, (countByAgent.get(r.agent_id) ?? 1) - 1),
+    sessions: treesByAgent.get(r.agent_id) ?? [],
   }));
 }

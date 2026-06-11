@@ -13,7 +13,7 @@ import { tmpdir } from "os";
 import { rmSync } from "fs";
 
 import { initDatabase } from "../db/init";
-import { listWorkingAgents } from "../db/working-agents";
+import { listWorkingAgents, listAgentSessionTrees } from "../db/working-agents";
 
 interface SeedAssignment {
   id: string;
@@ -237,5 +237,131 @@ describe("listWorkingAgents", () => {
     expect(row?.primary_assignment.updated_at).toMatch(
       /^\d{4}-\d{2}-\d{2}T.+Z$/
     );
+  });
+
+  // ── ST-P4: the additive `sessions` session-tree field ──────────────────────
+
+  /** Seed an open session on an assignment, optionally with a parent edge. */
+  function seedSession(
+    sessionId: string,
+    assignmentId: string,
+    opts: { parentSessionId?: string | null; substrate?: string; agentName?: string } = {}
+  ): void {
+    db.query(
+      `INSERT INTO sessions
+         (id, assignment_id, cc_session_id, endpoint_kind, started_at,
+          parent_session_id, substrate, agent_name)
+       VALUES (?, ?, NULL, 'local.observed', datetime('now'), ?, ?, ?)`
+    ).run(
+      sessionId,
+      assignmentId,
+      opts.parentSessionId ?? null,
+      opts.substrate ?? "claude-code",
+      opts.agentName ?? null
+    );
+  }
+
+  it("ST-P4: every tile carries a `sessions` array (additive; empty when no open sessions)", () => {
+    seedAgent(db, "ag-1");
+    seedTask(db, "t-1");
+    seedAssignment(db, "ag-1", { id: "a-1", taskId: "t-1", state: "running" });
+    const [row] = listWorkingAgents(db);
+    // Additive: the field exists and is an array even with no session rows.
+    expect(Array.isArray(row?.sessions)).toBe(true);
+    expect(row?.sessions).toEqual([]);
+  });
+
+  it("ST-P4: projects an agent's open sessions as a nested tree", () => {
+    seedAgent(db, "ag-tree");
+    seedTask(db, "t-1");
+    seedAssignment(db, "ag-tree", { id: "a-root", taskId: "t-1", state: "running" });
+    seedAssignment(db, "ag-tree", { id: "a-child", taskId: "t-1", state: "running" });
+    seedSession("s-root", "a-root", { agentName: "Luna" });
+    seedSession("s-child", "a-child", { parentSessionId: "s-root" });
+
+    const [row] = listWorkingAgents(db);
+    expect(row?.sessions).toHaveLength(1);
+    const root = row!.sessions[0]!;
+    expect(root.session_id).toBe("s-root");
+    expect(root.parent_session_id).toBeNull();
+    expect(root.agent_name).toBe("Luna");
+    expect(root.children.map((c) => c.session_id)).toEqual(["s-child"]);
+    expect(root.children[0]!.parent_session_id).toBe("s-root");
+  });
+
+  it("ST-P4: a child whose parent is filtered out surfaces as a root (orphaned-parent → root)", () => {
+    seedAgent(db, "ag-orphan");
+    seedTask(db, "t-1");
+    // Parent's assignment is terminal (completed) → the parent session is
+    // EXCLUDED by the non-terminal WHERE, so the child's parent ref is
+    // "orphaned" in the fetched set. The FK row still exists (ON DELETE CASCADE
+    // means a deleted parent would take the child with it — the real
+    // orphaned-parent case is a filtered-out parent, not a deleted one).
+    seedAssignment(db, "ag-orphan", { id: "a-parent", taskId: "t-1", state: "completed" });
+    seedAssignment(db, "ag-orphan", { id: "a-child", taskId: "t-1", state: "running" });
+    seedSession("s-parent", "a-parent");
+    seedSession("s-child", "a-child", { parentSessionId: "s-parent" });
+
+    const trees = listAgentSessionTrees(db, ["ag-orphan"]);
+    const forest = trees.get("ag-orphan")!;
+    expect(forest).toHaveLength(1);
+    expect(forest[0]!.session_id).toBe("s-child");
+    // Provenance preserved even though it renders as a root.
+    expect(forest[0]!.parent_session_id).toBe("s-parent");
+  });
+
+  it("ST-P4: excludes ended (terminal) sessions and sessions on terminal assignments", () => {
+    seedAgent(db, "ag-mix");
+    seedTask(db, "t-1");
+    seedAssignment(db, "ag-mix", { id: "a-run", taskId: "t-1", state: "running" });
+    seedAssignment(db, "ag-mix", { id: "a-done", taskId: "t-1", state: "completed" });
+    // Open session on the running assignment → included.
+    seedSession("s-open", "a-run");
+    // Session on a completed assignment → excluded (non-terminal filter).
+    seedSession("s-on-terminal", "a-done");
+    // Ended session on the running assignment → excluded (ended_at set).
+    db.query(
+      `INSERT INTO sessions (id, assignment_id, endpoint_kind, started_at, ended_at, substrate)
+       VALUES ('s-ended', 'a-run', 'local.observed', datetime('now'), datetime('now'), 'claude-code')`
+    ).run();
+
+    const forest = listAgentSessionTrees(db, ["ag-mix"]).get("ag-mix") ?? [];
+    expect(forest.map((n) => n.session_id)).toEqual(["s-open"]);
+  });
+
+  it("ST-P4: hydrates session timestamps to ISO-8601 UTC and carries substrate", () => {
+    seedAgent(db, "ag-iso2");
+    seedTask(db, "t-1");
+    seedAssignment(db, "ag-iso2", { id: "a-1", taskId: "t-1", state: "dispatched" });
+    seedSession("s-1", "a-1", { substrate: "codex" });
+    const [row] = listWorkingAgents(db);
+    const node = row!.sessions[0]!;
+    expect(node.substrate).toBe("codex");
+    expect(node.state).toBe("dispatched");
+    expect(node.started_at).toMatch(/^\d{4}-\d{2}-\d{2}T.+Z$/);
+    expect(node.ended_at).toBeNull();
+  });
+
+  it("ST-P4 additivity: pre-change DTO fields are byte-identical (snapshot)", () => {
+    seedAgent(db, "ag-snap", "Snapshot Agent");
+    seedTask(db, "t-snap", 1);
+    seedAssignment(db, "ag-snap", { id: "a-snap", taskId: "t-snap", state: "running" });
+    const [row] = listWorkingAgents(db);
+    // Strip the new field; the remainder must equal the exact pre-ST-P4 shape.
+    const { sessions, primary_assignment, ...scalars } = row!;
+    expect(Array.isArray(sessions)).toBe(true);
+    expect(scalars).toEqual({
+      agent_id: "ag-snap",
+      agent_name: "Snapshot Agent",
+      agent_type: "hands",
+      primary_state_rank: 1,
+      primary_state: "running",
+      additional_active_count: 0,
+    });
+    expect(primary_assignment.task_id).toBe("t-snap");
+    expect(primary_assignment.task_title).toBe("Task t-snap");
+    expect(primary_assignment.task_priority).toBe(1);
+    expect(primary_assignment.id).toBe("a-snap");
+    expect(primary_assignment.updated_at).toMatch(/^\d{4}-\d{2}-\d{2}T.+Z$/);
   });
 });

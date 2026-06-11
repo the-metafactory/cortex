@@ -10,6 +10,7 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
 import type { Classification } from "../../../../bus/myelin/envelope-validator";
+import { assembleSessionTree, type SessionTreeNode } from "../lib/session-tree";
 
 // ---------------------------------------------------------------------------
 // G-406: Module-level cache
@@ -51,6 +52,14 @@ export async function buildSnapshot(
       displayName: id === "meta-factory" ? "metafactory" : id.charAt(0).toUpperCase() + id.slice(1),
     })),
     agents,
+    /**
+     * ST-P4 — the session tree (refactor §5b): the active sessions in `agents`
+     * folded into the `initiated-by` forest (`parent_session_id`). ADDITIVE —
+     * the existing `agents` array is unchanged; the frontend reads this for the
+     * nested working-grid until P5 consumes it directly. Lifecycle metadata only
+     * (ADR-0005 — no interiors in the cloud projection).
+     */
+    sessionTree: buildSessionTree(agents),
     recentCompletions: completions,
     recentActivity: activity,
     stats: { today: dailyStats },
@@ -244,7 +253,8 @@ async function getActiveAgents(
            github_issue, started_at, completed_at, duration_ms, status, pr_url,
            events_count, last_event, last_event_at, progress_completed, progress_total,
            input_tokens, output_tokens, cache_read_tokens, cost_usd,
-           classification, data_residency, home_principal
+           classification, data_residency, home_principal,
+           parent_session_id, substrate
     FROM sessions
     WHERE (status = 'active' AND last_event_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-3 hours'))
       OR (status IN ('completed', 'failed') AND completed_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 minutes'))
@@ -305,8 +315,51 @@ async function getActiveAgents(
       status: r.status as "active" | "completed" | "failed",
       completedAt: r.completed_at as string | undefined,
       durationMs: r.duration_ms as number | null | undefined,
+      // ST-P4 — the session-tree edge + substrate, surfaced per active session
+      // (lifecycle metadata only — ADR-0005). The tree itself is assembled at
+      // the snapshot level (buildSessionTree) from these same rows.
+      parentSessionId: (r.parent_session_id as string | null) ?? null,
+      substrate: (r.substrate as string | null) ?? "claude-code",
     },
   }));
+}
+
+/**
+ * ST-P4 — assemble the cloud session tree from the active-agent session rows.
+ *
+ * The cloud `agents` array is already SESSION-keyed (one entry per active
+ * session, via `currentTask.sessionId`); this folds those same sessions into
+ * the `initiated-by` forest the dashboard renders, using the SHARED pure
+ * assembler (byte-identical to the local copy — see `lib/session-tree.ts`).
+ *
+ * Lifecycle metadata ONLY (ADR-0005: cloud never holds session interiors). A
+ * child whose parent is outside the active window surfaces as a root (the
+ * assembler's orphaned-parent rule), never dropped.
+ */
+function buildSessionTree(
+  agents: Array<{
+    status: "active" | "completed";
+    currentTask: {
+      sessionId: string;
+      agentName: string;
+      startedAt: string;
+      completedAt?: string;
+      parentSessionId: string | null;
+      substrate: string;
+    };
+  }>
+): SessionTreeNode[] {
+  return assembleSessionTree(
+    agents.map((a) => ({
+      session_id: a.currentTask.sessionId,
+      parent_session_id: a.currentTask.parentSessionId,
+      substrate: a.currentTask.substrate,
+      state: a.status,
+      started_at: a.currentTask.startedAt,
+      ended_at: a.currentTask.completedAt ?? null,
+      agent_name: a.currentTask.agentName,
+    }))
+  );
 }
 
 /**

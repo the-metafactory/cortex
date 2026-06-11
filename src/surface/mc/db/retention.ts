@@ -260,8 +260,11 @@ function selectStuckOrphans(db: Database, cutoffIso: string): StuckOrphan[] {
  *
  * Each reap is its own `applyTransition` transaction (concurrency-guarded by the
  * state-in-WHERE check there). Idempotent: once cancelled, a row is no longer
- * selected. Never touches real dispatch assignments (double-anchored on the
- * orphan prefix + orphan task) nor a session with a recent event.
+ * selected. Never touches real dispatch assignments: `selectStuckOrphans`
+ * double-anchors on `ata.task_id = mc-orphan-task` (the bookkeeping anchor) AND
+ * `s.endpoint_kind = 'local.observed'` — NOT the `mc-orphan-` agent prefix,
+ * which ST-P2 retired for new rows (#972). Nor does it touch a session with a
+ * recent event (the TTL cutoff).
  */
 export function reapStuckRunningOrphans(db: Database): StuckReapResult {
   const cutoffIso = new Date(Date.now() - STUCK_RUNNING_TTL_MS).toISOString();
