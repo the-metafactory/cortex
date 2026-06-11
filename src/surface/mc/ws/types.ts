@@ -108,7 +108,9 @@ export type WsServerMessage =
         | "governance.verdict"
         | "agent.heartbeat"
         | "attention"
-        | "adapter.health";
+        | "adapter.health"
+        // P-14 U2.1 (#934) — Observability tab refresh family. Additive.
+        | "observability";
       sessionId?: string;
       assignmentId?: string;
     }

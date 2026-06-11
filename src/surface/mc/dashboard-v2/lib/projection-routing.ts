@@ -25,6 +25,8 @@ export const PROJECTION_FAMILIES = [
   "agent.heartbeat",
   "attention",
   "adapter.health",
+  // P-14 U2.1 (#934) — signal's four system.* families refresh the Observability tab.
+  "observability",
 ] as const;
 
 export type ProjectionFamily = (typeof PROJECTION_FAMILIES)[number];
@@ -33,7 +35,7 @@ export type ProjectionFamily = (typeof PROJECTION_FAMILIES)[number];
  * The live views a `mc.projection` refetch can target. These are the
  * data hooks whose REST payload a projection write can invalidate.
  */
-export type ProjectionView = "working-agents" | "tasks" | "attention";
+export type ProjectionView = "working-agents" | "tasks" | "attention" | "observability";
 
 /**
  * Map a projection `family` → the live views it can invalidate.
@@ -64,6 +66,13 @@ export function routeProjectionFamily(family: string): readonly ProjectionView[]
       return ["attention"];
     case "adapter.health":
       return [];
+    case "observability":
+      // The Observability tab is the sole reader of this family (the four
+      // signal system.* families). It can also touch the attention queue (a
+      // collector.degraded / backend.unreachable opens an att:adapter: item),
+      // but the renderer broadcasts a separate `attention` family for that, so
+      // here `observability` routes only to its own view.
+      return ["observability"];
     default:
       return [];
   }

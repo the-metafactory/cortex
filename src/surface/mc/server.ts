@@ -46,6 +46,7 @@ import { handleGetPhaseDetail } from "./api/phase-detail";
 import { handleGetWorkItemDetail } from "./api/work-item-detail";
 import { handleListAttention } from "./api/attention";
 import { handleGetGovernance } from "./api/governance";
+import { handleGetObservability } from "./api/observability-tab";
 import { proxySideband } from "../../common/sideband/proxy";
 import type { ProcessManager } from "./session/process-manager";
 import type { SpawnFn } from "./session/endpoint-resolver";
@@ -499,6 +500,19 @@ async function handleApi(
       return methodNotAllowed(["GET"]);
     }
     return handleGetGovernance(db);
+  }
+
+  // P-14 U2.1 (#934) — GET /api/observability-events — the Observability tab's
+  // per-section rows + counts over `observability_events`. Registered BEFORE the
+  // U0.1 `/api/observability/*` proxy below: the proxy matches the trailing-slash
+  // prefix `/api/observability/`, which `/api/observability-events` does NOT
+  // start with (the next char is `-`, not `/`), so the two never collide — but
+  // ordering this first makes the disjointness explicit and robust to refactors.
+  if (pathname === "/api/observability-events") {
+    if (req.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
+    return handleGetObservability(db);
   }
 
   // P-14 U0.1 — GET /api/observability/* — Tier-3 sideband drill-down proxy.

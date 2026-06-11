@@ -109,6 +109,10 @@ describe("routeProjectionFamily — S6 family → live-view policy", () => {
     expect(routeProjectionFamily("adapter.health")).toEqual([]);
   });
 
+  it("observability (#934) routes only to the Observability view", () => {
+    expect(routeProjectionFamily("observability")).toEqual(["observability"]);
+  });
+
   it("an unknown family routes to nothing (defensive against future server families)", () => {
     expect(routeProjectionFamily("future.thing")).toEqual([]);
     expect(routeProjectionFamily("")).toEqual([]);
@@ -125,6 +129,8 @@ describe("routeProjectionFamily — S6 family → live-view policy", () => {
     expect(projectionAffectsView("dispatch.lifecycle", "attention")).toBe(false);
     expect(projectionAffectsView("attention", "attention")).toBe(true);
     expect(projectionAffectsView("adapter.health", "working-agents")).toBe(false);
+    expect(projectionAffectsView("observability", "observability")).toBe(true);
+    expect(projectionAffectsView("observability", "attention")).toBe(false);
   });
 });
 

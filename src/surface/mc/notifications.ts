@@ -198,7 +198,10 @@ export type ProjectionFamily =
   | "agent.heartbeat"
   | "attention"
   | "adapter.health"
-  | "governance.verdict";
+  | "governance.verdict"
+  // P-14 U2.1 (#934) — signal's four system.* observability families refreshed
+  // the Observability tab. Additive; older clients ignore an unknown family.
+  | "observability";
 
 /**
  * MC-I1.S6 (#848) — broadcast an `mc.projection` refresh signal to all connected

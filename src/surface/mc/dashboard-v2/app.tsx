@@ -27,6 +27,7 @@ import { WorkItemDetailView } from "./components/work-item-detail-view";
 import { AttentionView } from "./components/attention-view";
 import { NetworkView } from "./components/network-view";
 import { GovernanceView } from "./components/governance-view";
+import { ObservabilityView } from "./components/observability-view";
 import { Toast } from "./components/toast";
 import { useFocusArea } from "./hooks/use-focus-area";
 import { useTasks } from "./hooks/use-tasks";
@@ -39,6 +40,7 @@ import { usePhaseDetail } from "./hooks/use-phase-detail";
 import { useAttention } from "./hooks/use-attention";
 import { useAgents } from "./hooks/use-agents";
 import { useGovernance } from "./hooks/use-governance";
+import { useObservability } from "./hooks/use-observability";
 import type { AgentPresenceTile } from "./hooks/use-agents";
 import { useWorkItemDetail } from "./hooks/use-work-item-detail";
 import { useTheme } from "./hooks/use-theme";
@@ -63,7 +65,7 @@ import type { Command } from "./components/command-palette";
  * may upgrade to a hash route if deep-linking turns out to be
  * principal-requested; for now the in-memory view is sufficient.
  */
-type DashboardView = "default" | "metrics" | "iterations" | "sources" | "repositories" | "plans" | "phase-detail" | "work-item-detail" | "attention" | "kanban-detail" | "network" | "governance";
+type DashboardView = "default" | "metrics" | "iterations" | "sources" | "repositories" | "plans" | "phase-detail" | "work-item-detail" | "attention" | "kanban-detail" | "network" | "governance" | "observability";
 
 export function App() {
   const { theme, toggle: toggleTheme } = useTheme();
@@ -128,6 +130,10 @@ export function App() {
   const agents = useAgents(ws, view === "network");
   // G-1115 — governance verdicts, fetched only when the tab is visible.
   const governance = useGovernance(ws, view === "governance");
+  // P-14 U2.1 (#934) — observability events (signal's four system.* families),
+  // fetched only when the Observability tab is visible; live-refreshed off the
+  // `observability` mc.projection family.
+  const observability = useObservability(ws, view === "observability");
   // If software mode is toggled OFF while on a software-mode view (Repositories
   // / Plans / phase-detail / work-item-detail / attention), the tab + render
   // both gate off — reset to default so the main area isn't left blank.
@@ -364,6 +370,15 @@ export function App() {
         >
           Governance
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === "observability"}
+          className={`tab${view === "observability" ? " active" : ""}`}
+          onClick={() => setView("observability")}
+        >
+          Observability
+        </button>
         {softwareMode && (
           <button
             type="button"
@@ -552,6 +567,14 @@ export function App() {
           /* G-1115 — read-only governance audit surface: verdicts from the
              governed-action stack (pulse P-702) read back off the bus. */
           <GovernanceView state={governance} />
+        )}
+
+        {view === "observability" && (
+          /* P-14 U2.1 (#934) — signal's four system.* observability families:
+             signal health / federation / transport. Federation + transport are
+             hub-emitted; a non-hub stack shows an honest explanatory empty
+             state (roster arrives via U3.3), never synthesized data. */
+          <ObservabilityView state={observability} />
         )}
 
         {view === "network" && (

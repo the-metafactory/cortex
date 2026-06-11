@@ -130,6 +130,10 @@ import { startMissionControl, type MissionControlHandle } from "./surface/mc/emb
 import type { AgentPresenceView } from "./surface/mc/api/agents";
 // MC-I1.S4 (ADR-0005 §4) — bus→MC dispatch-lifecycle projection renderer.
 import { createDispatchProjectionRenderer } from "./surface/mc/projection/dispatch-lifecycle-renderer";
+// P-14 U2.1 (#934) — bus→MC observability projection renderer (signal's four
+// system.* families). Own renderer, own subjects; registered beside the dispatch
+// renderer, no edit to surface-router.ts.
+import { createObservabilityProjectionRenderer } from "./surface/mc/projection/observability-renderer";
 // MC-I1.S7 (#849) — funnel the event-driven failed_dispatch attention delta
 // onto the same system.attention.* bus path the cockpit loop publishes on.
 import { publishReconcileDelta } from "./surface/mc/attention-notify";
@@ -3610,6 +3614,16 @@ export async function startCortex(
         }),
       );
       console.log("cortex: Mission Control bus→MC projection renderer registered (dispatch + verdicts + heartbeats + attention + adapter health + failed-dispatch)");
+      // P-14 U2.1 (#934) — the observability projection renderer for signal's
+      // four system.* families. Its OWN surface-router renderer (own id +
+      // subjects); shares the embed's db + wsRegistry so its rows + att:adapter:
+      // attention items push the `observability` / `attention` mc.projection
+      // refresh families to live dashboard clients. Federation/transport are
+      // hub-emitted — on a non-hub stack the renderer simply never receives
+      // those subjects, so the tab's federation/transport sections stay honestly
+      // empty (no synthesized rows).
+      router.register(createObservabilityProjectionRenderer(mcDb, mcHandle.wsRegistry));
+      console.log("cortex: Mission Control observability projection renderer registered (signal + collector + federation + transport)");
     } catch (err) {
       console.error("cortex: Mission Control embed startup error (non-fatal):", err instanceof Error ? err.message : err);
     }

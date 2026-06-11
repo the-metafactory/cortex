@@ -106,6 +106,17 @@ export const EVENTS_RETENTION_MS = 14 * DAY_MS;
  */
 export const STUCK_RUNNING_TTL_MS = 30 * MINUTE_MS;
 
+/**
+ * Observability-events retention window (P-14 U2.1, #934). The
+ * `observability_events` table is an append-only projection of signal's four
+ * `system.*` families, with no session FK to CASCADE off — so, like `events`, it
+ * needs its own age-based prune or it grows unbounded. 14 days mirrors
+ * {@link EVENTS_RETENTION_MS}: a fortnight of observability history on the glass,
+ * then aged out by a single indexed DELETE (served by `idx_observability_timestamp`).
+ * Module constant, no config — minimal blast radius, same as the other windows.
+ */
+export const OBSERVABILITY_RETENTION_MS = 14 * DAY_MS;
+
 // ORPHAN_TASK_ID is imported from ./sessions — the shared orphan anchor task,
 // preserved by the prune (only its children go). Single source of truth so the
 // DELETE anchor can't drift from the registration site.
@@ -120,6 +131,10 @@ export interface EventsPruneResult {
   prunedEvents: number;
 }
 
+export interface ObservabilityPruneResult {
+  prunedObservability: number;
+}
+
 export interface StuckReapResult {
   /** Orphan assignments transitioned to terminal by the liveness reaper. */
   reaped: number;
@@ -128,6 +143,7 @@ export interface StuckReapResult {
 export interface RetentionSummary
   extends OrphanPruneResult,
     EventsPruneResult,
+    ObservabilityPruneResult,
     StuckReapResult {
   /** false when the prune failed (e.g. closed db) — best-effort, never throws. */
   ok: boolean;
@@ -397,8 +413,21 @@ export function pruneOldEvents(db: Database): EventsPruneResult {
 }
 
 /**
+ * Prune `observability_events` older than {@link OBSERVABILITY_RETENTION_MS}
+ * (P-14 U2.1, #934). Age-based, mirroring {@link pruneOldEvents}: a single
+ * indexed DELETE (served by `idx_observability_timestamp`); idempotent. The table
+ * has no session FK, so unlike orphan events these rows never CASCADE-drop with a
+ * session — this prune is their sole bound.
+ */
+export function pruneOldObservability(db: Database): ObservabilityPruneResult {
+  const cutoffIso = new Date(Date.now() - OBSERVABILITY_RETENTION_MS).toISOString();
+  const res = db.query(`DELETE FROM observability_events WHERE timestamp < ?`).run(cutoffIso);
+  return { prunedObservability: res.changes };
+}
+
+/**
  * Run the full retention sweep: stuck-running reap → orphan terminal-row prune
- * → events age prune.
+ * → events age prune → observability-events age prune (#934).
  *
  * Ordering is load-bearing: the reaper (ST-P3) runs FIRST so zombie orphans
  * that have gone quiet past the liveness TTL are driven terminal (stamping
@@ -419,7 +448,8 @@ export function pruneRetention(db: Database): RetentionSummary {
     const stuck = reapStuckRunningOrphans(db);
     const orphans = pruneOrphanSessions(db);
     const events = pruneOldEvents(db);
-    return { ok: true, ...stuck, ...orphans, ...events };
+    const observability = pruneOldObservability(db);
+    return { ok: true, ...stuck, ...orphans, ...events, ...observability };
   } catch (err) {
     return {
       ok: false,
@@ -429,6 +459,7 @@ export function pruneRetention(db: Database): RetentionSummary {
       prunedAssignments: 0,
       prunedAgents: 0,
       prunedEvents: 0,
+      prunedObservability: 0,
     };
   }
 }

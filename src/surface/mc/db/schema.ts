@@ -26,6 +26,7 @@ export const TABLE_NAMES = [
   "plan_phases",
   "work_items",
   "attention_items",
+  "observability_events",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
@@ -542,6 +543,30 @@ export const SCHEMA_SQL: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_governance_created ON governance_verdicts(created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_governance_decision ON governance_verdicts(decision, created_at)`,
+
+  // P-14 U2.1 (#934) — Observability events. Append-only projection rows from
+  // signal's four `system.*` envelope families (`system.signal.*`,
+  // `system.signal.collector.*`, `system.federation.*`, `system.transport.*`),
+  // surfaced on the MC Observability tab. NOT session-joined: the tab queries
+  // by `family` (signal-health / federation / transport sections) and time, not
+  // session feeds — modelled on `governance_verdicts`. `envelope_id` UNIQUE makes
+  // at-least-once redelivery idempotent. `family` is the section discriminator;
+  // `type` is the full `domain.entity.action`. Hub-scope (federation/transport)
+  // is a DATA property — non-hub stacks simply have zero rows of those families,
+  // which the tab renders as an honest empty state (never synthesized).
+  `CREATE TABLE IF NOT EXISTS observability_events (
+    id TEXT PRIMARY KEY,
+    envelope_id TEXT NOT NULL UNIQUE,
+    family TEXT NOT NULL
+      CHECK(family IN ('signal','collector','federation','transport')),
+    type TEXT NOT NULL,
+    stack_id TEXT,
+    summary TEXT,
+    payload TEXT NOT NULL DEFAULT '{}',
+    timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_observability_timestamp ON observability_events(timestamp)`,
+  `CREATE INDEX IF NOT EXISTS idx_observability_family ON observability_events(family, timestamp DESC)`,
 ];
 
 /**
