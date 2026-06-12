@@ -479,9 +479,9 @@ export type Presence = z.infer<typeof PresenceSchema>;
  *                    Required IFF `kind: exec` (a builtin has no command to
  *                    spawn). `{pack}` expands to the arc install dir at spawn.
  *   - `protocol`   — pinned to `cortex-brain/v1` (the only protocol B-1 speaks).
- *   - `lifecycle`  — `per-task` (default) | `daemon`. `per-task` is LIVE (B-1);
- *                    `daemon` is REJECTED at load time (B-2) so nobody
- *                    half-uses the socket transport before it exists.
+ *   - `lifecycle`  — `per-task` (default) | `daemon`. Both LIVE: `per-task`
+ *                    (B-1) spawns per inbound task; `daemon` (B-2) supervises a
+ *                    long-lived socket-multiplexed process.
  *   - `secrets`    — env var NAMES only (values resolve from the runtime env at
  *                    spawn). Install-time principal consent is the arc-side gate
  *                    (§8). Defaults to `[]`.
@@ -519,9 +519,10 @@ export const BrainConfigSchema = z
     /**
      * `per-task` — spawn the brain per inbound task, alive until it emits
      * `result` (B-1, LIVE). `daemon` — supervise a long-lived process on a
-     * socket transport (B-2). Daemon is REJECTED at load time (superRefine
-     * below) with a clear "lands in B-2" message so a config can't half-use a
-     * transport that does not exist yet. Defaults to `per-task`.
+     * Unix-socket transport, multiplexing tasks by `task_id`, with crash
+     * supervision (`maxRestarts`) and hot-swap drain (B-2, LIVE —
+     * `src/brain/daemon-brain-host.ts`). Both are accepted at load. Defaults to
+     * `per-task`.
      */
     lifecycle: z.enum(["per-task", "daemon"]).default("per-task"),
     /**
@@ -543,9 +544,11 @@ export const BrainConfigSchema = z
     dispatch_capabilities: z.array(z.string().min(1)).default([]),
     /**
      * Daemon supervision restart cap (§7.4): cortex restarts a crashed daemon
-     * brain up to this many times, then marks the agent degraded. Accepted +
-     * documented now; UNUSED until B-2 (a `per-task` brain is spawned fresh per
-     * task and never restarted). Non-negative integer; defaults to 3.
+     * brain up to this many times, then marks the agent degraded (the restart
+     * counter resets after a healthy uptime window). LIVE for `lifecycle: daemon`
+     * as of B-2 (`DaemonBrainHost`); a `per-task` brain is spawned fresh per task
+     * and never restarted, so the field is inert there. Non-negative integer;
+     * defaults to 3.
      */
     maxRestarts: z
       .number()
@@ -554,19 +557,12 @@ export const BrainConfigSchema = z
       .default(3),
   })
   .superRefine((brain, ctx) => {
-    // `daemon` lifecycle is B-2 — REJECT it at load so a config can't half-use
-    // the socket transport / supervision machinery before they exist. A clear,
-    // actionable message rather than a silent partial-feature.
-    if (brain.lifecycle === "daemon") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "agent.runtime.brain.lifecycle 'daemon' is not yet supported — daemon " +
-          "lifecycle (socket transport + supervision) lands in B-2; use " +
-          "'per-task' (the default) for now",
-        path: ["lifecycle"],
-      });
-    }
+    // `daemon` lifecycle is LIVE as of B-2 (socket transport + supervision +
+    // hot-swap drain — `src/brain/daemon-brain-host.ts`). The B-1 load-time
+    // rejection is removed; a `daemon` brain is now spawned once and supervised
+    // (the BrainConsumer routes its tasks through the DaemonBrainHost). The
+    // `exec`-with-`run` requirement below still applies to both lifecycles.
+
     // An `exec` brain has no behaviour without a command to spawn. Require
     // `run` so a half-declared exec brain fails at load, not at the first task.
     if (brain.kind === "exec" && (brain.run === undefined || brain.run.length === 0)) {

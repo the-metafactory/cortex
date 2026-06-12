@@ -421,12 +421,32 @@ describe("AgentRuntimeSchema.brain (Bot Packs B-1)", () => {
     expect(parsed.brain?.dispatch_capabilities).toEqual(["soc.triage.email"]);
   });
 
-  test("lifecycle=daemon is REJECTED at load (lands in B-2)", () => {
+  test("lifecycle=daemon is now ACCEPTED at load (B-2 daemon host is live)", () => {
+    const parsed = AgentRuntimeSchema.parse(
+      minRuntime({
+        kind: "exec",
+        run: "bun x.ts",
+        lifecycle: "daemon",
+        maxRestarts: 5,
+      }),
+    );
+    expect(parsed.brain?.lifecycle).toBe("daemon");
+    expect(parsed.brain?.maxRestarts).toBe(5);
+  });
+
+  test("lifecycle defaults to per-task when omitted", () => {
+    const parsed = AgentRuntimeSchema.parse(
+      minRuntime({ kind: "exec", run: "bun x.ts" }),
+    );
+    expect(parsed.brain?.lifecycle).toBe("per-task");
+  });
+
+  test("daemon still requires run when kind=exec", () => {
     expect(() =>
       AgentRuntimeSchema.parse(
-        minRuntime({ kind: "exec", run: "bun x.ts", lifecycle: "daemon" }),
+        minRuntime({ kind: "exec", lifecycle: "daemon" }),
       ),
-    ).toThrow(/daemon[\s\S]*B-2/);
+    ).toThrow(/brain\.run is required when brain\.kind is 'exec'/);
   });
 
   test("protocol pinned to cortex-brain/v1 — a wrong protocol fails", () => {
