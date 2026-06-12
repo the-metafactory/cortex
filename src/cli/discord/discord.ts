@@ -9,7 +9,7 @@
 import { Command } from "commander";
 import YAML from "yaml";
 import { loadConfig, saveConfig, getConfigPath } from "./lib/config";
-import { resolveServerContext, registerServerProfile, ServerContextError } from "./lib/server-context";
+import { cachedChannelId, resolveServerContext, registerServerProfile, ServerContextError } from "./lib/server-context";
 import type { ResolvedServerContext, ServerContextOptions } from "./lib/server-context";
 import type { DiscordCliConfig } from "./lib/config";
 import { postMessage, postMessageWithFiles, createThreadFromMessage, resolveChannelByName, resolveThreadByName, readMessages, listChannels, listThreads, type AttachmentInput } from "./lib/discord";
@@ -135,21 +135,14 @@ program
       process.exit(1);
     }
 
-    // Resolve channel name → ID (cached in context, or looked up via API).
-    // A cached id posts directly and is guild-agnostic — no resolution needed.
+    // Resolve channel name → ID. Cached ids and raw ids are only trusted when
+    // they belong to this command's effective guild.
     let channelId: string | undefined;
     if (channelName) {
-      channelId = ctx.channels?.[channelName]?.id;
-      if (!channelId) {
-        channelId = await resolveChannelByName(ctx.botToken, ctx.guildId, channelName) ?? undefined;
-        if (!channelId && !threadId) {
-          console.error(`Channel "#${channelName}" not found. Run: discord channels`);
-          process.exit(1);
-        }
-        if (channelId) {
-          cacheChannelId(config, ctx, channelName, channelId);
-          saveConfig(config);
-        }
+      channelId = await resolveChannelId(config, ctx, ctx.botToken, ctx.guildId, channelName);
+      if (!channelId && !threadId) {
+        console.error(`Channel "#${channelName}" not found. Run: discord channels`);
+        process.exit(1);
       }
     }
 
@@ -229,15 +222,10 @@ program
         process.exit(1);
       }
 
-      let channelId = ctx.channels?.[channelName]?.id;
+      const channelId = await resolveChannelId(config, ctx, ctx.botToken, ctx.guildId, channelName);
       if (!channelId) {
-        channelId = await resolveChannelByName(ctx.botToken, ctx.guildId, channelName) ?? undefined;
-        if (!channelId) {
-          console.error(`Channel "#${channelName}" not found.`);
-          process.exit(1);
-        }
-        cacheChannelId(config, ctx, channelName, channelId);
-        saveConfig(config);
+        console.error(`Channel "#${channelName}" not found.`);
+        process.exit(1);
       }
       readTargetId = channelId;
     }
@@ -389,6 +377,33 @@ function cacheChannelId(
     config.channels ??= {};
     config.channels[channelName] = { id: channelId };
   }
+}
+
+async function resolveChannelId(
+  config: DiscordCliConfig,
+  ctx: ResolvedServerContext,
+  botToken: string,
+  guildId: string,
+  channelName: string
+): Promise<string | undefined> {
+  if (isDiscordId(channelName)) {
+    const channels = await listChannels(botToken, guildId);
+    return channels.some((channel) => channel.id === channelName) ? channelName : undefined;
+  }
+
+  const cached = cachedChannelId(ctx, channelName);
+  if (cached) return cached;
+
+  const resolved = await resolveChannelByName(botToken, guildId, channelName) ?? undefined;
+  if (resolved) {
+    cacheChannelId(config, ctx, channelName, resolved);
+    saveConfig(config);
+  }
+  return resolved;
+}
+
+function isDiscordId(value: string): boolean {
+  return /^\d{17,20}$/.test(value);
 }
 
 function setNestedValue(obj: ConfigObject, key: string, value: string): void {

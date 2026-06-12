@@ -456,7 +456,7 @@ describe("BrainConsumer — dispatch effect enforcement", () => {
             capability: "soc.triage.email",
             payload: {},
           });
-          rejection = outcome as typeof rejection;
+          rejection = outcome;
         }),
       }),
     );
@@ -478,13 +478,13 @@ describe("BrainConsumer — dispatch effect enforcement", () => {
         runtime,
         agent: buildAgent({ dispatchCapabilities: ["soc.triage.email"] }),
         runBrainTask: stubRunner(completeResult(env.id), async (hooks) => {
-          outcome = (await hooks.onDispatch({
+          outcome = await hooks.onDispatch({
             v: 1,
             type: "dispatch",
             task_id: env.id,
             capability: "soc.triage.email",
             payload: { msg: "x" },
-          })) as typeof outcome;
+          });
         }),
       }),
     );
@@ -510,14 +510,14 @@ describe("BrainConsumer — dispatch effect enforcement", () => {
           modelClass: "local-only",
         }),
         runBrainTask: stubRunner(completeResult(env.id), async (hooks) => {
-          outcome = (await hooks.onDispatch({
+          outcome = await hooks.onDispatch({
             v: 1,
             type: "dispatch",
             task_id: env.id,
             capability: "soc.triage.email",
             payload: {},
             sovereignty: { model_class: "frontier" },
-          })) as typeof outcome;
+          });
         }),
       }),
     );

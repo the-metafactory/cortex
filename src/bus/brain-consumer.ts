@@ -145,16 +145,16 @@ export interface PrincipalGate {
  * gate as denied.
  */
 export class DenyAllPrincipalGate implements PrincipalGate {
-  async resolve(): Promise<{
+  resolve(): Promise<{
     verdict: GateVerdictValue;
     principal: string;
     notes?: string;
   }> {
-    return {
+    return Promise.resolve({
       verdict: "fail",
       principal: "",
       notes: "no principal gate configured (B-2)",
-    };
+    });
   }
 }
 

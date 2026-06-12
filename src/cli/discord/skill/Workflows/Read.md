@@ -23,3 +23,4 @@ Read recent messages from a Discord channel.
 - Format: `[HH:MM] Author: Content`
 - To list available channels: `discord channels`
 - To list active threads: `discord threads`
+- Cached channel names are used only when the cache owner matches the selected guild; raw channel IDs must be visible in the selected guild.
