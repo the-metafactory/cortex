@@ -2371,25 +2371,29 @@ export async function startCortex(
         `local.${reviewPrincipalId}.${derivedStack.stack}.tasks.${capability}`;
 
       if (reviewJsm !== null) {
-        for (const capability of brainCapabilities) {
-          const durable = brainDurableFor(capability);
-          try {
-            await provisionReviewConsumer({
-              jsm: reviewJsm,
-              stream: reviewStream,
-              durable,
-              filterSubject: brainPatternFor(capability),
-              maxDeliver: reviewConsumerMaxDeliver,
-            });
-          } catch (provisionErr) {
-            // Don't abort — let `consumer.start()` surface the bind failure
-            // through its own dormant/skip path (mirrors the review path).
-            process.stderr.write(
-              `cortex: provisionReviewConsumer (brain) failed for "${durable}": ` +
-                `${provisionErr instanceof Error ? provisionErr.message : String(provisionErr)}\n`,
-            );
-          }
-        }
+        // Independent durables — provision in one parallel wave (sage
+        // cortex#1033 round 2); still awaited as a whole BEFORE start().
+        await Promise.all(
+          brainCapabilities.map(async (capability) => {
+            const durable = brainDurableFor(capability);
+            try {
+              await provisionReviewConsumer({
+                jsm: reviewJsm,
+                stream: reviewStream,
+                durable,
+                filterSubject: brainPatternFor(capability),
+                maxDeliver: reviewConsumerMaxDeliver,
+              });
+            } catch (provisionErr) {
+              // Don't abort — let `consumer.start()` surface the bind failure
+              // through its own dormant/skip path (mirrors the review path).
+              process.stderr.write(
+                `cortex: provisionReviewConsumer (brain) failed for "${durable}": ` +
+                  `${provisionErr instanceof Error ? provisionErr.message : String(provisionErr)}\n`,
+              );
+            }
+          }),
+        );
       }
 
       const started = await consumer.start({

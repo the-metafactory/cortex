@@ -369,7 +369,7 @@ describe("AgentRuntimeSchema.brain (Bot Packs B-1)", () => {
     expect(parsed.brain).toBeUndefined();
   });
 
-  test("every existing fixture config parses IDENTICALLY (no brain drift)", () => {
+  test("representative existing config shapes parse identically (builtin-absent equivalence spread) (no brain drift)", () => {
     // Prove the schema addition is purely additive: a representative spread of
     // pre-B-1 runtime shapes round-trips byte-identical, with `brain` absent.
     const fixtures: Record<string, unknown>[] = [
@@ -1743,5 +1743,40 @@ describe("CortexConfigSchema — federated accept/deny subject scope (ADR 0001)"
       },
     });
     expect(parsed.policy?.federated?.networks[0]?.accept_subjects).toHaveLength(1);
+  });
+});
+
+// sage cortex#1033 round 2 (blocker) — exec-brain capability ids are exact
+// NATS subject segments; wildcards must fail at LOAD.
+describe("round-2: exec-brain capability wildcard rejection", () => {
+  const base = {
+    mode: "in-process",
+    capabilities: ["soc.compose.flow"],
+    brain: { kind: "exec", run: "bun {pack}/brain/main.ts" },
+  };
+
+  test("wildcard '>' in capabilities rejected for exec brains", () => {
+    const r = AgentRuntimeSchema.safeParse({ ...base, capabilities: [">"] });
+    expect(r.success).toBe(false);
+  });
+
+  test("'soc.>' rejected; '*' rejected", () => {
+    expect(AgentRuntimeSchema.safeParse({ ...base, capabilities: ["soc.>"] }).success).toBe(false);
+    expect(AgentRuntimeSchema.safeParse({ ...base, capabilities: ["*"] }).success).toBe(false);
+  });
+
+  test("wildcard in dispatch_capabilities rejected", () => {
+    const r = AgentRuntimeSchema.safeParse({
+      ...base,
+      brain: { ...base.brain, dispatch_capabilities: ["soc.>"] },
+    });
+    expect(r.success).toBe(false);
+  });
+
+  test("valid ids still pass; builtin agents unaffected by the grammar gate", () => {
+    expect(AgentRuntimeSchema.safeParse(base).success).toBe(true);
+    expect(
+      AgentRuntimeSchema.safeParse({ mode: "in-process", capabilities: ["WEIRD CAPS"] }).success,
+    ).toBe(true); // builtin: legacy looseness preserved
   });
 });

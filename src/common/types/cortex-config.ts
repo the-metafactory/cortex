@@ -49,6 +49,7 @@ import { NKEY_PUBKEY_REGEX } from "./nkey";
 import { NatsSubjectsSchema } from "./nats-subjects";
 import { LETTER_PREFIX_ID_REGEX } from "./id";
 import { OfferingSchema, superRefineOfferings } from "./offering";
+import { CAPABILITY_ID_REGEX } from "./capability";
 import { checkPublicOfferingBackendGate } from "./public-offering-backend-gate";
 import { StackConfigSchema, deriveStackId } from "./stack";
 
@@ -721,7 +722,39 @@ export const AgentRuntimeSchema = z.object({
       "subjects and silently fails to receive tasks)",
     path: ["capabilities"],
   },
-);
+).superRefine((rt, ctx) => {
+  // Sage cortex#1033 (blocker) — an exec brain's capability ids become EXACT
+  // NATS subject segments in the BrainConsumer pull filter. Free text here
+  // would let a fragment declare `>` or `soc.>` and claim tasks far beyond
+  // its capability. Enforce the capability-id grammar at LOAD time for both
+  // the subscription list and the dispatch allow-list. Builtin agents keep
+  // the legacy looseness (their subjects are built by the review path's own
+  // fixed taxonomy, not raw manifest text).
+  if (rt.brain?.kind !== "exec") return;
+  rt.capabilities.forEach((cap, i) => {
+    if (!CAPABILITY_ID_REGEX.test(cap)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          `agent.runtime.capabilities[${i}] ("${cap}") is not a valid capability id — ` +
+          "exec-brain capabilities become exact NATS subject segments and must match " +
+          "the capability grammar (dot-separated lowercase segments; no wildcards)",
+        path: ["capabilities", i],
+      });
+    }
+  });
+  (rt.brain.dispatch_capabilities ?? []).forEach((cap, i) => {
+    if (!CAPABILITY_ID_REGEX.test(cap)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          `agent.runtime.brain.dispatch_capabilities[${i}] ("${cap}") is not a valid ` +
+          "capability id (no wildcards)",
+        path: ["brain", "dispatch_capabilities", i],
+      });
+    }
+  });
+});
 
 export type AgentRuntime = z.infer<typeof AgentRuntimeSchema>;
 

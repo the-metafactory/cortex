@@ -435,6 +435,18 @@ export class BrainConsumer {
       );
     }
 
+    // 2b. Shutdown guard BEFORE `started` (sage cortex#1033 round 2): a task
+    // refused because the consumer is draining must never be recorded as
+    // started — publish the not_now failure and nak for the next boot.
+    if (this.stopped) {
+      await this.publishFailed(correlationId, {
+        kind: "not_now",
+        detail: "brain consumer is shutting down",
+        retry_after_ms: 0,
+      });
+      return { kind: "nak", delayMs: 0 };
+    }
+
     // 3. Emit dispatch.task.started — paired with the terminal via correlation.
     const startedAt = this.clock();
     await this.safePublish(
@@ -472,16 +484,18 @@ export class BrainConsumer {
     if (this.stopPromise) return this.stopPromise;
     this.stopPromise = (async () => {
       this.stopped = true;
-      for (const sub of this.subscribers) {
-        try {
-          await sub.stop();
-        } catch (err) {
+      // One subscriber per capability — stop them in one parallel wave
+      // (sage cortex#1033 round 2): shutdown latency is the slowest broker
+      // stop, not the sum.
+      const stops = await Promise.allSettled(this.subscribers.map((sub) => sub.stop()));
+      stops.forEach((res) => {
+        if (res.status === "rejected") {
           process.stderr.write(
             `brain-consumer: subscriber stop failed for agent=${this.agent.id}: ` +
-              `${err instanceof Error ? err.message : String(err)}\n`,
+              `${res.reason instanceof Error ? res.reason.message : String(res.reason)}\n`,
           );
         }
-      }
+      });
       if (this.inFlight.size > 0) {
         await Promise.allSettled(Array.from(this.inFlight));
       }

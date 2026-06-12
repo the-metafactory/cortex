@@ -163,11 +163,19 @@ export type CapabilityCost = z.infer<typeof CapabilityCostSchema>;
  * for natural readability (`code-review` vs `code_review` is a style
  * choice, not a structural one).
  */
+/**
+ * Exported for structural reuse (cortex#1033 §Security): brain-hosted agents'
+ * `runtime.capabilities` become EXACT NATS subject segments — they must match
+ * this grammar so a fragment can never smuggle a `>`/`*` wildcard into a pull
+ * filter and claim tasks beyond its declared capability.
+ */
+export const CAPABILITY_ID_REGEX = /^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/;
+
 const CapabilityIdSchema = z
   .string()
   .min(1, "capability id is required and must be non-empty")
   .regex(
-    /^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/,
+    CAPABILITY_ID_REGEX,
     "capability id must be dot-separated lowercase segments, each starting with a letter and containing only lowercase alphanumeric + hyphen/underscore (e.g. 'code-review.typescript', 'literature-search.medline'); reject uppercase, whitespace, digit-prefix segments, and leading/trailing/consecutive dots",
   );
 
