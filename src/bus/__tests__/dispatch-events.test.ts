@@ -358,7 +358,8 @@ describe("createDispatchTaskPostEvent", () => {
         task_id: TASK_ID,
         agent_id: "yarrow",
         text: "Composed the flow.",
-        task_source: { surface: "mattermost", channel: "c1", thread: "t1", user: "u1" },
+        response_routing: { surface: "mattermost", channel: "c1", thread: "t1" },
+        triggered_by: "u1",
       });
       expect(env.correlation_id).toBe(TASK_ID);
       expect(validateEnvelope(env).ok).toBe(true);

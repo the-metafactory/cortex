@@ -294,14 +294,14 @@ describe("BrainConsumer — happy path", () => {
 
     const posts = published(runtime, "dispatch.task.post");
     expect(posts.length).toBe(1);
-    const p = posts[0]?.payload as { text?: string; task_source?: unknown };
+    const p = posts[0]?.payload as { text?: string; response_routing?: unknown; triggered_by?: string };
     expect(p.text).toBe("Composed the flow.");
-    expect(p.task_source).toEqual({
+    expect(p.response_routing).toEqual({
       surface: "mattermost",
       channel: "c9",
       thread: "t9",
-      user: "alice",
     });
+    expect(p.triggered_by).toBe("alice");
   });
 });
 

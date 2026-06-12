@@ -603,11 +603,11 @@ export interface BrainPostOpts extends DispatchTaskCommonOpts {
  * task is BUS-ORIGINATED — there is no live surface session the BrainConsumer
  * can post into. So a brain's `post` effect is published as a
  * `dispatch.task.post` lifecycle envelope carrying the text/attachment-ref + the
- * task's source triple; the adapter/surface bridge that reads it and renders to
- * the thread is B-2. The BrainConsumer header documents this honestly. This
- * keeps the brain protocol's "post to the task's surface/thread" semantics
- * intact while the live-surface bridge is deferred — the brain still cannot
- * choose a channel (the source triple is host-supplied, §5 property 1).
+ * task's source as canonical `response_routing`; the adapter/surface bridge
+ * (dispatch sink) that reads it and renders to the thread is B-2 — in B-1 this
+ * is an INTENT envelope, not an actual thread post. What B-1 does preserve:
+ * the brain still cannot choose a channel (the routing is host-supplied, §5
+ * property 1), and the sink will need no second routing vocabulary.
  *
  * **Why `dispatch.task.post` and not `brain.post`** (cortex#1033 §Architecture):
  * the post is a dispatch-lifecycle moment, a sibling of started/completed/failed
@@ -618,9 +618,19 @@ export interface BrainPostOpts extends DispatchTaskCommonOpts {
 export function createDispatchTaskPostEvent(
   opts: BrainPostOpts & { taskSource: BrainPostSource },
 ): Envelope {
+  // Canonical response routing (CONTEXT.md §Response-routing, logical shape):
+  // the SAME payload field every dispatch.task.* lifecycle envelope carries,
+  // so the B-2 dispatch sink reads one vocabulary — never a parallel
+  // `task_source` (sage cortex#1033 round 3). The triggering user is not part
+  // of routing; it rides as its own field.
   return buildBaseEnvelope("dispatch.task.post", opts, {
     text: opts.text,
-    task_source: opts.taskSource,
+    response_routing: {
+      surface: opts.taskSource.surface,
+      channel: opts.taskSource.channel,
+      ...(opts.taskSource.thread !== "" && { thread: opts.taskSource.thread }),
+    },
+    triggered_by: opts.taskSource.user,
     ...(opts.attachment !== undefined && { attachment: opts.attachment }),
   });
 }

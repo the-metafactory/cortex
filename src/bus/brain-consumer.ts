@@ -166,6 +166,12 @@ export class DenyAllPrincipalGate implements PrincipalGate {
  * Minimal snapshot of an agent's runtime the BrainConsumer needs. Kept narrow
  * so tests build a fixture without the full Zod-validated `Agent`.
  */
+/**
+ * Finite default concurrency for exec brains (sage cortex#1033 round 3):
+ * one subprocess at a time unless the manifest raises it explicitly.
+ */
+export const DEFAULT_BRAIN_MAX_CONCURRENT = 1;
+
 export interface BrainConsumerAgent {
   /** Logical agent id — stamped onto every emitted envelope. */
   id: string;
@@ -396,15 +402,16 @@ export class BrainConsumer {
     const correlationId = envelope.id;
 
     // 1. Backpressure (§5 "Backpressure is host-side"). Over the ceiling →
-    //    publish a `not_now` failed envelope + nak with a retry hint.
-    if (
-      this.agent.maxConcurrent !== undefined &&
-      this.inFlight.size >= this.agent.maxConcurrent
-    ) {
+    //    publish a `not_now` failed envelope + nak with a retry hint. An
+    //    OMITTED maxConcurrent defaults to a FINITE cap (sage cortex#1033
+    //    round 3): every accepted task spawns a subprocess, so an unbounded
+    //    default would let a task burst grow processes without limit.
+    const concurrencyCap = this.agent.maxConcurrent ?? DEFAULT_BRAIN_MAX_CONCURRENT;
+    if (this.inFlight.size >= concurrencyCap) {
       const retryAfterMs = 1000;
       await this.publishFailed(correlationId, {
         kind: "not_now",
-        detail: `agent at maxConcurrent (${this.agent.maxConcurrent}) — try again`,
+        detail: `agent at maxConcurrent (${concurrencyCap}) — try again`,
         retry_after_ms: retryAfterMs,
       });
       return { kind: "nak", delayMs: retryAfterMs };
