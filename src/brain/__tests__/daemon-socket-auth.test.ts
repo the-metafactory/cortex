@@ -192,3 +192,25 @@ describe("makeBunUnixTransport — socket auth (finding 1)", () => {
     first.close();
   });
 });
+
+// sage cortex#1035 round 2 — bytes in the SAME chunk as the auth line must
+// reach the protocol layer once onData registers (no silent drop).
+describe("round-2: post-auth bytes in the auth chunk", () => {
+  test("protocol bytes appended to the auth line are delivered, not dropped", async () => {
+    const token = crypto.randomUUID();
+    const { proc, socketPath } = startTransport(token);
+    const brain = await connectRaw(socketPath);
+    // Auth line + a protocol line in ONE write (one socket chunk).
+    brain.write(
+      `{"v":1,"type":"auth","token":"${token}"}\n` +
+        `{"v":1,"type":"log","level":"info","text":"same-chunk"}\n`,
+    );
+    const conn = await proc.connection;
+    const received: string[] = [];
+    conn.onData((chunk) =>
+      received.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk)),
+    );
+    await until(() => received.join("").includes("same-chunk"));
+    brain.close();
+  });
+});

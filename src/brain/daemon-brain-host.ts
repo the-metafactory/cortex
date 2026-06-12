@@ -58,6 +58,7 @@
 
 import { timingSafeEqual } from "crypto";
 import { chmodSync, mkdtempSync, realpathSync } from "fs";
+import { realpath } from "fs/promises";
 import { rm } from "fs/promises";
 import { tmpdir } from "os";
 import { basename, dirname, join, resolve as resolvePath } from "path";
@@ -354,11 +355,16 @@ export class DaemonBrainHost {
       );
     }
 
+    // Async scratch setup (sage cortex#1035 round 2): per-task filesystem work
+    // must not stall the event loop the multiplexed socket shares with every
+    // other in-flight task.
     const scratchDir = this.makeScratchDir();
     let scratchReal: string;
     try {
-      scratchReal = realpathSync(scratchDir);
-    } catch {
+      scratchReal = await realpath(scratchDir);
+    } catch (_err) {
+      // Path not resolvable (yet) — fall back to a normalized absolute path;
+      // confinement still prefix-checks against this base.
       scratchReal = resolvePath(scratchDir);
     }
 
@@ -640,7 +646,9 @@ export class DaemonBrainHost {
       void this.failTask(record, "crashed");
     }
 
-    void crashedProc?.exited.catch(() => undefined);
+    // Crash path: usually already dead, but a socket-close without process
+    // exit (e.g. brain closed its socket and hung) must not leak the process.
+    this.reapFailedProc(crashedProc);
 
     this.restartOrDegrade();
   }
@@ -667,12 +675,38 @@ export class DaemonBrainHost {
     this.connection = null;
     const failedProc = this.proc;
     this.proc = null;
-    void failedProc?.exited.catch(() => undefined);
+    this.reapFailedProc(failedProc);
     process.stderr.write(
       `daemon-brain-host: restart spawn failed to connect for "${this.agentId}": ` +
         `${err instanceof Error ? err.message : String(err)}\n`,
     );
     this.restartOrDegrade();
+  }
+
+
+  /**
+   * Reap a process whose generation FAILED (connect failure / auth timeout) or
+   * crashed: SIGTERM immediately, SIGKILL after killGraceMs if it lingers
+   * (sage cortex#1035 round 2 — a failed spawn must never be left running
+   * while the next generation starts).
+   */
+  private reapFailedProc(proc: DaemonBrainProcess | null): void {
+    if (proc === null) return;
+    try {
+      proc.kill("SIGTERM");
+    } catch (_err) {
+      // already exited — nothing to reap
+    }
+    const killTimer = setTimeout(() => {
+      try {
+        proc.kill("SIGKILL");
+      } catch (_err) {
+        // already exited
+      }
+    }, this.killGraceMs);
+    void proc.exited
+      .catch(() => undefined)
+      .finally(() => clearTimeout(killTimer));
   }
 
   /**
@@ -1173,6 +1207,7 @@ export const makeBunUnixTransport: DaemonTransport = (opts) => {
   });
 
   let dataHandler: ((chunk: Uint8Array | string) => void) | null = null;
+    const pendingPostAuth: Uint8Array[] = [];
   let closeHandler: (() => void) | null = null;
   // The bound socket the brain connects on. Bun's socket data callback is
   // (socket, data); we expose a write/onData/onClose facade.
@@ -1278,13 +1313,26 @@ export const makeBunUnixTransport: DaemonTransport = (opts) => {
           },
           onData(handler) {
             dataHandler = handler;
+            // Flush bytes that arrived in the SAME chunk as the auth line
+            // (sage cortex#1035 round 2): the host registers onData only
+            // after the connection resolves; without buffering, protocol
+            // bytes replayed before registration are silently dropped.
+            if (pendingPostAuth.length > 0) {
+              const flush = pendingPostAuth.splice(0, pendingPostAuth.length);
+              for (const chunk of flush) handler(chunk);
+            }
           },
           onClose(handler) {
             closeHandler = handler;
           },
         });
         if (rest.length > 0) {
-          dataHandler?.(rest);
+          const restBytes = new TextEncoder().encode(rest);
+          if (dataHandler !== null) {
+            dataHandler(restBytes);
+          } else {
+            pendingPostAuth.push(restBytes);
+          }
         }
       },
       close() {
