@@ -22,7 +22,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, unlinkSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -136,6 +136,7 @@ function removeFragment(id: string): void {
 
 async function bootWatcherless(
   runtime: RecordingRuntime,
+  opts: { brainPackBaseDir?: string } = {},
 ): Promise<CortexHandle> {
   const handle = await startCortex(minimalConfig(), {
     disableConfigWatcher: true,
@@ -146,9 +147,36 @@ async function bootWatcherless(
     configPath: join(tmpAgentsDir, "cortex.yaml"), // so agentsDir resolution + pid path are coherent
     injectRuntime: runtime,
     principal: { id: "test-op" },
+    ...(opts.brainPackBaseDir !== undefined && {
+      brainPackBaseDir: opts.brainPackBaseDir,
+    }),
   });
   handles.push(handle);
   return handle;
+}
+
+/**
+ * Bot Packs B-1 — write an exec-brain agent fragment. Declares a `brain:` block
+ * with `kind: exec` + a `run` pointing at the pack's `brain/main.ts` (`{pack}`
+ * expands to `{brainPackBaseDir}/{id}`).
+ */
+function writeBrainFragment(id: string, capabilities: string[]): void {
+  const personaPath = join(tmpPersonasDir, `${id}.md`);
+  writeFileSync(personaPath, `# ${id} persona\n`);
+  const caps = capabilities.map((c) => `    - "${c}"`).join("\n");
+  const yaml = `id: ${id}
+displayName: ${id.charAt(0).toUpperCase() + id.slice(1)}
+persona: "${personaPath}"
+presence: {}
+runtime:
+  mode: in-process
+  capabilities:
+${caps}
+  brain:
+    kind: exec
+    run: "bun {pack}/brain/main.ts"
+`;
+  writeFileSync(join(tmpAgentsDir, `${id}.yaml`), yaml);
 }
 
 // Capability-registration envelopes carry the per-agent payload.
@@ -469,5 +497,116 @@ describe("startCortex — agents.d/ fs.watch reconcile (B-0, cortex#1021)", () =
       "luna",
     ]);
     expect(reloaded.some((added) => added.includes("luna"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — Bot Packs B-1 brain consumers (hot add/remove/change)
+// ---------------------------------------------------------------------------
+
+describe("startCortex — exec-brain consumers hot reload (B-1, cortex#1021)", () => {
+  let packBase: string;
+
+  beforeEach(() => {
+    packBase = mkdtempSync(join(tmpdir(), "cortex-reload-packs-"));
+  });
+  afterEach(() => {
+    rmSync(packBase, { recursive: true, force: true });
+  });
+
+  /** Drop a fixture brain at `{packBase}/{id}/brain/main.ts`. */
+  function writeBrainPack(id: string): void {
+    const dir = join(packBase, id, "brain");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "main.ts"),
+      `import { createInterface } from "node:readline";
+const rl = createInterface({ input: process.stdin });
+const it = rl[Symbol.asyncIterator]();
+const { value } = await it.next();
+const task = JSON.parse(value);
+process.stdout.write(JSON.stringify({ v: 1, type: "result", task_id: task.task_id, status: "complete" }) + "\\n");
+rl.close();
+process.exit(0);
+`,
+      "utf8",
+    );
+  }
+
+  /** Brain-consumer durables carry the `cortex-brain-consumer-` prefix. */
+  function brainDurables(runtime: RecordingRuntime): string[] {
+    return runtime.subscribePullCalls
+      .map((c) => c.durable ?? "")
+      .filter((d) => d.includes("cortex-brain-consumer-"));
+  }
+
+  test("ADD an exec-brain fragment → brain consumer subscribes per capability", async () => {
+    const runtime = createRecordingRuntime();
+    const handle = await bootWatcherless(runtime, { brainPackBaseDir: packBase });
+    expect(brainDurables(runtime).length).toBe(0);
+
+    writeBrainPack("yarrow");
+    writeBrainFragment("yarrow", ["soc.compose.flow"]);
+    await handle.reloadAgents("cli");
+
+    expect(handle.agentRegistry.getById("yarrow").id).toBe("yarrow");
+    // A brain consumer bound a durable for the declared capability — NOT a
+    // review consumer (the agent declares no code-review capability anyway).
+    const durables = brainDurables(runtime);
+    expect(durables.some((d) => d.includes("yarrow"))).toBe(true);
+    expect(durables.some((d) => d.includes("soc-compose-flow"))).toBe(true);
+  });
+
+  test("exec-brain agent is NOT hosted by a review consumer", async () => {
+    const runtime = createRecordingRuntime();
+    // Declare an exec brain that ALSO lists a code-review capability — the brain
+    // path wins; no review consumer is created for it.
+    writeBrainPack("hybrid");
+    writeBrainFragment("hybrid", ["code-review.typescript", "soc.compose.flow"]);
+    const handle = await bootWatcherless(runtime, { brainPackBaseDir: packBase });
+
+    const reviewDurables = runtime.subscribePullCalls
+      .map((c) => c.durable ?? "")
+      .filter((d) => d.includes("cortex-review-consumer-"));
+    expect(reviewDurables.some((d) => d.includes("hybrid"))).toBe(false);
+    // But a brain consumer IS bound.
+    expect(brainDurables(runtime).some((d) => d.includes("hybrid"))).toBe(true);
+    expect(handle.agentRegistry.getById("hybrid").id).toBe("hybrid");
+  });
+
+  test("REMOVE an exec-brain fragment → brain consumer drained", async () => {
+    const runtime = createRecordingRuntime();
+    writeBrainPack("yarrow");
+    writeBrainFragment("yarrow", ["soc.compose.flow"]);
+    const handle = await bootWatcherless(runtime, { brainPackBaseDir: packBase });
+    expect(brainDurables(runtime).some((d) => d.includes("yarrow"))).toBe(true);
+
+    removeFragment("yarrow");
+    await handle.reloadAgents("cli");
+
+    // The brain consumer's subscriber was stopped (drained).
+    expect(
+      runtime.stoppedSubscribers.some((d) => d.includes("yarrow")),
+    ).toBe(true);
+    expect(handle.agentRegistry.getAll().map((a) => a.id)).not.toContain("yarrow");
+  });
+
+  test("CHANGE an exec-brain fragment (new capability) → remove+add brain consumer", async () => {
+    const runtime = createRecordingRuntime();
+    writeBrainPack("yarrow");
+    writeBrainFragment("yarrow", ["soc.compose.flow"]);
+    const handle = await bootWatcherless(runtime, { brainPackBaseDir: packBase });
+    const before = runtime.subscribePullCalls.length;
+
+    writeBrainFragment("yarrow", ["soc.compose.flow", "soc.triage.email"]);
+    await handle.reloadAgents("cli");
+
+    // Old brain consumer drained, new one started → a fresh subscribe happened
+    // (now two capabilities → two durables on the new consumer).
+    expect(runtime.stoppedSubscribers.some((d) => d.includes("yarrow"))).toBe(true);
+    expect(runtime.subscribePullCalls.length).toBeGreaterThan(before);
+    expect(
+      brainDurables(runtime).some((d) => d.includes("soc-triage-email")),
+    ).toBe(true);
   });
 });
