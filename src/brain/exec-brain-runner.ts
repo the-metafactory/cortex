@@ -67,6 +67,7 @@ import {
   type GateVerdictValue,
   type BrainReason,
 } from "./protocol";
+import { AttachmentBudget } from "./attachment-budget";
 
 /**
  * Max stderr we retain in memory. A chatty brain must not grow the runner's
@@ -269,6 +270,12 @@ export function makeExecBrainRunner(
     // a result, and is returned to the caller. A chatty brain cannot grow this
     // past STDERR_TAIL_CAP — see {@link StderrRing}.
     const stderrRing = new StderrRing(STDERR_TAIL_CAP);
+
+    // Per-task attachment budget (§12.5) — 4 MiB cumulative inline + scratch
+    // bytes across every `post` this task emits. Over budget → effect_rejected
+    // (wont_do) and the post is DROPPED. One budget per spawned task (per-task
+    // lifecycle = one task per process).
+    const attachmentBudget = new AttachmentBudget();
 
     // Resolve the scratch dir's REAL path once (mkdtemp may hand back a path
     // through a symlinked temp root, e.g. /var → /private/var on macOS). All
@@ -506,6 +513,7 @@ export function makeExecBrainRunner(
           // and the post is DROPPED — the host owns the filesystem boundary,
           // not the brain. Symlink-escape detection is out of scope for v1; we
           // normalize and prefix-check.
+          let confinedPath: string | undefined;
           if (e.attachment?.path !== undefined) {
             const confined = confineScratchPath(
               scratchReal,
@@ -516,6 +524,20 @@ export function makeExecBrainRunner(
                 "post",
                 "attachment path outside scratch dir",
               );
+              return;
+            }
+            confinedPath = confined.resolved;
+          }
+          // Per-task attachment budget (§12.5): charge the attachment's bytes
+          // (decoded inline b64 OR confined scratch-file size) against the 4 MiB
+          // task ceiling. Over budget → effect_rejected (wont_do, PERMANENT for
+          // this task) and the post is DROPPED — the brain must summarise/link.
+          // A budget charge runs AFTER confinement so we only stat in-bounds
+          // files. A text-only post (no attachment) never touches the budget.
+          if (e.attachment !== undefined) {
+            const charge = attachmentBudget.charge(e.attachment, confinedPath);
+            if (!charge.ok) {
+              await rejectEffect("post", charge.detail);
               return;
             }
           }
