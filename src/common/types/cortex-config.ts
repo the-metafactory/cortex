@@ -34,6 +34,7 @@
 
 import { z } from "zod/v4";
 
+import { BRAIN_PROTOCOL_ID } from "../../brain/protocol";
 import { CapabilitySchema } from "./capability";
 import {
   CockpitSchema,
@@ -459,6 +460,128 @@ export type Presence = z.infer<typeof PresenceSchema>;
  *   - `roles` is the maximum capability set; presences may restrict, never widen
  */
 /**
+ * Bot Packs B-1 (`docs/design-bot-packs.md` §4) — the `brain:` block on an
+ * agent's `runtime`. Declares WHO computes the function from inbound events to
+ * effects (§2 "Brain" row): a first-party in-process engine (`kind: builtin`)
+ * or an externally-authored subprocess speaking `cortex-brain/v1`
+ * (`kind: exec`).
+ *
+ * **Absent ⇒ builtin ⇒ existing engine resolution untouched.** The whole block
+ * is optional; an agent that omits `brain` keeps today's
+ * `resolveReviewEngine(runtime)` behaviour byte-for-byte (the zero-migration
+ * contract — every existing fixture config parses identically). `kind: exec`
+ * is the new seam; the per-task exec path is B-1, the daemon lifecycle is B-2.
+ *
+ * The fields the schema carries (and what is LIVE vs. accepted-for-B-2):
+ *   - `kind`       — `builtin` (default) | `exec`. LIVE.
+ *   - `run`        — argv template (e.g. `"bun {pack}/brain/main.ts"`).
+ *                    Required IFF `kind: exec` (a builtin has no command to
+ *                    spawn). `{pack}` expands to the arc install dir at spawn.
+ *   - `protocol`   — pinned to `cortex-brain/v1` (the only protocol B-1 speaks).
+ *   - `lifecycle`  — `per-task` (default) | `daemon`. `per-task` is LIVE (B-1);
+ *                    `daemon` is REJECTED at load time (B-2) so nobody
+ *                    half-uses the socket transport before it exists.
+ *   - `secrets`    — env var NAMES only (values resolve from the runtime env at
+ *                    spawn). Install-time principal consent is the arc-side gate
+ *                    (§8). Defaults to `[]`.
+ *   - `dispatch_capabilities` — the manifest ALLOW-LIST for `dispatch` effects
+ *                    (§8: "a brain may dispatch only what its manifest allows").
+ *                    The BrainConsumer enforces it host-side. Defaults to `[]`
+ *                    (a brain that dispatches nothing).
+ *   - `maxRestarts` — daemon supervision restart cap. Accepted + documented;
+ *                    unused until B-2 (per-task brains never restart).
+ */
+export const BrainConfigSchema = z
+  .object({
+    /**
+     * `builtin` — the first-party in-process engine path (`engine: sage |
+     * assistant`); cortex's process holds the code, a trust statement about
+     * first-party code (§3). `exec` — the externally-authored subprocess seam
+     * (process isolation IS the sovereignty story). Defaults to `builtin` so an
+     * omitted/partial block preserves today's behaviour.
+     */
+    kind: z.enum(["builtin", "exec"]).default("builtin"),
+    /**
+     * The argv template cortex spawns for an `exec` brain, e.g.
+     * `"bun {pack}/brain/main.ts"`. `{pack}` expands to the arc install dir.
+     * Required IFF `kind: exec` (enforced by the superRefine below); ignored
+     * for `builtin`.
+     */
+    run: z.string().min(1).optional(),
+    /**
+     * The wire protocol the brain speaks. Pinned to `cortex-brain/v1` — the
+     * only protocol B-1 implements. A `z.literal` so a typo (or a future
+     * `/v2` config used against a B-1 cortex) fails at load rather than at
+     * the first spawn.
+     */
+    protocol: z.literal(BRAIN_PROTOCOL_ID).default(BRAIN_PROTOCOL_ID),
+    /**
+     * `per-task` — spawn the brain per inbound task, alive until it emits
+     * `result` (B-1, LIVE). `daemon` — supervise a long-lived process on a
+     * socket transport (B-2). Daemon is REJECTED at load time (superRefine
+     * below) with a clear "lands in B-2" message so a config can't half-use a
+     * transport that does not exist yet. Defaults to `per-task`.
+     */
+    lifecycle: z.enum(["per-task", "daemon"]).default("per-task"),
+    /**
+     * Names of secret env vars to inject into the brain process (§8, §12.2:
+     * env injection with install-time consent). NAMES only — the values resolve
+     * from the runtime env at spawn; cortex never stores secret material in the
+     * manifest. The principal approves these at arc-install time (the same
+     * consent shape as arc hook installation). Defaults to `[]`.
+     */
+    secrets: z.array(z.string().min(1)).default([]),
+    /**
+     * The manifest ALLOW-LIST for `dispatch` effects (§8). A brain emitting a
+     * `dispatch` for a capability NOT in this list is refused host-side with
+     * `effect_rejected` (`wont_do`) — fail-closed, the same posture as pulse's
+     * enforcement gate. Defaults to `[]` (a brain that may dispatch nothing).
+     * Distinct from `runtime.capabilities` (what the agent OFFERS the fleet);
+     * this is what the brain may REQUEST of the fleet.
+     */
+    dispatch_capabilities: z.array(z.string().min(1)).default([]),
+    /**
+     * Daemon supervision restart cap (§7.4): cortex restarts a crashed daemon
+     * brain up to this many times, then marks the agent degraded. Accepted +
+     * documented now; UNUSED until B-2 (a `per-task` brain is spawned fresh per
+     * task and never restarted). Non-negative integer; defaults to 3.
+     */
+    maxRestarts: z
+      .number()
+      .int("agent.runtime.brain.maxRestarts must be an integer")
+      .nonnegative("agent.runtime.brain.maxRestarts must be >= 0")
+      .default(3),
+  })
+  .superRefine((brain, ctx) => {
+    // `daemon` lifecycle is B-2 — REJECT it at load so a config can't half-use
+    // the socket transport / supervision machinery before they exist. A clear,
+    // actionable message rather than a silent partial-feature.
+    if (brain.lifecycle === "daemon") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "agent.runtime.brain.lifecycle 'daemon' is not yet supported — daemon " +
+          "lifecycle (socket transport + supervision) lands in B-2; use " +
+          "'per-task' (the default) for now",
+        path: ["lifecycle"],
+      });
+    }
+    // An `exec` brain has no behaviour without a command to spawn. Require
+    // `run` so a half-declared exec brain fails at load, not at the first task.
+    if (brain.kind === "exec" && (brain.run === undefined || brain.run.length === 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "agent.runtime.brain.run is required when brain.kind is 'exec' " +
+          "(the argv cortex spawns, e.g. 'bun {pack}/brain/main.ts')",
+        path: ["run"],
+      });
+    }
+  });
+
+export type BrainConfig = z.infer<typeof BrainConfigSchema>;
+
+/**
  * Optional `runtime` block on an agent — declares the substrate harness and
  * dispatch mode for arc-installable sub-bots (cortex#60 D4 + design-arc-agent-
  * bots.md §5). Optional in v1: inline agents in cortex.yaml may omit it
@@ -576,6 +699,14 @@ export const AgentRuntimeSchema = z.object({
    * drop).
    */
   modelClass: z.enum(["local-only", "frontier", "any"]).optional(),
+  /**
+   * Bot Packs B-1 (`docs/design-bot-packs.md` §4) — the brain block. Declares
+   * whether this agent's behaviour is a first-party in-process engine
+   * (`kind: builtin`, the default) or an externally-authored `cortex-brain/v1`
+   * subprocess (`kind: exec`). ABSENT ⇒ builtin ⇒ `resolveReviewEngine`
+   * untouched (zero-migration). See {@link BrainConfigSchema}.
+   */
+  brain: BrainConfigSchema.optional(),
 }).refine(
   // Echo M2 on cortex#62 — a `standalone` agent with zero capabilities parses
   // fine but routes zero work. The daemon connects to NATS, publishes nothing
