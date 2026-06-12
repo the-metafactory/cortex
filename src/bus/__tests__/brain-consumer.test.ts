@@ -70,6 +70,30 @@ function createRecordingRuntime(): RecordingRuntime {
   };
 }
 
+/**
+ * A runtime whose `publish` throws for envelope types matching `failTypes`
+ * (cortex#1033 §HonestOracle probe). Other publishes record normally.
+ */
+function createPublishFailingRuntime(failTypes: string[]): RecordingRuntime {
+  const published: Envelope[] = [];
+  const handlers = new Set<EnvelopeHandler>();
+  return {
+    enabled: false,
+    published,
+    onEnvelope(handler) {
+      handlers.add(handler);
+      return { unregister: () => handlers.delete(handler) };
+    },
+    publish: async (envelope: Envelope) => {
+      if (failTypes.includes(envelope.type)) {
+        throw new Error(`publish failed for ${envelope.type}`);
+      }
+      published.push(envelope);
+    },
+    stop: async () => {},
+  };
+}
+
 function buildAgent(over: Partial<BrainConsumerAgent> = {}): BrainConsumerAgent {
   return {
     id: "yarrow",
@@ -246,7 +270,7 @@ describe("BrainConsumer — happy path", () => {
     expect((completed[0]?.payload as { result_summary?: string }).result_summary).toBe("done");
   });
 
-  test("brain post effect → brain.post lifecycle envelope with task source + text", async () => {
+  test("brain post effect → dispatch.task.post lifecycle envelope with task source + text", async () => {
     const runtime = createRecordingRuntime();
     const env = makeTaskEnvelope({}, {
       response_routing: { surface: "mattermost", channel: "c9", thread: "t9" },
@@ -268,7 +292,7 @@ describe("BrainConsumer — happy path", () => {
 
     await consumer.processEnvelope(env, "subj", null, "soc.compose.flow");
 
-    const posts = published(runtime, "brain.post");
+    const posts = published(runtime, "dispatch.task.post");
     expect(posts.length).toBe(1);
     const p = posts[0]?.payload as { text?: string; task_source?: unknown };
     expect(p.text).toBe("Composed the flow.");
@@ -279,6 +303,89 @@ describe("BrainConsumer — happy path", () => {
       user: "alice",
     });
   });
+});
+
+// ---------------------------------------------------------------------------
+// Terminal publish failure — must NOT silently ack (cortex#1033 §HonestOracle)
+// ---------------------------------------------------------------------------
+
+describe("BrainConsumer — terminal publish failure", () => {
+  test(
+    "completed publish throws → nak-with-redelivery, NOT ack (result not stranded)",
+    async () => {
+      const runtime = createPublishFailingRuntime(["dispatch.task.completed"]);
+      const env = makeTaskEnvelope();
+      const consumer = new BrainConsumer(
+        baseOpts({
+          runtime,
+          runBrainTask: stubRunner(completeResult(env.id, "done")),
+        }),
+      );
+
+      const decision = await consumer.processEnvelope(
+        env,
+        "subj",
+        null,
+        "soc.compose.flow",
+      );
+
+      // A dropped terminal must redeliver, never ack into the void.
+      expect(decision).toEqual({ kind: "nak", delayMs: 0 });
+      // The completed envelope did NOT land (publish threw).
+      expect(published(runtime, "dispatch.task.completed").length).toBe(0);
+    },
+  );
+
+  test(
+    "failed publish throws → nak-with-redelivery, NOT the mapped failure ack",
+    async () => {
+      const runtime = createPublishFailingRuntime(["dispatch.task.failed"]);
+      const env = makeTaskEnvelope();
+      const consumer = new BrainConsumer(
+        baseOpts({
+          runtime,
+          runBrainTask: stubRunner({
+            v: 1,
+            type: "result",
+            task_id: env.id,
+            status: "failed",
+            reason: { kind: "cant_do", detail: "nope" },
+          }),
+        }),
+      );
+
+      const decision = await consumer.processEnvelope(
+        env,
+        "subj",
+        null,
+        "soc.compose.flow",
+      );
+
+      expect(decision).toEqual({ kind: "nak", delayMs: 0 });
+      expect(published(runtime, "dispatch.task.failed").length).toBe(0);
+    },
+  );
+
+  test(
+    "clean terminal publish still acks (no false-positive redelivery)",
+    async () => {
+      const runtime = createRecordingRuntime();
+      const env = makeTaskEnvelope();
+      const consumer = new BrainConsumer(
+        baseOpts({ runtime, runBrainTask: stubRunner(completeResult(env.id)) }),
+      );
+
+      const decision = await consumer.processEnvelope(
+        env,
+        "subj",
+        null,
+        "soc.compose.flow",
+      );
+
+      expect(decision).toEqual({ kind: "ack" });
+      expect(published(runtime, "dispatch.task.completed").length).toBe(1);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -421,6 +528,80 @@ describe("BrainConsumer — dispatch effect enforcement", () => {
     expect(outcome?.reason?.detail).toContain("tighten");
     expect(published(runtime, "tasks.soc.triage.email").length).toBe(0);
   });
+
+  test(
+    "cortex#1033 §Security — dispatch with OMITTED sovereignty inherits the " +
+      "agent ceiling, NOT 'any' (no frontier loosening)",
+    async () => {
+      const runtime = createRecordingRuntime();
+      const env = makeTaskEnvelope();
+      const consumer = new BrainConsumer(
+        baseOpts({
+          runtime,
+          // local-only brain dispatches WITHOUT a sovereignty block. The
+          // downgrade-only check passes (omitted ⇒ inherit), but the published
+          // envelope must carry the agent's local-only ceiling — never default
+          // to `any`/frontier-ok, which would let a local-only brain publish a
+          // frontier-allowed downstream task.
+          agent: buildAgent({
+            dispatchCapabilities: ["soc.triage.email"],
+            modelClass: "local-only",
+          }),
+          runBrainTask: stubRunner(completeResult(env.id), async (hooks) => {
+            await hooks.onDispatch({
+              v: 1,
+              type: "dispatch",
+              task_id: env.id,
+              capability: "soc.triage.email",
+              payload: {},
+              // no `sovereignty` — the regression vector.
+            });
+          }),
+        }),
+      );
+
+      await consumer.processEnvelope(env, "subj", null, "soc.compose.flow");
+
+      const dispatched = published(runtime, "tasks.soc.triage.email");
+      expect(dispatched.length).toBe(1);
+      expect(dispatched[0]?.sovereignty.model_class).toBe("local-only");
+      expect(dispatched[0]?.sovereignty.frontier_ok).toBe(false);
+    },
+  );
+
+  test(
+    "cortex#1033 §Security — class-less agent (undefined ceiling) omitting " +
+      "sovereignty still falls through to 'any' (documented loosest default)",
+    async () => {
+      const runtime = createRecordingRuntime();
+      const env = makeTaskEnvelope();
+      const consumer = new BrainConsumer(
+        baseOpts({
+          runtime,
+          agent: buildAgent({
+            dispatchCapabilities: ["soc.triage.email"],
+            modelClass: undefined,
+          }),
+          runBrainTask: stubRunner(completeResult(env.id), async (hooks) => {
+            await hooks.onDispatch({
+              v: 1,
+              type: "dispatch",
+              task_id: env.id,
+              capability: "soc.triage.email",
+              payload: {},
+            });
+          }),
+        }),
+      );
+
+      await consumer.processEnvelope(env, "subj", null, "soc.compose.flow");
+
+      const dispatched = published(runtime, "tasks.soc.triage.email");
+      expect(dispatched.length).toBe(1);
+      expect(dispatched[0]?.sovereignty.model_class).toBe("any");
+      expect(dispatched[0]?.sovereignty.frontier_ok).toBe(true);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -567,7 +748,7 @@ describe("BrainConsumer — real fixture brain (end-to-end)", () => {
   });
 
   test(
-    "bus task → real brain posts + completes → brain.post + completed published",
+    "bus task → real brain posts + completes → dispatch.task.post + completed published",
     async () => {
       // A brain that reads the task off stdin (node:readline — incremental, the
       // portable line-protocol reader the runner tests use), posts a line, then
@@ -602,7 +783,7 @@ process.exit(0);
       const decision = await consumer.processEnvelope(env, "subj", null, "soc.compose.flow");
 
       expect(decision).toEqual({ kind: "ack" });
-      expect(published(runtime, "brain.post").length).toBe(1);
+      expect(published(runtime, "dispatch.task.post").length).toBe(1);
       expect(published(runtime, "dispatch.task.completed").length).toBe(1);
     },
     15_000,

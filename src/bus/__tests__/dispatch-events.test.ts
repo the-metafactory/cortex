@@ -21,6 +21,7 @@ import {
   createDispatchTaskCompletedEvent,
   createDispatchTaskFailedEvent,
   createDispatchTaskStartedEvent,
+  createDispatchTaskPostEvent,
   type DispatchEventSource,
 } from "../dispatch-events";
 
@@ -331,6 +332,62 @@ describe("createDispatchTaskAbortedEvent", () => {
       "principal-cancel: SIGINT received during shutdown drain",
     );
     expect(validateEnvelope(env).ok).toBe(true);
+  });
+});
+
+describe("createDispatchTaskPostEvent", () => {
+  test(
+    "cortex#1033 §Architecture — post rides the dispatch domain as " +
+      "dispatch.task.post (NOT a brain.* top-level domain); passes schema",
+    () => {
+      const env = createDispatchTaskPostEvent({
+        source: SOURCE,
+        taskId: TASK_ID,
+        agentId: "yarrow",
+        text: "Composed the flow.",
+        taskSource: {
+          surface: "mattermost",
+          channel: "c1",
+          thread: "t1",
+          user: "u1",
+        },
+      });
+      expect(env.type).toBe("dispatch.task.post");
+      expect(env.type.startsWith("dispatch.")).toBe(true);
+      expect(env.payload).toMatchObject({
+        task_id: TASK_ID,
+        agent_id: "yarrow",
+        text: "Composed the flow.",
+        task_source: { surface: "mattermost", channel: "c1", thread: "t1", user: "u1" },
+      });
+      expect(env.correlation_id).toBe(TASK_ID);
+      expect(validateEnvelope(env).ok).toBe(true);
+    },
+  );
+
+  test("attachment reference is carried when present, omitted otherwise", () => {
+    const withAtt = createDispatchTaskPostEvent({
+      source: SOURCE,
+      taskId: TASK_ID,
+      agentId: "yarrow",
+      text: "see attached",
+      taskSource: { surface: "bus", channel: "", thread: "", user: "" },
+      attachment: { filename: "report.md", path: "/scratch/report.md" },
+    });
+    expect((withAtt.payload as { attachment?: unknown }).attachment).toEqual({
+      filename: "report.md",
+      path: "/scratch/report.md",
+    });
+    expect(validateEnvelope(withAtt).ok).toBe(true);
+
+    const noAtt = createDispatchTaskPostEvent({
+      source: SOURCE,
+      taskId: TASK_ID,
+      agentId: "yarrow",
+      text: "no attachment",
+      taskSource: { surface: "bus", channel: "", thread: "", user: "" },
+    });
+    expect("attachment" in (noAtt.payload as object)).toBe(false);
   });
 });
 

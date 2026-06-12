@@ -26,7 +26,7 @@
  *
  *   - **`onPost`** — B-1 is BUS-ORIGINATED: there is no live surface session to
  *     post into (the adapter/surface bridge is B-2). So a brain's `post` effect
- *     is published as a `brain.post` lifecycle envelope carrying the
+ *     is published as a `dispatch.task.post` lifecycle envelope carrying the
  *     text/attachment-ref + the task's source triple. We do NOT fake a
  *     `PlatformAdapter` wiring that can't be reached from a bus task — the
  *     honest B-1 behaviour is "publish the post intent onto the bus; B-2 renders
@@ -68,7 +68,7 @@
  *
  *   - NOT the daemon lifecycle — socket transport, supervision, drain-on-reload
  *     of a long-lived brain are B-2. This consumer is per-task only.
- *   - NOT the surface bridge — `onPost` publishes a `brain.post` envelope; the
+ *   - NOT the surface bridge — `onPost` publishes a `dispatch.task.post` envelope; the
  *     adapter that renders it is B-2.
  *   - NOT federation — B-1 binds `local.` only; cross-principal brain dispatch
  *     is out of scope.
@@ -88,7 +88,7 @@ import {
   createDispatchTaskStartedEvent,
   createDispatchTaskCompletedEvent,
   createDispatchTaskFailedEvent,
-  createBrainPostEvent,
+  createDispatchTaskPostEvent,
   type DispatchTaskFailedReason,
   type BrainPostSource,
 } from "./dispatch-events";
@@ -543,8 +543,20 @@ export class BrainConsumer {
     }
 
     // Terminal: publish completed/failed + map the JetStream control.
+    //
+    // cortex#1033 §HonestOracle blocker — the terminal envelope IS the task
+    // result; downstream waiters join on `dispatch.task.completed`/`…failed` via
+    // correlation_id. If that publish fails we must NOT ack: acking a dropped
+    // terminal strands the waiter (the result vanishes while the broker believes
+    // the task is done). ReviewConsumer's verdict path acks-after-swallow today
+    // (its `safePublish` logs-and-returns); rather than copy that latent bug, the
+    // brain path naks-with-redelivery so JetStream re-delivers and the per-task
+    // brain re-runs cleanly (idempotent — `processEnvelope` re-runs the brain on
+    // redelivery, see the §"NOT redelivery branch" note above). The review path
+    // retains its pre-existing behaviour (out of scope for this PR — noted in the
+    // disposition report).
     if (result.status === "complete") {
-      await this.safePublish(
+      const ok = await this.safePublish(
         createDispatchTaskCompletedEvent({
           source: this.source,
           taskId: crypto.randomUUID(),
@@ -556,12 +568,23 @@ export class BrainConsumer {
         }),
         "dispatch.task.completed",
       );
+      if (!ok) {
+        // Terminal publish lost — redeliver so the result is not silently
+        // dropped. `delayMs: 0` lets JetStream re-deliver on its own cadence.
+        return { kind: "nak", delayMs: 0 };
+      }
       return { kind: "ack" };
     }
 
     // status === "failed" — carry the brain's typed reason verbatim.
     const reason = brainReasonToDispatchReason(result.reason);
-    await this.publishFailed(correlationId, reason);
+    const failedOk = await this.publishFailed(correlationId, reason);
+    if (!failedOk) {
+      // Same rule as the completed path: a dropped `dispatch.task.failed` is a
+      // lost terminal result — nak-with-redelivery rather than ack the failure
+      // into the void.
+      return { kind: "nak", delayMs: 0 };
+    }
     return failedReasonToAckDecision(reason);
   }
 
@@ -578,12 +601,14 @@ export class BrainConsumer {
       user: source.user,
     };
     return {
-      // `post` — B-1 publishes a `brain.post` lifecycle envelope (no live
-      // surface session; the adapter bridge is B-2). The runner has already
-      // validated the attachment SHAPE + scratch confinement.
+      // `post` — B-1 publishes a `dispatch.task.post` lifecycle envelope (no
+      // live surface session; the adapter bridge is B-2). The runner has already
+      // validated the attachment SHAPE + scratch confinement. NON-TERMINAL: a
+      // lost post is a breadcrumb, not a stranded result, so the `safePublish`
+      // success flag is intentionally ignored here.
       onPost: async (post: PostEffect): Promise<void> => {
         await this.safePublish(
-          createBrainPostEvent({
+          createDispatchTaskPostEvent({
             source: this.source,
             taskId: crypto.randomUUID(),
             agentId: this.agent.id,
@@ -594,7 +619,7 @@ export class BrainConsumer {
               attachment: post.attachment,
             }),
           }),
-          "brain.post",
+          "dispatch.task.post",
         );
       },
 
@@ -645,12 +670,22 @@ export class BrainConsumer {
           };
         }
         // Allowed — publish a fleet task envelope under the agent's identity.
+        // SECURITY (cortex#1033 §Security blocker): an OMITTED dispatch
+        // sovereignty must inherit the AGENT's manifest ceiling, never default
+        // to the loosest class. `checkDowngradeOnly(undefined, …)` above passes
+        // (inherit), but the downstream envelope would otherwise be stamped
+        // `any`/frontier-ok by `buildDispatchTaskEnvelope`'s fallback — letting a
+        // `local-only` brain publish a frontier-allowed task. Resolve the
+        // effective class HERE (request ?? agent ceiling) so the published
+        // envelope carries the tightened ceiling the downgrade-only check
+        // promised. A class-less agent (undefined ceiling) still falls through to
+        // `any` inside the builder — that is the documented loosest default.
         await this.safePublish(
           buildDispatchTaskEnvelope({
             source: this.source,
             capability: dispatch.capability,
             payload: dispatch.payload,
-            modelClass: dispatch.sovereignty?.model_class,
+            modelClass: dispatch.sovereignty?.model_class ?? this.agent.modelClass,
           }),
           `dispatch:${dispatch.capability}`,
         );
@@ -666,13 +701,22 @@ export class BrainConsumer {
     };
   }
 
-  /** Publish a `dispatch.task.failed` envelope for a terminal failure. */
+  /**
+   * Publish a `dispatch.task.failed` envelope for a terminal failure. Returns
+   * the underlying `safePublish` success flag so the terminal caller in
+   * {@link runOne} can nak-with-redelivery on a dropped terminal (cortex#1033
+   * §HonestOracle). The PRE-SPAWN refusal callers in `processEnvelope`
+   * (backpressure / sovereignty-deny / shutdown) intentionally ignore the flag:
+   * they already carry their own nak/term AckDecision and a lost
+   * refusal-breadcrumb does not strand a result the way a dropped post-run
+   * terminal does.
+   */
   private async publishFailed(
     correlationId: string,
     reason: DispatchTaskFailedReason,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const now = this.clock();
-    await this.safePublish(
+    return this.safePublish(
       createDispatchTaskFailedEvent({
         source: this.source,
         taskId: crypto.randomUUID(),
@@ -692,15 +736,24 @@ export class BrainConsumer {
    * catch blocks"). A failed publish is noisy but must not crash the consumer
    * or prevent `processEnvelope` from returning an `AckDecision`. Mirrors
    * ReviewConsumer's `safePublish` (local-only — B-1 has no federated routing).
+   *
+   * Returns `true` on a clean publish, `false` when the publish threw (and was
+   * logged). NON-TERMINAL callers (`dispatch.task.started`, `dispatch.task.post`)
+   * ignore the result — a lost lifecycle breadcrumb is noise, not a correctness
+   * breach. The TERMINAL callers (`completed`/`failed`) inspect it: a lost
+   * terminal envelope IS a correctness breach (a waiter never sees the result),
+   * so they must NOT ack a dropped terminal — see {@link runOne}.
    */
-  private async safePublish(envelope: Envelope, label: string): Promise<void> {
+  private async safePublish(envelope: Envelope, label: string): Promise<boolean> {
     try {
       await this.runtime.publish(envelope);
+      return true;
     } catch (err) {
       process.stderr.write(
         `brain-consumer: publish failed for ${label} (agent=${this.agent.id}): ` +
           `${err instanceof Error ? err.message : String(err)}\n`,
       );
+      return false;
     }
   }
 }
@@ -716,7 +769,7 @@ export class BrainConsumer {
  * `payload.response_routing` / `payload.source` when present, else empty.
  *
  * The brain sees this only as metadata (§5 property 3); the B-2 surface bridge
- * is what turns a `brain.post` carrying it into a real thread reply.
+ * is what turns a `dispatch.task.post` carrying it into a real thread reply.
  */
 export function deriveTaskSource(envelope: Envelope): TaskSource {
   const p = envelope.payload as Record<string, unknown> | undefined;
