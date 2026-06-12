@@ -383,7 +383,7 @@ describe("AgentRuntimeSchema.brain (Bot Packs B-1)", () => {
       const parsed = AgentRuntimeSchema.parse(fx);
       expect(parsed.brain).toBeUndefined();
       // The non-brain fields survive verbatim (a sample of each).
-      expect(parsed.mode).toBe(fx.mode);
+      expect(parsed.mode).toBe(fx.mode as "in-process" | "standalone");
       expect(parsed.capabilities).toEqual(fx.capabilities as string[]);
     }
   });

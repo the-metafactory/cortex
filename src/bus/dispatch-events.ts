@@ -546,3 +546,66 @@ export function createDispatchTaskAbortedEvent(
     reason: opts.reason,
   });
 }
+
+// ---------------------------------------------------------------------------
+// brain.post  (Bot Packs B-1 — docs/design-bot-packs.md §5, §11 B-1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a brain task originated — the source triple cortex hands the brain on
+ * the `task` event and the BrainConsumer echoes onto every `brain.post`
+ * lifecycle envelope. Surface-agnostic (the brain sees it only as metadata,
+ * §5 property 3); the adapter/surface bridge (B-2) reads it to deliver the
+ * post to the right thread.
+ */
+export interface BrainPostSource {
+  /** Platform identity, e.g. `"mattermost"` | `"discord"` | `"bus"`. */
+  surface: string;
+  /** Native channel id the task arrived on. */
+  channel: string;
+  /** Native thread id (may be empty for channel-scope). */
+  thread: string;
+  /** The user who triggered the task. */
+  user: string;
+}
+
+export interface BrainPostOpts extends DispatchTaskCommonOpts {
+  /** The brain's whole-message text (§12.3 — whole-message posts in v1). */
+  text: string;
+  /**
+   * Optional attachment reference. B-1 is bus-originated (no live surface
+   * session to upload to), so the post carries the REFERENCE — inline base64
+   * XOR a scratch-dir path — and the B-2 adapter/surface bridge performs the
+   * actual upload. Exactly one of `b64` / `path` per the protocol's attachment
+   * XOR; the runner already validated SHAPE + scratch confinement before the
+   * BrainConsumer builds this.
+   */
+  attachment?: {
+    filename: string;
+    b64?: string;
+    path?: string;
+  };
+}
+
+/**
+ * Construct a `brain.post` lifecycle envelope (Bot Packs B-1).
+ *
+ * **Why a lifecycle envelope and not a direct surface post.** In B-1 a brain
+ * task is BUS-ORIGINATED — there is no live surface session the BrainConsumer
+ * can post into. So a brain's `post` effect is published as a `brain.post`
+ * lifecycle envelope carrying the text/attachment-ref + the task's source
+ * triple; the adapter/surface bridge that reads it and renders to the thread
+ * is B-2. The BrainConsumer header documents this honestly. This keeps the
+ * brain protocol's "post to the task's surface/thread" semantics intact while
+ * the live-surface bridge is deferred — the brain still cannot choose a
+ * channel (the source triple is host-supplied, §5 property 1).
+ */
+export function createBrainPostEvent(
+  opts: BrainPostOpts & { taskSource: BrainPostSource },
+): Envelope {
+  return buildBaseEnvelope("brain.post", opts, {
+    text: opts.text,
+    task_source: opts.taskSource,
+    ...(opts.attachment !== undefined && { attachment: opts.attachment }),
+  });
+}
