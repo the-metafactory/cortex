@@ -11,9 +11,13 @@
  *
  *   1. spawns the brain with a MINIMAL env (PATH/HOME/LANG/TMPDIR + the
  *      manifest secrets, same discipline as `exec-brain-runner`) plus the
- *      `CORTEX_BRAIN_SOCKET` env naming the socket to connect back on, and
- *      `lifecycle: daemon`-marking `CORTEX_BRAIN_LIFECYCLE=daemon`;
- *   2. waits for the brain to connect, then sends the `hello` handshake
+ *      `CORTEX_BRAIN_SOCKET` env naming the socket to connect back on, a
+ *      per-spawn `CORTEX_BRAIN_SOCKET_TOKEN` the brain MUST echo as its first
+ *      socket line to authenticate (`{ v:1, type:"auth", token }` — see
+ *      {@link DaemonTransport}), and the `lifecycle: daemon`-marking
+ *      `CORTEX_BRAIN_LIFECYCLE=daemon`;
+ *   2. waits for the brain to connect + AUTHENTICATE, then sends the `hello`
+ *      handshake
  *      (host → brain: agent id, persona, protocol version — §5 "Persona
  *      delivery"; identity is HOST-AUTHORITATIVE);
  *   3. accepts `runTask(task, hooks)` calls — writes the `task` event, routes
@@ -52,10 +56,11 @@
  * exercised without a real socket or subprocess.
  */
 
-import { mkdtempSync, realpathSync } from "fs";
+import { timingSafeEqual } from "crypto";
+import { chmodSync, mkdtempSync, realpathSync } from "fs";
 import { rm } from "fs/promises";
 import { tmpdir } from "os";
-import { join, resolve as resolvePath } from "path";
+import { basename, dirname, join, resolve as resolvePath } from "path";
 import {
   encodeBrainEvent,
   parseBrainEffect,
@@ -111,13 +116,39 @@ export interface DaemonBrainProcess {
  * it must: bind/listen on the socket, spawn the process (with the socket env
  * already injected by the host into `env`), and resolve `connection` when the
  * brain connects. Tests inject a fake that wires an in-memory pipe.
+ *
+ * ## Connection authentication (`socketToken`)
+ *
+ * A Unix socket under `tmpdir()` is reachable by any local process; the first
+ * connector wins. Without a proof, a local process racing the real brain could
+ * connect first and impersonate it (emit posts / dispatches / gate requests).
+ * So the host mints a per-spawn `socketToken`, injects it into the brain's env
+ * (`CORTEX_BRAIN_SOCKET_TOKEN`), and the transport REQUIRES the brain's FIRST
+ * line on the socket to be a matching auth proof
+ * (`{ "v": 1, "type": "auth", "token": "…" }`) BEFORE it resolves `connection`.
+ * This auth line is consumed by the TRANSPORT layer (raw bytes), NOT the
+ * protocol codec — it is pre-protocol, so `protocol.ts` is untouched and the
+ * tolerant ingest never sees it. Mismatch / malformed / no line within
+ * {@link SOCKET_AUTH_TIMEOUT_MS} → the socket is closed and `connection`
+ * rejects; the host treats that as a failed spawn (counts against the restart
+ * budget). A second connector arriving while one is already live is closed
+ * immediately (single-connection socket).
  */
 export type DaemonTransport = (opts: {
   argv: string[];
   env: Record<string, string>;
   cwd: string;
   socketPath: string;
+  /**
+   * Per-spawn auth token. The transport must require the brain's first socket
+   * line to be `{ v: 1, type: "auth", token }` matching this value before
+   * resolving `connection`. Always set by the host.
+   */
+  socketToken: string;
 }) => DaemonBrainProcess;
+
+/** How long the transport waits for the brain's auth line before rejecting. */
+export const SOCKET_AUTH_TIMEOUT_MS = 2_000;
 
 // ---------------------------------------------------------------------------
 // Options
@@ -258,13 +289,7 @@ export class DaemonBrainHost {
     this.makeScratchDir =
       opts.makeScratchDir ??
       (() => mkdtempSync(join(tmpdir(), "cortex-brain-daemon-")));
-    this.makeSocketPath =
-      opts.makeSocketPath ??
-      ((id) =>
-        join(
-          tmpdir(),
-          `cortex-brain-${id}-${process.pid}-${crypto.randomUUID().slice(0, 8)}.sock`,
-        ));
+    this.makeSocketPath = opts.makeSocketPath ?? defaultMakeSocketPath;
     this.onDegraded = opts.onDegraded;
     this.now = opts.now ?? (() => Date.now());
   }
@@ -284,7 +309,7 @@ export class DaemonBrainHost {
       throw new Error(`daemon-brain-host: already started for "${this.agentId}"`);
     }
     this.started = true;
-    await this.spawnGeneration();
+    await this.spawnGeneration(/* isRestart */ false);
   }
 
   /**
@@ -457,17 +482,35 @@ export class DaemonBrainHost {
 
   private currentSocketPath: string | null = null;
 
-  /** Spawn a fresh brain generation, connect, hello, wire the data/close pumps. */
-  private async spawnGeneration(): Promise<void> {
+  /**
+   * Spawn a fresh brain generation, connect, hello, wire the data/close pumps.
+   *
+   * `isRestart` distinguishes the two failure modes of a connect failure:
+   *   - initial `start()` (`isRestart=false`): re-throw so the boot path logs
+   *     and skips (the manifest/transport-fault contract); no live proc is left.
+   *   - supervised restart (`isRestart=true`): a connect failure is a failed
+   *     spawn — it must count against the restart budget (degrade if exhausted),
+   *     NOT throw into the floating `.catch` and recurse. {@link handleSpawnFailure}
+   *     owns that.
+   */
+  private async spawnGeneration(isRestart: boolean): Promise<void> {
     const argv = buildArgv(this.run, this.packDir);
     const socketPath = this.makeSocketPath(this.agentId);
     this.currentSocketPath = socketPath;
+    // Per-spawn socket auth token: a local process racing the brain to the
+    // tmpdir socket cannot impersonate it without this secret. The transport
+    // requires the brain's first line to prove it before accepting effects
+    // (see `DaemonTransport`). Fresh per generation — a restart re-mints it so
+    // a leaked token from a crashed generation is useless.
+    const socketToken = crypto.randomUUID();
     // Minimal env (shared discipline with the per-task runner) PLUS the socket
-    // env naming where the brain connects back, and the daemon lifecycle marker.
+    // env naming where the brain connects back, the per-spawn auth token, and
+    // the daemon lifecycle marker.
     const baseScratch = this.makeScratchDir();
     const env = {
       ...buildEnv(baseScratch, this.secrets),
       CORTEX_BRAIN_SOCKET: socketPath,
+      CORTEX_BRAIN_SOCKET_TOKEN: socketToken,
       CORTEX_BRAIN_LIFECYCLE: "daemon",
     };
     // The process-level scratch (env TMPDIR baseline) is removed on teardown; per
@@ -482,10 +525,41 @@ export class DaemonBrainHost {
 
     this.spawnAt = this.now();
     this.decoder = new JsonlDecoder();
-    const proc = this.transport({ argv, env, cwd: baseScratch, socketPath });
+    const proc = this.transport({ argv, env, cwd: baseScratch, socketPath, socketToken });
     this.proc = proc;
 
-    const connection = await proc.connection;
+    // Await the AUTHENTICATED connection. The transport rejects this promise on
+    // a wrong/missing auth proof or connect failure; a rejection here is a
+    // failed spawn — clear the live process/connection and count it against the
+    // restart budget (degrade if exhausted) rather than installing a stale proc
+    // or recursing. See finding 2 (failed-restart-does-not-degrade).
+    let connection: DaemonBrainConnection;
+    try {
+      connection = await proc.connection;
+    } catch (err) {
+      if (!isRestart) {
+        // Initial start() — clear the stale proc and re-throw so the boot path
+        // logs + skips (the documented manifest/transport-fault contract).
+        if (this.generation === myGeneration) {
+          this.proc = null;
+          this.connection = null;
+        }
+        throw err;
+      }
+      // Supervised restart — route through the budget (degrade if exhausted).
+      this.handleSpawnFailure(myGeneration, err);
+      return;
+    }
+    // A drain/stop (or a newer generation) may have superseded this spawn while
+    // we awaited the connection — don't install a connection nobody owns.
+    if (this.stopped || this.draining || myGeneration !== this.generation) {
+      try {
+        void connection;
+      } finally {
+        proc.kill("SIGKILL");
+      }
+      return;
+    }
     this.connection = connection;
 
     connection.onData((chunk) => {
@@ -568,22 +642,60 @@ export class DaemonBrainHost {
 
     void crashedProc?.exited.catch(() => undefined);
 
-    // Restart-or-degrade.
+    this.restartOrDegrade();
+  }
+
+  /**
+   * A supervised restart spawn FAILED to connect (wrong/missing auth, transport
+   * fault, or the process exited before connecting). Distinct from
+   * {@link handleDisconnect}: there is no live proc/connection to tear down — the
+   * connect never completed — so we must NOT re-enter the disconnect path (which
+   * would no-op on the `proc === null` re-entry guard and silently swallow the
+   * failure, leaving the budget unmoved). Clear any partial state for this
+   * generation and count the failed spawn directly against the budget.
+   */
+  private handleSpawnFailure(forGeneration: number, err: unknown): void {
+    if (this.stopped || this.draining) return;
+    if (forGeneration !== this.generation) return;
+    // Re-entry guard: if both are already cleared, this generation's failure was
+    // handled (the internal connect-failure path and the `.catch` safety net can
+    // both fire for the same generation). Don't double-count the budget.
+    if (this.connection === null && this.proc === null) return;
+    // The connect never resolved: no connection installed, and `this.proc` was
+    // set to the failed proc in spawnGeneration. Clear both so no stale process
+    // is left installed.
+    this.connection = null;
+    const failedProc = this.proc;
+    this.proc = null;
+    void failedProc?.exited.catch(() => undefined);
+    process.stderr.write(
+      `daemon-brain-host: restart spawn failed to connect for "${this.agentId}": ` +
+        `${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    this.restartOrDegrade();
+  }
+
+  /**
+   * Restart the brain if the budget allows, else mark degraded (§7.4). Shared by
+   * the live-disconnect path ({@link handleDisconnect}) and the failed-connect
+   * path ({@link handleSpawnFailure}) so every kind of failed generation — crash
+   * OR failed restart spawn — advances the SAME budget toward degradation.
+   */
+  private restartOrDegrade(): void {
     if (this.restartCount < this.maxRestarts) {
       this.restartCount += 1;
       process.stderr.write(
         `daemon-brain-host: brain "${this.agentId}" crashed — restarting ` +
           `(${this.restartCount}/${this.maxRestarts})\n`,
       );
-      void this.spawnGeneration().catch((err: unknown) => {
-        process.stderr.write(
-          `daemon-brain-host: restart spawn failed for "${this.agentId}": ` +
-            `${err instanceof Error ? err.message : String(err)}\n`,
-        );
-        // A failed restart spawn counts as another crash toward the budget. The
-        // failed spawn already advanced `this.generation`; treat it as that
-        // generation's disconnect so the budget advances (or degrades).
-        this.handleDisconnect(this.generation);
+      // A failed restart CONNECT routes through handleSpawnFailure internally
+      // (NOT a throw), so there is no recursion through the disconnect re-entry
+      // guard — the budget advances on every failed spawn. The `.catch` is a
+      // safety net for an UNEXPECTED throw (e.g. argv/env build) so the budget
+      // still advances rather than the failure floating unhandled.
+      const gen = this.generation;
+      void this.spawnGeneration(/* isRestart */ true).catch((err: unknown) => {
+        this.handleSpawnFailure(gen, err);
       });
     } else {
       this.markDegraded();
@@ -861,14 +973,26 @@ export class DaemonBrainHost {
     }
   }
 
-  /** Remove the process-level scratch dir + the socket file. Best-effort. */
+  /**
+   * Remove the process-level scratch dir + the socket file (and the per-spawn
+   * restricted dir the default factory created to hold it). Best-effort.
+   */
   private async cleanupSocket(): Promise<void> {
     if (this.processScratch !== null) {
       await cleanupDir(this.processScratch);
       this.processScratch = null;
     }
     if (this.currentSocketPath !== null) {
-      await cleanupDir(this.currentSocketPath);
+      const sockPath = this.currentSocketPath;
+      await cleanupDir(sockPath);
+      // The default factory nests the socket in a per-spawn 0700 dir
+      // (`…/cortex-brain-sock-XXXX/{agent}.sock`); remove that dir too so we do
+      // not leak an empty restricted dir per spawn. Guarded to our own naming
+      // so an injected `makeSocketPath` (e.g. a bare path) is never over-swept.
+      const parent = dirname(sockPath);
+      if (basename(parent).startsWith("cortex-brain-sock-")) {
+        await cleanupDir(parent);
+      }
       this.currentSocketPath = null;
     }
   }
@@ -945,14 +1069,97 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Default socket-path factory. Puts the socket inside a per-spawn directory
+ * created mode-0700 (owner-only) under the OS temp dir, so the socket file is
+ * not even traversable by other local users — a second, file-permission layer
+ * under the per-spawn auth token. Belt-and-braces: the token authenticates the
+ * connector; the 0700 dir narrows who can reach the socket at all. Falls back
+ * to a bare tmpdir path if the restricted-dir create fails (the auth token
+ * still protects the seam).
+ */
+function defaultMakeSocketPath(agentId: string): string {
+  const unique = `${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
+  try {
+    const dir = mkdtempSync(join(tmpdir(), `cortex-brain-sock-`));
+    // mkdtempSync creates 0700 on POSIX already, but set it explicitly so the
+    // guarantee does not depend on the platform umask.
+    try {
+      chmodSync(dir, 0o700);
+    } catch (err) {
+      process.stderr.write(
+        `daemon-brain-host: chmod 0700 on socket dir "${dir}" failed ` +
+          `(continuing; auth token still protects the seam): ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+    return join(dir, `${agentId}.sock`);
+  } catch (err) {
+    process.stderr.write(
+      `daemon-brain-host: restricted socket-dir create failed ` +
+        `(falling back to bare tmpdir; auth token still protects the seam): ` +
+        `${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    return join(tmpdir(), `cortex-brain-${agentId}-${unique}.sock`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Default Bun Unix-socket transport
 // ---------------------------------------------------------------------------
 
 /**
+ * Verify a raw pre-protocol auth line against the expected token. The line is
+ * `{ "v": 1, "type": "auth", "token": "…" }`. Tolerant of unknown extra fields
+ * (forward-compat), strict on the token match. Returns true only on an exact,
+ * constant-time-ish token match. Never throws.
+ */
+function verifyAuthLine(line: string, expected: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    // Malformed first line — not a valid auth proof.
+    return false;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return false;
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (obj.type !== "auth" || typeof obj.token !== "string") return false;
+  return timingSafeEqualStr(obj.token, expected);
+}
+
+/**
+ * Constant-time-ish token equality. Compares the UTF-8 bytes via
+ * `crypto.timingSafeEqual` when lengths match; a length mismatch is an
+ * immediate false — the token is a fixed-length UUID, so length is not a
+ * secret. Avoids leaking match progress through early-return timing on the
+ * byte comparison itself. Never throws.
+ */
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const ab = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  if (ab.length !== bb.length) return false;
+  try {
+    return timingSafeEqual(ab, bb);
+  } catch {
+    // timingSafeEqual only throws on length mismatch (already guarded); any
+    // other failure is treated as a non-match — fail closed.
+    return false;
+  }
+}
+
+/**
  * Production transport: bind a Unix domain socket, spawn the brain (with
- * `CORTEX_BRAIN_SOCKET` already in `env`), resolve `connection` when the brain
- * connects. Logs ride stdio (§12.1); the protocol rides the socket.
+ * `CORTEX_BRAIN_SOCKET` + `CORTEX_BRAIN_SOCKET_TOKEN` already in `env`), and
+ * resolve `connection` ONLY after the brain proves the per-spawn token on its
+ * first line. Logs ride stdio (§12.1); the protocol rides the socket.
+ *
+ * The auth line is consumed HERE, in the transport — before any protocol byte
+ * reaches the host's codec. The host's `onData` pump (the protocol decoder) is
+ * only wired AFTER `connection` resolves, so an unauthenticated connector never
+ * gets an effect routed.
  *
  * Wrapped in a factory so the host's default is a stable reference; tests pass
  * their own `transport`.
@@ -971,6 +1178,14 @@ export const makeBunUnixTransport: DaemonTransport = (opts) => {
   // (socket, data); we expose a write/onData/onClose facade.
   type BunServerSocket = { write(data: string | Uint8Array): number; end(): void };
   let liveSocket: BunServerSocket | null = null;
+  // Auth state: until the first line proves the token, the connection is NOT
+  // resolved and inbound bytes are buffered by the auth pre-reader, never the
+  // protocol pump.
+  let authed = false;
+  let authClosed = false;
+  let authBuffer = "";
+  const authDecoder = new TextDecoder("utf-8");
+  let authTimer: ReturnType<typeof setTimeout> | undefined;
 
   // `Bun.listen` with a `unix` path. The brain process connects via
   // `Bun.connect({ unix })`. Typed loosely because the Bun socket types vary
@@ -983,14 +1198,83 @@ export const makeBunUnixTransport: DaemonTransport = (opts) => {
     };
   };
 
+  /** Reject + tear down on a failed/timed-out auth. Idempotent. */
+  const failAuth = (reason: string): void => {
+    if (authClosed) return;
+    authClosed = true;
+    if (authTimer !== undefined) clearTimeout(authTimer);
+    process.stderr.write(
+      `daemon-brain-host(transport): rejecting unauthenticated connector on ` +
+        `${opts.socketPath}: ${reason}\n`,
+    );
+    try {
+      liveSocket?.end();
+    } catch {
+      // Socket already gone — nothing to close.
+    }
+    rejectConn(new Error(`brain socket auth failed: ${reason}`));
+  };
+
   const server = bun.listen({
     unix: opts.socketPath,
     socket: {
       open(socket: BunServerSocket) {
+        // SINGLE-CONNECTION socket: the first connector owns the auth attempt.
+        // A second connector arriving while one is live (authed OR mid-auth) is
+        // closed immediately — it cannot race in as the brain.
+        if (liveSocket !== null) {
+          process.stderr.write(
+            `daemon-brain-host(transport): rejecting second connector on ` +
+              `${opts.socketPath} (one already connected)\n`,
+          );
+          try {
+            socket.end();
+          } catch {
+            // Already closing.
+          }
+          return;
+        }
         liveSocket = socket;
+        // Start the auth deadline: no valid proof within the window → reject.
+        authTimer = setTimeout(
+          () => failAuth(`no auth line within ${SOCKET_AUTH_TIMEOUT_MS}ms`),
+          SOCKET_AUTH_TIMEOUT_MS,
+        );
+        (authTimer as { unref?: () => void }).unref?.();
+      },
+      data(_socket: BunServerSocket, data: Uint8Array) {
+        if (authed) {
+          // Post-auth: ordinary protocol bytes go to the host's decoder pump.
+          dataHandler?.(data);
+          return;
+        }
+        if (authClosed) return;
+        // Pre-auth: buffer until the first newline, then verify the auth proof.
+        authBuffer += authDecoder.decode(data, { stream: true });
+        const nl = authBuffer.indexOf("\n");
+        if (nl === -1) {
+          // Bound the pre-auth buffer so a connector cannot stream unbounded
+          // bytes without ever sending a newline.
+          if (authBuffer.length > 64 * 1024) {
+            failAuth("auth line exceeded 64 KiB without a newline");
+          }
+          return;
+        }
+        const rawLine = authBuffer.slice(0, nl);
+        const rest = authBuffer.slice(nl + 1);
+        const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+        if (!verifyAuthLine(line, opts.socketToken)) {
+          failAuth("auth token mismatch or malformed auth line");
+          return;
+        }
+        // Authenticated. Stop the deadline, resolve the connection, and replay
+        // any bytes that arrived AFTER the auth line into the protocol pump.
+        authed = true;
+        if (authTimer !== undefined) clearTimeout(authTimer);
+        const sock = liveSocket;
         resolveConn({
           write(chunk) {
-            socket.write(chunk);
+            sock?.write(chunk);
           },
           onData(handler) {
             dataHandler = handler;
@@ -999,12 +1283,17 @@ export const makeBunUnixTransport: DaemonTransport = (opts) => {
             closeHandler = handler;
           },
         });
-      },
-      data(_socket: BunServerSocket, data: Uint8Array) {
-        dataHandler?.(data);
+        if (rest.length > 0) {
+          dataHandler?.(rest);
+        }
       },
       close() {
         liveSocket = null;
+        if (!authed) {
+          // Closed before authenticating — surface as a failed connect.
+          failAuth("connector closed before authenticating");
+          return;
+        }
         closeHandler?.();
       },
       error(_socket: BunServerSocket, err: unknown) {
