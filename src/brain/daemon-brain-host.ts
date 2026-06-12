@@ -727,9 +727,15 @@ export class DaemonBrainHost {
       // guard — the budget advances on every failed spawn. The `.catch` is a
       // safety net for an UNEXPECTED throw (e.g. argv/env build) so the budget
       // still advances rather than the failure floating unhandled.
-      const gen = this.generation;
+      // Sage cortex#1035 round 3: capture the generation AFTER spawnGeneration
+      // increments it, not before — a throw after the increment would
+      // otherwise carry a stale generation and be discarded by
+      // handleSpawnFailure's staleness guard, never counting toward the
+      // budget. spawnGeneration is async; by the time .catch runs the
+      // increment has happened, so read the live value at catch time and
+      // attribute the failure to it.
       void this.spawnGeneration(/* isRestart */ true).catch((err: unknown) => {
-        this.handleSpawnFailure(gen, err);
+        this.handleSpawnFailure(this.generation, err);
       });
     } else {
       this.markDegraded();

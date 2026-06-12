@@ -2397,14 +2397,18 @@ export async function startCortex(
         // consumer still registers so a later reload can replace it. The
         // consumer's runner (the host's runTask) fast-fails not_now until the
         // host connects, so no task is silently lost.
-        try {
-          await daemonHost.start();
-        } catch (startErr) {
+        // Non-blocking start (sage cortex#1035 round 3): start() resolves on
+        // the socket handshake, so awaiting here would make cortex boot
+        // latency the SUM of every daemon's spawn+auth. The consumer's
+        // runner fast-fails not_now until the host connects (documented
+        // above), so registering the consumer before the handshake settles
+        // loses nothing — failures land in the same stderr path.
+        void daemonHost.start().catch((startErr: unknown) => {
           process.stderr.write(
             `cortex: daemon brain host start failed for agent=${agent.id}: ` +
               `${startErr instanceof Error ? startErr.message : String(startErr)}\n`,
           );
-        }
+        });
         daemonBrainHosts.push(daemonHost);
         consumer = new BrainConsumer({ ...baseConsumerOpts, daemonHost });
       } else {
