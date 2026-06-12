@@ -97,6 +97,7 @@ import type {
   RunBrainTask,
   BrainTaskHooks,
 } from "../brain/exec-brain-runner";
+import type { DaemonBrainHost } from "../brain/daemon-brain-host";
 import type {
   TaskEvent,
   TaskSource,
@@ -213,8 +214,28 @@ export interface BrainConsumerOpts {
    * The configured per-task brain runner (from `makeExecBrainRunner` over the
    * manifest's `brain` block). Injected so the consumer never owns spawn
    * policy; tests pass a stub that resolves a deterministic result.
+   *
+   * For a `lifecycle: daemon` agent (B-2) pass {@link daemonHost} instead — the
+   * consumer derives the runner from the host's `runTask` and routes
+   * drain/teardown through the host. Exactly one of `runBrainTask` / `daemonHost`
+   * is used; when both are present `daemonHost` wins (B-2 daemon path).
    */
   runBrainTask: RunBrainTask;
+  /**
+   * Bot Packs B-2 — the daemon brain host (`lifecycle: daemon`). When provided,
+   * the consumer multiplexes tasks over the long-lived host (its `runTask` is
+   * the runner) and a `stop()` DRAINS the host (hot-swap or shutdown). A degraded
+   * host (restart budget exhausted) is surfaced through the host's own
+   * `onDegraded` callback the boot wiring supplies. Omitted ⇒ per-task lifecycle
+   * (B-1) via {@link runBrainTask}.
+   */
+  daemonHost?: DaemonBrainHost;
+  /**
+   * Hot-swap drain deadline (ms) handed to {@link daemonHost.drain} on `stop()`.
+   * Past it, open `ask_principal` gates are cancelled with a re-trigger notice
+   * (§7.5). Ignored for the per-task lifecycle. Defaults to 5_000.
+   */
+  drainDeadlineMs?: number;
   /**
    * Optional persona text delivered to the brain on each `task` event (per-task
    * brains receive persona on the task; §5 "Persona delivery"). Omitted → no
@@ -283,6 +304,9 @@ export class BrainConsumer {
   private readonly source: SystemEventSource;
   private readonly runtime: MyelinRuntime;
   private readonly runBrainTask: RunBrainTask;
+  /** B-2 — the daemon host (when `lifecycle: daemon`), else undefined. */
+  private readonly daemonHost: DaemonBrainHost | undefined;
+  private readonly drainDeadlineMs: number;
   private readonly persona: string | undefined;
   private readonly principalGate: PrincipalGate;
   private readonly sovereigntyEnforce: boolean;
@@ -303,7 +327,15 @@ export class BrainConsumer {
     this.agent = opts.agent;
     this.source = opts.source;
     this.runtime = opts.runtime;
-    this.runBrainTask = opts.runBrainTask;
+    this.daemonHost = opts.daemonHost;
+    this.drainDeadlineMs = opts.drainDeadlineMs ?? 5_000;
+    // B-2: when a daemon host is provided, the runner IS the host's multiplexed
+    // `runTask` (one long-lived process). Otherwise the injected per-task runner
+    // (B-1). Binding here keeps `runOne` lifecycle-agnostic — it just calls
+    // `this.runBrainTask(task, hooks)` either way.
+    this.runBrainTask = opts.daemonHost
+      ? (task, hooks) => opts.daemonHost!.runTask(task, hooks)
+      : opts.runBrainTask;
     this.persona = opts.persona;
     this.principalGate = opts.principalGate ?? new DenyAllPrincipalGate();
     this.sovereigntyEnforce = opts.sovereigntyEnforce ?? false;
@@ -505,6 +537,21 @@ export class BrainConsumer {
       });
       if (this.inFlight.size > 0) {
         await Promise.allSettled(Array.from(this.inFlight));
+      }
+      // B-2 — drain the daemon host on the SAME stop path (hot-swap or shutdown).
+      // `drain(deadline)` sends `shutdown`, waits for in-flight tasks + open
+      // gates up to the deadline, cancels stragglers with the re-trigger notice
+      // (§7.5), then SIGTERM/SIGKILL. The per-task lifecycle has no host to
+      // drain — its in-flight runs already settled in the `inFlight` await above.
+      if (this.daemonHost !== undefined) {
+        try {
+          await this.daemonHost.drain(this.drainDeadlineMs);
+        } catch (err) {
+          process.stderr.write(
+            `brain-consumer: daemon host drain failed for agent=${this.agent.id}: ` +
+              `${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        }
       }
     })();
     return this.stopPromise;

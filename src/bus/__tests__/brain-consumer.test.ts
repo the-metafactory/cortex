@@ -789,3 +789,143 @@ process.exit(0);
     15_000,
   );
 });
+
+// ---------------------------------------------------------------------------
+// B-2 — daemon host integration
+// ---------------------------------------------------------------------------
+//
+// The consumer is lifecycle-agnostic: given a DaemonBrainHost, it multiplexes
+// tasks through the host's `runTask` and DRAINS the host on `stop()`. These
+// tests use a minimal in-memory transport double so no real socket/subprocess
+// is needed — the consumer↔host↔(fake brain) round-trip is fully driven.
+
+import { DaemonBrainHost } from "../../brain/daemon-brain-host";
+import type {
+  DaemonTransport,
+  DaemonBrainConnection,
+} from "../../brain/daemon-brain-host";
+import { parseBrainEvent, type BrainEvent } from "../../brain/protocol";
+
+class DaemonFakeBrain {
+  private dataHandler: ((c: string) => void) | null = null;
+  private closeHandler: (() => void) | null = null;
+  readonly received: BrainEvent[] = [];
+  private exitResolve!: (code: number | null) => void;
+  readonly exited: Promise<number | null>;
+  readonly connection: DaemonBrainConnection;
+  constructor() {
+    this.exited = new Promise((res) => { this.exitResolve = res; });
+    this.connection = {
+      write: (chunk: string) => {
+        for (const line of chunk.split("\n")) {
+          if (line.trim().length === 0) continue;
+          const p = parseBrainEvent(line);
+          if (p.kind === "ok") this.received.push(p.event);
+        }
+      },
+      onData: (h) => { this.dataHandler = h as (c: string) => void; },
+      onClose: (h) => { this.closeHandler = h; },
+    };
+  }
+  emit(line: string): void { this.dataHandler?.(line + "\n"); }
+  crash(): void { this.closeHandler?.(); this.exitResolve(1); }
+  /** A real process exits when killed — resolve `exited` so teardown is prompt. */
+  killed(): void { this.exitResolve(137); }
+  hasTask(): boolean { return this.received.some((e) => e.type === "task"); }
+  taskId(): string | undefined {
+    const t = this.received.find((e) => e.type === "task");
+    return t?.type === "task" ? t.task_id : undefined;
+  }
+}
+
+function daemonTransport(brain: DaemonFakeBrain): DaemonTransport {
+  return () => ({
+    connection: Promise.resolve(brain.connection),
+    exited: brain.exited,
+    // A killed process exits — resolve `exited` so the host's SIGTERM→grace
+    // race settles promptly (otherwise teardown waits the full killGrace).
+    kill: () => brain.killed(),
+  });
+}
+
+async function tick(): Promise<void> {
+  for (let i = 0; i < 50; i++) await new Promise((r) => setTimeout(r, 2));
+}
+
+describe("brain-consumer — daemon host (B-2)", () => {
+  test("routes a task through the daemon host to a completed envelope", async () => {
+    const runtime = createRecordingRuntime();
+    const brain = new DaemonFakeBrain();
+    const host = new DaemonBrainHost({
+      agentId: "yarrow",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport: daemonTransport(brain),
+    });
+    await host.start();
+    const consumer = new BrainConsumer(baseOpts({ runtime, daemonHost: host }));
+
+    const env = makeTaskEnvelope();
+    const decisionP = consumer.processEnvelope(env, "subj", null, "soc.compose.flow");
+
+    // Wait for the task to reach the fake brain, then complete it.
+    await tick();
+    expect(brain.hasTask()).toBe(true);
+    const tid = brain.taskId();
+    brain.emit(JSON.stringify({ v: 1, type: "post", task_id: tid, text: "hi" }));
+    brain.emit(JSON.stringify({ v: 1, type: "result", task_id: tid, status: "complete" }));
+
+    const decision = await decisionP;
+    expect(decision).toEqual({ kind: "ack" });
+    expect(published(runtime, "dispatch.task.post").length).toBe(1);
+    expect(published(runtime, "dispatch.task.completed").length).toBe(1);
+    await consumer.stop();
+  });
+
+  test("stop() drains the daemon host (sends shutdown)", async () => {
+    const runtime = createRecordingRuntime();
+    const brain = new DaemonFakeBrain();
+    const host = new DaemonBrainHost({
+      agentId: "yarrow",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport: daemonTransport(brain),
+      killGraceMs: 20,
+    });
+    await host.start();
+    const consumer = new BrainConsumer(
+      baseOpts({ runtime, daemonHost: host, drainDeadlineMs: 20 }),
+    );
+    await consumer.stop();
+    expect(brain.received.some((e) => e.type === "shutdown")).toBe(true);
+  });
+
+  test("a crashed daemon's in-flight task fails → dispatch.task.failed + nak", async () => {
+    const runtime = createRecordingRuntime();
+    const brain = new DaemonFakeBrain();
+    const host = new DaemonBrainHost({
+      agentId: "yarrow",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport: daemonTransport(brain),
+      maxRestarts: 0, // crash → straight to degraded; task fails cant_do
+    });
+    await host.start();
+    const consumer = new BrainConsumer(baseOpts({ runtime, daemonHost: host }));
+
+    const env = makeTaskEnvelope();
+    const decisionP = consumer.processEnvelope(env, "subj", null, "soc.compose.flow");
+    await tick();
+    expect(brain.hasTask()).toBe(true);
+    brain.crash();
+
+    const decision = await decisionP;
+    // cant_do maps to a terminal failure; the consumer publishes failed + maps
+    // the ack per failedReasonToAckDecision.
+    expect(published(runtime, "dispatch.task.failed").length).toBeGreaterThanOrEqual(1);
+    const failed = published(runtime, "dispatch.task.failed")[0];
+    expect(JSON.stringify(failed?.payload)).toMatch(/brain crashed/);
+    void decision;
+    await consumer.stop();
+  });
+});
