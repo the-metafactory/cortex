@@ -567,7 +567,7 @@ export const BrainConfigSchema = z
     // `run` so a half-declared exec brain fails at load, not at the first task.
     if (brain.kind === "exec" && (brain.run === undefined || brain.run.length === 0)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message:
           "agent.runtime.brain.run is required when brain.kind is 'exec' " +
           "(the argv cortex spawns, e.g. 'bun {pack}/brain/main.ts')",
@@ -726,11 +726,12 @@ export const AgentRuntimeSchema = z.object({
   // the subscription list and the dispatch allow-list. Builtin agents keep
   // the legacy looseness (their subjects are built by the review path's own
   // fixed taxonomy, not raw manifest text).
-  if (rt.brain?.kind !== "exec") return;
+  const brain = rt.brain;
+  if (brain?.kind !== "exec") return;
   rt.capabilities.forEach((cap, i) => {
     if (!CAPABILITY_ID_REGEX.test(cap)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message:
           `agent.runtime.capabilities[${i}] ("${cap}") is not a valid capability id — ` +
           "exec-brain capabilities become exact NATS subject segments and must match " +
@@ -739,10 +740,11 @@ export const AgentRuntimeSchema = z.object({
       });
     }
   });
-  (rt.brain.dispatch_capabilities ?? []).forEach((cap, i) => {
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Zod superRefine still sees hand-written configs while defaults are being applied.
+  (brain.dispatch_capabilities ?? []).forEach((cap, i) => {
     if (!CAPABILITY_ID_REGEX.test(cap)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message:
           `agent.runtime.brain.dispatch_capabilities[${i}] ("${cap}") is not a valid ` +
           "capability id (no wildcards)",

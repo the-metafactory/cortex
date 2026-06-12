@@ -1350,8 +1350,10 @@ export async function startCortex(
   // (the subjects the consumer binds) is hosted by a BrainConsumer. Used by both
   // the boot-time `brainAgents` filter AND the hot-reload `isBrainHosted` path so
   // a B-2 change to the hosting criteria can't drift between them.
-  const isBrainHosted = (a: Agent): boolean =>
-    isExecBrainAgent(a) && (a.runtime?.capabilities?.length ?? 0) > 0;
+  const isBrainHosted = (a: Agent): boolean => {
+    const runtime = a.runtime;
+    return runtime?.brain?.kind === "exec" && runtime.capabilities.length > 0;
+  };
   const brainConsumers: BrainConsumer[] = [];
   // Bot Packs B-2 — the long-lived daemon brain hosts (one per `lifecycle:
   // daemon` agent). Tracked so the shutdown drain + reconcile teardown can stop
@@ -2309,7 +2311,7 @@ export async function startCortex(
   const startBrainConsumersForAgent = async (agent: Agent): Promise<void> => {
     try {
       const brain = agent.runtime?.brain;
-      if (brain === undefined || brain.kind !== "exec" || brain.run === undefined) {
+      if (brain?.kind !== "exec" || brain.run === undefined) {
         // Defensive: the caller filters to exec brains with a `run`; a
         // mis-routed builtin/absent brain is a no-op, not a crash.
         return;

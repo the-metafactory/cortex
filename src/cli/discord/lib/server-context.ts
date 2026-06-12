@@ -47,6 +47,8 @@ export interface ResolvedServerContext {
   defaultChannel?: string;
   /** Cached channel name→id map for guild-agnostic id posting. */
   channels?: Record<string, ChannelConfig>;
+  /** Guild that owns the resolved cached channel map, when known. */
+  channelsGuildId?: string;
   /** Name of the profile applied, when `--server` was used. */
   serverName?: string;
 }
@@ -76,6 +78,7 @@ export function resolveServerContext(
   let botToken = config.botToken;
   let defaultChannel = config.defaultChannel;
   let channels = config.channels;
+  let channelsGuildId = config.channels ? config.guildId : undefined;
   let serverName: string | undefined;
 
   // ── Layer 1: named server profile ────────────────────────────────────────
@@ -98,7 +101,10 @@ export function resolveServerContext(
     // Optional overrides fall back to the top-level values when absent.
     if (profile.botToken) botToken = profile.botToken;
     if (profile.defaultChannel) defaultChannel = profile.defaultChannel;
-    if (profile.channels) channels = profile.channels;
+    if (profile.channels) {
+      channels = profile.channels;
+      channelsGuildId = profile.guildId;
+    }
   }
 
   // ── Layer 2: explicit --guild flag (highest precedence for guildId) ───────
@@ -114,7 +120,20 @@ export function resolveServerContext(
     guildId = opts.guild;
   }
 
-  return { guildId, botToken, defaultChannel, channels, serverName };
+  return { guildId, botToken, defaultChannel, channels, channelsGuildId, serverName };
+}
+
+/**
+ * Return a cached channel id only when the cache belongs to the same guild the
+ * command is currently resolving names in. This keeps a top-level `channels:`
+ * map from silently targeting another guild after `--guild`/`--server`.
+ */
+export function cachedChannelId(
+  ctx: ResolvedServerContext,
+  channelName: string
+): string | undefined {
+  if (!ctx.guildId || ctx.channelsGuildId !== ctx.guildId) return undefined;
+  return ctx.channels?.[channelName]?.id;
 }
 
 /**

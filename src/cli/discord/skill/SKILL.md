@@ -44,8 +44,9 @@ discord read  --server halden
 
 Precedence: explicit `--guild`/`--channel` flags  >  `--server` profile  >
 top-level config. With neither flag, behaviour is identical to single-guild.
-A cached `channels.<name>.id` posts by id directly and is guild-agnostic; the
-`--guild`/`--server` override only changes how a channel *name* is resolved.
+Cached `channels.<name>.id` entries are used only when their owning guild
+matches the selected `--guild`/`--server` context; otherwise the CLI resolves
+the name inside the selected guild or fails loudly.
 
 ---
 

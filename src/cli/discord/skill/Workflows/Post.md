@@ -43,5 +43,5 @@ top-level config. With no `--server`/`--guild`, posting is exactly as before.
 - For multi-line messages, use quotes and `\n` or write to a temp file first.
 - `--file <path>` attaches a local file (repeatable). The message is optional when at least one file is given. Each path is existence-checked before anything is posted, so a bad path fails cleanly with nothing sent.
 - If posting fails with "Bot token required", run `discord config show` and guide setup.
-- Channel names are resolved automatically on first use and cached (per guild).
+- Channel names are resolved automatically on first use and cached per guild. Raw channel IDs are accepted only after the bot sees that ID in the selected guild channel list.
 - `--guild` and `--server` must not disagree on the guild — the CLI errors if they do.
