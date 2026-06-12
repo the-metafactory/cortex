@@ -603,6 +603,56 @@ function targetAgentForDispatch(
 }
 
 /**
+ * Bot Packs B-1 (cortex#1033 §Maintainability) — collect the declared brain
+ * secrets from THIS process's env. Only named keys are forwarded into the
+ * brain's minimal env (the runner enforces the minimal-env policy; §8). A
+ * named-but-unset secret is simply absent (logged once for visibility — the
+ * install-time consent is the arc-side gate). Pure except for the stderr log.
+ */
+function collectBrainSecrets(
+  agentId: string,
+  declared: readonly string[],
+): Record<string, string> {
+  const secrets: Record<string, string> = {};
+  const missing: string[] = [];
+  for (const name of declared) {
+    const value = process.env[name];
+    if (value !== undefined) secrets[name] = value;
+    else missing.push(name);
+  }
+  if (missing.length > 0) {
+    process.stderr.write(
+      `cortex: brain agent=${agentId} declares secrets not present in the ` +
+        `environment: [${missing.join(",")}] — they will be absent from ` +
+        `the brain process (install-time consent is the arc-side gate)\n`,
+    );
+  }
+  return secrets;
+}
+
+/**
+ * Bot Packs B-1 (cortex#1033 §Maintainability) — read the persona text once at
+ * brain start. `personaPath` is the loader-resolved file PATH. A
+ * missing/unreadable persona is non-fatal: returns `undefined` (the brain
+ * receives no persona) and logs once.
+ */
+function loadBrainPersona(
+  agentId: string,
+  personaPath: string,
+): string | undefined {
+  try {
+    return readFileSync(personaPath, "utf-8");
+  } catch (personaErr) {
+    process.stderr.write(
+      `cortex: brain agent=${agentId} persona unreadable at "${personaPath}": ` +
+        `${personaErr instanceof Error ? personaErr.message : String(personaErr)} — ` +
+        `proceeding without persona\n`,
+    );
+    return undefined;
+  }
+}
+
+/**
  * Construct the full cortex stack and start it. Returns a stop handle.
  *
  * Order: runtime → router → dispatch-handler → adapters → dispatch-listener
@@ -1293,6 +1343,13 @@ export async function startCortex(
   // builtin ⇒ the existing review path, byte-for-byte unchanged.
   const isExecBrainAgent = (a: Agent): boolean =>
     a.runtime?.brain?.kind === "exec";
+  // Bot Packs B-1 — the SINGLE brain-hosting predicate (cortex#1033
+  // §Maintainability): an exec-brain agent that declares at least one capability
+  // (the subjects the consumer binds) is hosted by a BrainConsumer. Used by both
+  // the boot-time `brainAgents` filter AND the hot-reload `isBrainHosted` path so
+  // a B-2 change to the hosting criteria can't drift between them.
+  const isBrainHosted = (a: Agent): boolean =>
+    isExecBrainAgent(a) && (a.runtime?.capabilities?.length ?? 0) > 0;
   const brainConsumers: BrainConsumer[] = [];
   const reviewCapableAgents = mergedAgents.filter((a) => {
     // An exec-brain agent is hosted by the brain path even if it happens to
@@ -1304,11 +1361,8 @@ export async function startCortex(
       (c) => c === "code-review" || c.startsWith("code-review."),
     );
   });
-  // Bot Packs B-1 — agents hosted by a BrainConsumer: exec-brain agents that
-  // declare at least one capability (the subjects the consumer binds).
-  const brainAgents = mergedAgents.filter(
-    (a) => isExecBrainAgent(a) && (a.runtime?.capabilities?.length ?? 0) > 0,
-  );
+  // Bot Packs B-1 — agents hosted by a BrainConsumer (the shared predicate).
+  const brainAgents = mergedAgents.filter(isBrainHosted);
   // Stable identity inputs for the per-agent durable consumer name.
   // cortex#427 — `reviewPrincipalId` is the same `{principal}` segment the
   // surface-router and capability-registry boot paths use; reading the
@@ -2262,22 +2316,12 @@ export async function startCortex(
       // declared secrets resolve from THIS process's env at spawn — only the
       // named keys are forwarded into the brain's minimal env (the runner
       // enforces the minimal-env policy; §8). A named-but-unset secret is
-      // simply absent in the env (logged once below for visibility).
+      // simply absent in the env (logged once for visibility). cortex#1033
+      // §Maintainability — secret collection + persona load are extracted to the
+      // module-level `collectBrainSecrets` / `loadBrainPersona` helpers so this
+      // startup closure reads as a sequence of named steps.
       const packDir = join(brainPackBaseDir, agent.id);
-      const secrets: Record<string, string> = {};
-      const missingSecrets: string[] = [];
-      for (const name of brain.secrets) {
-        const value = process.env[name];
-        if (value !== undefined) secrets[name] = value;
-        else missingSecrets.push(name);
-      }
-      if (missingSecrets.length > 0) {
-        process.stderr.write(
-          `cortex: brain agent=${agent.id} declares secrets not present in the ` +
-            `environment: [${missingSecrets.join(",")}] — they will be absent from ` +
-            `the brain process (install-time consent is the arc-side gate)\n`,
-        );
-      }
+      const secrets = collectBrainSecrets(agent.id, brain.secrets);
 
       const runBrainTask = makeExecBrainRunner({
         run: brain.run,
@@ -2286,19 +2330,9 @@ export async function startCortex(
       });
 
       // Persona delivered to the brain on each task event (§5 "Persona
-      // delivery"). `agent.persona` is the loader-resolved file PATH; read its
-      // text once at start. A missing/unreadable persona is non-fatal — the
-      // brain simply receives no persona (logged once).
-      let personaText: string | undefined;
-      try {
-        personaText = readFileSync(agent.persona, "utf-8");
-      } catch (personaErr) {
-        process.stderr.write(
-          `cortex: brain agent=${agent.id} persona unreadable at "${agent.persona}": ` +
-            `${personaErr instanceof Error ? personaErr.message : String(personaErr)} — ` +
-            `proceeding without persona\n`,
-        );
-      }
+      // delivery"). A missing/unreadable persona is non-fatal — the brain simply
+      // receives no persona (logged once inside the helper).
+      const personaText = loadBrainPersona(agent.id, agent.persona);
 
       const consumer = new BrainConsumer({
         agent: consumerAgent,
@@ -2320,29 +2354,50 @@ export async function startCortex(
       // capability is a literal trailing segment, no `>` wildcard since a brain
       // task subject is exact per capability). Durable name is unique per
       // (principal, agent, capability).
-      const started = await consumer.start({
-        resolve: (capability) => {
-          const pattern = `local.${reviewPrincipalId}.${derivedStack.stack}.tasks.${capability}`;
-          const durable = `cortex-brain-consumer-${reviewPrincipalId}-${agent.id}-${capability.replaceAll(".", "-")}`;
-          // Provision the durable up-front (idempotent) so the bind below
-          // succeeds against a virgin broker. Skipped when JSM is unavailable
-          // (runtime dormant) — start() then stays dormant for this capability.
-          if (reviewJsm !== null) {
-            void provisionReviewConsumer({
+      //
+      // cortex#1033 §Architecture/§HonestOracle — provision ALL capability
+      // durables UP-FRONT and AWAIT them BEFORE calling `consumer.start()`, so
+      // the bind inside `start()` cannot race ahead of a not-yet-created durable
+      // on a virgin broker. This mirrors the review path (which awaits
+      // `provisionReviewConsumer` before `consumer.start()`); the brain path
+      // previously fired `void provisionReviewConsumer(...)` from inside the
+      // synchronous `resolve` callback, which returned the subscription params
+      // immediately while provisioning was still in flight. `resolve` is now a
+      // pure subject/durable resolver with no side effect.
+      const brainCapabilities = consumerAgent.capabilities;
+      const brainDurableFor = (capability: string): string =>
+        `cortex-brain-consumer-${reviewPrincipalId}-${agent.id}-${capability.replaceAll(".", "-")}`;
+      const brainPatternFor = (capability: string): string =>
+        `local.${reviewPrincipalId}.${derivedStack.stack}.tasks.${capability}`;
+
+      if (reviewJsm !== null) {
+        for (const capability of brainCapabilities) {
+          const durable = brainDurableFor(capability);
+          try {
+            await provisionReviewConsumer({
               jsm: reviewJsm,
               stream: reviewStream,
               durable,
-              filterSubject: pattern,
+              filterSubject: brainPatternFor(capability),
               maxDeliver: reviewConsumerMaxDeliver,
-            }).catch((provisionErr) => {
-              process.stderr.write(
-                `cortex: provisionReviewConsumer (brain) failed for "${durable}": ` +
-                  `${provisionErr instanceof Error ? provisionErr.message : String(provisionErr)}\n`,
-              );
             });
+          } catch (provisionErr) {
+            // Don't abort — let `consumer.start()` surface the bind failure
+            // through its own dormant/skip path (mirrors the review path).
+            process.stderr.write(
+              `cortex: provisionReviewConsumer (brain) failed for "${durable}": ` +
+                `${provisionErr instanceof Error ? provisionErr.message : String(provisionErr)}\n`,
+            );
           }
-          return { pattern, stream: reviewStream, durable };
-        },
+        }
+      }
+
+      const started = await consumer.start({
+        resolve: (capability) => ({
+          pattern: brainPatternFor(capability),
+          stream: reviewStream,
+          durable: brainDurableFor(capability),
+        }),
       });
 
       const capSummary =
@@ -3972,10 +4027,10 @@ export async function startCortex(
     const caps = a.runtime?.capabilities ?? [];
     return caps.some((c) => c === "code-review" || c.startsWith("code-review."));
   };
-  // Bot Packs B-1 — mirrors the boot-time `brainAgents` filter so a hot-added
-  // exec-brain agent is started iff it would have been started at boot.
-  const isBrainHosted = (a: Agent): boolean =>
-    isExecBrainAgent(a) && (a.runtime?.capabilities?.length ?? 0) > 0;
+  // Bot Packs B-1 — the hot-reload path reuses the SINGLE `isBrainHosted`
+  // predicate defined at boot setup (cortex#1033 §Maintainability) so a hot-added
+  // exec-brain agent is started iff it would have been started at boot, with no
+  // chance of the two filters drifting.
 
   // Drain + remove every review consumer owned by `agentId` from
   // `reviewConsumers[]`. `ReviewConsumer.stop()` is idempotent and awaits the
