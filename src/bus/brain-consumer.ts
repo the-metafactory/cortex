@@ -199,11 +199,14 @@ export interface BrainConsumerAgent {
 }
 
 /**
- * Construction options. Every dependency is injected — no module-scope
- * singletons. Production wires the real `runtime` + `runBrainTask`; tests
- * inject doubles.
+ * Construction options shared by both lifecycles. The lifecycle-specific
+ * `runBrainTask` (per-task / B-1) vs `daemonHost` (daemon / B-2) split is
+ * layered on as a discriminated union below ({@link BrainConsumerOpts}) so the
+ * two are MUTUALLY EXCLUSIVE at the type level — a caller cannot construct an
+ * inert runner alongside a daemon host (sage cortex#1035: one lifecycle path
+ * should be impossible, not merely "daemonHost wins").
  */
-export interface BrainConsumerOpts {
+export interface BrainConsumerBaseOpts {
   /** The agent this consumer serves. */
   agent: BrainConsumerAgent;
   /** Envelope source `{principal}.{agent}.{instance}` for emitted lifecycle envelopes. */
@@ -211,29 +214,10 @@ export interface BrainConsumerOpts {
   /** The myelin runtime — used for `publish` + `subscribePull`. */
   runtime: MyelinRuntime;
   /**
-   * The configured per-task brain runner (from `makeExecBrainRunner` over the
-   * manifest's `brain` block). Injected so the consumer never owns spawn
-   * policy; tests pass a stub that resolves a deterministic result.
-   *
-   * For a `lifecycle: daemon` agent (B-2) pass {@link daemonHost} instead — the
-   * consumer derives the runner from the host's `runTask` and routes
-   * drain/teardown through the host. Exactly one of `runBrainTask` / `daemonHost`
-   * is used; when both are present `daemonHost` wins (B-2 daemon path).
-   */
-  runBrainTask: RunBrainTask;
-  /**
-   * Bot Packs B-2 — the daemon brain host (`lifecycle: daemon`). When provided,
-   * the consumer multiplexes tasks over the long-lived host (its `runTask` is
-   * the runner) and a `stop()` DRAINS the host (hot-swap or shutdown). A degraded
-   * host (restart budget exhausted) is surfaced through the host's own
-   * `onDegraded` callback the boot wiring supplies. Omitted ⇒ per-task lifecycle
-   * (B-1) via {@link runBrainTask}.
-   */
-  daemonHost?: DaemonBrainHost;
-  /**
-   * Hot-swap drain deadline (ms) handed to {@link daemonHost.drain} on `stop()`.
-   * Past it, open `ask_principal` gates are cancelled with a re-trigger notice
-   * (§7.5). Ignored for the per-task lifecycle. Defaults to 5_000.
+   * Hot-swap drain deadline (ms) handed to {@link DaemonBrainHost.drain} on
+   * `stop()`. Past it, open `ask_principal` gates are cancelled with a
+   * re-trigger notice (§7.5). Ignored for the per-task lifecycle. Defaults to
+   * 5_000.
    */
   drainDeadlineMs?: number;
   /**
@@ -258,6 +242,47 @@ export interface BrainConsumerOpts {
   /** Test seam — clock. Defaults to `() => new Date()`. */
   clock?: () => Date;
 }
+
+/**
+ * Per-task lifecycle (B-1): the consumer owns an injected per-task runner and
+ * NO daemon host. `daemonHost` is statically forbidden here.
+ */
+export interface BrainConsumerPerTaskOpts extends BrainConsumerBaseOpts {
+  /**
+   * The configured per-task brain runner (from `makeExecBrainRunner` over the
+   * manifest's `brain` block). Injected so the consumer never owns spawn
+   * policy; tests pass a stub that resolves a deterministic result.
+   */
+  runBrainTask: RunBrainTask;
+  /** Forbidden on the per-task path — use {@link BrainConsumerDaemonOpts}. */
+  daemonHost?: never;
+}
+
+/**
+ * Daemon lifecycle (B-2): the consumer multiplexes tasks over a long-lived
+ * {@link DaemonBrainHost} (its `runTask` IS the runner) and `stop()` DRAINS the
+ * host (hot-swap or shutdown). A degraded host (restart budget exhausted) is
+ * surfaced through the host's own `onDegraded` callback the boot wiring
+ * supplies. `runBrainTask` is statically forbidden here — there is no inert
+ * per-task runner to construct alongside the host.
+ */
+export interface BrainConsumerDaemonOpts extends BrainConsumerBaseOpts {
+  /** The daemon brain host (`lifecycle: daemon`). */
+  daemonHost: DaemonBrainHost;
+  /** Forbidden on the daemon path — the host's `runTask` is the runner. */
+  runBrainTask?: never;
+}
+
+/**
+ * Construction options. A discriminated union over the two lifecycles so
+ * exactly ONE of `runBrainTask` (per-task / B-1) and `daemonHost` (daemon /
+ * B-2) is constructible — never both, never neither. Every dependency is
+ * injected — no module-scope singletons. Production wires the real `runtime`
+ * plus the lifecycle's runner; tests inject doubles.
+ */
+export type BrainConsumerOpts =
+  | BrainConsumerPerTaskOpts
+  | BrainConsumerDaemonOpts;
 
 /**
  * Options for {@link BrainConsumer.start} when binding real JetStream pull
@@ -333,9 +358,12 @@ export class BrainConsumer {
     // `runTask` (one long-lived process). Otherwise the injected per-task runner
     // (B-1). Binding here keeps `runOne` lifecycle-agnostic — it just calls
     // `this.runBrainTask(task, hooks)` either way.
-    this.runBrainTask = opts.daemonHost
-      ? (task, hooks) => opts.daemonHost!.runTask(task, hooks)
-      : opts.runBrainTask;
+    if (opts.daemonHost !== undefined) {
+      const host = opts.daemonHost;
+      this.runBrainTask = (task, hooks) => host.runTask(task, hooks);
+    } else {
+      this.runBrainTask = opts.runBrainTask;
+    }
     this.persona = opts.persona;
     this.principalGate = opts.principalGate ?? new DenyAllPrincipalGate();
     this.sovereigntyEnforce = opts.sovereigntyEnforce ?? false;

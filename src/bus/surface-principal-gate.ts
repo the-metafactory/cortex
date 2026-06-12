@@ -163,31 +163,17 @@ const AFFIRMATIVE = new Set([
   "confirmed",
 ]);
 
-/** Default negative replies — an explicit deny. */
-const NEGATIVE = new Set([
-  "no",
-  "n",
-  "deny",
-  "denied",
-  "reject",
-  "rejected",
-  "stop",
-  "cancel",
-  "fail",
-  "abort",
-]);
-
 /**
  * Map a principal's reply text to a gate verdict. Affirmative → `pass`; anything
- * else (explicit negative OR unrecognised) → `fail`. FAIL-CLOSED on ambiguity:
- * an unrecognised reply is a `fail`, not a retry — a verdict must be an explicit
- * yes. Normalises case + surrounding whitespace; never parses identity.
+ * else → `fail`. FAIL-CLOSED on ambiguity: an explicit negative ("no", "deny")
+ * and an unrecognised reply both fail the same way — a verdict must be an
+ * explicit affirmative. There is therefore no separate negative allow-list to
+ * maintain (the absence of a `pass` IS the deny). Normalises case + surrounding
+ * whitespace; never parses identity.
  */
 export function replyToVerdict(text: string): GateVerdictValue {
   const normalized = text.trim().toLowerCase();
   if (AFFIRMATIVE.has(normalized)) return "pass";
-  // Explicit negatives and everything unrecognised both fail closed.
-  void NEGATIVE; // exported intent: a negative is a fail, same as unknown.
   return "fail";
 }
 

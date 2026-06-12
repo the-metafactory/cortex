@@ -22,122 +22,20 @@ import { join } from "path";
 import {
   DaemonBrainHost,
   type DaemonTransport,
-  type DaemonBrainConnection,
   type DaemonBrainProcess,
 } from "../daemon-brain-host";
 import { MAX_TASK_ATTACHMENT_BYTES } from "../attachment-budget";
-import {
-  parseBrainEvent,
-  type BrainEvent,
-  type TaskEvent,
-  type GateVerdictValue,
-} from "../protocol";
+import { type TaskEvent, type GateVerdictValue } from "../protocol";
 import type { BrainTaskHooks } from "../exec-brain-runner";
+import {
+  FakeDaemonBrain,
+  makeFakeDaemonTransport,
+} from "./fake-daemon-brain";
 
-// ---------------------------------------------------------------------------
-// In-memory transport double
-// ---------------------------------------------------------------------------
-
-/**
- * A scripted brain on the other side of the socket. The host writes events
- * (lines) to `write`; the test reads them via `events` and replies by calling
- * `emit(line)`. `crash()` fires the close handler; `exit()` resolves `exited`.
- */
-class FakeBrain {
-  private dataHandler: ((chunk: string) => void) | null = null;
-  private closeHandler: (() => void) | null = null;
-  /** Every cortex → brain event the host wrote, parsed. */
-  readonly received: BrainEvent[] = [];
-  /** Raw lines (for assertions on shape). */
-  readonly receivedLines: string[] = [];
-  killed: NodeJS.Signals | number | undefined;
-  private exitResolve!: (code: number | null) => void;
-  readonly exited: Promise<number | null>;
-
-  readonly connection: DaemonBrainConnection;
-
-  constructor() {
-    this.exited = new Promise((res) => {
-      this.exitResolve = res;
-    });
-    this.connection = {
-      write: (chunk: string) => {
-        for (const line of chunk.split("\n")) {
-          if (line.trim().length === 0) continue;
-          this.receivedLines.push(line);
-          const parsed = parseBrainEvent(line);
-          if (parsed.kind === "ok") this.received.push(parsed.event);
-        }
-      },
-      onData: (handler) => {
-        this.dataHandler = handler as (c: string) => void;
-      },
-      onClose: (handler) => {
-        this.closeHandler = handler;
-      },
-    };
-  }
-
-  /** Brain → host: emit one effect line. */
-  emit(line: string): void {
-    this.dataHandler?.(line + "\n");
-  }
-
-  /** Simulate a crash — fire the connection close handler. */
-  crash(): void {
-    this.closeHandler?.();
-    this.exitResolve(1);
-  }
-
-  /** Simulate a clean exit. */
-  exit(code = 0): void {
-    this.exitResolve(code);
-  }
-
-  /** Did the host write an event of this type? */
-  hasEvent(type: BrainEvent["type"]): boolean {
-    return this.received.some((e) => e.type === type);
-  }
-
-  lastTask(): TaskEvent | undefined {
-    const tasks = this.received.filter((e): e is TaskEvent => e.type === "task");
-    return tasks[tasks.length - 1];
-  }
-}
-
-/**
- * Build a transport that hands out a sequence of FakeBrains (one per spawn —
- * generation 0, then restarts). The test pre-seeds the list; each spawn pops the
- * next. `connectDelayMs` lets a generation defer connecting.
- */
-function makeFakeTransport(brains: FakeBrain[]): {
-  transport: DaemonTransport;
-  spawns: number;
-} {
-  const state = { spawns: 0 };
-  const transport: DaemonTransport = () => {
-    const brain = brains[state.spawns];
-    state.spawns += 1;
-    if (brain === undefined) {
-      throw new Error(`fake transport: no brain seeded for spawn #${state.spawns - 1}`);
-    }
-    const proc: DaemonBrainProcess = {
-      connection: Promise.resolve(brain.connection),
-      exited: brain.exited,
-      kill: (signal) => {
-        brain.killed = signal;
-        brain.exit(137);
-      },
-    };
-    return proc;
-  };
-  return {
-    transport,
-    get spawns() {
-      return state.spawns;
-    },
-  };
-}
+// The in-memory daemon-brain double + sequencing transport are shared with the
+// consumer integration tests; see `./fake-daemon-brain.ts`.
+const FakeBrain = FakeDaemonBrain;
+const makeFakeTransport = makeFakeDaemonTransport;
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -396,6 +294,67 @@ describe("DaemonBrainHost — supervision", () => {
     brains[1]?.crash(); // would be 2/1 without reset → but reset → 1/1 again
     await until(() => brains[2]?.hasEvent("hello") === true);
     expect(host.isDegraded).toBe(false);
+    await host.stop();
+  });
+
+  // Finding 2 (sage cortex#1035): a restart whose CONNECT always fails must
+  // count against the restart budget and degrade — not recurse, not leave a
+  // stale proc installed.
+  test("a restart that always fails to connect degrades after maxRestarts (no recursion, no stale proc)", async () => {
+    const gen0 = new FakeDaemonBrain();
+    // gen 0 connects fine; every restart spawn rejects its connection promise.
+    let spawnIdx = 0;
+    const killedProcs: DaemonBrainProcess[] = [];
+    const transport: DaemonTransport = () => {
+      const idx = spawnIdx++;
+      if (idx === 0) {
+        return {
+          connection: Promise.resolve(gen0.connection),
+          exited: gen0.exited,
+          kill: () => gen0.killed(),
+        };
+      }
+      // A failed-connect restart: connection rejects, process already exited.
+      const proc: DaemonBrainProcess = {
+        connection: Promise.reject(
+          new Error(`connect failed for restart spawn #${idx}`),
+        ),
+        exited: Promise.resolve(1),
+        kill: () => {},
+      };
+      killedProcs.push(proc);
+      return proc;
+    };
+
+    const degraded: string[] = [];
+    const host = new DaemonBrainHost({
+      agentId: "yarrow",
+      run: "bun b.ts",
+      packDir: "/p",
+      transport,
+      maxRestarts: 2,
+      makeScratchDir: scratchFactory,
+      onDegraded: (id) => degraded.push(id),
+    });
+    await host.start();
+    expect(gen0.hasEvent("hello")).toBe(true);
+
+    // Crash gen 0 → restart 1 (fails connect) → restart 2 (fails connect) →
+    // budget (2) exhausted → degraded. No infinite recursion.
+    gen0.crash();
+    await until(() => host.isDegraded, 3000);
+    expect(degraded).toEqual(["yarrow"]);
+    // Exactly 1 original + 2 restart spawns were attempted (budget == 2); a
+    // recursion bug would keep spawning well past this.
+    expect(spawnIdx).toBe(3);
+
+    // No stale proc installed: a new task fast-fails not_now (degraded), and the
+    // host did not silently keep a dead connection.
+    const res = await host.runTask(makeTask(), makeHooks());
+    expect(res.result.status).toBe("failed");
+    if (res.result.status === "failed") {
+      expect(res.result.reason.kind).toBe("not_now");
+    }
     await host.stop();
   });
 });

@@ -2348,9 +2348,28 @@ export async function startCortex(
       // DaemonBrainHost (spawn once, socket-multiplex tasks, supervise + drain);
       // `per-task` (default) keeps the B-1 per-spawn runner. Both feed the SAME
       // BrainConsumer policy seam (the consumer is lifecycle-agnostic — it routes
-      // brain effects through the host hooks identically).
+      // brain effects through the host hooks identically). The lifecycle-specific
+      // runner is mutually exclusive: a daemon agent passes `daemonHost` (no
+      // per-task runner constructed), a per-task agent passes `runBrainTask`.
+      // The `principalGate` is left to the consumer default on BOTH paths:
+      // DenyAllPrincipalGate (B-1 fail-closed — every `ask_principal` denied).
+      // SurfacePrincipalGate (B-2) is IMPLEMENTED + unit-tested but NOT booted
+      // here yet: it needs an adapter inbound reply-bridge (a
+      // PrincipalReplySource fed by a live surface adapter) to observe the
+      // principal's reply, which lands in B-3. Until that bridge exists there is
+      // nothing to construct the gate from, so the boot path leaves the
+      // fail-closed default in place — identity-based approval is NOT live.
+      // Sovereignty audit-parity by default, mirroring ReviewConsumer (a
+      // self-declared modelClass is spoofable until bound to the signing
+      // identity, cortex#327).
+      const baseConsumerOpts = {
+        agent: consumerAgent,
+        source: systemEventSource,
+        runtime,
+        ...(personaText !== undefined && { persona: personaText }),
+      };
       let daemonHost: DaemonBrainHost | undefined;
-      let runBrainTask: ReturnType<typeof makeExecBrainRunner>;
+      let consumer: BrainConsumer;
       if (brain.lifecycle === "daemon") {
         daemonHost = new DaemonBrainHost({
           agentId: agent.id,
@@ -2387,28 +2406,11 @@ export async function startCortex(
           );
         }
         daemonBrainHosts.push(daemonHost);
-        // `runBrainTask` is unused when daemonHost is set (the consumer binds the
-        // host's runTask), but the field is required — supply the per-task runner
-        // as an inert fallback so the type is satisfied.
-        runBrainTask = makeExecBrainRunner({ run: brain.run, packDir, secrets });
+        consumer = new BrainConsumer({ ...baseConsumerOpts, daemonHost });
       } else {
-        runBrainTask = makeExecBrainRunner({ run: brain.run, packDir, secrets });
+        const runBrainTask = makeExecBrainRunner({ run: brain.run, packDir, secrets });
+        consumer = new BrainConsumer({ ...baseConsumerOpts, runBrainTask });
       }
-
-      const consumer = new BrainConsumer({
-        agent: consumerAgent,
-        source: systemEventSource,
-        runtime,
-        runBrainTask,
-        ...(daemonHost !== undefined && { daemonHost }),
-        ...(personaText !== undefined && { persona: personaText }),
-        // onAskPrincipal defaults to DenyAllPrincipalGate (fail-closed). The B-2
-        // SurfacePrincipalGate is wired by the boot path when a live surface +
-        // configured principal identity exist (see the surface-gate wiring).
-        // Sovereignty audit-parity by default, mirroring ReviewConsumer (a
-        // self-declared modelClass is spoofable until bound to the signing
-        // identity, cortex#327).
-      });
       brainConsumers.push(consumer);
 
       // Provision + bind one durable pull consumer per declared capability.

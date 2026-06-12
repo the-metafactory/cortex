@@ -148,13 +148,20 @@ function completeResult(taskId: string, summary?: string): ResultEffect {
 }
 
 function baseOpts(over: Partial<BrainConsumerOpts> = {}): BrainConsumerOpts {
-  return {
+  const { runBrainTask, daemonHost, ...rest } = over;
+  const base = {
     agent: buildAgent(),
     source: SOURCE,
     runtime: over.runtime ?? createRecordingRuntime(),
-    runBrainTask: over.runBrainTask ?? stubRunner(completeResult("x")),
-    ...over,
+    ...rest,
   };
+  // The opts type is a discriminated union: a daemon agent passes `daemonHost`
+  // (no per-task runner), a per-task agent passes `runBrainTask`. Build the
+  // correct variant so neither field leaks onto the other path.
+  if (daemonHost !== undefined) {
+    return { ...base, daemonHost };
+  }
+  return { ...base, runBrainTask: runBrainTask ?? stubRunner(completeResult("x")) };
 }
 
 function published(runtime: RecordingRuntime, type: string): Envelope[] {
@@ -800,53 +807,15 @@ process.exit(0);
 // is needed — the consumer↔host↔(fake brain) round-trip is fully driven.
 
 import { DaemonBrainHost } from "../../brain/daemon-brain-host";
-import type {
-  DaemonTransport,
-  DaemonBrainConnection,
-} from "../../brain/daemon-brain-host";
-import { parseBrainEvent, type BrainEvent } from "../../brain/protocol";
+import {
+  FakeDaemonBrain,
+  singleFakeDaemonTransport,
+} from "../../brain/__tests__/fake-daemon-brain";
 
-class DaemonFakeBrain {
-  private dataHandler: ((c: string) => void) | null = null;
-  private closeHandler: (() => void) | null = null;
-  readonly received: BrainEvent[] = [];
-  private exitResolve!: (code: number | null) => void;
-  readonly exited: Promise<number | null>;
-  readonly connection: DaemonBrainConnection;
-  constructor() {
-    this.exited = new Promise((res) => { this.exitResolve = res; });
-    this.connection = {
-      write: (chunk: string) => {
-        for (const line of chunk.split("\n")) {
-          if (line.trim().length === 0) continue;
-          const p = parseBrainEvent(line);
-          if (p.kind === "ok") this.received.push(p.event);
-        }
-      },
-      onData: (h) => { this.dataHandler = h as (c: string) => void; },
-      onClose: (h) => { this.closeHandler = h; },
-    };
-  }
-  emit(line: string): void { this.dataHandler?.(line + "\n"); }
-  crash(): void { this.closeHandler?.(); this.exitResolve(1); }
-  /** A real process exits when killed — resolve `exited` so teardown is prompt. */
-  killed(): void { this.exitResolve(137); }
-  hasTask(): boolean { return this.received.some((e) => e.type === "task"); }
-  taskId(): string | undefined {
-    const t = this.received.find((e) => e.type === "task");
-    return t?.type === "task" ? t.task_id : undefined;
-  }
-}
-
-function daemonTransport(brain: DaemonFakeBrain): DaemonTransport {
-  return () => ({
-    connection: Promise.resolve(brain.connection),
-    exited: brain.exited,
-    // A killed process exits — resolve `exited` so the host's SIGTERM→grace
-    // race settles promptly (otherwise teardown waits the full killGrace).
-    kill: () => brain.killed(),
-  });
-}
+// The daemon-brain double + single-brain transport are shared with the host's
+// own unit tests; see `src/brain/__tests__/fake-daemon-brain.ts`.
+const DaemonFakeBrain = FakeDaemonBrain;
+const daemonTransport = singleFakeDaemonTransport;
 
 async function tick(): Promise<void> {
   for (let i = 0; i < 50; i++) await new Promise((r) => setTimeout(r, 2));
