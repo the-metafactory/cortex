@@ -212,7 +212,7 @@ describe("runCredsList", () => {
       writeFileSync(join(dir, "luna.creds"), "fake");
       const r = runCredsList({
         subcommand: "list", rawSubcommand: "list", agentId: undefined,
-        credsDir: dir, account: undefined, json: false, help: false,
+        credsDir: dir, account: undefined, pub: [], sub: [], json: false, help: false,
       });
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toContain("echo");
@@ -226,7 +226,7 @@ describe("runCredsList", () => {
       writeFileSync(join(dir, "alpha.creds"), "fake");
       const r = runCredsList({
         subcommand: "list", rawSubcommand: "list", agentId: undefined,
-        credsDir: dir, account: undefined, json: false, help: false,
+        credsDir: dir, account: undefined, pub: [], sub: [], json: false, help: false,
       });
       expect(r.stdout.indexOf("alpha")).toBeLessThan(r.stdout.indexOf("zulu"));
     });
@@ -236,7 +236,7 @@ describe("runCredsList", () => {
     withTmpDir((dir) => {
       const r = runCredsList({
         subcommand: "list", rawSubcommand: "list", agentId: undefined,
-        credsDir: dir, account: undefined, json: false, help: false,
+        credsDir: dir, account: undefined, pub: [], sub: [], json: false, help: false,
       });
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toContain("0 creds files");
@@ -246,7 +246,7 @@ describe("runCredsList", () => {
   test("nonexistent dir → exit 0 with 'does not exist' note", () => {
     const r = runCredsList({
       subcommand: "list", rawSubcommand: "list", agentId: undefined,
-      credsDir: "/tmp/does-not-exist-xyz", account: undefined, json: false, help: false,
+      credsDir: "/tmp/does-not-exist-xyz", account: undefined, pub: [], sub: [], json: false, help: false,
     });
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain("does not exist");
@@ -257,7 +257,7 @@ describe("runCredsList", () => {
       writeFileSync(join(dir, "echo.creds"), "fake");
       const r = runCredsList({
         subcommand: "list", rawSubcommand: "list", agentId: undefined,
-        credsDir: dir, account: undefined, json: true, help: false,
+        credsDir: dir, account: undefined, pub: [], sub: [], json: true, help: false,
       });
       const parsed = JSON.parse(r.stdout);
       expect(parsed.status).toBe("ok");
@@ -272,7 +272,7 @@ describe("runCredsList", () => {
       writeFileSync(join(dir, "ok.creds"), "fake");
       const r = runCredsList({
         subcommand: "list", rawSubcommand: "list", agentId: undefined,
-        credsDir: dir, account: undefined, json: false, help: false,
+        credsDir: dir, account: undefined, pub: [], sub: [], json: false, help: false,
       });
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toContain("ok");
@@ -292,6 +292,8 @@ function args(subcommand: "issue" | "revoke" | "rotate", overrides: Partial<Pars
     agentId: "echo",
     credsDir: undefined,
     account: undefined,
+    pub: [],
+    sub: [],
     json: false,
     help: false,
     ...overrides,
@@ -335,11 +337,18 @@ describe("principal-input validation", () => {
 // =============================================================================
 
 describe("arc shellout — argv composition", () => {
-  test("issue invokes `arc nats add-bot <id> --json`", async () => {
+  test("issue invokes `arc nats add-bot <id> --pub <default> --sub <default> --json`", async () => {
+    // cortex#1057 — issue ALWAYS scopes; omitting --pub/--sub applies the
+    // safe default (federated.<id>.> + _INBOX.>) rather than issuing unscoped.
     const mock = mockArc({ stdout: addBotOk({ bot: "echo" }), stderr: "", exitCode: 0 });
     __setArcRunnerForTests(mock.runner);
     await runCredsIssue(args("issue", { agentId: "echo" }));
-    expect(mock.lastArgv).toEqual(["nats", "add-bot", "echo", "--json"]);
+    expect(mock.lastArgv).toEqual([
+      "nats", "add-bot", "echo",
+      "--pub", "federated.echo.>,_INBOX.>",
+      "--sub", "federated.echo.>,_INBOX.>",
+      "--json",
+    ]);
   });
 
   test("rotate invokes `arc nats reissue-bot <id> --json`", async () => {
@@ -356,11 +365,17 @@ describe("arc shellout — argv composition", () => {
     expect(mock.lastArgv).toEqual(["nats", "remove-bot", "echo", "--delete-creds", "--json"]);
   });
 
-  test("--account is passed through to arc", async () => {
+  test("--account is passed through to arc (before the scope flags)", async () => {
     const mock = mockArc({ stdout: addBotOk({ bot: "echo", account: "OP_X" }), stderr: "", exitCode: 0 });
     __setArcRunnerForTests(mock.runner);
     await runCredsIssue(args("issue", { agentId: "echo", account: "OP_X" }));
-    expect(mock.lastArgv).toEqual(["nats", "add-bot", "echo", "--account", "OP_X", "--json"]);
+    expect(mock.lastArgv).toEqual([
+      "nats", "add-bot", "echo",
+      "--account", "OP_X",
+      "--pub", "federated.echo.>,_INBOX.>",
+      "--sub", "federated.echo.>,_INBOX.>",
+      "--json",
+    ]);
   });
 
   test("--account is passed through on revoke (before --delete-creds)", async () => {
@@ -368,6 +383,154 @@ describe("arc shellout — argv composition", () => {
     __setArcRunnerForTests(mock.runner);
     await runCredsRevoke(args("revoke", { agentId: "echo", account: "OP_X" }));
     expect(mock.lastArgv).toEqual(["nats", "remove-bot", "echo", "--account", "OP_X", "--delete-creds", "--json"]);
+  });
+});
+
+// =============================================================================
+// cortex#1057 (O-2.5) — --pub/--sub subject-scope passthrough + safe default
+//
+// arc's `add-bot --pub <subjects>` takes a SINGLE comma-separated string
+// (Commander option, last-wins if repeated; arc splits on ","). cortex's
+// surface accepts REPEATABLE --pub/--sub for ergonomics and joins them with
+// commas into one arc flag — passing one arc flag per value would silently
+// drop all but the last subject (the exact leak this slice prevents).
+//
+// The subject scope IS the isolation boundary in ADR-0012's shared-account
+// default: an UNSCOPED bot in the shared `community` account could subscribe
+// `federated.>` (everyone). So an omitted scope is NOT issued unscoped — it
+// defaults to `federated.<sanitized-agent-id>.>` + `_INBOX.>`.
+// =============================================================================
+
+describe("creds issue — explicit --pub/--sub passthrough (cortex#1057)", () => {
+  test("explicit single --pub/--sub thread verbatim into arc as one flag each", async () => {
+    const mock = mockArc({ stdout: addBotOk({ bot: "leaf-jc" }), stderr: "", exitCode: 0 });
+    __setArcRunnerForTests(mock.runner);
+    await runCredsIssue(args("issue", {
+      agentId: "leaf-jc",
+      account: "community",
+      pub: ["federated.jc.>"],
+      sub: ["federated.jc.>"],
+    }));
+    expect(mock.lastArgv).toEqual([
+      "nats", "add-bot", "leaf-jc",
+      "--account", "community",
+      "--pub", "federated.jc.>",
+      "--sub", "federated.jc.>",
+      "--json",
+    ]);
+  });
+
+  test("multiple --pub values are comma-joined into a single arc --pub flag", async () => {
+    const mock = mockArc({ stdout: addBotOk({ bot: "leaf-jc" }), stderr: "", exitCode: 0 });
+    __setArcRunnerForTests(mock.runner);
+    await runCredsIssue(args("issue", {
+      agentId: "leaf-jc",
+      pub: ["federated.jc.>", "_INBOX.>"],
+      sub: ["federated.jc.>", "_INBOX.>"],
+    }));
+    expect(mock.lastArgv).toEqual([
+      "nats", "add-bot", "leaf-jc",
+      "--pub", "federated.jc.>,_INBOX.>",
+      "--sub", "federated.jc.>,_INBOX.>",
+      "--json",
+    ]);
+  });
+
+  test("only --pub given → --pub threaded, --sub falls back to safe default", async () => {
+    const mock = mockArc({ stdout: addBotOk({ bot: "echo" }), stderr: "", exitCode: 0 });
+    __setArcRunnerForTests(mock.runner);
+    await runCredsIssue(args("issue", { agentId: "echo", pub: ["custom.>"] }));
+    expect(mock.lastArgv).toEqual([
+      "nats", "add-bot", "echo",
+      "--pub", "custom.>",
+      "--sub", "federated.echo.>,_INBOX.>",
+      "--json",
+    ]);
+  });
+});
+
+describe("creds issue — safe default scope when omitted (cortex#1057)", () => {
+  test("omitted --pub/--sub → NOT unscoped; defaults to federated.<id>.> + _INBOX.>", async () => {
+    const mock = mockArc({ stdout: addBotOk({ bot: "echo" }), stderr: "", exitCode: 0 });
+    __setArcRunnerForTests(mock.runner);
+    await runCredsIssue(args("issue", { agentId: "echo" }));
+    expect(mock.lastArgv).toEqual([
+      "nats", "add-bot", "echo",
+      "--pub", "federated.echo.>,_INBOX.>",
+      "--sub", "federated.echo.>,_INBOX.>",
+      "--json",
+    ]);
+    // Defense-in-depth: the unscoped everyone-subject must NEVER reach arc.
+    const flat = (mock.lastArgv ?? []).join(" ");
+    expect(flat).not.toContain("federated.>");
+  });
+
+  test("safe default uses the agent id verbatim (already regex-validated)", async () => {
+    const mock = mockArc({ stdout: addBotOk({ bot: "leaf-northwood" }), stderr: "", exitCode: 0 });
+    __setArcRunnerForTests(mock.runner);
+    await runCredsIssue(args("issue", { agentId: "leaf-northwood", account: "community" }));
+    expect(mock.lastArgv).toEqual([
+      "nats", "add-bot", "leaf-northwood",
+      "--account", "community",
+      "--pub", "federated.leaf-northwood.>,_INBOX.>",
+      "--sub", "federated.leaf-northwood.>,_INBOX.>",
+      "--json",
+    ]);
+  });
+
+  test("the safe default is the documented federated.<op>.> scope from ADR-0012", async () => {
+    const mock = mockArc({ stdout: addBotOk({ bot: "echo" }), stderr: "", exitCode: 0 });
+    __setArcRunnerForTests(mock.runner);
+    await runCredsIssue(args("issue", { agentId: "echo" }));
+    const flat = (mock.lastArgv ?? []).join(" ");
+    expect(flat).toContain("federated.echo.>");
+    expect(flat).toContain("_INBOX.>");
+  });
+});
+
+describe("creds rotate/revoke — unaffected by --pub/--sub (cortex#1057)", () => {
+  test("rotate never threads pub/sub even if present on args", async () => {
+    const mock = mockArc({ stdout: reissueBotOk({ bot: "echo" }), stderr: "", exitCode: 0 });
+    __setArcRunnerForTests(mock.runner);
+    await runCredsRotate(args("rotate", { agentId: "echo", pub: ["x.>"], sub: ["y.>"] }));
+    expect(mock.lastArgv).toEqual(["nats", "reissue-bot", "echo", "--json"]);
+  });
+
+  test("revoke never threads pub/sub even if present on args", async () => {
+    const mock = mockArc({ stdout: removeBotOk({ bot: "echo" }), stderr: "", exitCode: 0 });
+    __setArcRunnerForTests(mock.runner);
+    await runCredsRevoke(args("revoke", { agentId: "echo", pub: ["x.>"], sub: ["y.>"] }));
+    expect(mock.lastArgv).toEqual(["nats", "remove-bot", "echo", "--delete-creds", "--json"]);
+  });
+});
+
+describe("parseCredsArgs — --pub/--sub (cortex#1057)", () => {
+  test("parses repeatable --pub on issue", () => {
+    const r = parseCredsArgs(["issue", "echo", "--pub", "a.>", "--pub", "b.>"]);
+    expect(r.pub).toEqual(["a.>", "b.>"]);
+  });
+
+  test("parses repeatable --sub on issue", () => {
+    const r = parseCredsArgs(["issue", "echo", "--sub", "a.>", "--sub", "b.>"]);
+    expect(r.sub).toEqual(["a.>", "b.>"]);
+  });
+
+  test("absent --pub/--sub default to empty arrays", () => {
+    const r = parseCredsArgs(["issue", "echo"]);
+    expect(r.pub).toEqual([]);
+    expect(r.sub).toEqual([]);
+  });
+
+  test("--pub is rejected on rotate (issue-only flag)", () => {
+    expect(() => parseCredsArgs(["rotate", "echo", "--pub", "a.>"])).toThrow(CliArgsError);
+  });
+
+  test("--sub is rejected on revoke (issue-only flag)", () => {
+    expect(() => parseCredsArgs(["revoke", "echo", "--sub", "a.>"])).toThrow(CliArgsError);
+  });
+
+  test("--pub without a value throws", () => {
+    expect(() => parseCredsArgs(["issue", "echo", "--pub"])).toThrow(CliArgsError);
   });
 });
 

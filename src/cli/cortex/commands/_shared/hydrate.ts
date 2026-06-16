@@ -19,7 +19,7 @@
  */
 
 export function valueFlag(
-  flags: Record<string, string | true>,
+  flags: Record<string, string | true | string[]>,
   name: string,
 ): string | undefined {
   const v = flags[name];
@@ -29,17 +29,39 @@ export function valueFlag(
       `internal: flag ${name} declared as bool in spec but accessed via valueFlag. Spec / hydration mismatch.`,
     );
   }
+  if (Array.isArray(v)) {
+    throw new Error(
+      `internal: flag ${name} declared as value-list in spec but accessed via valueFlag. Spec / hydration mismatch.`,
+    );
+  }
   return v;
 }
 
 export function boolFlag(
-  flags: Record<string, string | true>,
+  flags: Record<string, string | true | string[]>,
   name: string,
 ): boolean {
   const v = flags[name];
   if (v === undefined) return false;
   if (v === true) return true;
   throw new Error(
-    `internal: flag ${name} declared as value in spec but accessed via boolFlag. Spec / hydration mismatch.`,
+    `internal: flag ${name} declared as ${Array.isArray(v) ? "value-list" : "value"} in spec but accessed via boolFlag. Spec / hydration mismatch.`,
+  );
+}
+
+/**
+ * Accessor for `value-list` flags (cortex#1057). Returns the accumulated
+ * array, or `[]` when the flag was absent. Throws if the flag was declared
+ * as `value` (single string) or `bool` (`true`) — a spec/hydration mismatch.
+ */
+export function listFlag(
+  flags: Record<string, string | true | string[]>,
+  name: string,
+): string[] {
+  const v = flags[name];
+  if (v === undefined) return [];
+  if (Array.isArray(v)) return v;
+  throw new Error(
+    `internal: flag ${name} declared as ${v === true ? "bool" : "value"} in spec but accessed via listFlag. Spec / hydration mismatch.`,
   );
 }
