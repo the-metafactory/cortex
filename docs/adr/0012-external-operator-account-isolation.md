@@ -1,9 +1,18 @@
-# ADR 0012 — External operators get their own NATS account (isolation)
+# ADR 0012 — External-operator bus isolation: shared `community` account + scoped bot (default), dedicated account (opt-in)
 
-**Status:** Accepted
-**Date:** 2026-06-12
+**Status:** Accepted (revised 2026-06-16 per [design-automated-operator-onboarding.md](../design-automated-operator-onboarding.md) §4-D1 / cortex#1049)
+**Date:** 2026-06-12 (original) · 2026-06-16 (revision — default flipped)
 **Context tags:** federation, security, network onboarding
-**Supersedes / relates:** ADR-0001 (federated subject grammar), ADR-0002 (federated dispatch addressing), `docs/sop-federation-onboarding.md`, `docs/sop-stack-onboarding.md` §B0–B5
+**Supersedes / relates:** ADR-0001 (federated subject grammar), ADR-0002 (federated dispatch addressing), `docs/sop-federation-onboarding.md`, `docs/sop-stack-onboarding.md` §B0–B5, `docs/runbook-leaf-cred-issuance.md`, the `cortex creds` ↔ `arc nats` contract (`the-metafactory/arc:docs/integrations/cortex-creds.md`)
+
+> **Revision note (2026-06-16).** This ADR keeps its number (0012) and is amended in
+> place. The original **decision** was account-per-operator (Option A) as the *default*.
+> The automated-onboarding spec (cortex#1049-D1) flips the default to a **shared
+> `community` account + per-operator *scoped bot*** because that is the restart-free,
+> one-command path through the existing `cortex creds issue` → `arc nats add-bot`
+> primitive. **Account-per-operator (Option A) survives as an explicit opt-in** for
+> operators needing hard, namespace-level isolation. The full isolation analysis below
+> is retained — it is *why* the opt-in exists.
 
 ---
 
@@ -20,49 +29,89 @@ external operator's leaf binds to decides what their fleet can see and reach.
 
 Three options were on the table:
 
-| Option | What | Isolation |
-|---|---|---|
-| **(C)** issue the operator a user in `ANDREAS_AGENTS` | our internal agents' working account | **None** — their leaf shares the account our own agents run in. Rejected outright. |
-| **(B)** one shared `FEDERATION` account for all external operators | federation traffic isolated from `ANDREAS_AGENTS`, one-time hub setup, then pure `nsc add user` per operator (no hub restart) | Isolated from us, **but not from each other** — operator A could `sub federated.B.>` within the shared account. |
-| **(A)** one account **per** external operator under `OP_ANDREAS` | e.g. `NORTHWOODS` for Robert | Full — account-level isolation between us and every operator, and between operators. Cost: a hub `resolver_preload` entry + restart per operator (MEMORY resolver). |
+| Option | What | Isolation | Onboarding cost |
+|---|---|---|---|
+| **(C)** issue the operator a user in `ANDREAS_AGENTS` | our internal agents' working account | **None** — their leaf shares the account our own agents run in. Rejected outright. | — |
+| **(B → now default)** one shared `community` account for all external operators, each with a **per-operator bot scoped via `--pub/--sub federated.<op>.>`** | federation traffic isolated from `ANDREAS_AGENTS`; one-time account bootstrap, then pure `arc nats add-bot` per operator | Isolated from us; **namespace-shared between operators** — operator A *could* attempt `sub federated.B.>` within the shared account, which is why per-bot subject scoping + least-privilege `accept_subjects` is load-bearing. | **One command, restart-free** (add-bot adds a *user*). |
+| **(A → now opt-in)** one account **per** external operator under the issuing operator | e.g. `NORTHWOODS` for Robert | **Full** — account-level isolation between us and every operator, and between operators. | A hub `resolver_preload` entry + **restart per operator** (MEMORY resolver). |
+
+### The automation forcing-function (why the default moved)
+
+The bus side already ships a one-command issuance primitive:
+**`cortex creds issue <bot> -a <account> --pub federated.<op>.> --sub federated.<op>.>`**
+shells out to **`arc nats add-bot`** (contract: `arc:docs/integrations/cortex-creds.md`,
+schema `arc.nats.v1`). It is **operator-parameterized** (`-a OP_ANDREAS` / `-a OP_JC` — each
+admin issues under their own operator, signing keys never shared) and carries
+least-privilege `--pub/--sub` subject scoping built in.
+
+The decisive property: **`add-bot` adds a *user*, not an account.** A user JWT is
+self-contained and signed by an account the hub already trusts, so issuing one needs
+**no hub restart**. A **new *account*** is the thing that forces a `resolver_preload`
+edit + hub restart under the MEMORY resolver. Account-per-operator therefore makes every
+onboard a hub-restart event; shared-account-with-scoped-bot makes every onboard a single
+restart-free `cortex creds issue` call. For a flow we want to run **frequently and
+bot-driven**, the restart cost is the wrong default.
 
 ## Decision
 
-**Each external operator gets their own dedicated account under the issuing admin's operator** (Option A) — `OP_ANDREAS` when Andreas onboards them, the issuing admin's own operator when someone else does (e.g. JC issues under his operator on his hub; operator signing keys are never shared). See [`docs/runbook-leaf-cred-issuance.md`](../runbook-leaf-cred-issuance.md) §"Issuing admin".
+**Default: external operators bind a per-operator *bot* in one shared `community`
+account, scoped to `federated.<op>.>` via `--pub/--sub`.** Onboarding is one
+restart-free `cortex creds issue <bot> -a community --pub federated.<op>.> --sub
+federated.<op>.>` (→ `arc nats add-bot`). The **subject-permission scope is the isolation
+boundary** in this mode.
 
-External operators are **mutually untrusting peers**. The whole point of onboarding them to
-a shared bus is cross-principal *dispatch* (Offer/Direct over `federated.{principal}.{stack}.>`),
-not shared subject visibility. Account-per-operator is the only option that prevents one
-operator's fleet from subscribing to another's federated subjects. Per
-[Security-first defaults], we take the isolating option even though it costs a hub
-`resolver_preload` edit + restart per onboard.
+**Opt-in: account-per-operator (the original Option A)** for any operator that needs
+hard, namespace-level isolation — they get a dedicated account (e.g. `NORTHWOODS`) under
+the issuing admin's operator. This is the only mode that prevents one operator's fleet
+from even *attempting* another's federated subjects at the account layer. It costs the
+hub `resolver_preload` edit + restart, taken deliberately for that operator.
 
-We accept the operational cost because operator onboarding is **low-frequency** and the
-restart is a brief, scheduled blip on the community hub.
+External operators remain **mutually untrusting peers**. The point of a shared bus is
+cross-principal *dispatch* (Offer/Direct over `federated.{principal}.{stack}.>`), not
+shared subject visibility. In the shared-account default we get that isolation from
+**tight per-bot `--pub/--sub` scoping + least-privilege `accept_subjects`** rather than
+from the account boundary; per [Security-first defaults] we make that scoping mandatory,
+not optional, and we keep account-per-operator one flag away for anyone who needs the
+stronger boundary.
 
 ## Consequences
 
-- **Issuance** (per operator) creates a new account, not just a user — see
-  [`docs/runbook-leaf-cred-issuance.md`](../runbook-leaf-cred-issuance.md). Because the hub
-  runs `resolver: MEMORY`, a **new account** must be added to the hub's `resolver_preload`
-  and the hub restarted. (A new *user* in an existing account needs no restart — user JWTs
-  are self-contained, signed by the account; only accounts are preloaded.)
-- **Subject scope.** Combined with each operator's least-privilege `accept_subjects`
-  allow-list (`federated.{their-principal}.{their-stack}.>` only), account isolation is the
-  second, lower layer of the same boundary.
+- **Issuance (default)** is a single restart-free `cortex creds issue … -a community
+  --pub/--sub federated.<op>.>` per operator — see
+  [`docs/runbook-leaf-cred-issuance.md`](../runbook-leaf-cred-issuance.md). No new account,
+  no `resolver_preload` edit, no hub restart. The shared `community` account is
+  bootstrapped **once** (the runbook's "one-time account bootstrap" fallback path).
+- **Issuance (opt-in dedicated account)** creates a new account, which under the MEMORY
+  resolver **must** be added to the hub's `resolver_preload` and the hub restarted. (A new
+  *user* in an existing account never needs a restart — only accounts are preloaded.) This
+  is the raw-`nsc` path in the runbook, reserved for the hard-isolation opt-in.
+- **Isolation honesty.** Shared-account = **namespace-shared** isolation: weaker than
+  account-level, because the operators co-habit one NATS account. The mitigation is
+  **tight `--pub/--sub` scoping at issuance + least-privilege `accept_subjects`** on the
+  link. Document this trade-off to every operator on the shared default; offer the
+  dedicated-account opt-in to anyone for whom namespace-shared is insufficient.
+- **Subject scope (both modes).** Each operator's least-privilege `accept_subjects`
+  allow-list (`federated.{their-principal}.{their-stack}.>` only) is always present. In
+  the default mode it is the primary boundary; in the opt-in mode it is the second,
+  lower layer beneath account isolation.
 - **Confidentiality posture.** v1 `federated.` payloads cross cleartext-over-TLS, signing
-  off by default. Account isolation does **not** replace the signing/mTLS ramp for external
-  parties — it bounds *visibility*, not *authenticity/confidentiality*. For external
-  operators, tighten `accept_subjects` and prioritise ramping signing → mTLS sooner than we
-  would for fully-trusted internal stacks.
-- **Revocability.** Each operator's account + user is independently revocable
-  (`nsc revoke-activation` / delete the user / drop the account from `resolver_preload` +
-  restart) — onboarding one operator never entangles another.
+  off by default. Neither account nor namespace isolation replaces the signing/mTLS ramp
+  for external parties — they bound *visibility*, not *authenticity/confidentiality*. For
+  external operators keep `accept_subjects` least-privilege and prioritise ramping signing
+  → mTLS sooner than for fully-trusted internal stacks. (This is sharper under the
+  shared-account default, where there is no account wall behind the subject scope.)
+- **Revocability.** Default mode: revoke is one restart-free `cortex creds revoke <bot>`
+  (→ `arc nats remove-bot --delete-creds`, server-side revocation + push). Opt-in mode:
+  revoke the user, then drop the account from `resolver_preload` + restart to fully
+  offboard. Either way, offboarding one operator never entangles another.
 
-## Upgrade path (when operator count grows)
+## Upgrade path — clean restart-free revoke/offboard for the dedicated-account opt-in
 
-The per-account `resolver_preload` + restart is a MEMORY-resolver constraint. If external
-operators become numerous, move the hub to a **URL/JWT-server resolver** (an account-JWT
-server the hub queries) so new accounts are `nsc push`-ed without a hub restart. That is a
-separate infra change; not needed at current scale. Documented here so the constraint is a
-known, deliberate trade-off, not a surprise.
+The dedicated-account opt-in's `resolver_preload` + restart is a MEMORY-resolver
+constraint. If hard-isolated operators become numerous, move the hub to a **URL /
+account-JWT-server resolver** (a server the hub queries) so new accounts are `nsc push`-ed
+and revoked **without a hub restart**. That keeps account-level isolation while removing
+the only operational reason the default isn't account-per-operator. It is a separate infra
+change; not needed at current scale, and irrelevant to the shared-account default (which
+is already restart-free). Documented here so the constraint is a known, deliberate
+trade-off, not a surprise.

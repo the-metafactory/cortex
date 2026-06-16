@@ -202,7 +202,7 @@ Federating turns the stack's hard-isolated local bus into a **leaf** of a shared
 ### B0 — Prerequisites (hub admin)
 
 - **A reachable NATS leaf hub** (`host:port` + TLS). Reuse an existing endpoint under a NEW network id (e.g. `tls://nats.meta-factory.dev:7422`), or stand one up.
-- **A leaf `.creds` for THIS stack on that hub** — the gating manual artifact (like a VPN cert). Issued by the hub admin (`nsc`: a user under the hub's leaf account → `nsc generate creds`). Drop at `~/.config/nats/<network>.creds`. Note the **account** NKey (`A…`) it belongs to — it goes in `stack.nats_infra.account`. See [`runbook-federation-peering.md`](./runbook-federation-peering.md) for the manual hub side.
+- **A leaf `.creds` for THIS stack on that hub** — the gating artifact (like a VPN cert). Default issuance is **one restart-free command** by the hub admin: `cortex creds issue leaf-<slug> -a community --pub federated.<slug>.> --sub federated.<slug>.>` (→ `arc nats add-bot`) — it adds a *user* to an account the hub already trusts, so **no hub restart** is needed. Drop the resulting `.creds` at `~/.config/nats/<network>.creds`. Note the **account** NKey (`A…`) it belongs to — it goes in `stack.nats_infra.account`. See [`runbook-leaf-cred-issuance.md`](./runbook-leaf-cred-issuance.md) for the full hub side (happy path + the one-time account-bootstrap fallback), and [ADR-0012](./adr/0012-external-operator-account-isolation.md) for the shared-account-vs-dedicated isolation choice. Raw-`nsc` is the bootstrap fallback in `runbook-federation-peering.md`.
 
 ### B0.1 — The bus MUST be operator-mode (the #794 lesson)
 
@@ -238,6 +238,8 @@ resolver_preload: {
 ```
 
 Copy verbatim the four operator-mode blocks from `~/.config/nats/local.conf` — the `operator:` JWT, the `system_account`, the `resolver`, and the `resolver_preload` account map; **keep** the stack's own `server_name` / `listen` port / `jetstream.domain` / `http` monitor port (do not collide with the meta-factory bus); and **do not** copy meta-factory's `include "leafnodes-metafactory.conf"` line (the join renders this network's leaf include itself). Restart the bus, confirm it comes up, then run `cortex network join`.
+
+> **Restart framing — this is a one-time *bus-conversion* restart, not a per-cred cost.** The restart here is converting *this stack's local bus* to operator-mode (a one-time posture change). It is **not** triggered by issuing your leaf cred: minting the cred (`cortex creds issue` → `arc nats add-bot`) adds a *user* to an account the hub already trusts and is **restart-free**. On the **hub** side, a restart is needed only when a brand-new *account* is added to a `resolver: MEMORY` hub, or on revoke under MEMORY — see [`runbook-leaf-cred-issuance.md`](./runbook-leaf-cred-issuance.md) and [ADR-0012](./adr/0012-external-operator-account-isolation.md). The default shared-`community`-account flow issues per-operator bots with no hub restart.
 
 > **Principal's call (the open design question, #794):** whether a deliberately hard-isolated, public-facing stack like `andreas/community` *should* be converted to operator-mode to federate, or stay isolated, is a posture decision — operator-mode opens the bus to the network. The fail-fast only guarantees the join never crashes the bus; it does not decide the posture for you.
 
