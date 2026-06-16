@@ -942,6 +942,37 @@ export function renderOperatorModeBlocks(
  */
 const JWT_SHAPE = /^eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2}$/;
 
+// =============================================================================
+// O-4b (cortex#1063) — reusable shape guards for the leaf-package consumer.
+//
+// O-4b's `--from-package` source (network-leaf-package.ts) must fail-fast on a
+// malformed package with EXACTLY the same nkey-U / JWT-shape grammar O-3 uses to
+// validate before rendering — never a second, drifting copy. The two predicates
+// below expose `NKEY_ACCOUNT` / `JWT_SHAPE` (the module-private regexes above)
+// as named functions so the consumer reuses them rather than re-deriving the
+// grammar. Keeping the regexes private (only the predicates are exported)
+// preserves this module as the single source of the grammar.
+// =============================================================================
+
+/**
+ * True iff `value` is a NATS nkey-U account public key (`A` + 55 base32 chars).
+ * The exact grammar {@link renderOperatorModeBlocks} validates the package
+ * account/system-account against before emitting it bare into HOCON. (O-4b reuse)
+ */
+export function isNkeyAccountPubkey(value: string): boolean {
+  return NKEY_ACCOUNT.test(value);
+}
+
+/**
+ * True iff `value` has the NSC JWT shape (`eyJ…` header + exactly three
+ * dot-separated base64url segments) {@link renderOperatorModeBlocks} requires of
+ * the operator JWT and the account JWTs before emitting them. Validated, never
+ * cryptographically verified — verification is O-4's handshake. (O-4b reuse)
+ */
+export function isNscJwtShape(value: string): boolean {
+  return JWT_SHAPE.test(value);
+}
+
 /**
  * #821 MAJOR (code-review) — derive the nats-server HTTP MONITOR url from its
  * config, so the post-restart health probe targets THIS bus's monitor port (the

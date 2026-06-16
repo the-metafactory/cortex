@@ -40,7 +40,7 @@
  * Exit codes: 0 success · 1 operational failure · 2 usage error.
  */
 
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { readFile } from "fs/promises";
 import { join } from "path";
 
@@ -61,6 +61,10 @@ import {
   tolerantReader,
   type ConfigReader,
 } from "./network-derive";
+import {
+  parseLeafPackageFile,
+  type LeafPackageFile,
+} from "./network-leaf-package";
 
 /**
  * #753 — the production config reader: `loadConfigWithAgents` wrapped so a
@@ -180,6 +184,12 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--account-jwt": "value",
         "--system-account": "value",
         "--system-account-jwt": "value",
+        // O-4b (cortex#1063) — SOURCE the operator-mode leaf package from a JSON
+        // file (the interim form of the shape O-4a's signed register→issue
+        // response will carry) instead of the four flags above. Read + validated
+        // before it reaches deriveJoinInputs; sits BELOW the explicit flags and
+        // ABOVE config in precedence (flag > package > config > convention).
+        "--from-package": "value",
         "--nats-config": "value",
         "--plist": "value",
         // #763 — Linux/systemd: the nats-server systemd unit path (the
@@ -316,6 +326,40 @@ function readOverride(
   return { [resolvedKey]: v };
 }
 
+/**
+ * O-4b (cortex#1063) — read + validate the `--from-package <file>` leaf package.
+ * A PURE READ: it only reads the file (never writes), so it is safe under
+ * dry-run. Returns the parsed {@link LeafPackageFile}, or a usage-error reason on
+ * a missing/unreadable/malformed file — fail-fast so unvalidated key material
+ * never reaches the operator-mode conversion seam. `undefined` when the flag is
+ * absent (the common case: no package source).
+ */
+function readLeafPackageFlag(
+  flags: Record<string, string | true>,
+): { ok: true; package: LeafPackageFile | undefined } | { ok: false; reason: string } {
+  const path = optionalValueFlag(flags, "--from-package");
+  if (path === undefined) return { ok: true, package: undefined };
+
+  const expanded = expandTilde(path);
+  if (!existsSync(expanded)) {
+    return { ok: false, reason: `--from-package file not found at ${expanded}` };
+  }
+  let text: string;
+  try {
+    text = readFileSync(expanded, "utf-8");
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `failed to read --from-package file: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  const parsed = parseLeafPackageFile(text);
+  if (!parsed.ok) {
+    return { ok: false, reason: `invalid --from-package file: ${parsed.reason}` };
+  }
+  return { ok: true, package: parsed.package };
+}
+
 /** Resolve the stack slug from `--stack` (`{principal}/{slug}`) or default. */
 function resolveStackSlug(
   principalId: string,
@@ -443,6 +487,13 @@ async function runJoin(
     return usageError("join", `network "${networkId}" must be lowercase alphanumeric + hyphen, letter-prefixed`, json);
   }
 
+  // O-4b (cortex#1063) — read + validate the `--from-package` leaf package FIRST
+  // (a pure read). A malformed/missing package fails fast as a usage error here,
+  // BEFORE any derivation or mutation, so unvalidated key material never reaches
+  // the operator-mode conversion. Absent ⇒ undefined (the common case).
+  const pkgRes = readLeafPackageFlag(flags);
+  if (!pkgRes.ok) return usageError("join", pkgRes.reason, json);
+
   // #753 — derive principal / stack / seed / registry / nats-infra (config +
   // convention), with each flag surviving as an optional override. Config-load
   // errors (bad YAML, schema violations) surface as an op-error with the
@@ -468,6 +519,10 @@ async function runJoin(
         ...readOverride(flags, "--account-jwt", "accountJwt"),
         ...readOverride(flags, "--system-account", "systemAccount"),
         ...readOverride(flags, "--system-account-jwt", "systemAccountJwt"),
+        // O-4b (cortex#1063) — the `--from-package` leaf package (parsed above).
+        // Sits BELOW the explicit per-field flags and ABOVE config in the
+        // deriver's precedence chain (flag > package > config > convention).
+        ...(pkgRes.package !== undefined && { leafPackage: pkgRes.package }),
       },
       expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH),
       load,
@@ -1352,6 +1407,16 @@ Flags (all OPTIONAL OVERRIDES — derived from cortex.yaml when omitted; #753):
                           to stack.nats_infra.system_account.
   --system-account-jwt <eyJ…> (O-3, #1053) OPTIONAL system account JWT. Maps to
                           stack.nats_infra.system_account_jwt.
+  --from-package <file>   (O-4b, #1063) SOURCE the operator-mode leaf package from a
+                          JSON file — the interim form of the shape O-4a's signed
+                          register→issue response will carry:
+                          { operatorJwt, account, accountJwt, systemAccount?,
+                            systemAccountJwt?, credsPath, endpoint? }. Saves passing
+                          the four --operator-jwt/--account-jwt/--account/
+                          --system-account* flags by hand. Validated (nkey-U/JWT
+                          shape) + fail-fast on a malformed package. Precedence:
+                          explicit flags override the package; the package overrides
+                          config; the package sets only what it carries.
   --nats-config <p>       Override stack.nats_infra.config_path (nats-server -c config).
   --plist <p>             Override stack.nats_infra.plist_path (macOS nats-server launchd plist).
   --unit <p>              Override stack.nats_infra.unit_path (Linux nats-server systemd unit; #763).
