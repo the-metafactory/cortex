@@ -10,11 +10,13 @@
 import { describe, it, expect } from "bun:test";
 import {
   buildNetworkGraph,
+  deriveServingPrincipal,
   STACK_HUB_NODE_ID,
   FOREIGN_HUB_ID_PREFIX,
   type AgentNodeData,
   type StackHubNodeData,
 } from "../lib/network-graph-adapter";
+import { classifyOrigin } from "../lib/agents-display";
 import type { AgentPresenceTile } from "../hooks/use-agents";
 
 function tile(
@@ -53,6 +55,25 @@ function foreignTile(
     principal,
     stack,
     origin: { principal, stack },
+  });
+}
+
+/**
+ * #1008 — a SAME-PRINCIPAL local SIBLING tile (DB-read aggregation): an OBJECT
+ * origin whose principal is the SERVING principal (`andreas`), a DIFFERENT stack.
+ * Structurally identical on the wire to a foreign peer — the classifier tells
+ * them apart by the serving principal.
+ */
+function siblingTile(
+  over: Partial<AgentPresenceTile> & { agent_id: string; stack: string },
+): AgentPresenceTile {
+  const { agent_id, stack } = over;
+  return tile({
+    ...over,
+    key: `andreas/${stack}/${agent_id}`,
+    principal: "andreas",
+    stack,
+    origin: { principal: "andreas", stack },
   });
 }
 
@@ -144,6 +165,7 @@ describe("buildNetworkGraph (G-1114.D.2)", () => {
         "lastHeartbeatAt",
         "offlineReason",
         "origin",
+        "servingPrincipal",
         "state",
       ].sort(),
     );
@@ -272,5 +294,112 @@ describe("buildNetworkGraph — federated multi-hub grouping (G-1114.E.3)", () =
 
   it("returns an empty graph for an empty snapshot (federated path too)", () => {
     expect(buildNetworkGraph([])).toEqual({ nodes: [], edges: [] });
+  });
+});
+
+describe("deriveServingPrincipal (#1008)", () => {
+  it("reads the serving principal off the first local-origin agent", () => {
+    expect(
+      deriveServingPrincipal([
+        tile({ agent_id: "luna" }),
+        foreignTile({ agent_id: "sage", principal: "jc", stack: "research" }),
+      ]),
+    ).toBe("andreas");
+  });
+
+  it("returns null when no local agent is present (foreign-only snapshot)", () => {
+    expect(
+      deriveServingPrincipal([
+        foreignTile({ agent_id: "sage", principal: "jc", stack: "research" }),
+      ]),
+    ).toBeNull();
+  });
+
+  it("returns null for an empty snapshot", () => {
+    expect(deriveServingPrincipal([])).toBeNull();
+  });
+});
+
+describe("buildNetworkGraph — local-sibling vs federated classification (#1008)", () => {
+  it("threads the serving principal onto every node", () => {
+    const g = buildNetworkGraph([
+      tile({ agent_id: "luna" }),
+      siblingTile({ agent_id: "echo", stack: "work" }),
+      foreignTile({ agent_id: "sage", principal: "jc", stack: "research" }),
+    ]);
+    for (const n of g.nodes) {
+      const d = n.data as StackHubNodeData | AgentNodeData;
+      expect(d.servingPrincipal).toBe("andreas");
+    }
+  });
+
+  it("classifies a SAME-PRINCIPAL sibling as local (NOT federated), foreign as federated", () => {
+    const g = buildNetworkGraph([
+      tile({ agent_id: "luna" }), // self
+      siblingTile({ agent_id: "echo", stack: "work" }), // same-principal sibling
+      foreignTile({ agent_id: "sage", principal: "jc", stack: "research" }), // cross-principal
+    ]);
+
+    const selfHub = g.nodes.find((n) => n.id === STACK_HUB_NODE_ID)!
+      .data as StackHubNodeData;
+    const siblingHub = g.nodes.find(
+      (n) => n.id === `${FOREIGN_HUB_ID_PREFIX}andreas/work`,
+    )!.data as StackHubNodeData;
+    const foreignHub = g.nodes.find(
+      (n) => n.id === `${FOREIGN_HUB_ID_PREFIX}jc/research`,
+    )!.data as StackHubNodeData;
+
+    // Self + sibling are LOCAL categories; only the cross-principal peer is foreign.
+    expect(classifyOrigin(selfHub.origin, selfHub.servingPrincipal)).toBe("self");
+    expect(classifyOrigin(siblingHub.origin, siblingHub.servingPrincipal)).toBe(
+      "sibling",
+    );
+    expect(classifyOrigin(foreignHub.origin, foreignHub.servingPrincipal)).toBe(
+      "foreign",
+    );
+  });
+
+  it("still gives each distinct stack its OWN hub (sibling gets its own, not the local one)", () => {
+    const g = buildNetworkGraph([
+      tile({ agent_id: "luna" }),
+      siblingTile({ agent_id: "echo", stack: "work" }),
+    ]);
+    const hubs = g.nodes.filter((n) => n.type === "stackHub");
+    // local hub + the sibling's own hub = 2 distinct hubs
+    expect(hubs).toHaveLength(2);
+    expect(hubs.map((h) => h.id)).toContain(STACK_HUB_NODE_ID);
+    expect(hubs.map((h) => h.id)).toContain(
+      `${FOREIGN_HUB_ID_PREFIX}andreas/work`,
+    );
+    // the sibling agent is wired to its OWN hub, not the local one
+    const edge = g.edges.find((e) => e.target === "andreas/work/echo")!;
+    expect(edge.source).toBe(`${FOREIGN_HUB_ID_PREFIX}andreas/work`);
+  });
+
+  it("classifies an object origin as foreign when the serving principal is unknown", () => {
+    // Foreign-only snapshot → no local agent → servingPrincipal null → an object
+    // origin can't be proven a sibling, so it conservatively reads foreign.
+    const g = buildNetworkGraph([
+      foreignTile({ agent_id: "sage", principal: "jc", stack: "research" }),
+    ]);
+    const hub = g.nodes.find((n) => n.type === "stackHub")!
+      .data as StackHubNodeData;
+    expect(hub.servingPrincipal).toBeNull();
+    expect(classifyOrigin(hub.origin, hub.servingPrincipal)).toBe("foreign");
+  });
+
+  it("a local-only snapshot only gains the servingPrincipal field (otherwise unchanged)", () => {
+    const g = buildNetworkGraph([
+      tile({ agent_id: "luna" }),
+      tile({ agent_id: "echo" }),
+    ]);
+    // one local hub, every node carries servingPrincipal "andreas", origin "local"
+    const hubs = g.nodes.filter((n) => n.type === "stackHub");
+    expect(hubs).toHaveLength(1);
+    for (const n of g.nodes) {
+      const d = n.data as StackHubNodeData | AgentNodeData;
+      expect(d.origin).toBe("local");
+      expect(d.servingPrincipal).toBe("andreas");
+    }
   });
 });

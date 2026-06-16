@@ -28,7 +28,8 @@ import {
   formatCapabilities,
   offlineReasonLabel,
   isTtlLapse,
-  isForeignOrigin,
+  classifyOrigin,
+  isLocalCategory,
   originProvenanceLabel,
 } from "../lib/agents-display";
 import type {
@@ -51,9 +52,13 @@ export function StackHubCard({ data }: StackHubCardProps) {
     data.principal && data.stack
       ? `${data.principal}/${data.stack}`
       : (data.stack ?? data.principal ?? "stack");
-  // E.4: a FOREIGN (federated peer) hub renders distinctly from YOUR local hub —
-  // a "federated" eyebrow + a dimmer/bordered treatment via the modifier class.
-  const foreign = isForeignOrigin(data.origin);
+  // #1008: classify against the serving principal — `self`/`sibling` are LOCAL
+  // (same principal, same box; a sibling reached via DB-read aggregation), only
+  // a CROSS-PRINCIPAL `foreign` peer is "federated". This is the fix for local
+  // siblings mislabeled "FEDERATED STACK": a sibling now renders as a "stack"
+  // hub with the local visual, identical to your own stack's treatment.
+  const category = classifyOrigin(data.origin, data.servingPrincipal);
+  const foreign = !isLocalCategory(category);
   // U2.3 — signal's intent⋈reality verdict for this stack (present only when the
   // transport overlay is on AND signal observed it). Taken verbatim from signal.
   const badge =
@@ -62,10 +67,12 @@ export function StackHubCard({ data }: StackHubCardProps) {
     <div
       className={
         "network-node network-node-hub" +
-        (foreign ? " network-node-hub-foreign" : " network-node-hub-local")
+        (foreign ? " network-node-hub-foreign" : " network-node-hub-local") +
+        ` network-node-hub-${category}`
       }
       data-node-kind="stack-hub"
       data-hub-origin={foreign ? "foreign" : "local"}
+      data-hub-category={category}
       data-transport-verdict={data.transportVerdict ?? undefined}
     >
       <span className="network-hub-eyebrow dim">
@@ -136,11 +143,15 @@ export function AgentNodeCard({
   const ttlLapse = offline && isTtlLapse(data.offlineReason);
   const reasonLabel = offline ? offlineReasonLabel(data.offlineReason) : null;
   const name = data.assistantName ?? data.agentId;
-  // E.4: a FOREIGN agent renders distinctly — a "federated" border/dimmer
-  // treatment (modifier class) + a provenance badge (`jc/research`) showing where
-  // the peer agent actually lives.
-  const foreign = isForeignOrigin(data.origin);
-  const provenance = originProvenanceLabel(data.origin);
+  // #1008: classify against the serving principal. Only a CROSS-PRINCIPAL
+  // `foreign` peer renders distinctly (dashed border + "federated peer" badge);
+  // a SAME-PRINCIPAL local `sibling` (DB-read aggregation) renders LOCAL like
+  // your own agents — it is the principal's own stack, not a federation.
+  const category = classifyOrigin(data.origin, data.servingPrincipal);
+  const foreign = category === "foreign";
+  // The provenance label (`{principal}/{stack}`) is only surfaced for a true
+  // foreign peer — a local sibling reads as one of your own agents.
+  const provenance = foreign ? originProvenanceLabel(data.origin) : null;
 
   return (
     <div
@@ -154,6 +165,7 @@ export function AgentNodeCard({
       data-agent-id={data.agentId}
       data-state={data.state}
       data-agent-origin={foreign ? "foreign" : "local"}
+      data-agent-category={category}
       data-highlighted={highlighted ? "true" : undefined}
       data-offline-reason={offline ? (data.offlineReason ?? "") : undefined}
       aria-label={

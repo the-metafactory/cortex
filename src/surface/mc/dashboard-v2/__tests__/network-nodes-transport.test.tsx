@@ -18,6 +18,7 @@ function hub(over: Partial<StackHubNodeData> = {}): StackHubNodeData {
   return {
     kind: "stack-hub",
     origin: "local",
+    servingPrincipal: "andreas",
     principal: "andreas",
     stack: "research",
     agentCount: 2,
@@ -30,6 +31,7 @@ function agent(over: Partial<AgentNodeData> = {}): AgentNodeData {
     kind: "agent",
     key: "andreas/research/luna",
     origin: "local",
+    servingPrincipal: "andreas",
     agentId: "luna",
     assistantName: "Luna",
     capabilities: [],

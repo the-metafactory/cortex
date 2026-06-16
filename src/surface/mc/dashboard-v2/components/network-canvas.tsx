@@ -27,17 +27,21 @@ import {
   type Node as RfNode,
   type Edge as RfEdge,
   type NodeTypes,
+  type EdgeTypes,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import ELK from "elkjs/lib/elk.bundled.js";
 import {
-  STACK_HUB_NODE_ID,
   type NetworkGraph,
   type NetworkGraphNode,
 } from "../lib/network-graph-adapter";
 import { agentKeyFromClickedNode } from "../lib/network-detail-display";
-import { layoutNetworkGraph } from "../lib/network-graph-layout";
+import {
+  layoutNetworkGraph,
+  type LaidOutNetworkEdge,
+} from "../lib/network-graph-layout";
 import { AgentNode, StackHubNode } from "./network-nodes";
+import NetworkElkEdge from "./network-elk-edge";
 import { NetworkLegend } from "./network-legend";
 import {
   NetworkHoverContext,
@@ -49,6 +53,12 @@ import {
 const nodeTypes: NodeTypes = {
   stackHub: StackHubNode,
   agent: AgentNode,
+};
+
+// #1008 — the custom ELK orthogonal edge (rounded-corner polyline from ELK's
+// bend points). Registered once at module scope, same as `nodeTypes`.
+const edgeTypes: EdgeTypes = {
+  elk: NetworkElkEdge,
 };
 
 // One ELK engine for this chunk's lifetime, instantiated lazily on first layout.
@@ -83,9 +93,11 @@ export interface NetworkCanvasProps {
 /** The React Flow canvas — rendered once ELK has positioned the nodes. */
 function FlowCanvas({
   nodes,
+  laidOutEdges,
   onSelectAgent,
 }: {
   nodes: NetworkGraphNode[];
+  laidOutEdges: LaidOutNetworkEdge[];
   onSelectAgent?: (key: string | null) => void;
 }) {
   // React Flow's node `data` is typed `Record<string, unknown>`; our discriminated
@@ -93,20 +105,23 @@ function FlowCanvas({
   // we cast at this single boundary rather than polluting the adapter's data type.
   const rfNodes = nodes as unknown as RfNode[];
 
-  // The hub→agent edges are derivable, but for the star render we don't need
-  // visible connectors to read the grouping; the radial placement carries it.
-  // We still pass edges so the layout's parent/child relationship is honoured by
-  // React Flow's node ordering. Edges are rebuilt here from node ids.
+  // #1008 — render the ORIGIN-GROUPED edges from the adapter (each agent wired to
+  // ITS OWN stack's hub — local, sibling, or foreign), typed `elk` so the custom
+  // edge draws ELK's orthogonal route from `data.elkPoints`. This replaces the
+  // old code that rebuilt every edge as `STACK_HUB_NODE_ID → agent` (which mis-
+  // wired sibling/foreign agents to the LOCAL hub) and used React Flow's default
+  // crossing-prone renderer.
   const edges = useMemo<RfEdge[]>(
     () =>
-      nodes
-        .filter((n) => n.type === "agent")
-        .map((n) => ({
-          id: `hub-${n.id}`,
-          source: STACK_HUB_NODE_ID,
-          target: n.id,
-        })),
-    [nodes],
+      laidOutEdges.map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        type: "elk",
+        // The layout payload (elkPoints + face geometry) drives the custom edge.
+        data: e.layout as unknown as Record<string, unknown>,
+      })),
+    [laidOutEdges],
   );
 
   // Node click → lift the agent key up (D.4). The pure
@@ -133,6 +148,7 @@ function FlowCanvas({
       nodes={rfNodes}
       edges={edges}
       nodeTypes={nodeTypes}
+      edgeTypes={edgeTypes}
       fitView
       minZoom={0.2}
       maxZoom={2}
@@ -162,21 +178,24 @@ export default function NetworkCanvas({
   hover,
 }: NetworkCanvasProps) {
   const [positioned, setPositioned] = useState<NetworkGraphNode[]>([]);
+  const [laidOutEdges, setLaidOutEdges] = useState<LaidOutNetworkEdge[]>([]);
   const genRef = useRef(0);
 
   useEffect(() => {
     const myGen = ++genRef.current;
     if (graph.nodes.length === 0) {
       setPositioned([]);
+      setLaidOutEdges([]);
       return;
     }
     let cancelled = false;
     void layoutNetworkGraph(getElk(), graph)
-      .then((nodes) => {
+      .then((result) => {
         // Drop a stale layout: the graph changed (new gen) or the effect was
         // torn down while ELK was mid-flight.
         if (cancelled || genRef.current !== myGen) return;
-        setPositioned(nodes);
+        setPositioned(result.nodes);
+        setLaidOutEdges(result.edges);
       })
       .catch((err: unknown) => {
         if (cancelled || genRef.current !== myGen) return;
@@ -200,7 +219,11 @@ export default function NetworkCanvas({
 
   const canvas = (
     <ReactFlowProvider>
-      <FlowCanvas nodes={positioned} onSelectAgent={onSelectAgent} />
+      <FlowCanvas
+        nodes={positioned}
+        laidOutEdges={laidOutEdges}
+        onSelectAgent={onSelectAgent}
+      />
     </ReactFlowProvider>
   );
 

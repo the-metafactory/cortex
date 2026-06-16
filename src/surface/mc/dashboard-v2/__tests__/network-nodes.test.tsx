@@ -30,6 +30,7 @@ function agentData(over: Partial<AgentNodeData> = {}): AgentNodeData {
     kind: "agent",
     key: "andreas/research/luna",
     origin: "local",
+    servingPrincipal: "andreas",
     agentId: "luna",
     assistantName: "Luna",
     capabilities: [],
@@ -128,7 +129,18 @@ describe("AgentNodeCard (G-1114.D.1)", () => {
 });
 
 describe("StackHubCard (G-1114.D.1)", () => {
-  function renderHub(data: StackHubNodeData): string {
+  // Default the serving principal to `andreas` (matching the local fixtures), so
+  // `origin: "local"` classifies `self` and a `jc/*` origin classifies `foreign`.
+  // Tests that exercise the #1008 sibling path override it explicitly.
+  function renderHub(over: Partial<StackHubNodeData> & { kind: "stack-hub" }): string {
+    const data: StackHubNodeData = {
+      servingPrincipal: "andreas",
+      origin: "local",
+      principal: null,
+      stack: null,
+      agentCount: 0,
+      ...over,
+    };
     return renderToStaticMarkup(createElement(StackHubCard, { data }));
   }
 
@@ -196,6 +208,40 @@ describe("StackHubCard (G-1114.D.1)", () => {
     expect(html).toContain("federated stack");
     expect(html).toContain("jc/research");
   });
+
+  it("renders a SAME-PRINCIPAL local SIBLING hub as LOCAL, not federated (#1008)", () => {
+    // A sibling stack reached via DB-read aggregation carries an OBJECT origin
+    // whose principal === the serving principal. It must read as a "stack" hub
+    // (local visual), NOT "federated stack" — the bug this fixes.
+    const html = renderHub({
+      kind: "stack-hub",
+      origin: { principal: "andreas", stack: "work" },
+      servingPrincipal: "andreas",
+      principal: "andreas",
+      stack: "work",
+      agentCount: 2,
+    });
+    expect(html).toContain('data-hub-origin="local"');
+    expect(html).toContain('data-hub-category="sibling"');
+    expect(html).toContain("network-node-hub-sibling");
+    expect(html).not.toContain("network-node-hub-foreign");
+    expect(html).not.toContain("federated stack");
+    // still labelled with its own {principal}/{stack}
+    expect(html).toContain("andreas/work");
+  });
+
+  it("classifies a CROSS-PRINCIPAL hub as foreign even with the same stack name (#1008)", () => {
+    const html = renderHub({
+      kind: "stack-hub",
+      origin: { principal: "jc", stack: "work" },
+      servingPrincipal: "andreas",
+      principal: "jc",
+      stack: "work",
+      agentCount: 1,
+    });
+    expect(html).toContain('data-hub-category="foreign"');
+    expect(html).toContain("federated stack");
+  });
 });
 
 describe("AgentNodeCard — federated provenance (G-1114.E.4)", () => {
@@ -221,6 +267,23 @@ describe("AgentNodeCard — federated provenance (G-1114.E.4)", () => {
     expect(html).toContain("jc/research");
     // accessible label names it a federated peer
     expect(html).toContain("federated peer jc/research");
+  });
+
+  it("renders a SAME-PRINCIPAL local SIBLING agent as LOCAL, no federated badge (#1008)", () => {
+    const html = renderAgent(
+      agentData({
+        key: "andreas/work/echo",
+        agentId: "echo",
+        assistantName: "Echo",
+        origin: { principal: "andreas", stack: "work" },
+        servingPrincipal: "andreas",
+      }),
+    );
+    expect(html).toContain('data-agent-origin="local"');
+    expect(html).toContain('data-agent-category="sibling"');
+    expect(html).not.toContain("network-node-foreign");
+    expect(html).not.toContain("network-node-provenance");
+    expect(html).not.toContain("federated peer");
   });
 });
 

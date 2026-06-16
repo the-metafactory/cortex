@@ -71,6 +71,15 @@ export interface StackHubNodeData {
    * distinctly + carrying the provenance label).
    */
   origin: AgentOrigin;
+  /**
+   * #1008 — the SERVING stack's principal, derived from the snapshot's
+   * `"local"`-origin agents (the serving stack's own identity). `null` when the
+   * snapshot has no local agent to derive it from (a foreign-only snapshot). The
+   * card pairs this with `origin` via `classifyOrigin` to tell a SAME-PRINCIPAL
+   * local sibling (DB-read aggregation) from a CROSS-PRINCIPAL federated peer —
+   * so a sibling renders as a "stack" hub, not a "federated stack".
+   */
+  servingPrincipal: string | null;
   /** `{principal}` the stack belongs to. */
   principal: string | null;
   /** `{stack}` label. */
@@ -98,6 +107,13 @@ export interface AgentNodeData {
    * metadata, never an interior (ADR-0007).
    */
   origin: AgentOrigin;
+  /**
+   * #1008 — the SERVING stack's principal (see {@link StackHubNodeData.servingPrincipal}).
+   * Lets the card classify a same-principal local SIBLING agent apart from a
+   * cross-principal FOREIGN peer via `classifyOrigin` — a sibling renders local,
+   * only a true foreign peer renders federated.
+   */
+  servingPrincipal: string | null;
   /** Logical agent id (`luna`, `echo`, …). */
   agentId: string;
   /** Soma assistant name, or `null` (falls back to `agentId` at render). */
@@ -169,6 +185,27 @@ export interface NetworkGraph {
   edges: NetworkGraphEdge[];
 }
 
+/**
+ * #1008 — derive the SERVING stack's principal from the snapshot.
+ *
+ * A `"local"`-origin agent's tile carries the serving stack's own
+ * principal/stack (it IS a stack-own agent), so the serving principal is the
+ * `principal` of the first `"local"` agent. Returns `null` when no local agent
+ * is present (a foreign-only snapshot) — then no object origin can be proven a
+ * same-principal sibling, so classification falls back to "foreign".
+ *
+ * Derived client-side from the existing DTO rather than widening `/api/agents`
+ * to carry a serving-principal field — the `"local"` tiles already encode it.
+ */
+export function deriveServingPrincipal(
+  agents: readonly AgentPresenceTile[],
+): string | null {
+  for (const a of agents) {
+    if (a.origin === "local") return a.principal;
+  }
+  return null;
+}
+
 /** The `{principal}/{stack}` an agent's origin resolves to (for hub grouping). */
 function originScope(a: AgentPresenceTile): { principal: string; stack: string } {
   // A foreign agent's origin carries the peer's verified {principal,stack}; a
@@ -205,6 +242,16 @@ export function buildNetworkGraph(
   if (agents.length === 0) {
     return { nodes: [], edges: [] };
   }
+
+  // #1008 — derive the SERVING principal from the snapshot's `"local"`-origin
+  // agents: a local agent's tile carries the serving stack's own principal. We
+  // thread it onto every node so the cards can tell a SAME-PRINCIPAL local
+  // sibling (DB-read aggregation, `origin.principal === serving`) from a
+  // CROSS-PRINCIPAL federated peer (`origin.principal !== serving`) — the fix
+  // for siblings mislabeled "federated stack". `null` when the snapshot has no
+  // local agent (a foreign-only snapshot), in which case an object origin can't
+  // be proven a sibling and classifies conservatively as foreign.
+  const servingPrincipal = deriveServingPrincipal(agents);
 
   // First pass: bucket agents by their origin hub id, preserving first-seen order
   // of hubs and snapshot order of agents within each hub.
@@ -252,6 +299,7 @@ export function buildNetworkGraph(
       data: {
         kind: "stack-hub",
         origin: bucket.origin,
+        servingPrincipal,
         principal: bucket.principal ?? null,
         stack: bucket.stack ?? null,
         agentCount: bucket.agents.length,
@@ -266,6 +314,7 @@ export function buildNetworkGraph(
           kind: "agent",
           key: a.key,
           origin: a.origin,
+          servingPrincipal,
           agentId: a.agent_id,
           assistantName: a.assistant_name,
           capabilities: a.capabilities,

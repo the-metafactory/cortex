@@ -501,6 +501,15 @@ html, body {
   border-style: dashed;
   border-color: color-mix(in oklch, var(--accent) 55%, transparent);
 }
+/* #1008 — a SAME-PRINCIPAL local SIBLING stack (DB-read aggregation) is LOCAL,
+   not federated: it keeps the solid local-hub treatment (like your own stack),
+   distinguished only by a slightly softer accent so the pane reads "your stacks"
+   as one family vs the dashed cross-principal foreign peers. Distinction is by
+   border weight + label ("stack" vs "federated stack"), never colour alone. */
+.network-node-hub-sibling {
+  border-style: solid;
+  border-color: color-mix(in oklch, var(--accent) 70%, var(--line));
+}
 .network-node-provenance {
   display: inline-flex; align-items: center; gap: 3px;
   font-size: 10px; font-family: var(--mono);
