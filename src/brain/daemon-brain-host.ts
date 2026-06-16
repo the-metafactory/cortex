@@ -1247,6 +1247,29 @@ export const makeBunUnixTransport: DaemonTransport = (opts) => {
   // (socket, data); we expose a write/onData/onClose facade.
   interface BunServerSocket { write(data: string | Uint8Array): number; end(): void }
   let liveSocket: BunServerSocket | null = null;
+  // Outbound backpressure (host → brain). Bun's `socket.write` returns the
+  // number of bytes accepted and does NOT buffer the remainder — a large line
+  // (e.g. a task carrying an inlined attachment) exceeding the send buffer is
+  // PARTIALLY written, the rest dropped, so the brain reads a truncated line,
+  // fails JSON.parse, and silently drops the task (it never runs). Queue the
+  // unwritten bytes and flush them on the socket's `drain` event.
+  let writeQueue: Uint8Array = new Uint8Array(0);
+  const flushWriteQueue = (): void => {
+    if (liveSocket === null || writeQueue.length === 0) return;
+    const n = liveSocket.write(writeQueue);
+    writeQueue = n >= writeQueue.length ? new Uint8Array(0) : writeQueue.subarray(n);
+  };
+  const enqueueWrite = (bytes: Uint8Array): void => {
+    if (writeQueue.length === 0) {
+      writeQueue = bytes;
+    } else {
+      const merged = new Uint8Array(writeQueue.length + bytes.length);
+      merged.set(writeQueue);
+      merged.set(bytes, writeQueue.length);
+      writeQueue = merged;
+    }
+    flushWriteQueue();
+  };
   // Auth state: until the first line proves the token, the connection is NOT
   // resolved and inbound bytes are buffered by the auth pre-reader, never the
   // protocol pump.
@@ -1343,7 +1366,9 @@ export const makeBunUnixTransport: DaemonTransport = (opts) => {
         const sock = liveSocket;
         resolveConn({
           write(chunk) {
-            sock?.write(chunk);
+            // Byte-accurate, backpressure-safe: queue + flush (a large line is
+            // written across multiple `drain`s rather than truncated).
+            enqueueWrite(typeof chunk === "string" ? new TextEncoder().encode(chunk) : chunk);
           },
           onData(handler) {
             dataHandler = handler;
@@ -1369,8 +1394,14 @@ export const makeBunUnixTransport: DaemonTransport = (opts) => {
           }
         }
       },
+      drain() {
+        // Send buffer has room again — flush any bytes a large line couldn't
+        // fit on its first write (prevents truncated task/effect lines).
+        flushWriteQueue();
+      },
       close() {
         liveSocket = null;
+        writeQueue = new Uint8Array(0);
         if (!authed) {
           // Closed before authenticating — surface as a failed connect.
           failAuth("connector closed before authenticating");
