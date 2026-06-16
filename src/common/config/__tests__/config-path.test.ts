@@ -108,6 +108,23 @@ describe("migrateGroveConfigFile — auto-migrate preserving mode", () => {
     expect(mode).toBe(0o644);
   });
 
+  // The secret-at-rest contract, named explicitly: cloud-credentials.txt MUST
+  // land 0o600 on the cortex side — copyFileSync applies the umask, so the
+  // chmod re-assertion is what keeps the secret from being widened on migrate.
+  test("cloud-credentials.txt (a secret) stays 0o600 across the grove→cortex migrate", () => {
+    const SECRET = "cloud-credentials.txt";
+    const groveSecret = join(home, ".config", "grove", SECRET);
+    const cortexSecret = join(home, ".config", "cortex", SECRET);
+    mkdirSync(join(home, ".config", "grove"), { recursive: true });
+    writeFileSync(groveSecret, "TOKEN=redacted", { mode: 0o600 });
+    chmodSync(groveSecret, 0o600); // umask-proof the fixture
+
+    migrateGroveConfigFile(SECRET, home);
+
+    expect(existsSync(cortexSecret)).toBe(true);
+    expect(statSync(cortexSecret).mode & 0o777).toBe(0o600);
+  });
+
   test("no-op (returns false) when cortex already exists — never clobbers", () => {
     mkdirSync(join(home, ".config", "cortex"), { recursive: true });
     mkdirSync(join(home, ".config", "grove"), { recursive: true });

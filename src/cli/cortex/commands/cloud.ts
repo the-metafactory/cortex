@@ -498,9 +498,10 @@ async function cloudSetup(flags: Record<string, string>): Promise<void> {
   // --- Step 11: Print summary & save credentials ---
   step(11, TOTAL_STEPS, "Saving credentials and printing summary...");
 
-  // GV-1: write credentials cortex-side. Relocate any legacy grove copy first
-  // (mode-preserving) so we never leave a stale secret behind, then write the
-  // fresh credentials to the canonical cortex path.
+  // GV-1: write credentials cortex-side. Copy any legacy grove copy to the
+  // cortex path first (mode-preserving — the grove original is intentionally
+  // KEPT so the grove-fallback resolver still works during transition), then
+  // write the fresh credentials to the canonical cortex path.
   migrateGroveConfigFile("cloud-credentials.txt");
   const credPath = cortexConfigPath("cloud-credentials.txt");
   mkdirSync(dirname(credPath), { recursive: true });
