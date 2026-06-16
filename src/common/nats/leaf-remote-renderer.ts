@@ -914,6 +914,11 @@ export function renderOperatorModeBlocks(
   if (systemAccount !== undefined && systemAccount.length > 0) {
     blocks.push(`system_account: ${systemAccount}`);
   }
+  // Security-review NIT-2 (#1058) — `resolver_preload:` with the COLON form
+  // (not the brace-only `resolver_preload {`): this matches the production hub's
+  // `~/.config/nats/local.conf` shape (which uses the colon form), so a converted
+  // bus looks identical to a hand-built operator-mode one. Both forms are valid
+  // HOCON; we pick the colon form deliberately to match local.conf.
   blocks.push("resolver: MEMORY", "resolver_preload: {", ...preload, "}");
   blocks.push(OPERATOR_MODE_MARKER_END);
 
@@ -924,13 +929,18 @@ export function renderOperatorModeBlocks(
 
 /**
  * A JWT shape guard for the operator JWT + account JWTs emitted bare into the config.
- * NSC JWTs are `eyJ…` (a base64url-encoded `{"alg":…}` header) — three
- * base64url segments joined by `.`. We require the `eyJ` prefix + a
- * dot-separated base64url body (no whitespace/braces/newlines) so a hostile or
- * malformed value cannot break out of the rendered block. (Validated, never
- * cryptographically verified — verification is O-4's handshake.)
+ * NSC JWTs are `eyJ…` (a base64url-encoded `{"alg":…}` header) — EXACTLY three
+ * base64url segments joined by `.` (header.payload.signature). We require the
+ * `eyJ` prefix + exactly two more dot-separated base64url segments (no
+ * whitespace/braces/newlines) so a hostile or malformed value cannot break out
+ * of the rendered block. (Validated, never cryptographically verified —
+ * verification is O-4's handshake.)
+ *
+ * Security-review NIT-1 (#1058) — `{2}` (exactly two trailing segments), not
+ * `{1,2}`: a 2-segment value is not a valid NSC JWT, and accepting one would let
+ * nats-server reject it at RUNTIME (bus restart) instead of failing fast here.
  */
-const JWT_SHAPE = /^eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){1,2}$/;
+const JWT_SHAPE = /^eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2}$/;
 
 /**
  * #821 MAJOR (code-review) — derive the nats-server HTTP MONITOR url from its

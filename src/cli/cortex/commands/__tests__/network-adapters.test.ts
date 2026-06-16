@@ -14,7 +14,7 @@
  */
 
 import { describe, test, expect, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync } from "fs";
 import { tmpdir, homedir } from "os";
 import { join } from "path";
 
@@ -385,6 +385,70 @@ describe("O-3 live convertToOperatorMode — round-trip a real temp nats config"
     expect(result.status).toBe("converted");
     // ...but nothing was written.
     expect(readFileSync(conf, "utf-8")).toBe(original);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Security-review MAJOR (#1058) — the converting write is ATOMIC (tmp+rename),
+  // so a SIGKILL/OOM mid-write can never leave nats-server a truncated config.
+  // ---------------------------------------------------------------------------
+  test("the converting write goes via a tmp file + rename (no .tmp left behind)", () => {
+    const dir = freshDir();
+    const conf = join(dir, "community.conf");
+    writeFileSync(conf, anonLocalConf(), "utf-8");
+
+    const ports = buildLivePorts(cfgWithConfig(conf));
+    const result = ports.leafFile.convertToOperatorMode(FAKE_PACKAGE);
+    expect(result.status).toBe("converted");
+
+    // The rename CONSUMED the tmp file — none is left in the dir, and the final
+    // config carries the full converted bytes (atomic: old-or-new, never partial).
+    expect(existsSync(`${conf}.tmp`)).toBe(false);
+    expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+    if (result.status !== "converted") throw new Error("expected converted");
+    expect(readFileSync(conf, "utf-8")).toBe(result.conf);
+  });
+
+  test("a FAILED converting write leaves the original config intact (atomic, never truncated)", () => {
+    const dir = freshDir();
+    const conf = join(dir, "community.conf");
+    const original = anonLocalConf();
+    writeFileSync(conf, original, "utf-8");
+
+    // Make the config's directory read-only so the `.tmp` write throws EACCES
+    // BEFORE the rename — the original file's bytes must be untouched (the whole
+    // point of tmp+rename: the target is only ever swapped atomically, never
+    // opened for truncation in place).
+    chmodSync(dir, 0o500);
+    try {
+      const ports = buildLivePorts(cfgWithConfig(conf));
+      expect(() => ports.leafFile.convertToOperatorMode(FAKE_PACKAGE)).toThrow();
+    } finally {
+      chmodSync(dir, 0o700); // restore so afterEach can clean up
+    }
+    // The original config survived verbatim — no partial/corrupt write.
+    expect(readFileSync(conf, "utf-8")).toBe(original);
+    expect(existsSync(`${conf}.tmp`)).toBe(false);
+  });
+
+  test("restoreLeafState's base-config rewrite is ALSO atomic (no .tmp left behind)", () => {
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    // A base config WITHOUT the leaf include directive — restoring a snapshot
+    // that records "directive-present" makes restoreLeafState rewrite the base
+    // config (the path the MAJOR flagged). Assert it goes atomic.
+    writeFileSync(conf, bareLocalConf(), "utf-8");
+    const ports = buildLivePorts(cfgWithConfig(conf));
+
+    ports.leafFile.restoreLeafState({
+      networkId: "metafactory",
+      includeFile: undefined,
+      natsConfig: "directive-present", // → ensureLeafInclude rewrites the base config
+    });
+
+    expect(existsSync(`${conf}.tmp`)).toBe(false);
+    expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+    // The directive was added (the rewrite happened, atomically).
+    expect(readFileSync(conf, "utf-8")).toContain('include "leafnodes-metafactory.conf"');
   });
 });
 

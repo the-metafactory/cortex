@@ -209,6 +209,33 @@ describe("renderOperatorModeBlocks — fail-fast on missing material", () => {
     if (result.status !== "refuse") throw new Error("expected refuse");
     expect(result.reason).toMatch(/nkey|account/i);
   });
+
+  // Security-review NIT-1 (#1058) — JWT_SHAPE requires EXACTLY 3 segments.
+  test("a 2-segment operatorJwt → refuse (not a valid NSC JWT — fail fast here)", () => {
+    const result = renderOperatorModeBlocks(ANON_CONF, {
+      ...PACKAGE,
+      operatorJwt: "eyJhbGciOiJlZDI1NTE5LW5rZXkifQ.ONLY_TWO_SEGMENTS",
+    });
+    expect(result.status).toBe("refuse");
+    if (result.status !== "refuse") throw new Error("expected refuse");
+    expect(result.reason).toMatch(/JWT/i);
+  });
+
+  test("a 2-segment account 'JWT' → refuse", () => {
+    const result = renderOperatorModeBlocks(ANON_CONF, {
+      ...PACKAGE,
+      accountJwt: "eyJhbGciOiJlZDI1NTE5LW5rZXkifQ.ONLY_TWO",
+    });
+    expect(result.status).toBe("refuse");
+  });
+
+  test("a canonical 3-segment JWT is accepted (header.payload.signature)", () => {
+    const result = renderOperatorModeBlocks(ANON_CONF, {
+      ...PACKAGE,
+      operatorJwt: "eyJhbGciOiJlZDI1NTE5LW5rZXkifQ.PAYLOAD.SIGNATURE",
+    });
+    expect(result.status).toBe("converted");
+  });
 });
 
 // =============================================================================

@@ -25,6 +25,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -424,6 +425,25 @@ function buildRegistryPort(cfg: LivePortsConfig): NetworkRegistryPort {
 // Leaf-file port — S3 renderer output written to the nats config dir.
 // =============================================================================
 
+/**
+ * O-3 (cortex#1053 security-review MAJOR) — write `contents` to `path`
+ * ATOMICALLY: write a sibling `<path>.tmp` first, then `renameSync` it over the
+ * target. `rename(2)` is POSIX-atomic within a filesystem — a reader (here:
+ * nats-server on its next launchd/systemd restart) sees EITHER the old bytes OR
+ * the complete new bytes, NEVER a partial/truncated file.
+ *
+ * A plain `writeFileSync` is NOT atomic: a SIGKILL/OOM mid-write truncates the
+ * file, and nats-server then reads corrupt HOCON and REFUSES to start → the bus
+ * goes DOWN — the exact #794 hazard this slice exists to prevent (and which the
+ * snapshot/rollback can't recover, since it runs AFTER the write+restart). The
+ * `.tmp` sits beside the target so the rename stays same-filesystem (atomic).
+ */
+function atomicWriteFileSync(path: string, contents: string): void {
+  const tmpPath = `${path}.tmp`;
+  writeFileSync(tmpPath, contents, "utf-8");
+  renameSync(tmpPath, path); // POSIX-atomic: old-or-new, never partial.
+}
+
 /** Directory the per-network leaf include files live in (beside nats config). */
 function leafDir(cfg: LivePortsConfig): string {
   const natsConfig = expandTilde(cfg.natsConfigPath ?? "");
@@ -515,7 +535,11 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
       // inert — it surfaces the decision in the step log without touching disk.
       if (result.status === "converted" && mutate) {
         mkdirSync(dirname(configPath), { recursive: true });
-        writeFileSync(configPath, result.conf, "utf-8");
+        // Security-review MAJOR (#1058) — ATOMIC write (tmp + rename). A
+        // non-atomic writeFileSync truncated by a SIGKILL/OOM mid-write would
+        // leave corrupt HOCON that crashes nats-server on its next restart →
+        // bus DOWN, with no recovery (the snapshot runs after write+restart).
+        atomicWriteFileSync(configPath, result.conf);
       }
       return result;
     },
@@ -587,7 +611,9 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
         rmSync(includePath, { force: true });
       } else {
         mkdirSync(dir, { recursive: true });
-        writeFileSync(includePath, snapshot.includeFile, "utf-8");
+        // Security-review MAJOR (#1058) — atomic, same as the base config below:
+        // a crash mid-rollback must never leave a truncated include file either.
+        atomicWriteFileSync(includePath, snapshot.includeFile);
       }
 
       // Restore the include DIRECTIVE in the base config to its pre-join presence.
@@ -598,7 +624,10 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
       const next = directiveWasPresent
         ? ensureLeafInclude(current, snapshot.networkId) // it was there → keep it
         : removeLeafInclude(current, snapshot.networkId); // join added it → drop it
-      if (next !== current) writeFileSync(configPath, next, "utf-8");
+      // Security-review MAJOR (#1058) — ATOMIC write (tmp + rename). The rollback
+      // path has the identical non-atomicity hazard: a crash mid-rollback would
+      // corrupt the very base config it is trying to restore → bus DOWN.
+      if (next !== current) atomicWriteFileSync(configPath, next);
     },
   };
 }
