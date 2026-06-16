@@ -99,12 +99,13 @@ export function buildSecurityPreamble(config: AgentConfig, configPath?: string, 
 
   // Config immutability — the agent must never modify its own configuration.
   // This is a trust boundary: the entity being constrained must not control its own constraints.
-  // Note: the `~/.config/grove` default path is owned by the separate GROVE_* → CORTEX_*
-  // namespace migration (retires at MIG-8); in practice the runtime always passes a
-  // resolved `configPath` so the default is only seen by tests.
+  // Note: in practice the runtime always passes a resolved `configPath` so this
+  // default is only seen by tests; GV-1 (cortex#1076) points it at the canonical
+  // cortex config dir. (Distinct from the GROVE_* → CORTEX_* env-var migration,
+  // cortex#774.)
   const configDir = configPath
     ? configPath.replace(/\/[^/]+$/, "")
-    : "~/.config/grove";
+    : "~/.config/cortex";
   rules.push(
     `CONFIG IMMUTABILITY: You MUST NOT read, write, edit, or delete cortex.yaml or any file in the cortex config directory (${configDir}). ` +
     `This includes using any tool (Write, Edit, Bash, etc.) to modify, overwrite, move, copy, or remove cortex.yaml or files in ${configDir}. ` +
