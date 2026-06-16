@@ -90,6 +90,33 @@ export interface MattermostAdapterInfra {
   policyRegistry?: PrincipalRegistry;
 }
 
+/**
+ * Inbound thread key for a Mattermost post. The poller sets
+ * `rootId = post.root_id || post.id`, so a TOP-LEVEL post has
+ * `rootId === postId` — that is the message's own id, not a thread it belongs
+ * to. Returning `undefined` there lets cortex's `threadId ?? channelId`
+ * collapse (cortex.ts:2450) key top-level conversations on the CHANNEL, so a
+ * gate prompt and the principal's separate top-level reply correlate. A
+ * genuinely-threaded post (`rootId !== postId`) keeps its thread root.
+ */
+export function inboundThreadId(rootId: string, postId: string): string | undefined {
+  return rootId !== postId ? rootId : undefined;
+}
+
+/**
+ * Outbound Mattermost `root_id`. cortex routes a non-threaded conversation
+ * with `thread === channelId` (the collapse above); Mattermost rejects a post
+ * whose `root_id` is a channel id, so that case posts TOP-LEVEL (`undefined`).
+ * A genuine thread root (≠ channelId) threads as usual; `undefined` stays
+ * top-level.
+ */
+export function outboundRootId(
+  threadId: string | undefined,
+  channelId: string,
+): string | undefined {
+  return threadId !== undefined && threadId !== channelId ? threadId : undefined;
+}
+
 export class MattermostAdapter implements PlatformAdapter {
   readonly platform = "mattermost";
   readonly instanceId: string;
@@ -156,7 +183,9 @@ export class MattermostAdapter implements PlatformAdapter {
           authorName: mmMsg.userName,
           content: mmMsg.content,
           channelId: mmMsg.channelId,
-          threadId: mmMsg.rootId, // Thread to original message for proper reply threading
+          // Top-level posts collapse to the channel key so gate prompt + reply
+          // correlate; only genuine threads carry a thread id (see helper).
+          threadId: inboundThreadId(mmMsg.rootId, mmMsg.postId),
           // cortex#729 — stamp the home-principal trust signal for parity with
           // the Discord adapter, so the dispatch-handler's prompt-filter
           // trust-scope bypasses the hard-block for the home principal's
@@ -290,7 +319,9 @@ export class MattermostAdapter implements PlatformAdapter {
   async postResponse(target: ResponseTarget, text: string, files?: OutboundFile[]): Promise<void> {
     const apiUrl = this.apiUrl;
     const apiToken = this.apiToken;
-    const rootId = target.threadId;
+    // thread === channel is cortex's "no native thread" key — post top-level
+    // (root_id=channelId is invalid in MM); a genuine root still threads.
+    const rootId = outboundRootId(target.threadId, target.channelId);
 
     if (files && files.length > 0) {
       // Write files to temp paths for upload
@@ -317,10 +348,12 @@ export class MattermostAdapter implements PlatformAdapter {
     // Mattermost can't edit posts easily — just send once, skip subsequent
     if (this.progressSent.has(key)) return;
     this.progressSent.add(key);
+    // Same channel-collapse rule as postResponse.
+    const rootId = outboundRootId(target.threadId, target.channelId);
     await postReply(
       target.channelId,
       `> ${text}`,
-      target.threadId,
+      rootId,
       this.apiUrl,
       this.apiToken,
     );
