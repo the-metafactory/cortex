@@ -1363,7 +1363,6 @@ export const makeBunUnixTransport: DaemonTransport = (opts) => {
         // any bytes that arrived AFTER the auth line into the protocol pump.
         authed = true;
         if (authTimer !== undefined) clearTimeout(authTimer);
-        const sock = liveSocket;
         resolveConn({
           write(chunk) {
             // Byte-accurate, backpressure-safe: queue + flush (a large line is
