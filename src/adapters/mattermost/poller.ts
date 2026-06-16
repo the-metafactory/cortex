@@ -245,7 +245,7 @@ async function fetchChannelPostsSince(
  * Fetch file metadata from Mattermost for attachment processing.
  * Returns AttachmentInfo-compatible objects.
  */
-type MattermostFileInfo = {
+interface MattermostFileInfo {
   originalName: string;
   url: string;
   contentType: string;
@@ -257,7 +257,7 @@ type MattermostFileInfo = {
    *  fetches the bytes here and ships them inline. Discord uses public CDN URLs
    *  and never needs this. */
   content?: string;
-};
+}
 
 /** Text-like by MIME or extension — only these are worth inlining for IOC work. */
 function isInlineableText(name: string, mime: string): boolean {
