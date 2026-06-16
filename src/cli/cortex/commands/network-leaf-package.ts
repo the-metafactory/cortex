@@ -105,11 +105,11 @@ export type LeafPackageParseResult =
 // Parse + validate.
 // =============================================================================
 
-/** Read a non-empty string field; returns `undefined` when absent/empty/wrong-type. */
+/** Read a non-empty string field, TRIMMED; returns `undefined` when absent/empty/wrong-type. */
 function optionalString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
-  return trimmed.length === 0 ? undefined : value;
+  return trimmed.length === 0 ? undefined : trimmed;
 }
 
 /**
@@ -154,7 +154,7 @@ export function parseLeafPackageFile(jsonText: string): LeafPackageParseResult {
   const obj = raw as Record<string, unknown>;
 
   // 2) Required operator JWT.
-  const operatorJwt = optionalString(obj.operatorJwt)?.trim();
+  const operatorJwt = optionalString(obj.operatorJwt);
   if (operatorJwt === undefined) {
     return { ok: false, reason: "leaf package is missing `operatorJwt` (the NSC operator JWT)" };
   }
@@ -166,7 +166,7 @@ export function parseLeafPackageFile(jsonText: string): LeafPackageParseResult {
   }
 
   // 3) Required account nkey-U.
-  const account = optionalString(obj.account)?.trim();
+  const account = optionalString(obj.account);
   if (account === undefined) {
     return { ok: false, reason: "leaf package is missing `account` (the issued account public key)" };
   }
@@ -178,7 +178,7 @@ export function parseLeafPackageFile(jsonText: string): LeafPackageParseResult {
   }
 
   // 4) Required account JWT.
-  const accountJwt = optionalString(obj.accountJwt)?.trim();
+  const accountJwt = optionalString(obj.accountJwt);
   if (accountJwt === undefined) {
     return { ok: false, reason: "leaf package is missing `accountJwt` (the issued account JWT)" };
   }
@@ -201,8 +201,8 @@ export function parseLeafPackageFile(jsonText: string): LeafPackageParseResult {
   // 6) Optional system account — when offered, it must be a valid nkey-U AND
   // paired with a valid JWT (a half-specified SYS account is malformed, exactly
   // as O-3's renderer refuses).
-  const systemAccount = optionalString(obj.systemAccount)?.trim();
-  const systemAccountJwt = optionalString(obj.systemAccountJwt)?.trim();
+  const systemAccount = optionalString(obj.systemAccount);
+  const systemAccountJwt = optionalString(obj.systemAccountJwt);
   if (systemAccount !== undefined) {
     if (!isNkeyAccountPubkey(systemAccount)) {
       return {
