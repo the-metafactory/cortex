@@ -443,6 +443,7 @@ export class MattermostAdapter implements PlatformAdapter {
       filename: i.originalName,
       contentType: i.contentType,
       size: i.size,
+      ...(i.content !== undefined && { content: i.content }),
     }));
   }
 

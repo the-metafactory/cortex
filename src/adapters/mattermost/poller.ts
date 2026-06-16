@@ -245,12 +245,36 @@ async function fetchChannelPostsSince(
  * Fetch file metadata from Mattermost for attachment processing.
  * Returns AttachmentInfo-compatible objects.
  */
+type MattermostFileInfo = {
+  originalName: string;
+  url: string;
+  contentType: string;
+  size: number;
+  source: "mattermost";
+  /** Base64 file bytes, INLINED for text-like files under the cap. Mattermost
+   *  file URLs need the bot's Bearer token to download — the brain (and pulse's
+   *  A_INGEST_ATTACHMENT) can't auth, so the adapter (which HAS the token)
+   *  fetches the bytes here and ships them inline. Discord uses public CDN URLs
+   *  and never needs this. */
+  content?: string;
+};
+
+/** Text-like by MIME or extension — only these are worth inlining for IOC work. */
+function isInlineableText(name: string, mime: string): boolean {
+  const m = mime.toLowerCase();
+  if (m.startsWith("text/") || m === "message/rfc822" || m === "application/json") return true;
+  return /\.(eml|txt|csv|log|json|md|ics)$/i.test(name);
+}
+
+/** Cap on inlined file bytes — keeps the brain task envelope well under NATS limits. */
+const MAX_INLINE_BYTES = 512 * 1024;
+
 export async function fetchMattermostFileInfos(
   fileIds: string[],
   apiUrl: string,
   apiToken: string
-): Promise<{ originalName: string; url: string; contentType: string; size: number; source: "mattermost" }[]> {
-  const results: { originalName: string; url: string; contentType: string; size: number; source: "mattermost" }[] = [];
+): Promise<MattermostFileInfo[]> {
+  const results: MattermostFileInfo[] = [];
 
   for (const fileId of fileIds) {
     try {
@@ -260,12 +284,35 @@ export async function fetchMattermostFileInfos(
       if (!res.ok) continue;
 
       const info = await res.json() as { name?: string; mime_type?: string; size?: number };
+      const name = info.name ?? "unknown";
+      const contentType = info.mime_type ?? "application/octet-stream";
+      const size = info.size ?? 0;
+
+      // Inline text-like bytes (authenticated fetch) so the brain doesn't have
+      // to — a failed inline is non-fatal (the URL still travels as a fallback).
+      let content: string | undefined;
+      if (isInlineableText(name, contentType) && size > 0 && size <= MAX_INLINE_BYTES) {
+        try {
+          const fres = await fetch(`${apiUrl}/api/v4/files/${fileId}`, {
+            headers: { Authorization: `Bearer ${apiToken}` },
+          });
+          if (fres.ok) {
+            content = Buffer.from(new Uint8Array(await fres.arrayBuffer())).toString("base64");
+          } else {
+            console.warn(`mattermost-poller: file fetch ${fileId} → HTTP ${fres.status} (will ship URL only)`);
+          }
+        } catch (err) {
+          console.warn("mattermost-poller: file byte fetch failed:", fileId, err instanceof Error ? err.message : err);
+        }
+      }
+
       results.push({
-        originalName: info.name ?? "unknown",
+        originalName: name,
         url: `${apiUrl}/api/v4/files/${fileId}`,
-        contentType: info.mime_type ?? "application/octet-stream",
-        size: info.size ?? 0,
+        contentType,
+        size,
         source: "mattermost",
+        ...(content !== undefined && { content }),
       });
     } catch (err) {
       console.warn("mattermost-poller: failed to fetch file info:", fileId, err instanceof Error ? err.message : err);
