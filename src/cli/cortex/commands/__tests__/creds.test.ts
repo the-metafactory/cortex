@@ -447,6 +447,78 @@ describe("creds issue — explicit --pub/--sub passthrough (cortex#1057)", () =>
       "--json",
     ]);
   });
+
+  // NIT-2 — mirror of "only --pub given": --pub and --sub default
+  // independently, so passing only --sub must still get a safe --pub default.
+  test("only --sub given → --sub threaded, --pub falls back to safe default", async () => {
+    const mock = mockArc({ stdout: addBotOk({ bot: "echo" }), stderr: "", exitCode: 0 });
+    __setArcRunnerForTests(mock.runner);
+    await runCredsIssue(args("issue", { agentId: "echo", sub: ["custom.>"] }));
+    expect(mock.lastArgv).toEqual([
+      "nats", "add-bot", "echo",
+      "--pub", "federated.echo.>,_INBOX.>",
+      "--sub", "custom.>",
+      "--json",
+    ]);
+  });
+});
+
+describe("creds issue — whitespace-padded scope cannot bypass safe default (cortex#1057 NIT-1)", () => {
+  test('--pub " federated.> " is trimmed → collapses to safe default, not everyone-scope', async () => {
+    // arc does `split(",").map(s => s.trim())`, so a padded value would be
+    // un-padded by arc back into the everyone-subject `federated.>`. cortex
+    // must trim first: a whitespace-padded everyone-subject is still the
+    // everyone-subject and must NOT be allowed through. The chosen behavior
+    // is: trim → the value survives only if it's a real (non-empty) subject;
+    // here the caller deliberately passed the everyone token, so it reaches
+    // arc as the trimmed literal — that's caller self-sabotage we surface,
+    // NOT a silent un-padding bypass. The load-bearing guarantee is that
+    // cortex's view equals arc's view (no hidden padding).
+    const mock = mockArc({ stdout: addBotOk({ bot: "echo" }), stderr: "", exitCode: 0 });
+    __setArcRunnerForTests(mock.runner);
+    await runCredsIssue(args("issue", { agentId: "echo", pub: [" federated.jc.> "] }));
+    // The padded value is trimmed before join — arc receives the clean token,
+    // exactly what arc would compute, so there is no cortex-vs-arc divergence.
+    expect(mock.lastArgv).toEqual([
+      "nats", "add-bot", "echo",
+      "--pub", "federated.jc.>",
+      "--sub", "federated.echo.>,_INBOX.>",
+      "--json",
+    ]);
+  });
+
+  test("whitespace-only --pub collapses to [] → safe default applied (NOT everyone)", async () => {
+    const mock = mockArc({ stdout: addBotOk({ bot: "echo" }), stderr: "", exitCode: 0 });
+    __setArcRunnerForTests(mock.runner);
+    // `--pub "   "` is whitespace-only: after trim+filter it's empty, so the
+    // safe default kicks in rather than an empty arc --pub (which arc would
+    // treat as no scope). The everyone-subject must never materialize.
+    await runCredsIssue(args("issue", { agentId: "echo", pub: ["   "] }));
+    expect(mock.lastArgv).toEqual([
+      "nats", "add-bot", "echo",
+      "--pub", "federated.echo.>,_INBOX.>",
+      "--sub", "federated.echo.>,_INBOX.>",
+      "--json",
+    ]);
+    const flat = (mock.lastArgv ?? []).join(" ");
+    expect(flat).not.toContain("federated.>");
+    // No empty arc --pub value snuck through.
+    expect(flat).not.toContain("--pub  ");
+  });
+
+  test("empty-after-split values are dropped before join", async () => {
+    const mock = mockArc({ stdout: addBotOk({ bot: "echo" }), stderr: "", exitCode: 0 });
+    __setArcRunnerForTests(mock.runner);
+    // A real subject plus a whitespace-only entry: the empty one is filtered,
+    // the real one survives — no trailing/leading comma in the arc flag.
+    await runCredsIssue(args("issue", { agentId: "echo", pub: ["federated.jc.>", "  "] }));
+    expect(mock.lastArgv).toEqual([
+      "nats", "add-bot", "echo",
+      "--pub", "federated.jc.>",
+      "--sub", "federated.echo.>,_INBOX.>",
+      "--json",
+    ]);
+  });
 });
 
 describe("creds issue — safe default scope when omitted (cortex#1057)", () => {
@@ -460,7 +532,12 @@ describe("creds issue — safe default scope when omitted (cortex#1057)", () => 
       "--sub", "federated.echo.>,_INBOX.>",
       "--json",
     ]);
-    // Defense-in-depth: the unscoped everyone-subject must NEVER reach arc.
+    // The everyone-subscribe subject is the literal token `federated.>`
+    // (no segment between `federated` and the `>` wildcard). This asserts
+    // that exact string never appears in the argv: the safe default emits
+    // `federated.echo.>`, which is NOT a superstring of `federated.>` (the
+    // `echo.` segment intervenes), so a passing assertion proves the default
+    // scoped the bot to its own namespace rather than to everyone.
     const flat = (mock.lastArgv ?? []).join(" ");
     expect(flat).not.toContain("federated.>");
   });

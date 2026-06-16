@@ -92,6 +92,19 @@ function defaultScopeFor(agentId: string): string[] {
   return [`federated.${agentId}.>`, "_INBOX.>"];
 }
 
+/**
+ * Normalize a `--pub`/`--sub` value list the same way arc will (cortex#1057
+ * NIT-1): trim each entry and drop empties. arc does `split(",").map(trim)`
+ * after we comma-join, so a whitespace-padded `" federated.> "` would
+ * otherwise survive cortex verbatim and be un-padded by arc back into the
+ * everyone-scope `federated.>`. Trimming here keeps cortex's view of "the
+ * scope" identical to arc's, so the empty-check (→ safe default) and any
+ * future cortex-side validation see the real subjects.
+ */
+function sanitizeScope(values: string[]): string[] {
+  return values.map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
 /** A multi-thousand-entry creds directory is a misconfiguration; refuse
  *  to enumerate rather than allocate unbounded memory. */
 const MAX_CREDS_DIR_ENTRIES = 10_000;
@@ -485,9 +498,19 @@ async function runArcSubcommand(
   // shared `community` account). We fall back to the bot's own
   // `federated.<id>.>` namespace + `_INBOX.>`. pub and sub default
   // independently so `--pub x` alone still gets a safe `--sub` default.
+  //
+  // Sanitize BEFORE the empty-check (cortex#1057 NIT-1): arc itself does
+  // `split(",").map(s => s.trim())`, so a whitespace-padded value like
+  // `--pub " federated.> "` would survive cortex verbatim and arc would trim
+  // it back to `federated.>` (everyone-subscribe) — bypassing the safe
+  // default. Trimming + dropping empties here means a whitespace-only scope
+  // collapses to [] and correctly falls through to the safe default rather
+  // than reaching arc as an everyone-scope.
   if (subcommand === "issue") {
-    const pub = args.pub.length > 0 ? args.pub : defaultScopeFor(args.agentId);
-    const sub = args.sub.length > 0 ? args.sub : defaultScopeFor(args.agentId);
+    const pubScope = sanitizeScope(args.pub);
+    const subScope = sanitizeScope(args.sub);
+    const pub = pubScope.length > 0 ? pubScope : defaultScopeFor(args.agentId);
+    const sub = subScope.length > 0 ? subScope : defaultScopeFor(args.agentId);
     argv.push("--pub", pub.join(","));
     argv.push("--sub", sub.join(","));
   }
