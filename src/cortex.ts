@@ -2553,6 +2553,12 @@ export async function startCortex(
         liveSurfaces,
         renderer: makeDispatchPostRenderer({ runtime, source: systemEventSource }),
         replySource: gateReplyRouter,
+        // 10 min to review + approve a gate (e.g. a composed flow's operator-ack
+        // or an analyst gate). The host per-task liveness timeout is PAUSED while
+        // a gate is open (daemon-brain-host ask_principal), so this is the real
+        // human-reply window — not racing the 5-min task timeout that used to
+        // orphan it (cortex#1073).
+        timeoutMs: 600_000,
       })
     : undefined;
 

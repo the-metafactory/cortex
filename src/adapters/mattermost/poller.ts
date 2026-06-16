@@ -114,8 +114,80 @@ async function fetchUserName(
   }
 }
 
+// Mattermost save-layer ceiling: the v4 API validates MaxPostSize (16383) but
+// the DB SAVE 500s ("app.post.save.app_error") well below that — ~4000 chars
+// (binary-searched against securechat-test). A long single post (a composed
+// flow's YAML, a big advisory, multi-line step output) is therefore DROPPED
+// with a 500 unless we chunk under the ceiling. Chunk into a root post + thread
+// replies so the content survives. Mirrors A_FETCH/A_NOTIFY's measured limits.
+const MM_MAX_CHARS = 3800;
+const MM_MAX_BYTES = 15000;
+const utf8Len = (s: string): number => new TextEncoder().encode(s).length;
+
+/** Strip control chars Postgres/Mattermost reject at save time (keep \n, \t). */
+export function sanitizeForMattermost(message: string): string {
+  // eslint-disable-next-line no-control-regex
+  return message.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+}
+
+/** Split a message into chunks under both char and byte ceilings, preferring line boundaries. */
+export function splitForMattermost(message: string): string[] {
+  const fits = (s: string): boolean => s.length <= MM_MAX_CHARS && utf8Len(s) <= MM_MAX_BYTES;
+  if (fits(message)) return [message];
+  const chunks: string[] = [];
+  let current = "";
+  for (const line of message.split("\n")) {
+    // Hard-slice a single oversized line (the byte check keeps multibyte slices safe).
+    const pieces: string[] = [];
+    let rest = line;
+    while (!fits(rest)) {
+      let cut = Math.min(rest.length, MM_MAX_CHARS);
+      while (cut > 1 && !fits(rest.slice(0, cut))) cut = Math.floor(cut / 2);
+      pieces.push(rest.slice(0, cut));
+      rest = rest.slice(cut);
+    }
+    pieces.push(rest);
+    for (const piece of pieces) {
+      const candidate = current ? `${current}\n${piece}` : piece;
+      if (current && !fits(candidate)) {
+        chunks.push(current);
+        current = piece;
+      } else {
+        current = candidate;
+      }
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks.length > 0 ? chunks : [message];
+}
+
+/** POST one chunk; returns the created post id (or null on failure). */
+async function postOne(
+  channelId: string,
+  message: string,
+  rootId: string | undefined,
+  apiUrl: string,
+  apiToken: string,
+): Promise<string | null> {
+  const body: Record<string, string> = { channel_id: channelId, message };
+  if (rootId) body.root_id = rootId;
+  const res = await fetch(`${apiUrl}/api/v4/posts`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    console.error(`mattermost-poller: post failed: ${res.status} ${await res.text()}`);
+    return null;
+  }
+  const created = (await res.json()) as Record<string, unknown>;
+  return typeof created.id === "string" ? created.id : null;
+}
+
 /**
- * Post a reply to a Mattermost channel (or thread).
+ * Post a reply to a Mattermost channel (or thread). A message over the MM
+ * save-layer ceiling is split into a root post + thread replies (so a long
+ * flow YAML / advisory is never dropped with a 500); returns the ROOT post id.
  */
 export async function postReply(
   channelId: string,
@@ -125,27 +197,20 @@ export async function postReply(
   apiToken: string
 ): Promise<string | null> {
   try {
-    const body: Record<string, string> = {
-      channel_id: channelId,
-      message,
-    };
-    if (rootId) body.root_id = rootId;
-
-    const res = await fetch(`${apiUrl}/api/v4/posts`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      console.error(`mattermost-poller: post failed: ${res.status} ${await res.text()}`);
-      return null;
+    const chunks = splitForMattermost(sanitizeForMattermost(message));
+    // The chunks after the first reply into the thread; if the caller gave a
+    // rootId, everything stays in that thread, otherwise the first post becomes
+    // the thread root.
+    let thread = rootId;
+    let firstId: string | null = null;
+    for (const [i, chunk] of chunks.entries()) {
+      const id = await postOne(channelId, chunk, thread, apiUrl, apiToken);
+      if (i === 0) {
+        firstId = id;
+        if (thread === undefined && id) thread = id; // root the thread at chunk 1
+      }
     }
-    const created = await res.json() as Record<string, unknown>;
-    return typeof created.id === "string" ? created.id : null;
+    return firstId;
   } catch (error) {
     console.error("mattermost-poller: post error:", error);
     return null;

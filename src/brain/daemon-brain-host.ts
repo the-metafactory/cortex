@@ -837,6 +837,17 @@ export class DaemonBrainHost {
         return;
       }
       case "ask_principal": {
+        // PAUSE the per-task liveness timeout while a human gate is open. The
+        // timeout exists to fail a HUNG BRAIN, not a thinking human — an open
+        // `ask_principal` is legitimately unbounded by brain liveness, and the
+        // gate has its own deadline (SurfacePrincipalGate.timeoutMs). Without
+        // this, the host timed the task out mid-gate, dropped the verdict
+        // (record.settled), and the principal's reply orphaned (cortex#1073).
+        // Re-arm for the remaining deterministic work once all gates close.
+        if (record.openGates === 0 && record.timeoutTimer !== undefined) {
+          clearTimeout(record.timeoutTimer);
+          record.timeoutTimer = undefined;
+        }
         record.openGates += 1;
         try {
           const verdict = await record.hooks.onAskPrincipal(e);
@@ -856,6 +867,13 @@ export class DaemonBrainHost {
           );
         } finally {
           record.openGates = Math.max(0, record.openGates - 1);
+          // Last gate closed and the task is still live → re-arm the liveness
+          // timeout for the remaining (deterministic) steps.
+          if (record.openGates === 0 && !record.settled && record.timeoutTimer === undefined) {
+            record.timeoutTimer = setTimeout(() => {
+              void this.failTask(record, "timeout");
+            }, this.taskTimeoutMs);
+          }
         }
         return;
       }
