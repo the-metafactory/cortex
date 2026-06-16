@@ -155,6 +155,9 @@ describe("createCcEventEnvelope", () => {
     expect(env.payload.event_id).toBe("evt-abc");
     expect(env.payload.session_id).toBe("9d2c4e8a-1b3f-4c5d-9e6f-7a8b9c0d1e2f");
     expect(env.payload.grove_channel).toBe("andreas");
+    // GV-2 dual-write: cortex_channel is stamped from the grove_channel
+    // fallback even when the input only carries the legacy field.
+    expect(env.payload.cortex_channel).toBe("andreas");
     expect(env.payload.agent_id).toBe("luna");
     expect(env.payload.agent_name).toBe("Luna");
     expect(env.payload.network_id).toBe("metafactory");
@@ -173,6 +176,7 @@ describe("createCcEventEnvelope", () => {
     };
     const env = createCcEventEnvelope({ event });
     expect("grove_channel" in env.payload).toBe(false);
+    expect("cortex_channel" in env.payload).toBe(false);
     expect("agent_id" in env.payload).toBe(false);
     expect("agent_name" in env.payload).toBe(false);
     expect("network_id" in env.payload).toBe(false);

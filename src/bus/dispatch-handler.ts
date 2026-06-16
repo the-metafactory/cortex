@@ -1436,7 +1436,7 @@ export class DispatchHandler extends EventEmitter {
     const target = this.targetFromMsg(adapter, msg);
     const version = getCortexVersion();
     const helpText = [
-      `**${this.config.agent.displayName}** — PAI Agent on Grove v${version}\n`,
+      `**${this.config.agent.displayName}** — PAI Agent on Cortex v${version}\n`,
       "**Chat**",
       "`@mention <message>` — Ask me anything (uses Claude Code)",
       "`context:N <message>` — Override context depth (default 10, max 100)",
