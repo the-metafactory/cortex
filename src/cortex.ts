@@ -4781,10 +4781,20 @@ export async function startCortex(
       }
     }
     try {
+      // #1044 — headless MC mode (producer/server split). `mc.server.enabled`
+      // false ⇒ run db + ingestor only, SKIP the HTTP/WS server. A lean stack
+      // (work/halden) WRITES its `mission-control.db` for the pane-of-glass
+      // (#1008) to read, without binding a port or serving a dashboard. The
+      // db-read aggregation (which SERVES the pane) is full-mode-only, so the
+      // `localAggregation` getter only resolves a context on a server stack
+      // (`siblingResolveOpts` is computed below under the same `aggCfg` gate,
+      // independent of headless — a headless stack simply doesn't serve).
+      const mcHeadless = !config.mc.server.enabled;
       mcHandle = await startMissionControl({
         configPath: config.mc.configPath || undefined,
         dbPath,
         port: config.mc.port,
+        ...(mcHeadless ? { headless: true } : {}),
         agentPresence: () => presenceViewForApi,
         // #1008 — DB-read pane-of-glass aggregation. The getter returns a context
         // only when discovery produced a resolve-opts (dbRead on); otherwise null
@@ -4798,7 +4808,13 @@ export async function startCortex(
         sidebandUrl: config.mc.sideband,
       });
       mcDb = mcHandle.db;
-      console.log(`cortex: Mission Control embed listening on http://localhost:${mcHandle.port} — db ${dbPath}`);
+      // #1044 — headless mode binds no port (`mcHandle.port === null`); log the
+      // producer-only state honestly instead of an unreachable localhost URL.
+      if (mcHandle.port !== null) {
+        console.log(`cortex: Mission Control embed listening on http://localhost:${mcHandle.port} — db ${dbPath}`);
+      } else {
+        console.log(`cortex: Mission Control embed HEADLESS (db + ingestor, no HTTP server) — db ${dbPath}`);
+      }
 
       // MC-I1.S4/S6 (ADR-0005 §3/§4) — register the bus→MC projection renderer.
       // The seam is a surface-router renderer (§4) with a single project()
@@ -4820,10 +4836,19 @@ export async function startCortex(
       // makes failed_dispatch attention work whenever `mc.enabled`, independent
       // of `cockpit.enabled` (it's event-driven, not state-derived). The
       // deep-link for a session-anchored item is the dashboard drill-down route.
+      // #1044 — headless mode binds no port. Fall back to a non-routable
+      // sentinel so deep-links are well-formed but obviously not a live pane;
+      // an explicit `grove.baseUrl` (the pane-serving host) still wins. A
+      // headless producer's attention items deep-link into the SERVING stack's
+      // pane via `grove.baseUrl`, not its own absent port.
       const mcBaseUrl =
-        config.grove.baseUrl !== "" ? config.grove.baseUrl : `http://localhost:${mcHandle.port}`;
+        config.grove.baseUrl !== ""
+          ? config.grove.baseUrl
+          : mcHandle.port !== null
+            ? `http://localhost:${mcHandle.port}`
+            : "http://localhost";
       router.register(
-        createDispatchProjectionRenderer(mcDb, mcHandle.wsRegistry, {
+        createDispatchProjectionRenderer(mcDb, mcHandle.wsRegistry ?? undefined, {
           stackId: derivedStack.stack,
           publishDelta: async (delta) => {
             await publishReconcileDelta(
@@ -4847,7 +4872,7 @@ export async function startCortex(
       // hub-emitted — on a non-hub stack the renderer simply never receives
       // those subjects, so the tab's federation/transport sections stay honestly
       // empty (no synthesized rows).
-      router.register(createObservabilityProjectionRenderer(mcDb, mcHandle.wsRegistry));
+      router.register(createObservabilityProjectionRenderer(mcDb, mcHandle.wsRegistry ?? undefined));
       console.log("cortex: Mission Control observability projection renderer registered (signal + collector + federation + transport)");
     } catch (err) {
       console.error("cortex: Mission Control embed startup error (non-fatal):", err instanceof Error ? err.message : err);
@@ -4981,7 +5006,12 @@ export async function startCortex(
       // (`mcHandle` non-null); on a registry-without-embed boot the holder stays
       // null and there are no WS clients to notify.
       presenceViewForApi = presenceRegistryHandle.registry;
-      if (mcHandle !== null) {
+      // #1044 — the WS broadcast needs a live registry. In HEADLESS mode the
+      // embed binds no server, so `mcHandle.wsRegistry` is null (no clients to
+      // notify); skip the broadcast subscription entirely. The registry still
+      // CONSUMES presence (feeds `/api/agents` on a server stack), but a
+      // producer-only stack has no pane to push to.
+      if (mcHandle?.wsRegistry != null) {
         const broadcastWsRegistry = mcHandle.wsRegistry;
         presenceBroadcastSub = presenceRegistryHandle.registry.onChange((key, record) => {
           broadcastWsRegistry.broadcast({
@@ -5095,7 +5125,10 @@ export async function startCortex(
       // `mcDb` (the projection target); on the mc.enabled boot it is non-null.
       if (mcDb !== null) {
         const observabilityFoldDb = mcDb;
-        const observabilityFoldWs = mcHandle?.wsRegistry;
+        // #1044 — null in headless mode (no server ⇒ no WS clients). The
+        // projection's broadcast is a no-op on `undefined`; coalesce so the
+        // type matches `WsClientRegistry | undefined`.
+        const observabilityFoldWs = mcHandle?.wsRegistry ?? undefined;
         federatedObservabilityHandle = await startFederatedObservabilityFold({
           runtime,
           // The injected projection write — bus/ never imports surface/mc/, so
@@ -5228,7 +5261,16 @@ export async function startCortex(
     const cockpitDb = mcDb;
     const [repoOwner, repoName] = config.cockpit.repo.split("/");
     const defaultRepo = repoOwner && repoName ? { owner: repoOwner, repo: repoName } : undefined;
-    const baseUrl = config.grove.baseUrl !== "" ? config.grove.baseUrl : `http://localhost:${mcHandle?.port ?? 8767}`;
+    // #1044 — in headless mode `mcHandle.port` is null (no server). An explicit
+    // `grove.baseUrl` (the pane-serving host) wins; otherwise use the bound port
+    // when present, falling back to a portless localhost rather than a
+    // misleading fixed 8767 that nothing is listening on.
+    const baseUrl =
+      config.grove.baseUrl !== ""
+        ? config.grove.baseUrl
+        : mcHandle?.port != null
+          ? `http://localhost:${mcHandle.port}`
+          : "http://localhost";
     // Resolve docsDir to an absolute path so the ingest doesn't depend on the
     // launchd plist's CWD (which isn't guaranteed to be the repo root). Warn
     // once at startup if it's missing rather than only failing every tick.

@@ -173,16 +173,34 @@ github:
 # -----------------------------------------------------------------------------
 # mc — Mission Control, in-process (ADR-0005). OPTIONAL; off by default.
 # -----------------------------------------------------------------------------
-# When enabled, the cortex runtime starts the MC server (REST+WS+dashboard) as
-# an in-process module and owns mission-control.db. ONE db per stack is
-# REQUIRED: the hook cursor lives beside the db, so two stacks sharing a
-# dbPath would also share cursor state. Leave dbPath empty to get the per-slug
-# default (~/.local/share/cortex/mc/{slug}/mission-control.db).
+# When enabled, the cortex runtime starts the MC embed in-process and owns
+# mission-control.db. ONE db per stack is REQUIRED: the hook cursor lives beside
+# the db, so two stacks sharing a dbPath would also share cursor state. Leave
+# dbPath empty to get the per-slug default
+# (~/.local/share/cortex/mc/{slug}/mission-control.db).
+#
+# #1044 — producer/server split. The embed has two halves:
+#   * the PRODUCER — initDatabase + the ingestor (HookStreamPoller) — always
+#     runs when mc.enabled, populating mission-control.db from this stack's
+#     cc-events.
+#   * the SERVER — the REST+WS HTTP listener + dashboard — gated by
+#     `server.enabled` below.
+# A lean stack (work/halden) runs HEADLESS (server.enabled: false): it WRITES
+# its db cheaply for the pane-of-glass (#1008) to read, but binds no port and
+# serves no dashboard. The ONE pane-serving stack runs FULL (server.enabled:
+# true, the default) and reads every sibling's db.
 mc:
-  enabled: false                   # flip true on the stack that hosts your local pane
+  enabled: false                   # flip true on EVERY stack you want visible on the pane
   dbPath: ""                       # empty = per-slug default; set explicitly to adopt an existing db
   port: 0                          # 0 = MC default (8767); set when running panes for several stacks
   configPath: ""                   # optional MC yaml for hooks/ws/log tuning (db/port ignored when embedded)
+  # #1044 — HTTP/WS server + dashboard. DEFAULT ON (full MC). Set enabled:false
+  # for HEADLESS mode: db + ingestor only, NO port bound, NO dashboard. Use
+  # headless on producer-only stacks (work/halden) so they write their db for
+  # the pane-of-glass without serving a pane; keep it ON (or omit) on the single
+  # stack that hosts your local pane. Only meaningful when mc.enabled is true.
+  server:
+    enabled: true                  # false = headless (db + ingestor, no HTTP server)
   # P-14 U0.1 — Tier-3 sideband endpoint (signal cortex-sideband.md §2/§3/§8).
   # MC proxies /api/observability/* to this base URL SERVER-SIDE; the browser
   # only ever talks to MC. LOOPBACK-ENFORCED: the sideband is a local-only

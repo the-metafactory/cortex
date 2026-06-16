@@ -399,6 +399,27 @@ export const McSchema = z.object({
    */
   sideband: z.string().default(DEFAULT_SIDEBAND_URL),
   /**
+   * #1044 — headless MC mode (producer/server split). When `mc.enabled`, the
+   * embed always runs `initDatabase` + the `HookStreamPoller` INGESTOR (so the
+   * stack's `mission-control.db` is populated from its cc-events). This sub-flag
+   * gates ONLY the HTTP/WS server (`startServer`) + the live dashboard surface:
+   *
+   *   - `server.enabled: true`  (DEFAULT) → FULL MC — db + ingestor + HTTP server
+   *     + dashboard, byte-identical to pre-#1044. The ONE pane-serving stack
+   *     (meta-factory) runs this and reads every sibling stack's db (#1008).
+   *   - `server.enabled: false` → HEADLESS MC — db + ingestor only, NO port
+   *     bound, NO dashboard. A lean producer stack (work/halden) runs this so it
+   *     cheaply WRITES its db for the pane-of-glass to read, without serving one.
+   *
+   * Only meaningful when `mc.enabled` is true (an `mc.enabled: false` stack runs
+   * no embed at all). Default ON preserves every existing deployment's behaviour.
+   */
+  server: z
+    .object({
+      enabled: z.boolean().default(true),
+    })
+    .default(emptyDefault()),
+  /**
    * #989 part-1 — LOCAL same-principal stack aggregation on the Network view.
    *
    * When `enabled`, the dashboard-serving daemon auto-discovers the principal's
@@ -493,6 +514,12 @@ export const McSchema = z.object({
   dbPath: val.dbPath ?? "",
   port: val.port ?? 0,
   sideband: val.sideband ?? DEFAULT_SIDEBAND_URL,
+  // #1044 — re-apply the nested default ({} from `.default(emptyDefault())`
+  // would leave `enabled` undefined on the all-defaults parse path). The `??`
+  // chain is load-bearing, same as `aggregateLocalStacks` below.
+  server: {
+    enabled: val.server?.enabled ?? true,
+  },
   // #989 — re-apply the nested default ({} from `.default(emptyDefault())`
   // would otherwise leave the inner fields undefined). The `??` chain is
   // load-bearing for the all-defaults parse path, same as the leaves above.

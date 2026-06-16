@@ -27,15 +27,25 @@ import type { LocalAggregationProvider } from "./local-aggregation/sibling-db-re
 
 export interface MissionControlHandle {
   db: Database;
-  port: number;
+  /**
+   * The bound HTTP listen port, or `null` in HEADLESS mode (#1044) where no
+   * server is started. Callers that build a dashboard base URL (the cockpit
+   * loop, the projection deep-links) MUST tolerate `null` — a headless
+   * producer stack writes its db but serves no pane.
+   */
+  port: number | null;
   /**
    * The live WebSocket client registry (MC-I1.S6, #848). Exposed so the bus→MC
    * projection renderer can broadcast `mc.projection` refresh signals to live
    * dashboard clients on a projected mutation — closing the S4 "projection
    * writes bypass WS fan-out" gap. The cockpit/API mutation paths reach the
    * SAME registry; the projection reuses the existing broadcast helpers.
+   *
+   * `null` in HEADLESS mode (#1044): no server ⇒ no clients to broadcast to.
+   * The projection renderers already accept an optional/absent registry (their
+   * broadcast becomes a no-op), so downstream wiring passes `?? undefined`.
    */
-  wsRegistry: WsClientRegistry;
+  wsRegistry: WsClientRegistry | null;
   stop(): Promise<void>;
 }
 
@@ -50,6 +60,17 @@ export interface StartMissionControlOptions {
   dbPath: string;
   /** Listen port. `> 0` overrides the MC yaml's port; otherwise the yaml's port (default 8767) wins. */
   port?: number;
+  /**
+   * #1044 — HEADLESS mode (producer/server split). When `true`, the embed runs
+   * `initDatabase` + the `HookStreamPoller` INGESTOR (the db gets populated from
+   * the stack's cc-events) but SKIPS `startServer` — no HTTP/WS listener, no
+   * dashboard, no ProcessManager (which only serves the API's session-control
+   * endpoints, never the ingestor). The returned handle's `port` and
+   * `wsRegistry` are both `null`. A lean producer stack (work/halden) uses this
+   * so the pane-of-glass (#1008) can read its db without it serving a pane.
+   * Default (omitted/false) → FULL mode, byte-identical to pre-#1044.
+   */
+  headless?: boolean;
   /**
    * G-1114.B.4 — lazy accessor for the stack-local agent-presence registry
    * view (serves `GET /api/agents`). A GETTER because the registry boots AFTER
@@ -110,6 +131,38 @@ export async function startMissionControl(
   // unhandled throw here would otherwise leak the db handle — and the bound
   // socket — for the whole daemon lifetime (e.g. EADDRINUSE on a busy fixed port).
   const db = initDatabase(config.db.path);
+
+  // #1044 — HEADLESS path: db + ingestor only, NO server. The ingestor (the
+  // `HookStreamPoller`) is what populates the db from the stack's cc-events, so
+  // a producer stack runs it identically to a full stack — it just doesn't
+  // serve a pane. No ProcessManager (it only backs the API's session-control
+  // endpoints, never the ingestor); no wsRegistry (no clients to broadcast to);
+  // no port (nothing bound). Built with the same incremental-teardown discipline
+  // so a poller-construction failure closes the db rather than leaking it.
+  if (opts.headless === true) {
+    let headlessPoller: HookStreamPoller | null = null;
+    try {
+      // wsRegistry omitted → the ingestor's WS broadcasts are no-ops (the poller
+      // already guards every broadcast on `if (this.wsRegistry)`).
+      headlessPoller = new HookStreamPoller(db, config.hooks);
+      headlessPoller.start();
+
+      const startedPoller = headlessPoller;
+      // require-await: the contract is async (callers `await handle.stop()`);
+      // the headless teardown has nothing to await (no server, no ProcessManager).
+      // eslint-disable-next-line @typescript-eslint/require-await
+      const stop = async (): Promise<void> => {
+        startedPoller.stop();
+        db.close();
+      };
+      return { db, port: null, wsRegistry: null, stop };
+    } catch (err) {
+      headlessPoller?.stop();
+      db.close();
+      throw err;
+    }
+  }
+
   let serverCtx: ReturnType<typeof startServer> | null = null;
   let hookPoller: HookStreamPoller | null = null;
   try {

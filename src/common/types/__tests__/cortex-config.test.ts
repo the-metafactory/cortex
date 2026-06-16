@@ -720,6 +720,8 @@ describe("AgentConfigSchema.mc (MC-I1.S1)", () => {
       port: 0,
       // P-14 U0.1 — sideband defaults to the contract loopback bind.
       sideband: "http://127.0.0.1:9092",
+      // #1044 — the HTTP server defaults ON (full MC); headless sets it false.
+      server: { enabled: true },
       // #989 — local-stack aggregation defaults ON; discovery is a no-op on a
       // single-stack box (finds no siblings).
       // #1008 — dbRead pane-of-glass aggregation defaults ON alongside `enabled`.
@@ -898,6 +900,38 @@ describe("mc.sideband (P-14 U0.1)", () => {
       }).mc.aggregateLocalStacks;
       expect(agentParsed).toEqual(block);
       expect(cortexParsed).toEqual(block);
+    });
+
+    // #1044 — mc.server.enabled is on the SHARED McSchema (headless MC mode:
+    // run db+ingestor, skip the HTTP server). BOTH config shapes must parse it
+    // identically (the #877/#879 lesson) or a headless work/halden stack on the
+    // config-split shape would silently keep its server flag stripped.
+    test("BOTH schemas default mc.server.enabled to true (full mode)", () => {
+      const fromAgent = AgentConfigSchema.parse(minAgentConfig()).mc.server;
+      const fromCortex = CortexConfigSchema.parse(minConfig()).mc.server;
+      const expected = { enabled: true };
+      expect(fromAgent).toEqual(expected);
+      expect(fromCortex).toEqual(expected);
+    });
+
+    test("BOTH schemas parse an explicit mc.server.enabled:false (headless) identically", () => {
+      const fromAgent = AgentConfigSchema.parse(
+        minAgentConfig({ server: { enabled: false } }),
+      ).mc.server;
+      const fromCortex = CortexConfigSchema.parse({
+        ...minConfig(),
+        mc: { server: { enabled: false } },
+      }).mc.server;
+      const expected = { enabled: false };
+      expect(fromAgent).toEqual(expected);
+      expect(fromCortex).toEqual(expected);
+    });
+
+    test("empty mc block ({}) → server.enabled defaults true on BOTH schemas", () => {
+      expect(AgentConfigSchema.parse(minAgentConfig({})).mc.server.enabled).toBe(true);
+      expect(
+        CortexConfigSchema.parse({ ...minConfig(), mc: {} }).mc.server.enabled,
+      ).toBe(true);
     });
   });
 });
