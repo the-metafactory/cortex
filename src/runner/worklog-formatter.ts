@@ -161,7 +161,9 @@ export function formatCompletionSummary(event: PublishedEvent): string {
 export function formatChannelStart(event: PublishedEvent): string {
   const agentName = event.agent_name ?? event.agent_id ?? "agent";
   const desc = extractTaskDescription(event);
-  const channel = event.grove_channel ? `#${event.grove_channel}` : "";
+  // GV-2 (cortex#1077): canonical `cortex_channel`, legacy `grove_channel` fallback.
+  const channelLabel = event.cortex_channel ?? event.grove_channel;
+  const channel = channelLabel ? `#${channelLabel}` : "";
 
   let msg = `\u{1F3C3} **${agentName}** \u2014 "${desc}"`;
   if (channel) msg += ` \u2014 ${channel}`;

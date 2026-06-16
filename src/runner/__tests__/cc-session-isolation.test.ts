@@ -42,7 +42,7 @@ describe("CCSession — settings isolation (default ON)", () => {
     try {
       const session = new CCSession({
         prompt: "hi",
-        groveChannel: "test",
+        channel: "test",
         claudeDir: "/fake/.claude",
       });
       // start() will hit the spy, throw internally, and take the catch path.
@@ -86,7 +86,7 @@ describe("CCSession — settings isolation (default ON)", () => {
     try {
       const session = new CCSession({
         prompt: "hi",
-        groveChannel: "test",
+        channel: "test",
         claudeDir: "/fake/.claude",
       });
       session.on("error", () => {/* expected */});
@@ -98,7 +98,7 @@ describe("CCSession — settings isolation (default ON)", () => {
       // re-introduce hooks/plugins/settings into the isolated session.
       expect(env.CLAUDE_CODE_EXTRA_SETTINGS).toBeUndefined();
       expect(env.CLAUDE_HOOKS_PATH).toBeUndefined();
-      // Cortex's own pipeline var (set from groveChannel) survives.
+      // Cortex's own pipeline var (set from channel) survives.
       // cortex#774: the setter now writes the canonical CORTEX_CHANNEL name.
       expect(env.CORTEX_CHANNEL).toBe("test");
     } finally {
@@ -144,7 +144,7 @@ describe("CCSession — per-skill grants (cortex#710)", () => {
     try {
       const session = new CCSession({
         prompt: "hi",
-        groveChannel: "test",
+        channel: "test",
         claudeDir: "/fake/.claude",
         allowedSkills: ["code-review"],
       });
@@ -169,7 +169,7 @@ describe("CCSession — per-skill grants (cortex#710)", () => {
     try {
       const session = new CCSession({
         prompt: "hi",
-        groveChannel: "test",
+        channel: "test",
         claudeDir: "/fake/.claude",
         // no allowedSkills
       });
@@ -188,7 +188,7 @@ describe("CCSession — per-skill grants (cortex#710)", () => {
     try {
       const session = new CCSession({
         prompt: "hi",
-        groveChannel: "test",
+        channel: "test",
         claudeDir: "/fake/.claude",
         allowedSkills: ["code-review"],
         allowedTools: ["Bash", "Read"],
@@ -216,7 +216,7 @@ describe("CCSession — per-skill grants (cortex#710)", () => {
     try {
       const session = new CCSession({
         prompt: "hi",
-        groveChannel: "test",
+        channel: "test",
         claudeDir: "/fake/.claude",
         allowedSkills: [],
       });
@@ -239,7 +239,7 @@ describe("CCSession — isolation opt-out (principal-as-self)", () => {
     try {
       const session = new CCSession({
         prompt: "hi",
-        groveChannel: "test",
+        channel: "test",
         settingsIsolation: false,
       });
       session.on("error", () => {/* expected */});

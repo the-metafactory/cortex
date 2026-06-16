@@ -183,12 +183,12 @@ describe("buildDevSessionOpts — §3.5b guardrail parity", () => {
     runtime: { capabilities: ["dev.implement"] },
   };
 
-  test("ALWAYS sets groveChannel — bash-guard Gate-1 engagement precondition", () => {
+  test("ALWAYS sets channel — bash-guard Gate-1 engagement precondition", () => {
     // Without a channel, cc-session never sets CORTEX_CHANNEL and the guard
     // disengages (pass-through). The channel MUST be present on both the
     // no-config and the with-config paths.
-    expect(buildDevSessionOpts(agent, undefined).groveChannel).toBe("forge");
-    expect(buildDevSessionOpts(agent, { allowedTools: ["Bash"] }).groveChannel).toBe("forge");
+    expect(buildDevSessionOpts(agent, undefined).channel).toBe("forge");
+    expect(buildDevSessionOpts(agent, { allowedTools: ["Bash"] }).channel).toBe("forge");
   });
 
   test("ALWAYS sets bashAllowlist — conservative default when config declares none", () => {

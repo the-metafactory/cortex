@@ -22,9 +22,9 @@
 
 export interface ClaudeInvocationOpts {
   prompt: string;
-  groveChannel?: string;
+  channel?: string;
   /** G-501: Network identifier for event routing */
-  groveNetwork?: string;
+  network?: string;
   timeoutMs?: number;
   additionalArgs?: string[];
   /** If set, resume an existing CC session (for threaded conversations) */

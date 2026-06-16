@@ -16,7 +16,7 @@ describe("LocalBackend", () => {
     const backend = new LocalBackend();
     const session = backend.spawn({
       prompt: "test",
-      groveChannel: "test",
+      channel: "test",
     });
     expect(session).toBeInstanceOf(CCSession);
   });

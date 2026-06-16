@@ -75,7 +75,7 @@ describe("AgentTeam", () => {
   test("constructs with required opts", () => {
     const team = new AgentTeam({
       prompt: "Research quantum computing",
-      groveChannel: "test",
+      channel: "test",
       participants: [
         { name: "analyst", prompt: "Analytical perspective" },
         { name: "creative", prompt: "Creative perspective" },
@@ -90,7 +90,7 @@ describe("AgentTeam", () => {
   testClaude("emits progress and synthesis events for a real team run", async () => {
     const team = new AgentTeam({
       prompt: "What are the key benefits and risks of nuclear fusion energy? Give a brief answer.",
-      groveChannel: "test",
+      channel: "test",
       participants: [
         { name: "analyst", prompt: "Analyze the scientific and engineering feasibility" },
         { name: "critic", prompt: "Identify the main risks and challenges" },
@@ -117,12 +117,12 @@ describe("AgentTeam", () => {
   test("getTraceContext returns unique IDs", () => {
     const team1 = new AgentTeam({
       prompt: "test",
-      groveChannel: "test",
+      channel: "test",
       participants: [{ name: "a", prompt: "test" }],
     });
     const team2 = new AgentTeam({
       prompt: "test",
-      groveChannel: "test",
+      channel: "test",
       participants: [{ name: "a", prompt: "test" }],
     });
     expect(team1.getTraceContext().traceId).not.toBe(team2.getTraceContext().traceId);

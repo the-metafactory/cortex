@@ -274,14 +274,14 @@ export interface DispatchRuntime {
    */
   additionalArgs?: string[];
   /**
-   * Grove channel/network labels stamped onto downstream events (for
-   * the dashboard's per-channel grouping). Carried via `GROVE_CHANNEL`
-   * / `GROVE_NETWORK` env vars on the CC child process; future
-   * substrates may surface the same labels through their own event-tap
-   * mechanism.
+   * Surface channel/network labels stamped onto downstream events (for
+   * the dashboard's per-channel grouping). Carried via `CORTEX_CHANNEL`
+   * / `CORTEX_NETWORK` env vars (legacy `GROVE_*` fallback, cortex#774) on
+   * the CC child process; future substrates may surface the same labels
+   * through their own event-tap mechanism.
    */
-  groveChannel?: string;
-  groveNetwork?: string;
+  channel?: string;
+  network?: string;
   /**
    * Resume token for substrates that support stateful resumption (CC's
    * `--resume <session-id>`). Future stateless substrates (`bus-peer`

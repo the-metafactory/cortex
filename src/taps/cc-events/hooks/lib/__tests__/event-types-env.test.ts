@@ -64,7 +64,7 @@ describe("createRawEvent — CORTEX_* env resolution with GROVE_* fallback", () 
     process.env.CORTEX_CHANNEL = "ivy";
     const event = createRawEvent("agent.task.started", "Stop", {}, {
       sessionId: "s1",
-      groveChannel: "explicit",
+      channel: "explicit",
     });
     expect(event.grove_channel).toBe("explicit");
   });

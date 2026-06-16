@@ -390,8 +390,8 @@ describe("ClaudeCodeHarness — DispatchRequest → CCSessionOpts mapping", () =
         cwd: "/work",
         allowedDirs: ["/work", "/tmp"],
         additionalArgs: ["--verbose"],
-        groveChannel: "grove",
-        groveNetwork: "metafactory",
+        channel: "grove",
+        network: "metafactory",
         resumeSessionId: "sess-123",
         bashAllowlist: { rules: [{ pattern: "ls" }], repos: ["grove"] },
         bashGuardDisabled: false,
@@ -403,8 +403,8 @@ describe("ClaudeCodeHarness — DispatchRequest → CCSessionOpts mapping", () =
     expect(cap.opts[0]?.cwd).toBe("/work");
     expect(cap.opts[0]?.allowedDirs).toEqual(["/work", "/tmp"]);
     expect(cap.opts[0]?.additionalArgs).toEqual(["--verbose"]);
-    expect(cap.opts[0]?.groveChannel).toBe("grove");
-    expect(cap.opts[0]?.groveNetwork).toBe("metafactory");
+    expect(cap.opts[0]?.channel).toBe("grove");
+    expect(cap.opts[0]?.network).toBe("metafactory");
     expect(cap.opts[0]?.resumeSessionId).toBe("sess-123");
     expect(cap.opts[0]?.bashAllowlist).toEqual({
       rules: [{ pattern: "ls" }],
@@ -428,7 +428,7 @@ describe("ClaudeCodeHarness — DispatchRequest → CCSessionOpts mapping", () =
     const cap = captureFactory(makeResult());
     const h = new ClaudeCodeHarness({ source: SOURCE, ccSessionFactory: cap.factory });
     const req = makeRequest({
-      runtime: { cwd: "/work", groveChannel: "grove" },
+      runtime: { cwd: "/work", channel: "grove" },
       context: [
         { kind: "env", data: { principal: "andreas", entity: "pr/45", project: "cortex" } },
       ],
@@ -437,7 +437,7 @@ describe("ClaudeCodeHarness — DispatchRequest → CCSessionOpts mapping", () =
     await drain(h.dispatch(req));
 
     expect(cap.opts[0]?.cwd).toBe("/work");
-    expect(cap.opts[0]?.groveChannel).toBe("grove");
+    expect(cap.opts[0]?.channel).toBe("grove");
     expect(cap.opts[0]?.principal).toBe("andreas");
     expect(cap.opts[0]?.entity).toBe("pr/45");
     expect(cap.opts[0]?.project).toBe("cortex");

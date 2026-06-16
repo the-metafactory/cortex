@@ -305,6 +305,11 @@ function buildBlockEvent(
     // surface/principal resolvers — same chain the EventLogger hooks use. Since
     // cc-session now SETS the CORTEX_* names (not GROVE_*), reading GROVE_* only
     // would emit undefined channel/agent/network metadata on every block event.
+    // GV-2 (cortex#1077): DUAL-WRITE the channel label — canonical
+    // `cortex_channel` AND legacy `grove_channel` (retires at v3.0.0). The
+    // GROVE_* env fallback inside resolveSurfaceEnv is the cortex#774 shim and
+    // is intentionally left intact.
+    cortex_channel: resolveSurfaceEnv("CHANNEL"),
     grove_channel: resolveSurfaceEnv("CHANNEL"),
     agent_id: resolveSurfaceEnv("AGENT_ID"),
     agent_name: resolveSurfaceEnv("AGENT_NAME"),
