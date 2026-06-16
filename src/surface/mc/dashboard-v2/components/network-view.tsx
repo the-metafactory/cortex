@@ -34,6 +34,7 @@ import { pickAgentsPanelMode } from "../lib/agents-display";
 import {
   buildNetworkGraph,
   applyTransportOverlay,
+  deriveServingPrincipal,
 } from "../lib/network-graph-adapter";
 import {
   buildTransportOverlay,
@@ -134,6 +135,15 @@ export function NetworkView({
   const [filter, setFilter] = useState<NetworkFilterState>(DEFAULT_NETWORK_FILTER);
   const capabilityOptions = useMemo(
     () => collectCapabilityOptions(state.agents),
+    [state.agents],
+  );
+  // #1008 — derive the serving principal from the FULL snapshot (a filter that
+  // hides local agents must not lose it) so BOTH the graph adapter AND the
+  // click-through detail panel classify a same-principal sibling as LOCAL, not
+  // federated. The adapter derives its own copy internally; the panel needs it
+  // threaded as a prop (it's pure — no snapshot access of its own).
+  const servingPrincipal = useMemo(
+    () => deriveServingPrincipal(state.agents),
     [state.agents],
   );
   const filteredAgents = useMemo(
@@ -355,6 +365,7 @@ export function NetworkView({
             {selectedAgent && (
               <NetworkDetailPanel
                 agent={selectedAgent}
+                servingPrincipal={servingPrincipal}
                 dispatch={dispatch}
                 onClose={closePanel}
                 onViewInWorkingGrid={onViewInWorkingGrid}

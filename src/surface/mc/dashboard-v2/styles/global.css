@@ -619,7 +619,10 @@ html, body {
   color: color-mix(in oklch, var(--accent) 70%, var(--fg-faint));
 }
 .network-detail-federated-badge { font-size: 12px; line-height: 1; }
-.network-detail-foreign-activity { font-size: 11.5px; font-style: italic; }
+/* #1008 — the "not in this stack's projection" activity note, shared by a FOREIGN
+   peer and a same-principal SIBLING (both live on another stack). The base class
+   carries the styling; the per-origin modifier is a hook for future divergence. */
+.network-detail-nonlocal-activity { font-size: 11.5px; font-style: italic; }
 .network-detail-header {
   display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
 }
