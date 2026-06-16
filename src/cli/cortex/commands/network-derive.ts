@@ -38,6 +38,7 @@
 
 import type { LoadedConfig } from "../../../common/config/loader";
 import type { ServicePlatform } from "../../../common/nats/nats-service-manager";
+import type { OperatorModeLeafPackage } from "../../../common/nats/leaf-remote-renderer";
 
 // =============================================================================
 // Types
@@ -74,6 +75,15 @@ export interface DerivedJoinInputs {
    */
   account?: string;
   credsPath: string;
+  /**
+   * O-3 (cortex#1053) — the operator-mode leaf package, assembled from
+   * `--operator-jwt` / `--account-jwt` / `--account` (+ optional
+   * `--system-account` / `--system-account-jwt`) flags or the matching
+   * `stack.nats_infra.*` fields. Present ONLY when at least the operator JWT +
+   * account + account JWT all resolve — the minimum to convert an anonymous bus.
+   * Absent ⇒ join falls back to the #794 fail-fast on an anonymous bus.
+   */
+  operatorModePackage?: OperatorModeLeafPackage;
   /**
    * #762 — the capability ids this stack announces INTO the network, read from
    * the matching `policy.federated.networks[].announce_capabilities[]` block in
@@ -122,6 +132,14 @@ export interface JoinOverrides {
   unitPath?: string;
   account?: string;
   credsPath?: string;
+  /** O-3 (#1053) — `--operator-jwt`. */
+  operatorJwt?: string;
+  /** O-3 (#1053) — `--account-jwt`. */
+  accountJwt?: string;
+  /** O-3 (#1053) — `--system-account`. */
+  systemAccount?: string;
+  /** O-3 (#1053) — `--system-account-jwt`. */
+  systemAccountJwt?: string;
 }
 
 /** A reader that loads + validates the cortex config from a path. */
@@ -357,6 +375,35 @@ export function deriveJoinInputs(
   const credsPath =
     overrides.credsPath ?? natsInfra?.creds_path ?? defaultCredsPath(networkId);
 
+  // O-3 (cortex#1053) — assemble the operator-mode leaf package. Flag wins over
+  // config (`stack.nats_infra.{operator_jwt,account_jwt,system_account,…}`). The
+  // package materialises ONLY when its minimum (operator JWT + account + account
+  // JWT) all resolve; a partial set is treated as "no package" so join falls back
+  // to the #794 fail-fast rather than handing a half-formed package to the
+  // renderer (which would refuse anyway, but with a less obvious cause). O-4
+  // supplies these via the handshake; here they come from flags/config.
+  const operatorJwt = overrides.operatorJwt ?? natsInfra?.operator_jwt;
+  const accountJwt = overrides.accountJwt ?? natsInfra?.account_jwt;
+  const systemAccount = overrides.systemAccount ?? natsInfra?.system_account;
+  const systemAccountJwt =
+    overrides.systemAccountJwt ?? natsInfra?.system_account_jwt;
+  const operatorModePackage: OperatorModeLeafPackage | undefined =
+    operatorJwt !== undefined &&
+    operatorJwt !== "" &&
+    account !== undefined &&
+    accountJwt !== undefined &&
+    accountJwt !== ""
+      ? {
+          operatorJwt,
+          account,
+          accountJwt,
+          ...(systemAccount !== undefined &&
+            systemAccount !== "" && { systemAccount }),
+          ...(systemAccountJwt !== undefined &&
+            systemAccountJwt !== "" && { systemAccountJwt }),
+        }
+      : undefined;
+
   // #762 — announce_capabilities for THIS network, read from the matching
   // policy.federated.networks[] block. The join announces these to the registry
   // with networks:[networkId] so the principal joins the roster. Absent network
@@ -380,6 +427,7 @@ export function deriveJoinInputs(
       platform: descriptor.platform,
       ...(account !== undefined && { account }),
       credsPath,
+      ...(operatorModePackage !== undefined && { operatorModePackage }),
       announceCapabilities,
     },
   };

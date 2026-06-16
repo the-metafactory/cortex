@@ -42,6 +42,7 @@ import {
   natsConfigMonitorUrl,
   removeLeafInclude,
   renderLeafIncludeFile,
+  renderOperatorModeBlocks,
   resolveLeafBindMode,
 } from "../../../common/nats/leaf-remote-renderer";
 import {
@@ -497,6 +498,26 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
         ? readFileSync(configPath, "utf-8")
         : "";
       return resolveLeafBindMode(text, account, hasCreds);
+    },
+    convertToOperatorMode(pkg) {
+      // O-3 (cortex#1053) — render the SOP §B0.1 operator-mode blocks into the
+      // stack's nats config from the leaf package. The DECISION (convert /
+      // already / refuse) is a PURE read (identical in live + dry-run); only the
+      // WRITE-BACK is gated on `mutate`. An absent/empty config file reads as
+      // anonymous (a brand-new stack), so renderOperatorModeBlocks converts it.
+      const configPath = expandTilde(cfg.natsConfigPath ?? "");
+      const current = existsSync(configPath)
+        ? readFileSync(configPath, "utf-8")
+        : "";
+      const result = renderOperatorModeBlocks(current, pkg);
+      // Only a genuine `converted` mutates the on-disk config. `already` is a
+      // byte-stable no-op (skip the write); `refuse` writes nothing. Dry-run is
+      // inert — it surfaces the decision in the step log without touching disk.
+      if (result.status === "converted" && mutate) {
+        mkdirSync(dirname(configPath), { recursive: true });
+        writeFileSync(configPath, result.conf, "utf-8");
+      }
+      return result;
     },
     credsExist(path) {
       // #821 — pure READ (identical in live + dry-run): does the leaf creds file
