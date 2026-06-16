@@ -37,12 +37,13 @@ in and the loop runs end-to-end with no human conductor.
 
 | Slice | What | Issue | State |
 |---|---|---|---|
-| **W5.0** | merge policy ('review-loop-passed + CI-green → auto-approve & merge') + approver identity + signed commits | [#924](https://github.com/the-metafactory/cortex/issues/924) | ⬜ |
-| **W5.1** | stack enablement — opt a stack into the dev-loop. **Re-pointed onto the capability-offering model (CO-6, [#945](https://github.com/the-metafactory/cortex/issues/945)):** enabling = declaring the dev-loop capabilities as `local` offerings (`cortex offer dev.implement/release.cut/code-review.* --scope local`), not a bespoke capabilities+streams+approver recipe. The offering mechanism (CO-1/2/3) already ships; W5.1 is now the documented SOP ([`docs/sop-enable-dev-loop.md`](sop-enable-dev-loop.md)). | [#925](https://github.com/the-metafactory/cortex/issues/925) → [#945](https://github.com/the-metafactory/cortex/issues/945) | ⬜ *(bridge to true autonomous dev; mechanism via CO-6)* |
+| **W5.0** | merge policy ('review-loop-passed + CI-green → auto-approve & merge') + approver identity + signed commits | [#924](https://github.com/the-metafactory/cortex/issues/924) | ✅ pilot#164 (gate + trust model) + cortex#994 (signing); #924 closed. Approver fail-closes until `APPROVER_GH_TOKEN` is set → [#995](https://github.com/the-metafactory/cortex/issues/995). |
+| **W5.1** | stack enablement — opt a stack into the dev-loop. **Re-pointed onto the capability-offering model (CO-6, [#945](https://github.com/the-metafactory/cortex/issues/945)):** enabling = declaring the dev-loop capabilities as `local` offerings (`cortex offer dev.implement/release.cut/code-review.* --scope local`), not a bespoke capabilities+streams+approver recipe. The offering mechanism (CO-1/2/3) already ships; W5.1 is now the documented SOP ([`docs/sop-enable-dev-loop.md`](sop-enable-dev-loop.md)). **BLOCKED on [#1009](https://github.com/the-metafactory/cortex/issues/1009):** a stack can't declare the dev-loop capabilities until the bundle's `dev`/`release`/`approver` agents are real `agents[]` entries (verified — the config-merge dry-run on meta-factory fails `CortexConfigSchema` on unresolved `provided_by`). Two-step: (1) merge capabilities + role; (2) `cortex offer set --scope local` (offerings are post-merge per DD-CO-7, NOT in the fragment). | [#925](https://github.com/the-metafactory/cortex/issues/925) → [#945](https://github.com/the-metafactory/cortex/issues/945) | ⬜ blocked on #1009 |
 | **W5.2** | F-4.2 production ReleaseExecutor (real git/gh seam behind release.cut) | [#926](https://github.com/the-metafactory/cortex/issues/926) | ⬜ |
 | **W5.3** | F-5a ExecutionBackend wiring (local; sandbox-ready seam) | [#927](https://github.com/the-metafactory/cortex/issues/927) | ⬜ |
-| **W5.4** | assemble the installable `dev-loop` blueprint (`arc install dev-loop`) | [#928](https://github.com/the-metafactory/cortex/issues/928) | ⬜ |
-| **W5.5** | first live dogfood run — the loop drives a real PR with no human conductor | [#929](https://github.com/the-metafactory/cortex/issues/929) | ⬜ |
+| **W5.4** | assemble the installable `dev-loop` blueprint (`arc install dev-loop`) | [#928](https://github.com/the-metafactory/cortex/issues/928) | ✅ bundle assembled per §6.1 + `the-metafactory/dev-loop` repo created (private; flip public for the marketplace once hardened). Agents ship **scaffolded** → deployable-hardening tracked [#1009](https://github.com/the-metafactory/cortex/issues/1009). |
+| **W5.5** | first live dogfood run — the loop drives a real PR with no human conductor | [#929](https://github.com/the-metafactory/cortex/issues/929) | ⬜ blocked on #1009 (deployable agents) + W5.1 (enable). First run **holds at merge** until #995 (approver credential); a human casts the final merge. |
+| **W5.1a** | **harden the scaffolded dev/release agent packages into deployable agents** (the verified W5.1/W5.5 prerequisite) | [#1009](https://github.com/the-metafactory/cortex/issues/1009) | ⬜ **next** |
 
 **Two learnings from the v5.6.0 drive that shaped wave-5:**
 1. *Dormant-by-default is safe but inert* → W5.1 makes enabling a stack first-class. **Re-pointed (CO-6):** dormant-by-default is the *correct* default of the capability-offering model (default-deny → `local`); enabling = `cortex offer … --scope local` (`docs/sop-enable-dev-loop.md`), a clean instance of the general model rather than a bespoke dev-loop path.
@@ -55,5 +56,12 @@ in and the loop runs end-to-end with no human conductor.
 
 ## Build order (dependency-sequenced)
 
-**Done:** F-1 → F-2/F-3/F-4.1/F-6{a–e} (built, reviewed, merged) → released v5.6.0 + deployed.
-**Wave 5:** W5.0 (policy+identity) + W5.2/W5.3 (executor/backend, parallel) → W5.1 (enable a stack — needs W5.0) → W5.4 (blueprint) → W5.5 (dogfood). Then F-7 (mining).
+**Done:** F-1 → F-2/F-3/F-4.1/F-6{a–e} (built, reviewed, merged) → released v5.6.0 + deployed. **W5.0** (merge gate + signing) ✅ + **W5.4** (bundle + `the-metafactory/dev-loop` repo) ✅ — both landed; the Capability Offering epic (#939, the offer/enablement mechanism) shipped in v5.9.0.
+
+**Remaining (verified sequence, 2026-06-16):** the loop is built + released but **not enabled on any stack** (meta-factory/work have 0 dev-loop capabilities) and **not running**. The make-it-live path:
+1. **W5.1a / #1009 — harden `dev`+`release` agents into deployable packages** (the consumer runtime exists; package = persona + manifest + AgentState + nkey identity). **The current critical path.** `approver` stays dormant until #995.
+2. **W5.1 / #925 — enable on an isolated `cortex stack create dev-loop`** (contained blast radius — recommended over live Luna for a first autonomous run): config-merge capabilities+role → `cortex offer set --scope local` → restart → verify on the bus.
+3. **W5.5 / #929 — first live dogfood**: dispatch a real task → implement → review → fix → **HOLD at merge** (human casts it, approver dormant). Expect to surface wiring gaps.
+4. **#995 — provision the approver credential** (principal action) → the loop closes the merge itself; W5.5 becomes truly no-conductor.
+
+W5.2/W5.3 (production ReleaseExecutor / sandbox backend) + F-7 (mining) follow. **A redeploy** also closes the current daemon drift (deployed v5.12.0 vs main v5.16.0 — unrelated observability work, not the loop).
