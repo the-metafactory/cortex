@@ -210,7 +210,7 @@ describe("DaemonBrainHost — round-trip", () => {
     await until(() => brain.lastTask()?.task_id === "g1");
 
     // Open a gate; the host must NOT fail the task during the 450ms wait.
-    brain.emit(JSON.stringify({ v: 1, type: "ask_principal", task_id: "g1", gate: "operator-ack", prompt: "Run?" }));
+    brain.emit(JSON.stringify({ v: 1, type: "ask_principal", task_id: "g1", gate: "run-ack", prompt: "Run?" }));
     await until(() => gateResolved, 2000);
     // Gate answered → brain completes the (re-armed) task.
     brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "g1", status: "complete" }));
