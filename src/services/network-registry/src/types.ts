@@ -417,11 +417,20 @@ export interface IssuanceDecisionClaimWithPackage extends IssuanceDecisionClaim 
  * claim with that key. The registry verifies:
  *   1. Signature is valid over canonical-JSON(claim).
  *   2. Signer pubkey === request.peer_pubkey.
+ *   3. claim.request_id === the path :request_id (N2 — token is bound to a
+ *      specific request so it cannot be replayed against a different request
+ *      for the same peer key).
  * No nonce (reads are idempotent). Clock-skew applies.
  */
 export interface IssuancePackageReadClaim {
   /** The peer's own stack pubkey (base64 Ed25519). Verified against the request. */
   peer_pubkey: string;
+  /**
+   * N2 — binds this signed token to a specific issuance request.
+   * Must equal the :request_id path parameter; a mismatch is rejected 401.
+   * 32 lowercase hex chars (the format generateRequestId produces).
+   */
+  request_id: string;
   /** ISO-8601 UTC; within the CLOCK_SKEW_MS window. */
   issued_at: string;
 }

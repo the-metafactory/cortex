@@ -138,13 +138,24 @@ async function get(
   return app.fetch(new Request(`http://localhost${path}`, { headers }), e);
 }
 
-/** Build a peer PoP header for the given peer key. */
+/**
+ * Build a peer PoP header for the given peer key.
+ *
+ * N2 — `requestId` is now required: the signed claim includes `request_id`
+ * so the token is bound to a specific issuance request and cannot be replayed
+ * against a different request for the same peer key.
+ *
+ * `opts.requestIdOverride` lets tests sign a claim with a DIFFERENT request_id
+ * than the path to exercise the mismatch rejection.
+ */
 async function makePeerPoP(
   peerKey: PrincipalKey,
-  opts: { issuedAt?: string; signWith?: PrincipalKey } = {},
+  requestId: string,
+  opts: { issuedAt?: string; signWith?: PrincipalKey; requestIdOverride?: string } = {},
 ): Promise<string> {
   const claim: IssuancePackageReadClaim = {
     peer_pubkey: peerKey.publicKeyB64,
+    request_id: opts.requestIdOverride ?? requestId,
     issued_at: opts.issuedAt ?? new Date().toISOString(),
   };
   const message = new TextEncoder().encode(canonicalJSON(claim));
@@ -499,7 +510,7 @@ describe("GET /issuance-requests/:id/package — peer PoP", () => {
     expect(grantRes.status).toBe(200);
 
     // Peer fetches their package.
-    const peerHeader = await makePeerPoP(principal);
+    const peerHeader = await makePeerPoP(principal, req.request_id);
     const res = await get(
       `/issuance-requests/${req.request_id}/package`,
       env,
@@ -516,7 +527,7 @@ describe("GET /issuance-requests/:id/package — peer PoP", () => {
     const req = await registerAndGetRequest("pop-bob");
     // Do NOT grant.
 
-    const peerHeader = await makePeerPoP(principal);
+    const peerHeader = await makePeerPoP(principal, req.request_id);
     const res = await get(
       `/issuance-requests/${req.request_id}/package`,
       env,
@@ -533,7 +544,7 @@ describe("GET /issuance-requests/:id/package — peer PoP", () => {
     const decision = await makeSignedAdminDecision(req.request_id, "reject", admin);
     await post(`/issuance-requests/${req.request_id}/reject`, decision);
 
-    const peerHeader = await makePeerPoP(principal);
+    const peerHeader = await makePeerPoP(principal, req.request_id);
     const res = await get(
       `/issuance-requests/${req.request_id}/package`,
       env,
@@ -552,7 +563,7 @@ describe("GET /issuance-requests/:id/package — peer PoP", () => {
 
     // A different peer key signs the PoP.
     const otherKey = await makePrincipalKey();
-    const peerHeader = await makePeerPoP(otherKey);
+    const peerHeader = await makePeerPoP(otherKey, req.request_id);
     const res = await get(
       `/issuance-requests/${req.request_id}/package`,
       env,
@@ -571,7 +582,7 @@ describe("GET /issuance-requests/:id/package — peer PoP", () => {
 
     // Build a PoP that claims principal.publicKeyB64 but is signed by another key.
     const otherKey = await makePrincipalKey();
-    const peerHeader = await makePeerPoP(principal, { signWith: otherKey });
+    const peerHeader = await makePeerPoP(principal, req.request_id, { signWith: otherKey });
     const res = await get(
       `/issuance-requests/${req.request_id}/package`,
       env,
@@ -582,9 +593,10 @@ describe("GET /issuance-requests/:id/package — peer PoP", () => {
   });
 
   test("peer request on nonexistent request_id → 404 not_found", async () => {
-    const peerHeader = await makePeerPoP(principal);
+    const knownId = "0000000000000000000000000000cafe";
+    const peerHeader = await makePeerPoP(principal, knownId);
     const res = await get(
-      "/issuance-requests/0000000000000000000000000000cafe/package",
+      `/issuance-requests/${knownId}/package`,
       env,
       { "x-peer-signed": peerHeader },
     );
@@ -599,7 +611,7 @@ describe("GET /issuance-requests/:id/package — peer PoP", () => {
     const decision = await makeSignedAdminDecision(req.request_id, "grant", admin);
     await post(`/issuance-requests/${req.request_id}/grant`, decision);
 
-    const peerHeader = await makePeerPoP(principal);
+    const peerHeader = await makePeerPoP(principal, req.request_id);
     const res = await get(
       `/issuance-requests/${req.request_id}/package`,
       env,
@@ -622,7 +634,10 @@ describe("GET /issuance-requests/:id/package — peer PoP", () => {
   });
 
   test("invalid request_id on /package route → 400 invalid_request_id", async () => {
-    const peerHeader = await makePeerPoP(principal);
+    // For an invalid path param we use a placeholder known-good id in the claim
+    // (the path validation fires before the claim is parsed, so the claim
+    // request_id value doesn't matter here — the path param is rejected first).
+    const peerHeader = await makePeerPoP(principal, "0000000000000000000000000000cafe");
     const res = await get(
       "/issuance-requests/not-valid-hex/package",
       env,
@@ -640,7 +655,7 @@ describe("GET /issuance-requests/:id/package — peer PoP", () => {
 
     // PoP with a stale issued_at (30 min ago > 5 min skew window).
     const staleAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-    const peerHeader = await makePeerPoP(principal, { issuedAt: staleAt });
+    const peerHeader = await makePeerPoP(principal, req.request_id, { issuedAt: staleAt });
     const res = await get(
       `/issuance-requests/${req.request_id}/package`,
       env,
@@ -659,7 +674,7 @@ describe("GET /issuance-requests/:id/package — peer PoP", () => {
     await post(`/issuance-requests/${req.request_id}/grant`, decision);
 
     // Admin tries to fetch using admin key as peer — wrong_key since admin ≠ registered peer.
-    const adminPoP = await makePeerPoP(admin);
+    const adminPoP = await makePeerPoP(admin, req.request_id);
     const res = await get(
       `/issuance-requests/${req.request_id}/package`,
       env,
@@ -667,6 +682,89 @@ describe("GET /issuance-requests/:id/package — peer PoP", () => {
     );
     expect(res.status).toBe(403);
     expect(((await res.json()) as { error: string }).error).toBe("wrong_key");
+  });
+
+  // ===========================================================================
+  // M1 — rate-limit: flood of peer GETs trips 429
+  // ===========================================================================
+
+  test("M1 — flood of peer GET /package trips 429 (rate-limit shed)", async () => {
+    const req = await registerAndGetRequest("pop-rate-limit");
+
+    // Grant with package so the request is GRANTED.
+    const decision = await makeSignedAdminDecisionWithPackage(req.request_id, admin, VALID_PACKAGE);
+    await post(`/issuance-requests/${req.request_id}/grant`, decision);
+
+    // The "read" bucket allows 120 / 60s. Exhaust it with a batch of requests
+    // (each signed with a fresh key so they don't short-circuit on ownership).
+    // We send 121 to guarantee we cross the threshold; the in-memory fallback
+    // will reject the 121st.
+    let tripped = false;
+    for (let i = 0; i <= 120; i++) {
+      const peerHeader = await makePeerPoP(principal, req.request_id);
+      const res = await get(
+        `/issuance-requests/${req.request_id}/package`,
+        env,
+        { "x-peer-signed": peerHeader },
+      );
+      if (res.status === 429) {
+        tripped = true;
+        const body = (await res.json()) as { error: string };
+        expect(body.error).toBe("rate_limited");
+        break;
+      }
+    }
+    expect(tripped).toBe(true);
+  });
+
+  // ===========================================================================
+  // N2 — request_id binding: token signed for request A rejected at request B
+  // ===========================================================================
+
+  test("N2 — claim.request_id missing from envelope → 400 validation_failed", async () => {
+    // Build a raw header WITHOUT request_id in the claim (old pre-N2 shape).
+    const claim = {
+      peer_pubkey: principal.publicKeyB64,
+      // request_id deliberately omitted
+      issued_at: new Date().toISOString(),
+    };
+    const message = new TextEncoder().encode(canonicalJSON(claim));
+    const signature = await signEd25519(principal.privateKeyB64, message);
+    const header = JSON.stringify({ claim, signature });
+
+    const req = await registerAndGetRequest("n2-missing");
+    const res = await get(
+      `/issuance-requests/${req.request_id}/package`,
+      env,
+      { "x-peer-signed": header },
+    );
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: string };
+    expect(json.error).toBe("x-peer-signed validation_failed");
+  });
+
+  test("N2 — claim signed for request A is rejected at request B → 401 request_id_mismatch", async () => {
+    // Register two separate principals so we get two distinct issuance requests.
+    const reqA = await registerAndGetRequest("n2-request-a");
+    const reqB = await registerAndGetRequest("n2-request-b");
+
+    // Grant request B so it reaches the package-serve logic.
+    const decisionB = await makeSignedAdminDecisionWithPackage(reqB.request_id, admin, VALID_PACKAGE);
+    await post(`/issuance-requests/${reqB.request_id}/grant`, decisionB);
+
+    // Build a PoP signed for request A (requestIdOverride = reqA.request_id),
+    // then present it at request B's endpoint.
+    const peerHeader = await makePeerPoP(principal, reqB.request_id, {
+      requestIdOverride: reqA.request_id,
+    });
+    const res = await get(
+      `/issuance-requests/${reqB.request_id}/package`,
+      env,
+      { "x-peer-signed": peerHeader },
+    );
+    expect(res.status).toBe(401);
+    const json = (await res.json()) as { error: string };
+    expect(json.error).toBe("request_id_mismatch");
   });
 });
 

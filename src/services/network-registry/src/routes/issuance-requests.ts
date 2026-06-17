@@ -176,7 +176,7 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
     // IMPORTANT: The canonical-JSON signed payload includes leaf_package when
     // present — the admin signed the whole claim object (including the package),
     // so the existing signature gate already authenticates the package content.
-    const message = new TextEncoder().encode(canonicalJSON(claim));
+    const message = new TextEncoder().encode(canonicalJSON(claim)) as Uint8Array<ArrayBuffer>;
     const gateResult = await applyAdminGate(
       adminPubkeys,
       claim.admin_pubkey,
@@ -244,6 +244,14 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
       return { error: "admin_not_configured", status: 503 };
     }
 
+    // M1 — rate-limit BEFORE the Ed25519 verify to shed compute-DoS.
+    // Admin reads are keyed by IP only (no entity id in the path to fold in).
+    // Uses the "read" bucket (120/60s) — same class as other admin GET endpoints.
+    const allowed = await checkRateLimit(c.env, "read", clientKey(c.req.raw));
+    if (!allowed) {
+      return { error: "rate_limited", status: 429 };
+    }
+
     // 2. Parse + validate x-admin-signed header.
     const headerVal = c.req.header("x-admin-signed");
     if (!headerVal) {
@@ -272,7 +280,7 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
 
     // 4. Signature + allowlist check (no nonce for reads — idempotent).
     const message = new TextEncoder().encode(canonicalJSON(signed.claim));
-    const valid = await verifyEd25519(signed.claim.admin_pubkey, signed.signature, message);
+    const valid = await verifyEd25519(signed.claim.admin_pubkey, signed.signature, message as Uint8Array<ArrayBuffer>);
     if (!valid) return { error: "signature_invalid", status: 401 };
     if (!adminPubkeys.has(signed.claim.admin_pubkey)) return { error: "admin_not_authorized", status: 403 };
 
@@ -298,7 +306,7 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
   app.get("/issuance-requests", async (c) => {
     const authError = await verifyAdminReadHeader(c);
     if (authError) {
-      return c.json({ error: authError.error }, authError.status as 400 | 401 | 403 | 503);
+      return c.json({ error: authError.error }, authError.status as 400 | 401 | 403 | 429 | 503);
     }
 
     const status = c.req.query("status") as IssuanceStatus | undefined;
@@ -322,7 +330,7 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
   app.get("/issuance-requests/:request_id", async (c) => {
     const authError = await verifyAdminReadHeader(c);
     if (authError) {
-      return c.json({ error: authError.error }, authError.status as 400 | 401 | 403 | 503);
+      return c.json({ error: authError.error }, authError.status as 400 | 401 | 403 | 429 | 503);
     }
 
     const requestId = c.req.param("request_id") ?? "";
@@ -368,6 +376,16 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
       return c.json({ error: "invalid_request_id" }, 400);
     }
 
+    // M1 — rate-limit BEFORE the header-parse / Ed25519-verify to shed compute-DoS.
+    // Keyed by (IP, requestId) so a targeted flood against one request doesn't
+    // exhaust the bucket for all requests from that IP, and a distributed flood
+    // can't hide behind a shared egress IP by spreading across request ids.
+    // Uses the "read" bucket (120/60s) — same class as other GET endpoints.
+    const allowed = await checkRateLimit(c.env, "read", clientKey(c.req.raw, requestId));
+    if (!allowed) {
+      return c.json(TOO_MANY_REQUESTS_BODY, 429, { "Retry-After": String(retryAfterSeconds("read")) });
+    }
+
     // 1. Parse + validate x-peer-signed header.
     const headerVal = c.req.header("x-peer-signed");
     if (!headerVal) {
@@ -387,6 +405,13 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
     }
     const { signed } = readCheck;
 
+    // N2 — request_id binding check: the signed token must name this specific
+    // request. Reject 401 if it was signed for a different request_id (same
+    // error class as a bad signature — the token is not valid for this endpoint).
+    if (signed.claim.request_id !== requestId) {
+      return c.json({ error: "request_id_mismatch" }, 401);
+    }
+
     // 2. Clock-skew check.
     const issued = Date.parse(signed.claim.issued_at);
     const now = Date.now();
@@ -396,7 +421,7 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
 
     // 3. Signature verification — peer proves possession of claim.peer_pubkey.
     const message = new TextEncoder().encode(canonicalJSON(signed.claim));
-    const valid = await verifyEd25519(signed.claim.peer_pubkey, signed.signature, message);
+    const valid = await verifyEd25519(signed.claim.peer_pubkey, signed.signature, message as Uint8Array<ArrayBuffer>);
     if (!valid) {
       return c.json({ error: "signature_invalid" }, 401);
     }

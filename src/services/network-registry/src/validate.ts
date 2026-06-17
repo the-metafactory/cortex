@@ -726,9 +726,15 @@ export function validateGrantLeafPackage(
   }
   const p = pkg as Record<string, unknown>;
 
-  // Reject secret-looking fields. An admin including credsPath or a seed in
-  // the grant body is an admin error — fail loudly rather than silently
-  // ignoring the field (which would hide data-hygiene bugs).
+  // Secret-detection (N1 — secondary / belt-and-suspenders control):
+  // The PRIMARY guard is the canonical allow-list build at the bottom of this
+  // function — we reconstruct GrantLeafPackage from only the fields the schema
+  // names, so unknown fields are silently dropped and never reach storage.
+  // This deny-list is a SECONDARY, defense-in-depth layer: it makes the
+  // rejection explicit and loud when an admin accidentally includes a field
+  // whose name looks like a secret (e.g. `credsPath`, `accountSeed`). Failing
+  // early here surfaces the admin error at grant time rather than silently
+  // discarding the value and leaving the admin wondering where it went.
   const SECRET_FIELD_RE = /cred|seed|secret|private/i;
   for (const key of Object.keys(p)) {
     if (SECRET_FIELD_RE.test(key)) {
@@ -854,6 +860,10 @@ export function validateIssuanceDecisionClaimWithPackage(
  * Validate the `x-peer-signed` header envelope for peer PoP package reads.
  * The header value is JSON: { claim: IssuancePackageReadClaim, signature: string }.
  * No nonce (reads are idempotent). Clock-skew applies.
+ *
+ * N2 — `claim.request_id` is required and must be a valid hex32 request id.
+ * The route layer then asserts it equals the :request_id path parameter so
+ * a signed token cannot be replayed against a different request for the same key.
  */
 export function validateSignedIssuancePackageRead(
   body: unknown,
@@ -878,13 +888,20 @@ export function validateSignedIssuancePackageRead(
       errors: [{ field: "claim.peer_pubkey", message: "must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)" }],
     };
   }
+  // N2 — request_id binds the token to a specific issuance request.
+  if (typeof c.request_id !== "string" || !isValidRequestId(c.request_id)) {
+    return {
+      ok: false,
+      errors: [{ field: "claim.request_id", message: "must be a 32-char lowercase hex request id" }],
+    };
+  }
   if (typeof c.issued_at !== "string" || Number.isNaN(Date.parse(c.issued_at))) {
     return { ok: false, errors: [{ field: "claim.issued_at", message: "must be an ISO-8601 timestamp" }] };
   }
   return {
     ok: true,
     signed: {
-      claim: { peer_pubkey: c.peer_pubkey, issued_at: c.issued_at },
+      claim: { peer_pubkey: c.peer_pubkey, request_id: c.request_id, issued_at: c.issued_at },
       signature: b.signature,
     },
   };
