@@ -226,13 +226,27 @@ export class MockD1 {
     }
 
     // issuance_requests: UPDATE (transitionIssuanceRequest — CAS on status='PENDING')
+    // O-4a.2: args are [newStatus, grantedBy, updatedAt, leafPackageJson, requestId]
+    // (leaf_package added in O-4a.2 — the 4th bind value is the package JSON or null)
     if (sql.startsWith("UPDATE issuance_requests SET status")) {
-      const [newStatus, grantedBy, updatedAt, requestId] = args as [string, string, string, string];
+      const [newStatus, grantedBy, updatedAt, leafPackageJson, requestId] = args as [
+        string,
+        string,
+        string,
+        string | null,
+        string,
+      ];
       const existing = this.issuanceRequests.get(requestId);
       if (!existing || existing.status !== "PENDING") {
         return { meta: { changes: 0 } };
       }
-      const updated: IssuanceRequestRow = { ...existing, status: newStatus, granted_by: grantedBy, updated_at: updatedAt };
+      const updated: IssuanceRequestRow = {
+        ...existing,
+        status: newStatus,
+        granted_by: grantedBy,
+        updated_at: updatedAt,
+        leaf_package: leafPackageJson,
+      };
       this.issuanceRequests.set(requestId, updated);
       return { meta: { changes: 1 } };
     }

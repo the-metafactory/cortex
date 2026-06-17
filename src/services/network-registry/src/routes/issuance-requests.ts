@@ -46,7 +46,9 @@ import { getNonceCache, getIssuanceStore, AlreadyDecidedError } from "../store";
 import {
   validateSignedIssuanceDecision,
   validateIssuanceDecisionClaim,
+  validateIssuanceDecisionClaimWithPackage,
   validateSignedIssuanceRead,
+  validateSignedIssuancePackageRead,
   isValidRequestId,
 } from "../validate";
 import { canonicalJSON, verifyEd25519 } from "../signing";
@@ -142,11 +144,20 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
     }
     const { signed } = envelopeCheck;
 
-    const claimCheck = validateIssuanceDecisionClaim(signed.claim, requestId, decision);
-    if (!claimCheck.ok) {
-      return c.json({ error: "validation_failed", details: claimCheck.errors }, 400);
+    // O-4a.2: for grant, use the extended claim validator that allows an
+    // optional leaf_package field. For reject, the base validator is sufficient
+    // (packages are only valid on grant; the extended validator rejects a
+    // leaf_package on a reject claim via the base decision check).
+    let claimResult: ReturnType<typeof validateIssuanceDecisionClaim> | ReturnType<typeof validateIssuanceDecisionClaimWithPackage>;
+    if (decision === "grant") {
+      claimResult = validateIssuanceDecisionClaimWithPackage(signed.claim, requestId);
+    } else {
+      claimResult = validateIssuanceDecisionClaim(signed.claim, requestId, decision);
     }
-    const { claim } = claimCheck;
+    if (!claimResult.ok) {
+      return c.json({ error: "validation_failed", details: claimResult.errors }, 400);
+    }
+    const { claim } = claimResult;
 
     // 3. Clock-skew check.
     const issued = Date.parse(claim.issued_at);
@@ -162,6 +173,9 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
     }
 
     // 4. Signature verification FIRST (before recording nonce — #695 rationale).
+    // IMPORTANT: The canonical-JSON signed payload includes leaf_package when
+    // present — the admin signed the whole claim object (including the package),
+    // so the existing signature gate already authenticates the package content.
     const message = new TextEncoder().encode(canonicalJSON(claim));
     const gateResult = await applyAdminGate(
       adminPubkeys,
@@ -180,7 +194,11 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
       return c.json({ error: "nonce_replayed" }, 409);
     }
 
-    // 6. State transition.
+    // 6. State transition (O-4a.2: pass leafPackage for grant when present).
+    const leafPackage =
+      decision === "grant" && "leaf_package" in claim
+        ? (claim as { leaf_package?: import("../types").GrantLeafPackage }).leaf_package
+        : undefined;
     const store = getIssuanceStore(c.env);
     let updated;
     try {
@@ -188,6 +206,7 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
         requestId,
         decision === "grant" ? "GRANTED" : "REJECTED",
         claim.admin_pubkey,
+        leafPackage,
       );
     } catch (err) {
       if (err instanceof AlreadyDecidedError) {
@@ -317,6 +336,110 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
       return c.json({ error: "not_found" }, 404);
     }
     return c.json(request, 200);
+  });
+
+  // ---------------------------------------------------------------------------
+  // GET /issuance-requests/:request_id/package — peer proof-of-possession fetch
+  //
+  // O-4a.2 — the joining peer fetches THEIR OWN granted leaf package.
+  //
+  // Trust model (separate from admin gate):
+  //   The peer is NOT an admin. They prove possession of the stack key they
+  //   registered with by signing a read claim with that key. The registry verifies:
+  //     1. x-peer-signed header present + valid shape
+  //     2. clock-skew on claim.issued_at
+  //     3. signature valid over canonical-JSON(claim) for claim.peer_pubkey
+  //     4. claim.peer_pubkey === request.peer_pubkey  ← ownership check
+  //   Only then is leaf_package served.
+  //
+  // Status rules:
+  //   GRANTED + leaf_package populated → 200 { leaf_package }
+  //   GRANTED + leaf_package null      → 404 package_not_ready
+  //   PENDING                          → 409 not_granted
+  //   REJECTED                         → 409 not_granted
+  //   request_id not found             → 404 not_found
+  //   peer_pubkey mismatch             → 403 wrong_key
+  // ---------------------------------------------------------------------------
+
+  app.get("/issuance-requests/:request_id/package", async (c) => {
+    const requestId = c.req.param("request_id") ?? "";
+    // M2 — validate request_id path param first.
+    if (!isValidRequestId(requestId)) {
+      return c.json({ error: "invalid_request_id" }, 400);
+    }
+
+    // 1. Parse + validate x-peer-signed header.
+    const headerVal = c.req.header("x-peer-signed");
+    if (!headerVal) {
+      return c.json({ error: "x-peer-signed header required" }, 400);
+    }
+
+    let parsedHeader: unknown;
+    try {
+      parsedHeader = JSON.parse(headerVal);
+    } catch (_err) {
+      return c.json({ error: "x-peer-signed must be valid JSON" }, 400);
+    }
+
+    const readCheck = validateSignedIssuancePackageRead(parsedHeader);
+    if (!readCheck.ok) {
+      return c.json({ error: "x-peer-signed validation_failed", details: readCheck.errors }, 400);
+    }
+    const { signed } = readCheck;
+
+    // 2. Clock-skew check.
+    const issued = Date.parse(signed.claim.issued_at);
+    const now = Date.now();
+    if (Math.abs(now - issued) > CLOCK_SKEW_MS) {
+      return c.json({ error: "issued_at out of skew window" }, 400);
+    }
+
+    // 3. Signature verification — peer proves possession of claim.peer_pubkey.
+    const message = new TextEncoder().encode(canonicalJSON(signed.claim));
+    const valid = await verifyEd25519(signed.claim.peer_pubkey, signed.signature, message);
+    if (!valid) {
+      return c.json({ error: "signature_invalid" }, 401);
+    }
+
+    // 4. Fetch the issuance request.
+    const store = getIssuanceStore(c.env);
+    const request = await store.getIssuanceRequest(requestId);
+    if (!request) {
+      return c.json({ error: "not_found" }, 404);
+    }
+
+    // 5. Ownership check: signer pubkey MUST match the registered peer_pubkey.
+    // A peer can only fetch their own request's package — never another peer's.
+    if (signed.claim.peer_pubkey !== request.peer_pubkey) {
+      return c.json({ error: "wrong_key" }, 403);
+    }
+
+    // 6. Status check: package is only available when GRANTED.
+    if (request.status !== "GRANTED") {
+      return c.json(
+        {
+          error: "not_granted",
+          details: `request ${requestId} is ${request.status}`,
+        },
+        409,
+      );
+    }
+
+    // 7. Return the package — if it exists.
+    if (request.leaf_package === null) {
+      // Granted without a package (admin did not supply one at grant time).
+      return c.json({ error: "package_not_ready" }, 404);
+    }
+
+    let pkg: unknown;
+    try {
+      pkg = JSON.parse(request.leaf_package);
+    } catch (_err) {
+      // Corrupt stored data — surface as 500 rather than hiding the corruption.
+      return c.json({ error: "package_parse_error" }, 500);
+    }
+
+    return c.json({ leaf_package: pkg }, 200);
   });
 
   return app;

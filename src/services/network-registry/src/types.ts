@@ -352,3 +352,83 @@ export interface SignedIssuanceRead {
   /** Base64 Ed25519 signature over canonical-JSON(claim). */
   signature: string;
 }
+
+// =============================================================================
+// O-4a.2 — Leaf package types
+// =============================================================================
+
+/**
+ * The PUBLIC leaf credential package the admin posts on grant.
+ *
+ * Registry-level shape: JWTs + nkey-U public keys ONLY. This is the
+ * `OperatorModeLeafPackage` shape from O-4b (`leaf-remote-renderer.ts`)
+ * MINUS `credsPath` — the registry NEVER receives a creds path or any
+ * secret. The symmetric `credsPath` is delivered out-of-band (#1012).
+ *
+ * Grammar (mirrors O-4b canonical validators — see validate.ts for the
+ * mirrored regexes and the anti-drift test vectors):
+ *   - `account` / `systemAccount`: nkey-U pubkey — `/^A[A-Z2-7]{55}$/`
+ *   - `operatorJwt` / `accountJwt` / `systemAccountJwt`: NSC JWT shape
+ *     — `/^eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2}$/`
+ *
+ * Half-specified SYS account (one of systemAccount/systemAccountJwt
+ * without the other) is rejected with 400 — same rule as O-4b.
+ */
+export interface GrantLeafPackage {
+  /** The NSC operator JWT (`eyJ…`). */
+  operatorJwt: string;
+  /** The issued account public key (nkey-U, `A…`). */
+  account: string;
+  /** The issued account JWT (`eyJ…`). */
+  accountJwt: string;
+  /** OPTIONAL system account public key (nkey-U). */
+  systemAccount?: string;
+  /** OPTIONAL system account JWT. Must be present when `systemAccount` is. */
+  systemAccountJwt?: string;
+  /**
+   * OPTIONAL network endpoint hint for this leaf credential.
+   * Non-empty string if supplied.
+   */
+  endpoint?: string;
+}
+
+/**
+ * The admin-signed claim carried by
+ * `POST /issuance-requests/{request_id}/grant` (O-4a.2 extension).
+ *
+ * Extends `IssuanceDecisionClaim` by adding the optional `leaf_package`
+ * field. The package is included ONLY on grant (not reject). When present
+ * the package is stored atomically inside the PENDING→GRANTED transition.
+ *
+ * The existing `IssuanceDecisionClaim` stays unchanged so O-4a.1 grant
+ * calls (no package) continue to work — the field is optional.
+ */
+export interface IssuanceDecisionClaimWithPackage extends IssuanceDecisionClaim {
+  /**
+   * O-4a.2: the PUBLIC leaf package to store on grant. Optional — a grant
+   * without a package is still valid (leaf_package column stays null).
+   */
+  leaf_package?: GrantLeafPackage;
+}
+
+/**
+ * Proof-of-possession read claim. The joining peer proves they own the
+ * stack key on record for their issuance request by signing a minimal
+ * claim with that key. The registry verifies:
+ *   1. Signature is valid over canonical-JSON(claim).
+ *   2. Signer pubkey === request.peer_pubkey.
+ * No nonce (reads are idempotent). Clock-skew applies.
+ */
+export interface IssuancePackageReadClaim {
+  /** The peer's own stack pubkey (base64 Ed25519). Verified against the request. */
+  peer_pubkey: string;
+  /** ISO-8601 UTC; within the CLOCK_SKEW_MS window. */
+  issued_at: string;
+}
+
+/** On-wire envelope for a peer proof-of-possession package read. */
+export interface SignedIssuancePackageRead {
+  claim: IssuancePackageReadClaim;
+  /** Base64 Ed25519 signature over canonical-JSON(claim). */
+  signature: string;
+}

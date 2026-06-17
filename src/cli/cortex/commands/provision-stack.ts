@@ -446,7 +446,14 @@ async function doRegister(
       reason: `registry rejected registration (HTTP ${result.status.toString()}): ${detail}`,
     };
   }
-  return { ok: true, note: `registered pubkey ${material.fingerprint}… at ${registryUrl} (HTTP ${result.status.toString()})` };
+  // O-4a.2 — a successful registration (2xx) triggers an issuance request that
+  // starts PENDING. The leaf credential package is issued only after an admin
+  // grants the request. Always surface this so the principal knows to expect
+  // the admin-grant step before the stack can join the federation.
+  return {
+    ok: true,
+    note: `registration recorded; awaiting admin grant — your credential will be issued on approval (HTTP ${result.status.toString()}, registry: ${registryUrl})`,
+  };
 }
 
 // =============================================================================

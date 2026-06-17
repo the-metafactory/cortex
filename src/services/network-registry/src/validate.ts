@@ -18,10 +18,14 @@
 
 import type {
   Capability,
+  GrantLeafPackage,
   IssuanceDecisionClaim,
+  IssuanceDecisionClaimWithPackage,
+  IssuancePackageReadClaim,
   IssuanceReadClaim,
   RegistrationClaim,
   SignedIssuanceDecision,
+  SignedIssuancePackageRead,
   SignedIssuanceRead,
   SignedRegistration,
   StackIdentity,
@@ -646,5 +650,242 @@ export function validateSignedRegistration(
   return {
     ok: true,
     signed: { claim: b.claim as RegistrationClaim, signature: b.signature },
+  };
+}
+
+// =============================================================================
+// O-4a.2 — Leaf package + peer PoP validators
+// =============================================================================
+
+/**
+ * O-4b grammar: NATS nkey-U account public key.
+ *
+ * Canonical source: `src/common/nats/leaf-remote-renderer.ts`:
+ *   const NKEY_ACCOUNT = /^A[A-Z2-7]{55}$/;
+ *
+ * ANTI-DRIFT: isNkeyAccountPubkeyRegistry() below is tested against the same
+ * known-good and known-bad vectors used to validate O-4b's isNkeyAccountPubkey.
+ * If O-4b's regex ever changes, the shared test in o4a2-package.test.ts will
+ * catch the drift (it uses the same vector strings on BOTH validators).
+ */
+const NKEY_ACCOUNT_RE = /^A[A-Z2-7]{55}$/;
+
+/**
+ * O-4b grammar: NSC JWT shape (`eyJ…` header + exactly three
+ * dot-separated base64url segments).
+ *
+ * Canonical source: `src/common/nats/leaf-remote-renderer.ts`:
+ *   const JWT_SHAPE = /^eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2}$/;
+ *
+ * ANTI-DRIFT: same cross-validation in o4a2-package.test.ts.
+ */
+const NSC_JWT_SHAPE_RE = /^eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2}$/;
+
+/**
+ * True iff `value` is a NATS nkey-U account public key.
+ * Mirrors O-4b's `isNkeyAccountPubkey` from `leaf-remote-renderer.ts`.
+ * The registry is a SEPARATE package and cannot import that module.
+ */
+export function isNkeyAccountPubkeyRegistry(value: string): boolean {
+  return NKEY_ACCOUNT_RE.test(value);
+}
+
+/**
+ * True iff `value` has the NSC JWT shape.
+ * Mirrors O-4b's `isNscJwtShape` from `leaf-remote-renderer.ts`.
+ */
+export function isNscJwtShapeRegistry(value: string): boolean {
+  return NSC_JWT_SHAPE_RE.test(value);
+}
+
+/**
+ * Validate a `GrantLeafPackage` object (public-material-only).
+ *
+ * Enforces:
+ *   - operatorJwt / accountJwt: NSC JWT shape
+ *   - account: nkey-U pubkey
+ *   - systemAccount (optional): nkey-U pubkey
+ *   - systemAccountJwt (optional): NSC JWT shape
+ *   - half-specified SYS account: one of (systemAccount, systemAccountJwt)
+ *     without the other → rejected
+ *   - credsPath or any unrecognised "secret-looking" field → rejected (400)
+ *
+ * Secret-detection: we explicitly reject `credsPath` and any key that
+ * contains "cred", "seed", "secret", or "private" (case-insensitive). The
+ * registry ONLY stores public JWTs + nkey-U pubkeys. Any field that looks
+ * like a secret is an admin error and should fail loudly.
+ */
+export function validateGrantLeafPackage(
+  pkg: unknown,
+  fieldPrefix = "leaf_package",
+): { ok: true; pkg: GrantLeafPackage } | { ok: false; errors: ValidationError[] } {
+  const errors: ValidationError[] = [];
+
+  if (typeof pkg !== "object" || pkg === null || Array.isArray(pkg)) {
+    return { ok: false, errors: [{ field: fieldPrefix, message: "must be an object" }] };
+  }
+  const p = pkg as Record<string, unknown>;
+
+  // Reject secret-looking fields. An admin including credsPath or a seed in
+  // the grant body is an admin error — fail loudly rather than silently
+  // ignoring the field (which would hide data-hygiene bugs).
+  const SECRET_FIELD_RE = /cred|seed|secret|private/i;
+  for (const key of Object.keys(p)) {
+    if (SECRET_FIELD_RE.test(key)) {
+      errors.push({
+        field: `${fieldPrefix}.${key}`,
+        message:
+          "the registry only stores public material (JWTs + nkey-U pubkeys); " +
+          `field "${key}" looks like a secret and is rejected`,
+      });
+    }
+  }
+  if (errors.length > 0) return { ok: false, errors };
+
+  // operatorJwt — required, NSC JWT shape.
+  if (typeof p.operatorJwt !== "string" || !NSC_JWT_SHAPE_RE.test(p.operatorJwt)) {
+    errors.push({
+      field: `${fieldPrefix}.operatorJwt`,
+      message: "must be an NSC JWT (eyJ… + three base64url segments)",
+    });
+  }
+
+  // account — required, nkey-U pubkey.
+  if (typeof p.account !== "string" || !NKEY_ACCOUNT_RE.test(p.account)) {
+    errors.push({
+      field: `${fieldPrefix}.account`,
+      message: "must be a NATS nkey-U account pubkey (A + 55 base32 chars)",
+    });
+  }
+
+  // accountJwt — required, NSC JWT shape.
+  if (typeof p.accountJwt !== "string" || !NSC_JWT_SHAPE_RE.test(p.accountJwt)) {
+    errors.push({
+      field: `${fieldPrefix}.accountJwt`,
+      message: "must be an NSC JWT (eyJ… + three base64url segments)",
+    });
+  }
+
+  // Half-specified SYS account: one present without the other → reject.
+  const hasSysAccount = p.systemAccount !== undefined;
+  const hasSysJwt = p.systemAccountJwt !== undefined;
+  if (hasSysAccount !== hasSysJwt) {
+    errors.push({
+      field: `${fieldPrefix}.systemAccount`,
+      message:
+        "systemAccount and systemAccountJwt must both be present or both absent (half-specified SYS account)",
+    });
+  } else {
+    if (hasSysAccount) {
+      if (typeof p.systemAccount !== "string" || !NKEY_ACCOUNT_RE.test(p.systemAccount)) {
+        errors.push({
+          field: `${fieldPrefix}.systemAccount`,
+          message: "must be a NATS nkey-U account pubkey (A + 55 base32 chars)",
+        });
+      }
+    }
+    if (hasSysJwt) {
+      if (typeof p.systemAccountJwt !== "string" || !NSC_JWT_SHAPE_RE.test(p.systemAccountJwt)) {
+        errors.push({
+          field: `${fieldPrefix}.systemAccountJwt`,
+          message: "must be an NSC JWT (eyJ… + three base64url segments)",
+        });
+      }
+    }
+  }
+
+  // endpoint — optional, non-empty string when present.
+  if (p.endpoint !== undefined) {
+    if (typeof p.endpoint !== "string" || p.endpoint.length === 0) {
+      errors.push({
+        field: `${fieldPrefix}.endpoint`,
+        message: "must be a non-empty string when provided",
+      });
+    }
+  }
+
+  if (errors.length > 0) return { ok: false, errors };
+
+  // Build canonical shape — only include optional keys when defined.
+  const result: GrantLeafPackage = {
+    operatorJwt: p.operatorJwt as string,
+    account: p.account as string,
+    accountJwt: p.accountJwt as string,
+  };
+  if (typeof p.systemAccount === "string") result.systemAccount = p.systemAccount;
+  if (typeof p.systemAccountJwt === "string") result.systemAccountJwt = p.systemAccountJwt;
+  if (typeof p.endpoint === "string") result.endpoint = p.endpoint;
+
+  return { ok: true, pkg: result };
+}
+
+/**
+ * Validate the full grant body WITH optional leaf_package (O-4a.2 extension).
+ *
+ * Returns the base `IssuanceDecisionClaim` + the validated `GrantLeafPackage`
+ * when present. The claim still validates via `validateIssuanceDecisionClaim`;
+ * this function adds the package field on top.
+ */
+export function validateIssuanceDecisionClaimWithPackage(
+  claim: unknown,
+  expectedRequestId: string,
+): { ok: true; claim: IssuanceDecisionClaimWithPackage } | { ok: false; errors: ValidationError[] } {
+  // Validate base claim first.
+  const base = validateIssuanceDecisionClaim(claim, expectedRequestId, "grant");
+  if (!base.ok) return base;
+
+  const c = claim as Record<string, unknown>;
+
+  // leaf_package is optional — only validate when present.
+  if (c.leaf_package === undefined) {
+    return { ok: true, claim: base.claim };
+  }
+
+  const pkgResult = validateGrantLeafPackage(c.leaf_package);
+  if (!pkgResult.ok) return { ok: false, errors: pkgResult.errors };
+
+  return {
+    ok: true,
+    claim: { ...base.claim, leaf_package: pkgResult.pkg },
+  };
+}
+
+/**
+ * Validate the `x-peer-signed` header envelope for peer PoP package reads.
+ * The header value is JSON: { claim: IssuancePackageReadClaim, signature: string }.
+ * No nonce (reads are idempotent). Clock-skew applies.
+ */
+export function validateSignedIssuancePackageRead(
+  body: unknown,
+): { ok: true; signed: SignedIssuancePackageRead } | { ok: false; errors: ValidationError[] } {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return { ok: false, errors: [{ field: "body", message: "must be an object" }] };
+  }
+  const b = body as Record<string, unknown>;
+  if (typeof b.signature !== "string" || b.signature.length === 0) {
+    return { ok: false, errors: [{ field: "signature", message: "missing" }] };
+  }
+  if (!BASE64_RE.test(b.signature)) {
+    return { ok: false, errors: [{ field: "signature", message: "must be base64" }] };
+  }
+  if (typeof b.claim !== "object" || b.claim === null) {
+    return { ok: false, errors: [{ field: "claim", message: "missing" }] };
+  }
+  const c = b.claim as Record<string, unknown>;
+  if (typeof c.peer_pubkey !== "string" || !isValidPubkey(c.peer_pubkey)) {
+    return {
+      ok: false,
+      errors: [{ field: "claim.peer_pubkey", message: "must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)" }],
+    };
+  }
+  if (typeof c.issued_at !== "string" || Number.isNaN(Date.parse(c.issued_at))) {
+    return { ok: false, errors: [{ field: "claim.issued_at", message: "must be an ISO-8601 timestamp" }] };
+  }
+  return {
+    ok: true,
+    signed: {
+      claim: { peer_pubkey: c.peer_pubkey, issued_at: c.issued_at },
+      signature: b.signature,
+    },
   };
 }

@@ -28,6 +28,7 @@
 import type {
   Capability,
   CapabilityHit,
+  GrantLeafPackage,
   IssuanceRequest,
   IssuanceStatus,
   NetworkRecord,
@@ -203,12 +204,15 @@ export interface IssuanceRequestStore {
    * If the request_id doesn't exist, returns `undefined`.
    *
    * Sets `granted_by` to `adminPubkey` and `updated_at` to now.
-   * `leaf_package` stays null (O-4a.2 populates it).
+   * O-4a.2: when `newStatus === "GRANTED"` and `leafPackage` is provided,
+   * stores it in the `leaf_package` column atomically. On REJECTED the
+   * `leafPackage` argument is ignored (package only flows with grants).
    */
   transitionIssuanceRequest(
     requestId: string,
     newStatus: "GRANTED" | "REJECTED",
     adminPubkey: string,
+    leafPackage?: GrantLeafPackage,
   ): Promise<IssuanceRequest | undefined>;
 }
 
@@ -272,6 +276,7 @@ export class InMemoryIssuanceRequestStore implements IssuanceRequestStore {
     requestId: string,
     newStatus: "GRANTED" | "REJECTED",
     adminPubkey: string,
+    leafPackage?: GrantLeafPackage,
   ): Promise<IssuanceRequest | undefined> {
     const existing = this.requests.get(requestId);
     if (!existing) return undefined;
@@ -283,6 +288,11 @@ export class InMemoryIssuanceRequestStore implements IssuanceRequestStore {
       status: newStatus,
       granted_by: adminPubkey,
       updated_at: new Date().toISOString(),
+      // O-4a.2: store the package only when granting and a package was supplied.
+      leaf_package:
+        newStatus === "GRANTED" && leafPackage !== undefined
+          ? JSON.stringify(leafPackage)
+          : null,
     };
     this.requests.set(requestId, updated);
     return updated;
@@ -362,6 +372,7 @@ export class D1IssuanceRequestStore implements IssuanceRequestStore {
     requestId: string,
     newStatus: "GRANTED" | "REJECTED",
     adminPubkey: string,
+    leafPackage?: GrantLeafPackage,
   ): Promise<IssuanceRequest | undefined> {
     // Re-read current state before mutating — needed for AlreadyDecidedError.
     const existing = await this.getIssuanceRequest(requestId);
@@ -371,16 +382,22 @@ export class D1IssuanceRequestStore implements IssuanceRequestStore {
     }
 
     const now = new Date().toISOString();
+    // O-4a.2: include leaf_package in the SET clause when granting with a package.
+    const leafPackageJson =
+      newStatus === "GRANTED" && leafPackage !== undefined
+        ? JSON.stringify(leafPackage)
+        : null;
+
     // CAS-ish: UPDATE only touches the row when status is still PENDING.
     // If a concurrent grant/reject raced us here, the WHERE status='PENDING'
     // is false, changes === 0, and we read back the decided row to throw.
     const res = await this.db
       .prepare(
         `UPDATE issuance_requests
-         SET status = ?, granted_by = ?, updated_at = ?
+         SET status = ?, granted_by = ?, updated_at = ?, leaf_package = ?
          WHERE request_id = ? AND status = 'PENDING'`,
       )
-      .bind(newStatus, adminPubkey, now, requestId)
+      .bind(newStatus, adminPubkey, now, leafPackageJson, requestId)
       .run();
 
     if ((res.meta?.changes ?? 0) === 0) {
@@ -399,6 +416,7 @@ export class D1IssuanceRequestStore implements IssuanceRequestStore {
       status: newStatus,
       granted_by: adminPubkey,
       updated_at: now,
+      leaf_package: leafPackageJson,
     };
   }
 }
