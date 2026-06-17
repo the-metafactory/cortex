@@ -16,7 +16,7 @@
 import { Hono } from "hono";
 import { getRegistryPublicKey, type Env } from "../index";
 import { signEd25519, verifyEd25519, canonicalJSON } from "../signing";
-import { getNonceCache, getStore, StaleRecordError } from "../store";
+import { getNonceCache, getStore, getIssuanceStore, StaleRecordError } from "../store";
 import {
   checkRateLimit,
   clientKey,
@@ -201,6 +201,34 @@ export function principalRoutes(): Hono<{ Bindings: Env }> {
         );
       }
       throw err;
+    }
+
+    // O-4a.1 — issuance-request hook. AFTER successful registration, upsert a
+    // PENDING issuance request for the peer's principal pubkey. This is additive:
+    // it does not change the response body or the principal record. Idempotent:
+    // re-registration of the same peer_pubkey returns the existing request row
+    // without creating a duplicate.
+    //
+    // We use the first stack's stack_pubkey (or the root principal_pubkey when
+    // the claim carries no stacks) as the peer_pubkey on the issuance request.
+    // This is the key that federated envelopes FROM this peer will be verified
+    // against (per C-787). The requested_scope is derived from the principal_id.
+    //
+    // Errors here are logged but NOT propagated to the caller: a failure to
+    // create the issuance request must not reject a valid registration — the
+    // principal record is already committed, and a retry of the issuance upsert
+    // is always safe (idempotent).
+    try {
+      const issuanceStore = getIssuanceStore(c.env);
+      const peerPubkey =
+        stacksWithPubkeys[0]?.stack_pubkey ?? claim.principal_pubkey;
+      const requestedScope = `federated.${principalId}.>`;
+      await issuanceStore.upsertPending(principalId, peerPubkey, requestedScope);
+    } catch (err) {
+      console.error(
+        `[network-registry] issuance upsert failed for principal ${principalId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      // Intentionally non-fatal: the principal record is committed.
     }
 
     // Sign + return the canonical view so the principal gets the same

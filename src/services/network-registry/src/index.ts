@@ -38,6 +38,7 @@ import { createMiddleware } from "hono/factory";
 import { principalRoutes } from "./routes/principals";
 import { networkRoutes } from "./routes/networks";
 import { capabilityRoutes } from "./routes/capabilities";
+import { issuanceRequestRoutes } from "./routes/issuance-requests";
 import { pubkeyFromPkcs8 } from "./signing";
 import type { RateLimitEnv } from "./rate-limit";
 import type { StoreEnv } from "./store";
@@ -242,6 +243,7 @@ app.use("/capabilities", readLimited);
 app.route("/", principalRoutes());
 app.route("/", networkRoutes());
 app.route("/", capabilityRoutes());
+app.route("/", issuanceRequestRoutes());
 
 // ---------------------------------------------------------------------------
 // 404

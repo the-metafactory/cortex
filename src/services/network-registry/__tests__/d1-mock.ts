@@ -39,6 +39,18 @@ interface NetworkRow {
   updated_at: string;
 }
 
+interface IssuanceRequestRow {
+  request_id: string;
+  principal_id: string;
+  peer_pubkey: string;
+  requested_scope: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  granted_by: string | null;
+  leaf_package: string | null;
+}
+
 /** What D1's `.run()` returns — we only populate `meta.changes`. */
 interface RunResult {
   meta: { changes: number };
@@ -83,6 +95,10 @@ export class MockD1 {
   readonly principals = new Map<string, PrincipalRow>();
   readonly networks = new Map<string, NetworkRow>();
   readonly nonces = new Map<string, number>();
+  /** Keyed by request_id */
+  readonly issuanceRequests = new Map<string, IssuanceRequestRow>();
+  /** Maps (principal_id + "\x00" + peer_pubkey) → request_id for the unique constraint */
+  private readonly issuancePeerIndex = new Map<string, string>();
 
   /** Count of writes, exposed so tests can assert query activity if needed. */
   writeCount = 0;
@@ -182,6 +198,52 @@ export class MockD1 {
       return { meta: { changes: n } };
     }
 
+    // issuance_requests: INSERT (upsertPending — no re-insert path; D1IssuanceRequestStore pre-checks)
+    if (sql.startsWith("INSERT INTO issuance_requests")) {
+      const [requestId, principalId, peerPubkey, requestedScope, createdAt, updatedAt] = args as [
+        string, string, string, string, string, string,
+      ];
+      const peerKey = `${principalId}\x00${peerPubkey}`;
+      // Enforce UNIQUE(principal_id, peer_pubkey)
+      if (this.issuancePeerIndex.has(peerKey)) {
+        return { meta: { changes: 0 } }; // conflict — no-op
+      }
+      const row: IssuanceRequestRow = {
+        request_id: requestId,
+        principal_id: principalId,
+        peer_pubkey: peerPubkey,
+        requested_scope: requestedScope,
+        status: "PENDING",
+        created_at: createdAt,
+        updated_at: updatedAt,
+        granted_by: null,
+        leaf_package: null,
+      };
+      this.issuanceRequests.set(requestId, row);
+      this.issuancePeerIndex.set(peerKey, requestId);
+      return { meta: { changes: 1 } };
+    }
+
+    // issuance_requests: UPDATE (transitionIssuanceRequest — CAS on status='PENDING')
+    if (sql.startsWith("UPDATE issuance_requests SET status")) {
+      const [newStatus, grantedBy, updatedAt, requestId] = args as [string, string, string, string];
+      const existing = this.issuanceRequests.get(requestId);
+      if (!existing || existing.status !== "PENDING") {
+        return { meta: { changes: 0 } };
+      }
+      const updated: IssuanceRequestRow = { ...existing, status: newStatus, granted_by: grantedBy, updated_at: updatedAt };
+      this.issuanceRequests.set(requestId, updated);
+      return { meta: { changes: 1 } };
+    }
+
+    // issuance_requests: reset
+    if (sql === "DELETE FROM issuance_requests") {
+      const n = this.issuanceRequests.size;
+      this.issuanceRequests.clear();
+      this.issuancePeerIndex.clear();
+      return { meta: { changes: n } };
+    }
+
     throw new Error(`MockD1: unhandled write statement: ${sql}`);
   }
 
@@ -205,6 +267,31 @@ export class MockD1 {
       const id = args[0] as string;
       const row = this.networks.get(id);
       return row ? [row] : [];
+    }
+
+    // issuance_requests: SELECT by request_id
+    if (sql.includes("FROM issuance_requests WHERE request_id =")) {
+      const id = args[0] as string;
+      const row = this.issuanceRequests.get(id);
+      return row ? [row] : [];
+    }
+
+    // issuance_requests: SELECT by (principal_id, peer_pubkey)
+    if (sql.includes("FROM issuance_requests WHERE principal_id = ? AND peer_pubkey =")) {
+      const [principalId, peerPubkey] = args as [string, string];
+      const key = `${principalId}\x00${peerPubkey}`;
+      const requestId = this.issuancePeerIndex.get(key);
+      if (!requestId) return [];
+      const row = this.issuanceRequests.get(requestId);
+      return row ? [row] : [];
+    }
+
+    // issuance_requests: SELECT by status ORDER BY created_at
+    if (sql.includes("FROM issuance_requests WHERE status =")) {
+      const status = args[0] as string;
+      return [...this.issuanceRequests.values()]
+        .filter((r) => r.status === status)
+        .sort((a, b) => a.created_at.localeCompare(b.created_at));
     }
 
     throw new Error(`MockD1: unhandled read statement: ${sql}`);

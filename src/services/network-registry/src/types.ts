@@ -249,3 +249,106 @@ export interface CapabilityHit {
   networks: string[];
   description?: string;
 }
+
+// =============================================================================
+// O-4a.1 — Issuance-request state machine types
+// =============================================================================
+
+/**
+ * The lifecycle status of an issuance request.
+ * Transitions: PENDING → GRANTED (on admin grant)
+ *              PENDING → REJECTED (on admin reject)
+ * Re-transitions are forbidden (409 already_decided).
+ */
+export type IssuanceStatus = "PENDING" | "GRANTED" | "REJECTED";
+
+/**
+ * A persisted issuance request — the metadata record that a verified
+ * registration creates. No secrets; no credentials. The `leaf_package`
+ * column is the O-4a.2 seam (always null in O-4a.1).
+ */
+export interface IssuanceRequest {
+  /** Opaque hex UUID, URL-safe. Primary key. */
+  request_id: string;
+  /** The principal that registered and triggered this request. */
+  principal_id: string;
+  /**
+   * Base64 Ed25519 pubkey of the peer stack being onboarded.
+   * The (principal_id, peer_pubkey) pair is unique — re-registration
+   * returns the existing row rather than inserting a duplicate.
+   */
+  peer_pubkey: string;
+  /**
+   * The NATS subject scope the peer is requesting,
+   * e.g. `federated.<peer_slug>.>`.
+   */
+  requested_scope: string;
+  /** Current lifecycle state. */
+  status: IssuanceStatus;
+  /** ISO-8601 UTC; when the request was first created. */
+  created_at: string;
+  /** ISO-8601 UTC; updated on grant/reject. */
+  updated_at: string;
+  /**
+   * The admin pubkey (base64) that granted or rejected this request.
+   * Null while PENDING.
+   */
+  granted_by: string | null;
+  /**
+   * O-4a.2 seam: JSON blob of the issued leaf credential package.
+   * Always null in O-4a.1; populated by the next slice.
+   */
+  leaf_package: string | null;
+}
+
+/**
+ * The admin-signed claim carried by
+ * `POST /issuance-requests/{request_id}/grant` and `/reject`.
+ *
+ * Mirrors `NetworkCreateClaim` in structure so the admin gate can be
+ * reused verbatim: admin signs canonicalJSON(claim); registry verifies
+ * the signature against claim.admin_pubkey and checks the allowlist.
+ */
+export interface IssuanceDecisionClaim {
+  /** Must equal the URL path parameter. Echoed for canonicalisation. */
+  request_id: string;
+  /** The decision: "grant" or "reject". Part of the signed payload. */
+  decision: "grant" | "reject";
+  /** Base64 Ed25519 pubkey of the admin signing this claim. */
+  admin_pubkey: string;
+  /** ISO-8601 UTC timestamp at which the admin signed this claim. */
+  issued_at: string;
+  /** Random nonce to prevent replay (same replay cache as network-create). */
+  nonce: string;
+}
+
+/** On-wire envelope for a grant/reject decision. */
+export interface SignedIssuanceDecision {
+  claim: IssuanceDecisionClaim;
+  /** Base64 Ed25519 signature over canonical-JSON(claim). */
+  signature: string;
+}
+
+/**
+ * The admin-signed claim carried by GET /issuance-requests reads.
+ * The GET endpoints are operational metadata; we gate them behind
+ * an admin signature sent via `x-admin-signed` header. This prevents
+ * any unauthenticated enumeration of the onboarding queue.
+ *
+ * A lightweight claim (no nonce/replay check — reads are idempotent
+ * and don't mutate state). Clock-skew check applies to prevent stale
+ * tokens lingering. The admin proves allowlisted possession.
+ */
+export interface IssuanceReadClaim {
+  /** The admin's own pubkey — used for allowlist check. */
+  admin_pubkey: string;
+  /** ISO-8601 UTC; within the CLOCK_SKEW_MS window. */
+  issued_at: string;
+}
+
+/** On-wire envelope for an admin read authorisation. */
+export interface SignedIssuanceRead {
+  claim: IssuanceReadClaim;
+  /** Base64 Ed25519 signature over canonical-JSON(claim). */
+  signature: string;
+}
