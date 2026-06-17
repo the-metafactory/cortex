@@ -90,6 +90,10 @@ if [ -f "${SEED3}" ]; then
     else
       fail "generated seed does NOT parse via fromSeed — cortex#1106 regression"
     fi
+  else
+    # bun is a hard cortex dep, so this should not happen — make the degraded
+    # guard VISIBLE rather than silently skipping the strongest assertion.
+    printf '  ⓘ skip: bun not on PATH — fromSeed round-trip assertion not run\n'
   fi
 else
   fail "generate_nkey_seed produced no seed file (neither nsc nor bun available?)"

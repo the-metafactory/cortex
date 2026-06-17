@@ -128,7 +128,10 @@ generate_nkey_seed() {
   local nsc_seed
   nsc_seed="$("${nsc_path}" generate nkey -u 2>/dev/null | awk '/^S/ { print; exit }')"
   [ -n "${nsc_seed}" ] || return 1
-  printf '%s' "${nsc_seed}" > "${seed_path}" || return 1
+  # umask 077 so the seed file is born 600 — no world-readable window between
+  # create and the chmod below (it IS signing-key material). chmod stays as
+  # belt-and-suspenders for an inherited-odd-umask environment.
+  ( umask 077; printf '%s' "${nsc_seed}" > "${seed_path}" ) || return 1
   chmod 600 "${seed_path}" 2>/dev/null
   return 0
 }
