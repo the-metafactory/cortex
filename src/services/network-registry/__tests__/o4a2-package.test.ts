@@ -319,7 +319,7 @@ describe("validateGrantLeafPackage", () => {
   });
 
   test("field containing 'seed' → rejected", () => {
-    const pkg = { ...VALID_PACKAGE, operatorSeed: "SOABCDEF" };
+    const pkg = { ...VALID_PACKAGE, accountSeed: "SOABCDEF" };
     const result = validateGrantLeafPackage(pkg);
     expect(result.ok).toBe(false);
   });
