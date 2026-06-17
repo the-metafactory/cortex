@@ -65,7 +65,7 @@ import {
 import { CliArgsError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { type ExitResult } from "./_shared/exit-result";
-import { parseSubcommandArgs, type SubcommandSpec } from "./_shared/parser";
+import { parseSubcommandArgs, type FlagMap, type SubcommandSpec } from "./_shared/parser";
 
 export { type ExitResult } from "./_shared/exit-result";
 
@@ -126,7 +126,7 @@ const SPEC: SubcommandSpec<ProvisionSubcommand> = {
 /** Resolve the stack id — explicit `--stack-id` or `{principal}/default`. */
 function resolveStackId(
   principalId: string,
-  stackIdFlag: string | true | undefined,
+  stackIdFlag: string | true | string[] | undefined,
 ): { ok: true; stackId: string } | { ok: false; reason: string } {
   if (stackIdFlag === undefined) {
     return { ok: true, stackId: `${principalId}/default` };
@@ -152,12 +152,12 @@ function resolveStackId(
 
 /** Pull a required value-flag; returns the string or an error result. */
 function requireValueFlag(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   name: string,
 ): { ok: true; value: string } | { ok: false; reason: string } {
   const v = flags[name];
   if (v === undefined) return { ok: false, reason: `${name} is required` };
-  if (v === true) return { ok: false, reason: `${name} requires a value` };
+  if (v === true || Array.isArray(v)) return { ok: false, reason: `${name} requires a value` };
   return { ok: true, value: v };
 }
 
@@ -195,7 +195,7 @@ async function materialFromSeedFile(
 
 interface HandlerCtx {
   principalId: string;
-  flags: Record<string, string | true>;
+  flags: FlagMap;
   json: boolean;
 }
 

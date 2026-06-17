@@ -55,7 +55,8 @@ export function detectProject(text: string): string | null {
 /**
  * Detect project from a published event's payload fields.
  * H-001: Prefers explicit metadata (GROVE_PROJECT env var) over regex detection.
- * Falls back to: regex on text → grove_channel.
+ * Falls back to: regex on text → channel label (GV-2 cortex#1077: canonical
+ * `cortex_channel`, then legacy `grove_channel` alias).
  */
 export function detectProjectFromEvent(event: PublishedEvent): string | null {
   // H-001: Explicit project metadata takes priority
@@ -67,7 +68,7 @@ export function detectProjectFromEvent(event: PublishedEvent): string | null {
     asString(event.payload.description) ||
     asString(event.payload.active_task) ||
     "";
-  return detectProject(text) ?? event.grove_channel ?? null;
+  return detectProject(text) ?? event.cortex_channel ?? event.grove_channel ?? null;
 }
 
 /**

@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { parseSubcommandArgs, type SubcommandSpec } from "../parser";
-import { boolFlag, valueFlag } from "../hydrate";
+import { boolFlag, listFlag, valueFlag } from "../hydrate";
 import {
   CliArgsError,
   MissingPositionalError,
@@ -298,6 +298,87 @@ describe("hydrate helpers (valueFlag / boolFlag)", () => {
   test("boolFlag throws if flag was value-typed and accessed as bool", () => {
     const r = parseSubcommandArgs(spec, ["list", "--creds-dir", "/tmp"]);
     expect(() => boolFlag(r.flags, "--creds-dir")).toThrow(/declared as value/);
+  });
+});
+
+// cortex#1057 (O-2.5) — repeatable value-list flags. A `value-list` flag
+// accumulates each occurrence into a string[] (vs `value`'s last-wins).
+// Needed so `cortex creds issue --pub a --pub b` collects both subjects.
+const listSpec: SubcommandSpec<"issue"> = {
+  cliName: "list-cli",
+  subcommands: {
+    issue: {
+      positionals: ["agent-id"],
+      flags: { "--pub": "value-list", "--sub": "value-list" },
+    },
+  },
+  universal: { "--help": "bool", "-h": "bool", "--json": "bool" },
+};
+
+describe("parseSubcommandArgs — value-list flags (cortex#1057)", () => {
+  test("single occurrence yields a one-element array", () => {
+    const r = parseSubcommandArgs(listSpec, ["issue", "echo", "--pub", "a.>"]);
+    expect(r.flags["--pub"]).toEqual(["a.>"]);
+  });
+
+  test("multiple occurrences accumulate in order", () => {
+    const r = parseSubcommandArgs(listSpec, [
+      "issue", "echo", "--pub", "a.>", "--pub", "b.>", "--pub", "c.>",
+    ]);
+    expect(r.flags["--pub"]).toEqual(["a.>", "b.>", "c.>"]);
+  });
+
+  test("--pub and --sub collect independently", () => {
+    const r = parseSubcommandArgs(listSpec, [
+      "issue", "echo", "--pub", "p1", "--sub", "s1", "--pub", "p2",
+    ]);
+    expect(r.flags["--pub"]).toEqual(["p1", "p2"]);
+    expect(r.flags["--sub"]).toEqual(["s1"]);
+  });
+
+  test("absent value-list flag is undefined", () => {
+    const r = parseSubcommandArgs(listSpec, ["issue", "echo"]);
+    expect(r.flags["--pub"]).toBeUndefined();
+  });
+
+  test("value-list flag without a value throws", () => {
+    expect(() => parseSubcommandArgs(listSpec, ["issue", "echo", "--pub"])).toThrow(
+      CliArgsError,
+    );
+  });
+
+  test("value-list flag followed by another flag throws", () => {
+    expect(() =>
+      parseSubcommandArgs(listSpec, ["issue", "echo", "--pub", "--json"]),
+    ).toThrow(CliArgsError);
+  });
+
+  test("first-pass positional scan skips value-list values", () => {
+    // --pub consumes "a.>"; the subcommand "issue" must still be identified
+    // and "echo" captured as the positional.
+    const r = parseSubcommandArgs(listSpec, [
+      "--pub", "a.>", "issue", "echo",
+    ]);
+    expect(r.subcommand).toBe("issue");
+    expect(r.positionals["agent-id"]).toBe("echo");
+    expect(r.flags["--pub"]).toEqual(["a.>"]);
+  });
+});
+
+describe("hydrate listFlag (cortex#1057)", () => {
+  test("listFlag returns the array when set", () => {
+    const r = parseSubcommandArgs(listSpec, ["issue", "echo", "--pub", "a", "--pub", "b"]);
+    expect(listFlag(r.flags, "--pub")).toEqual(["a", "b"]);
+  });
+
+  test("listFlag returns [] when absent", () => {
+    const r = parseSubcommandArgs(listSpec, ["issue", "echo"]);
+    expect(listFlag(r.flags, "--pub")).toEqual([]);
+  });
+
+  test("listFlag throws if accessed on a non-list flag", () => {
+    const r = parseSubcommandArgs(listSpec, ["issue", "echo", "--json"]);
+    expect(() => listFlag(r.flags, "--json")).toThrow(/declared as bool/);
   });
 });
 

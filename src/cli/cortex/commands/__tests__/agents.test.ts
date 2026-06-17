@@ -1,9 +1,10 @@
 // F-3 — cortex agents reload/list CLI tests.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync, copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync } from "fs";
+import { mkdtempSync, writeFileSync, copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync, existsSync, unlinkSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { spawn, type ChildProcess } from "child_process";
 
 import {
   parseAgentsArgs,
@@ -12,6 +13,7 @@ import {
   dispatchAgents,
   AgentsArgsError,
 } from "../agents";
+import { pidFileFor } from "../../../../common/pidfile";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
 const VALID_DIR = join(FIXTURES, "agents.d-valid");
@@ -266,14 +268,122 @@ presence:
     expect(r.stderr).toMatch(/displayName/i);
   });
 
-  test("success text includes the validation-only caveat (Echo M3)", () => {
+  test("B-0: --validate-only keeps the validation-only caveat (no daemon signal)", () => {
     const cfg = mkdtempSync(join(tmpdir(), "f3-validation-note-"));
+    seedConfigDir(cfg, VALID_DIR);
+    const r = runAgentsReload(
+      parseAgentsArgs([
+        "reload",
+        "--validate-only",
+        "--config",
+        join(cfg, "cortex.yaml"),
+      ]),
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("validation-only");
+    // No signal language on the validate-only path.
+    expect(r.stdout).not.toContain("reload signal delivered");
+  });
+
+  test("B-0: default reload reports no signal sent when no runtime is running", () => {
+    const cfg = mkdtempSync(join(tmpdir(), "f3-no-runtime-"));
     seedConfigDir(cfg, VALID_DIR);
     const r = runAgentsReload(
       parseAgentsArgs(["reload", "--config", join(cfg, "cortex.yaml")]),
     );
+    // Validation passed; with no PID file there's no runtime to signal — benign,
+    // so the command still exits 0 (validation is the failure surface).
     expect(r.exitCode).toBe(0);
-    expect(r.stdout).toContain("validation-only");
+    expect(r.stdout).toContain("no reload signal sent");
+    expect(r.stdout).toContain("no running cortex runtime");
+  });
+
+  // Sage cortex#1027 — honesty: a delivered SIGHUP is reported as "signal
+  // delivered", NOT "reload applied". Drive a real signalable PID (this test
+  // process) through a config whose PID file we write ourselves.
+  test("Sage cortex#1027: delivered signal is reported as 'signal delivered', not 'reload applied'", () => {
+    const target = spawnSignalTarget();
+    const { configPath, restore } = seedConfigWithPidFile(target.pid);
+    try {
+      const r = runAgentsReload(
+        parseAgentsArgs(["reload", "--config", configPath]),
+      );
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain("reload signal delivered");
+      // Honest scope: never claims the async reload finished.
+      expect(r.stdout).not.toMatch(/reload live|reload applied/);
+      // Tells the principal where to confirm.
+      expect(r.stdout).toContain("runtime logs");
+    } finally {
+      target.kill();
+      restore();
+    }
+  });
+
+  test("round-2: partial-numeric PID file is malformed — never signals PID prefix", () => {
+    // parseInt("123abc") === 123 would SIGHUP an unintended process; the
+    // full-string check must classify the file as malformed instead.
+    const { configPath, restore } = seedConfigWithPidFile(1);
+    try {
+      writeFileSync(pidFileFor(configPath), "123abc\n");
+      const r = runAgentsReload(
+        parseAgentsArgs(["reload", "--config", configPath]),
+      );
+      expect(r.exitCode).toBe(1);
+      expect(r.stdout).toContain("malformed");
+    } finally {
+      restore();
+    }
+  });
+
+  test("Sage cortex#1027: a FAILED signal (stale PID) exits non-zero and reports the failure", () => {
+    // A PID that is (almost certainly) not a live process → process.kill throws
+    // ESRCH → attempted-but-failed → non-zero exit.
+    const { configPath, restore } = seedConfigWithPidFile(2_147_483_646);
+    try {
+      const r = runAgentsReload(
+        parseAgentsArgs(["reload", "--config", configPath]),
+      );
+      expect(r.exitCode).toBe(1);
+      expect(r.stdout).toContain("reload signal FAILED");
+    } finally {
+      restore();
+    }
+  });
+
+  test("Sage cortex#1027: --json carries a FAILED signal as an error + non-zero exit", () => {
+    const { configPath, restore } = seedConfigWithPidFile(2_147_483_646);
+    try {
+      const r = runAgentsReload(
+        parseAgentsArgs(["reload", "--config", configPath, "--json"]),
+      );
+      expect(r.exitCode).toBe(1);
+      const parsed = JSON.parse(r.stdout);
+      expect(parsed.status).toBe("error");
+      expect(parsed.error.reason).toContain("reload signal failed");
+      // Validation itself passed — the error context records that distinction.
+      expect(parsed.error.context.validation).toBe("ok");
+    } finally {
+      restore();
+    }
+  });
+
+  test("Sage cortex#1027: --json on a delivered signal records signalled=true in data (success)", () => {
+    const target = spawnSignalTarget();
+    const { configPath, restore } = seedConfigWithPidFile(target.pid);
+    try {
+      const r = runAgentsReload(
+        parseAgentsArgs(["reload", "--config", configPath, "--json"]),
+      );
+      expect(r.exitCode).toBe(0);
+      const parsed = JSON.parse(r.stdout);
+      expect(parsed.status).toBe("ok");
+      expect(parsed.data.signalled).toBe("true");
+      expect(parsed.data.pid).toBe(String(target.pid));
+    } finally {
+      target.kill();
+      restore();
+    }
   });
 
   test("--fragment 1 MiB cap applies (Echo M2 hardening parity)", () => {
@@ -413,3 +523,84 @@ function seedConfigDir(cfg: string, srcAgentsDir: string): void {
     writeFileSync(join(agentsD, filename), content);
   }
 }
+
+/**
+ * Sage cortex#1027 — seed a valid config dir AND write a PID file (containing
+ * `pid`) at the exact location `signalDaemonReload` resolves it to, so a `reload`
+ * actually attempts `process.kill(pid, SIGHUP)`. Each test gets a UNIQUE config
+ * basename (so its PID file path is unique) and `restore()` removes the PID file.
+ *
+ * The config basename must be unique per test because `pidFileFor` keys on the
+ * (canonicalized) config basename — two tests sharing a basename would collide on
+ * the same PID file under `~/.config/grove/state/`.
+ */
+/**
+ * Spawn a harmless long-lived child (`sleep 300`) and return its PID + a killer.
+ * Used as a REAL, signalable target so the "delivered signal" path runs
+ * `process.kill(childPid, SIGHUP)` against a live process that is NOT the test
+ * runner (signalling `process.pid` would SIGHUP-kill the test process itself).
+ * The child's default SIGHUP action terminates it — fine; `process.kill` still
+ * returns success because the process existed at signal time.
+ */
+function spawnSignalTarget(): { pid: number; kill: () => void } {
+  const child: ChildProcess = spawn("sleep", ["300"], { stdio: "ignore" });
+  const pid = child.pid;
+  if (pid === undefined) throw new Error("failed to spawn signal target");
+  return {
+    pid,
+    kill: () => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // already gone (e.g. our SIGHUP terminated it) — nothing to clean up.
+      }
+    },
+  };
+}
+
+let pidConfigCounter = 0;
+function seedConfigWithPidFile(pid: number): {
+  cfg: string;
+  configPath: string;
+  restore: () => void;
+} {
+  const cfg = mkdtempSync(join(tmpdir(), "f3-pid-"));
+  // UNIQUE config basename per call — `pidFileFor` keys on the (canonicalized)
+  // basename, so a shared name would collide on one PID file across tests AND
+  // could clash with a real daemon's `cortex-cortex.pid`. The agents.d/ dir is
+  // resolved from the config DIRECTORY, so the filename is free to vary.
+  const base = `cortex-pidtest-${process.pid}-${pidConfigCounter++}`;
+  const configPath = join(cfg, `${base}.yaml`);
+  // seedConfigDir writes its own cortex.yaml placeholder + agents.d/; we only
+  // need the agents.d/ tree (resolved from the config dir), so reuse it then
+  // point --config at our uniquely-named file (same dir).
+  seedConfigDir(cfg, VALID_DIR);
+  writeFileSync(configPath, "agents: []\n");
+  const pidFile = pidFileFor(configPath);
+  mkdirSync(join(pidFile, ".."), { recursive: true });
+  writeFileSync(pidFile, String(pid));
+  return {
+    cfg,
+    configPath,
+    restore: () => {
+      if (existsSync(pidFile)) unlinkSync(pidFile);
+      rmSync(cfg, { recursive: true, force: true });
+    },
+  };
+}
+
+// sage round 3 — tilde spelling converges for on-disk configs
+describe("round-3: pidFileFor tilde expansion", () => {
+  test("~ and absolute spellings of the same existing config derive one PID file", () => {
+    const home = process.env.HOME!;
+    const dir = mkdtempSync(join(home, ".pidfile-tilde-test-"));
+    try {
+      const abs = join(dir, "stack.yaml");
+      writeFileSync(abs, "x: 1\n");
+      const viaTilde = `~/${abs.slice(home.length + 1)}`;
+      expect(pidFileFor(viaTilde)).toBe(pidFileFor(abs));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

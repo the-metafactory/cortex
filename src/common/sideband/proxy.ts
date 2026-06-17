@@ -66,14 +66,27 @@ export const DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024;
 
 /**
  * Endpoints the proxy is allowed to forward, expressed as the suffix AFTER the
- * `/api/observability` prefix. The contract's read surface (§2):
- *   GET /traces?correlation_id=…
- *   GET /logs?correlation_id=…
- *   GET /traces/{trace_id}/timeline
- *   GET /healthz
+ * `/api/observability` prefix. The contract's read surface:
+ *   GET /traces?correlation_id=…           (P-9 §2.1)
+ *   GET /logs?correlation_id=…             (P-9 §2.2)
+ *   GET /traces/{trace_id}/timeline        (P-9 §2.3)
+ *   GET /healthz                           (P-9 §2.4)
+ *   GET /metrics/summary?window=…          (P-14 U4.1, signal#127/#147)
+ *   GET /search?since=&class=&query=&limit (P-14 U4.1, signal#127/#147)
  *
  * `traces` and `logs` are exact (query carries the id); `traces/{id}/timeline`
- * is a 3-segment shape validated structurally. Everything else is refused.
+ * is a 3-segment shape validated structurally. The two v2 reads
+ * (`metrics/summary`, `search`) are exact prefixes whose query strings carry
+ * pre-validated params — the SIGNAL server re-validates the `window` / `since`
+ * / `class` / `query` / `limit` gates (server.ts `DURATION_RE` / `CLASS_RE` /
+ * `SEARCH_QUERY_MAX`) before any interpolation into PromQL/LogsQL, so the proxy
+ * forwards the search string verbatim and lets the server own input safety
+ * (same posture as `/traces?correlation_id=` — the proxy gates the PATH, the
+ * sideband gates the PARAMS). Everything else is refused.
+ *
+ * v2 endpoints stay loopback-only and GET-only exactly like the P-9 reads:
+ * `/metrics/summary` wraps VictoriaMetrics and `/search` wraps VictoriaLogs,
+ * both reached through the same tokenless local daemon (contract §3).
  */
 function mapAllowedPath(suffix: string): string | null {
   // Strip a single leading slash for matching.
@@ -82,6 +95,8 @@ function mapAllowedPath(suffix: string): string | null {
   if (s === "traces") return "/traces";
   if (s === "logs") return "/logs";
   if (s === "healthz") return "/healthz";
+  if (s === "metrics/summary") return "/metrics/summary";
+  if (s === "search") return "/search";
 
   // traces/{trace_id}/timeline — exactly 3 segments, middle is the id.
   const segs = s.split("/");

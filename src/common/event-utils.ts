@@ -25,8 +25,11 @@ export function detectProjectFromIngestEvent(
     if (match?.[1]) return match[1];
   }
 
-  // Fallback: grove_channel (set by GROVE_CHANNEL env var in instrumented sessions)
-  if (event.grove_channel) return event.grove_channel;
+  // Fallback: the channel label (set by CORTEX_CHANNEL / legacy GROVE_CHANNEL
+  // env var in instrumented sessions). GV-2 (cortex#1077): read the canonical
+  // `cortex_channel` first, fall back to the legacy `grove_channel` alias.
+  const channel = event.cortex_channel ?? event.grove_channel;
+  if (channel) return channel;
 
   return null;
 }

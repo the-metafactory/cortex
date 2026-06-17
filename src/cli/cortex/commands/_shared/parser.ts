@@ -47,7 +47,22 @@ import {
 // Spec types
 // =============================================================================
 
-export type FlagKind = "value" | "bool";
+/**
+ * - `value`     — consumes the next argv entry; last-wins on repeat.
+ * - `bool`      — no value; presence = `true`.
+ * - `value-list` — consumes the next argv entry; REPEATABLE, each
+ *                 occurrence accumulates into a `string[]` (cortex#1057).
+ */
+export type FlagKind = "value" | "bool" | "value-list";
+
+/**
+ * Canonical type of the `flags` map produced by `parseSubcommandArgs`.
+ * `value` flags hold a string, `bool` flags hold `true`, `value-list`
+ * flags hold a `string[]` (cortex#1057). Callers that pass the flags map
+ * around should reference this alias rather than re-spelling the union,
+ * so the shape stays in one place.
+ */
+export type FlagMap = Record<string, string | true | string[]>;
 
 export interface SubcommandSpec<SubcommandName extends string> {
   /** CLI name passed into `CliArgsError` for diagnostics ("agents", "creds"). */
@@ -78,8 +93,9 @@ export interface ParsedSubcommandArgs<SubcommandName extends string> {
    *  positional names. Absent keys = positional not provided. */
   positionals: Record<string, string>;
   /** Flag values. Value-flags hold the captured string; bool-flags hold
-   *  `true` when present. Absent keys = flag not provided. */
-  flags: Record<string, string | true>;
+   *  `true` when present; value-list flags hold a `string[]` accumulating
+   *  every occurrence. Absent keys = flag not provided. */
+  flags: FlagMap;
   /** `true` if a `--help`/`-h` was seen AFTER the subcommand name. */
   help: boolean;
 }
@@ -143,12 +159,21 @@ export function parseSubcommandArgs<S extends string>(
 
     if (arg.startsWith("-")) {
       const kind = resolveFlagKind(spec, activeRule, out.subcommand, arg);
-      if (kind === "value") {
+      if (kind === "value" || kind === "value-list") {
         const next = argv[i + 1];
         if (next === undefined || next.startsWith("-")) {
           throw new CliArgsError(spec.cliName, `${arg} requires a value argument`);
         }
-        out.flags[arg] = next;
+        if (kind === "value-list") {
+          // Accumulate; each occurrence appends. Existing value is always a
+          // string[] for a value-list flag (or absent on the first hit).
+          const existing = out.flags[arg];
+          const list = Array.isArray(existing) ? existing : [];
+          list.push(next);
+          out.flags[arg] = list;
+        } else {
+          out.flags[arg] = next;
+        }
         i += 2;
       } else {
         out.flags[arg] = true;
@@ -221,7 +246,7 @@ function findFirstPositional<S extends string>(
     const arg = argv[i] ?? "";
     if (!arg.startsWith("-")) return arg;
     const kind = lookupFlagKindAcrossSpec(spec, arg);
-    if (kind === "value") {
+    if (kind === "value" || kind === "value-list") {
       i += 2;
     } else {
       // bool or unknown — single token consume

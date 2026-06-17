@@ -99,8 +99,57 @@ describe("scanEgress — config/path leakage", () => {
     }
   });
 
-  test("flags an nkey_seed_path reference", () => {
-    const out = scanEgress("the nkey_seed_path is set to ...");
+  // cortex#1022 — value/path-shaped detection, never bare key-name tokens.
+  // The key names are public repo content; a review of a PR about signing
+  // config (e.g. cortex#1020) must be able to name them.
+  test("flags an nkey_seed_path ASSIGNMENT with a path value", () => {
+    const cases = [
+      "nkey_seed_path: ~/.config/nats/cortex-research.nk",
+      'nkey_seed_path = "/Users/someone/secrets/stack.nk"',
+      "nkey_seed_path: $HOME/keys/stack.nk",
+      "  nkey_seed_path: ./relative/stack.nk",
+    ];
+    for (const text of cases) {
+      const out = scanEgress(text);
+      expect(out.clean).toBe(false);
+      if (!out.clean) {
+        expect(out.findings.some((f) => f.kind === "config-path")).toBe(true);
+      }
+    }
+  });
+
+  test("does NOT flag a bare nkey_seed_path key-name mention in prose (cortex#1022)", () => {
+    const out = scanEgress(
+      "The loader now bumps signing to permissive when stack.nkey_seed_path " +
+        "is configured and security.signing is unset — explicit off is respected.",
+    );
+    expect(out.clean).toBe(true);
+  });
+
+  test("flags a home-anchored path to a cortex.yaml", () => {
+    const cases = [
+      "see ~/myconfigs/cortex.yaml for the live values",
+      "loaded /Users/someone/.config/foo/cortex.yml at boot",
+      "config at /home/clawbox/deploy/cortex.yaml",
+    ];
+    for (const text of cases) {
+      const out = scanEgress(text);
+      expect(out.clean).toBe(false);
+      if (!out.clean) {
+        expect(out.findings.some((f) => f.kind === "config-path")).toBe(true);
+      }
+    }
+  });
+
+  test("does NOT flag a bare cortex.yaml file-name mention in prose (cortex#1022)", () => {
+    const out = scanEgress(
+      "The security block in cortex.yaml carries three independent toggles.",
+    );
+    expect(out.clean).toBe(true);
+  });
+
+  test("still flags the principal config tree regardless of phrasing", () => {
+    const out = scanEgress("my config is at /Users/someone/.config/cortex");
     expect(out.clean).toBe(false);
   });
 });

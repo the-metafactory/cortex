@@ -80,6 +80,10 @@ function render(
   over: Partial<NetworkDetailPanelProps> & { agent: AgentPresenceTile },
 ): string {
   const props: NetworkDetailPanelProps = {
+    // Default serving principal `andreas` (matching the local fixtures), so a
+    // `"local"` tile classifies `self` and a `jc/*` tile classifies `foreign`.
+    // The #1008 sibling tests override it explicitly.
+    servingPrincipal: "andreas",
     dispatch: null,
     onClose: () => {},
     now: Date.now(),
@@ -276,6 +280,7 @@ describe("NetworkDetailPanel — F.3 dispatch-direct affordance", () => {
     const calls: AgentPresenceTile[] = [];
     const el = createElement(NetworkDetailPanel, {
       agent,
+      servingPrincipal: "andreas",
       dispatch: null,
       onClose: () => {},
       onDispatchDirect: (a) => {
@@ -316,6 +321,105 @@ describe("NetworkDetailPanel — F.3 dispatch-direct affordance", () => {
     });
     // F-19 DispatchButton renders "…" + a disabled button while busy.
     expect(html).toContain("disabled");
+  });
+});
+
+const SIBLING_ORIGIN = { principal: "andreas", stack: "work" } as const;
+
+function siblingTile(
+  over: Partial<AgentPresenceTile> & { agent_id: string } = { agent_id: "echo" },
+): AgentPresenceTile {
+  return tile({
+    ...over,
+    key: `andreas/work/${over.agent_id}`,
+    principal: "andreas",
+    stack: "work",
+    origin: SIBLING_ORIGIN,
+  });
+}
+
+describe("NetworkDetailPanel — local-sibling vs federated classification (#1008)", () => {
+  it("renders a SAME-PRINCIPAL local SIBLING agent as LOCAL, NOT federated", () => {
+    // The bug: clicking a sibling agent re-showed the "FEDERATED" mislabel the
+    // node fix killed. With the serving principal threaded, the panel classifies
+    // the sibling LOCAL — no federated badge, no foreign provenance, no
+    // "activity not local (federated)" framing.
+    const html = render({
+      agent: siblingTile({ agent_id: "echo", assistant_name: "Echo" }),
+      servingPrincipal: "andreas",
+    });
+    expect(html).toContain('data-agent-origin="local"');
+    // No foreign treatment: not the aside modifier, not the provenance badge,
+    // not the federated-activity class — a sibling reads as one of your own.
+    expect(html).not.toContain("network-detail-panel network-detail-foreign");
+    expect(html).not.toContain("network-detail-foreign-activity");
+    expect(html).not.toContain("network-detail-provenance");
+    expect(html).not.toContain("Federated peer");
+  });
+
+  it("frames a sibling's non-local activity as a SIBLING stack, not a federated peer", () => {
+    const html = render({
+      agent: siblingTile({ agent_id: "echo" }),
+      servingPrincipal: "andreas",
+    });
+    // The activity note distinguishes a sibling (its own LOCAL stack) from a
+    // federated peer — and never mislabels it "Federated".
+    expect(html).toContain('data-activity-origin="sibling"');
+    expect(html).toContain("Local sibling stack");
+    expect(html).toContain("andreas/work");
+    expect(html).not.toContain("Federated peer");
+  });
+
+  it("does NOT show the live Dispatch button for a sibling (dispatch is this-stack-local)", () => {
+    const html = render({
+      agent: siblingTile({ agent_id: "echo" }),
+      servingPrincipal: "andreas",
+      onDispatchDirect: () => {},
+    });
+    expect(html).toContain("network-detail-dispatch-direct");
+    // No live button — a sibling lives on another stack; show the future-state.
+    expect(html).not.toContain("network-detail-dispatch-direct-btn");
+    expect(html).toContain('data-dispatch-direct="sibling-disabled"');
+    expect(html).toContain("Local sibling stack");
+    // and it is NOT mislabeled as a federated peer
+    expect(html).not.toContain("foreign-disabled");
+  });
+
+  it("hides the 'view in working grid' link for a sibling (grid is this stack's surface)", () => {
+    const html = render({
+      agent: siblingTile({ agent_id: "echo" }),
+      servingPrincipal: "andreas",
+      onViewInWorkingGrid: () => {},
+    });
+    expect(html).not.toContain("View in working grid");
+  });
+
+  it("still treats a CROSS-PRINCIPAL peer as foreign even with a same stack name", () => {
+    const html = render({
+      agent: tile({
+        agent_id: "nova",
+        key: "jc/work/nova",
+        principal: "jc",
+        stack: "work",
+        origin: { principal: "jc", stack: "work" },
+      }),
+      servingPrincipal: "andreas",
+      onDispatchDirect: () => {},
+    });
+    expect(html).toContain('data-agent-origin="foreign"');
+    expect(html).toContain("Federated peer");
+    expect(html).toContain("foreign-disabled");
+  });
+
+  it("classifies an object origin as foreign when the serving principal is unknown (null)", () => {
+    // Foreign-only snapshot → null serving principal → an object origin can't be
+    // proven a sibling, so it stays foreign (conservative).
+    const html = render({
+      agent: siblingTile({ agent_id: "echo" }),
+      servingPrincipal: null,
+    });
+    expect(html).toContain('data-agent-origin="foreign"');
+    expect(html).toContain("Federated peer");
   });
 });
 

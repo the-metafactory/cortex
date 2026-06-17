@@ -199,6 +199,9 @@ export type ProjectionFamily =
   | "attention"
   | "adapter.health"
   | "governance.verdict"
+  // P-14 U3.1 (#936) — access denials/refusals (U0.2's system.access.*) refresh
+  // the governance pane alongside verdicts. Additive; older clients ignore it.
+  | "governance.denial"
   // P-14 U2.1 (#934) — signal's four system.* observability families refreshed
   // the Observability tab. Additive; older clients ignore an unknown family.
   | "observability";

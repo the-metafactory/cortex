@@ -19,13 +19,17 @@ import "./bootstrap/ws-transport";
 
 import { Command } from "commander";
 import { existsSync, writeFileSync, readFileSync, unlinkSync, mkdirSync, readdirSync } from "fs";
-import { basename, join, dirname, isAbsolute } from "path";
+import { join, dirname, isAbsolute } from "path";
 import { homedir } from "os";
 import { parse as parseYaml } from "yaml";
 import type { TextChannel } from "discord.js";
 
 import { loadConfigWithAgents, loadAgentsDirectory, expandTilde, FragmentLoadError } from "./common/config/loader";
-import { ConfigWatcher } from "./common/config/watcher";
+import {
+  ConfigWatcher,
+  AgentsDirectoryWatcher,
+  type AgentsChangeEvent,
+} from "./common/config/watcher";
 import { type AgentConfig } from "./common/types/config";
 import { resolveSigningKnobs } from "./common/security-posture";
 import { buildHttpsMtlsMaterial } from "./common/config/transport-mtls";
@@ -52,6 +56,7 @@ import { createNetworkResolver } from "./bus/network-resolver";
 import type { SystemEventSource } from "./bus/system-events";
 import {
   publishCapabilityRegistry,
+  buildCapabilityRegisteredEnvelope,
   type CapabilityRegistryEntry,
 } from "./bus";
 import {
@@ -59,6 +64,23 @@ import {
   type ReviewConsumerAgent,
   type SignatureVerifier,
 } from "./bus/review-consumer";
+import {
+  BrainConsumer,
+  buildBrainTaskPayload,
+  safeAttachmentRefs,
+  type BrainAttachmentRef,
+  buildDispatchTaskEnvelope,
+  BRAIN_TASK_SUBJECT_FAMILY,
+  type BrainConsumerAgent,
+} from "./bus/brain-consumer";
+import {
+  SurfacePrincipalGate,
+  makeDispatchPostRenderer,
+  type PrincipalIdentity,
+} from "./bus/surface-principal-gate";
+import { GateReplyRouter } from "./bus/gate-reply-router";
+import { makeExecBrainRunner } from "./brain/exec-brain-runner";
+import { DaemonBrainHost } from "./brain/daemon-brain-host";
 import { wireDevConsumers } from "./runner/dev-consumer-boot";
 import {
   ReleaseConsumer,
@@ -118,7 +140,7 @@ import {
 } from "./common/policy";
 import { MattermostAdapter } from "./adapters/mattermost";
 import { SlackAdapter } from "./adapters/slack";
-import type { PlatformAdapter } from "./adapters/types";
+import type { InboundMessage, PlatformAdapter } from "./adapters/types";
 import { createDispatchSink, type DispatchSink } from "./adapters/dispatch-sink";
 import { createReviewSink, type ReviewSink } from "./adapters/review-sink";
 import { startGatewayIfEnabled } from "./gateway/start-gateway";
@@ -133,7 +155,12 @@ import { createDispatchProjectionRenderer } from "./surface/mc/projection/dispat
 // P-14 U2.1 (#934) — bus→MC observability projection renderer (signal's four
 // system.* families). Own renderer, own subjects; registered beside the dispatch
 // renderer, no edit to surface-router.ts.
-import { createObservabilityProjectionRenderer } from "./surface/mc/projection/observability-renderer";
+// P-14 U3.3 (#937) — projectForeignObservability: the foreign-origin projection
+// entry the federated observability fold's callback writes through.
+import {
+  createObservabilityProjectionRenderer,
+  projectForeignObservability,
+} from "./surface/mc/projection/observability-renderer";
 // MC-I1.S7 (#849) — funnel the event-driven failed_dispatch attention delta
 // onto the same system.attention.* bus path the cockpit loop publishes on.
 import { publishReconcileDelta } from "./surface/mc/attention-notify";
@@ -164,6 +191,13 @@ import {
   startFederatedAgentPresenceSubscriber,
   type FederatedAgentPresenceSubscriberHandle,
 } from "./bus/agent-network/federated-subscriber";
+// P-14 U3.3 (#937) — trust-verified federated OBSERVABILITY fold (the
+// observability sibling of the presence subscriber; same Option-D trust path +
+// the curation gate, origin-badged).
+import {
+  startFederatedObservabilityFold,
+  type FederatedObservabilityFoldHandle,
+} from "./bus/agent-network/federated-observability-fold";
 // #989 part-1 — LOCAL same-principal multi-bus presence aggregation.
 import { discoverSiblingStacks } from "./surface/mc/local-aggregation/sibling-discovery";
 import {
@@ -171,6 +205,12 @@ import {
   type SiblingPresenceAggregatorHandle,
 } from "./surface/mc/local-aggregation/sibling-presence-subscriber";
 import { natsSiblingBusConnector } from "./surface/mc/local-aggregation/nats-sibling-connector";
+// #1008 — direct sibling MC-DB read aggregation (the pane-of-glass mechanism).
+import type {
+  LocalAggregationContext,
+  SiblingDbResolveOptions,
+} from "./surface/mc/local-aggregation/sibling-db-reader";
+import type { SiblingStackDescriptor } from "./surface/mc/local-aggregation/sibling-discovery";
 import { createProbeResponder, type ProbeResponder } from "./bus/probe-responder";
 import { WorklogManager } from "./runner/worklog-manager";
 
@@ -205,9 +245,11 @@ import {
 
 // MIG-7.9 (deferred) flips these to `~/.config/cortex/`. Keeping grove-shaped
 // paths for now so the principal's existing `bot.yaml` continues to work.
-const STATE_DIR = join(process.env.HOME ?? "~", ".config", "grove", "state");
-const PID_FILE = join(STATE_DIR, "cortex.pid");
-const DEFAULT_CONFIG = join(process.env.HOME ?? "~", ".config", "grove", "bot.yaml");
+// B-0 (cortex#1021) — the PID-file resolution moved to `./common/pidfile` so
+// the lightweight `cortex agents reload` CLI can resolve the running daemon's
+// PID (to signal a reload) without importing this whole module graph. Re-import
+// here so cortex.ts's lifecycle paths stay on the single source of truth.
+import { STATE_DIR, DEFAULT_CONFIG, pidFileFor } from "./common/pidfile";
 
 /**
  * Resolve the PID file path for a given `--config` value.
@@ -231,14 +273,11 @@ const DEFAULT_CONFIG = join(process.env.HOME ?? "~", ".config", "grove", "bot.ya
  * to the same PID file — moving a config doesn't accidentally orphan
  * the prior PID file.
  */
-export function pidFileFor(configPath: string | undefined): string {
-  if (configPath === undefined || configPath === DEFAULT_CONFIG) {
-    return PID_FILE;
-  }
-  const base = basename(configPath).replace(/\.ya?ml$/i, "");
-  if (base.length === 0) return PID_FILE;
-  return join(STATE_DIR, `cortex-${base}.pid`);
-}
+// B-0 (cortex#1021) — `pidFileFor` is imported from `./common/pidfile` (single
+// source of truth shared with the `cortex agents reload` daemon-signal path)
+// and re-exported here so existing importers of `pidFileFor` from `cortex.ts`
+// (tests, the lifecycle commands below) are unaffected.
+export { pidFileFor };
 
 /**
  * cortex#400 — derive the per-agent CC session opts handed to the
@@ -310,6 +349,24 @@ export interface CortexHandle {
    */
   readonly agentRegistry: AgentRegistry;
   /**
+   * B-0 (cortex#1021) — the live agent-registry generation. 0 at boot; each
+   * successful agents.d/ reload that CHANGES the agent set increments it. A
+   * no-op reload (no add/remove/change) does not advance it. Read it after a
+   * `reloadAgents()` (or a fs.watch-driven reload) to confirm a swap happened.
+   */
+  readonly agentGeneration: number;
+  /**
+   * B-0 (cortex#1021) — trigger an agents.d/ reload on the SAME path the
+   * fs.watch callback uses: revalidate fragments, rebuild the merged set
+   * (inline cortex.yaml agents still win on id conflict), swap the registry,
+   * reconcile review consumers (add → start, remove → drain, change →
+   * remove+add), and re-publish the capability registry. `cortex agents
+   * reload` and SIGHUP route here. `source` tags the reload's origin for
+   * logging/observation. Resolves once the reconcile completes (consumers
+   * drained/started). A no-op when no `agents.d/` directory is in play.
+   */
+  reloadAgents(source?: "cli" | "sighup"): Promise<void>;
+  /**
    * IAW Phase D.4.3 — registry-resolved peer pubkey reader. Exposed
    * read-only so D.6 integration tests + future consumers can verify
    * that the federation roster gets populated from the registry.
@@ -379,6 +436,44 @@ export interface StartCortexOptions {
    * @internal — not part of the public API; semver does not apply.
    */
   agentsDir?: string;
+  /**
+   * B-0 (cortex#1021) — skip the daemon-level `agents.d/` fragment watcher
+   * (tests that don't want a live fs.watch, or that drive reloads through the
+   * handle's `reloadAgents()` directly). Production omits this; the watcher
+   * starts whenever `agentsDir` exists.
+   */
+  disableAgentsWatcher?: boolean;
+  /**
+   * B-0 (cortex#1021) — override the `agents.d/` watcher debounce (tests use a
+   * short window to keep fs.watch assertions fast). Defaults to the watcher's
+   * own 200ms — the same window the main ConfigWatcher uses.
+   */
+  agentsWatcherDebounceMs?: number;
+  /**
+   * Bot Packs B-1 (cortex#1021) — base directory under which an `exec` brain's
+   * pack is resolved: `{brainPackBaseDir}/{agentId}` substitutes for the
+   * `{pack}` placeholder in `brain.run`. Defaults to
+   * `~/.config/metafactory/pkg/repos/` (the arc install path per
+   * design-bot-packs.md §7.1). Tests point it at a tmp dir holding fixture
+   * brains. arc#117's HostAdapter will own this resolution end-to-end (B-3);
+   * until then a pack can be hand-dropped under this base.
+   */
+  brainPackBaseDir?: string;
+  /**
+   * B-0 (cortex#1021) — test-only observation hook fired after EVERY
+   * agents.d/ reload attempt (watcher-, cli-, or sighup-sourced), including
+   * failed ones. Surfaces the post-reload generation + the add/remove/change
+   * sets so tests can assert reconcile behaviour without scraping logs.
+   */
+  onAgentsReloaded?: (info: {
+    generation: number;
+    source: AgentsChangeEvent["source"];
+    failed: boolean;
+    added: string[];
+    removed: string[];
+    changed: string[];
+    consumerAgentIds: string[];
+  }) => void;
   /**
    * Inline `Agent[]` to merge with the fragment-loaded list when building
    * the registry. Mirrors the cortex.yaml `agents[]` block (design §6.1):
@@ -520,6 +615,56 @@ function targetAgentForDispatch(
 }
 
 /**
+ * Bot Packs B-1 (cortex#1033 §Maintainability) — collect the declared brain
+ * secrets from THIS process's env. Only named keys are forwarded into the
+ * brain's minimal env (the runner enforces the minimal-env policy; §8). A
+ * named-but-unset secret is simply absent (logged once for visibility — the
+ * install-time consent is the arc-side gate). Pure except for the stderr log.
+ */
+function collectBrainSecrets(
+  agentId: string,
+  declared: readonly string[],
+): Record<string, string> {
+  const secrets: Record<string, string> = {};
+  const missing: string[] = [];
+  for (const name of declared) {
+    const value = process.env[name];
+    if (value !== undefined) secrets[name] = value;
+    else missing.push(name);
+  }
+  if (missing.length > 0) {
+    process.stderr.write(
+      `cortex: brain agent=${agentId} declares secrets not present in the ` +
+        `environment: [${missing.join(",")}] — they will be absent from ` +
+        `the brain process (install-time consent is the arc-side gate)\n`,
+    );
+  }
+  return secrets;
+}
+
+/**
+ * Bot Packs B-1 (cortex#1033 §Maintainability) — read the persona text once at
+ * brain start. `personaPath` is the loader-resolved file PATH. A
+ * missing/unreadable persona is non-fatal: returns `undefined` (the brain
+ * receives no persona) and logs once.
+ */
+function loadBrainPersona(
+  agentId: string,
+  personaPath: string,
+): string | undefined {
+  try {
+    return readFileSync(personaPath, "utf-8");
+  } catch (personaErr) {
+    process.stderr.write(
+      `cortex: brain agent=${agentId} persona unreadable at "${personaPath}": ` +
+        `${personaErr instanceof Error ? personaErr.message : String(personaErr)} — ` +
+        `proceeding without persona\n`,
+    );
+    return undefined;
+  }
+}
+
+/**
  * Construct the full cortex stack and start it. Returns a stop handle.
  *
  * Order: runtime → router → dispatch-handler → adapters → dispatch-listener
@@ -616,10 +761,11 @@ export async function startCortex(
   let stackNKeyPubForVerifier: string | undefined;
   if (options.stack?.nkey_seed_path && !signingKnobs.attachSigner) {
     // TC-0 (#628) — a stack seed is configured, but `security.signing` is
-    // `off` (the schema default). Posture wins: do NOT attach the signer;
-    // publish unsigned. This is the DECISION-FOR-REVIEW behaviour change vs
-    // pre-TC-0 (which signed whenever a seed was present). Seed-configured
-    // stacks must set `signing: permissive` (or `enforce`) to retain signing.
+    // `off`. Posture wins: do NOT attach the signer; publish unsigned.
+    // Since cortex#1000 a seed-configured stack only reaches this branch via
+    // an EXPLICIT `signing: off` — the loader's seed-aware default
+    // (`applySeedAwareSigningDefault`) bumps an UNSET toggle to `permissive`
+    // before the schema parse. Keep the warning for the explicit-off case.
     console.log(
       "cortex: stack signing key present but security.signing=off — " +
         "NOT attaching signer; outbound envelopes will be unsigned " +
@@ -903,7 +1049,19 @@ export async function startCortex(
     ...inlineAgents,
     ...fragmentAgents.filter((a) => !inlineIds.has(a.id)),
   ];
-  const agentRegistry = AgentRegistry.fromAgents(mergedAgents);
+  // B-0 (cortex#1021) — `agentRegistry` is the live, swappable snapshot. The
+  // agents.d/ hot-reload path (below) rebuilds the merged set and reassigns
+  // this binding under a bumped generation counter; the handle's
+  // `agentRegistry` getter reads the live binding so callers always see the
+  // current generation. `mergedAgents` stays the BOOT snapshot (it is consumed
+  // structurally by the boot-time adapter / presence / dispatch wiring); the
+  // reload path tracks its own current view in `liveFragmentAgents` below.
+  let agentRegistry = AgentRegistry.fromAgents(mergedAgents);
+  // The registry generation. Starts at 0 (boot); each successful agents.d/
+  // reload that changes the agent set increments it. Surfaced for tests +
+  // observability — a generation that doesn't advance on a no-op reload is the
+  // signal that nothing structurally changed.
+  let agentGeneration = 0;
   if (mergedAgents.length > 0) {
     console.log(
       `cortex: agent registry assembled — ${mergedAgents.length} agent(s) `
@@ -1000,24 +1158,38 @@ export async function startCortex(
   //
   // **Scope (per §10.1 PR-7).** Publish-only. No subscriber wiring here —
   // the consumer is principal-dashboard side and lands in a future PR.
-  const capabilityEntries: CapabilityRegistryEntry[] = mergedAgents
-    .filter((a): a is Agent & { runtime: { capabilities: readonly string[] } } =>
-      (a.runtime?.capabilities.length ?? 0) > 0,
-    )
-    .map((a) => ({
-      agentId: a.id,
-      capabilities: a.runtime.capabilities,
-    }));
-  if (capabilityEntries.length > 0) {
+  // B-0 (cortex#1021) — the idempotent capability-registry publish, lifted into
+  // a reusable closure so the agents.d/ hot-reload path (below) re-publishes
+  // through the SAME code at boot. This CLOSES the long-standing TODO in this
+  // block's preamble ("we do NOT wire a re-publish into the hot-reload path …
+  // when [a fragment watcher] is wired, the re-publish belongs in its
+  // callback"): the watcher's reload callback now calls `publishCapabilitiesFor`
+  // after swapping the registry. The publisher keys the bucket on `agent_id`
+  // and overwrites, so a re-publish reconciles a changed/added agent's caps and
+  // is a harmless no-op for unchanged ones. Returns the number of agents whose
+  // registrations were attempted (0 when no agent declares capabilities).
+  const publishCapabilitiesFor = async (
+    agents: readonly Agent[],
+    context: "boot" | "reload",
+  ): Promise<number> => {
+    const entries: CapabilityRegistryEntry[] = agents
+      .filter((a): a is Agent & { runtime: { capabilities: readonly string[] } } =>
+        (a.runtime?.capabilities.length ?? 0) > 0,
+      )
+      .map((a) => ({
+        agentId: a.id,
+        capabilities: a.runtime.capabilities,
+      }));
+    if (entries.length === 0) return 0;
     // cortex#288 follow-up — closure-scoped success/failure counters.
     //
     // `publishCapabilityRegistry`'s contract is "I called publish() for each
     // envelope" — it pushes to its returned `published[]` *after* awaiting
-    // publish(), regardless of whether the boot site swallows the rejection.
+    // publish(), regardless of whether the call site swallows the rejection.
     // Our `wrappedPublish` below DOES swallow per-envelope failures (so one
     // bad publish doesn't abort the loop), which means `published.length` is
     // really "publishes that returned without throwing into the publisher",
-    // not "publishes that actually landed on the wire". The boot log should
+    // not "publishes that actually landed on the wire". The log should
     // report wire-side reality. We count outcomes locally here; the publisher
     // contract stays correct and unchanged.
     let successfulPublishes = 0;
@@ -1043,25 +1215,79 @@ export async function startCortex(
     try {
       await publishCapabilityRegistry({
         source: systemEventSource,
-        entries: capabilityEntries,
+        entries,
         publish: wrappedPublish,
       });
       const failureSuffix = failedPublishes > 0 ? ` (${failedPublishes} failure(s))` : "";
       console.log(
         `cortex: published ${successfulPublishes} capability registration(s)${failureSuffix} ` +
-          `for ${capabilityEntries.length} agent(s)`,
+          `for ${entries.length} agent(s) (${context})`,
       );
     } catch (err) {
       // Defensive — `publishCapabilityRegistry` is pure orchestration and
       // shouldn't throw once `wrappedPublish` traps per-envelope failures,
       // but a `clock()` or `buildBaseEnvelope` throw would still surface
-      // here. Boot continues; the bucket simply stays unpopulated until
-      // the next restart.
+      // here. Boot/reload continues; the bucket simply stays unpopulated
+      // until the next publish.
       console.error(
-        "cortex: capability-registry boot wiring failed (non-fatal — boot continues):",
+        `cortex: capability-registry ${context} wiring failed (non-fatal — continues):`,
         err instanceof Error ? err.message : String(err),
       );
     }
+    return entries.length;
+  };
+
+  // B-0 (Sage cortex#1027) — capability TOMBSTONE publish for REMOVED agents.
+  //
+  // The bucket consumer keys on `agent_id` and overwrites; an agent that is
+  // removed on reload must have its prior registration OVERWRITTEN, not merely
+  // omitted from the next republish (omission leaves the stale registration
+  // live — the agent stays a "provider" of capabilities it no longer hosts).
+  // `publishCapabilityRegistry` deliberately SKIPS empty-capability entries
+  // (spec §3.4), so we cannot tombstone through it. We build the empty-capability
+  // envelope directly: same `agents.capabilities.registered` type + `agent_id`,
+  // `capabilities: []` — which a keyed consumer interprets as "this agent now
+  // provides nothing", i.e. an unregister. Errors are trapped per-envelope so one
+  // failure doesn't abort the reload.
+  const publishCapabilityTombstones = async (
+    removedAgentIds: readonly string[],
+  ): Promise<number> => {
+    if (removedAgentIds.length === 0) return 0;
+    let tombstoned = 0;
+    for (const agentId of removedAgentIds) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-deprecated -- intentional dual-emit tombstone during the agent.online migration window.
+        const envelope = buildCapabilityRegisteredEnvelope({
+          source: systemEventSource,
+          agentId,
+          capabilities: [],
+          registeredAt: new Date(),
+          instance: systemEventSource.instance,
+        });
+        await runtime.publish(envelope);
+        tombstoned++;
+      } catch (err) {
+        // Per CLAUDE.md "no empty catch blocks": log, continue. stderr (not the
+        // system-events pipeline) for the same reason as publishCapabilitiesFor.
+        process.stderr.write(
+          `cortex: capability-registry tombstone publish failed for agent_id=${agentId}: ` +
+            `${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
+    }
+    if (tombstoned > 0) {
+      console.log(
+        `cortex: published ${tombstoned} capability tombstone(s) for removed agent(s) (reload)`,
+      );
+    }
+    return tombstoned;
+  };
+
+  const capabilityEntryCount = mergedAgents.filter(
+    (a) => (a.runtime?.capabilities.length ?? 0) > 0,
+  ).length;
+  if (capabilityEntryCount > 0) {
+    await publishCapabilitiesFor(mergedAgents, "boot");
   } else {
     // cortex#314 — promote skipped notice to stderr WARNING with
     // principal-actionable text. The capability-dispatch consumer rejects
@@ -1124,12 +1350,48 @@ export async function startCortex(
   // on each, allowing in-flight pipelines to finish per the consumer's
   // own drain contract.
   const reviewConsumers: ReviewConsumer[] = [];
+  // Bot Packs B-1 (design-bot-packs.md §4, §6) — an agent whose
+  // `runtime.brain.kind === "exec"` is hosted by a BrainConsumer for its
+  // declared capabilities, NOT a builtin ReviewConsumer. `brain` absent / kind
+  // builtin ⇒ the existing review path, byte-for-byte unchanged.
+  const isExecBrainAgent = (a: Agent): boolean =>
+    a.runtime?.brain?.kind === "exec";
+  // Bot Packs B-1 — the SINGLE brain-hosting predicate (cortex#1033
+  // §Maintainability): an exec-brain agent that declares at least one capability
+  // (the subjects the consumer binds) is hosted by a BrainConsumer. Used by both
+  // the boot-time `brainAgents` filter AND the hot-reload `isBrainHosted` path so
+  // a B-2 change to the hosting criteria can't drift between them.
+  const isBrainHosted = (a: Agent): boolean => {
+    const runtime = a.runtime;
+    return runtime?.brain?.kind === "exec" && runtime.capabilities.length > 0;
+  };
+  const brainConsumers: BrainConsumer[] = [];
+  // Bot Packs B-2 — the long-lived daemon brain hosts (one per `lifecycle:
+  // daemon` agent). Tracked so the shutdown drain + reconcile teardown can stop
+  // them; the BrainConsumer already routes per-task drain through `stop()`, but
+  // a host also needs an unconditional teardown on process shutdown.
+  const daemonBrainHosts: DaemonBrainHost[] = [];
+  // Bot Packs B-2 — a mutable holder for the presence producer so the daemon
+  // host's `onDegraded` callback (which fires at RUNTIME, long after boot) can
+  // surface a degraded agent via `publishCapabilitiesChanged(agentId, [])` —
+  // the same capability-change presence signal the reconcile path uses. The
+  // producer is constructed later (the MC-registry block); this holder is
+  // assigned there and read lazily inside the callback.
+  const brainPresenceHolder: { producer: AgentPresenceProducer | null } = {
+    producer: null,
+  };
   const reviewCapableAgents = mergedAgents.filter((a) => {
+    // An exec-brain agent is hosted by the brain path even if it happens to
+    // declare a code-review capability — the two consumers are mutually
+    // exclusive per agent (§6: "instead of, not in addition to").
+    if (isExecBrainAgent(a)) return false;
     const caps = a.runtime?.capabilities ?? [];
     return caps.some(
       (c) => c === "code-review" || c.startsWith("code-review."),
     );
   });
+  // Bot Packs B-1 — agents hosted by a BrainConsumer (the shared predicate).
+  const brainAgents = mergedAgents.filter(isBrainHosted);
   // Stable identity inputs for the per-agent durable consumer name.
   // cortex#427 — `reviewPrincipalId` is the same `{principal}` segment the
   // surface-router and capability-registry boot paths use; reading the
@@ -1470,6 +1732,29 @@ export async function startCortex(
   const devImplementStreamSubjects = devStreamOfferingPatterns;
   // ── /F-2.2 DEV_IMPLEMENT subject set ──────────────────────────────────────
 
+  // ── B-3 (cortex#1021) BRAIN_TASKS subject set ─────────────────────────────
+  // Inbound surface tasks addressed TO an exec-brain agent land on
+  // `…brain.{capability}` (the `BRAIN_TASK_SUBJECT_FAMILY`), captured by the
+  // BRAIN_TASKS stream. The B-1 runtime bound every brain capability on
+  // CODE_REVIEW, whose filter is `tasks.code-review.>` — so a non-code-review
+  // capability (e.g. `soc.compose.flow`) had NO stream to receive a task from.
+  // This stream closes that gap: a brain consumer binds its durable here, and
+  // the inbound dispatch publishes to the bus on `…brain.{capability}`.
+  //
+  // OVERLAP ANALYSIS (JetStream rejects overlapping subjects across streams):
+  //   CODE_REVIEW       owns `…tasks.code-review.>`
+  //   DEV_IMPLEMENT     owns `…tasks.dev.>`
+  //   REVIEW_LIFECYCLE  owns `…review.verdict.>` / `…code.pr.review.>` / `…dispatch.task.>`
+  //   BRAIN_TASKS       owns `…brain.>`            (THIS stream)
+  // `brain.` is a distinct segment-4 token from `tasks.` / `review.` / `code.`
+  // / `dispatch.`: no subject here is a prefix of (or prefixed by) any other
+  // stream's subjects. The four streams partition the subject space cleanly.
+  const brainTasksStream = "BRAIN_TASKS";
+  const brainTasksStreamSubjects = [
+    `local.${reviewPrincipalId}.${derivedStack.stack}.${BRAIN_TASK_SUBJECT_FAMILY}.>`,
+  ];
+  // ── /B-3 BRAIN_TASKS subject set ──────────────────────────────────────────
+
   if (reviewJsm !== null) {
     try {
       const outcome = await provisionReviewStream({
@@ -1581,9 +1866,52 @@ export async function startCortex(
       );
     }
     // ── /F-2.2 provision DEV_IMPLEMENT ──────────────────────────────────────
+
+    // ── B-3 (cortex#1021) provision BRAIN_TASKS ─────────────────────────────
+    // Same `reviewJsm !== null` gate + posture as CODE_REVIEW / DEV_IMPLEMENT
+    // (Interest retention, File storage, idempotent ensure). The exec-brain
+    // consumer binds its durable here; the inbound dispatch publishes onto
+    // `…brain.{capability}`. A failure does NOT abort boot. Same KNOWN COUPLING
+    // as DEV_IMPLEMENT: the gate is review-capability presence, so a
+    // brain-ONLY stack would skip provisioning — not reachable today (the
+    // switch stack runs sage); the independent-gate fix is the same follow-up.
+    try {
+      const brainOutcome = await provisionReviewStream({
+        jsm: reviewJsm,
+        name: brainTasksStream,
+        subjects: brainTasksStreamSubjects,
+        maxAgeNs: reviewStreamMaxAgeNs,
+        maxBytes: reviewStreamMaxBytes,
+      });
+      if (brainOutcome === "created") {
+        console.log(
+          `cortex: provisioned JetStream stream "${brainTasksStream}" (subjects=[${brainTasksStreamSubjects.join(", ")}])`,
+        );
+      } else if (brainOutcome === "exists") {
+        console.log(
+          `cortex: JetStream stream "${brainTasksStream}" already present — binding existing config`,
+        );
+      }
+    } catch (err) {
+      process.stderr.write(
+        `cortex: provisionReviewStream failed for "${brainTasksStream}": ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+    // ── /B-3 provision BRAIN_TASKS ──────────────────────────────────────────
   }
 
-  for (const agent of reviewCapableAgents) {
+  // B-0 (cortex#1021) — the per-agent review-consumer construction, lifted out
+  // of the boot loop into a reusable closure so the agents.d/ hot-reload path
+  // (below) can START a newly-ADDED agent's consumers through the SAME
+  // construction it uses at boot — no duplicated wiring. It captures every
+  // boot-scoped dependency it needs (trustResolver, signingKnobs, signer,
+  // resolvedPolicy, derivedStack, reviewJsm, the offering/federation patterns,
+  // systemEventSource, the reviewConsumers array, …) by closure; nothing new is
+  // threaded as a parameter. Pushes the consumers it creates onto
+  // `reviewConsumers[]` (the same array the shutdown drain walks), so a
+  // hot-added agent's consumers drain on shutdown identically to a boot agent's.
+  const startReviewConsumersForAgent = async (agent: Agent): Promise<void> => {
     try {
       const caps = agent.runtime?.capabilities ?? [];
       const consumerAgent: ReviewConsumerAgent = {
@@ -2037,6 +2365,416 @@ export async function startCortex(
           `${err instanceof Error ? err.message : String(err)}\n`,
       );
     }
+  };
+
+  // Bot Packs B-1 (design-bot-packs.md §4, §6, §8) — start a BrainConsumer for
+  // an `exec`-brain agent. Mirrors `startReviewConsumersForAgent`'s shape: reads
+  // the closure-captured boot state (runtime, systemEventSource, the
+  // brainConsumers[] array the shutdown drain + reconcile walk), provisions the
+  // per-capability JetStream durables, and binds the consumer. NEVER throws —
+  // one brain's wiring failure does not abort boot.
+  const brainPackBaseDir =
+    options.brainPackBaseDir ?? expandTilde("~/.config/metafactory/pkg/repos/");
+
+  // Bot Packs B-3 (cortex#1021 W-1/W-2) — the adapter inbound reply-bridge +
+  // the booted surface gate. Constructed ONCE here (before the per-agent brain
+  // consumers, which capture the gate) even though the surface adapters boot
+  // LATER: the bridge is late-wired —
+  //   - `gateReplyRouter` is a passive registry; each adapter's inbound
+  //     handler (below, at adapter start) offers every normalized message to
+  //     it before chat dispatch;
+  //   - `liveSurfaces` is seeded from the CONFIGURED surface instances (sage
+  //     #1037 round 1: brain consumers boot BEFORE adapters, so seeding only
+  //     at adapter start would fail-close every gate in the boot window even
+  //     though the adapter is seconds from being available). A configured
+  //     surface whose adapter then fails to start still fails closed: the
+  //     gate's rendered prompt has no adapter to deliver it and no reply can
+  //     arrive, so the gate times out to `fail`. Adapters still `add()` on
+  //     start (idempotent) so a surface added by hot-reload joins late.
+  // The gate itself only boots when the principal has at least one configured
+  // surface identity (`principal.mattermostId` / `discordId` / `slackId`) —
+  // with no platform id there is nothing to verify a reply against, so the
+  // consumer keeps its DenyAll default (fail-closed, B-1 behaviour).
+  const gateReplyRouter = new GateReplyRouter();
+
+  // One metadata row per surface family (sage #1037 round 2: liveSurfaces,
+  // principalIdentity and the has-identity check previously repeated the
+  // platform list in three independent shapes — adding a surface meant
+  // touching all of them).
+  const surfaceGateMeta = [
+    {
+      surface: "discord",
+      configured: config.discord.length > 0,
+      identityKey: "discordId" as const,
+      principalId: options.principal?.discordId,
+    },
+    {
+      surface: "mattermost",
+      configured: config.mattermost.length > 0,
+      identityKey: "mattermostId" as const,
+      principalId: options.principal?.mattermostId,
+    },
+    {
+      surface: "slack",
+      configured: config.slack.length > 0,
+      identityKey: "slackId" as const,
+      principalId: options.principal?.slackId,
+    },
+  ];
+  const liveSurfaces = new Set<string>(
+    surfaceGateMeta.filter((m) => m.configured).map((m) => m.surface),
+  );
+  const principalIdentity: PrincipalIdentity = {};
+  for (const m of surfaceGateMeta) {
+    if (m.principalId !== undefined) principalIdentity[m.identityKey] = m.principalId;
+  }
+  const principalHasSurfaceIdentity = surfaceGateMeta.some(
+    (m) => m.principalId !== undefined,
+  );
+
+  // sage #1037 round 1 (maintainability): ONE inbound handler shape for all
+  // three adapter families — gate reply-bridge first, chat dispatch second.
+  // B-3 (cortex#1021 W-1): a message landing in a thread with an open
+  // principal gate is that gate's reply (identity checked by the GATE, never
+  // here), not a chat dispatch. The InboundMessage → GateReplyOffer mapping
+  // lives HERE (surface layer) so the bus-side router stays blind to adapter
+  // DTOs (sage round 2, architecture).
+  const inboundWithGateBridge =
+    (adapter: PlatformAdapter, agent: Agent) =>
+    (msg: InboundMessage): Promise<void> => {
+      // The routing key for both the gate reply-bridge and a brain task's
+      // response_routing. A top-level (non-threaded) surface message has no
+      // native thread, so the channel id is the key — used IDENTICALLY on the
+      // gate-await side and the offer side, so a gate prompt + the principal's
+      // reply correlate whether the conversation is threaded or not.
+      const thread = msg.threadId !== undefined && msg.threadId.length > 0
+        ? msg.threadId
+        : msg.channelId;
+      const consumed = gateReplyRouter.offer({
+        surface: msg.platform,
+        channel: msg.channelId,
+        thread,
+        authorId: msg.authorId,
+        text: msg.content,
+      });
+      if (consumed) return Promise.resolve();
+      // B-3 routing (design-bot-packs.md §6, cortex#1021): an exec-brain agent
+      // does NOT run the builtin claude-code chat pipeline (it has no CC
+      // substrate). Its inbound @-mention becomes a capability task PUBLISHED
+      // TO THE BUS on `…brain.{capability}` (the BRAIN_TASKS stream), which the
+      // brain consumer pulls — the documented "bus is the medium" contract
+      // (sage #1038 round 1). Fleet `dispatch` effects ride the bus too.
+      if (agent.runtime?.brain?.kind === "exec") {
+        // Return (not void) so the platform handler applies natural
+        // back-pressure on the publish (sage #1038 r2). The publish is cheap
+        // — a JetStream write; the long compose is decoupled on the consumer
+        // side (the brain pulls the task), so awaiting here bounds inbound
+        // publish concurrency without serialising composition.
+        return dispatchInboundToBrain(agent, msg, thread);
+      }
+      return dispatchHandler.handleMessage(adapter, msg, targetAgentForDispatch(agent, configDir));
+    };
+
+  /**
+   * Publish an inbound surface message to an exec-brain agent as a capability
+   * task on the bus. Builds a `brain.{capability}` envelope (BRAIN_TASKS
+   * stream) carrying the message text + the surface `response_routing` (so the
+   * brain can `post` back and `ask_principal` renders to the originating
+   * thread), and `runtime.publish`es it — the brain consumer's durable pulls
+   * it through the normal `processEnvelope` path. Non-blocking: the inbound
+   * handler never awaits compose/gate/run.
+   *
+   * Note on the gate thread key (sage #1038 round 1): `thread` is
+   * `threadId ?? channelId`, computed once in the caller and used IDENTICALLY
+   * for the gate reply-bridge offer (above) AND this task's `response_routing`.
+   * A top-level (non-threaded) message would otherwise have no thread for the
+   * gate to await on / correlate a reply against; keying both sides on the
+   * channel id when there is no native thread makes the gate prompt and the
+   * principal's reply correlate either way. The SurfacePrincipalGate is the
+   * only PrincipalReplySource consumer, and it awaits on exactly this source —
+   * so the normalization is self-consistent, not a generic-router assumption.
+   *
+   * Capability selection: the brain's FIRST declared capability. A
+   * multi-capability brain needs a keyword/prefix selector (follow-up); v1
+   * brains (Yarrow → `soc.compose.flow`) declare exactly one.
+   */
+  const dispatchInboundToBrain = async (
+    agent: Agent,
+    msg: InboundMessage,
+    thread: string,
+  ): Promise<void> => {
+    const capability = agent.runtime?.capabilities[0];
+    if (capability === undefined) {
+      process.stderr.write(
+        `cortex: exec-brain agent=${agent.id} has no declared capability — dropping inbound message\n`,
+      );
+      return;
+    }
+    const envelope = buildDispatchTaskEnvelope({
+      source: systemEventSource,
+      capability,
+      family: BRAIN_TASK_SUBJECT_FAMILY,
+      payload: buildBrainTaskPayload({
+        text: msg.content,
+        user: msg.authorId,
+        surface: msg.platform,
+        channel: msg.channelId,
+        thread,
+        // cortex#1038 — the adapter instance the @-mention arrived on, so the
+        // brain's posts + the gate prompt route back to THIS adapter via the
+        // chat dispatch-sink (which filters on adapter_instance).
+        adapterInstance: msg.instanceId,
+        // Pass attachment REFERENCES (url, not bytes) so a brain can fetch a
+        // dropped file (e.g. Yarrow's A_INGEST_ATTACHMENT). safeAttachmentRefs
+        // is the SSRF guard: https + surface host-allowlist, fail-closed.
+        ...((): { attachments?: BrainAttachmentRef[] } => {
+          const refs = safeAttachmentRefs(msg.platform, msg.attachments);
+          return refs.length > 0 ? { attachments: refs } : {};
+        })(),
+      }),
+      ...(agent.runtime?.modelClass !== undefined && { modelClass: agent.runtime.modelClass }),
+    });
+    try {
+      await runtime.publish(envelope);
+    } catch (err) {
+      // Log AND rethrow (sage #1038 r3): swallowing here would let the
+      // platform handler treat the mention as successfully handled while no
+      // brain task was actually delivered — a silent drop on a transient bus
+      // error. Rejecting lets the adapter surface/retry per its own policy.
+      process.stderr.write(
+        `cortex: exec-brain agent=${agent.id} inbound publish failed: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      throw err;
+    }
+  };
+  const surfacePrincipalGate = principalHasSurfaceIdentity
+    ? new SurfacePrincipalGate({
+        principalIdentity,
+        liveSurfaces,
+        renderer: makeDispatchPostRenderer({ runtime, source: systemEventSource }),
+        replySource: gateReplyRouter,
+        // 10 min to review + approve a gate (e.g. a composed flow's run-approval
+        // or an analyst gate). The host per-task liveness timeout is PAUSED while
+        // a gate is open (daemon-brain-host ask_principal), so this is the real
+        // human-reply window — not racing the 5-min task timeout that used to
+        // orphan it (cortex#1073).
+        timeoutMs: 600_000,
+      })
+    : undefined;
+
+  const startBrainConsumersForAgent = async (agent: Agent): Promise<void> => {
+    try {
+      const brain = agent.runtime?.brain;
+      if (brain?.kind !== "exec" || brain.run === undefined) {
+        // Defensive: the caller filters to exec brains with a `run`; a
+        // mis-routed builtin/absent brain is a no-op, not a crash.
+        return;
+      }
+      const caps = agent.runtime?.capabilities ?? [];
+      const consumerAgent: BrainConsumerAgent = {
+        id: agent.id,
+        capabilities: caps,
+        dispatchCapabilities: brain.dispatch_capabilities,
+        ...(agent.runtime?.maxConcurrent !== undefined && {
+          maxConcurrent: agent.runtime.maxConcurrent,
+        }),
+        ...(agent.runtime?.modelClass !== undefined && {
+          modelClass: agent.runtime.modelClass,
+        }),
+      };
+
+      // Resolve the per-task runner over the manifest `brain` block. `{pack}`
+      // expands to `{base}/{agentId}` (the arc install dir; design §7.1). The
+      // declared secrets resolve from THIS process's env at spawn — only the
+      // named keys are forwarded into the brain's minimal env (the runner
+      // enforces the minimal-env policy; §8). A named-but-unset secret is
+      // simply absent in the env (logged once for visibility). cortex#1033
+      // §Maintainability — secret collection + persona load are extracted to the
+      // module-level `collectBrainSecrets` / `loadBrainPersona` helpers so this
+      // startup closure reads as a sequence of named steps.
+      const packDir = join(brainPackBaseDir, agent.id);
+      const secrets = collectBrainSecrets(agent.id, brain.secrets);
+
+      // Persona delivered to the brain — per-task brains receive it on each task
+      // event; daemon brains receive it ONCE in the `hello` handshake (§5
+      // "Persona delivery"). A missing/unreadable persona is non-fatal.
+      const personaText = loadBrainPersona(agent.id, agent.persona);
+
+      // Bot Packs B-2 — `lifecycle: daemon` is hosted by a long-lived
+      // DaemonBrainHost (spawn once, socket-multiplex tasks, supervise + drain);
+      // `per-task` (default) keeps the B-1 per-spawn runner. Both feed the SAME
+      // BrainConsumer policy seam (the consumer is lifecycle-agnostic — it routes
+      // brain effects through the host hooks identically). The lifecycle-specific
+      // runner is mutually exclusive: a daemon agent passes `daemonHost` (no
+      // per-task runner constructed), a per-task agent passes `runBrainTask`.
+      // The `principalGate` (B-3, cortex#1021 W-2): when the principal has a
+      // configured surface identity, every brain consumer gets the SHARED
+      // `surfacePrincipalGate` — `ask_principal` renders to the task's
+      // surface/thread and awaits the principal's identity-checked reply via
+      // the `gateReplyRouter` bridge (wired into each adapter's inbound flow
+      // at adapter start). Tasks that are bus-only, on a surface this
+      // instance doesn't host, or on a surface with no configured principal
+      // id STILL fail closed inside the gate (resolve-time checks). With no
+      // principal surface identity at all the consumer keeps its
+      // DenyAllPrincipalGate default (B-1 fail-closed).
+      // Sovereignty audit-parity by default, mirroring ReviewConsumer (a
+      // self-declared modelClass is spoofable until bound to the signing
+      // identity, cortex#327).
+      const baseConsumerOpts = {
+        agent: consumerAgent,
+        source: systemEventSource,
+        runtime,
+        ...(personaText !== undefined && { persona: personaText }),
+        ...(surfacePrincipalGate !== undefined && {
+          principalGate: surfacePrincipalGate,
+        }),
+      };
+      let daemonHost: DaemonBrainHost | undefined;
+      let consumer: BrainConsumer;
+      if (brain.lifecycle === "daemon") {
+        daemonHost = new DaemonBrainHost({
+          agentId: agent.id,
+          run: brain.run,
+          packDir,
+          secrets,
+          maxRestarts: brain.maxRestarts,
+          ...(personaText !== undefined && { persona: personaText }),
+          // On degradation (restart budget exhausted) surface the agent via the
+          // presence producer's capability-change signal (drop to empty caps),
+          // the same path the reconcile uses (§7.4). Read the holder lazily —
+          // the producer is constructed after this boot closure runs.
+          onDegraded: (degradedId: string): void => {
+            const producer = brainPresenceHolder.producer;
+            if (producer !== null) {
+              producer.publishCapabilitiesChanged(degradedId, []);
+            }
+            process.stderr.write(
+              `cortex: daemon brain agent=${degradedId} marked DEGRADED — ` +
+                `restart budget exhausted; presence signalled\n`,
+            );
+          },
+        });
+        // Spawn + connect + hello. A spawn/connect failure is logged; the
+        // consumer still registers so a later reload can replace it. The
+        // consumer's runner (the host's runTask) fast-fails not_now until the
+        // host connects, so no task is silently lost.
+        // Non-blocking start (sage cortex#1035 round 3): start() resolves on
+        // the socket handshake, so awaiting here would make cortex boot
+        // latency the SUM of every daemon's spawn+auth. The consumer's
+        // runner fast-fails not_now until the host connects (documented
+        // above), so registering the consumer before the handshake settles
+        // loses nothing — failures land in the same stderr path.
+        void daemonHost.start().catch((startErr: unknown) => {
+          process.stderr.write(
+            `cortex: daemon brain host start failed for agent=${agent.id}: ` +
+              `${startErr instanceof Error ? startErr.message : String(startErr)}\n`,
+          );
+        });
+        daemonBrainHosts.push(daemonHost);
+        consumer = new BrainConsumer({ ...baseConsumerOpts, daemonHost });
+      } else {
+        const runBrainTask = makeExecBrainRunner({ run: brain.run, packDir, secrets });
+        consumer = new BrainConsumer({ ...baseConsumerOpts, runBrainTask });
+      }
+      brainConsumers.push(consumer);
+
+      // Provision + bind one durable pull consumer per declared capability.
+      // Subject grammar: `local.{principal}.{stack}.tasks.{capability}` (the
+      // myelin task-envelope grammar the design + agent envelopes use — the
+      // capability is a literal trailing segment, no `>` wildcard since a brain
+      // task subject is exact per capability). Durable name is unique per
+      // (principal, agent, capability).
+      //
+      // cortex#1033 §Architecture/§HonestOracle — provision ALL capability
+      // durables UP-FRONT and AWAIT them BEFORE calling `consumer.start()`, so
+      // the bind inside `start()` cannot race ahead of a not-yet-created durable
+      // on a virgin broker. This mirrors the review path (which awaits
+      // `provisionReviewConsumer` before `consumer.start()`); the brain path
+      // previously fired `void provisionReviewConsumer(...)` from inside the
+      // synchronous `resolve` callback, which returned the subscription params
+      // immediately while provisioning was still in flight. `resolve` is now a
+      // pure subject/durable resolver with no side effect.
+      // B-3 (cortex#1021): brain task subjects live on the `brain.` family /
+      // BRAIN_TASKS stream — NOT `tasks.`/CODE_REVIEW (where B-1 bound them,
+      // a stream that never carried non-code-review capabilities). The inbound
+      // dispatch publishes onto exactly this subject.
+      const brainCapabilities = consumerAgent.capabilities;
+      const brainDurableFor = (capability: string): string =>
+        `cortex-brain-consumer-${reviewPrincipalId}-${agent.id}-${capability.replaceAll(".", "-")}`;
+      const brainPatternFor = (capability: string): string =>
+        `local.${reviewPrincipalId}.${derivedStack.stack}.${BRAIN_TASK_SUBJECT_FAMILY}.${capability}`;
+
+      if (reviewJsm !== null) {
+        // Independent durables — provision in one parallel wave (sage
+        // cortex#1033 round 2); still awaited as a whole BEFORE start().
+        await Promise.all(
+          brainCapabilities.map(async (capability) => {
+            const durable = brainDurableFor(capability);
+            try {
+              await provisionReviewConsumer({
+                jsm: reviewJsm,
+                stream: brainTasksStream,
+                durable,
+                filterSubject: brainPatternFor(capability),
+                maxDeliver: reviewConsumerMaxDeliver,
+              });
+            } catch (provisionErr) {
+              // Don't abort — let `consumer.start()` surface the bind failure
+              // through its own dormant/skip path (mirrors the review path).
+              process.stderr.write(
+                `cortex: provisionReviewConsumer (brain) failed for "${durable}": ` +
+                  `${provisionErr instanceof Error ? provisionErr.message : String(provisionErr)}\n`,
+              );
+            }
+          }),
+        );
+      }
+
+      const started = await consumer.start({
+        resolve: (capability) => ({
+          pattern: brainPatternFor(capability),
+          stream: brainTasksStream,
+          durable: brainDurableFor(capability),
+        }),
+      });
+
+      const capSummary =
+        started.capabilities.length > 0 ? started.capabilities.join(",") : "(none)";
+      if (started.subscribedCapabilities.length > 0) {
+        console.log(
+          `cortex: brain consumer ready for agent=${agent.id} kind=exec ` +
+            `capabilities=[${capSummary}] subscribed=[${started.subscribedCapabilities.join(",")}] ` +
+            `gate=${surfacePrincipalGate !== undefined ? "surface" : "deny-all"}`,
+        );
+      } else {
+        console.log(
+          `cortex: brain consumer DORMANT for agent=${agent.id} kind=exec ` +
+            `capabilities=[${capSummary}] ` +
+            `gate=${surfacePrincipalGate !== undefined ? "surface" : "deny-all"} ` +
+            `— cortex MyelinRuntime subscriptions disabled ` +
+            `(G-1111 pending; tasks.{capability} envelopes will not be claimed by this brain)`,
+        );
+      }
+    } catch (err) {
+      // Per CLAUDE.md: log every error. One brain's wiring failure does NOT
+      // abort boot; the consumer (if pushed) stays in `brainConsumers[]` so the
+      // shutdown drain still calls `.stop()` (idempotent).
+      process.stderr.write(
+        `cortex: brain consumer init failed for agent=${agent.id}: ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+  };
+
+  // Boot: start review consumers for every code-review-capable agent. Same
+  // closure the hot-reload path calls for a newly-added agent.
+  for (const agent of reviewCapableAgents) {
+    await startReviewConsumersForAgent(agent);
+  }
+  // Boot: start brain consumers for every exec-brain agent (B-1). Same closure
+  // the hot-reload path calls for a newly-added exec-brain agent.
+  for (const agent of brainAgents) {
+    await startBrainConsumersForAgent(agent);
   }
   if (reviewConsumers.length === 0) {
     // cortex#314 — same first-install-safety promotion as the
@@ -2845,7 +3583,10 @@ export async function startCortex(
       // Register the adapter's surface-router face. Empty `surfaceSubjects`
       // makes this a no-op match; harmless to register either way.
       router.register(adapter.surfaceConfig);
-      await adapter.start((msg) => dispatchHandler.handleMessage(adapter, msg, targetAgentForDispatch(agent, configDir)));
+      await adapter.start(inboundWithGateBridge(adapter, agent));
+      // B-3: confirm this surface live (idempotent — seeded from config; a
+      // hot-reloaded surface joins here).
+      liveSurfaces.add(adapter.platform);
       adapters.push(adapter);
 
       // cortex#98 (part B) — Pass 1 step c: register this adapter's bot
@@ -3012,7 +3753,10 @@ export async function startCortex(
         },
       );
       router.register(adapter.surfaceConfig);
-      await adapter.start((msg) => dispatchHandler.handleMessage(adapter, msg, targetAgentForDispatch(agent, configDir)));
+      await adapter.start(inboundWithGateBridge(adapter, agent));
+      // B-3: confirm this surface live (idempotent — seeded from config; a
+      // hot-reloaded surface joins here).
+      liveSurfaces.add(adapter.platform);
       adapters.push(adapter);
       console.log(`cortex: mattermost adapter started (instance: ${instanceId}, ${instance.channels.length} channel(s))`);
     } catch (err) {
@@ -3120,7 +3864,10 @@ export async function startCortex(
       // `attachInboundDispatch()`. This is the Slack equivalent of
       // discord.js's buffered-events-before-listener pattern.
       const explicitTrustedBotIds: ReadonlySet<string> = new Set(instance.trustedBotIds);
-      await adapter.start((msg) => dispatchHandler.handleMessage(adapter, msg, targetAgentForDispatch(agent, configDir)));
+      await adapter.start(inboundWithGateBridge(adapter, agent));
+      // B-3: confirm this surface live (idempotent — seeded from config; a
+      // hot-reloaded surface joins here).
+      liveSurfaces.add(adapter.platform);
       adapters.push(adapter);
       // Best-effort trust-resolver registration matches the Discord pattern.
       if (agentRegistry.tryGetById(agent.id)) {
@@ -3577,6 +4324,399 @@ export async function startCortex(
     configWatcher.start();
   }
 
+  // ===========================================================================
+  // B-0 (cortex#1021, design-bot-packs §7 + §11) — daemon-level agents.d/
+  // fragment watcher + hot reload.
+  // ===========================================================================
+  //
+  // This wires the in-tree `AgentsDirectoryWatcher` (cortex#60 A.1, which until
+  // now was unit-tested but UNWIRED at the daemon level — see the historical
+  // TODO this section closes) into the running daemon, EXTENDING the existing
+  // reload machinery (the ConfigWatcher above) rather than inventing a parallel
+  // one. On a fragment add/change/remove (debounced), or an explicit
+  // `cortex agents reload` / SIGHUP, it:
+  //
+  //   1. revalidates fragments + rebuilds the merged agent set (inline
+  //      cortex.yaml agents still WIN on id conflict — design §6.1);
+  //   2. swaps `agentRegistry` under a bumped `agentGeneration`;
+  //   3. reconciles REVIEW CONSUMERS — an ADDED agent's consumers START via the
+  //      same `startReviewConsumersForAgent` boot uses; a REMOVED agent's
+  //      consumers DRAIN (`.stop()` lets in-flight finish) and leave
+  //      `reviewConsumers[]`; a CHANGED agent is remove-then-add;
+  //   4. reconciles the capability registry (Sage cortex#1027): re-publishes
+  //      registrations for ADDED + CHANGED agents only (diff-only, not the whole
+  //      roster), and TOMBSTONES removed agents (and changed-to-empty agents) with
+  //      an empty-capability registration so a removed agent stops being a
+  //      registered provider — both keyed on agent_id;
+  //   5. an invalid fragment is REJECTED without killing the daemon — the old
+  //      generation is retained and a warning is logged.
+  //
+  // HONEST SCOPE — PRESENCE ADAPTERS ARE RESTART-ONLY (documented limitation).
+  // Live presence-adapter (Discord/Mattermost/Slack) start/stop on reload is
+  // deeply entangled with boot: the two-pass cross-adapter trust resolution
+  // (cortex#98 part B) and the surface-router registration both run once over
+  // the full roster at boot. Hot-swapping a single adapter would have to
+  // re-run those shared passes safely mid-flight. Per the task's honest-scope
+  // rule we DO NOT half-implement that — the registry + review-consumer +
+  // capability hot path is fully live; presence changes for a hot-added/removed
+  // agent require a daemon restart. The reconcile logs a warning and
+  // `reloadAgents()` callers (the CLI) surface the same notice.
+  //
+  // The reconcile is SERIALIZED behind `reloadInFlight` so overlapping triggers
+  // (a fast double fs.watch event, or a CLI reload racing a watcher reload)
+  // don't interleave consumer start/stop. Each trigger awaits the prior one.
+  let liveFragmentAgents: Agent[] = fragmentAgents;
+  let liveMergedAgents: Agent[] = mergedAgents;
+  let reloadInFlight: Promise<void> = Promise.resolve();
+
+  // Predicate mirrors the boot-time `reviewCapableAgents` filter so a
+  // hot-added agent is started iff it would have been started at boot — an
+  // exec-brain agent is hosted by the BRAIN path, never the review path.
+  const isReviewCapable = (a: Agent): boolean => {
+    if (isExecBrainAgent(a)) return false;
+    const caps = a.runtime?.capabilities ?? [];
+    return caps.some((c) => c === "code-review" || c.startsWith("code-review."));
+  };
+  // Bot Packs B-1 — the hot-reload path reuses the SINGLE `isBrainHosted`
+  // predicate defined at boot setup (cortex#1033 §Maintainability) so a hot-added
+  // exec-brain agent is started iff it would have been started at boot, with no
+  // chance of the two filters drifting.
+
+  // Drain + remove every review consumer owned by `agentId` from
+  // `reviewConsumers[]`. `ReviewConsumer.stop()` is idempotent and awaits the
+  // in-flight set per its own drain contract (cortex#237 PR-6), so a removed
+  // agent's in-flight reviews publish their terminal envelope before teardown.
+  const drainConsumersForAgent = async (agentId: string): Promise<void> => {
+    // Iterate a snapshot of the indices to remove (consumers can appear more
+    // than once per agent: local + offer-scope + federated offer/direct).
+    const toStop = reviewConsumers.filter((c) => c.agent.id === agentId);
+    // Bot Packs B-1 — the agent's brain consumer (if any) drains on the SAME
+    // path. A reload that removes/changes an exec-brain agent must stop its
+    // BrainConsumer (which drains its in-flight brain tasks per its own
+    // contract) just like a review agent's consumers.
+    const brainToStop = brainConsumers.filter((c) => c.agent.id === agentId);
+    // Sage cortex#1027 — drain this agent's consumers CONCURRENTLY. Each
+    // `stop()` drains in-flight work; serializing them made one agent's reload
+    // latency the SUM of its consumers' drains. `allSettled` so one failing
+    // stop doesn't abort the siblings; we log each rejection by index.
+    const outcomes = await Promise.allSettled([
+      ...toStop.map((c) => c.stop()),
+      ...brainToStop.map((c) => c.stop()),
+    ]);
+    outcomes.forEach((outcome, i) => {
+      if (outcome.status === "rejected") {
+        const err: unknown = outcome.reason;
+        process.stderr.write(
+          `cortex: agents-reload — consumer drain failed for agent=${agentId} ` +
+            `(consumer ${i}): ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
+    });
+    // Compact `reviewConsumers[]` + `brainConsumers[]` in place, preserving
+    // order of survivors.
+    for (let i = reviewConsumers.length - 1; i >= 0; i--) {
+      if (reviewConsumers[i]?.agent.id === agentId) {
+        reviewConsumers.splice(i, 1);
+      }
+    }
+    for (let i = brainConsumers.length - 1; i >= 0; i--) {
+      if (brainConsumers[i]?.agent.id === agentId) {
+        brainConsumers.splice(i, 1);
+      }
+    }
+    // Bot Packs B-2 — the removed/changed agent's daemon brain host (if any) was
+    // already drained by its BrainConsumer.stop() above (which calls
+    // host.drain()); compact it out of the tracking array so a subsequent
+    // shutdown doesn't re-stop a host whose generation is gone. stop() is
+    // idempotent regardless, so this is bookkeeping, not correctness.
+    for (let i = daemonBrainHosts.length - 1; i >= 0; i--) {
+      if (daemonBrainHosts[i]?.agentId === agentId) {
+        daemonBrainHosts.splice(i, 1);
+      }
+    }
+  };
+
+  // The single reconcile path. Both the fs.watch callback and the handle's
+  // `reloadAgents()` route here through `runReconcile`. Computes the merged
+  // diff (inline wins), drains removed/changed-old consumers, starts
+  // added/changed-new consumers, swaps the registry, re-publishes caps.
+  const reconcileFromEvent = async (event: AgentsChangeEvent): Promise<void> => {
+    if (event.failed) {
+      // Invalid fragment mid-run: keep the old generation alive. The watcher
+      // already retained the prior valid agent set; we don't swap anything.
+      console.warn(
+        `cortex: agents-reload (${event.source}) REJECTED — invalid fragment ${event.error?.file ?? "?"}: ` +
+          `${event.error?.reason ?? "unknown"} — keeping generation ${agentGeneration}`,
+      );
+      options.onAgentsReloaded?.({
+        generation: agentGeneration,
+        source: event.source,
+        failed: true,
+        added: [],
+        removed: [],
+        changed: [],
+        consumerAgentIds: reviewConsumers.map((c) => c.agent.id),
+      });
+      return;
+    }
+
+    // `event.agents` is the fresh FRAGMENT set. Re-apply the inline-wins merge
+    // (design §6.1) so an inline cortex.yaml agent still shadows a fragment of
+    // the same id after the reload.
+    const freshFragments = event.agents;
+    const freshMerged: Agent[] = [
+      ...inlineAgents,
+      ...freshFragments.filter((a) => !inlineIds.has(a.id)),
+    ];
+
+    // Diff the MERGED view (not the raw fragment view) so a fragment change to
+    // an inline-shadowed id is a no-op, and removing a fragment that an inline
+    // entry shadows does not tear down the inline agent's consumers.
+    const priorById = new Map(liveMergedAgents.map((a) => [a.id, a]));
+    const freshById = new Map(freshMerged.map((a) => [a.id, a]));
+    const added: string[] = [];
+    const removed: string[] = [];
+    const changed: string[] = [];
+    for (const [id, fresh] of freshById) {
+      const prior = priorById.get(id);
+      if (prior === undefined) added.push(id);
+      else if (!agentsEqual(prior, fresh)) changed.push(id);
+    }
+    for (const id of priorById.keys()) {
+      if (!freshById.has(id)) removed.push(id);
+    }
+    added.sort();
+    removed.sort();
+    changed.sort();
+
+    if (added.length === 0 && removed.length === 0 && changed.length === 0) {
+      // Nothing structurally changed in the merged view — do not bump the
+      // generation, do not churn consumers. (e.g. a fragment touched but its
+      // content is byte-identical, or only inline-shadowed ids moved.)
+      console.log(
+        `cortex: agents-reload (${event.source}) — no effective change (generation ${agentGeneration})`,
+      );
+      options.onAgentsReloaded?.({
+        generation: agentGeneration,
+        source: event.source,
+        failed: false,
+        added: [],
+        removed: [],
+        changed: [],
+        consumerAgentIds: reviewConsumers.map((c) => c.agent.id),
+      });
+      return;
+    }
+
+    // ── Drain consumers for removed + changed (old definition) agents first ──
+    //    Sage cortex#1027 — drain all affected agents CONCURRENTLY; each
+    //    `drainConsumersForAgent` already settles its own consumers in parallel
+    //    and logs failures, so the whole drain is one parallel wave rather than
+    //    a per-agent serial chain.
+    await Promise.all(
+      [...removed, ...changed].map((id) => drainConsumersForAgent(id)),
+    );
+
+    // ── Swap the registry + bump the generation BEFORE starting new consumers,
+    //    so a started consumer reads the new registry generation. ──
+    liveFragmentAgents = [...freshFragments];
+    liveMergedAgents = freshMerged;
+    agentRegistry = AgentRegistry.fromAgents(freshMerged);
+    agentGeneration += 1;
+
+    // ── Start consumers for added + changed (new definition) agents via the
+    //    SAME construction path boot uses — concurrently (sage round 2),
+    //    mirroring the parallel drain wave above. A review-capable agent starts
+    //    a ReviewConsumer; an exec-brain agent starts a BrainConsumer (the two
+    //    are mutually exclusive per agent, §6). ──
+    await Promise.all(
+      [...added, ...changed].map(async (id) => {
+        const agent = freshById.get(id);
+        if (agent === undefined) return;
+        if (isReviewCapable(agent)) {
+          await startReviewConsumersForAgent(agent);
+        } else if (isBrainHosted(agent)) {
+          await startBrainConsumersForAgent(agent);
+        }
+      }),
+    );
+
+    // ── Re-publish the capability registry (deliverable 3). ──
+    //    Sage cortex#1027:
+    //    (a) DIFF-ONLY republish — only re-emit registrations for added + changed
+    //        agents. Unchanged agents' registrations are already live and keyed by
+    //        agent_id; re-emitting all of them made a one-fragment edit cost
+    //        O(total agents) bus publishes. We republish O(changed agents).
+    //    (b) TOMBSTONE removed agents — a removed agent must have its prior
+    //        registration OVERWRITTEN with an empty-capability registration, else
+    //        it stays registered as a provider of capabilities it no longer hosts.
+    const republishIds = new Set([...added, ...changed]);
+    const republishAgents = freshMerged.filter((a) => republishIds.has(a.id));
+    if (republishAgents.length > 0) {
+      await publishCapabilitiesFor(republishAgents, "reload");
+    }
+    // Tombstone every agent whose registration must be CLEARED: removed agents,
+    // plus CHANGED agents that dropped to zero capabilities (publishCapabilities-
+    // For skips empty-capability entries, so without an explicit tombstone such an
+    // agent would keep its stale prior registration).
+    const changedToEmpty = changed.filter((id) => {
+      const a = freshById.get(id);
+      if (a === undefined) return true;
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- tolerate partially-loaded runtime fragments during reload; missing capabilities means empty.
+      return (a.runtime?.capabilities?.length ?? 0) === 0;
+    });
+    await publishCapabilityTombstones([...removed, ...changedToEmpty]);
+
+    // ── Canonical presence envelope (sage round 3): the legacy registry write
+    //    above is the migration-period dual-emit; `agent.capabilities-changed`
+    //    is the canonical signal presence consumers follow (CONTEXT.md §Agent
+    //    presence). Diff-based: the producer only emits on a real delta.
+    const presenceProducer = presenceProducerForReload;
+    if (presenceProducer !== null) {
+      let emitted = 0;
+      for (const id of [...added, ...changed]) {
+        const fresh = freshById.get(id);
+        if (fresh === undefined) continue;
+        const caps = fresh.runtime?.capabilities ?? [];
+        if (presenceProducer.publishCapabilitiesChanged(id, caps)) emitted += 1;
+      }
+      for (const id of removed) {
+        if (presenceProducer.publishCapabilitiesChanged(id, [])) emitted += 1;
+      }
+      if (emitted > 0) {
+        console.log(
+          `cortex: agents-reload — emitted ${emitted} agent.capabilities-changed`,
+        );
+      }
+    }
+
+    // ── Honest-scope: presence-adapter changes are restart-only. Warn when a
+    //    reload added/removed an agent that declares a presence binding (the
+    //    case where a restart is actually needed to (dis)connect a bot). ──
+    const presenceAffected = [...added, ...removed, ...changed].filter((id) => {
+      const a = freshById.get(id) ?? priorById.get(id);
+      return (
+        a?.presence.discord !== undefined ||
+        a?.presence.mattermost !== undefined ||
+        a?.presence.slack !== undefined
+      );
+    });
+    if (presenceAffected.length > 0) {
+      process.stderr.write(
+        `cortex: agents-reload (${event.source}) — presence changes for ${presenceAffected.join(", ")} ` +
+          `require a daemon restart (registry + review consumers + capabilities updated live; ` +
+          `presence adapters are restart-only — see B-0 honest-scope note).\n`,
+      );
+    }
+
+    console.log(
+      `cortex: agents-reload (${event.source}) — generation ${agentGeneration} ` +
+        `(added: [${added.join(",")}], removed: [${removed.join(",")}], changed: [${changed.join(",")}])`,
+    );
+    options.onAgentsReloaded?.({
+      generation: agentGeneration,
+      source: event.source,
+      failed: false,
+      added,
+      removed,
+      changed,
+      consumerAgentIds: reviewConsumers.map((c) => c.agent.id),
+    });
+  };
+
+  // Serialize every reconcile behind `reloadInFlight` so triggers can't
+  // interleave consumer start/stop. Returns the chained promise so callers
+  // (the CLI handle path) can await completion.
+  const runReconcile = (event: AgentsChangeEvent): Promise<void> => {
+    const next = reloadInFlight.then(() => reconcileFromEvent(event));
+    // Swallow the rejection on the CHAIN (not on `next`) so one failed
+    // reconcile doesn't poison every subsequent trigger; the per-reconcile
+    // body already logs its own errors.
+    reloadInFlight = next.catch((err: unknown) => {
+      process.stderr.write(
+        `cortex: agents-reload reconcile error (non-fatal): ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    });
+    return next;
+  };
+
+  // The watcher itself. Constructed with the BOOT fragment set as its baseline
+  // so the first fs.watch diff is computed against what boot actually loaded.
+  // `null` when disabled (tests) or when the daemon has no agents.d/ in play.
+  let agentsWatcher: AgentsDirectoryWatcher | null = null;
+  if (!options.disableAgentsWatcher) {
+    agentsWatcher = new AgentsDirectoryWatcher(
+      agentsDir,
+      fragmentAgents,
+      (event) => {
+        void runReconcile(event);
+      },
+      {
+        ...(options.agentsWatcherDebounceMs !== undefined && {
+          debounceMs: options.agentsWatcherDebounceMs,
+        }),
+      },
+    );
+    agentsWatcher.start();
+  }
+
+  // `reloadAgents()` (handle) + SIGHUP both call this. When the watcher exists
+  // we route through its `triggerReload` (which loads the dir + emits the same
+  // AgentsChangeEvent the fs.watch path emits) so there is ONE reconcile path.
+  // When the watcher is disabled, we load the directory directly and synthesize
+  // the event so the CLI/SIGHUP still works in watcher-less deployments/tests.
+  const reloadAgentsViaTrigger = async (
+    source: "cli" | "sighup",
+  ): Promise<void> => {
+    if (agentsWatcher !== null) {
+      // Capture the reconcile promise: triggerReload fires the handler
+      // synchronously (no debounce for explicit triggers), which calls
+      // runReconcile and assigns reloadInFlight. Await that.
+      agentsWatcher.triggerReload(source);
+      await reloadInFlight;
+      return;
+    }
+    // Watcher-less path: load + reconcile directly.
+    let event: AgentsChangeEvent;
+    try {
+      const fresh = loadAgentsDirectory(agentsDir);
+      event = {
+        source,
+        failed: false,
+        agents: fresh,
+        // The diff sets are recomputed inside reconcileFromEvent against the
+        // live merged view; these fragment-level sets are unused there.
+        agentsAdded: [],
+        agentsRemoved: [],
+        agentsChanged: [],
+      };
+    } catch (err) {
+      const isFragErr = err instanceof FragmentLoadError;
+      event = {
+        source,
+        failed: true,
+        error: {
+          file: isFragErr ? err.file : agentsDir,
+          reason: err instanceof Error ? err.message : String(err),
+        },
+        agents: liveFragmentAgents,
+        agentsAdded: [],
+        agentsRemoved: [],
+        agentsChanged: [],
+      };
+    }
+    await runReconcile(event);
+  };
+
+  // SIGHUP → agents reload, on the SAME path the watcher + CLI use. Registered
+  // once; harmless when the watcher is disabled (the trigger still revalidates
+  // + reconciles by reloading the dir directly). Deregistered in `drain()`.
+  const sighupHandler = (): void => {
+    void reloadAgentsViaTrigger("sighup");
+  };
+  process.on("SIGHUP", sighupHandler);
+
   // MC-I1.S1 (ADR-0005): in-process Mission Control embed — opt-in via `config.mc.enabled`.
   // The legacy `api.*` embedded-dashboard path (G-201) was retired per ADR-0005 /
   // #712 (its dynamic import never migrated from grove-v2 and threw on every
@@ -3589,24 +4729,99 @@ export async function startCortex(
   // registry boots AFTER this embed (below), so the getter returns `null` until
   // we assign it post-registry-start. The MC server resolves it per request.
   let presenceViewForApi: AgentPresenceView | null = null;
+  // #1008/#989 — discovered LOCAL sibling stacks, used by BOTH the DB-read
+  // pane-of-glass aggregation (the embed's `localAggregation` getter, below, for
+  // session trees) AND the #989 bus sibling-presence aggregator (later, for
+  // idle-or-active liveness). The two paths COMPOSE (presence via bus, sessions
+  // via db) — they are no longer mutually exclusive; `aggregateAgentTiles` dedups
+  // the overlap by key. Empty until the aggregation block computes it; the getter
+  // reads this holder lazily (the embed starts before discovery runs).
+  const aggCfg = config.mc.aggregateLocalStacks;
+  let discoveredSiblings: readonly SiblingStackDescriptor[] = [];
+  let siblingResolveOpts: SiblingDbResolveOptions | null = null;
   if (config.mc.enabled && !options.disableDashboard) {
     // Per-slug default keeps each stack's MC db isolated; the cursor lands beside it.
     const defaultDbPath = join(
       homedir(), ".local", "share", "cortex", "mc", derivedStack.stack, "mission-control.db",
     );
     const dbPath = config.mc.dbPath !== "" ? expandTilde(config.mc.dbPath) : defaultDbPath;
+
+    // #1008 — discover the principal's LOCAL sibling stacks (reusing #989's
+    // `discoverSiblingStacks` for the stack LIST; the DB-read path needs the
+    // roster, not the bus part). The DB-read aggregation context resolves each
+    // sibling's `mission-control.db` per-request and excludes THIS stack's own
+    // db (`selfDbPath = dbPath`). Built only when `aggregateLocalStacks.enabled`
+    // AND `dbRead` are both on; otherwise the context getter returns null and
+    // the feeds stay single-db.
+    if (aggCfg.enabled && aggCfg.dbRead) {
+      try {
+        const configRoot =
+          aggCfg.configRoot !== ""
+            ? expandTilde(aggCfg.configRoot)
+            : dirname(configDir);
+        const explicit =
+          aggCfg.stacks.length > 0
+            ? aggCfg.stacks.map((s) => ({
+                stack: s.stack,
+                principal: s.principal,
+                url: s.url,
+                credential: { kind: "creds" as const, credsPath: s.credsPath },
+              }))
+            : undefined;
+        discoveredSiblings = discoverSiblingStacks({
+          configRoot,
+          selfPrincipal: principalId,
+          selfStack: derivedStack.stack,
+          ...(explicit !== undefined && { explicit }),
+        });
+        siblingResolveOpts = { configRoot, selfDbPath: dbPath };
+        console.log(
+          `cortex: pane-of-glass DB-read aggregation ON — ${discoveredSiblings.length} local sibling stack(s) ` +
+            `(${discoveredSiblings.map((s) => s.stack).join(", ") || "none"})`,
+        );
+      } catch (err) {
+        // Discovery failure must never block the embed boot — degrade to single-db.
+        console.error(
+          "cortex: pane-of-glass sibling discovery error (non-fatal, single-db feed):",
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
     try {
+      // #1044 — headless MC mode (producer/server split). `mc.server.enabled`
+      // false ⇒ run db + ingestor only, SKIP the HTTP/WS server. A lean stack
+      // (work/halden) WRITES its `mission-control.db` for the pane-of-glass
+      // (#1008) to read, without binding a port or serving a dashboard. The
+      // db-read aggregation (which SERVES the pane) is full-mode-only, so the
+      // `localAggregation` getter only resolves a context on a server stack
+      // (`siblingResolveOpts` is computed below under the same `aggCfg` gate,
+      // independent of headless — a headless stack simply doesn't serve).
+      const mcHeadless = !config.mc.server.enabled;
       mcHandle = await startMissionControl({
         configPath: config.mc.configPath || undefined,
         dbPath,
         port: config.mc.port,
+        ...(mcHeadless ? { headless: true } : {}),
         agentPresence: () => presenceViewForApi,
+        // #1008 — DB-read pane-of-glass aggregation. The getter returns a context
+        // only when discovery produced a resolve-opts (dbRead on); otherwise null
+        // ⇒ single-db feeds. Lazy so the roster can be (re)read consistently.
+        localAggregation: (): LocalAggregationContext | null =>
+          siblingResolveOpts === null
+            ? null
+            : { siblings: discoveredSiblings, resolve: siblingResolveOpts },
         // P-14 U0.1 — Tier-3 sideband proxy. Loopback-enforced at config-parse
         // time; the embed wires it onto the `/api/observability/*` proxy.
         sidebandUrl: config.mc.sideband,
       });
       mcDb = mcHandle.db;
-      console.log(`cortex: Mission Control embed listening on http://localhost:${mcHandle.port} — db ${dbPath}`);
+      // #1044 — headless mode binds no port (`mcHandle.port === null`); log the
+      // producer-only state honestly instead of an unreachable localhost URL.
+      if (mcHandle.port !== null) {
+        console.log(`cortex: Mission Control embed listening on http://localhost:${mcHandle.port} — db ${dbPath}`);
+      } else {
+        console.log(`cortex: Mission Control embed HEADLESS (db + ingestor, no HTTP server) — db ${dbPath}`);
+      }
 
       // MC-I1.S4/S6 (ADR-0005 §3/§4) — register the bus→MC projection renderer.
       // The seam is a surface-router renderer (§4) with a single project()
@@ -3628,10 +4843,19 @@ export async function startCortex(
       // makes failed_dispatch attention work whenever `mc.enabled`, independent
       // of `cockpit.enabled` (it's event-driven, not state-derived). The
       // deep-link for a session-anchored item is the dashboard drill-down route.
+      // #1044 — headless mode binds no port. Fall back to a non-routable
+      // sentinel so deep-links are well-formed but obviously not a live pane;
+      // an explicit `grove.baseUrl` (the pane-serving host) still wins. A
+      // headless producer's attention items deep-link into the SERVING stack's
+      // pane via `grove.baseUrl`, not its own absent port.
       const mcBaseUrl =
-        config.grove.baseUrl !== "" ? config.grove.baseUrl : `http://localhost:${mcHandle.port}`;
+        config.grove.baseUrl !== ""
+          ? config.grove.baseUrl
+          : mcHandle.port !== null
+            ? `http://localhost:${mcHandle.port}`
+            : "http://localhost";
       router.register(
-        createDispatchProjectionRenderer(mcDb, mcHandle.wsRegistry, {
+        createDispatchProjectionRenderer(mcDb, mcHandle.wsRegistry ?? undefined, {
           stackId: derivedStack.stack,
           publishDelta: async (delta) => {
             await publishReconcileDelta(
@@ -3655,7 +4879,7 @@ export async function startCortex(
       // hub-emitted — on a non-hub stack the renderer simply never receives
       // those subjects, so the tab's federation/transport sections stay honestly
       // empty (no synthesized rows).
-      router.register(createObservabilityProjectionRenderer(mcDb, mcHandle.wsRegistry));
+      router.register(createObservabilityProjectionRenderer(mcDb, mcHandle.wsRegistry ?? undefined));
       console.log("cortex: Mission Control observability projection renderer registered (signal + collector + federation + transport)");
     } catch (err) {
       console.error("cortex: Mission Control embed startup error (non-fatal):", err instanceof Error ? err.message : err);
@@ -3711,6 +4935,10 @@ export async function startCortex(
   // G-1114.E.2 — trust-verified federated presence subscriber (folds peers'
   // agents into the SAME registry, tagged with foreign provenance).
   let federatedPresenceHandle: FederatedAgentPresenceSubscriberHandle | null = null;
+  // P-14 U3.3 (#937) — trust-verified federated OBSERVABILITY fold (folds peers'
+  // curated+signed system.{transport,federation}.* into the observability
+  // projection, ORIGIN-BADGED — the Option-D sibling of the presence subscriber).
+  let federatedObservabilityHandle: FederatedObservabilityFoldHandle | null = null;
   // #989 part-1 — LOCAL same-principal sibling-stack presence aggregator (folds
   // the principal's OTHER local stacks' agents into the SAME registry, tagged by
   // sibling origin, so the Network view shows every local stack as its own hub).
@@ -3785,7 +5013,12 @@ export async function startCortex(
       // (`mcHandle` non-null); on a registry-without-embed boot the holder stays
       // null and there are no WS clients to notify.
       presenceViewForApi = presenceRegistryHandle.registry;
-      if (mcHandle !== null) {
+      // #1044 — the WS broadcast needs a live registry. In HEADLESS mode the
+      // embed binds no server, so `mcHandle.wsRegistry` is null (no clients to
+      // notify); skip the broadcast subscription entirely. The registry still
+      // CONSUMES presence (feeds `/api/agents` on a server stack), but a
+      // producer-only stack has no pane to push to.
+      if (mcHandle?.wsRegistry != null) {
         const broadcastWsRegistry = mcHandle.wsRegistry;
         presenceBroadcastSub = presenceRegistryHandle.registry.onChange((key, record) => {
           broadcastWsRegistry.broadcast({
@@ -3835,6 +5068,10 @@ export async function startCortex(
       // defensive emit side). Wired regardless of `mc.enabled` so capability
       // hot-reload tracks presence even on a non-dashboard stack.
       presenceProducerForReload = presenceProducer;
+      // Bot Packs B-2 — publish the producer to the daemon-brain degrade holder
+      // so a `DaemonBrainHost.onDegraded` (restart budget exhausted, at runtime)
+      // can surface the agent via `publishCapabilitiesChanged(agentId, [])`.
+      brainPresenceHolder.producer = presenceProducer;
       console.log(
         `cortex: agent-presence producer started — ${presenceAgents.length} agent(s) announced ` +
           `(stack-local${config.mc.enabled ? " + local registry" : ", mc disabled"}; ` +
@@ -3881,6 +5118,64 @@ export async function startCortex(
         ...(resolveFederatedPeer !== undefined && { resolveFederatedPeer }),
       });
 
+      // P-14 U3.3 (#937) — the trust-verified federated OBSERVABILITY fold, the
+      // observability sibling of the presence subscriber above. Reuses the EXACT
+      // same trust config (federation gate + `verifySignedByChain` + the
+      // `resolveFederatedPeer` seam) PLUS cortex's curation gate (ALLOW
+      // system.{transport,federation}.>; DENY trace/metric/log/session/
+      // system.signal — signal#141). Folds peers' curated+signed substrate
+      // observability into the SAME observability projection the U2.1 renderer
+      // writes, but ORIGIN-BADGED foreign (chain-verified `{principal}/{stack}`),
+      // and NEVER opening a local attention item. The U2.1 renderer was narrowed
+      // to `local.*` at U3.3, so the federated path is exclusively this verified
+      // fold — no double-fold. INERT when federation isn't opted into. Needs
+      // `mcDb` (the projection target); on the mc.enabled boot it is non-null.
+      if (mcDb !== null) {
+        const observabilityFoldDb = mcDb;
+        // #1044 — null in headless mode (no server ⇒ no WS clients). The
+        // projection's broadcast is a no-op on `undefined`; coalesce so the
+        // type matches `WsClientRegistry | undefined`.
+        const observabilityFoldWs = mcHandle?.wsRegistry ?? undefined;
+        federatedObservabilityHandle = await startFederatedObservabilityFold({
+          runtime,
+          // The injected projection write — bus/ never imports surface/mc/, so
+          // the DB write is wired here. Non-throwing: projectForeignObservability
+          // never throws on a valid envelope; a defensive guard keeps a poison
+          // peer envelope from perturbing the verify fan-out.
+          foldObservability: ({ envelope, peer }) => {
+            try {
+              projectForeignObservability(
+                observabilityFoldDb,
+                { id: envelope.id, type: envelope.type, payload: envelope.payload },
+                peer,
+                observabilityFoldWs,
+              );
+            } catch (err) {
+              process.stderr.write(
+                `cortex: federated observability fold projection error (non-fatal) ` +
+                  `for ${envelope.type} (id=${envelope.id}): ` +
+                  `${err instanceof Error ? err.message : String(err)}\n`,
+              );
+            }
+          },
+          federated: resolvedPolicy?.federated,
+          source: systemEventSource,
+          trustResolver,
+          receivingAgentId: mergedAgents[0]?.id,
+          principalId,
+          cryptoVerify: signingKnobs.cryptoVerify,
+          rejectEmpty: signingKnobs.rejectEmpty,
+          ...(signer !== undefined && { stackIdentity: signer.principal }),
+          ...(stackNKeyPubForVerifier !== undefined && {
+            stackNKeyPub: stackNKeyPubForVerifier,
+          }),
+          ...(resolveFederatedPeer !== undefined && { resolveFederatedPeer }),
+        });
+        console.log(
+          "cortex: federated observability fold started (Option-D trust path: curation gate + accept-list + chain-verify; origin-badged)",
+        );
+      }
+
       // #989 part-1 — LOCAL same-principal sibling-stack presence aggregation.
       // When enabled (default ON), auto-discover the principal's OTHER local
       // stacks (sibling config-split dirs under the config root), open a
@@ -3891,8 +5186,31 @@ export async function startCortex(
       // trust: every bus is the principal's own loopback bus (ADR-0005). Any
       // sibling that can't be reached / authed degrades to absent — it never
       // blocks this boot or perturbs the serving stack's own presence.
-      const aggCfg = config.mc.aggregateLocalStacks;
-      if (aggCfg.enabled) {
+      //
+      // #1008/#989 RECONCILIATION — PRESENCE via bus, SESSIONS via db (they
+      // COMPOSE, they are not mutually exclusive). Agent PRESENCE (the liveness
+      // a hub renders: "this agent is up, idle or not") lives ONLY in the
+      // in-memory registry, fed by the `agent.{online,heartbeat,offline}` bus
+      // stream — it is NEVER persisted to a sibling's db. So the DB-read path can
+      // only project a sibling agent that "owns a LIVE SESSION" (sibling-db-reader
+      // `siblingAgentTiles`); an IDLE local sibling has no live session and thus
+      // vanished from the Network view whenever the bus path was gated off (the
+      // "only one stack" regression). The earlier "DB-read OWNS local siblings,
+      // gate the bus path off to avoid double-count" framing was wrong: db-read
+      // owns SESSION TREES (/api/working-agents), not idle PRESENCE.
+      //
+      // Corrected split: the BUS sibling-presence aggregator owns local-sibling
+      // PRESENCE (folds idle-or-active `agent.*` into the registry, origin-tagged)
+      // and runs whenever aggregation is enabled — NOT gated by dbRead. The
+      // DB-read path keeps the session trees (working-agents) AND a deduped
+      // live-session fallback into /api/agents: `aggregateAgentTiles` skips any
+      // sibling tile whose key is already live in the registry (the bus fold), so
+      // an active sibling present on BOTH paths is counted ONCE (registry wins),
+      // and a sibling the bus couldn't reach still surfaces from its db. The
+      // separate `startFederatedAgentPresenceSubscriber` above stays the path for
+      // FEDERATED / cross-principal peers (remote dbs, unreadable here).
+      const runBusSiblingPresence = aggCfg.enabled;
+      if (runBusSiblingPresence) {
         try {
           // Precedence: explicit `stacks[]` overrides discovery. Empty ⇒ scan
           // the config root (default = the serving config dir's parent, the
@@ -3960,7 +5278,16 @@ export async function startCortex(
     const cockpitDb = mcDb;
     const [repoOwner, repoName] = config.cockpit.repo.split("/");
     const defaultRepo = repoOwner && repoName ? { owner: repoOwner, repo: repoName } : undefined;
-    const baseUrl = config.grove.baseUrl !== "" ? config.grove.baseUrl : `http://localhost:${mcHandle?.port ?? 8767}`;
+    // #1044 — in headless mode `mcHandle.port` is null (no server). An explicit
+    // `grove.baseUrl` (the pane-serving host) wins; otherwise use the bound port
+    // when present, falling back to a portless localhost rather than a
+    // misleading fixed 8767 that nothing is listening on.
+    const baseUrl =
+      config.grove.baseUrl !== ""
+        ? config.grove.baseUrl
+        : mcHandle?.port != null
+          ? `http://localhost:${mcHandle.port}`
+          : "http://localhost";
     // Resolve docsDir to an absolute path so the ingest doesn't depend on the
     // launchd plist's CWD (which isn't guaranteed to be the repo root). Warn
     // once at startup if it's missing rather than only failing every tick.
@@ -4175,6 +5502,10 @@ export async function startCortex(
       "github webhook receiver stop",
       ...adapterCleanup.map((_, i) => `outbound poller stop[${i}]`),
       ...reviewConsumers.map((c, i) => `review-consumer stop[${i}] (agent=${c.agent.id})`),
+      ...brainConsumers.map((c, i) => `brain-consumer stop[${i}] (agent=${c.agent.id})`),
+      // Bot Packs B-2 — daemon brain host teardown slots (belt-and-braces; the
+      // consumer drain already drains the host, these are idempotent).
+      ...daemonBrainHosts.map((h, i) => `daemon-brain-host stop[${i}] (agent=${h.agentId})`),
       ...releaseConsumers.map((c, i) => `release-consumer stop[${i}] (agent=${c.agent.id})`),
       ...devConsumers.map((c, i) => `dev-consumer stop[${i}] (agent=${c.agent.id})`),
       "dispatch-listener stop",
@@ -4215,6 +5546,16 @@ export async function startCortex(
 
     const drain = async (): Promise<void> => {
       completeSync("config-watcher stop", () => configWatcher?.stop());
+      // B-0 (cortex#1021) — stop the agents.d/ watcher + deregister the SIGHUP
+      // handler so no reload fires mid-shutdown. Await any in-flight reconcile
+      // first so a reload racing shutdown finishes its consumer start/stop
+      // before the runtime closes (the started consumers then drain below with
+      // the rest of `reviewConsumers[]`).
+      completeSync("agents-watcher stop", () => agentsWatcher?.stop());
+      completeSync("agents-sighup deregister", () =>
+        process.removeListener("SIGHUP", sighupHandler),
+      );
+      await completeAsync("agents-reload in-flight drain", reloadInFlight);
       // G-1114.B.2 — publish agent.offline (reason: shutdown) for every hosted
       // agent FIRST, while the runtime/bus is still up. `stop()` awaits the
       // offline publishes so they go out before any later step (and well before
@@ -4235,6 +5576,15 @@ export async function startCortex(
       await completeAsync(
         "federated agent-presence subscriber stop",
         federatedPresenceHandle?.stop(),
+      );
+      // P-14 U3.3 — stop the federated observability fold (drains its push
+      // subscriber + unregisters its fan-out handler). Projected observability
+      // ROWS are append-only history retained by db/retention.ts — stopping the
+      // fold stops NEW peer rows; it does not retro-delete (identical to local
+      // rows). Order-independent vs. the registry/db teardown.
+      await completeAsync(
+        "federated observability fold stop",
+        federatedObservabilityHandle?.stop(),
       );
       // #989 part-1 — stop the LOCAL sibling-stack aggregator alongside the
       // federated one (both before the registry stop). It closes every sibling
@@ -4271,6 +5621,39 @@ export async function startCortex(
           await completeAsync(
             `review-consumer stop[${i}] (agent=${consumer.agent.id})`,
             consumer.stop(),
+          );
+        }
+      }
+      // Bot Packs B-3 — stop the gate reply-bridge FIRST: every open
+      // principal gate resolves `null` (its fail-closed timeout branch)
+      // immediately, so the brain-consumer drain below is never held hostage
+      // by a gate awaiting a reply that can no longer arrive (the adapters
+      // are going down on this same boundary).
+      gateReplyRouter.stop();
+      // Bot Packs B-1 — drain brain consumers on the SAME boundary as the
+      // review consumers so an in-flight brain task publishes its terminal
+      // envelope before the runtime closes. `BrainConsumer.stop()` is
+      // idempotent and awaits its in-flight set (dormant / never-subscribed is
+      // a no-op). Empty on every stack with no exec-brain agents.
+      for (let i = 0; i < brainConsumers.length; i++) {
+        const consumer = brainConsumers[i];
+        if (consumer) {
+          await completeAsync(
+            `brain-consumer stop[${i}] (agent=${consumer.agent.id})`,
+            consumer.stop(),
+          );
+        }
+      }
+      // Bot Packs B-2 — belt-and-braces: ensure every daemon brain host is torn
+      // down even if its consumer's stop() did not reach the drain (e.g. a host
+      // whose consumer init threw after the host spawned). `stop()` is idempotent
+      // — a host already drained by its consumer above is a no-op.
+      for (let i = 0; i < daemonBrainHosts.length; i++) {
+        const host = daemonBrainHosts[i];
+        if (host) {
+          await completeAsync(
+            `daemon-brain-host stop[${i}] (agent=${host.agentId})`,
+            host.stop(),
           );
         }
       }
@@ -4394,10 +5777,63 @@ export async function startCortex(
     get agentRegistry() {
       return agentRegistry;
     },
+    get agentGeneration() {
+      return agentGeneration;
+    },
+    // B-0 (cortex#1021) — manual reload entrypoint. `cortex agents reload`
+    // (via the CLI's daemon-signal path) and SIGHUP both reach the same
+    // reconcile through here.
+    reloadAgents(source: "cli" | "sighup" = "cli") {
+      return reloadAgentsViaTrigger(source);
+    },
     get registryClient() {
       return registryClient;
     },
   };
+}
+
+/**
+ * B-0 (cortex#1021) — order-independent structural equality for two `Agent`
+ * shapes, used by the agents.d/ hot-reload diff to decide whether an agent
+ * CHANGED (vs. an untouched fragment touch that produced a byte-identical
+ * reload). Mirrors the watcher's private `deepEqual` (it can't be imported
+ * without widening the watcher's public surface) but is scoped to the Agent
+ * shapes the reconcile actually compares: plain objects, arrays, scalars.
+ * No Date/Map/Set handling — Agent values don't inhabit those.
+ */
+function agentsEqual(a: Agent, b: Agent): boolean {
+  return structuralEqual(a, b);
+}
+
+function structuralEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return a === b;
+  if (typeof a !== typeof b) return false;
+  if (typeof a !== "object") return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b)) return false;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!structuralEqual(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  if (Array.isArray(b)) return false;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b as object);
+  if (aKeys.length !== bKeys.length) return false;
+  for (const key of aKeys) {
+    if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+    if (
+      !structuralEqual(
+        (a as Record<string, unknown>)[key],
+        (b as Record<string, unknown>)[key],
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**

@@ -127,11 +127,11 @@ function buildStackRuntime(): StackRuntime {
       handlers.add(handler);
       return { unregister: () => handlers.delete(handler) };
     },
-    // eslint-disable-next-line @typescript-eslint/require-await
+
     async publish(envelope) {
       published.push(envelope);
     },
-    // eslint-disable-next-line @typescript-eslint/require-await
+
     async stop() {
       handlers.clear();
     },

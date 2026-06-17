@@ -25,6 +25,10 @@
  */
 
 import type { Database } from "bun:sqlite";
+import {
+  aggregateAgentTiles,
+  type LocalAggregationContext,
+} from "../local-aggregation/sibling-db-reader";
 
 /**
  * The minimal read-only contract the MC server depends on to serve
@@ -158,13 +162,31 @@ function toTile(r: AgentPresenceSnapshotRecord): AgentPresenceTile {
  *
  * `view === null` (MC enabled but no presence registry — a gating mismatch)
  * returns an empty list gracefully rather than erroring.
+ *
+ * #1008 — when a `localAggregation` context is supplied (the serving stack has
+ * DB-read pane-of-glass aggregation on), the response is the UNION of the local
+ * registry view AND each readable LOCAL sibling stack's db-derived agent tiles,
+ * origin-tagged (`{principal, stack}`). The presence registry is bus-liveness-
+ * derived; a sibling db has no bus presence, so its agents are projected from
+ * "owns a live session here" (`state: online`, bus-only fields null/empty — an
+ * honest projection, never synthesized liveness). Without the context, the feed
+ * is byte-identical to the pre-#1008 registry-only snapshot.
  */
 export function handleListAgents(
   _db: Database,
   view: AgentPresenceView | null,
+  localAggregation?: LocalAggregationContext | null,
 ): Response {
   try {
     const records = view ? view.getAgents() : [];
+    if (localAggregation) {
+      const agents = aggregateAgentTiles(
+        records,
+        localAggregation.siblings,
+        localAggregation.resolve,
+      );
+      return Response.json({ agents } satisfies ListAgentsResponse);
+    }
     const body: ListAgentsResponse = { agents: records.map(toTile) };
     return Response.json(body);
   } catch (err) {

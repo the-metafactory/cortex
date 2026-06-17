@@ -2013,7 +2013,7 @@ describe("emitAccessFiltered — defensive .catch on publish failure (cortex#137
     // Capture stderr writes.
     const originalWrite = process.stderr.write.bind(process.stderr);
     const captured: string[] = [];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     (process.stderr as { write: (chunk: unknown) => boolean }).write = (chunk) => {
       captured.push(typeof chunk === "string" ? chunk : String(chunk));
       return true;

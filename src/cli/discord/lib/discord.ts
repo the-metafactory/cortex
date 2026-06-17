@@ -102,6 +102,66 @@ export async function postMessage(
   return { success: true, messageId: data.id };
 }
 
+/** One attachment, already read into memory. The CLI owns the file read +
+ *  existence check; this module owns the wire format, so the builder stays a
+ *  pure function (testable without fs or a token). */
+export interface AttachmentInput {
+  filename: string;
+  /** ArrayBuffer-backed (not Shared) so it appends to a Blob without a copy. */
+  bytes: Uint8Array<ArrayBuffer>;
+}
+
+/**
+ * Build the `multipart/form-data` body for an attachment post (Discord v10:
+ * https://discord.com/developers/docs/reference#uploading-files).
+ *
+ * Pure — no I/O. The form carries a `payload_json` part (message fields plus an
+ * `attachments` array that references each file by index) and one `files[n]`
+ * part per attachment. Do NOT set a Content-Type header when sending this:
+ * fetch derives the multipart boundary from the FormData itself.
+ */
+export function buildAttachmentForm(content: string, files: AttachmentInput[]): FormData {
+  const form = new FormData();
+  const payload = {
+    content,
+    // Discord references uploaded files by the same index used in files[n].
+    attachments: files.map((f, i) => ({ id: i, filename: f.filename })),
+  };
+  form.append("payload_json", JSON.stringify(payload));
+  files.forEach((f, i) => {
+    // Blob accepts the Uint8Array view directly — no copy (sage cortex#1031).
+    form.append(`files[${i}]`, new Blob([f.bytes]), f.filename);
+  });
+  return form;
+}
+
+/**
+ * Post a message with one or more file attachments via bot API.
+ * `content` may be empty when at least one file is present (Discord allows a
+ * file-only message). Same `PostResult` contract as `postMessage`.
+ */
+export async function postMessageWithFiles(
+  botToken: string,
+  channelId: string,
+  content: string,
+  files: AttachmentInput[]
+): Promise<PostResult> {
+  const res = await fetch(`${DISCORD_API}/channels/${channelId}/messages`, {
+    method: "POST",
+    // No Content-Type — fetch sets multipart/form-data + boundary from the body.
+    headers: { Authorization: `Bot ${botToken}` },
+    body: buildAttachmentForm(content, files),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    return { success: false, error: `${res.status}: ${text}` };
+  }
+
+  const data = (await res.json()) as DiscordApiMessageCreated;
+  return { success: true, messageId: data.id };
+}
+
 export interface CreateThreadResult {
   success: boolean;
   threadId?: string;

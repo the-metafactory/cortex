@@ -170,7 +170,7 @@ export class BusPeerHarness implements SessionHarness {
    *     a louder failure surface, but at this slice we mirror the
    *     existing runtime contract.
    */
-  // eslint-disable-next-line @typescript-eslint/require-await
+
   async *dispatch(
     req: DispatchRequest,
   ): AsyncIterable<MyelinEnvelope> {

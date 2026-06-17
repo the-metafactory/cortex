@@ -18,6 +18,8 @@
  */
 
 import type { ObservabilityState } from "../hooks/use-observability";
+import type { ObsMetricsState } from "../hooks/use-obs-metrics";
+import { ObsMetricsPanels } from "./obs-metrics-panels";
 import type { ObservabilityEventRow } from "../../db/observability";
 
 function when(ts: string): string {
@@ -72,15 +74,29 @@ function Section({ title, rows, count, emptyNote }: SectionProps) {
 
 export interface ObservabilityViewProps {
   state: ObservabilityState;
+  /**
+   * Aggregate-metrics + >14d-history state (P-14 U4.2, #938). Optional so the
+   * tab still renders its U2.1 event sections if the panels aren't wired (e.g.
+   * a test that only exercises the event projection).
+   */
+  metrics?: ObsMetricsState;
 }
 
-export function ObservabilityView({ state }: ObservabilityViewProps) {
+export function ObservabilityView({ state, metrics }: ObservabilityViewProps) {
   const { data, loaded, error } = state;
+
+  // Aggregate panels + >14d history are sourced INDEPENDENTLY of the event
+  // projection (sideband /metrics/summary + /search vs the local
+  // observability_events table). Render them whenever wired, even if the event
+  // sections below are still loading or errored — the two have distinct
+  // sources and distinct failure modes (P-14 U4.2, #938).
+  const panels = metrics ? <ObsMetricsPanels state={metrics} /> : null;
 
   if (!loaded) {
     return (
       <section className="scaffold-section observability-view" aria-label="Observability">
         <h2>Observability</h2>
+        {panels}
         <p className="dim">Loading…</p>
       </section>
     );
@@ -90,6 +106,7 @@ export function ObservabilityView({ state }: ObservabilityViewProps) {
     return (
       <section className="scaffold-section observability-view" aria-label="Observability">
         <h2>Observability</h2>
+        {panels}
         <p className="dim">Could not load observability events: {error ?? "no data"}.</p>
       </section>
     );
@@ -104,6 +121,8 @@ export function ObservabilityView({ state }: ObservabilityViewProps) {
   return (
     <section className="scaffold-section observability-view" aria-label="Observability">
       <h2>Observability</h2>
+
+      {panels}
 
       <Section
         title="Signal health"

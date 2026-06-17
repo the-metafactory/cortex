@@ -544,6 +544,35 @@ export const SCHEMA_SQL: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_governance_created ON governance_verdicts(created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_governance_decision ON governance_verdicts(decision, created_at)`,
 
+  // P-14 U3.1 (#936) — governance access denials. Pipeline-level access-decision
+  // rows projected from U0.2's (#932) `system.access.{denied,filtered}` envelopes
+  // — the access-gate dimension of the governance pane, sibling to
+  // `governance_verdicts` (the governed-action dimension). `kind` distinguishes
+  // a hard access deny from a renderer visibility filter; `reason_kind` carries
+  // the deny/filter discriminator (`sovereignty_model_class`, `chain_verify_failed`,
+  // `chain_verify_fault`, `residency_blocked`, …) — the sovereignty subset is the
+  // pane's REFUSALS. Append-only; `envelope_id` UNIQUE makes redelivery idempotent;
+  // retention ages rows past 35d, outliving the 30d query window (db/retention.ts).
+  `CREATE TABLE IF NOT EXISTS governance_denials (
+    id TEXT PRIMARY KEY,
+    envelope_id TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL
+      CHECK(kind IN ('denied','filtered')),
+    reason_kind TEXT NOT NULL,
+    principal_id TEXT,
+    capability TEXT,
+    envelope_subject TEXT,
+    detail TEXT,
+    source TEXT,
+    subject TEXT,
+    principal TEXT,
+    stack TEXT,
+    payload TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_governance_denials_created ON governance_denials(created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_governance_denials_reason ON governance_denials(reason_kind, created_at)`,
+
   // P-14 U2.1 (#934) — Observability events. Append-only projection rows from
   // signal's four `system.*` envelope families (`system.signal.*`,
   // `system.signal.collector.*`, `system.federation.*`, `system.transport.*`),
@@ -554,6 +583,15 @@ export const SCHEMA_SQL: string[] = [
   // `type` is the full `domain.entity.action`. Hub-scope (federation/transport)
   // is a DATA property — non-hub stacks simply have zero rows of those families,
   // which the tab renders as an honest empty state (never synthesized).
+  // P-14 U3.3 (#937) — `origin_kind` / `origin_peer` carry the ORIGIN-BADGE.
+  //   - `origin_kind` is `'local'` (this principal's own / sibling-stack rows,
+  //     the U2.1 default) or `'foreign'` (a TRUST-VERIFIED federated peer's row,
+  //     folded via the Option-D `federated-observability-fold.ts` path).
+  //   - `origin_peer` is the CHAIN-VERIFIED `{principal}/{stack}` for a foreign
+  //     row (NULL for local). It is derived from the verified envelope SOURCE,
+  //     never from the attacker-controlled payload — so a peer row can NEVER be
+  //     shown as local (the negative control's identity half).
+  // Fresh DBs get them here; existing DBs backfill via COLUMN_ADD_MIGRATIONS.
   `CREATE TABLE IF NOT EXISTS observability_events (
     id TEXT PRIMARY KEY,
     envelope_id TEXT NOT NULL UNIQUE,
@@ -563,10 +601,24 @@ export const SCHEMA_SQL: string[] = [
     stack_id TEXT,
     summary TEXT,
     payload TEXT NOT NULL DEFAULT '{}',
+    origin_kind TEXT NOT NULL DEFAULT 'local'
+      CHECK(origin_kind IN ('local','foreign')),
+    origin_peer TEXT,
     timestamp TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_observability_timestamp ON observability_events(timestamp)`,
   `CREATE INDEX IF NOT EXISTS idx_observability_family ON observability_events(family, timestamp DESC)`,
+  // ST-P0 / #1048: the origin-badge lookup index (idx_observability_origin on
+  // origin_kind, origin_peer) is DELIBERATELY NOT declared here. It indexes
+  // origin_kind / origin_peer, columns that an existing pre-U3.3 DB does not yet
+  // carry when init.ts runs this SCHEMA_SQL loop (which precedes the
+  // COLUMN_ADD_MIGRATIONS loop). Declaring it here crashes initDatabase on those
+  // DBs with `no such column: origin_kind` (the #961 bug class, reintroduced by
+  // U3.3 / #937, and the cause of the MC embed boot crash in #1048). It is
+  // created instead by the origin_kind / origin_peer COLUMN_ADD_MIGRATIONS
+  // `post[]` arrays below — which run AFTER the column ALTERs AND unconditionally
+  // (init.ts always runs `post[]`, even when the ALTER is skipped on a fresh DB
+  // whose columns came from CREATE TABLE).
 ];
 
 /**
@@ -645,6 +697,37 @@ export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
   { table: "sessions", column: "classification", ddl: `ALTER TABLE sessions ADD COLUMN classification TEXT` },
   { table: "sessions", column: "data_residency", ddl: `ALTER TABLE sessions ADD COLUMN data_residency TEXT` },
   { table: "sessions", column: "home_principal", ddl: `ALTER TABLE sessions ADD COLUMN home_principal TEXT` },
+
+  // P-14 U3.3 (#937) — origin-badge columns for EXISTING observability DBs.
+  // Fresh DBs get these from the observability_events CREATE TABLE above; an
+  // already-initialised DB (the running U2.1 stacks) backfills them here.
+  // `origin_kind` is NOT NULL with a constant DEFAULT 'local' (SQLite ALTER ADD
+  // requires a constant default for NOT NULL) — so every pre-U3.3 row reads as
+  // `local`, exactly its true origin (U2.1 only ever folded local rows safely;
+  // the federated path is what U3.3 adds). `origin_peer` is nullable (NULL for
+  // local). The partner index is idempotent via CREATE INDEX IF NOT EXISTS.
+  {
+    table: "observability_events",
+    column: "origin_kind",
+    ddl: `ALTER TABLE observability_events ADD COLUMN origin_kind TEXT NOT NULL DEFAULT 'local'`,
+    // NOTE: the partner index idx_observability_origin spans BOTH origin_kind
+    // AND origin_peer. It is created in the origin_peer entry's post[] below —
+    // NOT here — because at this point origin_peer has not yet been ALTERed in
+    // (this entry runs first), so a `CREATE INDEX ... (origin_kind, origin_peer)`
+    // here throws `no such column: origin_peer` on an existing DB (#1048).
+  },
+  {
+    table: "observability_events",
+    column: "origin_peer",
+    ddl: `ALTER TABLE observability_events ADD COLUMN origin_peer TEXT`,
+    // Both origin columns now exist (origin_kind added by the entry above,
+    // origin_peer by this one), so the composite index is safe to create here.
+    // Runs unconditionally (init.ts always runs post[]) so fresh DBs — whose
+    // columns came from CREATE TABLE — get the index too.
+    post: [
+      `CREATE INDEX IF NOT EXISTS idx_observability_origin ON observability_events(origin_kind, origin_peer)`,
+    ],
+  },
 ];
 
 /**

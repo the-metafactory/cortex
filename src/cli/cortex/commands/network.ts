@@ -40,7 +40,7 @@
  * Exit codes: 0 success · 1 operational failure · 2 usage error.
  */
 
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { readFile } from "fs/promises";
 import { join } from "path";
 
@@ -61,6 +61,10 @@ import {
   tolerantReader,
   type ConfigReader,
 } from "./network-derive";
+import {
+  parseLeafPackageFile,
+  type LeafPackageFile,
+} from "./network-leaf-package";
 
 /**
  * #753 — the production config reader: `loadConfigWithAgents` wrapped so a
@@ -76,7 +80,7 @@ const DEFAULT_READER: ConfigReader = tolerantReader(
 import { CliArgsError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { type ExitResult } from "./_shared/exit-result";
-import { parseSubcommandArgs, type SubcommandSpec } from "./_shared/parser";
+import { parseSubcommandArgs, type FlagMap, type SubcommandSpec } from "./_shared/parser";
 import {
   joinNetwork,
   leaveNetwork,
@@ -132,7 +136,7 @@ const DEFAULT_CONFIG_PATH = "~/.config/cortex/cortex.yaml";
  * daemon-restart can LOCATE the daemon's launchd/systemd service by its
  * `--config` arg instead of guessing `ai.meta-factory.cortex.<stack-slug>`.
  */
-function cortexConfigPathFromFlags(flags: Record<string, string | true>): string {
+function cortexConfigPathFromFlags(flags: FlagMap): string {
   return expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH);
 }
 
@@ -169,6 +173,23 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--principal-seed": "value",
         "--creds": "value",
         "--account": "value",
+        // O-3 (cortex#1053) — the operator-mode "leaf package" flags. When the
+        // stack's bus is anonymous/hard-isolated (the #794 fail-fast input),
+        // these let `cortex network join` AUTO-CONVERT it to operator-mode
+        // (render the SOP §B0.1 blocks) instead of refusing. Map to
+        // stack.nats_infra.{operator_jwt,account_jwt,system_account,
+        // system_account_jwt}. O-4 supplies them via the register→issue
+        // handshake; these flags/config fields are the manual/interim path.
+        "--operator-jwt": "value",
+        "--account-jwt": "value",
+        "--system-account": "value",
+        "--system-account-jwt": "value",
+        // O-4b (cortex#1063) — SOURCE the operator-mode leaf package from a JSON
+        // file (the interim form of the shape O-4a's signed register→issue
+        // response will carry) instead of the four flags above. Read + validated
+        // before it reaches deriveJoinInputs; sits BELOW the explicit flags and
+        // ABOVE config in precedence (flag > package > config > convention).
+        "--from-package": "value",
         "--nats-config": "value",
         "--plist": "value",
         // #763 — Linux/systemd: the nats-server systemd unit path (the
@@ -267,17 +288,17 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
 // =============================================================================
 
 function requireValueFlag(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   name: string,
 ): { ok: true; value: string } | { ok: false; reason: string } {
   const v = flags[name];
   if (v === undefined) return { ok: false, reason: `${name} is required` };
-  if (v === true) return { ok: false, reason: `${name} requires a value` };
+  if (v === true || Array.isArray(v)) return { ok: false, reason: `${name} requires a value` };
   return { ok: true, value: v };
 }
 
 function optionalValueFlag(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   name: string,
 ): string | undefined {
   const v = flags[name];
@@ -293,7 +314,7 @@ function optionalValueFlag(
  * (which would otherwise shadow the config value with `undefined`).
  */
 function readOverride(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   flagName: string,
   key?: string,
 ): Record<string, string> {
@@ -303,6 +324,40 @@ function readOverride(
   // `--principal`. Callers pass an explicit `key` for the renamed inputs.
   const resolvedKey = key ?? flagName.replace(/^--/, "").replace(/-/g, "");
   return { [resolvedKey]: v };
+}
+
+/**
+ * O-4b (cortex#1063) — read + validate the `--from-package <file>` leaf package.
+ * A PURE READ: it only reads the file (never writes), so it is safe under
+ * dry-run. Returns the parsed {@link LeafPackageFile}, or a usage-error reason on
+ * a missing/unreadable/malformed file — fail-fast so unvalidated key material
+ * never reaches the operator-mode conversion seam. `undefined` when the flag is
+ * absent (the common case: no package source).
+ */
+function readLeafPackageFlag(
+  flags: FlagMap,
+): { ok: true; package: LeafPackageFile | undefined } | { ok: false; reason: string } {
+  const path = optionalValueFlag(flags, "--from-package");
+  if (path === undefined) return { ok: true, package: undefined };
+
+  const expanded = expandTilde(path);
+  if (!existsSync(expanded)) {
+    return { ok: false, reason: `--from-package file not found at ${expanded}` };
+  }
+  let text: string;
+  try {
+    text = readFileSync(expanded, "utf-8");
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `failed to read --from-package file: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  const parsed = parseLeafPackageFile(text);
+  if (!parsed.ok) {
+    return { ok: false, reason: `invalid --from-package file: ${parsed.reason}` };
+  }
+  return { ok: true, package: parsed.package };
 }
 
 /** Resolve the stack slug from `--stack` (`{principal}/{slug}`) or default. */
@@ -382,7 +437,7 @@ function resolveStatusConfigPath(slug: string): string {
  * command resolve identically to `status` and can't drift (the gap that made ping
  * read the flat default and report `not-configured` for a config-split peer).
  */
-function resolveLocalStackConfigPath(flags: Record<string, string | true>): string {
+function resolveLocalStackConfigPath(flags: FlagMap): string {
   const explicitConfig = optionalValueFlag(flags, "--config");
   if (explicitConfig !== undefined) return expandTilde(explicitConfig);
   const stackFlag = optionalValueFlag(flags, "--stack");
@@ -401,7 +456,7 @@ function resolveLocalStackConfigPath(flags: Record<string, string | true>): stri
  * `--apply` and `--dry-run` together is a usage error.
  */
 function resolveApply(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
 ): { ok: true; apply: boolean } | { ok: false; reason: string } {
   const apply = flags["--apply"] === true;
   const dry = flags["--dry-run"] === true;
@@ -417,7 +472,7 @@ function resolveApply(
 
 async function runJoin(
   networkId: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
   load: ConfigReader,
 ): Promise<ExitResult> {
@@ -431,6 +486,13 @@ async function runJoin(
   if (!NETWORK_ID_RE.test(networkId)) {
     return usageError("join", `network "${networkId}" must be lowercase alphanumeric + hyphen, letter-prefixed`, json);
   }
+
+  // O-4b (cortex#1063) — read + validate the `--from-package` leaf package FIRST
+  // (a pure read). A malformed/missing package fails fast as a usage error here,
+  // BEFORE any derivation or mutation, so unvalidated key material never reaches
+  // the operator-mode conversion. Absent ⇒ undefined (the common case).
+  const pkgRes = readLeafPackageFlag(flags);
+  if (!pkgRes.ok) return usageError("join", pkgRes.reason, json);
 
   // #753 — derive principal / stack / seed / registry / nats-infra (config +
   // convention), with each flag surviving as an optional override. Config-load
@@ -452,6 +514,15 @@ async function runJoin(
         ...readOverride(flags, "--unit", "unitPath"),
         ...readOverride(flags, "--account", "account"),
         ...readOverride(flags, "--creds", "credsPath"),
+        // O-3 (cortex#1053) — operator-mode leaf-package overrides.
+        ...readOverride(flags, "--operator-jwt", "operatorJwt"),
+        ...readOverride(flags, "--account-jwt", "accountJwt"),
+        ...readOverride(flags, "--system-account", "systemAccount"),
+        ...readOverride(flags, "--system-account-jwt", "systemAccountJwt"),
+        // O-4b (cortex#1063) — the `--from-package` leaf package (parsed above).
+        // Sits BELOW the explicit per-field flags and ABOVE config in the
+        // deriver's precedence chain (flag > package > config > convention).
+        ...(pkgRes.package !== undefined && { leafPackage: pkgRes.package }),
       },
       expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH),
       load,
@@ -490,6 +561,11 @@ async function runJoin(
     account: inputs.account,
     leafNode: optionalValueFlag(flags, "--leaf-node"),
     maxHop,
+    // O-3 (cortex#1053) — pass the operator-mode leaf package (when resolved)
+    // so join auto-converts an anonymous bus instead of fail-fasting (#794).
+    ...(inputs.operatorModePackage !== undefined && {
+      operatorModePackage: inputs.operatorModePackage,
+    }),
   };
 
   const cfg = portsConfigFromInputs(networkId, inputs, slugRes.slug, flags);
@@ -504,7 +580,7 @@ async function runJoin(
 
 async function runLeave(
   networkId: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
   load: ConfigReader,
 ): Promise<ExitResult> {
@@ -575,7 +651,7 @@ async function runLeave(
 }
 
 async function runStatus(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
 ): Promise<ExitResult> {
   const principalRes = requireValueFlag(flags, "--principal");
@@ -593,7 +669,7 @@ async function runStatus(
   // instead of the default monolith. Previously status fell through to
   // ~/.config/cortex/cortex.yaml and reported a joined config-split stack as
   // "no networks joined".
-  const statusFlags: Record<string, string | true> =
+  const statusFlags: FlagMap =
     optionalValueFlag(flags, "--config") === undefined
       ? { ...flags, "--config": resolveStatusConfigPath(slugRes.slug) }
       : flags;
@@ -675,7 +751,7 @@ const DEFAULT_PING_BUS_FACTORY: PingBusFactory = async (cfg) => {
 
 async function runPing(
   peerArg: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
   load: ConfigReader,
   busFactory: PingBusFactory,
@@ -757,7 +833,7 @@ async function runPing(
 
 /** Parse a positive-integer value flag with a default. */
 function parsePositiveInt(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   name: string,
   dflt: number,
 ): { ok: true; value: number } | { ok: false; reason: string } {
@@ -864,7 +940,7 @@ async function adminMaterialFromSeedFile(
 
 async function runCreate(
   networkId: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
 ): Promise<ExitResult> {
   if (!NETWORK_ID_RE.test(networkId)) {
@@ -985,7 +1061,7 @@ function splitCsv(raw: string | undefined): string[] {
 }
 
 async function runJoinPublic(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
 ): Promise<ExitResult> {
   const principalRes = requireValueFlag(flags, "--principal");
@@ -1036,7 +1112,7 @@ async function runJoinPublic(
 }
 
 async function runLeavePublic(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
 ): Promise<ExitResult> {
   const principalRes = requireValueFlag(flags, "--principal");
@@ -1067,7 +1143,7 @@ function portsConfig(
   networkId: string,
   principalId: string,
   stackSlug: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
 ): LivePortsConfig {
   return {
     networkId,
@@ -1093,7 +1169,7 @@ function portsConfigFromInputs(
   networkId: string,
   inputs: import("./network-derive").DerivedJoinInputs,
   stackSlug: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
 ): LivePortsConfig {
   return {
     networkId,
@@ -1320,6 +1396,27 @@ Flags (all OPTIONAL OVERRIDES — derived from cortex.yaml when omitted; #753):
                           2nd stack — not to re-run a converged one.
   --creds <p>             Override stack.nats_infra.creds_path (default: ~/.config/nats/<network>.creds).
   --account <nkey-U>      Override stack.nats_infra.account (A… nkey-U the leaf binds to).
+  --operator-jwt <eyJ…>   (O-3, #1053) NSC operator JWT. With --account-jwt + --account, lets join
+                          AUTO-CONVERT an anonymous/hard-isolated bus to operator-mode (render the
+                          SOP §B0.1 blocks) instead of fail-fasting (#794). Maps to
+                          stack.nats_infra.operator_jwt. O-4 supplies it via the register→issue
+                          handshake; this flag/config is the manual/interim path.
+  --account-jwt <eyJ…>    (O-3, #1053) The issued account JWT (preloaded under resolver_preload).
+                          Maps to stack.nats_infra.account_jwt.
+  --system-account <A…>   (O-3, #1053) OPTIONAL system account nkey-U (sets system_account). Maps
+                          to stack.nats_infra.system_account.
+  --system-account-jwt <eyJ…> (O-3, #1053) OPTIONAL system account JWT. Maps to
+                          stack.nats_infra.system_account_jwt.
+  --from-package <file>   (O-4b, #1063) SOURCE the operator-mode leaf package from a
+                          JSON file — the interim form of the shape O-4a's signed
+                          register→issue response will carry:
+                          { operatorJwt, account, accountJwt, systemAccount?,
+                            systemAccountJwt?, credsPath, endpoint? }. Saves passing
+                          the four --operator-jwt/--account-jwt/--account/
+                          --system-account* flags by hand. Validated (nkey-U/JWT
+                          shape) + fail-fast on a malformed package. Precedence:
+                          explicit flags override the package; the package overrides
+                          config; the package sets only what it carries.
   --nats-config <p>       Override stack.nats_infra.config_path (nats-server -c config).
   --plist <p>             Override stack.nats_infra.plist_path (macOS nats-server launchd plist).
   --unit <p>              Override stack.nats_infra.unit_path (Linux nats-server systemd unit; #763).

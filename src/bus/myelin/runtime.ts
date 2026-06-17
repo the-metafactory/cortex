@@ -595,7 +595,7 @@ export async function startMyelinRuntime(
   // of whether NATS is configured; making this a no-op (rather than a
   // throw) keeps adapter code simple. The `enabled === false` flag is the
   // explicit signal for callers who DO want to gate.
-  // eslint-disable-next-line @typescript-eslint/no-empty-function, @typescript-eslint/require-await
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
   const publishDisabled = async (_envelope: Envelope) => {};
 
   // Subscribe-pull no-op for the disabled paths (no NATS configured,
@@ -613,7 +613,7 @@ export async function startMyelinRuntime(
   // eslint-disable-next-line @typescript-eslint/require-await
   const subscribePushDisabled = async (_pattern: string): Promise<null> => null;
 
-  // eslint-disable-next-line @typescript-eslint/no-empty-function, @typescript-eslint/require-await
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
   const stopDisabled = async () => {};
 
   // cortex#338 — disabled JSM helper mirrors `subscribePullDisabled`.

@@ -356,7 +356,7 @@ describe("error reporting", () => {
 // returns the rich agents[] alongside via `inlineAgents` so `startCortex`
 // can route per-instance identity correctly.
 
-import { loadConfigWithAgents } from "../loader";
+import { applySeedAwareSigningDefault, loadConfigWithAgents } from "../loader";
 
 describe("MIG-7.2e — cortex-shape detection + transform", () => {
   function writeCortexConfig(dir: string, config: Record<string, unknown>): string {
@@ -542,6 +542,122 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
       encryption: { payload: "off", at_rest: "off" },
       transport: { mtls: "off" },
     });
+  });
+
+  // cortex#1000 — seed-aware secure default. A configured stack signing seed
+  // with NO explicit `security.signing` must boot `permissive`, not the
+  // schema's `off` (the forged-stamp-injection defaults gap). Explicit values
+  // — including `off` — always win; seedless stacks keep the all-off default
+  // (pinned by the backward-compat test above).
+  test("cortex#1000: signing seed + security.signing unset → defaults to permissive", () => {
+    const cfg = minimalCortex();
+    cfg.stack = {
+      id: "jc/research",
+      nkey_seed_path: "~/.config/nats/cortex-research.nk",
+    };
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, cfg));
+    expect(config.security.signing).toBe("permissive");
+    // Only the signing toggle bumps — the other posture layers keep `off`.
+    expect(config.security.encryption.payload).toBe("off");
+    expect(config.security.encryption.at_rest).toBe("off");
+    expect(config.security.transport.mtls).toBe("off");
+  });
+
+  test("cortex#1000: signing seed + EXPLICIT security.signing: off stays off", () => {
+    const cfg = minimalCortex();
+    cfg.stack = {
+      id: "jc/research",
+      nkey_seed_path: "~/.config/nats/cortex-research.nk",
+    };
+    cfg.security = { signing: "off" };
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, cfg));
+    expect(config.security.signing).toBe("off");
+  });
+
+  test("cortex#1000: signing seed + security block WITHOUT a signing key → permissive, siblings preserved", () => {
+    const cfg = minimalCortex();
+    cfg.stack = {
+      id: "jc/research",
+      nkey_seed_path: "~/.config/nats/cortex-research.nk",
+    };
+    cfg.security = { encryption: { payload: "opt-in" } };
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, cfg));
+    expect(config.security.signing).toBe("permissive");
+    expect(config.security.encryption.payload).toBe("opt-in");
+  });
+
+  test("cortex#1000: signing seed + explicit enforce untouched by the seed-aware default", () => {
+    const cfg = minimalCortex();
+    cfg.stack = {
+      id: "jc/research",
+      nkey_seed_path: "~/.config/nats/cortex-research.nk",
+    };
+    cfg.security = { signing: "enforce" };
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, cfg));
+    expect(config.security.signing).toBe("enforce");
+  });
+
+  test("cortex#1000: stack block without nkey_seed_path keeps the off default", () => {
+    const cfg = minimalCortex();
+    cfg.stack = { id: "jc/research" };
+    const { config } = loadConfigWithAgents(writeCortexConfig(testDir, cfg));
+    expect(config.security.signing).toBe("off");
+  });
+
+  // Sage review on #1020 — a MALFORMED `security:` block must reach the
+  // schema parse untouched and fail with the schema's own error; the
+  // seed-aware default must never rewrite it into a valid-looking object.
+  test("cortex#1000: malformed security (array) is NOT masked by the seed-aware default", () => {
+    const cfg = minimalCortex();
+    cfg.stack = {
+      id: "jc/research",
+      nkey_seed_path: "~/.config/nats/cortex-research.nk",
+    };
+    cfg.security = ["off"];
+    expect(() => loadConfigWithAgents(writeCortexConfig(testDir, cfg))).toThrow();
+  });
+
+  test("cortex#1000: malformed security (string) is NOT masked by the seed-aware default", () => {
+    const cfg = minimalCortex();
+    cfg.stack = {
+      id: "jc/research",
+      nkey_seed_path: "~/.config/nats/cortex-research.nk",
+    };
+    cfg.security = "off";
+    expect(() => loadConfigWithAgents(writeCortexConfig(testDir, cfg))).toThrow();
+  });
+
+  test("cortex#1000: bare null security key is NOT masked by the seed-aware default", () => {
+    const cfg = minimalCortex();
+    cfg.stack = {
+      id: "jc/research",
+      nkey_seed_path: "~/.config/nats/cortex-research.nk",
+    };
+    cfg.security = null;
+    expect(() => loadConfigWithAgents(writeCortexConfig(testDir, cfg))).toThrow();
+  });
+
+  // Sage round 2 on #1020 — non-plain objects (Date, Map, class instances)
+  // must not be treated as mergeable records either. These can't round-trip
+  // through the YAML fixture (the parser emits plain mappings), so the
+  // exported helper is exercised directly.
+  test("cortex#1000: applySeedAwareSigningDefault leaves non-plain security objects untouched", () => {
+    const seed = { stack: { nkey_seed_path: "~/x.nk" } };
+    for (const malformed of [new Date(0), new Map(), new URL("https://example.com")]) {
+      const raw: Record<string, unknown> = { ...seed, security: malformed };
+      expect(applySeedAwareSigningDefault(raw)).toBe(false);
+      expect(raw.security).toBe(malformed); // untouched, schema will reject
+    }
+  });
+
+  test("cortex#1000: applySeedAwareSigningDefault accepts a null-prototype record", () => {
+    const securityRec = Object.create(null) as Record<string, unknown>;
+    const raw: Record<string, unknown> = {
+      stack: { nkey_seed_path: "~/x.nk" },
+      security: securityRec,
+    };
+    expect(applySeedAwareSigningDefault(raw)).toBe(true);
+    expect((raw.security as Record<string, unknown>).signing).toBe("permissive");
   });
 
   test("passes bus.review provisioning knobs through with defaults applied", () => {

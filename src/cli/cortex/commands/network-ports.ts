@@ -34,6 +34,8 @@ import type { NetworkFetchResult } from "../../../common/registry/network-client
 import type {
   AccountBindCheck,
   LeafBindMode,
+  OperatorModeConversion,
+  OperatorModeLeafPackage,
   StackLeafBinding,
 } from "../../../common/nats/leaf-remote-renderer";
 import type { PolicyFederatedNetwork } from "../../../common/types/cortex-config";
@@ -189,6 +191,28 @@ export interface LeafFilePort {
    * creds path; `account` is the candidate nkey-U (or `undefined`).
    */
   resolveBindMode(account: string | undefined, hasCreds: boolean): LeafBindMode;
+  /**
+   * O-3 (cortex#1053) — CONVERT an anonymous/hard-isolated bus to operator-mode
+   * by rendering the SOP §B0.1 operator-mode blocks (operator JWT +
+   * system_account + `resolver: MEMORY` + `resolver_preload`) from a leaf
+   * package, KEEPING the stack's own identity/ports/JS domain and adding NO leaf
+   * include (the join renders its own). Replaces the #794 "fail-fast and tell a
+   * human to hand-edit `<slug>.conf`" with a one-command conversion.
+   *
+   *   - `converted` — the bus was anonymous; the live adapter WROTE the rendered
+   *     operator-mode config back to `natsConfigPath()` (dry-run is inert).
+   *   - `already` — the bus was already operator-mode under THIS package's
+   *     operator JWT; a byte-stable no-op (no write).
+   *   - `refuse` — material absent/malformed (the preserved #794 fail-fast), OR
+   *     the bus is already operator-mode under a DIFFERENT operator (never
+   *     clobber it).
+   *
+   * Delegates the rendering to {@link renderOperatorModeBlocks} (pure). The
+   * orchestrator calls this ONLY when `resolveBindMode` would refuse an anonymous
+   * bus AND a leaf package is present, then re-resolves the (now operator-mode)
+   * bus. An absent config file reads as anonymous (a brand-new stack).
+   */
+  convertToOperatorMode(pkg: OperatorModeLeafPackage): OperatorModeConversion;
   /**
    * #821 — pre-flight: does the leaf `.creds` file at `path` actually EXIST on
    * disk? `nats-server -c <cfg> -t` only validates HOCON syntax — it does NOT

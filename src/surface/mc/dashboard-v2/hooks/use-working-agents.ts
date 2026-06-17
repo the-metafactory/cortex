@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiFailure, getJson } from "../lib/api";
+import type { AgentOrigin } from "../../api/agents";
 import type { WsClient, WsMessage } from "./use-websocket";
 import { useProjectionRefetch } from "./use-projection-refetch";
 
@@ -60,6 +61,15 @@ export interface WorkingAgentTile {
     updated_at: string;
   };
   additional_active_count: number;
+  /**
+   * #1065 — the tile's origin stack (the pane-of-glass `/api/working-agents`
+   * federation tags every tile: `"local"` for the serving stack, or a sibling's
+   * `{principal, stack}`). The SAME `agent_id` (e.g. `luna`) legitimately appears
+   * across stacks, so the tile's React key MUST be namespaced by origin — see
+   * `workingTileKey`. Defaulted to `"local"` at the fetch boundary for pre-#1008
+   * (un-aggregated) responses; optional on the type so existing fixtures stay valid.
+   */
+  origin?: AgentOrigin;
   /**
    * ST-P5 — the owning agent's session tree (refactor §7), mirroring the server
    * projection's `sessions` field. ADDITIVE: every field above is byte-compatible
@@ -110,10 +120,14 @@ export function useWorkingAgents(ws: WsClient): WorkingAgentsState {
         signal ? { signal } : undefined
       );
       if (!aliveRef.current || genRef.current !== myGen) return;
-      // Normalize `sessions` to [] per tile so a pre-ST-P5 response (no
-      // `sessions` field) renders exactly as before — empty/compat path.
+      // Normalize `sessions` to [] and `origin` to "local" per tile so a
+      // pre-ST-P5 / pre-#1008 response renders exactly as before — compat path.
       setAgents(
-        (body.agents ?? []).map((a) => ({ ...a, sessions: a.sessions ?? [] }))
+        (body.agents ?? []).map((a) => ({
+          ...a,
+          sessions: a.sessions ?? [],
+          origin: a.origin ?? "local",
+        }))
       );
       setError(null);
       bootedRef.current = true;

@@ -110,6 +110,27 @@ export const StackNatsInfraSchema = z.object({
    * (per-network creds file). Declare here only to override the convention.
    */
   creds_path: z.string().min(1).optional(),
+  /**
+   * O-3 (cortex#1053) — the operator-mode "leaf package": the material
+   * `cortex network join` needs to AUTO-CONVERT an anonymous/hard-isolated bus
+   * to operator-mode (rendering the SOP §B0.1 blocks) instead of fail-fasting
+   * (#794). All OPTIONAL — a stack standing on an already-operator-mode bus, or
+   * one that never federates, omits them. O-4 (the register→issue handshake)
+   * SUPPLIES these at join time; declaring them in config is the manual /
+   * interim path. These are JWTs + an account pubkey — public-key material, not
+   * seeds — but a federating stack's config still carries the bot token, so keep
+   * the stack file chmod 600.
+   *
+   * `operator_jwt` + `account` + `account_jwt` are the minimum to convert; a
+   * `system_account` (+ its `system_account_jwt`) is rendered only when present.
+   */
+  operator_jwt: z.string().min(1).optional(),
+  account_jwt: z.string().min(1).optional(),
+  system_account: z.string().regex(
+    /^A[A-Z0-9]{55}$/,
+    "stack.nats_infra.system_account must be an account-class NKey (A-prefixed, 56 chars total)",
+  ).optional(),
+  system_account_jwt: z.string().min(1).optional(),
 }).strict();
 
 export type StackNatsInfra = z.infer<typeof StackNatsInfraSchema>;

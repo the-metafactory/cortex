@@ -544,111 +544,82 @@ describe("CortexConfigSchema — agents[].runtime.capabilities → catalog (A.6.
     ]);
   });
 
-  test("agent claiming undeclared capability is rejected (dangling reference)", () => {
+  test("B-0 (cortex#1021) — agent declaring an uncatalogued capability now parses cleanly", () => {
+    // The former check #3 (every runtime.capabilities[] entry must exist in
+    // the top-level catalog) is RETIRED per design-bot-packs §7 + §11. An
+    // agent declaring `runtime.capabilities: [X]` IS a provider of X; the
+    // effective catalog synthesizes the entry. So this no longer throws.
+    const parsed = CortexConfigSchema.parse(
+      minConfig({
+        agents: [
+          minAgent({
+            id: "luna",
+            runtime: {
+              substrate: "claude-code",
+              mode: "in-process",
+              capabilities: ["code-review.typescript"], // not in empty catalog
+            },
+          }),
+        ],
+        // capabilities: omitted → defaults to []
+      }),
+    );
+    expect(parsed.agents[0]?.runtime?.capabilities).toEqual([
+      "code-review.typescript",
+    ]);
+    // The explicit catalog is still empty — derivation happens at boot/reload
+    // (`deriveEffectiveCapabilityCatalog`), NOT inside the parsed config.
+    expect(parsed.capabilities).toEqual([]);
+  });
+
+  test("B-0 (cortex#1021) — mixed catalogued + declaration-only capabilities both parse", () => {
+    // One capability has an explicit catalog entry; another exists ONLY via
+    // the agent's declaration. Both are accepted; the explicit one is
+    // unchanged in the parsed config, the declaration-only one is NOT injected
+    // into `config.capabilities` (it surfaces only in the derived catalog).
+    const parsed = CortexConfigSchema.parse(
+      minConfig({
+        agents: [
+          minAgent({
+            id: "echo",
+            runtime: {
+              substrate: "claude-code",
+              mode: "in-process",
+              capabilities: ["code-review.typescript", "deploy.k8s"],
+            },
+          }),
+        ],
+        capabilities: [
+          minCapability({ id: "code-review.typescript", provided_by: ["echo"] }),
+        ],
+      }),
+    );
+    expect(parsed.capabilities.map((c) => c.id)).toEqual([
+      "code-review.typescript",
+    ]);
+    expect(parsed.agents[0]?.runtime?.capabilities).toEqual([
+      "code-review.typescript",
+      "deploy.k8s",
+    ]);
+  });
+
+  test("B-0 (cortex#1021) — an EXPLICIT provided_by naming a nonexistent agent is STILL rejected", () => {
+    // The typo guard (check #2) is preserved: a hand-authored provided_by[]
+    // that names a phantom agent is still a config error. Only the agent-side
+    // reference check (former check #3) was retired.
     expect(() =>
       CortexConfigSchema.parse(
         minConfig({
-          agents: [
-            minAgent({
-              id: "luna",
-              runtime: {
-                substrate: "claude-code",
-                mode: "in-process",
-                capabilities: ["code-review.typescript"], // not in empty catalog
-              },
+          agents: [minAgent({ id: "echo" })],
+          capabilities: [
+            minCapability({
+              id: "code-review.typescript",
+              provided_by: ["nonexistent-agent"],
             }),
           ],
-          // capabilities: omitted → defaults to []
         }),
       ),
-    ).toThrow(/claims capability .*code-review\.typescript/);
-  });
-
-  test("error message names the agent, the capability id, and the catalog state", () => {
-    try {
-      CortexConfigSchema.parse(
-        minConfig({
-          agents: [
-            minAgent({
-              id: "echo",
-              runtime: {
-                substrate: "claude-code",
-                mode: "in-process",
-                capabilities: ["deploy.k8s"],
-              },
-            }),
-          ],
-          capabilities: [
-            minCapability({ id: "code-review.typescript", provided_by: ["echo"] }),
-          ],
-        }),
-      );
-      throw new Error("expected parse to throw");
-    } catch (e) {
-      // ZodError.message is JSON-encoded; we assert on bare identifiers
-      // rather than the surrounding quote character so the test doesn't
-      // brittle-couple to JSON escaping.
-      const msg = (e as Error).message;
-      expect(msg).toContain("echo");
-      expect(msg).toContain("deploy.k8s");
-      expect(msg).toContain("code-review.typescript"); // the declared catalog id
-    }
-  });
-
-  test("cortex#314 — error message points at 'Fix:' add-to-catalog asymmetry, not symmetric 'Either…or…' framing", () => {
-    // First-install safety regression guard. The previous error wording
-    // was "Either add ... or remove ..." which implied symmetric choice.
-    // In practice the right fix (especially for code-review.* flavors
-    // pilot dispatches against) is almost always to add the capability
-    // to the top-level catalog — the catalog is the source of truth.
-    //
-    // The reworded message:
-    //   - Leads with the verb "Fix:" so a principal scanning the error
-    //     finds the actionable line immediately.
-    //   - Spells out the asymmetry between catalog (registry consumed
-    //     by the dispatch consumer) and runtime.capabilities[] (agent
-    //     declaration of intent).
-    //   - Includes a copy-pasteable minimal capability entry naming
-    //     the offending capability id AND the offending agent id (the
-    //     agent becomes the catalog entry's provided_by[]).
-    //   - Keeps a parenthetical pointing at the remove-from-agent
-    //     escape hatch as the rarer fix.
-    try {
-      CortexConfigSchema.parse(
-        minConfig({
-          agents: [
-            minAgent({
-              id: "echo",
-              runtime: {
-                substrate: "claude-code",
-                mode: "in-process",
-                capabilities: ["code-review.typescript"],
-              },
-            }),
-          ],
-          // capabilities: omitted → defaults to []
-        }),
-      );
-      throw new Error("expected parse to throw");
-    } catch (e) {
-      const msg = (e as Error).message;
-      // Leads with the actionable verb + the catalog as target.
-      expect(msg).toContain("Fix:");
-      expect(msg).toContain("add a");
-      expect(msg).toContain("entry to capabilities[] at the top level of cortex.yaml");
-      // Spells out the asymmetry rather than the previous "Either…or…".
-      expect(msg).toContain("source of truth");
-      expect(msg).toContain("declaration of intent");
-      // Carries the copy-pasteable example block naming the offender +
-      // provider in their canonical YAML shape.
-      expect(msg).toContain("Example minimal entry");
-      expect(msg).toContain("- id: code-review.typescript");
-      expect(msg).toContain("provided_by: [echo]");
-      // Keeps the remove-from-agent escape hatch as the rarer fix.
-      expect(msg).toContain("Only remove from agent");
-      // Does NOT carry the old symmetric "Either…or…" framing.
-      expect(msg).not.toContain("Either add");
-    }
+    ).toThrow(/provider agent .*nonexistent-agent/);
   });
 
   test("empty catalog + empty agent runtime.capabilities parses cleanly", () => {
@@ -714,28 +685,30 @@ describe("CortexConfigSchema — agents[].runtime.capabilities → catalog (A.6.
     ]);
   });
 
-  test("multiple dangling agent references are all reported", () => {
-    try {
-      CortexConfigSchema.parse(
-        minConfig({
-          agents: [
-            minAgent({
-              id: "luna",
-              runtime: {
-                substrate: "claude-code",
-                mode: "in-process",
-                capabilities: ["missing-a", "missing-b"],
-              },
-            }),
-          ],
-        }),
-      );
-      throw new Error("expected parse to throw");
-    } catch (e) {
-      const msg = (e as Error).message;
-      expect(msg).toContain("missing-a");
-      expect(msg).toContain("missing-b");
-    }
+  test("B-0 (cortex#1021) — multiple declaration-only capabilities all parse (former dangling-ref check retired)", () => {
+    // Pre-B-0 this asserted that an agent claiming multiple uncatalogued
+    // capabilities surfaced a dangling-reference error per capability. Under
+    // B-0 those declarations are valid: each becomes a derived/synthesized
+    // catalog entry. Assert the config now parses and preserves the claims.
+    const parsed = CortexConfigSchema.parse(
+      minConfig({
+        agents: [
+          minAgent({
+            id: "luna",
+            runtime: {
+              substrate: "claude-code",
+              mode: "in-process",
+              capabilities: ["missing-a", "missing-b"],
+            },
+          }),
+        ],
+      }),
+    );
+    expect(parsed.agents[0]?.runtime?.capabilities).toEqual([
+      "missing-a",
+      "missing-b",
+    ]);
+    expect(parsed.capabilities).toEqual([]);
   });
 });
 

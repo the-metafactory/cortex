@@ -48,9 +48,10 @@ describe("buildSecurityPreamble", () => {
     expect(preamble).toContain("/home/user/.config/cortex");
   });
 
-  test("defaults to ~/.config/grove when no configPath (pre-MIG-8 cascade — GROVE_* → CORTEX_* namespace migration owns this)", () => {
+  test("defaults to ~/.config/cortex when no configPath (GV-1 cortex#1076 — config-path migration)", () => {
     const preamble = buildSecurityPreamble(makeConfig());
-    expect(preamble).toContain("~/.config/grove");
+    expect(preamble).toContain("~/.config/cortex");
+    expect(preamble).not.toContain("~/.config/grove");
   });
 
   test("includes filesystem restriction when allowedDirs configured", () => {

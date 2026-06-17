@@ -30,12 +30,14 @@ function agentData(over: Partial<AgentNodeData> = {}): AgentNodeData {
     kind: "agent",
     key: "andreas/research/luna",
     origin: "local",
+    servingPrincipal: "andreas",
     agentId: "luna",
     assistantName: "Luna",
     capabilities: [],
     state: "online",
     offlineReason: null,
     lastHeartbeatAt: null,
+    stackColor: "#5b8cd4",
     ...over,
   };
 }
@@ -128,7 +130,19 @@ describe("AgentNodeCard (G-1114.D.1)", () => {
 });
 
 describe("StackHubCard (G-1114.D.1)", () => {
-  function renderHub(data: StackHubNodeData): string {
+  // Default the serving principal to `andreas` (matching the local fixtures), so
+  // `origin: "local"` classifies `self` and a `jc/*` origin classifies `foreign`.
+  // Tests that exercise the #1008 sibling path override it explicitly.
+  function renderHub(over: Partial<StackHubNodeData> & { kind: "stack-hub" }): string {
+    const data: StackHubNodeData = {
+      servingPrincipal: "andreas",
+      origin: "local",
+      principal: null,
+      stack: null,
+      agentCount: 0,
+      stackColor: "#5b8cd4",
+      ...over,
+    };
     return renderToStaticMarkup(createElement(StackHubCard, { data }));
   }
 
@@ -196,6 +210,40 @@ describe("StackHubCard (G-1114.D.1)", () => {
     expect(html).toContain("federated stack");
     expect(html).toContain("jc/research");
   });
+
+  it("renders a SAME-PRINCIPAL local SIBLING hub as LOCAL, not federated (#1008)", () => {
+    // A sibling stack reached via DB-read aggregation carries an OBJECT origin
+    // whose principal === the serving principal. It must read as a "stack" hub
+    // (local visual), NOT "federated stack" — the bug this fixes.
+    const html = renderHub({
+      kind: "stack-hub",
+      origin: { principal: "andreas", stack: "work" },
+      servingPrincipal: "andreas",
+      principal: "andreas",
+      stack: "work",
+      agentCount: 2,
+    });
+    expect(html).toContain('data-hub-origin="local"');
+    expect(html).toContain('data-hub-category="sibling"');
+    expect(html).toContain("network-node-hub-sibling");
+    expect(html).not.toContain("network-node-hub-foreign");
+    expect(html).not.toContain("federated stack");
+    // still labelled with its own {principal}/{stack}
+    expect(html).toContain("andreas/work");
+  });
+
+  it("classifies a CROSS-PRINCIPAL hub as foreign even with the same stack name (#1008)", () => {
+    const html = renderHub({
+      kind: "stack-hub",
+      origin: { principal: "jc", stack: "work" },
+      servingPrincipal: "andreas",
+      principal: "jc",
+      stack: "work",
+      agentCount: 1,
+    });
+    expect(html).toContain('data-hub-category="foreign"');
+    expect(html).toContain("federated stack");
+  });
 });
 
 describe("AgentNodeCard — federated provenance (G-1114.E.4)", () => {
@@ -221,6 +269,23 @@ describe("AgentNodeCard — federated provenance (G-1114.E.4)", () => {
     expect(html).toContain("jc/research");
     // accessible label names it a federated peer
     expect(html).toContain("federated peer jc/research");
+  });
+
+  it("renders a SAME-PRINCIPAL local SIBLING agent as LOCAL, no federated badge (#1008)", () => {
+    const html = renderAgent(
+      agentData({
+        key: "andreas/work/echo",
+        agentId: "echo",
+        assistantName: "Echo",
+        origin: { principal: "andreas", stack: "work" },
+        servingPrincipal: "andreas",
+      }),
+    );
+    expect(html).toContain('data-agent-origin="local"');
+    expect(html).toContain('data-agent-category="sibling"');
+    expect(html).not.toContain("network-node-foreign");
+    expect(html).not.toContain("network-node-provenance");
+    expect(html).not.toContain("federated peer");
   });
 });
 
@@ -271,5 +336,132 @@ describe("AgentNodeCard — F.2 hover highlight", () => {
     );
     const lit = (html.match(/network-node-cap-highlighted/g) ?? []).length;
     expect(lit).toBe(1);
+  });
+});
+
+describe("#1068 — per-stack color", () => {
+  it("the agent card carries its stack color as --stack-color + data attr", () => {
+    const html = renderAgent(agentData({ stackColor: "#2e8b7a" }));
+    expect(html).toContain("--stack-color:#2e8b7a");
+    expect(html).toContain('data-stack-color="#2e8b7a"');
+  });
+
+  it("the hub card carries its stack color as --stack-color + data attr", () => {
+    const html = renderToStaticMarkup(
+      createElement(StackHubCard, {
+        data: {
+          kind: "stack-hub",
+          origin: "local",
+          servingPrincipal: "andreas",
+          principal: "andreas",
+          stack: "research",
+          agentCount: 1,
+          stackColor: "#d4915b",
+        } satisfies StackHubNodeData,
+      }),
+    );
+    expect(html).toContain("--stack-color:#d4915b");
+    expect(html).toContain('data-stack-color="#d4915b"');
+  });
+
+  it("the legend renders a swatch + label per stack passed in", () => {
+    const html = renderToStaticMarkup(
+      createElement(NetworkLegend, {
+        stacks: [
+          { id: "__stack__", label: "local", color: "#5b8cd4" },
+          { id: "__stack__:jc/research", label: "jc/research", color: "#2e8b7a" },
+        ],
+      }),
+    );
+    expect(html).toContain("network-legend-swatch-stack");
+    expect(html).toContain("local");
+    expect(html).toContain("jc/research");
+    expect(html).toContain("background:#5b8cd4");
+    expect(html).toContain("background:#2e8b7a");
+  });
+});
+
+describe("#1068 — hub-subtree selection (a11y + emphasis/dim)", () => {
+  it("a non-interactive hub (no toggle handler) carries no role/aria-pressed", () => {
+    const html = renderToStaticMarkup(
+      createElement(StackHubCard, {
+        data: {
+          kind: "stack-hub",
+          origin: "local",
+          servingPrincipal: "andreas",
+          principal: "andreas",
+          stack: "research",
+          agentCount: 1,
+          stackColor: "#5b8cd4",
+        } satisfies StackHubNodeData,
+      }),
+    );
+    expect(html).not.toContain('role="button"');
+    expect(html).not.toContain("aria-pressed");
+  });
+
+  it("an interactive selected hub stamps role=button, aria-pressed=true, data-selected", () => {
+    const html = renderToStaticMarkup(
+      createElement(StackHubCard, {
+        data: {
+          kind: "stack-hub",
+          origin: "local",
+          servingPrincipal: "andreas",
+          principal: "andreas",
+          stack: "research",
+          agentCount: 1,
+          stackColor: "#5b8cd4",
+        } satisfies StackHubNodeData,
+        selected: true,
+        onToggleSelect: () => {},
+      }),
+    );
+    expect(html).toContain('role="button"');
+    expect(html).toContain('aria-pressed="true"');
+    expect(html).toContain('data-selected="true"');
+    expect(html).toContain("network-node-selected");
+  });
+
+  it("a dimmed (non-selected, selection active) hub carries data-dimmed + the dim class", () => {
+    const html = renderToStaticMarkup(
+      createElement(StackHubCard, {
+        data: {
+          kind: "stack-hub",
+          origin: "local",
+          servingPrincipal: "andreas",
+          principal: "andreas",
+          stack: "research",
+          agentCount: 1,
+          stackColor: "#5b8cd4",
+        } satisfies StackHubNodeData,
+        dimmed: true,
+        onToggleSelect: () => {},
+      }),
+    );
+    expect(html).toContain('data-dimmed="true"');
+    expect(html).toContain("network-node-dimmed");
+    expect(html).toContain('aria-pressed="false"');
+  });
+
+  it("an emphasized agent (in the selected subtree) carries data-selected + the emphasis class", () => {
+    const html = renderToStaticMarkup(
+      createElement(AgentNodeCard, {
+        data: agentData(),
+        subtreeEmphasized: true,
+      }),
+    );
+    expect(html).toContain('data-selected="true"');
+    expect(html).toContain("network-node-selected");
+  });
+
+  it("a dimmed agent (outside the selected subtree) carries data-dimmed + the dim class", () => {
+    const html = renderToStaticMarkup(
+      createElement(AgentNodeCard, {
+        data: agentData(),
+        dimmed: true,
+      }),
+    );
+    expect(html).toContain('data-dimmed="true"');
+    expect(html).toContain("network-node-dimmed");
   });
 });

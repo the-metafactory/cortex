@@ -5,6 +5,7 @@
 import type { AssignmentListItem, MostActiveAgent } from "../db/assignments";
 import type { TaskListItem } from "../db/tasks";
 import type { WorkingAgentTile } from "../db/working-agents";
+import type { AgentOrigin } from "./agents";
 import type {
   InboxItem,
   IterationDetail,
@@ -61,10 +62,17 @@ export interface ListTasksResponse {
  * projection with the current-primary assignment folded in, plus a count
  * of additional active-non-blocked assignments for the `+N` badge.
  *
+ * #1008 — each tile MAY carry an `origin` (`"local"` or `{principal, stack}`)
+ * when the serving stack has pane-of-glass DB-read aggregation on: the feed is
+ * then the origin-tagged UNION across the local db + each readable LOCAL sibling
+ * stack's db. The field is OPTIONAL — the single-db feed omits it (byte-identical
+ * to the pre-#1008 shape), and the dashboard's multi-hub grouping treats a
+ * missing `origin` as `"local"`.
+ *
  * See docs/design-mc-f9-working-grid.md for the full decision log.
  */
 export interface ListWorkingAgentsResponse {
-  agents: WorkingAgentTile[];
+  agents: (WorkingAgentTile & { origin?: AgentOrigin })[];
 }
 
 // --- POST /api/sessions ---

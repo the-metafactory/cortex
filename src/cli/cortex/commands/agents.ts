@@ -2,13 +2,19 @@
 /**
  * F-3 — `cortex agents <subcommand>` CLI.
  *
- * Validation-only CLI for inspecting and validating `agents.d/` fragments
- * against the cortex schema. Wraps F-2's `loadAgentsDirectory()`. Does NOT
- * talk to a running cortex daemon in v1 — daemon-IPC is a follow-up that
- * waits for cortex.ts integration of `AgentsDirectoryWatcher`.
+ * Inspects + validates `agents.d/` fragments against the cortex schema (wraps
+ * F-2's `loadAgentsDirectory()`), and — B-0 (cortex#1021) — SIGNALS the running
+ * cortex runtime to reload after a successful validation. `reload` resolves the
+ * runtime's PID file from `--config` and sends SIGHUP, which the runtime routes
+ * to the same agents.d/ reconcile its fs.watch watcher uses (registry swap +
+ * review-consumer reconcile + capability re-publish). The signal is delivered
+ * synchronously; the reload is applied asynchronously (Sage cortex#1027 — the CLI
+ * reports "signal delivered", not "reload applied"). `--validate-only` keeps the
+ * legacy validation-only behaviour; `--fragment` (single-file) is always
+ * validation-only. Presence adapters are restart-only (documented limitation).
  *
  * Usage:
- *   bun src/cli/cortex/commands/agents.ts reload [--config <path>] [--fragment <path>] [--json]
+ *   bun src/cli/cortex/commands/agents.ts reload [--config <path>] [--fragment <path>] [--validate-only] [--json]
  *   bun src/cli/cortex/commands/agents.ts list   [--config <path>] [--json]
  *   bun src/cli/cortex/commands/agents.ts --help
  *
@@ -18,9 +24,10 @@
  *   2  — usage error (bad flags, missing files, unknown subcommand)
  */
 
-import { existsSync, statSync } from "fs";
+import { existsSync, statSync, readFileSync } from "fs";
 import { dirname } from "path";
 
+import { pidFileFor } from "../../../common/pidfile";
 import { CliArgsError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { type ExitResult } from "./_shared/exit-result";
@@ -45,6 +52,14 @@ export interface ParsedAgentsArgs {
   fragment: string | undefined;
   json: boolean;
   help: boolean;
+  /**
+   * B-0 (cortex#1021) — when set, `reload` only VALIDATES the fragments and
+   * does NOT signal the running cortex runtime. Default behaviour now validates
+   * AND sends SIGHUP to the runtime (resolved from the `--config` PID file) so
+   * the live registry / review consumers / capability registry reload — the same
+   * path the runtime's fs.watch + `reloadAgents()` use.
+   */
+  validateOnly: boolean;
 }
 
 // ExitResult moved to `_shared/exit-result.ts` (cortex#65). Importing
@@ -71,7 +86,13 @@ export const AgentsArgsError = CliArgsError;
 const AGENTS_SPEC: SubcommandSpec<"reload" | "list"> = {
   cliName: "agents",
   subcommands: {
-    reload: { flags: { "--config": "value", "--fragment": "value" } },
+    reload: {
+      flags: {
+        "--config": "value",
+        "--fragment": "value",
+        "--validate-only": "bool",
+      },
+    },
     list: { flags: { "--config": "value" } },
   },
   universal: { "--help": "bool", "-h": "bool", "--json": "bool" },
@@ -97,6 +118,7 @@ export function parseAgentsArgs(argv: string[]): ParsedAgentsArgs {
     fragment: valueFlag(parsed.flags, "--fragment"),
     json: boolFlag(parsed.flags, "--json"),
     help: parsed.help,
+    validateOnly: boolFlag(parsed.flags, "--validate-only"),
   };
 }
 
@@ -121,20 +143,58 @@ export function runAgentsReload(args: ParsedAgentsArgs): ExitResult {
 
   try {
     const agents = loadAgentsDirectory(agentsDir);
+    // B-0 (cortex#1021) — validation succeeded. Unless `--validate-only`, signal
+    // the running runtime (SIGHUP) so it reloads the live registry / review
+    // consumers / capability registry via the SAME reconcile path its fs.watch
+    // and `reloadAgents()` use. Sage cortex#1027 — three outcomes, handled below:
+    // a missing PID file is benign (no runtime; exit 0); a DELIVERED signal is
+    // reported as "delivered", NOT "reload applied" (we can't prove the async
+    // reload finished); an ATTEMPTED-but-FAILED signal (stale/malformed PID,
+    // ESRCH/EPERM) is an error → non-zero exit + JSON error.
+    const signal = args.validateOnly ? null : signalDaemonReload(args.config);
+
+    // Sage cortex#1027 — a signal that was ATTEMPTED but FAILED is an error for
+    // machine consumers: the reload the caller asked for did NOT happen. Exit
+    // non-zero and emit a JSON error (validation passed, but the operation as a
+    // whole did not). A BENIGN miss (no runtime to signal) or a delivered signal
+    // stays exit 0.
+    const signalFailed = signal !== null && !signal.signalled && !signal.benign;
+
     if (args.json) {
-      return { exitCode: 0, stdout: jsonOk(agents), stderr: "" };
-    }
-    if (agents.length === 0) {
+      if (signalFailed) {
+        return {
+          exitCode: 1,
+          stdout: renderJson(
+            envelopeError<AgentSummary>(
+              `reload signal failed: ${signal.reason}`,
+              { signalled: "false", validation: "ok" },
+            ),
+          ),
+          stderr: "",
+        };
+      }
+      // Success: carry the signal outcome in `data` so machine consumers can
+      // distinguish "signal delivered" from "no runtime to signal" — and so they
+      // never mistake validation-only success for a completed reload.
       return {
         exitCode: 0,
-        stdout: `0 fragments in ${agentsDir} — nothing to load (OK)\n\n${VALIDATION_ONLY_NOTE}\n`,
+        stdout: jsonOk(agents, signalData(signal)),
+        stderr: "",
+      };
+    }
+
+    const footer = reloadFooter(agents.length, signal);
+    const exitCode = signalFailed ? 1 : 0;
+    if (agents.length === 0) {
+      return {
+        exitCode,
+        stdout: `0 fragments in ${agentsDir} — nothing to load (OK)\n\n${footer}\n`,
         stderr: "",
       };
     }
     return {
-      exitCode: 0,
-      stdout:
-        agents.map(formatAgentLine).join("\n") + "\n\n" + successFooter(agents.length),
+      exitCode,
+      stdout: agents.map(formatAgentLine).join("\n") + "\n\n" + footer + "\n",
       stderr: "",
     };
   } catch (err) {
@@ -147,6 +207,130 @@ export function runAgentsReload(args: ParsedAgentsArgs): ExitResult {
       stderr: `cortex agents reload: unexpected error: ${err instanceof Error ? err.message : String(err)}\n`,
     };
   }
+}
+
+/**
+ * B-0 (cortex#1021; Sage cortex#1027 honesty fix) — outcome of attempting to
+ * signal the running runtime.
+ *
+ * Three distinct states (the middle two are NOT the same — Sage cortex#1027):
+ *   - `signalled: true`            — SIGHUP DELIVERED to a live PID. This proves
+ *                                    the signal was SENT, NOT that the runtime
+ *                                    finished (or even began) reloading. We never
+ *                                    claim "reload applied" — only "signal
+ *                                    delivered; reload happens asynchronously".
+ *   - `signalled: false, benign`   — no runtime to signal (no PID file). Nothing
+ *                                    was attempted; validation passed → exit 0.
+ *   - `signalled: false, failed`   — we ATTEMPTED to signal but it failed (stale
+ *                                    PID file vanished mid-read, malformed PID,
+ *                                    ESRCH/EPERM from kill). This is an ERROR for
+ *                                    machine consumers → non-zero exit + JSON
+ *                                    error. The validation still passed, but the
+ *                                    reload the caller asked for did NOT happen.
+ */
+type SignalOutcome =
+  | { signalled: true; pid: number }
+  | { signalled: false; benign: true; reason: string }
+  | { signalled: false; benign: false; reason: string };
+
+/**
+ * Resolve the runtime PID file for `configPath` and send SIGHUP, which the
+ * running cortex runtime routes to its agents.d/ reload reconcile. The agents
+ * CLI's default config is `~/.config/cortex/cortex.yaml` (NOT the legacy grove
+ * default `pidFileFor` collapses to), so when `--config` is absent we resolve the
+ * PID file against the explicit cortex default path rather than the unspecified
+ * branch — this keeps the CLI pointed at the cortex-shaped runtime.
+ *
+ * Sage cortex#1027 — the PID-file READ is inside the same non-fatal outcome path
+ * as the signal: if the file disappears or becomes unreadable between the
+ * existence check and the read, we report `signalled: false, failed` rather than
+ * letting `readFileSync` throw out of the reload command as an unexpected error.
+ */
+function signalDaemonReload(configPath: string | undefined): SignalOutcome {
+  const resolvedConfig = expandTilde(configPath ?? DEFAULT_CONFIG_PATH);
+  const pidFile = pidFileFor(resolvedConfig);
+  if (!existsSync(pidFile)) {
+    // No runtime to signal — benign. Validation passed; nothing to reload.
+    return {
+      signalled: false,
+      benign: true,
+      reason: `no running cortex runtime (no PID file at ${pidFile})`,
+    };
+  }
+  let raw: string;
+  try {
+    raw = readFileSync(pidFile, "utf-8").trim();
+  } catch (err) {
+    // Sage cortex#1027 — the PID file vanished or became unreadable between the
+    // existsSync check and this read (a stale/racing runtime shutdown). Treat as
+    // an ATTEMPTED-but-FAILED signal, not an unexpected crash of the command.
+    return {
+      signalled: false,
+      benign: false,
+      reason: `could not read PID file ${pidFile}: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  // Full-string numeric check (sage round 2): parseInt("123abc") === 123
+  // would SIGHUP an unintended process instead of flagging the file.
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return {
+      signalled: false,
+      benign: false,
+      reason: `PID file ${pidFile} is malformed ("${raw}")`,
+    };
+  }
+  const pid = Number(trimmed);
+  if (pid <= 0) {
+    return {
+      signalled: false,
+      benign: false,
+      reason: `PID file ${pidFile} is malformed ("${raw}")`,
+    };
+  }
+  try {
+    process.kill(pid, "SIGHUP");
+    return { signalled: true, pid };
+  } catch (err) {
+    // ESRCH (process gone — stale PID) or EPERM (not ours). We attempted the
+    // signal and it failed → non-benign. The reload did NOT happen.
+    return {
+      signalled: false,
+      benign: false,
+      reason: `could not signal PID ${pid}: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
+ * Compose the reload footer reflecting validation + the runtime-signal result.
+ *
+ * Sage cortex#1027 — HONEST wording. A delivered SIGHUP proves the signal was
+ * SENT, not that the runtime reloaded. We say "reload signal delivered" and tell
+ * the principal where to confirm the reload actually applied (runtime logs /
+ * generation bump), instead of asserting "reload live".
+ */
+function reloadFooter(n: number, signal: SignalOutcome | null): string {
+  const summary = `${n} fragment${n === 1 ? "" : "s"} loaded OK`;
+  if (signal === null) {
+    // --validate-only
+    return `${summary}\n${VALIDATION_ONLY_NOTE}`;
+  }
+  if (signal.signalled) {
+    return (
+      `${summary}\n` +
+      `reload signal delivered to running cortex runtime (PID ${signal.pid}, SIGHUP). ` +
+      `The runtime applies the reload asynchronously — confirm via the runtime logs ` +
+      `(look for "agents-reload … generation N").\n` +
+      `note: presence (Discord/Mattermost/Slack) changes for added/removed agents require a runtime restart.`
+    );
+  }
+  if (signal.benign) {
+    // No runtime present — nothing to signal. Validation still passed.
+    return `${summary}\nvalidation OK; no reload signal sent — ${signal.reason}`;
+  }
+  // Attempted-but-failed signal — surface as a problem the principal must act on.
+  return `${summary}\nvalidation OK, but the reload signal FAILED — ${signal.reason}`;
 }
 
 /**
@@ -314,12 +498,12 @@ export function dispatchAgents(argv: string[]): ExitResult {
 // =============================================================================
 
 /**
- * Validation-only caveat appended to success output so arc lifecycle scripts
- * (and principals reading stdout) don't infer "the running daemon reloaded."
- * Echo M3 on cortex#63.
+ * Validation-only caveat appended to success output for paths that do NOT
+ * signal the cortex runtime — `--validate-only` and the single-file `--fragment`
+ * check. The default `reload` path DOES signal (SIGHUP) and uses `reloadFooter`.
  */
 const VALIDATION_ONLY_NOTE =
-  "note: validation-only — this CLI does NOT signal a running cortex daemon to reload (v1).";
+  "note: validation-only — the running cortex runtime was NOT signalled to reload.";
 
 function successFooter(n: number): string {
   const summary = `${n} fragment${n === 1 ? "" : "s"} loaded OK`;
@@ -344,8 +528,29 @@ function successFooter(n: number): string {
  */
 export type AgentSummary = ReturnType<typeof summarizeAgent>;
 
-function jsonOk(agents: Agent[]): string {
-  return renderJson(envelopeOk<AgentSummary>(agents.map(summarizeAgent)));
+function jsonOk(agents: Agent[], data?: Record<string, string>): string {
+  return renderJson(envelopeOk<AgentSummary>(agents.map(summarizeAgent), data));
+}
+
+/**
+ * Sage cortex#1027 — success-side `data` describing the runtime-signal outcome,
+ * so JSON consumers can tell apart "reload signal delivered" from "no runtime to
+ * signal" from "validation-only". For `--validate-only` (signal === null, no
+ * signal attempted) returns `{ signalled: "false", reason: "validate-only" }`
+ * so the JSON contract always carries an explicit signal outcome.
+ */
+function signalData(
+  signal: SignalOutcome | null,
+): Record<string, string> | undefined {
+  if (signal === null) {
+    return { signalled: "false", reason: "validate-only" };
+  }
+  if (signal.signalled) {
+    // "signalled" — the SIGHUP was delivered. NOT a reload-applied claim.
+    return { signalled: "true", pid: String(signal.pid) };
+  }
+  // benign miss (no runtime present)
+  return { signalled: "false", reason: signal.reason };
 }
 
 function jsonOrTextError(
@@ -451,20 +656,28 @@ Exit codes:
 }
 
 function reloadHelp(): string {
-  return `cortex agents reload — validate agents.d/ fragments
+  return `cortex agents reload — validate agents.d/ fragments + reload the cortex runtime
 
 Usage:
-  cortex agents reload [--config <path>] [--fragment <path>] [--json]
+  cortex agents reload [--config <path>] [--fragment <path>] [--validate-only] [--json]
 
 Options:
   --config <path>      cortex.yaml path (default: ~/.config/cortex/cortex.yaml)
-                       The agents.d/ directory next to this file is loaded.
-  --fragment <path>    Validate a single fragment file (overrides --config dir mode)
+                       The agents.d/ directory next to this file is loaded; the
+                       runtime's PID file is resolved from the same path.
+  --fragment <path>    Validate a single fragment file (overrides --config dir mode).
+                       Validation-only — does not signal the cortex runtime.
+  --validate-only      Validate the agents.d/ directory but do NOT signal the cortex runtime.
   --json               Emit structured JSON
 
-In v1, this command is validation-only. It does NOT signal a running cortex
-daemon to reload — that wiring lands when cortex.ts integrates the
-AgentsDirectoryWatcher (separate follow-up).
+By default this validates the agents.d/ fragments and then sends SIGHUP to the
+running cortex runtime (resolved from the --config PID file). The runtime then
+reloads its live agent registry, review consumers, and capability registry via
+the same reconcile path its fs.watch + 'reloadAgents()' use. The signal is
+delivered synchronously; the reload itself is applied asynchronously — confirm
+it landed via the runtime logs. Presence adapter (Discord/Mattermost/Slack)
+changes for added/removed agents require a runtime restart (registry + review +
+capabilities reload live; presence is restart-only).
 `;
 }
 

@@ -15,7 +15,7 @@ import {
   pickWorkingGridMode,
   priorityLabel,
 } from "../lib/working-grid-display";
-import { WorkingGrid } from "../components/working-grid";
+import { WorkingGrid, workingTileKey } from "../components/working-grid";
 import type {
   WorkingAgentTile,
   SessionTreeNode,
@@ -234,5 +234,34 @@ describe("WorkingGrid — ST-P5 session-tree render (static markup)", () => {
     const html = renderGrid({ sessions: [sessionNode("s1")] });
     expect(html).toContain('role="group"');
     expect(html).toContain("Sessions for Luna");
+  });
+});
+
+describe("workingTileKey — #1065 stack-namespaced unique key", () => {
+  it("namespaces the SAME agent_id across stacks → distinct keys (no collision)", () => {
+    const local = workingTileKey({ origin: "local", agent_id: "luna" });
+    const work = workingTileKey({
+      origin: { principal: "andreas", stack: "work" },
+      agent_id: "luna",
+    });
+    const halden = workingTileKey({
+      origin: { principal: "andreas", stack: "halden" },
+      agent_id: "luna",
+    });
+    expect(local).toBe("local/luna");
+    expect(work).toBe("andreas/work/luna");
+    expect(halden).toBe("andreas/halden/luna");
+    // The duplicate-key bug: three `luna` tiles, three DISTINCT keys.
+    expect(new Set([local, work, halden]).size).toBe(3);
+  });
+
+  it("treats a missing origin (pre-#1008 response) as local", () => {
+    expect(workingTileKey({ agent_id: "echo" })).toBe("local/echo");
+  });
+
+  it("distinct agent_ids on the local stack stay distinct", () => {
+    expect(workingTileKey({ origin: "local", agent_id: "luna" })).not.toBe(
+      workingTileKey({ origin: "local", agent_id: "echo" }),
+    );
   });
 });

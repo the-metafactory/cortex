@@ -14,6 +14,7 @@
 import { describe, expect, test } from "bun:test";
 import type { DiscordCliConfig } from "../lib/config";
 import {
+  cachedChannelId,
   resolveServerContext,
   registerServerProfile,
   ServerContextError,
@@ -47,6 +48,7 @@ describe("resolveServerContext — back-compat (no flags)", () => {
     expect(ctx.botToken).toBe("grove-token");
     expect(ctx.defaultChannel).toBe("cortex");
     expect(ctx.channels).toEqual({ cortex: { id: "111" } });
+    expect(ctx.channelsGuildId).toBe(GROVE_GUILD);
     expect(ctx.serverName).toBeUndefined();
   });
 
@@ -60,6 +62,7 @@ describe("resolveServerContext — back-compat (no flags)", () => {
     expect(ctx.guildId).toBe(GROVE_GUILD);
     expect(ctx.botToken).toBe("t");
     expect(ctx.defaultChannel).toBe("cortex");
+    expect(ctx.channelsGuildId).toBeUndefined();
   });
 });
 
@@ -67,12 +70,14 @@ describe("resolveServerContext — --guild flag (ISC-C2/C3)", () => {
   test("--guild overrides guildId for name resolution", () => {
     const ctx = resolveServerContext(baseConfig(), { guild: HALDEN_GUILD });
     expect(ctx.guildId).toBe(HALDEN_GUILD);
+    expect(ctx.channelsGuildId).toBe(GROVE_GUILD);
   });
 
-  test("--guild keeps the top-level token and channels (token guild-agnostic)", () => {
+  test("--guild keeps the top-level token and channels but marks their owner", () => {
     const ctx = resolveServerContext(baseConfig(), { guild: HALDEN_GUILD });
     expect(ctx.botToken).toBe("grove-token");
     expect(ctx.channels).toEqual({ cortex: { id: "111" } });
+    expect(ctx.channelsGuildId).toBe(GROVE_GUILD);
     expect(ctx.serverName).toBeUndefined();
   });
 });
@@ -88,9 +93,10 @@ describe("resolveServerContext — --server profile (ISC-C7/C8)", () => {
     const ctx = resolveServerContext(baseConfig(), { server: "halden" });
     expect(ctx.defaultChannel).toBe("general");
     expect(ctx.channels).toEqual({ general: { id: "1512054429480648837" } });
+    expect(ctx.channelsGuildId).toBe(HALDEN_GUILD);
   });
 
-  test("--server falls back to top-level token/channel when profile omits them", () => {
+  test("--server falls back to top-level token/channel and preserves channel owner", () => {
     const config = baseConfig();
     config.servers = { halden: { guildId: HALDEN_GUILD } };
     const ctx = resolveServerContext(config, { server: "halden" });
@@ -98,6 +104,7 @@ describe("resolveServerContext — --server profile (ISC-C7/C8)", () => {
     expect(ctx.botToken).toBe("grove-token"); // fell back to top-level
     expect(ctx.defaultChannel).toBe("cortex"); // fell back to top-level
     expect(ctx.channels).toEqual({ cortex: { id: "111" } });
+    expect(ctx.channelsGuildId).toBe(GROVE_GUILD);
   });
 
   test("--server uses the profile's own token when present", () => {
@@ -116,6 +123,49 @@ describe("resolveServerContext — precedence (ISC-C9)", () => {
     expect(ctx.guildId).toBe(HALDEN_GUILD);
     // profile's channels/defaultChannel still layered in.
     expect(ctx.defaultChannel).toBe("general");
+    expect(ctx.channelsGuildId).toBe(HALDEN_GUILD);
+  });
+});
+
+describe("cachedChannelId — guild-scoped channel cache (cortex#1030)", () => {
+  test("no flags can use the top-level channel cache", () => {
+    const ctx = resolveServerContext(baseConfig(), {});
+    expect(cachedChannelId(ctx, "cortex")).toBe("111");
+  });
+
+  test("--guild cannot use a top-level cache owned by another guild", () => {
+    const ctx = resolveServerContext(baseConfig(), { guild: HALDEN_GUILD });
+    expect(cachedChannelId(ctx, "cortex")).toBeUndefined();
+  });
+
+  test("--guild can use the top-level cache when the guild still matches", () => {
+    const ctx = resolveServerContext(baseConfig(), { guild: GROVE_GUILD });
+    expect(cachedChannelId(ctx, "cortex")).toBe("111");
+  });
+
+  test("--server can use its own profile channel cache", () => {
+    const ctx = resolveServerContext(baseConfig(), { server: "halden" });
+    expect(cachedChannelId(ctx, "general")).toBe("1512054429480648837");
+  });
+
+  test("--server without profile channels cannot use inherited top-level cache", () => {
+    const config = baseConfig();
+    config.servers = { halden: { guildId: HALDEN_GUILD } };
+    const ctx = resolveServerContext(config, { server: "halden" });
+    expect(cachedChannelId(ctx, "cortex")).toBeUndefined();
+  });
+
+  test("matching --server and --guild can still use the profile cache", () => {
+    const ctx = resolveServerContext(baseConfig(), {
+      server: "halden",
+      guild: HALDEN_GUILD,
+    });
+    expect(cachedChannelId(ctx, "general")).toBe("1512054429480648837");
+  });
+
+  test("unknown channel names miss the cache", () => {
+    const ctx = resolveServerContext(baseConfig(), {});
+    expect(cachedChannelId(ctx, "unknown")).toBeUndefined();
   });
 });
 

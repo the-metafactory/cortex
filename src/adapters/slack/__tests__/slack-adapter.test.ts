@@ -85,7 +85,7 @@ function makeFakeClient(initial: Partial<FakeSlackClientState> = {}): {
   let onDisconnected: ((info: { wasClean?: boolean; closeReason?: string }) => void) | null = null;
 
   const client: SlackClient = {
-    // eslint-disable-next-line @typescript-eslint/require-await
+
     async start(opts) {
       state.startCount++;
       state.callOrder.push("start");
@@ -93,13 +93,13 @@ function makeFakeClient(initial: Partial<FakeSlackClientState> = {}): {
       onConnected = opts.onConnected ?? null;
       onDisconnected = opts.onDisconnected ?? null;
     },
-    // eslint-disable-next-line @typescript-eslint/require-await
+
     async stop() {
       state.stopCount++;
       state.callOrder.push("stop");
       onEvent = null;
     },
-    // eslint-disable-next-line @typescript-eslint/require-await
+
     async postMessage(channel, text, threadTs) {
       state.callOrder.push("postMessage");
       if (state.postMessageError) throw state.postMessageError;
@@ -110,13 +110,13 @@ function makeFakeClient(initial: Partial<FakeSlackClientState> = {}): {
       });
       return { ts: "1700000000.000001" };
     },
-    // eslint-disable-next-line @typescript-eslint/require-await
+
     async getBotUserId() {
       state.callOrder.push("getBotUserId");
       if (state.getBotUserIdError) throw state.getBotUserIdError;
       return state.botUserId;
     },
-    // eslint-disable-next-line @typescript-eslint/require-await
+
     async getBotIdentity(): Promise<SlackBotIdentity> {
       state.callOrder.push("getBotIdentity");
       if (state.getBotUserIdError) throw state.getBotUserIdError;

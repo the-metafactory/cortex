@@ -55,14 +55,14 @@ function minimalConfig(): AgentConfig {
 }
 
 function createNoopRuntime(): MyelinRuntime {
-  /* eslint-disable @typescript-eslint/no-empty-function */
+
   return {
     enabled: false,
     onEnvelope: (_handler: EnvelopeHandler) => ({ unregister: () => {} }),
     publish: async () => {},
     stop: async () => {},
   };
-  /* eslint-enable @typescript-eslint/no-empty-function */
+
 }
 
 function networkWith(

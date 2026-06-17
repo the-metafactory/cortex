@@ -27,20 +27,26 @@ import {
   type Node as RfNode,
   type Edge as RfEdge,
   type NodeTypes,
+  type EdgeTypes,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import ELK from "elkjs/lib/elk.bundled.js";
 import {
-  STACK_HUB_NODE_ID,
+  collectLegendStacks,
   type NetworkGraph,
   type NetworkGraphNode,
 } from "../lib/network-graph-adapter";
 import { agentKeyFromClickedNode } from "../lib/network-detail-display";
-import { layoutNetworkGraph } from "../lib/network-graph-layout";
+import {
+  layoutNetworkGraph,
+  type LaidOutNetworkEdge,
+} from "../lib/network-graph-layout";
 import { AgentNode, StackHubNode } from "./network-nodes";
+import NetworkElkEdge from "./network-elk-edge";
 import { NetworkLegend } from "./network-legend";
 import {
   NetworkHoverContext,
+  useNetworkHover,
   type NetworkHoverContextValue,
 } from "../lib/network-hover-context";
 
@@ -49,6 +55,12 @@ import {
 const nodeTypes: NodeTypes = {
   stackHub: StackHubNode,
   agent: AgentNode,
+};
+
+// #1008 — the custom ELK orthogonal edge (rounded-corner polyline from ELK's
+// bend points). Registered once at module scope, same as `nodeTypes`.
+const edgeTypes: EdgeTypes = {
+  elk: NetworkElkEdge,
 };
 
 // One ELK engine for this chunk's lifetime, instantiated lazily on first layout.
@@ -83,9 +95,11 @@ export interface NetworkCanvasProps {
 /** The React Flow canvas — rendered once ELK has positioned the nodes. */
 function FlowCanvas({
   nodes,
+  laidOutEdges,
   onSelectAgent,
 }: {
   nodes: NetworkGraphNode[];
+  laidOutEdges: LaidOutNetworkEdge[];
   onSelectAgent?: (key: string | null) => void;
 }) {
   // React Flow's node `data` is typed `Record<string, unknown>`; our discriminated
@@ -93,46 +107,79 @@ function FlowCanvas({
   // we cast at this single boundary rather than polluting the adapter's data type.
   const rfNodes = nodes as unknown as RfNode[];
 
-  // The hub→agent edges are derivable, but for the star render we don't need
-  // visible connectors to read the grouping; the radial placement carries it.
-  // We still pass edges so the layout's parent/child relationship is honoured by
-  // React Flow's node ordering. Edges are rebuilt here from node ids.
-  const edges = useMemo<RfEdge[]>(
-    () =>
-      nodes
-        .filter((n) => n.type === "agent")
-        .map((n) => ({
-          id: `hub-${n.id}`,
-          source: STACK_HUB_NODE_ID,
-          target: n.id,
-        })),
+  // #1068 — the per-stack legend rows (one swatch per stack-hub), derived from
+  // the positioned nodes. Hub emission order (local first, then peers) is
+  // preserved, so the legend reads in layout order.
+  const legendStacks = useMemo(
+    () => collectLegendStacks({ nodes, edges: [] }),
     [nodes],
   );
 
-  // Node click → lift the agent key up (D.4). The pure
-  // `agentKeyFromClickedNode` resolves agent-node→key / hub→null, so this
-  // handler is a thin delegation (the click→lift logic itself is unit-tested
-  // off the helper, since xyflow can't mount in `bun test`).
+  // #1008 — render the ORIGIN-GROUPED edges from the adapter (each agent wired to
+  // ITS OWN stack's hub — local, sibling, or foreign), typed `elk` so the custom
+  // edge draws ELK's orthogonal route from `data.elkPoints`. This replaces the
+  // old code that rebuilt every edge as `STACK_HUB_NODE_ID → agent` (which mis-
+  // wired sibling/foreign agents to the LOCAL hub) and used React Flow's default
+  // crossing-prone renderer.
+  const edges = useMemo<RfEdge[]>(
+    () =>
+      laidOutEdges.map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        type: "elk",
+        // The layout payload (elkPoints + face geometry) drives the custom edge.
+        // #1068 — fold in the per-stack `stackColor` (from the adapter's edge
+        // `data`) so the edge can stroke in its hub's hue.
+        data: {
+          ...(e.layout as unknown as Record<string, unknown>),
+          stackColor: e.data?.stackColor,
+        } as Record<string, unknown>,
+      })),
+    [laidOutEdges],
+  );
+
+  // #1068 — the sticky hub-subtree selection lives in the hover context (set by
+  // the view, broadcast through the provider). The canvas reads the toggle here
+  // so a hub click flips the selection.
+  const { toggleHubSelection } = useNetworkHover();
+
+  // Node click →
+  //   - AGENT node → lift its key up (D.4): open the detail panel.
+  //   - STACK-HUB node → DESELECT any open agent panel (the hub isn't an agent).
+  //     The subtree-selection TOGGLE is owned by the hub card's own
+  //     `onClick`/`onKeyDown` (network-nodes.tsx — the a11y `role=button` control
+  //     with `aria-pressed` + keyboard activation). The hub card does NOT stop
+  //     propagation, so this `onNodeClick` ALSO fires on a hub click; it must NOT
+  //     toggle here too, or the two functional `setSelection` calls in the same
+  //     event tick cancel out (EMPTY→selected→EMPTY) and the highlight never
+  //     sticks (#1070 regression — caught in browser-QA, invisible to the pure-
+  //     function unit tests). `agentKeyFromClickedNode` resolves hub→null anyway.
   const onNodeClick = useCallback(
     (_evt: unknown, node: RfNode) => {
-      if (!onSelectAgent) return;
-      onSelectAgent(
-        agentKeyFromClickedNode(node as unknown as NetworkGraphNode),
-      );
+      const n = node as unknown as NetworkGraphNode;
+      if (n.type === "stackHub") {
+        onSelectAgent?.(null);
+        return;
+      }
+      onSelectAgent?.(agentKeyFromClickedNode(n));
     },
     [onSelectAgent],
   );
 
-  // Click on empty canvas → deselect (close the panel).
+  // Click on empty canvas → deselect EVERYTHING: close the panel AND clear the
+  // hub-subtree selection (#1068).
   const onPaneClick = useCallback(() => {
     onSelectAgent?.(null);
-  }, [onSelectAgent]);
+    toggleHubSelection(null);
+  }, [onSelectAgent, toggleHubSelection]);
 
   return (
     <ReactFlow
       nodes={rfNodes}
       edges={edges}
       nodeTypes={nodeTypes}
+      edgeTypes={edgeTypes}
       fitView
       minZoom={0.2}
       maxZoom={2}
@@ -144,7 +191,7 @@ function FlowCanvas({
     >
       <Background gap={20} size={1} />
       <Controls position="bottom-left" showInteractive={false} />
-      <NetworkLegend />
+      <NetworkLegend stacks={legendStacks} />
     </ReactFlow>
   );
 }
@@ -162,21 +209,24 @@ export default function NetworkCanvas({
   hover,
 }: NetworkCanvasProps) {
   const [positioned, setPositioned] = useState<NetworkGraphNode[]>([]);
+  const [laidOutEdges, setLaidOutEdges] = useState<LaidOutNetworkEdge[]>([]);
   const genRef = useRef(0);
 
   useEffect(() => {
     const myGen = ++genRef.current;
     if (graph.nodes.length === 0) {
       setPositioned([]);
+      setLaidOutEdges([]);
       return;
     }
     let cancelled = false;
     void layoutNetworkGraph(getElk(), graph)
-      .then((nodes) => {
+      .then((result) => {
         // Drop a stale layout: the graph changed (new gen) or the effect was
         // torn down while ELK was mid-flight.
         if (cancelled || genRef.current !== myGen) return;
-        setPositioned(nodes);
+        setPositioned(result.nodes);
+        setLaidOutEdges(result.edges);
       })
       .catch((err: unknown) => {
         if (cancelled || genRef.current !== myGen) return;
@@ -200,7 +250,11 @@ export default function NetworkCanvas({
 
   const canvas = (
     <ReactFlowProvider>
-      <FlowCanvas nodes={positioned} onSelectAgent={onSelectAgent} />
+      <FlowCanvas
+        nodes={positioned}
+        laidOutEdges={laidOutEdges}
+        onSelectAgent={onSelectAgent}
+      />
     </ReactFlowProvider>
   );
 

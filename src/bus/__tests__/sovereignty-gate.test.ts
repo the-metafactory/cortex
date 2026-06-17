@@ -48,12 +48,27 @@ describe("evaluateSovereignty — the breach is guarded", () => {
 });
 
 describe("evaluateSovereignty — fail-closed invariants", () => {
-  it("denies when the agent class is missing", () => {
-    expect(evaluateSovereignty({ model_class: "any", frontier_ok: true }, undefined).decision).toBe("deny");
+  // cortex#1023 — DEMAND-FIRST: a missing/unknown agent class fails closed
+  // ONLY when the task demands a local model. A task whose sovereignty
+  // explicitly permits frontier carries nothing the class could breach.
+  it("allows a class-less agent a task that explicitly permits frontier (cortex#1023)", () => {
+    const d = evaluateSovereignty({ model_class: "any", frontier_ok: true }, undefined);
+    expect(d.decision).toBe("allow");
+    expect(d.reason).toContain("permits any model class");
   });
 
-  it("denies when the agent class is unknown", () => {
+  it("denies a class-less agent when the task demands local (missing class)", () => {
+    // frontier_ok missing → demands local → class-less fails closed.
+    expect(evaluateSovereignty({ model_class: "any" }, undefined).decision).toBe("deny");
+  });
+
+  it("denies when the agent class is unknown and the task demands local", () => {
     expect(evaluateSovereignty({ model_class: "any" }, "gpu" as never).decision).toBe("deny");
+  });
+
+  it("allows an unknown-class agent a task that explicitly permits frontier (cortex#1023)", () => {
+    // Same demand-first rule for unknown (not just missing) class values.
+    expect(evaluateSovereignty({ model_class: "any", frontier_ok: true }, "gpu" as never).decision).toBe("allow");
   });
 
   it("denies when the envelope has no sovereignty block", () => {
@@ -62,6 +77,12 @@ describe("evaluateSovereignty — fail-closed invariants", () => {
   });
 
   it("a local-only task with no agent class denies (cannot prove compliance)", () => {
-    expect(evaluateSovereignty({ model_class: "local-only" }, undefined).decision).toBe("deny");
+    const d = evaluateSovereignty({ model_class: "local-only" }, undefined);
+    expect(d.decision).toBe("deny");
+    expect(d.reason).toContain("missing or unknown");
+  });
+
+  it("a frontier_ok:false task with no agent class denies", () => {
+    expect(evaluateSovereignty({ model_class: "any", frontier_ok: false }, undefined).decision).toBe("deny");
   });
 });

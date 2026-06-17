@@ -50,6 +50,8 @@ import type {
   MyelinSubscribePullOpts,
 } from "../bus/myelin/runtime";
 import type { MyelinSubscriber } from "../bus/myelin/subscriber";
+import type { NetworkRosterProvider } from "../common/registry";
+import type { NetworkRosterResult } from "../common/registry/types";
 
 // ---------------------------------------------------------------------------
 // Test helpers — mirror cortex.capability-boot.test.ts so reviewers see one
@@ -144,6 +146,41 @@ function makeAgent(
     trust: [],
     presence: {},
     ...(runtime !== undefined && { runtime }),
+  };
+}
+
+const FEDERATED_TEST_PEER_PUBKEY =
+  "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+
+function rosterWith(
+  members: NetworkRosterResult["members"],
+): NetworkRosterResult {
+  return { network_id: "metafactory-net", members };
+}
+
+function stubFederatedRosterProvider(): NetworkRosterProvider & {
+  fetched: string[];
+} {
+  const fetched: string[] = [];
+  return {
+    fetched,
+    async fetchAndCache(networkId) {
+      fetched.push(networkId);
+      return {
+        status: "ok",
+        value: {
+          roster: rosterWith([
+            {
+              principal_id: "jcfischer",
+              principal_pubkey: FEDERATED_TEST_PEER_PUBKEY,
+            },
+          ]),
+        },
+      };
+    },
+    loadCached() {
+      return undefined;
+    },
   };
 }
 
@@ -326,13 +363,14 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
     };
     // `resolvedPolicy` (incl. offerings) is read from `options.policy`, NOT the
     // config object (AgentConfigSchema strips `policy`). Pass it through options
-    // — the same path the federated-peer-boot test uses.
+    // — the same path the federated-peer-boot test uses. The test injects a
+    // roster provider and deliberately omits `policy.federated.registry` so the
+    // boot-wiring assertion never constructs a live RegistryClient.
     const policy: Policy = {
       principals: [],
       roles: [],
       federated: {
         networks: [network],
-        registry: { url: "https://network.meta-factory.ai" },
       },
       offerings: [
         {
@@ -342,6 +380,7 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
         },
       ],
     };
+    const rosterProvider = stubFederatedRosterProvider();
     const { result: handle } = await withCapturedConsoleLog(() =>
       startCortex(minimalConfig(), {
         disableConfigWatcher: true,
@@ -352,6 +391,7 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
         inlineAgents: [makeAgent("echo", ["code-review.typescript"])],
         principal: { id: "test-op" },
         policy,
+        bootFederatedRosterProvider: rosterProvider,
       }),
     );
     const patterns = runtime.subscribePullCalls.map((c) => c.pattern);
@@ -364,6 +404,8 @@ describe("startCortex — review-consumer boot wiring (cortex#237 PR-6)", () => 
     expect(
       durables.some((d) => d.includes("offer-federated")),
     ).toBe(true);
+    expect(rosterProvider.fetched).toEqual(["metafactory-net"]);
+    expect(handle.registryClient).toBeNull();
     await handle.stop();
     rmSync(tmpAgentsDir, { recursive: true, force: true });
   });

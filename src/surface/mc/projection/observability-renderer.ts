@@ -53,6 +53,7 @@ import { broadcastProjection } from "../notifications";
 import {
   insertObservabilityEvent,
   type ObservabilityFamily,
+  type ObservabilityOrigin,
 } from "../db/observability";
 import { produceObservabilityAttention } from "./observability-attention";
 
@@ -61,26 +62,36 @@ export const OBSERVABILITY_PROJECTION_RENDERER_ID = "mc-observability-projection
 
 /**
  * NATS subject patterns the renderer subscribes to — the stack-ful
- * (`local.{principal}.{stack}.…`), stack-less (`local.{principal}.…`) LOCAL and
- * the federated (`federated.{principal}.{stack}.…`) grammars for each family.
- * Intentionally broad; the authoritative filter is the renderer's own `type`
- * prefix check (an over-matching subject costs only a cheap compare).
+ * (`local.{principal}.{stack}.…`) + stack-less (`local.{principal}.…`) LOCAL
+ * grammars for each family. Intentionally broad WITHIN the local scope; the
+ * authoritative filter is the renderer's own `type` prefix check (an
+ * over-matching subject costs only a cheap compare).
  *
  * `*` matches exactly one segment, `>` one-or-more trailing segments.
+ *
+ * ## P-14 U3.3 (#937) — LOCAL-ONLY. The `federated.*` grammars were REMOVED.
+ *
+ * Pre-U3.3 this renderer also subscribed to `federated.*.*.system.{signal,
+ * federation,transport}.>` and folded peer rows UN-origin-badged, WITHOUT chain
+ * verification, and WITHOUT cortex's curation gate (so it would have folded the
+ * DENIED `system.signal.*` class from a peer). That was a trust gap for a
+ * cross-principal fold. At U3.3 ALL `federated.*` observability flows through
+ * the dedicated TRUST-VERIFIED path (`bus/agent-network/federated-observability-
+ * fold.ts`): curation gate + federation accept-list + `verifySignedByChain` +
+ * source-bound origin badge. This renderer now folds ONLY this principal's own
+ * (and local-sibling) observability, every row `origin: "local"` (the default).
+ * The two paths are disjoint by subject scope — no double-fold.
  */
 export const OBSERVABILITY_PROJECTION_SUBJECTS: string[] = [
   // signal (covers signal.collector.* too — the prefix check splits them)
   "local.*.system.signal.>",
   "local.*.*.system.signal.>",
-  "federated.*.*.system.signal.>",
   // federation
   "local.*.system.federation.>",
   "local.*.*.system.federation.>",
-  "federated.*.*.system.federation.>",
   // transport (hub-emitted; non-hub stacks just never see these)
   "local.*.system.transport.>",
   "local.*.*.system.transport.>",
-  "federated.*.*.system.transport.>",
 ];
 
 /** A structural view of an envelope the projection reads. */
@@ -125,12 +136,18 @@ function originStackId(payload: Record<string, unknown>): string | null {
  * family (or null when the type matched no family / the row was a redelivery
  * no-op) so callers/tests can assert routing without the surface-router.
  *
+ * `origin` defaults to `"local"` — the U2.1 contract (this renderer + every
+ * local caller folds local rows). P-14 U3.3's federated fold path passes
+ * `{ kind: "foreign"; peer }` via {@link projectForeignObservability} so the row
+ * carries the chain-verified peer origin badge.
+ *
  * Exported for direct unit testing.
  */
 export function projectObservability(
   db: Database,
   envelope: ProjectableEnvelope,
   wsRegistry: WsClientRegistry | undefined,
+  origin: ObservabilityOrigin = "local",
 ): ObservabilityFamily | null {
   const family = familyForType(envelope.type);
   if (family === null) return null;
@@ -146,6 +163,9 @@ export function projectObservability(
   // shape (which then can't dedup, but never collides).
   const envelopeId = asString(envelope.id) ?? crypto.randomUUID();
 
+  // Origin-stack id is a best-effort GROUPING hint off the payload. For a
+  // FOREIGN row the authoritative ATTRIBUTION is the `origin.peer` (chain-
+  // verified source), persisted via the `origin` column — never the payload.
   const rowId = insertObservabilityEvent(db, {
     envelopeId,
     family,
@@ -153,6 +173,7 @@ export function projectObservability(
     stackId: originStackId(payload),
     summary: asString(payload.summary) ?? asString(payload.message),
     payload,
+    origin,
   });
 
   // The attention producer rides the SAME seam — every observability envelope is
@@ -160,7 +181,17 @@ export function projectObservability(
   // open or resolve an `att:adapter:` item. It runs independently of the row
   // insert's idempotent no-op (a redelivered degraded must still keep the item
   // open / resolvable), so it is NOT gated on `rowId`.
-  const attn = produceObservabilityAttention(db, { id: envelope.id, type: envelope.type, payload });
+  //
+  // P-14 U3.3 — only LOCAL observability opens the principal's actionable
+  // `att:adapter:` attention items. A FOREIGN peer's substrate health is
+  // origin-badged HISTORY (+ Network-view overlay), NOT the principal's own
+  // adapter to action — and `att:adapter:` items are keyed by leaf/backend id
+  // alone, so a peer's leaf would collide with a local one. Foreign rows project
+  // history + broadcast only; the attention queue stays the principal's own.
+  const attn =
+    origin === "local"
+      ? produceObservabilityAttention(db, { id: envelope.id, type: envelope.type, payload })
+      : null;
 
   let mutated = rowId !== null;
   if (attn !== null) {
@@ -171,6 +202,30 @@ export function projectObservability(
     broadcastProjection(wsRegistry, "observability");
   }
   return family;
+}
+
+/**
+ * P-14 U3.3 (#937) — the projection entry point for the TRUST-VERIFIED federated
+ * observability fold (`bus/agent-network/federated-observability-fold.ts`).
+ *
+ * Writes the curated, chain-verified peer envelope as an ORIGIN-BADGED row
+ * (`origin: { kind: "foreign"; peer }`), where `peer` is the chain-verified
+ * `{principal}/{stack}` the fold derived from the envelope SOURCE (never the
+ * payload). Thin wrapper over {@link projectObservability} with the foreign
+ * origin — so a foreign row gets the SAME idempotent-redelivery + WS-broadcast
+ * treatment as a local one, while being durably attributed to its peer and
+ * NEVER opening a local attention item.
+ *
+ * Non-throwing is the CALLER's contract here (the fold callback swallows), but
+ * the underlying inserts/broadcasts already never throw on valid inputs.
+ */
+export function projectForeignObservability(
+  db: Database,
+  envelope: ProjectableEnvelope,
+  peer: string,
+  wsRegistry: WsClientRegistry | undefined,
+): ObservabilityFamily | null {
+  return projectObservability(db, envelope, wsRegistry, { kind: "foreign", peer });
 }
 
 /**

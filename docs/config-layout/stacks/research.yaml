@@ -37,8 +37,14 @@ principal:
 # -----------------------------------------------------------------------------
 # stack — identity of THIS deployment within the principal (signing identity)
 # -----------------------------------------------------------------------------
-# Stack signing is ON by default. Without an `nkey_seed_path` cortex publishes
-# UNSIGNED and peers running signed-chain verification reject the traffic.
+# Signing default is seed-aware (cortex#1000): with `nkey_seed_path` configured
+# and `security.signing` unset, the stack boots `signing: permissive` (signs
+# outbound, verifies inbound, never rejects). Without an `nkey_seed_path`
+# cortex publishes UNSIGNED and peers running signed-chain verification reject
+# the traffic. Below `enforce`, UNSIGNED (empty-chain) envelopes are accepted
+# — so `signed_by` cannot be relied on as a trust gate; bus-layer auth (NATS
+# leaf-node/user auth) is the effective trust boundary under `off`. Only set
+# `off` explicitly on a hardened bus.
 # `arc upgrade Cortex` auto-provisions a seed at `nkey_seed_path` if missing.
 # See docs/sop-stack-identity.md for rotation + threat-model background.
 stack:
@@ -167,16 +173,34 @@ github:
 # -----------------------------------------------------------------------------
 # mc — Mission Control, in-process (ADR-0005). OPTIONAL; off by default.
 # -----------------------------------------------------------------------------
-# When enabled, the cortex runtime starts the MC server (REST+WS+dashboard) as
-# an in-process module and owns mission-control.db. ONE db per stack is
-# REQUIRED: the hook cursor lives beside the db, so two stacks sharing a
-# dbPath would also share cursor state. Leave dbPath empty to get the per-slug
-# default (~/.local/share/cortex/mc/{slug}/mission-control.db).
+# When enabled, the cortex runtime starts the MC embed in-process and owns
+# mission-control.db. ONE db per stack is REQUIRED: the hook cursor lives beside
+# the db, so two stacks sharing a dbPath would also share cursor state. Leave
+# dbPath empty to get the per-slug default
+# (~/.local/share/cortex/mc/{slug}/mission-control.db).
+#
+# #1044 — producer/server split. The embed has two halves:
+#   * the PRODUCER — initDatabase + the ingestor (HookStreamPoller) — always
+#     runs when mc.enabled, populating mission-control.db from this stack's
+#     cc-events.
+#   * the SERVER — the REST+WS HTTP listener + dashboard — gated by
+#     `server.enabled` below.
+# A lean stack (work/halden) runs HEADLESS (server.enabled: false): it WRITES
+# its db cheaply for the pane-of-glass (#1008) to read, but binds no port and
+# serves no dashboard. The ONE pane-serving stack runs FULL (server.enabled:
+# true, the default) and reads every sibling's db.
 mc:
-  enabled: false                   # flip true on the stack that hosts your local pane
+  enabled: false                   # flip true on EVERY stack you want visible on the pane
   dbPath: ""                       # empty = per-slug default; set explicitly to adopt an existing db
   port: 0                          # 0 = MC default (8767); set when running panes for several stacks
   configPath: ""                   # optional MC yaml for hooks/ws/log tuning (db/port ignored when embedded)
+  # #1044 — HTTP/WS server + dashboard. DEFAULT ON (full MC). Set enabled:false
+  # for HEADLESS mode: db + ingestor only, NO port bound, NO dashboard. Use
+  # headless on producer-only stacks (work/halden) so they write their db for
+  # the pane-of-glass without serving a pane; keep it ON (or omit) on the single
+  # stack that hosts your local pane. Only meaningful when mc.enabled is true.
+  server:
+    enabled: true                  # false = headless (db + ingestor, no HTTP server)
   # P-14 U0.1 — Tier-3 sideband endpoint (signal cortex-sideband.md §2/§3/§8).
   # MC proxies /api/observability/* to this base URL SERVER-SIDE; the browser
   # only ever talks to MC. LOOPBACK-ENFORCED: the sideband is a local-only
@@ -196,6 +220,19 @@ mc:
   # A single-stack box is unaffected (discovery finds no siblings = no-op).
   aggregateLocalStacks:
     enabled: true                  # false = pin the pane to THIS stack only
+    # #1008 — DB-read pane-of-glass: the PRIMARY mechanism for LOCAL siblings.
+    # When ON (default), the serving daemon reads each local sibling stack's OWN
+    # mission-control.db READ-ONLY and merges its sessions+agents into the
+    # /api/working-agents + /api/agents feeds, origin-tagged — so the pane shows
+    # ALL local stacks as hubs with their full session TREES (sessions AND
+    # agents), with NO bus / NO presence-publish. It SUPERSEDES the #989 bus-
+    # presence path for local siblings (when dbRead is on, the bus sibling path is
+    # gated OFF for local stacks to avoid double-counting; it stays for FEDERATED
+    # cross-principal peers whose dbs live on another machine). Reads are cheap
+    # (per-request read-only SQLite open of YOUR OWN dbs on YOUR OWN box); a
+    # sibling db that's missing/locked/too-old degrades to absent, never crashing
+    # the feed. Set false to fall back to the #989 bus path (agents only, no trees).
+    dbRead: true
     configRoot: ""                 # empty = the serving config dir's parent (~/.config/cortex)
     # Explicit roster OVERRIDES auto-discovery when non-empty (precedence:
     # explicit > discovery). Use it to add a bus the scan can't see, or to

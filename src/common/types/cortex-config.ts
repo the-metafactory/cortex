@@ -34,6 +34,7 @@
 
 import { z } from "zod/v4";
 
+import { BRAIN_PROTOCOL_ID } from "../../brain/protocol";
 import { CapabilitySchema } from "./capability";
 import {
   CockpitSchema,
@@ -48,6 +49,7 @@ import { NKEY_PUBKEY_REGEX } from "./nkey";
 import { NatsSubjectsSchema } from "./nats-subjects";
 import { LETTER_PREFIX_ID_REGEX } from "./id";
 import { OfferingSchema, superRefineOfferings } from "./offering";
+import { CAPABILITY_ID_REGEX } from "./capability";
 import { checkPublicOfferingBackendGate } from "./public-offering-backend-gate";
 import { StackConfigSchema, deriveStackId } from "./stack";
 
@@ -459,6 +461,124 @@ export type Presence = z.infer<typeof PresenceSchema>;
  *   - `roles` is the maximum capability set; presences may restrict, never widen
  */
 /**
+ * Bot Packs B-1 (`docs/design-bot-packs.md` §4) — the `brain:` block on an
+ * agent's `runtime`. Declares WHO computes the function from inbound events to
+ * effects (§2 "Brain" row): a first-party in-process engine (`kind: builtin`)
+ * or an externally-authored subprocess speaking `cortex-brain/v1`
+ * (`kind: exec`).
+ *
+ * **Absent ⇒ builtin ⇒ existing engine resolution untouched.** The whole block
+ * is optional; an agent that omits `brain` keeps today's
+ * `resolveReviewEngine(runtime)` behaviour byte-for-byte (the zero-migration
+ * contract — every existing fixture config parses identically). `kind: exec`
+ * is the new seam; the per-task exec path is B-1, the daemon lifecycle is B-2.
+ *
+ * The fields the schema carries (and what is LIVE vs. accepted-for-B-2):
+ *   - `kind`       — `builtin` (default) | `exec`. LIVE.
+ *   - `run`        — argv template (e.g. `"bun {pack}/brain/main.ts"`).
+ *                    Required IFF `kind: exec` (a builtin has no command to
+ *                    spawn). `{pack}` expands to the arc install dir at spawn.
+ *   - `protocol`   — pinned to `cortex-brain/v1` (the only protocol B-1 speaks).
+ *   - `lifecycle`  — `per-task` (default) | `daemon`. Both LIVE: `per-task`
+ *                    (B-1) spawns per inbound task; `daemon` (B-2) supervises a
+ *                    long-lived socket-multiplexed process.
+ *   - `secrets`    — env var NAMES only (values resolve from the runtime env at
+ *                    spawn). Install-time principal consent is the arc-side gate
+ *                    (§8). Defaults to `[]`.
+ *   - `dispatch_capabilities` — the manifest ALLOW-LIST for `dispatch` effects
+ *                    (§8: "a brain may dispatch only what its manifest allows").
+ *                    The BrainConsumer enforces it host-side. Defaults to `[]`
+ *                    (a brain that dispatches nothing).
+ *   - `maxRestarts` — daemon supervision restart cap. Accepted + documented;
+ *                    unused until B-2 (per-task brains never restart).
+ */
+export const BrainConfigSchema = z
+  .object({
+    /**
+     * `builtin` — the first-party in-process engine path (`engine: sage |
+     * assistant`); cortex's process holds the code, a trust statement about
+     * first-party code (§3). `exec` — the externally-authored subprocess seam
+     * (process isolation IS the sovereignty story). Defaults to `builtin` so an
+     * omitted/partial block preserves today's behaviour.
+     */
+    kind: z.enum(["builtin", "exec"]).default("builtin"),
+    /**
+     * The argv template cortex spawns for an `exec` brain, e.g.
+     * `"bun {pack}/brain/main.ts"`. `{pack}` expands to the arc install dir.
+     * Required IFF `kind: exec` (enforced by the superRefine below); ignored
+     * for `builtin`.
+     */
+    run: z.string().min(1).optional(),
+    /**
+     * The wire protocol the brain speaks. Pinned to `cortex-brain/v1` — the
+     * only protocol B-1 implements. A `z.literal` so a typo (or a future
+     * `/v2` config used against a B-1 cortex) fails at load rather than at
+     * the first spawn.
+     */
+    protocol: z.literal(BRAIN_PROTOCOL_ID).default(BRAIN_PROTOCOL_ID),
+    /**
+     * `per-task` — spawn the brain per inbound task, alive until it emits
+     * `result` (B-1, LIVE). `daemon` — supervise a long-lived process on a
+     * Unix-socket transport, multiplexing tasks by `task_id`, with crash
+     * supervision (`maxRestarts`) and hot-swap drain (B-2, LIVE —
+     * `src/brain/daemon-brain-host.ts`). Both are accepted at load. Defaults to
+     * `per-task`.
+     */
+    lifecycle: z.enum(["per-task", "daemon"]).default("per-task"),
+    /**
+     * Names of secret env vars to inject into the brain process (§8, §12.2:
+     * env injection with install-time consent). NAMES only — the values resolve
+     * from the runtime env at spawn; cortex never stores secret material in the
+     * manifest. The principal approves these at arc-install time (the same
+     * consent shape as arc hook installation). Defaults to `[]`.
+     */
+    secrets: z.array(z.string().min(1)).default([]),
+    /**
+     * The manifest ALLOW-LIST for `dispatch` effects (§8). A brain emitting a
+     * `dispatch` for a capability NOT in this list is refused host-side with
+     * `effect_rejected` (`wont_do`) — fail-closed, the same posture as pulse's
+     * enforcement gate. Defaults to `[]` (a brain that may dispatch nothing).
+     * Distinct from `runtime.capabilities` (what the agent OFFERS the fleet);
+     * this is what the brain may REQUEST of the fleet.
+     */
+    dispatch_capabilities: z.array(z.string().min(1)).default([]),
+    /**
+     * Daemon supervision restart cap (§7.4): cortex restarts a crashed daemon
+     * brain up to this many times, then marks the agent degraded (the restart
+     * counter resets after a healthy uptime window). LIVE for `lifecycle: daemon`
+     * as of B-2 (`DaemonBrainHost`); a `per-task` brain is spawned fresh per task
+     * and never restarted, so the field is inert there. Non-negative integer;
+     * defaults to 3.
+     */
+    maxRestarts: z
+      .number()
+      .int("agent.runtime.brain.maxRestarts must be an integer")
+      .nonnegative("agent.runtime.brain.maxRestarts must be >= 0")
+      .default(3),
+  })
+  .superRefine((brain, ctx) => {
+    // `daemon` lifecycle is LIVE as of B-2 (socket transport + supervision +
+    // hot-swap drain — `src/brain/daemon-brain-host.ts`). The B-1 load-time
+    // rejection is removed; a `daemon` brain is now spawned once and supervised
+    // (the BrainConsumer routes its tasks through the DaemonBrainHost). The
+    // `exec`-with-`run` requirement below still applies to both lifecycles.
+
+    // An `exec` brain has no behaviour without a command to spawn. Require
+    // `run` so a half-declared exec brain fails at load, not at the first task.
+    if (brain.kind === "exec" && (brain.run === undefined || brain.run.length === 0)) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "agent.runtime.brain.run is required when brain.kind is 'exec' " +
+          "(the argv cortex spawns, e.g. 'bun {pack}/brain/main.ts')",
+        path: ["run"],
+      });
+    }
+  });
+
+export type BrainConfig = z.infer<typeof BrainConfigSchema>;
+
+/**
  * Optional `runtime` block on an agent — declares the substrate harness and
  * dispatch mode for arc-installable sub-bots (cortex#60 D4 + design-arc-agent-
  * bots.md §5). Optional in v1: inline agents in cortex.yaml may omit it
@@ -576,6 +696,14 @@ export const AgentRuntimeSchema = z.object({
    * drop).
    */
   modelClass: z.enum(["local-only", "frontier", "any"]).optional(),
+  /**
+   * Bot Packs B-1 (`docs/design-bot-packs.md` §4) — the brain block. Declares
+   * whether this agent's behaviour is a first-party in-process engine
+   * (`kind: builtin`, the default) or an externally-authored `cortex-brain/v1`
+   * subprocess (`kind: exec`). ABSENT ⇒ builtin ⇒ `resolveReviewEngine`
+   * untouched (zero-migration). See {@link BrainConfigSchema}.
+   */
+  brain: BrainConfigSchema.optional(),
 }).refine(
   // Echo M2 on cortex#62 — a `standalone` agent with zero capabilities parses
   // fine but routes zero work. The daemon connects to NATS, publishes nothing
@@ -590,7 +718,41 @@ export const AgentRuntimeSchema = z.object({
       "subjects and silently fails to receive tasks)",
     path: ["capabilities"],
   },
-);
+).superRefine((rt, ctx) => {
+  // Sage cortex#1033 (blocker) — an exec brain's capability ids become EXACT
+  // NATS subject segments in the BrainConsumer pull filter. Free text here
+  // would let a fragment declare `>` or `soc.>` and claim tasks far beyond
+  // its capability. Enforce the capability-id grammar at LOAD time for both
+  // the subscription list and the dispatch allow-list. Builtin agents keep
+  // the legacy looseness (their subjects are built by the review path's own
+  // fixed taxonomy, not raw manifest text).
+  const brain = rt.brain;
+  if (brain?.kind !== "exec") return;
+  rt.capabilities.forEach((cap, i) => {
+    if (!CAPABILITY_ID_REGEX.test(cap)) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          `agent.runtime.capabilities[${i}] ("${cap}") is not a valid capability id — ` +
+          "exec-brain capabilities become exact NATS subject segments and must match " +
+          "the capability grammar (dot-separated lowercase segments; no wildcards)",
+        path: ["capabilities", i],
+      });
+    }
+  });
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Zod superRefine still sees hand-written configs while defaults are being applied.
+  (brain.dispatch_capabilities ?? []).forEach((cap, i) => {
+    if (!CAPABILITY_ID_REGEX.test(cap)) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          `agent.runtime.brain.dispatch_capabilities[${i}] ("${cap}") is not a valid ` +
+          "capability id (no wildcards)",
+        path: ["brain", "dispatch_capabilities", i],
+      });
+    }
+  });
+});
 
 export type AgentRuntime = z.infer<typeof AgentRuntimeSchema>;
 
@@ -2560,46 +2722,35 @@ export const CortexConfigSchema = z.object({
       }
     }
   })
-  .superRefine((config, ctx) => {
-    const catalogIds = new Set(config.capabilities.map((c) => c.id));
-    const declaredCatalog = [...catalogIds].sort().join(", ") || "(none)";
-    for (let agentIdx = 0; agentIdx < config.agents.length; agentIdx++) {
-      const agent = config.agents[agentIdx];
-      if (!agent) continue;
-      const claimed = agent.runtime?.capabilities ?? [];
-      for (let claimIdx = 0; claimIdx < claimed.length; claimIdx++) {
-        const capId = claimed[claimIdx];
-        if (capId !== undefined && !catalogIds.has(capId)) {
-          // cortex#314 — reworded for first-install safety. The previous
-          // "Either add ... or remove ..." framing implied symmetric
-          // choice; in practice (especially for code-review.* flavors)
-          // the right fix is almost always to add the capability to the
-          // top-level catalog. The catalog is the source of truth that
-          // the dispatch consumer + future network registry consult;
-          // the agent's runtime.capabilities[] is the agent's
-          // declaration of intent. Spell that asymmetry out so a fresh
-          // principal hitting this error knows which surface to edit.
-          ctx.addIssue({
-            code: "custom",
-            message:
-              `agent "${agent.id}" claims capability "${capId}" in runtime.capabilities[], ` +
-              `but no matching entry exists in the top-level capabilities[] catalog ` +
-              `(declared capability ids: ${declaredCatalog}).\n\n` +
-              `Fix: add a "${capId}" entry to capabilities[] at the top level of cortex.yaml. ` +
-              `The top-level capabilities[] is the source of truth that the dispatch consumer ` +
-              `consults; the agent's runtime.capabilities[] is the agent's declaration of intent.\n\n` +
-              `Example minimal entry:\n` +
-              `  - id: ${capId}\n` +
-              `    description: <one-line description>\n` +
-              `    provided_by: [${agent.id}]\n\n` +
-              `(Only remove from agent "${agent.id}" runtime.capabilities[] if the agent should NOT ` +
-              `actually provide that capability.)`,
-            path: ["agents", agentIdx, "runtime", "capabilities", claimIdx],
-          });
-        }
-      }
-    }
-  })
+  // B-0 (cortex#1021, design-bot-packs §7 + §11) — the per-agent
+  // capability-reference check (formerly check #3) is RETIRED.
+  //
+  // It used to require every `agents[].runtime.capabilities[]` entry to exist
+  // in the top-level `capabilities[]` catalog, forcing a principal who adds an
+  // agent to ALSO hand-edit the catalog. That manual cross-edit is exactly the
+  // step the bot-packs design removes: an agent declaring `runtime.capabilities:
+  // [X]` IS, by declaration, a provider of X, and
+  // `deriveEffectiveCapabilityCatalog` (`src/common/agents/capability-catalog.ts`)
+  // synthesizes a catalog entry for a declaration-only capability at boot/reload.
+  //
+  // What is INTENTIONALLY preserved (checks #1 + #2 above, untouched):
+  //   - top-level capability ids stay unique;
+  //   - an EXPLICIT `provided_by[]` entry that names a nonexistent agent is
+  //     still rejected (the typo guard) — derived providers can only ever be
+  //     real agent ids because they come from the agent list itself.
+  //
+  // Backwards compatibility: a config whose catalog already lists every
+  // declared capability validates EXACTLY as before (the derivation is a no-op
+  // for it). Only the previously-rejected "declared but uncatalogued" shape
+  // changes — it now validates and derives.
+  //
+  // Sage cortex#1027 — the retired check #3 left an empty `.superRefine(() => {})`
+  // in the chain as a "where re-tightening would go" marker. That is dead code
+  // that runs on every parse and an attractive-but-misleading home for future
+  // validation logic, so it is removed. If the per-agent capability-reference
+  // check ever needs re-introducing, it belongs as a NEW named `.superRefine`
+  // here with its own rationale — not resurrected from a no-op stub.
+  //
   // ADR 0001 (supersedes cortex#661) — federated accept/deny subject scope.
   //
   // Every `policy.federated.networks[].accept_subjects[]` / `deny_subjects[]`

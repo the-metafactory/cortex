@@ -30,8 +30,8 @@ const REQUEST: DispatchRequest = {
   requestId: "11111111-1111-4111-8111-111111111111",
   timeoutMs: 60_000,
   runtime: {
-    groveChannel: "codex",
-    groveNetwork: "direction-a",
+    channel: "codex",
+    network: "direction-a",
     additionalArgs: ["--model", "sonnet"],
     allowedDirs: ["/tmp/work"],
   },
@@ -128,8 +128,8 @@ describe("AgentTeamHarness", () => {
     expect(opts?.disallowedTools).toEqual(["Bash"]);
     expect(opts?.allowedDirs).toEqual(["/tmp/work"]);
     expect(opts?.timeoutMs).toBe(60_000);
-    expect(opts?.groveChannel).toBe("codex");
-    expect(opts?.groveNetwork).toBe("direction-a");
+    expect(opts?.channel).toBe("codex");
+    expect(opts?.network).toBe("direction-a");
     expect(opts?.additionalArgs).toEqual(["--model", "sonnet"]);
     expect(opts?.principal).toBe("andreas");
     expect(opts?.entity).toBe("cortex#408");

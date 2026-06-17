@@ -4,8 +4,10 @@
  * Per G-1111 §3.4 the `dispatch.task` domain captures the lifecycle of a
  * task that a principal (or a sibling agent) dispatched to a runner-style
  * agent: `dispatched`, `accepted`, `rejected`, `started`, `completed`,
- * `failed`. This file ships the four lifecycle helpers cortex's runner
- * needs end-to-end (`started`, `completed`, `failed`, `aborted`).
+ * `failed`. This file ships the lifecycle helpers cortex's runner needs
+ * end-to-end (`started`, `completed`, `failed`, `aborted`) plus the Bot Packs
+ * B-1 `post` sibling (`dispatch.task.post` — a brain's surface-post intent,
+ * cortex#1033 §Architecture).
  *
  * Note on §3.4 vs §6: the spec's §3.4 summary table omits `aborted`
  * (only lists `failed`) but the natural runtime distinction between
@@ -544,5 +546,114 @@ export function createDispatchTaskAbortedEvent(
     started_at: opts.startedAt.toISOString(),
     aborted_at: opts.abortedAt.toISOString(),
     reason: opts.reason,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// dispatch.task.post  (Bot Packs B-1 — docs/design-bot-packs.md §5, §11 B-1)
+//
+// cortex#1033 §Architecture — a brain's `post` effect is a DISPATCH-lifecycle
+// event (a sibling of started/completed/failed), so it rides the declared
+// `dispatch` domain as `dispatch.task.post`, NOT a new `brain.*` top-level
+// domain. CONTEXT.md §Language → Domain enumerates the legal domains
+// (tasks/agent/system/code/review/dispatch/governance); introducing `brain` as
+// a public wire surface B-2 adapters consume would lock in an undeclared shape.
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a brain task originated — the source triple cortex hands the brain on
+ * the `task` event and the BrainConsumer echoes onto every `dispatch.task.post`
+ * lifecycle envelope. Surface-agnostic (the brain sees it only as metadata,
+ * §5 property 3); the adapter/surface bridge (B-2) reads it to deliver the
+ * post to the right thread.
+ */
+export interface BrainPostSource {
+  /** Platform identity, e.g. `"mattermost"` | `"discord"` | `"bus"`. */
+  surface: string;
+  /** Native channel id the task arrived on. */
+  channel: string;
+  /** Native thread id (may be empty for channel-scope). */
+  thread: string;
+  /** The user who triggered the task. */
+  user: string;
+  /**
+   * cortex#1038 — the adapter instance id, when the task arrived on a LIVE
+   * surface. Present ⇒ the post emits the WIRE `response_routing`
+   * (`{ adapter_instance, channel_id, thread_id }`) the chat dispatch-sink
+   * routes on, so a brain reply reaches the originating adapter directly.
+   * Absent (bus-originated) ⇒ the logical `{ surface, channel, thread }`
+   * shape (review-sink path) — back-compat unchanged.
+   */
+  adapter_instance?: string;
+}
+
+export interface BrainPostOpts extends DispatchTaskCommonOpts {
+  /** The brain's whole-message text (§12.3 — whole-message posts in v1). */
+  text: string;
+  /**
+   * Optional attachment reference. B-1 is bus-originated (no live surface
+   * session to upload to), so the post carries the REFERENCE — inline base64
+   * XOR a scratch-dir path — and the B-2 adapter/surface bridge performs the
+   * actual upload. Exactly one of `b64` / `path` per the protocol's attachment
+   * XOR; the runner already validated SHAPE + scratch confinement before the
+   * BrainConsumer builds this.
+   */
+  attachment?: {
+    filename: string;
+    b64?: string;
+    path?: string;
+  };
+}
+
+/**
+ * Construct a `dispatch.task.post` lifecycle envelope (Bot Packs B-1).
+ *
+ * **Why a lifecycle envelope and not a direct surface post.** In B-1 a brain
+ * task is BUS-ORIGINATED — there is no live surface session the BrainConsumer
+ * can post into. So a brain's `post` effect is published as a
+ * `dispatch.task.post` lifecycle envelope carrying the text/attachment-ref + the
+ * task's source as canonical `response_routing`; the adapter/surface bridge
+ * (dispatch sink) that reads it and renders to the thread is B-2 — in B-1 this
+ * is an INTENT envelope, not an actual thread post. What B-1 does preserve:
+ * the brain still cannot choose a channel (the routing is host-supplied, §5
+ * property 1), and the sink will need no second routing vocabulary.
+ *
+ * **Why `dispatch.task.post` and not `brain.post`** (cortex#1033 §Architecture):
+ * the post is a dispatch-lifecycle moment, a sibling of started/completed/failed
+ * under the already-declared `dispatch` domain. A `brain.*` top-level domain is
+ * not in CONTEXT.md §Language → Domain's enumerated values and would lock an
+ * undocumented public wire shape that B-2 adapters consume.
+ */
+export function createDispatchTaskPostEvent(
+  opts: BrainPostOpts & { taskSource: BrainPostSource },
+): Envelope {
+  // Canonical response routing (CONTEXT.md §Response-routing, logical shape):
+  // the SAME payload field every dispatch.task.* lifecycle envelope carries,
+  // so the B-2 dispatch sink reads one vocabulary — never a parallel
+  // `task_source` (sage cortex#1033 round 3). The triggering user is not part
+  // of routing; it rides as its own field.
+  // cortex#1038 — when the task came from a LIVE surface (adapter_instance
+  // present), emit the WIRE routing shape the chat dispatch-sink consumes
+  // (`readResponseRouting` requires `adapter_instance` + `channel_id`); a
+  // brain `post` then reaches the originating adapter directly. Without it
+  // (bus-originated), keep the logical `{ surface, channel, thread }` shape
+  // the review-sink resolves — back-compat unchanged.
+  const responseRouting =
+    opts.taskSource.adapter_instance !== undefined
+      ? {
+          adapter_instance: opts.taskSource.adapter_instance,
+          channel_id: opts.taskSource.channel,
+          ...(opts.taskSource.thread !== "" && { thread_id: opts.taskSource.thread }),
+        }
+      : {
+          surface: opts.taskSource.surface,
+          channel: opts.taskSource.channel,
+          ...(opts.taskSource.thread !== "" && { thread: opts.taskSource.thread }),
+        };
+  return buildBaseEnvelope("dispatch.task.post", opts, {
+    text: opts.text,
+    response_routing: responseRouting,
+    triggered_by: opts.taskSource.user,
+    ...(opts.attachment !== undefined && { attachment: opts.attachment }),
   });
 }

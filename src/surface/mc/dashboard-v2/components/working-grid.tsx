@@ -41,6 +41,23 @@ import type {
   SessionTreeNode,
 } from "../hooks/use-working-agents";
 
+/**
+ * #1065 — a globally-unique React key for a working tile. The pane-of-glass
+ * aggregation (#1008) surfaces the SAME `agent_id` across stacks (e.g. `luna`
+ * on meta-factory + work + halden + community), so keying on the bare
+ * `agent_id` collides → duplicate-key warnings + reconciliation hazard. Namespace
+ * by the tile's origin stack, mirroring the network-graph node-id convention:
+ *   - `"local"`            → `local/{agent_id}`
+ *   - `{principal, stack}` → `{principal}/{stack}/{agent_id}`
+ */
+export function workingTileKey(tile: Pick<WorkingAgentTile, "origin" | "agent_id">): string {
+  const scope =
+    !tile.origin || tile.origin === "local"
+      ? "local"
+      : `${tile.origin.principal}/${tile.origin.stack}`;
+  return `${scope}/${tile.agent_id}`;
+}
+
 export interface WorkingGridProps {
   agents: WorkingAgentTile[];
   loaded: boolean;
@@ -126,7 +143,7 @@ export function WorkingGrid({
       {mode === "tiles" && (
         <div className="working-grid">
           {agents.map((a, idx) => (
-            <div className="working-tile-wrap" key={a.agent_id}>
+            <div className="working-tile-wrap" key={workingTileKey(a)}>
               <button
                 ref={(el) => { tileRefs.current[idx] = el; }}
                 type="button"

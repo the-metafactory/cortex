@@ -42,6 +42,10 @@ import {
 import { getTaskById, listTasks } from "../db/tasks";
 import { listWorkingAgents } from "../db/working-agents";
 import {
+  aggregateWorkingAgents,
+  type LocalAggregationContext,
+} from "../local-aggregation/sibling-db-reader";
+import {
   attachTask,
   canTransitionServer,
   createIteration,
@@ -426,10 +430,29 @@ export function handleListInbox(db: Database, url: URL): Response {
  * assignment. Primary assignment picked by rank + updated_at (matches
  * F-8 Decision 5 for drill-down-entry consistency).
  *
+ * #1008 — when a `localAggregation` context is supplied (the serving stack has
+ * DB-read pane-of-glass aggregation on), the result is the origin-tagged UNION
+ * across the local db + each readable LOCAL sibling stack's `mission-control.db`.
+ * Each row carries an `origin` (`"local"` or `{principal, stack}`) so the
+ * dashboard's G-1114 multi-hub grouping renders every local stack as its own
+ * hub. Without the context (or `null`), behaviour is byte-identical to the
+ * pre-#1008 single-db feed (tiles carry no `origin`).
+ *
  * See docs/design-mc-f9-working-grid.md for the decision log.
  */
-export function handleListWorkingAgents(db: Database): Response {
+export function handleListWorkingAgents(
+  db: Database,
+  localAggregation?: LocalAggregationContext | null
+): Response {
   try {
+    if (localAggregation) {
+      const agents = aggregateWorkingAgents(
+        db,
+        localAggregation.siblings,
+        localAggregation.resolve
+      );
+      return json({ agents } satisfies ListWorkingAgentsResponse);
+    }
     const agents = listWorkingAgents(db);
     const body: ListWorkingAgentsResponse = { agents };
     return json(body);

@@ -53,6 +53,7 @@ import { projectHeartbeat } from "./heartbeat";
 import { projectAttention } from "./attention-projection";
 import { projectAdapterLifecycle } from "./adapter-lifecycle";
 import { projectGovernanceVerdict } from "./governance-verdict";
+import { projectGovernanceDenial } from "./governance-denial";
 import {
   produceFailedDispatchAttention,
   type AttentionDelta,
@@ -130,6 +131,12 @@ export const DISPATCH_PROJECTION_SUBJECTS: string[] = [
   "local.*.governance.verdict.*",
   "local.*.*.governance.verdict.*",
   "federated.*.*.governance.verdict.*",
+  // governance denials (P-14 U3.1, #936) — U0.2's system.access.{denied,filtered}.
+  // The access-gate dimension of the governance pane; same broad-subject /
+  // type-filter discipline as the verdict family above.
+  "local.*.system.access.*",
+  "local.*.*.system.access.*",
+  "federated.*.*.system.access.*",
 ];
 
 /** A structural view of an envelope the projections read (kept loose so any
@@ -239,6 +246,17 @@ export function project(
     if (res !== null) {
       // Refresh signal only (the attention pattern) — the tab re-reads the API.
       broadcastProjection(wsRegistry, "governance.verdict");
+    }
+    return;
+  }
+
+  // governance denials (P-14 U3.1 — #936): U0.2's system.access.{denied,filtered}
+  // feed the governance pane's denials/refusals dimension. Same refresh-signal
+  // discipline as verdicts — the tab re-reads /api/governance.
+  if (type === "system.access.denied" || type === "system.access.filtered") {
+    const res = projectGovernanceDenial(db, envelope, subject);
+    if (res !== null) {
+      broadcastProjection(wsRegistry, "governance.denial");
     }
     return;
   }

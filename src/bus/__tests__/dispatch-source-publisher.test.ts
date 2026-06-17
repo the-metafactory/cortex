@@ -135,8 +135,8 @@ function baseOpts(
     timeoutMs: undefined,
     cwd: undefined,
     additionalArgs: undefined,
-    groveChannel: undefined,
-    groveNetwork: undefined,
+    channel: undefined,
+    network: undefined,
     project: undefined,
     entity: undefined,
     principal: undefined,
@@ -280,5 +280,31 @@ describe("dispatch-source-publisher — F-1b subject principal derivation (corte
     );
     const payload = runtime.subjectPublishes[0]!.envelope.payload;
     expect("allowed_skills" in payload).toBe(false);
+  });
+
+  // ── GV-2 (cortex#1077) — channel/network label dual-write shim ──────────────
+
+  test("GV-2: channel/network DUAL-WRITE both cortex_ (canonical) + grove_ (legacy)", async () => {
+    const runtime = makeRecordingRuntime();
+    await publishInboundChatDispatchEnvelope(
+      baseOpts(runtime, { channel: "cortex", network: "metafactory" }),
+    );
+    const payload = runtime.subjectPublishes[0]!.envelope.payload;
+    expect(payload.cortex_channel).toBe("cortex");
+    expect(payload.grove_channel).toBe("cortex");
+    expect(payload.cortex_network).toBe("metafactory");
+    expect(payload.grove_network).toBe("metafactory");
+  });
+
+  test("GV-2: channel/network omitted → neither cortex_ nor grove_ field emitted", async () => {
+    const runtime = makeRecordingRuntime();
+    await publishInboundChatDispatchEnvelope(
+      baseOpts(runtime, { channel: undefined, network: undefined }),
+    );
+    const payload = runtime.subjectPublishes[0]!.envelope.payload;
+    expect("cortex_channel" in payload).toBe(false);
+    expect("grove_channel" in payload).toBe(false);
+    expect("cortex_network" in payload).toBe(false);
+    expect("grove_network" in payload).toBe(false);
   });
 });

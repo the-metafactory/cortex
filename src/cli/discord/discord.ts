@@ -9,10 +9,11 @@
 import { Command } from "commander";
 import YAML from "yaml";
 import { loadConfig, saveConfig, getConfigPath } from "./lib/config";
-import { resolveServerContext, registerServerProfile, ServerContextError } from "./lib/server-context";
+import { cachedChannelId, resolveServerContext, registerServerProfile, ServerContextError } from "./lib/server-context";
 import type { ResolvedServerContext, ServerContextOptions } from "./lib/server-context";
 import type { DiscordCliConfig } from "./lib/config";
-import { postMessage, createThreadFromMessage, resolveChannelByName, resolveThreadByName, readMessages, listChannels, listThreads } from "./lib/discord";
+import { postMessage, postMessageWithFiles, createThreadFromMessage, resolveChannelByName, resolveThreadByName, readMessages, listChannels, listThreads, type AttachmentInput } from "./lib/discord";
+import { basename } from "node:path";
 
 // Per-command option shapes. Commander's typing is permissive; pinning each
 // `.action((opts) => …)` to the concrete shape lets the typed-checked preset
@@ -22,6 +23,7 @@ interface PostOptions extends ServerContextOptions {
   channel?: string;
   thread?: string;
   createThread?: string;
+  file?: string[];
 }
 interface ReadOptions extends ServerContextOptions {
   channel?: string;
@@ -69,20 +71,41 @@ const program = new Command()
 program
   .command("post")
   .description("Post a message to a Discord channel")
-  .argument("<message...>", "Message text (multiple words joined)")
+  .argument("[message...]", "Message text (optional when --file is given)")
   .option("-c, --channel <name>", "Channel name (default: defaultChannel from config)")
   .option("-t, --thread <name-or-id>", "Thread name or ID to post into")
   .option("-T, --create-thread <name>", "Create a thread from the posted message and print its ID")
+  .option("-f, --file <path>", "Attach a file (repeatable)", (v: string, acc: string[]) => [...acc, v], [])
   .option("-g, --guild <id>", "Guild ID to resolve channel/thread names against (overrides config)")
   .option("-s, --server <name>", "Named server profile from config (layers guildId + overrides)")
   .action(async (messageParts: string[], opts: PostOptions) => {
     const config = loadConfig();
     const ctx = resolveContextOrExit(config, opts);
     const message = messageParts.join(" ");
+    const filePaths = opts.file ?? [];
 
     if (opts.thread && opts.createThread) {
       console.error("--thread and --create-thread are mutually exclusive (a thread cannot contain a thread).");
       process.exit(1);
+    }
+
+    // A post must carry SOMETHING — text or at least one file. An empty post
+    // is rejected before any network call (no dangling empty message).
+    if (message.length === 0 && filePaths.length === 0) {
+      console.error("Nothing to post: provide a message, one or more --file, or both.");
+      process.exit(1);
+    }
+
+    // Read + existence-check every attachment BEFORE resolving the channel or
+    // hitting the API, so a bad path fails cleanly with nothing posted.
+    const attachments: AttachmentInput[] = [];
+    for (const path of filePaths) {
+      const f = Bun.file(path);
+      if (!(await f.exists())) {
+        console.error(`Attachment not found: ${path}`);
+        process.exit(1);
+      }
+      attachments.push({ filename: basename(path), bytes: new Uint8Array(await f.arrayBuffer()) });
     }
 
     if (!ctx.botToken) {
@@ -112,21 +135,14 @@ program
       process.exit(1);
     }
 
-    // Resolve channel name → ID (cached in context, or looked up via API).
-    // A cached id posts directly and is guild-agnostic — no resolution needed.
+    // Resolve channel name → ID. Cached ids and raw ids are only trusted when
+    // they belong to this command's effective guild.
     let channelId: string | undefined;
     if (channelName) {
-      channelId = ctx.channels?.[channelName]?.id;
-      if (!channelId) {
-        channelId = await resolveChannelByName(ctx.botToken, ctx.guildId, channelName) ?? undefined;
-        if (!channelId && !threadId) {
-          console.error(`Channel "#${channelName}" not found. Run: discord channels`);
-          process.exit(1);
-        }
-        if (channelId) {
-          cacheChannelId(config, ctx, channelName, channelId);
-          saveConfig(config);
-        }
+      channelId = await resolveChannelId(config, ctx, ctx.botToken, ctx.guildId, channelName);
+      if (!channelId && !threadId) {
+        console.error(`Channel "#${channelName}" not found. Run: discord channels`);
+        process.exit(1);
       }
     }
 
@@ -136,12 +152,15 @@ program
       process.exit(1);
     }
 
-    const result = await postMessage(ctx.botToken, targetId, message);
+    const result = attachments.length > 0
+      ? await postMessageWithFiles(ctx.botToken, targetId, message, attachments)
+      : await postMessage(ctx.botToken, targetId, message);
     if (!result.success) {
       console.error(`Failed: ${result.error}`);
       process.exit(1);
     }
-    console.log(`Posted to #${channelName}${opts.thread ? ` (thread)` : ""}`);
+    const attachNote = attachments.length > 0 ? ` (+${attachments.length} file${attachments.length === 1 ? "" : "s"})` : "";
+    console.log(`Posted to #${channelName}${opts.thread ? ` (thread)` : ""}${attachNote}`);
 
     if (opts.createThread) {
       if (!result.messageId) {
@@ -203,15 +222,10 @@ program
         process.exit(1);
       }
 
-      let channelId = ctx.channels?.[channelName]?.id;
+      const channelId = await resolveChannelId(config, ctx, ctx.botToken, ctx.guildId, channelName);
       if (!channelId) {
-        channelId = await resolveChannelByName(ctx.botToken, ctx.guildId, channelName) ?? undefined;
-        if (!channelId) {
-          console.error(`Channel "#${channelName}" not found.`);
-          process.exit(1);
-        }
-        cacheChannelId(config, ctx, channelName, channelId);
-        saveConfig(config);
+        console.error(`Channel "#${channelName}" not found.`);
+        process.exit(1);
       }
       readTargetId = channelId;
     }
@@ -363,6 +377,33 @@ function cacheChannelId(
     config.channels ??= {};
     config.channels[channelName] = { id: channelId };
   }
+}
+
+async function resolveChannelId(
+  config: DiscordCliConfig,
+  ctx: ResolvedServerContext,
+  botToken: string,
+  guildId: string,
+  channelName: string
+): Promise<string | undefined> {
+  if (isDiscordId(channelName)) {
+    const channels = await listChannels(botToken, guildId);
+    return channels.some((channel) => channel.id === channelName) ? channelName : undefined;
+  }
+
+  const cached = cachedChannelId(ctx, channelName);
+  if (cached) return cached;
+
+  const resolved = await resolveChannelByName(botToken, guildId, channelName) ?? undefined;
+  if (resolved) {
+    cacheChannelId(config, ctx, channelName, resolved);
+    saveConfig(config);
+  }
+  return resolved;
+}
+
+function isDiscordId(value: string): boolean {
+  return /^\d{17,20}$/.test(value);
 }
 
 function setNestedValue(obj: ConfigObject, key: string, value: string): void {

@@ -54,6 +54,12 @@ function emptyDefault<T>(): T {
 // ramps independently `off → permissive → enforce`.
 // See docs/design-trust-confidentiality.md §Phase 0 (part of #627).
 //
+// cortex#1000 EXCEPTION — the `signing` default is seed-aware: when the raw
+// config declares `stack.nkey_seed_path` and `signing` is unset, the loader
+// (`applySeedAwareSigningDefault` in `src/common/config/loader.ts`) bumps the
+// RAW config to `permissive` BEFORE this schema parses. The schema default
+// here only lands on seedless stacks (or an explicit value passes through).
+//
 // - `signing`: off = no signer · permissive = sign + verify but NEVER reject
 //   (cryptoVerify:true, rejectEmpty:false, signFailureMode:"fallback") ·
 //   enforce = reject unsigned/invalid (rejectEmpty:true, signFailureMode:"drop").
@@ -393,6 +399,27 @@ export const McSchema = z.object({
    */
   sideband: z.string().default(DEFAULT_SIDEBAND_URL),
   /**
+   * #1044 — headless MC mode (producer/server split). When `mc.enabled`, the
+   * embed always runs `initDatabase` + the `HookStreamPoller` INGESTOR (so the
+   * stack's `mission-control.db` is populated from its cc-events). This sub-flag
+   * gates ONLY the HTTP/WS server (`startServer`) + the live dashboard surface:
+   *
+   *   - `server.enabled: true`  (DEFAULT) → FULL MC — db + ingestor + HTTP server
+   *     + dashboard, byte-identical to pre-#1044. The ONE pane-serving stack
+   *     (meta-factory) runs this and reads every sibling stack's db (#1008).
+   *   - `server.enabled: false` → HEADLESS MC — db + ingestor only, NO port
+   *     bound, NO dashboard. A lean producer stack (work/halden) runs this so it
+   *     cheaply WRITES its db for the pane-of-glass to read, without serving one.
+   *
+   * Only meaningful when `mc.enabled` is true (an `mc.enabled: false` stack runs
+   * no embed at all). Default ON preserves every existing deployment's behaviour.
+   */
+  server: z
+    .object({
+      enabled: z.boolean().default(true),
+    })
+    .default(emptyDefault()),
+  /**
    * #989 part-1 — LOCAL same-principal stack aggregation on the Network view.
    *
    * When `enabled`, the dashboard-serving daemon auto-discovers the principal's
@@ -421,6 +448,27 @@ export const McSchema = z.object({
   aggregateLocalStacks: z
     .object({
       enabled: z.boolean().default(true),
+      /**
+       * #1008 — DB-read pane-of-glass aggregation. When ON (default), the
+       * dashboard-serving daemon reads each discovered LOCAL sibling stack's own
+       * `mission-control.db` READ-ONLY and merges its sessions+agents into the
+       * `/api/working-agents` + `/api/agents` feeds, origin-tagged — so the pane
+       * shows ALL local stacks as hubs with their session TREES (the full local
+       * picture: sessions AND agents), with NO bus / NO presence-publish.
+       *
+       * This is the principal-chosen PRIMARY mechanism for LOCAL siblings and
+       * SUPERSEDES the bus-presence path (#989) for them: when `dbRead` is on,
+       * the #989 sibling-PRESENCE bus aggregator is gated OFF for LOCAL siblings
+       * to avoid double-counting (DB-read owns local; the bus path stays for
+       * FEDERATED/cross-principal peers whose dbs live on another machine). Set
+       * `dbRead: false` to fall back to the #989 bus-presence path for local
+       * siblings (agents only, no session trees).
+       *
+       * Default ON. Cheap (per-request read-only SQLite open of the principal's
+       * OWN dbs on their OWN machine — ADR-0005 satisfied); a sibling db that is
+       * missing/locked/too-old degrades to absent, never crashing the feed.
+       */
+      dbRead: z.boolean().default(true),
       /**
        * Config root to scan for sibling stacks. Empty ⇒ the serving stack's own
        * config dir's parent (the conventional `~/.config/cortex`). Leading `~`
@@ -466,11 +514,18 @@ export const McSchema = z.object({
   dbPath: val.dbPath ?? "",
   port: val.port ?? 0,
   sideband: val.sideband ?? DEFAULT_SIDEBAND_URL,
+  // #1044 — re-apply the nested default ({} from `.default(emptyDefault())`
+  // would leave `enabled` undefined on the all-defaults parse path). The `??`
+  // chain is load-bearing, same as `aggregateLocalStacks` below.
+  server: {
+    enabled: val.server?.enabled ?? true,
+  },
   // #989 — re-apply the nested default ({} from `.default(emptyDefault())`
   // would otherwise leave the inner fields undefined). The `??` chain is
   // load-bearing for the all-defaults parse path, same as the leaves above.
   aggregateLocalStacks: {
     enabled: val.aggregateLocalStacks?.enabled ?? true,
+    dbRead: val.aggregateLocalStacks?.dbRead ?? true,
     configRoot: val.aggregateLocalStacks?.configRoot ?? "",
     stacks: val.aggregateLocalStacks?.stacks ?? [],
   },

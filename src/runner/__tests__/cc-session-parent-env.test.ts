@@ -18,7 +18,7 @@ describe("buildSessionEnv — ST-P1 stamps CORTEX_PARENT_SESSION_ID", () => {
 
   test("omits CORTEX_PARENT_SESSION_ID when parentSessionId is unset", () => {
     const env = buildSessionEnv(baseEnv, {
-      groveChannel: "ivy",
+      channel: "ivy",
     });
     expect(env.CORTEX_PARENT_SESSION_ID).toBeUndefined();
   });

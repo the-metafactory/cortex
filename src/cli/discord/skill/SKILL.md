@@ -44,8 +44,9 @@ discord read  --server halden
 
 Precedence: explicit `--guild`/`--channel` flags  >  `--server` profile  >
 top-level config. With neither flag, behaviour is identical to single-guild.
-A cached `channels.<name>.id` posts by id directly and is guild-agnostic; the
-`--guild`/`--server` override only changes how a channel *name* is resolved.
+Cached `channels.<name>.id` entries are used only when their owning guild
+matches the selected `--guild`/`--server` context; otherwise the CLI resolves
+the name inside the selected guild or fails loudly.
 
 ---
 
@@ -84,4 +85,8 @@ servers:
     # botToken / channels optional — omitted fields fall back to top-level
 ```
 
-Config stored at `~/.config/grove/cli.yaml`.
+Config stored at `~/.config/cortex/cli.yaml` (read cortex-first with a `~/.config/grove/cli.yaml` fallback during the GV-1 transition; first write migrates the legacy copy).
+
+## Attachments
+
+`discord post --file <path>` attaches a local file (repeatable); the message text is optional when a file is present. Files are read + existence-checked before the post, so a bad path posts nothing.

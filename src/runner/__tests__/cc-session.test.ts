@@ -6,7 +6,7 @@ describe("CCSession", () => {
   test("constructs with required opts", () => {
     const session = new CCSession({
       prompt: "Say hello",
-      groveChannel: "test",
+      channel: "test",
     });
     expect(session).toBeInstanceOf(CCSession);
     expect(session.sessionId).toBeUndefined();
@@ -16,7 +16,7 @@ describe("CCSession", () => {
   testClaude("emits events in correct order for a successful run", async () => {
     const session = new CCSession({
       prompt: "Say just the word hello, nothing else",
-      groveChannel: "test",
+      channel: "test",
       timeoutMs: 30_000,
     });
 
@@ -55,7 +55,7 @@ describe("CCSession", () => {
   testClaude("handles timeout", async () => {
     const session = new CCSession({
       prompt: "Write a very long essay about the history of the universe",
-      groveChannel: "test",
+      channel: "test",
       timeoutMs: 100, // Extremely short — will timeout
     });
 
@@ -75,7 +75,7 @@ describe("CCSession", () => {
   testClaude("wait() auto-starts if not started", async () => {
     const session = new CCSession({
       prompt: "Say just the word ok",
-      groveChannel: "test",
+      channel: "test",
       timeoutMs: 30_000,
     });
 
@@ -90,7 +90,7 @@ describe("CCSession", () => {
   testClaude("result is stored on session object", async () => {
     const session = new CCSession({
       prompt: "Say just the word yes",
-      groveChannel: "test",
+      channel: "test",
       timeoutMs: 30_000,
     });
 
@@ -106,7 +106,7 @@ describe("CCSession args", () => {
     // Verify the session adds --output-format stream-json by checking it doesn't throw
     const session = new CCSession({
       prompt: "test",
-      groveChannel: "test",
+      channel: "test",
       allowedTools: ["Read", "Grep"],
       disallowedTools: ["Bash"],
       allowedDirs: ["/tmp"],

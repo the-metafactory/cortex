@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { formatEnvelopeAsMarkdown } from "../envelope-renderer";
+import { formatEnvelopeAsMarkdown, formatDispatchLifecycle } from "../envelope-renderer";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
 
 function makeEnvelope(overrides: Partial<Envelope> = {}): Envelope {
@@ -135,6 +135,26 @@ describe("formatEnvelopeAsMarkdown — dispatch lifecycle", () => {
       type: "dispatch.task.failed",
       payload: { agent_id: "ivy", error_summary: "claude exited 1" },
     }))).toBe("Ivy failed: claude exited 1");
+  });
+
+  test("renders a brain post's own text verbatim (cortex#1039 follow-up)", () => {
+    // A brain `post` carries its content under payload.text — the composed
+    // flow, the ask_principal prompt, per-step replies. Without rendering it
+    // the sink dropped every brain post on null text, so a bot pack stayed
+    // silent. Empty text → null (nothing to deliver).
+    // Verbatim — intentional leading/trailing whitespace + final newline are
+    // preserved (sage #1040: trim only gates emptiness, never the output).
+    const body = "  ⚖️ Yarrow is frontier-A\n```yaml\nname: F_X\n```\n";
+    expect(
+      formatDispatchLifecycle(
+        makeEnvelope({ type: "dispatch.task.post", payload: { agent_id: "yarrow", text: body } }),
+      ),
+    ).toBe(body);
+    expect(
+      formatDispatchLifecycle(
+        makeEnvelope({ type: "dispatch.task.post", payload: { agent_id: "yarrow", text: "  " } }),
+      ),
+    ).toBeNull();
   });
 });
 

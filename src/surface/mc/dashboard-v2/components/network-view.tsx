@@ -31,7 +31,16 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react
 import type { AgentPresenceTile, AgentsState } from "../hooks/use-agents";
 import type { WorkingAgentTile } from "../hooks/use-working-agents";
 import { pickAgentsPanelMode } from "../lib/agents-display";
-import { buildNetworkGraph } from "../lib/network-graph-adapter";
+import {
+  buildNetworkGraph,
+  applyTransportOverlay,
+  deriveServingPrincipal,
+} from "../lib/network-graph-adapter";
+import {
+  buildTransportOverlay,
+  EMPTY_TRANSPORT_OVERLAY,
+} from "../lib/network-transport-overlay";
+import type { TransportRosterEventRow } from "../../api/observability-tab";
 import {
   resolveSelectedAgent,
   selectAgentDispatchActivity,
@@ -44,6 +53,11 @@ import {
   computeHighlight,
   type HoverTarget,
 } from "../lib/capability-highlight";
+import {
+  EMPTY_SUBTREE_SELECTION,
+  toggleHubSelection as computeToggleHubSelection,
+  type SubtreeSelection,
+} from "../lib/network-subtree-highlight";
 import type { NetworkHoverContextValue } from "../lib/network-hover-context";
 import {
   DEFAULT_NETWORK_FILTER,
@@ -97,6 +111,15 @@ export interface NetworkViewProps {
    * caller projects them here and the index lights up task↔agent matches.
    */
   matchTasks?: readonly MatchTask[];
+  /**
+   * P-14 U2.3 (#935) — signal's projected `system.transport.*` roster (the
+   * payload-bearing `transportRoster` from `/api/observability-events`, via
+   * `useObservability`). When the principal flips the transport-overlay toggle,
+   * the view folds these into per-stack verdict badges + leaf liveness/RTT. Empty
+   * default → the overlay has nothing to paint (a non-hub stack, or signal not
+   * emitting yet). SOURCED FROM SIGNAL — the view never re-derives substrate health.
+   */
+  transportRoster?: readonly TransportRosterEventRow[];
 }
 
 export function NetworkView({
@@ -106,6 +129,7 @@ export function NetworkView({
   onDispatchDirect,
   dispatchingAgentKeys,
   matchTasks = [],
+  transportRoster = [],
 }: NetworkViewProps) {
   const mode = pickAgentsPanelMode(state);
 
@@ -118,6 +142,15 @@ export function NetworkView({
     () => collectCapabilityOptions(state.agents),
     [state.agents],
   );
+  // #1008 — derive the serving principal from the FULL snapshot (a filter that
+  // hides local agents must not lose it) so BOTH the graph adapter AND the
+  // click-through detail panel classify a same-principal sibling as LOCAL, not
+  // federated. The adapter derives its own copy internally; the panel needs it
+  // threaded as a prop (it's pure — no snapshot access of its own).
+  const servingPrincipal = useMemo(
+    () => deriveServingPrincipal(state.agents),
+    [state.agents],
+  );
   const filteredAgents = useMemo(
     () => filterAgents(state.agents, filter),
     [state.agents, filter],
@@ -126,7 +159,29 @@ export function NetworkView({
   // Pure: filtered snapshot → React-Flow graph (re-derived when agents OR the
   // filter change). Tiny + engine-free, so it stays in the main bundle; the lazy
   // canvas takes the built graph and runs ELK over it.
-  const graph = useMemo(() => buildNetworkGraph(filteredAgents), [filteredAgents]);
+  const baseGraph = useMemo(() => buildNetworkGraph(filteredAgents), [filteredAgents]);
+
+  // U2.3 — fold signal's transport verdicts + leaf liveness/RTT into the overlay
+  // model, then onto the base graph WHEN the overlay toggle is on. Built off the
+  // FULL roster (the verdict for a stack is the verdict regardless of agent
+  // filters), but applied to the SCOPE-FILTERED graph — so `local-only` cleanly
+  // hides foreign verdicts (those hubs/nodes aren't in the graph to paint onto).
+  // SOURCED FROM SIGNAL: `buildTransportOverlay` carries signal's verdict strings
+  // verbatim; cortex never re-derives them.
+  const transportOverlay = useMemo(
+    () =>
+      filter.transportOverlay
+        ? buildTransportOverlay(transportRoster)
+        : EMPTY_TRANSPORT_OVERLAY,
+    [filter.transportOverlay, transportRoster],
+  );
+  const graph = useMemo(
+    () =>
+      filter.transportOverlay
+        ? applyTransportOverlay(baseGraph, transportOverlay)
+        : baseGraph,
+    [baseGraph, transportOverlay, filter.transportOverlay],
+  );
 
   // F.1 — the capability-match index, built off the FULL snapshot (not the
   // filtered one) so a hovered capability lights every declaring agent
@@ -154,9 +209,44 @@ export function NetworkView({
     () => computeHighlight(hoverTarget, matchIndex),
     [hoverTarget, matchIndex],
   );
+
+  // #1068 — the STICKY hub-subtree selection. The view owns the graph, so it
+  // computes the next selection (pure `toggleHubSelection`) when the canvas
+  // reports a hub click. Recomputed against the LIVE graph so the highlight set
+  // tracks presence changes; if the selected hub vanishes (its stack dropped out
+  // of the snapshot) we clear the stale selection (the effect below).
+  const [selection, setSelection] = useState<SubtreeSelection>(
+    EMPTY_SUBTREE_SELECTION,
+  );
+  const onToggleHubSelection = useCallback(
+    (clickedHubId: string | null) =>
+      setSelection((prev) => computeToggleHubSelection(prev, clickedHubId, graph)),
+    [graph],
+  );
+  // Re-derive the highlight set when the graph changes while a hub is selected
+  // (an agent popped in/out of that stack), and clear a selection whose hub no
+  // longer exists.
+  useEffect(() => {
+    setSelection((prev) => {
+      if (prev.selectedHubId === null) return prev;
+      const stillExists = graph.nodes.some((n) => n.id === prev.selectedHubId);
+      if (!stillExists) return EMPTY_SUBTREE_SELECTION;
+      return computeToggleHubSelection(
+        EMPTY_SUBTREE_SELECTION,
+        prev.selectedHubId,
+        graph,
+      );
+    });
+  }, [graph]);
+
   const hover = useMemo<NetworkHoverContextValue>(
-    () => ({ highlight, setHoverTarget }),
-    [highlight],
+    () => ({
+      highlight,
+      setHoverTarget,
+      selection,
+      toggleHubSelection: onToggleHubSelection,
+    }),
+    [highlight, selection, onToggleHubSelection],
   );
 
   // Filter callbacks.
@@ -173,6 +263,11 @@ export function NetworkView({
   // spotlight read, so flipping it cleanly removes/restores foreign agents.
   const onScopeChange = useCallback(
     (scope: NetworkScopeFilter) => setFilter((f) => ({ ...f, scope })),
+    [],
+  );
+  // U2.3 — flip the transport overlay (a render lens, not an agent predicate).
+  const onTransportOverlayChange = useCallback(
+    (on: boolean) => setFilter((f) => ({ ...f, transportOverlay: on })),
     [],
   );
   const onClearFilters = useCallback(() => setFilter(DEFAULT_NETWORK_FILTER), []);
@@ -282,6 +377,7 @@ export function NetworkView({
             onStateChange={onStateChange}
             onCapabilityChange={onCapabilityChange}
             onScopeChange={onScopeChange}
+            onTransportOverlayChange={onTransportOverlayChange}
             onClear={onClearFilters}
             onOpenSpotlight={openSpotlight}
           />
@@ -309,6 +405,7 @@ export function NetworkView({
             {selectedAgent && (
               <NetworkDetailPanel
                 agent={selectedAgent}
+                servingPrincipal={servingPrincipal}
                 dispatch={dispatch}
                 onClose={closePanel}
                 onViewInWorkingGrid={onViewInWorkingGrid}

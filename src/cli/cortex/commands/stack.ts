@@ -40,7 +40,7 @@ import { homedir } from "os";
 import { CliArgsError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { type ExitResult } from "./_shared/exit-result";
-import { parseSubcommandArgs, type SubcommandSpec } from "./_shared/parser";
+import { parseSubcommandArgs, type FlagMap, type SubcommandSpec } from "./_shared/parser";
 import {
   assertAligned,
   discoverStacks,
@@ -109,7 +109,7 @@ function expandTildePath(p: string): string {
 }
 
 function optionalValueFlag(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   name: string,
 ): string | undefined {
   const v = flags[name];
@@ -122,7 +122,7 @@ function optionalValueFlag(
  * error. Mirrors `cortex network`'s `resolveApply`.
  */
 function resolveApply(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
 ): { ok: true; apply: boolean } | { ok: false; reason: string } {
   const apply = flags["--apply"] === true;
   const dry = flags["--dry-run"] === true;
@@ -140,7 +140,7 @@ function resolveApply(
  * deliberate usage error so we never guess wrong.
  */
 function resolvePrincipal(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   configDir: string,
 ): { ok: true; principal: string } | { ok: false; reason: string } {
   const flagged = optionalValueFlag(flags, "--principal");
@@ -173,7 +173,7 @@ function resolvePrincipal(
 
 function runCreate(
   slug: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
 ): ExitResult {
   // --- validate slug -------------------------------------------------------
@@ -373,7 +373,7 @@ function capitalize(s: string): string {
 // =============================================================================
 
 function runList(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
 ): ExitResult {
   const configDir = expandTildePath(optionalValueFlag(flags, "--config-dir") ?? DEFAULT_CONFIG_DIR);

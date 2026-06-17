@@ -425,7 +425,7 @@ export class SlackAdapter implements PlatformAdapter {
    * stale-agent invariant Holly flagged at MIG-7.2c-internal cycle
    * 1).
    */
-  // eslint-disable-next-line @typescript-eslint/require-await
+
   updateConfig(config: AgentConfig): void {
     const newInstance = config.slack.find((inst) => inst.workspaceId === this.presence.workspaceId);
     if (!newInstance) {
@@ -549,7 +549,7 @@ export class SlackAdapter implements PlatformAdapter {
     await this.client.postMessage(target.channelId, text, target.threadId);
   }
 
-  // eslint-disable-next-line @typescript-eslint/require-await
+
   async sendTyping(_target: ResponseTarget): Promise<void> {
     // Slack has no public typing-indicator API for Socket Mode bots — no-op.
   }

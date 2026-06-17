@@ -82,9 +82,12 @@ describe("startMissionControl (embed)", () => {
     // bus→MC projection renderer can broadcast `mc.projection` refresh signals
     // to live dashboard clients. It must be the SAME registry the server's
     // hooks/API use (broadcast() callable, starts with zero clients).
-    expect(handle.wsRegistry).toBeDefined();
-    expect(typeof handle.wsRegistry.broadcast).toBe("function");
-    expect(handle.wsRegistry.size).toBe(0);
+    // Full mode: the registry is live (non-null). Headless (#1044) sets it null;
+    // the dedicated headless test asserts that path.
+    expect(handle.wsRegistry).not.toBeNull();
+    const wsRegistry = handle.wsRegistry!;
+    expect(typeof wsRegistry.broadcast).toBe("function");
+    expect(wsRegistry.size).toBe(0);
   });
 
   it("releases the port on stop()", async () => {
@@ -117,6 +120,106 @@ describe("startMissionControl (embed)", () => {
       // port omitted → falls back to the yaml's port
     });
     expect(handle.port).toBeGreaterThan(0);
+    expect((await fetch(`http://127.0.0.1:${handle.port}/health`)).ok).toBe(true);
+  });
+
+  // ---- #1044 — headless MC mode (db + ingestor, NO HTTP server) ----
+  // A lean producer stack runs initDatabase + the HookStreamPoller ingestor so
+  // its mission-control.db is populated for the pane-of-glass (#1008) to read,
+  // but binds NO port and serves NO dashboard.
+
+  it("headless: boots db + ingestor with NO server — port is null, no listener bound", async () => {
+    const dbPath = join(tmpDir, "data", "mission-control.db");
+    handle = await startMissionControl({
+      configPath: writeMcYaml(),
+      dbPath,
+      headless: true,
+    });
+
+    // No HTTP listener: port is null headless.
+    expect(handle.port).toBeNull();
+    // No wsRegistry headless (no clients to broadcast to).
+    expect(handle.wsRegistry).toBeNull();
+
+    // The db still lands at the requested path, with the cursor BESIDE it — the
+    // ingestor's home — so the producer writes exactly like a full stack.
+    expect(existsSync(dbPath)).toBe(true);
+    const cursorPath = join(dirname(dbPath), "mc-hook-cursor.json");
+    expect(dirname(cursorPath)).toBe(dirname(dbPath));
+
+    // The handle exposes the live, writable db handle.
+    expect(handle.db).toBeDefined();
+    expect(() => handle!.db.query("SELECT 1").get()).not.toThrow();
+  });
+
+  it("headless: the ingestor populates the db from raw cc-events (same as full mode)", async () => {
+    const dbPath = join(tmpDir, "data", "mission-control.db");
+    const rawEventsDir = join(tmpDir, "events", "raw");
+    mkdirSync(rawEventsDir, { recursive: true });
+    const cfgPath = join(tmpDir, "mc.yaml");
+    // Fast poll so the test doesn't wait long for the ingestor tick.
+    writeFileSync(
+      cfgPath,
+      `port: 0\nhooks:\n  rawEventsDir: ${rawEventsDir}\n  pollInterval: 20\n`,
+    );
+
+    handle = await startMissionControl({ configPath: cfgPath, dbPath, headless: true });
+    expect(handle.port).toBeNull();
+
+    // Emit a hook event for an unknown cc_session_id — the ingestor (#856)
+    // auto-registers it as a `local.observed` session row. Mirror the
+    // RawHookEvent shape the EventLogger writes to ~/.claude/events/raw/.
+    const ccSessionId = "headless-sess-1";
+    const line = JSON.stringify({
+      event_id: "evt-1",
+      event_type: "SessionStart",
+      timestamp: new Date().toISOString(),
+      session_id: ccSessionId,
+      agent_id: "test-agent",
+      agent_name: "Test Agent",
+      source: { hook: "SessionStart" },
+      payload: {},
+    });
+    writeFileSync(join(rawEventsDir, "events.jsonl"), line + "\n");
+
+    // Wait for the ingestor to pick the line up (poll every 20ms). The row is
+    // keyed by cc_session_id (its `id` is generated).
+    let row: unknown = null;
+    for (let i = 0; i < 100; i++) {
+      row = handle.db
+        .query("SELECT id FROM sessions WHERE cc_session_id = ?")
+        .get(ccSessionId);
+      if (row) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(row).not.toBeNull();
+  });
+
+  it("headless: stop() tears down cleanly (db closed, no port to release)", async () => {
+    const dbPath = join(tmpDir, "data", "mission-control.db");
+    handle = await startMissionControl({
+      configPath: writeMcYaml(),
+      dbPath,
+      headless: true,
+    });
+    await handle.stop();
+    handle = null; // prevent afterEach double-stop
+
+    // The db handle was closed: we can reopen + delete it cleanly.
+    const reopened = new Database(dbPath, { readwrite: true });
+    expect(() => reopened.query("PRAGMA user_version").get()).not.toThrow();
+    reopened.close();
+    expect(() => rmSync(dbPath, { force: true })).not.toThrow();
+  });
+
+  it("full mode is unchanged when headless is omitted (regression — server on, port bound)", async () => {
+    handle = await startMissionControl({
+      configPath: writeMcYaml(),
+      dbPath: join(tmpDir, "data", "mission-control.db"),
+      // headless omitted → full mode (server on)
+    });
+    expect(handle.port).toBeGreaterThan(0);
+    expect(handle.wsRegistry).not.toBeNull();
     expect((await fetch(`http://127.0.0.1:${handle.port}/health`)).ok).toBe(true);
   });
 

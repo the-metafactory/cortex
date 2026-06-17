@@ -6,8 +6,8 @@ describe("buildSessionEnv — G-2a/G-3a (cortex#774) sets CORTEX_* instrumentati
 
   test("sets the CORTEX_* names from the session opts", () => {
     const env = buildSessionEnv(baseEnv, {
-      groveChannel: "ivy",
-      groveNetwork: "metafactory",
+      channel: "ivy",
+      network: "metafactory",
       agentName: "Ivy",
       agentId: "ivy-001",
       project: "cortex",
@@ -26,8 +26,8 @@ describe("buildSessionEnv — G-2a/G-3a (cortex#774) sets CORTEX_* instrumentati
 
   test("does NOT set the legacy GROVE_* instrumentation names", () => {
     const env = buildSessionEnv(baseEnv, {
-      groveChannel: "ivy",
-      groveNetwork: "metafactory",
+      channel: "ivy",
+      network: "metafactory",
       agentName: "Ivy",
       agentId: "ivy-001",
       project: "cortex",
@@ -46,7 +46,7 @@ describe("buildSessionEnv — G-2a/G-3a (cortex#774) sets CORTEX_* instrumentati
 
   test("omits unset optional fields", () => {
     const env = buildSessionEnv(baseEnv, {
-      groveChannel: "ivy",
+      channel: "ivy",
     });
     expect(env.CORTEX_CHANNEL).toBe("ivy");
     expect(env.CORTEX_NETWORK).toBeUndefined();
@@ -55,7 +55,7 @@ describe("buildSessionEnv — G-2a/G-3a (cortex#774) sets CORTEX_* instrumentati
   });
 
   test("preserves the inherited base env", () => {
-    const env = buildSessionEnv(baseEnv, { groveChannel: "ivy" });
+    const env = buildSessionEnv(baseEnv, { channel: "ivy" });
     expect(env.PATH).toBe("/usr/bin");
   });
 });

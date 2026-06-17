@@ -55,15 +55,15 @@ function createRecordingRuntime(): RecordingRuntime {
   return {
     enabled: false,
     published,
-    // eslint-disable-next-line @typescript-eslint/no-empty-function
+
     onEnvelope(_handler: EnvelopeHandler) {
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
+
       return { unregister: () => {} };
     },
     publish: async (envelope: Envelope) => {
       published.push(envelope);
     },
-    // eslint-disable-next-line @typescript-eslint/no-empty-function
+
     stop: async () => {},
   };
 }

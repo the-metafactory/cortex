@@ -21,6 +21,7 @@ import { SCHEMA_SQL } from "../db/schema";
 import {
   createObservabilityProjectionRenderer,
   projectObservability,
+  projectForeignObservability,
   familyForType,
 } from "../projection/observability-renderer";
 import { produceObservabilityAttention } from "../projection/observability-attention";
@@ -151,6 +152,58 @@ describe("projectObservability — projection rows", () => {
 });
 
 // ---------------------------------------------------------------------------
+// P-14 U3.3 — foreign-origin projection + the narrowed (local-only) subjects
+// ---------------------------------------------------------------------------
+
+describe("projectForeignObservability — origin-badged peer rows (U3.3)", () => {
+  let db: Database;
+  let broadcasts: WsServerMessage[];
+  let fakeRegistry: WsClientRegistry;
+
+  beforeEach(() => {
+    db = setupDb();
+    broadcasts = [];
+    fakeRegistry = {
+      broadcast: (msg: WsServerMessage) => broadcasts.push(msg),
+    } as unknown as WsClientRegistry;
+  });
+  afterEach(() => db.close());
+
+  it("writes a FOREIGN-origin row + broadcasts, never local", () => {
+    const fam = projectForeignObservability(
+      db,
+      envelope("system.transport.leaf_connect", { leaf: "leaf-a" }),
+      "joel/research",
+      fakeRegistry,
+    );
+    expect(fam).toBe("transport");
+    const row = listObservabilityEvents(db, 10, "transport")[0];
+    expect(row?.origin).toEqual({ kind: "foreign", peer: "joel/research" });
+    expect(broadcasts.some((m) => m.type === "mc.projection" && m.family === "observability")).toBe(true);
+  });
+
+  it("a FOREIGN row never opens a local attention item (peer health is not the principal's adapter)", () => {
+    // A peer's leaf_disconnect WOULD open an att:adapter: item if treated as
+    // local. As a foreign row it must NOT — no attention broadcast, no item.
+    projectForeignObservability(
+      db,
+      envelope("system.transport.leaf_disconnect", { leaf: "leaf-a" }),
+      "joel/research",
+      fakeRegistry,
+    );
+    expect(broadcasts.some((m) => m.type === "mc.projection" && m.family === "attention")).toBe(false);
+    const attnCount = (db.query(`SELECT COUNT(*) AS n FROM attention_items`).get() as { n: number }).n;
+    expect(attnCount).toBe(0);
+  });
+
+  it("a LOCAL transport health signal STILL opens an attention item (regression guard)", () => {
+    // Contrast: the same disconnect via the LOCAL path opens the att:adapter: item.
+    projectObservability(db, envelope("system.transport.leaf_disconnect", { leaf: "leaf-a" }), fakeRegistry);
+    expect(broadcasts.some((m) => m.type === "mc.projection" && m.family === "attention")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Attention producer — the live-oracle path
 // ---------------------------------------------------------------------------
 
@@ -235,6 +288,16 @@ describe("createObservabilityProjectionRenderer", () => {
     expect(r.subjects.some((s) => s.includes("system.signal"))).toBe(true);
     expect(r.subjects.some((s) => s.includes("system.federation"))).toBe(true);
     expect(r.subjects.some((s) => s.includes("system.transport"))).toBe(true);
+  });
+
+  it("U3.3 — subjects are LOCAL-ONLY: no federated.* (the trust-verified fold owns federation)", () => {
+    // At U3.3 this renderer no longer subscribes to federated.* — ALL federated
+    // observability flows through the chain-verifying, curation-gated fold. This
+    // narrowing is load-bearing: it prevents an UN-verified, UN-badged, UN-curated
+    // double-fold of peer rows (which would have folded the DENIED system.signal.*).
+    const r = createObservabilityProjectionRenderer(db, fakeRegistry);
+    expect(r.subjects.every((s) => s.startsWith("local."))).toBe(true);
+    expect(r.subjects.some((s) => s.startsWith("federated."))).toBe(false);
   });
 
   it("collector.degraded projects a row AND opens an attention item (oracle path)", async () => {

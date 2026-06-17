@@ -7,6 +7,7 @@ import { parse as parseYaml } from "yaml";
 import { join } from "path";
 import { homedir } from "os";
 import type { Config, LogLevel } from "./types";
+import { resolveConfigFilePath } from "../../common/config/config-path";
 
 const VALID_LOG_LEVELS: ReadonlySet<LogLevel> = new Set([
   "debug",
@@ -51,9 +52,10 @@ export const DEFAULT_CONFIG: Config = {
  * - If the file is malformed YAML, throws with a clear message.
  */
 export function loadConfig(configPath?: string): Readonly<Config> {
+  // GV-1: cortex-first, grove-fallback for the default mission-control.yaml.
   const resolvedPath =
     configPath ??
-    join(homedir(), ".config", "grove", "mission-control.yaml");
+    resolveConfigFilePath("mission-control.yaml");
 
   if (!existsSync(resolvedPath)) {
     return Object.freeze({ ...DEFAULT_CONFIG });

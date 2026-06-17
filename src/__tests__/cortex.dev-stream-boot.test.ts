@@ -267,6 +267,45 @@ describe("startCortex — DEV_IMPLEMENT stream boot wiring (F-2.2, cortex#835 �
     rmSync(tmpAgentsDir, { recursive: true, force: true });
   });
 
+  test("provisions BRAIN_TASKS covering the brain-task family (cortex#1021 B-3)", async () => {
+    const { jsm, streamAdds } = makeRecordingJsm();
+    const runtime = createRecordingRuntime({ jsm });
+    const tmpAgentsDir = mkdtempSync(join(tmpdir(), "cortex-brain-stream-boot-"));
+    const inlineAgents: Agent[] = [makeAgent("echo", ["code-review.typescript"])];
+
+    const { result: handle, logs } = await withCapturedConsoleLog(() =>
+      startCortex(minimalConfig(), {
+        disableConfigWatcher: true,
+        disableDashboard: true,
+        disableOutboundPoller: true,
+        agentsDir: tmpAgentsDir,
+        injectRuntime: runtime,
+        inlineAgents,
+        principal: { id: PRINCIPAL },
+      }),
+    );
+
+    const byName = new Map(streamAdds.map((c) => [c.name, c]));
+    expect(byName.has("BRAIN_TASKS")).toBe(true);
+    const brain = byName.get("BRAIN_TASKS")!;
+    // The brain-task family — disjoint segment-4 token (`brain.`) from
+    // `tasks.` so it can never collide with CODE_REVIEW / DEV_IMPLEMENT.
+    expect(brain.subjects).toEqual([`local.${PRINCIPAL}.${STACK}.brain.>`]);
+    // Config posture mirrors CODE_REVIEW.
+    expect(String(brain.retention)).toBe("interest");
+    expect(String(brain.storage)).toBe("file");
+
+    const provisionedLog = logs.find(
+      (l) =>
+        l.includes('provisioned JetStream stream "BRAIN_TASKS"') ||
+        l.includes('JetStream stream "BRAIN_TASKS" already present'),
+    );
+    expect(provisionedLog).toBeDefined();
+
+    await handle.stop();
+    rmSync(tmpAgentsDir, { recursive: true, force: true });
+  });
+
   test("OVERLAP INVARIANT — CODE_REVIEW and DEV_IMPLEMENT subject sets are disjoint", async () => {
     const { jsm, streamAdds } = makeRecordingJsm();
     const runtime = createRecordingRuntime({ jsm });

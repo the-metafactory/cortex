@@ -22,6 +22,7 @@ function render(over: Partial<NetworkFilterBarProps> = {}): string {
     onStateChange: () => {},
     onCapabilityChange: () => {},
     onScopeChange: () => {},
+    onTransportOverlayChange: () => {},
     onClear: () => {},
     onOpenSpotlight: () => {},
     ...over,
@@ -117,6 +118,32 @@ describe("NetworkFilterBar — clear affordance (G-1114.D.5)", () => {
   it("shows Clear when a capability filter is active", () => {
     const html = render({ filter: { state: "all", capability: "moderate", scope: "include-federated" } });
     expect(html).toContain("network-filter-clear");
+  });
+});
+
+describe("NetworkFilterBar — transport overlay toggle (P-14 U2.3)", () => {
+  it("renders the toggle, off by default", () => {
+    const html = render();
+    expect(html).toContain('data-transport-overlay="off"');
+    expect(html).toContain('aria-pressed="false"');
+    expect(html).toContain("Overlay off");
+  });
+
+  it("marks the toggle pressed + on when the overlay is enabled", () => {
+    const html = render({
+      filter: { state: "all", capability: null, scope: "include-federated", transportOverlay: true },
+    });
+    expect(html).toContain('aria-pressed="true" data-transport-overlay="on"');
+    expect(html).toContain("Overlay on");
+  });
+
+  it("does NOT count the overlay toggle as an agent filter (no Clear from it alone)", () => {
+    // The overlay is a render lens, not an agent predicate — toggling it on must
+    // not surface the Clear affordance (which is for agent-narrowing filters).
+    const html = render({
+      filter: { state: "all", capability: null, scope: "include-federated", transportOverlay: true },
+    });
+    expect(html).not.toContain("network-filter-clear");
   });
 });
 
