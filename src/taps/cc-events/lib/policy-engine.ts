@@ -142,7 +142,12 @@ export function processEvent(
     ...(raw.parent_session_id !== undefined && { parent_session_id: raw.parent_session_id }),
     ...(raw.substrate !== undefined && { substrate: raw.substrate }),
     // cortex#774: read CORTEX_CHANNEL first, fall back to legacy GROVE_CHANNEL.
-    grove_channel: raw.grove_channel ?? resolveSurfaceEnv("CHANNEL"),
+    // GV-2 (cortex#1077): DUAL-WRITE — resolve the channel once (cortex field
+    // preferred, then grove, then env) and stamp BOTH the canonical
+    // `cortex_channel` and the legacy `grove_channel` alias. `grove_channel`
+    // retires at v3.0.0 in lockstep with the GROVE_* env shim.
+    cortex_channel: raw.cortex_channel ?? raw.grove_channel ?? resolveSurfaceEnv("CHANNEL"),
+    grove_channel: raw.cortex_channel ?? raw.grove_channel ?? resolveSurfaceEnv("CHANNEL"),
     agent_id: raw.agent_id,
     agent_name: raw.agent_name,
     payload: redacted,

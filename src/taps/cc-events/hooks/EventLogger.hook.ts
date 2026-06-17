@@ -90,12 +90,12 @@ const INGEST_URL = "http://localhost:8766/api/events/ingest";
 // cortex#774: read CORTEX_* first, fall back to legacy GROVE_* (see
 // surface-env.ts). The session is instrumented when a channel resolves
 // from either tier.
-const groveChannel = resolveSurfaceEnv("CHANNEL");
-if (!groveChannel) {
+const channel = resolveSurfaceEnv("CHANNEL");
+if (!channel) {
   process.exit(0); // Not an instrumented session — silent exit
 }
 
-const groveNetwork = resolveSurfaceEnv("NETWORK");
+const network = resolveSurfaceEnv("NETWORK");
 const groveProject = resolveSurfaceEnv("PROJECT");
 const groveEntity = resolveSurfaceEnv("ENTITY");
 // R9 (cortex#388 PR-3): the human-the-stack-owner concept is now `principal`.
@@ -264,7 +264,7 @@ async function main() {
       ...(parentSessionId !== undefined && { parentSessionId }),
       substrate,
       toolName,
-      networkId: groveNetwork,
+      networkId: network,
     });
 
     // H-004: HTTP POST as primary delivery, JSONL as fallback/archive
@@ -282,7 +282,7 @@ async function main() {
           sessionId,
           ...(parentSessionId !== undefined && { parentSessionId }),
           substrate,
-          networkId: groveNetwork,
+          networkId: network,
         }
       );
       await postEvent(heartbeat);

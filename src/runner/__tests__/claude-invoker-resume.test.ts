@@ -3,7 +3,7 @@ import { buildClaudeArgs } from "../claude-invoker";
 
 describe("buildClaudeArgs", () => {
   test("one-shot mode uses --print with prompt as positional", () => {
-    const args = buildClaudeArgs({ prompt: "hello", groveChannel: "ivy" });
+    const args = buildClaudeArgs({ prompt: "hello", channel: "ivy" });
     expect(args).toContain("--print");
     expect(args[args.length - 1]).toBe("hello");
     expect(args).not.toContain("--resume");
@@ -12,7 +12,7 @@ describe("buildClaudeArgs", () => {
   test("resume mode includes --resume with session ID", () => {
     const args = buildClaudeArgs({
       prompt: "follow up",
-      groveChannel: "ivy",
+      channel: "ivy",
       resumeSessionId: "abc-123",
     });
     expect(args).toContain("--resume");
@@ -24,7 +24,7 @@ describe("buildClaudeArgs", () => {
   test("includes additional args", () => {
     const args = buildClaudeArgs({
       prompt: "hello",
-      groveChannel: "ivy",
+      channel: "ivy",
       additionalArgs: ["--verbose"],
     });
     expect(args).toContain("--verbose");

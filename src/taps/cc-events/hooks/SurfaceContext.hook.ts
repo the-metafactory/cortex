@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * G-501: GroveContext Hook
+ * G-501: SurfaceContext Hook
  * Injects network identity and session context into Claude Code sessions.
  * Only active when CORTEX_CHANNEL (legacy GROVE_CHANNEL) env var is set
  * (session scoping).
@@ -14,14 +14,14 @@ import { resolveSurfaceEnv } from "./lib/surface-env";
 
 // cortex#774: read CORTEX_* first, fall back to legacy GROVE_* (see
 // surface-env.ts).
-const groveChannel = resolveSurfaceEnv("CHANNEL");
-if (!groveChannel) {
+const channel = resolveSurfaceEnv("CHANNEL");
+if (!channel) {
   process.exit(0); // Not an instrumented session — silent exit
 }
 
-const groveNetwork = resolveSurfaceEnv("NETWORK");
-const groveAgentId = resolveSurfaceEnv("AGENT_ID");
-const groveAgentName = resolveSurfaceEnv("AGENT_NAME");
+const network = resolveSurfaceEnv("NETWORK");
+const agentId = resolveSurfaceEnv("AGENT_ID");
+const agentName = resolveSurfaceEnv("AGENT_NAME");
 
 // =============================================================================
 // Context Injection
@@ -53,20 +53,20 @@ async function main() {
     // Build context injection
     const contextLines: string[] = [];
 
-    if (groveNetwork) {
-      contextLines.push(`Network: ${groveNetwork}`);
+    if (network) {
+      contextLines.push(`Network: ${network}`);
     }
 
-    if (groveChannel) {
-      contextLines.push(`Channel: ${groveChannel}`);
+    if (channel) {
+      contextLines.push(`Channel: ${channel}`);
     }
 
-    if (groveAgentId) {
-      contextLines.push(`Agent ID: ${groveAgentId}`);
+    if (agentId) {
+      contextLines.push(`Agent ID: ${agentId}`);
     }
 
-    if (groveAgentName) {
-      contextLines.push(`Agent Name: ${groveAgentName}`);
+    if (agentName) {
+      contextLines.push(`Agent Name: ${agentName}`);
     }
 
     if (contextLines.length === 0) {
@@ -74,19 +74,19 @@ async function main() {
       process.exit(0);
     }
 
-    // Inject Grove context into system prompt
+    // Inject Cortex surface context into system prompt
     const contextBlock = `
 <system-reminder>
-Grove Context:
+Cortex Context:
 ${contextLines.map((line) => `  ${line}`).join("\n")}
 
-This session is instrumented for Grove event tracking and dashboard visibility.
+This session is instrumented for Cortex event tracking and dashboard visibility.
 </system-reminder>
 `;
 
     // Append context to prompt.
     // NOTE: This hook mutates hookInput.prompt. Prompt-mutating hooks should be
-    // ordered intentionally in grove-hooks.json to ensure correct layering
+    // ordered intentionally in cortex-hooks.json to ensure correct layering
     // (e.g., security preambles before context injection).
     if (typeof hookInput.prompt === "string") {
       hookInput.prompt = hookInput.prompt + contextBlock;

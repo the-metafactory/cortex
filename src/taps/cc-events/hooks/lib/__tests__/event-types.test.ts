@@ -134,3 +134,51 @@ describe("createRawEvent", () => {
     expect(event.source.tool_name).toBe("Write");
   });
 });
+
+// GV-2 (cortex#1077) — channel-label vocabulary migration: additive
+// dual-write shim. Producers stamp BOTH `cortex_channel` (canonical) and
+// `grove_channel` (legacy back-compat alias); consumers read cortex-first
+// with a grove fallback. `grove_channel` is NEVER removed before v3.0.0.
+describe("GV-2 cortex_channel/grove_channel dual-write shim", () => {
+  test("createRawEvent DUAL-WRITES both fields from the channel option", () => {
+    const event = createRawEvent("agent.task.completed", "Stop", {}, {
+      sessionId: "s1",
+      channel: "ivy",
+    });
+    expect(event.cortex_channel).toBe("ivy");
+    expect(event.grove_channel).toBe("ivy");
+  });
+
+  test("RawEventSchema accepts the canonical cortex_channel", () => {
+    const result = RawEventSchema.parse({ ...validRawEvent, cortex_channel: "ivy" });
+    expect(result.cortex_channel).toBe("ivy");
+  });
+
+  test("RawEventSchema still accepts the legacy grove_channel (back-compat)", () => {
+    const groveOnly = { ...validRawEvent, grove_channel: "legacy" };
+    const result = RawEventSchema.parse(groveOnly);
+    expect(result.grove_channel).toBe("legacy");
+    expect(result.cortex_channel).toBeUndefined();
+  });
+
+  test("both channel fields are optional", () => {
+    const { grove_channel, ...noChannels } = validRawEvent;
+    const result = RawEventSchema.parse(noChannels);
+    expect(result.cortex_channel).toBeUndefined();
+    expect(result.grove_channel).toBeUndefined();
+  });
+
+  test("PublishedEventSchema accepts cortex_channel alongside grove_channel", () => {
+    const result = PublishedEventSchema.parse({
+      event_id: "550e8400-e29b-41d4-a716-446655440000",
+      event_type: "agent.task.completed",
+      timestamp: "2026-03-27T10:00:00.000Z",
+      session_id: "session-abc",
+      cortex_channel: "ivy",
+      grove_channel: "ivy",
+      payload: {},
+    });
+    expect(result.cortex_channel).toBe("ivy");
+    expect(result.grove_channel).toBe("ivy");
+  });
+});

@@ -506,3 +506,148 @@ describe("#763 — deriveLeaveInputs platform-aware descriptor", () => {
     expect(res.inputs?.platform).toBe("linux");
   });
 });
+
+// =============================================================================
+// O-3 (cortex#1053) — assemble the operator-mode leaf package from config/flags.
+// =============================================================================
+
+describe("deriveJoinInputs — O-3 operator-mode leaf package", () => {
+  const OP_JWT = "eyJhbGciOiJlZDI1NTE5LW5rZXkifQ.FAKE_OP.sig";
+  const ACC_JWT = "eyJhbGciOiJlZDI1NTE5LW5rZXkifQ.FAKE_ACC.sig";
+
+  test("config-supplied package (operator_jwt + account + account_jwt) materialises", () => {
+    const cfg = loaded({
+      principal: { id: "andreas" },
+      stack: {
+        id: "andreas/community",
+        nkey_seed_path: "~/seed.nk",
+        nats_infra: {
+          config_path: "~/community.conf",
+          plist_path: "~/nats.plist",
+          account: "A" + "B".repeat(55),
+          operator_jwt: OP_JWT,
+          account_jwt: ACC_JWT,
+        },
+      },
+      policy: {
+        principals: [],
+        roles: [],
+        federated: {
+          networks: [],
+          registry: { url: "https://r", pubkey: "A".repeat(43) + "=" },
+        },
+      },
+    });
+    const res = deriveJoinInputs("metafactory-community", {}, "/cfg", reader(cfg), "darwin");
+    expect(res.ok).toBe(true);
+    expect(res.inputs?.operatorModePackage).toEqual({
+      operatorJwt: OP_JWT,
+      account: "A" + "B".repeat(55),
+      accountJwt: ACC_JWT,
+    });
+  });
+
+  test("flags override config for the package fields", () => {
+    const cfg = loaded({
+      principal: { id: "andreas" },
+      stack: {
+        id: "andreas/community",
+        nkey_seed_path: "~/seed.nk",
+        nats_infra: {
+          config_path: "~/community.conf",
+          plist_path: "~/nats.plist",
+          account: "A" + "B".repeat(55),
+          operator_jwt: "eyJ.CONFIG_OP.sig",
+          account_jwt: "eyJ.CONFIG_ACC.sig",
+        },
+      },
+      policy: {
+        principals: [],
+        roles: [],
+        federated: {
+          networks: [],
+          registry: { url: "https://r", pubkey: "A".repeat(43) + "=" },
+        },
+      },
+    });
+    const res = deriveJoinInputs(
+      "metafactory-community",
+      { operatorJwt: OP_JWT, accountJwt: ACC_JWT, account: "A" + "C".repeat(55) },
+      "/cfg",
+      reader(cfg),
+      "darwin",
+    );
+    expect(res.ok).toBe(true);
+    expect(res.inputs?.operatorModePackage).toEqual({
+      operatorJwt: OP_JWT,
+      account: "A" + "C".repeat(55),
+      accountJwt: ACC_JWT,
+    });
+  });
+
+  test("a SYS account (+ jwt) is carried through when present", () => {
+    const res = deriveJoinInputs(
+      "metafactory-community",
+      {
+        operatorJwt: OP_JWT,
+        accountJwt: ACC_JWT,
+        account: "A" + "B".repeat(55),
+        systemAccount: "A" + "D".repeat(55),
+        systemAccountJwt: "eyJ.SYS.sig",
+      },
+      "/cfg",
+      reader(loaded({
+        principal: { id: "andreas" },
+        stack: {
+          id: "andreas/community",
+          nkey_seed_path: "~/seed.nk",
+          nats_infra: { config_path: "~/c.conf", plist_path: "~/p.plist" },
+        },
+        policy: {
+          principals: [],
+          roles: [],
+          federated: { networks: [], registry: { url: "https://r", pubkey: "A".repeat(43) + "=" } },
+        },
+      })),
+      "darwin",
+    );
+    expect(res.ok).toBe(true);
+    expect(res.inputs?.operatorModePackage).toEqual({
+      operatorJwt: OP_JWT,
+      account: "A" + "B".repeat(55),
+      accountJwt: ACC_JWT,
+      systemAccount: "A" + "D".repeat(55),
+      systemAccountJwt: "eyJ.SYS.sig",
+    });
+  });
+
+  test("a PARTIAL package (operator_jwt but no account_jwt) → no package (fail-fast preserved)", () => {
+    const res = deriveJoinInputs(
+      "metafactory-community",
+      { operatorJwt: OP_JWT, account: "A" + "B".repeat(55) }, // no accountJwt
+      "/cfg",
+      reader(loaded({
+        principal: { id: "andreas" },
+        stack: {
+          id: "andreas/community",
+          nkey_seed_path: "~/seed.nk",
+          nats_infra: { config_path: "~/c.conf", plist_path: "~/p.plist" },
+        },
+        policy: {
+          principals: [],
+          roles: [],
+          federated: { networks: [], registry: { url: "https://r", pubkey: "A".repeat(43) + "=" } },
+        },
+      })),
+      "darwin",
+    );
+    expect(res.ok).toBe(true);
+    expect(res.inputs?.operatorModePackage).toBeUndefined();
+  });
+
+  test("no package material at all → operatorModePackage undefined (the common case)", () => {
+    const res = deriveJoinInputs("metafactory", {}, "/cfg/cortex.yaml", reader(FULL), "darwin");
+    expect(res.ok).toBe(true);
+    expect(res.inputs?.operatorModePackage).toBeUndefined();
+  });
+});

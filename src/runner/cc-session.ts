@@ -21,9 +21,9 @@ export type { UsageStats, StreamEvent };
 
 export interface CCSessionOpts {
   prompt: string;
-  groveChannel?: string;
+  channel?: string;
   /** G-501: Network identifier for event routing */
-  groveNetwork?: string;
+  network?: string;
   agentName?: string;
   agentId?: string;
   resumeSessionId?: string;
@@ -125,7 +125,7 @@ export interface CCSessionResult {
  *
  * Sets the canonical `CORTEX_*` names — `CORTEX_CHANNEL`, `CORTEX_NETWORK`,
  * `CORTEX_AGENT_NAME`, `CORTEX_AGENT_ID`, `CORTEX_PROJECT`, `CORTEX_ENTITY`,
- * and `CORTEX_PRINCIPAL` — that the EventLogger / GroveContext hooks read.
+ * and `CORTEX_PRINCIPAL` — that the EventLogger / SurfaceContext hooks read.
  * The legacy `GROVE_*` instrumentation names are NO LONGER set here; the
  * hooks retain a `GROVE_*` read-fallback (see `surface-env.ts` /
  * `principal-env.ts`) so external setters still on `GROVE_*` keep resolving
@@ -138,8 +138,8 @@ export function buildSessionEnv(
   baseEnv: Record<string, string>,
   opts: Pick<
     CCSessionOpts,
-    | "groveChannel"
-    | "groveNetwork"
+    | "channel"
+    | "network"
     | "agentName"
     | "agentId"
     | "project"
@@ -150,8 +150,8 @@ export function buildSessionEnv(
 ): Record<string, string> {
   return {
     ...baseEnv,
-    ...(opts.groveChannel && { CORTEX_CHANNEL: opts.groveChannel }),
-    ...(opts.groveNetwork && { CORTEX_NETWORK: opts.groveNetwork }),
+    ...(opts.channel && { CORTEX_CHANNEL: opts.channel }),
+    ...(opts.network && { CORTEX_NETWORK: opts.network }),
     ...(opts.agentName && { CORTEX_AGENT_NAME: opts.agentName }),
     ...(opts.agentId && { CORTEX_AGENT_ID: opts.agentId }),
     ...(opts.project && { CORTEX_PROJECT: opts.project }),
@@ -237,8 +237,8 @@ export class CCSession extends EventEmitter {
     // Build args from existing buildClaudeArgs, then inject stream-json
     const invokerOpts: ClaudeInvocationOpts = {
       prompt: this.opts.prompt,
-      groveChannel: this.opts.groveChannel,
-      groveNetwork: this.opts.groveNetwork,
+      channel: this.opts.channel,
+      network: this.opts.network,
       resumeSessionId: this.opts.resumeSessionId,
       allowedTools: effectiveAllowedTools,
       disallowedTools: effectiveDisallowedTools,

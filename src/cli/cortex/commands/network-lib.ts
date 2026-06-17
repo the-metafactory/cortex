@@ -33,6 +33,7 @@ import type {
   PolicyFederatedPeer,
 } from "../../../common/types/cortex-config";
 import type { NetworkRosterResult } from "../../../common/registry/types";
+import type { OperatorModeLeafPackage } from "../../../common/nats/leaf-remote-renderer";
 import { base64PubkeyToNkey } from "../../../common/registry/encoding";
 
 import {
@@ -70,6 +71,15 @@ export interface JoiningStack {
   leafNode?: string;
   /** max_hop to write (schema has no default). Conservative default: 1. */
   maxHop?: number;
+  /**
+   * O-3 (cortex#1053) — the operator-mode "leaf package" (operator JWT + issued
+   * account + account JWT, optional SYS account). Present ⇒ when the stack's bus
+   * is anonymous/hard-isolated (the #794 fail-fast input), `joinNetwork` CONVERTS
+   * it to operator-mode (renders the SOP §B0.1 blocks) instead of refusing, then
+   * proceeds with the existing leaf render. Absent ⇒ the #794 fail-fast stands.
+   * O-4 (the register→issue handshake) SUPPLIES this; O-3 only consumes it.
+   */
+  operatorModePackage?: OperatorModeLeafPackage;
 }
 
 // =============================================================================
@@ -214,7 +224,44 @@ export async function joinNetwork(
   // This is a READ (no mutation), so dry-run surfaces the same decision.
   const hasCreds =
     typeof stack.credentials === "string" && stack.credentials.trim().length > 0;
-  const bindMode = ports.leafFile.resolveBindMode(stack.account, hasCreds);
+  let bindMode = ports.leafFile.resolveBindMode(stack.account, hasCreds);
+
+  // (b.5.1) O-3 (cortex#1053, spec §4-D2) — AUTO-CONVERT an anonymous bus.
+  //
+  // When the bind-mode pre-flight REFUSES (the #794 fail-fast: an anonymous /
+  // hard-isolated bus has no operator-mode account tree, so the account the leaf
+  // binds can never resolve) AND the joining stack carries a leaf package (O-4's
+  // register→issue handshake supplies it), render the SOP §B0.1 operator-mode
+  // blocks into the bus's nats config — KEEPING its own identity/ports/JS domain,
+  // adding NO leaf include — THEN re-resolve. The converted bus is operator-mode,
+  // so the re-resolve binds the account and the existing join flow proceeds.
+  //
+  // The conversion port is the single writer (live writes the rendered config;
+  // dry-run is inert). `already`/`converted` both let the join continue; a
+  // conversion `refuse` (incomplete package, or a bus already operator-mode under
+  // a DIFFERENT operator JWT — never clobber it) ABORTS before any further mutation.
+  if (bindMode.mode === "refuse" && stack.operatorModePackage !== undefined) {
+    const conversion = ports.leafFile.convertToOperatorMode(
+      stack.operatorModePackage,
+    );
+    if (conversion.status === "refuse") {
+      return {
+        ok: false,
+        steps,
+        reason:
+          `cannot auto-convert the bus to operator-mode (${conversion.reason}). ` +
+          `Refusing to render a leaf that would crash nats-server (cortex#794/#1053).`,
+      };
+    }
+    steps.push(
+      conversion.status === "converted"
+        ? `converted the anonymous bus to operator-mode (rendered the operator/account/resolver blocks — O-3, #1053)`
+        : `bus already operator-mode under this operator — no conversion needed (O-3, #1053)`,
+    );
+    // Re-resolve against the now-operator-mode bus.
+    bindMode = ports.leafFile.resolveBindMode(stack.account, hasCreds);
+  }
+
   if (bindMode.mode === "refuse") {
     const configPath = ports.leafFile.natsConfigPath();
     return {
@@ -223,7 +270,8 @@ export async function joinNetwork(
       reason:
         `nats config ${configPath} cannot federate (${bindMode.reason}). ` +
         `An operator-mode bus must DEFINE the leaf account (convert it — see ` +
-        `docs/sop-stack-onboarding.md §Part 2 — or pass a config that does via ` +
+        `docs/sop-stack-onboarding.md §Part 2, or supply a leaf package so join ` +
+        `auto-converts — O-3/#1053 — or pass a config that does via ` +
         `--nats-config); a $G/default bus needs valid leaf creds. Refusing to ` +
         `render a leaf that would crash nats-server (cortex#794/#799).`,
     };

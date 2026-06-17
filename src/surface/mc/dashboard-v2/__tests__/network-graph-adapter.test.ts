@@ -10,11 +10,15 @@
 import { describe, it, expect } from "bun:test";
 import {
   buildNetworkGraph,
+  collectLegendStacks,
+  deriveServingPrincipal,
   STACK_HUB_NODE_ID,
   FOREIGN_HUB_ID_PREFIX,
   type AgentNodeData,
   type StackHubNodeData,
 } from "../lib/network-graph-adapter";
+import { classifyOrigin } from "../lib/agents-display";
+import { LOCAL_STACK_COLOR } from "../lib/stack-color";
 import type { AgentPresenceTile } from "../hooks/use-agents";
 
 function tile(
@@ -56,6 +60,25 @@ function foreignTile(
   });
 }
 
+/**
+ * #1008 — a SAME-PRINCIPAL local SIBLING tile (DB-read aggregation): an OBJECT
+ * origin whose principal is the SERVING principal (`andreas`), a DIFFERENT stack.
+ * Structurally identical on the wire to a foreign peer — the classifier tells
+ * them apart by the serving principal.
+ */
+function siblingTile(
+  over: Partial<AgentPresenceTile> & { agent_id: string; stack: string },
+): AgentPresenceTile {
+  const { agent_id, stack } = over;
+  return tile({
+    ...over,
+    key: `andreas/${stack}/${agent_id}`,
+    principal: "andreas",
+    stack,
+    origin: { principal: "andreas", stack },
+  });
+}
+
 describe("buildNetworkGraph (G-1114.D.2)", () => {
   it("returns an empty graph for an empty snapshot", () => {
     const g = buildNetworkGraph([]);
@@ -74,6 +97,10 @@ describe("buildNetworkGraph (G-1114.D.2)", () => {
     expect(data.principal).toBe("andreas");
     expect(data.stack).toBe("research");
     expect(data.agentCount).toBe(1);
+    // #1068 — the local hub carries the reserved signature color, and its edge
+    // strokes in the same hue.
+    expect(data.stackColor).toBe(LOCAL_STACK_COLOR);
+    expect(g.edges[0]!.data?.stackColor).toBe(LOCAL_STACK_COLOR);
   });
 
   it("emits one agent node + one hub→agent edge per agent", () => {
@@ -133,7 +160,9 @@ describe("buildNetworkGraph (G-1114.D.2)", () => {
     expect(d.offlineReason).toBeNull();
     expect(d.lastHeartbeatAt).toBe(beat);
     // No session-interior fields leak onto the node (ADR-0007). The data shape
-    // is a fixed allowlist — assert the key set is exactly the presence fields.
+    // is a fixed allowlist — assert the key set is exactly the presence fields
+    // (+ #1068 `stackColor`, a deterministic presentation field derived from the
+    // origin, NOT a session interior).
     expect(Object.keys(d).sort()).toEqual(
       [
         "agentId",
@@ -144,9 +173,14 @@ describe("buildNetworkGraph (G-1114.D.2)", () => {
         "lastHeartbeatAt",
         "offlineReason",
         "origin",
+        "servingPrincipal",
+        "stackColor",
         "state",
       ].sort(),
     );
+    // #1068 — the agent carries its stack's deterministic color (a member of the
+    // palette), shared with its hub. Local agent → the reserved signature hue.
+    expect(d.stackColor).toBe(LOCAL_STACK_COLOR);
     // The local agent carries the bare "local" origin.
     expect(d.origin).toBe("local");
   });
@@ -272,5 +306,262 @@ describe("buildNetworkGraph — federated multi-hub grouping (G-1114.E.3)", () =
 
   it("returns an empty graph for an empty snapshot (federated path too)", () => {
     expect(buildNetworkGraph([])).toEqual({ nodes: [], edges: [] });
+  });
+});
+
+describe("deriveServingPrincipal (#1008)", () => {
+  it("reads the serving principal off the first local-origin agent", () => {
+    expect(
+      deriveServingPrincipal([
+        tile({ agent_id: "luna" }),
+        foreignTile({ agent_id: "sage", principal: "jc", stack: "research" }),
+      ]),
+    ).toBe("andreas");
+  });
+
+  it("returns null when no local agent is present (foreign-only snapshot)", () => {
+    expect(
+      deriveServingPrincipal([
+        foreignTile({ agent_id: "sage", principal: "jc", stack: "research" }),
+      ]),
+    ).toBeNull();
+  });
+
+  it("returns null for an empty snapshot", () => {
+    expect(deriveServingPrincipal([])).toBeNull();
+  });
+});
+
+describe("buildNetworkGraph — local-sibling vs federated classification (#1008)", () => {
+  it("threads the serving principal onto every node", () => {
+    const g = buildNetworkGraph([
+      tile({ agent_id: "luna" }),
+      siblingTile({ agent_id: "echo", stack: "work" }),
+      foreignTile({ agent_id: "sage", principal: "jc", stack: "research" }),
+    ]);
+    for (const n of g.nodes) {
+      const d = n.data as StackHubNodeData | AgentNodeData;
+      expect(d.servingPrincipal).toBe("andreas");
+    }
+  });
+
+  it("classifies a SAME-PRINCIPAL sibling as local (NOT federated), foreign as federated", () => {
+    const g = buildNetworkGraph([
+      tile({ agent_id: "luna" }), // self
+      siblingTile({ agent_id: "echo", stack: "work" }), // same-principal sibling
+      foreignTile({ agent_id: "sage", principal: "jc", stack: "research" }), // cross-principal
+    ]);
+
+    const selfHub = g.nodes.find((n) => n.id === STACK_HUB_NODE_ID)!
+      .data as StackHubNodeData;
+    const siblingHub = g.nodes.find(
+      (n) => n.id === `${FOREIGN_HUB_ID_PREFIX}andreas/work`,
+    )!.data as StackHubNodeData;
+    const foreignHub = g.nodes.find(
+      (n) => n.id === `${FOREIGN_HUB_ID_PREFIX}jc/research`,
+    )!.data as StackHubNodeData;
+
+    // Self + sibling are LOCAL categories; only the cross-principal peer is foreign.
+    expect(classifyOrigin(selfHub.origin, selfHub.servingPrincipal)).toBe("self");
+    expect(classifyOrigin(siblingHub.origin, siblingHub.servingPrincipal)).toBe(
+      "sibling",
+    );
+    expect(classifyOrigin(foreignHub.origin, foreignHub.servingPrincipal)).toBe(
+      "foreign",
+    );
+
+    // #1068 — each stack gets a DISTINCT color: self → signature, the two peers
+    // → their own (different) hues, and each hub's agents + edge share the hub's.
+    expect(selfHub.stackColor).toBe(LOCAL_STACK_COLOR);
+    const hubColors = [selfHub, siblingHub, foreignHub].map((h) => h.stackColor);
+    expect(new Set(hubColors).size).toBe(3);
+    // The sibling agent + its edge carry the SIBLING hub's color, not the local's.
+    const siblingAgent = g.nodes.find((n) => n.id === "andreas/work/echo")!
+      .data as AgentNodeData;
+    expect(siblingAgent.stackColor).toBe(siblingHub.stackColor);
+    const siblingEdge = g.edges.find((e) => e.target === "andreas/work/echo")!;
+    expect(siblingEdge.data?.stackColor).toBe(siblingHub.stackColor);
+  });
+
+  it("still gives each distinct stack its OWN hub (sibling gets its own, not the local one)", () => {
+    const g = buildNetworkGraph([
+      tile({ agent_id: "luna" }),
+      siblingTile({ agent_id: "echo", stack: "work" }),
+    ]);
+    const hubs = g.nodes.filter((n) => n.type === "stackHub");
+    // local hub + the sibling's own hub = 2 distinct hubs
+    expect(hubs).toHaveLength(2);
+    expect(hubs.map((h) => h.id)).toContain(STACK_HUB_NODE_ID);
+    expect(hubs.map((h) => h.id)).toContain(
+      `${FOREIGN_HUB_ID_PREFIX}andreas/work`,
+    );
+    // the sibling agent is wired to its OWN hub, not the local one
+    const edge = g.edges.find((e) => e.target === "andreas/work/echo")!;
+    expect(edge.source).toBe(`${FOREIGN_HUB_ID_PREFIX}andreas/work`);
+  });
+
+  it("classifies an object origin as foreign when the serving principal is unknown", () => {
+    // Foreign-only snapshot → no local agent → servingPrincipal null → an object
+    // origin can't be proven a sibling, so it conservatively reads foreign.
+    const g = buildNetworkGraph([
+      foreignTile({ agent_id: "sage", principal: "jc", stack: "research" }),
+    ]);
+    const hub = g.nodes.find((n) => n.type === "stackHub")!
+      .data as StackHubNodeData;
+    expect(hub.servingPrincipal).toBeNull();
+    expect(classifyOrigin(hub.origin, hub.servingPrincipal)).toBe("foreign");
+  });
+
+  it("a local-only snapshot only gains the servingPrincipal field (otherwise unchanged)", () => {
+    const g = buildNetworkGraph([
+      tile({ agent_id: "luna" }),
+      tile({ agent_id: "echo" }),
+    ]);
+    // one local hub, every node carries servingPrincipal "andreas", origin "local"
+    const hubs = g.nodes.filter((n) => n.type === "stackHub");
+    expect(hubs).toHaveLength(1);
+    for (const n of g.nodes) {
+      const d = n.data as StackHubNodeData | AgentNodeData;
+      expect(d.origin).toBe("local");
+      expect(d.servingPrincipal).toBe("andreas");
+    }
+  });
+});
+
+describe("buildNetworkGraph — agent node ids namespaced by stack (#1065)", () => {
+  // #1065: browser-QA of the multi-stack graph (#1060) saw 16 React
+  // `Encountered two children with the same key` errors for `andreas`/`luna` —
+  // multiple stacks now host an agent with the SAME logical id, so a bare
+  // `agent_id` node id collides across the per-stack hubs. React Flow keys its
+  // internal node list by `node.id`, so the node id MUST be globally unique.
+  // These tests pin the invariant: the node id is the full registry key
+  // (`{principal}/{stack}/{agent_id}`), so same-id-different-stack agents get
+  // DISTINCT node ids (zero duplicate-key collisions), and the edges + the
+  // click→detail selection key + the hover/highlight key all line up on that
+  // SAME id so the graph still wires + highlights + selects correctly.
+
+  it("gives two agents that share an agent_id on DIFFERENT stacks DISTINCT node ids", () => {
+    // `luna` on andreas/meta-factory AND andreas/work — the real collision the
+    // pane-of-glass aggregation surfaced. Bare-id node ids would collide on
+    // `luna`; namespaced ids do not.
+    const g = buildNetworkGraph([
+      tile({ agent_id: "luna", stack: "meta-factory", key: "andreas/meta-factory/luna" }),
+      siblingTile({ agent_id: "luna", stack: "work" }),
+    ]);
+    const agentNodes = g.nodes.filter((n) => n.type === "agent");
+    expect(agentNodes).toHaveLength(2);
+
+    const ids = agentNodes.map((n) => n.id);
+    expect(ids).toContain("andreas/meta-factory/luna");
+    expect(ids).toContain("andreas/work/luna");
+    // The load-bearing assertion: no duplicate node ids → no duplicate React keys.
+    expect(new Set(ids).size).toBe(ids.length);
+    // And specifically NOT the bare logical id that collided in QA.
+    expect(ids).not.toContain("luna");
+  });
+
+  it("keeps EVERY node id globally unique across local + sibling + foreign hubs sharing agent_ids", () => {
+    // The worst case the QA hit: `andreas` and `luna` each present on several
+    // stacks at once. Every node id (hubs + agents) must be unique.
+    const g = buildNetworkGraph([
+      tile({ agent_id: "luna", stack: "meta-factory", key: "andreas/meta-factory/luna" }),
+      tile({ agent_id: "andreas", stack: "meta-factory", key: "andreas/meta-factory/andreas" }),
+      siblingTile({ agent_id: "luna", stack: "work" }),
+      siblingTile({ agent_id: "andreas", stack: "work" }),
+      foreignTile({ agent_id: "luna", principal: "jc", stack: "research" }),
+      foreignTile({ agent_id: "andreas", principal: "jc", stack: "research" }),
+    ]);
+    const allIds = g.nodes.map((n) => n.id);
+    expect(new Set(allIds).size).toBe(allIds.length);
+    // The six agents resolve to six distinct namespaced ids.
+    const agentIds = g.nodes.filter((n) => n.type === "agent").map((n) => n.id);
+    expect(new Set(agentIds)).toEqual(
+      new Set([
+        "andreas/meta-factory/luna",
+        "andreas/meta-factory/andreas",
+        "andreas/work/luna",
+        "andreas/work/andreas",
+        "jc/research/luna",
+        "jc/research/andreas",
+      ]),
+    );
+  });
+
+  it("targets each hub→agent edge at the SAME namespaced node id (edges still connect)", () => {
+    const g = buildNetworkGraph([
+      tile({ agent_id: "luna", stack: "meta-factory", key: "andreas/meta-factory/luna" }),
+      siblingTile({ agent_id: "luna", stack: "work" }),
+    ]);
+    const nodeIds = new Set(g.nodes.map((n) => n.id));
+    // Every edge's source + target must reference a node that actually exists —
+    // a stale bare-id target would orphan the edge (no line drawn).
+    for (const e of g.edges) {
+      expect(nodeIds.has(e.source)).toBe(true);
+      expect(nodeIds.has(e.target)).toBe(true);
+    }
+    // The two `luna` edges point at the two DISTINCT namespaced agent nodes.
+    const targets = g.edges.map((e) => e.target).sort();
+    expect(targets).toEqual(
+      ["andreas/meta-factory/luna", "andreas/work/luna"].sort(),
+    );
+  });
+
+  it("uses the registry key as the node id so click→detail selection + hover/highlight align", () => {
+    // The detail panel resolves a clicked node via `agents.find(a => a.key === id)`
+    // and the hover/highlight match index keys on `a.key` — both the namespaced
+    // registry key. The node id MUST equal `data.key` so a click/hover on a node
+    // resolves the right agent (and the right ONE of two same-id siblings).
+    const g = buildNetworkGraph([
+      tile({ agent_id: "luna", stack: "meta-factory", key: "andreas/meta-factory/luna" }),
+      siblingTile({ agent_id: "luna", stack: "work" }),
+    ]);
+    for (const n of g.nodes.filter((n) => n.type === "agent")) {
+      const d = n.data as AgentNodeData;
+      // node.id (the React key + the lifted selection key) === data.key (the
+      // hover/match key + the detail-panel lookup key). One id, three consumers.
+      expect(n.id).toBe(d.key);
+    }
+  });
+
+  it("still produces a stable single-stack id (regression: no namespacing change for the common case)", () => {
+    const g = buildNetworkGraph([tile({ agent_id: "luna" })]);
+    const agentNode = g.nodes.find((n) => n.type === "agent")!;
+    expect(agentNode.id).toBe("andreas/research/luna");
+    expect(g.edges).toHaveLength(1);
+    expect(g.edges[0]!.target).toBe("andreas/research/luna");
+  });
+});
+
+describe("collectLegendStacks (#1068)", () => {
+  it("returns no rows for an empty graph", () => {
+    expect(collectLegendStacks({ nodes: [], edges: [] })).toEqual([]);
+  });
+
+  it("one row per stack-hub, local first, with label + matching hub color", () => {
+    const g = buildNetworkGraph([
+      tile({ agent_id: "luna" }), // local self
+      siblingTile({ agent_id: "echo", stack: "work" }), // andreas/work
+      foreignTile({ agent_id: "sage", principal: "jc", stack: "research" }),
+    ]);
+    const rows = collectLegendStacks(g);
+    expect(rows).toHaveLength(3);
+
+    // Local first; its label is "local" and its color the reserved signature.
+    expect(rows[0]!.id).toBe(STACK_HUB_NODE_ID);
+    expect(rows[0]!.label).toBe("local");
+    expect(rows[0]!.color).toBe(LOCAL_STACK_COLOR);
+
+    // Peers carry their `{principal}/{stack}` label + their hub's color.
+    const labels = rows.map((r) => r.label);
+    expect(labels).toContain("andreas/work");
+    expect(labels).toContain("jc/research");
+
+    // Each legend color equals its hub node's stackColor (one source of truth).
+    for (const row of rows) {
+      const hub = g.nodes.find((n) => n.id === row.id)!.data as StackHubNodeData;
+      expect(row.color).toBe(hub.stackColor);
+    }
+    // The three colors are distinct.
+    expect(new Set(rows.map((r) => r.color)).size).toBe(3);
   });
 });

@@ -86,10 +86,13 @@ function connectRow(principal: string, stack: string, rtt: number): TransportRos
 }
 
 describe("NetworkGraphEdge — base shape unchanged without overlay (U2.3)", () => {
-  it("buildNetworkGraph emits edges with NO data field (pre-U2.3 byte-shape)", () => {
+  it("buildNetworkGraph emits edges with NO transport field (pre-U2.3 byte-shape)", () => {
     const g = buildNetworkGraph([tile({ agent_id: "luna" })]);
     expect(g.edges.length).toBe(1);
-    expect(g.edges[0]!.data).toBeUndefined();
+    // #1068 — the edge carries `data.stackColor` (the per-stack hue) at build
+    // time, but NO `transport` payload without the overlay.
+    expect(g.edges[0]!.data?.transport).toBeUndefined();
+    expect(typeof g.edges[0]!.data?.stackColor).toBe("string");
   });
 });
 
@@ -124,7 +127,10 @@ describe("applyTransportOverlay — additive widening (U2.3)", () => {
     expect((hub.data as StackHubNodeData).transportVerdict).toBeUndefined();
     const agent = g.nodes.find((n) => n.id === "andreas/research/luna")!;
     expect((agent.data as AgentNodeData).transportLeaf).toBeUndefined();
-    expect(g.edges.find((e) => e.target === "andreas/research/luna")!.data).toBeUndefined();
+    // #1068 — the edge keeps its per-stack color but gains NO transport payload.
+    expect(
+      g.edges.find((e) => e.target === "andreas/research/luna")!.data?.transport,
+    ).toBeUndefined();
   });
 
   it("keys a FOREIGN peer's leaf on its ORIGIN stack (not the local hub)", () => {
@@ -157,6 +163,7 @@ describe("applyTransportOverlay — additive widening (U2.3)", () => {
     const g = applyTransportOverlay(base, buildTransportOverlay([]));
     const hub = g.nodes.find((n) => n.id === STACK_HUB_NODE_ID)!;
     expect((hub.data as StackHubNodeData).transportVerdict).toBeUndefined();
-    expect(g.edges[0]!.data).toBeUndefined();
+    // #1068 — color survives; no transport payload added by an empty overlay.
+    expect(g.edges[0]!.data?.transport).toBeUndefined();
   });
 });

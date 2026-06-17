@@ -169,6 +169,17 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--principal-seed": "value",
         "--creds": "value",
         "--account": "value",
+        // O-3 (cortex#1053) — the operator-mode "leaf package" flags. When the
+        // stack's bus is anonymous/hard-isolated (the #794 fail-fast input),
+        // these let `cortex network join` AUTO-CONVERT it to operator-mode
+        // (render the SOP §B0.1 blocks) instead of refusing. Map to
+        // stack.nats_infra.{operator_jwt,account_jwt,system_account,
+        // system_account_jwt}. O-4 supplies them via the register→issue
+        // handshake; these flags/config fields are the manual/interim path.
+        "--operator-jwt": "value",
+        "--account-jwt": "value",
+        "--system-account": "value",
+        "--system-account-jwt": "value",
         "--nats-config": "value",
         "--plist": "value",
         // #763 — Linux/systemd: the nats-server systemd unit path (the
@@ -452,6 +463,11 @@ async function runJoin(
         ...readOverride(flags, "--unit", "unitPath"),
         ...readOverride(flags, "--account", "account"),
         ...readOverride(flags, "--creds", "credsPath"),
+        // O-3 (cortex#1053) — operator-mode leaf-package overrides.
+        ...readOverride(flags, "--operator-jwt", "operatorJwt"),
+        ...readOverride(flags, "--account-jwt", "accountJwt"),
+        ...readOverride(flags, "--system-account", "systemAccount"),
+        ...readOverride(flags, "--system-account-jwt", "systemAccountJwt"),
       },
       expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH),
       load,
@@ -490,6 +506,11 @@ async function runJoin(
     account: inputs.account,
     leafNode: optionalValueFlag(flags, "--leaf-node"),
     maxHop,
+    // O-3 (cortex#1053) — pass the operator-mode leaf package (when resolved)
+    // so join auto-converts an anonymous bus instead of fail-fasting (#794).
+    ...(inputs.operatorModePackage !== undefined && {
+      operatorModePackage: inputs.operatorModePackage,
+    }),
   };
 
   const cfg = portsConfigFromInputs(networkId, inputs, slugRes.slug, flags);
@@ -1320,6 +1341,17 @@ Flags (all OPTIONAL OVERRIDES — derived from cortex.yaml when omitted; #753):
                           2nd stack — not to re-run a converged one.
   --creds <p>             Override stack.nats_infra.creds_path (default: ~/.config/nats/<network>.creds).
   --account <nkey-U>      Override stack.nats_infra.account (A… nkey-U the leaf binds to).
+  --operator-jwt <eyJ…>   (O-3, #1053) NSC operator JWT. With --account-jwt + --account, lets join
+                          AUTO-CONVERT an anonymous/hard-isolated bus to operator-mode (render the
+                          SOP §B0.1 blocks) instead of fail-fasting (#794). Maps to
+                          stack.nats_infra.operator_jwt. O-4 supplies it via the register→issue
+                          handshake; this flag/config is the manual/interim path.
+  --account-jwt <eyJ…>    (O-3, #1053) The issued account JWT (preloaded under resolver_preload).
+                          Maps to stack.nats_infra.account_jwt.
+  --system-account <A…>   (O-3, #1053) OPTIONAL system account nkey-U (sets system_account). Maps
+                          to stack.nats_infra.system_account.
+  --system-account-jwt <eyJ…> (O-3, #1053) OPTIONAL system account JWT. Maps to
+                          stack.nats_infra.system_account_jwt.
   --nats-config <p>       Override stack.nats_infra.config_path (nats-server -c config).
   --plist <p>             Override stack.nats_infra.plist_path (macOS nats-server launchd plist).
   --unit <p>              Override stack.nats_infra.unit_path (Linux nats-server systemd unit; #763).

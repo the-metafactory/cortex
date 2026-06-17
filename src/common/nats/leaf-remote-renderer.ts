@@ -721,6 +721,227 @@ function hasNonLeafInclude(text: string): boolean {
   return false;
 }
 
+// =============================================================================
+// O-3 (cortex#1053, epic #1050, spec docs/design-automated-operator-onboarding.md  // operator-mode
+// §4-D2) — CONVERT an anonymous/hard-isolated bus to operator-mode, in place,
+// instead of fail-fasting (#794) and telling a human to hand-edit `<slug>.conf`.
+//
+// #794 made `cortex network join` REFUSE on an anonymous bus (rendering an
+// account-bound leaf there crashes nats-server). That refusal is the right
+// last-resort, but it blocks automation: the human had to copy the four
+// operator-mode blocks out of `~/.config/nats/local.conf` by hand (SOP §B0.1).
+//
+// O-3 makes join render those blocks itself FROM THE LEAF PACKAGE (the
+// register→issue handshake of O-4 supplies it; O-3 is the renderer + the
+// conversion seam). The blocks are exactly SOP §B0.1's four:
+//   - `operator: <JWT>`        — the NSC operator JWT
+//   - `system_account: <A…>`   — OPTIONAL (only when the package carries a SYS)
+//   - `resolver: MEMORY`
+//   - `resolver_preload { <account>: <JWT> [, <sys>: <JWT>] }`
+// while KEEPING the stack's own `server_name`/`listen`/`http`/`jetstream` and
+// NOT adding a meta-factory leaf include (join renders its own per-network one).
+// =============================================================================
+
+/**
+ * The "leaf package" — the operator-mode material join needs to convert an
+ * anonymous bus. O-4 (the register→issue handshake) SUPPLIES this; O-3 only
+ * consumes + renders it. Public-repo-safe: it is JWT + nkey-U text, never a
+ * seed.
+ */
+export interface OperatorModeLeafPackage {
+  /** The NSC operator JWT (`eyJ…`) — the root of the local account tree. */
+  operatorJwt: string;
+  /** The issued account public key (nkey-U, `A…`) the leaf binds to. */
+  account: string;
+  /** The issued account's JWT (`eyJ…`) — preloaded under `resolver_preload`. */
+  accountJwt: string;
+  /** OPTIONAL system account public key (nkey-U). Sets `system_account`. */
+  systemAccount?: string;
+  /** OPTIONAL system account JWT — preloaded alongside the issued account. */
+  systemAccountJwt?: string;
+}
+
+/**
+ * The outcome of {@link renderOperatorModeBlocks}:
+ *   - `converted` — the config was anonymous; the rendered operator-mode config
+ *     is in `conf` (the orchestrator writes it).
+ *   - `already` — the config is ALREADY operator-mode under THIS package's
+ *     operator JWT; `conf` is the unchanged bytes (a byte-stable no-op).
+ *   - `refuse` — cannot convert: material absent/malformed, OR the config is
+ *     already operator-mode under a DIFFERENT operator (never clobber it).
+ */
+export type OperatorModeConversion =
+  | { status: "converted"; conf: string }
+  | { status: "already"; conf: string }
+  | { status: "refuse"; reason: string };
+
+/** A marker line so a human reading the converted config knows join wrote it. */
+const OPERATOR_MODE_MARKER =
+  "// --- operator-mode blocks rendered by cortex network join (O-3, #1053) ---";
+const OPERATOR_MODE_MARKER_END =
+  "// --- end operator-mode blocks ---";
+
+/**
+ * Render the SOP §B0.1 operator-mode blocks INTO `currentConf` from a leaf
+ * package. PURE (text in, text out): no filesystem, no daemon. The orchestrator
+ * (network-lib joinNetwork) calls this through the LeafFilePort, decides whether
+ * to write the result, then proceeds with the existing leaf-remote render.
+ *
+ * Conversion rules:
+ *   - **anonymous bus + complete package** → `converted`: append the four blocks,
+ *     KEEPING the stack's own identity/ports/JS domain verbatim, NOT touching
+ *     any `leafnodes`/`include` (the join renders its own per-network leaf).
+ *   - **already operator-mode under THIS operator** → `already` (idempotent
+ *     no-op: re-running a converted bus must not duplicate or drift).
+ *   - **already operator-mode under a DIFFERENT operator** → `refuse`: never
+ *     clobber a bus standing on someone else's account tree.
+ *   - **material absent/malformed** → `refuse` with an actionable reason (this
+ *     is the #794 fail-fast, preserved for the genuinely-unconvertible case).
+ *
+ * The account nkey-U is validated against {@link NKEY_ACCOUNT} before it is
+ * emitted, and the operator JWT + account JWTs are emitted ONLY as bare `eyJ…` tokens
+ * matching the live `local.conf` shape — both guards prevent HOCON injection
+ * (a value carrying whitespace/braces/newlines would break out of the block).
+ */
+export function renderOperatorModeBlocks(
+  currentConf: string,
+  pkg: OperatorModeLeafPackage,
+): OperatorModeConversion {
+  // 1) Validate the package — the genuinely-unconvertible cases fail fast (#794).
+  const operatorJwt = pkg.operatorJwt.trim();
+  const account = pkg.account.trim();
+  const accountJwt = pkg.accountJwt.trim();
+  const systemAccount = pkg.systemAccount?.trim();
+  const systemAccountJwt = pkg.systemAccountJwt?.trim();
+
+  if (operatorJwt.length === 0) {
+    return {
+      status: "refuse",
+      reason:
+        "leaf package is missing the operator JWT — cannot render operator-mode " +
+        "(pass --operator-jwt or set stack.nats_infra.operator_jwt; O-4 supplies it " +
+        "via the register→issue handshake).",
+    };
+  }
+  if (!JWT_SHAPE.test(operatorJwt)) {
+    return {
+      status: "refuse",
+      reason: `operator JWT ${JSON.stringify(pkg.operatorJwt)} is not a JWT (expected an \`eyJ…\` token)`,
+    };
+  }
+  if (account.length === 0) {
+    return {
+      status: "refuse",
+      reason:
+        "leaf package is missing the issued account public key — cannot bind the " +
+        "leaf (pass --account or set stack.nats_infra.account).",
+    };
+  }
+  if (!NKEY_ACCOUNT.test(account)) {
+    return {
+      status: "refuse",
+      reason: `account ${JSON.stringify(pkg.account)} is not an nkey-U account public key (\`A…\`)`,
+    };
+  }
+  if (accountJwt.length === 0 || !JWT_SHAPE.test(accountJwt)) {
+    return {
+      status: "refuse",
+      reason:
+        "leaf package is missing a valid account JWT — `resolver_preload` needs the " +
+        "issued account's JWT (pass --account-jwt or set stack.nats_infra.account_jwt).",
+    };
+  }
+  // A SYS account is OPTIONAL, but if one is offered it must be well-formed
+  // AND paired with its JWT (a half-specified SYS account would emit a
+  // `system_account` line with no preload → nats-server can't resolve it).
+  if (systemAccount !== undefined && systemAccount.length > 0) {
+    if (!NKEY_ACCOUNT.test(systemAccount)) {
+      return {
+        status: "refuse",
+        reason: `system account ${JSON.stringify(pkg.systemAccount)} is not an nkey-U account public key`,
+      };
+    }
+    if (
+      systemAccountJwt === undefined ||
+      systemAccountJwt.length === 0 ||
+      !JWT_SHAPE.test(systemAccountJwt)
+    ) {
+      return {
+        status: "refuse",
+        reason:
+          "a system account was offered without a valid system account JWT — " +
+          "`resolver_preload` must carry the SYS account's JWT too.",
+      };
+    }
+  }
+
+  // 2) Already operator-mode? Decide between idempotent no-op and clobber-refuse.
+  if (natsConfigHasAccountTree(currentConf)) {
+    const stripped = stripConfigComments(currentConf);
+    const existingOperatorJwt = /^[ \t]*operator[ \t]*[:=][ \t]*(\S+)/m.exec( // operator-mode block line
+      stripped,
+    );
+    // SAME operator JWT already present → this package already converted it.
+    // Byte-stable no-op (the orchestrator may skip the write).
+    if (existingOperatorJwt?.[1] === operatorJwt) {
+      return { status: "already", conf: currentConf };
+    }
+    // Operator-mode under a DIFFERENT (or unreadable) operator JWT — NEVER clobber.
+    return {
+      status: "refuse",
+      reason:
+        "the nats config is ALREADY operator-mode under a different operator — " +
+        "refusing to overwrite its account tree. Convert/clean the bus by hand " +
+        "or join with the operator that owns this bus (cortex#1053).",
+    };
+  }
+
+  // 3) Anonymous bus + complete package → render the four §B0.1 blocks.
+  // We APPEND them (KEEPING the stack's own identity/ports/JS domain verbatim,
+  // and never touching any leafnodes/include). The trailing newline of the
+  // source config is normalised so the appended block sits on its own lines.
+  const preload: string[] = [
+    `  ${account}: ${accountJwt}`,
+  ];
+  if (systemAccount !== undefined && systemAccount.length > 0) {
+    preload.push(`  ${systemAccount}: ${systemAccountJwt ?? ""}`);
+  }
+
+  const blocks: string[] = [
+    OPERATOR_MODE_MARKER,
+    `operator: ${operatorJwt}`,
+  ];
+  if (systemAccount !== undefined && systemAccount.length > 0) {
+    blocks.push(`system_account: ${systemAccount}`);
+  }
+  // Security-review NIT-2 (#1058) — `resolver_preload:` with the COLON form
+  // (not the brace-only `resolver_preload {`): this matches the production hub's
+  // `~/.config/nats/local.conf` shape (which uses the colon form), so a converted
+  // bus looks identical to a hand-built operator-mode one. Both forms are valid
+  // HOCON; we pick the colon form deliberately to match local.conf.
+  blocks.push("resolver: MEMORY", "resolver_preload: {", ...preload, "}");
+  blocks.push(OPERATOR_MODE_MARKER_END);
+
+  const base = currentConf.replace(/\n+$/, "");
+  const conf = `${base}\n\n${blocks.join("\n")}\n`;
+  return { status: "converted", conf };
+}
+
+/**
+ * A JWT shape guard for the operator JWT + account JWTs emitted bare into the config.
+ * NSC JWTs are `eyJ…` (a base64url-encoded `{"alg":…}` header) — EXACTLY three
+ * base64url segments joined by `.` (header.payload.signature). We require the
+ * `eyJ` prefix + exactly two more dot-separated base64url segments (no
+ * whitespace/braces/newlines) so a hostile or malformed value cannot break out
+ * of the rendered block. (Validated, never cryptographically verified —
+ * verification is O-4's handshake.)
+ *
+ * Security-review NIT-1 (#1058) — `{2}` (exactly two trailing segments), not
+ * `{1,2}`: a 2-segment value is not a valid NSC JWT, and accepting one would let
+ * nats-server reject it at RUNTIME (bus restart) instead of failing fast here.
+ */
+const JWT_SHAPE = /^eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2}$/;
+
 /**
  * #821 MAJOR (code-review) — derive the nats-server HTTP MONITOR url from its
  * config, so the post-restart health probe targets THIS bus's monitor port (the

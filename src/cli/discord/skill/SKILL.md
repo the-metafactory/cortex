@@ -85,7 +85,7 @@ servers:
     # botToken / channels optional — omitted fields fall back to top-level
 ```
 
-Config stored at `~/.config/grove/cli.yaml`.
+Config stored at `~/.config/cortex/cli.yaml` (read cortex-first with a `~/.config/grove/cli.yaml` fallback during the GV-1 transition; first write migrates the legacy copy).
 
 ## Attachments
 

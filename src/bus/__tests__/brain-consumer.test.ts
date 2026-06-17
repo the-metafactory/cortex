@@ -298,6 +298,19 @@ describe("brain-consumer helpers", () => {
     expect(safeAttachmentRefs("mattermost", [{ filename: "x", url: "https://files.mm/x" }])).toEqual([]);
   });
 
+  test("safeAttachmentRefs: inlined content bypasses the host allowlist (no fetch = no SSRF)", () => {
+    // Mattermost: bytes the adapter already fetched (with the bot token) and
+    // base64-inlined are forwarded REGARDLESS of host — the brain reads the
+    // bytes, never fetches the (auth-gated, non-allowlisted) URL.
+    const refs = safeAttachmentRefs("mattermost", [
+      { filename: "phish.eml", contentType: "message/rfc822", url: "https://securechat.example/api/v4/files/abc", content: "YmFzZTY0" },
+      { filename: "nocontent.eml", url: "https://securechat.example/api/v4/files/def" }, // no inline → dropped (off-allowlist)
+    ]);
+    expect(refs).toEqual([
+      { name: "phish.eml", contentType: "message/rfc822", url: "https://securechat.example/api/v4/files/abc", content: "YmFzZTY0" },
+    ]);
+  });
+
   test("brainReasonToDispatchReason: not_now carries retry_after_ms", () => {
     expect(
       brainReasonToDispatchReason({ kind: "not_now", detail: "busy", retry_after_ms: 500 }),

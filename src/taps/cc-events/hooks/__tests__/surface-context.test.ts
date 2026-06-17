@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { spawnSync } from "child_process";
 import { join } from "path";
 
-const HOOK_PATH = join(import.meta.dir, "..", "GroveContext.hook.ts");
+const HOOK_PATH = join(import.meta.dir, "..", "SurfaceContext.hook.ts");
 
 /** Helper: run the hook with SessionStart JSON on stdin */
 function runHook(env: Record<string, string>, prompt = "Hello") {
@@ -17,7 +17,7 @@ function runHook(env: Record<string, string>, prompt = "Hello") {
   });
 }
 
-describe("GroveContext.hook", () => {
+describe("SurfaceContext.hook", () => {
   const originalEnv = { ...process.env };
 
   beforeEach(() => {
@@ -59,13 +59,13 @@ describe("GroveContext.hook", () => {
     expect(output.prompt).toBe("Hello");
   });
 
-  test("should inject Grove context on SessionStart when GROVE_CHANNEL is set", () => {
+  test("should inject Cortex context on SessionStart when GROVE_CHANNEL is set", () => {
     const result = runHook({ GROVE_CHANNEL: "test-channel" });
 
     expect(result.status).toBe(0);
     const output = JSON.parse(result.stdout.trim());
     expect(output.prompt).toContain("<system-reminder>");
-    expect(output.prompt).toContain("Grove Context:");
+    expect(output.prompt).toContain("Cortex Context:");
     expect(output.prompt).toContain("Channel: test-channel");
     expect(output.prompt).toContain("</system-reminder>");
   });
