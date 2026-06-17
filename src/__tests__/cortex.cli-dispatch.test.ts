@@ -117,3 +117,21 @@ describe("#752 — start/stop/status unaffected", () => {
     expect(r.stdout).toContain("provision-stack");
   });
 });
+
+describe("O-2.5 (#1061) — creds passthrough", () => {
+  test("`cortex creds --help` routes to the creds dispatcher", async () => {
+    const r = await runCortex(["creds", "--help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("cortex creds");
+    expect(r.stdout).toContain("issue");
+    expect(r.stdout).toContain("revoke");
+    expect(r.stdout).toContain("rotate");
+    expect(r.stdout + r.stderr).not.toContain("cortex: starting");
+  });
+
+  test("`cortex --help` lists creds alongside the other subcommands", async () => {
+    const r = await runCortex(["--help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("creds");
+  });
+});

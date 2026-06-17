@@ -222,6 +222,7 @@ import { dispatchNetwork } from "./cli/cortex/commands/network";
 import { dispatchOffer } from "./cli/cortex/commands/offer";
 import { dispatchProvisionStack } from "./cli/cortex/commands/provision-stack";
 import { dispatchStack } from "./cli/cortex/commands/stack";
+import { dispatchCreds } from "./cli/cortex/commands/creds";
 
 import { CloudPublisher } from "./taps/cc-events/cloud-publisher";
 import {
@@ -6286,6 +6287,27 @@ if (import.meta.main) {
     .helpOption(false)
     .action(async (args: string[]) => {
       const result = await dispatchOffer(args);
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      process.exit(result.exitCode);
+    });
+
+  // O-2.5 (#1061) — per-agent NATS user credentials (issue/list/revoke/rotate),
+  // a thin delegator to `arc nats … --json`. Same passthrough shape as
+  // `network` / `stack` / `offer`: `dispatchCreds` owns its own arg parsing
+  // (incl. the `creds issue <agent-id> --account/--pub/--sub` form), so
+  // commander hands it the raw remaining argv untouched. The module landed in
+  // #1061 but was never wired into the CLI here — `cortex creds …` was an
+  // unknown command until this registration.
+  program
+    .command("creds")
+    .description("Manage per-agent NATS user credentials (issue / list / revoke / rotate)")
+    .argument("[args...]", "creds subcommand + flags (see `cortex creds --help`)")
+    .allowUnknownOption()
+    .passThroughOptions()
+    .helpOption(false)
+    .action(async (args: string[]) => {
+      const result = await dispatchCreds(args);
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);
       process.exit(result.exitCode);
