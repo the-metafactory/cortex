@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { resolveChannelContext, resolveGroveChannel } from "../channel-context";
+import { resolveChannelContext, resolveSurfaceChannel } from "../channel-context";
 
 const repos = [
   "the-metafactory/grove",
@@ -92,15 +92,15 @@ describe("resolveChannelContext", () => {
   });
 });
 
-describe("resolveGroveChannel", () => {
+describe("resolveSurfaceChannel", () => {
   test("grove channel matching repo name resolves", () => {
-    const ctx = resolveGroveChannel("grove", repos);
+    const ctx = resolveSurfaceChannel("grove", repos);
     expect(ctx.repo).toBe("the-metafactory/grove");
     expect(ctx.repoShort).toBe("grove");
   });
 
   test("non-matching channel returns null", () => {
-    const ctx = resolveGroveChannel("andreas", repos);
+    const ctx = resolveSurfaceChannel("andreas", repos);
     expect(ctx.repo).toBeNull();
   });
 });

@@ -132,6 +132,11 @@ export interface IngestEvent {
   session_id: string;
   agent_id?: string;
   agent_name?: string;
+  // GV-2 (cortex#1077) — channel-label vocabulary migration. `cortex_channel`
+  // is canonical; `grove_channel` is the legacy alias kept for back-compat.
+  // Producers dual-write both; consumers read cortex-first with a grove
+  // fallback. `grove_channel` retires at v3.0.0 (cortex#774 lockstep).
+  cortex_channel?: string;
   grove_channel?: string;
   /**
    * IAW D.5 — sovereignty fields hoisted onto the event envelope by the

@@ -43,6 +43,7 @@ import type {
   TransportVerdict,
 } from "./network-transport-overlay";
 import { overlayForStack } from "./network-transport-overlay";
+import { stackColor } from "./stack-color";
 
 /** Reserved id for the synthetic LOCAL stack-root hub node (never a valid agent key). */
 export const STACK_HUB_NODE_ID = "__stack__";
@@ -71,12 +72,29 @@ export interface StackHubNodeData {
    * distinctly + carrying the provenance label).
    */
   origin: AgentOrigin;
+  /**
+   * #1008 — the SERVING stack's principal, derived from the snapshot's
+   * `"local"`-origin agents (the serving stack's own identity). `null` when the
+   * snapshot has no local agent to derive it from (a foreign-only snapshot). The
+   * card pairs this with `origin` via `classifyOrigin` to tell a SAME-PRINCIPAL
+   * local sibling (DB-read aggregation) from a CROSS-PRINCIPAL federated peer —
+   * so a sibling renders as a "stack" hub, not a "federated stack".
+   */
+  servingPrincipal: string | null;
   /** `{principal}` the stack belongs to. */
   principal: string | null;
   /** `{stack}` label. */
   stack: string | null;
   /** Count of agents attached to this hub. */
   agentCount: number;
+  /**
+   * #1068 — the deterministic per-stack color for this hub, derived from
+   * `origin` via `stackColor` (the LOCAL stack gets the reserved signature hue,
+   * each peer a stable palette color). Used as the hub's accent/border. ADDITIVE:
+   * the local/sibling/foreign shape treatments (solid/dashed border, eyebrow)
+   * stay — color is a legibility aid, never the only signal.
+   */
+  stackColor: string;
   /**
    * P-14 U2.3 (#935) — signal's intent⋈reality VERDICT for this stack, when the
    * transport overlay is on AND signal observed this `{principal}/{stack}`.
@@ -98,6 +116,13 @@ export interface AgentNodeData {
    * metadata, never an interior (ADR-0007).
    */
   origin: AgentOrigin;
+  /**
+   * #1008 — the SERVING stack's principal (see {@link StackHubNodeData.servingPrincipal}).
+   * Lets the card classify a same-principal local SIBLING agent apart from a
+   * cross-principal FOREIGN peer via `classifyOrigin` — a sibling renders local,
+   * only a true foreign peer renders federated.
+   */
+  servingPrincipal: string | null;
   /** Logical agent id (`luna`, `echo`, …). */
   agentId: string;
   /** Soma assistant name, or `null` (falls back to `agentId` at render). */
@@ -110,6 +135,14 @@ export interface AgentNodeData {
   offlineReason: string | null;
   /** Epoch-ms of the last `agent.heartbeat` observed, or `null`. */
   lastHeartbeatAt: number | null;
+  /**
+   * #1068 — the deterministic per-stack color for THIS agent's stack (the same
+   * `stackColor(origin)` its hub carries — a local agent shares the local
+   * signature hue, a foreign peer shares its stack's color). Drives the agent
+   * card's accent/left-border. ADDITIVE — the foreign dashed-border + provenance
+   * badge stay; color groups the card visually with its hub.
+   */
+  stackColor: string;
   /**
    * P-14 U2.3 (#935) — leaf LIVENESS for this agent's stack, when the transport
    * overlay is on AND signal observed the stack. `present` is the live-link flag,
@@ -159,14 +192,41 @@ export interface NetworkGraphEdge {
   id: string;
   source: string;
   target: string;
-  /** U2.3 — optional transport overlay payload (health/lag), sourced from signal. */
-  data?: { transport?: NetworkEdgeTransportData };
+  /**
+   * Edge `data` payload.
+   *   - `stackColor` (#1068) — the hub's stack color, so the hub→agent connector
+   *     strokes in the stack's hue (set at build time for every edge).
+   *   - `transport` (U2.3) — optional health/lag overlay payload, sourced from
+   *     signal (present only when the transport overlay is on).
+   */
+  data?: { stackColor?: string; transport?: NetworkEdgeTransportData };
 }
 
 /** The adapter's output: nodes + edges, pre-layout. */
 export interface NetworkGraph {
   nodes: NetworkGraphNode[];
   edges: NetworkGraphEdge[];
+}
+
+/**
+ * #1008 — derive the SERVING stack's principal from the snapshot.
+ *
+ * A `"local"`-origin agent's tile carries the serving stack's own
+ * principal/stack (it IS a stack-own agent), so the serving principal is the
+ * `principal` of the first `"local"` agent. Returns `null` when no local agent
+ * is present (a foreign-only snapshot) — then no object origin can be proven a
+ * same-principal sibling, so classification falls back to "foreign".
+ *
+ * Derived client-side from the existing DTO rather than widening `/api/agents`
+ * to carry a serving-principal field — the `"local"` tiles already encode it.
+ */
+export function deriveServingPrincipal(
+  agents: readonly AgentPresenceTile[],
+): string | null {
+  for (const a of agents) {
+    if (a.origin === "local") return a.principal;
+  }
+  return null;
 }
 
 /** The `{principal}/{stack}` an agent's origin resolves to (for hub grouping). */
@@ -205,6 +265,16 @@ export function buildNetworkGraph(
   if (agents.length === 0) {
     return { nodes: [], edges: [] };
   }
+
+  // #1008 — derive the SERVING principal from the snapshot's `"local"`-origin
+  // agents: a local agent's tile carries the serving stack's own principal. We
+  // thread it onto every node so the cards can tell a SAME-PRINCIPAL local
+  // sibling (DB-read aggregation, `origin.principal === serving`) from a
+  // CROSS-PRINCIPAL federated peer (`origin.principal !== serving`) — the fix
+  // for siblings mislabeled "federated stack". `null` when the snapshot has no
+  // local agent (a foreign-only snapshot), in which case an object origin can't
+  // be proven a sibling and classifies conservatively as foreign.
+  const servingPrincipal = deriveServingPrincipal(agents);
 
   // First pass: bucket agents by their origin hub id, preserving first-seen order
   // of hubs and snapshot order of agents within each hub.
@@ -245,6 +315,11 @@ export function buildNetworkGraph(
   const edges: NetworkGraphEdge[] = [];
 
   for (const bucket of orderedBuckets) {
+    // #1068 — the stack's deterministic color, derived from the bucket's verified
+    // origin. The hub, every agent in the bucket, and every hub→agent edge share
+    // it, so a stack reads as one colored cluster. ADDITIVE over the shape/label
+    // treatments — never the only signal.
+    const color = stackColor(bucket.origin);
     nodes.push({
       id: bucket.hubId,
       type: "stackHub",
@@ -252,9 +327,11 @@ export function buildNetworkGraph(
       data: {
         kind: "stack-hub",
         origin: bucket.origin,
+        servingPrincipal,
         principal: bucket.principal ?? null,
         stack: bucket.stack ?? null,
         agentCount: bucket.agents.length,
+        stackColor: color,
       },
     });
     for (const a of bucket.agents) {
@@ -266,23 +343,62 @@ export function buildNetworkGraph(
           kind: "agent",
           key: a.key,
           origin: a.origin,
+          servingPrincipal,
           agentId: a.agent_id,
           assistantName: a.assistant_name,
           capabilities: a.capabilities,
           state: a.state,
           offlineReason: a.offline_reason,
           lastHeartbeatAt: a.last_heartbeat_at,
+          stackColor: color,
         },
       });
       edges.push({
         id: `hub-${a.key}`,
         source: bucket.hubId,
         target: a.key,
+        data: { stackColor: color },
       });
     }
   }
 
   return { nodes, edges };
+}
+
+/** #1068 — one legend entry: a stack's hub id, display label, and color. */
+export interface LegendStack {
+  /** The hub node id (stable React key + identity). */
+  id: string;
+  /** Display label — `{principal}/{stack}`, or `local` for the self stack. */
+  label: string;
+  /** The stack's deterministic color (the hub's `stackColor`). */
+  color: string;
+}
+
+/**
+ * #1068 — collect the per-stack legend entries from a built graph: one row per
+ * stack-hub node, carrying its `{principal}/{stack}` label (or `local` for the
+ * self stack) and its deterministic color. Hub emission order is preserved
+ * (local first, then peers in first-seen order — see {@link buildNetworkGraph}),
+ * so the legend reads in the same order the hubs lay out.
+ *
+ * Pure + DOM-free so it's unit-tested without a browser; the legend component
+ * takes the result and renders swatches.
+ */
+export function collectLegendStacks(graph: NetworkGraph): LegendStack[] {
+  const out: LegendStack[] = [];
+  for (const node of graph.nodes) {
+    if (node.data.kind !== "stack-hub") continue;
+    const d = node.data;
+    const label =
+      d.origin === "local"
+        ? "local"
+        : d.principal && d.stack
+          ? `${d.principal}/${d.stack}`
+          : (d.stack ?? d.principal ?? node.id);
+    out.push({ id: node.id, label, color: d.stackColor });
+  }
+  return out;
 }
 
 /**
@@ -345,6 +461,9 @@ export function applyTransportOverlay(
     return {
       ...edge,
       data: {
+        // Preserve the #1068 per-stack color the base build set; the overlay
+        // only ADDS the transport payload.
+        ...edge.data,
         transport: {
           verdict: peer.verdict,
           present: peer.present,

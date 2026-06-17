@@ -188,8 +188,8 @@ export class BusInboundSink implements GatewayInboundSink {
       timeoutMs: undefined,
       cwd: undefined,
       additionalArgs: undefined,
-      groveChannel: undefined,
-      groveNetwork: undefined,
+      channel: undefined,
+      network: undefined,
       project: undefined,
       entity: undefined,
     };

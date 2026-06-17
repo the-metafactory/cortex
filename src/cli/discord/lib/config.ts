@@ -1,16 +1,16 @@
 /**
- * Discord CLI configuration — stored at ~/.config/grove/cli.yaml.
+ * Discord CLI configuration — stored at ~/.config/cortex/cli.yaml.
  *
- * Path is intentionally `~/.config/grove/` for byte-identical parity with
- * grove-v2 (plan §1.3 non-goal: behaviour parity). The rename to
- * `~/.config/cortex/cli.yaml` lands at MIG-7 alongside the broader
- * bot.yaml → cortex.yaml move; doing it now would create an intermediate
- * config-fork state for the principal. Tracked at plan §4 MIG-7.
+ * GV-1 (cortex#1076): the canonical location is `~/.config/cortex/cli.yaml`.
+ * Reads are cortex-first with a `~/.config/grove/cli.yaml` fallback during the
+ * transition window; the first write migrates the legacy grove copy to cortex
+ * (mode-preserving) and persists cortex-side thereafter.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { join, dirname } from "path";
+import { dirname } from "path";
 import YAML from "yaml";
+import { cortexConfigPath, migrateGroveConfigFile, resolveConfigFilePath } from "../../../common/config/config-path";
 
 export interface ChannelConfig {
   /** Discord channel ID */
@@ -50,21 +50,29 @@ export interface DiscordCliConfig {
   servers?: Record<string, ServerProfile>;
 }
 
-const CONFIG_PATH = join(process.env.HOME ?? "~", ".config", "grove", "cli.yaml");
+const CONFIG_FILENAME = "cli.yaml";
 
 export function loadConfig(): DiscordCliConfig {
-  if (!existsSync(CONFIG_PATH)) return {};
-  const text = readFileSync(CONFIG_PATH, "utf-8");
+  // cortex-first, grove-fallback (GV-1).
+  const path = resolveConfigFilePath(CONFIG_FILENAME);
+  if (!existsSync(path)) return {};
+  const text = readFileSync(path, "utf-8");
   return (YAML.parse(text) as DiscordCliConfig | undefined) ?? {};
 }
 
 export function saveConfig(config: DiscordCliConfig): void {
-  mkdirSync(dirname(CONFIG_PATH), { recursive: true });
-  writeFileSync(CONFIG_PATH, YAML.stringify(config));
+  // On first write, migrate any legacy grove copy to cortex (mode-preserving),
+  // then always persist to the canonical cortex path.
+  migrateGroveConfigFile(CONFIG_FILENAME);
+  const path = cortexConfigPath(CONFIG_FILENAME);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, YAML.stringify(config));
 }
 
 export function getConfigPath(): string {
-  return CONFIG_PATH;
+  // The path a reader would resolve right now (cortex if present/default,
+  // grove only as the legacy fallback).
+  return resolveConfigFilePath(CONFIG_FILENAME);
 }
 
 /**

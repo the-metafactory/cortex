@@ -544,7 +544,7 @@ describe("DevConsumer.processEnvelope — F-2.1", () => {
         sessionOpts: {
           agentId: "forge",
           // The bash-guard Gate-1 engagement precondition.
-          groveChannel: "forge",
+          channel: "forge",
           bashAllowlist,
           allowedTools: ["Bash", "Read"],
           allowedDirs: ["/repo"],
@@ -555,7 +555,7 @@ describe("DevConsumer.processEnvelope — F-2.1", () => {
 
     const o = seen.opts[0]!;
     // Channel present → bash-guard engages (not pass-through).
-    expect(o.groveChannel).toBe("forge");
+    expect(o.channel).toBe("forge");
     // bashAllowlist present → guard has rules AND the session avoids the
     // CLI-bypass (CORTEX_BASH_GUARD set).
     expect(o.bashAllowlist).toEqual(bashAllowlist);

@@ -86,7 +86,7 @@ describe("lockdownReviewSessionOpts — wider scope lockdown", () => {
   });
 
   test("sets the bash-guard engagement channel to the agent id", () => {
-    expect(locked.groveChannel).toBe("echo");
+    expect(locked.channel).toBe("echo");
   });
 
   test("preserves non-security baseline fields (agentName, timeout)", () => {

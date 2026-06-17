@@ -719,8 +719,8 @@ describe("dispatch-listener — success path", () => {
     expect(optsCaptured).toHaveLength(1);
     const opts = optsCaptured[0]!;
     expect(opts.prompt).toBe("do the work");
-    expect(opts.groveChannel).toBe("test-channel");
-    expect(opts.groveNetwork).toBe("test-network");
+    expect(opts.channel).toBe("test-channel");
+    expect(opts.network).toBe("test-network");
     expect(opts.agentName).toBe("Cortex");
     expect(opts.agentId).toBe("cortex"); // sourced from payload.agent_id
     expect(opts.allowedTools).toEqual(["Read", "Edit"]);
@@ -736,6 +736,68 @@ describe("dispatch-listener — success path", () => {
     expect(opts.entity).toBe("issue/12");
     expect(opts.principal).toBe("andreas");
     expect(opts.resumeSessionId).toBe("prior-session");
+  });
+
+  // GV-2 (cortex#1077) — channel/network label vocabulary migration. The
+  // listener reads the canonical `cortex_*` payload field first, falling back
+  // to the legacy `grove_*` alias (a pre-GV-2 source still sends grove only).
+  // The grove-fallback path is already exercised by the test above (which
+  // sends grove_channel/grove_network only); these lock the cortex-first path.
+  test("GV-2: reads canonical cortex_channel/cortex_network when present", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(
+      makeReceivedEnvelope({
+        prompt: "do the work",
+        cortex_channel: "cortex-channel",
+        cortex_network: "cortex-network",
+        agent_name: "Cortex",
+      }),
+      CANONICAL_CORTEX_CHAT_SUBJECT,
+    );
+    await settle(() => r.published);
+
+    expect(optsCaptured).toHaveLength(1);
+    expect(optsCaptured[0]!.channel).toBe("cortex-channel");
+    expect(optsCaptured[0]!.network).toBe("cortex-network");
+  });
+
+  test("GV-2: cortex_channel wins when both cortex_ and grove_ are present", async () => {
+    const r = recordingRuntime();
+    const router = createSurfaceRouter(r.runtime);
+    const { factory, optsCaptured } = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      ccSessionFactory: factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+    });
+    await listener.start();
+    await router.start();
+
+    r.trigger(
+      makeReceivedEnvelope({
+        prompt: "do the work",
+        cortex_channel: "cortex-channel",
+        grove_channel: "grove-channel",
+        agent_name: "Cortex",
+      }),
+      CANONICAL_CORTEX_CHAT_SUBJECT,
+    );
+    await settle(() => r.published);
+
+    expect(optsCaptured).toHaveLength(1);
+    expect(optsCaptured[0]!.channel).toBe("cortex-channel");
   });
 
   // ST-P1 (cortex#964, refs #952) — parent_session_id threads from the
@@ -941,8 +1003,8 @@ describe("dispatch-listener — success path", () => {
     expect(opts.cwd).toBeUndefined();
     expect(opts.allowedDirs).toBeUndefined();
     expect(opts.additionalArgs).toBeUndefined();
-    expect(opts.groveChannel).toBeUndefined();
-    expect(opts.groveNetwork).toBeUndefined();
+    expect(opts.channel).toBeUndefined();
+    expect(opts.network).toBeUndefined();
     expect(opts.resumeSessionId).toBeUndefined();
     expect(opts.bashAllowlist).toBeUndefined();
     expect(opts.bashGuardDisabled).toBeUndefined();

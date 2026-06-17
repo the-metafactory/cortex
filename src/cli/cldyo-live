@@ -7,8 +7,9 @@
 # events are bucketed under that repo on the dashboard.
 # Defaults to operator name if no repo given.
 #
-# Agent identity is read from ~/.config/grove/bot.yaml (agent.name, agent.displayName).
-# If bot.yaml is missing, falls back to system username.
+# Agent identity is read from ~/.config/cortex/bot.yaml (agent.name, agent.displayName),
+# falling back to ~/.config/grove/bot.yaml during the GV-1 config-path transition
+# (cortex#1076). If neither exists, falls back to the system username.
 #
 # Examples:
 #   cldyo-live grove              # Work on grove, visible on dashboard
@@ -16,8 +17,14 @@
 #   cldyo-live                    # Default session
 #   cldyo-live grove --resume abc # Pass extra args to claude
 
-# Read agent identity from bot.yaml
-CONFIG_FILE="${HOME}/.config/grove/bot.yaml"
+# Read agent identity from bot.yaml — cortex-first, grove-fallback (GV-1).
+CORTEX_CONFIG_FILE="${HOME}/.config/cortex/bot.yaml"
+GROVE_CONFIG_FILE="${HOME}/.config/grove/bot.yaml"
+if [ -f "${CORTEX_CONFIG_FILE}" ]; then
+  CONFIG_FILE="${CORTEX_CONFIG_FILE}"
+else
+  CONFIG_FILE="${GROVE_CONFIG_FILE}"
+fi
 if [ -f "${CONFIG_FILE}" ]; then
   AGENT_NAME=$(grep -A2 '^agent:' "${CONFIG_FILE}" | grep 'name:' | head -1 | sed 's/.*name:\s*//' | sed 's/#.*//' | tr -d '"' | tr -d "'" | xargs)
   DISPLAY_NAME=$(grep -A3 '^agent:' "${CONFIG_FILE}" | grep 'displayName:' | head -1 | sed 's/.*displayName:\s*//' | sed 's/#.*//' | tr -d '"' | tr -d "'" | xargs)

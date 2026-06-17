@@ -60,6 +60,11 @@ export interface InboundAttachment {
   filename: string;
   contentType?: string;
   size?: number;
+  /** Base64 file bytes, INLINED by the adapter when the surface needs auth to
+   *  download (Mattermost) — lets the brain consume the file without the bot
+   *  token or a host-allowlisted public URL. Absent for public-CDN surfaces
+   *  (Discord), which travel by URL. */
+  content?: string;
 }
 
 /** Result of access control check */

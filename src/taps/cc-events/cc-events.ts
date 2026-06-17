@@ -208,7 +208,16 @@ export function createCcEventEnvelope(
       // /api/ingest) can parent the session. Omitted when absent (root/non-CC).
       ...(event.parent_session_id !== undefined && { parent_session_id: event.parent_session_id }),
       ...(event.substrate !== undefined && { substrate: event.substrate }),
-      ...(event.grove_channel !== undefined && { grove_channel: event.grove_channel }),
+      // GV-2 (cortex#1077) — DUAL-WRITE the channel label onto the payload.
+      // `cortex_channel` is canonical (prefer it, fall back to the legacy
+      // `grove_channel` so events from a pre-GV-2 producer still populate it);
+      // `grove_channel` is re-emitted for back-compat and retires at v3.0.0.
+      ...((event.cortex_channel ?? event.grove_channel) !== undefined && {
+        cortex_channel: event.cortex_channel ?? event.grove_channel,
+      }),
+      ...((event.grove_channel ?? event.cortex_channel) !== undefined && {
+        grove_channel: event.grove_channel ?? event.cortex_channel,
+      }),
       ...(event.agent_id !== undefined && { agent_id: event.agent_id }),
       ...(event.agent_name !== undefined && { agent_name: event.agent_name }),
       ...(event.network_id !== undefined && { network_id: event.network_id }),

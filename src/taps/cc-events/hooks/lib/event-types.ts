@@ -1,6 +1,6 @@
 /**
  * T-1.1: Raw Event Schema + T-1.2: Published Event Schema
- * Shared event type definitions for Grove event filtering pipeline.
+ * Shared event type definitions for the Cortex event filtering pipeline.
  */
 
 import { z } from "zod/v4";
@@ -23,6 +23,12 @@ export const RawEventSchema = z.object({
   // session. Names PINNED for the ST-P2 consumer.
   parent_session_id: z.string().optional(),
   substrate: z.string().optional(),
+  // GV-2 (cortex#1077) — channel-label vocabulary migration. `cortex_channel`
+  // is the canonical field; `grove_channel` is the legacy alias kept for
+  // back-compat. Producers DUAL-WRITE both; consumers read cortex-first with a
+  // grove fallback. `grove_channel` retires only at the breaking v3.0.0 (in
+  // lockstep with the GROVE_* env shim, cortex#774). Both optional.
+  cortex_channel: z.string().optional(),
   grove_channel: z.string().optional(),
   agent_id: z.string().optional(),
   agent_name: z.string().optional(),
@@ -55,6 +61,8 @@ export const PublishedEventSchema = z.object({
   // consumers (the relay propagates these from the RawEvent). See RawEventSchema.
   parent_session_id: z.string().optional(),
   substrate: z.string().optional(),
+  // GV-2 (cortex#1077) — dual-written channel label; see RawEventSchema.
+  cortex_channel: z.string().optional(),
   grove_channel: z.string().optional(),
   agent_id: z.string().optional(),
   agent_name: z.string().optional(),
@@ -72,7 +80,7 @@ export function createRawEvent(
   eventType: string,
   hook: RawEvent["source"]["hook"],
   payload: Record<string, unknown>,
-  options?: { sessionId?: string; parentSessionId?: string; substrate?: string; toolName?: string; groveChannel?: string; agentId?: string; agentName?: string; networkId?: string }
+  options?: { sessionId?: string; parentSessionId?: string; substrate?: string; toolName?: string; channel?: string; agentId?: string; agentName?: string; networkId?: string }
 ): RawEvent {
   return {
     event_id: crypto.randomUUID(),
@@ -84,7 +92,11 @@ export function createRawEvent(
     ...(options?.parentSessionId !== undefined && { parent_session_id: options.parentSessionId }),
     ...(options?.substrate !== undefined && { substrate: options.substrate }),
     // cortex#774: read CORTEX_* first, fall back to legacy GROVE_*.
-    grove_channel: options?.groveChannel ?? resolveSurfaceEnv("CHANNEL"),
+    // GV-2 (cortex#1077): DUAL-WRITE the channel label — `cortex_channel`
+    // (canonical) AND `grove_channel` (legacy back-compat alias). Both carry
+    // the same resolved value; `grove_channel` retires at v3.0.0.
+    cortex_channel: options?.channel ?? resolveSurfaceEnv("CHANNEL"),
+    grove_channel: options?.channel ?? resolveSurfaceEnv("CHANNEL"),
     agent_id: options?.agentId ?? resolveSurfaceEnv("AGENT_ID"),
     agent_name: options?.agentName ?? resolveSurfaceEnv("AGENT_NAME"),
     network_id: options?.networkId ?? resolveSurfaceEnv("NETWORK"),

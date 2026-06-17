@@ -80,7 +80,7 @@ const DEFAULT_READER: ConfigReader = tolerantReader(
 import { CliArgsError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { type ExitResult } from "./_shared/exit-result";
-import { parseSubcommandArgs, type SubcommandSpec } from "./_shared/parser";
+import { parseSubcommandArgs, type FlagMap, type SubcommandSpec } from "./_shared/parser";
 import {
   joinNetwork,
   leaveNetwork,
@@ -136,7 +136,7 @@ const DEFAULT_CONFIG_PATH = "~/.config/cortex/cortex.yaml";
  * daemon-restart can LOCATE the daemon's launchd/systemd service by its
  * `--config` arg instead of guessing `ai.meta-factory.cortex.<stack-slug>`.
  */
-function cortexConfigPathFromFlags(flags: Record<string, string | true>): string {
+function cortexConfigPathFromFlags(flags: FlagMap): string {
   return expandTilde(optionalValueFlag(flags, "--config") ?? DEFAULT_CONFIG_PATH);
 }
 
@@ -288,17 +288,17 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
 // =============================================================================
 
 function requireValueFlag(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   name: string,
 ): { ok: true; value: string } | { ok: false; reason: string } {
   const v = flags[name];
   if (v === undefined) return { ok: false, reason: `${name} is required` };
-  if (v === true) return { ok: false, reason: `${name} requires a value` };
+  if (v === true || Array.isArray(v)) return { ok: false, reason: `${name} requires a value` };
   return { ok: true, value: v };
 }
 
 function optionalValueFlag(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   name: string,
 ): string | undefined {
   const v = flags[name];
@@ -314,7 +314,7 @@ function optionalValueFlag(
  * (which would otherwise shadow the config value with `undefined`).
  */
 function readOverride(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   flagName: string,
   key?: string,
 ): Record<string, string> {
@@ -335,7 +335,7 @@ function readOverride(
  * absent (the common case: no package source).
  */
 function readLeafPackageFlag(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
 ): { ok: true; package: LeafPackageFile | undefined } | { ok: false; reason: string } {
   const path = optionalValueFlag(flags, "--from-package");
   if (path === undefined) return { ok: true, package: undefined };
@@ -437,7 +437,7 @@ function resolveStatusConfigPath(slug: string): string {
  * command resolve identically to `status` and can't drift (the gap that made ping
  * read the flat default and report `not-configured` for a config-split peer).
  */
-function resolveLocalStackConfigPath(flags: Record<string, string | true>): string {
+function resolveLocalStackConfigPath(flags: FlagMap): string {
   const explicitConfig = optionalValueFlag(flags, "--config");
   if (explicitConfig !== undefined) return expandTilde(explicitConfig);
   const stackFlag = optionalValueFlag(flags, "--stack");
@@ -456,7 +456,7 @@ function resolveLocalStackConfigPath(flags: Record<string, string | true>): stri
  * `--apply` and `--dry-run` together is a usage error.
  */
 function resolveApply(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
 ): { ok: true; apply: boolean } | { ok: false; reason: string } {
   const apply = flags["--apply"] === true;
   const dry = flags["--dry-run"] === true;
@@ -472,7 +472,7 @@ function resolveApply(
 
 async function runJoin(
   networkId: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
   load: ConfigReader,
 ): Promise<ExitResult> {
@@ -580,7 +580,7 @@ async function runJoin(
 
 async function runLeave(
   networkId: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
   load: ConfigReader,
 ): Promise<ExitResult> {
@@ -651,7 +651,7 @@ async function runLeave(
 }
 
 async function runStatus(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
 ): Promise<ExitResult> {
   const principalRes = requireValueFlag(flags, "--principal");
@@ -669,7 +669,7 @@ async function runStatus(
   // instead of the default monolith. Previously status fell through to
   // ~/.config/cortex/cortex.yaml and reported a joined config-split stack as
   // "no networks joined".
-  const statusFlags: Record<string, string | true> =
+  const statusFlags: FlagMap =
     optionalValueFlag(flags, "--config") === undefined
       ? { ...flags, "--config": resolveStatusConfigPath(slugRes.slug) }
       : flags;
@@ -751,7 +751,7 @@ const DEFAULT_PING_BUS_FACTORY: PingBusFactory = async (cfg) => {
 
 async function runPing(
   peerArg: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
   load: ConfigReader,
   busFactory: PingBusFactory,
@@ -833,7 +833,7 @@ async function runPing(
 
 /** Parse a positive-integer value flag with a default. */
 function parsePositiveInt(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   name: string,
   dflt: number,
 ): { ok: true; value: number } | { ok: false; reason: string } {
@@ -940,7 +940,7 @@ async function adminMaterialFromSeedFile(
 
 async function runCreate(
   networkId: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
 ): Promise<ExitResult> {
   if (!NETWORK_ID_RE.test(networkId)) {
@@ -1061,7 +1061,7 @@ function splitCsv(raw: string | undefined): string[] {
 }
 
 async function runJoinPublic(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
 ): Promise<ExitResult> {
   const principalRes = requireValueFlag(flags, "--principal");
@@ -1112,7 +1112,7 @@ async function runJoinPublic(
 }
 
 async function runLeavePublic(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
 ): Promise<ExitResult> {
   const principalRes = requireValueFlag(flags, "--principal");
@@ -1143,7 +1143,7 @@ function portsConfig(
   networkId: string,
   principalId: string,
   stackSlug: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
 ): LivePortsConfig {
   return {
     networkId,
@@ -1169,7 +1169,7 @@ function portsConfigFromInputs(
   networkId: string,
   inputs: import("./network-derive").DerivedJoinInputs,
   stackSlug: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
 ): LivePortsConfig {
   return {
     networkId,

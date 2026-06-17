@@ -184,6 +184,42 @@ describe("DaemonBrainHost — round-trip", () => {
     await host.stop();
   });
 
+  test("an open ask_principal gate PAUSES the per-task timeout — no orphan (cortex#1073)", async () => {
+    const brain = new FakeBrain();
+    const { transport } = makeFakeTransport([brain]);
+    const host = new DaemonBrainHost({
+      agentId: "yarrow",
+      run: "bun brain.ts",
+      packDir: "/p",
+      transport,
+      makeScratchDir: scratchFactory,
+      taskTimeoutMs: 150, // deliberately shorter than the gate wait below
+    });
+    await host.start();
+
+    let gateResolved = false;
+    const hooks = makeHooks({
+      onAskPrincipal: async (): Promise<{ verdict: GateVerdictValue; principal: string }> => {
+        // A thinking human holds the gate open far longer than taskTimeoutMs.
+        await new Promise((r) => setTimeout(r, 450));
+        gateResolved = true;
+        return { verdict: "pass", principal: "jc" };
+      },
+    });
+    const runP = host.runTask(makeTask({ task_id: "g1" }), hooks);
+    await until(() => brain.lastTask()?.task_id === "g1");
+
+    // Open a gate; the host must NOT fail the task during the 450ms wait.
+    brain.emit(JSON.stringify({ v: 1, type: "ask_principal", task_id: "g1", gate: "run-ack", prompt: "Run?" }));
+    await until(() => gateResolved, 2000);
+    // Gate answered → brain completes the (re-armed) task.
+    brain.emit(JSON.stringify({ v: 1, type: "result", task_id: "g1", status: "complete" }));
+
+    const result = await runP;
+    expect(result.result.status).toBe("complete"); // NOT "failed"/timeout
+    await host.stop();
+  });
+
   test("an effect for an unknown task_id is refused with effect_rejected", async () => {
     const brain = new FakeBrain();
     const { transport } = makeFakeTransport([brain]);

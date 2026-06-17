@@ -11,10 +11,10 @@
 # Requires: GROVE_CHANNEL set (e.g., via cldyo-live).
 # Without GROVE_CHANNEL, this extension is a no-op (returns silently).
 #
-# NOTE: env-var and config-path names are intentionally left as `GROVE_*` /
-# `~/.config/grove/` to preserve 1:1 behaviour with grove's installed helper
-# during the MIG-7 cutover window. A follow-up will rename them to `CORTEX_*`
-# once cldyo-live and the bot are emitting the new contract.
+# NOTE: the bot.yaml config path is read cortex-first with a `~/.config/grove/`
+# fallback during the GV-1 transition (cortex#1076). The `GROVE_*` ENV VARS are
+# left as-is — they are owned by the separate GROVE_* → CORTEX_* env-var shim
+# (cortex#774) and are out of scope for GV-1.
 #
 # Install: arc lays this file down at $PAI_DIR/cortex-status.sh; the cortex
 # statusline-command.sh sources it explicitly.
@@ -34,8 +34,12 @@ CORTEX_LOCAL='\033[38;2;251;191;36m'    # Amber-400
 CORTEX_RESET='\033[0m'
 
 # ─── Read bot config ──────────────────────────────────────────────────────────
-# Path stays `~/.config/grove/` during cutover (see header note).
-CORTEX_CONFIG="${HOME}/.config/grove/bot.yaml"
+# cortex-first, grove-fallback (GV-1, cortex#1076 — see header note).
+if [ -f "${HOME}/.config/cortex/bot.yaml" ]; then
+    CORTEX_CONFIG="${HOME}/.config/cortex/bot.yaml"
+else
+    CORTEX_CONFIG="${HOME}/.config/grove/bot.yaml"
+fi
 cortex_mode=""
 cortex_network=""
 cortex_operator=""

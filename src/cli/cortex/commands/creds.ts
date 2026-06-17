@@ -37,7 +37,7 @@ import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { assertExhaustive } from "./_shared/assert-exhaustive";
 import { type ExitResult } from "./_shared/exit-result";
 import { parseSubcommandArgs, type SubcommandSpec } from "./_shared/parser";
-import { boolFlag, valueFlag } from "./_shared/hydrate";
+import { boolFlag, listFlag, valueFlag } from "./_shared/hydrate";
 
 // =============================================================================
 // Types
@@ -51,6 +51,14 @@ export interface ParsedCredsArgs {
   /** NSC operator account name passed through as `arc nats … --account <name>`.
    *  Optional; when absent, arc resolves the account via nsc env. */
   account: string | undefined;
+  /** Per-bot publish subject scope for `issue` (cortex#1057). Repeatable at
+   *  the surface; joined comma-separated into arc's single `--pub` flag.
+   *  Empty when omitted — the safe default scope is applied in that case. */
+  pub: string[];
+  /** Per-bot subscribe subject scope for `issue` (cortex#1057). Same shape +
+   *  semantics as `pub`. The subscribe scope is the load-bearing isolation
+   *  boundary in ADR-0012's shared-account default. */
+  sub: string[];
   json: boolean;
   help: boolean;
 }
@@ -68,6 +76,34 @@ export interface CredsItem {
 
 const AGENT_ID_REGEX = /^[a-z0-9-]+$/;
 const DEFAULT_CREDS_DIR = "~/.config/nats/creds";
+
+/**
+ * Safe-default subject scope applied on `issue` when `--pub`/`--sub` are
+ * omitted (cortex#1057, ADR-0012 D1). The per-bot subject scope IS the
+ * isolation boundary in the shared `community` account: an UNSCOPED bot
+ * could subscribe `federated.>` (everyone) — the exact cross-principal leak
+ * the shared-account default must prevent. So rather than issue unscoped,
+ * we default to the bot's own federated namespace plus its inbox.
+ *
+ * `{id}` is the (already regex-validated `/^[a-z0-9-]+$/`) agent id, so the
+ * interpolated subject is always a legal NATS token — no injection surface.
+ */
+function defaultScopeFor(agentId: string): string[] {
+  return [`federated.${agentId}.>`, "_INBOX.>"];
+}
+
+/**
+ * Normalize a `--pub`/`--sub` value list the same way arc will (cortex#1057
+ * NIT-1): trim each entry and drop empties. arc does `split(",").map(trim)`
+ * after we comma-join, so a whitespace-padded `" federated.> "` would
+ * otherwise survive cortex verbatim and be un-padded by arc back into the
+ * everyone-scope `federated.>`. Trimming here keeps cortex's view of "the
+ * scope" identical to arc's, so the empty-check (→ safe default) and any
+ * future cortex-side validation see the real subjects.
+ */
+function sanitizeScope(values: string[]): string[] {
+  return values.map((s) => s.trim()).filter((s) => s.length > 0);
+}
 
 /** A multi-thousand-entry creds directory is a misconfiguration; refuse
  *  to enumerate rather than allocate unbounded memory. */
@@ -147,7 +183,16 @@ const CREDS_SPEC: SubcommandSpec<"list" | "issue" | "revoke" | "rotate"> = {
   cliName: "creds",
   subcommands: {
     list: { flags: { "--creds-dir": "value" } },
-    issue: { positionals: ["agent-id"], flags: { "--account": "value" } },
+    issue: {
+      positionals: ["agent-id"],
+      flags: {
+        "--account": "value",
+        // cortex#1057 — repeatable subject scope, comma-joined into arc's
+        // single `--pub`/`--sub` flag. issue-only: rotate/revoke don't scope.
+        "--pub": "value-list",
+        "--sub": "value-list",
+      },
+    },
     revoke: { positionals: ["agent-id"], flags: { "--account": "value" } },
     rotate: { positionals: ["agent-id"], flags: { "--account": "value" } },
   },
@@ -174,6 +219,8 @@ export function parseCredsArgs(argv: string[]): ParsedCredsArgs {
         agentId: undefined,
         credsDir: undefined,
         account: undefined,
+        pub: [],
+        sub: [],
         json: false,
         help: false,
       };
@@ -187,6 +234,8 @@ export function parseCredsArgs(argv: string[]): ParsedCredsArgs {
     agentId: parsed.positionals["agent-id"],
     credsDir: valueFlag(parsed.flags, "--creds-dir"),
     account: valueFlag(parsed.flags, "--account"),
+    pub: listFlag(parsed.flags, "--pub"),
+    sub: listFlag(parsed.flags, "--sub"),
     json: boolFlag(parsed.flags, "--json"),
     help: parsed.help,
   };
@@ -435,6 +484,37 @@ async function runArcSubcommand(
   const arcVerb = arcVerbFor(subcommand);
   const argv: string[] = ["nats", arcVerb, args.agentId];
   if (args.account) argv.push("--account", args.account);
+
+  // cortex#1057 — subject-scope passthrough (issue only). arc's
+  // `add-bot --pub <subjects>` takes ONE comma-separated string (Commander
+  // option, last-wins if repeated; arc itself splits on ","). cortex's
+  // surface accepts repeatable --pub/--sub for ergonomics and joins each
+  // with commas into a SINGLE arc flag — emitting one arc flag per value
+  // would make arc keep only the last subject, silently narrowing (or, for
+  // a default scope, dropping `_INBOX.>`) the very boundary we're setting.
+  //
+  // Safe default (ADR-0012 D1): when a scope is omitted we do NOT issue an
+  // unscoped bot (which could subscribe `federated.>` = everyone in the
+  // shared `community` account). We fall back to the bot's own
+  // `federated.<id>.>` namespace + `_INBOX.>`. pub and sub default
+  // independently so `--pub x` alone still gets a safe `--sub` default.
+  //
+  // Sanitize BEFORE the empty-check (cortex#1057 NIT-1): arc itself does
+  // `split(",").map(s => s.trim())`, so a whitespace-padded value like
+  // `--pub " federated.> "` would survive cortex verbatim and arc would trim
+  // it back to `federated.>` (everyone-subscribe) — bypassing the safe
+  // default. Trimming + dropping empties here means a whitespace-only scope
+  // collapses to [] and correctly falls through to the safe default rather
+  // than reaching arc as an everyone-scope.
+  if (subcommand === "issue") {
+    const pubScope = sanitizeScope(args.pub);
+    const subScope = sanitizeScope(args.sub);
+    const pub = pubScope.length > 0 ? pubScope : defaultScopeFor(args.agentId);
+    const sub = subScope.length > 0 ? subScope : defaultScopeFor(args.agentId);
+    argv.push("--pub", pub.join(","));
+    argv.push("--sub", sub.join(","));
+  }
+
   // cortex always wants the local .creds file gone on revoke — the file
   // is meaningless once the pubkey is server-side revoked. Carries
   // arc.remove-bot's `--delete-creds`.
@@ -697,7 +777,7 @@ contract.
 
 Usage:
   cortex creds list   [--creds-dir <path>] [--json]
-  cortex creds issue  <agent-id> [--account <name>] [--json]
+  cortex creds issue  <agent-id> [--account <name>] [--pub <subject>]... [--sub <subject>]... [--json]
   cortex creds revoke <agent-id> [--account <name>] [--json]
   cortex creds rotate <agent-id> [--account <name>] [--json]
   cortex creds --help
@@ -712,6 +792,13 @@ Per-subcommand options:
   list:    --creds-dir <path>   Directory containing .creds files (default: ~/.config/nats/creds)
   issue/revoke/rotate:
            --account <name>     NSC operator account name (default: arc resolves via nsc env)
+  issue:   --pub <subject>      Publish subject scope. Repeatable; multiple values
+                                are comma-joined into arc's single --pub flag.
+           --sub <subject>      Subscribe subject scope. Same shape as --pub.
+                                The subject scope is the bot's isolation boundary in
+                                a shared account (ADR-0012). When --pub/--sub are
+                                OMITTED, the bot is NOT issued unscoped — it defaults
+                                to "federated.<agent-id>.>" + "_INBOX.>".
 
 Universal options:
   --json               Emit structured JSON envelope
@@ -748,14 +835,25 @@ Behavior:
 function subcommandHelp(sub: "issue" | "revoke" | "rotate"): string {
   const arcVerb = arcVerbFor(sub);
   const verbDesc = sub === "issue" ? "mint" : sub === "revoke" ? "revoke" : "rotate";
+  const scopeUsage = sub === "issue" ? " [--pub <subject>]... [--sub <subject>]..." : "";
+  // issue-only: the subject-scope contract + safe default (cortex#1057).
+  const scopeBehavior =
+    sub === "issue"
+      ? `  - --pub/--sub scope the bot's NATS subject permissions. Each is repeatable;
+    multiple values are comma-joined into arc's single --pub/--sub flag.
+  - The subject scope IS the bot's isolation boundary in a shared account
+    (ADR-0012). When --pub/--sub are OMITTED, the bot is NOT issued unscoped
+    (which could subscribe "federated.>" = everyone) — it defaults to
+    "federated.<agent-id>.>" + "_INBOX.>".\n`
+      : "";
   return `cortex creds ${sub} — ${verbDesc} per-agent NATS credentials via arc
 
 Usage:
-  cortex creds ${sub} <agent-id> [--account <name>] [--json]
+  cortex creds ${sub} <agent-id> [--account <name>]${scopeUsage} [--json]
 
 Behavior:
   - Shells out to \`arc nats ${arcVerb} <agent-id>${sub === "revoke" ? " --delete-creds" : ""} [--account <name>] --json\`.
-  - Parses arc's \`${ARC_NATS_SCHEMA_V1}\` envelope and surfaces the result.
+${scopeBehavior}  - Parses arc's \`${ARC_NATS_SCHEMA_V1}\` envelope and surfaces the result.
   - On success: stdout summarises bot, account, creds_path, and pub key(s).
   - On arc failure: exit 1 with the structured error code and message.
   - On arc binary missing: exit 1 with install instructions.
