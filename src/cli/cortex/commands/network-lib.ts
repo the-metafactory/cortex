@@ -9,10 +9,13 @@
  *
  * S4 writes the federation config, so it must be on-contract:
  *
- *   - **accept_subjects** = the stack's OWN `federated.{me}.{stack}.>` ONLY.
- *     A network never names itself on the wire; accept-lists gate by the
- *     stack's own principal/stack segment. We NEVER write the network id into
- *     a subject.
+ *   - **accept_subjects** = the stack's OWN `federated.{me}.{stack}.>` (inbound
+ *     dispatch, RECEIVER-addressed) ∪ each roster peer's
+ *     `federated.{peer}.{peer-stack}.>` (inbound presence, SOURCE-addressed) —
+ *     the dual-grammar union derived by `deriveAcceptSubjects` (P2 #1087,
+ *     design §7 P2 / §8 OQ2). A network never names ITSELF on the wire;
+ *     accept-lists gate by principal/stack segments only. We NEVER write the
+ *     network id into a subject.
  *   - **peers[]** declare by `principal_id` (+ `stack_id`), pubkey
  *     registry-resolved (DD-5) — the local principal is never in its own
  *     peers[].
@@ -35,6 +38,10 @@ import type {
 import type { NetworkRosterResult } from "../../../common/registry/types";
 import type { OperatorModeLeafPackage } from "../../../common/nats/leaf-remote-renderer";
 import { buildRosterPeers } from "../../../bus/agent-network/roster-read";
+import {
+  deriveAcceptSubjects,
+  type FederatedWireIdentity,
+} from "../../../bus/agent-network/accept-subjects";
 
 import {
   brandVerified,
@@ -335,7 +342,6 @@ export async function joinNetwork(
   // converges (idempotent). `try` spans both writes so the step log records how
   // far the mutation got before the failure.
   const resolvedPeers = buildPeers(stack.principalId, roster);
-  const acceptSubject = `federated.${stack.principalId}.${stack.stackSlug}.>`;
   const warnings: string[] = [];
 
   // (d-pre) #762 — never clobber a working hand-pin with 0 resolved peers.
@@ -368,11 +374,34 @@ export async function joinNetwork(
     steps.push(`WARN: ${warn}`);
   }
 
+  // (d) P2 (#1087, design §7 P2 / §8 OQ2) — derive `accept_subjects` from the
+  // FINAL peer set (own ∪ peer subtrees), not OWN-only. The gate
+  // (`evaluateFederationGate`) keys gate-step-3 on the inbound SUBJECT, and the
+  // two federated traffic classes are addressed differently (dual-grammar):
+  //
+  //   - DISPATCH is RECEIVER-addressed → admitted by the OWN subtree
+  //     `federated.{me}.{my-stack}.>` (a peer dispatching TO me publishes here).
+  //   - PRESENCE is SOURCE-addressed → admitted by each PEER's subtree
+  //     `federated.{peer}.{peer-stack}.>` (the federated presence subscriber
+  //     binds `federated.*.*.agent.>`, segment[1] = the SOURCE peer; ADR-0007).
+  //
+  // An OWN-only accept-list (the pre-P2 behaviour) rejected every peer's
+  // presence even though the peer was in `peers[]` — peer membership and the
+  // accept-list are SEPARATE gates. We derive over `peers` (the post-#762 set:
+  // registry-resolved, or the preserved hand-pins) so the accept-list stays
+  // consistent with whatever peers are actually written. With 0 peers the
+  // derivation collapses to exactly the prior OWN-only list (behaviour-
+  // preserving for the empty-roster first-join case).
+  const acceptSubjects = deriveAcceptSubjects(
+    { principal: stack.principalId, stack: stack.stackSlug },
+    peers.map(peerToWireIdentity),
+  );
+
   const entry: PolicyFederatedNetwork = {
     id: networkId,
     leaf_node: stack.leafNode ?? networkId,
     peers,
-    accept_subjects: [acceptSubject],
+    accept_subjects: acceptSubjects,
     deny_subjects: [],
     // #762 — PRESERVE the hand-authored announce_capabilities for this network.
     // `deriveJoinInputs` sources the caps the join announces INTO the roster from
@@ -397,12 +426,14 @@ export async function joinNetwork(
     steps.push(`ensured local.conf includes leafnodes-${networkId}.conf`);
 
     // (d) Merge the network into the federation config with registry-resolved
-    // peers (DD-5) + the OWN accept-subject (wire contract). Idempotent: replace
-    // the entry keyed by network id, never append a duplicate.
+    // peers (DD-5) + the derived own ∪ peer accept-subjects (P2 #1087, wire
+    // contract). Idempotent: replace the entry keyed by network id, never append
+    // a duplicate.
     const merged = mergeNetwork(existing, entry);
     ports.configStore.writeNetworks(merged);
     steps.push(
-      `wrote policy.federated.networks["${networkId}"] — ${peers.length.toString()} peer(s), accept ${acceptSubject}`,
+      `wrote policy.federated.networks["${networkId}"] — ${peers.length.toString()} peer(s), ` +
+        `accept ${acceptSubjects.join(", ")}`,
     );
   } catch (err) {
     return {
@@ -587,6 +618,26 @@ function buildPeers(
       principal_pubkey: p.principal_pubkey,
     }),
   }));
+}
+
+/**
+ * Project a written {@link PolicyFederatedPeer} → the `{principal, stack}` wire
+ * view {@link deriveAcceptSubjects} consumes (P2 #1087). The `stack` segment is
+ * the part AFTER the `/` in `stack_id` (`{principal}/{stack}`); a malformed id
+ * with no usable slash falls back to `default` (mirrors `roster-read`'s
+ * `stackSlugOf`, so the accept-list segment matches the leaf-write/peer view).
+ *
+ * Exported for direct unit testing of the projection in isolation.
+ */
+export function peerToWireIdentity(
+  peer: PolicyFederatedPeer,
+): FederatedWireIdentity {
+  const slash = peer.stack_id.indexOf("/");
+  const stack =
+    slash >= 0 && slash < peer.stack_id.length - 1
+      ? peer.stack_id.slice(slash + 1)
+      : "default";
+  return { principal: peer.principal_id, stack };
 }
 
 /**

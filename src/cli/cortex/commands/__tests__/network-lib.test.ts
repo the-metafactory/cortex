@@ -13,8 +13,10 @@
  *     its own peers[].
  *   - leave reverses exactly + is idempotent.
  *   - status renders joined networks + peers + link state.
- *   - wire contract: accept_subjects = the stack's OWN federated.{me}.{stack}.>
- *     (no network id on the wire).
+ *   - wire contract (P2 #1087): accept_subjects = the stack's OWN
+ *     federated.{me}.{stack}.> (inbound dispatch) ∪ each roster peer's
+ *     federated.{peer}.{peer-stack}.> (inbound presence) — no network id on the
+ *     wire. Empty roster collapses to the OWN-only list.
  */
 
 import { describe, test, expect } from "bun:test";
@@ -1017,13 +1019,19 @@ describe("join", () => {
     });
   });
 
-  test("accept_subjects is the stack's OWN federated.{me}.{stack}.> (wire contract)", async () => {
+  test("accept_subjects = own ∪ peer subtrees, never the network id (wire contract, P2 #1087)", async () => {
     const { ports, storeRef } = makeFakes({});
     await joinNetwork("metafactory", LOCAL, ports);
     const net = storeRef.networks[0]!;
-    // The wire contract: own principal/stack segment, NOT the network id.
-    expect(net.accept_subjects).toEqual(["federated.andreas.meta-factory.>"]);
-    // Network id must NOT appear in any accept subject (no network on the wire).
+    // P2: own subtree (dispatch TO me) ∪ each roster peer's subtree (presence
+    // FROM peers). rosterFor() resolves one peer, jc/sage-host.
+    expect(net.accept_subjects).toEqual([
+      "federated.andreas.meta-factory.>",
+      "federated.jc.sage-host.>",
+    ]);
+    // The wire contract STILL holds: subjects gate by principal/stack segments,
+    // never the network id `metafactory` (note `meta-factory` is the stack SLUG,
+    // a hyphenated segment that does not contain the un-hyphenated network id).
     expect(net.accept_subjects.some((s) => s.includes("metafactory"))).toBe(false);
   });
 
@@ -1362,6 +1370,80 @@ describe("#762 empty roster preserves hand-pins", () => {
     expect(
       b.storeRef.networks.find((n) => n.id === "metafactory")!.announce_capabilities,
     ).toEqual(["chat", "release"]);
+  });
+});
+
+// =============================================================================
+// P2 (#1087) — accept_subjects = own ∪ peer subtrees (dual-grammar, OQ2 fix)
+// =============================================================================
+
+describe("P2 #1087 accept_subjects derivation", () => {
+  test("normal join → OWN subtree ∪ each roster peer's subtree (dual-grammar)", async () => {
+    // rosterFor() yields one real peer: jc/sage-host (andreas is self → excluded).
+    const { ports, storeRef } = makeFakes({});
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+
+    expect(res.ok).toBe(true);
+    const net = storeRef.networks.find((n) => n.id === "metafactory")!;
+    expect(net.accept_subjects).toEqual([
+      "federated.andreas.meta-factory.>", // dispatch addressed TO me
+      "federated.jc.sage-host.>", // jc's presence, SOURCE-addressed
+    ]);
+  });
+
+  test("the step log records the derived accept-list (not OWN-only)", async () => {
+    const { ports } = makeFakes({});
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+
+    expect(res.ok).toBe(true);
+    expect(
+      res.steps.some(
+        (s) =>
+          s.includes("federated.andreas.meta-factory.>") &&
+          s.includes("federated.jc.sage-host.>"),
+      ),
+    ).toBe(true);
+  });
+
+  test("empty-roster preserve path → accept-list derived from the PRESERVED peers", async () => {
+    // handPinnedNetwork pins peer `andreas/meta-factory` — which EQUALS the self
+    // subtree, so the derived list collapses to OWN-only (the dedupe). The point:
+    // the accept-list is derived from the FINAL (preserved) peer set, staying
+    // consistent with whatever peers are actually written.
+    const { ports, storeRef } = makeFakes({
+      fetch: {
+        status: "ok",
+        value: {
+          descriptor: descriptorFor("metafactory"),
+          roster: emptyRosterFor("metafactory"),
+        },
+      },
+      initialNetworks: [handPinnedNetwork("metafactory")],
+    });
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+
+    expect(res.ok).toBe(true);
+    const net = storeRef.networks.find((n) => n.id === "metafactory")!;
+    // Preserved peer == self subtree → deduped to OWN-only.
+    expect(net.accept_subjects).toEqual(["federated.andreas.meta-factory.>"]);
+  });
+
+  test("first-join empty roster → OWN-only accept-list (pre-P2 behaviour preserved)", async () => {
+    const { ports, storeRef } = makeFakes({
+      fetch: {
+        status: "ok",
+        value: {
+          descriptor: descriptorFor("metafactory"),
+          roster: emptyRosterFor("metafactory"),
+        },
+      },
+      // No initial networks — first join, 0 peers.
+    });
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+
+    expect(res.ok).toBe(true);
+    const net = storeRef.networks.find((n) => n.id === "metafactory")!;
+    expect(net.accept_subjects).toEqual(["federated.andreas.meta-factory.>"]);
   });
 });
 
