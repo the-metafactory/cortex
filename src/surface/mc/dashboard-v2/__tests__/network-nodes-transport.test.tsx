@@ -18,9 +18,11 @@ function hub(over: Partial<StackHubNodeData> = {}): StackHubNodeData {
   return {
     kind: "stack-hub",
     origin: "local",
+    servingPrincipal: "andreas",
     principal: "andreas",
     stack: "research",
     agentCount: 2,
+    stackColor: "#5b8cd4",
     ...over,
   };
 }
@@ -30,12 +32,14 @@ function agent(over: Partial<AgentNodeData> = {}): AgentNodeData {
     kind: "agent",
     key: "andreas/research/luna",
     origin: "local",
+    servingPrincipal: "andreas",
     agentId: "luna",
     assistantName: "Luna",
     capabilities: [],
     state: "online",
     offlineReason: null,
     lastHeartbeatAt: null,
+    stackColor: "#5b8cd4",
     ...over,
   };
 }

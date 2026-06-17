@@ -64,7 +64,7 @@ import { join } from "path";
 
 /** Read version from arc-manifest.yaml (cached after first read). */
 let _cachedVersion: string | null = null;
-function getGroveVersion(): string {
+function getCortexVersion(): string {
   if (_cachedVersion) return _cachedVersion;
   try {
     const manifest = Bun.file(join(import.meta.dir, "../../../arc-manifest.yaml"));
@@ -455,8 +455,8 @@ export class DispatchHandler extends EventEmitter {
     timeoutMs: number | undefined;
     cwd: string | undefined;
     additionalArgs: string[] | undefined;
-    groveChannel: string | undefined;
-    groveNetwork: string | undefined;
+    channel: string | undefined;
+    network: string | undefined;
     project: string | undefined;
     entity: string | undefined;
     principal: string | undefined;
@@ -608,21 +608,21 @@ export class DispatchHandler extends EventEmitter {
 
       // Use channel-resolved repo name for event attribution (e.g., "meta-factory" not "luna")
       // DMs don't get a GROVE_CHANNEL — keeps them off the dashboard
-      const effectiveGroveChannel = msg.isDM ? undefined : (channelCtx.repoShort ?? this.config.agent.name);
+      const effectiveChannel = msg.isDM ? undefined : (channelCtx.repoShort ?? this.config.agent.name);
 
       // G-500: Resolve network from platform context
-      let effectiveGroveNetwork: string | undefined;
+      let effectiveNetwork: string | undefined;
       if (!msg.isDM) {
         if (msg.platform === "discord" && msg.guildId) {
-          effectiveGroveNetwork = getNetworkForGuild(msg.guildId, this.config);
+          effectiveNetwork = getNetworkForGuild(msg.guildId, this.config);
         } else if (msg.platform === "mattermost") {
-          effectiveGroveNetwork = getNetworkForChannel(msg.channelId, this.config);
+          effectiveNetwork = getNetworkForChannel(msg.channelId, this.config);
         }
       }
 
       // G-500: Resolve per-network claude overrides
-      const networkConfig = effectiveGroveNetwork
-        ? this.config.networks.find(n => n.id === effectiveGroveNetwork)
+      const networkConfig = effectiveNetwork
+        ? this.config.networks.find(n => n.id === effectiveNetwork)
         : undefined;
       const networkClaude = networkConfig?.claude;
 
@@ -816,8 +816,8 @@ export class DispatchHandler extends EventEmitter {
           timeoutMs: this.config.claude.timeoutMs,
           cwd: effectiveCwd,
           additionalArgs: this.config.claude.additionalArgs,
-          groveChannel: effectiveGroveChannel,
-          groveNetwork: effectiveGroveNetwork,
+          channel: effectiveChannel,
+          network: effectiveNetwork,
           project: groveProject,
           entity: groveEntity,
           principal,
@@ -838,13 +838,13 @@ export class DispatchHandler extends EventEmitter {
       // 12. Route by mode
       switch (parsed.mode) {
         case "async":
-          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants);
+          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants);
           break;
         case "team":
-          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants);
+          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants);
           break;
         default:
-          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveGroveChannel, effectiveGroveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants);
+          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants);
           break;
       }
     } catch (error) {
@@ -874,8 +874,8 @@ export class DispatchHandler extends EventEmitter {
     useSession: boolean,
     bashGuardDisabled?: boolean,
     bashAllowlist?: CCSessionOpts["bashAllowlist"],
-    groveChannel?: string,
-    groveNetwork?: string,
+    channel?: string,
+    network?: string,
     groveProject?: string,
     groveEntity?: string,
     principal?: string,
@@ -913,8 +913,8 @@ export class DispatchHandler extends EventEmitter {
 
     const sessionOpts: CCSessionOpts = {
       prompt,
-      groveChannel: groveChannel,
-      groveNetwork: groveNetwork,
+      channel: channel,
+      network: network,
       agentName: this.config.agent.displayName,
       agentId: this.config.agent.name,
       timeoutMs: this.config.claude.timeoutMs,
@@ -1211,8 +1211,8 @@ export class DispatchHandler extends EventEmitter {
     sessionKey: string,
     bashGuardDisabled?: boolean,
     bashAllowlist?: CCSessionOpts["bashAllowlist"],
-    groveChannel?: string,
-    groveNetwork?: string,
+    channel?: string,
+    network?: string,
     groveProject?: string,
     groveEntity?: string,
     principal?: string,
@@ -1231,8 +1231,8 @@ export class DispatchHandler extends EventEmitter {
 
     const session = new CCSession({
       prompt,
-      groveChannel: groveChannel,
-      groveNetwork: groveNetwork,
+      channel: channel,
+      network: network,
       agentName: this.config.agent.displayName,
       agentId: this.config.agent.name,
       timeoutMs: this.config.claude.asyncTimeoutMs,
@@ -1343,8 +1343,8 @@ export class DispatchHandler extends EventEmitter {
     disallowedTools: string[],
     bashGuardDisabled?: boolean,
     bashAllowlist?: CCSessionOpts["bashAllowlist"],
-    groveChannel?: string,
-    groveNetwork?: string,
+    channel?: string,
+    network?: string,
     groveProject?: string,
     groveEntity?: string,
     principal?: string,
@@ -1363,8 +1363,8 @@ export class DispatchHandler extends EventEmitter {
 
     const team = new AgentTeam({
       prompt: teamContent,
-      groveChannel: groveChannel,
-      groveNetwork: groveNetwork,
+      channel: channel,
+      network: network,
       participants: [
         { name: "analyst", prompt: "Deep analytical perspective — examine evidence, data, and logical implications" },
         { name: "creative", prompt: "Creative and lateral thinking — explore unconventional angles and connections" },
@@ -1384,7 +1384,7 @@ export class DispatchHandler extends EventEmitter {
     });
 
     // Dummy session for TaskTracker (AgentTeam manages its own sessions)
-    const dummySession = new CCSession({ prompt: "", groveChannel: this.config.agent.name, groveNetwork: groveNetwork });
+    const dummySession = new CCSession({ prompt: "", channel: this.config.agent.name, network: network });
     dummySession.on("error", () => {
       // prevent unhandled error — AgentTeam manages real session errors below
     });
@@ -1434,9 +1434,9 @@ export class DispatchHandler extends EventEmitter {
 
   private async handleHelp(adapter: PlatformAdapter, msg: InboundMessage): Promise<void> {
     const target = this.targetFromMsg(adapter, msg);
-    const version = getGroveVersion();
+    const version = getCortexVersion();
     const helpText = [
-      `**${this.config.agent.displayName}** — PAI Agent on Grove v${version}\n`,
+      `**${this.config.agent.displayName}** — PAI Agent on Cortex v${version}\n`,
       "**Chat**",
       "`@mention <message>` — Ask me anything (uses Claude Code)",
       "`context:N <message>` — Override context depth (default 10, max 100)",

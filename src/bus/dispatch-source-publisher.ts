@@ -42,8 +42,8 @@ export interface InboundChatDispatchPublishOpts {
   timeoutMs: number | undefined;
   cwd: string | undefined;
   additionalArgs: string[] | undefined;
-  groveChannel: string | undefined;
-  groveNetwork: string | undefined;
+  channel: string | undefined;
+  network: string | undefined;
   project: string | undefined;
   entity: string | undefined;
   principal: string | undefined;
@@ -221,8 +221,12 @@ export async function publishInboundChatDispatchEnvelope(
     // cortex#491 — originating surface address; the runner echoes this onto
     // every lifecycle envelope so the dispatch sink can post the reply back.
     response_routing: responseRoutingFromMessage(opts.msg),
-    ...(opts.groveChannel !== undefined && { grove_channel: opts.groveChannel }),
-    ...(opts.groveNetwork !== undefined && { grove_network: opts.groveNetwork }),
+    // GV-2 (cortex#1077): DUAL-WRITE the channel/network labels onto the
+    // dispatch payload — canonical `cortex_*` AND legacy `grove_*` aliases.
+    // The listener reads cortex-first; the grove aliases retire at v3.0.0
+    // (cortex#774 lockstep).
+    ...(opts.channel !== undefined && { cortex_channel: opts.channel, grove_channel: opts.channel }),
+    ...(opts.network !== undefined && { cortex_network: opts.network, grove_network: opts.network }),
     agent_name: opts.agentDisplayName,
     ...(opts.resumeSessionId !== undefined && {
       resume_session_id: opts.resumeSessionId,

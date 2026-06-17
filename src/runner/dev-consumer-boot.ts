@@ -28,7 +28,7 @@
  * code + pushes), so it MUST be at least as guarded as the review session.
  * `buildDevSessionOpts` threads the same `config.claude` guardrails the review
  * path uses (`bashAllowlist` + `allowedTools` + `allowedDirs` + async timeout),
- * and — critically — sets `groveChannel`, the env var (`CORTEX_CHANNEL`) that
+ * and — critically — sets `channel`, the env var (`CORTEX_CHANNEL`) that
  * is `bash-guard.hook.ts`'s Gate-1 ENGAGEMENT precondition. Without a channel
  * the guard `pass()`-es through on every Bash command; the original wiring
  * omitted it, so the guard disengaged on the push path (the review BLOCKER this
@@ -330,7 +330,7 @@ export const DEFAULT_DEV_BASH_ALLOWLIST: {
  * agent manifest). Exported so `__tests__/dev-consumer-boot.test.ts` can assert
  * the guardrails are wired without standing up `startCortex`.
  *
- * **The load-bearing field is `groveChannel`.** `cc-session.ts` maps it to the
+ * **The load-bearing field is `channel`.** `cc-session.ts` maps it to the
  * `CORTEX_CHANNEL` env var, which is `bash-guard.hook.ts`'s Gate-1 ENGAGEMENT
  * precondition: without it the guard `pass()`-es through on every Bash command
  * (the disengagement the review found). We set it to the agent id so the guard
@@ -355,7 +355,7 @@ export function buildDevSessionOpts(
     // bash-guard Gate-1 engagement precondition — without a channel the guard
     // disengages. The agent id is a stable, non-PII channel label for the
     // headless dev session (it has no Discord/Mattermost surface).
-    groveChannel: agent.id,
+    channel: agent.id,
     // Always guarded: config allowlist or the conservative repo-shaped default.
     // Setting this ALSO keeps the session out of the Gate-2 CLI-bypass.
     bashAllowlist: g.bashAllowlist ?? DEFAULT_DEV_BASH_ALLOWLIST,

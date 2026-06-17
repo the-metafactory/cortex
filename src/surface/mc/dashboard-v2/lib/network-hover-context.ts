@@ -19,17 +19,38 @@
 
 import { createContext, useContext } from "react";
 import { EMPTY_HIGHLIGHT, type HighlightSet, type HoverTarget } from "./capability-highlight";
+import {
+  EMPTY_SUBTREE_SELECTION,
+  type SubtreeSelection,
+} from "./network-subtree-highlight";
 
 export interface NetworkHoverContextValue {
   /** The currently-active highlight set (derived from the hover target). */
   highlight: HighlightSet;
   /** Report a new hover target (or `null` on mouse-leave). */
   setHoverTarget: (target: HoverTarget) => void;
+  /**
+   * #1068 — the STICKY hub-subtree selection (the selected hub id + the set of
+   * hub/agent/edge ids to emphasize; everything else dims). A sibling of `hover`
+   * that persists until the principal re-clicks the hub or clicks empty canvas.
+   * Inert default → nothing selected (no dimming). Read by the node cards (to
+   * emphasize/dim + stamp `aria-pressed`/`data-selected`) and the custom edge
+   * (to emphasize/dim its connector).
+   */
+  selection: SubtreeSelection;
+  /**
+   * #1068 — TOGGLE the hub selection for a clicked hub id (or clear on `null`).
+   * The view owns the graph, so it computes the next selection; the canvas just
+   * reports the clicked hub up through this setter.
+   */
+  toggleHubSelection: (clickedHubId: string | null) => void;
 }
 
 const INERT: NetworkHoverContextValue = {
   highlight: EMPTY_HIGHLIGHT,
   setHoverTarget: () => {},
+  selection: EMPTY_SUBTREE_SELECTION,
+  toggleHubSelection: () => {},
 };
 
 export const NetworkHoverContext =

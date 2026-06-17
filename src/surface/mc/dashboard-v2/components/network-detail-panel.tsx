@@ -34,7 +34,7 @@ import {
   formatCapabilities,
   offlineReasonLabel,
   isTtlLapse,
-  isForeignOrigin,
+  classifyOrigin,
   originProvenanceLabel,
 } from "../lib/agents-display";
 import type { AgentPresenceTile } from "../hooks/use-agents";
@@ -50,6 +50,17 @@ function priorityLabel(p: number): string {
 export interface NetworkDetailPanelProps {
   /** The live, snapshot-resolved agent tile to show. */
   agent: AgentPresenceTile;
+  /**
+   * #1008 — the SERVING stack's principal (derived by the view from the snapshot's
+   * `"local"`-origin agents via `deriveServingPrincipal`). The panel pairs it with
+   * `agent.origin` through `classifyOrigin` to distinguish a SAME-PRINCIPAL local
+   * SIBLING (DB-read aggregation) from a CROSS-PRINCIPAL federated peer — so a
+   * sibling renders LOCAL here, exactly as it does on the graph node, rather than
+   * re-showing the "federated peer" mislabel the binary guard produced. `null`
+   * when the snapshot has no local agent (a foreign-only snapshot) → an object
+   * origin classifies conservatively as foreign.
+   */
+  servingPrincipal: string | null;
   /**
    * The agent's dispatch-lifecycle activity (joined from the working-agents
    * projection), or `null` when the agent isn't actively dispatched (idle).
@@ -97,6 +108,7 @@ export interface NetworkDetailPanelProps {
  */
 export function NetworkDetailPanel({
   agent,
+  servingPrincipal,
   dispatch,
   onClose,
   onViewInWorkingGrid,
@@ -111,10 +123,26 @@ export function NetworkDetailPanel({
   const reasonLabel = offline ? offlineReasonLabel(agent.offline_reason) : null;
   const name = agent.assistant_name ?? agent.agent_id;
   const caps = formatCapabilities(agent.capabilities);
-  // E.4: a FOREIGN (federated peer) agent shows its origin + a "activity not
-  // local" note instead of a dispatch join (#909 — working-agents is local-only).
-  const foreign = isForeignOrigin(agent.origin);
-  const provenance = originProvenanceLabel(agent.origin);
+  // #1008: classify against the serving principal — only a CROSS-PRINCIPAL
+  // `foreign` peer gets the "federated peer" badge + the "activity not local"
+  // treatment. A SAME-PRINCIPAL local `sibling` (DB-read aggregation) renders
+  // LOCAL here, matching its graph node — the fix for siblings re-showing the
+  // "FEDERATED" mislabel on click-through.
+  const category = classifyOrigin(agent.origin, servingPrincipal);
+  const foreign = category === "foreign";
+  // Provenance (`{principal}/{stack}`) is only surfaced for a true foreign peer;
+  // a sibling reads as one of your own agents.
+  const provenance = foreign ? originProvenanceLabel(agent.origin) : null;
+  // #1008: ONLY the serving stack's OWN agents are locally dispatchable + carry a
+  // local working-grid join. A SIBLING agent — though same-principal + LOCAL in
+  // label — lives in ANOTHER stack's DB; the dispatch path writes THIS stack's DB
+  // + spawns a local subprocess, so it can't target a sibling any more than a
+  // foreign peer. So the dispatch-join, working-grid link, and dispatch-direct
+  // button gate on `self`, not merely "not foreign". The sibling's own-stack
+  // provenance label (for the not-local activity note) is computed unconditionally
+  // for the non-self branches.
+  const self = category === "self";
+  const ownStackLabel = originProvenanceLabel(agent.origin);
 
   return (
     <aside
@@ -219,15 +247,24 @@ export function NetworkDetailPanel({
       </section>
 
       {/* Dispatch lifecycle (LIGHT — pointer only, never interiors) ---------
-          E.4 / #909: a FOREIGN peer agent shows NO local dispatch activity —
-          working-agents is the LOCAL stack's projection, never joined for a
-          foreign agent. The principal sees that the activity simply isn't local,
-          not an empty "idle" that would misrepresent a busy peer. */}
+          E.4 / #909 / #1008: only the SERVING stack's OWN agents carry a local
+          working-agents join. A FOREIGN peer OR a same-principal SIBLING agent
+          lives on ANOTHER stack — its activity is not in this stack's projection,
+          so we show an origin-appropriate "not local" note rather than an empty
+          "idle" that would misrepresent a busy peer/sibling. */}
       <section className="network-detail-section network-detail-activity">
         <span className="network-detail-section-label dim">recent activity</span>
-        {foreign ? (
-          <span className="network-detail-foreign-activity dim">
-            Federated peer — activity not local.
+        {!self ? (
+          <span
+            className={
+              "network-detail-nonlocal-activity dim" +
+              (foreign ? " network-detail-foreign-activity" : " network-detail-sibling-activity")
+            }
+            data-activity-origin={foreign ? "foreign" : "sibling"}
+          >
+            {foreign
+              ? "Federated peer — activity not local."
+              : `Local sibling stack — activity lives on its own stack${ownStackLabel ? ` (${ownStackLabel})` : ""}.`}
           </span>
         ) : dispatch ? (
           <div className="network-detail-dispatch">
@@ -258,9 +295,10 @@ export function NetworkDetailPanel({
             No active dispatch.
           </span>
         )}
-        {/* The working grid is the LOCAL stack's dispatch surface — the pointer
-            is meaningless for a foreign peer agent (#909), so it's hidden. */}
-        {!foreign && onViewInWorkingGrid && (
+        {/* The working grid is THIS stack's dispatch surface — the pointer is
+            meaningless for a foreign peer (#909) OR a sibling on another stack
+            (#1008), so it's shown only for the serving stack's own agents. */}
+        {self && onViewInWorkingGrid && (
           <button
             type="button"
             className="network-detail-grid-link"
@@ -272,23 +310,25 @@ export function NetworkDetailPanel({
       </section>
 
       {/* Dispatch direct (F.3) ---------------------------------------------
-          A LOCAL agent gets a confirm-gated "Dispatch to {agent}" button that
-          REUSES the existing dispatch path (`POST /api/sessions` with
+          The SERVING stack's OWN agent gets a confirm-gated "Dispatch to {agent}"
+          button that REUSES the existing dispatch path (`POST /api/sessions` with
           `agentId`) — the same confirmation popover the task-row Dispatch uses,
-          so no auth/confirm step is bypassed. A FOREIGN peer agent CANNOT be
-          dispatched to from here (the dispatch path is LOCAL-only — it writes
-          this stack's DB + spawns a local subprocess), so it shows a disabled
-          future-state rather than a half-working cross-principal dispatch. */}
+          so no auth/confirm step is bypassed. A FOREIGN peer OR a same-principal
+          SIBLING agent CANNOT be dispatched to from here (the dispatch path is
+          LOCAL-to-this-stack — it writes THIS stack's DB + spawns a local
+          subprocess, so it can't target an agent that lives on another stack),
+          so it shows a future-state note rather than a half-working dispatch. */}
       {onDispatchDirect && (
         <section className="network-detail-section network-detail-dispatch-direct">
           <span className="network-detail-section-label dim">dispatch</span>
-          {foreign ? (
+          {!self ? (
             <span
               className="network-detail-dispatch-direct-foreign dim"
-              data-dispatch-direct="foreign-disabled"
+              data-dispatch-direct={foreign ? "foreign-disabled" : "sibling-disabled"}
             >
-              Federated peer — direct dispatch happens on its own stack
-              {provenance ? ` (${provenance})` : ""}.
+              {foreign
+                ? `Federated peer — direct dispatch happens on its own stack${provenance ? ` (${provenance})` : ""}.`
+                : `Local sibling stack — direct dispatch happens on its own stack${ownStackLabel ? ` (${ownStackLabel})` : ""}.`}
             </span>
           ) : (
             <DispatchButton

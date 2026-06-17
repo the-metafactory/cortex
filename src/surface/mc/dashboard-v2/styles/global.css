@@ -474,8 +474,17 @@ html, body {
 }
 .network-node-hub {
   align-items: center; text-align: center;
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  /* #1068 — the hub accents in its per-stack color (falls back to the generic
+     accent when no stack color is set). Color is ADDITIVE: the foreign/sibling
+     shape treatments below still set border-style + the eyebrow label. */
+  border-color: var(--stack-color, var(--accent));
+  background: color-mix(in oklch, var(--stack-color, var(--accent)) 14%, var(--panel));
+}
+/* A 2px top accent bar makes the hub's stack color legible even when the border
+   is muted by a shape treatment. */
+.network-node-hub {
+  border-top-width: 2px;
+  border-top-color: var(--stack-color, var(--accent));
 }
 .network-hub-eyebrow {
   font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em;
@@ -483,7 +492,14 @@ html, body {
 .network-hub-label { font-size: 13px; font-weight: 700; font-family: var(--mono); }
 .network-hub-count { font-size: 10.5px; }
 
-.network-node-agent { width: 200px; }
+.network-node-agent {
+  width: 200px;
+  /* #1068 — a left accent bar in the agent's stack color groups it visually with
+     its hub. ADDITIVE: the foreign dashed border + provenance badge still apply;
+     a colorblind reader still distinguishes stacks by the hub label + shape. */
+  border-left-width: 3px;
+  border-left-color: var(--stack-color, var(--line));
+}
 .network-node-offline { opacity: 0.62; }
 .network-node-ttl-lapse {
   border-color: color-mix(in oklch, var(--warn) 50%, var(--line));
@@ -500,6 +516,15 @@ html, body {
 .network-node-hub-foreign {
   border-style: dashed;
   border-color: color-mix(in oklch, var(--accent) 55%, transparent);
+}
+/* #1008 — a SAME-PRINCIPAL local SIBLING stack (DB-read aggregation) is LOCAL,
+   not federated: it keeps the solid local-hub treatment (like your own stack),
+   distinguished only by a slightly softer accent so the pane reads "your stacks"
+   as one family vs the dashed cross-principal foreign peers. Distinction is by
+   border weight + label ("stack" vs "federated stack"), never colour alone. */
+.network-node-hub-sibling {
+  border-style: solid;
+  border-color: color-mix(in oklch, var(--accent) 70%, var(--line));
 }
 .network-node-provenance {
   display: inline-flex; align-items: center; gap: 3px;
@@ -581,6 +606,17 @@ html, body {
 .network-legend-swatch.swatch-online { background: var(--ok); }
 .network-legend-swatch.swatch-offline { background: var(--fg-faint); }
 .network-legend-swatch.swatch-ttl-lapse { background: var(--warn); }
+/* #1068 — per-stack color swatches. Square (vs the round state swatches) so the
+   two legend groups read as distinct keys; the inline background is the stack's
+   deterministic color. The flex-wrap lets the stack list flow when many stacks
+   are present. */
+.network-legend { flex-wrap: wrap; max-width: 60%; }
+.network-legend-stacks {
+  display: inline-flex; flex-wrap: wrap; gap: 10px;
+  padding-left: 10px; margin-left: 2px;
+  border-left: 1px solid var(--line);
+}
+.network-legend-swatch-stack { border-radius: 2px; }
 
 /* G-1114.D.4 — node detail panel (slides in on the right of the canvas).
    Presence + capabilities + a LIGHT dispatch pointer — never session
@@ -610,7 +646,10 @@ html, body {
   color: color-mix(in oklch, var(--accent) 70%, var(--fg-faint));
 }
 .network-detail-federated-badge { font-size: 12px; line-height: 1; }
-.network-detail-foreign-activity { font-size: 11.5px; font-style: italic; }
+/* #1008 — the "not in this stack's projection" activity note, shared by a FOREIGN
+   peer and a same-principal SIBLING (both live on another stack). The base class
+   carries the styling; the per-origin modifier is a hook for future divergence. */
+.network-detail-nonlocal-activity { font-size: 11.5px; font-style: italic; }
 .network-detail-header {
   display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
 }
@@ -678,6 +717,34 @@ html, body {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
   box-shadow: 0 0 12px -2px var(--accent);
+}
+
+/* #1068 — STICKY hub-subtree selection. Selecting a stack-hub emphasizes its
+   subtree (the hub + its agents + edges) and dims everything else. Emphasis +
+   dim are conveyed by OUTLINE + OPACITY, never hue alone (a11y): a colorblind
+   principal still sees the lit subtree pop and the rest recede. The outline uses
+   the stack's own color when present (`--stack-color`) so the emphasis reads as
+   "this stack", falling back to the generic accent. */
+.network-node-selected {
+  outline: 2px solid var(--stack-color, var(--accent));
+  outline-offset: 1px;
+  box-shadow: 0 0 14px -2px var(--stack-color, var(--accent));
+  opacity: 1;
+}
+.network-node-hub.network-node-selected {
+  /* The selected hub gets a slightly stronger ring so it reads as the anchor. */
+  outline-width: 3px;
+}
+.network-node-dimmed {
+  opacity: 0.28;
+  filter: saturate(0.7);
+  transition: opacity 0.2s ease, filter 0.2s ease;
+}
+/* An interactive hub shows a pointer + a focus ring for keyboard a11y. */
+.network-node-hub[role="button"] { cursor: pointer; }
+.network-node-hub[role="button"]:focus-visible {
+  outline: 2px solid var(--stack-color, var(--accent));
+  outline-offset: 2px;
 }
 
 /* G-1114.F.3 — dispatch-direct affordance in the detail panel. */

@@ -233,6 +233,32 @@ CARVEOUT_LINE_PATTERNS=(
   'operator_pubkey'
   'operator-mode'
   '[Oo]peratorRecord'
+  # O-3 (cortex#1053) — the NSC operator-JWT / operator-mode-conversion vocabulary
+  # that `cortex network join` auto-converts an anonymous bus with. ALL the NSC
+  # account-tree sense (the operator JWT the leaf binds under), NEVER the
+  # principal. Class: NSC (the permanent qualified survivor). Covers:
+  #   - the `OperatorMode*` renderer type/symbol prefix (OperatorModeLeafPackage,
+  #     OperatorModeConversion, renderOperatorModeBlocks, convertToOperatorMode);
+  #   - the `operatorJwt` field + the `operator_jwt` config key + `--operator-jwt`
+  #     flag (the operator JWT, an NSC artifact);
+  #   - a rendered `operator:` config line (the operator-mode block this writes).
+  '[Oo]peratorMode'
+  'operatorJwt'
+  'operator_jwt'
+  '--operator-jwt'
+  'operator:[[:space:]]*\$\{?operatorJwt'
+  '`operator:'
+  'operator[[:space:]]+(JWT|that owns)'
+  # O-3 test fixtures — the operator-mode-conversion suite's NSC vocabulary:
+  #   - `foreign-operator` — the bus-type fixture modelling a bus already
+  #     operator-mode under a DIFFERENT operator JWT (the never-clobber case);
+  #   - a rendered `operator: eyJ…` block line + its `A_DIFFERENT_OPERATOR` fake;
+  #   - the design-doc filename `…-operator-onboarding.md`.
+  # All the NSC account-tree sense, never the principal. Class: NSC.
+  'foreign-operator'
+  'operator: eyJ'
+  'A_DIFFERENT_OPERATOR'
+  'operator-onboarding'
   # NSC operator-account signing seed/nkey file paths (`operator.nk`, `operator.nkey`,
   # `operator.creds`). The NATS account-tree root seed (CONTEXT.md → NSC operator);
   # a filesystem path to the operator-account key, never the principal. Class: NSC.

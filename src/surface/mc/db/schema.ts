@@ -608,7 +608,17 @@ export const SCHEMA_SQL: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_observability_timestamp ON observability_events(timestamp)`,
   `CREATE INDEX IF NOT EXISTS idx_observability_family ON observability_events(family, timestamp DESC)`,
-  `CREATE INDEX IF NOT EXISTS idx_observability_origin ON observability_events(origin_kind, origin_peer)`,
+  // ST-P0 / #1048: the origin-badge lookup index (idx_observability_origin on
+  // origin_kind, origin_peer) is DELIBERATELY NOT declared here. It indexes
+  // origin_kind / origin_peer, columns that an existing pre-U3.3 DB does not yet
+  // carry when init.ts runs this SCHEMA_SQL loop (which precedes the
+  // COLUMN_ADD_MIGRATIONS loop). Declaring it here crashes initDatabase on those
+  // DBs with `no such column: origin_kind` (the #961 bug class, reintroduced by
+  // U3.3 / #937, and the cause of the MC embed boot crash in #1048). It is
+  // created instead by the origin_kind / origin_peer COLUMN_ADD_MIGRATIONS
+  // `post[]` arrays below — which run AFTER the column ALTERs AND unconditionally
+  // (init.ts always runs `post[]`, even when the ALTER is skipped on a fresh DB
+  // whose columns came from CREATE TABLE).
 ];
 
 /**
@@ -700,14 +710,20 @@ export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
     table: "observability_events",
     column: "origin_kind",
     ddl: `ALTER TABLE observability_events ADD COLUMN origin_kind TEXT NOT NULL DEFAULT 'local'`,
-    post: [
-      `CREATE INDEX IF NOT EXISTS idx_observability_origin ON observability_events(origin_kind, origin_peer)`,
-    ],
+    // NOTE: the partner index idx_observability_origin spans BOTH origin_kind
+    // AND origin_peer. It is created in the origin_peer entry's post[] below —
+    // NOT here — because at this point origin_peer has not yet been ALTERed in
+    // (this entry runs first), so a `CREATE INDEX ... (origin_kind, origin_peer)`
+    // here throws `no such column: origin_peer` on an existing DB (#1048).
   },
   {
     table: "observability_events",
     column: "origin_peer",
     ddl: `ALTER TABLE observability_events ADD COLUMN origin_peer TEXT`,
+    // Both origin columns now exist (origin_kind added by the entry above,
+    // origin_peer by this one), so the composite index is safe to create here.
+    // Runs unconditionally (init.ts always runs post[]) so fresh DBs — whose
+    // columns came from CREATE TABLE — get the index too.
     post: [
       `CREATE INDEX IF NOT EXISTS idx_observability_origin ON observability_events(origin_kind, origin_peer)`,
     ],

@@ -42,8 +42,22 @@ import type {
 } from "../../../../common/registry/types";
 import type { NetworkFetchResult } from "../../../../common/registry/network-client";
 import type { PolicyFederatedNetwork } from "../../../../common/types/cortex-config";
-import { renderLeafIncludeFile } from "../../../../common/nats/leaf-remote-renderer";
+import {
+  renderLeafIncludeFile,
+  type OperatorModeLeafPackage,
+} from "../../../../common/nats/leaf-remote-renderer";
 import { nkeyToBase64Pubkey } from "../../../../common/registry/encoding";
+
+// O-3 (cortex#1053) — a public-repo-safe fake leaf package: the operator-mode
+// material `cortex network join` renders to convert an anonymous bus. O-4
+// supplies this for real via the register→issue handshake.
+const LOCAL_PACKAGE: OperatorModeLeafPackage = {
+  operatorJwt:
+    "eyJhbGciOiJlZDI1NTE5LW5rZXkiLCJ0eXAiOiJKV1QifQ.FAKE_OPERATOR.sig",
+  account: "A" + "B".repeat(55),
+  accountJwt:
+    "eyJhbGciOiJlZDI1NTE5LW5rZXkiLCJ0eXAiOiJKV1QifQ.FAKE_ACCOUNT.sig",
+};
 
 // =============================================================================
 // Fixtures
@@ -127,6 +141,8 @@ interface Recorder {
   healthProbes: number;
   /** #821 MAJOR-1 — count of `nats-server -c <cfg> -t` validation gate runs. */
   validateConfigs: number;
+  /** O-3 (#1053) — leaf packages the orchestrator asked to convert with. */
+  conversions: OperatorModeLeafPackage[];
 }
 
 function makeFakes(opts: {
@@ -150,7 +166,7 @@ function makeFakes(opts: {
    *   - "default-g"               → $G/default-account bus (no account tree).
    * The fake's `resolveBindMode` mirrors the real `resolveLeafBindMode` decision.
    */
-  busType?: "operator-mode" | "default-g";
+  busType?: "operator-mode" | "default-g" | "anonymous" | "foreign-operator";
   /** #821 — model the leaf creds file as MISSING (pre-flight refuses). */
   credsMissing?: boolean;
   /**
@@ -195,8 +211,14 @@ function makeFakes(opts: {
     restores: [],
     healthProbes: 0,
     validateConfigs: 0,
+    conversions: [],
   };
   const storeRef = { networks: opts.initialNetworks ?? [] };
+  // O-3 (#1053) — the fake's mutable view of the bus type. An "anonymous" bus
+  // that convertToOperatorMode() successfully converts FLIPS to operator-mode,
+  // so the subsequent resolveBindMode() returns account-bound (mirroring how the
+  // real renderOperatorModeBlocks rewrites the on-disk config the next read sees).
+  let busType = opts.busType ?? "operator-mode";
   const leafFilesPresent = new Set<string>(
     (opts.initialNetworks ?? []).map((n) => n.id),
   );
@@ -267,7 +289,16 @@ function makeFakes(opts: {
       if (!hasCreds) {
         return { mode: "refuse", reason: "no leaf creds available" };
       }
-      const busType = opts.busType ?? "operator-mode";
+      // O-3 (#1053) — an anonymous / foreign-operator bus refuses (the #794
+      // fail-fast input). A successful conversion flips `busType` to operator-mode
+      // BEFORE the orchestrator re-resolves, so this branch only fires pre-convert.
+      if (busType === "anonymous" || busType === "foreign-operator") {
+        return {
+          mode: "refuse",
+          reason:
+            "config is anonymous/hard-isolated (no operator-mode account tree)",
+        };
+      }
       if (busType === "default-g") {
         // $G/default-account bus + creds → no-account remote (creds JWT binds).
         return { mode: "creds-only" };
@@ -294,6 +325,35 @@ function makeFakes(opts: {
           "operator-mode bus requires the leaf remote to declare an account nkey, " +
           "but none was offered",
       };
+    },
+    convertToOperatorMode(pkg) {
+      rec.conversions.push(pkg);
+      // O-3 (#1053) — model the real adapter's outcomes over the bus type:
+      //   - foreign-operator bus → REFUSE (never clobber someone else's tree).
+      //   - already operator-mode (any operator-binding type) → 'already' no-op.
+      //   - anonymous bus + a valid package → 'converted'; FLIP busType to
+      //     operator-mode so the orchestrator's re-resolve binds the account.
+      //   - anonymous bus + an INVALID package → refuse (the preserved fail-fast).
+      if (busType === "foreign-operator") {
+        return {
+          status: "refuse",
+          reason:
+            "the nats config is ALREADY operator-mode under a different operator",
+        };
+      }
+      if (busType !== "anonymous") {
+        return { status: "already", conf: "ALREADY-OPERATOR-MODE" };
+      }
+      // Anonymous bus. Validate the package the way the real renderer does (only
+      // the fields the orchestrator depends on): operator JWT + account present.
+      if (pkg.operatorJwt.trim().length === 0 || pkg.account.trim().length === 0) {
+        return {
+          status: "refuse",
+          reason: "leaf package is missing the operator JWT or account",
+        };
+      }
+      busType = "operator-mode"; // the conversion stuck — the bus is now operator-mode.
+      return { status: "converted", conf: "CONVERTED-OPERATOR-MODE-CONF" };
     },
     credsExist(path) {
       rec.credsChecks.push(path);
@@ -604,6 +664,107 @@ describe("join", () => {
       expect(rec.writes.length).toBe(0);
       expect(storeRef.networks.length).toBe(0);
       expect(rec.bindModeChecks).toEqual([{ account: undefined, hasCreds: false }]);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // O-3 (cortex#1053, epic #1050, spec §4-D2) — auto-convert an anonymous bus to
+  // operator-mode instead of fail-fasting (#794). The orchestrator, given a leaf
+  // package on the joining stack, converts the bus THEN proceeds with the
+  // existing leaf render + policy write + restart.
+  // ---------------------------------------------------------------------------
+  describe("O-3 auto-convert an anonymous bus to operator-mode", () => {
+    test("anonymous bus + leaf package → converts, then joins account-bound", async () => {
+      const STACK: JoiningStack = {
+        principalId: "andreas",
+        stackSlug: "community",
+        credentials: "/Users/andreas/.config/nats/andreas.creds",
+        account: LOCAL_PACKAGE.account,
+        operatorModePackage: LOCAL_PACKAGE,
+      };
+      const { ports, rec, storeRef } = makeFakes({ busType: "anonymous" });
+      const res = await joinNetwork("metafactory-community", STACK, ports);
+
+      expect(res.ok).toBe(true);
+      // The conversion ran with the supplied package...
+      expect(rec.conversions).toEqual([LOCAL_PACKAGE]);
+      // ...and the join then proceeded account-bound (the converted bus is now
+      // operator-mode, so resolveBindMode bound the account on the re-resolve).
+      expect(rec.writes.length).toBe(1);
+      expect(rec.writes[0]!.binding.account).toBe(LOCAL_PACKAGE.account);
+      expect(storeRef.networks.length).toBe(1);
+      expect(rec.restarts).toBe(1);
+      // A step records the conversion so the CLI can surface it.
+      expect(res.steps.some((s) => /operator-mode/i.test(s))).toBe(true);
+    });
+
+    test("an already-operator-mode bus is NOT converted (no package needed)", async () => {
+      // The pre-O-3 happy path: operator-mode bus that binds the account → join
+      // proceeds WITHOUT any conversion attempt.
+      const { ports, rec } = makeFakes({ busType: "operator-mode" });
+      const res = await joinNetwork("metafactory", LOCAL, ports);
+      expect(res.ok).toBe(true);
+      expect(rec.conversions).toEqual([]); // no conversion attempted
+      expect(rec.writes.length).toBe(1);
+    });
+
+    test("anonymous bus with NO leaf package → STILL fail-fasts (#794 preserved)", async () => {
+      // The conversion seam only engages when a package is present. Without one,
+      // an anonymous bus is still un-joinable → the #794 refusal stands.
+      const STACK: JoiningStack = {
+        principalId: "andreas",
+        stackSlug: "community",
+        credentials: "/Users/andreas/.config/nats/andreas.creds",
+        account: LOCAL_PACKAGE.account,
+        // no operatorModePackage
+      };
+      const { ports, rec, storeRef } = makeFakes({ busType: "anonymous" });
+      const res = await joinNetwork("metafactory-community", STACK, ports);
+
+      expect(res.ok).toBe(false);
+      expect(res.reason).toContain("cortex#794/#799");
+      expect(rec.conversions).toEqual([]); // never attempted (no package)
+      // NOTHING mutated.
+      expect(rec.writes.length).toBe(0);
+      expect(storeRef.networks.length).toBe(0);
+      expect(rec.restarts).toBe(0);
+    });
+
+    test("conversion REFUSE (foreign-operator bus) aborts the join, touches nothing", async () => {
+      const STACK: JoiningStack = {
+        principalId: "andreas",
+        stackSlug: "community",
+        credentials: "/Users/andreas/.config/nats/andreas.creds",
+        account: LOCAL_PACKAGE.account,
+        operatorModePackage: LOCAL_PACKAGE,
+      };
+      const { ports, rec, storeRef } = makeFakes({ busType: "foreign-operator" });
+      const res = await joinNetwork("metafactory-community", STACK, ports);
+
+      expect(res.ok).toBe(false);
+      expect(res.reason).toMatch(/different operator|operator-mode/i);
+      // Conversion was attempted (and refused) — but NOTHING was mutated.
+      expect(rec.conversions).toEqual([LOCAL_PACKAGE]);
+      expect(rec.writes.length).toBe(0);
+      expect(storeRef.networks.length).toBe(0);
+      expect(rec.restarts).toBe(0);
+    });
+
+    test("conversion REFUSE (incomplete package) aborts the join", async () => {
+      const STACK: JoiningStack = {
+        principalId: "andreas",
+        stackSlug: "community",
+        credentials: "/Users/andreas/.config/nats/andreas.creds",
+        account: LOCAL_PACKAGE.account,
+        operatorModePackage: { ...LOCAL_PACKAGE, operatorJwt: "" },
+      };
+      const { ports, rec, storeRef } = makeFakes({ busType: "anonymous" });
+      const res = await joinNetwork("metafactory-community", STACK, ports);
+
+      expect(res.ok).toBe(false);
+      expect(rec.conversions.length).toBe(1);
+      expect(rec.writes.length).toBe(0);
+      expect(storeRef.networks.length).toBe(0);
     });
   });
 

@@ -8,15 +8,67 @@
 import type { AgentPresenceTile, AgentOrigin } from "../hooks/use-agents";
 
 /**
- * G-1114.E.4 — true when an origin is a FOREIGN (federated peer) provenance.
- * A thin guard so view code reads `isForeignOrigin(origin)` rather than
+ * G-1114.E.4 — true when an origin is NOT the serving stack's own `"local"`
+ * record. A thin guard so view code reads `isForeignOrigin(origin)` rather than
  * re-checking the `"local"`-string-vs-object discriminant. Mirrors the bus-side
  * `isForeignOrigin`, re-declared here so the surface layer stays bus-free.
+ *
+ * ⚠️ NOTE: this is the SERVING-STACK guard (origin is an object), NOT the
+ * "federated peer" guard. A same-principal LOCAL SIBLING (#1008 DB-read
+ * aggregation) also carries an object origin yet is NOT federated — it's the
+ * principal's own stack on the principal's own box. Use {@link classifyOrigin}
+ * (which knows the serving principal) to tell a sibling from a true foreign
+ * peer; only `classifyOrigin(...) === "foreign"` means "federated stack".
  */
 export function isForeignOrigin(
   origin: AgentOrigin,
 ): origin is { principal: string; stack: string } {
   return origin !== "local";
+}
+
+/**
+ * The three origin categories the Network graph distinguishes:
+ *   - `"self"`    — the SERVING stack's own agent (`origin: "local"`).
+ *   - `"sibling"` — a SAME-PRINCIPAL local stack reached via #1008 DB-read
+ *     aggregation (`origin: {principal, stack}` with `principal` === the serving
+ *     principal). Same principal, same machine — a LOCAL stack, NOT federated.
+ *   - `"foreign"` — a CROSS-PRINCIPAL federated peer (`origin.principal` !== the
+ *     serving principal). The only category that is truly "federated".
+ *
+ * `self` + `sibling` both render as LOCAL hubs ("stack"); only `foreign` renders
+ * as a "federated stack". This is the fix for the #1008 mislabel where every
+ * object-origin (including same-principal siblings) read as federated.
+ */
+export type OriginCategory = "self" | "sibling" | "foreign";
+
+/**
+ * Classify an origin against the SERVING principal into {@link OriginCategory}.
+ *
+ *   - `"local"` → `"self"`.
+ *   - `{principal,stack}` with `principal === servingPrincipal` → `"sibling"`
+ *     (a same-principal LOCAL stack — DB-read aggregation, not federation).
+ *   - `{principal,stack}` with `principal !== servingPrincipal` → `"foreign"`
+ *     (a cross-principal federated peer).
+ *
+ * When `servingPrincipal` is unknown (`null` — e.g. a foreign-only snapshot with
+ * no `"local"` agent to derive it from), an object origin can't be proven a
+ * sibling, so it conservatively classifies as `"foreign"`. A `"local"` origin is
+ * always `"self"` regardless.
+ */
+export function classifyOrigin(
+  origin: AgentOrigin,
+  servingPrincipal: string | null,
+): OriginCategory {
+  if (origin === "local") return "self";
+  if (servingPrincipal !== null && origin.principal === servingPrincipal) {
+    return "sibling";
+  }
+  return "foreign";
+}
+
+/** True when a category renders with the LOCAL (non-federated) visual + label. */
+export function isLocalCategory(category: OriginCategory): boolean {
+  return category === "self" || category === "sibling";
 }
 
 /**

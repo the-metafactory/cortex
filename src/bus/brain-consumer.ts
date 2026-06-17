@@ -1003,6 +1003,11 @@ export interface BrainAttachmentRef {
   name: string;
   contentType?: string;
   url: string;
+  /** Base64 file bytes, inlined by the surface adapter when the file can't be
+   *  fetched by the brain (Mattermost needs auth). When present the brain uses
+   *  it DIRECTLY — no URL fetch — so it is NOT subject to the host allowlist
+   *  (there is no SSRF surface without a fetch). */
+  content?: string;
 }
 
 /**
@@ -1021,15 +1026,31 @@ const ATTACHMENT_HOST_ALLOWLIST: Record<string, readonly string[]> = {
  * default port (443) — a non-default port (e.g. `cdn.discordapp.com:22`) is
  * rejected. Fail-closed: an unknown surface (no allowlist entry) forwards NONE,
  * and a malformed / non-https / off-allowlist / non-default-port URL is dropped.
+ *
+ * INLINE-CONTENT path (Mattermost): an attachment whose bytes the adapter
+ * already fetched (with the bot token) and base64-inlined is forwarded with its
+ * `content` REGARDLESS of host allowlist — the brain consumes the bytes
+ * directly, never fetches the URL, so there is no SSRF surface to guard. The
+ * URL is still carried (audit/fallback) but is not what the brain reads.
  * Normalises `filename` → `name`.
  */
 export function safeAttachmentRefs(
   platform: string,
-  attachments: { filename: string; contentType?: string; url: string }[],
+  attachments: { filename: string; contentType?: string; url: string; content?: string }[],
 ): BrainAttachmentRef[] {
   const allowed = ATTACHMENT_HOST_ALLOWLIST[platform] ?? [];
   const refs: BrainAttachmentRef[] = [];
   for (const a of attachments) {
+    // Inlined bytes → forward directly (no fetch, no SSRF, no allowlist check).
+    if (typeof a.content === "string" && a.content.length > 0) {
+      refs.push({
+        name: a.filename,
+        ...(a.contentType !== undefined && { contentType: a.contentType }),
+        url: a.url,
+        content: a.content,
+      });
+      continue;
+    }
     let host: string;
     try {
       const u = new URL(a.url);

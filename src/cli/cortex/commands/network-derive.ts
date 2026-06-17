@@ -38,6 +38,8 @@
 
 import type { LoadedConfig } from "../../../common/config/loader";
 import type { ServicePlatform } from "../../../common/nats/nats-service-manager";
+import type { OperatorModeLeafPackage } from "../../../common/nats/leaf-remote-renderer";
+import type { LeafPackageFile } from "./network-leaf-package";
 
 // =============================================================================
 // Types
@@ -74,6 +76,15 @@ export interface DerivedJoinInputs {
    */
   account?: string;
   credsPath: string;
+  /**
+   * O-3 (cortex#1053) — the operator-mode leaf package, assembled from
+   * `--operator-jwt` / `--account-jwt` / `--account` (+ optional
+   * `--system-account` / `--system-account-jwt`) flags or the matching
+   * `stack.nats_infra.*` fields. Present ONLY when at least the operator JWT +
+   * account + account JWT all resolve — the minimum to convert an anonymous bus.
+   * Absent ⇒ join falls back to the #794 fail-fast on an anonymous bus.
+   */
+  operatorModePackage?: OperatorModeLeafPackage;
   /**
    * #762 — the capability ids this stack announces INTO the network, read from
    * the matching `policy.federated.networks[].announce_capabilities[]` block in
@@ -122,6 +133,25 @@ export interface JoinOverrides {
   unitPath?: string;
   account?: string;
   credsPath?: string;
+  /** O-3 (#1053) — `--operator-jwt`. */
+  operatorJwt?: string;
+  /** O-3 (#1053) — `--account-jwt`. */
+  accountJwt?: string;
+  /** O-3 (#1053) — `--system-account`. */
+  systemAccount?: string;
+  /** O-3 (#1053) — `--system-account-jwt`. */
+  systemAccountJwt?: string;
+  /**
+   * O-4b (#1063) — the leaf package SOURCED from `--from-package <file>` (parsed
+   * + validated by the CLI before it reaches here). Sits in the precedence chain
+   * BELOW the explicit per-field flags above and ABOVE config: an explicit flag
+   * (`operatorJwt`/`account`/`accountJwt`/`systemAccount*`/`credsPath`) wins, then
+   * the package supplies what it sets, then config, then convention. The package
+   * also carries `credsPath` (the issued leaf creds) which feeds the join's creds
+   * resolution. O-4a will supply the SAME shape over the wire; this is the interim
+   * file source. Absent ⇒ unchanged O-3/#753 behaviour.
+   */
+  leafPackage?: LeafPackageFile;
 }
 
 /** A reader that loads + validates the cortex config from a path. */
@@ -326,6 +356,12 @@ export function deriveJoinInputs(
   // nats-infra — flag wins, else stack.nats_infra.{config_path,plist_path,account}.
   const natsInfra = cfg.stack?.nats_infra;
 
+  // O-4b (#1063) — the leaf package sourced from `--from-package`. Sits ABOVE
+  // config and BELOW the explicit per-field flags in the precedence chain (flag
+  // > package > config > convention). Already parsed + validated by the CLI, so
+  // every field here is well-formed (the renderer re-validates at conversion).
+  const pkg = overrides.leafPackage;
+
   const natsConfigPath = overrides.natsConfigPath ?? natsInfra?.config_path;
   if (natsConfigPath === undefined || natsConfigPath === "") {
     return fail(
@@ -349,13 +385,45 @@ export function deriveJoinInputs(
   // leaf (binding rides in the creds JWT). So an absent account is NOT an
   // error here; the bind-mode decision (resolveLeafBindMode) refuses only the
   // genuinely-unjoinable case (no creds, or operator-mode missing the account).
-  const accountRaw = overrides.account ?? natsInfra?.account;
+  const accountRaw = overrides.account ?? pkg?.account ?? natsInfra?.account;
   const account =
     accountRaw === undefined || accountRaw === "" ? undefined : accountRaw;
 
-  // creds — flag wins, else stack.nats_infra.creds_path, else convention.
+  // creds — flag wins, else the package's issued creds, else
+  // stack.nats_infra.creds_path, else convention.
   const credsPath =
-    overrides.credsPath ?? natsInfra?.creds_path ?? defaultCredsPath(networkId);
+    overrides.credsPath ?? pkg?.credsPath ?? natsInfra?.creds_path ?? defaultCredsPath(networkId);
+
+  // O-3 (cortex#1053) — assemble the operator-mode leaf package. Precedence per
+  // field: explicit flag > `--from-package` file (O-4b #1063) > config
+  // (`stack.nats_infra.{operator_jwt,account_jwt,system_account,…}`). The package
+  // materialises ONLY when its minimum (operator JWT + account + account JWT) all
+  // resolve; a partial set is treated as "no package" so join falls back to the
+  // #794 fail-fast rather than handing a half-formed package to the renderer
+  // (which would refuse anyway, but with a less obvious cause). O-4a supplies the
+  // file/wire package; flags/config remain the manual path.
+  const operatorJwt = overrides.operatorJwt ?? pkg?.operatorJwt ?? natsInfra?.operator_jwt;
+  const accountJwt = overrides.accountJwt ?? pkg?.accountJwt ?? natsInfra?.account_jwt;
+  const systemAccount =
+    overrides.systemAccount ?? pkg?.systemAccount ?? natsInfra?.system_account;
+  const systemAccountJwt =
+    overrides.systemAccountJwt ?? pkg?.systemAccountJwt ?? natsInfra?.system_account_jwt;
+  const operatorModePackage: OperatorModeLeafPackage | undefined =
+    operatorJwt !== undefined &&
+    operatorJwt !== "" &&
+    account !== undefined &&
+    accountJwt !== undefined &&
+    accountJwt !== ""
+      ? {
+          operatorJwt,
+          account,
+          accountJwt,
+          ...(systemAccount !== undefined &&
+            systemAccount !== "" && { systemAccount }),
+          ...(systemAccountJwt !== undefined &&
+            systemAccountJwt !== "" && { systemAccountJwt }),
+        }
+      : undefined;
 
   // #762 — announce_capabilities for THIS network, read from the matching
   // policy.federated.networks[] block. The join announces these to the registry
@@ -380,6 +448,7 @@ export function deriveJoinInputs(
       platform: descriptor.platform,
       ...(account !== undefined && { account }),
       credsPath,
+      ...(operatorModePackage !== undefined && { operatorModePackage }),
       announceCapabilities,
     },
   };

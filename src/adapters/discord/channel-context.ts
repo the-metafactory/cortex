@@ -81,9 +81,9 @@ export function resolveChannelContext(
  * Same logic as channel name resolution — if the channel name matches
  * a repo short name, it's scoped to that repo.
  */
-export function resolveGroveChannel(
-  groveChannel: string,
+export function resolveSurfaceChannel(
+  channel: string,
   repos: string[],
 ): ChannelContext {
-  return resolveChannelContext(groveChannel, null, repos);
+  return resolveChannelContext(channel, null, repos);
 }

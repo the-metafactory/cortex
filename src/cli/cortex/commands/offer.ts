@@ -97,7 +97,7 @@ import { deriveStackId } from "../../../common/types/stack";
 import { CliArgsError } from "./_shared/arg-error";
 import { envelopeError, envelopeOk, renderJson } from "./_shared/envelope";
 import { type ExitResult } from "./_shared/exit-result";
-import { parseSubcommandArgs, type SubcommandSpec } from "./_shared/parser";
+import { parseSubcommandArgs, type FlagMap, type SubcommandSpec } from "./_shared/parser";
 
 export { type ExitResult } from "./_shared/exit-result";
 
@@ -1029,7 +1029,7 @@ function opError(sub: string, reason: string, json: boolean): ExitResult {
 
 /** Resolve --config (preferred) or --config-dir; both name the stack's config
  *  dir or a single cortex.yaml. */
-function resolveConfigPath(flags: Record<string, string | true>): string {
+function resolveConfigPath(flags: FlagMap): string {
   const explicit =
     typeof flags["--config"] === "string"
       ? flags["--config"]
@@ -1040,7 +1040,7 @@ function resolveConfigPath(flags: Record<string, string | true>): string {
 }
 
 function resolveApply(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
 ): { ok: true; apply: boolean } | { ok: false; reason: string } {
   const apply = flags["--apply"] === true;
   const dry = flags["--dry-run"] === true;
@@ -1191,7 +1191,7 @@ function commitEdit(
 /** set/widen — the bare-positional `offer <capability> --scope …` form. */
 function runSet(
   capability: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
 ): ExitResult {
   const scopeRaw = typeof flags["--scope"] === "string" ? flags["--scope"] : undefined;
@@ -1234,7 +1234,7 @@ function runSet(
 /** revoke — narrow back toward local. */
 function runRevoke(
   capability: string,
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
 ): ExitResult {
   if (!CAPABILITY_ID_RE.test(capability)) {
@@ -1315,7 +1315,7 @@ function describeAccept(accept: AcceptPolicy | undefined): string {
 
 /** list — read-only "what do I expose, to whom". */
 function runList(
-  flags: Record<string, string | true>,
+  flags: FlagMap,
   json: boolean,
 ): ExitResult {
   let target: ResolvedTarget;
@@ -1402,8 +1402,8 @@ const SET_FLAG_SPEC: Record<string, "value" | "bool"> = {
 
 /** Hand-rolled parser for the set path. Returns the capability + flag map, or
  *  throws CliArgsError on a bad flag. */
-function parseSetArgs(argv: string[]): { capability: string; flags: Record<string, string | true> } {
-  const flags: Record<string, string | true> = {};
+function parseSetArgs(argv: string[]): { capability: string; flags: FlagMap } {
+  const flags: FlagMap = {};
   const [capability, ...rest] = argv;
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i] ?? "";

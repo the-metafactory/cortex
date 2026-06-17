@@ -106,9 +106,9 @@ export interface TeamParticipantConfig {
 export interface AgentTeamOpts {
   /** The original user request */
   prompt: string;
-  groveChannel?: string;
+  channel?: string;
   /** G-501: Network identifier for event routing */
-  groveNetwork?: string;
+  network?: string;
   /** Pre-configured participants */
   participants: TeamParticipantConfig[];
   /** Additional CC args for all sessions */
@@ -297,8 +297,8 @@ export class AgentTeamHarness implements SessionHarness {
     return {
       prompt: req.prompt,
       participants: this.participants.map((p) => ({ ...p })),
-      ...(req.runtime?.groveChannel !== undefined && { groveChannel: req.runtime.groveChannel }),
-      ...(req.runtime?.groveNetwork !== undefined && { groveNetwork: req.runtime.groveNetwork }),
+      ...(req.runtime?.channel !== undefined && { channel: req.runtime.channel }),
+      ...(req.runtime?.network !== undefined && { network: req.runtime.network }),
       ...(req.runtime?.additionalArgs !== undefined && { additionalArgs: req.runtime.additionalArgs }),
       ...(req.tools.allow.length > 0 && { allowedTools: [...req.tools.allow] }),
       ...(req.tools.deny !== undefined && { disallowedTools: [...req.tools.deny] }),
@@ -580,8 +580,8 @@ export class AgentTeam extends EventEmitter {
 
     this.moderator = new CCSession({
       prompt: moderatorPrompt,
-      groveChannel: this.opts.groveChannel,
-      groveNetwork: this.opts.groveNetwork,
+      channel: this.opts.channel,
+      network: this.opts.network,
       // ST-P1 (cortex#964) — the moderator is a child of the DISPATCH-level
       // parent (the dispatch that spawned this team), if any.
       ...(this.opts.parentSessionId !== undefined && { parentSessionId: this.opts.parentSessionId }),
@@ -703,8 +703,8 @@ export class AgentTeam extends EventEmitter {
 
     const session = new CCSession({
       prompt: participantPrompt,
-      groveChannel: this.opts.groveChannel,
-      groveNetwork: this.opts.groveNetwork,
+      channel: this.opts.channel,
+      network: this.opts.network,
       ...(participantParent !== undefined && { parentSessionId: participantParent }),
       additionalArgs: this.opts.additionalArgs,
       allowedTools: config.allowedTools ?? this.opts.allowedTools,
@@ -884,7 +884,7 @@ export class AgentTeam extends EventEmitter {
 
     const synthSession = new CCSession({
       prompt: synthesisPrompt,
-      groveChannel: this.opts.groveChannel,
+      channel: this.opts.channel,
       ...(synthesisParent !== undefined && { parentSessionId: synthesisParent }),
       additionalArgs: this.opts.additionalArgs,
       allowedTools: this.opts.allowedTools,

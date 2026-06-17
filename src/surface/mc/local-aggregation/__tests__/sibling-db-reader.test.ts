@@ -257,6 +257,98 @@ describe("aggregateAgentTiles (/api/agents union)", () => {
     expect(luna).toBeDefined();
     expect(luna!.origin).toEqual({ principal: "andreas", stack: "work" });
   });
+
+  test("#989 dedup — a sibling already live in the registry (bus fold) is NOT double-counted from its db", () => {
+    // The reconciliation: the bus aggregator folds a local sibling's LIVE
+    // presence into the registry (`localRecords`), AND the same sibling has a
+    // live session in its db. Both paths produce the SAME key
+    // (`andreas/work/luna`) — `aggregateAgentTiles` must emit ONE tile (the
+    // bus-folded record wins, carrying real liveness), never two (which would be
+    // a duplicate React key in the Network view).
+    const root = freshTmp();
+    const share = freshTmp();
+    seedDb(join(share, "work", "mission-control.db"), {
+      agentId: "luna",
+      agentName: "Luna",
+      taskTitle: "work task",
+    });
+
+    const localRecords: AgentPresenceSnapshotRecord[] = [
+      {
+        // The SAME sibling agent, already folded into the registry via the bus.
+        key: "andreas/work/luna",
+        origin: { kind: "foreign", principal: "andreas", stack: "work" },
+        agentId: "luna",
+        nkeyPublicKey: "NKEYLUNA",
+        assistantName: "Luna",
+        principal: "andreas",
+        stack: "work",
+        capabilities: ["chat"],
+        state: "online",
+        lastSeenAt: 42,
+      },
+    ];
+
+    const tiles = aggregateAgentTiles(
+      localRecords,
+      [sibling("work")],
+      { configRoot: root, homeShareDir: share },
+    );
+
+    const lunas = tiles.filter((t) => t.key === "andreas/work/luna");
+    expect(lunas).toHaveLength(1); // deduped — not two
+    // The registry (bus-folded) record wins: it carries the real capabilities +
+    // nkey, which the db live-session projection leaves empty.
+    expect(lunas[0]!.capabilities).toEqual(["chat"]);
+    expect(lunas[0]!.nkey_public_key).toBe("NKEYLUNA");
+    // Both paths agree online → stays online.
+    expect(lunas[0]!.state).toBe("online");
+  });
+
+  test("#989 dedup is state-aware — a live db session revives an offline-by-TTL registry tile", () => {
+    // The degraded-bus case: the sibling's bus went quiet so the TTL reaper marked
+    // its registry record `offline` (the reaper keeps the record, never deletes),
+    // BUT the sibling still has a LIVE SESSION in its db. The db fallback exists
+    // for exactly this — so the agent must read ONLINE, not offline. The registry's
+    // richer fields (capabilities/nkey) are still preserved.
+    const root = freshTmp();
+    const share = freshTmp();
+    seedDb(join(share, "work", "mission-control.db"), {
+      agentId: "luna",
+      agentName: "Luna",
+      taskTitle: "still working",
+    });
+
+    const localRecords: AgentPresenceSnapshotRecord[] = [
+      {
+        key: "andreas/work/luna",
+        origin: { kind: "foreign", principal: "andreas", stack: "work" },
+        agentId: "luna",
+        nkeyPublicKey: "NKEYLUNA",
+        assistantName: "Luna",
+        principal: "andreas",
+        stack: "work",
+        capabilities: ["chat"],
+        state: "offline", // heartbeat lapsed — but a session is still live in the db
+        offlineReason: "ttl_lapse",
+        lastSeenAt: 1,
+      },
+    ];
+
+    const tiles = aggregateAgentTiles(
+      localRecords,
+      [sibling("work")],
+      { configRoot: root, homeShareDir: share },
+    );
+
+    const lunas = tiles.filter((t) => t.key === "andreas/work/luna");
+    expect(lunas).toHaveLength(1); // still one tile
+    expect(lunas[0]!.state).toBe("online"); // live db session revived liveness
+    expect(lunas[0]!.offline_reason).toBeNull();
+    // Richer registry fields are preserved through the liveness upgrade.
+    expect(lunas[0]!.capabilities).toEqual(["chat"]);
+    expect(lunas[0]!.nkey_public_key).toBe("NKEYLUNA");
+  });
 });
 
 // ---------------------------------------------------------------------------

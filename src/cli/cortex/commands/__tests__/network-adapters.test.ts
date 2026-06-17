@@ -14,7 +14,7 @@
  */
 
 import { describe, test, expect, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync } from "fs";
 import { tmpdir, homedir } from "os";
 import { join } from "path";
 
@@ -262,6 +262,193 @@ describe("#754 live leaf-include wiring", () => {
 
     // The file on disk is untouched.
     expect(readFileSync(conf, "utf-8")).toBe(original);
+  });
+});
+
+// =============================================================================
+// O-3 (cortex#1053) — the LIVE convertToOperatorMode adapter round-trips a real
+// temp nats config: an anonymous bus + a leaf package → the on-disk config gains
+// the operator-mode blocks, keeps its own identity, and adds NO leaf include.
+// =============================================================================
+
+/** The anonymous / hard-isolated bus shape (sop-stack-onboarding §Step 2). */
+function anonLocalConf(): string {
+  return [
+    "server_name: community-andreas",
+    "listen: 127.0.0.1:4224",
+    "http: 127.0.0.1:8224",
+    "jetstream {",
+    "  store_dir: /Users/andreas/.config/nats/community-jetstream",
+    "  domain: community-andreas",
+    "}",
+    "",
+  ].join("\n");
+}
+
+// Public-repo-safe fake leaf package (obvious `eyJ…` / `A…`-shaped fixtures).
+const FAKE_PACKAGE = {
+  operatorJwt:
+    "eyJhbGciOiJlZDI1NTE5LW5rZXkiLCJ0eXAiOiJKV1QifQ.FAKE_OPERATOR.sig",
+  account: "AADPQ7M7LQZTKPNF5CTE7V4XKB2FUYPGKLWZVMW6VXCEEKH62BYKGBHX",
+  accountJwt:
+    "eyJhbGciOiJlZDI1NTE5LW5rZXkiLCJ0eXAiOiJKV1QifQ.FAKE_ACCOUNT.sig",
+};
+
+describe("O-3 live convertToOperatorMode — round-trip a real temp nats config", () => {
+  test("anonymous bus + leaf package → conf gains operator-mode blocks, keeps identity, no leaf include", () => {
+    const dir = freshDir();
+    const conf = join(dir, "community.conf");
+    writeFileSync(conf, anonLocalConf(), "utf-8");
+
+    const ports = buildLivePorts(cfgWithConfig(conf));
+    const result = ports.leafFile.convertToOperatorMode(FAKE_PACKAGE);
+
+    expect(result.status).toBe("converted");
+    const after = readFileSync(conf, "utf-8");
+    // operator-mode blocks rendered
+    expect(after).toContain(`operator: ${FAKE_PACKAGE.operatorJwt}`);
+    expect(after).toContain("resolver: MEMORY");
+    expect(after).toContain(`${FAKE_PACKAGE.account}: ${FAKE_PACKAGE.accountJwt}`);
+    // the stack's own identity/ports/JS domain preserved
+    expect(after).toContain("server_name: community-andreas");
+    expect(after).toContain("listen: 127.0.0.1:4224");
+    expect(after).toContain("domain: community-andreas");
+    // NO leaf include — join renders its own
+    expect(after).not.toMatch(/include[ \t]+["']leafnodes-/);
+  });
+
+  test("already-operator-mode bus under the SAME operator → 'already', file unchanged + leaf can be added", () => {
+    const dir = freshDir();
+    const conf = join(dir, "community.conf");
+    writeFileSync(conf, anonLocalConf(), "utf-8");
+    const ports = buildLivePorts(cfgWithConfig(conf));
+
+    // First convert, then re-convert: byte-stable no-op.
+    ports.leafFile.convertToOperatorMode(FAKE_PACKAGE);
+    const afterFirst = readFileSync(conf, "utf-8");
+    const second = ports.leafFile.convertToOperatorMode(FAKE_PACKAGE);
+    expect(second.status).toBe("already");
+    expect(readFileSync(conf, "utf-8")).toBe(afterFirst);
+
+    // And the converted bus can now take a leaf include (the join's next step).
+    ports.leafFile.ensureInclude("metafactory");
+    const withLeaf = readFileSync(conf, "utf-8");
+    expect(withLeaf).toContain('include "leafnodes-metafactory.conf"');
+    // still operator-mode + identity intact
+    expect(withLeaf).toContain(`operator: ${FAKE_PACKAGE.operatorJwt}`);
+    expect(withLeaf).toContain("server_name: community-andreas");
+  });
+
+  test("missing operator JWT → refuse, the on-disk config is untouched (fail-fast preserved)", () => {
+    const dir = freshDir();
+    const conf = join(dir, "community.conf");
+    const original = anonLocalConf();
+    writeFileSync(conf, original, "utf-8");
+    const ports = buildLivePorts(cfgWithConfig(conf));
+
+    const result = ports.leafFile.convertToOperatorMode({
+      ...FAKE_PACKAGE,
+      operatorJwt: "",
+    });
+    expect(result.status).toBe("refuse");
+    // nothing written
+    expect(readFileSync(conf, "utf-8")).toBe(original);
+  });
+
+  test("an already-operator-mode bus under a DIFFERENT operator → refuse (never clobber)", () => {
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    const original = bareLocalConf(); // carries system_account → operator-mode-ish
+    const foreign = [
+      original.trimEnd(),
+      "operator: eyJhbGciOiJlZDI1NTE5LW5rZXkifQ.A_DIFFERENT_OPERATOR.sig",
+      "",
+    ].join("\n");
+    writeFileSync(conf, foreign, "utf-8");
+    const ports = buildLivePorts(cfgWithConfig(conf));
+
+    const result = ports.leafFile.convertToOperatorMode(FAKE_PACKAGE);
+    expect(result.status).toBe("refuse");
+    // the foreign config is left exactly as-is.
+    expect(readFileSync(conf, "utf-8")).toBe(foreign);
+  });
+
+  test("dry-run convertToOperatorMode surfaces the decision but writes NOTHING", () => {
+    const dir = freshDir();
+    const conf = join(dir, "community.conf");
+    const original = anonLocalConf();
+    writeFileSync(conf, original, "utf-8");
+
+    const ports = buildDryRunPorts(cfgWithConfig(conf));
+    const result = ports.leafFile.convertToOperatorMode(FAKE_PACKAGE);
+    // The decision is a READ — identical to live: it WOULD convert.
+    expect(result.status).toBe("converted");
+    // ...but nothing was written.
+    expect(readFileSync(conf, "utf-8")).toBe(original);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Security-review MAJOR (#1058) — the converting write is ATOMIC (tmp+rename),
+  // so a SIGKILL/OOM mid-write can never leave nats-server a truncated config.
+  // ---------------------------------------------------------------------------
+  test("the converting write goes via a tmp file + rename (no .tmp left behind)", () => {
+    const dir = freshDir();
+    const conf = join(dir, "community.conf");
+    writeFileSync(conf, anonLocalConf(), "utf-8");
+
+    const ports = buildLivePorts(cfgWithConfig(conf));
+    const result = ports.leafFile.convertToOperatorMode(FAKE_PACKAGE);
+    expect(result.status).toBe("converted");
+
+    // The rename CONSUMED the tmp file — none is left in the dir, and the final
+    // config carries the full converted bytes (atomic: old-or-new, never partial).
+    expect(existsSync(`${conf}.tmp`)).toBe(false);
+    expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+    if (result.status !== "converted") throw new Error("expected converted");
+    expect(readFileSync(conf, "utf-8")).toBe(result.conf);
+  });
+
+  test("a FAILED converting write leaves the original config intact (atomic, never truncated)", () => {
+    const dir = freshDir();
+    const conf = join(dir, "community.conf");
+    const original = anonLocalConf();
+    writeFileSync(conf, original, "utf-8");
+
+    // Make the config's directory read-only so the `.tmp` write throws EACCES
+    // BEFORE the rename — the original file's bytes must be untouched (the whole
+    // point of tmp+rename: the target is only ever swapped atomically, never
+    // opened for truncation in place).
+    chmodSync(dir, 0o500);
+    try {
+      const ports = buildLivePorts(cfgWithConfig(conf));
+      expect(() => ports.leafFile.convertToOperatorMode(FAKE_PACKAGE)).toThrow();
+    } finally {
+      chmodSync(dir, 0o700); // restore so afterEach can clean up
+    }
+    // The original config survived verbatim — no partial/corrupt write.
+    expect(readFileSync(conf, "utf-8")).toBe(original);
+    expect(existsSync(`${conf}.tmp`)).toBe(false);
+  });
+
+  test("restoreLeafState's base-config rewrite is ALSO atomic (no .tmp left behind)", () => {
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    // A base config WITHOUT the leaf include directive — restoring a snapshot
+    // that records "directive-present" makes restoreLeafState rewrite the base
+    // config (the path the MAJOR flagged). Assert it goes atomic.
+    writeFileSync(conf, bareLocalConf(), "utf-8");
+    const ports = buildLivePorts(cfgWithConfig(conf));
+
+    ports.leafFile.restoreLeafState({
+      networkId: "metafactory",
+      includeFile: undefined,
+      natsConfig: "directive-present", // → ensureLeafInclude rewrites the base config
+    });
+
+    expect(existsSync(`${conf}.tmp`)).toBe(false);
+    expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+    // The directive was added (the rewrite happened, atomically).
+    expect(readFileSync(conf, "utf-8")).toContain('include "leafnodes-metafactory.conf"');
   });
 });
 
