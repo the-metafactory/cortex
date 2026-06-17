@@ -24,8 +24,8 @@
 
 This keeps two things cleanly separated (the design's central decision, D1 + D5):
 
-- **Bus admission** is subject-scoped at the NATS layer — each principal's bot is minted with
-  `--pub/--sub federated.<op>.>` (per-principal least-privilege; `cortex creds issue`, O-2.5).
+- **Bus admission** is subject-scoped at the NATS layer — each principal's stack bot is minted with
+  `--pub/--sub federated.<principal>.>` (per-principal least-privilege; `cortex creds issue`, O-2.5).
   The Discord role does **not** widen bus permissions.
 - **Discord presence/access** is the role. The role carries the channel overrides; the
   principal's bots stay minimally-scoped on the bus regardless of the role.
@@ -81,7 +81,7 @@ Two independent least-privilege boundaries, neither escalatable from the other.
 Triggered as **step 5 of the O-4 handshake**, AFTER the human approves the trust grant (D5):
 
 ```
-register → issue (cortex creds issue <op-bot> -a community --pub/--sub federated.<op>.>) → join
+register → issue (cortex creds issue <principal-bot> -a community --pub/--sub federated.<principal>.>) → join
    → [human approves the bus-admission trust grant — D5]
    → bot: assign `community-fleet` to the principal's Discord member(s)
 ```
@@ -99,7 +99,7 @@ else needs a human" true (acceptance §6).
 ## Step 4 — revoke (bulk or single)
 
 - **Single principal:** remove `community-fleet` from their member(s). Independently revoke
-  their bus creds (`cortex creds revoke <op-bot>` / `arc nats remove-bot --delete-creds`) —
+  their bus creds (`cortex creds revoke <principal-bot>` / `arc nats remove-bot --delete-creds`) —
   the two are deliberately separate handles.
 - **Bulk:** remove the role from all holders (or delete/replace the role) — one act
   de-admits the whole fleet from Discord. (Bus de-admission is still per-bot cred revoke.)
@@ -120,4 +120,4 @@ else needs a human" true (acceptance §6).
 
 - **The onboarding bot itself** — it is the assistant-fleet tender ([cortex#108 effort / #assistant-fleet-onboarding]); this SOP specifies the role + procedure it executes, not the bot's implementation.
 - **Bus cred issuance/revoke** — `cortex creds` (O-2.5, #1061) + the `register→issue→join` handshake (O-4, #1054/#1064/#1090). The role is the surface half; the cred is the bus half.
-- **Per-principal subject scoping** — `federated.<op>.>` least-privilege (O-2.5), the actual bus-authority boundary.
+- **Per-principal subject scoping** — `federated.<principal>.>` least-privilege (O-2.5), the actual bus-authority boundary.
