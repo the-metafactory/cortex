@@ -47,8 +47,15 @@ import {
   validateSignedIssuanceDecision,
   validateIssuanceDecisionClaim,
   validateSignedIssuanceRead,
+  isValidRequestId,
 } from "../validate";
 import { canonicalJSON, verifyEd25519 } from "../signing";
+import {
+  checkRateLimit,
+  clientKey,
+  retryAfterSeconds,
+  TOO_MANY_REQUESTS_BODY,
+} from "../rate-limit";
 import type { IssuanceStatus } from "../types";
 
 /** Maximum clock skew for admin decision claims — mirrors the network-create route. */
@@ -89,6 +96,13 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
   ): Promise<Response> {
     const requestId = c.req.param("request_id") ?? "";
 
+    // M2 — validate request_id path param BEFORE body parse or crypto.
+    // Rejects slugs, UUIDs with dashes, empty strings, and injection attempts
+    // before they can reach queries or error bodies. Returns 400 immediately.
+    if (!isValidRequestId(requestId)) {
+      return c.json({ error: "invalid_request_id" }, 400);
+    }
+
     // 1. FAIL-CLOSED, FIRST: admin allowlist must be configured.
     const adminPubkeys = parseAdminPubkeys(c.env);
     if (adminPubkeys.size === 0) {
@@ -101,6 +115,17 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
         },
         503,
       );
+    }
+
+    // M1 — rate-limit BEFORE the expensive Ed25519 verify (mirrors networks.ts:~106).
+    // Keyed by (IP, request_id) so a flood against one request can't hide behind
+    // a shared egress IP, and one IP can't exhaust the limit across requests.
+    // Uses the "register" bucket (mutation + Ed25519 compute — same cost class).
+    const allowed = await checkRateLimit(c.env, "register", clientKey(c.req.raw, requestId));
+    if (!allowed) {
+      return c.json(TOO_MANY_REQUESTS_BODY, 429, {
+        "Retry-After": String(retryAfterSeconds("register")),
+      });
     }
 
     // 2. Parse + validate envelope.
@@ -282,6 +307,10 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
     }
 
     const requestId = c.req.param("request_id") ?? "";
+    // M2 — validate request_id path param before any query.
+    if (!isValidRequestId(requestId)) {
+      return c.json({ error: "invalid_request_id" }, 400);
+    }
     const store = getIssuanceStore(c.env);
     const request = await store.getIssuanceRequest(requestId);
     if (!request) {

@@ -43,6 +43,9 @@ import {
 } from "./helpers";
 import { canonicalJSON, signEd25519 } from "../src/signing";
 import type { IssuanceRequest } from "../src/types";
+import { D1IssuanceRequestStore } from "../src/store";
+import { MockD1, asD1 } from "./d1-mock";
+import { _resetRateLimitBucketsForTest } from "../src/rate-limit";
 
 let env: Env;
 let admin: PrincipalKey;
@@ -303,8 +306,10 @@ describe("POST /issuance-requests/:id/grant — auth failures", () => {
   });
 
   test("unknown request_id → 404", async () => {
-    const decision = await makeSignedAdminDecision("doesnotexist1234", "grant", admin);
-    const res = await post("/issuance-requests/doesnotexist1234/grant", decision);
+    // Must be a valid 32-hex-char id (passes M2 check) but not in the store.
+    const nonexistent = "0000000000000000000000000000dead";
+    const decision = await makeSignedAdminDecision(nonexistent, "grant", admin);
+    const res = await post(`/issuance-requests/${nonexistent}/grant`, decision);
     expect(res.status).toBe(404);
   });
 });
@@ -398,9 +403,10 @@ describe("GET /issuance-requests — admin-gated read surface", () => {
   });
 
   test("GET /issuance-requests/:id → 404 for unknown", async () => {
+    // Must be a valid 32-hex-char id (passes M2 check) but not in the store.
     const signedRead = await makeSignedAdminRead(admin);
     const res = await get(
-      "/issuance-requests/unknownrequest0000",
+      "/issuance-requests/0000000000000000000000000000cafe",
       env,
       { "x-admin-signed": JSON.stringify(signedRead) },
     );
@@ -445,6 +451,227 @@ describe("GET /issuance-requests — admin-gated read surface", () => {
   test("GET /issuance-requests missing admin header → 400", async () => {
     const res = await get("/issuance-requests?status=PENDING");
     expect(res.status).toBe(400);
+  });
+});
+
+// =============================================================================
+// M1 — rate-limit: flood trips 429 on grant/reject handlers
+// =============================================================================
+
+describe("M1 — rate-limit: decision flood trips 429", () => {
+  test("flooding grant with a valid request_id trips 429 after the register limit", async () => {
+    // The "register" bucket allows 5 requests per 60s window (per RATE_LIMITS).
+    // Exhaust the bucket then assert the next call returns 429.
+    // We use a valid-format but nonexistent request_id so the rate-limit check
+    // runs before any store access (the flood-shed path matters, not the outcome).
+    const targetId = "aaaa0000bbbb1111cccc2222dddd3333";
+
+    // Reset rate-limit bucket state from beforeEach so this test starts clean.
+    _resetRateLimitBucketsForTest();
+
+    // Fire 5 requests (the limit) — all will fail on auth (no valid body) but
+    // the rate-limit consumes a token on each.
+    for (let i = 0; i < 5; i++) {
+      await post(`/issuance-requests/${targetId}/grant`, { claim: {}, signature: "" });
+    }
+
+    // The 6th request must be rate-limited before any body parse.
+    const res = await post(`/issuance-requests/${targetId}/grant`, {
+      claim: {},
+      signature: "aGVsbG8=",
+    });
+    expect(res.status).toBe(429);
+    expect(((await res.json()) as { error: string }).error).toBe("rate_limited");
+    expect(res.headers.get("Retry-After")).toBeTruthy();
+  });
+
+  test("flooding reject with a valid request_id trips 429 after the register limit", async () => {
+    const targetId = "eeee4444ffff5555aaaa6666bbbb7777";
+    _resetRateLimitBucketsForTest();
+
+    for (let i = 0; i < 5; i++) {
+      await post(`/issuance-requests/${targetId}/reject`, { claim: {}, signature: "" });
+    }
+
+    const res = await post(`/issuance-requests/${targetId}/reject`, {
+      claim: {},
+      signature: "aGVsbG8=",
+    });
+    expect(res.status).toBe(429);
+    expect(((await res.json()) as { error: string }).error).toBe("rate_limited");
+  });
+});
+
+// =============================================================================
+// M2 — request_id path param validation: 400 before body parse or crypto
+// =============================================================================
+
+describe("M2 — invalid request_id path param → 400 invalid_request_id", () => {
+  test("slug (non-hex) request_id → 400 on grant", async () => {
+    const decision = await makeSignedAdminDecision("not-a-valid-request-id", "grant", admin);
+    const res = await post("/issuance-requests/not-a-valid-request-id/grant", decision);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_request_id");
+  });
+
+  test("UUID-with-dashes request_id → 400 on grant", async () => {
+    const uuidId = "550e8400-e29b-41d4-a716-446655440000";
+    const decision = await makeSignedAdminDecision(uuidId, "grant", admin);
+    const res = await post(`/issuance-requests/${uuidId}/grant`, decision);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_request_id");
+  });
+
+  test("empty request_id → 400 on reject", async () => {
+    // Hono maps an empty path segment to "" which fails isValidRequestId.
+    const res = await post("/issuance-requests//reject", { claim: {}, signature: "" });
+    // Hono may 404 on unmatched route; either 400 or 404 is acceptable here
+    // (the important thing is it never reaches the store).
+    expect([400, 404].includes(res.status)).toBe(true);
+  });
+
+  test("too-short hex string → 400 on grant (31 chars)", async () => {
+    const shortId = "0000000000000000000000000000bea"; // 31 chars
+    const decision = await makeSignedAdminDecision(shortId, "grant", admin);
+    const res = await post(`/issuance-requests/${shortId}/grant`, decision);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_request_id");
+  });
+
+  test("too-long hex string → 400 on grant (33 chars)", async () => {
+    const longId = "0000000000000000000000000000beef0"; // 33 chars
+    const decision = await makeSignedAdminDecision(longId, "grant", admin);
+    const res = await post(`/issuance-requests/${longId}/grant`, decision);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_request_id");
+  });
+
+  test("invalid request_id on GET /:request_id → 400 invalid_request_id", async () => {
+    const signedRead = await makeSignedAdminRead(admin);
+    const res = await get(
+      "/issuance-requests/not-hex-32chars",
+      env,
+      { "x-admin-signed": JSON.stringify(signedRead) },
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_request_id");
+  });
+});
+
+// =============================================================================
+// M3 — D1 upsertPending is atomic: concurrent inserts never duplicate
+// =============================================================================
+
+describe("M3 — D1IssuanceRequestStore.upsertPending is atomic", () => {
+  test("concurrent upsertPending calls for the same (principal, peer) return the same row", async () => {
+    const shared = new MockD1();
+    const store = new D1IssuanceRequestStore(asD1(shared));
+
+    // Simulate two concurrent upsertPending calls arriving before either row exists.
+    // In production these race; in the mock the first INSERT wins and the second
+    // hits ON CONFLICT DO NOTHING, then both SELECTs return the same row.
+    const [r1, r2] = await Promise.all([
+      store.upsertPending("principal-x", "pubkeyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "scope.leaf"),
+      store.upsertPending("principal-x", "pubkeyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "scope.leaf"),
+    ]);
+
+    // Both calls return the same request_id — no duplicate was created.
+    expect(r1.request_id).toBe(r2.request_id);
+    expect(r1.status).toBe("PENDING");
+    expect(r2.status).toBe("PENDING");
+
+    // Only one row exists in the backing store.
+    expect(shared.issuanceRequests.size).toBe(1);
+  });
+
+  test("upsertPending returns existing row regardless of its status (idempotent after grant)", async () => {
+    const shared = new MockD1();
+    const store = new D1IssuanceRequestStore(asD1(shared));
+
+    const original = await store.upsertPending(
+      "principal-y",
+      "pubkeyBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+      "scope.leaf",
+    );
+
+    // Simulate the request being granted by directly mutating the mock.
+    const row = shared.issuanceRequests.get(original.request_id)!;
+    shared.issuanceRequests.set(original.request_id, { ...row, status: "GRANTED", granted_by: "admin-key" });
+
+    // A second upsertPending for the same peer returns the existing (now GRANTED) row.
+    const second = await store.upsertPending(
+      "principal-y",
+      "pubkeyBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+      "scope.leaf",
+    );
+
+    expect(second.request_id).toBe(original.request_id);
+    expect(second.status).toBe("GRANTED");
+    expect(shared.issuanceRequests.size).toBe(1);
+  });
+});
+
+// =============================================================================
+// N1 — envelope validator rejects array claim + missing fields
+// =============================================================================
+
+describe("N1 — validateSignedIssuanceDecision envelope hardening", () => {
+  test("array claim → 400 validation_failed", async () => {
+    const req = await registerAndGetRequest("n1-alice");
+    const res = await post(`/issuance-requests/${req.request_id}/grant`, {
+      claim: [{ decision: "grant" }],
+      signature: "aGVsbG8=",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("missing claim field → 400 validation_failed", async () => {
+    const req = await registerAndGetRequest("n1-bob");
+    const res = await post(`/issuance-requests/${req.request_id}/grant`, {
+      signature: "aGVsbG8=",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("missing signature field → 400 validation_failed", async () => {
+    const req = await registerAndGetRequest("n1-carol");
+    const res = await post(`/issuance-requests/${req.request_id}/grant`, {
+      claim: { decision: "grant" },
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+// =============================================================================
+// N2 — CAS fallback uses pre-read existing row (no spurious 404 on D1 transient)
+// =============================================================================
+
+describe("N2 — transitionIssuanceRequest CAS uses pre-read row on changes===0", () => {
+  test("concurrent grant/reject: second transition throws AlreadyDecidedError with the existing row", async () => {
+    const shared = new MockD1();
+    const store = new D1IssuanceRequestStore(asD1(shared));
+
+    const row = await store.upsertPending(
+      "principal-z",
+      "pubkeyCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=",
+      "scope.leaf",
+    );
+
+    // Grant it once — changes the status in the mock.
+    await store.transitionIssuanceRequest(row.request_id, "GRANTED", "admin-pub");
+
+    // Second grant attempt — `existing` is fetched as GRANTED, then changes === 0,
+    // so AlreadyDecidedError should be thrown with the existing row (not re-read).
+    let caughtStatus: string | undefined;
+    try {
+      await store.transitionIssuanceRequest(row.request_id, "GRANTED", "admin-pub");
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AlreadyDecidedError") {
+        const typed = err as { request: { status: string } };
+        caughtStatus = typed.request.status;
+      }
+    }
+    expect(caughtStatus).toBe("GRANTED");
   });
 });
 

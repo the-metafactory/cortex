@@ -46,6 +46,14 @@ const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 /** Network id — same grammar as principal id. */
 const NETWORK_ID_RE = /^[a-z][a-z0-9-]*$/;
 
+/**
+ * Issuance request id — 32 lowercase hex chars (16 random bytes from
+ * generateRequestId in store.ts). Matching the exact format the store
+ * generates ensures a malformed path param is rejected before it reaches
+ * any query or error body (M2 — request_id path param validation).
+ */
+const REQUEST_ID_RE = /^[0-9a-f]{32}$/;
+
 // =============================================================================
 // Public validators
 // =============================================================================
@@ -64,6 +72,16 @@ export function isValidStackId(id: string): boolean {
 
 export function isValidCapabilityId(id: string): boolean {
   return typeof id === "string" && id.length <= 64 && CAPABILITY_ID_RE.test(id);
+}
+
+/**
+ * Validate an issuance request_id path parameter.
+ * Must be exactly 32 lowercase hex chars — the format generateRequestId in
+ * store.ts produces. Rejects slugs, UUIDs with dashes, and empty strings
+ * before they can reach queries or error bodies (M2 guard).
+ */
+export function isValidRequestId(id: string): boolean {
+  return typeof id === "string" && REQUEST_ID_RE.test(id);
 }
 
 /**
@@ -486,14 +504,19 @@ export function validateSignedIssuanceDecision(
     return { ok: false, errors: [{ field: "body", message: "must be an object" }] };
   }
   const b = body as Record<string, unknown>;
+  // N1 — envelope-level rejection: signature must be a non-empty base64 string.
+  // Explicit check so a future direct caller sees a clear error rather than
+  // reaching validateIssuanceDecisionClaim with an unfiltered raw cast.
   if (typeof b.signature !== "string" || b.signature.length === 0) {
     return { ok: false, errors: [{ field: "signature", message: "missing" }] };
   }
   if (!BASE64_RE.test(b.signature)) {
     return { ok: false, errors: [{ field: "signature", message: "must be base64" }] };
   }
-  if (typeof b.claim !== "object" || b.claim === null) {
-    return { ok: false, errors: [{ field: "claim", message: "missing" }] };
+  // N1 — claim must be a plain object (not null, not an array). Arrays pass
+  // the `typeof === "object"` check but are not valid claim shapes.
+  if (typeof b.claim !== "object" || b.claim === null || Array.isArray(b.claim)) {
+    return { ok: false, errors: [{ field: "claim", message: "must be a non-array object" }] };
   }
   return {
     ok: true,

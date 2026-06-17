@@ -198,15 +198,16 @@ export class MockD1 {
       return { meta: { changes: n } };
     }
 
-    // issuance_requests: INSERT (upsertPending — no re-insert path; D1IssuanceRequestStore pre-checks)
+    // issuance_requests: INSERT ... ON CONFLICT(principal_id, peer_pubkey) DO NOTHING
+    // (M3 atomic upsert — D1IssuanceRequestStore.upsertPending)
     if (sql.startsWith("INSERT INTO issuance_requests")) {
       const [requestId, principalId, peerPubkey, requestedScope, createdAt, updatedAt] = args as [
         string, string, string, string, string, string,
       ];
       const peerKey = `${principalId}\x00${peerPubkey}`;
-      // Enforce UNIQUE(principal_id, peer_pubkey)
+      // ON CONFLICT(principal_id, peer_pubkey) DO NOTHING — idempotent.
       if (this.issuancePeerIndex.has(peerKey)) {
-        return { meta: { changes: 0 } }; // conflict — no-op
+        return { meta: { changes: 0 } }; // existing row wins, no-op
       }
       const row: IssuanceRequestRow = {
         request_id: requestId,

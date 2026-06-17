@@ -301,39 +301,43 @@ export class D1IssuanceRequestStore implements IssuanceRequestStore {
     peerPubkey: string,
     requestedScope: string,
   ): Promise<IssuanceRequest> {
-    // Check for an existing row for this (principal_id, peer_pubkey) first.
-    // The UNIQUE index on (principal_id, peer_pubkey) would make an INSERT
-    // conflict; we pre-check to keep the idempotency logic explicit and to
-    // return the existing row without touching it.
-    const existing = await this.db
-      .prepare(
-        "SELECT * FROM issuance_requests WHERE principal_id = ? AND peer_pubkey = ?",
-      )
-      .bind(principalId, peerPubkey)
-      .first<IssuanceRequestRow>();
-    if (existing) return rowToIssuanceRequest(existing);
-
+    // M3 — atomic upsert: INSERT ... ON CONFLICT(principal_id, peer_pubkey) DO NOTHING.
+    // Mirrors the D1NonceCache atomic insert pattern (~line 536): the database
+    // decides atomically whether the row exists; no SELECT-then-INSERT race window
+    // exists where two concurrent registrations could both see "no row" and
+    // attempt a double-insert. After the insert-or-ignore, we unconditionally
+    // SELECT the row (either the one we just inserted or the pre-existing one)
+    // and return it.  Contract: always returns the PENDING (or already-decided)
+    // row for this (principal_id, peer_pubkey) pair; never throws on a concurrent
+    // insert; never creates a duplicate.
     const now = new Date().toISOString();
     const requestId = generateRequestId();
     await this.db
       .prepare(
         `INSERT INTO issuance_requests
            (request_id, principal_id, peer_pubkey, requested_scope, status, created_at, updated_at, granted_by, leaf_package)
-         VALUES (?, ?, ?, ?, 'PENDING', ?, ?, NULL, NULL)`,
+         VALUES (?, ?, ?, ?, 'PENDING', ?, ?, NULL, NULL)
+         ON CONFLICT(principal_id, peer_pubkey) DO NOTHING`,
       )
       .bind(requestId, principalId, peerPubkey, requestedScope, now, now)
       .run();
-    return {
-      request_id: requestId,
-      principal_id: principalId,
-      peer_pubkey: peerPubkey,
-      requested_scope: requestedScope,
-      status: "PENDING",
-      created_at: now,
-      updated_at: now,
-      granted_by: null,
-      leaf_package: null,
-    };
+
+    // Unconditional SELECT — retrieves the winner (our insert or the existing row).
+    const row = await this.db
+      .prepare(
+        "SELECT * FROM issuance_requests WHERE principal_id = ? AND peer_pubkey = ?",
+      )
+      .bind(principalId, peerPubkey)
+      .first<IssuanceRequestRow>();
+
+    // The row MUST exist at this point: either we inserted it or it pre-existed.
+    // A missing row here would indicate a D1 write anomaly outside normal operation.
+    if (!row) {
+      throw new Error(
+        `network-registry: upsertPending invariant violated — no row found for (${principalId}, ${peerPubkey}) after atomic insert`,
+      );
+    }
+    return rowToIssuanceRequest(row);
   }
 
   async getIssuanceRequest(requestId: string): Promise<IssuanceRequest | undefined> {
@@ -380,10 +384,14 @@ export class D1IssuanceRequestStore implements IssuanceRequestStore {
       .run();
 
     if ((res.meta?.changes ?? 0) === 0) {
-      // Someone else decided it concurrently — re-read and throw.
-      const current = await this.getIssuanceRequest(requestId);
-      if (current) throw new AlreadyDecidedError(current);
-      return undefined; // should not happen
+      // N2 — the pre-UPDATE `existing` row is already in scope and was confirmed
+      // PENDING before the UPDATE ran. `changes === 0` means the
+      // `WHERE status = 'PENDING'` guard flipped false after our read — a
+      // concurrent grant/reject landed between our SELECT and UPDATE. Throw
+      // directly with the row we already have rather than issuing a second
+      // SELECT (which could 404 under a transient D1 error even though the row
+      // exists, causing a spurious 404 vs the correct 409).
+      throw new AlreadyDecidedError(existing);
     }
 
     return {
