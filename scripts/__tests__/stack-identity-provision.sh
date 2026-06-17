@@ -63,5 +63,38 @@ after="$(cat "${TH2}/.config/nats/cortex-x-test.nk")"
 [ "${before}" = "${after}" ] && pass "declared path + existing seed → not regenerated (idempotent)" || fail "existing seed was clobbered"
 rm -rf "${TH2}"
 
+# ─── Case 3: generated seed is a SINGLE bare nkey, not nsc's multi-line dump (cortex#1106) ──
+# `nsc generate nkey -u` prints seed + pubkey + blank (3 lines); writing all of
+# them makes cortex's `fromSeed(content.trim())` fail ("invalid encoded key").
+# The seed must be one bare S-prefixed token that round-trips through fromSeed.
+TH3="$(mktemp -d)"
+mkdir -p "${TH3}/.config/nats"
+HOME="${TH3}" bash -c \
+  "source '${SCRIPT_DIR}/lib/stack-identity-provision.sh'; generate_nkey_seed \"\${HOME}/.config/nats/seed.nk\"" \
+  >/dev/null 2>&1 || true
+SEED3="${TH3}/.config/nats/seed.nk"
+if [ -f "${SEED3}" ]; then
+  # Newline count: 0 (bare, no trailing) or 1 (trailing) for a valid single
+  # seed; nsc's unfixed 3-line dump yields 2 → this is the core regression guard.
+  nl="$(wc -l < "${SEED3}" | tr -d ' ')"
+  tok="$(tr -d '[:space:]' < "${SEED3}")"
+  if [ "${nl}" -le 1 ] && printf '%s' "${tok}" | grep -qE '^S[A-Z2-7]+$'; then
+    pass "generated seed is a single bare S-prefixed line, not nsc's 3-line dump (cortex#1106)"
+  else
+    fail "generated seed is multi-line / malformed (${nl} newline(s)) — cortex#1106 regression"
+  fi
+  # The exact parse cortex's stack-signing loader performs.
+  if command -v bun >/dev/null 2>&1; then
+    if bun -e "import {fromSeed} from 'nkeys.js'; import {readFileSync} from 'fs'; fromSeed(new TextEncoder().encode(readFileSync('${SEED3}','utf-8').trim())).getPublicKey();" >/dev/null 2>&1; then
+      pass "generated seed parses via nkeys.js fromSeed (cortex#1106)"
+    else
+      fail "generated seed does NOT parse via fromSeed — cortex#1106 regression"
+    fi
+  fi
+else
+  fail "generate_nkey_seed produced no seed file (neither nsc nor bun available?)"
+fi
+rm -rf "${TH3}"
+
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"
 [ "${FAIL}" -eq 0 ]

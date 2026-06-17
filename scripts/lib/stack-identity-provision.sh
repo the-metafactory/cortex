@@ -117,8 +117,18 @@ generate_nkey_seed() {
     return 0
   fi
   mkdir -p "$(dirname "${seed_path}")"
-  # nsc generate nkey -u prints the seed on stdout.
-  "${nsc_path}" generate nkey -u > "${seed_path}" 2>/dev/null || return 1
+  # cortex#1106 — `nsc generate nkey -u` prints THREE lines: the seed (`SU…`),
+  # the public key (`U…`), and a trailing blank. Writing all three breaks the
+  # stack signing loader: cortex does `fromSeed(content.trim())`, and trim()
+  # cannot strip the INTERIOR pubkey line, so the file fails to parse
+  # ("nkeys: invalid encoded key") and the stack boots unsigned (seen on the
+  # dev-loop + tender stacks). Extract ONLY the seed line (the `S`-prefixed
+  # one) and write it bare (no trailing newline), matching the bun fallback
+  # above and the single-token format `derive_pubkey_from_seed` + cortex expect.
+  local nsc_seed
+  nsc_seed="$("${nsc_path}" generate nkey -u 2>/dev/null | awk '/^S/ { print; exit }')"
+  [ -n "${nsc_seed}" ] || return 1
+  printf '%s' "${nsc_seed}" > "${seed_path}" || return 1
   chmod 600 "${seed_path}" 2>/dev/null
   return 0
 }
