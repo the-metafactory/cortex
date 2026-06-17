@@ -1,13 +1,13 @@
-# Runbook — Issue a leaf credential for a community operator (admin / admin-agent executable)
+# Runbook — Issue a leaf credential for a community principal (admin / admin-agent executable)
 
 **Status:** active
 **Audience:** a **network/hub admin** (human or an admin agent with repo + arc/`nsc` access) onboarding a peer operator onto `metafactory-community`
 **Decision basis:** [ADR-0012](./adr/0012-external-operator-account-isolation.md) — **default: shared `community` account + per-operator scoped bot**; dedicated account is an opt-in for hard isolation
 **Related:** `docs/design-automated-operator-onboarding.md`, `docs/sop-stack-onboarding.md` §B0–B5, `docs/sop-federation-onboarding.md`, `docs/sop-network-join.md`, `docs/runbook-federation-peering.md`, the `cortex creds` ↔ `arc nats` contract (`the-metafactory/arc:docs/integrations/cortex-creds.md`)
 
-This is the **hub side** of community-operator onboarding: minting the one secret artifact —
-a leaf `.creds` — that lets an operator's cortex bind a NATS leaf to a hub. It is
-copy-paste and agent-executable. The operator-facing steps (what *they* run) are in
+This is the **hub side** of community-principal onboarding: minting the one secret artifact —
+a leaf `.creds` — that lets a principal's cortex bind a NATS leaf to a hub. It is
+copy-paste and agent-executable. The principal-facing steps (what *they* run) are in
 `#assistant-fleet-onboarding` / `docs/sop-network-join.md`.
 
 > **Restart framing (read first).** Issuing a leaf cred for a **bot/user in an account the
@@ -23,11 +23,11 @@ copy-paste and agent-executable. The operator-facing steps (what *they* run) are
 ## Happy path — `cortex creds issue` (one command, restart-free)
 
 Per [ADR-0012](./adr/0012-external-operator-account-isolation.md), the **default** is a
-per-operator **bot in the shared `community` account**, scoped to that operator's federated
+per-principal **bot in the shared `community` account**, scoped to that principal's federated
 namespace. Mint it in one command:
 
 ```bash
-OP=northwoods                                   # the operator's handle (lowercase)
+OP=northwoods                                   # the principal's handle (lowercase)
 cortex creds issue "leaf-$OP" \
   -a community \
   --pub "federated.$OP.>" \
@@ -45,9 +45,9 @@ federated.$OP.> --json`** (contract: `arc:docs/integrations/cortex-creds.md`, sc
   isolation boundary in shared-account mode — ADR-0012),
 - needs **no hub restart** — it adds a *user* to an account the hub already trusts.
 
-**Issuing admin (operator-parameterized).** Pass `-a` for the operator/account you issue
-under — each admin issues under their **own** operator on their **own** hub; operator signing
-keys are never shared. arc resolves the active operator via `nsc env` when `-a` is omitted.
+**Issuing admin (`nsc`-account-parameterized).** Pass `-a` for the `nsc` account you issue
+under — each admin issues under their **own** `nsc` account tree on their **own** hub; signing
+keys are never shared. arc resolves the active `nsc` account via `nsc env` when `-a` is omitted.
 
 | Issuing admin | Issue under | Hub endpoint |
 |---|---|---|
@@ -68,9 +68,9 @@ Then proceed to **Hand-off** below.
 ## Fallback — one-time `community` account bootstrap (only when a dedicated account is needed)
 
 > ⚠️ **You only run this section in two cases:** (1) **once**, to bootstrap the shared
-> `community` account itself the very first time, before any operator can be issued into it;
-> or (2) when an operator takes the **dedicated-account opt-in** (ADR-0012) for hard,
-> namespace-level isolation. For every ordinary operator after the shared account exists,
+> `community` account itself the very first time, before any principal can be issued into it;
+> or (2) when a principal takes the **dedicated-account opt-in** (ADR-0012) for hard,
+> namespace-level isolation. For every ordinary principal after the shared account exists,
 > **skip this — use the happy path above.** This is the raw-`nsc` path; it creates an
 > **account**, which under the MEMORY resolver is the one thing that **does** need a hub
 > restart.
@@ -80,8 +80,8 @@ Then proceed to **Hand-off** below.
 | | Value |
 |---|---|
 | Operator | `OP_ANDREAS` |
-| Shared external account | `community` — the default home for external-operator bots (ADR-0012) |
-| Internal agents' account | `ANDREAS_AGENTS` — **never** issue an external operator into this |
+| Shared external account | `community` — the default home for external-principal bots (ADR-0012) |
+| Internal agents' account | `ANDREAS_AGENTS` — **never** issue an external principal into this |
 | System account | `SYS` |
 | Hub config (resolver) | `~/.config/nats/local.conf` — `resolver: MEMORY` + `resolver_preload` |
 | Network | `metafactory-community` — hub `tls://nats.meta-factory.dev:7422`, leaf_port `7422` |
@@ -92,7 +92,7 @@ Then proceed to **Hand-off** below.
 ### Inputs
 
 - `ACCT_NAME` — the account to bootstrap. For the shared default this is `community`
-  (done once). For a dedicated-account opt-in, the operator's handle UPPER (e.g.
+  (done once). For a dedicated-account opt-in, the principal's handle UPPER (e.g.
   `NORTHWOODS`). Verify it's not already taken: `nsc list accounts`.
 
 ### Steps
@@ -103,7 +103,7 @@ Then proceed to **Hand-off** below.
 ACCT=community                                                      # or e.g. NORTHWOODS for the dedicated opt-in
 nsc add account --name "$ACCT"
 nsc edit account --name "$ACCT" --sk generate                       # account signing key (good hygiene)
-# capture the account public key (A…) — the operator's `--account` value:
+# capture the account public key (A…) — the principal's `--account` value:
 ACCT_PUB=$(nsc describe account --name "$ACCT" --field sub --raw 2>/dev/null || nsc list accounts | awk -v a="$ACCT" '$0~a{print $4}')
 echo "account pubkey: $ACCT_PUB"
 ```
@@ -120,10 +120,10 @@ ACCT_JWT=$(nsc describe account --name "$ACCT" --raw)               # the accoun
 ```
 > ⚠️ This restart is **only** because step 1 created a **new account**. Confirm the hub
 > comes back up (`curl -s http://127.0.0.1:8222/healthz`) and andreas/jc leafs re-link
-> before issuing into it. Once the account exists, every per-operator bot issued into it
+> before issuing into it. Once the account exists, every per-principal bot issued into it
 > (happy path above) is **restart-free**.
 
-#### 3. Issue the operator's bot into the now-existing account
+#### 3. Issue the principal's bot into the now-existing account
 
 For the shared `community` account, this is just the **happy path** above
 (`cortex creds issue leaf-$OP -a community --pub/--sub federated.$OP.>`) — restart-free.
@@ -143,13 +143,13 @@ cortex creds issue "leaf-$OP" -a "$ACCT" --pub "federated.$OP.>" --sub "federate
 
 ## Hand-off package (out of band — see security note)
 
-Give the operator **four** things:
+Give the principal **four** things:
 1. the leaf `.creds` (path from `credsPath` in the issue output) — the leaf credential (**secret — bearer key**).
 2. `account pubkey` (the `A…`) — their `cortex network join --account` value.
 3. `account JWT` — for **their** local nats `resolver_preload` (operator-mode bus, §B0.1).
 4. Endpoint: `tls://nats.meta-factory.dev:7422` (already in the `metafactory-community` registry descriptor).
 
-The operator then runs the three commands in `#assistant-fleet-onboarding` (register → join → status).
+The principal then runs the three commands in `#assistant-fleet-onboarding` (register → join → status).
 
 > Once the `register → issue → join` handshake lands (design spec O-4), the leaf package
 > rides the signed registration response and this manual hand-off goes away — see
@@ -161,15 +161,15 @@ The operator then runs the three commands in `#assistant-fleet-onboarding` (regi
 
 - The `.creds` is a **private bearer key**. Prefer an **encrypted / one-time** hand-off
   (age/gpg, a self-destructing secret link, Signal) over a plain Discord paste.
-- If a private channel paste is used for convenience: **delete the message** once the operator
+- If a private channel paste is used for convenience: **delete the message** once the principal
   has pulled it, keep the channel's membership tight, and **rotate after first connect**
   (`cortex creds rotate leaf-$OP -a community` — restart-free) so the pasted copy is dead.
 - The cred is **scoped + revocable** per ADR-0012 — confined to `federated.<slug>.>` at
   issuance (the `--pub/--sub` scope, which is the isolation boundary in shared-account mode)
-  and independently revocable without touching any other operator.
+  and independently revocable without touching any other principal.
 - In **shared-account (default) mode** there is no account wall behind the subject scope —
   so keep `--pub/--sub` and `accept_subjects` strictly least-privilege, and prioritise the
-  signing → mTLS ramp for external operators. An operator needing a hard wall takes the
+  signing → mTLS ramp for external principals. A principal needing a hard wall takes the
   dedicated-account opt-in (ADR-0012).
 - v1 `federated.` payloads are cleartext-over-TLS, signing off.
 
