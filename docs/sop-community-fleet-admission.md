@@ -6,7 +6,7 @@
 **Companions:** [`sop-federation-onboarding.md`](sop-federation-onboarding.md), [`sop-network-join.md`](sop-network-join.md), [`runbook-leaf-cred-issuance.md`](runbook-leaf-cred-issuance.md)
 
 > **Scope.** O-5 is the LAST step of the automated-operator-onboarding handshake (O-4):
-> after `register → issue → join` admits an operator to the federated bus and a human
+> after `register → issue → join` admits a principal to the federated bus and a human
 > approves the trust grant (D5), the onboarding bot **assigns one Discord role** —
 > `community-fleet` — so **presence + Discord access land in a single, bulk-revocable act**.
 > This is **cortex/ops**, not cortex daemon code: the actor is the onboarding bot
@@ -17,18 +17,18 @@
 
 ## The one idea
 
-> **The `community-fleet` role IS the admission.** Holding it = "this operator is an
+> **The `community-fleet` role IS the admission.** Holding it = "this principal is an
 > admitted member of the federated community." Granting it (presence + channel access)
 > and revoking it (bulk de-admission) are each **one role-membership change**, not a
 > sweep of per-channel/per-bot edits.
 
 This keeps two things cleanly separated (the design's central decision, D1 + D5):
 
-- **Bus admission** is subject-scoped at the NATS layer — each operator bot is minted with
-  `--pub/--sub federated.<op>.>` (per-operator least-privilege; `cortex creds issue`, O-2.5).
+- **Bus admission** is subject-scoped at the NATS layer — each principal's stack bot is minted with
+  `--pub/--sub federated.<principal>.>` (per-principal least-privilege; `cortex creds issue`, O-2.5).
   The Discord role does **not** widen bus permissions.
 - **Discord presence/access** is the role. The role carries the channel overrides; the
-  operator's bots stay minimally-scoped on the bus regardless of the role.
+  principal's bots stay minimally-scoped on the bus regardless of the role.
 
 So the role is a **surface-side** convenience (visibility + channel access + a single
 revoke handle), never a bus-authority grant. Losing the role removes Discord access; it
@@ -43,7 +43,7 @@ On the **metafactory-community** guild, create a role:
 | Property | Value |
 |---|---|
 | name | `community-fleet` |
-| hoist / mentionable | optional (operator preference) |
+| hoist / mentionable | optional (principal preference) |
 | base guild permissions | **none beyond `@everyone`** — the role grants access via per-channel **overrides**, not guild-wide perms |
 | position | **below** the onboarding bot's own top role (a bot can only manage roles ranked below its highest — see Step 2) |
 
@@ -76,19 +76,19 @@ Two independent least-privilege boundaries, neither escalatable from the other.
 
 ---
 
-## Step 3 — assign on admission (onboarding bot, per operator)
+## Step 3 — assign on admission (onboarding bot, per principal)
 
 Triggered as **step 5 of the O-4 handshake**, AFTER the human approves the trust grant (D5):
 
 ```
-register → issue (cortex creds issue <op-bot> -a community --pub/--sub federated.<op>.>) → join
+register → issue (cortex creds issue <principal-bot> -a community --pub/--sub federated.<principal>.>) → join
    → [human approves the bus-admission trust grant — D5]
-   → bot: assign `community-fleet` to the operator's Discord member(s)
+   → bot: assign `community-fleet` to the principal's Discord member(s)
 ```
 
 The assign is idempotent (already-holding → no-op) and is the **only** Discord act —
 presence + channel access both follow from the single role. The bot logs the grant
-(operator id, Discord member id, timestamp) for audit.
+(principal id, Discord member id, timestamp) for audit.
 
 **The role grant must not precede the human trust-grant** — admission to Discord is the
 visible signal of bus admission; gating it on D5 keeps "a human approves admission, nothing
@@ -98,8 +98,8 @@ else needs a human" true (acceptance §6).
 
 ## Step 4 — revoke (bulk or single)
 
-- **Single operator:** remove `community-fleet` from their member(s). Independently revoke
-  their bus creds (`cortex creds revoke <op-bot>` / `arc nats remove-bot --delete-creds`) —
+- **Single principal:** remove `community-fleet` from their member(s). Independently revoke
+  their bus creds (`cortex creds revoke <principal-bot>` / `arc nats remove-bot --delete-creds`) —
   the two are deliberately separate handles.
 - **Bulk:** remove the role from all holders (or delete/replace the role) — one act
   de-admits the whole fleet from Discord. (Bus de-admission is still per-bot cred revoke.)
@@ -111,7 +111,7 @@ else needs a human" true (acceptance §6).
 - [ ] `community-fleet` role exists with channel overrides only (no guild-wide perms).
 - [ ] Onboarding bot holds Manage-Roles, its role ranked above `community-fleet`, no Administrator.
 - [ ] On a real onboarding, the bot assigns the role **after** the human trust-grant — presence + channel access appear in one act.
-- [ ] Removing the role removes Discord access for that operator; bus creds revoke is a separate, still-working act.
+- [ ] Removing the role removes Discord access for that principal; bus creds revoke is a separate, still-working act.
 - [ ] The bot cannot assign any role ranked at/above its own (verified by role-ordering).
 
 ---
@@ -120,4 +120,4 @@ else needs a human" true (acceptance §6).
 
 - **The onboarding bot itself** — it is the assistant-fleet tender ([cortex#108 effort / #assistant-fleet-onboarding]); this SOP specifies the role + procedure it executes, not the bot's implementation.
 - **Bus cred issuance/revoke** — `cortex creds` (O-2.5, #1061) + the `register→issue→join` handshake (O-4, #1054/#1064/#1090). The role is the surface half; the cred is the bus half.
-- **Per-operator subject scoping** — `federated.<op>.>` least-privilege (O-2.5), the actual bus-authority boundary.
+- **Per-principal subject scoping** — `federated.<principal>.>` least-privilege (O-2.5), the actual bus-authority boundary.
