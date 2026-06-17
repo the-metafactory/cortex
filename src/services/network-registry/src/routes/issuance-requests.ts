@@ -64,11 +64,10 @@ const CLOCK_SKEW_MS = 5 * 60 * 1000; // 5 minutes
  * (caller short-circuits immediately).
  */
 async function applyAdminGate(
-  env: Env,
   adminPubkeys: Set<string>,
   adminPubkey: string,
   signature: string,
-  message: Uint8Array,
+  message: Uint8Array<ArrayBuffer>,
 ): Promise<{ error: string; status: number } | null> {
   // adminPubkeys already checked for empty before calling this helper.
   const valid = await verifyEd25519(adminPubkey, signature, message);
@@ -140,7 +139,6 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
     // 4. Signature verification FIRST (before recording nonce — #695 rationale).
     const message = new TextEncoder().encode(canonicalJSON(claim));
     const gateResult = await applyAdminGate(
-      c.env,
       adminPubkeys,
       claim.admin_pubkey,
       signed.signature,
