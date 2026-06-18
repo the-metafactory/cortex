@@ -179,6 +179,11 @@ ALLOWLIST_PATHS=(
   # NATS account-tree root, never the principal. Class: NSC.
   # RETIRE: never (NSC operator is the permanent qualified survivor, CONTEXT.md).
   'docs/adr/0013-sovereign-federation-model.md'
+  # ADR-0015 two-tier onboarding + admission gate — federation/NSC-operator subject
+  # throughout (sovereign tier, network-admission gate). Every "operator" is the NATS
+  # account-tree root, never the principal. Class: NSC.
+  # RETIRE: never (NSC operator is the permanent qualified survivor, CONTEXT.md).
+  'docs/adr/0015-two-tier-onboarding-and-admission-gate.md'
   # G5 peer-onboarding runbook — the end-to-end onboarding SOP teaches the sovereign
   # federation path (ADR-0013): every occurrence of "operator" is "NSC operator" (the
   # NATS account-tree root, qualified throughout). Same class as ADR-0013 and the G1

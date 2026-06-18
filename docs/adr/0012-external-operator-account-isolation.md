@@ -1,6 +1,6 @@
 # ADR 0012 — External-principal bus isolation: shared `community` account + scoped bot (default), dedicated account (opt-in)
 
-**Status:** Accepted (revised 2026-06-16 per [design-automated-operator-onboarding.md](../design-automated-operator-onboarding.md) §4-D1 / cortex#1049)
+**Status:** SUPERSEDED by [ADR-0015](./0015-two-tier-onboarding-and-admission-gate.md) (2026-06-18) — its premise (the hub mints an account/cred for an external joiner, "Model A") was dropped by ADR-0013 (sovereign federation) + ADR-0015 (two-tier onboarding, no guest-bus tier). Retained for history; full Model-A state recoverable on tag/branch `model-a-hub-minted-creds`. Earlier: Accepted (revised 2026-06-16 per [design-automated-operator-onboarding.md](../design-automated-operator-onboarding.md) §4-D1 / cortex#1049)
 **Date:** 2026-06-12 (original) · 2026-06-16 (revision — default flipped)
 **Context tags:** federation, security, network onboarding
 **Supersedes / relates:** ADR-0001 (federated subject grammar), ADR-0002 (federated dispatch addressing), `docs/sop-federation-onboarding.md`, `docs/sop-stack-onboarding.md` §B0–B5, `docs/runbook-leaf-cred-issuance.md`, the `cortex creds` ↔ `arc nats` contract (`the-metafactory/arc:docs/integrations/cortex-creds.md`)
