@@ -1,6 +1,6 @@
 # Design — Distributing multi-agent bundles via arc + capability offerings
 
-**Status: Draft — for principal review**
+**Status: Accepted — principal-approved 2026-06-18**
 
 **Refs:** cortex#1133 (umbrella) · cortex#1021 (bot packs / B-0 #1027) · cortex#939 + #962 (capability offering, CO-1) · `docs/adr/0008-capability-offering-scope.md` · `docs/adr/0009-offerings-per-stack-no-shared-layer.md` · `docs/adr/0010-public-accept-gate-two-stage.md` · **`docs/adr/0014-capability-authorized-agents.md`** (this design's new decision) · cortex#1071 (offer folds `agents.d`) · the-metafactory/dev-loop (the bundle) + dev-loop#4 (`trust:[]`) · the-metafactory/yarrow (the single-bot reference) · the-metafactory/arc#244 (arc lane) · cortex#129 (install validation) · `CONTEXT.md` §Identity&trust / §Capability offering · compass `sops/federation-wire-protocol.md`
 
