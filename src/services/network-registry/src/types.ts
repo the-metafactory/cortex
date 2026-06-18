@@ -216,6 +216,17 @@ export interface NetworkDescriptor {
    * capabilities), not stored on the network record.
    */
   members: string[];
+  /**
+   * G1a (cortex#1117) — the hub's NSC account public key (nkey-U, `A…`).
+   * OPTIONAL: absent means "no cross-account wiring needed" (Case A —
+   * hub and leaf share the same NSC account).
+   * When present the joining stack's `cortex network join` (G1c) will use this
+   * to drive `arc nats add-federation-export --to-account <hub_account>`.
+   * Grammar: `/^A[A-Z2-7]{55}$/` — same as the O-4b leaf-package `account` field.
+   * Validated at create time; carried inside the signed assertion payload so any
+   * tampering invalidates the registry signature (DD-9).
+   */
+  hub_account?: string;
 }
 
 /**
@@ -235,6 +246,12 @@ export interface NetworkRecord {
   leaf_port: number;
   /** ISO-8601 UTC; when the topology was last (re-)seeded. */
   updated_at: string;
+  /**
+   * G1a (cortex#1117) — the hub's NSC account public key (nkey-U, `A…`).
+   * OPTIONAL: absent = "same-account / no cross-account wiring needed".
+   * Grammar: `/^A[A-Z2-7]{55}$/`.
+   */
+  hub_account?: string;
 }
 
 /**

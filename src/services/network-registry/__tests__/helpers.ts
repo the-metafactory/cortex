@@ -166,6 +166,8 @@ export async function makeSignedAdminRead(
 /**
  * The admin claim shape carried by `POST /networks/:id` (#747). Mirrors
  * `NetworkCreateClaim` in `../src/validate`.
+ *
+ * G1a (cortex#1117): hub_account is optional — absent = back-compat.
  */
 export interface NetworkCreateClaim {
   network_id: string;
@@ -174,6 +176,8 @@ export interface NetworkCreateClaim {
   admin_pubkey: string;
   issued_at: string;
   nonce: string;
+  /** G1a: optional nkey-U hub account pubkey (`A…`). */
+  hub_account?: string;
 }
 
 /**
@@ -181,6 +185,9 @@ export interface NetworkCreateClaim {
  * just an Ed25519 keypair (the CLI derives it from an nkey seed; here we mint
  * one directly via `makePrincipalKey`). Tests override fields/signing-key to
  * exercise forged-signature / wrong-key / replay paths.
+ *
+ * G1a (cortex#1117): `hubAccount` is optional. When provided it is included
+ * in the signed claim. When absent the field is omitted entirely (back-compat).
  */
 export async function makeSignedNetworkCreate(
   networkId: string,
@@ -194,6 +201,8 @@ export async function makeSignedNetworkCreate(
     adminPubkeyOverride?: string;
     /** Sign with a DIFFERENT key than the claim declares — forged signature. */
     signWith?: PrincipalKey;
+    /** G1a: optional nkey-U hub account pubkey. */
+    hubAccount?: string;
   } = {},
 ): Promise<{ claim: NetworkCreateClaim; signature: string }> {
   const claim: NetworkCreateClaim = {
@@ -203,6 +212,8 @@ export async function makeSignedNetworkCreate(
     admin_pubkey: opts.adminPubkeyOverride ?? adminKey.publicKeyB64,
     issued_at: opts.issuedAt ?? new Date().toISOString(),
     nonce: opts.nonce ?? randomNonce(),
+    // G1a: only include when provided so canonical-JSON matches what the CLI signs.
+    ...(opts.hubAccount !== undefined && { hub_account: opts.hubAccount }),
   };
   const message = new TextEncoder().encode(canonicalJSON(claim));
   const signer = opts.signWith ?? adminKey;

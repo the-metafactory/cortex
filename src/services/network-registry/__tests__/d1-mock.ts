@@ -36,6 +36,8 @@ interface NetworkRow {
   network_id: string;
   hub_url: string;
   leaf_port: number;
+  /** G1a (cortex#1117): nullable — NULL when not provided. */
+  hub_account: string | null;
   updated_at: string;
 }
 
@@ -174,17 +176,20 @@ export class MockD1 {
     }
 
     // networks: UPSERT (S2.5)
+    // G1a (cortex#1117): bind order is (networkId, hubUrl, leafPort, hubAccount|null, updatedAt)
     if (sql.startsWith("INSERT INTO networks")) {
-      const [networkId, hubUrl, leafPort, updatedAt] = args as [
+      const [networkId, hubUrl, leafPort, hubAccount, updatedAt] = args as [
         string,
         string,
         number,
+        string | null,
         string,
       ];
       this.networks.set(networkId, {
         network_id: networkId,
         hub_url: hubUrl,
         leaf_port: leafPort,
+        hub_account: hubAccount,
         updated_at: updatedAt,
       });
       // An UPSERT always touches exactly one row (insert or update).

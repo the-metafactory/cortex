@@ -134,6 +134,17 @@ export interface NetworkDescriptor {
    * pubkeys + stacks) comes from `GET /networks/{id}/roster`.
    */
   members: string[];
+  /**
+   * G1a (cortex#1117) — the hub's NSC account public key (nkey-U, `A…`).
+   * OPTIONAL: absent means "no cross-account wiring needed" (Case A —
+   * hub and leaf share the same NSC account). When present, the joining stack uses this to
+   * configure the cross-account nats export/import (G1c, future slice).
+   * Grammar: `/^A[A-Z2-7]{55}$/` — same as the O-4b leaf-package `account`.
+   * Carried inside the signed assertion so tampering invalidates the
+   * registry signature (DD-9). The service-side `NetworkDescriptor` is the
+   * source of truth; this field mirrors it.
+   */
+  hub_account?: string;
 }
 
 /**

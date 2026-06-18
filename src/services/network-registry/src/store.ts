@@ -136,12 +136,16 @@ export interface RegistryStore {
    * script / direct D1 write), NOT via a public HTTP route — an unauthenticated
    * write the registry then signs would defeat DD-9 (descriptor poisoning).
    * Returns the post-write view. Callers are responsible for validating
-   * `hubUrl` / `leafPort`; the store only persists.
+   * `hubUrl` / `leafPort` / `hubAccount`; the store only persists.
+   *
+   * G1a (cortex#1117): `hubAccount` is optional (nkey-U `A…` pubkey).
+   * Absent = "same-account / no cross-account wiring needed" (back-compat).
    */
   putNetwork(
     networkId: string,
     hubUrl: string,
     leafPort: number,
+    hubAccount?: string,
   ): Promise<NetworkRecord>;
 
   /**
@@ -585,12 +589,16 @@ export class InMemoryRegistryStore implements RegistryStore {
     networkId: string,
     hubUrl: string,
     leafPort: number,
+    hubAccount?: string,
   ): Promise<NetworkRecord> {
     const record: NetworkRecord = {
       network_id: networkId,
       hub_url: hubUrl,
       leaf_port: leafPort,
       updated_at: new Date().toISOString(),
+      // G1a: only include hub_account when explicitly provided (back-compat:
+      // omitting preserves the field's absence on existing records).
+      ...(hubAccount !== undefined && { hub_account: hubAccount }),
     };
     this.networks.set(networkId, record);
     return record;
@@ -735,25 +743,31 @@ export class D1RegistryStore implements RegistryStore {
     networkId: string,
     hubUrl: string,
     leafPort: number,
+    hubAccount?: string,
   ): Promise<NetworkRecord> {
     const record: NetworkRecord = {
       network_id: networkId,
       hub_url: hubUrl,
       leaf_port: leafPort,
       updated_at: new Date().toISOString(),
+      // G1a: only include hub_account when explicitly provided (back-compat:
+      // omitting leaves the column NULL on existing rows unchanged).
+      ...(hubAccount !== undefined && { hub_account: hubAccount }),
     };
     // UPSERT: re-seeding a network replaces the topology row in place.
+    // G1a: hub_account is included in SET so a second write can update it.
     // Parameterised — no value is string-interpolated into SQL.
     await this.db
       .prepare(
-        `INSERT INTO networks (network_id, hub_url, leaf_port, updated_at)
-         VALUES (?, ?, ?, ?)
+        `INSERT INTO networks (network_id, hub_url, leaf_port, hub_account, updated_at)
+         VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(network_id) DO UPDATE SET
-           hub_url    = excluded.hub_url,
-           leaf_port  = excluded.leaf_port,
-           updated_at = excluded.updated_at`,
+           hub_url     = excluded.hub_url,
+           leaf_port   = excluded.leaf_port,
+           hub_account = excluded.hub_account,
+           updated_at  = excluded.updated_at`,
       )
-      .bind(networkId, hubUrl, leafPort, record.updated_at)
+      .bind(networkId, hubUrl, leafPort, hubAccount ?? null, record.updated_at)
       .run();
     return record;
   }
@@ -761,7 +775,7 @@ export class D1RegistryStore implements RegistryStore {
   async getNetwork(networkId: string): Promise<NetworkRecord | undefined> {
     const row = await this.db
       .prepare(
-        "SELECT network_id, hub_url, leaf_port, updated_at FROM networks WHERE network_id = ?",
+        "SELECT network_id, hub_url, leaf_port, hub_account, updated_at FROM networks WHERE network_id = ?",
       )
       .bind(networkId)
       .first<NetworkRow>();
@@ -798,16 +812,25 @@ interface NetworkRow {
   hub_url: string;
   /** SQLite stores the INTEGER column; D1 returns it as a JS number. */
   leaf_port: number;
+  /** G1a (cortex#1117) — nullable; NULL when the column was absent pre-migration
+   * or the network was created without a hub_account. */
+  hub_account: string | null;
   updated_at: string;
 }
 
 function rowToNetworkRecord(row: NetworkRow): NetworkRecord {
-  return {
+  const record: NetworkRecord = {
     network_id: row.network_id,
     hub_url: row.hub_url,
     leaf_port: row.leaf_port,
     updated_at: row.updated_at,
   };
+  // G1a: only include hub_account when the column is non-null (back-compat:
+  // pre-migration rows have NULL and must not appear polluted with undefined).
+  if (row.hub_account !== null && row.hub_account !== undefined) {
+    record.hub_account = row.hub_account;
+  }
+  return record;
 }
 
 /**
