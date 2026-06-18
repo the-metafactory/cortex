@@ -625,9 +625,9 @@ function resolvePrincipalId(
 }
 
 function targetAgentForDispatch(
-  agent: Pick<Agent, "id" | "displayName" | "persona">,
+  agent: Pick<Agent, "id" | "displayName" | "persona" | "openOnboarding">,
   configDir: string,
-): { id: string; displayName: string; persona: string } {
+): { id: string; displayName: string; persona: string; openOnboarding?: boolean } {
   const expandedPersona = expandTilde(agent.persona);
   return {
     id: agent.id,
@@ -635,6 +635,9 @@ function targetAgentForDispatch(
     persona: isAbsolute(expandedPersona)
       ? expandedPersona
       : join(configDir, expandedPersona),
+    // cortex#1165 — carry the open-onboarding gate flag per target agent so the
+    // dispatch handler can admit unmapped senders for flagged concierges only.
+    ...(agent.openOnboarding === true && { openOnboarding: true }),
   };
 }
 

@@ -849,6 +849,26 @@ export const AgentSchema = z.object({
    * declare it so the dashboard renders accurate substrate provenance.
    */
   runtime: AgentRuntimeSchema.optional(),
+  /**
+   * cortex#1165 — the Pier "open-onboarding" gate. When `true`, this agent
+   * will ACCEPT dispatch from senders who are NOT mapped to ANY principal in
+   * `policy.principals[].platform_ids` — instead of denying, the inbound is
+   * attributed to a synthetic, **zero-authority anonymous principal** (no
+   * roles, no privileged short-circuit capability, no skills, no dir grants,
+   * every tool restricted, not trusted for the prompt-injection filter) whose
+   * ONLY purpose is to let the agent's chat session run so a concierge can
+   * greet a stranger.
+   *
+   * **AUTH-GATE FLAG — default `false`/absent.** ONLY for issues-nothing
+   * concierge agents (e.g. Pier) whose persona mints no credentials and whose
+   * worst-case authority is "talk back in a public channel". Unflagged agents
+   * (Luna, dev-loop, every real assistant) keep the strict deny: an unmapped
+   * sender is denied with a pointer at `policy.principals[].platform_ids`.
+   * The flag opens NO privileged path — the anonymous principal never enters
+   * the policy engine/registry, so no role/capability check can ever resolve
+   * it (see `anonOnboardingAccess` in `src/common/policy/resolve-access.ts`).
+   */
+  openOnboarding: z.boolean().optional(),
 });
 // cortex#245 — the previous `at least one presence block` refine was
 // dropped to admit headless agents (bus-only participants with no

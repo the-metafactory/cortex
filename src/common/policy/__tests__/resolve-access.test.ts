@@ -10,12 +10,15 @@ import { describe, expect, test } from "bun:test";
 
 import {
   resolvePolicyAccess,
+  anonOnboardingAccess,
   isOperatorPrincipal,
 } from "../resolve-access";
 import {
   buildPlatformPrincipalIndex,
   buildPrincipalRegistry,
+  defaultPolicySovereignty,
 } from "../policy-gate";
+import { CLAUDE_TOOL_INVENTORY } from "../tool-inventory";
 import { policyEngineFromConfig } from "../factory";
 import type { Policy } from "../../types/cortex-config";
 import type { InboundMessage } from "../../../adapters/types";
@@ -134,6 +137,114 @@ describe("resolvePolicyAccess — unknown principal deny path", () => {
     expect(result.allowed).toBe(false);
     expect(result.denyReason).toContain("not set up to respond");
     expect(result.denyReason).toContain("policy.principals[].platform_ids");
+  });
+
+  // cortex#1165 — the unmapped-sender deny must carry the stable `unmapped_sender`
+  // code so the open-onboarding gate can key off the category, not the prose.
+  test("stamps denyCode=unmapped_sender on the unknown-principal deny", () => {
+    const result = resolvePolicyAccess({
+      msg: msg({ authorId: "9999999999999999" }),
+      ...buildHarness(USER_POLICY),
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.denyCode).toBe("unmapped_sender");
+  });
+
+  test("no-policy deny carries denyCode=no_policy (NOT unmapped_sender)", () => {
+    const result = resolvePolicyAccess({
+      msg: msg(),
+      engine: undefined,
+      index: undefined,
+      registry: undefined,
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.denyCode).toBe("no_policy");
+  });
+
+  test("lockout deny (recognized principal, zero keyword caps) carries denyCode=lockout", () => {
+    const lockoutPolicy: Policy = {
+      principals: [
+        {
+          id: "muted",
+          home_principal: "andreas",
+          home_stack: "andreas/meta-factory",
+          role: ["muted"],
+          trust: [],
+          platform_ids: { discord: ["555000111222333444"] },
+        },
+      ],
+      // role exists but grants NO keyword.* and NOT operator
+      roles: [{ id: "muted", capabilities: ["tool.read"] }],
+    };
+    const result = resolvePolicyAccess({
+      msg: msg({ authorId: "555000111222333444" }),
+      ...buildHarness(lockoutPolicy),
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.denyCode).toBe("lockout");
+  });
+});
+
+describe("anonOnboardingAccess — zero-authority anonymous principal (cortex#1165)", () => {
+  test("allows chat ONLY — async + team stay false (no privileged keywords)", () => {
+    const result = anonOnboardingAccess(msg({ authorId: "285727653603049472" }));
+    expect(result.allowed).toBe(true);
+    expect(result.features.chat).toBe(true);
+    expect(result.features.async).toBe(false);
+    expect(result.features.team).toBe(false);
+  });
+
+  test("is NOT trusted — the inbound prompt-injection filter stays armed", () => {
+    const result = anonOnboardingAccess(msg());
+    // trusted must be explicitly false (not merely undefined) — a stranger is
+    // the least-trusted sender; the filter's trust gate must never let it pass.
+    expect(result.trusted).toBe(false);
+  });
+
+  test("restricts EVERY tool in the canonical inventory (zero tool authority)", () => {
+    const result = anonOnboardingAccess(msg());
+    // The full inventory is restricted — no tool is granted.
+    expect(result.toolRestrictions).toEqual([...CLAUDE_TOOL_INVENTORY]);
+    // Spot-check the dangerous ones explicitly.
+    expect(result.toolRestrictions).toContain("Bash");
+    expect(result.toolRestrictions).toContain("Write");
+    expect(result.toolRestrictions).toContain("Edit");
+    expect(result.toolRestrictions).toContain("Read");
+  });
+
+  test("grants NO skills and NO dir restrictions (inherits most-restrictive defaults), bashGuard ON", () => {
+    const result = anonOnboardingAccess(msg());
+    expect(result.allowedSkills).toBeUndefined();
+    expect(result.dirRestrictions).toBeUndefined();
+    expect(result.bashGuard).toBe(true);
+  });
+
+  test("marks the decision as anon with a synthetic, non-registry id", () => {
+    const result = anonOnboardingAccess(msg({ platform: "discord", authorId: "285727653603049472" }));
+    expect(result.anonPrincipal).toBe(true);
+    expect(result.anonPrincipalId).toBe("anon:discord:285727653603049472");
+  });
+
+  test("the anon id is NOT resolvable by the policy index/registry — zero authority proven", () => {
+    // Prove the anon principal can satisfy NO role-gated check: build a real
+    // engine, then confirm neither the synthetic id nor the raw author tuple
+    // resolves to any capability.
+    const { engine, index } = buildHarness(OPERATOR_POLICY);
+    expect(engine).toBeDefined();
+    expect(index).toBeDefined();
+    const anon = anonOnboardingAccess(msg({ authorId: "285727653603049472" }));
+    // 1. The synthetic id is not in the registry → index never produced it,
+    //    and the engine denies every capability for an unknown principal.
+    for (const cap of ["operator", "keyword.chat", "keyword.async", "keyword.team", "tool.read", "tool.bash"]) {
+      expect(engine!.check(anon.anonPrincipalId!, { capability: cap, sovereignty: defaultPolicySovereignty() }).allow).toBe(false);
+    }
+    // 2. The raw inbound tuple resolves to NO principal id at all.
+    expect(index!.resolve("discord", "285727653603049472")).toBeUndefined();
+  });
+
+  test("threads isDM through when the inbound was a DM", () => {
+    expect(anonOnboardingAccess(msg({ isDM: true })).isDM).toBe(true);
+    expect(anonOnboardingAccess(msg({ isDM: false })).isDM).toBeUndefined();
   });
 });
 

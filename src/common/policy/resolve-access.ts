@@ -55,10 +55,50 @@ export interface ResolvePolicyAccessInput {
 const DENY_NO_POLICY: AccessDecision = {
   allowed: false,
   features: { chat: false, async: false, team: false },
+  denyCode: "no_policy",
   denyReason:
     "cortex.yaml has no policy.principals[] declared; v2.0.0 requires a policy block. " +
     "Run `bun src/cli/cortex/commands/migrate-config.ts <your-config.yaml>` to synthesise one from legacy fields.",
 };
+
+/**
+ * cortex#1165 — mint a ZERO-AUTHORITY anonymous `AccessDecision` for an
+ * inbound sender who maps to NO principal, used ONLY when the target agent
+ * declares `openOnboarding: true` (the Pier concierge gate). The dispatch
+ * handler substitutes this for the `unmapped_sender` deny so the agent's chat
+ * session can run and greet a stranger.
+ *
+ * Security contract — this principal carries NO authority whatsoever:
+ *   - `features`: only `chat` (the bare "can talk" keyword). `async`/`team`
+ *     are FALSE — a stranger cannot spawn background tasks or agent teams.
+ *   - `trusted: false` — the inbound prompt-injection filter stays FULLY armed
+ *     (a stranger is the LEAST trusted sender there is).
+ *   - `toolRestrictions`: the ENTIRE Claude tool inventory — every tool is
+ *     restricted. The concierge persona narrows further (Pier → Read only).
+ *   - NO `allowedSkills`, NO `dirRestrictions` grants are emitted, so the
+ *     session inherits the deployment's most-restrictive defaults; `bashGuard`
+ *     stays ON.
+ *   - The synthetic id (`anon:<platform>:<authorId>`) is NEVER inserted into
+ *     the policy index/registry, so no `engine.check(...)` can resolve it to
+ *     any role or capability — every role/authority gate fails closed.
+ *
+ * It exists purely so the chat session has *a* attributed sender; it unlocks
+ * no privileged path.
+ */
+export function anonOnboardingAccess(msg: InboundMessage): AccessDecision {
+  return {
+    allowed: true,
+    features: { chat: true, async: false, team: false },
+    // Restrict EVERY tool — zero authority. A concierge persona narrows
+    // further; this is the floor, not the ceiling.
+    toolRestrictions: [...CLAUDE_TOOL_INVENTORY],
+    bashGuard: true,
+    trusted: false,
+    anonPrincipal: true,
+    anonPrincipalId: `anon:${msg.platform}:${msg.authorId}`,
+    ...(msg.isDM === true && { isDM: true }),
+  };
+}
 
 /**
  * Authorise an inbound platform message via the PolicyEngine. Returns an
@@ -88,6 +128,10 @@ export function resolvePolicyAccess(input: ResolvePolicyAccessInput): AccessDeci
     return {
       allowed: false,
       features: { chat: false, async: false, team: false },
+      // cortex#1165 — the one deny category an `openOnboarding` agent may
+      // convert into a zero-authority anon ALLOW. The dispatch handler keys
+      // off this code (not the prose) so the conversion is precise.
+      denyCode: "unmapped_sender",
       denyReason:
         `Sorry, I'm not set up to respond to you. Ask the operator to map your ${msg.platform} id ` +
         `"${msg.authorId}" into policy.principals[].platform_ids.${msg.platform}[] in cortex.yaml.`,
@@ -104,6 +148,7 @@ export function resolvePolicyAccess(input: ResolvePolicyAccessInput): AccessDeci
     return {
       allowed: false,
       features: { chat: false, async: false, team: false },
+      denyCode: "registry_drift",
       denyReason: `policy.principals[] is missing an entry for resolved principal "${principalId}" — registry/index drift; re-run migrate-config and restart cortex.`,
       ...(msg.isDM === true && { isDM: true }),
     };
@@ -154,6 +199,7 @@ export function resolvePolicyAccess(input: ResolvePolicyAccessInput): AccessDeci
     return {
       allowed: false,
       features,
+      denyCode: "lockout",
       denyReason: `Principal "${principalId}" has no keyword capabilities — add 'keyword.chat' (or .async/.team) to a role they hold in policy.roles[].capabilities[].`,
       ...(msg.isDM === true && { isDM: true }),
     };

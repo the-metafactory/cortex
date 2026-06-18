@@ -152,6 +152,162 @@ describe("DispatchHandler", () => {
     });
   });
 
+  // cortex#1165 — Pier open-onboarding gate. An unmapped sender + a flagged
+  // target agent → admitted as a zero-authority anon principal; the chat
+  // session runs. Unflagged agents stay denied. Non-`unmapped_sender` denies
+  // are NEVER converted.
+  describe("open-onboarding gate (cortex#1165)", () => {
+    const UNMAPPED_DENY = {
+      allowed: false as const,
+      features: { chat: false, async: false, team: false },
+      denyCode: "unmapped_sender" as const,
+      // Trimmed to the assertion-relevant prefix — the full prose lives in
+      // resolve-access.ts; the test only keys off this substring + denyCode.
+      denyReason: "Sorry, I'm not set up to respond to you.",
+    };
+
+    test("unmapped sender + FLAGGED agent → admitted (no deny posted, session runs)", async () => {
+      let calls = 0;
+      const factory: CCSessionFactory = () => {
+        calls++;
+        const session: CCSessionLike = {
+          start() { return session; },
+          async wait(): Promise<CCSessionResult> {
+            return { success: true, response: "welcome!", exitCode: 0, durationMs: 1, sessionId: "anon-sess" };
+          },
+        };
+        return session;
+      };
+      const handler = new DispatchHandler({
+        config: makeConfig(),
+        securityPreamble: "",
+        ccSessionFactory: factory,
+      });
+      adapter.accessDecision = { ...UNMAPPED_DENY };
+
+      await handler.handleMessage(adapter, makeMsg({ content: "hi, I'm new here" }), {
+        id: "pier",
+        displayName: "Pier",
+        openOnboarding: true,
+      });
+
+      // The strict deny message must NOT have been posted...
+      const denied = adapter.sentMessages.some((m) => m.text.includes("not set up to respond"));
+      expect(denied).toBe(false);
+      // ...and the chat session must have run (allow→dispatch).
+      expect(calls).toBe(1);
+      await handler.shutdown();
+    });
+
+    test("unmapped sender + UNFLAGGED agent (regression) → still DENIED, no session", async () => {
+      let calls = 0;
+      const factory: CCSessionFactory = () => {
+        calls++;
+        const session: CCSessionLike = {
+          start() { return session; },
+          async wait(): Promise<CCSessionResult> {
+            return { success: true, response: "should not run", exitCode: 0, durationMs: 1, sessionId: "x" };
+          },
+        };
+        return session;
+      };
+      const handler = new DispatchHandler({
+        config: makeConfig(),
+        securityPreamble: "",
+        ccSessionFactory: factory,
+      });
+      adapter.accessDecision = { ...UNMAPPED_DENY };
+
+      // No targetAgent / openOnboarding absent → strict deny path.
+      await handler.handleMessage(adapter, makeMsg({ content: "hi" }), {
+        id: "luna",
+        displayName: "Luna",
+        // openOnboarding intentionally absent
+      });
+
+      expect(adapter.sentMessages).toHaveLength(1);
+      expect(adapter.sentMessages[0]!.text).toContain("not set up to respond");
+      expect(calls).toBe(0);
+      await handler.shutdown();
+    });
+
+    test("FLAGGED agent does NOT convert a non-unmapped deny (lockout stays denied)", async () => {
+      let calls = 0;
+      const factory: CCSessionFactory = () => {
+        calls++;
+        const session: CCSessionLike = {
+          start() { return session; },
+          async wait(): Promise<CCSessionResult> {
+            return { success: true, response: "x", exitCode: 0, durationMs: 1, sessionId: "x" };
+          },
+        };
+        return session;
+      };
+      const handler = new DispatchHandler({
+        config: makeConfig(),
+        securityPreamble: "",
+        ccSessionFactory: factory,
+      });
+      // A recognized-but-muted principal → lockout deny, NOT unmapped_sender.
+      adapter.accessDecision = {
+        allowed: false,
+        features: { chat: false, async: false, team: false },
+        denyCode: "lockout",
+        denyReason: 'Principal "muted" has no keyword capabilities ...',
+      };
+
+      await handler.handleMessage(adapter, makeMsg({ content: "let me in" }), {
+        id: "pier",
+        displayName: "Pier",
+        openOnboarding: true,
+      });
+
+      // Lockout is a real principal with zero caps — open-onboarding must NOT
+      // rescue it (it is a different deny category).
+      expect(adapter.sentMessages).toHaveLength(1);
+      expect(adapter.sentMessages[0]!.text).toContain("no keyword capabilities");
+      expect(calls).toBe(0);
+      await handler.shutdown();
+    });
+
+    test("a MAPPED principal is unaffected — flagged agent still uses the real allow", async () => {
+      let calls = 0;
+      const factory: CCSessionFactory = () => {
+        calls++;
+        const session: CCSessionLike = {
+          start() { return session; },
+          async wait(): Promise<CCSessionResult> {
+            return { success: true, response: "real reply", exitCode: 0, durationMs: 1, sessionId: "real" };
+          },
+        };
+        return session;
+      };
+      const handler = new DispatchHandler({
+        config: makeConfig(),
+        securityPreamble: "",
+        ccSessionFactory: factory,
+      });
+      // A real, mapped principal: allowed with real grants — NOT anon.
+      adapter.accessDecision = {
+        allowed: true,
+        features: { chat: true, async: false, team: false },
+      };
+
+      await handler.handleMessage(adapter, makeMsg({ content: "hello" }), {
+        id: "pier",
+        displayName: "Pier",
+        openOnboarding: true,
+      });
+
+      // No deny posted, session runs as the real principal (conversion code
+      // only fires on `!allowed && unmapped_sender`).
+      const denied = adapter.sentMessages.some((m) => m.text.includes("not set up to respond"));
+      expect(denied).toBe(false);
+      expect(calls).toBe(1);
+      await handler.shutdown();
+    });
+  });
+
   describe("help mode", () => {
     test("/help returns help text without CC invocation", async () => {
       await router.handleMessage(adapter, makeMsg({ content: "/help" }));

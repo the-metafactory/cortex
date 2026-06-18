@@ -60,6 +60,7 @@ import {
   type DispatchSourcePublishResult,
 } from "./dispatch-source-publisher";
 import type { PolicyEngine } from "../common/policy/engine";
+import { anonOnboardingAccess } from "../common/policy/resolve-access";
 import { join } from "path";
 
 /** Read version from arc-manifest.yaml (cached after first read). */
@@ -86,6 +87,14 @@ interface DispatchTargetAgent {
   id: string;
   displayName: string;
   persona?: string;
+  /**
+   * cortex#1165 — the Pier open-onboarding gate. When `true`, an inbound
+   * sender who maps to NO principal is attributed to a zero-authority
+   * anonymous principal (and the chat session runs) instead of being denied.
+   * Carried per-target-agent so one shared handler serving multiple agents
+   * applies the gate ONLY to the flagged target. Absent/false → strict deny.
+   */
+  openOnboarding?: boolean;
 }
 
 export interface DispatchHandlerOpts {
@@ -551,7 +560,31 @@ export class DispatchHandler extends EventEmitter {
   ): Promise<void> {
     try {
       // 1. Access control
-      const access = adapter.resolveAccess(msg);
+      let access = adapter.resolveAccess(msg);
+
+      // cortex#1165 — Pier open-onboarding gate. When the ONLY reason for the
+      // deny is that the sender maps to no principal (`unmapped_sender`) AND
+      // the TARGET agent is flagged `openOnboarding`, attribute the sender to
+      // a ZERO-AUTHORITY anonymous principal and allow the chat session to run.
+      // Keyed off the stable `denyCode` (never the prose) and off the
+      // per-target-agent flag — so this NEVER fires for unflagged agents
+      // (Luna/dev-loop), and NEVER converts a non-`unmapped_sender` deny
+      // (no_policy / registry_drift / lockout stay hard denies). The anon
+      // principal carries no roles/skills/dirs, every tool restricted, and is
+      // untrusted for the prompt-injection filter (see `anonOnboardingAccess`).
+      if (
+        !access.allowed &&
+        access.denyCode === "unmapped_sender" &&
+        targetAgent?.openOnboarding === true
+      ) {
+        access = anonOnboardingAccess(msg);
+        console.log(
+          `dispatch-handler: [OPEN-ONBOARDING] ${adapter.instanceId} agent=${targetAgent.id} ` +
+            `admitting unmapped ${msg.platform} sender ${msg.authorName} (${msg.authorId}) ` +
+            `as zero-authority anon principal ${access.anonPrincipalId}`,
+        );
+      }
+
       if (!access.allowed) {
         // G-300: Unknown DMs are silently ignored (no response to user)
         // But always log for audit — helps decide if permissions need changing

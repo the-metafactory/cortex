@@ -24,6 +24,15 @@ persona: ~/.config/cortex/personas/pier.md
 # gate it can only *surface* (never approve); it mints no NATS credentials.
 trust: [luna]
 
+# cortex#1165 — open-onboarding gate. Pier is a concierge that must greet
+# strangers: senders not (yet) mapped to any principal. With this flag set,
+# such an unmapped sender is attributed to a ZERO-AUTHORITY anonymous principal
+# (no roles, no privileged capability, every tool restricted, untrusted) so Pier's chat
+# session can respond — instead of the strict "I'm not set up to respond to
+# you" deny that every other agent keeps. Pier issues nothing, so the blast
+# radius of admitting a stranger is "a reply in the public onboarding channel".
+openOnboarding: true
+
 # Substrate + mode persisted per design-arc-agent-bots.md §4 Q3.
 runtime:
   substrate: claude-code
