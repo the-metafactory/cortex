@@ -850,3 +850,136 @@ describe("review-sink — attention delivery (ML.4)", () => {
     expect(adapter.sentMessages).toHaveLength(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cortex#1149 — slice convergence B: a slice's lifecycle narrative converges on
+// ONE {repo}/issue/N thread.
+//
+// The review sink IS the slice renderer (it already subscribes to
+// dispatch.task.* + review.verdict.*, reads logical routing, resolves
+// {repo}/issue/N → a thread via resolveLogicalTarget/findOrCreateThreadByName,
+// and renders via the existing formatters). These tests pin the slice
+// behaviour explicitly against the issue-thread address: a whole slice's beats
+// (started → post → completed → verdict) land in the ONE issue thread, in
+// order; an un-routed dispatch is skipped; and beats are never coalesced.
+// ---------------------------------------------------------------------------
+describe("review-sink — slice convergence (cortex#1149)", () => {
+  const issueThread = "cortex/issue/872";
+  const sliceRouting = logicalRouting("discord", "cortex", issueThread);
+
+  test("a slice's started+post+completed+verdict beats all land in the ONE issue thread, in order", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    // Distinct ids so the render-dedupe (per envelope.id) never collapses
+    // genuinely distinct beats. All carry the SAME slice address.
+    trigger(
+      envelopeWithId("00000000-0000-4000-8000-0000000009a1", "dispatch.task.started", {
+        agent_id: "forge",
+        response_routing: sliceRouting,
+      }),
+    );
+    trigger(
+      envelopeWithId("00000000-0000-4000-8000-0000000009a2", "dispatch.task.post", {
+        agent_id: "forge",
+        text: "building…",
+        response_routing: sliceRouting,
+      }),
+    );
+    trigger(
+      envelopeWithId("00000000-0000-4000-8000-0000000009a3", "dispatch.task.completed", {
+        agent_id: "forge",
+        chat_response: JSON.stringify({
+          pr: {
+            repo: "the-metafactory/cortex",
+            number: 1140,
+            url: "https://github.com/the-metafactory/cortex/pull/1140",
+          },
+        }),
+        response_routing: sliceRouting,
+      }),
+    );
+    trigger(
+      envelopeWithId("00000000-0000-4000-8000-0000000009a4", "review.verdict.approved", {
+        ...verdictPayload({ verdict: "approved", reviewer: "echo" }),
+        response_routing: sliceRouting,
+      }),
+    );
+    await flushMicrotasks();
+
+    // started → sendProgress; the other three → postResponse. ALL resolve the
+    // SAME issue thread (no pr/N thread, no per-dispatch fan-out).
+    for (const resolved of adapter.logicalTargetsResolved) {
+      expect(resolved).toEqual({ surface: "discord", channel: "cortex", thread: issueThread });
+    }
+    expect(adapter.progressSent).toHaveLength(1); // started
+    expect(adapter.progressSent[0]!.text).toContain("working");
+
+    // post, completed, verdict → three posts to the one thread, in order.
+    expect(adapter.sentMessages).toHaveLength(3);
+    for (const m of adapter.sentMessages) {
+      expect(m.target).toEqual({
+        instanceId: "discord-cortex",
+        channelId: "chan:cortex",
+        threadId: `thread:${issueThread}`,
+      });
+    }
+    expect(adapter.sentMessages[0]!.text).toContain("building…");
+    // The dev-implement completed renders as the clean "opened PR #N" milestone
+    // beat (not raw JSON).
+    expect(adapter.sentMessages[1]!.text).not.toContain('{"pr"');
+    expect(adapter.sentMessages[1]!.text).toContain("the-metafactory/cortex#1140");
+    // The verdict one-liner + reviewer ping.
+    expect(adapter.sentMessages[2]!.text).toContain("@echo");
+    expect(adapter.sentMessages[2]!.text).toContain("approved");
+  });
+
+  test("a dispatch beat WITHOUT response_routing is skipped (un-stamped → nothing posted)", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      envelopeWithId("00000000-0000-4000-8000-0000000009b1", "dispatch.task.post", {
+        agent_id: "forge",
+        text: "building…",
+        // no response_routing — pilot A′ hasn't stamped a real address yet.
+      }),
+    );
+    await flushMicrotasks();
+
+    expect(adapter.sentMessages).toHaveLength(0);
+    expect(adapter.progressSent).toHaveLength(0);
+    expect(adapter.logicalTargetsResolved).toHaveLength(0);
+  });
+
+  test("no coalescing — two distinct beats produce two posts (not collapsed)", async () => {
+    const { runtime, trigger } = fakeRuntime();
+    const adapter = discordMock();
+    const sink = createReviewSink({ runtime, adapters: [adapter], principal: "metafactory" });
+    await sink.start();
+
+    trigger(
+      envelopeWithId("00000000-0000-4000-8000-0000000009c1", "dispatch.task.post", {
+        agent_id: "forge",
+        text: "building…",
+        response_routing: sliceRouting,
+      }),
+    );
+    trigger(
+      envelopeWithId("00000000-0000-4000-8000-0000000009c2", "dispatch.task.post", {
+        agent_id: "forge",
+        text: "running gates…",
+        response_routing: sliceRouting,
+      }),
+    );
+    await flushMicrotasks();
+
+    expect(adapter.sentMessages).toHaveLength(2);
+    expect(adapter.sentMessages[0]!.text).toContain("building…");
+    expect(adapter.sentMessages[1]!.text).toContain("running gates…");
+  });
+});
