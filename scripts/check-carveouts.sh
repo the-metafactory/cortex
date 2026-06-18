@@ -174,6 +174,11 @@ ALLOWLIST_PATHS=(
   # "operator" is the NATS account-tree root, never the principal. Class: NSC.
   # RETIRE: never (NSC operator is the permanent qualified survivor, CONTEXT.md).
   'docs/design-g1-account-topology.md'
+  # ADR-0013 sovereign federation — its whole subject is the NSC operator/account
+  # model (own-operator federation, per-side export/import). Every "operator" is the
+  # NATS account-tree root, never the principal. Class: NSC.
+  # RETIRE: never (NSC operator is the permanent qualified survivor, CONTEXT.md).
+  'docs/adr/0013-sovereign-federation-model.md'
   # HISTORICAL removed-field regression test — describes and guards the
   # v3-REMOVED `config.agent.operatorId` legacy field (cortex#429 PR-C). Its
   # whole purpose is to assert a stray reader of the removed field never creeps
