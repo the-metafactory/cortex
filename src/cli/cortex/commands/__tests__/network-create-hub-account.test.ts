@@ -116,7 +116,7 @@ describe("create with --hub-account (valid)", () => {
     const { seedPath, adminPubkey } = await mintAdminSeed();
     const reg = await makeRegistryKey();
 
-    let registryEnv: Env = {
+    const registryEnv: Env = {
       REGISTRY_SIGNING_KEY: reg.signingKey,
       REGISTRY_PUBLIC_KEY: reg.publicKey,
       REGISTRY_ADMIN_PUBKEYS: adminPubkey,
