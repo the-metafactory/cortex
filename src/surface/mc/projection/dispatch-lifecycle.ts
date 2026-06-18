@@ -76,7 +76,11 @@ import type { Database } from "bun:sqlite";
 import { generateId } from "../db/events";
 import { ensureAgentRow } from "../db/agents";
 import { applyTransition } from "../db/transitions";
-import { anchorTaskId } from "./anchor";
+import {
+  anchorTaskId,
+  parseSliceThread,
+  linkAnchorToSliceWorkItem,
+} from "./anchor";
 import type { AssignmentState } from "../types";
 
 /**
@@ -106,6 +110,25 @@ interface LifecyclePayload {
   task_id?: unknown;
   agent_id?: unknown;
   cc_session_id?: unknown;
+  // Slice convergence A→C: the slice address echoed onto every lifecycle
+  // envelope. `response_routing.thread` is the channel-routing `{repo}/issue/N`
+  // form; §C resolves it to the issue's work_item and links the anchor task.
+  response_routing?: unknown;
+}
+
+/**
+ * Read `payload.response_routing.thread` as a slice address (`{repo}/issue/N`).
+ * Returns null for any envelope without a parseable issue thread — the
+ * backward-compatible no-`response_routing` path (behaviour unchanged: no
+ * work_item link). Structural read; mirrors `readLogicalRouting` in
+ * `src/adapters/response-routing-delivery.ts` (kept local so the projection
+ * stays import-free of the adapter layer).
+ */
+function readSliceThread(payload: LifecyclePayload): string | undefined {
+  const raw = payload.response_routing;
+  if (raw === null || typeof raw !== "object") return undefined;
+  const thread = (raw as Record<string, unknown>).thread;
+  return typeof thread === "string" ? thread : undefined;
 }
 
 /** A read of the projected session for a correlation_id, via the anchor task. */
@@ -181,6 +204,12 @@ export function projectDispatchLifecycle(
   // (the builder's default) when the field is absent on the wire.
   const correlationId = envelope.correlation_id ?? taskId;
   const ccSessionId = asString(payload.cc_session_id);
+  // Slice convergence C: the slice address (if any) the anchor task links to.
+  // Parsed once here; a non-issue / absent thread → null → no work_item link
+  // (backward compatible). A FEDERATED dispatch carries the same address and is
+  // NOT special-cased — its anchor links to the work_item too, carrying
+  // lifecycle only (no interior, which is never projected from a peer).
+  const sliceRef = parseSliceThread(readSliceThread(payload));
 
   // Everything below runs in ONE transaction: anchor creation, transition, and
   // (for terminal) cc_session_id backfill + orphan reconciliation must be
@@ -195,6 +224,14 @@ export function projectDispatchLifecycle(
       // a fresh dispatch's started carries no id (pending).
       provisionalCcSessionId: kind === "started" ? ccSessionId : null,
     });
+
+    // Slice convergence C — link the per-dispatch anchor task to the slice's
+    // issue work_item. Runs on EVERY lifecycle kind (idempotent create-if-absent
+    // + UPDATE) so a terminal-first delivery (lost `started`) still links, and a
+    // redelivery is harmless. No-op when the dispatch carries no issue thread.
+    if (sliceRef !== null) {
+      linkAnchorToSliceWorkItem(db, correlationId, sliceRef);
+    }
 
     if (kind === "started") {
       // Drive the assignment dispatched → running so the working grid shows the
