@@ -653,16 +653,12 @@ describe("deriveJoinInputs — O-3 operator-mode leaf package", () => {
 });
 
 // =============================================================================
-// O-4b (cortex#1063) — `--from-package` sources the operator-mode leaf package.
-// Precedence: explicit flags > package file > config > convention.
+// operator-mode precedence — explicit flags > config > convention.
+// (O-4b --from-package source retired in ADR-0015; tests for that path removed.)
 // =============================================================================
 
-describe("deriveJoinInputs — O-4b leaf-package source (--from-package)", () => {
-  const OP_JWT = "eyJhbGciOiJlZDI1NTE5LW5rZXkifQ.FAKE_OP.sig";
-  const ACC_JWT = "eyJhbGciOiJlZDI1NTE5LW5rZXkifQ.FAKE_ACC.sig";
-  const PKG_ACCOUNT = "A" + "B".repeat(55);
-
-  // A config with NO operator-mode material — the package supplies everything.
+describe("deriveJoinInputs — operator-mode source precedence", () => {
+  // A config with NO operator-mode material — explicit flags are the only source.
   const CFG_NO_PKG = loaded({
     principal: { id: "andreas" },
     stack: {
@@ -678,151 +674,6 @@ describe("deriveJoinInputs — O-4b leaf-package source (--from-package)", () =>
         registry: { url: "https://r", pubkey: "A".repeat(43) + "=" },
       },
     },
-  });
-
-  test("package fields flow into operatorModePackage when config has none", () => {
-    const res = deriveJoinInputs(
-      "metafactory-community",
-      {
-        leafPackage: {
-          operatorJwt: OP_JWT,
-          account: PKG_ACCOUNT,
-          accountJwt: ACC_JWT,
-          credsPath: "~/.config/nats/issued.creds",
-        },
-      },
-      "/cfg",
-      reader(CFG_NO_PKG),
-      "darwin",
-    );
-    expect(res.ok).toBe(true);
-    expect(res.inputs?.operatorModePackage).toEqual({
-      operatorJwt: OP_JWT,
-      account: PKG_ACCOUNT,
-      accountJwt: ACC_JWT,
-    });
-  });
-
-  test("package credsPath flows into credsPath (overrides the convention default)", () => {
-    const res = deriveJoinInputs(
-      "metafactory-community",
-      {
-        leafPackage: {
-          operatorJwt: OP_JWT,
-          account: PKG_ACCOUNT,
-          accountJwt: ACC_JWT,
-          credsPath: "~/.config/nats/issued.creds",
-        },
-      },
-      "/cfg",
-      reader(CFG_NO_PKG),
-      "darwin",
-    );
-    expect(res.ok).toBe(true);
-    expect(res.inputs?.credsPath).toBe("~/.config/nats/issued.creds");
-  });
-
-  test("package SYS account (+ jwt) is carried through", () => {
-    const res = deriveJoinInputs(
-      "metafactory-community",
-      {
-        leafPackage: {
-          operatorJwt: OP_JWT,
-          account: PKG_ACCOUNT,
-          accountJwt: ACC_JWT,
-          systemAccount: "A" + "D".repeat(55),
-          systemAccountJwt: "eyJ.SYS.sig",
-          credsPath: "~/.config/nats/issued.creds",
-        },
-      },
-      "/cfg",
-      reader(CFG_NO_PKG),
-      "darwin",
-    );
-    expect(res.ok).toBe(true);
-    expect(res.inputs?.operatorModePackage).toEqual({
-      operatorJwt: OP_JWT,
-      account: PKG_ACCOUNT,
-      accountJwt: ACC_JWT,
-      systemAccount: "A" + "D".repeat(55),
-      systemAccountJwt: "eyJ.SYS.sig",
-    });
-  });
-
-  test("explicit FLAGS override the package file (flag wins)", () => {
-    const res = deriveJoinInputs(
-      "metafactory-community",
-      {
-        // package supplies one operator JWT + account …
-        leafPackage: {
-          operatorJwt: "eyJ.PKG_OP.sig",
-          account: PKG_ACCOUNT,
-          accountJwt: "eyJ.PKG_ACC.sig",
-          credsPath: "~/.config/nats/pkg.creds",
-        },
-        // … but explicit flags override operatorJwt + account + creds.
-        operatorJwt: OP_JWT,
-        account: "A" + "C".repeat(55),
-        credsPath: "~/.config/nats/flag.creds",
-      },
-      "/cfg",
-      reader(CFG_NO_PKG),
-      "darwin",
-    );
-    expect(res.ok).toBe(true);
-    expect(res.inputs?.operatorModePackage).toEqual({
-      operatorJwt: OP_JWT, // flag won
-      account: "A" + "C".repeat(55), // flag won
-      accountJwt: "eyJ.PKG_ACC.sig", // package (no flag)
-    });
-    expect(res.inputs?.credsPath).toBe("~/.config/nats/flag.creds"); // flag won
-  });
-
-  test("package overrides config (package beats config for the package fields)", () => {
-    const cfgWithMaterial = loaded({
-      principal: { id: "andreas" },
-      stack: {
-        id: "andreas/community",
-        nkey_seed_path: "~/seed.nk",
-        nats_infra: {
-          config_path: "~/community.conf",
-          plist_path: "~/nats.plist",
-          operator_jwt: "eyJ.CONFIG_OP.sig",
-          account: "A" + "E".repeat(55),
-          account_jwt: "eyJ.CONFIG_ACC.sig",
-          creds_path: "~/.config/nats/config.creds",
-        },
-      },
-      policy: {
-        principals: [],
-        roles: [],
-        federated: {
-          networks: [],
-          registry: { url: "https://r", pubkey: "A".repeat(43) + "=" },
-        },
-      },
-    });
-    const res = deriveJoinInputs(
-      "metafactory-community",
-      {
-        leafPackage: {
-          operatorJwt: OP_JWT,
-          account: PKG_ACCOUNT,
-          accountJwt: ACC_JWT,
-          credsPath: "~/.config/nats/issued.creds",
-        },
-      },
-      "/cfg",
-      reader(cfgWithMaterial),
-      "darwin",
-    );
-    expect(res.ok).toBe(true);
-    expect(res.inputs?.operatorModePackage).toEqual({
-      operatorJwt: OP_JWT, // package beats config
-      account: PKG_ACCOUNT, // package beats config
-      accountJwt: ACC_JWT, // package beats config
-    });
-    expect(res.inputs?.credsPath).toBe("~/.config/nats/issued.creds"); // package beats config
   });
 
   test("no package + no flags + no config material → operatorModePackage undefined", () => {

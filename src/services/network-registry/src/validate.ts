@@ -17,15 +17,15 @@
  */
 
 import type {
+  AdmissionDecisionClaim,
+  AdmissionReadClaim,
   Capability,
-  GrantLeafPackage,
   IssuanceDecisionClaim,
-  IssuanceDecisionClaimWithPackage,
-  IssuancePackageReadClaim,
   IssuanceReadClaim,
   RegistrationClaim,
+  SignedAdmissionDecision,
+  SignedAdmissionRead,
   SignedIssuanceDecision,
-  SignedIssuancePackageRead,
   SignedIssuanceRead,
   SignedRegistration,
   StackIdentity,
@@ -652,220 +652,17 @@ export function validateSignedRegistration(
 }
 
 // =============================================================================
-// O-4a.2 — Leaf package + peer PoP validators
+// ADR-0015 — Network-admission decision + read claim validators
 // =============================================================================
 
 /**
- * O-4b grammar: NATS nkey-U account public key.
- *
- * Canonical source: `src/common/nats/leaf-remote-renderer.ts`:
- *   const NKEY_ACCOUNT = /^A[A-Z2-7]{55}$/;
- *
- * ANTI-DRIFT: isNkeyAccountPubkeyRegistry() below is tested against the same
- * known-good and known-bad vectors used to validate O-4b's isNkeyAccountPubkey.
- * If O-4b's regex ever changes, the shared test in o4a2-package.test.ts will
- * catch the drift (it uses the same vector strings on BOTH validators).
+ * Validate the body of `POST /admission-requests/{id}/admit` and `/reject`.
+ * The envelope is { claim: AdmissionDecisionClaim, signature: string }.
+ * Structurally identical to validateSignedIssuanceDecision — same admin gate.
  */
-const NKEY_ACCOUNT_RE = /^A[A-Z2-7]{55}$/;
-
-/**
- * O-4b grammar: NSC JWT shape (`eyJ…` header + exactly three
- * dot-separated base64url segments).
- *
- * Canonical source: `src/common/nats/leaf-remote-renderer.ts`:
- *   const JWT_SHAPE = /^eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2}$/;
- *
- * ANTI-DRIFT: same cross-validation in o4a2-package.test.ts.
- */
-const NSC_JWT_SHAPE_RE = /^eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2}$/;
-
-/**
- * True iff `value` is a NATS nkey-U account public key.
- * Mirrors O-4b's `isNkeyAccountPubkey` from `leaf-remote-renderer.ts`.
- * The registry is a SEPARATE package and cannot import that module.
- */
-export function isNkeyAccountPubkeyRegistry(value: string): boolean {
-  return NKEY_ACCOUNT_RE.test(value);
-}
-
-/**
- * True iff `value` has the NSC JWT shape.
- * Mirrors O-4b's `isNscJwtShape` from `leaf-remote-renderer.ts`.
- */
-export function isNscJwtShapeRegistry(value: string): boolean {
-  return NSC_JWT_SHAPE_RE.test(value);
-}
-
-/**
- * Validate a `GrantLeafPackage` object (public-material-only).
- *
- * Enforces:
- *   - operatorJwt / accountJwt: NSC JWT shape
- *   - account: nkey-U pubkey
- *   - systemAccount (optional): nkey-U pubkey
- *   - systemAccountJwt (optional): NSC JWT shape
- *   - half-specified SYS account: one of (systemAccount, systemAccountJwt)
- *     without the other → rejected
- *   - credsPath or any unrecognised "secret-looking" field → rejected (400)
- *
- * Secret-detection: we explicitly reject `credsPath` and any key that
- * contains "cred", "seed", "secret", or "private" (case-insensitive). The
- * registry ONLY stores public JWTs + nkey-U pubkeys. Any field that looks
- * like a secret is an admin error and should fail loudly.
- */
-export function validateGrantLeafPackage(
-  pkg: unknown,
-  fieldPrefix = "leaf_package",
-): { ok: true; pkg: GrantLeafPackage } | { ok: false; errors: ValidationError[] } {
-  const errors: ValidationError[] = [];
-
-  if (typeof pkg !== "object" || pkg === null || Array.isArray(pkg)) {
-    return { ok: false, errors: [{ field: fieldPrefix, message: "must be an object" }] };
-  }
-  const p = pkg as Record<string, unknown>;
-
-  // Secret-detection (N1 — secondary / belt-and-suspenders control):
-  // The PRIMARY guard is the canonical allow-list build at the bottom of this
-  // function — we reconstruct GrantLeafPackage from only the fields the schema
-  // names, so unknown fields are silently dropped and never reach storage.
-  // This deny-list is a SECONDARY, defense-in-depth layer: it makes the
-  // rejection explicit and loud when an admin accidentally includes a field
-  // whose name looks like a secret (e.g. `credsPath`, `accountSeed`). Failing
-  // early here surfaces the admin error at grant time rather than silently
-  // discarding the value and leaving the admin wondering where it went.
-  const SECRET_FIELD_RE = /cred|seed|secret|private/i;
-  for (const key of Object.keys(p)) {
-    if (SECRET_FIELD_RE.test(key)) {
-      errors.push({
-        field: `${fieldPrefix}.${key}`,
-        message:
-          "the registry only stores public material (JWTs + nkey-U pubkeys); " +
-          `field "${key}" looks like a secret and is rejected`,
-      });
-    }
-  }
-  if (errors.length > 0) return { ok: false, errors };
-
-  // operatorJwt — required, NSC JWT shape.
-  if (typeof p.operatorJwt !== "string" || !NSC_JWT_SHAPE_RE.test(p.operatorJwt)) {
-    errors.push({
-      field: `${fieldPrefix}.operatorJwt`,
-      message: "must be an NSC JWT (eyJ… + three base64url segments)",
-    });
-  }
-
-  // account — required, nkey-U pubkey.
-  if (typeof p.account !== "string" || !NKEY_ACCOUNT_RE.test(p.account)) {
-    errors.push({
-      field: `${fieldPrefix}.account`,
-      message: "must be a NATS nkey-U account pubkey (A + 55 base32 chars)",
-    });
-  }
-
-  // accountJwt — required, NSC JWT shape.
-  if (typeof p.accountJwt !== "string" || !NSC_JWT_SHAPE_RE.test(p.accountJwt)) {
-    errors.push({
-      field: `${fieldPrefix}.accountJwt`,
-      message: "must be an NSC JWT (eyJ… + three base64url segments)",
-    });
-  }
-
-  // Half-specified SYS account: one present without the other → reject.
-  const hasSysAccount = p.systemAccount !== undefined;
-  const hasSysJwt = p.systemAccountJwt !== undefined;
-  if (hasSysAccount !== hasSysJwt) {
-    errors.push({
-      field: `${fieldPrefix}.systemAccount`,
-      message:
-        "systemAccount and systemAccountJwt must both be present or both absent (half-specified SYS account)",
-    });
-  } else {
-    if (hasSysAccount) {
-      if (typeof p.systemAccount !== "string" || !NKEY_ACCOUNT_RE.test(p.systemAccount)) {
-        errors.push({
-          field: `${fieldPrefix}.systemAccount`,
-          message: "must be a NATS nkey-U account pubkey (A + 55 base32 chars)",
-        });
-      }
-    }
-    if (hasSysJwt) {
-      if (typeof p.systemAccountJwt !== "string" || !NSC_JWT_SHAPE_RE.test(p.systemAccountJwt)) {
-        errors.push({
-          field: `${fieldPrefix}.systemAccountJwt`,
-          message: "must be an NSC JWT (eyJ… + three base64url segments)",
-        });
-      }
-    }
-  }
-
-  // endpoint — optional, non-empty string when present.
-  if (p.endpoint !== undefined) {
-    if (typeof p.endpoint !== "string" || p.endpoint.length === 0) {
-      errors.push({
-        field: `${fieldPrefix}.endpoint`,
-        message: "must be a non-empty string when provided",
-      });
-    }
-  }
-
-  if (errors.length > 0) return { ok: false, errors };
-
-  // Build canonical shape — only include optional keys when defined.
-  const result: GrantLeafPackage = {
-    operatorJwt: p.operatorJwt as string,
-    account: p.account as string,
-    accountJwt: p.accountJwt as string,
-  };
-  if (typeof p.systemAccount === "string") result.systemAccount = p.systemAccount;
-  if (typeof p.systemAccountJwt === "string") result.systemAccountJwt = p.systemAccountJwt;
-  if (typeof p.endpoint === "string") result.endpoint = p.endpoint;
-
-  return { ok: true, pkg: result };
-}
-
-/**
- * Validate the full grant body WITH optional leaf_package (O-4a.2 extension).
- *
- * Returns the base `IssuanceDecisionClaim` + the validated `GrantLeafPackage`
- * when present. The claim still validates via `validateIssuanceDecisionClaim`;
- * this function adds the package field on top.
- */
-export function validateIssuanceDecisionClaimWithPackage(
-  claim: unknown,
-  expectedRequestId: string,
-): { ok: true; claim: IssuanceDecisionClaimWithPackage } | { ok: false; errors: ValidationError[] } {
-  // Validate base claim first.
-  const base = validateIssuanceDecisionClaim(claim, expectedRequestId, "grant");
-  if (!base.ok) return base;
-
-  const c = claim as Record<string, unknown>;
-
-  // leaf_package is optional — only validate when present.
-  if (c.leaf_package === undefined) {
-    return { ok: true, claim: base.claim };
-  }
-
-  const pkgResult = validateGrantLeafPackage(c.leaf_package);
-  if (!pkgResult.ok) return { ok: false, errors: pkgResult.errors };
-
-  return {
-    ok: true,
-    claim: { ...base.claim, leaf_package: pkgResult.pkg },
-  };
-}
-
-/**
- * Validate the `x-peer-signed` header envelope for peer PoP package reads.
- * The header value is JSON: { claim: IssuancePackageReadClaim, signature: string }.
- * No nonce (reads are idempotent). Clock-skew applies.
- *
- * N2 — `claim.request_id` is required and must be a valid hex32 request id.
- * The route layer then asserts it equals the :request_id path parameter so
- * a signed token cannot be replayed against a different request for the same key.
- */
-export function validateSignedIssuancePackageRead(
+export function validateSignedAdmissionDecision(
   body: unknown,
-): { ok: true; signed: SignedIssuancePackageRead } | { ok: false; errors: ValidationError[] } {
+): { ok: true; signed: SignedAdmissionDecision } | { ok: false; errors: ValidationError[] } {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     return { ok: false, errors: [{ field: "body", message: "must be an object" }] };
   }
@@ -876,30 +673,111 @@ export function validateSignedIssuancePackageRead(
   if (!BASE64_RE.test(b.signature)) {
     return { ok: false, errors: [{ field: "signature", message: "must be base64" }] };
   }
-  if (typeof b.claim !== "object" || b.claim === null) {
-    return { ok: false, errors: [{ field: "claim", message: "missing" }] };
+  if (typeof b.claim !== "object" || b.claim === null || Array.isArray(b.claim)) {
+    return { ok: false, errors: [{ field: "claim", message: "must be a non-array object" }] };
   }
-  const c = b.claim as Record<string, unknown>;
-  if (typeof c.peer_pubkey !== "string" || !isValidPubkey(c.peer_pubkey)) {
-    return {
-      ok: false,
-      errors: [{ field: "claim.peer_pubkey", message: "must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)" }],
-    };
+  return {
+    ok: true,
+    signed: { claim: b.claim as AdmissionDecisionClaim, signature: b.signature },
+  };
+}
+
+/**
+ * Validate the `AdmissionDecisionClaim` payload before crypto verification.
+ * Cross-field rule: claim.request_id MUST match the URL path parameter.
+ * claim.decision MUST be "admit" or "reject".
+ */
+export function validateAdmissionDecisionClaim(
+  claim: unknown,
+  expectedRequestId: string,
+  expectedDecision: "admit" | "reject",
+): { ok: true; claim: AdmissionDecisionClaim } | { ok: false; errors: ValidationError[] } {
+  const errors: ValidationError[] = [];
+
+  if (typeof claim !== "object" || claim === null || Array.isArray(claim)) {
+    return { ok: false, errors: [{ field: "claim", message: "must be an object" }] };
   }
-  // N2 — request_id binds the token to a specific issuance request.
-  if (typeof c.request_id !== "string" || !isValidRequestId(c.request_id)) {
-    return {
-      ok: false,
-      errors: [{ field: "claim.request_id", message: "must be a 32-char lowercase hex request id" }],
-    };
+  const c = claim as Record<string, unknown>;
+
+  if (typeof c.request_id !== "string" || c.request_id.length === 0) {
+    errors.push({ field: "request_id", message: "must be a non-empty string" });
+  } else if (c.request_id !== expectedRequestId) {
+    errors.push({
+      field: "request_id",
+      message: `body request_id "${c.request_id}" does not match path "${expectedRequestId}"`,
+    });
   }
+
+  if (c.decision !== "admit" && c.decision !== "reject") {
+    errors.push({ field: "decision", message: 'must be "admit" or "reject"' });
+  } else if (c.decision !== expectedDecision) {
+    errors.push({
+      field: "decision",
+      message: `body decision "${c.decision as string}" does not match route "${expectedDecision}"`,
+    });
+  }
+
+  if (typeof c.admin_pubkey !== "string" || !isValidPubkey(c.admin_pubkey)) {
+    errors.push({ field: "admin_pubkey", message: "must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)" });
+  }
+
   if (typeof c.issued_at !== "string" || Number.isNaN(Date.parse(c.issued_at))) {
+    errors.push({ field: "issued_at", message: "must be an ISO-8601 timestamp" });
+  }
+
+  if (typeof c.nonce !== "string" || c.nonce.length < 8 || c.nonce.length > 128) {
+    errors.push({ field: "nonce", message: "must be a string between 8 and 128 chars" });
+  }
+
+  if (errors.length > 0) return { ok: false, errors };
+
+  return {
+    ok: true,
+    claim: {
+      request_id: c.request_id as string,
+      decision: c.decision as "admit" | "reject",
+      admin_pubkey: c.admin_pubkey as string,
+      issued_at: c.issued_at as string,
+      nonce: c.nonce as string,
+    },
+  };
+}
+
+/**
+ * Validate the `x-admin-signed` header for admin read endpoints on
+ * /admission-requests. The header value is JSON: { claim: AdmissionReadClaim,
+ * signature: string }. No nonce (reads are idempotent). Clock-skew applies.
+ */
+export function validateSignedAdmissionRead(
+  body: unknown,
+): { ok: true; signed: SignedAdmissionRead } | { ok: false; errors: ValidationError[] } {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return { ok: false, errors: [{ field: "body", message: "must be an object" }] };
+  }
+  const b = body as Record<string, unknown>;
+  if (typeof b.signature !== "string" || b.signature.length === 0) {
+    return { ok: false, errors: [{ field: "signature", message: "missing" }] };
+  }
+  if (!BASE64_RE.test(b.signature)) {
+    return { ok: false, errors: [{ field: "signature", message: "must be base64" }] };
+  }
+  if (typeof b.claim !== "object" || b.claim === null || Array.isArray(b.claim)) {
+    return { ok: false, errors: [{ field: "claim", message: "must be a non-array object" }] };
+  }
+  const bc = b.claim as Record<string, unknown>;
+  if (typeof bc.admin_pubkey !== "string" || !isValidPubkey(bc.admin_pubkey)) {
+    return {
+      ok: false,
+      errors: [{ field: "claim.admin_pubkey", message: "must be a 32-byte Ed25519 pubkey, base64-encoded (44 chars)" }],
+    };
+  }
+  if (typeof bc.issued_at !== "string" || Number.isNaN(Date.parse(bc.issued_at))) {
     return { ok: false, errors: [{ field: "claim.issued_at", message: "must be an ISO-8601 timestamp" }] };
   }
   return {
     ok: true,
     signed: {
-      claim: { peer_pubkey: c.peer_pubkey, request_id: c.request_id, issued_at: c.issued_at },
+      claim: { admin_pubkey: bc.admin_pubkey, issued_at: bc.issued_at },
       signature: b.signature,
     },
   };

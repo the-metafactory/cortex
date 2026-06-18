@@ -93,23 +93,42 @@ policy:
 
 The pinned pubkey is the trust anchor. Without pinning, the client uses TOFU at first boot (a network-path attacker could substitute their own anchor). Obtain the pubkey out-of-band or from `GET https://network.meta-factory.ai/registry/pubkey`.
 
-### Step 5 — Obtain your leaf credentials (hub side issues them)
+### Step 5 — Get admitted to the network roster (two-party gate)
 
-The hub-side network admin issues leaf credentials for your stack. This is one of the two irreducible two-party moments (see section 3):
+The network admin must **consciously admit your stack** to the network roster. This is the ADR-0015 admission gate: it controls who is recognised as a peer, and **mints nothing** — the credential exchange is step 5b below.
 
-**Hub side (the network admin):**
+**Your side (submit an admission request):**
 
 ```bash
-cortex creds issue leaf-<slug> --account community --pub 'federated.<slug>.>' --sub 'federated.<slug>.>'
+# Register your stack with the network registry — creates a PENDING admission request.
+cortex provision-stack register <principal> \
+  --registry-url https://network.meta-factory.ai \
+  --seed-path ~/.config/nats/cortex-<slug>.nk \
+  --stack-id <principal>/<slug> \
+  --network <network>
 ```
 
-This runs `arc nats add-bot` under the hood and adds a user to the federation account the hub trusts — **no hub restart required** for an existing account. The admin then assembles the leaf package and makes it available.
+**Hub side (the network admin admits the request):**
 
-**Your side:**
+```bash
+# List pending requests
+cortex network admit --list-pending \
+  --registry-url https://network.meta-factory.ai \
+  --admin-seed ~/.config/nats/admin.nk
 
-Download the leaf `.creds` file and place it at `~/.config/nats/<network>.creds`. Note the federation account NKey (`A…`) it belongs to — it goes in `stack.nats_infra.account`.
+# Admit (approves roster membership; mints nothing)
+cortex network admit <request-id> \
+  --network <network> \
+  --registry-url https://network.meta-factory.ai \
+  --admin-seed ~/.config/nats/admin.nk \
+  --apply
+```
 
-If the network uses the O-4a issuance-request broker: submit `cortex provision-stack register …` with `--request-creds` and the admin runs `cortex creds grant <request-id>`.
+**Step 5b — Exchange leaf credentials (out-of-band secret)**
+
+Once admitted, the admin issues a leaf `.creds` file for your stack from their own NSC operator (using `cortex creds issue` or `arc nats add-bot` locally, in their own account) and shares it with you out-of-band (e.g., encrypted message, secure file share). This is the one irreducible secret handoff — no automation bypasses it.
+
+Place the received `.creds` at `~/.config/nats/<network>.creds`. Note the federation account NKey (`A…`) — it goes in `stack.nats_infra.account`.
 
 ### Step 6 — Join the network (one command)
 
@@ -151,11 +170,14 @@ curl https://network.meta-factory.ai/principals/<principal>  # → SignedAsserti
 
 Everything in section 2 can be done independently by each side — except two moments that are genuine two-party decisions an agent can orchestrate and prompt for, but not unilaterally perform:
 
-### (a) The leaf secret exchange
+### (a) The admission + leaf secret exchange
 
-The hub admin must **consciously admit a peer** — they issue leaf credentials for the joining stack and share the secret out-of-band. This is by design: no automation can bypass the human-grant decision that admits a new principal onto a hub. The `cortex creds grant <request-id>` command (G2) scripts the hub-side mechanics, but the decision to grant is the admin's.
+The network admin must **consciously admit a peer** (via `cortex network admit <request-id> --apply`) and then issue leaf credentials for the joining stack out-of-band. These are two distinct steps (ADR-0015):
 
-**What crosses out-of-band:** the leaf `.creds` file (or the issuance-request ID for the O-4a broker flow), and the leaf endpoint URL.
+1. **Roster admission** — `cortex network admit` approves the peer onto the network roster. It is admin-signed, mints nothing, and records ADMITTED status in the registry.
+2. **Leaf credential handoff** — the admin separately issues a leaf `.creds` with `cortex creds issue` (or `arc nats add-bot`) from their own NSC operator and delivers it to the peer out-of-band. No automation can bypass this; it is the irreducible secret that bounds who can physically connect a leaf.
+
+**What crosses out-of-band:** the leaf `.creds` file and the leaf endpoint URL.
 
 ### (b) The hub topology agreement
 

@@ -115,7 +115,6 @@ describe("POST /principals/:id/register — issuance request side-effect", () =>
     expect(req.created_at).toBeTruthy();
     expect(req.updated_at).toBeTruthy();
     expect(req.granted_by).toBeNull();
-    expect(req.leaf_package).toBeNull();
   });
 
   test("re-registration with same peer_pubkey is idempotent (same request_id returned)", async () => {
@@ -151,21 +150,20 @@ describe("POST /principals/:id/register — issuance request side-effect", () =>
 });
 
 // =============================================================================
-// Admin grant — PENDING → GRANTED
+// Admin grant — PENDING → ADMITTED (ADR-0015: was GRANTED)
 // =============================================================================
 
 describe("POST /issuance-requests/:id/grant — happy path", () => {
-  test("allowlisted admin can grant a PENDING request", async () => {
+  test("allowlisted admin can grant a PENDING request (transitions to ADMITTED)", async () => {
     const req = await registerAndGetRequest("dave");
 
     const decision = await makeSignedAdminDecision(req.request_id, "grant", admin);
     const res = await post(`/issuance-requests/${req.request_id}/grant`, decision);
     expect(res.status).toBe(200);
     const granted = (await res.json()) as IssuanceRequest;
-    expect(granted.status).toBe("GRANTED");
+    expect(granted.status).toBe("ADMITTED");
     expect(granted.granted_by).toBe(admin.publicKeyB64);
     expect(granted.request_id).toBe(req.request_id);
-    expect(granted.leaf_package).toBeNull(); // O-4a.2 populates this
   });
 
   test("granted request is retrievable via GET /issuance-requests/:id", async () => {
@@ -182,7 +180,7 @@ describe("POST /issuance-requests/:id/grant — happy path", () => {
     );
     expect(res.status).toBe(200);
     const record = (await res.json()) as IssuanceRequest;
-    expect(record.status).toBe("GRANTED");
+    expect(record.status).toBe("ADMITTED");
   });
 });
 
@@ -209,7 +207,7 @@ describe("POST /issuance-requests/:id/reject — happy path", () => {
 // =============================================================================
 
 describe("grant/reject on already-decided request → 409", () => {
-  test("granting an already-GRANTED request returns 409 already_decided", async () => {
+  test("granting an already-ADMITTED request returns 409 already_decided", async () => {
     const req = await registerAndGetRequest("grace");
     const d1 = await makeSignedAdminDecision(req.request_id, "grant", admin);
     await post(`/issuance-requests/${req.request_id}/grant`, d1);
@@ -371,21 +369,21 @@ describe("GET /issuance-requests — admin-gated read surface", () => {
     expect(list.every((r) => r.status === "PENDING")).toBe(true);
   });
 
-  test("GET ?status=GRANTED lists only granted requests", async () => {
+  test("GET ?status=ADMITTED lists only admitted requests (ADR-0015: was GRANTED)", async () => {
     const req = await registerAndGetRequest("tara");
     const decision = await makeSignedAdminDecision(req.request_id, "grant", admin);
     await post(`/issuance-requests/${req.request_id}/grant`, decision);
 
     const signedRead = await makeSignedAdminRead(admin);
     const res = await get(
-      `/issuance-requests?status=GRANTED`,
+      `/issuance-requests?status=ADMITTED`,
       env,
       { "x-admin-signed": JSON.stringify(signedRead) },
     );
     expect(res.status).toBe(200);
     const list = (await res.json()) as IssuanceRequest[];
     expect(list.some((r) => r.request_id === req.request_id)).toBe(true);
-    expect(list.every((r) => r.status === "GRANTED")).toBe(true);
+    expect(list.every((r) => r.status === "ADMITTED")).toBe(true);
   });
 
   test("GET /issuance-requests/:id returns the specific request (admin-gated)", async () => {
@@ -594,11 +592,11 @@ describe("M3 — D1IssuanceRequestStore.upsertPending is atomic", () => {
       "scope.leaf",
     );
 
-    // Simulate the request being granted by directly mutating the mock.
+    // Simulate the request being admitted by directly mutating the mock.
     const row = shared.issuanceRequests.get(original.request_id)!;
-    shared.issuanceRequests.set(original.request_id, { ...row, status: "GRANTED", granted_by: "admin-key" });
+    shared.issuanceRequests.set(original.request_id, { ...row, status: "ADMITTED", granted_by: "admin-key" });
 
-    // A second upsertPending for the same peer returns the existing (now GRANTED) row.
+    // A second upsertPending for the same peer returns the existing (now ADMITTED) row.
     const second = await store.upsertPending(
       "principal-y",
       "pubkeyBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
@@ -606,7 +604,7 @@ describe("M3 — D1IssuanceRequestStore.upsertPending is atomic", () => {
     );
 
     expect(second.request_id).toBe(original.request_id);
-    expect(second.status).toBe("GRANTED");
+    expect(second.status).toBe("ADMITTED");
     expect(shared.issuanceRequests.size).toBe(1);
   });
 });
@@ -657,21 +655,21 @@ describe("N2 — transitionIssuanceRequest CAS uses pre-read row on changes===0"
       "scope.leaf",
     );
 
-    // Grant it once — changes the status in the mock.
-    await store.transitionIssuanceRequest(row.request_id, "GRANTED", "admin-pub");
+    // Admit it once — changes the status in the mock.
+    await store.transitionIssuanceRequest(row.request_id, "ADMITTED", "admin-pub");
 
-    // Second grant attempt — `existing` is fetched as GRANTED, then changes === 0,
+    // Second admit attempt — `existing` is fetched as ADMITTED, then changes === 0,
     // so AlreadyDecidedError should be thrown with the existing row (not re-read).
     let caughtStatus: string | undefined;
     try {
-      await store.transitionIssuanceRequest(row.request_id, "GRANTED", "admin-pub");
+      await store.transitionIssuanceRequest(row.request_id, "ADMITTED", "admin-pub");
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AlreadyDecidedError") {
         const typed = err as { request: { status: string } };
         caughtStatus = typed.request.status;
       }
     }
-    expect(caughtStatus).toBe("GRANTED");
+    expect(caughtStatus).toBe("ADMITTED");
   });
 });
 

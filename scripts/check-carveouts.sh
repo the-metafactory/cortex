@@ -184,6 +184,13 @@ ALLOWLIST_PATHS=(
   # account-tree root, never the principal. Class: NSC.
   # RETIRE: never (NSC operator is the permanent qualified survivor, CONTEXT.md).
   'docs/adr/0015-two-tier-onboarding-and-admission-gate.md'
+  # ADR-0015 companion runbook — retired leaf-cred issuance runbook (Model-A, now
+  # tombstoned). Its body carries legacy NSC operator issuance steps as historical
+  # reference; the tombstone header also uses "NSC operator" in its summary of what
+  # supersedes it. Every "operator" is the NATS account-tree root, never the principal.
+  # Class: NSC + HISTORICAL (retired doc).
+  # RETIRE: when the file is removed from the repo.
+  'docs/runbook-leaf-cred-issuance.md'
   # G5 peer-onboarding runbook — the end-to-end onboarding SOP teaches the sovereign
   # federation path (ADR-0013): every occurrence of "operator" is "NSC operator" (the
   # NATS account-tree root, qualified throughout). Same class as ADR-0013 and the G1

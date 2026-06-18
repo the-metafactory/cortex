@@ -251,26 +251,31 @@ export interface CapabilityHit {
 }
 
 // =============================================================================
-// O-4a.1 — Issuance-request state machine types
+// ADR-0015 — Network-admission gate types
+//
+// The O-4a issuance-request state machine is repurposed as the
+// NETWORK-ADMISSION gate (ADR-0015). It gates roster membership, mints
+// nothing. The `register → PENDING → admit` flow is unchanged structurally;
+// only the vocabulary and the payload (no leaf package) change.
 // =============================================================================
 
 /**
- * The lifecycle status of an issuance request.
- * Transitions: PENDING → GRANTED (on admin grant)
+ * The lifecycle status of a network admission request.
+ * Transitions: PENDING → ADMITTED (on admin admit/grant)
  *              PENDING → REJECTED (on admin reject)
  * Re-transitions are forbidden (409 already_decided).
  */
-export type IssuanceStatus = "PENDING" | "GRANTED" | "REJECTED";
+export type AdmissionStatus = "PENDING" | "ADMITTED" | "REJECTED";
 
 /**
- * A persisted issuance request — the metadata record that a verified
- * registration creates. No secrets; no credentials. The `leaf_package`
- * column is the O-4a.2 seam (always null in O-4a.1).
+ * A persisted admission request — the metadata record that a verified
+ * registration creates. No secrets; no credentials; mints nothing.
+ * The gate controls roster membership for the target network.
  */
-export interface IssuanceRequest {
+export interface AdmissionRequest {
   /** Opaque hex UUID, URL-safe. Primary key. */
   request_id: string;
-  /** The principal that registered and triggered this request. */
+  /** The principal requesting admission. */
   principal_id: string;
   /**
    * Base64 Ed25519 pubkey of the peer stack being onboarded.
@@ -283,37 +288,38 @@ export interface IssuanceRequest {
    * e.g. `federated.<peer_slug>.>`.
    */
   requested_scope: string;
+  /**
+   * The target network id for this admission request.
+   * Null for rows migrated from the pre-ADR-0015 issuance_requests table;
+   * new rows always carry the network id.
+   */
+  network_id: string | null;
   /** Current lifecycle state. */
-  status: IssuanceStatus;
+  status: AdmissionStatus;
   /** ISO-8601 UTC; when the request was first created. */
   created_at: string;
-  /** ISO-8601 UTC; updated on grant/reject. */
+  /** ISO-8601 UTC; updated on admit/reject. */
   updated_at: string;
   /**
-   * The admin pubkey (base64) that granted or rejected this request.
+   * The admin pubkey (base64) that admitted or rejected this request.
    * Null while PENDING.
    */
   granted_by: string | null;
-  /**
-   * O-4a.2 seam: JSON blob of the issued leaf credential package.
-   * Always null in O-4a.1; populated by the next slice.
-   */
-  leaf_package: string | null;
 }
 
 /**
  * The admin-signed claim carried by
- * `POST /issuance-requests/{request_id}/grant` and `/reject`.
+ * `POST /admission-requests/{request_id}/admit` and `/reject`.
  *
  * Mirrors `NetworkCreateClaim` in structure so the admin gate can be
  * reused verbatim: admin signs canonicalJSON(claim); registry verifies
  * the signature against claim.admin_pubkey and checks the allowlist.
  */
-export interface IssuanceDecisionClaim {
+export interface AdmissionDecisionClaim {
   /** Must equal the URL path parameter. Echoed for canonicalisation. */
   request_id: string;
-  /** The decision: "grant" or "reject". Part of the signed payload. */
-  decision: "grant" | "reject";
+  /** The decision: "admit" or "reject". Part of the signed payload. */
+  decision: "admit" | "reject";
   /** Base64 Ed25519 pubkey of the admin signing this claim. */
   admin_pubkey: string;
   /** ISO-8601 UTC timestamp at which the admin signed this claim. */
@@ -322,15 +328,15 @@ export interface IssuanceDecisionClaim {
   nonce: string;
 }
 
-/** On-wire envelope for a grant/reject decision. */
-export interface SignedIssuanceDecision {
-  claim: IssuanceDecisionClaim;
+/** On-wire envelope for an admit/reject decision. */
+export interface SignedAdmissionDecision {
+  claim: AdmissionDecisionClaim;
   /** Base64 Ed25519 signature over canonical-JSON(claim). */
   signature: string;
 }
 
 /**
- * The admin-signed claim carried by GET /issuance-requests reads.
+ * The admin-signed claim carried by GET /admission-requests reads.
  * The GET endpoints are operational metadata; we gate them behind
  * an admin signature sent via `x-admin-signed` header. This prevents
  * any unauthenticated enumeration of the onboarding queue.
@@ -339,7 +345,7 @@ export interface SignedIssuanceDecision {
  * and don't mutate state). Clock-skew check applies to prevent stale
  * tokens lingering. The admin proves allowlisted possession.
  */
-export interface IssuanceReadClaim {
+export interface AdmissionReadClaim {
   /** The admin's own pubkey — used for allowlist check. */
   admin_pubkey: string;
   /** ISO-8601 UTC; within the CLOCK_SKEW_MS window. */
@@ -347,97 +353,45 @@ export interface IssuanceReadClaim {
 }
 
 /** On-wire envelope for an admin read authorisation. */
-export interface SignedIssuanceRead {
-  claim: IssuanceReadClaim;
+export interface SignedAdmissionRead {
+  claim: AdmissionReadClaim;
   /** Base64 Ed25519 signature over canonical-JSON(claim). */
   signature: string;
 }
 
-// =============================================================================
-// O-4a.2 — Leaf package types
-// =============================================================================
+// ---------------------------------------------------------------------------
+// Back-compat aliases — a few consumers in tests reference the old names.
+// Kept so they resolve without import churn; will be cleaned up in a
+// follow-on vocab sweep. New code MUST use the Admission* names.
+// ---------------------------------------------------------------------------
+
+/** @deprecated Use AdmissionStatus */
+export type IssuanceStatus = AdmissionStatus;
+/** @deprecated Use AdmissionRequest */
+export type IssuanceRequest = AdmissionRequest;
 
 /**
- * The PUBLIC leaf credential package the admin posts on grant.
- *
- * Registry-level shape: JWTs + nkey-U public keys ONLY. This is the
- * `OperatorModeLeafPackage` shape from O-4b (`leaf-remote-renderer.ts`)
- * MINUS `credsPath` — the registry NEVER receives a creds path or any
- * secret. The symmetric `credsPath` is delivered out-of-band (#1012).
- *
- * Grammar (mirrors O-4b canonical validators — see validate.ts for the
- * mirrored regexes and the anti-drift test vectors):
- *   - `account` / `systemAccount`: nkey-U pubkey — `/^A[A-Z2-7]{55}$/`
- *   - `operatorJwt` / `accountJwt` / `systemAccountJwt`: NSC JWT shape
- *     — `/^eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2}$/`
- *
- * Half-specified SYS account (one of systemAccount/systemAccountJwt
- * without the other) is rejected with 400 — same rule as O-4b.
+ * @deprecated Use AdmissionDecisionClaim.
+ * Kept as a structurally distinct type (NOT an alias) so the legacy
+ * /issuance-requests routes can keep accepting the old "grant"/"reject"
+ * vocabulary at the wire level during the backward-compat transition window.
  */
-export interface GrantLeafPackage {
-  /** The NSC operator JWT (`eyJ…`). */
-  operatorJwt: string;
-  /** The issued account public key (nkey-U, `A…`). */
-  account: string;
-  /** The issued account JWT (`eyJ…`). */
-  accountJwt: string;
-  /** OPTIONAL system account public key (nkey-U). */
-  systemAccount?: string;
-  /** OPTIONAL system account JWT. Must be present when `systemAccount` is. */
-  systemAccountJwt?: string;
-  /**
-   * OPTIONAL network endpoint hint for this leaf credential.
-   * Non-empty string if supplied.
-   */
-  endpoint?: string;
-}
-
-/**
- * The admin-signed claim carried by
- * `POST /issuance-requests/{request_id}/grant` (O-4a.2 extension).
- *
- * Extends `IssuanceDecisionClaim` by adding the optional `leaf_package`
- * field. The package is included ONLY on grant (not reject). When present
- * the package is stored atomically inside the PENDING→GRANTED transition.
- *
- * The existing `IssuanceDecisionClaim` stays unchanged so O-4a.1 grant
- * calls (no package) continue to work — the field is optional.
- */
-export interface IssuanceDecisionClaimWithPackage extends IssuanceDecisionClaim {
-  /**
-   * O-4a.2: the PUBLIC leaf package to store on grant. Optional — a grant
-   * without a package is still valid (leaf_package column stays null).
-   */
-  leaf_package?: GrantLeafPackage;
-}
-
-/**
- * Proof-of-possession read claim. The joining peer proves they own the
- * stack key on record for their issuance request by signing a minimal
- * claim with that key. The registry verifies:
- *   1. Signature is valid over canonical-JSON(claim).
- *   2. Signer pubkey === request.peer_pubkey.
- *   3. claim.request_id === the path :request_id (N2 — token is bound to a
- *      specific request so it cannot be replayed against a different request
- *      for the same peer key).
- * No nonce (reads are idempotent). Clock-skew applies.
- */
-export interface IssuancePackageReadClaim {
-  /** The peer's own stack pubkey (base64 Ed25519). Verified against the request. */
-  peer_pubkey: string;
-  /**
-   * N2 — binds this signed token to a specific issuance request.
-   * Must equal the :request_id path parameter; a mismatch is rejected 401.
-   * 32 lowercase hex chars (the format generateRequestId produces).
-   */
+export interface IssuanceDecisionClaim {
   request_id: string;
-  /** ISO-8601 UTC; within the CLOCK_SKEW_MS window. */
+  /** @deprecated Use "admit"/"reject" (AdmissionDecisionClaim). */
+  decision: "grant" | "reject";
+  admin_pubkey: string;
   issued_at: string;
+  nonce: string;
 }
 
-/** On-wire envelope for a peer proof-of-possession package read. */
-export interface SignedIssuancePackageRead {
-  claim: IssuancePackageReadClaim;
-  /** Base64 Ed25519 signature over canonical-JSON(claim). */
+/** @deprecated Use SignedAdmissionDecision */
+export interface SignedIssuanceDecision {
+  claim: IssuanceDecisionClaim;
   signature: string;
 }
+
+/** @deprecated Use AdmissionReadClaim */
+export type IssuanceReadClaim = AdmissionReadClaim;
+/** @deprecated Use SignedAdmissionRead */
+export type SignedIssuanceRead = SignedAdmissionRead;

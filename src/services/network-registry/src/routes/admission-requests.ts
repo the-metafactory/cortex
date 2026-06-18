@@ -1,25 +1,28 @@
 /**
- * O-4a.1 — Issuance-request state machine endpoints.
+ * ADR-0015 — Network-admission gate endpoints.
  *
- *   POST /issuance-requests/{request_id}/grant
- *     Admin-signed transition: PENDING → GRANTED.
+ * Repurposes the O-4a issuance-request state machine as the admission gate:
+ * it gates ROSTER MEMBERSHIP, mints NOTHING.
+ *
+ *   POST /admission-requests/{request_id}/admit
+ *     Admin-signed transition: PENDING → ADMITTED.
  *     Reuses the admin-pubkey gate from #747 (network-create) verbatim:
  *       503 admin_not_configured  — no allowlist set
  *       401 signature_invalid     — sig doesn't verify
  *       403 admin_not_authorized  — key not allowlisted
- *     On success: returns the updated IssuanceRequest (leaf_package still null —
- *     that's O-4a.2). 409 already_decided if the request is not PENDING.
+ *     On success: returns the updated AdmissionRequest. 409 already_decided
+ *     if the request is not PENDING.
  *
- *   POST /issuance-requests/{request_id}/reject
- *     Admin-signed transition: PENDING → REJECTED. Same gate as grant.
+ *   POST /admission-requests/{request_id}/reject
+ *     Admin-signed transition: PENDING → REJECTED. Same gate as admit.
  *
- *   GET /issuance-requests?status=<PENDING|GRANTED|REJECTED>
+ *   GET /admission-requests?status=<PENDING|ADMITTED|REJECTED>
  *     Admin-gated list of requests by status. The admin proves allowlisted
  *     possession via the `x-admin-signed` request header (a signed read
  *     claim — no nonce, clock-skew applies). 400 if the header is missing
  *     or malformed.
  *
- *   GET /issuance-requests/{request_id}
+ *   GET /admission-requests/{request_id}
  *     Admin-gated single-request fetch. Same auth as the list surface.
  *     404 when the request_id is not found.
  *
@@ -44,9 +47,9 @@ import { Hono, type Context } from "hono";
 import { parseAdminPubkeys, type Env } from "../index";
 import { getNonceCache, getIssuanceStore, AlreadyDecidedError } from "../store";
 import {
-  validateSignedIssuanceDecision,
-  validateIssuanceDecisionClaim,
-  validateSignedIssuanceRead,
+  validateSignedAdmissionDecision,
+  validateAdmissionDecisionClaim,
+  validateSignedAdmissionRead,
   isValidRequestId,
 } from "../validate";
 import { canonicalJSON, verifyEd25519 } from "../signing";
@@ -62,13 +65,12 @@ import type { AdmissionStatus } from "../types";
 const CLOCK_SKEW_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
- * Shared admin gate used by both write (grant/reject) and read endpoints.
+ * Shared admin gate used by both write (admit/reject) and read endpoints.
  * Mirrors the network-create gate order verbatim:
  *   503 admin_not_configured → 401 signature_invalid → 403 admin_not_authorized
  *
- * `adminPubkey` and `signature` are pulled from the validated claim.
- * Returns null on success (caller continues); returns a Response on failure
- * (caller short-circuits immediately).
+ * Returns null on success (caller continues); returns an error descriptor on
+ * failure (caller short-circuits immediately).
  */
 async function applyAdminGate(
   adminPubkeys: Set<string>,
@@ -83,22 +85,20 @@ async function applyAdminGate(
   return null; // pass
 }
 
-export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
+export function admissionRequestRoutes(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
 
   // ---------------------------------------------------------------------------
-  // Helper: shared decision handler for grant and reject
+  // Helper: shared decision handler for admit and reject
   // ---------------------------------------------------------------------------
 
   async function handleDecision(
     c: Context<{ Bindings: Env }>,
-    decision: "grant" | "reject",
+    decision: "admit" | "reject",
   ): Promise<Response> {
     const requestId = c.req.param("request_id") ?? "";
 
     // M2 — validate request_id path param BEFORE body parse or crypto.
-    // Rejects slugs, UUIDs with dashes, empty strings, and injection attempts
-    // before they can reach queries or error bodies. Returns 400 immediately.
     if (!isValidRequestId(requestId)) {
       return c.json({ error: "invalid_request_id" }, 400);
     }
@@ -110,17 +110,14 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
         {
           error: "admin_not_configured",
           details:
-            "REGISTRY_ADMIN_PUBKEYS not provisioned; issuance decisions are disabled (fail-closed). " +
+            "REGISTRY_ADMIN_PUBKEYS not provisioned; admission decisions are disabled (fail-closed). " +
             "Set the admin pubkey allowlist via `wrangler secret put` to enable signed-admin writes.",
         },
         503,
       );
     }
 
-    // M1 — rate-limit BEFORE the expensive Ed25519 verify (mirrors networks.ts:~106).
-    // Keyed by (IP, request_id) so a flood against one request can't hide behind
-    // a shared egress IP, and one IP can't exhaust the limit across requests.
-    // Uses the "register" bucket (mutation + Ed25519 compute — same cost class).
+    // M1 — rate-limit BEFORE the expensive Ed25519 verify.
     const allowed = await checkRateLimit(c.env, "register", clientKey(c.req.raw, requestId));
     if (!allowed) {
       return c.json(TOO_MANY_REQUESTS_BODY, 429, {
@@ -136,14 +133,13 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
       return c.json({ error: "body must be valid JSON" }, 400);
     }
 
-    const envelopeCheck = validateSignedIssuanceDecision(body);
+    const envelopeCheck = validateSignedAdmissionDecision(body);
     if (!envelopeCheck.ok) {
       return c.json({ error: "validation_failed", details: envelopeCheck.errors }, 400);
     }
     const { signed } = envelopeCheck;
 
-    // Both grant (→ ADMITTED) and reject use the base claim validator.
-    const claimResult = validateIssuanceDecisionClaim(signed.claim, requestId, decision);
+    const claimResult = validateAdmissionDecisionClaim(signed.claim, requestId, decision);
     if (!claimResult.ok) {
       return c.json({ error: "validation_failed", details: claimResult.errors }, 400);
     }
@@ -162,7 +158,7 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
       );
     }
 
-    // 4. Signature verification FIRST (before recording nonce — #695 rationale).
+    // 4. Signature verification FIRST (before recording nonce).
     const message = new TextEncoder().encode(canonicalJSON(claim)) as Uint8Array<ArrayBuffer>;
     const gateResult = await applyAdminGate(
       adminPubkeys,
@@ -181,13 +177,13 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
       return c.json({ error: "nonce_replayed" }, 409);
     }
 
-    // 6. State transition — grant becomes ADMITTED (ADR-0015); mints nothing.
+    // 6. State transition.
     const store = getIssuanceStore(c.env);
     let updated;
     try {
       updated = await store.transitionIssuanceRequest(
         requestId,
-        decision === "grant" ? "ADMITTED" : "REJECTED",
+        decision === "admit" ? "ADMITTED" : "REJECTED",
         claim.admin_pubkey,
       );
     } catch (err) {
@@ -201,8 +197,6 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
           409,
         );
       }
-      // Unexpected error — surface as 500 (caught by global error handler,
-      // but we re-throw so it reaches the onError handler set in index.ts).
       throw err;
     }
 
@@ -226,9 +220,7 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
       return { error: "admin_not_configured", status: 503 };
     }
 
-    // M1 — rate-limit BEFORE the Ed25519 verify to shed compute-DoS.
-    // Admin reads are keyed by IP only (no entity id in the path to fold in).
-    // Uses the "read" bucket (120/60s) — same class as other admin GET endpoints.
+    // M1 — rate-limit BEFORE the Ed25519 verify.
     const allowed = await checkRateLimit(c.env, "read", clientKey(c.req.raw));
     if (!allowed) {
       return { error: "rate_limited", status: 429 };
@@ -247,7 +239,7 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
       return { error: "x-admin-signed must be valid JSON", status: 400 };
     }
 
-    const readCheck = validateSignedIssuanceRead(parsed);
+    const readCheck = validateSignedAdmissionRead(parsed);
     if (!readCheck.ok) {
       return { error: "x-admin-signed validation_failed", status: 400 };
     }
@@ -270,22 +262,22 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
   }
 
   // ---------------------------------------------------------------------------
-  // POST /issuance-requests/:request_id/grant
+  // POST /admission-requests/:request_id/admit
   // ---------------------------------------------------------------------------
 
-  app.post("/issuance-requests/:request_id/grant", (c) => handleDecision(c, "grant"));
+  app.post("/admission-requests/:request_id/admit", (c) => handleDecision(c, "admit"));
 
   // ---------------------------------------------------------------------------
-  // POST /issuance-requests/:request_id/reject
+  // POST /admission-requests/:request_id/reject
   // ---------------------------------------------------------------------------
 
-  app.post("/issuance-requests/:request_id/reject", (c) => handleDecision(c, "reject"));
+  app.post("/admission-requests/:request_id/reject", (c) => handleDecision(c, "reject"));
 
   // ---------------------------------------------------------------------------
-  // GET /issuance-requests?status=<status>
+  // GET /admission-requests?status=<status>
   // ---------------------------------------------------------------------------
 
-  app.get("/issuance-requests", async (c) => {
+  app.get("/admission-requests", async (c) => {
     const authError = await verifyAdminReadHeader(c);
     if (authError) {
       return c.json({ error: authError.error }, authError.status as 400 | 401 | 403 | 429 | 503);
@@ -306,10 +298,10 @@ export function issuanceRequestRoutes(): Hono<{ Bindings: Env }> {
   });
 
   // ---------------------------------------------------------------------------
-  // GET /issuance-requests/:request_id
+  // GET /admission-requests/:request_id
   // ---------------------------------------------------------------------------
 
-  app.get("/issuance-requests/:request_id", async (c) => {
+  app.get("/admission-requests/:request_id", async (c) => {
     const authError = await verifyAdminReadHeader(c);
     if (authError) {
       return c.json({ error: authError.error }, authError.status as 400 | 401 | 403 | 429 | 503);

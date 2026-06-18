@@ -1,6 +1,15 @@
 # Runbook — Issue a leaf credential for a community principal (admin / admin-agent executable)
 
-**Status:** active
+> **Superseded — see [ADR-0015](./adr/0015-two-tier-onboarding-and-admission-gate.md) and [`sop-onboard-peer-principal.md`](./sop-onboard-peer-principal.md).**
+>
+> The Model-A hub-minted-credential path described in this runbook is **retired** (ADR-0015, 2026-06-18).
+> The admission gate (`register → PENDING → admit`) now controls **roster membership only** — it mints
+> no credentials and issues no leaf packages. Community participation is either Tier 1 (Discord bot,
+> no NATS) or Tier 2 (sovereign NSC operator + Model-B federation join).
+>
+> Archived on git tag/branch `model-a-hub-minted-creds` for reference.
+
+**Status:** retired (ADR-0015)
 **Audience:** a **network/hub admin** (human or an admin agent with repo + arc/`nsc` access) onboarding a peer operator onto `metafactory-community`
 **Decision basis:** [ADR-0012](./adr/0012-external-operator-account-isolation.md) — **default: shared `community` account + per-operator scoped bot**; dedicated account is an opt-in for hard isolation
 **Related:** `docs/design-automated-operator-onboarding.md`, `docs/sop-stack-onboarding.md` §B0–B5, `docs/sop-federation-onboarding.md`, `docs/sop-network-join.md`, `docs/runbook-federation-peering.md`, the `cortex creds` ↔ `arc nats` contract (`the-metafactory/arc:docs/integrations/cortex-creds.md`)

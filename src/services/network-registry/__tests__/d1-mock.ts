@@ -44,11 +44,11 @@ interface IssuanceRequestRow {
   principal_id: string;
   peer_pubkey: string;
   requested_scope: string;
+  network_id: string | null;
   status: string;
   created_at: string;
   updated_at: string;
   granted_by: string | null;
-  leaf_package: string | null;
 }
 
 /** What D1's `.run()` returns — we only populate `meta.changes`. */
@@ -198,11 +198,11 @@ export class MockD1 {
       return { meta: { changes: n } };
     }
 
-    // issuance_requests: INSERT ... ON CONFLICT(principal_id, peer_pubkey) DO NOTHING
-    // (M3 atomic upsert — D1IssuanceRequestStore.upsertPending)
-    if (sql.startsWith("INSERT INTO issuance_requests")) {
-      const [requestId, principalId, peerPubkey, requestedScope, createdAt, updatedAt] = args as [
-        string, string, string, string, string, string,
+    // admission_requests: INSERT ... ON CONFLICT(principal_id, peer_pubkey) DO NOTHING
+    // (M3 atomic upsert — D1IssuanceRequestStore.upsertPending, ADR-0015)
+    if (sql.startsWith("INSERT INTO admission_requests")) {
+      const [requestId, principalId, peerPubkey, requestedScope, networkId, createdAt, updatedAt] = args as [
+        string, string, string, string, string | null, string, string,
       ];
       const peerKey = `${principalId}\x00${peerPubkey}`;
       // ON CONFLICT(principal_id, peer_pubkey) DO NOTHING — idempotent.
@@ -214,26 +214,24 @@ export class MockD1 {
         principal_id: principalId,
         peer_pubkey: peerPubkey,
         requested_scope: requestedScope,
+        network_id: networkId,
         status: "PENDING",
         created_at: createdAt,
         updated_at: updatedAt,
         granted_by: null,
-        leaf_package: null,
       };
       this.issuanceRequests.set(requestId, row);
       this.issuancePeerIndex.set(peerKey, requestId);
       return { meta: { changes: 1 } };
     }
 
-    // issuance_requests: UPDATE (transitionIssuanceRequest — CAS on status='PENDING')
-    // O-4a.2: args are [newStatus, grantedBy, updatedAt, leafPackageJson, requestId]
-    // (leaf_package added in O-4a.2 — the 4th bind value is the package JSON or null)
-    if (sql.startsWith("UPDATE issuance_requests SET status")) {
-      const [newStatus, grantedBy, updatedAt, leafPackageJson, requestId] = args as [
+    // admission_requests: UPDATE (transitionIssuanceRequest — CAS on status='PENDING')
+    // ADR-0015: args are [newStatus, grantedBy, updatedAt, requestId] (no leaf_package)
+    if (sql.startsWith("UPDATE admission_requests SET status")) {
+      const [newStatus, grantedBy, updatedAt, requestId] = args as [
         string,
         string,
         string,
-        string | null,
         string,
       ];
       const existing = this.issuanceRequests.get(requestId);
@@ -245,14 +243,13 @@ export class MockD1 {
         status: newStatus,
         granted_by: grantedBy,
         updated_at: updatedAt,
-        leaf_package: leafPackageJson,
       };
       this.issuanceRequests.set(requestId, updated);
       return { meta: { changes: 1 } };
     }
 
-    // issuance_requests: reset
-    if (sql === "DELETE FROM issuance_requests") {
+    // admission_requests: reset
+    if (sql === "DELETE FROM admission_requests") {
       const n = this.issuanceRequests.size;
       this.issuanceRequests.clear();
       this.issuancePeerIndex.clear();
@@ -284,15 +281,15 @@ export class MockD1 {
       return row ? [row] : [];
     }
 
-    // issuance_requests: SELECT by request_id
-    if (sql.includes("FROM issuance_requests WHERE request_id =")) {
+    // admission_requests: SELECT by request_id (ADR-0015)
+    if (sql.includes("FROM admission_requests WHERE request_id =")) {
       const id = args[0] as string;
       const row = this.issuanceRequests.get(id);
       return row ? [row] : [];
     }
 
-    // issuance_requests: SELECT by (principal_id, peer_pubkey)
-    if (sql.includes("FROM issuance_requests WHERE principal_id = ? AND peer_pubkey =")) {
+    // admission_requests: SELECT by (principal_id, peer_pubkey)
+    if (sql.includes("FROM admission_requests WHERE principal_id = ? AND peer_pubkey =")) {
       const [principalId, peerPubkey] = args as [string, string];
       const key = `${principalId}\x00${peerPubkey}`;
       const requestId = this.issuancePeerIndex.get(key);
@@ -301,8 +298,8 @@ export class MockD1 {
       return row ? [row] : [];
     }
 
-    // issuance_requests: SELECT by status ORDER BY created_at
-    if (sql.includes("FROM issuance_requests WHERE status =")) {
+    // admission_requests: SELECT by status ORDER BY created_at
+    if (sql.includes("FROM admission_requests WHERE status =")) {
       const status = args[0] as string;
       return [...this.issuanceRequests.values()]
         .filter((r) => r.status === status)
