@@ -1,0 +1,23 @@
+# Test fixture — mirrors agents.d/pier.yaml with a relative persona path
+# so the fragment loader can find the persona in the fixtures dir.
+id: pier
+displayName: Pier
+persona: ../personas/pier.md
+roles: [agent-restricted]
+trust: [luna]
+runtime:
+  substrate: claude-code
+  mode: in-process
+  capabilities:
+    - onboarding
+    - chat
+presence:
+  discord:
+    enabled: true
+    token: ${PIER_BOT_TOKEN}
+    guildId: "1505549701674700991"
+    agentChannelId: "1514679294553751613"
+    logChannelId: "1514679294553751613"
+    dmOwner: false
+    contextDepth: 10
+    surfaceSubjects: []
