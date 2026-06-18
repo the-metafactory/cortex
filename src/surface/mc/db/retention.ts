@@ -22,12 +22,22 @@
  *
  *   - **Orphan terminal-age prune** keys off `sessions.ended_at` (the #857
  *     `applyTransition` fix stamps it on every terminal transition). A row is
- *     prunable iff it is an orphan (its agent carries the `mc-orphan-` prefix
- *     AND hangs off the shared `mc-orphan-task`), its session is terminal
+ *     prunable iff it hangs off the shared `mc-orphan-task` (the bookkeeping
+ *     anchor for ALL auto-registered observed sessions), its session is terminal
  *     (`ended_at IS NOT NULL`), and that `ended_at` is older than
  *     {@link ORPHAN_RETENTION_MS}. Real dispatch-projected / principal-created
- *     rows are NEVER touched — the prune's WHERE is double-anchored on the
- *     orphan prefix AND the orphan task id.
+ *     rows are NEVER touched — the prune's WHERE is anchored on the orphan task
+ *     id, which no controlled/dispatch work ever uses.
+ *
+ *     ST-P2 NOTE: the anchor was *double*-anchored on the `mc-orphan-` agent
+ *     prefix AND the orphan task. ST-P2 stopped minting per-session
+ *     `mc-orphan-{cc}` agents — observed sessions now attach to the REAL owning
+ *     agent (e.g. 'luna') and hang off `mc-orphan-task`. So the **session/
+ *     assignment** selection now anchors on the **task** alone (covers BOTH
+ *     legacy `mc-orphan-` rows AND new-model observed rows), while the
+ *     **agent-deletion** step stays anchored on the `mc-orphan-` prefix so it
+ *     only ever deletes the legacy ephemeral agents and CANNOT touch a real
+ *     owning agent.
  *
  *   - **Events prune is AGE-based, not a per-session cap.** Age is the simpler
  *     bound that still caps unbounded growth: a single indexed
@@ -128,11 +138,19 @@ export interface RetentionSummary
 /**
  * Select the orphan assignment ids whose session is terminal beyond the
  * retention window. An assignment qualifies iff:
- *   - its agent id starts with the orphan prefix, AND
- *   - it hangs off the shared `mc-orphan-task` (double-anchor: belt + braces
- *     against a non-orphan agent ever acquiring the prefix), AND
+ *   - it hangs off the shared `mc-orphan-task` — the bookkeeping anchor for ALL
+ *     auto-registered observed sessions (legacy `mc-orphan-{cc}`-agent rows AND
+ *     ST-P2 real-owning-agent rows both use it). No controlled/dispatch work
+ *     ever uses this task, so this single anchor is the safety guarantee, AND
  *   - it has a session whose `ended_at` is non-null and older than the cutoff,
  *     AND it has NO session that is still open (ended_at IS NULL).
+ *
+ * ST-P2: the prior `ag.id LIKE 'mc-orphan-%'` agent-prefix predicate is GONE
+ * here — ST-P2 observed sessions attach to the REAL owning agent (e.g. 'luna'),
+ * which carries no prefix, so requiring it would silently STOP pruning the
+ * new-model rows (the exact regression P3↔P2 must avoid). The orphan-task anchor
+ * covers both row generations. (The agent-DELETION step in `pruneOrphanSessions`
+ * keeps the prefix, so a real owning agent is never deleted.)
  *
  * The "no open session" guard means a re-observed orphan (a new dispatched/
  * running session re-attached to the same assignment) is never pruned mid-turn.
@@ -142,9 +160,7 @@ function selectPrunableOrphanAssignments(db: Database, cutoffIso: string): strin
     .query(
       `SELECT ata.id AS id
          FROM agent_task_assignment ata
-         JOIN agents ag ON ag.id = ata.agent_id
         WHERE ata.task_id = ?
-          AND ag.id LIKE ? || '%'
           AND EXISTS (
                 SELECT 1 FROM sessions s
                  WHERE s.assignment_id = ata.id
@@ -157,7 +173,7 @@ function selectPrunableOrphanAssignments(db: Database, cutoffIso: string): strin
                    AND s.ended_at IS NULL
               )`
     )
-    .all(ORPHAN_TASK_ID, ORPHAN_AGENT_PREFIX, cutoffIso) as { id: string }[];
+    .all(ORPHAN_TASK_ID, cutoffIso) as { id: string }[];
   return rows.map((r) => r.id);
 }
 
@@ -175,10 +191,22 @@ interface StuckOrphan {
 
 /**
  * Select orphan assignments that are STUCK: in a non-terminal state
- * (`dispatched`/`running`/`blocked`), anchored on the orphan prefix AND the
- * shared orphan task (the same double-anchor the terminal-age prune uses, so a
- * real dispatch assignment can NEVER be selected), with exactly one OPEN
- * session (`ended_at IS NULL`) whose last activity is older than the cutoff.
+ * (`dispatched`/`running`/`blocked`), anchored on the shared orphan task (the
+ * bookkeeping anchor for ALL auto-registered observed sessions — legacy AND
+ * ST-P2 real-owning-agent rows), with an OPEN session (`ended_at IS NULL`) that
+ * is `local.observed` and whose last activity is older than the cutoff.
+ *
+ * ST-P2: the prior `ag.id LIKE 'mc-orphan-%'` predicate is REPLACED. ST-P2
+ * observed sessions attach to the REAL owning agent (e.g. 'luna') — requiring
+ * the agent prefix would silently STOP reaping the new-model zombies (the exact
+ * regression the P3 reaper must keep covering). Instead we anchor on:
+ *   - `ata.task_id = mc-orphan-task` — the orphan bookkeeping task no
+ *     controlled/dispatch work ever uses (the real-dispatch safety guarantee),
+ *   - `s.endpoint_kind = 'local.observed'` — defense-in-depth: only observed
+ *     sessions are reaped.
+ * Together these can NEVER match a real dispatch assignment (which uses a real
+ * task and a controlled endpoint), preserving the "never touch real dispatch"
+ * guarantee while now covering BOTH legacy and new-model observed zombies.
  *
  * "Last activity" is `MAX(events.timestamp)` for the session, or — when the
  * session has emitted no events — its `started_at`. A session with ANY event
@@ -191,17 +219,16 @@ function selectStuckOrphans(db: Database, cutoffIso: string): StuckOrphan[] {
     .query(
       `SELECT ata.id AS assignmentId, s.id AS sessionId
          FROM agent_task_assignment ata
-         JOIN agents ag ON ag.id = ata.agent_id
          JOIN sessions s ON s.assignment_id = ata.id AND s.ended_at IS NULL
         WHERE ata.task_id = ?
-          AND ag.id LIKE ? || '%'
+          AND s.endpoint_kind = 'local.observed'
           AND ata.state IN ('dispatched', 'running', 'blocked')
           AND COALESCE(
                 (SELECT MAX(e.timestamp) FROM events e WHERE e.session_id = s.id),
                 s.started_at
               ) < ?`
     )
-    .all(ORPHAN_TASK_ID, ORPHAN_AGENT_PREFIX, cutoffIso) as StuckOrphan[];
+    .all(ORPHAN_TASK_ID, cutoffIso) as StuckOrphan[];
   return rows;
 }
 
@@ -267,8 +294,12 @@ export function reapStuckRunningOrphans(db: Database): StuckReapResult {
  *   2. delete the qualifying assignments — sessions already gone; the assignment
  *      FK is `ON DELETE CASCADE` off the assignment too, but the agent/task FKs
  *      are RESTRICT so order matters: assignment before agent.
- *   3. delete the now-childless orphan agents — only those with NO remaining
- *      assignment (a re-observed orphan agent may still anchor a live session).
+ *   3. delete the now-childless LEGACY orphan agents — only those carrying the
+ *      `mc-orphan-` prefix with NO remaining assignment. ST-P2 observed sessions
+ *      attach to a REAL owning agent (e.g. 'luna'), which carries no prefix and
+ *      is therefore NEVER deleted here — we only sweep its (now-pruned) session/
+ *      assignment, leaving the real agent intact. The prefix anchor on this step
+ *      is the guarantee that a real owning agent is never collateral-damaged.
  *
  * The shared `mc-orphan-task` is intentionally preserved (it is the stable
  * anchor; only its child assignments + sessions are reaped).

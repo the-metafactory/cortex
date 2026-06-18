@@ -533,6 +533,13 @@ function ensureDefaultAgent(db: Database): string {
  * the agents table yet. The first observed call lands the row;
  * subsequent calls are no-ops. `name` is only applied on insert — once
  * an agent is registered, the principal owns its display name.
+ *
+ * ST-P2 invariant: this keys on the WRAPPER IDENTITY (`agentId`), so it mints
+ * exactly ONE real agent per distinct identity — never one per session/
+ * cc_session_id. A session is NOT an agent (refactor D2): the per-session
+ * identity lives on the `sessions` row (agent_id/agent_name columns), assembled
+ * into the session tree by the Phase-4 projection. This is the controlled-POST
+ * sibling of `registerOrphanSession`'s `resolveOwningAgentId` resolution.
  */
 function ensureNamedAgent(
   db: Database,
@@ -767,10 +774,28 @@ export async function handleCreateSession(
         409
       );
     }
+    // ST-P2 — the observed path already mints the REAL owning agent via
+    // ensureNamedAgent (keyed on body.agentId, e.g. 'luna' — NOT per-session),
+    // so no per-session agent is created here. Thread the canonical session
+    // columns (owning agent id/name, substrate, parent_session_id) onto the
+    // SESSION row so the session-tree projection (Phase 4) can assemble the tree
+    // and the working grid renders the display name off the session, not an
+    // agent-per-session. All additive + optional — omitting them is unchanged
+    // behavior bar the now-populated agent_id/agent_name.
+    // Display name for the session row: the wrapper's agentName, else its
+    // agentId, else null. Empty-string trims fall through (intentional `||`),
+    // matching the title/principalId resolution above.
+    // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+    const observedAgentName = body.agentName?.trim() || body.agentId?.trim() || null;
     const session = createSession(db, {
       assignmentId,
       endpointKind: "local.observed",
       ccSessionId,
+      agentId,
+      agentName: observedAgentName,
+      principalId,
+      ...(body.substrate ? { substrate: body.substrate } : {}),
+      parentSessionId: body.parentSessionId ?? null,
     });
     endpoint = { sessionId: session.id };
   } else {

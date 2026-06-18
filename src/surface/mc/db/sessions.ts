@@ -293,44 +293,59 @@ export function createShadowAssignmentAndSession(
 }
 
 // ============================================================================
-// MC-I1.S5 (ADR-0005 §3) — orphan observed-session auto-registration
+// Observed-session auto-registration (MC-I1.S5 → ST-P2 owning-agent model)
 // ============================================================================
 //
 // An ORPHAN is a real instrumented CC session (CORTEX_CHANNEL set — e.g. the
-// principal's own `cldyo-live` terminal) that writes raw hook events but was
-// NEVER registered with Mission Control: no dispatch, no `POST /api/sessions`,
-// so no task/assignment/session row exists for its `cc_session_id`. The
-// ingestor used to HARD-DROP these events; ADR-0005 §3 (the catch-all half of
-// Phase 1) says auto-register them so the session lights up on the glass.
+// principal's own `cldyo-live` terminal, or any Claude-Code-`Agent`-tool child)
+// that writes raw hook events but was NEVER registered with Mission Control: no
+// dispatch, no `POST /api/sessions`, so no task/assignment/session row exists
+// for its `cc_session_id`. The ingestor used to HARD-DROP these events;
+// ADR-0005 §3 auto-registers them so the session lights up on the glass.
 //
-// Storage shape — DECISION (b): synthetic task + per-orphan agent + assignment.
-// We reuse the established F-12b pattern (`ensureShadowAgent` +
-// `createShadowAssignmentAndSession`) rather than relaxing `sessions.assignment_id`
-// to nullable. Rationale:
-//   - EVERY read query joins FROM `agent_task_assignment` outward to sessions
-//     (`mostRecentSessionLeftJoin`, `listWorkingAgents`, `mostActiveAgent`,
-//     the ingestor's own F-20 SELECT). A NULL `assignment_id` with no
-//     assignment row would make the orphan session exist but render NOWHERE —
-//     it is unreachable through every assignment-anchored join. The synthetic
-//     assignment keeps orphans visible through the unchanged join paths.
-//   - Zero schema change → zero blast radius on the 20-table schema, no
-//     REBUILD_MIGRATIONS, no nullable-column audit across N queries.
+// ── ST-P2: sessions, not agents (the 1,044-tile fix) ────────────────────────
+// The S5 model minted ONE `agents` row per `cc_session_id` (`mc-orphan-{uuid}`).
+// An overnight autonomous run is a deep recursive tree of ~1,000 sessions, so
+// that flattened the whole tree into 1,044 sibling "agent" tiles
+// (docs/refactor-mc-session-tree.md §1, D2). A session is NOT an agent.
 //
-// Distinguishability: orphan agents carry the `mc-orphan-` id prefix and the
-// session is `endpoint_kind = 'local.observed'`, so the dashboard can tell
-// them apart from dispatch-spawned controlled sessions. They are PER-orphan
-// (one agent + assignment + session per `cc_session_id`), so each instrumented
-// terminal is its own working-grid tile rather than collapsing into one.
+// New model (refactor D2): an observed session is a SESSION belonging to the
+// REAL owning agent — the wrapper identity carried on the event (e.g. 'luna' /
+// 'andreas'). `ensureAgentRow` keeps ONE real agent row per distinct observed
+// identity (that IS an agent), NEVER one per `cc_session_id`. The observed
+// display name is stored on the session's canonical `agent_name` column.
 //
-// Lifecycle: the orphan assignment is born `dispatched` so the ingestor's F-20
+// Why the working grid collapses 1,044 → 1: `listWorkingAgents` is agent-keyed
+// (`FROM agents JOIN agent_task_assignment … AND a.id = (SELECT … LIMIT 1)` →
+// one tile per agent). Once every observed session's assignment points at the
+// SAME real agent, that agent folds to a SINGLE tile regardless of how many
+// sessions hang off it. The session tree under it is Phase 4's projection.
+//
+// Synthetic assignment (refactor D3): the `sessions.assignment_id NOT NULL` FK
+// and the partial unique index `idx_sessions_active_assignment (assignment_id)
+// WHERE ended_at IS NULL` (at most one OPEN session per assignment) force a
+// PER-SESSION assignment row — but, per D3, it now points at the REAL owning
+// agent, not a per-session synthetic one. We keep the synthetic task +
+// assignment mechanics short-term (zero blast radius on the assignment-anchored
+// read joins); they retire once reads are fully session-anchored. The shared
+// `mc-orphan-task` stays the bookkeeping anchor for AUTO-registered observed
+// sessions — the one predicate that distinguishes them from principal-dispatch
+// work (which never uses this task) for the retention reaper (db/retention.ts).
+//
+// Lifecycle: the assignment is born `dispatched` so the ingestor's F-20
 // auto-transitions drive it normally — `dispatched → running` on the first
-// event, `running → completed` on Stop/SessionEnd — exactly like any other
-// observed session. Nothing in F-20 needs to special-case orphans.
+// event, `running → completed` on Stop/SessionEnd. Nothing in F-20 special-cases
+// orphans.
 
+// Retained ONLY for legacy-row compatibility in the retention prune/reaper:
+// pre-ST-P2 DBs still hold `mc-orphan-{uuid}` agent rows the reaper must keep
+// sweeping. No NEW row is ever minted with this prefix. See db/retention.ts.
 export const ORPHAN_AGENT_PREFIX = "mc-orphan-";
-// Exported so the retention prune anchors on the SAME id (it's a DELETE
-// anchor — a silent drift between two copies would break the prune's
-// real-row safety guarantee). See db/retention.ts.
+// Exported so the retention prune/reaper anchors on the SAME id (it's a DELETE/
+// reap anchor — a silent drift between two copies would break the prune's
+// real-row safety guarantee). The orphan task is the bookkeeping anchor that
+// distinguishes auto-registered observed sessions (which hang off it) from real
+// dispatch work (which never does). See db/retention.ts.
 export const ORPHAN_TASK_ID = "mc-orphan-task";
 const ORPHAN_TASK_TITLE = "Observed sessions (unregistered)";
 // Synthetic task needs a principal_id + source_system (both NOT NULL). The task
@@ -339,9 +354,19 @@ const ORPHAN_TASK_PRINCIPAL = "mc-orphan";
 const ORPHAN_TASK_SOURCE_SYSTEM = "internal";
 
 /**
- * Lazily insert the well-known orphan catch-all task. Idempotent. All orphan
- * assignments hang off this single task (the task is bookkeeping; the agent +
- * assignment + session carry the per-session identity).
+ * Stable id prefix for an observed session's OWNING agent when the event
+ * carries no wrapper `agent_id`. We derive it from the display name (slugged)
+ * so distinct named identities still fold to one tile each, and fall back to
+ * the cc_session_id ONLY when there is no identity at all (a truly anonymous
+ * observed session — the rare worst case, still ONE agent for that session, not
+ * the old per-cc_session_id-with-`head`-type flood since it carries no name).
+ */
+const OBSERVED_AGENT_PREFIX = "observed:";
+
+/**
+ * Lazily insert the well-known orphan catch-all task. Idempotent. All
+ * auto-registered observed assignments hang off this single task (the task is
+ * bookkeeping; the REAL owning agent + the session carry identity).
  */
 function ensureOrphanTask(db: Database): string {
   db.query(
@@ -352,34 +377,39 @@ function ensureOrphanTask(db: Database): string {
   return ORPHAN_TASK_ID;
 }
 
-/**
- * Deterministic orphan-agent id for a `cc_session_id`. One agent per orphan
- * session → one working-grid tile per instrumented terminal. The `mc-orphan-`
- * prefix makes orphans distinguishable from dispatch-spawned agents.
- */
-export function orphanAgentId(ccSessionId: string): string {
-  return `${ORPHAN_AGENT_PREFIX}${ccSessionId}`;
+/** Slug a display name into an id-safe token (lowercase, non-alnum → '-'). */
+function slugifyIdentity(name: string): string {
+  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
 /**
- * Lazily insert the per-orphan agent. `displayName` is taken from the raw
- * event's `agent_name` when present, otherwise the cc_session_id — applied
- * only on insert (subsequent events never overwrite a name the principal may
- * have since edited), matching `ensureNamedAgent`'s semantics.
+ * Resolve the OWNING agent id for an observed session (ST-P2, refactor D2).
+ *
+ * Resolution order (most → least authoritative):
+ *   1. `agentId` — the wrapper identity carried on the event (`CORTEX_AGENT_ID`,
+ *      e.g. 'luna' / 'andreas'). This IS the real agent. ONE per distinct
+ *      identity → ONE working-grid tile.
+ *   2. `observed:{slug(displayName)}` — when only a display name is known
+ *      (`CORTEX_AGENT_NAME` with no id). Distinct named identities still fold to
+ *      one agent each.
+ *   3. `observed:{ccSessionId}` — last resort for a truly anonymous observed
+ *      session. One agent for that one session (NOT a recurring per-spawn flood,
+ *      because a real instrumented run carries an identity at #1/#2).
+ *
+ * NEVER returns the legacy `mc-orphan-{cc}` shape — that minted one agent per
+ * session, the bug ST-P2 fixes.
  */
-function ensureOrphanAgent(
-  db: Database,
+export function resolveOwningAgentId(
   ccSessionId: string,
+  agentId: string | undefined,
   displayName: string | undefined
 ): string {
-  const id = orphanAgentId(ccSessionId);
-  // Deliberate double-guard with the ingestor's pick (which already skips
-  // empty agent_name values): this fallback must hold for ANY caller, not
-  // just the ingestor path.
-  const name = displayName && displayName.length > 0 ? displayName : ccSessionId;
-  // head / non-persistent (per-orphan ephemeral agent). Insert-only name via
-  // the shared ensureAgentRow helper (S6 DRY pickup, #861 finding 3).
-  return ensureAgentRow(db, { id, name, type: "head", persistent: false });
+  if (agentId && agentId.trim().length > 0) return agentId.trim();
+  if (displayName && displayName.trim().length > 0) {
+    const slug = slugifyIdentity(displayName);
+    if (slug.length > 0) return `${OBSERVED_AGENT_PREFIX}${slug}`;
+  }
+  return `${OBSERVED_AGENT_PREFIX}${ccSessionId}`;
 }
 
 export interface OrphanSession {
@@ -388,25 +418,40 @@ export interface OrphanSession {
   sessionId: string;
 }
 
+/** Identity + tree metadata captured off the raw event for an observed session. */
+export interface ObservedSessionInput {
+  /** Wrapper agent id off the event (`CORTEX_AGENT_ID`); resolves the owning agent. */
+  agentId?: string;
+  /** Display name (`CORTEX_AGENT_NAME` / event `agent_name`); stored on the session. */
+  displayName?: string;
+  /** Substrate (event payload `substrate`); defaults to {@link DEFAULT_SUBSTRATE}. */
+  substrate?: string;
+  /** Parent session id (event payload `parent_session_id` or prompt-correlation). */
+  parentSessionId?: string | null;
+}
+
 /**
- * Auto-register an orphan observed session for an unknown `cc_session_id`.
+ * Auto-register an observed session for an unknown `cc_session_id` (ST-P2).
+ *
+ * The session attaches to the REAL owning agent (resolved via
+ * {@link resolveOwningAgentId}) — NOT a per-session synthetic agent. The display
+ * name lands on the session's canonical `agent_name` column; substrate +
+ * parent_session_id are set when known. The synthetic assignment (anchored on
+ * the shared `mc-orphan-task`) points at the real agent (refactor D3).
  *
  * Idempotent on `cc_session_id`: if a session row already carries this
- * `cc_session_id` we return null (the caller then proceeds with the existing
- * session — no duplicate task/agent/assignment/session is created). The first
- * call lands the synthetic task (shared), a per-orphan agent, an assignment in
- * `dispatched`, and a `local.observed` session.
+ * `cc_session_id` we return null (the caller proceeds with the existing
+ * session). The first call ensures the shared task + the REAL owning agent
+ * (insert-only name), an assignment in `dispatched`, and a `local.observed`
+ * session carrying the canonical columns.
  *
  * Wrapped in a single transaction so a partial insert can never leave a
- * dangling agent/assignment without its session.
- *
- * @param displayName  Raw event `agent_name`, surfaced as the orphan agent's
- *                     display name where the schema allows (insert-only).
+ * dangling assignment without its session.
  */
 export function registerOrphanSession(
   db: Database,
   ccSessionId: string,
-  displayName?: string
+  input?: ObservedSessionInput
 ): OrphanSession | null {
   // Dedupe: any existing session for this cc_session_id (orphan or otherwise)
   // means we must NOT create a second one. The ingestor's own lookup already
@@ -417,29 +462,40 @@ export function registerOrphanSession(
   if (existing) return null;
 
   const assignmentId = generateId();
-  const sessionId = generateId();
+  const agentId = resolveOwningAgentId(ccSessionId, input?.agentId, input?.displayName);
+  // Display name stored on the session (a session is NOT an agent). Fall back to
+  // the resolved agentId so a card never shows an empty label.
+  const displayName =
+    input?.displayName && input.displayName.length > 0 ? input.displayName : agentId;
 
   const txn = db.transaction(() => {
     ensureOrphanTask(db);
-    const agentId = ensureOrphanAgent(db, ccSessionId, displayName);
+    // ONE real agent per distinct observed identity (insert-only name via the
+    // shared helper). `head` (it runs a session); persistent so a re-observed
+    // identity keeps its principal-edited name. NOT the old per-session agent.
+    ensureAgentRow(db, { id: agentId, name: displayName, type: "head", persistent: true });
 
-    // Born `dispatched` so the ingestor's F-20 auto-transitions
-    // (dispatched → running on first event, running → completed on
-    // Stop/SessionEnd) drive the orphan exactly like a registered observed
-    // session — no orphan-specific lifecycle code needed.
+    // Born `dispatched` so the ingestor's F-20 auto-transitions drive it like
+    // any observed session. The assignment points at the REAL agent (D3).
     db.query(
       `INSERT INTO agent_task_assignment (id, agent_id, task_id, state)
        VALUES (?, ?, ?, 'dispatched')`
     ).run(assignmentId, agentId, ORPHAN_TASK_ID);
 
-    const now = new Date().toISOString();
-    db.query(
-      `INSERT INTO sessions
-         (id, assignment_id, cc_session_id, endpoint_kind, pid, started_at)
-       VALUES (?, ?, ?, 'local.observed', NULL, ?)`
-    ).run(sessionId, assignmentId, ccSessionId, now);
+    // Insert the SESSION via the canonical createSession path so the
+    // denormalized columns (agent_id, agent_name, substrate, parent_session_id)
+    // are written in lockstep with the schema.
+    const session = createSession(db, {
+      assignmentId,
+      endpointKind: "local.observed",
+      ccSessionId,
+      agentId,
+      agentName: displayName,
+      substrate: input?.substrate ?? DEFAULT_SUBSTRATE,
+      parentSessionId: input?.parentSessionId ?? null,
+    });
 
-    return { agentId, assignmentId, sessionId };
+    return { agentId, assignmentId, sessionId: session.id };
   });
 
   return txn();

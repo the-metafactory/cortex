@@ -121,17 +121,21 @@ describe("pruneOrphanSessions (#857)", () => {
     return orphan;
   }
 
-  it("prunes orphan agent + assignment + session beyond the window", () => {
+  it("prunes the observed session + assignment beyond the window, retaining the real owning agent (ST-P2)", () => {
     const old = terminalOrphan("cc-old-1", ORPHAN_RETENTION_MS + DAY);
 
     const result = pruneOrphanSessions(db);
     expect(result.prunedSessions).toBe(1);
     expect(result.prunedAssignments).toBe(1);
-    expect(result.prunedAgents).toBe(1);
+    // ST-P2: the session attaches to the REAL owning agent (here 'observed:{cc}'
+    // for a nameless register) — the prune sweeps the session + assignment but
+    // NEVER the owning agent. Only LEGACY mc-orphan- agents are agent-deleted.
+    expect(result.prunedAgents).toBe(0);
 
     expect(db.query(`SELECT 1 FROM sessions WHERE id = ?`).get(old.sessionId)).toBeNull();
     expect(db.query(`SELECT 1 FROM agent_task_assignment WHERE id = ?`).get(old.assignmentId)).toBeNull();
-    expect(db.query(`SELECT 1 FROM agents WHERE id = ?`).get(old.agentId)).toBeNull();
+    // The owning agent is retained (not collateral-damaged).
+    expect(db.query(`SELECT 1 FROM agents WHERE id = ?`).get(old.agentId)).toBeTruthy();
   });
 
   it("cascades the orphan session's events when the session prunes", () => {
@@ -207,12 +211,30 @@ describe("pruneOrphanSessions (#857)", () => {
     expect(second.prunedAgents).toBe(0);
   });
 
-  it("only prunes mc-orphan-prefixed agents", () => {
-    const old = terminalOrphan("cc-prefix-1", ORPHAN_RETENTION_MS + DAY);
-    expect(old.agentId.startsWith(ORPHAN_AGENT_PREFIX)).toBe(true);
-    pruneOrphanSessions(db);
-    // The agent is gone; verify no non-orphan agent id was touched by checking the
-    // (separately-inserted) shadow agent survives if present.
+  // ST-P2: new-model orphans attach to a REAL owning agent ('observed:{cc}'
+  // here), which the prune never deletes. The agent-DELETION step still sweeps
+  // LEGACY mc-orphan-{cc} agent rows (pre-ST-P2 DBs) so they keep ageing out.
+  it("agent-deletion sweeps LEGACY mc-orphan- agents but never the real owning agent", () => {
+    // New-model orphan: owning agent is observed:{cc}, retained on prune.
+    const newModel = terminalOrphan("cc-prefix-1", ORPHAN_RETENTION_MS + DAY);
+    expect(newModel.agentId.startsWith(ORPHAN_AGENT_PREFIX)).toBe(false);
+
+    // Legacy row: hand-seed a pre-ST-P2 mc-orphan-{cc} agent + assignment +
+    // terminal session on the shared orphan task, aged past the window.
+    const legacyAgent = `${ORPHAN_AGENT_PREFIX}legacy-cc`;
+    const oldIso = new Date(Date.now() - (ORPHAN_RETENTION_MS + DAY)).toISOString();
+    db.exec(`INSERT INTO agents (id, name, type, persistent) VALUES ('${legacyAgent}', 'legacy', 'head', 0)`);
+    db.exec(`INSERT INTO agent_task_assignment (id, agent_id, task_id, state) VALUES ('ata-legacy', '${legacyAgent}', 'mc-orphan-task', 'completed')`);
+    db.query(`INSERT INTO sessions (id, assignment_id, cc_session_id, endpoint_kind, started_at, ended_at) VALUES ('s-legacy', 'ata-legacy', 'legacy-cc', 'local.observed', ?, ?)`)
+      .run(oldIso, oldIso);
+
+    const result = pruneOrphanSessions(db);
+    // Both sessions pruned (task-anchored), but only the LEGACY agent deleted.
+    expect(db.query(`SELECT 1 FROM agents WHERE id = '${legacyAgent}'`).get()).toBeNull();
+    expect(db.query(`SELECT 1 FROM agents WHERE id = ?`).get(newModel.agentId)).toBeTruthy();
+    expect(result.prunedAgents).toBe(1); // exactly the one legacy agent
+
+    // A non-orphan agent is never touched.
     db.exec(`INSERT INTO agents (id, name, type, persistent) VALUES ('mc-shadow-agent', 'shadow', 'hands', 1) ON CONFLICT(id) DO NOTHING`);
     pruneOrphanSessions(db);
     expect(db.query(`SELECT 1 FROM agents WHERE id = 'mc-shadow-agent'`).get()).toBeTruthy();
@@ -279,7 +301,9 @@ describe("pruneRetention (combined, transactional, best-effort)", () => {
 
     const summary = pruneRetention(db);
     expect(summary.prunedSessions).toBe(1);
-    expect(summary.prunedAgents).toBe(1);
+    // ST-P2: owning agent retained (observed:{cc}); only legacy mc-orphan-
+    // agents are agent-deleted, and there are none here.
+    expect(summary.prunedAgents).toBe(0);
     expect(summary.ok).toBe(true);
   });
 
@@ -434,6 +458,64 @@ describe("reapStuckRunningOrphans (ST-P3 zombie fix)", () => {
     silenceSession(orphan.sessionId, STUCK_RUNNING_TTL_MS + 60_000);
     expect(reapStuckRunningOrphans(db).reaped).toBe(1);
     expect(reapStuckRunningOrphans(db).reaped).toBe(0);
+  });
+
+  // ST-P2: new-model observed zombies attach to a REAL owning agent (e.g.
+  // 'luna'), NOT an mc-orphan- agent. The reaper must still catch them — it
+  // anchors on the orphan TASK + endpoint_kind, not the agent prefix.
+  it("reaps a NEW-MODEL observed zombie attached to a real owning agent", () => {
+    const orphan = registerOrphanSession(db, "cc-newmodel-stuck", {
+      agentId: "luna",
+      displayName: "Luna",
+    })!;
+    // Sanity: it's attached to the real agent, not an mc-orphan- one.
+    const owning = db.query(`SELECT agent_id FROM agent_task_assignment WHERE id = ?`)
+      .get(orphan.assignmentId) as { agent_id: string };
+    expect(owning.agent_id).toBe("luna");
+
+    applyTransition(db, orphan.assignmentId, orphan.sessionId, { type: "start" });
+    silenceSession(orphan.sessionId, STUCK_RUNNING_TTL_MS + 60_000);
+
+    expect(reapStuckRunningOrphans(db).reaped).toBe(1);
+    const ata = db.query(`SELECT state FROM agent_task_assignment WHERE id = ?`)
+      .get(orphan.assignmentId) as { state: string };
+    expect(ata.state).toBe("cancelled");
+    // The real owning agent is NOT touched by the reap.
+    expect(db.query(`SELECT 1 FROM agents WHERE id = 'luna'`).get()).toBeTruthy();
+  });
+
+  it("reaps a LEGACY mc-orphan- zombie too (backward compatibility)", () => {
+    // Hand-seed a pre-ST-P2 row: mc-orphan-{cc} agent, dispatched, on the shared
+    // orphan task, silent past the TTL.
+    const legacyAgent = "mc-orphan-legacy-stuck";
+    const oldIso = new Date(Date.now() - (STUCK_RUNNING_TTL_MS + 60_000)).toISOString();
+    // The orphan task must exist FIRST (FK target for the assignment).
+    db.exec(`INSERT INTO tasks (id, title, priority, principal_id, source_system, status) VALUES ('mc-orphan-task', 'Observed', 2, 'mc-orphan', 'internal', 'in_progress') ON CONFLICT(id) DO NOTHING`);
+    db.exec(`INSERT INTO agents (id, name, type, persistent) VALUES ('${legacyAgent}', 'legacy', 'head', 0)`);
+    db.exec(`INSERT INTO agent_task_assignment (id, agent_id, task_id, state) VALUES ('ata-legacy-stuck', '${legacyAgent}', 'mc-orphan-task', 'running')`);
+    db.query(`INSERT INTO sessions (id, assignment_id, cc_session_id, endpoint_kind, started_at) VALUES ('s-legacy-stuck', 'ata-legacy-stuck', 'legacy-stuck-cc', 'local.observed', ?)`)
+      .run(oldIso);
+
+    expect(reapStuckRunningOrphans(db).reaped).toBe(1);
+    const ata = db.query(`SELECT state FROM agent_task_assignment WHERE id = 'ata-legacy-stuck'`)
+      .get() as { state: string };
+    expect(ata.state).toBe("cancelled");
+  });
+
+  it("does NOT reap a principal-REGISTERED observed session (real task, not mc-orphan-task)", () => {
+    // A cldyo-live POST /api/sessions observed session: local.observed but on a
+    // REAL task — must never be reaped (it's principal-controlled lifecycle).
+    db.exec(`INSERT INTO tasks (id, title, priority, principal_id, source_system, status) VALUES ('real-obs-task', 'Real observed', 2, 'andreas', 'internal', 'in_progress')`);
+    db.exec(`INSERT INTO agents (id, name, type, persistent) VALUES ('andreas', 'Andreas', 'head', 1)`);
+    db.exec(`INSERT INTO agent_task_assignment (id, agent_id, task_id, state) VALUES ('ata-real-obs', 'andreas', 'real-obs-task', 'running')`);
+    db.query(`INSERT INTO sessions (id, assignment_id, cc_session_id, endpoint_kind, started_at) VALUES ('s-real-obs', 'ata-real-obs', 'cc-real-obs', 'local.observed', ?)`)
+      .run(new Date(Date.now() - 90 * DAY).toISOString());
+
+    const result = reapStuckRunningOrphans(db);
+    expect(result.reaped).toBe(0);
+    const ata = db.query(`SELECT state FROM agent_task_assignment WHERE id = 'ata-real-obs'`)
+      .get() as { state: string };
+    expect(ata.state).toBe("running"); // principal-registered observed never reaped
   });
 
   it("composes with the terminal-age prune: reaped row becomes prunable", () => {

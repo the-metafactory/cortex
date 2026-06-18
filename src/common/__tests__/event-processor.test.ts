@@ -118,3 +118,57 @@ describe("processSessionEvent — sovereignty propagation (IAW D.5)", () => {
     });
   });
 });
+
+describe("processSessionEvent — session-tree propagation (ST-P2)", () => {
+  test("task_started lifts parent_session_id + substrate off the payload", () => {
+    const event = baseEvent({
+      event_type: "agent.task.started",
+      payload: { parent_session_id: "parent-sess-9", substrate: "codex" },
+    });
+    const out = processSessionEvent("andreas", event);
+    if (out.type !== "task_started") throw new Error("wrong branch");
+    expect(out.session.parentSessionId).toBe("parent-sess-9");
+    expect(out.session.substrate).toBe("codex");
+  });
+
+  test("task_completed fallback session carries the tree fields", () => {
+    const event = baseEvent({
+      event_type: "agent.task.completed",
+      payload: { parent_session_id: "parent-sess-c", substrate: "claude-code" },
+    });
+    const out = processSessionEvent("andreas", event);
+    if (out.type !== "task_completed") throw new Error("wrong branch");
+    expect(out.fallbackSession?.parentSessionId).toBe("parent-sess-c");
+    expect(out.fallbackSession?.substrate).toBe("claude-code");
+  });
+
+  test("progress fallback session carries the tree fields", () => {
+    const event = baseEvent({
+      event_type: "tool.bash.executed",
+      payload: { parent_session_id: "parent-sess-p", substrate: "codex" },
+    });
+    const out = processSessionEvent("andreas", event);
+    if (out.type !== "progress") throw new Error("wrong branch");
+    expect(out.fallbackSession?.parentSessionId).toBe("parent-sess-p");
+    expect(out.fallbackSession?.substrate).toBe("codex");
+  });
+
+  test("absent tree fields → parentSessionId null, substrate null (worker uses column default)", () => {
+    const event = baseEvent({ event_type: "agent.task.started", payload: {} });
+    const out = processSessionEvent("andreas", event);
+    if (out.type !== "task_started") throw new Error("wrong branch");
+    expect(out.session.parentSessionId).toBeNull();
+    expect(out.session.substrate).toBeNull();
+  });
+
+  test("empty-string tree fields are treated as absent", () => {
+    const event = baseEvent({
+      event_type: "agent.task.started",
+      payload: { parent_session_id: "", substrate: "" },
+    });
+    const out = processSessionEvent("andreas", event);
+    if (out.type !== "task_started") throw new Error("wrong branch");
+    expect(out.session.parentSessionId).toBeNull();
+    expect(out.session.substrate).toBeNull();
+  });
+});

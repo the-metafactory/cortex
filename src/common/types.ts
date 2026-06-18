@@ -92,6 +92,15 @@ export interface SessionUpsertData {
   progressTotal: number | null;
   /** IAW D.5 — sovereignty lifted from the originating envelope, if any. */
   sovereignty?: SessionSovereignty;
+  /**
+   * ST-P2 / ADR-0011 canonical session-tree fields, lifted off the event
+   * payload (`parent_session_id` / `substrate`). Optional — pre-ST-P2 / pre-P1
+   * publishers omit them; the D1 row keeps `parent_session_id` NULL and
+   * `substrate` at its 'claude-code' column default. An attribute of the
+   * SESSION (a session is not an agent — refactor D2/D4).
+   */
+  parentSessionId?: string | null;
+  substrate?: string | null;
 }
 
 /** Data for completing a session */

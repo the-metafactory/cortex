@@ -178,10 +178,15 @@ function anchorUnattachedVerdict(
   syntheticCc: string,
   reviewer: string,
 ): string {
-  const orphan = registerOrphanSession(db, syntheticCc, `${reviewer} (verdict)`);
+  // ST-P2: registerOrphanSession now resolves the OWNING agent from the
+  // identity we pass (here: the reviewer label as displayName) rather than
+  // minting a per-session agent. Distinct reviewers fold to one agent each.
+  const orphan = registerOrphanSession(db, syntheticCc, {
+    displayName: `${reviewer} (verdict)`,
+  });
   if (orphan !== null) {
-    // registerOrphanSession created a `head`/non-persistent agent already; the
-    // reviewer label rides as the display name. Nothing else to do.
+    // The reviewer label rides as the display name on both the resolved owning
+    // agent (insert-only) and the session's agent_name column. Nothing else.
     return orphan.sessionId;
   }
   // Race: another writer created it between our miss + the insert. Re-find.

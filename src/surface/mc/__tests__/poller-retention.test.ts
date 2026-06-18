@@ -59,7 +59,11 @@ describe("HookStreamPoller retention prune wiring", () => {
     poller.poll(); // first tick → throttle fires
 
     expect(db.query(`SELECT 1 FROM sessions WHERE id = ?`).get(orphan.sessionId)).toBeNull();
-    expect(db.query(`SELECT 1 FROM agents WHERE id = ?`).get(orphan.agentId)).toBeNull();
+    // ST-P2: the session prunes, but the REAL owning agent (here observed:{cc}
+    // for a nameless register) is retained — only legacy mc-orphan- agents are
+    // ever agent-deleted. The 1,044-tile fix collapses tiles via owning-agent
+    // attach; agent-row cleanup is no longer the prune's job for new-model rows.
+    expect(db.query(`SELECT 1 FROM agents WHERE id = ?`).get(orphan.agentId)).toBeTruthy();
     poller.stop();
   });
 
