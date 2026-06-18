@@ -108,6 +108,17 @@ export function buildFederationWiringAdapter(
       // the arc primitive handles this as a no-op). A dedicated agents_account
       // config field that splits the two is tracked as G1d (#1117 follow-up).
       const toAccount = agentsAccount ?? federationAccount;
+      if (agentsAccount === undefined) {
+        // Nit 2 (G1c review) — make the G1d gap operationally visible. When no
+        // dedicated agents account is configured, from==to is a same-account no-op
+        // in the arc primitive. Log at WARN so the principal can see the gap and
+        // knows to configure agents_account (G1d) when they split accounts.
+        process.stderr.write(
+          `[cortex network join] WARN: federation wiring is a same-account no-op ` +
+          `(dedicated federation account not configured — G1d, cortex#1117 follow-up). ` +
+          `Set agents_account in the stack config to wire cross-account export/import.\n`,
+        );
+      }
 
       const argv: string[] = [
         "nats",
@@ -174,11 +185,27 @@ export function buildFederationWiringAdapter(
       const envelope = parsed as ArcFederationEnvelope;
 
       if (!envelope.ok) {
+        // Shape-check before reading .error so a malformed envelope (ok:false but
+        // missing/mistyped .error) surfaces a clear diagnostic rather than a
+        // runtime TypeError on .error.code / .error.message.
+        const rawError = (envelope as { error?: unknown }).error;
+        const errCode =
+          rawError !== null &&
+          typeof rawError === "object" &&
+          "code" in rawError &&
+          typeof (rawError as { code?: unknown }).code === "string"
+            ? (rawError as { code: string }).code
+            : "(unknown code)";
+        const errMsg =
+          rawError !== null &&
+          typeof rawError === "object" &&
+          "message" in rawError &&
+          typeof (rawError as { message?: unknown }).message === "string"
+            ? (rawError as { message: string }).message
+            : "(no message)";
         return {
           ok: false,
-          reason:
-            `arc nats add-federation-export failed: ` +
-            `${envelope.error.code}: ${envelope.error.message}`,
+          reason: `arc nats add-federation-export failed: ${errCode}: ${errMsg}`,
         };
       }
 

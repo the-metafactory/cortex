@@ -578,8 +578,24 @@ describe("buildFederationWiringAdapter — arc-shell adapter", () => {
     if (!result.ok) expect(result.reason).toMatch(/ENOENT/i);
   });
 
-  test("no agentsAccount: omits --to-account (same-account / G1d path)", async () => {
-    const { runner, calls } = makeRunner({ stdout: SUCCESS_JSON });
+  test("no agentsAccount: arc IS called exactly once with --from-account == --to-account (same-account / G1d path)", async () => {
+    // G1d same-account path: agentsAccount absent → toAccount = federationAccount = LEAF_ACCOUNT.
+    // arc is always called (the adapter always shells out; the arc primitive treats
+    // from==to as a no-op locally). Build a SUCCESS_JSON with toAccount=LEAF_ACCOUNT
+    // to match the actual args the adapter will pass.
+    const sameAccountSuccessJson = JSON.stringify({
+      schema: "arc.nats.v2",
+      ok: true,
+      fromAccount: LEAF_ACCOUNT,
+      toAccount: LEAF_ACCOUNT,
+      subject: "federated.>",
+      exportAdded: true,
+      importAdded: true,
+      exportAlreadyPresent: false,
+      importAlreadyPresent: false,
+    });
+
+    const { runner, calls } = makeRunner({ stdout: sameAccountSuccessJson });
     const adapter = buildFederationWiringAdapter(runner);
 
     const result = await adapter.wireLocalFederation({
@@ -588,19 +604,25 @@ describe("buildFederationWiringAdapter — arc-shell adapter", () => {
       apply: false,
     });
 
-    // When agentsAccount is undefined, arc is called with --from-account only;
-    // the arc primitive handles the same-account case (it's a no-op there).
-    // OR: we skip the arc call entirely if both accounts are the same.
-    // In either case the result should be ok (documented as G1d gap).
     expect(result.ok).toBe(true);
-    // --to-account should not appear (or both accounts are the same value)
-    if (calls.length > 0) {
-      const toIdx = calls[0]!.indexOf("--to-account");
-      // If --to-account IS present it should be the same as --from-account (same-account path)
-      if (toIdx >= 0) {
-        expect(calls[0]![toIdx + 1]).toBe(LEAF_ACCOUNT);
-      }
-    }
+
+    // HARD: arc MUST be invoked exactly once — the G1d path is a no-op in the
+    // arc primitive, not in the adapter. Zero calls means the behavior was never
+    // exercised; > 1 call means a double-invocation bug.
+    expect(calls).toHaveLength(1);
+
+    // HARD: --from-account must be present and equal LEAF_ACCOUNT.
+    const fromIdx = calls[0]!.indexOf("--from-account");
+    expect(fromIdx).toBeGreaterThanOrEqual(0);
+    expect(calls[0]![fromIdx + 1]).toBe(LEAF_ACCOUNT);
+
+    // HARD: --to-account must be present and equal LEAF_ACCOUNT (same-account).
+    const toIdx = calls[0]!.indexOf("--to-account");
+    expect(toIdx).toBeGreaterThanOrEqual(0);
+    expect(calls[0]![toIdx + 1]).toBe(LEAF_ACCOUNT);
+
+    // HARD: both accounts are identical (the defining property of the G1d path).
+    expect(calls[0]![fromIdx + 1]).toBe(calls[0]![toIdx + 1]);
   });
 
   test("command includes 'nats add-federation-export' as the arc subcommand", async () => {
