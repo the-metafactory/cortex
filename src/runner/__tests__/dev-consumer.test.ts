@@ -755,7 +755,7 @@ function makeRoutedRequest(
   payload: DevImplementPayload = PAYLOAD,
 ): Envelope {
   const env = makeRequest(payload);
-  (env.payload as Record<string, unknown>).response_routing = routing;
+  (env.payload).response_routing = routing;
   return env;
 }
 
