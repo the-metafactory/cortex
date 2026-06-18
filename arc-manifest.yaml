@@ -54,12 +54,14 @@ provides:
       target: ~/.claude/skills/Discord
 
     # ─── Claude Code hooks ────────────────────────────────────
-    # Hook source filenames keep grove-era names (GroveContext.hook.ts,
-    # EventLogger.hook.ts, bash-guard.hook.ts) so the in-repo tree stays
-    # operator-facing-stable while internals migrate. The installed symlink
-    # targets ARE renamed to Cortex* so settings.json references are
-    # cortex-side and don't collide with grove leftovers.
-    - source: src/taps/cc-events/hooks/GroveContext.hook.ts
+    # Some hook source filenames keep grove-era names (EventLogger.hook.ts,
+    # bash-guard.hook.ts) so the in-repo tree stays operator-facing-stable
+    # while internals migrate. The installed symlink targets ARE renamed to
+    # Cortex* so settings.json references are cortex-side and don't collide
+    # with grove leftovers. NOTE: GroveContext.hook.ts was renamed to
+    # SurfaceContext.hook.ts in #1079 (GV-2) — the source path below MUST
+    # track that rename or arc recreates a dangling CortexContext symlink.
+    - source: src/taps/cc-events/hooks/SurfaceContext.hook.ts
       target: ~/.claude/hooks/CortexContext.hook.ts
     - source: src/taps/cc-events/hooks/EventLogger.hook.ts
       target: ~/.claude/hooks/CortexEventLogger.hook.ts
