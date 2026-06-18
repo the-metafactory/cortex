@@ -12,7 +12,7 @@ import { DID_RE } from "@the-metafactory/myelin/identity";
 import {
   resolvePolicyAccess,
   anonOnboardingAccess,
-  anonOriginatorDid,
+  PUBLIC_ORIGINATOR_DID,
   isOperatorPrincipal,
 } from "../resolve-access";
 import {
@@ -21,7 +21,12 @@ import {
   defaultPolicySovereignty,
 } from "../policy-gate";
 import { CLAUDE_TOOL_INVENTORY } from "../tool-inventory";
-import { policyEngineFromConfig } from "../factory";
+import {
+  policyEngineFromConfig,
+  buildPublicPrincipalEntries,
+  PUBLIC_PRINCIPAL_ID,
+  PUBLIC_ROLE_ID,
+} from "../factory";
 import type { Policy } from "../../types/cortex-config";
 import type { InboundMessage } from "../../../adapters/types";
 
@@ -221,27 +226,13 @@ describe("anonOnboardingAccess — zero-authority anonymous principal (cortex#11
     expect(result.bashGuard).toBe(true);
   });
 
-  test("marks the decision as anon with a synthetic, non-registry id", () => {
+  test("marks the decision as anon, keeping the per-sender id as an AUDIT label only", () => {
     const result = anonOnboardingAccess(msg({ platform: "discord", authorId: "285727653603049472" }));
     expect(result.anonPrincipal).toBe(true);
+    // cortex#1167 — this is an audit label, NOT the authority. Authority is the
+    // single `public` principal (proven in the buildPublicPrincipalEntries +
+    // dispatch-handler round-trip tests).
     expect(result.anonPrincipalId).toBe("anon:discord:285727653603049472");
-  });
-
-  test("the anon id is NOT resolvable by the policy index/registry — zero authority proven", () => {
-    // Prove the anon principal can satisfy NO role-gated check: build a real
-    // engine, then confirm neither the synthetic id nor the raw author tuple
-    // resolves to any capability.
-    const { engine, index } = buildHarness(OPERATOR_POLICY);
-    expect(engine).toBeDefined();
-    expect(index).toBeDefined();
-    const anon = anonOnboardingAccess(msg({ authorId: "285727653603049472" }));
-    // 1. The synthetic id is not in the registry → index never produced it,
-    //    and the engine denies every capability for an unknown principal.
-    for (const cap of ["operator", "keyword.chat", "keyword.async", "keyword.team", "tool.read", "tool.bash"]) {
-      expect(engine!.check(anon.anonPrincipalId!, { capability: cap, sovereignty: defaultPolicySovereignty() }).allow).toBe(false);
-    }
-    // 2. The raw inbound tuple resolves to NO principal id at all.
-    expect(index!.resolve("discord", "285727653603049472")).toBeUndefined();
   });
 
   test("threads isDM through when the inbound was a DM", () => {
@@ -276,23 +267,77 @@ describe("anonOnboardingAccess — zero-authority anonymous principal (cortex#11
   });
 });
 
-describe("anonOriginatorDid — DID-grammar-valid anon originator (cortex#1167)", () => {
-  test("produces a DID_RE-valid identity for a numeric discord author id", () => {
-    const did = anonOriginatorDid("discord", "285727653603049472");
-    expect(did).toBe("did:mf:anon.discord.285727653603049472");
-    // Must satisfy myelin's DID grammar (colons in the tail are illegal — the
-    // human-readable anon:discord:<id> form would be REJECTED on the wire).
-    expect(DID_RE.test(did)).toBe(true);
+describe("PUBLIC_ORIGINATOR_DID — the public principal's wire identity (cortex#1167)", () => {
+  test("is `did:mf:public` and DID-grammar valid", () => {
+    expect(PUBLIC_ORIGINATOR_DID).toBe("did:mf:public");
+    expect(DID_RE.test(PUBLIC_ORIGINATOR_DID)).toBe(true);
+  });
+});
+
+describe("buildPublicPrincipalEntries — single minimal-privilege public principal (cortex#1167)", () => {
+  const HOME_PRINCIPAL = "andreas";
+  const HOME_STACK = "andreas/meta-factory";
+
+  test("no flagged agents → NO public principal registered (unmapped stays denied)", () => {
+    const { principals, roles } = buildPublicPrincipalEntries([], HOME_PRINCIPAL, HOME_STACK);
+    expect(principals).toEqual([]);
+    expect(roles).toEqual([]);
   });
 
-  test("the human-readable anon id form is NOT DID-valid (why the override exists)", () => {
-    expect(DID_RE.test("did:mf:anon:discord:123")).toBe(false);
+  test("grants EXACTLY dispatch.<agentId> per flagged agent, and nothing else", () => {
+    const { principals, roles } = buildPublicPrincipalEntries(["pier"], HOME_PRINCIPAL, HOME_STACK);
+    expect(principals).toHaveLength(1);
+    expect(principals[0]!.id).toBe(PUBLIC_PRINCIPAL_ID);
+    expect(principals[0]!.role).toEqual([PUBLIC_ROLE_ID]);
+    // No platform_ids → never resolved via the (platform, authorId) index.
+    expect(principals[0]!.platform_ids).toBeUndefined();
+    expect(roles).toHaveLength(1);
+    expect(roles[0]!.capabilities).toEqual(["dispatch.pier"]);
   });
 
-  test("strips DID-unsafe characters from platform + author id", () => {
-    const did = anonOriginatorDid("Discord", "AB-12.x");
-    expect(DID_RE.test(did)).toBe(true);
-    expect(did).toBe("did:mf:anon.discord.ab12x");
+  test("multiple flagged agents → one capability each", () => {
+    const { roles } = buildPublicPrincipalEntries(["pier", "concierge"], HOME_PRINCIPAL, HOME_STACK);
+    expect(roles[0]!.capabilities).toEqual(["dispatch.pier", "dispatch.concierge"]);
+  });
+
+  // The security crux: wire the synthetic entries into a real engine and prove
+  // `public` PASSES dispatch.pier but is DENIED everything else.
+  function engineWithPublic(flagged: string[]) {
+    const policy: Policy = {
+      principals: [OPERATOR_POLICY.principals[0]!],
+      roles: OPERATOR_POLICY.roles,
+    };
+    return policyEngineFromConfig(policy, flagged)!;
+  }
+  const sov = defaultPolicySovereignty();
+
+  test("`public` is GRANTED dispatch.pier (functional end-to-end at the listener)", () => {
+    const engine = engineWithPublic(["pier"]);
+    expect(engine.check(PUBLIC_PRINCIPAL_ID, { capability: "dispatch.pier", sovereignty: sov }).allow).toBe(true);
+  });
+
+  test("`public` is DENIED dispatch to a NON-flagged agent (Luna)", () => {
+    const engine = engineWithPublic(["pier"]);
+    expect(engine.check(PUBLIC_PRINCIPAL_ID, { capability: "dispatch.luna", sovereignty: sov }).allow).toBe(false);
+  });
+
+  test("`public` is DENIED operator, every tool, every keyword, admit, and bus", () => {
+    const engine = engineWithPublic(["pier"]);
+    for (const cap of [
+      "operator",
+      "keyword.chat", "keyword.async", "keyword.team",
+      "tool.read", "tool.bash", "tool.write", "tool.edit",
+      "admit", "network.admit",
+      "bus.publish", "publish",
+    ]) {
+      expect(engine.check(PUBLIC_PRINCIPAL_ID, { capability: cap, sovereignty: sov }).allow).toBe(false);
+    }
+  });
+
+  test("with NO flagged agents, `public` is an UNKNOWN principal (zero authority, denied everything)", () => {
+    const engine = engineWithPublic([]);
+    expect(engine.check(PUBLIC_PRINCIPAL_ID, { capability: "dispatch.pier", sovereignty: sov }).allow).toBe(false);
+    expect(engine.check(PUBLIC_PRINCIPAL_ID, { capability: "operator", sovereignty: sov }).allow).toBe(false);
   });
 });
 

@@ -9,8 +9,12 @@ import type { AgentConfig } from "../../common/types/config";
 import type { Envelope } from "../myelin/envelope-validator";
 import type { MyelinRuntime } from "../myelin/runtime";
 import type { DispatchSourcePublishResult } from "../dispatch-source-publisher";
-import { validateEnvelope } from "../myelin/envelope-validator";
+import { validateEnvelope, getActorPrincipal } from "../myelin/envelope-validator";
 import { PolicyEngine } from "../../common/policy/engine";
+import { policyEngineFromConfig } from "../../common/policy/factory";
+import { defaultPolicySovereignty } from "../../common/policy/policy-gate";
+import { extractAgentIdFromDid } from "../../common/policy/did";
+import type { Policy } from "../../common/types/cortex-config";
 import type {
   CCSessionFactory,
   CCSessionLike,
@@ -48,6 +52,30 @@ function makePublishPolicyEngine(): PolicyEngine {
     ],
     roles: [{ id: "operator", capabilities: ["dispatch.test-agent"] }],
   });
+}
+
+/**
+ * cortex#1167 — the PRODUCTION engine shape: built via `policyEngineFromConfig`
+ * (exactly how cortex.ts wires it) so the synthetic `public` principal is
+ * registered with `dispatch.<agentId>` per flagged agent. Maps
+ * (discord, 1487204875912609844) → andreas (a fully-privileged principal). Used
+ * by the round-trip tests that prove the listener's engine.check passes for `public`.
+ */
+function makeWiredEngineWithPublic(openOnboardingAgentIds: string[]): PolicyEngine {
+  const policy: Policy = {
+    principals: [
+      {
+        id: "andreas",
+        home_principal: "andreas",
+        home_stack: "andreas/meta-factory",
+        role: ["operator"],
+        trust: [],
+        platform_ids: { discord: ["1487204875912609844"] },
+      },
+    ],
+    roles: [{ id: "operator", capabilities: ["operator", "keyword.chat", "dispatch.test-agent", "dispatch.pier"] }],
+  };
+  return policyEngineFromConfig(policy, openOnboardingAgentIds)!;
 }
 
 // Minimal config that satisfies AgentConfig shape for testing
@@ -1651,15 +1679,16 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
     await handler.shutdown();
   });
 
-  // cortex#1167 review BLOCKER — the gate must work on the PRODUCTION path
-  // (runtime + policyEngine WIRED), not just the missing-runtime direct-sync
-  // fallback. With the bus wired, the publish path RE-RESOLVES the originator
-  // from the platform tuple; an unmapped anon sender would be rejected
-  // (`invalid-originator`) unless the gate threads a pre-resolved anon DID
-  // through. This drives the full handleMessage admit path and asserts the
-  // chat envelope is actually PUBLISHED (Pier greets the stranger), carrying
-  // the anon originator DID + the Read-only allowlist.
-  test("WIRED bus: unmapped sender + flagged Pier → chat envelope PUBLISHED (not invalid-originator)", async () => {
+  // cortex#1167 review BLOCKER (PIVOT) — full publish → LISTENER round-trip with
+  // runtime + policyEngine WIRED (production config). The earlier whack-a-mole
+  // anon-DID approach left the dispatch-listener gate (engine.check(...,
+  // "dispatch.pier") at dispatch-listener.ts:1687) DENYING the unmapped sender
+  // as unknown_principal. The fix attributes the sender to the single
+  // registered `public` principal (originator `did:mf:public`) which the engine
+  // GRANTS `dispatch.pier`. This test drives the admit path, then reproduces the
+  // listener's EXACT principal resolution + engine.check on the published
+  // envelope to PROVE it is NOT denied at 1687 (Pier's session would run).
+  test("WIRED bus round-trip: unmapped sender → flagged Pier → published AND PASSES the listener's engine.check", async () => {
     const runtime = makeRecordingRuntimeWithSubject();
     const handler = new DispatchHandler({
       config: makeConfig(),
@@ -1667,12 +1696,12 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       runtime,
       systemEventSource: { principal: "andreas", agent: "cortex", instance: "local" },
       stack: "meta-factory",
-      // The engine maps (discord, 1487204875912609844) → andreas ONLY. JC's id
-      // below is UNMAPPED — exactly the production scenario from the issue.
-      policyEngine: makePublishPolicyEngine(),
+      // PRODUCTION engine: built via the factory WITH the public principal
+      // granted dispatch.pier (exactly how cortex.ts wires it). It maps
+      // (discord, 1487204875912609844) → andreas; JC's id below is UNMAPPED.
+      policyEngine: makeWiredEngineWithPublic(["pier"]),
     });
     const adapter = new MockAdapter();
-    // Adapter denies the unmapped sender with the real engine-derived shape.
     adapter.accessDecision = {
       allowed: false,
       features: { chat: false, async: false, team: false },
@@ -1686,22 +1715,45 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       { id: "pier", displayName: "Pier", openOnboarding: true, openOnboardingAllowedTools: ["Read"] },
     );
 
-    // The chat envelope was published (Pier will greet the stranger).
+    // 1. The chat envelope was published with the PUBLIC originator.
     expect(runtime.subjectPublishes.length).toBe(1);
     const { envelope } = runtime.subjectPublishes[0]!;
     expect(envelope.type).toBe("tasks.chat");
-    // Originator is the DID-grammar-valid anon identity — NOT a re-resolved
-    // (and failing) platform tuple, and NOT a real principal DID.
-    expect(envelope.originator?.identity).toBe("did:mf:anon.discord.285727653603049472");
-    // The envelope must still validate against the myelin wire schema.
+    expect(envelope.originator?.identity).toBe("did:mf:public");
     expect(validateEnvelope(envelope).ok).toBe(true);
-    // cortex#1167 MAJOR — the explicit Read-only allowlist rode the payload.
+    // MAJOR — the explicit Read-only allowlist rode the payload (every path).
     expect(envelope.payload.allowed_tools).toEqual(["Read"]);
-    // No invalid-originator error was posted back.
+
+    // 2. ROUND-TRIP — reproduce the dispatch-listener's gate (dispatch-listener.ts
+    //    resolvePrincipalId → engine.check("dispatch.<agent_id>")). The published
+    //    envelope must PASS, not get denied as unknown_principal at line 1687.
+    const listenerEngine = makeWiredEngineWithPublic(["pier"]);
+    const actorDid = getActorPrincipal(envelope);
+    expect(actorDid).toBe("did:mf:public");
+    const principalId = extractAgentIdFromDid(actorDid!);
+    expect(principalId).toBe("public");
+    const decision = listenerEngine.check(principalId!, {
+      capability: `dispatch.${envelope.payload.agent_id as string}`,
+      sovereignty: defaultPolicySovereignty(),
+    });
+    expect(decision.allow).toBe(true); // NOT denied at dispatch-listener.ts:1687
+
+    // 3. No invalid-originator error posted back.
     const errored = adapter.sentMessages.some((m) => m.text.includes("could not be mapped"));
     expect(errored).toBe(false);
 
     await handler.shutdown();
+  });
+
+  // cortex#1167 — the listener gate DENIES the public principal dispatching to a
+  // NON-flagged agent (Luna): same engine, different capability claim.
+  test("WIRED bus round-trip: public principal is DENIED dispatch to a NON-flagged agent (Luna) at the listener", () => {
+    const listenerEngine = makeWiredEngineWithPublic(["pier"]);
+    const decision = listenerEngine.check("public", {
+      capability: "dispatch.luna",
+      sovereignty: defaultPolicySovereignty(),
+    });
+    expect(decision.allow).toBe(false);
   });
 
   // cortex#1167 — regression: originator validation is UNCHANGED for real
@@ -1715,7 +1767,7 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
       runtime,
       systemEventSource: { principal: "andreas", agent: "cortex", instance: "local" },
       stack: "meta-factory",
-      policyEngine: makePublishPolicyEngine(),
+      policyEngine: makeWiredEngineWithPublic(["pier"]),
     });
     const adapter = new MockAdapter();
     // Mapped principal: a real allow (the conversion code never fires).
@@ -1729,10 +1781,10 @@ describe("DispatchHandler — Direction A Stage 4-B inbound envelope publish (co
 
     expect(runtime.subjectPublishes.length).toBe(1);
     const { envelope } = runtime.subjectPublishes[0]!;
-    // RESOLVED real principal DID — proves the anon override did NOT leak onto
-    // a real, mapped dispatch.
+    // RESOLVED real principal DID — proves the public override did NOT leak onto
+    // a real, mapped dispatch (originator validation unchanged for real paths).
     expect(envelope.originator?.identity).toBe("did:mf:andreas");
-    expect(envelope.originator?.identity).not.toContain("anon");
+    expect(envelope.originator?.identity).not.toContain("public");
     // No anon allowlist on a real dispatch.
     expect(envelope.payload.allowed_tools).toBeUndefined();
 

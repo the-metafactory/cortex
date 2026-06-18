@@ -60,7 +60,7 @@ import {
   type DispatchSourcePublishResult,
 } from "./dispatch-source-publisher";
 import type { PolicyEngine } from "../common/policy/engine";
-import { anonOnboardingAccess, anonOriginatorDid } from "../common/policy/resolve-access";
+import { anonOnboardingAccess, PUBLIC_ORIGINATOR_DID } from "../common/policy/resolve-access";
 import { join } from "path";
 
 /** Read version from arc-manifest.yaml (cached after first read). */
@@ -574,17 +574,18 @@ export class DispatchHandler extends EventEmitter {
       // 1. Access control
       let access = adapter.resolveAccess(msg);
 
-      // cortex#1165 — Pier open-onboarding gate. When the ONLY reason for the
-      // deny is that the sender maps to no principal (`unmapped_sender`) AND
-      // the TARGET agent is flagged `openOnboarding`, attribute the sender to
-      // a ZERO-AUTHORITY anonymous principal and allow the chat session to run.
-      // Keyed off the stable `denyCode` (never the prose) and off the
-      // per-target-agent flag — so this NEVER fires for unflagged agents
-      // (Luna/dev-loop), and NEVER converts a non-`unmapped_sender` deny
-      // (no_policy / registry_drift / lockout stay hard denies). The anon
-      // principal carries no roles/skills/dirs, an explicit Read-only tool
-      // allowlist, and is untrusted for the prompt-injection filter (see
-      // `anonOnboardingAccess`).
+      // cortex#1165 / #1167 — Pier open-onboarding gate. When the ONLY reason
+      // for the deny is that the sender maps to no principal (`unmapped_sender`)
+      // AND the TARGET agent is flagged `openOnboarding`, attribute the sender
+      // to the single minimal-privilege PUBLIC-DOMAIN principal and allow the
+      // chat session to run. Keyed off the stable `denyCode` (never the prose)
+      // and off the per-target-agent flag — so this NEVER fires for unflagged
+      // agents (Luna/dev-loop), and NEVER converts a non-`unmapped_sender` deny
+      // (no_policy / registry_drift / lockout stay hard denies). The `public`
+      // principal holds EXACTLY `dispatch.<flaggedAgentId>` and nothing else;
+      // the session gets a Read-only allowlist and stays untrusted for the
+      // prompt-injection filter (see `anonOnboardingAccess` + the synthetic
+      // principal in `factory.ts`).
       //
       // cortex#1167 review MINOR — scope to the agent's bound PUBLIC channel,
       // NOT DMs. The adapter already filters non-DM inbound to the agent's
@@ -598,17 +599,18 @@ export class DispatchHandler extends EventEmitter {
         msg.isDM !== true
       ) {
         access = anonOnboardingAccess(msg, targetAgent.openOnboardingAllowedTools);
-        // cortex#1167 BLOCKER — the bus publish path re-resolves the originator
-        // independently and would reject this (unmapped) tuple as
-        // `invalid-originator`. Thread a DID-grammar-valid anon originator DID
-        // through so the chat envelope is accepted as the originator OF ITS OWN
-        // inbound chat. Zero authority — the DID resolves to no principal.
-        anonOriginatorOverride = anonOriginatorDid(msg.platform, msg.authorId);
+        // cortex#1167 — stamp the registered PUBLIC principal DID as the
+        // originator. The bus publish path + dispatch-listener resolve THIS to
+        // the `public` principal (a real engine entry holding `dispatch.pier`),
+        // so `engine.check` PASSES end-to-end instead of rejecting an unmapped
+        // tuple as `invalid-originator`. Authority = the one `public` principal,
+        // never a per-sender identity.
+        anonOriginatorOverride = PUBLIC_ORIGINATOR_DID;
         console.log(
           `dispatch-handler: [OPEN-ONBOARDING] ${adapter.instanceId} agent=${targetAgent.id} ` +
             `admitting unmapped ${msg.platform} sender ${msg.authorName} (${msg.authorId}) ` +
-            `as zero-authority anon principal ${access.anonPrincipalId} ` +
-            `(originator=${anonOriginatorOverride}, allowedTools=[${access.allowedTools?.join(",") ?? ""}])`,
+            `as public-domain principal (audit-label=${access.anonPrincipalId}, ` +
+            `originator=${anonOriginatorOverride}, allowedTools=[${access.allowedTools?.join(",") ?? ""}])`,
         );
       }
 
@@ -812,6 +814,18 @@ export class DispatchHandler extends EventEmitter {
         ? access.toolRestrictions
         : [...new Set([...globalDisallowed, ...networkDisallowed])];
 
+      // cortex#1167 review — PATH-INDEPENDENT tool allowlist. `access.allowedTools`
+      // (set only by the anon open-onboarding path) takes precedence over the
+      // config default on EVERY path: the bus path (via the publish payload
+      // below) AND the direct handleSync/handleAsync/handleTeam fallback (which
+      // previously hard-coded `config.claude.allowedTools`, leaving the anon
+      // allowlist un-enforced when the bus is unwired). A non-empty allowlist
+      // confines the CC session to exactly those tools — anything unlisted
+      // (incl. every `mcp__*`) is denied.
+      const effectiveAllowedTools = access.allowedTools?.length
+        ? access.allowedTools
+        : this.config.claude.allowedTools;
+
       // cortex#710 (C-701 Part B) — default-deny + per-skill grants, FLIPPED
       // ATOMICALLY from the legacy binary G-121 gate. The grant decision is
       // `access.allowedSkills`:
@@ -905,13 +919,13 @@ export class DispatchHandler extends EventEmitter {
       // 12. Route by mode
       switch (parsed.mode) {
         case "async":
-          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants);
+          await this.handleAsync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools);
           break;
         case "team":
-          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants);
+          await this.handleTeam(adapter, msg, parsed.content, invokeDirs, effectiveDisallowed, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools);
           break;
         default:
-          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants);
+          await this.handleSync(adapter, msg, prompt, existingSession?.sessionId, invokeDirs, effectiveDisallowed, attachmentSessionId, sessionKey, useSession, bashGuardDisabled, effectiveBashAllowlist, effectiveChannel, effectiveNetwork, groveProject, groveEntity, principal, effectiveCwd, skillGrants, effectiveAllowedTools);
           break;
       }
     } catch (error) {
@@ -949,6 +963,8 @@ export class DispatchHandler extends EventEmitter {
     cwd?: string,
     /** cortex#710 — per-skill grant list ([...] → grants; undefined/[] → none). */
     allowedSkills?: string[],
+    /** cortex#1167 — explicit tool allowlist (anon path = ["Read"]); else config default. */
+    allowedTools?: string[],
   ): Promise<void> {
     const target = this.targetFromMsg(adapter, msg);
 
@@ -987,7 +1003,7 @@ export class DispatchHandler extends EventEmitter {
       timeoutMs: this.config.claude.timeoutMs,
       additionalArgs: this.config.claude.additionalArgs,
       resumeSessionId,
-      allowedTools: this.config.claude.allowedTools,
+      allowedTools: allowedTools ?? this.config.claude.allowedTools,
       disallowedTools,
       ...(allowedSkills !== undefined && { allowedSkills }),
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
@@ -1286,6 +1302,8 @@ export class DispatchHandler extends EventEmitter {
     cwd?: string,
     /** cortex#710 — per-skill grant list ([...] → grants; undefined/[] → none). */
     allowedSkills?: string[],
+    /** cortex#1167 — explicit tool allowlist (anon path = ["Read"]); else config default. */
+    allowedTools?: string[],
   ): Promise<void> {
     const taskId = `task-${randomUUID()}`;
 
@@ -1305,7 +1323,7 @@ export class DispatchHandler extends EventEmitter {
       timeoutMs: this.config.claude.asyncTimeoutMs,
       additionalArgs: this.config.claude.additionalArgs,
       resumeSessionId,
-      allowedTools: this.config.claude.allowedTools,
+      allowedTools: allowedTools ?? this.config.claude.allowedTools,
       disallowedTools,
       ...(allowedSkills !== undefined && { allowedSkills }),
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,
@@ -1418,6 +1436,8 @@ export class DispatchHandler extends EventEmitter {
     _cwd?: string,
     /** cortex#710 — per-skill grant list ([...] → grants; undefined/[] → none). */
     allowedSkills?: string[],
+    /** cortex#1167 — explicit tool allowlist (anon path = ["Read"]); else config default. */
+    allowedTools?: string[],
   ): Promise<void> {
     const taskId = `team-${randomUUID()}`;
 
@@ -1438,7 +1458,7 @@ export class DispatchHandler extends EventEmitter {
         { name: "critic", prompt: "Critical evaluation — identify weaknesses, counterarguments, and risks" },
       ],
       additionalArgs: this.config.claude.additionalArgs,
-      allowedTools: this.config.claude.allowedTools,
+      allowedTools: allowedTools ?? this.config.claude.allowedTools,
       disallowedTools,
       ...(allowedSkills !== undefined && { allowedSkills }),
       allowedDirs: invokeDirs.length > 0 ? invokeDirs : undefined,

@@ -31,6 +31,7 @@
 
 import type { AccessDecision, InboundMessage } from "../../adapters/types";
 import { CLAUDE_TOOL_INVENTORY } from "./tool-inventory";
+import { PUBLIC_PRINCIPAL_ID } from "./factory";
 import type { PolicyEngine } from "./engine";
 import {
   defaultPolicySovereignty,
@@ -62,39 +63,50 @@ const DENY_NO_POLICY: AccessDecision = {
 };
 
 /**
- * cortex#1165 — mint a ZERO-AUTHORITY anonymous `AccessDecision` for an
- * inbound sender who maps to NO principal, used ONLY when the target agent
- * declares `openOnboarding: true` (the Pier concierge gate). The dispatch
- * handler substitutes this for the `unmapped_sender` deny so the agent's chat
- * session can run and greet a stranger.
+ * cortex#1167 — the originator DID stamped on an open-onboarding chat envelope:
+ * the single, registered, minimal-privilege public-domain principal
+ * (`did:mf:public`). Because it is a REAL engine entry holding exactly
+ * `dispatch.<flaggedAgentId>`, the dispatch-listener's
+ * `engine.check("public", "dispatch.pier")` PASSES — the round-trip is
+ * functional end-to-end — while every other capability check on `public`
+ * (operator, tool.*, keyword.*, dispatch to a non-flagged agent, admit, bus)
+ * fails closed. No per-layer carve-out, no lossy per-sender DID.
+ */
+export const PUBLIC_ORIGINATOR_DID = `did:mf:${PUBLIC_PRINCIPAL_ID}`;
+
+/**
+ * cortex#1165 / #1167 — mint the `AccessDecision` for an inbound sender who maps
+ * to NO principal, used ONLY when the target agent declares
+ * `openOnboarding: true` (the Pier concierge gate). The dispatch handler
+ * substitutes this for the `unmapped_sender` deny so the agent's chat session
+ * can run and greet a stranger.
  *
- * Security contract — this principal carries NO authority whatsoever:
- *   - `features`: only `chat` (the bare "can talk" keyword). `async`/`team`
- *     are FALSE — a stranger cannot spawn background tasks or agent teams.
- *   - `trusted: false` — the inbound prompt-injection filter stays FULLY armed
- *     (a stranger is the LEAST trusted sender there is).
- *   - `allowedTools` (cortex#1167 review MAJOR): an EXPLICIT ALLOWLIST equal to
- *     the agent's persona allowedTools (Pier → `["Read"]`). This is the real
- *     tool gate — CC tool confinement is allow-by-default on an EMPTY list, so
- *     a deny-list alone would leave `mcp__*` and future tools open. With a
- *     non-empty allowlist, ANYTHING not listed is denied.
- *   - `toolRestrictions`: the ENTIRE Claude tool inventory is ALSO denied as a
- *     belt-and-braces backstop (so even if the allowlist were dropped on some
- *     path the inventory tools stay blocked).
- *   - NO `allowedSkills`, NO `dirRestrictions` grants are emitted, so the
- *     session inherits the deployment's most-restrictive defaults; `bashGuard`
- *     stays ON.
- *   - The synthetic id (`anon:<platform>:<authorId>`) is NEVER inserted into
- *     the policy index/registry, so no `engine.check(...)` can resolve it to
- *     any role or capability — every role/authority gate fails closed.
+ * AUTHORITY lives in the single registered `public` principal (see
+ * `buildPublicPrincipalEntries` in `factory.ts`), NOT in a per-sender identity.
+ * This decision merely tells the adapter/handler "allow chat, Read-only" and
+ * carries the per-sender id as an AUDIT LABEL (`anonPrincipalId`). The wire
+ * originator is `did:mf:public` (stamped by the handler), so the listener's
+ * engine check resolves to `public` and passes the one granted capability.
  *
- * It exists purely so the chat session has *a* attributed sender; it unlocks
- * no privileged path.
+ * Security contract:
+ *   - `features`: only `chat`. `async`/`team` are FALSE — a stranger cannot
+ *     spawn background tasks or agent teams.
+ *   - `trusted: false` — the inbound prompt-injection filter stays FULLY armed.
+ *   - `allowedTools` (review MAJOR): an EXPLICIT ALLOWLIST equal to the agent's
+ *     persona allowedTools (Pier → `["Read"]`). CC tool confinement is
+ *     allow-by-default on an EMPTY list, so a deny-list alone would leave
+ *     `mcp__*` and future tools open. With a non-empty allowlist anything not
+ *     listed is denied. This rides EVERY path (bus + direct fallback).
+ *   - `toolRestrictions`: the full known inventory ALSO denied as backstop.
+ *   - NO `allowedSkills`, NO `dirRestrictions`; `bashGuard` ON.
+ *   - The `public` principal holds EXACTLY `dispatch.<flaggedAgentId>` — no
+ *     operator, no tool.*, no keyword.*, no dispatch to a non-flagged agent,
+ *     no admit, no bus.
  *
  * @param allowedTools the persona allowlist to confine the session to. Defaults
  *   to the most-restrictive safe floor `["Read"]` when the caller passes
- *   nothing (or an empty list — an empty allowlist would mean allow-by-default,
- *   which a stranger must never get, so we coerce up to `["Read"]`).
+ *   nothing (or an empty list — coerced up so a stranger never gets
+ *   allow-by-default).
  */
 export function anonOnboardingAccess(
   msg: InboundMessage,
@@ -115,29 +127,11 @@ export function anonOnboardingAccess(
     bashGuard: true,
     trusted: false,
     anonPrincipal: true,
+    // AUDIT LABEL only — the AUTHORITY is the `public` principal. Kept so logs
+    // and the audit trail can see which individual stranger this was.
     anonPrincipalId: `anon:${msg.platform}:${msg.authorId}`,
     ...(msg.isDM === true && { isDM: true }),
   };
-}
-
-/**
- * cortex#1167 — DID-grammar-compliant originator identity for an anonymous
- * open-onboarding sender, threaded through the publish path as the
- * `originatorIdentityOverride` so the bus-side originator resolver does NOT
- * re-resolve the (unmapped) platform tuple and reject the chat envelope.
- *
- * myelin's `DID_RE` = `/^did:mf:[a-z](?:[a-z0-9._]|-(?!-))+$/` — colons in the
- * tail are illegal, so the human-readable `anon:<platform>:<authorId>` form
- * cannot be a DID. We encode with dot separators: `did:mf:anon.<platform>.<id>`
- * (starts with the letter `a`, only `[a-z0-9.]` after). This DID resolves to NO
- * registered principal — it is purely a syntactically-valid originator label
- * for the one inbound chat envelope; it grants nothing downstream.
- */
-export function anonOriginatorDid(platform: string, authorId: string): string {
-  // Keep the tail DID-safe: lowercase, strip anything outside [a-z0-9.].
-  const safeId = authorId.replace(/[^a-z0-9]/gi, "").toLowerCase();
-  const safePlatform = platform.replace(/[^a-z0-9]/gi, "").toLowerCase();
-  return `did:mf:anon.${safePlatform}.${safeId}`;
 }
 
 /**

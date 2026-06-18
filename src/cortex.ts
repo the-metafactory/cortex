@@ -1094,6 +1094,14 @@ export async function startCortex(
   // agent that is both inline and a fragment (inline wins; fragment shadowed).
   const fragmentOnlyAgents = fragmentAgents.filter((a) => !inlineIds.has(a.id));
   const mergedAgents: Agent[] = [...inlineAgents, ...fragmentOnlyAgents];
+  // cortex#1167 — ids of agents flagged `openOnboarding`. Threaded into the
+  // policy engine so the single synthetic `public` principal is granted exactly
+  // `dispatch.<id>` for each (and nothing else). Boot snapshot; an agents.d
+  // hot-reload that toggles the flag requires a restart to re-grant (acceptable
+  // for an auth-gate flag — same posture as the rest of the policy block).
+  const openOnboardingAgentIds: string[] = mergedAgents
+    .filter((a) => a.openOnboarding === true)
+    .map((a) => a.id);
   // B-0 (cortex#1021) — `agentRegistry` is the live, swappable snapshot. The
   // agents.d/ hot-reload path (below) rebuilds the merged set and reassigns
   // this binding under a bumped generation counter; the handle's
@@ -3392,7 +3400,7 @@ export async function startCortex(
   // adapter loop) so the DispatchHandler can consume the engine for
   // adapter-side platform-id → principal resolution at envelope-publish
   // time. See `dispatch-source-publisher` / CONTEXT.md §Dispatch-source.
-  const adapterPolicyEngine = policyEngineFromConfig(resolvedPolicy);
+  const adapterPolicyEngine = policyEngineFromConfig(resolvedPolicy, openOnboardingAgentIds);
   const adapterPolicyLookup = buildPlatformPrincipalIndex(resolvedPolicy);
   const adapterPolicyRegistry = buildPrincipalRegistry(resolvedPolicy);
 
@@ -4090,7 +4098,7 @@ export async function startCortex(
       `cortex: policy: block declared with empty principals[] — no authorisation gate engages; the dispatch-listener stays on the legacy path.`,
     );
   }
-  const policyEngine = policyEngineFromConfig(resolvedPolicy);
+  const policyEngine = policyEngineFromConfig(resolvedPolicy, openOnboardingAgentIds);
   if (policyEngine !== undefined) {
     console.log(
       `cortex: policy-engine active — principals=${policyEngine.principalCount} roles=${policyEngine.roleCount} (signed_by chain verified; empty chains accepted for adapter-originated dispatches)`,
