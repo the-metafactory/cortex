@@ -37,6 +37,7 @@ import { enforceChmod600 } from "../../../common/config/file-permissions";
 import {
   materialFromSeedString,
   randomNonce,
+  signClaimWithSeed,
   type StackIdentityMaterial,
 } from "../../../bus/stack-provisioning";
 import { canonicalJSON } from "../../../common/registry/signing";
@@ -780,6 +781,30 @@ function errorEnvelopeForSubcommand(
 }
 
 // =============================================================================
+// G2 — Discord client injection seam (mirrors ArcRunner pattern)
+// =============================================================================
+
+/** Minimal Discord client surface used by runCredsGrant — injectable for tests. */
+export interface DiscordGrantClient {
+  resolveRoleId(botToken: string, guildId: string, roleName: string): Promise<string>;
+  assignRole(botToken: string, guildId: string, userId: string, roleId: string): Promise<{ success: boolean; error?: string }>;
+}
+
+let discordGrantClientOverride: DiscordGrantClient | null = null;
+
+/** Test-only setter. Production callers never touch this. Passing `null`
+ *  restores the real discord-lib default. */
+export function __setDiscordGrantClientForTests(client: DiscordGrantClient | null): void {
+  discordGrantClientOverride = client;
+}
+
+/** Default production client — thin wrappers over the real discord lib. */
+const defaultDiscordGrantClient: DiscordGrantClient = {
+  resolveRoleId,
+  assignRole,
+};
+
+// =============================================================================
 // G2 — runCredsGrant: one-command admin grant act (cortex#1118)
 // =============================================================================
 
@@ -856,10 +881,9 @@ async function adminMaterialFromSeedPath(
 
 /**
  * Build an admin-signed issuance decision body. The claim is canonicalJSON'd
- * and signed with the admin nkey — exactly the same path as network-create.
- * The `fromSeed` call is inlined here because `signWithNKey` is not exported;
- * instead we re-derive the KeyPair from the in-memory seed string, matching
- * the pattern in `buildNetworkCreateClaim`.
+ * and signed with the admin nkey via the shared `signClaimWithSeed` primitive
+ * from stack-provisioning.ts — one source of truth for the PKCS#8 bridge so
+ * divergent prefix bytes cannot silently break signatures.
  */
 async function buildGrantDecisionBody(
   requestId: string,
@@ -867,28 +891,6 @@ async function buildGrantDecisionBody(
   leafPackage: GrantLeafPackageClient | undefined,
   opts: { issuedAt?: string; nonce?: string } = {},
 ): Promise<{ claim: IssuanceDecisionClaimWithPackageClient; signature: string }> {
-  const { fromSeed } = await import("nkeys.js");
-
-  // PKCS#8 bridge (mirrors stack-provisioning.ts — same approach, same key shape)
-  const PKCS8_ED25519_PREFIX = Uint8Array.from([
-    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04,
-    0x22, 0x04, 0x20,
-  ]);
-
-  const kp = fromSeed(new TextEncoder().encode(material.seed.trim()));
-  const rawSeed = (kp as unknown as { getRawSeed(): Uint8Array }).getRawSeed();
-  const pkcs8 = new Uint8Array(PKCS8_ED25519_PREFIX.length + 32);
-  pkcs8.set(PKCS8_ED25519_PREFIX, 0);
-  pkcs8.set(rawSeed, PKCS8_ED25519_PREFIX.length);
-
-  const cryptoKey = await crypto.subtle.importKey(
-    "pkcs8",
-    pkcs8 as BufferSource,
-    { name: "Ed25519" },
-    false,
-    ["sign"],
-  );
-
   const claim: IssuanceDecisionClaimWithPackageClient = {
     request_id: requestId,
     decision: "grant",
@@ -899,12 +901,8 @@ async function buildGrantDecisionBody(
   };
 
   // Bytes to be signed: canonical-JSON(claim) — same as the registry verifies.
-  let bin = "";
   const msgBytes = new TextEncoder().encode(canonicalJSON(claim));
-  const sig = await crypto.subtle.sign({ name: "Ed25519" }, cryptoKey, msgBytes);
-  const sigBytes = new Uint8Array(sig);
-  for (const b of sigBytes) bin += String.fromCharCode(b);
-  const signature = btoa(bin);
+  const signature = await signClaimWithSeed(material.seed, msgBytes);
 
   return { claim, signature };
 }
@@ -912,43 +910,19 @@ async function buildGrantDecisionBody(
 /**
  * Build an admin-signed read claim for the `x-admin-signed` header used on
  * GET /issuance-requests/{id}. No nonce (reads are idempotent). Clock-skew
- * applies on the registry side.
+ * applies on the registry side. Uses `signClaimWithSeed` — the same PKCS#8
+ * bridge as buildGrantDecisionBody, single source of truth.
  */
 async function buildAdminReadHeader(
   material: StackIdentityMaterial,
 ): Promise<string> {
-  const { fromSeed } = await import("nkeys.js");
-
-  const PKCS8_ED25519_PREFIX = Uint8Array.from([
-    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04,
-    0x22, 0x04, 0x20,
-  ]);
-
-  const kp = fromSeed(new TextEncoder().encode(material.seed.trim()));
-  const rawSeed = (kp as unknown as { getRawSeed(): Uint8Array }).getRawSeed();
-  const pkcs8 = new Uint8Array(PKCS8_ED25519_PREFIX.length + 32);
-  pkcs8.set(PKCS8_ED25519_PREFIX, 0);
-  pkcs8.set(rawSeed, PKCS8_ED25519_PREFIX.length);
-
-  const cryptoKey = await crypto.subtle.importKey(
-    "pkcs8",
-    pkcs8 as BufferSource,
-    { name: "Ed25519" },
-    false,
-    ["sign"],
-  );
-
   const claim = {
     admin_pubkey: material.pubkeyB64,
     issued_at: new Date().toISOString(),
   };
 
-  let bin = "";
   const msgBytes = new TextEncoder().encode(canonicalJSON(claim));
-  const sig = await crypto.subtle.sign({ name: "Ed25519" }, cryptoKey, msgBytes);
-  const sigBytes = new Uint8Array(sig);
-  for (const b of sigBytes) bin += String.fromCharCode(b);
-  const signature = btoa(bin);
+  const signature = await signClaimWithSeed(material.seed, msgBytes);
 
   return JSON.stringify({ claim, signature });
 }
@@ -1183,18 +1157,6 @@ export async function runCredsGrant(args: ParsedCredsArgs): Promise<ExitResult> 
     }
   }
 
-  // Safety: verify the package carries no secret material (belt-and-suspenders;
-  // the shape only has public fields, but if there's ever a future bug where
-  // credsPath bleeds in, catch it here).
-  if (leafPackage !== undefined) {
-    const pkgStr = JSON.stringify(leafPackage);
-    if (pkgStr.includes("credsPath") || pkgStr.includes(".creds")) {
-      const reason = "internal: leaf package contains secret field (credsPath) — refusing to POST";
-      process.stderr.write(`cortex creds grant: ${reason}\n`);
-      return { exitCode: 1, stdout: "", stderr: `cortex creds grant: ${reason}\n` };
-    }
-  }
-
   // 4. Sign + POST the grant
   let grantBody: { claim: IssuanceDecisionClaimWithPackageClient; signature: string };
   try {
@@ -1205,6 +1167,18 @@ export async function runCredsGrant(args: ParsedCredsArgs): Promise<ExitResult> 
       return { exitCode: 1, stdout: renderJson(envelopeError<CredsItem>(reason, { subcommand: "grant" })), stderr: "" };
     }
     return { exitCode: 1, stdout: "", stderr: `cortex creds grant: ${reason}\n` };
+  }
+
+  // Safety: verify the ACTUAL WIRE PAYLOAD carries no secret material
+  // (belt-and-suspenders on the full POST body — not just the leaf package —
+  // so any future field that bleeds credsPath/seed is caught on the actual bytes).
+  {
+    const wireStr = JSON.stringify(grantBody);
+    if (wireStr.includes("credsPath") || wireStr.includes(".creds")) {
+      const reason = "internal: grant body contains secret field (credsPath/.creds) — refusing to POST";
+      process.stderr.write(`cortex creds grant: ${reason}\n`);
+      return { exitCode: 1, stdout: "", stderr: `cortex creds grant: ${reason}\n` };
+    }
   }
 
   let grantResponse: unknown;
@@ -1236,6 +1210,10 @@ export async function runCredsGrant(args: ParsedCredsArgs): Promise<ExitResult> 
   let discordWarning = "";
 
   if (args.discordMember) {
+    // Use the injected client when running under tests; fall back to the
+    // real discord lib for production (which reads from loadDiscordConfig()).
+    const discordClient = discordGrantClientOverride;
+
     try {
       // Resolve bot token + guild id from config/flags — mirrors discord.ts role add
       const discordConfig = loadDiscordConfig();
@@ -1244,20 +1222,21 @@ export async function runCredsGrant(args: ParsedCredsArgs): Promise<ExitResult> 
         guild: args.discordGuild,
       });
 
-      const botToken = ctx.botToken;
-      const guildId = ctx.guildId;
+      const botToken = discordClient ? "injected" : ctx.botToken;
+      const guildId = discordClient ? (args.discordGuild ?? ctx.guildId) : ctx.guildId;
 
-      if (!botToken) {
+      if (!discordClient && !botToken) {
         discordWarning = "Discord role not assigned: no bot token configured (run: discord config set botToken <token>)";
         discordStatus = "skipped_no_token";
       } else if (!guildId) {
         discordWarning = "Discord role not assigned: no guild id configured — pass --discord-guild <id> or run: discord config set guildId <id>";
         discordStatus = "skipped_no_guild";
       } else {
+        const client = discordClient ?? defaultDiscordGrantClient;
         const roleName = args.discordRole ?? DEFAULT_DISCORD_ROLE;
         let roleId: string;
         try {
-          roleId = await resolveRoleId(botToken, guildId, roleName);
+          roleId = await client.resolveRoleId(botToken ?? "", guildId, roleName);
         } catch (err) {
           discordWarning = `Discord role not assigned: ${err instanceof Error ? err.message : String(err)} — assign manually`;
           discordStatus = "failed";
@@ -1265,7 +1244,7 @@ export async function runCredsGrant(args: ParsedCredsArgs): Promise<ExitResult> 
         }
 
         if (roleId) {
-          const roleResult = await assignRole(botToken, guildId, args.discordMember, roleId);
+          const roleResult = await client.assignRole(botToken ?? "", guildId, args.discordMember, roleId);
           if (roleResult.success) {
             discordStatus = "assigned";
           } else {
@@ -1288,7 +1267,7 @@ export async function runCredsGrant(args: ParsedCredsArgs): Promise<ExitResult> 
       request_id: args.requestId,
       principal_id: request.principal_id,
       scope: scopeStr,
-      creds_path: localCredsPath,
+      local_creds_path: localCredsPath,
       admin_fingerprint: material.fingerprint,
       ...(discordStatus !== "skipped" && { discord_status: discordStatus }),
     };

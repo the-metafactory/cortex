@@ -18,9 +18,9 @@ import { mkdtempSync, rmSync, writeFileSync, chmodSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { dispatchCreds, __setArcRunnerForTests } from "../creds";
+import { dispatchCreds, __setArcRunnerForTests, __setDiscordGrantClientForTests } from "../creds";
 import { dispatchProvisionStack } from "../provision-stack";
-import type { ArcRunner, ArcRunResult } from "../creds";
+import type { ArcRunner, ArcRunResult, DiscordGrantClient } from "../creds";
 
 /** Type-safe helper to assign a mock to globalThis.fetch without hitting Bun's
  *  `preconnect` property requirement. Mirrors the pattern in network-create.test.ts. */
@@ -41,6 +41,7 @@ function freshDir(): string {
 
 afterEach(() => {
   __setArcRunnerForTests(null);
+  __setDiscordGrantClientForTests(null);
   // Restore real fetch
   globalThis.fetch = realFetch;
   while (tmpDirs.length > 0) rmSync(tmpDirs.pop()!, { recursive: true, force: true });
@@ -542,11 +543,24 @@ describe("creds grant --apply — Discord role assignment", () => {
     const discordGuildId = "987654321098765432";
     const discordRoleId = "111111111111111111";
 
-    const { fetch: mockFetch, calls } = buildMockFetch({
+    // Track Discord client calls via the injected seam — no real fetch,
+    // no filesystem config required. This is what was missing on CI.
+    const discordCalls: { method: string; userId?: string; guildId?: string; roleId?: string }[] = [];
+    const mockDiscordClient: DiscordGrantClient = {
+      async resolveRoleId(_token, guildId, _roleName) {
+        discordCalls.push({ method: "resolveRoleId", guildId });
+        return discordRoleId;
+      },
+      async assignRole(_token, guildId, userId, roleId) {
+        discordCalls.push({ method: "assignRole", guildId, userId, roleId });
+        return { success: true };
+      },
+    };
+    __setDiscordGrantClientForTests(mockDiscordClient);
+
+    const { fetch: mockFetch } = buildMockFetch({
       requestId,
       requestFixture: fixture,
-      discordGuildId,
-      discordRoleId,
     });
     setMockFetch(mockFetch);
 
@@ -561,11 +575,14 @@ describe("creds grant --apply — Discord role assignment", () => {
 
     expect(res.exitCode).toBe(0);
 
-    // Discord PUT role call made
-    const rolePut = calls.find((c) => c.method === "PUT" && c.url.includes("/roles/"));
-    expect(rolePut).toBeTruthy();
-    expect(rolePut!.url).toContain(discordGuildId);
-    expect(rolePut!.url).toContain(discordMemberId);
+    // Injected client was called for role resolution and assignment
+    const resolveCall = discordCalls.find((c) => c.method === "resolveRoleId");
+    expect(resolveCall).toBeTruthy();
+    const assignCall = discordCalls.find((c) => c.method === "assignRole");
+    expect(assignCall).toBeTruthy();
+    expect(assignCall!.userId).toBe(discordMemberId);
+    expect(assignCall!.guildId).toBe(discordGuildId);
+    expect(assignCall!.roleId).toBe(discordRoleId);
 
     // Output mentions role assignment
     expect(res.stdout).toMatch(/role|discord/i);
@@ -582,11 +599,20 @@ describe("creds grant --apply — Discord role assignment", () => {
       stderr: "",
     }));
 
+    // Inject a Discord client that fails on assignRole
+    const mockDiscordClient: DiscordGrantClient = {
+      async resolveRoleId(_token, _guildId, _roleName) {
+        return "roleId-fake";
+      },
+      async assignRole(_token, _guildId, _userId, _roleId) {
+        return { success: false, error: "Missing Permissions" };
+      },
+    };
+    __setDiscordGrantClientForTests(mockDiscordClient);
+
     const { fetch: mockFetch } = buildMockFetch({
       requestId,
       requestFixture: fixture,
-      discordGuildId: "999999999999999999",
-      discordPutStatus: 403, // Discord fails
     });
     setMockFetch(mockFetch);
 
@@ -679,7 +705,7 @@ describe("creds grant — scope flag", () => {
 // =============================================================================
 
 describe("creds grant --apply --json", () => {
-  test("success emits structured envelope with creds_path and grant details", async () => {
+  test("success emits structured envelope with local_creds_path and grant details", async () => {
     const { seedPath } = await mintAdminSeed();
     const requestId = "req-json-001";
     const fixture = pendingRequestFixture(requestId);
@@ -709,7 +735,7 @@ describe("creds grant --apply --json", () => {
     expect(env.status).toBe("ok");
     expect(env.data.applied).toBe("true");
     expect(env.data.request_id).toBe(requestId);
-    // credsPath is surfaced as local context for the admin, NOT sent to registry
-    expect(env.data.creds_path).toBe("/home/admin/.nats/echo.creds");
+    // local_creds_path is surfaced as local context for the admin, NOT sent to registry
+    expect(env.data.local_creds_path).toBe("/home/admin/.nats/echo.creds");
   });
 });
