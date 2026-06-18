@@ -75,10 +75,11 @@ describe("Pier agent fragment (agents.d/pier.yaml)", () => {
     expect(f.displayName).toBe("Pier");
   });
 
-  test("roles includes 'agent-restricted'", () => {
+  test("does NOT carry a retired `roles` field (AgentSchema.roles[] retired at v2.0.0, cortex#297)", () => {
     const f = loadFragment();
-    expect(Array.isArray(f.roles)).toBe(true);
-    expect(f.roles as string[]).toContain("agent-restricted");
+    // Authorization moved to policy.principals[]; the agent fragment must not
+    // re-introduce the retired field (Zod would silently strip it).
+    expect(f.roles).toBeUndefined();
   });
 
   test("trust includes 'luna'", () => {
@@ -117,11 +118,22 @@ describe("Pier agent fragment (agents.d/pier.yaml)", () => {
     expect(discord.guildId).toBe("1505549701674700991");
   });
 
-  test("presence.discord.agentChannelId is #assistant-fleet-onboarding", () => {
+  test("presence.discord.agentChannelId is #onboard-your-fleet (PUBLIC entry channel)", () => {
     const f = loadFragment();
     const presence = f.presence as Record<string, unknown>;
     const discord = presence.discord as Record<string, unknown>;
-    expect(discord.agentChannelId).toBe("1514679294553751613");
+    // Pier must greet newcomers in a channel they can reach BEFORE holding the
+    // community-fleet role — the public entry, not the gated working surface.
+    expect(discord.agentChannelId).toBe("1517154685595942972");
+  });
+
+  test("presence.discord.logChannelId is #assistant-fleet-onboarding (PRIVATE back-office)", () => {
+    const f = loadFragment();
+    const presence = f.presence as Record<string, unknown>;
+    const discord = presence.discord as Record<string, unknown>;
+    // Admission audit trail lands in the private back-office (principal + Pier only),
+    // distinct from the public entry channel.
+    expect(discord.logChannelId).toBe("1514679294553751613");
   });
 
   test("presence.discord.token references env var placeholder (not a real token)", () => {
