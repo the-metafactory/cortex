@@ -15,6 +15,14 @@
 #      none exists.
 #   4. Idempotent: skipped entirely if `stack.nkey_seed_path` is already
 #      declared in the file.
+#   5. G3 (cortex#1119): once the real pubkey is derived, idempotently
+#      writes it back to ALL THREE config sites that need it:
+#        a. stack.nkey_pub
+#        b. policy.principals[<agent>].nkey_pub  (the signing identity)
+#        c. agents[*].nkey_pub
+#      Only placeholder values (UAAA…56 chars) are overwritten; a real
+#      pubkey already in place is left untouched. Every patch + skip is
+#      logged explicitly.
 #
 # Backup: before any edit, the script copies the config to
 # `${config}.pre-stack-identity-$(date +%Y%m%dT%H%M%S)`. Principal can roll
@@ -92,6 +100,133 @@ derive_pubkey_from_seed() {
   " 2>/dev/null
 }
 
+# G3 (cortex#1119) — idempotently write the real U-prefixed pubkey back to
+# all three config sites that reference it.
+#
+# Strategy:
+#   • Only patches lines whose nkey_pub value is the all-A placeholder
+#     (UAAAA…56 chars). A different U-prefixed value is treated as a real
+#     key already in place and is left untouched.
+#   • Targets precisely:
+#       1. stack.nkey_pub        (inside the top-level `stack:` block)
+#       2. policy.principals[x].nkey_pub  (agent signing entries — those that
+#          HAVE a nkey_pub line; human principals typically have none)
+#       3. agents[*].nkey_pub   (every agent entry that has an nkey_pub line)
+#   • Backs up the config before any edit (reuses the caller's backup if
+#     already taken; this function creates its own if called independently).
+#   • Logs each patched site AND each skipped site (already real).
+#   • Never writes if pubkey is empty — caller must guard that.
+#
+# Args:
+#   $1 config file path
+#   $2 real U-prefixed pubkey (56-char base32)
+#   $3 backup flag: "backup" (default) or "no-backup" when caller already
+#      created one.
+#
+# Returns 0 always (best-effort; failures are logged, not fatal).
+#
+# The placeholder emitted by `cortex stack create` (NKEY_PUB_PLACEHOLDER):
+#   UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+# It is a valid-FORMAT 56-char all-A nkey that parses at load but is
+# semantically meaningless. Matching this exact value (U + 55 × A) is the
+# safe sentinel: real pubkeys generated from actual seeds will differ.
+readonly _NKEY_PLACEHOLDER="UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+patch_nkey_pub_sites() {
+  local config="$1"
+  local pubkey="$2"
+  local backup_flag="${3:-backup}"
+
+  [ -f "${config}" ] || return 0
+  [ -n "${pubkey}" ] || return 0
+
+  # Validate pubkey format: U + exactly 55 uppercase base32 chars.
+  if ! printf '%s' "${pubkey}" | grep -qE '^U[A-Z2-7]{55}$'; then
+    echo "  ⚠ patch_nkey_pub_sites: pubkey '${pubkey}' does not match U[A-Z2-7]{55} — skipping" >&2
+    return 0
+  fi
+
+  # Check whether any placeholder sites exist at all. If not, nothing to do.
+  local placeholder_count
+  placeholder_count="$(grep -c "${_NKEY_PLACEHOLDER}" "${config}" 2>/dev/null || true)"
+  if [ "${placeholder_count}" -eq 0 ]; then
+    echo "  ⊘ No placeholder nkey_pub values found in ${config##*/} — all sites already set"
+    return 0
+  fi
+
+  # Backup before edit (skip if caller already created one).
+  if [ "${backup_flag}" != "no-backup" ]; then
+    local backup
+    backup="${config}.pre-stack-identity-$(date +%Y%m%dT%H%M%S)"
+    cp "${config}" "${backup}"
+    echo "  ✓ Config backup → ${backup##*/}"
+  fi
+
+  # G3 patch strategy: replace ALL occurrences of the placeholder on `nkey_pub:`
+  # lines. The placeholder is the exact 56-char all-A value emitted by
+  # `cortex stack create` — it is semantically unique and cannot legitimately
+  # appear in any other context (it is an invalid-key-material value used solely
+  # as a FORMAT placeholder so the config file passes schema validation before the
+  # real key is provisioned). Any nkey_pub line carrying a DIFFERENT U-prefixed
+  # value is left untouched (it is either a real key or a legitimately distinct
+  # placeholder the operator supplied).
+  #
+  # Implementation: awk in record-per-line mode. For each line, if it is a
+  # `nkey_pub:` line whose first value token equals the placeholder, swap in
+  # the real pubkey while preserving leading whitespace and any trailing inline
+  # comment. All other lines (including nkey_pub lines with real keys) pass
+  # through unchanged.
+  #
+  # Note: we write the awk program to a tmpfile instead of passing it inline to
+  # avoid bash's heredoc/single-quote parser misidentifying $0 and function-call
+  # syntax as shell constructs when the script is sourced in strict mode.
+  local awkprog
+  awkprog="$(mktemp)"
+  # Write awk program as a separate file — avoids bash single-quote parse issues.
+  printf '%s\n' \
+    'BEGIN { patched = 0; skipped = 0 }' \
+    '/^[[:space:]]*nkey_pub:[[:space:]]/ {' \
+    '  # Extract the value token (first non-whitespace token after "nkey_pub: ").'\
+    '  val = $0' \
+    '  sub(/^[[:space:]]*nkey_pub:[[:space:]]*/, "", val)' \
+    '  # Strip inline comment and trailing whitespace to get the bare value.' \
+    '  gsub(/[[:space:]].*$/, "", val)' \
+    '  if (val == placeholder) {' \
+    '    # Preserve leading whitespace (indent) from the original line.' \
+    '    lead = $0' \
+    '    sub(/nkey_pub:.*$/, "", lead)' \
+    '    # Preserve any trailing inline comment (everything after the value token).' \
+    '    comment = $0' \
+    '    sub(/^[[:space:]]*nkey_pub:[[:space:]]*[^[:space:]]+/, "", comment)' \
+    '    printf "%snkey_pub: %s%s\n", lead, pub, comment' \
+    '    patched++' \
+    '    print "  [G3] patch: nkey_pub " val " patched" | "cat >&2"' \
+    '  } else {' \
+    '    print' \
+    '    skipped++' \
+    '    print "  [G3] skip:  nkey_pub " val " (real key — left untouched)" | "cat >&2"' \
+    '  }' \
+    '  next' \
+    '}' \
+    '{ print }' \
+    'END {' \
+    '  if (patched > 0 || skipped > 0) {' \
+    '    msg = "  [G3] summary: " patched " site(s) patched"' \
+    '    if (skipped > 0) msg = msg ", " skipped " already real (left untouched)"' \
+    '    print msg | "cat >&2"' \
+    '  }' \
+    '}' \
+    > "${awkprog}"
+
+  local tmpfile
+  tmpfile="$(mktemp)"
+  awk -v pub="${pubkey}" -v placeholder="${_NKEY_PLACEHOLDER}" -f "${awkprog}" "${config}" > "${tmpfile}"
+  rm -f "${awkprog}"
+  mv "${tmpfile}" "${config}"
+
+  echo "  ✓ G3 nkey_pub write-back complete (${placeholder_count} placeholder(s) replaced in ${config##*/})"
+}
+
 # Generate a fresh SU-prefixed NKey at the given path, chmod 600.
 # Returns 0 on success, 1 if nsc is not installed (caller skips).
 generate_nkey_seed() {
@@ -160,6 +295,15 @@ provision_stack_identity() {
     declared_seed="$(nkey_path_for "${nkey_basename}")"
     if [ -f "${declared_seed}" ]; then
       echo "  ⊘ Stack identity configured + seed file present in ${config##*/}"
+      # G3 (cortex#1119): seed is present but placeholder nkey_pub values may
+      # still be in the config (e.g. after `cortex stack create` + first arc
+      # upgrade that generated the seed but predates G3). Derive the pubkey and
+      # write it back to any placeholder sites — idempotent if already correct.
+      local existing_pub
+      existing_pub="$(derive_pubkey_from_seed "${declared_seed}" || true)"
+      if [ -n "${existing_pub}" ]; then
+        patch_nkey_pub_sites "${config}" "${existing_pub}"
+      fi
       return 0
     fi
     echo "  ⊕ ${config##*/} declares nkey_seed_path but the seed file is missing — generating at ${declared_seed} (cortex#1101)..."
@@ -171,7 +315,12 @@ provision_stack_identity() {
     local declared_pub
     declared_pub="$(derive_pubkey_from_seed "${declared_seed}" || true)"
     if [ -n "${declared_pub}" ]; then
-      echo "    Pin this into ${config##*/} stack.nkey_pub (replacing the placeholder): ${declared_pub}"
+      # G3 (cortex#1119): write the real pubkey back to all 3 config sites.
+      # The config already carries nkey_seed_path — we only patch nkey_pub
+      # placeholder values; the seed path wiring is already correct.
+      patch_nkey_pub_sites "${config}" "${declared_pub}"
+    else
+      echo "    ⓘ Could not derive pubkey from ${declared_seed##*/}; cortex will log it at boot."
     fi
     return 0
   fi
@@ -270,6 +419,10 @@ provision_stack_identity() {
   mv "${tmpfile}" "${config}"
   if [ -n "${pubkey}" ]; then
     echo "  ✓ Stack identity wired: nkey_seed_path + nkey_pub (${pubkey:0:8}…)"
+    # G3 (cortex#1119): the awk above wired stack.nkey_pub. Now patch the two
+    # remaining sites (policy.principals[].nkey_pub and agents[].nkey_pub).
+    # The backup was already taken above — pass "no-backup" to avoid a second one.
+    patch_nkey_pub_sites "${config}" "${pubkey}" "no-backup"
   else
     echo "  ✓ Stack identity wired: nkey_seed_path (nkey_pub will be logged at next boot)"
   fi
